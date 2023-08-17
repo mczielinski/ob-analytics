@@ -64,7 +64,34 @@ def interval_sum_breaks(volume_range, breaks):
         prev_idx = b
     return sums
 
+def filter_depth(d, from_time, to_time):
+    # 1. Get all active price levels before the start of the range.
+    pre = d[d['timestamp'] <= from_time]
+    pre = pre.sort_values(by=['price', 'timestamp'])
 
+    # Last update for each price level <= from_time. This becomes the starting point
+    # for all updates within the range.
+    pre = pre.loc[~pre['price'].duplicated(keep='last') & (pre['volume'] > 0)]
+
+    # Clamp range (reset timestamp to from_time if price level active before start of range).
+    if not pre.empty:
+        pre['timestamp'] = pre['timestamp'].apply(lambda r: max(from_time, r))
+
+    # 2. Add all volume changes within the range.
+    mid = d[(d['timestamp'] > from_time) & (d['timestamp'] < to_time)]
+    combined_range = pd.concat([pre, mid])
+
+    # 3. At the end of the range, set all price level volume to 0.
+    open_ends = combined_range.loc[~combined_range['price'].duplicated(keep='last') & (combined_range['volume'] > 0)].copy()
+    open_ends['timestamp'] = to_time
+    open_ends['volume'] = 0
+
+    # Combine pre, mid, and open_ends. Ensure it's in order.
+    combined_range = pd.concat([combined_range, open_ends])
+    combined_range = combined_range.sort_values(by=['price', 'timestamp'])
+
+    return combined_range
+    
 def depth_metrics(depth, bps=25, bins=20):
     def pct_names(name):
         return [f"{name}{i}bps" for i in range(bps, bps * bins + 1, bps)]
