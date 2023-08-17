@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
-from R.event_processing import load_event_data
-from R.matching_engine import event_match
+from ob_analytics.event_processing import load_event_data
+from ob_analytics.matching_engine import event_match
 
 
 def process_data(csv_file, price_digits=2, volume_digits=8):
