@@ -6,6 +6,7 @@ from ob_analytics.trades import match_trades
 from ob_analytics.order_types import set_order_types
 from ob_analytics.depth import price_level_volume
 from ob_analytics.depth import depth_metrics
+from ob_analytics.event_processing import order_aggressiveness
 
 def process_data(csv_file, price_digits=2, volume_digits=8):
     def get_zombie_ids(events, trades):
@@ -37,7 +38,7 @@ def process_data(csv_file, price_digits=2, volume_digits=8):
     depth_summary = depth_metrics(depth)
     events = order_aggressiveness(events, depth_summary)
     
-    offset = min(events['timestamp']) + 60
+    offset = min(events['timestamp']) + pd.Timedelta(minutes=60)
     return {
         'events': events,
         'trades': trades,
