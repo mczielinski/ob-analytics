@@ -54,8 +54,8 @@ def match_trades(events: pd.DataFrame) -> pd.DataFrame:
         'price': price,
         'volume': volume,
         'direction': direction,
-        'maker_event_id': maker_event_id,
-        'taker_event_id': taker_event_id,
+        'maker.event.id': maker_event_id,
+        'taker.event.id': taker_event_id,
         'maker': maker,
         'taker': taker
     })
@@ -69,8 +69,8 @@ def match_trades(events: pd.DataFrame) -> pd.DataFrame:
         combined.iloc[jump, combined.columns.get_loc('maker')], combined.iloc[jump, combined.columns.get_loc('taker')] = \
         combined.iloc[jump, combined.columns.get_loc('taker')], combined.iloc[jump, combined.columns.get_loc('maker')]
         
-        combined.iloc[jump, combined.columns.get_loc('maker_event_id')], combined.iloc[jump, combined.columns.get_loc('taker_event_id')] = \
-        combined.iloc[jump, combined.columns.get_loc('taker_event_id')], combined.iloc[jump, combined.columns.get_loc('maker_event_id')]
+        combined.iloc[jump, combined.columns.get_loc('maker.event.id')], combined.iloc[jump, combined.columns.get_loc('taker.event.id')] = \
+        combined.iloc[jump, combined.columns.get_loc('taker.event.id')], combined.iloc[jump, combined.columns.get_loc('maker.event.id')]
         
         combined.iloc[jump, combined.columns.get_loc('direction')] = 'buy' if combined.iloc[jump, combined.columns.get_loc('direction')] == 'sell' else 'sell'
         
