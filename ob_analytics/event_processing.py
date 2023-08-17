@@ -77,7 +77,8 @@ def load_event_data(file: str, price_digits: int = 2, volume_digits: int = 8) ->
     events = pd.merge(events, events_grouped, on="id", how="left")
     events["fill"] = events["volume_y"].astype(float).abs().round(volume_digits)
     events.drop(columns=["volume_y"], inplace=True)
-
+    events=events.rename(columns={"volume_x":"volume"})
+    
     return events
 
 def order_aggressiveness(events: pd.DataFrame, depth_summary: pd.DataFrame) -> pd.DataFrame:

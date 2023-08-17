@@ -4,6 +4,7 @@ from ob_analytics.event_processing import load_event_data
 from ob_analytics.matching_engine import event_match
 from ob_analytics.trades import match_trades
 from ob_analytics.order_types import set_order_types
+from ob_analytics.depth import price_level_volume
 
 def process_data(csv_file, price_digits=2, volume_digits=8):
     def get_zombie_ids(events, trades):
