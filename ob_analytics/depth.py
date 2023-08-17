@@ -56,41 +56,44 @@ def price_level_volume(events):
     
     return depth_data.sort_values('timestamp')
 
+def interval_sum_breaks(volume_range, breaks):
+    sums = []
+    prev_idx = 0
+    for b in breaks:
+        sums.append(volume_range[prev_idx:b].sum())
+        prev_idx = b
+    return sums
+
 
 def depth_metrics(depth, bps=25, bins=20):
-    
     def pct_names(name):
-        return [f"{name}{i}bps" for i in range(bps, bps*bins+1, bps)]
+        return [f"{name}{i}bps" for i in range(bps, bps * bins + 1, bps)]
     
-    def interval_sum_breaks(volume_range, breaks):
-        sums = []
-        prev_idx = 0
-        for b in breaks:
-            sums.append(volume_range[prev_idx:b].sum())
-            prev_idx = b
-        return sums
-    
-    ordered_depth = depth.sort_values('timestamp')
-    ordered_depth['price'] = (100 * ordered_depth['price']).astype(int)
-    
-    col_names = ['best.bid.price', 'best.bid.vol'] + pct_names('bid.vol') + ['best.ask.price', 'best.ask.vol'] + pct_names('ask.vol')
-    metrics = pd.DataFrame(0, index=range(len(ordered_depth)), columns=col_names)
-    
+    ordered_depth = depth.sort_values(by="timestamp")
+    ordered_depth["price"] = (100 * ordered_depth["price"]).values.round().astype(int)
+    depth_matrix = np.column_stack([ordered_depth["price"], ordered_depth["volume"], 
+                                   np.where(ordered_depth["side"] == "bid", 0, 1)])
+
+    metrics_columns = ["best.bid.price", "best.bid.vol"] + pct_names("bid.vol") + ["best.ask.price", "best.ask.vol"] + pct_names("ask.vol")
+    metrics = pd.DataFrame(0, columns=metrics_columns, index=ordered_depth.index)
+
     asks_state = np.zeros(1000000, dtype=int)
-    asks_state[-1] = 1  # trick
+    asks_state[-1] = 1
     bids_state = np.zeros(1000000, dtype=int)
-    bids_state[0] = 1  # trick
-    best_ask = max(ordered_depth[ordered_depth['side'] == 'ask']['price'])
-    best_bid = min(ordered_depth[ordered_depth['side'] == 'bid']['price'])
+    bids_state[0] = 1
+
+    best_ask = ordered_depth.loc[ordered_depth["side"] == "ask", "price"].max()
+    best_bid = ordered_depth.loc[ordered_depth["side"] == "bid", "price"].min()
     best_ask_vol = 0
     best_bid_vol = 0
-    
-    for idx, row in ordered_depth.iterrows():
-        price, volume, side = row['price'], row['volume'], row['side']
-        
-        if side == 'ask':
+
+    for i in range(len(ordered_depth)):
+        depth_row = depth_matrix[i]
+        price, volume, side = depth_row
+
+        if side > 0:
             if price > best_bid:
-                asks_state[price] = volume
+                asks_state[int(price)] = volume
                 if volume > 0:
                     if price < best_ask:
                         best_ask = price
@@ -101,50 +104,54 @@ def depth_metrics(depth, bps=25, bins=20):
                     if price == best_ask:
                         best_ask = np.where(asks_state > 0)[0][0]
                         best_ask_vol = asks_state[best_ask]
-                
-                price_range = np.arange(best_ask, int(round((1 + bps * bins * 0.0001) * best_ask)) + 1)
+
+                price_range = np.arange(int(best_ask), int((1 + bps * bins * 0.0001) * best_ask) + 1)
                 volume_range = asks_state[price_range]
-                breaks = np.ceil(np.cumsum(np.full(bins, len(price_range)/bins))).astype(int)
-                
-                metrics.at[idx, 'best.ask.price'] = best_ask
-                metrics.at[idx, 'best.ask.vol'] = best_ask_vol
-                metrics.at[idx, (bins+5):(2*(2+bins))] = interval_sum_breaks(volume_range, breaks)
-                if idx > 0:
-                    metrics.iloc[idx, 0:(2+bins)] = metrics.iloc[idx-1, 0:(2+bins)]
-            
+
+                breaks = np.ceil(np.cumsum([len(price_range) / bins] * bins)).astype(int)
+
+                metrics.at[ordered_depth.index[i], "best.ask.price"] = best_ask
+                metrics.at[ordered_depth.index[i], "best.ask.vol"] = best_ask_vol
+                metrics.loc[ordered_depth.index[i], pct_names("ask.vol")] = interval_sum_breaks(volume_range, breaks)
+
+                if i > 0:
+                    metrics.iloc[i, :bins + 2] = metrics.iloc[i - 1, :bins + 2]
             else:
-                if idx > 0:
-                    metrics.iloc[idx, :] = metrics.iloc[idx-1, :]
-        
+                if i > 0:
+                    metrics.iloc[i] = metrics.iloc[i - 1]
+
         else:
             if price < best_ask:
-                bids_state[price] = volume
+                bids_state[int(price)] = volume
                 if volume > 0:
                     if price > best_bid:
                         best_bid = price
-                        best_bid_vol = volume
                     elif price == best_bid:
                         best_bid_vol = volume
                 else:
                     if price == best_bid:
                         best_bid = np.where(bids_state > 0)[0][-1]
                         best_bid_vol = bids_state[best_bid]
-                
-                price_range = np.arange(best_bid, int(round((1 - bps * bins * 0.0001) * best_bid)) + 1)
+
+                price_range = np.arange(int(best_bid), int((1 - bps * bins * 0.0001) * best_bid) - 1, -1)
+
                 volume_range = bids_state[price_range]
-                breaks = np.ceil(np.cumsum(np.full(bins, len(price_range)/bins))).astype(int)
-                
-                metrics.at[idx, 'best.bid.price'] = best_bid
-                metrics.at[idx, 'best.bid.vol'] = best_bid_vol
-                metrics.at[idx, 3:(2+bins)] = interval_sum_breaks(volume_range, breaks)
-                if idx > 0:
-                    metrics.iloc[idx, (bins+3):(2*(2+bins))] = metrics.iloc[idx-1, (bins+3):(2*(2+bins))]
-            
+
+                breaks = np.ceil(np.cumsum([len(price_range) / bins] * bins)).astype(int)
+
+                metrics.at[ordered_depth.index[i], "best.bid.price"] = best_bid
+                metrics.at[ordered_depth.index[i], "best.bid.vol"] = best_bid_vol
+                metrics.loc[ordered_depth.index[i], pct_names("bid.vol")] = interval_sum_breaks(volume_range, breaks)
+
+                if i > 0:
+                    metrics.iloc[i, bins + 2:] = metrics.iloc[i - 1, bins + 2:]
             else:
-                if idx > 0:
-                    metrics.iloc[idx, :] = metrics.iloc[idx-1, :]
+                if i > 0:
+                    metrics.iloc[i] = metrics.iloc[i - 1]
+
+    res = pd.concat([ordered_depth["timestamp"], metrics], axis=1)
+    res[["best.bid.price", "best.ask.price"]] = (0.01 * res[["best.bid.price", "best.ask.price"]]).round(2)
     
-    res = pd.concat([ordered_depth['timestamp'], 0.01 * metrics[['best.bid.price', 'best.ask.price']].round(2), metrics.drop(columns=['best.bid.price', 'best.ask.price'])], axis=1)
     return res
 
 def get_spread(depth_summary):
