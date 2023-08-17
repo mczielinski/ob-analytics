@@ -13,14 +13,14 @@ def process_data(csv_file, price_digits=2, volume_digits=8):
         ask_zombies = zombies[zombies['direction'] == "ask"]
         
         bid_zombie_ids = bid_zombies[bid_zombies['id'].apply(
-            lambda id_val: trades[(trades['direction'] == "sell") & 
+            lambda id_val: (trades[(trades['direction'] == "sell") & 
                                   (trades['timestamp'] >= bid_zombies[bid_zombies['id'] == id_val].iloc[-1]['timestamp']) & 
-                                  (trades['price'] < bid_zombies[bid_zombies['id'] == id_val].iloc[-1]['price'])].any())]['id'].unique()
+                                  (trades['price'] < bid_zombies[bid_zombies['id'] == id_val].iloc[-1]['price'])]['price'] != 0).any())]['id'].unique()
         
         ask_zombie_ids = ask_zombies[ask_zombies['id'].apply(
-            lambda id_val: trades[(trades['direction'] == "buy") & 
+            lambda id_val: (trades[(trades['direction'] == "buy") & 
                                   (trades['timestamp'] >= ask_zombies[ask_zombies['id'] == id_val].iloc[-1]['timestamp']) & 
-                                  (trades['price'] > ask_zombies[ask_zombies['id'] == id_val].iloc[-1]['price'])].any())]['id'].unique()
+                                  (trades['price'] > ask_zombies[ask_zombies['id'] == id_val].iloc[-1]['price'])]['price'] != 0).any())]['id'].unique()
         
         return list(bid_zombie_ids) + list(ask_zombie_ids)
 
