@@ -16,25 +16,26 @@ def match_trades(events: pd.DataFrame) -> pd.DataFrame:
     pd.DataFrame
         Dataframe with matched trades.
     """
-    events=events.reset_index(drop=True)
     
+    events=events.reset_index(drop=True)
+        
     matching_bids = events[(events['direction'] == 'bid') & (~events['matching.event'].isna())]
-    matching_bids = matching_bids.sort_values(by='event.id')
+    matching_bids = matching_bids.sort_values(by='event.id').reset_index(drop=True)
     
     matching_asks = events[(events['direction'] == 'ask') & (~events['matching.event'].isna())]
-    matching_asks = matching_asks.sort_values(by='matching.event')
+    matching_asks = matching_asks.sort_values(by='matching.event').reset_index(drop=True)
     
     assert set(matching_bids['event.id']) == set(matching_asks['matching.event']), "Mismatch in bid and ask events."
     
     bid_exchange_ts = matching_bids['exchange.timestamp']
     ask_exchange_ts = matching_asks['exchange.timestamp']
 
-    bid_maker = (bid_exchange_ts.values < ask_exchange_ts.values) | ((bid_exchange_ts.values == ask_exchange_ts.values) & 
-                                                     (matching_bids['id'].values < matching_asks['id'].values))
+    bid_maker = (bid_exchange_ts < ask_exchange_ts) | ((bid_exchange_ts == ask_exchange_ts) & 
+                                                     (matching_bids['id'] < matching_asks['id']))
     
     bid_local_ts = matching_bids['timestamp']
     ask_local_ts = matching_asks['timestamp']
-    timestamp = np.where(bid_local_ts.values <= ask_local_ts.values, bid_local_ts.values, ask_local_ts.values)
+    timestamp = np.where(bid_local_ts <= ask_local_ts, bid_local_ts, ask_local_ts)
     
     price = np.where(bid_maker, matching_bids['price'], matching_asks['price'])
     volume = matching_bids['fill']
@@ -44,18 +45,9 @@ def match_trades(events: pd.DataFrame) -> pd.DataFrame:
     maker_event_id = np.where(bid_maker, matching_bids['event.id'], matching_asks['event.id'])
     taker_event_id = np.where(bid_maker, matching_asks['event.id'], matching_bids['event.id'])
     
-    maker = events.loc[events['event.id'].isin(maker_event_id), 'id'].values
-    taker = events.loc[events['event.id'].isin(taker_event_id), 'id'].values
-
-    print(timestamp.shape)
-    print(price.shape)
-    print(volume.shape)
-    print(direction.shape)
-    print(maker_event_id.shape)
-    print(taker_event_id.shape)
-    print(maker.shape)
-    print(taker.shape)
-
+    # Directly using maker_event_id and taker_event_id arrays to extract the corresponding maker and taker values
+    maker = [events[events['event.id'] == eid]['id'].values[0] for eid in maker_event_id]
+    taker = [events[events['event.id'] == eid]['id'].values[0] for eid in taker_event_id]
 
     combined = pd.DataFrame({
         'timestamp': timestamp,
@@ -74,9 +66,11 @@ def match_trades(events: pd.DataFrame) -> pd.DataFrame:
     
     # Swapping makers and takers based on price jumps
     for jump in jumps:
-        combined.iloc[jump, combined.columns.get_loc('maker')], combined.iloc[jump, combined.columns.get_loc('taker')] =         combined.iloc[jump, combined.columns.get_loc('taker')], combined.iloc[jump, combined.columns.get_loc('maker')]
+        combined.iloc[jump, combined.columns.get_loc('maker')], combined.iloc[jump, combined.columns.get_loc('taker')] = \
+        combined.iloc[jump, combined.columns.get_loc('taker')], combined.iloc[jump, combined.columns.get_loc('maker')]
         
-        combined.iloc[jump, combined.columns.get_loc('maker_event_id')], combined.iloc[jump, combined.columns.get_loc('taker_event_id')] =         combined.iloc[jump, combined.columns.get_loc('taker_event_id')], combined.iloc[jump, combined.columns.get_loc('maker_event_id')]
+        combined.iloc[jump, combined.columns.get_loc('maker_event_id')], combined.iloc[jump, combined.columns.get_loc('taker_event_id')] = \
+        combined.iloc[jump, combined.columns.get_loc('taker_event_id')], combined.iloc[jump, combined.columns.get_loc('maker_event_id')]
         
         combined.iloc[jump, combined.columns.get_loc('direction')] = 'buy' if combined.iloc[jump, combined.columns.get_loc('direction')] == 'sell' else 'sell'
         
