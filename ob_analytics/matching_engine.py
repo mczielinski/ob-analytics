@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
-from R.needleman_wunsch import sMatrix
-from R.needleman_wunsch import alignS
+from ob_analytics.needleman_wunsch import sMatrix
+from ob_analytics.needleman_wunsch import alignS
 
 def event_match(events: pd.DataFrame, cut_off_ms: int = 5000) -> pd.DataFrame:
     """

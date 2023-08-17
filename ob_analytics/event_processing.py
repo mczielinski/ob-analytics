@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from R.auxiliary import vector_diff
+from ob_analytics.auxiliary import vector_diff
 
 def load_event_data(file: str, price_digits: int = 2, volume_digits: int = 8) -> pd.DataFrame:
     """
