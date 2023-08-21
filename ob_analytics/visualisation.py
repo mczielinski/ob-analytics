@@ -1,7 +1,8 @@
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-
+from ob_analytics.depth import filter_depth
 def plot_time_series(timestamp, series, start_time=None, end_time=None, 
                      title="time series", y_label="series"):
     """
@@ -156,9 +157,13 @@ def plot_price_levels_faster(depth, spread=None, trades=None, show_mp=True,
                              col_bias=0.1, price_by=None):
     
     # Filter trades based on their direction
-    buys = trades[trades['direction'] == "buy"]
-    sells = trades[trades['direction'] == "sell"]
-    
+    if trades is not None:
+        buys = trades[trades['direction'] == "buy"]
+        sells = trades[trades['direction'] == "sell"]
+    else:
+        buys = None
+        sells = None
+        
     # Color palette generation
     if col_bias <= 0:
         col_bias = 1
