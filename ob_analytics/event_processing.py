@@ -4,80 +4,78 @@ from ob_analytics.auxiliary import vector_diff
 
 def load_event_data(file: str, price_digits: int = 2, volume_digits: int = 8) -> pd.DataFrame:
     """
-    Load event data, clean and preprocess it.
+    Load and preprocess event data from the provided file.
 
     Parameters
     ----------
     file : str
-        Path to the CSV file containing the event data.
+        Path to the file containing event data.
     price_digits : int, optional
-        Number of decimal places to round the price to. Default is 2.
+        Number of decimal digits to round the price column, by default 2.
     volume_digits : int, optional
-        Number of decimal places to round the volume to. Default is 8.
+        Number of decimal digits to round the volume column, by default 8.
 
     Returns
     -------
     pd.DataFrame
-        Cleaned and preprocessed event data.
+        The preprocessed dataframe containing event data.
     """
 
     def remove_duplicates(events: pd.DataFrame) -> pd.DataFrame:
         """
-        Remove duplicate rows from the events dataframe.
-
+        Remove duplicate events from the data.
+    
         Parameters
         ----------
         events : pd.DataFrame
-            Events dataframe.
-
+            The dataframe containing event data.
+    
         Returns
         -------
         pd.DataFrame
-            Dataframe after removing duplicates.
+            The dataframe after removing duplicate events.
         """
-        mask = events.duplicated(subset=["id", "price", "volume", "action"]) & (events["action"] != "changed")
-        dups = events[mask]
-        if not dups.empty:
-            ids = " ".join(map(str, dups["id"].unique()))
+        mask = (events.duplicated(subset=["id", "price", "volume", "action"])) & (events["action"] != "changed")
+        dups = events[mask].index
+        if len(dups) > 0:
+            ids = " ".join(map(str, events.loc[dups, "id"].unique()))
+            events = events.drop(dups)
             print(f"Warning: removed {len(dups)} duplicate events: {ids}")
-            events = events[~mask]
         return events
-
-    # Load data
+    
+    # Load the data
     events = pd.read_csv(file)
-
-    # Remove negative volumes
-    negative_vol = events[events["volume"] < 0]
-    if not negative_vol.empty:
+    
+    # Remove rows with negative volume
+    negative_vol = events[events['volume'] < 0].index
+    if len(negative_vol) > 0:
+        events = events.drop(negative_vol)
         print(f"Warning: removed {len(negative_vol)} negative volume events")
-        events = events[events["volume"] >= 0]
-
-    # Round volume and price
-    events["volume"] = events["volume"].round(volume_digits)
-    events["price"] = events["price"].round(price_digits)
-
+    
+    # Round volume and price columns
+    events['volume'] = events['volume'].round(volume_digits)
+    events['price'] = events['price'].round(price_digits)
+    
     # Remove duplicates
     events = remove_duplicates(events)
-
+    
     # Convert timestamps
-    events["timestamp"] = pd.to_datetime(events["timestamp"] / 1000, unit="s", origin="unix")
-    events["exchange.timestamp"] = pd.to_datetime(events["exchange.timestamp"] / 1000, unit="s", origin="unix")
-
+    events['timestamp'] = pd.to_datetime(events['timestamp'] / 1000, unit='s', origin="1970-01-01").dt.floor('S')
+    events['exchange.timestamp'] = pd.to_datetime(events['exchange.timestamp'] / 1000, unit='s', origin="1970-01-01").dt.floor('S')
+    
     # Factorize columns
-    events["action"] = pd.Categorical(events["action"], categories=["created", "changed", "deleted"], ordered=True)
-    events["direction"] = pd.Categorical(events["direction"], categories=["bid", "ask"], ordered=True)
-
-    # Sort data
+    events['action'] = pd.Categorical(events['action'], categories=["created", "changed", "deleted"], ordered=True)
+    events['direction'] = pd.Categorical(events['direction'], categories=["bid", "ask"], ordered=True)
+    
+    # Order data
     events = events.sort_values(by=["id", "action", "timestamp"])
-
-    # Add event ID
-    events["event.id"]= range(1, len(events) + 1)
-    # Compute fill deltas
-    events_grouped = events.groupby("id")["volume"].apply(vector_diff).explode().reset_index()
-    events = pd.merge(events, events_grouped, on="id", how="left")
-    events["fill"] = events["volume_y"].astype(float).abs().round(volume_digits)
-    events.drop(columns=["volume_y"], inplace=True)
-    events=events.rename(columns={"volume_x":"volume"})
+    
+    # Add event.id column
+    events.insert(0, 'event.id', range(1, len(events) + 1))
+    
+    # Compute fill column
+    fill_deltas = events.groupby('id')['volume'].transform(vector_diff)
+    events['fill'] = fill_deltas.abs().round(volume_digits)
     
     return events
 
