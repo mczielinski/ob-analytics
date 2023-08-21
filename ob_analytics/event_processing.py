@@ -72,7 +72,7 @@ def load_event_data(file: str, price_digits: int = 2, volume_digits: int = 8) ->
     
     # Add event.id column
     events.insert(0, 'event.id', range(1, len(events) + 1))
-    
+
     # Compute fill column
     fill_deltas = events.groupby('id')['volume'].transform(vector_diff)
     events['fill'] = fill_deltas.abs().round(volume_digits)
