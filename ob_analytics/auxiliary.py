@@ -1,20 +1,21 @@
 import numpy as np
 import pandas as pd
 
-def vector_diff(v: list[float]) -> list[float]:
-    """Calculate the difference between consecutive elements of a list.
-    
+def vector_diff(v: pd.Series) -> pd.Series:
+    """
+    Calculate the difference between consecutive elements in a series.
+
     Parameters
     ----------
-    v : list[float]
-        Input list of numbers.
+    v : pd.Series
+        Input series.
 
     Returns
     -------
-    list[float]
-        List containing the difference between consecutive elements.
+    pd.Series
+        Series with the difference between consecutive elements.
     """
-    return np.insert(np.diff(v), 0, 0).tolist()
+    return v.diff().fillna(0)
 
 def reverse_matrix(m: np.ndarray) -> np.ndarray:
     """Reverse the rows of a matrix.
