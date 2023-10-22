@@ -38,33 +38,44 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
     events["type"] = "unknown"
     
     # Identify 'pacman' orders
-    pacman_ids = events[events["id"].isin(is_pacman(events).index[is_pacman(events).values])]["event.id"].values
-    events.loc[events["event.id"].isin(pacman_ids), "type"] = "pacman"
+    pacman_ids = set(events[events["id"].isin(is_pacman(events).index[is_pacman(events).values])]["id"].values)
+    events.loc[events["id"].isin(pacman_ids), "type"] = "pacman"
+    
+    # Identify orders
+    created = events[events["action"] == "created"].sort_values("id")
+    created_ids = set(created["id"])
+    deleted_ids = set(events.loc[events["action"] == "deleted", "id"])
+    changed_ids = set(events.loc[events["action"] == "changed", "id"])
+    
+    # Identify orders that don't have a creation event
+    original_ids = set(events["id"]) - created_ids
     
     # Identify 'flashed-limit' orders
-    flashed_limit_orders = events[
-        (events["action"] == "created") & 
-        events["event.id"].isin(events.loc[events["action"] == "deleted", "event.id"])
-    ]
-    events.loc[events["event.id"].isin(flashed_limit_orders["event.id"]), "type"] = "flashed-limit"
-    
-    # Identify 'resting-limit' orders
-    resting_limit_orders = events[
-        (events["action"] == "created") & 
-        events["event.id"].isin(events.loc[events["action"] == "hit", "event.id"])
-    ]
-    events.loc[events["event.id"].isin(resting_limit_orders["event.id"]), "type"] = "resting-limit"
-    
+    created_deleted_ids = created_ids - changed_ids & deleted_ids
+    volumes_created = {id_: created.loc[created["id"] == id_, "volume"].values[0] for id_ in created_deleted_ids}
+    volumes_deleted = {id_: events.loc[events["id"] == id_, "volume"].values[0] for id_ in created_deleted_ids & deleted_ids}
+    volume_matched = {id_ for id_ in created_deleted_ids if volumes_created[id_] == volumes_deleted[id_]}
+    flashed_ids = created_deleted_ids & volume_matched
 
-    # Identify 'market-limit' orders
-    ml_ids = set(trades["taker.event.id"]) & set(events.loc[events["type"] == "flashed-limit", "event.id"])
-    ml_ids = ml_ids - set(events.loc[events["type"] == "pacman", "event.id"])
-    events.loc[events["event.id"].isin(ml_ids), "type"] = "market-limit"
+    if flashed_ids:
+        events.loc[events["id"].isin(flashed_ids), "type"] = "flashed-limit"
+        
+    # Identify 'resting-limit' orders
+    forever_ids = created_ids - changed_ids - deleted_ids | (original_ids - changed_ids - deleted_ids)
+    if forever_ids:
+        events.loc[events["id"].isin(forever_ids), "type"] = "resting-limit"
     
+    # Identify 'market-limit' orders
+    maker_ids = set(pd.unique(events.loc[events["event.id"].isin(trades["maker.event.id"]), "id"]))
+    taker_ids = set(pd.unique(events.loc[events["event.id"].isin(trades["taker.event.id"]), "id"]))
+    
+    ml_ids = taker_ids.intersection(maker_ids) - pacman_ids
+    if ml_ids:
+        events.loc[events["id"].isin(ml_ids), "type"] = "market-limit"
+
     # Identify 'market' orders
-    mo_ids = set(trades["taker.event.id"]) - set(trades["maker.event.id"])
-    mo_ids = mo_ids - set(events.loc[events["type"] == "pacman", "event.id"])
-    events.loc[events["event.id"].isin(mo_ids), "type"] = "market"
+    mo_ids = taker_ids - maker_ids - pacman_ids
+    if mo_ids:
+        events.loc[events["id"].isin(mo_ids), "type"] = "market"
     
     return events
-
