@@ -158,21 +158,6 @@ def depth_metrics(depth, bps=25, bins=20):
         price = int(depth_row[0])
         volume = depth_row[1]
         side = depth_row[2]
-        # print('---------------------------------------------------------------')
-        # print('iteration is: '+str(i)+'\nside is: '+str(side)+'\nolume is: '+str(volume) + '\nprice is: '+str(price))
-
-        # --- ASK SIDE LOGIC ---
-        # Diagram:
-        #    if side > 0 (ask):
-        #        if price > best_bid:
-        #            ... (update ask state)
-        #        else:
-        #            ... (no change)
-        #    else (bid):
-        #        if price < best_ask:
-        #            ... (update bid state)
-        #        else:
-        #            ... (no change)
 
         # ask
         if side > 0:  # if side is 0, bid, if side is 1, ask (this is doing asks)
@@ -214,24 +199,6 @@ def depth_metrics(depth, bps=25, bins=20):
                 metrics.iloc[i, bins + 2] = best_ask
                 metrics.iloc[i, bins + 3] = best_ask_vol
 
-                # a=np.cumsum(volume_range)
-                # try:
-                #    a[breaks]
-                # except:
-                #    print('pause')
-                #
-
-                # print('best ask:')
-                # print(best_ask)
-                # print('best ask vol:')
-                # print(best_ask_vol)
-                # print('end value:')
-                # print(end_value)
-                # print('breaks:')
-                # print(breaks)
-                # print('interval sum breaks:')
-                # print(interval_sum_breaks(volume_range, breaks))
-                # print('---------------------------------------------------------------')
                 metrics.iloc[i, (bins + 4) : (2 * (2 + bins))] = interval_sum_breaks(
                     volume_range, breaks
                 )
@@ -287,24 +254,6 @@ def depth_metrics(depth, bps=25, bins=20):
                 # Update the metrics DataFrame with bid-side data
                 metrics.iloc[i, 0] = best_bid
                 metrics.iloc[i, 1] = best_bid_vol
-
-                # a=np.cumsum(volume_range)
-                # try:
-                #    a[breaks]
-                # except:
-                #    print('pause')
-
-                # print('best bid:')
-                # print(best_bid)
-                # print('best bid vol:')
-                # print(best_bid_vol)
-                # print('end value:')
-                # print(end_value)
-                # print('breaks:')
-                # print(breaks)
-                # print('interval sum breaks:')
-                # print(interval_sum_breaks(volume_range, breaks))
-                # print('---------------------------------------------------------------')
 
                 metrics.iloc[i, 2 : (2 + bins)] = interval_sum_breaks(
                     volume_range, breaks

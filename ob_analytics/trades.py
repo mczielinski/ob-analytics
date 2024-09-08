@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from ob_analytics.auxiliary import vwap
 
+
 def match_trades(events: pd.DataFrame) -> pd.DataFrame:
     """
     Construct a DataFrame of inferred trades (executions).
