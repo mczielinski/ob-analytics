@@ -1,10 +1,10 @@
-# obAnalytics
+# ob-analytics
 
 [![License](http://img.shields.io/badge/license-GPL%20%28%3E=%202%29-blue.svg?style=flat)](http://www.gnu.org/licenses/gpl-2.0.html)
 
 Limit Order Book event processing and visualisation.
 
-**obAnalytics** is an Python package (translated from the original R package) intended for visualisation and analysis of limit
+**ob-analytics** is an Python package (translated from the original R package) intended for visualisation and analysis of limit
 order data. The package is experimental and is based on the R code used to
 create the visualizations in this original [Limit Order Book Visualisation](http://parasec.net/transmission/order-book-visualisation/)
 article.
