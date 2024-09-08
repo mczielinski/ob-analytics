@@ -1,136 +1,118 @@
+## auxillary.py
+
 import numpy as np
 import pandas as pd
 
-def vector_diff(v: pd.Series) -> pd.Series:
-    """
-    Calculate the difference between consecutive elements in a series.
+def vector_diff(v: np.ndarray) -> np.ndarray:
+  """
+  Calculate the difference between consecutive elements of a vector.
 
-    Parameters
-    ----------
-    v : pd.Series
-        Input series.
+  Args:
+    v: A NumPy array of numerical values.
 
-    Returns
-    -------
-    pd.Series
-        Series with the difference between consecutive elements.
-    """
-    return v.diff().fillna(0)
+  Returns:
+    A NumPy array with the same length as v, where the first element is 0 
+    and the remaining elements are the differences between consecutive elements 
+    of v.
+  """
+  return np.diff(v, prepend=0)
 
 def reverse_matrix(m: np.ndarray) -> np.ndarray:
-    """Reverse the rows of a matrix.
-    
-    Parameters
-    ----------
-    m : np.ndarray
-        Input matrix.
+  """
+  Reverse the rows of a matrix.
 
-    Returns
-    -------
-    np.ndarray
-        Matrix with reversed rows.
-    """
-    return m[::-1]
+  Args:
+    m: A 2D NumPy array.
 
-def norml(v: list[float], minv: float = None, maxv: float = None) -> list[float]:
-    """Normalize a list of numbers to the range [0, 1].
-    
-    Parameters
-    ----------
-    v : list[float]
-        Input list of numbers.
-    minv : float, optional
-        Minimum value to be used for normalization. If not specified, the minimum of the list is used.
-    maxv : float, optional
-        Maximum value to be used for normalization. If not specified, the maximum of the list is used.
+  Returns:
+    A 2D NumPy array with the rows reversed.
+  """
+  return m[::-1, :]
 
-    Returns
-    -------
-    list[float]
-        Normalized list of numbers.
-    """
-    v_array = np.array(v)
-    if minv is None:
-        minv = v_array.min()
-    if maxv is None:
-        maxv = v_array.max()
-    return ((v_array - minv) / (maxv - minv)).tolist()
+def norml(v: np.ndarray, minv: float = None, maxv: float = None) -> np.ndarray:
+  """
+  Normalize a vector to the range [0, 1].
 
-def to_zoo(df: pd.DataFrame, timestamp_col: str = "timestamp") -> pd.DataFrame:
-    """Convert a DataFrame to a time-series DataFrame using the specified timestamp column.
-    
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Input DataFrame.
-    timestamp_col : str
-        Name of the column to be used as the timestamp. Default is "timestamp".
+  Args:
+    v: A NumPy array of numerical values.
+    minv: The minimum value for normalization. If None, the minimum of v is used.
+    maxv: The maximum value for normalization. If None, the maximum of v is used.
 
-    Returns
-    -------
-    pd.DataFrame
-        Time-series DataFrame indexed by the timestamp column.
-    """
-    return df.set_index(timestamp_col)
+  Returns:
+    A NumPy array with the same shape as v, where each element is normalized 
+    to the range [0, 1].
+  """
+  minv = np.min(v) if minv is None else minv
+  maxv = np.max(v) if maxv is None else maxv
+  return (v - minv) / (maxv - minv)
 
-def interval_sum_breaks(v: list[float], breaks: list[int]) -> list[float]:
-    """Compute the cumulative sum of a list at specified intervals.
-    
-    Parameters
-    ----------
-    v : list[float]
-        Input list of numbers.
-    breaks : list[int]
-        Indices at which to compute the cumulative sums.
+def to_pandas(v: np.ndarray) -> pd.DataFrame:
+  """
+  Convert a NumPy array to a pandas DataFrame.
 
-    Returns
-    -------
-    list[float]
-        List of cumulative sums at the specified intervals.
-    """
-    cs = np.cumsum(v)
-    intervals = cs[breaks]
-    return np.insert(np.diff(intervals, prepend=0), 0, intervals[0]).tolist()
+  Args:
+    v: A 2D NumPy array, where the first column is assumed to be timestamps.
 
-def vwap(price: list[float], volume: list[float]) -> float:
-    """Compute the Volume Weighted Average Price (VWAP).
-    
-    Parameters
-    ----------
-    price : list[float]
-        List of prices.
-    volume : list[float]
-        Corresponding list of volumes.
+  Returns:
+    A pandas DataFrame representing the time series data.
+  """
+  df = pd.DataFrame(v[:, 1:], columns=[f"col{i}" for i in range(1, v.shape[1])])
+  df['timestamp'] = pd.to_datetime(v[:, 0])
+  df.set_index('timestamp', inplace=True)
+  return df
 
-    Returns
-    -------
-    float
-        Volume Weighted Average Price.
-    """
-    return np.dot(price, volume) / np.sum(volume)
+def interval_sum_breaks(v: np.ndarray, breaks: np.ndarray) -> np.ndarray:
+  """
+  Calculate the sum of values in each interval defined by breaks.
 
-def interval_vwap(price: list[float], volume: list[float], breaks: list[int]) -> list[float]:
-    """Compute the VWAP at specified intervals.
-    
-    Parameters
-    ----------
-    price : list[float]
-        List of prices.
-    volume : list[float]
-        Corresponding list of volumes.
-    breaks : list[int]
-        Indices at which to compute the VWAP.
+  Args:
+    v: A NumPy array of numerical values.
+    breaks: A NumPy array of indices that define the intervals.
 
-    Returns
-    -------
-    list[float]
-        List of VWAP values at the specified intervals.
-    """
-    vwap_values = []
-    start_idx = 0
-    for end_idx in breaks:
-        interval_price = price[start_idx:end_idx+1]
-        interval_volume = volume[start_idx:end_idx+1]
-        vwap_values.append(vwap(interval_price, interval_volume))
-        start_idx = end_idx + 1
-    return vwap_values
+  Returns:
+    A NumPy array with the sum of values in each interval.
+  """
+  cs = np.cumsum(v)
+  intervals = cs[breaks]
+  return np.concatenate(([intervals[0]], np.diff(intervals)))
+
+
+def vwap(price: np.ndarray, volume: np.ndarray) -> float:
+  """
+  Calculate the volume-weighted average price (VWAP).
+
+  Args:
+    price: A NumPy array of prices.
+    volume: A NumPy array of volumes.
+
+  Returns:
+    The VWAP as a float.
+  """
+  return np.average(price, weights=volume)
+
+def interval_vwap(price: np.ndarray, volume: np.ndarray, breaks: np.ndarray) -> np.ndarray:
+  """
+  Calculate the VWAP for each interval defined by breaks.
+
+  Args:
+    price: A NumPy array of prices.
+    volume: A NumPy array of volumes.
+    breaks: A NumPy array of indices that define the intervals.
+
+  Returns:
+    A NumPy array with the VWAP for each interval.
+  """
+  return interval_sum_breaks(price * volume, breaks) / interval_sum_breaks(volume, breaks)
+
+def interval_price_level_gaps(volume: np.ndarray, breaks: np.ndarray) -> np.ndarray:
+  """
+  Calculate the number of price level gaps in each interval.
+
+  Args:
+    volume: A NumPy array of volumes.
+    breaks: A NumPy array of indices that define the intervals.
+
+  Returns:
+    A NumPy array with the number of price level gaps in each interval.
+  """
+  return interval_sum_breaks(np.where(volume == 0, 1, 0), breaks)

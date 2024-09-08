@@ -8,46 +8,95 @@ from ob_analytics.depth import price_level_volume
 from ob_analytics.depth import depth_metrics
 from ob_analytics.event_processing import order_aggressiveness
 
-def process_data(csv_file, price_digits=2, volume_digits=8):
-    def get_zombie_ids(events, trades):
-        cancelled = events[events['action'] == "deleted"]['id']
-        zombies = events[~events['id'].isin(cancelled)]
-        bid_zombies = zombies[zombies['direction'] == "bid"]
-        ask_zombies = zombies[zombies['direction'] == "ask"]
-        
-        bid_zombie_ids = bid_zombies[bid_zombies['id'].apply(
-            lambda id_val: (trades[(trades['direction'] == "sell") & 
-                                  (trades['timestamp'] >= bid_zombies[bid_zombies['id'] == id_val].iloc[-1]['timestamp']) & 
-                                  (trades['price'] < bid_zombies[bid_zombies['id'] == id_val].iloc[-1]['price'])]['price'] != 0).any())]['id'].unique()
-        
-        ask_zombie_ids = ask_zombies[ask_zombies['id'].apply(
-            lambda id_val: (trades[(trades['direction'] == "buy") & 
-                                  (trades['timestamp'] >= ask_zombies[ask_zombies['id'] == id_val].iloc[-1]['timestamp']) & 
-                                  (trades['price'] > ask_zombies[ask_zombies['id'] == id_val].iloc[-1]['price'])]['price'] != 0).any())]['id'].unique()
-        
-        return list(bid_zombie_ids) + list(ask_zombie_ids)
-
-    events = load_event_data(csv_file)
-    events = event_match(events)
-    trades = match_trades(events)
-    events = set_order_types(events, trades)
-    zombie_ids = get_zombie_ids(events, trades)
-    events = events[~events['id'].isin(zombie_ids)]
-
-    depth = price_level_volume(events)
-    depth_summary = depth_metrics(depth)
-    events = order_aggressiveness(events, depth_summary)
+def get_zombie_ids(events, trades):
+    # Filter cancelled events
+    cancelled = events[events['action'] == "deleted"]['id']
+    zombies = events[~events['id'].isin(cancelled)]
     
-    offset = min(events['timestamp']) + pd.Timedelta(minutes=60)
-    return {
-        'events': events,
-        'trades': trades,
-        'depth': depth,
-        'depth_summary': depth_summary[depth_summary['timestamp'] >= offset]
-    }
+    # Separate bid and ask zombies
+    bid_zombies = zombies[zombies['direction'] == "bid"]
+    ask_zombies = zombies[zombies['direction'] == "ask"]
+    
+    # Identify bid zombies
+    bid_zombie_ids = bid_zombies['id'].unique()
+    valid_bid_zombies = []
+    for bid_id in bid_zombie_ids:
+        zombie = bid_zombies[bid_zombies['id'] == bid_id].iloc[-1]
+        if any((trades['direction'] == "sell") & 
+               (trades['timestamp'] >= zombie['timestamp']) & 
+               (trades['price'] < zombie['price'])):
+            valid_bid_zombies.append(bid_id)
+    
+    # Identify ask zombies
+    ask_zombie_ids = ask_zombies['id'].unique()
+    valid_ask_zombies = []
+    for ask_id in ask_zombie_ids:
+        zombie = ask_zombies[ask_zombies['id'] == ask_id].iloc[-1]
+        if any((trades['direction'] == "buy") & 
+               (trades['timestamp'] >= zombie['timestamp']) & 
+               (trades['price'] > zombie['price'])):
+            valid_ask_zombies.append(ask_id)
+    
+    # Combine bid and ask zombies
+    return valid_bid_zombies + valid_ask_zombies
 
-def load_data(bin_file, **kwargs):
-    return pd.read_pickle(bin_file)
 
-def save_data(lob_data, bin_file, **kwargs):
-    lob_data.to_pickle(bin_file)
+def process_data(csv_file: str, price_digits: int = 2, volume_digits: int = 8) -> dict:
+  """
+  Import and preprocess limit order data from a CSV file.
+
+  Args:
+    csv_file: The path to the CSV file containing limit order data.
+    price_digits: The number of decimal places for the 'price' column.
+    volume_digits: The number of decimal places for the 'volume' column.
+
+  Returns:
+    A dictionary containing four pandas DataFrames:
+      - events: Limit order events.
+      - trades: Inferred trades (executions).
+      - depth: Order book price level depth through time.
+      - depth_summary: Limit order book summary statistics.
+  """
+
+  #def get_zombie_ids(events: pd.DataFrame, trades: pd.DataFrame) -> list:
+    # ... (Implementation will be added later)
+
+  events = load_event_data(csv_file, price_digits, volume_digits)
+  events = event_match(events)
+  trades = match_trades(events)
+  events = set_order_types(events, trades)
+  zombie_ids = get_zombie_ids(events, trades)
+  events = events[~events['id'].isin(zombie_ids)]
+
+  depth = price_level_volume(events)
+  depth_summary = depth_metrics(depth)
+  events = order_aggressiveness(events, depth_summary)
+  offset = pd.Timedelta(minutes=1)
+  return {
+      'events': events,
+      'trades': trades,
+      'depth': depth,
+      'depth_summary': depth_summary[depth_summary['timestamp'] >= events['timestamp'].min() + offset]
+  }
+
+def load_data(bin_file: str) -> dict:
+  """
+  Load pre-processed data from a file.
+
+  Args:
+    bin_file: The path to the file containing pre-processed data.
+
+  Returns:
+    A dictionary containing the loaded DataFrames, similar to the output of `process_data`.
+  """
+  return pd.read_pickle(bin_file)  # Assuming pickle format
+
+def save_data(lob_data: dict, bin_file: str):
+  """
+  Save processed data to a file.
+
+  Args:
+    lob_data: A dictionary containing the DataFrames to save.
+    bin_file: The path to the file where the data will be saved.
+  """
+  pd.to_pickle(lob_data, bin_file)  # Assuming pickle format

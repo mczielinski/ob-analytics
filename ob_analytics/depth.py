@@ -1,187 +1,288 @@
 
 import pandas as pd
 import numpy as np
+from ob_analytics.auxiliary import interval_sum_breaks
 
-def price_level_volume(events):
+def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
+  """
+  Calculate the cumulative volume for each price level over time.
+
+  Args:
+    events: A pandas DataFrame containing limit order events.
+
+  Returns:
+    A pandas DataFrame with the cumulative volume for each price level.
+  """
+
+  def directional_price_level_volume(dir_events):
+    cols = ["event.id", "id", "timestamp", "exchange.timestamp", "price", 
+            "volume", "direction", "action"]
     
-    def directional_price_level_volume(dir_events):
-        dir_events = dir_events.copy()
-        condition = (
-    (dir_events['action'] == 'created')
-    | (
-        (dir_events['action'] == 'changed')
-        & (dir_events['fill'] == 0)
-    )
-) & (dir_events['type'] != 'pacman') & (dir_events['type'] != 'market')
-        added_volume = dir_events[condition][['event.id', 'id', 'timestamp', 'exchange.timestamp', 'price', 'volume', 'direction', 'action']]
-        
-        condition = (
-    (dir_events['action'] == 'deleted')
-    & (dir_events['volume'] > 0)
-    & (dir_events['type'] != 'pacman')
-    & (dir_events['type'] != 'market')
-)
-        cancelled_volume = dir_events[condition][['event.id', 'id', 'timestamp', 'exchange.timestamp', 'price', 'volume', 'direction', 'action']]
-        cancelled_volume['volume'] = -cancelled_volume['volume']
-        cancelled_volume = cancelled_volume[cancelled_volume['id'].isin(added_volume['id'])]
-
-        condition = (
-    (dir_events['fill'] > 0)
-    & (dir_events['type'] != 'pacman')
-    & (dir_events['type'] != 'market')
-)
-        filled_volume = dir_events[condition][['event.id', 'id', 'timestamp', 'exchange.timestamp', 'price', 'fill', 'direction', 'action']]
-        filled_volume['fill'] = -filled_volume['fill']
-        filled_volume = filled_volume[filled_volume['id'].isin(added_volume['id'])]
-        filled_volume.columns = ['event.id', 'id', 'timestamp', 'exchange.timestamp', 'price', 'volume', 'direction', 'action']
-
-        volume_deltas = pd.concat([added_volume, cancelled_volume, filled_volume])
-        volume_deltas = volume_deltas.sort_values(['price', 'timestamp'])
-        
-        cum_volume = volume_deltas.groupby('price')['volume'].cumsum()
-        cum_volume = np.where(cum_volume < 0, 0, cum_volume)
-        
-        return pd.DataFrame({
-            'timestamp': volume_deltas['timestamp'],
-            'price': volume_deltas['price'],
-            'volume': cum_volume,
-            'side': volume_deltas['direction']
-        })
-
-    bids = events[events['direction'] == 'bid']
-    depth_bid = directional_price_level_volume(bids)
-    asks = events[events['direction'] == 'ask']
-    depth_ask = directional_price_level_volume(asks)
-    depth_data = pd.concat([depth_bid, depth_ask])
+    # Added Volume
+    added_volume = dir_events[((dir_events['action'] == "created") | 
+                               ((dir_events['action'] == "changed") & 
+                                (dir_events['fill'] == 0))) & 
+                              (dir_events['type'] != "pacman") & 
+                              (dir_events['type'] != "market")][cols]
     
-    return depth_data.sort_values('timestamp')
+    # Cancelled Volume
+    cancelled_volume = dir_events[(dir_events['action'] == "deleted") & 
+                                  (dir_events['volume'] > 0) & 
+                                  (dir_events['type'] != "pacman") & 
+                                  (dir_events['type'] != "market")][cols]
+    cancelled_volume['volume'] = -cancelled_volume['volume']
+    cancelled_volume = cancelled_volume[cancelled_volume['id'].isin(added_volume['id'])]
+    
+    # Filled Volume
+    filled_volume = dir_events[(dir_events['fill'] > 0) & 
+                               (dir_events['type'] != "pacman") & 
+                               (dir_events['type'] != "market")][
+        ["event.id", "id", "timestamp", "exchange.timestamp", "price", "fill", "direction", "action"]]
+    filled_volume['fill'] = -filled_volume['fill']
+    filled_volume = filled_volume[filled_volume['id'].isin(added_volume['id'])]
+    filled_volume.columns = cols
+    
+    # Combine Volumes
+    volume_deltas = pd.concat([added_volume, cancelled_volume, filled_volume])
+    volume_deltas = volume_deltas.sort_values(by=['price', 'timestamp'])
+    
+    # Calculate Cumulative Volume
+    volume_deltas['volume'] = volume_deltas.groupby('price')['volume'].cumsum()
+    volume_deltas['volume'] = volume_deltas['volume'].clip(lower=0)
+    
+    return volume_deltas[['timestamp', 'price', 'volume', 'direction']]
 
-def interval_sum_breaks(volume_range, breaks):
-    sums = []
-    prev_idx = 0
-    for b in breaks:
-        sums.append(volume_range[prev_idx:b].sum())
-        prev_idx = b
-    return sums
 
-def filter_depth(d, from_time, to_time):
-    # 1. Get all active price levels before the start of the range.
-    pre = d[d['timestamp'] <= from_time]
+  bids = events[events['direction'] == 'bid']
+  depth_bid = directional_price_level_volume(bids)
+  asks = events[events['direction'] == 'ask']
+  depth_ask = directional_price_level_volume(asks)
+  depth_data = pd.concat([depth_bid, depth_ask])
+  return depth_data.sort_values(by='timestamp')
+
+def filter_depth(d: pd.DataFrame, from_timestamp: pd.Timestamp, to_timestamp: pd.Timestamp)-> pd.DataFrame:
+    # 1. Get all active price levels before start of range
+    pre = d[d['timestamp'] <= from_timestamp]
     pre = pre.sort_values(by=['price', 'timestamp'])
 
-    # Last update for each price level <= from_time. This becomes the starting point
-    # for all updates within the range.
-    pre = pre.loc[~pre['price'].duplicated(keep='last') & (pre['volume'] > 0)]
+    # Last update for each price level <= from. This becomes the starting point for all updates within the range.
+    pre = pre.drop_duplicates(subset='price', keep='last')
+    pre = pre[pre['volume'] > 0]
 
-    # Clamp range (reset timestamp to from_time if price level active before start of range).
+    # Clamp range (reset timestamp to from if price level active before start of range)
     if not pre.empty:
-        pre['timestamp'] = pre['timestamp'].apply(lambda r: max(from_time, r))
+        pre['timestamp'] = pre['timestamp'].apply(lambda r: max(from_timestamp, r))
 
-    # 2. Add all volume changes within the range.
-    mid = d[(d['timestamp'] > from_time) & (d['timestamp'] < to_time)]
-    combined_range = pd.concat([pre, mid])
+    # 2. Add all volume changes within the range
+    mid = d[(d['timestamp'] > from_timestamp) & (d['timestamp'] < to_timestamp)]
+    range_combined = pd.concat([pre, mid])
 
-    # 3. At the end of the range, set all price level volume to 0.
-    open_ends = combined_range.loc[~combined_range['price'].duplicated(keep='last') & (combined_range['volume'] > 0)].copy()
-    open_ends['timestamp'] = to_time
+    # 3. At the end of the range, set all price level volume to 0
+    open_ends = range_combined.drop_duplicates(subset='price', keep='last')
+    open_ends = open_ends[open_ends['volume'] > 0].copy()
+    open_ends['timestamp'] = to_timestamp
     open_ends['volume'] = 0
 
-    # Combine pre, mid, and open_ends. Ensure it's in order.
-    combined_range = pd.concat([combined_range, open_ends])
-    combined_range = combined_range.sort_values(by=['price', 'timestamp'])
+    # Combine pre, mid, and open_ends, ensure it is in order
+    range_combined = pd.concat([range_combined, open_ends])
+    range_combined = range_combined.sort_values(by=['price', 'timestamp'])
 
-    return combined_range
-    
+    return range_combined
+
 def depth_metrics(depth, bps=25, bins=20):
     def pct_names(name):
         return [f"{name}{i}bps" for i in range(bps, bps * bins + 1, bps)]
-    
-    ordered_depth = depth.sort_values(by="timestamp")
-    ordered_depth["price"] = (100 * ordered_depth["price"]).values.round().astype(int)
-    depth_matrix = np.column_stack([ordered_depth["price"], ordered_depth["volume"], 
-                                   np.where(ordered_depth["side"] == "bid", 0, 1)])
 
-    metrics_columns = ["best.bid.price", "best.bid.vol"] + pct_names("bid.vol") + ["best.ask.price", "best.ask.vol"] + pct_names("ask.vol")
-    metrics = pd.DataFrame(0, columns=metrics_columns, index=ordered_depth.index)
+    ordered_depth = depth.sort_values(by='timestamp')
+    ordered_depth['price'] = (100 * ordered_depth['price']).round().astype(int)
+    depth_matrix = np.column_stack((ordered_depth['price'], ordered_depth['volume'],
+                                     np.where(ordered_depth['direction'] == 'bid', 0, 1)))
 
+    metrics = pd.DataFrame(0, index=range(len(ordered_depth)),
+                           columns=['best.bid.price', 'best.bid.vol'] + pct_names("bid.vol") +
+                                   ['best.ask.price', 'best.ask.vol'] + pct_names("ask.vol"))
+
+    # the volume state for all price level depths. (updated in loop)
     asks_state = np.zeros(1000000, dtype=int)
-    asks_state[-1] = 1
+    asks_state[999999] = 1  # trick (so there is an initial best ask)
     bids_state = np.zeros(1000000, dtype=int)
-    bids_state[0] = 1
-
-    best_ask = ordered_depth.loc[ordered_depth["side"] == "ask", "price"].max()
-    best_bid = ordered_depth.loc[ordered_depth["side"] == "bid", "price"].min()
+    bids_state[0] = 1  # trick
+    # initial best bid/ask
+    best_ask = ordered_depth[ordered_depth['direction'] == 'ask']['price'].max()
+    best_bid = ordered_depth[ordered_depth['direction'] == 'bid']['price'].min()
     best_ask_vol = 0
     best_bid_vol = 0
 
     for i in range(len(ordered_depth)):
-        depth_row = depth_matrix[i]
-        price, volume, side = depth_row
+        depth_row = depth_matrix[i, :]
+        price = int(depth_row[0])
+        volume = depth_row[1]
+        side = depth_row[2]
+        #print('---------------------------------------------------------------')
+        #print('iteration is: '+str(i)+'\nside is: '+str(side)+'\nolume is: '+str(volume) + '\nprice is: '+str(price))
 
-        if side > 0:
+        # --- ASK SIDE LOGIC ---
+        # Diagram:
+        #    if side > 0 (ask):
+        #        if price > best_bid:
+        #            ... (update ask state)
+        #        else:
+        #            ... (no change)
+        #    else (bid):
+        #        if price < best_ask:
+        #            ... (update bid state)
+        #        else:
+        #            ... (no change)
+
+        # ask
+        if side > 0:  # if side is 0, bid, if side is 1, ask (this is doing asks)
+            # If the current price is higher than the best bid, it's a valid ask
             if price > best_bid:
-                asks_state[int(price)] = volume
+                asks_state[price] = volume  # Update the volume at this price level
+                # If there's volume at this price level
                 if volume > 0:
+                    # If the price is lower than the current best ask, update best ask and volume
                     if price < best_ask:
                         best_ask = price
                         best_ask_vol = volume
+                    # If the price is the same as the current best ask, update only the volume
                     elif price == best_ask:
                         best_ask_vol = volume
+                # If there's no volume at this price level
                 else:
+                    # If this price was the best ask, find the new best ask
                     if price == best_ask:
                         best_ask = np.where(asks_state > 0)[0][0]
                         best_ask_vol = asks_state[best_ask]
 
-                price_range = np.arange(int(best_ask), int((1 + bps * bins * 0.0001) * best_ask) + 1)
+                # Calculate the price range and volume range for the ask side
+                end_value = round((1+bps * bins * 0.0001) * best_ask)+1
+                price_range = np.arange(best_ask, end_value, 1)      
+                
                 volume_range = asks_state[price_range]
 
-                breaks = np.ceil(np.cumsum([len(price_range) / bins] * bins)).astype(int)
+                # Calculate breaks for binning the volume data
+                breaks = np.ceil(np.cumsum(np.repeat(len(price_range) / bins, bins))).astype(int)-1
+                breaks[-1]= breaks[-1]-1
 
-                metrics.at[ordered_depth.index[i], "best.ask.price"] = best_ask
-                metrics.at[ordered_depth.index[i], "best.ask.vol"] = best_ask_vol
-                metrics.loc[ordered_depth.index[i], pct_names("ask.vol")] = interval_sum_breaks(volume_range, breaks)
+                # Update the metrics DataFrame with ask-side data
+                metrics.iloc[i, bins + 2] = best_ask
+                metrics.iloc[i, bins + 3] = best_ask_vol
+                
+                #a=np.cumsum(volume_range)
+                #try: 
+                #    a[breaks]
+                #except:
+                #    print('pause')
+                #
 
+                #print('best ask:')
+                #print(best_ask)
+                #print('best ask vol:')
+                #print(best_ask_vol)
+                #print('end value:')
+                #print(end_value)
+                #print('breaks:')
+                #print(breaks)
+                #print('interval sum breaks:')
+                #print(interval_sum_breaks(volume_range, breaks))
+                #print('---------------------------------------------------------------')
+                metrics.iloc[i, (bins + 4):(2 * (2 + bins))] =interval_sum_breaks(volume_range, breaks)
+
+                # Copy the last bid data (no need to re-calculate it)
                 if i > 0:
-                    metrics.iloc[i, :bins + 2] = metrics.iloc[i - 1, :bins + 2]
+                    metrics.iloc[i, : (2 + bins)] = metrics.iloc[i - 1, : (2 + bins)]
+            # If the price is not higher than the best bid, it's not a valid ask, so no changes are made
             else:
+                # Copy the last data (no change)
                 if i > 0:
-                    metrics.iloc[i] = metrics.iloc[i - 1]
+                    metrics.iloc[i, :] = metrics.iloc[i - 1, :]
 
-        else:
+        # --- BID SIDE LOGIC ---
+        # This section follows a similar logic as the ask side, but for bids
+        else:  # bid
+            # If the current price is lower than the best ask, it's a valid bid
             if price < best_ask:
-                bids_state[int(price)] = volume
+                bids_state[price] = volume  # Update the volume at this price level
+                # If there's volume at this price level
                 if volume > 0:
+                    # If the price is higher than the current best bid, update best bid and volume
                     if price > best_bid:
                         best_bid = price
+                    # If the price is the same as the current best bid, update only the volume
                     elif price == best_bid:
                         best_bid_vol = volume
+                # If there's no volume at this price level
                 else:
+                    # If this price was the best bid, find the new best bid
                     if price == best_bid:
                         best_bid = np.where(bids_state > 0)[0][-1]
                         best_bid_vol = bids_state[best_bid]
 
-                price_range = np.arange(int(best_bid), int((1 - bps * bins * 0.0001) * best_bid) - 1, -1)
+                # Calculate the price range and volume range for the bid side
+                
+                # Calculate the end value for the price_range
+                end_value = round((1 - bps * bins * 0.0001) * best_bid)
 
+                # Create the price_range array using np.arange, ensuring it includes the end value by adding 1 to the end value
+                price_range = np.arange(best_bid, end_value - 1, -1)                
                 volume_range = bids_state[price_range]
 
-                breaks = np.ceil(np.cumsum([len(price_range) / bins] * bins)).astype(int)
+                # Calculate breaks for binning the volume data
+                breaks = np.ceil(np.cumsum(np.repeat(len(price_range) / bins, bins))).astype(int)-1
+                breaks[-1]= breaks[-1]-1
 
-                metrics.at[ordered_depth.index[i], "best.bid.price"] = best_bid
-                metrics.at[ordered_depth.index[i], "best.bid.vol"] = best_bid_vol
-                metrics.loc[ordered_depth.index[i], pct_names("bid.vol")] = interval_sum_breaks(volume_range, breaks)
+                # Update the metrics DataFrame with bid-side data
+                metrics.iloc[i, 0] = best_bid
+                metrics.iloc[i, 1] = best_bid_vol
+                
+                #a=np.cumsum(volume_range)
+                #try: 
+                #    a[breaks]
+                #except:
+                #    print('pause')
 
+                #print('best bid:')
+                #print(best_bid)
+                #print('best bid vol:')
+                #print(best_bid_vol)
+                #print('end value:')
+                #print(end_value)
+                #print('breaks:')
+                #print(breaks)
+                #print('interval sum breaks:')
+                #print(interval_sum_breaks(volume_range, breaks))
+                #print('---------------------------------------------------------------')
+
+                metrics.iloc[i, 2:(2 + bins)] = interval_sum_breaks(volume_range, breaks)
+
+                # Copy the last ask data (no need to re-calculate it)
                 if i > 0:
-                    metrics.iloc[i, bins + 2:] = metrics.iloc[i - 1, bins + 2:]
+                    metrics.iloc[i, (bins + 2):(2 * (2 + bins))] = metrics.iloc[i - 1, (bins + 2):(2 * (2 + bins))]
+            # If the price is not lower than the best ask, it's not a valid bid, so no changes are made
             else:
+                # Copy the last data (no change)
                 if i > 0:
-                    metrics.iloc[i] = metrics.iloc[i - 1]
+                    metrics.iloc[i, :] = metrics.iloc[i - 1, :]
 
-    res = pd.concat([ordered_depth["timestamp"], metrics], axis=1)
-    res[["best.bid.price", "best.ask.price"]] = (0.01 * res[["best.bid.price", "best.ask.price"]]).round(2)
-    
+    # back into $
+    #res = pd.concat([ordered_depth['timestamp'], metrics], axis=1)
+    res =pd.concat([ordered_depth.reset_index()['timestamp'], metrics], axis=1)
+    keys = ["best.bid.price", "best.ask.price"]
+    res[keys] = round(0.01 * res[keys], 2)
+
     return res
 
-def get_spread(depth_summary):
-    spread = depth_summary[['timestamp', 'best.bid.price', 'best.bid.vol', 'best.ask.price', 'best.ask.vol']]
-    changes = (spread['best.bid.price'].diff() != 0) | (spread['best.bid.vol'].diff() != 0) | (spread['best.ask.price'].diff() != 0) | (spread['best.ask.vol'].diff() != 0)
-    return spread[changes].copy()
+def get_spread(depth_summary: pd.DataFrame) -> pd.DataFrame:
+  """
+  Extract the bid/ask spread from the depth summary.
+
+  Args:
+    depth_summary: A pandas DataFrame containing depth summary statistics.
+
+  Returns:
+    A pandas DataFrame with the bid/ask spread data.
+  """
+  spread = depth_summary[['timestamp', 'best_bid_price', 'best_bid_vol', 'best_ask_price', 'best_ask_vol']]
+  changes = (spread[['best_bid_price', 'best_bid_vol', 'best_ask_price', 'best_ask_vol']].diff() != 0).any(axis=1)
+  return spread[changes]
