@@ -54,43 +54,43 @@ def plot_time_series(timestamp, series, start_time=None, end_time=None,
 
 def plot_trades(trades, start_time=None, end_time=None):
     """
-    Plots the trades data in a step-wise visualization.
-    
+    Plots the trades data as a step plot.
+
     Parameters:
     - trades: pd.DataFrame
         DataFrame containing the trades data with columns 'timestamp' and 'price'.
-    - start_time: str, optional
+    - start_time: datetime, optional
         Start time for the plot.
-    - end_time: str, optional
+    - end_time: datetime, optional
         End time for the plot.
 
     Returns:
     - None
     """
-    # Filter trades based on start_time and end_time
     if not start_time:
         start_time = trades['timestamp'].min()
     if not end_time:
         end_time = trades['timestamp'].max()
 
-    ts = trades[(trades['timestamp'] >= start_time) & (trades['timestamp'] <= end_time)]
-    
-    price_by = 10**np.round(np.log10(ts['price'].max() - ts['price'].min()) - 1)
-    
+    filtered_trades = trades[(trades['timestamp'] >= start_time) & (trades['timestamp'] <= end_time)]
+
+    # Calculate price breaks for y-axis
+    price_range = filtered_trades['price'].max() - filtered_trades['price'].min()
+    price_by = 10 ** round(np.log10(price_range) - 1)
+    y_breaks = np.arange(round(min(filtered_trades['price']) / price_by) * price_by, 
+                         round(max(filtered_trades['price']) / price_by) * price_by, 
+                         step=price_by)
+
     # Plotting
     plt.figure(figsize=(10, 6))
-    sns.lineplot(data=ts, x='timestamp', y='price', drawstyle='steps-post')
-    
-    price_ticks = np.arange(np.round(ts['price'].min() / price_by) * price_by, 
-                            np.round(ts['price'].max() / price_by) * price_by + price_by, 
-                            price_by)
-    plt.yticks(price_ticks)
-    plt.ylabel("limit price")
-    plt.xlabel("time")
+    sns.lineplot(data=filtered_trades, x='timestamp', y='price', drawstyle='steps-post')
+
+    plt.xlabel("Time")
+    plt.ylabel("Limit Price")
+    plt.yticks(y_breaks)
     plt.grid(True)
     plt.tight_layout()
 
-    # Display the plot
     plt.show()
 
 def plot_price_levels(depth, spread=None, trades=None, show_mp=True,
@@ -98,6 +98,11 @@ def plot_price_levels(depth, spread=None, trades=None, show_mp=True,
                       end_time=None, price_from=None, price_to=None,
                       volume_from=None, volume_to=None, volume_scale=1,
                       price_by=None):
+    
+    if start_time is None:
+        start_time = depth['timestamp'].min()
+    if end_time is None:
+        end_time = depth['timestamp'].max()
 
     # Scale the volume
     depth['volume'] *= volume_scale
@@ -207,10 +212,16 @@ def plot_price_levels_faster(depth, spread=None, trades=None, show_mp=True,
     sns.set_style("darkgrid")
     plt.legend(loc='upper left')
     
-    plt.show()
+    plt.savefig('foo.png')
+
 
 def plot_event_map(events, start_time=None, end_time=None, price_from=None,
                    price_to=None, volume_from=None, volume_to=None, volume_scale=1):
+    
+    if start_time is None:
+        start_time = events['timestamp'].min()
+    if end_time is None:
+        end_time = events['timestamp'].max()
 
     # Filter events based on given criteria
     events = events[(events['timestamp'] >= start_time) & 
@@ -256,6 +267,11 @@ def plot_volume_map(events, action="deleted", event_type=["flashed-limit"],
                     volume_from=None, volume_to=None, volume_scale=1, log_scale=False):
     
     assert action in ["deleted", "created"], "Invalid action provided"
+    
+    if start_time is None:
+        start_time = events['timestamp'].min()
+    if end_time is None:
+        end_time = events['timestamp'].max()
     
     # Scale the volume
     events['volume'] *= volume_scale
@@ -335,8 +351,13 @@ def plot_current_depth(order_book, volume_scale=1, show_quantiles=True, show_vol
     sns.set_style("darkgrid")
     plt.show()
 
-def plot_volume_percentiles(depth_summary, start_time, end_time, 
+def plot_volume_percentiles(depth_summary, start_time=None, end_time=None, 
                             volume_scale=1, perc_line=True, side_line=True):
+    
+    if start_time is None:
+        start_time = depth_summary['timestamp'].min()
+    if end_time is None:
+        end_time = depth_summary['timestamp'].max()
     
     # Subset the data frame based on start and end times
     depth_summary = depth_summary[(depth_summary['timestamp'] >= start_time) & 
@@ -374,7 +395,12 @@ def plot_volume_percentiles(depth_summary, start_time, end_time,
     plt.title("Order Book Liquidity Through Time")
     plt.show()
 
-def plot_events_histogram(events, start_time, end_time, val="volume", bw=None):
+def plot_events_histogram(events, start_time=None, end_time=None, val="volume", bw=None):
+    
+    if start_time is None:
+        start_time = events['timestamp'].min()
+    if end_time is None:
+        end_time = events['timestamp'].max()
     
     assert val in ["volume", "price"], "Invalid value for 'val'. Choose 'volume' or 'price'."
     
