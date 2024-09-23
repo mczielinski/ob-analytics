@@ -19,18 +19,24 @@ def vector_diff(v: np.ndarray) -> np.ndarray:
     return np.diff(v, prepend=0)
 
 
-def reverse_matrix(m: np.ndarray) -> np.ndarray:
+def reverse_matrix(m):
     """
-    Reverse the rows of a matrix.
+    Reverse the rows of a DataFrame or 2D NumPy array.
 
     Args:
-      m: A 2D NumPy array.
+        m: A pandas DataFrame or 2D NumPy array.
 
     Returns:
-      A 2D NumPy array with the rows reversed.
+        A DataFrame or 2D NumPy array with the rows reversed.
     """
-    return m[::-1, :]
-
+    # For a pandas DataFrame
+    if isinstance(m, pd.DataFrame):
+        return m.iloc[::-1].reset_index(drop=True)
+    # For a NumPy array
+    elif isinstance(m, np.ndarray):
+        return m[::-1, :]
+    else:
+        raise TypeError("Input must be a pandas DataFrame or a NumPy array.")
 
 def norml(v: np.ndarray, minv: float = None, maxv: float = None) -> np.ndarray:
     """
