@@ -293,15 +293,15 @@ def get_spread(depth_summary: pd.DataFrame) -> pd.DataFrame:
     spread = depth_summary[
         [
             "timestamp",
-            "best_bid_price",
-            "best_bid_vol",
-            "best_ask_price",
-            "best_ask_vol",
+            "best.bid.price",
+            "best.bid.vol",
+            "best.ask.price",
+            "best.ask.vol",
         ]
     ]
     changes = (
         spread[
-            ["best_bid_price", "best_bid_vol", "best_ask_price", "best_ask_vol"]
+            ["best.bid.price", "best.bid.vol", "best.ask.price", "best.ask.vol"]
         ].diff()
         != 0
     ).any(axis=1)
