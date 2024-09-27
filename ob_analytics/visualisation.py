@@ -769,9 +769,7 @@ def plot_volume_percentiles(
     col_pal *= 2  # Duplicate for bids and asks
 
     # Define breaks and legend names
-    breaks = [f"ask.vol{int(i):03d}bps" for i in range(500, 49, -50)] + [
-        f"bid.vol{int(i):03d}bps" for i in range(50, 501, 50)
-    ]
+    
     legend_names = [f"+{int(i):03d}bps" for i in range(500, 49, -50)] + [
         f"-{int(i):03d}bps" for i in range(50, 501, 50)
     ]
