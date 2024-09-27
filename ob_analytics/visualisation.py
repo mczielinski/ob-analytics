@@ -1,11 +1,15 @@
-import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 import seaborn as sns
-from ob_analytics.depth import filter_depth
-from ob_analytics.auxiliary import reverse_matrix
 
-sns.set_theme(style='darkgrid', context='notebook', font_scale=1.5, rc={"lines.linewidth": 2.5})
+from ob_analytics.auxiliary import reverse_matrix
+from ob_analytics.depth import filter_depth
+
+sns.set_theme(
+    style="darkgrid", context="notebook", font_scale=1.5, rc={"lines.linewidth": 2.5}
+)
+
 
 def plot_time_series(
     timestamp,
@@ -348,7 +352,7 @@ def plot_event_map(
         color="#333333",  # Color for the created events
         ax=ax,
         legend=False,
-        marker='o'
+        marker="o",
     )
 
     # Plot deleted events with an open marker
@@ -361,9 +365,9 @@ def plot_event_map(
         color="#333333",  # Color for the deleted events
         ax=ax,
         legend=False,
-        marker='o',
+        marker="o",
         edgecolor="black",
-        alpha=0.5
+        alpha=0.5,
     )
 
     # Overlay the events with color based on the direction (ask/bid)
@@ -375,14 +379,19 @@ def plot_event_map(
         size=0.1,  # Small size for direction overlay
         palette=col_pal,
         ax=ax,
-        legend=False
+        legend=False,
     )
 
     # Set axis labels and customize plot
     ax.set_xlabel("Time")
     ax.set_ylabel("Limit Price")
-    ax.set_yticks(np.arange(round(events["price"].min() / price_by) * price_by, 
-                            round(events["price"].max() / price_by) * price_by, price_by))
+    ax.set_yticks(
+        np.arange(
+            round(events["price"].min() / price_by) * price_by,
+            round(events["price"].max() / price_by) * price_by,
+            price_by,
+        )
+    )
 
     sns.set_style("darkgrid")
     plt.show()
@@ -455,103 +464,129 @@ def plot_volume_map(
     sns.set_style("darkgrid")
     plt.show()
 
-def plot_current_depth(order_book, volume_scale=1, show_quantiles=True, show_volume=True):
+
+def plot_current_depth(
+    order_book, volume_scale=1, show_quantiles=True, show_volume=True
+):
     # Ensure bids are sorted descending and asks ascending
-    #bids = order_book['bids'].sort_values(by='price', ascending=False).reset_index(drop=True)
-    #asks = order_book['asks'].sort_values(by='price', ascending=True).reset_index(drop=True)
-    bids=reverse_matrix(order_book['bids'])
-    asks=reverse_matrix(order_book['asks'])
+    # bids = order_book['bids'].sort_values(by='price', ascending=False).reset_index(drop=True)
+    # asks = order_book['asks'].sort_values(by='price', ascending=True).reset_index(drop=True)
+    bids = reverse_matrix(order_book["bids"])
+    asks = reverse_matrix(order_book["asks"])
 
     # Combine both sides into a single series
-    x = np.concatenate([
-        bids['price'].values,
-        [bids['price'].values[-1]],
-        [asks['price'].values[0]],
-        asks['price'].values
-    ])
-    y1 = np.concatenate([
-        bids['liquidity'].values,
-        [0],
-        [0],
-        asks['liquidity'].values
-    ]) * volume_scale
-    y2 = np.concatenate([
-        bids['volume'].values,
-        [0],
-        [0],
-        asks['volume'].values
-    ]) * volume_scale
-    side = ['bid'] * (len(bids) + 1) + ['ask'] * (len(asks) + 1)
+    x = np.concatenate(
+        [
+            bids["price"].values,
+            [bids["price"].values[-1]],
+            [asks["price"].values[0]],
+            asks["price"].values,
+        ]
+    )
+    y1 = (
+        np.concatenate([bids["liquidity"].values, [0], [0], asks["liquidity"].values])
+        * volume_scale
+    )
+    y2 = (
+        np.concatenate([bids["volume"].values, [0], [0], asks["volume"].values])
+        * volume_scale
+    )
+    side = ["bid"] * (len(bids) + 1) + ["ask"] * (len(asks) + 1)
 
     # Create depth DataFrame
-    depth = pd.DataFrame({'price': x, 'liquidity': y1, 'volume': y2, 'side': side})
+    depth = pd.DataFrame({"price": x, "liquidity": y1, "volume": y2, "side": side})
 
     # Set up the plot
-    #plt.style.use('dark_background')
+    # plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(12, 7))
 
-    # Plot volume using ax.bar for proper alignment
+    # Plot volume using ax.bar with auto-scaling bar width
     if show_volume:
-        bar_width = 0.8  # Adjust as needed
-        ax.bar(depth['price'], depth['volume'], width=bar_width, color='#555555', alpha=0.3, align='center', edgecolor=None)
+        # Compute bar width based on the resolution of the price data
+        unique_prices = np.sort(np.unique(depth["price"]))
+        price_diffs = np.diff(unique_prices)
+        # Filter out zero or negative differences
+        price_diffs = price_diffs[price_diffs > 0]
+        if len(price_diffs) > 0:
+            resolution = np.min(price_diffs)
+            bar_width = resolution * 5  # 500% of the minimum non-zero price difference
+        else:
+            # If all prices are the same, set a default bar width
+            bar_width = 1  # Adjust as necessary
+
+        ax.bar(
+            depth["price"],
+            depth["volume"],
+            width=bar_width,
+            color="#555555",
+            alpha=0.3,
+            align="center",
+            edgecolor=None,
+        )
 
     # Plot liquidity (cumulative volume)
-    col_pal = {'ask': '#ff0000', 'bid': '#0000ff'}
-    for side_value in ['bid', 'ask']:
-        side_data = depth[depth['side'] == side_value]
-        ax.step(side_data['price'], side_data['liquidity'], where='pre',  # Changed 'post' to 'pre'
-            color=col_pal[side_value], label=side_value, linewidth=2)
+    col_pal = {"ask": "#ff0000", "bid": "#0000ff"}
+    for side_value in ["bid", "ask"]:
+        side_data = depth[depth["side"] == side_value]
+        ax.step(
+            side_data["price"],
+            side_data["liquidity"],
+            where="pre",  # Changed 'post' to 'pre'
+            color=col_pal[side_value],
+            label=side_value,
+            linewidth=2,
+        )
 
     # Highlight highest 1% volume with vertical lines
     if show_quantiles:
-        bid_quantile = bids['volume'].quantile(0.99)
-        bid_quantiles = bids.loc[bids['volume'] >= bid_quantile, 'price']
-        ask_quantile = asks['volume'].quantile(0.99)
-        ask_quantiles = asks.loc[asks['volume'] >= ask_quantile, 'price']
+        bid_quantile = bids["volume"].quantile(0.99)
+        bid_quantiles = bids.loc[bids["volume"] >= bid_quantile, "price"]
+        ask_quantile = asks["volume"].quantile(0.99)
+        ask_quantiles = asks.loc[asks["volume"] >= ask_quantile, "price"]
         for x_value in bid_quantiles:
-            ax.axvline(x=x_value, color='#222222', linestyle='--')
+            ax.axvline(x=x_value, color="#222222", linestyle="--")
         for x_value in ask_quantiles:
-            ax.axvline(x=x_value, color='#222222', linestyle='--')
+            ax.axvline(x=x_value, color="#222222", linestyle="--")
 
     # Set x-axis ticks
-    xmin = round(bids['price'].min())
-    xmax = round(asks['price'].max())
+    xmin = round(bids["price"].min())
+    xmax = round(asks["price"].max())
     xticks = np.arange(xmin, xmax + 1, 1)
     ax.set_xticks(xticks)
 
     # Set labels and title
-    timestamp = pd.to_datetime(order_book['timestamp'], unit='s', utc=True)
-    ax.set_title(timestamp.strftime('%Y-%m-%d %H:%M:%S UTC'), color='white')
-    ax.set_xlabel('Price', color='white')
-    ax.set_ylabel('Liquidity', color='white')
+    timestamp = pd.to_datetime(order_book["timestamp"], unit="s", utc=True)
+    ax.set_title(timestamp.strftime("%Y-%m-%d %H:%M:%S UTC"))
+    ax.set_xlabel("Price")
+    ax.set_ylabel("Liquidity")
 
     # Customize plot appearance
     ax.legend()
-    #ax.tick_params(colors='white')
-    #ax.spines['bottom'].set_color('white')
-    #ax.spines['left'].set_color('white')
+
     fig.tight_layout()
     plt.show()
 
 
-
-def plot_volume_percentiles(depth_summary, 
-                            start_time=None,
-                            end_time=None,
-                            volume_scale=1,
-                            perc_line=True,
-                            side_line=True):
-    import pandas as pd
-    import numpy as np
-    import matplotlib.pyplot as plt
+def plot_volume_percentiles(
+    depth_summary,
+    start_time=None,
+    end_time=None,
+    volume_scale=1,
+    perc_line=True,
+    side_line=True,
+):
     from datetime import timedelta
+
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import pandas as pd
     from matplotlib.colors import LinearSegmentedColormap
     from matplotlib.patches import Patch
 
     if start_time is None:
-        start_time = depth_summary['timestamp'].iloc[0]
+        start_time = depth_summary["timestamp"].iloc[0]
     if end_time is None:
-        end_time = depth_summary['timestamp'].iloc[-1]
+        end_time = depth_summary["timestamp"].iloc[-1]
 
     # Generate bid and ask column names
     bid_names = [f"bid.vol{i}bps" for i in range(25, 501, 25)]
@@ -561,24 +596,26 @@ def plot_volume_percentiles(depth_summary,
     td = round(td)
 
     # Determine frequency based on time difference
-    frequency = 'mins' if td > 900 else 'secs'
+    frequency = "mins" if td > 900 else "secs"
 
     # Subset the data based on start and end times
-    delta = timedelta(seconds=60 if frequency == 'mins' else 1)
-    mask = (depth_summary['timestamp'] >= (start_time - delta)) & (depth_summary['timestamp'] <= end_time)
-    ob_percentiles = depth_summary.loc[mask, ['timestamp'] + bid_names + ask_names]
+    delta = timedelta(seconds=60 if frequency == "mins" else 1)
+    mask = (depth_summary["timestamp"] >= (start_time - delta)) & (
+        depth_summary["timestamp"] <= end_time
+    )
+    ob_percentiles = depth_summary.loc[mask, ["timestamp"] + bid_names + ask_names]
 
     # Remove duplicates, keeping the last occurrence
-    ob_percentiles = ob_percentiles.drop_duplicates(subset='timestamp', keep='last')
+    ob_percentiles = ob_percentiles.drop_duplicates(subset="timestamp", keep="last")
 
     # Set timestamp as index
-    ob_percentiles.set_index('timestamp', inplace=True)
+    ob_percentiles.set_index("timestamp", inplace=True)
 
     # Truncate timestamps to frequency
-    if frequency == 'mins':
-        intervals = ob_percentiles.index.floor('T')
+    if frequency == "mins":
+        intervals = ob_percentiles.index.floor("T")
     else:
-        intervals = ob_percentiles.index.floor('S')
+        intervals = ob_percentiles.index.floor("S")
 
     # Aggregate data by intervals
     aggregated = ob_percentiles.groupby(intervals).mean()
@@ -586,48 +623,75 @@ def plot_volume_percentiles(depth_summary,
     # Adjust timestamps and reset index
     aggregated.index = aggregated.index + delta
     aggregated.reset_index(inplace=True)
-    aggregated.rename(columns={'index': 'timestamp'}, inplace=True)
+    aggregated.rename(columns={"index": "timestamp"}, inplace=True)
     ob_percentiles = aggregated
 
     # Update bid and ask names with zero padding
     bid_names = [f"bid.vol{int(i):03d}bps" for i in range(25, 501, 25)]
     ask_names = [f"ask.vol{int(i):03d}bps" for i in range(25, 501, 25)]
-    ob_percentiles.columns = ['timestamp'] + bid_names + ask_names
+    ob_percentiles.columns = ["timestamp"] + bid_names + ask_names
 
     # Calculate max ask and bid volumes
     max_ask = ob_percentiles[ask_names].sum(axis=1).max()
     max_bid = ob_percentiles[bid_names].sum(axis=1).max()
 
     # Melt the data frames for asks and bids
-    melted_asks = ob_percentiles.melt(id_vars='timestamp', value_vars=ask_names,
-                                      var_name='percentile', value_name='liquidity')
-    melted_asks['percentile'] = pd.Categorical(melted_asks['percentile'], categories=ask_names[::-1], ordered=True)
-    melted_asks['liquidity'] *= volume_scale
+    melted_asks = ob_percentiles.melt(
+        id_vars="timestamp",
+        value_vars=ask_names,
+        var_name="percentile",
+        value_name="liquidity",
+    )
+    melted_asks["percentile"] = pd.Categorical(
+        melted_asks["percentile"], categories=ask_names[::-1], ordered=True
+    )
+    melted_asks["liquidity"] *= volume_scale
 
-    melted_bids = ob_percentiles.melt(id_vars='timestamp', value_vars=bid_names,
-                                      var_name='percentile', value_name='liquidity')
-    melted_bids['percentile'] = pd.Categorical(melted_bids['percentile'], categories=bid_names[::-1], ordered=True)
-    melted_bids['liquidity'] *= volume_scale
+    melted_bids = ob_percentiles.melt(
+        id_vars="timestamp",
+        value_vars=bid_names,
+        var_name="percentile",
+        value_name="liquidity",
+    )
+    melted_bids["percentile"] = pd.Categorical(
+        melted_bids["percentile"], categories=bid_names[::-1], ordered=True
+    )
+    melted_bids["liquidity"] *= volume_scale
 
     # Define color palette
-    colors_list = ["#f92b20", "#fe701b", "#facd1f", "#d6fd1c",
-                   "#65fe1b", "#1bfe42", "#1cfdb4", "#1fb9fa",
-                   "#1e71fb", "#261cfd"]
-    cmap = LinearSegmentedColormap.from_list('custom_cmap', colors_list, N=20)
+    colors_list = [
+        "#f92b20",
+        "#fe701b",
+        "#facd1f",
+        "#d6fd1c",
+        "#65fe1b",
+        "#1bfe42",
+        "#1cfdb4",
+        "#1fb9fa",
+        "#1e71fb",
+        "#261cfd",
+    ]
+    cmap = LinearSegmentedColormap.from_list("custom_cmap", colors_list, N=20)
     col_pal = [cmap(i / 19) for i in range(20)]
     col_pal *= 2  # Duplicate for bids and asks
 
     # Define breaks and legend names
-    breaks = [f"ask.vol{int(i):03d}bps" for i in range(500, 49, -50)] + \
-             [f"bid.vol{int(i):03d}bps" for i in range(50, 501, 50)]
-    legend_names = [f"+{int(i):03d}bps" for i in range(500, 49, -50)] + \
-                   [f"-{int(i):03d}bps" for i in range(50, 501, 50)]
+    breaks = [f"ask.vol{int(i):03d}bps" for i in range(500, 49, -50)] + [
+        f"bid.vol{int(i):03d}bps" for i in range(50, 501, 50)
+    ]
+    legend_names = [f"+{int(i):03d}bps" for i in range(500, 49, -50)] + [
+        f"-{int(i):03d}bps" for i in range(50, 501, 50)
+    ]
 
     pl = 0.1 if perc_line else 0  # Line size
 
     # Pivot data to wide format
-    asks_pivot = melted_asks.pivot(index='timestamp', columns='percentile', values='liquidity')
-    bids_pivot = melted_bids.pivot(index='timestamp', columns='percentile', values='liquidity')
+    asks_pivot = melted_asks.pivot(
+        index="timestamp", columns="percentile", values="liquidity"
+    )
+    bids_pivot = melted_bids.pivot(
+        index="timestamp", columns="percentile", values="liquidity"
+    )
 
     # Sort columns according to the ordered categories
     asks_pivot = asks_pivot[ask_names[::-1]]  # Reverse to match R code stacking order
@@ -654,10 +718,14 @@ def plot_volume_percentiles(depth_summary,
     x = asks_cumsum.index
     for percentile in asks_cols:
         current = asks_cumsum[percentile].values
-        ax.fill_between(x, prev, current,
-                        facecolor=colors_dict[percentile],
-                        edgecolor='black' if perc_line else None,
-                        linewidth=pl)
+        ax.fill_between(
+            x,
+            prev,
+            current,
+            facecolor=colors_dict[percentile],
+            edgecolor="black" if perc_line else None,
+            linewidth=pl,
+        )
         prev = current
 
     # Plot bids
@@ -665,22 +733,26 @@ def plot_volume_percentiles(depth_summary,
     x = bids_cumsum_neg.index
     for percentile in bids_cols:
         current = bids_cumsum_neg[percentile].values
-        ax.fill_between(x, prev, current,
-                        facecolor=colors_dict[percentile],
-                        edgecolor='black' if perc_line else None,
-                        linewidth=pl)
+        ax.fill_between(
+            x,
+            prev,
+            current,
+            facecolor=colors_dict[percentile],
+            edgecolor="black" if perc_line else None,
+            linewidth=pl,
+        )
         prev = current
 
     # Add horizontal line at y=0
     if side_line:
-        ax.axhline(y=0, color='#000000', linewidth=0.1)
+        ax.axhline(y=0, color="#000000", linewidth=0.1)
 
     # Set y limits
     y_range = volume_scale * max(max_ask, max_bid)
     ax.set_ylim(-y_range, y_range)
 
     # Set x label
-    ax.set_xlabel('time')
+    ax.set_xlabel("time")
 
     # Format x-axis dates
     fig.autofmt_xdate()
@@ -688,56 +760,71 @@ def plot_volume_percentiles(depth_summary,
     # Create legend
     legend_elements = []
     for col, label in zip(all_cols, legend_names):
-        patch = Patch(facecolor=colors_dict[col], edgecolor='black' if perc_line else None, label=label)
+        patch = Patch(
+            facecolor=colors_dict[col],
+            edgecolor="black" if perc_line else None,
+            label=label,
+        )
         legend_elements.append(patch)
 
-    ax.legend(handles=legend_elements, title='depth         \n', loc='best', ncol=2)
+    ax.legend(handles=legend_elements, title="depth         \n", loc="best", ncol=2)
 
     plt.tight_layout()
     plt.show()
 
 
+def plot_events_histogram(
+    events, start_time=None, end_time=None, val="volume", bw=None
+):
+    """
+    Plot a histogram given event data.
 
-def plot_events_histogram(events, start_time=None, end_time=None, val="volume", bw=None):
-    # Set default start and end times if not provided
+    Convenience function for plotting event price and volume histograms.
+    Will plot ask/bid bars side by side.
+
+    Parameters:
+    - events: pandas DataFrame containing event data.
+    - start_time: Include event data >= this time.
+    - end_time: Include event data <= this time.
+    - val: 'volume' or 'price'.
+    - bw: Bin width (e.g., for price, 0.5 = 50 cent buckets).
+
+    Returns:
+    - None
+    """
+    assert val in ["volume", "price"], "val must be 'volume' or 'price'"
+
+    # Set default start_time and end_time if not provided
     if start_time is None:
         start_time = events["timestamp"].min()
     if end_time is None:
         end_time = events["timestamp"].max()
 
-    # Validate the 'val' parameter
-    if val not in ["volume", "price"]:
-        raise ValueError("Invalid value for 'val'. Choose 'volume' or 'price'.")
-
-    # Filter events within the specified time range
-    events = events[
+    # Filter events between start_time and end_time
+    events_filtered = events[
         (events["timestamp"] >= start_time) & (events["timestamp"] <= end_time)
     ]
 
-    # Check if the filtered events are empty
-    if events.empty:
-        print("No events found in the specified time range.")
-        return
-
-    # Define color palette for 'bid' and 'ask' directions
-    palette = {"bid": "#0000ff", "ask": "#ff0000"}
+    # Set up the plot
+    plt.figure(figsize=(12, 7))
 
     # Plot the histogram
-    plt.figure(figsize=(10, 6))
     sns.histplot(
-        data=events,
+        data=events_filtered,
         x=val,
         hue="direction",
+        multiple="dodge",  # Side by side bars
         binwidth=bw,
-        palette=palette,
-        multiple="dodge"
+        palette={"bid": "#0000ff", "ask": "#ff0000"},
+        edgecolor="white",
+        linewidth=0.5,
     )
 
-    # Enhance the plot
-    plt.title(f"Events {val.capitalize()} Distribution")
+    # Set labels and title
+    plt.title(f"Events {val} distribution")
     plt.xlabel(val.capitalize())
     plt.ylabel("Count")
-    plt.legend(title="Direction", labels=["Bid", "Ask"])
+
+    # Show the plot
     plt.tight_layout()
     plt.show()
-
