@@ -1,90 +1,99 @@
-import pandas as pd
+from datetime import datetime, timezone
+
 import numpy as np
+import pandas as pd
 
 
 def order_book(
-    events: pd.DataFrame,
-    tp: pd.Timestamp = pd.Timestamp.now(tz="UTC"),
-    max_levels: int = None,
-    bps_range: float = 0,
-    min_bid: float = 0,
-    max_ask: float = np.inf,
-) -> dict:
-    """
-    Reconstruct a limit order book for a specific point in time.
+    events, tp=None, max_levels=None, bps_range=0, min_bid=0, max_ask=np.inf
+):
+    if tp is None:
+        tp = datetime.now(timezone.utc)
 
-    Args:
-      events: A pandas DataFrame of limit order events.
-      tp: The time point at which to reconstruct the order book.
-      max_levels: The maximum number of price levels to return.
-      bps_range: The maximum depth to return in basis points from the best bid/ask.
-      min_bid: The minimum bid price to include.
-      max_ask: The maximum ask price to include.
-
-    Returns:
-      A dictionary containing the reconstructed order book with 'timestamp', 'asks', and 'bids' DataFrames.
-    """
     pct_range = bps_range * 0.0001
 
-    def active_bids(active_orders: pd.DataFrame) -> pd.DataFrame:
+    def active_bids(active_orders):
         bids = active_orders[
             (active_orders["direction"] == "bid") & (active_orders["type"] != "market")
         ]
+        # Order by price descending, then by id ascending (FIFO)
         bids = bids.sort_values(by=["price", "id"], ascending=[False, True])
-        first_price = bids["price"].iloc[0]
-        bids["bps"] = ((first_price - bids["price"]) / first_price) * 10000
+        first_price = bids.iloc[0]["price"] if not bids.empty else np.nan
+        bids["bps"] = (
+            ((first_price - bids["price"]) / first_price) * 10000
+            if not bids.empty
+            else np.nan
+        )
         bids["liquidity"] = bids["volume"].cumsum()
         return bids
 
-    def active_asks(active_orders: pd.DataFrame) -> pd.DataFrame:
+    def active_asks(active_orders):
         asks = active_orders[
             (active_orders["direction"] == "ask") & (active_orders["type"] != "market")
         ]
+        # Order by price ascending, then by id ascending (FIFO)
         asks = asks.sort_values(by=["price", "id"], ascending=[True, True])
-        first_price = asks["price"].iloc[0]
-        asks["bps"] = ((asks["price"] - first_price) / first_price) * 10000
+        first_price = asks.iloc[0]["price"] if not asks.empty else np.nan
+        asks["bps"] = (
+            ((asks["price"] - first_price) / first_price) * 10000
+            if not asks.empty
+            else np.nan
+        )
         asks["liquidity"] = asks["volume"].cumsum()
         return asks
 
-    # Active orders processing
+    # Determine active orders
     created_before = events[
         (events["action"] == "created") & (events["timestamp"] <= tp)
     ]["id"]
+
     deleted_before = events[
         (events["action"] == "deleted") & (events["timestamp"] <= tp)
     ]["id"]
+
     active_order_ids = set(created_before) - set(deleted_before)
     active_orders = events[events["id"].isin(active_order_ids)]
     active_orders = active_orders[active_orders["timestamp"] <= tp]
 
     # Handle changed orders
-    changed_orders = active_orders[active_orders["action"] == "changed"]
-    changed_orders = (
-        changed_orders.sort_values(by="timestamp", ascending=False)
-        .groupby("id")
-        .head(1)
-    )
-    active_orders = pd.concat(
-        [active_orders[active_orders["action"] != "changed"], changed_orders]
-    )
-    assert not active_orders["id"].duplicated().any()
+    changed_orders_mask = active_orders["action"] == "changed"
+    changed_before = active_orders[changed_orders_mask]
+    changed_before = changed_before.sort_values(by="timestamp", ascending=False)
+    changed_before = changed_before.drop_duplicates(subset="id", keep="first")
 
-    asks = active_asks(active_orders)[
+    # Remove changed orders and their initial creations
+    active_orders = active_orders[~changed_orders_mask]
+    active_orders = active_orders[~active_orders["id"].isin(changed_before["id"])]
+    active_orders = pd.concat([active_orders, changed_before], ignore_index=True)
+
+    # Sanity checks
+    assert all(active_orders["timestamp"] <= tp), "Timestamps exceed current time."
+    assert not active_orders["id"].duplicated().any(), "Duplicate order IDs found."
+
+    asks = active_asks(active_orders)
+    asks = asks[
         ["id", "timestamp", "exchange.timestamp", "price", "volume", "liquidity", "bps"]
     ]
-    asks = asks.iloc[::-1]  # Reverse asks for ascending price order
-    bids = active_bids(active_orders)[
+    # Reverse the asks (ascending price)
+    asks = asks.iloc[::-1].reset_index(drop=True)
+
+    bids = active_bids(active_orders)
+    bids = bids[
         ["id", "timestamp", "exchange.timestamp", "price", "volume", "liquidity", "bps"]
     ]
 
+    # Apply percentage range filter
     if pct_range > 0:
-        max_ask = asks["price"].iloc[-1] * (1 + pct_range)
-        asks = asks[asks["price"] <= max_ask]
-        min_bid = bids["price"].iloc[0] * (1 - pct_range)
-        bids = bids[bids["price"] >= min_bid]
+        if not asks.empty:
+            max_ask_price = asks.iloc[-1]["price"] * (1 + pct_range)
+            asks = asks[asks["price"] <= max_ask_price]
+        if not bids.empty:
+            min_bid_price = bids.iloc[0]["price"] * (1 - pct_range)
+            bids = bids[bids["price"] >= min_bid_price]
 
+    # Limit the number of levels
     if max_levels is not None:
-        asks = asks.iloc[-max_levels:]
-        bids = bids.iloc[:max_levels]
+        asks = asks.tail(max_levels).reset_index(drop=True)
+        bids = bids.head(max_levels).reset_index(drop=True)
 
     return {"timestamp": tp, "asks": asks, "bids": bids}
