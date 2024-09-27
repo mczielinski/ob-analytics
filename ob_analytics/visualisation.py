@@ -1,7 +1,9 @@
+import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from matplotlib.colors import LogNorm, Normalize
 
 from ob_analytics.auxiliary import reverse_matrix
 from ob_analytics.depth import filter_depth
@@ -129,16 +131,39 @@ def plot_price_levels(
     volume_scale=1,
     price_by=None,
 ):
+    """
+    Plot price levels with depth, spread, and trades data.
 
+    Parameters:
+    - depth: DataFrame containing depth data.
+    - spread: DataFrame containing spread data.
+    - trades: DataFrame containing trades data.
+    - show_mp: Boolean to show midprice.
+    - show_all_depth: Boolean to show all depth levels.
+    - col_bias: Color bias for volume mapping.
+    - start_time: Start time for filtering data.
+    - end_time: End time for filtering data.
+    - price_from: Minimum price for filtering depth data.
+    - price_to: Maximum price for filtering depth data.
+    - volume_from: Minimum volume for filtering depth data.
+    - volume_to: Maximum volume for filtering depth data.
+    - volume_scale: Scaling factor for volume.
+    - price_by: Step size for y-axis ticks (price levels).
+
+    Returns:
+    - None
+    """
+
+    # Scale volume
+    depth["volume"] = depth["volume"] * volume_scale
+
+    # Set default start_time and end_time if not provided
     if start_time is None:
-        start_time = depth["timestamp"].min()
+        start_time = depth["timestamp"].iloc[0]
     if end_time is None:
-        end_time = depth["timestamp"].max()
+        end_time = depth["timestamp"].iloc[-1]
 
-    # Scale the volume
-    depth["volume"] *= volume_scale
-
-    # Filter spread based on start and end time and set price_from, price_to
+    # Filter spread by start_time and end_time, and set price_from and price_to
     if spread is not None:
         spread = spread[
             (spread["timestamp"] >= start_time) & (spread["timestamp"] <= end_time)
@@ -148,7 +173,7 @@ def plot_price_levels(
         if price_to is None:
             price_to = 1.005 * spread["best.ask.price"].max()
 
-    # Filter trades based on start and end time and set price_from, price_to
+    # Filter trades by start_time and end_time, and set price_from and price_to
     if trades is not None:
         trades = trades[
             (trades["timestamp"] >= start_time) & (trades["timestamp"] <= end_time)
@@ -157,7 +182,6 @@ def plot_price_levels(
             price_from = 0.995 * trades["price"].min()
         else:
             trades = trades[trades["price"] >= price_from]
-
         if price_to is None:
             price_to = 1.005 * trades["price"].max()
         else:
@@ -173,118 +197,187 @@ def plot_price_levels(
     if volume_to is not None:
         depth = depth[depth["volume"] <= volume_to]
 
-    # Filter depth by the time window (using a placeholder function for filterDepth)
+    # Filter depth by time window using a hypothetical filter_depth function
     depth_filtered = filter_depth(depth, start_time, end_time)
 
-    # Remove price levels with no update during time window if requested
+    # Remove price levels with no update during time window if show_all_depth is False
     if not show_all_depth:
-        # Group by price and check for unchanged timestamps
-        groups = depth_filtered.groupby("price")
-        unchanged_prices = []
-        for name, group in groups:
-            timestamps = group["timestamp"]
-            if (
+
+        def is_unchanged(timestamps):
+            timestamps = sorted(timestamps)
+            return (
                 len(timestamps) == 2
-                and timestamps.iloc[0] == start_time
-                and timestamps.iloc[1] == end_time
-            ):
-                unchanged_prices.append(name)
+                and timestamps[0] == start_time
+                and timestamps[1] == end_time
+            )
+
+        grouped = depth_filtered.groupby("price")["timestamp"].apply(list)
+        unchanged_prices = grouped[grouped.apply(is_unchanged)].index
         depth_filtered = depth_filtered[~depth_filtered["price"].isin(unchanged_prices)]
 
+    # Set volumes that are zero to NaN
     depth_filtered.loc[depth_filtered["volume"] == 0, "volume"] = np.nan
 
-    # Call the plotPriceLevelsFaster function (assuming it's defined elsewhere)
-    plot_price_levels_faster(
-        depth_filtered, spread, trades, show_mp, col_bias, price_by
-    )
+    # Plot the data
+    plot_price_levels_faster(depth_filtered, spread, trades, show_mp, col_bias)
 
 
 def plot_price_levels_faster(
     depth, spread=None, trades=None, show_mp=True, col_bias=0.1, price_by=None
 ):
+    """
+    Fast plotting of price levels using Matplotlib.
 
-    # Filter trades based on their direction
-    if trades is not None:
-        buys = trades[trades["direction"] == "buy"]
-        sells = trades[trades["direction"] == "sell"]
-    else:
-        buys = None
-        sells = None
+    Parameters:
+    - depth: Filtered depth DataFrame.
+    - spread: Spread DataFrame.
+    - trades: Trades DataFrame.
+    - show_mp: Boolean to show midprice.
+    - col_bias: Color bias for volume mapping.
 
-    # Color palette generation
+    Returns:
+    - None
+    """
+
+    # Prepare data
+    depth = depth.copy()
+    depth.sort_values(by="timestamp", inplace=True)
+
+    # Set alpha based on volume
+    depth["alpha"] = np.where(
+        depth["volume"].isna(), 0, np.where(depth["volume"] < 1, 0.1, 1)
+    )
+
+    # Determine if log scale is needed
+    log_10 = False
     if col_bias <= 0:
         col_bias = 1
         log_10 = True
-    else:
-        log_10 = False
 
-    col_pal = sns.color_palette("RdBu_r", n_colors=len(depth["volume"].unique()))
+    # Create colormap
+    cmap = plt.get_cmap("viridis")
 
-    if price_by is None:
-        price_by = 10 ** round(
-            np.log10(depth["price"].max() - depth["price"].min()) - 1
-        )
-
-    # Create a figure and axis
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    # Heatmap-style plot using seaborn's lineplot
+    # Normalize volume for color mapping
+    vmin = depth["volume"].min()
+    vmax = depth["volume"].max()
     if log_10:
-        sns.lineplot(
-            data=depth, x="timestamp", y="price", hue="volume", palette=col_pal, ax=ax
-        )
+        if vmin <= 0:
+            vmin = depth["volume"][depth["volume"] > 0].min()
+        norm = LogNorm(vmin=vmin, vmax=vmax)
     else:
-        sns.lineplot(
-            data=depth, x="timestamp", y="price", hue="volume", palette=col_pal, ax=ax
-        )
+        norm = Normalize(vmin=vmin, vmax=vmax)
+
+    # Set up the plot
+    fig, ax = plt.subplots(figsize=(12, 7))
+
+    # Scatter plot of depth data
+    sc = ax.scatter(
+        depth["timestamp"],
+        depth["price"],
+        c=depth["volume"],
+        cmap=cmap,
+        alpha=depth["alpha"],
+        norm=norm,
+        edgecolors="none",
+        s=5,
+    )
+
+    # Add colorbar
+    cbar = plt.colorbar(sc, ax=ax)
+    cbar.set_label("Volume")
 
     # Plot midprice or spread
     if spread is not None:
+        spread = spread.copy()
+        spread.sort_values(by="timestamp", inplace=True)
         if show_mp:
-            midprice = (spread["best.bid.price"] + spread["best.ask.price"]) / 2
-            ax.plot(spread["timestamp"], midprice, color="#ffffff", linewidth=1.1)
-        else:
+            spread["midprice"] = (
+                spread["best.bid.price"] + spread["best.ask.price"]
+            ) / 2
             ax.plot(
+                spread["timestamp"],
+                spread["midprice"],
+                color="#ffffff",
+                linewidth=1.1,
+                label="Midprice",
+            )
+        else:
+            ax.step(
                 spread["timestamp"],
                 spread["best.ask.price"],
                 color="#ff0000",
                 linewidth=1.5,
+                where="post",
+                label="Best Ask",
             )
-            ax.plot(
+            ax.step(
                 spread["timestamp"],
                 spread["best.bid.price"],
                 color="#00ff00",
                 linewidth=1.5,
+                where="post",
+                label="Best Bid",
             )
 
-    # Plot trades
+    # Plot trades with enhanced visibility
     if trades is not None:
+        buys = trades[trades["direction"] == "buy"]
+        sells = trades[trades["direction"] == "sell"]
+
+        # Plot sells (hollow circles)
         ax.scatter(
             sells["timestamp"],
             sells["price"],
-            color="#ff0000",
             s=50,
-            marker="o",
-            edgecolors="white",
+            facecolors="none",
+            edgecolors="#ff0000",
+            linewidths=1.5,
+            zorder=5,
+            marker="v",
+            label="Sell Trades",
         )
+
+        # Plot buys (hollow circles)
         ax.scatter(
             buys["timestamp"],
             buys["price"],
-            color="#00ff00",
             s=50,
-            marker="o",
-            edgecolors="white",
+            facecolors="none",
+            edgecolors="#00ff00",
+            linewidths=1.5,
+            zorder=5,
+            marker="^",
+            label="Buy Trades",
         )
 
-    # Set labels
+    # Format x-axis with date labels
+    ax.xaxis_date()
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+    plt.xticks(rotation=45)
+
+    # Set labels and title
     ax.set_xlabel("Time")
     ax.set_ylabel("Limit Price")
+    ax.set_title("Price Levels Over Time")
 
-    # Theme configuration
-    sns.set_style("darkgrid")
-    plt.legend(loc="upper left")
+    # Adjust y-axis limits
+    ymin = depth["price"].min()
+    ymax = depth["price"].max()
+    ax.set_ylim([ymin, ymax])
 
-    plt.savefig("foo.png")
+    # Set y-axis ticks based on price_by
+    if price_by is not None:
+        y_ticks = np.arange(round(ymin), round(ymax) + price_by, price_by)
+        ax.set_yticks(y_ticks)
+
+    # Remove duplicate legend entries
+    handles, labels = ax.get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    ax.legend(by_label.values(), by_label.keys())
+
+    # Show plot
+    plt.tight_layout()
+    plt.show()
 
 
 def plot_event_map(
