@@ -38,6 +38,7 @@ def reverse_matrix(m):
     else:
         raise TypeError("Input must be a pandas DataFrame or a NumPy array.")
 
+
 def norml(v: np.ndarray, minv: float = None, maxv: float = None) -> np.ndarray:
     """
     Normalize a vector to the range [0, 1].

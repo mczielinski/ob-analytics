@@ -1,5 +1,5 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
 
 
 def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:

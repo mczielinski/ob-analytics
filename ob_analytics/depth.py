@@ -1,5 +1,6 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
+
 from ob_analytics.auxiliary import interval_sum_breaks
 
 

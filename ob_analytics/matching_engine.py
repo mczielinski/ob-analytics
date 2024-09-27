@@ -1,7 +1,7 @@
-import pandas as pd
 import numpy as np
-from ob_analytics.needleman_wunsch import create_similarity_matrix
-from ob_analytics.needleman_wunsch import align_sequences
+import pandas as pd
+
+from ob_analytics.needleman_wunsch import align_sequences, create_similarity_matrix
 
 
 def event_match(events: pd.DataFrame, cut_off_ms: int = 5000) -> pd.DataFrame:
