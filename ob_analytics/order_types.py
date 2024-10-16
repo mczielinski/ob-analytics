@@ -6,15 +6,33 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
     """
     Determine limit order types.
 
-    Args:
-      events: The limit order events DataFrame.
-      trades: The executions DataFrame.
+    Parameters
+    ----------
+    events : pandas.DataFrame
+        The limit order events DataFrame.
+    trades : pandas.DataFrame
+        The executions DataFrame.
 
-    Returns:
-      The events DataFrame with an updated 'type' column indicating order types.
+    Returns
+    -------
+    pandas.DataFrame
+        The events DataFrame with an updated 'type' column indicating order types.
     """
 
     def is_pacman(events: pd.DataFrame) -> pd.Series:
+        """
+        Identify 'pacman' orders where the price changes over time.
+
+        Parameters
+        ----------
+        events : pandas.DataFrame
+            DataFrame containing order events.
+
+        Returns
+        -------
+        pandas.Series
+            A boolean Series indicating whether each order ID is a 'pacman' order.
+        """
         return events.groupby("id")["price"].transform(lambda x: x.diff().any())
 
     events["type"] = "unknown"

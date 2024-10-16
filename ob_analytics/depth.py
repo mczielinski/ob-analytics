@@ -1,3 +1,5 @@
+## depth.py
+
 import numpy as np
 import pandas as pd
 
@@ -8,14 +10,31 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
     """
     Calculate the cumulative volume for each price level over time.
 
-    Args:
-      events: A pandas DataFrame containing limit order events.
+    Parameters
+    ----------
+    events : pandas.DataFrame
+        A pandas DataFrame containing limit order events.
 
-    Returns:
-      A pandas DataFrame with the cumulative volume for each price level.
+    Returns
+    -------
+    pandas.DataFrame
+        A pandas DataFrame with the cumulative volume for each price level.
     """
 
-    def directional_price_level_volume(dir_events):
+    def directional_price_level_volume(dir_events: pd.DataFrame) -> pd.DataFrame:
+        """
+        Calculate cumulative volume for each price level in one direction.
+
+        Parameters
+        ----------
+        dir_events : pandas.DataFrame
+            DataFrame containing events for a specific direction ('bid' or 'ask').
+
+        Returns
+        -------
+        pandas.DataFrame
+            DataFrame with cumulative volume for each price level.
+        """
         cols = [
             "event.id",
             "id",
@@ -91,6 +110,23 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
 def filter_depth(
     d: pd.DataFrame, from_timestamp: pd.Timestamp, to_timestamp: pd.Timestamp
 ) -> pd.DataFrame:
+    """
+    Filter depth data within a specified time range.
+
+    Parameters
+    ----------
+    d : pandas.DataFrame
+        DataFrame containing depth data.
+    from_timestamp : pandas.Timestamp
+        Start of the time range.
+    to_timestamp : pandas.Timestamp
+        End of the time range.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Filtered depth data within the specified time range.
+    """
     # 1. Get all active price levels before start of range
     pre = d[d["timestamp"] <= from_timestamp]
     pre = pre.sort_values(by=["price", "timestamp"])
@@ -120,8 +156,25 @@ def filter_depth(
     return range_combined
 
 
-def depth_metrics(depth, bps=25, bins=20):
-    def pct_names(name):
+def depth_metrics(depth: pd.DataFrame, bps: int = 25, bins: int = 20) -> pd.DataFrame:
+    """
+    Compute limit order book depth metrics.
+
+    Parameters
+    ----------
+    depth : pandas.DataFrame
+        DataFrame containing depth data.
+    bps : int, optional
+        Basis points increment for volume bins. Default is 25.
+    bins : int, optional
+        Number of bins to use for volume aggregation. Default is 20.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame containing depth metrics over time.
+    """
+    def pct_names(name: str) -> list[str]:
         return [f"{name}{i}bps" for i in range(bps, bps * bins + 1, bps)]
 
     ordered_depth = depth.sort_values(by="timestamp")
@@ -284,11 +337,15 @@ def get_spread(depth_summary: pd.DataFrame) -> pd.DataFrame:
     """
     Extract the bid/ask spread from the depth summary.
 
-    Args:
-      depth_summary: A pandas DataFrame containing depth summary statistics.
+    Parameters
+    ----------
+    depth_summary : pandas.DataFrame
+        A pandas DataFrame containing depth summary statistics.
 
-    Returns:
-      A pandas DataFrame with the bid/ask spread data.
+    Returns
+    -------
+    pandas.DataFrame
+        A pandas DataFrame with the bid/ask spread data.
     """
     spread = depth_summary[
         [

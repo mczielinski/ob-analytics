@@ -1,3 +1,5 @@
+## data.py
+
 import pandas as pd
 
 from ob_analytics.depth import depth_metrics, price_level_volume
@@ -7,7 +9,22 @@ from ob_analytics.order_types import set_order_types
 from ob_analytics.trades import match_trades
 
 
-def get_zombie_ids(events, trades):
+def get_zombie_ids(events: pd.DataFrame, trades: pd.DataFrame) -> list[int]:
+    """
+    Identify zombie orders that should be removed from the events DataFrame.
+
+    Parameters
+    ----------
+    events : pandas.DataFrame
+        DataFrame containing limit order events.
+    trades : pandas.DataFrame
+        DataFrame containing trade executions.
+
+    Returns
+    -------
+    list of int
+        A list of order IDs that are considered zombies.
+    """
     # Filter cancelled events
     cancelled = events[events["action"] == "deleted"]["id"]
     zombies = events[~events["id"].isin(cancelled)]
@@ -44,26 +61,30 @@ def get_zombie_ids(events, trades):
     return valid_bid_zombies + valid_ask_zombies
 
 
-def process_data(csv_file: str, price_digits: int = 2, volume_digits: int = 8) -> dict:
+def process_data(
+    csv_file: str, price_digits: int = 2, volume_digits: int = 8
+) -> dict[str, pd.DataFrame]:
     """
     Import and preprocess limit order data from a CSV file.
 
-    Args:
-      csv_file: The path to the CSV file containing limit order data.
-      price_digits: The number of decimal places for the 'price' column.
-      volume_digits: The number of decimal places for the 'volume' column.
+    Parameters
+    ----------
+    csv_file : str
+        The path to the CSV file containing limit order data.
+    price_digits : int, optional
+        The number of decimal places for the 'price' column. Default is 2.
+    volume_digits : int, optional
+        The number of decimal places for the 'volume' column. Default is 8.
 
-    Returns:
-      A dictionary containing four pandas DataFrames:
-        - events: Limit order events.
-        - trades: Inferred trades (executions).
-        - depth: Order book price level depth through time.
-        - depth_summary: Limit order book summary statistics.
+    Returns
+    -------
+    dict of str to pandas.DataFrame
+        A dictionary containing four pandas DataFrames:
+        - 'events': Limit order events.
+        - 'trades': Inferred trades (executions).
+        - 'depth': Order book price level depth through time.
+        - 'depth_summary': Limit order book summary statistics.
     """
-
-    # def get_zombie_ids(events: pd.DataFrame, trades: pd.DataFrame) -> list:
-    # ... (Implementation will be added later)
-
     events = load_event_data(csv_file, price_digits, volume_digits)
     events = event_match(events)
     trades = match_trades(events)
@@ -85,25 +106,36 @@ def process_data(csv_file: str, price_digits: int = 2, volume_digits: int = 8) -
     }
 
 
-def load_data(bin_file: str) -> dict:
+def load_data(bin_file: str) -> dict[str, pd.DataFrame]:
     """
     Load pre-processed data from a file.
 
-    Args:
-      bin_file: The path to the file containing pre-processed data.
+    Parameters
+    ----------
+    bin_file : str
+        The path to the file containing pre-processed data.
 
-    Returns:
-      A dictionary containing the loaded DataFrames, similar to the output of `process_data`.
+    Returns
+    -------
+    dict of str to pandas.DataFrame
+        A dictionary containing the loaded DataFrames, similar to the output of `process_data`.
     """
     return pd.read_pickle(bin_file)  # Assuming pickle format
 
 
-def save_data(lob_data: dict, bin_file: str):
+def save_data(lob_data: dict[str, pd.DataFrame], bin_file: str) -> None:
     """
     Save processed data to a file.
 
-    Args:
-      lob_data: A dictionary containing the DataFrames to save.
-      bin_file: The path to the file where the data will be saved.
+    Parameters
+    ----------
+    lob_data : dict of str to pandas.DataFrame
+        A dictionary containing the DataFrames to save.
+    bin_file : str
+        The path to the file where the data will be saved.
+
+    Returns
+    -------
+    None
     """
     pd.to_pickle(lob_data, bin_file)  # Assuming pickle format

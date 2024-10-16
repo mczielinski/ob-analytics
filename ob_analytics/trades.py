@@ -7,11 +7,15 @@ def match_trades(events: pd.DataFrame) -> pd.DataFrame:
     """
     Construct a DataFrame of inferred trades (executions).
 
-    Args:
-      events: The limit order events DataFrame with assigned maker/taker event IDs.
+    Parameters
+    ----------
+    events : pandas.DataFrame
+        The limit order events DataFrame with assigned maker/taker event IDs.
 
-    Returns:
-      A pandas DataFrame describing trade executions.
+    Returns
+    -------
+    pandas.DataFrame
+        A DataFrame describing trade executions.
     """
     matching_bids = events[
         (events["direction"] == "bid") & ~pd.isna(events["matching.event"])
@@ -132,14 +136,31 @@ def trade_impacts(trades: pd.DataFrame) -> pd.DataFrame:
     """
     Generate a DataFrame containing order book impact summaries.
 
-    Args:
-      trades: The trades DataFrame.
+    Parameters
+    ----------
+    trades : pandas.DataFrame
+        The trades DataFrame.
 
-    Returns:
-      A pandas DataFrame summarizing market order impacts.
+    Returns
+    -------
+    pandas.DataFrame
+        A DataFrame summarizing market order impacts.
     """
 
     def impact_summary(impact: pd.DataFrame) -> dict:
+        """
+        Summarize the impact of a trade.
+
+        Parameters
+        ----------
+        impact : pandas.DataFrame
+            DataFrame containing trade information for a single taker.
+
+        Returns
+        -------
+        dict
+            A dictionary summarizing the trade impact.
+        """
         return {
             "id": impact["taker"].iloc[-1],
             "min.price": impact["price"].min(),

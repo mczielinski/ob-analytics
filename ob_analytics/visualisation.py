@@ -8,38 +8,44 @@ from matplotlib.colors import LogNorm, Normalize
 from ob_analytics.auxiliary import reverse_matrix
 from ob_analytics.depth import filter_depth
 
+from matplotlib.colors import to_rgba
+import matplotlib.dates as mdates
+import matplotlib.collections as collections
+
 sns.set_theme(
     style="darkgrid", context="notebook", font_scale=1.5, rc={"lines.linewidth": 2.5}
 )
 
 
 def plot_time_series(
-    timestamp,
-    series,
-    start_time=None,
-    end_time=None,
-    title="time series",
-    y_label="series",
-):
+    timestamp: pd.Series,
+    series: pd.Series,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+    title: str = "time series",
+    y_label: str = "series",
+) -> None:
     """
     Plots a time series.
 
-    Parameters:
-    - timestamp: pd.Series
+    Parameters
+    ----------
+    timestamp : pandas.Series
         Series of timestamps.
-    - series: pd.Series
+    series : pandas.Series
         Series of values to plot.
-    - start_time: str, optional
-        Start time for the plot.
-    - end_time: str, optional
-        End time for the plot.
-    - title: str
-        Title of the plot.
-    - y_label: str
-        Label for the y-axis.
+    start_time : pandas.Timestamp, optional
+        Start time for the plot. Default is None.
+    end_time : pandas.Timestamp, optional
+        End time for the plot. Default is None.
+    title : str, optional
+        Title of the plot. Default is 'time series'.
+    y_label : str, optional
+        Label for the y-axis. Default is 'series'.
 
-    Returns:
-    - None
+    Returns
+    -------
+    None
     """
     if len(timestamp) != len(series):
         raise ValueError("Length of timestamp and series must be the same.")
@@ -69,20 +75,26 @@ def plot_time_series(
     plt.show()
 
 
-def plot_trades(trades, start_time=None, end_time=None):
+def plot_trades(
+    trades: pd.DataFrame,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+) -> None:
     """
     Plots the trades data as a step plot.
 
-    Parameters:
-    - trades: pd.DataFrame
+    Parameters
+    ----------
+    trades : pandas.DataFrame
         DataFrame containing the trades data with columns 'timestamp' and 'price'.
-    - start_time: datetime, optional
-        Start time for the plot.
-    - end_time: datetime, optional
-        End time for the plot.
+    start_time : pandas.Timestamp, optional
+        Start time for the plot. Default is None.
+    end_time : pandas.Timestamp, optional
+        End time for the plot. Default is None.
 
-    Returns:
-    - None
+    Returns
+    -------
+    None
     """
     if not start_time:
         start_time = trades["timestamp"].min()
@@ -116,44 +128,59 @@ def plot_trades(trades, start_time=None, end_time=None):
 
 
 def plot_price_levels(
-    depth,
-    spread=None,
-    trades=None,
-    show_mp=True,
-    show_all_depth=False,
-    col_bias=0.1,
-    start_time=None,
-    end_time=None,
-    price_from=None,
-    price_to=None,
-    volume_from=None,
-    volume_to=None,
-    volume_scale=1,
-    price_by=None,
-):
+    depth: pd.DataFrame,
+    spread: pd.DataFrame | None = None,
+    trades: pd.DataFrame | None = None,
+    show_mp: bool = True,
+    show_all_depth: bool = False,
+    col_bias: float = 0.1,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+    price_from: float | None = None,
+    price_to: float | None = None,
+    volume_from: float | None = None,
+    volume_to: float | None = None,
+    volume_scale: float = 1,
+    price_by: float | None = None,
+) -> None:
     """
     Plot price levels with depth, spread, and trades data.
 
-    Parameters:
-    - depth: DataFrame containing depth data.
-    - spread: DataFrame containing spread data.
-    - trades: DataFrame containing trades data.
-    - show_mp: Boolean to show midprice.
-    - show_all_depth: Boolean to show all depth levels.
-    - col_bias: Color bias for volume mapping.
-    - start_time: Start time for filtering data.
-    - end_time: End time for filtering data.
-    - price_from: Minimum price for filtering depth data.
-    - price_to: Maximum price for filtering depth data.
-    - volume_from: Minimum volume for filtering depth data.
-    - volume_to: Maximum volume for filtering depth data.
-    - volume_scale: Scaling factor for volume.
-    - price_by: Step size for y-axis ticks (price levels).
+    Parameters
+    ----------
+    depth : pandas.DataFrame
+        DataFrame containing depth data.
+    spread : pandas.DataFrame, optional
+        DataFrame containing spread data. Default is None.
+    trades : pandas.DataFrame, optional
+        DataFrame containing trades data. Default is None.
+    show_mp : bool, optional
+        Whether to show midprice. Default is True.
+    show_all_depth : bool, optional
+        Whether to show all depth levels. Default is False.
+    col_bias : float, optional
+        Color bias for volume mapping. Default is 0.1.
+    start_time : pandas.Timestamp, optional
+        Start time for filtering data. Default is None.
+    end_time : pandas.Timestamp, optional
+        End time for filtering data. Default is None.
+    price_from : float, optional
+        Minimum price for filtering depth data. Default is None.
+    price_to : float, optional
+        Maximum price for filtering depth data. Default is None.
+    volume_from : float, optional
+        Minimum volume for filtering depth data. Default is None.
+    volume_to : float, optional
+        Maximum volume for filtering depth data. Default is None.
+    volume_scale : float, optional
+        Scaling factor for volume. Default is 1.
+    price_by : float, optional
+        Step size for y-axis ticks (price levels). Default is None.
 
-    Returns:
-    - None
+    Returns
+    -------
+    None
     """
-
     # Scale volume
     depth["volume"] = depth["volume"] * volume_scale
 
@@ -203,7 +230,7 @@ def plot_price_levels(
     # Remove price levels with no update during time window if show_all_depth is False
     if not show_all_depth:
 
-        def is_unchanged(timestamps):
+        def is_unchanged(timestamps: list[pd.Timestamp]) -> bool:
             timestamps = sorted(timestamps)
             return (
                 len(timestamps) == 2
@@ -223,22 +250,35 @@ def plot_price_levels(
 
 
 def plot_price_levels_faster(
-    depth, spread=None, trades=None, show_mp=True, col_bias=0.1, price_by=None
-):
+    depth: pd.DataFrame,
+    spread: pd.DataFrame | None = None,
+    trades: pd.DataFrame | None = None,
+    show_mp: bool = True,
+    col_bias: float = 0.1,
+    price_by: float | None = None,
+) -> None:
     """
     Fast plotting of price levels using Matplotlib.
 
-    Parameters:
-    - depth: Filtered depth DataFrame.
-    - spread: Spread DataFrame.
-    - trades: Trades DataFrame.
-    - show_mp: Boolean to show midprice.
-    - col_bias: Color bias for volume mapping.
+    Parameters
+    ----------
+    depth : pandas.DataFrame
+        Filtered depth DataFrame.
+    spread : pandas.DataFrame, optional
+        Spread DataFrame. Default is None.
+    trades : pandas.DataFrame, optional
+        Trades DataFrame. Default is None.
+    show_mp : bool, optional
+        Whether to show midprice. Default is True.
+    col_bias : float, optional
+        Color bias for volume mapping. Default is 0.1.
+    price_by : float, optional
+        Step size for y-axis ticks (price levels). Default is None.
 
-    Returns:
-    - None
+    Returns
+    -------
+    None
     """
-
     # Prepare data
     depth = depth.copy()
     depth.sort_values(by="timestamp", inplace=True)
@@ -381,16 +421,41 @@ def plot_price_levels_faster(
 
 
 def plot_event_map(
-    events,
-    start_time=None,
-    end_time=None,
-    price_from=None,
-    price_to=None,
-    volume_from=None,
-    volume_to=None,
-    volume_scale=1,
-):
+    events: pd.DataFrame,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+    price_from: float | None = None,
+    price_to: float | None = None,
+    volume_from: float | None = None,
+    volume_to: float | None = None,
+    volume_scale: float = 1,
+) -> None:
+    """
+    Plot an event map of limit order events.
 
+    Parameters
+    ----------
+    events : pandas.DataFrame
+        DataFrame containing event data.
+    start_time : pandas.Timestamp, optional
+        Start time for the plot. Default is None.
+    end_time : pandas.Timestamp, optional
+        End time for the plot. Default is None.
+    price_from : float, optional
+        Minimum price for filtering events. Default is None.
+    price_to : float, optional
+        Maximum price for filtering events. Default is None.
+    volume_from : float, optional
+        Minimum volume for filtering events. Default is None.
+    volume_to : float, optional
+        Maximum volume for filtering events. Default is None.
+    volume_scale : float, optional
+        Scaling factor for volume. Default is 1.
+
+    Returns
+    -------
+    None
+    """
     # Set defaults if not provided
     if start_time is None:
         start_time = events["timestamp"].min()
@@ -491,19 +556,50 @@ def plot_event_map(
 
 
 def plot_volume_map(
-    events,
-    action="deleted",
-    event_type=["flashed-limit"],
-    start_time=None,
-    end_time=None,
-    price_from=None,
-    price_to=None,
-    volume_from=None,
-    volume_to=None,
-    volume_scale=1,
-    log_scale=False,
-):
+    events: pd.DataFrame,
+    action: str = "deleted",
+    event_type: list[str] = ["flashed-limit"],
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+    price_from: float | None = None,
+    price_to: float | None = None,
+    volume_from: float | None = None,
+    volume_to: float | None = None,
+    volume_scale: float = 1,
+    log_scale: bool = False,
+) -> None:
+    """
+    Plot a volume map of flashed limit orders.
 
+    Parameters
+    ----------
+    events : pandas.DataFrame
+        DataFrame containing event data.
+    action : str, optional
+        The action to filter ('deleted' or 'created'). Default is 'deleted'.
+    event_type : list of str, optional
+        List of event types to include. Default is ['flashed-limit'].
+    start_time : pandas.Timestamp, optional
+        Start time for the plot. Default is None.
+    end_time : pandas.Timestamp, optional
+        End time for the plot. Default is None.
+    price_from : float, optional
+        Minimum price for filtering events. Default is None.
+    price_to : float, optional
+        Maximum price for filtering events. Default is None.
+    volume_from : float, optional
+        Minimum volume for filtering events. Default is None.
+    volume_to : float, optional
+        Maximum volume for filtering events. Default is None.
+    volume_scale : float, optional
+        Scaling factor for volume. Default is 1.
+    log_scale : bool, optional
+        Whether to use a logarithmic scale on the y-axis. Default is False.
+
+    Returns
+    -------
+    None
+    """
     assert action in ["deleted", "created"], "Invalid action provided"
 
     if start_time is None:
@@ -559,8 +655,29 @@ def plot_volume_map(
 
 
 def plot_current_depth(
-    order_book, volume_scale=1, show_quantiles=True, show_volume=True
-):
+    order_book: dict,
+    volume_scale: float = 1,
+    show_quantiles: bool = True,
+    show_volume: bool = True,
+) -> None:
+    """
+    Plot the current order book depth.
+
+    Parameters
+    ----------
+    order_book : dict
+        Dictionary containing 'bids', 'asks', and 'timestamp'.
+    volume_scale : float, optional
+        Scaling factor for volume. Default is 1.
+    show_quantiles : bool, optional
+        Whether to highlight highest 1% volume with vertical lines. Default is True.
+    show_volume : bool, optional
+        Whether to show volume bars. Default is True.
+
+    Returns
+    -------
+    None
+    """
     # Ensure bids are sorted descending and asks ascending
     # bids = order_book['bids'].sort_values(by='price', ascending=False).reset_index(drop=True)
     # asks = order_book['asks'].sort_values(by='price', ascending=True).reset_index(drop=True)
@@ -661,13 +778,35 @@ def plot_current_depth(
 
 
 def plot_volume_percentiles(
-    depth_summary,
-    start_time=None,
-    end_time=None,
-    volume_scale=1,
-    perc_line=True,
-    side_line=True,
-):
+    depth_summary: pd.DataFrame,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+    volume_scale: float = 1,
+    perc_line: bool = True,
+    side_line: bool = True,
+) -> None:
+    """
+    Plot volume percentiles over time.
+
+    Parameters
+    ----------
+    depth_summary : pandas.DataFrame
+        DataFrame containing depth summary statistics.
+    start_time : pandas.Timestamp, optional
+        Start time for the plot. Default is None.
+    end_time : pandas.Timestamp, optional
+        End time for the plot. Default is None.
+    volume_scale : float, optional
+        Scaling factor for volume. Default is 1.
+    perc_line : bool, optional
+        Whether to draw lines between percentiles. Default is True.
+    side_line : bool, optional
+        Whether to draw a line separating bids and asks. Default is True.
+
+    Returns
+    -------
+    None
+    """
     from datetime import timedelta
 
     import matplotlib.pyplot as plt
@@ -865,23 +1004,34 @@ def plot_volume_percentiles(
 
 
 def plot_events_histogram(
-    events, start_time=None, end_time=None, val="volume", bw=None
-):
+    events: pd.DataFrame,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+    val: str = "volume",
+    bw: float | None = None,
+) -> None:
     """
     Plot a histogram given event data.
 
     Convenience function for plotting event price and volume histograms.
     Will plot ask/bid bars side by side.
 
-    Parameters:
-    - events: pandas DataFrame containing event data.
-    - start_time: Include event data >= this time.
-    - end_time: Include event data <= this time.
-    - val: 'volume' or 'price'.
-    - bw: Bin width (e.g., for price, 0.5 = 50 cent buckets).
+    Parameters
+    ----------
+    events : pandas.DataFrame
+        DataFrame containing event data.
+    start_time : pandas.Timestamp, optional
+        Include event data >= this time. Default is None.
+    end_time : pandas.Timestamp, optional
+        Include event data <= this time. Default is None.
+    val : str, optional
+        'volume' or 'price'. Default is 'volume'.
+    bw : float, optional
+        Bin width (e.g., for price, 0.5 = 50 cent buckets). Default is None.
 
-    Returns:
-    - None
+    Returns
+    -------
+    None
     """
     assert val in ["volume", "price"], "val must be 'volume' or 'price'"
 
