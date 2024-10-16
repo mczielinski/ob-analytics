@@ -8,16 +8,35 @@ def load_event_data(
     """
     Read raw limit order event data from a CSV file.
 
-    Args:
-      file: The path to the CSV file containing limit order events.
-      price_digits: The number of decimal places for the 'price' column.
-      volume_digits: The number of decimal places for the 'volume' column.
+    Parameters
+    ----------
+    file : str
+        The path to the CSV file containing limit order events.
+    price_digits : int, optional
+        The number of decimal places for the 'price' column. Default is 2.
+    volume_digits : int, optional
+        The number of decimal places for the 'volume' column. Default is 8.
 
-    Returns:
-      A pandas DataFrame containing the raw limit order events data.
+    Returns
+    -------
+    pandas.DataFrame
+        A DataFrame containing the raw limit order events data.
     """
 
     def remove_duplicates(events: pd.DataFrame) -> pd.DataFrame:
+        """
+        Remove duplicate events from the DataFrame.
+
+        Parameters
+        ----------
+        events : pandas.DataFrame
+            DataFrame containing limit order events.
+
+        Returns
+        -------
+        pandas.DataFrame
+            DataFrame with duplicate events removed.
+        """
         dups = events[
             events.duplicated(subset=["id", "price", "volume", "action"])
             & (events["action"] != "changed")
@@ -60,22 +79,42 @@ def order_aggressiveness(
     """
     Calculate order aggressiveness with respect to the best bid or ask in BPS.
 
-    Args:
-        events: The events DataFrame.
-        depth_summary: The order book summary statistics DataFrame.
+    Parameters
+    ----------
+    events : pandas.DataFrame
+        The events DataFrame.
+    depth_summary : pandas.DataFrame
+        The order book summary statistics DataFrame.
 
-    Returns:
+    Returns
+    -------
+    pandas.DataFrame
         The events DataFrame with an added 'aggressiveness.bps' column.
     """
 
     def event_diff_bps(events: pd.DataFrame, direction: int) -> pd.DataFrame:
+        """
+        Calculate the price difference in basis points for orders in a given direction.
+
+        Parameters
+        ----------
+        events : pandas.DataFrame
+            The events DataFrame.
+        direction : int
+            The direction of the orders: 1 for bids, -1 for asks.
+
+        Returns
+        -------
+        pandas.DataFrame
+            A DataFrame with 'event.id' and 'diff.bps' columns.
+        """
         orders = events[
             (events["direction"] == ("bid" if direction == 1 else "ask"))
             & (events["action"] != "changed")
             & events["type"].isin(["flashed-limit", "resting-limit"])
         ].sort_values(by="timestamp")
 
-        # stopifnot equivalent in Python
+        # Equivalent to R's stopifnot
         assert all(
             orders["timestamp"].isin(depth_summary["timestamp"])
         ), "Not all timestamps in orders are present in depth_summary"

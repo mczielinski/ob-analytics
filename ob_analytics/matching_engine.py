@@ -8,16 +8,28 @@ def event_match(events: pd.DataFrame, cut_off_ms: int = 5000) -> pd.DataFrame:
     """
     Match market orders (takers) to limit orders (makers).
 
-    Args:
-      events: A pandas DataFrame of order book events.
-      cut_off_ms: The time window in milliseconds for considering candidate matches.
+    Parameters
+    ----------
+    events : pandas.DataFrame
+        A pandas DataFrame of order book events.
+    cut_off_ms : int, optional
+        The time window in milliseconds for considering candidate matches. Default is 5000.
 
-    Returns:
-      The events DataFrame with a 'matching.event' column indicating matched events.
+    Returns
+    -------
+    pandas.DataFrame
+        The events DataFrame with a 'matching.event' column indicating matched events.
     """
 
     def matcher() -> np.ndarray:
+        """
+        Internal function to perform the matching logic.
 
+        Returns
+        -------
+        numpy.ndarray
+            An array of matched event IDs.
+        """
         cut_off_td = np.timedelta64(cut_off_ms * 1000000, "ns")
         res = []
         cols = ["original_number", "event.id", "fill", "timestamp"]
@@ -26,6 +38,21 @@ def event_match(events: pd.DataFrame, cut_off_ms: int = 5000) -> pd.DataFrame:
         ask_fills = events[(events["direction"] == "ask") & (events["fill"] != 0)][cols]
 
         def fill_id(src: pd.DataFrame, dst: pd.DataFrame) -> pd.DataFrame:
+            """
+            Filter fills based on matching fill amounts and sort them.
+
+            Parameters
+            ----------
+            src : pandas.DataFrame
+                Source DataFrame containing fills.
+            dst : pandas.DataFrame
+                Destination DataFrame to compare fills with.
+
+            Returns
+            -------
+            pandas.DataFrame
+                Filtered and sorted DataFrame of fills.
+            """
             id_fills = src[src["fill"].isin(dst["fill"])]
             return id_fills.sort_values(
                 by=["fill", "timestamp"], ascending=[False, True]

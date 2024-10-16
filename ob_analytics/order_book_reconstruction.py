@@ -5,14 +5,59 @@ import pandas as pd
 
 
 def order_book(
-    events, tp=None, max_levels=None, bps_range=0, min_bid=0, max_ask=np.inf
-):
+    events: pd.DataFrame,
+    tp: datetime | None = None,
+    max_levels: int | None = None,
+    bps_range: int = 0,
+    min_bid: float = 0,
+    max_ask: float = np.inf,
+) -> dict[str, datetime | pd.DataFrame]:
+    """
+    Reconstruct the order book at a specific point in time.
+
+    Parameters
+    ----------
+    events : pandas.DataFrame
+        DataFrame containing order events.
+    tp : datetime.datetime, optional
+        The point in time at which to evaluate the order book.
+        If None, uses the current UTC time.
+    max_levels : int, optional
+        The maximum number of price levels to include for bids and asks.
+    bps_range : int, optional
+        Basis points range to filter the bids and asks. Default is 0.
+    min_bid : float, optional
+        Minimum bid price. Default is 0.
+    max_ask : float, optional
+        Maximum ask price. Default is infinity.
+
+    Returns
+    -------
+    dict[str, datetime.datetime or pandas.DataFrame]
+        A dictionary containing:
+        - 'timestamp': The evaluation timestamp.
+        - 'asks': DataFrame of active ask orders.
+        - 'bids': DataFrame of active bid orders.
+    """
     if tp is None:
         tp = datetime.now(timezone.utc)
 
     pct_range = bps_range * 0.0001
 
-    def active_bids(active_orders):
+    def active_bids(active_orders: pd.DataFrame) -> pd.DataFrame:
+        """
+        Extract active bid orders and calculate BPS and cumulative liquidity.
+
+        Parameters
+        ----------
+        active_orders : pandas.DataFrame
+            DataFrame of active orders.
+
+        Returns
+        -------
+        pandas.DataFrame
+            DataFrame of active bids with BPS and liquidity calculations.
+        """
         bids = active_orders[
             (active_orders["direction"] == "bid") & (active_orders["type"] != "market")
         ]
@@ -27,7 +72,20 @@ def order_book(
         bids["liquidity"] = bids["volume"].cumsum()
         return bids
 
-    def active_asks(active_orders):
+    def active_asks(active_orders: pd.DataFrame) -> pd.DataFrame:
+        """
+        Extract active ask orders and calculate BPS and cumulative liquidity.
+
+        Parameters
+        ----------
+        active_orders : pandas.DataFrame
+            DataFrame of active orders.
+
+        Returns
+        -------
+        pandas.DataFrame
+            DataFrame of active asks with BPS and liquidity calculations.
+        """
         asks = active_orders[
             (active_orders["direction"] == "ask") & (active_orders["type"] != "market")
         ]
