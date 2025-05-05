@@ -1,16 +1,13 @@
+import matplotlib.collections as collections
+import matplotlib.colors as mcolors
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from matplotlib.colors import LogNorm, Normalize
 
 from ob_analytics.auxiliary import reverse_matrix
 from ob_analytics.depth import filter_depth
-
-from matplotlib.colors import to_rgba
-import matplotlib.dates as mdates
-import matplotlib.collections as collections
 
 sns.set_theme(
     style="darkgrid", context="notebook", font_scale=1.5, rc={"lines.linewidth": 2.5}
@@ -246,7 +243,7 @@ def plot_price_levels(
     depth_filtered.loc[depth_filtered["volume"] == 0, "volume"] = np.nan
 
     # Plot the data
-    plot_price_levels_faster(depth_filtered, spread, trades, show_mp, col_bias)
+    plot_price_levels_faster(depth_filtered, spread, trades, show_mp, col_bias, price_by)
 
 
 def plot_price_levels_faster(
@@ -282,6 +279,9 @@ def plot_price_levels_faster(
     # Prepare data
     depth = depth.copy()
     depth.sort_values(by="timestamp", inplace=True)
+    if depth.empty or depth.groupby("price").size().min() < 2:
+        print("Not enough data for any price level")
+        return
 
     # Set alpha based on volume
     depth["alpha"] = np.where(
@@ -303,34 +303,43 @@ def plot_price_levels_faster(
     if log_10:
         if vmin <= 0:
             vmin = depth["volume"][depth["volume"] > 0].min()
-        norm = LogNorm(vmin=vmin, vmax=vmax)
+        norm = mcolors.LogNorm(vmin=vmin, vmax=vmax)
     else:
-        norm = Normalize(vmin=vmin, vmax=vmax)
+        norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
 
     # Set up the plot
     fig, ax = plt.subplots(figsize=(12, 7))
 
-    # Scatter plot of depth data
-    sc = ax.scatter(
-        depth["timestamp"],
-        depth["price"],
-        c=depth["volume"],
-        cmap=cmap,
-        alpha=depth["alpha"],
-        norm=norm,
-        edgecolors="none",
-        s=5,
-    )
+    # Convert timestamps for plotting lines
+    depth["timestamp_numeric"] = mdates.date2num(depth["timestamp"])
+
+    # Plot each price level as a LineCollection
+    for price, group in depth.groupby("price"):
+        group = group.sort_values("timestamp")
+        x = group["timestamp_numeric"].values
+        y = group["price"].values
+        v = group["volume"].values
+        a = group["alpha"].values
+        if len(x) < 2:
+            continue
+        points = np.array([x, y]).T.reshape(-1, 1, 2)
+        segments = np.concatenate([points[:-1], points[1:]], axis=1)
+        seg_colors = cmap(norm(v[:-1]))
+        seg_colors[:, -1] = a[:-1]
+        lc = collections.LineCollection(segments, colors=seg_colors, linewidths=2)
+        ax.add_collection(lc)
 
     # Add colorbar
-    cbar = plt.colorbar(sc, ax=ax)
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=ax)
     cbar.set_label("Volume")
 
     # Plot midprice or spread
     if spread is not None:
         spread = spread.copy()
         spread.sort_values(by="timestamp", inplace=True)
-        if show_mp:
+        if show_mp and "best.bid.price" in spread and "best.ask.price" in spread:
             spread["midprice"] = (
                 spread["best.bid.price"] + spread["best.ask.price"]
             ) / 2
@@ -342,53 +351,57 @@ def plot_price_levels_faster(
                 label="Midprice",
             )
         else:
-            ax.step(
-                spread["timestamp"],
-                spread["best.ask.price"],
-                color="#ff0000",
-                linewidth=1.5,
-                where="post",
-                label="Best Ask",
-            )
-            ax.step(
-                spread["timestamp"],
-                spread["best.bid.price"],
-                color="#00ff00",
-                linewidth=1.5,
-                where="post",
-                label="Best Bid",
-            )
+            if "best.ask.price" in spread:
+                ax.step(
+                    spread["timestamp"],
+                    spread["best.ask.price"],
+                    color="#ff0000",
+                    linewidth=1.5,
+                    where="post",
+                    label="Best Ask",
+                )
+            if "best.bid.price" in spread:
+                ax.step(
+                    spread["timestamp"],
+                    spread["best.bid.price"],
+                    color="#00ff00",
+                    linewidth=1.5,
+                    where="post",
+                    label="Best Bid",
+                )
 
     # Plot trades with enhanced visibility
     if trades is not None:
         buys = trades[trades["direction"] == "buy"]
         sells = trades[trades["direction"] == "sell"]
 
-        # Plot sells (hollow circles)
-        ax.scatter(
-            sells["timestamp"],
-            sells["price"],
-            s=50,
-            facecolors="none",
-            edgecolors="#ff0000",
-            linewidths=1.5,
-            zorder=5,
-            marker="v",
-            label="Sell Trades",
-        )
+        # Plot sells (hollow red triangles)
+        if not sells.empty:
+            ax.scatter(
+                sells["timestamp"],
+                sells["price"],
+                s=50,
+                facecolors="none",
+                edgecolors="#ff0000",
+                linewidths=1.5,
+                zorder=5,
+                marker="v",
+                label="Sell Trades",
+            )
 
-        # Plot buys (hollow circles)
-        ax.scatter(
-            buys["timestamp"],
-            buys["price"],
-            s=50,
-            facecolors="none",
-            edgecolors="#00ff00",
-            linewidths=1.5,
-            zorder=5,
-            marker="^",
-            label="Buy Trades",
-        )
+        # Plot buys (hollow green triangles)
+        if not buys.empty:
+            ax.scatter(
+                buys["timestamp"],
+                buys["price"],
+                s=50,
+                facecolors="none",
+                edgecolors="#00ff00",
+                linewidths=1.5,
+                zorder=5,
+                marker="^",
+                label="Buy Trades",
+            )
 
     # Format x-axis with date labels
     ax.xaxis_date()
