@@ -115,9 +115,9 @@ def order_aggressiveness(
         ].sort_values(by="timestamp")
 
         # Equivalent to R's stopifnot
-        assert all(
-            orders["timestamp"].isin(depth_summary["timestamp"])
-        ), "Not all timestamps in orders are present in depth_summary"
+        assert all(orders["timestamp"].isin(depth_summary["timestamp"])), (
+            "Not all timestamps in orders are present in depth_summary"
+        )
 
         best = depth_summary.loc[
             depth_summary["timestamp"].isin(orders["timestamp"]),

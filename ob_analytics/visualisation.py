@@ -243,7 +243,9 @@ def plot_price_levels(
     depth_filtered.loc[depth_filtered["volume"] == 0, "volume"] = np.nan
 
     # Plot the data
-    plot_price_levels_faster(depth_filtered, spread, trades, show_mp, col_bias, price_by)
+    plot_price_levels_faster(
+        depth_filtered, spread, trades, show_mp, col_bias, price_by
+    )
 
 
 def plot_price_levels_faster(
@@ -921,7 +923,7 @@ def plot_volume_percentiles(
     col_pal *= 2  # Duplicate for bids and asks
 
     # Define breaks and legend names
-    
+
     legend_names = [f"+{int(i):03d}bps" for i in range(500, 49, -50)] + [
         f"-{int(i):03d}bps" for i in range(50, 501, 50)
     ]

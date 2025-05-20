@@ -161,9 +161,7 @@ def interval_vwap(
     )
 
 
-def interval_price_level_gaps(
-    volume: np.ndarray, breaks: np.ndarray
-) -> np.ndarray:
+def interval_price_level_gaps(volume: np.ndarray, breaks: np.ndarray) -> np.ndarray:
     """
     Calculate the number of price level gaps in each interval.
 
