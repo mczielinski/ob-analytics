@@ -2,9 +2,7 @@ import numpy as np
 import pandas as pd
 
 
-def create_similarity_matrix(
-    a: pd.Series, b: pd.Series, cut_off_ms: int
-) -> np.ndarray:
+def create_similarity_matrix(a: pd.Series, b: pd.Series, cut_off_ms: int) -> np.ndarray:
     """
     Create a similarity matrix based on time differences and cut-off window.
 

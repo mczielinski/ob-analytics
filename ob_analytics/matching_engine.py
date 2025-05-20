@@ -62,7 +62,6 @@ def event_match(events: pd.DataFrame, cut_off_ms: int = 5000) -> pd.DataFrame:
         id_ask_fills = fill_id(ask_fills, bid_fills)
 
         for volume in id_bid_fills["fill"].unique():
-
             bids = id_bid_fills[id_bid_fills["fill"] == volume]
             asks = id_ask_fills[id_ask_fills["fill"] == volume]
 

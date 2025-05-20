@@ -174,6 +174,7 @@ def depth_metrics(depth: pd.DataFrame, bps: int = 25, bins: int = 20) -> pd.Data
     pandas.DataFrame
         DataFrame containing depth metrics over time.
     """
+
     def pct_names(name: str) -> list[str]:
         return [f"{name}{i}bps" for i in range(bps, bps * bins + 1, bps)]
 
