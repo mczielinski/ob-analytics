@@ -21,6 +21,7 @@ dependencies = [
     "opencv-python>=4.8.1.78,<5",
     "openpyxl>=3.1.2,<4",
     "ipython>=8.14.0",
+    "ruff>=0.11.10",
 ]
 
 [dependency-groups]
@@ -44,7 +45,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.sdist]
-include = ["ob_analytics"]
+include = ["ob_analytics", "tests"]
 
 [tool.hatch.build.targets.wheel]
 include = ["ob_analytics"]
@@ -52,3 +53,16 @@ include = ["ob_analytics"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.pytest]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+
+[tool.coverage.run]
+source = ["ob_analytics"]
+omit = ["tests/*"]
+
+[tool.pytest.ini_options]
+addopts = "--cov=ob_analytics"
