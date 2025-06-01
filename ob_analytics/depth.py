@@ -237,17 +237,12 @@ def depth_metrics(depth: pd.DataFrame, bps: int = 25, bins: int = 20) -> pd.Data
 
                 # Calculate the price range and volume range for the ask side
                 end_value = round((1 + bps * bins * 0.0001) * best_ask) + 1
-                price_range = np.arange(best_ask, end_value, 1)
+                price_range = np.arange(best_ask, end_value + 1, 1)
 
                 volume_range = asks_state[price_range]
 
                 # Calculate breaks for binning the volume data
-                breaks = (
-                    np.ceil(np.cumsum(np.repeat(len(price_range) / bins, bins))).astype(
-                        int
-                    )
-                    - 1
-                )
+                breaks= ((np.arange(1, bins + 1) * len(price_range) + bins - 1) // bins)-1 
                 breaks[-1] = breaks[-1] - 1
 
                 # Update the metrics DataFrame with ask-side data
@@ -278,6 +273,7 @@ def depth_metrics(depth: pd.DataFrame, bps: int = 25, bins: int = 20) -> pd.Data
                     # If the price is higher than the current best bid, update best bid and volume
                     if price > best_bid:
                         best_bid = price
+                        best_bid_vol = volume 
                     # If the price is the same as the current best bid, update only the volume
                     elif price == best_bid:
                         best_bid_vol = volume
@@ -298,12 +294,7 @@ def depth_metrics(depth: pd.DataFrame, bps: int = 25, bins: int = 20) -> pd.Data
                 volume_range = bids_state[price_range]
 
                 # Calculate breaks for binning the volume data
-                breaks = (
-                    np.ceil(np.cumsum(np.repeat(len(price_range) / bins, bins))).astype(
-                        int
-                    )
-                    - 1
-                )
+                breaks= ((np.arange(1, bins + 1) * len(price_range) + bins - 1) // bins)-1 
                 breaks[-1] = breaks[-1] - 1
 
                 # Update the metrics DataFrame with bid-side data
