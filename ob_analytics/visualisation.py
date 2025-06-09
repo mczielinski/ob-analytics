@@ -569,7 +569,6 @@ def plot_event_map(
         )
     )
 
-    sns.set_style("darkgrid")
     plt.show()
 
 
@@ -668,7 +667,6 @@ def plot_volume_map(
     plt.xlabel("Time")
     plt.ylabel("Volume")
     plt.title("Volume Map of Flashed Limit Orders")
-    sns.set_style("darkgrid")
     plt.show()
 
 
@@ -696,9 +694,6 @@ def plot_current_depth(
     -------
     None
     """
-    # Ensure bids are sorted descending and asks ascending
-    # bids = order_book['bids'].sort_values(by='price', ascending=False).reset_index(drop=True)
-    # asks = order_book['asks'].sort_values(by='price', ascending=True).reset_index(drop=True)
     bids = reverse_matrix(order_book["bids"])
     asks = reverse_matrix(order_book["asks"])
 
@@ -724,8 +719,6 @@ def plot_current_depth(
     # Create depth DataFrame
     depth = pd.DataFrame({"price": x, "liquidity": y1, "volume": y2, "side": side})
 
-    # Set up the plot
-    # plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(12, 7))
 
     # Plot volume using ax.bar with auto-scaling bar width
@@ -737,7 +730,7 @@ def plot_current_depth(
         price_diffs = price_diffs[price_diffs > 0]
         if len(price_diffs) > 0:
             resolution = np.min(price_diffs)
-            bar_width = resolution * 5  # 500% of the minimum non-zero price difference
+            bar_width = resolution
         else:
             # If all prices are the same, set a default bar width
             bar_width = 1  # Adjust as necessary
@@ -746,8 +739,7 @@ def plot_current_depth(
             depth["price"],
             depth["volume"],
             width=bar_width,
-            color="#555555",
-            alpha=0.3,
+            color="white",
             align="center",
             edgecolor=None,
         )
@@ -759,7 +751,7 @@ def plot_current_depth(
         ax.step(
             side_data["price"],
             side_data["liquidity"],
-            where="pre",  # Changed 'post' to 'pre'
+            where="pre",
             color=col_pal[side_value],
             label=side_value,
             linewidth=2,
@@ -788,9 +780,7 @@ def plot_current_depth(
     ax.set_xlabel("Price")
     ax.set_ylabel("Liquidity")
 
-    # Customize plot appearance
     ax.legend()
-
     fig.tight_layout()
     plt.show()
 
