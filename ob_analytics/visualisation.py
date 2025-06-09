@@ -10,7 +10,10 @@ from ob_analytics.auxiliary import reverse_matrix
 from ob_analytics.depth import filter_depth
 
 sns.set_theme(
-    style="darkgrid", context="notebook", font_scale=1.5, rc={"lines.linewidth": 2.5}
+    style="darkgrid",
+    context="notebook",
+    font_scale=1.5,
+    rc={"lines.linewidth": 2.5, "axes.facecolor": "darkgray"},
 )
 
 
@@ -1012,9 +1015,16 @@ def plot_volume_percentiles(
         )
         legend_elements.append(patch)
 
-    ax.legend(handles=legend_elements, title="depth         \n", loc="best", ncol=2)
+    ax.legend(
+        handles=legend_elements,
+        title="depth         \n",
+        loc="center left",
+        bbox_to_anchor=(1.01, 0.5),
+        ncol=1,  # single column
+        borderaxespad=0.0,
+    )
 
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0, 0.85, 1])  # leave space for legend
     plt.show()
 
 
