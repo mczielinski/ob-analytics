@@ -182,13 +182,14 @@ def plot_price_levels(
     None
     """
     # Scale volume
-    depth["volume"] = depth["volume"] * volume_scale
+    depth_local = depth.copy()
+    depth_local["volume"] = depth_local["volume"] * volume_scale
 
     # Set default start_time and end_time if not provided
     if start_time is None:
-        start_time = depth["timestamp"].iloc[0]
+        start_time = depth_local["timestamp"].iloc[0]
     if end_time is None:
-        end_time = depth["timestamp"].iloc[-1]
+        end_time = depth_local["timestamp"].iloc[-1]
 
     # Filter spread by start_time and end_time, and set price_from and price_to
     if spread is not None:
@@ -216,16 +217,16 @@ def plot_price_levels(
 
     # Filter depth by price and volume
     if price_from is not None:
-        depth = depth[depth["price"] >= price_from]
+        depth_local = depth_local[depth_local["price"] >= price_from]
     if price_to is not None:
-        depth = depth[depth["price"] <= price_to]
+        depth_local = depth_local[depth_local["price"] <= price_to]
     if volume_from is not None:
-        depth = depth[(depth["volume"] >= volume_from) | (depth["volume"] == 0)]
+        depth_local = depth_local[(depth_local["volume"] >= volume_from) | (depth_local["volume"] == 0)]
     if volume_to is not None:
-        depth = depth[depth["volume"] <= volume_to]
+        depth_local = depth_local[depth_local["volume"] <= volume_to]
 
-    # Filter depth by time window using a hypothetical filter_depth function
-    depth_filtered = filter_depth(depth, start_time, end_time)
+    # Filter depth by time window using the filter_depth function
+    depth_filtered = filter_depth(depth_local, start_time, end_time)
 
     # Remove price levels with no update during time window if show_all_depth is False
     if not show_all_depth:
