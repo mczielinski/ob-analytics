@@ -55,7 +55,7 @@ def event_match(events: pd.DataFrame, cut_off_ms: int = 5000) -> pd.DataFrame:
             """
             id_fills = src[src["fill"].isin(dst["fill"])]
             return id_fills.sort_values(
-                by=["fill", "timestamp"], ascending=[False, True]
+                by=["fill", "timestamp"], ascending=[False, True], kind="stable"
             )
 
         id_bid_fills = fill_id(bid_fills, ask_fills)

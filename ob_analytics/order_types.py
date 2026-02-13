@@ -54,8 +54,8 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
     events.loc[events["id"].isin(pacman_ids), "type"] = "pacman"
 
     # Flashed and resting limit orders
-    created = events[events["action"] == "created"].sort_values(by="id")
-    deleted = events[events["action"] == "deleted"].sort_values(by="id")
+    created = events[events["action"] == "created"].sort_values(by="id", kind="stable")
+    deleted = events[events["action"] == "deleted"].sort_values(by="id", kind="stable")
     changed = events[events["action"] == "changed"]
 
     created_deleted_ids = created[
