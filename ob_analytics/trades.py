@@ -19,10 +19,10 @@ def match_trades(events: pd.DataFrame) -> pd.DataFrame:
     """
     matching_bids = events[
         (events["direction"] == "bid") & ~pd.isna(events["matching.event"])
-    ].sort_values(by="event.id")
+    ].sort_values(by="event.id", kind="stable")
     matching_asks = events[
         (events["direction"] == "ask") & ~pd.isna(events["matching.event"])
-    ].sort_values(by="matching.event")
+    ].sort_values(by="matching.event", kind="stable")
 
     # assert (matching_bids['event.id'].reset_index(drop=True).astype(float) - matching_asks['matching.event'].reset_index(drop=True) == 0).all()
     assert all(
@@ -84,7 +84,7 @@ def match_trades(events: pd.DataFrame) -> pd.DataFrame:
             "taker_og": taker_og,
         }
     )
-    combined = combined.sort_values(by="timestamp")
+    combined = combined.sort_values(by="timestamp", kind="stable")
 
     jumps = np.where(abs(np.diff(combined["price"])) > 10)[0]
     if len(jumps) > 0:

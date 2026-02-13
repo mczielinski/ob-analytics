@@ -284,7 +284,7 @@ def plot_price_levels_faster(
     """
     # Prepare data
     depth = depth.copy()
-    depth.sort_values(by="timestamp", inplace=True)
+    depth.sort_values(by="timestamp", inplace=True, kind="stable")
     if depth.empty or depth.groupby("price").size().min() < 2:
         print("Not enough data for any price level")
         return
@@ -321,7 +321,7 @@ def plot_price_levels_faster(
 
     # Plot each price level as a LineCollection
     for price, group in depth.groupby("price"):
-        group = group.sort_values("timestamp")
+        group = group.sort_values("timestamp", kind="stable")
         x = group["timestamp_numeric"].values
         y = group["price"].values
         v = group["volume"].values
@@ -344,7 +344,7 @@ def plot_price_levels_faster(
     # Plot midprice or spread
     if spread is not None:
         spread = spread.copy()
-        spread.sort_values(by="timestamp", inplace=True)
+        spread.sort_values(by="timestamp", inplace=True, kind="stable")
         if show_mp and "best.bid.price" in spread and "best.ask.price" in spread:
             spread["midprice"] = (
                 spread["best.bid.price"] + spread["best.ask.price"]

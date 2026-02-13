@@ -91,7 +91,7 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
 
         # Combine Volumes
         volume_deltas = pd.concat([added_volume, cancelled_volume, filled_volume])
-        volume_deltas = volume_deltas.sort_values(by=["price", "timestamp"])
+        volume_deltas = volume_deltas.sort_values(by=["price", "timestamp"], kind="stable")
 
         # Calculate Cumulative Volume
         volume_deltas["volume"] = volume_deltas.groupby("price")["volume"].cumsum()
@@ -104,7 +104,7 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
     asks = events[events["direction"] == "ask"]
     depth_ask = directional_price_level_volume(asks)
     depth_data = pd.concat([depth_bid, depth_ask])
-    return depth_data.sort_values(by="timestamp")
+    return depth_data.sort_values(by="timestamp", kind="stable")
 
 
 def filter_depth(
@@ -129,7 +129,7 @@ def filter_depth(
     """
     # 1. Get all active price levels before start of range
     pre = d[d["timestamp"] <= from_timestamp]
-    pre = pre.sort_values(by=["price", "timestamp"])
+    pre = pre.sort_values(by=["price", "timestamp"], kind="stable")
 
     # Last update for each price level <= from. This becomes the starting point for all updates within the range.
     pre = pre.drop_duplicates(subset="price", keep="last")
@@ -151,7 +151,7 @@ def filter_depth(
 
     # Combine pre, mid, and open_ends, ensure it is in order
     range_combined = pd.concat([range_combined, open_ends])
-    range_combined = range_combined.sort_values(by=["price", "timestamp"])
+    range_combined = range_combined.sort_values(by=["price", "timestamp"], kind="stable")
 
     return range_combined
 
@@ -178,7 +178,7 @@ def depth_metrics(depth: pd.DataFrame, bps: int = 25, bins: int = 20) -> pd.Data
     def pct_names(name: str) -> list[str]:
         return [f"{name}{i}bps" for i in range(bps, bps * bins + 1, bps)]
 
-    ordered_depth = depth.sort_values(by="timestamp")
+    ordered_depth = depth.sort_values(by="timestamp", kind="stable")
     ordered_depth["price"] = (100 * ordered_depth["price"]).round().astype(int)
     depth_matrix = np.column_stack(
         (
@@ -270,10 +270,10 @@ def depth_metrics(depth: pd.DataFrame, bps: int = 25, bins: int = 20) -> pd.Data
                 bids_state[price] = volume  # Update the volume at this price level
                 # If there's volume at this price level
                 if volume > 0:
-                    # If the price is higher than the current best bid, update best bid and volume
+                    # If the price is higher than the current best bid, update best bid
+                    # (R does NOT update best_bid_vol here - only the price)
                     if price > best_bid:
                         best_bid = price
-                        best_bid_vol = volume 
                     # If the price is the same as the current best bid, update only the volume
                     elif price == best_bid:
                         best_bid_vol = volume
