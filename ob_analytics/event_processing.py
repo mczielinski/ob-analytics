@@ -1,5 +1,9 @@
+import logging
+
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 def load_event_data(
@@ -50,9 +54,10 @@ def load_event_data(
             removed_ids = events.loc[
                 events["event.id"].isin(duplicate_event_ids), "id"
             ]
-            print(
-                f"Removed {rem_dup} duplicate order cancellations: "
-                + " ".join(removed_ids.astype(str))
+            logger.warning(
+                "Removed %d duplicate order cancellations: %s",
+                rem_dup,
+                " ".join(removed_ids.astype(str)),
             )
 
         return events[~events["event.id"].isin(duplicate_event_ids)]

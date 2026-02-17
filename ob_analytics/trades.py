@@ -1,6 +1,11 @@
-import pandas as pd
+import logging
+
 import numpy as np
+import pandas as pd
+
 from ob_analytics.auxiliary import vwap
+
+logger = logging.getLogger(__name__)
 
 
 def match_trades(events: pd.DataFrame) -> pd.DataFrame:
@@ -90,8 +95,10 @@ def match_trades(events: pd.DataFrame) -> pd.DataFrame:
     if len(jumps) > 0:
         if jumps[0] == 0:
             jumps = jumps[1:]
-        print(
-            f"{combined['timestamp'].iloc[0].strftime('%Y-%m-%d')}: {len(jumps)} jumps > $10 (swapping makers with takers)"
+        logger.warning(
+            "%s: %d jumps > $10 (swapping makers with takers)",
+            combined["timestamp"].iloc[0].strftime("%Y-%m-%d"),
+            len(jumps),
         )
         for i in jumps:
             prev_jump, this_jump = combined.iloc[i - 1], combined.iloc[i]

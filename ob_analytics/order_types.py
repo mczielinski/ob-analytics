@@ -1,5 +1,9 @@
+import logging
+
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
@@ -110,6 +114,6 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
 
     unidentified = (events["type"] == "unknown").sum()
     if unidentified > 0:
-        print(f"Could not identify {unidentified} orders")
+        logger.warning("Could not identify %d orders", unidentified)
 
     return events
