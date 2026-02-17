@@ -1,3 +1,5 @@
+import logging
+
 import matplotlib.collections as collections
 import matplotlib.colors as mcolors
 import matplotlib.dates as mdates
@@ -9,12 +11,19 @@ import seaborn as sns
 from ob_analytics.auxiliary import reverse_matrix
 from ob_analytics.depth import filter_depth
 
-sns.set_theme(
-    style="darkgrid",
-    context="notebook",
-    font_scale=1.5,
-    rc={"lines.linewidth": 2.5, "axes.facecolor": "darkgray"},
-)
+logger = logging.getLogger(__name__)
+
+_DEFAULT_THEME = {
+    "style": "darkgrid",
+    "context": "notebook",
+    "font_scale": 1.5,
+    "rc": {"lines.linewidth": 2.5, "axes.facecolor": "darkgray"},
+}
+
+
+def _apply_theme() -> None:
+    """Apply the default seaborn theme for ob-analytics plots."""
+    sns.set_theme(**_DEFAULT_THEME)
 
 
 def plot_time_series(
@@ -62,6 +71,7 @@ def plot_time_series(
     df = df[(df["ts"] >= start_time) & (df["ts"] <= end_time)]
 
     # Plotting
+    _apply_theme()
     plt.figure(figsize=(10, 6))
     sns.lineplot(data=df, x="ts", y="val", drawstyle="steps-post")
 
@@ -115,6 +125,7 @@ def plot_trades(
     )
 
     # Plotting
+    _apply_theme()
     plt.figure(figsize=(10, 6))
     sns.lineplot(data=filtered_trades, x="timestamp", y="price", drawstyle="steps-post")
 
@@ -286,7 +297,7 @@ def plot_price_levels_faster(
     depth = depth.copy()
     depth.sort_values(by="timestamp", inplace=True, kind="stable")
     if depth.empty or depth.groupby("price").size().min() < 2:
-        print("Not enough data for any price level")
+        logger.warning("Not enough data for any price level")
         return
 
     # Set alpha based on volume
@@ -314,6 +325,7 @@ def plot_price_levels_faster(
         norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
 
     # Set up the plot
+    _apply_theme()
     fig, ax = plt.subplots(figsize=(12, 7))
 
     # Convert timestamps for plotting lines
@@ -517,6 +529,7 @@ def plot_event_map(
     price_by = 10 ** round(np.log10(events["price"].max() - events["price"].min()) - 1)
 
     # Plotting
+    _apply_theme()
     fig, ax = plt.subplots(figsize=(10, 6))
 
     # Plot created events with a filled marker
@@ -653,6 +666,7 @@ def plot_volume_map(
     col_pal = {"bid": "#0000ff", "ask": "#ff0000"}
 
     # Plotting
+    _apply_theme()
     plt.figure(figsize=(10, 6))
     if log_scale:
         plt.yscale("log")
@@ -720,6 +734,7 @@ def plot_current_depth(
     # Create depth DataFrame
     depth = pd.DataFrame({"price": x, "liquidity": y1, "volume": y2, "side": side})
 
+    _apply_theme()
     fig, ax = plt.subplots(figsize=(12, 7))
 
     # Plot volume using ax.bar with auto-scaling bar width
@@ -950,6 +965,7 @@ def plot_volume_percentiles(
     colors_dict = dict(zip(all_cols, col_pal))
 
     # Plotting
+    _apply_theme()
     fig, ax = plt.subplots(figsize=(12, 8))
 
     # Plot asks
@@ -1063,6 +1079,7 @@ def plot_events_histogram(
     ]
 
     # Set up the plot
+    _apply_theme()
     plt.figure(figsize=(12, 7))
 
     # Plot the histogram
