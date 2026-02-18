@@ -124,7 +124,6 @@ def event_match(events: pd.DataFrame, cut_off_ms: int = 5000) -> pd.DataFrame:
 
     matched = matcher()
 
-    # pd.DataFrame(matched).to_csv('matched.csv')
     events["matching.event"] = np.nan
     # matched[:, 0] = bid event ids, matched[:, 1] = ask event ids
     matched_bids = pd.DataFrame(matched, columns=["event.id", "matching.event"])

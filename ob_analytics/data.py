@@ -1,5 +1,3 @@
-## data.py
-
 import pandas as pd
 
 from ob_analytics.depth import depth_metrics, price_level_volume
