@@ -48,6 +48,8 @@ class NeedlemanWunschMatcher:
         matched = self._run_matching(events)
 
         events["matching.event"] = np.nan
+        if len(matched) == 0:
+            return events
         matched_bids = pd.DataFrame(matched, columns=["event.id", "matching.event"])
         matched_asks = pd.DataFrame(matched, columns=["matching.event", "event.id"])
         events = pd.merge(events, matched_bids, on="event.id", how="left")
