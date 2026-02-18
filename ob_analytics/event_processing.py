@@ -159,9 +159,11 @@ def order_aggressiveness(
             & events["type"].isin(["flashed-limit", "resting-limit"])
         ].sort_values(by="timestamp", kind="stable")
 
-        assert all(orders["timestamp"].isin(depth_summary["timestamp"])), (
-            "Not all timestamps in orders are present in depth_summary"
-        )
+        if not all(orders["timestamp"].isin(depth_summary["timestamp"])):
+            raise ValueError(
+                "Not all order timestamps are present in depth_summary. "
+                "Ensure depth_summary covers the full event time range."
+            )
 
         best_price_col = f"best.{side}.price"
 

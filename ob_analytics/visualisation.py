@@ -631,7 +631,8 @@ def plot_volume_map(
     -------
     None
     """
-    assert action in ["deleted", "created"], "Invalid action provided"
+    if action not in ("deleted", "created"):
+        raise ValueError(f"action must be 'deleted' or 'created', got {action!r}")
 
     if start_time is None:
         start_time = events["timestamp"].min()
@@ -1065,7 +1066,8 @@ def plot_events_histogram(
     -------
     None
     """
-    assert val in ["volume", "price"], "val must be 'volume' or 'price'"
+    if val not in ("volume", "price"):
+        raise ValueError(f"val must be 'volume' or 'price', got {val!r}")
 
     # Set default start_time and end_time if not provided
     if start_time is None:

@@ -29,10 +29,11 @@ def match_trades(events: pd.DataFrame) -> pd.DataFrame:
         (events["direction"] == "ask") & ~pd.isna(events["matching.event"])
     ].sort_values(by="matching.event", kind="stable")
 
-    # assert (matching_bids['event.id'].reset_index(drop=True).astype(float) - matching_asks['matching.event'].reset_index(drop=True) == 0).all()
-    assert all(
-        matching_bids["event.id"].values == matching_asks["matching.event"].values
-    )
+    if not all(matching_bids["event.id"].values == matching_asks["matching.event"].values):
+        raise RuntimeError(
+            "Bid event IDs do not align with ask matching events. "
+            "This indicates a matching error in the upstream eventMatch step."
+        )
 
     matching_bids = matching_bids.reset_index(drop=True)
     matching_asks = matching_asks.reset_index(drop=True)

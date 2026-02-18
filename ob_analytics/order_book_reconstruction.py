@@ -124,9 +124,15 @@ def order_book(
     active_orders = active_orders[~active_orders["id"].isin(changed_before["id"])]
     active_orders = pd.concat([active_orders, changed_before], ignore_index=True)
 
-    # Sanity checks
-    assert all(active_orders["timestamp"] <= tp), "Timestamps exceed current time."
-    assert not active_orders["id"].duplicated().any(), "Duplicate order IDs found."
+    if not all(active_orders["timestamp"] <= tp):
+        raise ValueError(
+            f"Some active orders have timestamps after the requested time {tp}."
+        )
+    if active_orders["id"].duplicated().any():
+        raise RuntimeError(
+            "Duplicate order IDs found in active orders. "
+            "This indicates a data integrity issue."
+        )
 
     asks = active_asks(active_orders)
     asks = asks[
