@@ -1,7 +1,7 @@
 [project]
 name = "ob-analytics"
 version = "0.1.0"
-description = ""
+description = "Limit order book analytics and visualization — reconstruct trades, classify orders, and visualize market microstructure from raw exchange events."
 authors = [{ name = "mczielinski", email = "mczielinski@gmail.com" }]
 requires-python = ">=3.10,<3.13"
 readme = "README.md"

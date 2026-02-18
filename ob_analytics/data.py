@@ -1,3 +1,5 @@
+"""Data processing utilities: loading, saving, and processing order book data."""
+
 import logging
 from pathlib import Path
 

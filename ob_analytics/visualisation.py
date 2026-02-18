@@ -1,3 +1,5 @@
+"""Visualization functions for order book analytics and plotting."""
+
 import logging
 from dataclasses import dataclass, field
 from datetime import timedelta

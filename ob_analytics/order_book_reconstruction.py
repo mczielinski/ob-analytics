@@ -1,3 +1,5 @@
+"""Point-in-time order book snapshot reconstruction."""
+
 from datetime import datetime, timezone
 
 import numpy as np

@@ -1,3 +1,5 @@
+"""Order type classification for limit order book events."""
+
 import logging
 
 import numpy as np
