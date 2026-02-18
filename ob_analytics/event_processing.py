@@ -1,53 +1,103 @@
+"""Event loading and aggressiveness computation.
+
+Contains :class:`BitstampLoader` (the default :class:`EventLoader`
+implementation) and the :func:`order_aggressiveness` calculation.
+"""
+
+from __future__ import annotations
+
 import logging
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from ob_analytics._utils import validate_columns, validate_non_empty
+from ob_analytics.config import PipelineConfig
 from ob_analytics.exceptions import InvalidDataError
 
 logger = logging.getLogger(__name__)
 
 
-def load_event_data(
-    file: str, price_digits: int = 2, volume_digits: int = 8
-) -> pd.DataFrame:
-    """
-    Read raw limit order event data from a CSV file.
+class BitstampLoader:
+    """Load raw limit-order events from a Bitstamp-format CSV.
+
+    Satisfies the :class:`~ob_analytics.protocols.EventLoader` protocol.
 
     Parameters
     ----------
-    file : str
-        The path to the CSV file containing limit order events.
-    price_digits : int, optional
-        The number of decimal places for the 'price' column. Default is 2.
-    volume_digits : int, optional
-        The number of decimal places for the 'volume' column. Default is 8.
-
-    Returns
-    -------
-    pandas.DataFrame
-        A DataFrame containing the raw limit order events data.
+    config : PipelineConfig, optional
+        Pipeline configuration.  ``price_decimals`` and ``volume_decimals``
+        control rounding precision.
     """
 
-    def remove_duplicates(events: pd.DataFrame) -> pd.DataFrame:
-        """
-        Remove duplicate delete events, matching R's removeDuplicates logic.
+    def __init__(self, config: PipelineConfig | None = None) -> None:
+        self._config = config or PipelineConfig()
 
-        R's logic:
-        1. Get all 'deleted' events
-        2. Sort by (id, volume)
-        3. Find ids that have multiple delete events
-        4. Keep the first occurrence per id, remove subsequent ones
-        5. Remove those event.ids from the full events DataFrame
+    def load(self, source: str | Path) -> pd.DataFrame:
+        """Read *source* CSV and return a cleaned events DataFrame.
+
+        The returned DataFrame contains columns: ``id``, ``timestamp``,
+        ``exchange.timestamp``, ``price``, ``volume``, ``action``,
+        ``direction``, ``event.id``, ``fill``, ``original_number``.
         """
+        price_digits = self._config.price_decimals
+        volume_digits = self._config.volume_decimals
+
+        events = pd.read_csv(source)
+        validate_columns(
+            events,
+            {"id", "timestamp", "exchange.timestamp", "price", "volume", "action", "direction"},
+            "BitstampLoader.load",
+        )
+        validate_non_empty(events, "BitstampLoader.load")
+
+        events = events[events["volume"] >= 0]
+        events = events.reset_index().rename(columns={"index": "original_number"})
+        events.original_number = events.original_number + 1
+        events["volume"] = events["volume"].round(volume_digits)
+        events["price"] = events["price"].round(price_digits)
+
+        events["timestamp"] = pd.to_datetime(events["timestamp"] / 1000, unit="s")
+        events["exchange.timestamp"] = pd.to_datetime(
+            events["exchange.timestamp"] / 1000, unit="s"
+        )
+        events["action"] = pd.Categorical(
+            events["action"], categories=["created", "changed", "deleted"], ordered=True
+        )
+        events["direction"] = pd.Categorical(
+            events["direction"], categories=["bid", "ask"], ordered=True
+        )
+
+        events = events.sort_values(
+            by=["id", "volume", "action", "timestamp"],
+            ascending=[True, False, True, True],
+            kind="stable",
+        )
+
+        events["event.id"] = np.arange(1, len(events) + 1)
+        events = self._remove_duplicates(events)
+
+        fill_deltas = events.groupby("id")["volume"].diff().fillna(0)
+        price_deltas = events.groupby("id")["price"].diff().fillna(0)
+        fill_deltas = fill_deltas.where(price_deltas == 0, 0)
+        events["fill"] = fill_deltas.abs().round(volume_digits)
+
+        ts_sorted = events.groupby("id")["timestamp"].transform(
+            lambda x: np.sort(x.values, kind="stable")
+        )
+        events["timestamp"] = ts_sorted
+
+        return events
+
+    @staticmethod
+    def _remove_duplicates(events: pd.DataFrame) -> pd.DataFrame:
+        """Remove duplicate delete events, matching R's removeDuplicates."""
         deletes = events[events["action"] == "deleted"].sort_values(
             by=["id", "volume"], kind="stable"
         )
-        # Find ids with multiple delete events
         dup_ids = deletes.loc[deletes["id"].duplicated(), "id"]
         duplicate_deletes = deletes[deletes["id"].isin(dup_ids)]
-        # Get event.ids of the 2nd+ occurrence for each id (keep first)
         duplicate_event_ids = duplicate_deletes.loc[
             duplicate_deletes["id"].duplicated(), "event.id"
         ]
@@ -65,72 +115,42 @@ def load_event_data(
 
         return events[~events["event.id"].isin(duplicate_event_ids)]
 
-    events = pd.read_csv(file)
-    validate_columns(
-        events,
-        {"id", "timestamp", "exchange.timestamp", "price", "volume", "action", "direction"},
-        "load_event_data",
-    )
-    validate_non_empty(events, "load_event_data")
-    events = events[events["volume"] >= 0]
-    events = events.reset_index().rename(columns={"index": "original_number"})
-    events.original_number = events.original_number + 1
-    events["volume"] = events["volume"].round(volume_digits)
-    events["price"] = events["price"].round(price_digits)
 
-    events["timestamp"] = pd.to_datetime(events["timestamp"] / 1000, unit="s")
-    events["exchange.timestamp"] = pd.to_datetime(
-        events["exchange.timestamp"] / 1000, unit="s"
-    )
-    events["action"] = pd.Categorical(
-        events["action"], categories=["created", "changed", "deleted"], ordered=True
-    )
-    events["direction"] = pd.Categorical(
-        events["direction"], categories=["bid", "ask"], ordered=True
-    )
+# ── Backward-compatible module-level function ─────────────────────────
 
-    # Sort by id ASC, volume DESC, action ASC, timestamp ASC
-    # (matches R: order(id, -volume, action, timestamp))
-    events = events.sort_values(
-        by=["id", "volume", "action", "timestamp"],
-        ascending=[True, False, True, True],
-        kind="stable",
-    )
 
-    # Assign event.id BEFORE removing duplicates (matches R)
-    # This means event.id will have gaps after duplicate removal
-    events["event.id"] = np.arange(1, len(events) + 1)
+def load_event_data(
+    file: str, price_digits: int = 2, volume_digits: int = 8
+) -> pd.DataFrame:
+    """Read raw limit order event data from a CSV file.
 
-    # Remove duplicate delete events (after event.id assignment, matching R)
-    events = remove_duplicates(events)
+    This is a convenience wrapper around :class:`BitstampLoader`.
 
-    # Calculate fill deltas (volume change between consecutive events for same order)
-    # Using vectorDiff approach: c(0, diff(v)) per group
-    fill_deltas = events.groupby("id")["volume"].diff().fillna(0)
+    Parameters
+    ----------
+    file : str
+        The path to the CSV file containing limit order events.
+    price_digits : int, optional
+        The number of decimal places for the 'price' column. Default is 2.
+    volume_digits : int, optional
+        The number of decimal places for the 'volume' column. Default is 8.
 
-    # For pacman orders: zero out fill when price changes
-    price_deltas = events.groupby("id")["price"].diff().fillna(0)
-    fill_deltas = fill_deltas.where(price_deltas == 0, 0)
+    Returns
+    -------
+    pandas.DataFrame
+        A DataFrame containing the raw limit order events data.
+    """
+    config = PipelineConfig(price_decimals=price_digits, volume_decimals=volume_digits)
+    return BitstampLoader(config).load(file)
 
-    events["fill"] = fill_deltas.abs().round(volume_digits)
 
-    # Fix timestamps: re-sort timestamps within each order id group
-    # to match the logical lifecycle ordering (id, -volume, action, timestamp).
-    # R does: ts.ordered <- unlist(tapply(events$timestamp, events$id, sort))
-    ts_sorted = (
-        events.groupby("id")["timestamp"]
-        .transform(lambda x: np.sort(x.values, kind="stable"))
-    )
-    events["timestamp"] = ts_sorted
-
-    return events
+# ── Order aggressiveness (standalone function) ────────────────────────
 
 
 def order_aggressiveness(
     events: pd.DataFrame, depth_summary: pd.DataFrame
 ) -> pd.DataFrame:
-    """
-    Calculate order aggressiveness with respect to the best bid or ask in BPS.
+    """Calculate order aggressiveness with respect to the best bid or ask in BPS.
 
     Parameters
     ----------
@@ -144,7 +164,6 @@ def order_aggressiveness(
     pandas.DataFrame
         The events DataFrame with an added 'aggressiveness.bps' column.
     """
-
     validate_columns(
         events,
         {"direction", "action", "type", "timestamp", "event.id", "price"},
@@ -157,21 +176,6 @@ def order_aggressiveness(
     )
 
     def event_diff_bps(events: pd.DataFrame, direction: int) -> pd.DataFrame:
-        """
-        Calculate the price difference in basis points for orders in a given direction.
-
-        Parameters
-        ----------
-        events : pandas.DataFrame
-            The events DataFrame.
-        direction : int
-            The direction of the orders: 1 for bids, -1 for asks.
-
-        Returns
-        -------
-        pandas.DataFrame
-            A DataFrame with 'event.id' and 'diff.bps' columns.
-        """
         side = "bid" if direction == 1 else "ask"
         orders = events[
             (events["direction"] == side)
@@ -187,8 +191,6 @@ def order_aggressiveness(
 
         best_price_col = f"best.{side}.price"
 
-        # Replicate R's `match` behavior with a left merge
-        # Drop duplicates from depth_summary to ensure a 1-to-1 merge like R's match()
         unique_depth_summary = depth_summary.drop_duplicates(subset=["timestamp"])
         merged = pd.merge(
             orders,
@@ -197,10 +199,8 @@ def order_aggressiveness(
             how="left",
         )
 
-        # Replicate R's `head(best, -1)` by shifting
         best = merged[best_price_col].shift(1)
 
-        # Drop the first row which now has a NaN `best` price
         merged = merged.iloc[1:].copy()
         best = best.iloc[1:]
 
@@ -212,13 +212,11 @@ def order_aggressiveness(
     ask_diff = event_diff_bps(events, -1)
     events["aggressiveness.bps"] = np.nan
 
-    # Use merge to update aggressiveness.bps for bids
     if not bid_diff.empty:
         events = pd.merge(events, bid_diff, on="event.id", how="left")
         events["aggressiveness.bps"] = events["aggressiveness.bps"].fillna(events["diff.bps"])
         events.drop(columns=["diff.bps"], inplace=True)
 
-    # Use merge to update aggressiveness.bps for asks
     if not ask_diff.empty:
         events = pd.merge(events, ask_diff, on="event.id", how="left")
         events["aggressiveness.bps"] = events["aggressiveness.bps"].fillna(events["diff.bps"])

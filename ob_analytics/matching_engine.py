@@ -1,66 +1,76 @@
+"""Event matching engine.
+
+Contains :class:`NeedlemanWunschMatcher` (the default
+:class:`MatchingEngine` implementation) which pairs simultaneous bid and
+ask fills to identify trades.
+"""
+
+from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 
 from ob_analytics._needleman_wunsch import align_sequences, create_similarity_matrix
 from ob_analytics._utils import validate_columns, validate_non_empty
+from ob_analytics.config import PipelineConfig
 
 
-def event_match(events: pd.DataFrame, cut_off_ms: int = 5000) -> pd.DataFrame:
-    """
-    Match market orders (takers) to limit orders (makers).
+class NeedlemanWunschMatcher:
+    """Match bid/ask fills using volume equality and Needleman-Wunsch alignment.
+
+    Satisfies the :class:`~ob_analytics.protocols.MatchingEngine` protocol.
 
     Parameters
     ----------
-    events : pandas.DataFrame
-        A pandas DataFrame of order book events.
-    cut_off_ms : int, optional
-        The time window in milliseconds for considering candidate matches. Default is 5000.
-
-    Returns
-    -------
-    pandas.DataFrame
-        The events DataFrame with a 'matching.event' column indicating matched events.
+    config : PipelineConfig, optional
+        Pipeline configuration.  ``match_cutoff_ms`` controls the maximum
+        time window between fills to consider a match.
     """
 
-    validate_columns(
-        events,
-        {"direction", "fill", "original_number", "event.id", "timestamp"},
-        "event_match",
-    )
-    validate_non_empty(events, "event_match")
+    def __init__(self, config: PipelineConfig | None = None) -> None:
+        self._config = config or PipelineConfig()
 
-    def matcher() -> np.ndarray:
-        """
-        Internal function to perform the matching logic.
+    def match(self, events: pd.DataFrame) -> pd.DataFrame:
+        """Add a ``matching.event`` column pairing bid/ask fills.
 
-        Returns
-        -------
-        numpy.ndarray
-            An array of matched event IDs.
+        For each unique fill volume, bid and ask fills within
+        ``match_cutoff_ms`` are paired.  When a simple closest-match is
+        ambiguous (duplicates or gaps), Needleman-Wunsch sequence
+        alignment is used as a fallback.
         """
-        cut_off_td = np.timedelta64(cut_off_ms * 1000000, "ns")
-        res = []
+        validate_columns(
+            events,
+            {"direction", "fill", "original_number", "event.id", "timestamp"},
+            "NeedlemanWunschMatcher.match",
+        )
+        validate_non_empty(events, "NeedlemanWunschMatcher.match")
+
+        matched = self._run_matching(events)
+
+        events["matching.event"] = np.nan
+        matched_bids = pd.DataFrame(matched, columns=["event.id", "matching.event"])
+        matched_asks = pd.DataFrame(matched, columns=["matching.event", "event.id"])
+        events = pd.merge(events, matched_bids, on="event.id", how="left")
+        events = pd.merge(events, matched_asks, on="event.id", how="left")
+
+        events["matching.event"] = (
+            events["matching.event_y"]
+            .fillna(events["matching.event_x"])
+            .fillna(events["matching.event"])
+        )
+
+        events = events.drop(columns=["matching.event_x", "matching.event_y"])
+        return events
+
+    def _run_matching(self, events: pd.DataFrame) -> np.ndarray:
+        cut_off_td = np.timedelta64(self._config.match_cutoff_ms * 1_000_000, "ns")
+        res: list[np.ndarray] = []
         cols = ["original_number", "event.id", "fill", "timestamp"]
 
         bid_fills = events[(events["direction"] == "bid") & (events["fill"] != 0)][cols]
         ask_fills = events[(events["direction"] == "ask") & (events["fill"] != 0)][cols]
 
         def fill_id(src: pd.DataFrame, dst: pd.DataFrame) -> pd.DataFrame:
-            """
-            Filter fills based on matching fill amounts and sort them.
-
-            Parameters
-            ----------
-            src : pandas.DataFrame
-                Source DataFrame containing fills.
-            dst : pandas.DataFrame
-                Destination DataFrame to compare fills with.
-
-            Returns
-            -------
-            pandas.DataFrame
-                Filtered and sorted DataFrame of fills.
-            """
             id_fills = src[src["fill"].isin(dst["fill"])]
             return id_fills.sort_values(
                 by=["fill", "timestamp"], ascending=[False, True], kind="stable"
@@ -73,30 +83,22 @@ def event_match(events: pd.DataFrame, cut_off_ms: int = 5000) -> pd.DataFrame:
             bids = id_bid_fills[id_bid_fills["fill"] == volume]
             asks = id_ask_fills[id_ask_fills["fill"] == volume]
 
-            # Calculate distance matrix in milliseconds
             distance_matrix_ms = (
                 (bids["timestamp"].values.reshape(-1, 1) - asks["timestamp"].values)
                 .astype("timedelta64[ns]")
                 .astype("int64")
             )
 
-            # Handle single ask case
             if len(asks) == 1:
                 distance_matrix_ms = distance_matrix_ms.reshape(-1, 1)
 
-            # Find the closest ask indices for each bid
             closest_ask_indices = np.argmin(np.abs(distance_matrix_ms), axis=1)
-
-            # Retrieve event ids of the closest asks
             ask_event_ids = asks["event.id"].values[closest_ask_indices]
 
-            # Create a mask for the valid matches within cutoff
             mask = (
                 np.abs(distance_matrix_ms[np.arange(len(bids)), closest_ask_indices])
                 <= cut_off_td
             )
-
-            # Apply mask to get the final ask event ids
             ask_event_ids = np.where(mask, ask_event_ids, np.nan)
 
             if not any(pd.isna(ask_event_ids)) and len(ask_event_ids) == len(
@@ -118,7 +120,6 @@ def event_match(events: pd.DataFrame, cut_off_ms: int = 5000) -> pd.DataFrame:
                     )
                     <= cut_off_td
                 ]
-
                 res.extend(
                     np.column_stack(
                         (
@@ -130,22 +131,28 @@ def event_match(events: pd.DataFrame, cut_off_ms: int = 5000) -> pd.DataFrame:
 
         return np.array(res, dtype=int)
 
-    matched = matcher()
 
-    events["matching.event"] = np.nan
-    # matched[:, 0] = bid event ids, matched[:, 1] = ask event ids
-    matched_bids = pd.DataFrame(matched, columns=["event.id", "matching.event"])
-    matched_asks = pd.DataFrame(matched, columns=["matching.event", "event.id"])
-    events = pd.merge(events, matched_bids, on="event.id", how="left")
-    events = pd.merge(events, matched_asks, on="event.id", how="left")
+# ── Backward-compatible module-level function ─────────────────────────
 
-    # Combine columns into a single 'matching.event' column
-    events["matching.event"] = (
-        events["matching.event_y"]
-        .fillna(events["matching.event_x"])
-        .fillna(events["matching.event"])
-    )
 
-    # Drop the unnecessary columns
-    events = events.drop(columns=["matching.event_x", "matching.event_y"])
-    return events
+def event_match(events: pd.DataFrame, cut_off_ms: int = 5000) -> pd.DataFrame:
+    """Match market orders (takers) to limit orders (makers).
+
+    This is a convenience wrapper around :class:`NeedlemanWunschMatcher`.
+
+    Parameters
+    ----------
+    events : pandas.DataFrame
+        A pandas DataFrame of order book events.
+    cut_off_ms : int, optional
+        The time window in milliseconds for considering candidate matches.
+        Default is 5000.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The events DataFrame with a 'matching.event' column indicating
+        matched events.
+    """
+    config = PipelineConfig(match_cutoff_ms=cut_off_ms)
+    return NeedlemanWunschMatcher(config).match(events)

@@ -7,7 +7,7 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())
 from ob_analytics.config import PipelineConfig
 from ob_analytics.data import get_zombie_ids, load_data, process_data, save_data
 from ob_analytics.depth import depth_metrics, filter_depth, get_spread, price_level_volume
-from ob_analytics.event_processing import load_event_data, order_aggressiveness
+from ob_analytics.event_processing import BitstampLoader, load_event_data, order_aggressiveness
 from ob_analytics.exceptions import (
     ConfigurationError,
     InsufficientDataError,
@@ -15,14 +15,19 @@ from ob_analytics.exceptions import (
     MatchingError,
     ObAnalyticsError,
 )
-from ob_analytics.matching_engine import event_match
+from ob_analytics.matching_engine import NeedlemanWunschMatcher, event_match
 from ob_analytics.models import DepthLevel, OrderBookSnapshot, OrderEvent, Trade
 from ob_analytics.order_book_reconstruction import order_book
 from ob_analytics.order_types import set_order_types
-from ob_analytics.trades import match_trades, trade_impacts
+from ob_analytics.pipeline import Pipeline, PipelineResult
+from ob_analytics.protocols import EventLoader, MatchingEngine, TradeInferrer
+from ob_analytics.trades import DefaultTradeInferrer, match_trades, trade_impacts
 
 __all__ = [
-    # Pipeline functions
+    # Pipeline class
+    "Pipeline",
+    "PipelineResult",
+    # Pipeline functions (backward-compatible)
     "get_zombie_ids",
     "load_data",
     "process_data",
@@ -40,6 +45,14 @@ __all__ = [
     "trade_impacts",
     # Configuration
     "PipelineConfig",
+    # Protocols
+    "EventLoader",
+    "MatchingEngine",
+    "TradeInferrer",
+    # Default implementations
+    "BitstampLoader",
+    "NeedlemanWunschMatcher",
+    "DefaultTradeInferrer",
     # Domain models
     "OrderEvent",
     "Trade",
