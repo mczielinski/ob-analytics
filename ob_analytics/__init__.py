@@ -22,6 +22,20 @@ from ob_analytics.order_types import set_order_types
 from ob_analytics.pipeline import Pipeline, PipelineResult
 from ob_analytics.protocols import EventLoader, MatchingEngine, TradeInferrer
 from ob_analytics.trades import DefaultTradeInferrer, match_trades, trade_impacts
+from ob_analytics.visualisation import (
+    PlotTheme,
+    get_plot_theme,
+    plot_current_depth,
+    plot_event_map,
+    plot_events_histogram,
+    plot_price_levels,
+    plot_time_series,
+    plot_trades,
+    plot_volume_map,
+    plot_volume_percentiles,
+    save_figure,
+    set_plot_theme,
+)
 
 __all__ = [
     # Pipeline class
@@ -58,6 +72,19 @@ __all__ = [
     "Trade",
     "DepthLevel",
     "OrderBookSnapshot",
+    # Visualization
+    "PlotTheme",
+    "set_plot_theme",
+    "get_plot_theme",
+    "save_figure",
+    "plot_time_series",
+    "plot_trades",
+    "plot_price_levels",
+    "plot_event_map",
+    "plot_volume_map",
+    "plot_current_depth",
+    "plot_volume_percentiles",
+    "plot_events_histogram",
     # Exceptions
     "ObAnalyticsError",
     "InvalidDataError",

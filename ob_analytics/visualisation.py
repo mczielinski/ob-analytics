@@ -1,4 +1,7 @@
 import logging
+from dataclasses import dataclass, field
+from datetime import timedelta
+from pathlib import Path
 
 import matplotlib.collections as collections
 import matplotlib.colors as mcolors
@@ -7,23 +10,91 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from matplotlib.axes import Axes
+from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.figure import Figure
+from matplotlib.patches import Patch
 
 from ob_analytics._utils import reverse_matrix
 from ob_analytics.depth import filter_depth
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_THEME = {
-    "style": "darkgrid",
-    "context": "notebook",
-    "font_scale": 1.5,
-    "rc": {"lines.linewidth": 2.5, "axes.facecolor": "darkgray"},
-}
+
+# ---------------------------------------------------------------------------
+# Theme system
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class PlotTheme:
+    """Configurable visual theme for ob-analytics plots.
+
+    Attributes
+    ----------
+    style : str
+        Seaborn style name (e.g. ``"darkgrid"``, ``"whitegrid"``).
+    context : str
+        Seaborn context name (e.g. ``"notebook"``, ``"talk"``).
+    font_scale : float
+        Global font scaling factor.
+    rc : dict[str, object]
+        Matplotlib rc overrides applied on top of the seaborn theme.
+    """
+
+    style: str = "darkgrid"
+    context: str = "notebook"
+    font_scale: float = 1.5
+    rc: dict[str, object] = field(
+        default_factory=lambda: {"lines.linewidth": 2.5, "axes.facecolor": "darkgray"}
+    )
+
+
+_current_theme: PlotTheme = PlotTheme()
+
+
+def set_plot_theme(theme: PlotTheme) -> None:
+    """Set the global plot theme used by all ob-analytics plot functions."""
+    global _current_theme
+    _current_theme = theme
+
+
+def get_plot_theme() -> PlotTheme:
+    """Return the current global plot theme."""
+    return _current_theme
 
 
 def _apply_theme() -> None:
-    """Apply the default seaborn theme for ob-analytics plots."""
-    sns.set_theme(**_DEFAULT_THEME)
+    """Apply the current theme to matplotlib / seaborn."""
+    t = _current_theme
+    sns.set_theme(style=t.style, context=t.context, font_scale=t.font_scale, rc=dict(t.rc))
+
+
+def _create_axes(
+    ax: Axes | None,
+    figsize: tuple[float, float] = (10, 6),
+) -> tuple[Figure, Axes]:
+    """Return ``(fig, ax)``, creating a new figure only when *ax* is ``None``."""
+    if ax is not None:
+        return ax.get_figure(), ax  # type: ignore[return-value]
+    _apply_theme()
+    fig, new_ax = plt.subplots(figsize=figsize)
+    return fig, new_ax
+
+
+def save_figure(
+    fig: Figure,
+    path: str | Path,
+    *,
+    dpi: int = 150,
+    **kwargs: object,
+) -> None:
+    """Save a matplotlib *fig* to *path* with sensible defaults."""
+    fig.savefig(path, dpi=dpi, bbox_inches="tight", **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Plot functions
+# ---------------------------------------------------------------------------
 
 
 def plot_time_series(
@@ -33,7 +104,8 @@ def plot_time_series(
     end_time: pd.Timestamp | None = None,
     title: str = "time series",
     y_label: str = "series",
-) -> None:
+    ax: Axes | None = None,
+) -> Figure:
     """
     Plots a time series.
 
@@ -51,15 +123,16 @@ def plot_time_series(
         Title of the plot. Default is 'time series'.
     y_label : str, optional
         Label for the y-axis. Default is 'series'.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on.  A new figure is created when *None*.
 
     Returns
     -------
-    None
+    matplotlib.figure.Figure
     """
     if len(timestamp) != len(series):
         raise ValueError("Length of timestamp and series must be the same.")
 
-    # Create a dataframe from the provided series
     df = pd.DataFrame({"ts": timestamp, "val": series})
 
     if not start_time:
@@ -67,29 +140,25 @@ def plot_time_series(
     if not end_time:
         end_time = df["ts"].max()
 
-    # Filter the dataframe based on the provided start and end times
     df = df[(df["ts"] >= start_time) & (df["ts"] <= end_time)]
 
-    # Plotting
-    _apply_theme()
-    plt.figure(figsize=(10, 6))
-    sns.lineplot(data=df, x="ts", y="val", drawstyle="steps-post")
+    fig, ax = _create_axes(ax, figsize=(10, 6))
+    sns.lineplot(data=df, x="ts", y="val", drawstyle="steps-post", ax=ax)
 
-    plt.title(title)
-    plt.xlabel("time")
-    plt.ylabel(y_label)
-    plt.grid(True)
-    plt.tight_layout()
-
-    # Display the plot
-    plt.show()
+    ax.set_title(title)
+    ax.set_xlabel("time")
+    ax.set_ylabel(y_label)
+    ax.grid(True)
+    fig.tight_layout()
+    return fig
 
 
 def plot_trades(
     trades: pd.DataFrame,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
-) -> None:
+    ax: Axes | None = None,
+) -> Figure:
     """
     Plots the trades data as a step plot.
 
@@ -101,10 +170,12 @@ def plot_trades(
         Start time for the plot. Default is None.
     end_time : pandas.Timestamp, optional
         End time for the plot. Default is None.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on.  A new figure is created when *None*.
 
     Returns
     -------
-    None
+    matplotlib.figure.Figure
     """
     if not start_time:
         start_time = trades["timestamp"].min()
@@ -115,7 +186,6 @@ def plot_trades(
         (trades["timestamp"] >= start_time) & (trades["timestamp"] <= end_time)
     ]
 
-    # Calculate price breaks for y-axis
     price_range = filtered_trades["price"].max() - filtered_trades["price"].min()
     price_by = 10 ** round(np.log10(price_range) - 1)
     y_breaks = np.arange(
@@ -124,18 +194,18 @@ def plot_trades(
         step=price_by,
     )
 
-    # Plotting
-    _apply_theme()
-    plt.figure(figsize=(10, 6))
-    sns.lineplot(data=filtered_trades, x="timestamp", y="price", drawstyle="steps-post")
+    fig, ax = _create_axes(ax, figsize=(10, 6))
+    sns.lineplot(
+        data=filtered_trades, x="timestamp", y="price",
+        drawstyle="steps-post", ax=ax,
+    )
 
-    plt.xlabel("Time")
-    plt.ylabel("Limit Price")
-    plt.yticks(y_breaks)
-    plt.grid(True)
-    plt.tight_layout()
-
-    plt.show()
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Limit Price")
+    ax.set_yticks(y_breaks)
+    ax.grid(True)
+    fig.tight_layout()
+    return fig
 
 
 def plot_price_levels(
@@ -153,7 +223,8 @@ def plot_price_levels(
     volume_to: float | None = None,
     volume_scale: float = 1,
     price_by: float | None = None,
-) -> None:
+    ax: Axes | None = None,
+) -> Figure:
     """
     Plot price levels with depth, spread, and trades data.
 
@@ -187,22 +258,21 @@ def plot_price_levels(
         Scaling factor for volume. Default is 1.
     price_by : float, optional
         Step size for y-axis ticks (price levels). Default is None.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on.  A new figure is created when *None*.
 
     Returns
     -------
-    None
+    matplotlib.figure.Figure
     """
-    # Scale volume
     depth_local = depth.copy()
     depth_local["volume"] = depth_local["volume"] * volume_scale
 
-    # Set default start_time and end_time if not provided
     if start_time is None:
         start_time = depth_local["timestamp"].iloc[0]
     if end_time is None:
         end_time = depth_local["timestamp"].iloc[-1]
 
-    # Filter spread by start_time and end_time, and set price_from and price_to
     if spread is not None:
         spread = spread[
             (spread["timestamp"] >= start_time) & (spread["timestamp"] <= end_time)
@@ -212,7 +282,6 @@ def plot_price_levels(
         if price_to is None:
             price_to = 1.005 * spread["best.ask.price"].max()
 
-    # Filter trades by start_time and end_time, and set price_from and price_to
     if trades is not None:
         trades = trades[
             (trades["timestamp"] >= start_time) & (trades["timestamp"] <= end_time)
@@ -226,7 +295,6 @@ def plot_price_levels(
         else:
             trades = trades[trades["price"] <= price_to]
 
-    # Filter depth by price and volume
     if price_from is not None:
         depth_local = depth_local[depth_local["price"] >= price_from]
     if price_to is not None:
@@ -236,10 +304,8 @@ def plot_price_levels(
     if volume_to is not None:
         depth_local = depth_local[depth_local["volume"] <= volume_to]
 
-    # Filter depth by time window using the filter_depth function
     depth_filtered = filter_depth(depth_local, start_time, end_time)
 
-    # Remove price levels with no update during time window if show_all_depth is False
     if not show_all_depth:
 
         def is_unchanged(timestamps: list[pd.Timestamp]) -> bool:
@@ -254,12 +320,10 @@ def plot_price_levels(
         unchanged_prices = grouped[grouped.apply(is_unchanged)].index
         depth_filtered = depth_filtered[~depth_filtered["price"].isin(unchanged_prices)]
 
-    # Set volumes that are zero to NaN
     depth_filtered.loc[depth_filtered["volume"] == 0, "volume"] = np.nan
 
-    # Plot the data
-    plot_price_levels_faster(
-        depth_filtered, spread, trades, show_mp, col_bias, price_by
+    return plot_price_levels_faster(
+        depth_filtered, spread, trades, show_mp, col_bias, price_by, ax=ax,
     )
 
 
@@ -270,7 +334,8 @@ def plot_price_levels_faster(
     show_mp: bool = True,
     col_bias: float = 0.1,
     price_by: float | None = None,
-) -> None:
+    ax: Axes | None = None,
+) -> Figure:
     """
     Fast plotting of price levels using Matplotlib.
 
@@ -288,33 +353,31 @@ def plot_price_levels_faster(
         Color bias for volume mapping. Default is 0.1.
     price_by : float, optional
         Step size for y-axis ticks (price levels). Default is None.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on.  A new figure is created when *None*.
 
     Returns
     -------
-    None
+    matplotlib.figure.Figure
     """
-    # Prepare data
     depth = depth.copy()
     depth.sort_values(by="timestamp", inplace=True, kind="stable")
     if depth.empty or depth.groupby("price").size().min() < 2:
         logger.warning("Not enough data for any price level")
-        return
+        fig, ax = _create_axes(ax, figsize=(12, 7))
+        return fig
 
-    # Set alpha based on volume
     depth["alpha"] = np.where(
         depth["volume"].isna(), 0, np.where(depth["volume"] < 1, 0.1, 1)
     )
 
-    # Determine if log scale is needed
     log_10 = False
     if col_bias <= 0:
         col_bias = 1
         log_10 = True
 
-    # Create colormap
     cmap = plt.get_cmap("viridis")
 
-    # Normalize volume for color mapping
     vmin = depth["volume"].min()
     vmax = depth["volume"].max()
     if log_10:
@@ -324,14 +387,10 @@ def plot_price_levels_faster(
     else:
         norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
 
-    # Set up the plot
-    _apply_theme()
-    fig, ax = plt.subplots(figsize=(12, 7))
+    fig, ax = _create_axes(ax, figsize=(12, 7))
 
-    # Convert timestamps for plotting lines
     depth["timestamp_numeric"] = mdates.date2num(depth["timestamp"])
 
-    # Plot each price level as a LineCollection
     for price, group in depth.groupby("price"):
         group = group.sort_values("timestamp", kind="stable")
         x = group["timestamp_numeric"].values
@@ -347,13 +406,11 @@ def plot_price_levels_faster(
         lc = collections.LineCollection(segments, colors=seg_colors, linewidths=2)
         ax.add_collection(lc)
 
-    # Add colorbar
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
     cbar = plt.colorbar(sm, ax=ax)
     cbar.set_label("Volume")
 
-    # Plot midprice or spread
     if spread is not None:
         spread = spread.copy()
         spread.sort_values(by="timestamp", inplace=True, kind="stable")
@@ -388,12 +445,10 @@ def plot_price_levels_faster(
                     label="Best Bid",
                 )
 
-    # Plot trades with enhanced visibility
     if trades is not None:
         buys = trades[trades["direction"] == "buy"]
         sells = trades[trades["direction"] == "sell"]
 
-        # Plot sells (hollow red triangles)
         if not sells.empty:
             ax.scatter(
                 sells["timestamp"],
@@ -407,7 +462,6 @@ def plot_price_levels_faster(
                 label="Sell Trades",
             )
 
-        # Plot buys (hollow green triangles)
         if not buys.empty:
             ax.scatter(
                 buys["timestamp"],
@@ -421,34 +475,28 @@ def plot_price_levels_faster(
                 label="Buy Trades",
             )
 
-    # Format x-axis with date labels
     ax.xaxis_date()
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
     plt.xticks(rotation=45)
 
-    # Set labels and title
     ax.set_xlabel("Time")
     ax.set_ylabel("Limit Price")
     ax.set_title("Price Levels Over Time")
 
-    # Adjust y-axis limits
     ymin = depth["price"].min()
     ymax = depth["price"].max()
     ax.set_ylim([ymin, ymax])
 
-    # Set y-axis ticks based on price_by
     if price_by is not None:
         y_ticks = np.arange(round(ymin), round(ymax) + price_by, price_by)
         ax.set_yticks(y_ticks)
 
-    # Remove duplicate legend entries
     handles, labels = ax.get_legend_handles_labels()
     by_label = dict(zip(labels, handles))
     ax.legend(by_label.values(), by_label.keys())
 
-    # Show plot
-    plt.tight_layout()
-    plt.show()
+    fig.tight_layout()
+    return fig
 
 
 def plot_event_map(
@@ -460,7 +508,8 @@ def plot_event_map(
     volume_from: float | None = None,
     volume_to: float | None = None,
     volume_scale: float = 1,
-) -> None:
+    ax: Axes | None = None,
+) -> Figure:
     """
     Plot an event map of limit order events.
 
@@ -482,77 +531,66 @@ def plot_event_map(
         Maximum volume for filtering events. Default is None.
     volume_scale : float, optional
         Scaling factor for volume. Default is 1.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on.  A new figure is created when *None*.
 
     Returns
     -------
-    None
+    matplotlib.figure.Figure
     """
-    # Set defaults if not provided
     if start_time is None:
         start_time = events["timestamp"].min()
     if end_time is None:
         end_time = events["timestamp"].max()
 
-    # Filter for the given time window and event types
     events = events[
         (events["timestamp"] >= start_time)
         & (events["timestamp"] <= end_time)
         & ((events["type"] == "flashed-limit") | (events["type"] == "resting-limit"))
-    ].copy()  # Create a copy to avoid SettingWithCopyWarning
+    ].copy()
 
-    # Scale the volume
     events["volume"] *= volume_scale
 
-    # Further filtering based on volume if specified
     if volume_from is not None:
         events = events[events["volume"] >= volume_from]
     if volume_to is not None:
         events = events[events["volume"] <= volume_to]
 
-    # If price range is not specified, set it to contain 99% of data
     if price_from is None:
         price_from = events["price"].quantile(0.01)
     if price_to is None:
         price_to = events["price"].quantile(0.99)
 
-    # Filter based on price range
     events = events[(events["price"] >= price_from) & (events["price"] <= price_to)]
 
-    # Separate created and deleted events
     created = events[events["action"] == "created"]
     deleted = events[events["action"] == "deleted"]
 
-    # Set up color palette for direction
     col_pal = {"bid": "#0000ff", "ask": "#ff0000"}
 
-    # Define the price range for breaks
     price_by = 10 ** round(np.log10(events["price"].max() - events["price"].min()) - 1)
 
-    # Plotting
-    _apply_theme()
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = _create_axes(ax, figsize=(10, 6))
 
-    # Plot created events with a filled marker
     sns.scatterplot(
         data=created,
         x="timestamp",
         y="price",
         size="volume",
-        sizes=(20, 200),  # Adjust bubble size range
-        color="#333333",  # Color for the created events
+        sizes=(20, 200),
+        color="#333333",
         ax=ax,
         legend=False,
         marker="o",
     )
 
-    # Plot deleted events with an open marker
     sns.scatterplot(
         data=deleted,
         x="timestamp",
         y="price",
         size="volume",
-        sizes=(20, 200),  # Adjust bubble size range
-        color="#333333",  # Color for the deleted events
+        sizes=(20, 200),
+        color="#333333",
         ax=ax,
         legend=False,
         marker="o",
@@ -560,19 +598,17 @@ def plot_event_map(
         alpha=0.5,
     )
 
-    # Overlay the events with color based on the direction (ask/bid)
     sns.scatterplot(
         data=events,
         x="timestamp",
         y="price",
         hue="direction",
-        size=0.1,  # Small size for direction overlay
+        size=0.1,
         palette=col_pal,
         ax=ax,
         legend=False,
     )
 
-    # Set axis labels and customize plot
     ax.set_xlabel("Time")
     ax.set_ylabel("Limit Price")
     ax.set_yticks(
@@ -583,13 +619,14 @@ def plot_event_map(
         )
     )
 
-    plt.show()
+    fig.tight_layout()
+    return fig
 
 
 def plot_volume_map(
     events: pd.DataFrame,
     action: str = "deleted",
-    event_type: list[str] = ["flashed-limit"],
+    event_type: list[str] = ["flashed-limit"],  # noqa: B006
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
     price_from: float | None = None,
@@ -598,7 +635,8 @@ def plot_volume_map(
     volume_to: float | None = None,
     volume_scale: float = 1,
     log_scale: bool = False,
-) -> None:
+    ax: Axes | None = None,
+) -> Figure:
     """
     Plot a volume map of flashed limit orders.
 
@@ -626,10 +664,12 @@ def plot_volume_map(
         Scaling factor for volume. Default is 1.
     log_scale : bool, optional
         Whether to use a logarithmic scale on the y-axis. Default is False.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on.  A new figure is created when *None*.
 
     Returns
     -------
-    None
+    matplotlib.figure.Figure
     """
     if action not in ("deleted", "created"):
         raise ValueError(f"action must be 'deleted' or 'created', got {action!r}")
@@ -639,10 +679,8 @@ def plot_volume_map(
     if end_time is None:
         end_time = events["timestamp"].max()
 
-    # Scale the volume
     events["volume"] *= volume_scale
 
-    # Filter the events based on the provided criteria
     mask = (
         (events["action"] == action)
         & events["type"].isin(event_type)
@@ -651,7 +689,6 @@ def plot_volume_map(
     )
     events = events[mask]
 
-    # Further filtering based on volume and price
     if price_from:
         events = events[events["price"] >= price_from]
     if price_to:
@@ -663,14 +700,11 @@ def plot_volume_map(
         volume_to = events["volume"].quantile(0.9999)
     events = events[events["volume"] <= volume_to]
 
-    # Set up the color palette
     col_pal = {"bid": "#0000ff", "ask": "#ff0000"}
 
-    # Plotting
-    _apply_theme()
-    plt.figure(figsize=(10, 6))
+    fig, ax = _create_axes(ax, figsize=(10, 6))
     if log_scale:
-        plt.yscale("log")
+        ax.set_yscale("log")
     sns.scatterplot(
         data=events,
         x="timestamp",
@@ -679,11 +713,13 @@ def plot_volume_map(
         palette=col_pal,
         size=0.5,
         marker="o",
+        ax=ax,
     )
-    plt.xlabel("Time")
-    plt.ylabel("Volume")
-    plt.title("Volume Map of Flashed Limit Orders")
-    plt.show()
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Volume")
+    ax.set_title("Volume Map of Flashed Limit Orders")
+    fig.tight_layout()
+    return fig
 
 
 def plot_current_depth(
@@ -691,7 +727,8 @@ def plot_current_depth(
     volume_scale: float = 1,
     show_quantiles: bool = True,
     show_volume: bool = True,
-) -> None:
+    ax: Axes | None = None,
+) -> Figure:
     """
     Plot the current order book depth.
 
@@ -705,15 +742,16 @@ def plot_current_depth(
         Whether to highlight highest 1% volume with vertical lines. Default is True.
     show_volume : bool, optional
         Whether to show volume bars. Default is True.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on.  A new figure is created when *None*.
 
     Returns
     -------
-    None
+    matplotlib.figure.Figure
     """
     bids = reverse_matrix(order_book["bids"])
     asks = reverse_matrix(order_book["asks"])
 
-    # Combine both sides into a single series
     x = np.concatenate(
         [
             bids["price"].values,
@@ -732,25 +770,19 @@ def plot_current_depth(
     )
     side = ["bid"] * (len(bids) + 1) + ["ask"] * (len(asks) + 1)
 
-    # Create depth DataFrame
     depth = pd.DataFrame({"price": x, "liquidity": y1, "volume": y2, "side": side})
 
-    _apply_theme()
-    fig, ax = plt.subplots(figsize=(12, 7))
+    fig, ax = _create_axes(ax, figsize=(12, 7))
 
-    # Plot volume using ax.bar with auto-scaling bar width
     if show_volume:
-        # Compute bar width based on the resolution of the price data
         unique_prices = np.sort(np.unique(depth["price"]))
         price_diffs = np.diff(unique_prices)
-        # Filter out zero or negative differences
         price_diffs = price_diffs[price_diffs > 0]
         if len(price_diffs) > 0:
             resolution = np.min(price_diffs)
             bar_width = resolution
         else:
-            # If all prices are the same, set a default bar width
-            bar_width = 1  # Adjust as necessary
+            bar_width = 1
 
         ax.bar(
             depth["price"],
@@ -761,7 +793,6 @@ def plot_current_depth(
             edgecolor=None,
         )
 
-    # Plot liquidity (cumulative volume)
     col_pal = {"ask": "#ff0000", "bid": "#0000ff"}
     for side_value in ["bid", "ask"]:
         side_data = depth[depth["side"] == side_value]
@@ -774,7 +805,6 @@ def plot_current_depth(
             linewidth=2,
         )
 
-    # Highlight highest 1% volume with vertical lines
     if show_quantiles:
         bid_quantile = bids["volume"].quantile(0.99)
         bid_quantiles = bids.loc[bids["volume"] >= bid_quantile, "price"]
@@ -785,13 +815,11 @@ def plot_current_depth(
         for x_value in ask_quantiles:
             ax.axvline(x=x_value, color="#222222", linestyle="--")
 
-    # Set x-axis ticks
     xmin = round(bids["price"].min())
     xmax = round(asks["price"].max())
     xticks = np.arange(xmin, xmax + 1, 1)
     ax.set_xticks(xticks)
 
-    # Set labels and title
     timestamp = pd.to_datetime(order_book["timestamp"], unit="s", utc=True)
     ax.set_title(timestamp.strftime("%Y-%m-%d %H:%M:%S UTC"))
     ax.set_xlabel("Price")
@@ -799,7 +827,7 @@ def plot_current_depth(
 
     ax.legend()
     fig.tight_layout()
-    plt.show()
+    return fig
 
 
 def plot_volume_percentiles(
@@ -809,7 +837,8 @@ def plot_volume_percentiles(
     volume_scale: float = 1,
     perc_line: bool = True,
     side_line: bool = True,
-) -> None:
+    ax: Axes | None = None,
+) -> Figure:
     """
     Plot volume percentiles over time.
 
@@ -827,72 +856,55 @@ def plot_volume_percentiles(
         Whether to draw lines between percentiles. Default is True.
     side_line : bool, optional
         Whether to draw a line separating bids and asks. Default is True.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on.  A new figure is created when *None*.
 
     Returns
     -------
-    None
+    matplotlib.figure.Figure
     """
-    from datetime import timedelta
-
-    import matplotlib.pyplot as plt
-    import numpy as np
-    import pandas as pd
-    from matplotlib.colors import LinearSegmentedColormap
-    from matplotlib.patches import Patch
-
     if start_time is None:
         start_time = depth_summary["timestamp"].iloc[0]
     if end_time is None:
         end_time = depth_summary["timestamp"].iloc[-1]
 
-    # Generate bid and ask column names
     bid_names = [f"bid.vol{i}bps" for i in range(25, 501, 25)]
     ask_names = [f"ask.vol{i}bps" for i in range(25, 501, 25)]
 
     td = (end_time - start_time).total_seconds()
     td = round(td)
 
-    # Determine frequency based on time difference
     frequency = "mins" if td > 900 else "secs"
 
-    # Subset the data based on start and end times
     delta = timedelta(seconds=60 if frequency == "mins" else 1)
     mask = (depth_summary["timestamp"] >= (start_time - delta)) & (
         depth_summary["timestamp"] <= end_time
     )
     ob_percentiles = depth_summary.loc[mask, ["timestamp"] + bid_names + ask_names]
 
-    # Remove duplicates, keeping the last occurrence
     ob_percentiles = ob_percentiles.drop_duplicates(subset="timestamp", keep="last")
 
-    # Set timestamp as index
     ob_percentiles.set_index("timestamp", inplace=True)
 
-    # Truncate timestamps to frequency
     if frequency == "mins":
         intervals = ob_percentiles.index.floor("T")
     else:
         intervals = ob_percentiles.index.floor("S")
 
-    # Aggregate data by intervals
     aggregated = ob_percentiles.groupby(intervals).mean()
 
-    # Adjust timestamps and reset index
     aggregated.index = aggregated.index + delta
     aggregated.reset_index(inplace=True)
     aggregated.rename(columns={"index": "timestamp"}, inplace=True)
     ob_percentiles = aggregated
 
-    # Update bid and ask names with zero padding
     bid_names = [f"bid.vol{int(i):03d}bps" for i in range(25, 501, 25)]
     ask_names = [f"ask.vol{int(i):03d}bps" for i in range(25, 501, 25)]
     ob_percentiles.columns = ["timestamp"] + bid_names + ask_names
 
-    # Calculate max ask and bid volumes
     max_ask = ob_percentiles[ask_names].sum(axis=1).max()
     max_bid = ob_percentiles[bid_names].sum(axis=1).max()
 
-    # Melt the data frames for asks and bids
     melted_asks = ob_percentiles.melt(
         id_vars="timestamp",
         value_vars=ask_names,
@@ -915,7 +927,6 @@ def plot_volume_percentiles(
     )
     melted_bids["liquidity"] *= volume_scale
 
-    # Define color palette
     colors_list = [
         "#f92b20",
         "#fe701b",
@@ -930,17 +941,14 @@ def plot_volume_percentiles(
     ]
     cmap = LinearSegmentedColormap.from_list("custom_cmap", colors_list, N=20)
     col_pal = [cmap(i / 19) for i in range(20)]
-    col_pal *= 2  # Duplicate for bids and asks
-
-    # Define breaks and legend names
+    col_pal *= 2
 
     legend_names = [f"+{int(i):03d}bps" for i in range(500, 49, -50)] + [
         f"-{int(i):03d}bps" for i in range(50, 501, 50)
     ]
 
-    pl = 0.1 if perc_line else 0  # Line size
+    pl = 0.1 if perc_line else 0
 
-    # Pivot data to wide format
     asks_pivot = melted_asks.pivot(
         index="timestamp", columns="percentile", values="liquidity"
     )
@@ -948,28 +956,21 @@ def plot_volume_percentiles(
         index="timestamp", columns="percentile", values="liquidity"
     )
 
-    # Sort columns according to the ordered categories
-    asks_pivot = asks_pivot[ask_names[::-1]]  # Reverse to match R code stacking order
+    asks_pivot = asks_pivot[ask_names[::-1]]
     bids_pivot = bids_pivot[bid_names[::-1]]
 
-    # Compute cumulative sums for stacking
     asks_cumsum = asks_pivot.cumsum(axis=1)
     bids_cumsum = bids_pivot.cumsum(axis=1)
 
-    # Multiply bids by -1 for plotting negative values
     bids_cumsum_neg = -bids_cumsum
 
-    # Prepare colors
     asks_cols = asks_cumsum.columns.tolist()
     bids_cols = bids_cumsum.columns.tolist()
     all_cols = asks_cols + bids_cols
     colors_dict = dict(zip(all_cols, col_pal))
 
-    # Plotting
-    _apply_theme()
-    fig, ax = plt.subplots(figsize=(12, 8))
+    fig, ax = _create_axes(ax, figsize=(12, 8))
 
-    # Plot asks
     prev = np.zeros(len(asks_cumsum))
     x = asks_cumsum.index
     for percentile in asks_cols:
@@ -984,7 +985,6 @@ def plot_volume_percentiles(
         )
         prev = current
 
-    # Plot bids
     prev = np.zeros(len(bids_cumsum_neg))
     x = bids_cumsum_neg.index
     for percentile in bids_cols:
@@ -999,21 +999,16 @@ def plot_volume_percentiles(
         )
         prev = current
 
-    # Add horizontal line at y=0
     if side_line:
         ax.axhline(y=0, color="#000000", linewidth=0.1)
 
-    # Set y limits
     y_range = volume_scale * max(max_ask, max_bid)
     ax.set_ylim(-y_range, y_range)
 
-    # Set x label
     ax.set_xlabel("time")
 
-    # Format x-axis dates
     fig.autofmt_xdate()
 
-    # Create legend
     legend_elements = []
     for col, label in zip(all_cols, legend_names):
         patch = Patch(
@@ -1028,12 +1023,12 @@ def plot_volume_percentiles(
         title="depth         \n",
         loc="center left",
         bbox_to_anchor=(1.01, 0.5),
-        ncol=1,  # single column
+        ncol=1,
         borderaxespad=0.0,
     )
 
-    plt.tight_layout(rect=[0, 0, 0.85, 1])  # leave space for legend
-    plt.show()
+    fig.tight_layout(rect=[0, 0, 0.85, 1])
+    return fig
 
 
 def plot_events_histogram(
@@ -1042,7 +1037,8 @@ def plot_events_histogram(
     end_time: pd.Timestamp | None = None,
     val: str = "volume",
     bw: float | None = None,
-) -> None:
+    ax: Axes | None = None,
+) -> Figure:
     """
     Plot a histogram given event data.
 
@@ -1061,46 +1057,41 @@ def plot_events_histogram(
         'volume' or 'price'. Default is 'volume'.
     bw : float, optional
         Bin width (e.g., for price, 0.5 = 50 cent buckets). Default is None.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on.  A new figure is created when *None*.
 
     Returns
     -------
-    None
+    matplotlib.figure.Figure
     """
     if val not in ("volume", "price"):
         raise ValueError(f"val must be 'volume' or 'price', got {val!r}")
 
-    # Set default start_time and end_time if not provided
     if start_time is None:
         start_time = events["timestamp"].min()
     if end_time is None:
         end_time = events["timestamp"].max()
 
-    # Filter events between start_time and end_time
     events_filtered = events[
         (events["timestamp"] >= start_time) & (events["timestamp"] <= end_time)
     ]
 
-    # Set up the plot
-    _apply_theme()
-    plt.figure(figsize=(12, 7))
+    fig, ax = _create_axes(ax, figsize=(12, 7))
 
-    # Plot the histogram
     sns.histplot(
         data=events_filtered,
         x=val,
         hue="direction",
-        multiple="dodge",  # Side by side bars
+        multiple="dodge",
         binwidth=bw,
         palette={"bid": "#0000ff", "ask": "#ff0000"},
         edgecolor="white",
         linewidth=0.5,
+        ax=ax,
     )
 
-    # Set labels and title
-    plt.title(f"Events {val} distribution")
-    plt.xlabel(val.capitalize())
-    plt.ylabel("Count")
-
-    # Show the plot
-    plt.tight_layout()
-    plt.show()
+    ax.set_title(f"Events {val} distribution")
+    ax.set_xlabel(val.capitalize())
+    ax.set_ylabel("Count")
+    fig.tight_layout()
+    return fig
