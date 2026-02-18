@@ -1,4 +1,12 @@
-"""Visualization functions for order book analytics and plotting."""
+"""Visualization functions for limit order book analytics.
+
+All plot functions return a :class:`~matplotlib.figure.Figure` and accept
+an optional ``ax`` parameter for subplot composition.  Theming is
+configurable via :class:`PlotTheme` / :func:`set_plot_theme`.
+
+Plot types: depth heatmaps, event maps, volume maps, order book snapshots,
+trade price charts, volume percentiles, and event histograms.
+"""
 
 import logging
 from dataclasses import dataclass, field
@@ -55,13 +63,25 @@ _current_theme: PlotTheme = PlotTheme()
 
 
 def set_plot_theme(theme: PlotTheme) -> None:
-    """Set the global plot theme used by all ob-analytics plot functions."""
+    """Set the global plot theme used by all ob-analytics plot functions.
+
+    Parameters
+    ----------
+    theme : PlotTheme
+        Theme configuration to apply globally.
+    """
     global _current_theme
     _current_theme = theme
 
 
 def get_plot_theme() -> PlotTheme:
-    """Return the current global plot theme."""
+    """Return the current global plot theme.
+
+    Returns
+    -------
+    PlotTheme
+        The active theme configuration.
+    """
     return _current_theme
 
 
@@ -90,7 +110,20 @@ def save_figure(
     dpi: int = 150,
     **kwargs: object,
 ) -> None:
-    """Save a matplotlib *fig* to *path* with sensible defaults."""
+    """Save a matplotlib *fig* to *path* with sensible defaults.
+
+    Parameters
+    ----------
+    fig : Figure
+        The matplotlib figure to save.
+    path : str or Path
+        Destination file path (e.g. ``"output/plot.png"``).
+    dpi : int, optional
+        Resolution in dots per inch (default 150).
+    **kwargs
+        Additional keyword arguments forwarded to
+        :meth:`~matplotlib.figure.Figure.savefig`.
+    """
     fig.savefig(path, dpi=dpi, bbox_inches="tight", **kwargs)
 
 

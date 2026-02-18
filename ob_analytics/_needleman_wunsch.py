@@ -1,4 +1,9 @@
-"""Needleman-Wunsch sequence alignment algorithm implementation."""
+"""Needleman-Wunsch sequence alignment for bid/ask fill matching.
+
+Adapted from the bioinformatics algorithm to align sequences of
+bid and ask fills by timestamp proximity, resolving ambiguous cases
+where simple closest-match pairing fails.
+"""
 
 import numpy as np
 import pandas as pd

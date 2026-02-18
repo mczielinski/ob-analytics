@@ -37,9 +37,19 @@ class BitstampLoader:
     def load(self, source: str | Path) -> pd.DataFrame:
         """Read *source* CSV and return a cleaned events DataFrame.
 
-        The returned DataFrame contains columns: ``id``, ``timestamp``,
-        ``exchange.timestamp``, ``price``, ``volume``, ``action``,
-        ``direction``, ``event.id``, ``fill``, ``original_number``.
+        Parameters
+        ----------
+        source : str or Path
+            Path to a Bitstamp-format CSV with columns ``id``,
+            ``timestamp``, ``exchange.timestamp``, ``price``, ``volume``,
+            ``action``, ``direction``.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Cleaned events with columns ``id``, ``timestamp``,
+            ``exchange.timestamp``, ``price``, ``volume``, ``action``,
+            ``direction``, ``event.id``, ``fill``, ``original_number``.
         """
         price_digits = self._config.price_decimals
         volume_digits = self._config.volume_decimals

@@ -24,6 +24,9 @@ dev = [
     "safety>=2.3.5,<3",
     "mypy>=1.4.1,<2",
     "codecov>=2.1.13,<3",
+    "mkdocs>=1.6.1",
+    "mkdocs-material>=9.7.2",
+    "mkdocstrings[python]>=1.0.3",
 ]
 
 [tool.hatch.build.targets.sdist]

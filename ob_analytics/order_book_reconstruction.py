@@ -1,4 +1,9 @@
-"""Point-in-time order book snapshot reconstruction."""
+"""Point-in-time order book snapshot reconstruction.
+
+Reconstructs the full bid/ask ladder at any timestamp by replaying
+events up to that point.  Used by :func:`order_book` and the
+visualization functions that need a static depth snapshot.
+"""
 
 from datetime import datetime, timezone
 

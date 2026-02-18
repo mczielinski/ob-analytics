@@ -1,4 +1,8 @@
-"""Custom exceptions for the ob-analytics package."""
+"""Custom exception hierarchy for the ob-analytics package.
+
+All exceptions inherit from :class:`ObAnalyticsError`, allowing callers to
+catch every package-specific error with a single ``except`` clause.
+"""
 
 
 class ObAnalyticsError(Exception):

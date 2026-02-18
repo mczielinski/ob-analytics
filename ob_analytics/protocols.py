@@ -31,7 +31,21 @@ class EventLoader(Protocol):
     in :class:`~ob_analytics.models.OrderEvent`.
     """
 
-    def load(self, source: str | Path) -> pd.DataFrame: ...
+    def load(self, source: str | Path) -> pd.DataFrame:
+        """Load events from *source* and return a DataFrame.
+
+        Parameters
+        ----------
+        source : str or Path
+            Data source identifier (e.g. a file path).
+
+        Returns
+        -------
+        pandas.DataFrame
+            Events with at least the columns described by
+            :class:`~ob_analytics.models.OrderEvent`.
+        """
+        ...
 
 
 @runtime_checkable
@@ -42,7 +56,20 @@ class MatchingEngine(Protocol):
     returns the same DataFrame with a ``matching.event`` column added.
     """
 
-    def match(self, events: pd.DataFrame) -> pd.DataFrame: ...
+    def match(self, events: pd.DataFrame) -> pd.DataFrame:
+        """Pair bid/ask fills and return events with a ``matching.event`` column.
+
+        Parameters
+        ----------
+        events : pandas.DataFrame
+            Events DataFrame with a ``fill`` column.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Same DataFrame with ``matching.event`` added.
+        """
+        ...
 
 
 @runtime_checkable
@@ -53,4 +80,18 @@ class TradeInferrer(Protocol):
     and returns a trades DataFrame.
     """
 
-    def infer_trades(self, events: pd.DataFrame) -> pd.DataFrame: ...
+    def infer_trades(self, events: pd.DataFrame) -> pd.DataFrame:
+        """Build a trades DataFrame from matched events.
+
+        Parameters
+        ----------
+        events : pandas.DataFrame
+            Events with ``matching.event`` populated.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Trades with ``timestamp``, ``price``, ``volume``,
+            ``direction``, ``maker.event.id``, ``taker.event.id``.
+        """
+        ...

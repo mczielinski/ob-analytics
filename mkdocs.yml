@@ -1,0 +1,83 @@
+site_name: ob-analytics
+site_description: Limit order book analytics and visualization for Python
+repo_url: https://github.com/mczielinski/ob-analytics
+repo_name: mczielinski/ob-analytics
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: pink
+      toggle:
+        icon: material/brightness-7
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: pink
+      toggle:
+        icon: material/brightness-4
+        name: Switch to dark mode
+  features:
+    - navigation.sections
+    - navigation.expand
+    - content.code.copy
+    - toc.follow
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          options:
+            show_source: false
+            show_root_heading: true
+            show_root_full_path: false
+            heading_level: 3
+            members_order: source
+            show_signature_annotations: true
+            separate_signature: true
+            docstring_style: numpy
+            merge_init_into_class: true
+            show_if_no_docstring: false
+
+nav:
+  - Home: index.md
+  - Quickstart: quickstart.md
+  - API Reference:
+      - Pipeline: api/pipeline.md
+      - Configuration: api/config.md
+      - Protocols: api/protocols.md
+      - Domain Models: api/models.md
+      - Event Processing: api/event_processing.md
+      - Matching Engine: api/matching_engine.md
+      - Trades: api/trades.md
+      - Depth Metrics: api/depth.md
+      - Order Book: api/order_book.md
+      - Order Types: api/order_types.md
+      - Data I/O: api/data.md
+      - Visualization: api/visualisation.md
+      - Exceptions: api/exceptions.md
+  - Changelog: changelog.md

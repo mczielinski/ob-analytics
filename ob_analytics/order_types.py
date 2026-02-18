@@ -1,4 +1,9 @@
-"""Order type classification for limit order book events."""
+"""Order type classification for limit order book events.
+
+Classifies each order as one of: *market*, *resting-limit*,
+*flashed-limit*, *pacman*, or *market-limit*, based on how the order
+interacts with the book over its lifetime.
+"""
 
 import logging
 

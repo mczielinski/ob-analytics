@@ -37,6 +37,18 @@ class NeedlemanWunschMatcher:
         ``match_cutoff_ms`` are paired.  When a simple closest-match is
         ambiguous (duplicates or gaps), Needleman-Wunsch sequence
         alignment is used as a fallback.
+
+        Parameters
+        ----------
+        events : pandas.DataFrame
+            Events with columns ``direction``, ``fill``,
+            ``original_number``, ``event.id``, ``timestamp``.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Same events with a ``matching.event`` column added.
+            Unmatched rows have ``NaN``.
         """
         validate_columns(
             events,

@@ -81,6 +81,19 @@ class DepthMetricsEngine:
 
         This is the main entry point, equivalent to the legacy
         :func:`depth_metrics` function.
+
+        Parameters
+        ----------
+        depth : pandas.DataFrame
+            Price-level volume data with columns ``timestamp``,
+            ``price``, ``volume``, ``direction``.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Depth summary with ``timestamp``, ``best.bid.price``,
+            ``best.bid.vol``, ``best.ask.price``, ``best.ask.vol``,
+            and volume-in-BPS-bin columns (e.g. ``bid.vol25bps``).
         """
         validate_columns(
             depth, {"timestamp", "price", "volume", "direction"}, "DepthMetricsEngine.compute"

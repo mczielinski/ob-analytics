@@ -46,7 +46,19 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class PipelineResult:
-    """Immutable container for the outputs of a pipeline run."""
+    """Immutable container for the outputs of a pipeline run.
+
+    Attributes
+    ----------
+    events : pandas.DataFrame
+        Processed events with order types and aggressiveness.
+    trades : pandas.DataFrame
+        Inferred trades with maker/taker attribution.
+    depth : pandas.DataFrame
+        Price-level volume time series.
+    depth_summary : pandas.DataFrame
+        Depth metrics (best bid/ask, BPS bins, spread).
+    """
 
     events: pd.DataFrame
     trades: pd.DataFrame
@@ -92,6 +104,17 @@ class Pipeline:
 
     def run(self, source: str | Path) -> PipelineResult:
         """Execute the full pipeline on *source* and return results.
+
+        Parameters
+        ----------
+        source : str or Path
+            Path to the raw events file (e.g. a Bitstamp CSV).
+
+        Returns
+        -------
+        PipelineResult
+            Frozen dataclass with ``events``, ``trades``, ``depth``,
+            and ``depth_summary`` DataFrames.
 
         Steps
         -----

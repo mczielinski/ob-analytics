@@ -38,6 +38,18 @@ class DefaultTradeInferrer:
 
         Determines maker vs taker using exchange timestamps, and applies
         a price-jump heuristic to correct misattributions.
+
+        Parameters
+        ----------
+        events : pandas.DataFrame
+            Events with ``matching.event`` column populated.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Trades with columns ``timestamp``, ``price``, ``volume``,
+            ``direction``, ``maker.event.id``, ``taker.event.id``,
+            ``maker``, ``taker``.
         """
         validate_columns(
             events,

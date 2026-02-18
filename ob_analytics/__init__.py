@@ -1,4 +1,23 @@
-"""ob-analytics: Limit order book analytics and visualization."""
+"""Limit order book analytics and visualization.
+
+Reconstruct trades from raw exchange events, classify order types,
+compute depth metrics, and visualize market microstructure.
+
+Quick start::
+
+    from ob_analytics import Pipeline
+
+    result = Pipeline().run("orders.csv")
+
+The package exposes two layers:
+
+* **High-level**: :class:`Pipeline` runs the full 8-step processing
+  sequence with sensible defaults.
+* **Low-level**: Individual functions (``load_event_data``,
+  ``event_match``, ``match_trades``, etc.) for step-by-step control.
+
+All processing stages are pluggable via :mod:`~ob_analytics.protocols`.
+"""
 
 import logging
 
