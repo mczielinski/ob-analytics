@@ -71,17 +71,6 @@ class PipelineConfig(BaseModel):
         gt=0,
         description="Number of depth bins on each side of the book.",
     )
-    max_price_units: int = Field(
-        default=1_000_000,
-        gt=0,
-        description=(
-            "Size of the numpy state arrays used in depth_metrics, "
-            "expressed in the smallest price unit (cents when "
-            "price_decimals=2).  Must exceed the highest price in the "
-            "dataset.  Will be replaced by a dynamic structure in Phase 3."
-        ),
-    )
-
     # ── Data processing ───────────────────────────────────────────────────
     zombie_offset_seconds: int = Field(
         default=60,

@@ -1,6 +1,11 @@
+import logging
+from pathlib import Path
+
 import pandas as pd
 
 from ob_analytics._utils import validate_columns, validate_non_empty
+
+logger = logging.getLogger(__name__)
 from ob_analytics.depth import depth_metrics, price_level_volume
 from ob_analytics.event_processing import load_event_data, order_aggressiveness
 from ob_analytics.matching_engine import event_match
@@ -116,36 +121,70 @@ def process_data(
     }
 
 
-def load_data(bin_file: str) -> dict[str, pd.DataFrame]:
-    """
-    Load pre-processed data from a file.
+def load_data(path: str | Path) -> dict[str, pd.DataFrame]:
+    """Load pre-processed pipeline data from a Parquet directory or pickle file.
 
     Parameters
     ----------
-    bin_file : str
-        The path to the file containing pre-processed data.
+    path : str or Path
+        If *path* is a directory, each ``.parquet`` file inside is loaded
+        as a DataFrame keyed by its stem (``events.parquet`` → ``"events"``).
+        If *path* is a single file with a ``.pkl`` / ``.pickle`` extension,
+        it is loaded via :func:`pandas.read_pickle` for backward
+        compatibility (**not recommended** for untrusted data).
 
     Returns
     -------
     dict of str to pandas.DataFrame
-        A dictionary containing the loaded DataFrames, similar to the output of `process_data`.
     """
-    return pd.read_pickle(bin_file)  # Assuming pickle format
+    p = Path(path)
+    if p.is_dir():
+        result = {}
+        for pq in sorted(p.glob("*.parquet")):
+            result[pq.stem] = pd.read_parquet(pq)
+        if not result:
+            raise FileNotFoundError(f"No .parquet files found in {p}")
+        return result
+    if p.suffix in (".pkl", ".pickle"):
+        logger.warning(
+            "Loading from pickle (%s). Pickle is insecure for untrusted "
+            "data; prefer Parquet via save_data().",
+            p,
+        )
+        return pd.read_pickle(p)
+    raise ValueError(
+        f"Unsupported format: {p.suffix}. Use a Parquet directory or .pkl file."
+    )
 
 
-def save_data(lob_data: dict[str, pd.DataFrame], bin_file: str) -> None:
-    """
-    Save processed data to a file.
+def save_data(
+    lob_data: dict[str, pd.DataFrame],
+    path: str | Path,
+    *,
+    fmt: str = "parquet",
+) -> None:
+    """Save pipeline data to disk.
 
     Parameters
     ----------
     lob_data : dict of str to pandas.DataFrame
-        A dictionary containing the DataFrames to save.
-    bin_file : str
-        The path to the file where the data will be saved.
-
-    Returns
-    -------
-    None
+        The DataFrames to save (keys become file stems).
+    path : str or Path
+        Destination directory (Parquet) or file (pickle).
+    fmt : ``"parquet"`` or ``"pickle"``
+        Serialisation format.  Parquet is the default and recommended
+        format -- it is portable, fast, and safe for untrusted data.
     """
-    pd.to_pickle(lob_data, bin_file)  # Assuming pickle format
+    p = Path(path)
+    if fmt == "parquet":
+        p.mkdir(parents=True, exist_ok=True)
+        for name, df in lob_data.items():
+            df.to_parquet(p / f"{name}.parquet", index=False)
+    elif fmt == "pickle":
+        logger.warning(
+            "Saving as pickle. Consider using fmt='parquet' for "
+            "portability and security."
+        )
+        pd.to_pickle(lob_data, p)
+    else:
+        raise ValueError(f"Unsupported format: {fmt!r}. Use 'parquet' or 'pickle'.")
