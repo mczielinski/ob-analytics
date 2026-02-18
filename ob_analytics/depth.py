@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from ob_analytics.auxiliary import interval_sum_breaks
+from ob_analytics._utils import interval_sum_breaks, validate_columns, validate_non_empty
 
 
 def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
@@ -18,6 +18,16 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
     pandas.DataFrame
         A pandas DataFrame with the cumulative volume for each price level.
     """
+
+    validate_columns(
+        events,
+        {
+            "event.id", "id", "timestamp", "exchange.timestamp",
+            "price", "volume", "direction", "action", "fill", "type",
+        },
+        "price_level_volume",
+    )
+    validate_non_empty(events, "price_level_volume")
 
     def directional_price_level_volume(dir_events: pd.DataFrame) -> pd.DataFrame:
         """
@@ -125,6 +135,8 @@ def filter_depth(
     pandas.DataFrame
         Filtered depth data within the specified time range.
     """
+    validate_columns(d, {"timestamp", "price", "volume"}, "filter_depth")
+
     # 1. Get all active price levels before start of range
     pre = d[d["timestamp"] <= from_timestamp]
     pre = pre.sort_values(by=["price", "timestamp"], kind="stable")
@@ -172,6 +184,11 @@ def depth_metrics(depth: pd.DataFrame, bps: int = 25, bins: int = 20) -> pd.Data
     pandas.DataFrame
         DataFrame containing depth metrics over time.
     """
+
+    validate_columns(
+        depth, {"timestamp", "price", "volume", "direction"}, "depth_metrics"
+    )
+    validate_non_empty(depth, "depth_metrics")
 
     def pct_names(name: str) -> list[str]:
         return [f"{name}{i}bps" for i in range(bps, bps * bins + 1, bps)]
@@ -337,6 +354,12 @@ def get_spread(depth_summary: pd.DataFrame) -> pd.DataFrame:
     pandas.DataFrame
         A pandas DataFrame with the bid/ask spread data.
     """
+    validate_columns(
+        depth_summary,
+        {"timestamp", "best.bid.price", "best.bid.vol", "best.ask.price", "best.ask.vol"},
+        "get_spread",
+    )
+
     spread = depth_summary[
         [
             "timestamp",

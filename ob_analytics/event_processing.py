@@ -3,6 +3,9 @@ import logging
 import numpy as np
 import pandas as pd
 
+from ob_analytics._utils import validate_columns, validate_non_empty
+from ob_analytics.exceptions import InvalidDataError
+
 logger = logging.getLogger(__name__)
 
 
@@ -63,6 +66,12 @@ def load_event_data(
         return events[~events["event.id"].isin(duplicate_event_ids)]
 
     events = pd.read_csv(file)
+    validate_columns(
+        events,
+        {"id", "timestamp", "exchange.timestamp", "price", "volume", "action", "direction"},
+        "load_event_data",
+    )
+    validate_non_empty(events, "load_event_data")
     events = events[events["volume"] >= 0]
     events = events.reset_index().rename(columns={"index": "original_number"})
     events.original_number = events.original_number + 1
@@ -136,6 +145,17 @@ def order_aggressiveness(
         The events DataFrame with an added 'aggressiveness.bps' column.
     """
 
+    validate_columns(
+        events,
+        {"direction", "action", "type", "timestamp", "event.id", "price"},
+        "order_aggressiveness(events)",
+    )
+    validate_columns(
+        depth_summary,
+        {"timestamp"},
+        "order_aggressiveness(depth_summary)",
+    )
+
     def event_diff_bps(events: pd.DataFrame, direction: int) -> pd.DataFrame:
         """
         Calculate the price difference in basis points for orders in a given direction.
@@ -160,7 +180,7 @@ def order_aggressiveness(
         ].sort_values(by="timestamp", kind="stable")
 
         if not all(orders["timestamp"].isin(depth_summary["timestamp"])):
-            raise ValueError(
+            raise InvalidDataError(
                 "Not all order timestamps are present in depth_summary. "
                 "Ensure depth_summary covers the full event time range."
             )

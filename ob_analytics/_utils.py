@@ -1,5 +1,48 @@
+"""Internal utility functions for ob-analytics.
+
+Array helpers, DataFrame validation, and other shared internals.  Nothing
+in this module is part of the public API.
+"""
+
+from __future__ import annotations
+
+from typing import Iterable
+
 import numpy as np
 import pandas as pd
+
+from ob_analytics.exceptions import InsufficientDataError, InvalidDataError
+
+# ---------------------------------------------------------------------------
+# DataFrame validation
+# ---------------------------------------------------------------------------
+
+
+def validate_columns(
+    df: pd.DataFrame,
+    required: Iterable[str],
+    context: str,
+) -> None:
+    """Raise :class:`InvalidDataError` if *required* columns are missing."""
+    missing = set(required) - set(df.columns)
+    if missing:
+        raise InvalidDataError(
+            f"{context}: missing required columns {sorted(missing)}. "
+            f"Available columns: {sorted(df.columns)}"
+        )
+
+
+def validate_non_empty(df: pd.DataFrame, context: str) -> None:
+    """Raise :class:`InsufficientDataError` if *df* is empty."""
+    if df.empty:
+        raise InsufficientDataError(
+            f"{context}: received empty DataFrame ({len(df.columns)} columns, 0 rows)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Array / DataFrame helpers
+# ---------------------------------------------------------------------------
 
 
 def vector_diff(v: np.ndarray) -> np.ndarray:

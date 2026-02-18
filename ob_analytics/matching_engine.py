@@ -1,7 +1,8 @@
 import numpy as np
 import pandas as pd
 
-from ob_analytics.needleman_wunsch import align_sequences, create_similarity_matrix
+from ob_analytics._needleman_wunsch import align_sequences, create_similarity_matrix
+from ob_analytics._utils import validate_columns, validate_non_empty
 
 
 def event_match(events: pd.DataFrame, cut_off_ms: int = 5000) -> pd.DataFrame:
@@ -20,6 +21,13 @@ def event_match(events: pd.DataFrame, cut_off_ms: int = 5000) -> pd.DataFrame:
     pandas.DataFrame
         The events DataFrame with a 'matching.event' column indicating matched events.
     """
+
+    validate_columns(
+        events,
+        {"direction", "fill", "original_number", "event.id", "timestamp"},
+        "event_match",
+    )
+    validate_non_empty(events, "event_match")
 
     def matcher() -> np.ndarray:
         """

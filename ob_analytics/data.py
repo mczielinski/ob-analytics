@@ -1,5 +1,6 @@
 import pandas as pd
 
+from ob_analytics._utils import validate_columns, validate_non_empty
 from ob_analytics.depth import depth_metrics, price_level_volume
 from ob_analytics.event_processing import load_event_data, order_aggressiveness
 from ob_analytics.matching_engine import event_match
@@ -23,6 +24,17 @@ def get_zombie_ids(events: pd.DataFrame, trades: pd.DataFrame) -> list[int]:
     list of int
         A list of order IDs that are considered zombies.
     """
+    validate_columns(
+        events,
+        {"action", "id", "direction", "timestamp", "price"},
+        "get_zombie_ids(events)",
+    )
+    validate_columns(
+        trades,
+        {"direction", "timestamp", "price"},
+        "get_zombie_ids(trades)",
+    )
+
     # Filter cancelled events
     cancelled = events[events["action"] == "deleted"]["id"]
     zombies = events[~events["id"].isin(cancelled)]

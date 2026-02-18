@@ -3,6 +3,8 @@ import logging
 import numpy as np
 import pandas as pd
 
+from ob_analytics._utils import validate_columns, validate_non_empty
+
 logger = logging.getLogger(__name__)
 
 
@@ -22,6 +24,18 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
     pandas.DataFrame
         The events DataFrame with an updated 'type' column indicating order types.
     """
+
+    validate_columns(
+        events,
+        {"id", "price", "action", "event.id", "direction"},
+        "set_order_types(events)",
+    )
+    validate_columns(
+        trades,
+        {"maker.event.id", "taker.event.id"},
+        "set_order_types(trades)",
+    )
+    validate_non_empty(events, "set_order_types")
 
     def is_pacman(events: pd.DataFrame) -> pd.Series:
         """

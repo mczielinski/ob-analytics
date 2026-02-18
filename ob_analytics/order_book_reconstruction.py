@@ -3,6 +3,9 @@ from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 
+from ob_analytics._utils import validate_columns, validate_non_empty
+from ob_analytics.exceptions import InvalidDataError
+
 
 def order_book(
     events: pd.DataFrame,
@@ -39,6 +42,16 @@ def order_book(
         - 'asks': DataFrame of active ask orders.
         - 'bids': DataFrame of active bid orders.
     """
+    validate_columns(
+        events,
+        {
+            "action", "timestamp", "id", "direction", "type",
+            "price", "volume", "exchange.timestamp",
+        },
+        "order_book",
+    )
+    validate_non_empty(events, "order_book")
+
     if tp is None:
         tp = datetime.now(timezone.utc)
 
@@ -125,11 +138,11 @@ def order_book(
     active_orders = pd.concat([active_orders, changed_before], ignore_index=True)
 
     if not all(active_orders["timestamp"] <= tp):
-        raise ValueError(
+        raise InvalidDataError(
             f"Some active orders have timestamps after the requested time {tp}."
         )
     if active_orders["id"].duplicated().any():
-        raise RuntimeError(
+        raise InvalidDataError(
             "Duplicate order IDs found in active orders. "
             "This indicates a data integrity issue."
         )

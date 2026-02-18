@@ -3,7 +3,8 @@ import logging
 import numpy as np
 import pandas as pd
 
-from ob_analytics.auxiliary import vwap
+from ob_analytics._utils import validate_columns, validate_non_empty, vwap
+from ob_analytics.exceptions import MatchingError
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,16 @@ def match_trades(events: pd.DataFrame) -> pd.DataFrame:
     pandas.DataFrame
         A DataFrame describing trade executions.
     """
+    validate_columns(
+        events,
+        {
+            "direction", "matching.event", "event.id", "exchange.timestamp",
+            "timestamp", "price", "fill", "id", "original_number",
+        },
+        "match_trades",
+    )
+    validate_non_empty(events, "match_trades")
+
     matching_bids = events[
         (events["direction"] == "bid") & ~pd.isna(events["matching.event"])
     ].sort_values(by="event.id", kind="stable")
@@ -30,7 +41,7 @@ def match_trades(events: pd.DataFrame) -> pd.DataFrame:
     ].sort_values(by="matching.event", kind="stable")
 
     if not all(matching_bids["event.id"].values == matching_asks["matching.event"].values):
-        raise RuntimeError(
+        raise MatchingError(
             "Bid event IDs do not align with ask matching events. "
             "This indicates a matching error in the upstream eventMatch step."
         )
@@ -154,6 +165,13 @@ def trade_impacts(trades: pd.DataFrame) -> pd.DataFrame:
     pandas.DataFrame
         A DataFrame summarizing market order impacts.
     """
+
+    validate_columns(
+        trades,
+        {"taker", "price", "volume", "timestamp", "direction"},
+        "trade_impacts",
+    )
+    validate_non_empty(trades, "trade_impacts")
 
     def impact_summary(impact: pd.DataFrame) -> dict:
         """

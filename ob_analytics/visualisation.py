@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from ob_analytics.auxiliary import reverse_matrix
+from ob_analytics._utils import reverse_matrix
 from ob_analytics.depth import filter_depth
 
 logger = logging.getLogger(__name__)
