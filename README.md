@@ -204,13 +204,13 @@ flowchart TD
 | Stage | Function | Input | Output |
 |-------|----------|-------|--------|
 | ① | `load_event_data()` | CSV path | Events DataFrame (50,393 rows) |
-| ② | `event_match()` | Events | Events + `matching.event` column |
+| ② | `event_match()` | Events | Events + `matching_event` column |
 | ③ | `match_trades()` | Matched events | Trades DataFrame (482 rows) |
 | ④ | `set_order_types()` | Events + trades | Events + `type` column |
 | ⑤ | `get_zombie_ids()` | Events + trades | Set of order IDs to remove |
 | ⑥ | `price_level_volume()` | Clean events | Depth DataFrame (49,376 rows) |
 | ⑦ | `depth_metrics()` | Depth | Depth summary (45 columns) |
-| ⑧ | `order_aggressiveness()` | Events + depth summary | Events + `aggressiveness.bps` |
+| ⑧ | `order_aggressiveness()` | Events + depth summary | Events + `aggressiveness_bps` |
 
 ---
 
@@ -429,9 +429,9 @@ class MyExchangeLoader:
     def load(self, source: str | Path) -> pd.DataFrame:
         df = pd.read_csv(source)
         # Transform columns to match expected schema:
-        #   id, timestamp, exchange.timestamp, price, volume,
+        #   id, timestamp, exchange_timestamp, price, volume,
         #   action (created/changed/deleted), direction (bid/ask),
-        #   event.id, fill
+        #   event_id, fill
         ...
         return df
 
@@ -452,7 +452,7 @@ class SimpleTimeMatcher:
         self.config = config or PipelineConfig()
 
     def match(self, events: pd.DataFrame) -> pd.DataFrame:
-        # Add 'matching.event' column pairing bid/ask fills
+        # Add 'matching_event' column pairing bid/ask fills
         ...
         return events
 
@@ -471,7 +471,7 @@ class VWAPTradeInferrer:
     def infer_trades(self, events: pd.DataFrame) -> pd.DataFrame:
         # Return trades DataFrame with columns:
         #   timestamp, price, volume, direction,
-        #   maker.event.id, taker.event.id, maker, taker
+        #   maker_event_id, taker_event_id, maker, taker
         ...
         return trades
 

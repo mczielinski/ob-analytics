@@ -53,7 +53,7 @@ def order_book(
         events,
         {
             "action", "timestamp", "id", "direction", "type",
-            "price", "volume", "exchange.timestamp",
+            "price", "volume", "exchange_timestamp",
         },
         "order_book",
     )
@@ -156,14 +156,14 @@ def order_book(
 
     asks = active_asks(active_orders)
     asks = asks[
-        ["id", "timestamp", "exchange.timestamp", "price", "volume", "liquidity", "bps"]
+        ["id", "timestamp", "exchange_timestamp", "price", "volume", "liquidity", "bps"]
     ]
     # Reverse the asks (ascending price)
     asks = asks.iloc[::-1].reset_index(drop=True)
 
     bids = active_bids(active_orders)
     bids = bids[
-        ["id", "timestamp", "exchange.timestamp", "price", "volume", "liquidity", "bps"]
+        ["id", "timestamp", "exchange_timestamp", "price", "volume", "liquidity", "bps"]
     ]
 
     # Apply percentage range filter

@@ -57,7 +57,7 @@ class MatchingEngine(Protocol):
     """
 
     def match(self, events: pd.DataFrame) -> pd.DataFrame:
-        """Pair bid/ask fills and return events with a ``matching.event`` column.
+        """Pair bid/ask fills and return events with a ``matching_event`` column.
 
         Parameters
         ----------
@@ -67,7 +67,7 @@ class MatchingEngine(Protocol):
         Returns
         -------
         pandas.DataFrame
-            Same DataFrame with ``matching.event`` added.
+            Same DataFrame with ``matching_event`` added.
         """
         ...
 
@@ -86,12 +86,12 @@ class TradeInferrer(Protocol):
         Parameters
         ----------
         events : pandas.DataFrame
-            Events with ``matching.event`` populated.
+            Events with ``matching_event`` populated.
 
         Returns
         -------
         pandas.DataFrame
             Trades with ``timestamp``, ``price``, ``volume``,
-            ``direction``, ``maker.event.id``, ``taker.event.id``.
+            ``direction``, ``maker_event_id``, ``taker_event_id``.
         """
         ...

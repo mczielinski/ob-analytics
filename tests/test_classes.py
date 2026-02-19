@@ -52,7 +52,7 @@ class TestBitstampLoader:
         events = loader.load(sample_csv)
         assert isinstance(events, pd.DataFrame)
         assert len(events) == 4
-        for col in ["id", "timestamp", "price", "volume", "action", "direction", "fill", "event.id"]:
+        for col in ["id", "timestamp", "price", "volume", "action", "direction", "fill", "event_id"]:
             assert col in events.columns
 
     def test_fill_computed(self, sample_csv: Path):
@@ -78,13 +78,13 @@ class TestNeedlemanWunschMatcher:
     def test_match_simple_pairs(self, tiny_events):
         matcher = NeedlemanWunschMatcher()
         result = matcher.match(tiny_events)
-        assert "matching.event" in result.columns
-        matched_count = result["matching.event"].notna().sum()
+        assert "matching_event" in result.columns
+        matched_count = result["matching_event"].notna().sum()
         assert matched_count == 4
 
     def test_rejects_empty_dataframe(self):
         df = pd.DataFrame(
-            columns=["direction", "fill", "original_number", "event.id", "timestamp"]
+            columns=["direction", "fill", "original_number", "event_id", "timestamp"]
         )
         with pytest.raises(InsufficientDataError):
             NeedlemanWunschMatcher().match(df)
@@ -94,8 +94,8 @@ class TestNeedlemanWunschMatcher:
         config = PipelineConfig(match_cutoff_ms=1)
         matcher = NeedlemanWunschMatcher(config)
         result = matcher.match(tiny_events)
-        assert "matching.event" in result.columns
-        matched_count = result["matching.event"].notna().sum()
+        assert "matching_event" in result.columns
+        matched_count = result["matching_event"].notna().sum()
         assert matched_count <= 4
 
 
@@ -108,7 +108,7 @@ class TestDefaultTradeInferrer:
         trades = inferrer.infer_trades(matched_events)
         assert isinstance(trades, pd.DataFrame)
         assert len(trades) == 2
-        for col in ["timestamp", "price", "volume", "direction", "maker.event.id", "taker.event.id"]:
+        for col in ["timestamp", "price", "volume", "direction", "maker_event_id", "taker_event_id"]:
             assert col in trades.columns
 
     def test_rejects_missing_columns(self):
@@ -123,8 +123,8 @@ class TestDepthMetricsEngine:
         result = engine.compute(tiny_depth)
         assert len(result) == len(tiny_depth)
         assert "timestamp" in result.columns
-        assert "best.bid.price" in result.columns
-        assert "best.ask.price" in result.columns
+        assert "best_bid_price" in result.columns
+        assert "best_ask_price" in result.columns
 
     def test_compute_column_count(self, tiny_depth):
         config = PipelineConfig(depth_bins=5)
@@ -136,8 +136,8 @@ class TestDepthMetricsEngine:
     def test_best_prices_populated(self, tiny_depth):
         engine = DepthMetricsEngine()
         result = engine.compute(tiny_depth)
-        assert result["best.bid.price"].iloc[-1] > 0
-        assert result["best.ask.price"].iloc[-1] > 0
+        assert result["best_bid_price"].iloc[-1] > 0
+        assert result["best_ask_price"].iloc[-1] > 0
 
     def test_compat_mode_flag(self, tiny_depth):
         engine_compat = DepthMetricsEngine(compat_mode=True)
@@ -166,5 +166,5 @@ class TestDepthMetricsEngine:
         )
         engine = DepthMetricsEngine()
         result = engine.compute(depth)
-        assert result["best.bid.price"].iloc[-1] == 50000.00
-        assert result["best.ask.price"].iloc[-1] == 50100.00
+        assert result["best_bid_price"].iloc[-1] == 50000.00
+        assert result["best_ask_price"].iloc[-1] == 50100.00

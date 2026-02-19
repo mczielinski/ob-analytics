@@ -87,11 +87,11 @@ def sample_depth_summary() -> pd.DataFrame:
     data: dict = {"timestamp": [ts + pd.Timedelta(seconds=i) for i in range(n)]}
     for side in ("bid", "ask"):
         for bps in range(25, 501, 25):
-            data[f"{side}.vol{bps}bps"] = rng.uniform(10, 500, n)
-    data["best.bid.price"] = np.full(n, 236.50)
-    data["best.ask.price"] = np.full(n, 237.00)
-    data["best.bid.vol"] = rng.uniform(100, 1000, n)
-    data["best.ask.vol"] = rng.uniform(100, 1000, n)
+            data[f"{side}_vol{bps}bps"] = rng.uniform(10, 500, n)
+    data["best_bid_price"] = np.full(n, 236.50)
+    data["best_ask_price"] = np.full(n, 237.00)
+    data["best_bid_vol"] = rng.uniform(100, 1000, n)
+    data["best_ask_vol"] = rng.uniform(100, 1000, n)
     return pd.DataFrame(data)
 
 

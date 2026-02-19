@@ -42,19 +42,19 @@ class DefaultTradeInferrer:
         Parameters
         ----------
         events : pandas.DataFrame
-            Events with ``matching.event`` column populated.
+            Events with ``matching_event`` column populated.
 
         Returns
         -------
         pandas.DataFrame
             Trades with columns ``timestamp``, ``price``, ``volume``,
-            ``direction``, ``maker.event.id``, ``taker.event.id``,
+            ``direction``, ``maker_event_id``, ``taker_event_id``,
             ``maker``, ``taker``.
         """
         validate_columns(
             events,
             {
-                "direction", "matching.event", "event.id", "exchange.timestamp",
+                "direction", "matching_event", "event_id", "exchange_timestamp",
                 "timestamp", "price", "fill", "id", "original_number",
             },
             "DefaultTradeInferrer.infer_trades",
@@ -62,13 +62,13 @@ class DefaultTradeInferrer:
         validate_non_empty(events, "DefaultTradeInferrer.infer_trades")
 
         matching_bids = events[
-            (events["direction"] == "bid") & ~pd.isna(events["matching.event"])
-        ].sort_values(by="event.id", kind="stable")
+            (events["direction"] == "bid") & ~pd.isna(events["matching_event"])
+        ].sort_values(by="event_id", kind="stable")
         matching_asks = events[
-            (events["direction"] == "ask") & ~pd.isna(events["matching.event"])
-        ].sort_values(by="matching.event", kind="stable")
+            (events["direction"] == "ask") & ~pd.isna(events["matching_event"])
+        ].sort_values(by="matching_event", kind="stable")
 
-        if not all(matching_bids["event.id"].values == matching_asks["matching.event"].values):
+        if not all(matching_bids["event_id"].values == matching_asks["matching_event"].values):
             raise MatchingError(
                 "Bid event IDs do not align with ask matching events. "
                 "This indicates a matching error in the upstream eventMatch step."
@@ -76,8 +76,8 @@ class DefaultTradeInferrer:
 
         matching_bids = matching_bids.reset_index(drop=True)
         matching_asks = matching_asks.reset_index(drop=True)
-        bid_exchange_ts = matching_bids["exchange.timestamp"]
-        ask_exchange_ts = matching_asks["exchange.timestamp"]
+        bid_exchange_ts = matching_bids["exchange_timestamp"]
+        ask_exchange_ts = matching_asks["exchange_timestamp"]
         bid_maker = (bid_exchange_ts < ask_exchange_ts) | (
             (bid_exchange_ts == ask_exchange_ts)
             & (matching_bids["id"] < matching_asks["id"])
@@ -97,14 +97,14 @@ class DefaultTradeInferrer:
         ).astype(str)
 
         maker_event_id = np.where(
-            bid_maker, matching_bids["event.id"], matching_asks["event.id"]
+            bid_maker, matching_bids["event_id"], matching_asks["event_id"]
         )
         taker_event_id = np.where(
-            bid_maker, matching_asks["event.id"], matching_bids["event.id"]
+            bid_maker, matching_asks["event_id"], matching_bids["event_id"]
         )
 
-        id_to_id = dict(zip(events["event.id"], events["id"]))
-        id_to_original_number = dict(zip(events["event.id"], events["original_number"]))
+        id_to_id = dict(zip(events["event_id"], events["id"]))
+        id_to_original_number = dict(zip(events["event_id"], events["original_number"]))
 
         maker = pd.Series(maker_event_id).map(id_to_id).values
         taker = pd.Series(taker_event_id).map(id_to_id).values
@@ -117,8 +117,8 @@ class DefaultTradeInferrer:
                 "price": price,
                 "volume": volume,
                 "direction": direction,
-                "maker.event.id": maker_event_id,
-                "taker.event.id": taker_event_id,
+                "maker_event_id": maker_event_id,
+                "taker_event_id": taker_event_id,
                 "maker": maker,
                 "taker": taker,
                 "maker_og": maker_og,
@@ -152,17 +152,17 @@ class DefaultTradeInferrer:
         for i in jumps:
             prev_jump, this_jump = combined.iloc[i - 1], combined.iloc[i]
             if abs(this_jump["price"] - prev_jump["price"]) > threshold:
-                taker_eid = this_jump["taker.event.id"]
+                taker_eid = this_jump["taker_event_id"]
                 taker_price = events.loc[
-                    events["event.id"] == taker_eid, "price"
+                    events["event_id"] == taker_eid, "price"
                 ].iloc[0]
                 taker_dir = "sell" if this_jump["direction"] == "buy" else "buy"
                 swap = pd.DataFrame(
                     {
                         "price": taker_price,
                         "direction": taker_dir,
-                        "maker.event.id": taker_eid,
-                        "taker.event.id": this_jump["maker.event.id"],
+                        "maker_event_id": taker_eid,
+                        "taker_event_id": this_jump["maker_event_id"],
                         "maker": this_jump["taker"],
                         "taker": this_jump["maker"],
                         "maker_og": this_jump["taker_og"],
@@ -173,8 +173,8 @@ class DefaultTradeInferrer:
                 combined.loc[
                     i,
                     [
-                        "price", "direction", "maker.event.id",
-                        "taker.event.id", "maker", "taker",
+                        "price", "direction", "maker_event_id",
+                        "taker_event_id", "maker", "taker",
                         "maker_og", "taker_og",
                     ],
                 ] = swap.iloc[0]
@@ -224,13 +224,13 @@ def trade_impacts(trades: pd.DataFrame) -> pd.DataFrame:
     def impact_summary(impact: pd.DataFrame) -> dict:
         return {
             "id": impact["taker"].iloc[-1],
-            "min.price": impact["price"].min(),
-            "max.price": impact["price"].max(),
+            "min_price": impact["price"].min(),
+            "max_price": impact["price"].max(),
             "vwap": vwap(impact["price"], impact["volume"]),
             "hits": len(impact),
             "vol": impact["volume"].sum(),
-            "start.time": impact["timestamp"].min(),
-            "end.time": impact["timestamp"].max(),
+            "start_time": impact["timestamp"].min(),
+            "end_time": impact["timestamp"].max(),
             "dir": impact["direction"].iloc[-1],
         }
 

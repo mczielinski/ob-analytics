@@ -204,7 +204,7 @@ class GenericCsvLoader:
     COLUMN_MAP = {
         "order_id": "id",
         "event_time": "timestamp",
-        "server_time": "exchange.timestamp",
+        "server_time": "exchange_timestamp",
         "side": "direction",
         "type": "action",
     }
@@ -236,7 +236,7 @@ class GenericCsvLoader:
 
         # Convert timestamps
         df["timestamp"] = pd.to_datetime(df["timestamp"])
-        df["exchange.timestamp"] = pd.to_datetime(df["exchange.timestamp"])
+        df["exchange_timestamp"] = pd.to_datetime(df["exchange_timestamp"])
 
         # Compute fill deltas and event IDs
         # (your logic here — see BitstampLoader source for reference)
@@ -303,7 +303,7 @@ class CryptofeedLoader:
             rows.append({
                 "id": oid,
                 "timestamp": row["receipt_timestamp"],
-                "exchange.timestamp": row["exchange_timestamp"],
+                "exchange_timestamp": row["exchange_timestamp"],
                 "price": row["price"],
                 "volume": size,
                 "action": action,
@@ -312,8 +312,8 @@ class CryptofeedLoader:
             })
 
         events = pd.DataFrame(rows)
-        events["event.id"] = range(1, len(events) + 1)
-        events["original_number"] = events["event.id"]
+        events["event_id"] = range(1, len(events) + 1)
+        events["original_number"] = events["event_id"]
         return events
 ```
 
@@ -376,7 +376,7 @@ class LobsterLoader:
 
         # Convert time (seconds after midnight) to datetime
         df["timestamp"] = self.trading_date + pd.to_timedelta(df["time"], unit="s")
-        df["exchange.timestamp"] = df["timestamp"]
+        df["exchange_timestamp"] = df["timestamp"]
 
         # Map event types and directions
         df["action"] = df["event_type"].map(self.EVENT_TYPE_MAP)
@@ -388,8 +388,8 @@ class LobsterLoader:
         # Compute fills (volume consumed between events for the same order)
         df = df.sort_values("timestamp", kind="stable")
         df["fill"] = 0.0
-        df["event.id"] = range(1, len(df) + 1)
-        df["original_number"] = df["event.id"]
+        df["event_id"] = range(1, len(df) + 1)
+        df["original_number"] = df["event_id"]
 
         return df
 ```
@@ -417,8 +417,8 @@ class SimpleTimeMatcher:
         self.config = config or PipelineConfig()
 
     def match(self, events: pd.DataFrame) -> pd.DataFrame:
-        # Your matching logic here — must add 'matching.event' column
-        events["matching.event"] = float("nan")
+        # Your matching logic here — must add 'matching_event' column
+        events["matching_event"] = float("nan")
 
         bids = events[
             (events["direction"] == "bid") & (events["fill"] > 0)

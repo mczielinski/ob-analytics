@@ -91,9 +91,9 @@ class DepthMetricsEngine:
         Returns
         -------
         pandas.DataFrame
-            Depth summary with ``timestamp``, ``best.bid.price``,
-            ``best.bid.vol``, ``best.ask.price``, ``best.ask.vol``,
-            and volume-in-BPS-bin columns (e.g. ``bid.vol25bps``).
+            Depth summary with ``timestamp``, ``best_bid_price``,
+            ``best_bid_vol``, ``best_ask_price``, ``best_ask_vol``,
+            and volume-in-BPS-bin columns (e.g. ``bid_vol25bps``).
         """
         validate_columns(
             depth, {"timestamp", "price", "volume", "direction"}, "DepthMetricsEngine.compute"
@@ -122,7 +122,7 @@ class DepthMetricsEngine:
         timestamps = ordered.reset_index(drop=True)["timestamp"]
         res = pd.concat([timestamps, metrics], axis=1)
 
-        price_cols = ["best.bid.price", "best.ask.price"]
+        price_cols = ["best_bid_price", "best_ask_price"]
         res[price_cols] = round(res[price_cols] / multiplier, self._config.price_decimals)
 
         return res
@@ -267,10 +267,10 @@ class DepthMetricsEngine:
             return [f"{name}{i}bps" for i in range(bps, bps * bins + 1, bps)]
 
         return (
-            ["best.bid.price", "best.bid.vol"]
-            + pct_names("bid.vol")
-            + ["best.ask.price", "best.ask.vol"]
-            + pct_names("ask.vol")
+            ["best_bid_price", "best_bid_vol"]
+            + pct_names("bid_vol")
+            + ["best_ask_price", "best_ask_vol"]
+            + pct_names("ask_vol")
         )
 
 
@@ -293,7 +293,7 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
     validate_columns(
         events,
         {
-            "event.id", "id", "timestamp", "exchange.timestamp",
+            "event_id", "id", "timestamp", "exchange_timestamp",
             "price", "volume", "direction", "action", "fill", "type",
         },
         "price_level_volume",
@@ -302,7 +302,7 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
 
     def directional_price_level_volume(dir_events: pd.DataFrame) -> pd.DataFrame:
         cols = [
-            "event.id", "id", "timestamp", "exchange.timestamp",
+            "event_id", "id", "timestamp", "exchange_timestamp",
             "price", "volume", "direction", "action",
         ]
 
@@ -332,7 +332,7 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
             & (dir_events["type"] != "market")
         ][
             [
-                "event.id", "id", "timestamp", "exchange.timestamp",
+                "event_id", "id", "timestamp", "exchange_timestamp",
                 "price", "fill", "direction", "action",
             ]
         ]
@@ -438,22 +438,22 @@ def get_spread(depth_summary: pd.DataFrame) -> pd.DataFrame:
     """
     validate_columns(
         depth_summary,
-        {"timestamp", "best.bid.price", "best.bid.vol", "best.ask.price", "best.ask.vol"},
+        {"timestamp", "best_bid_price", "best_bid_vol", "best_ask_price", "best_ask_vol"},
         "get_spread",
     )
 
     spread = depth_summary[
         [
             "timestamp",
-            "best.bid.price",
-            "best.bid.vol",
-            "best.ask.price",
-            "best.ask.vol",
+            "best_bid_price",
+            "best_bid_vol",
+            "best_ask_price",
+            "best_ask_vol",
         ]
     ]
     changes = (
         spread[
-            ["best.bid.price", "best.bid.vol", "best.ask.price", "best.ask.vol"]
+            ["best_bid_price", "best_bid_vol", "best_ask_price", "best_ask_vol"]
         ].diff()
         != 0
     ).any(axis=1)

@@ -313,9 +313,9 @@ def plot_price_levels(
             (spread["timestamp"] >= start_time) & (spread["timestamp"] <= end_time)
         ]
         if price_from is None:
-            price_from = 0.995 * spread["best.bid.price"].min()
+            price_from = 0.995 * spread["best_bid_price"].min()
         if price_to is None:
-            price_to = 1.005 * spread["best.ask.price"].max()
+            price_to = 1.005 * spread["best_ask_price"].max()
 
     if trades is not None:
         trades = trades[
@@ -449,9 +449,9 @@ def plot_price_levels_faster(
     if spread is not None:
         spread = spread.copy()
         spread.sort_values(by="timestamp", inplace=True, kind="stable")
-        if show_mp and "best.bid.price" in spread and "best.ask.price" in spread:
+        if show_mp and "best_bid_price" in spread and "best_ask_price" in spread:
             spread["midprice"] = (
-                spread["best.bid.price"] + spread["best.ask.price"]
+                spread["best_bid_price"] + spread["best_ask_price"]
             ) / 2
             ax.plot(
                 spread["timestamp"],
@@ -461,19 +461,19 @@ def plot_price_levels_faster(
                 label="Midprice",
             )
         else:
-            if "best.ask.price" in spread:
+            if "best_ask_price" in spread:
                 ax.step(
                     spread["timestamp"],
-                    spread["best.ask.price"],
+                    spread["best_ask_price"],
                     color="#ff0000",
                     linewidth=1.5,
                     where="post",
                     label="Best Ask",
                 )
-            if "best.bid.price" in spread:
+            if "best_bid_price" in spread:
                 ax.step(
                     spread["timestamp"],
-                    spread["best.bid.price"],
+                    spread["best_bid_price"],
                     color="#00ff00",
                     linewidth=1.5,
                     where="post",
@@ -903,8 +903,8 @@ def plot_volume_percentiles(
     if end_time is None:
         end_time = depth_summary["timestamp"].iloc[-1]
 
-    bid_names = [f"bid.vol{i}bps" for i in range(25, 501, 25)]
-    ask_names = [f"ask.vol{i}bps" for i in range(25, 501, 25)]
+    bid_names = [f"bid_vol{i}bps" for i in range(25, 501, 25)]
+    ask_names = [f"ask_vol{i}bps" for i in range(25, 501, 25)]
 
     td = (end_time - start_time).total_seconds()
     td = round(td)
@@ -933,8 +933,8 @@ def plot_volume_percentiles(
     aggregated.rename(columns={"index": "timestamp"}, inplace=True)
     ob_percentiles = aggregated
 
-    bid_names = [f"bid.vol{int(i):03d}bps" for i in range(25, 501, 25)]
-    ask_names = [f"ask.vol{int(i):03d}bps" for i in range(25, 501, 25)]
+    bid_names = [f"bid_vol{int(i):03d}bps" for i in range(25, 501, 25)]
+    ask_names = [f"ask_vol{int(i):03d}bps" for i in range(25, 501, 25)]
     ob_percentiles.columns = ["timestamp"] + bid_names + ask_names
 
     max_ask = ob_percentiles[ask_names].sum(axis=1).max()

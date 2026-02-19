@@ -42,44 +42,44 @@ class NeedlemanWunschMatcher:
         ----------
         events : pandas.DataFrame
             Events with columns ``direction``, ``fill``,
-            ``original_number``, ``event.id``, ``timestamp``.
+            ``original_number``, ``event_id``, ``timestamp``.
 
         Returns
         -------
         pandas.DataFrame
-            Same events with a ``matching.event`` column added.
+            Same events with a ``matching_event`` column added.
             Unmatched rows have ``NaN``.
         """
         validate_columns(
             events,
-            {"direction", "fill", "original_number", "event.id", "timestamp"},
+            {"direction", "fill", "original_number", "event_id", "timestamp"},
             "NeedlemanWunschMatcher.match",
         )
         validate_non_empty(events, "NeedlemanWunschMatcher.match")
 
         matched = self._run_matching(events)
 
-        events["matching.event"] = np.nan
+        events["matching_event"] = np.nan
         if len(matched) == 0:
             return events
-        matched_bids = pd.DataFrame(matched, columns=["event.id", "matching.event"])
-        matched_asks = pd.DataFrame(matched, columns=["matching.event", "event.id"])
-        events = pd.merge(events, matched_bids, on="event.id", how="left")
-        events = pd.merge(events, matched_asks, on="event.id", how="left")
+        matched_bids = pd.DataFrame(matched, columns=["event_id", "matching_event"])
+        matched_asks = pd.DataFrame(matched, columns=["matching_event", "event_id"])
+        events = pd.merge(events, matched_bids, on="event_id", how="left")
+        events = pd.merge(events, matched_asks, on="event_id", how="left")
 
-        events["matching.event"] = (
-            events["matching.event_y"]
-            .fillna(events["matching.event_x"])
-            .fillna(events["matching.event"])
+        events["matching_event"] = (
+            events["matching_event_y"]
+            .fillna(events["matching_event_x"])
+            .fillna(events["matching_event"])
         )
 
-        events = events.drop(columns=["matching.event_x", "matching.event_y"])
+        events = events.drop(columns=["matching_event_x", "matching_event_y"])
         return events
 
     def _run_matching(self, events: pd.DataFrame) -> np.ndarray:
         cut_off_td = np.timedelta64(self._config.match_cutoff_ms * 1_000_000, "ns")
         res: list[np.ndarray] = []
-        cols = ["original_number", "event.id", "fill", "timestamp"]
+        cols = ["original_number", "event_id", "fill", "timestamp"]
 
         bid_fills = events[(events["direction"] == "bid") & (events["fill"] != 0)][cols]
         ask_fills = events[(events["direction"] == "ask") & (events["fill"] != 0)][cols]
@@ -107,7 +107,7 @@ class NeedlemanWunschMatcher:
                 distance_matrix_ms = distance_matrix_ms.reshape(-1, 1)
 
             closest_ask_indices = np.argmin(np.abs(distance_matrix_ms), axis=1)
-            ask_event_ids = asks["event.id"].values[closest_ask_indices]
+            ask_event_ids = asks["event_id"].values[closest_ask_indices]
 
             mask = (
                 np.abs(distance_matrix_ms[np.arange(len(bids)), closest_ask_indices])
@@ -118,7 +118,7 @@ class NeedlemanWunschMatcher:
             if not any(pd.isna(ask_event_ids)) and len(ask_event_ids) == len(
                 set(ask_event_ids)
             ):
-                matches = np.column_stack((bids["event.id"], ask_event_ids))
+                matches = np.column_stack((bids["event_id"], ask_event_ids))
                 res.extend(matches)
             else:
                 similarity_matrix = create_similarity_matrix(
@@ -137,8 +137,8 @@ class NeedlemanWunschMatcher:
                 res.extend(
                     np.column_stack(
                         (
-                            bids["event.id"].values[matched_indices[:, 0]],
-                            asks["event.id"].values[matched_indices[:, 1]],
+                            bids["event_id"].values[matched_indices[:, 0]],
+                            asks["event_id"].values[matched_indices[:, 1]],
                         )
                     )
                 )
@@ -165,7 +165,7 @@ def event_match(events: pd.DataFrame, cut_off_ms: int = 5000) -> pd.DataFrame:
     Returns
     -------
     pandas.DataFrame
-        The events DataFrame with a 'matching.event' column indicating
+        The events DataFrame with a ``matching_event`` column indicating
         matched events.
     """
     config = PipelineConfig(match_cutoff_ms=cut_off_ms)

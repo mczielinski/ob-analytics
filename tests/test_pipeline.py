@@ -20,10 +20,10 @@ def _make_full_events() -> pd.DataFrame:
     n = 8
     return pd.DataFrame(
         {
-            "event.id": list(range(1, n + 1)),
+            "event_id": list(range(1, n + 1)),
             "id": [100, 200, 100, 200, 300, 400, 300, 400],
             "timestamp": [ts + pd.Timedelta(seconds=i) for i in range(n)],
-            "exchange.timestamp": [ts + pd.Timedelta(seconds=i - 1) for i in range(n)],
+            "exchange_timestamp": [ts + pd.Timedelta(seconds=i - 1) for i in range(n)],
             "price": [236.50, 237.00, 236.50, 237.00, 236.60, 237.10, 236.60, 237.10],
             "volume": [10000, 5000, 8000, 3000, 7000, 4000, 5000, 2000],
             "action": pd.Categorical(
@@ -38,7 +38,7 @@ def _make_full_events() -> pd.DataFrame:
             ),
             "fill": [0.0, 0.0, 2000.0, 2000.0, 0.0, 0.0, 2000.0, 2000.0],
             "original_number": list(range(1, n + 1)),
-            "matching.event": [np.nan, np.nan, 4.0, 3.0, np.nan, np.nan, 8.0, 7.0],
+            "matching_event": [np.nan, np.nan, 4.0, 3.0, np.nan, np.nan, 8.0, 7.0],
             "type": pd.Categorical(
                 ["resting-limit", "resting-limit", "resting-limit", "resting-limit",
                  "resting-limit", "resting-limit", "resting-limit", "resting-limit"],
@@ -57,8 +57,8 @@ def _make_trades() -> pd.DataFrame:
             "price": [236.50, 236.60],
             "volume": [2000.0, 2000.0],
             "direction": ["sell", "sell"],
-            "maker.event.id": [3, 7],
-            "taker.event.id": [4, 8],
+            "maker_event_id": [3, 7],
+            "taker_event_id": [4, 8],
             "maker": [100, 300],
             "taker": [200, 400],
             "maker_og": [3, 7],

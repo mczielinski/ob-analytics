@@ -26,7 +26,7 @@ def _make_events(
             "direction": pd.Categorical(
                 directions, categories=["bid", "ask"], ordered=True
             ),
-            "event.id": event_ids,
+            "event_id": event_ids,
             "fill": [fill] * n,
             "original_number": list(range(1, n + 1)),
         }
@@ -49,7 +49,7 @@ class TestSimpleEventMatching:
         )
         matched = event_match(events, cut_off_ms=1000)
         expected = [2, 1, 4, 3]
-        result = matched.sort_values("event.id")["matching.event"].tolist()
+        result = matched.sort_values("event_id")["matching_event"].tolist()
         assert result == expected
 
 
@@ -69,7 +69,7 @@ class TestLeftOverEventMatching:
             event_ids=[1, 2, 3, 4, 5],
         )
         matched = event_match(events, cut_off_ms=1000)
-        result = matched.sort_values("event.id")["matching.event"].tolist()
+        result = matched.sort_values("event_id")["matching_event"].tolist()
         assert result[0] == 2
         assert result[1] == 1
         assert result[2] == 4
@@ -93,7 +93,7 @@ class TestConflictingEventMatching:
             event_ids=[1, 2, 3, 4, 5],
         )
         matched = event_match(events, cut_off_ms=1000)
-        result = matched.sort_values("event.id")["matching.event"].tolist()
+        result = matched.sort_values("event_id")["matching_event"].tolist()
         assert result[0] == 2
         assert result[1] == 1
         assert np.isnan(result[2])
@@ -113,7 +113,7 @@ class TestConflictingEventMatching:
             event_ids=[1, 2, 3, 4, 5],
         )
         matched = event_match(events, cut_off_ms=1000)
-        result = matched.sort_values("event.id")["matching.event"].tolist()
+        result = matched.sort_values("event_id")["matching_event"].tolist()
         assert result[0] == 2
         assert result[1] == 1
         assert result[2] == 4

@@ -41,23 +41,25 @@ class BitstampLoader:
         ----------
         source : str or Path
             Path to a Bitstamp-format CSV with columns ``id``,
-            ``timestamp``, ``exchange.timestamp``, ``price``, ``volume``,
-            ``action``, ``direction``.
+            ``timestamp``, ``exchange.timestamp`` (or ``exchange_timestamp``),
+            ``price``, ``volume``, ``action``, ``direction``.
 
         Returns
         -------
         pandas.DataFrame
             Cleaned events with columns ``id``, ``timestamp``,
-            ``exchange.timestamp``, ``price``, ``volume``, ``action``,
-            ``direction``, ``event.id``, ``fill``, ``original_number``.
+            ``exchange_timestamp``, ``price``, ``volume``, ``action``,
+            ``direction``, ``event_id``, ``fill``, ``original_number``.
         """
         price_digits = self._config.price_decimals
         volume_digits = self._config.volume_decimals
 
         events = pd.read_csv(source)
+        if "exchange.timestamp" in events.columns:
+            events = events.rename(columns={"exchange.timestamp": "exchange_timestamp"})
         validate_columns(
             events,
-            {"id", "timestamp", "exchange.timestamp", "price", "volume", "action", "direction"},
+            {"id", "timestamp", "exchange_timestamp", "price", "volume", "action", "direction"},
             "BitstampLoader.load",
         )
         validate_non_empty(events, "BitstampLoader.load")
@@ -69,8 +71,8 @@ class BitstampLoader:
         events["price"] = events["price"].round(price_digits)
 
         events["timestamp"] = pd.to_datetime(events["timestamp"] / 1000, unit="s")
-        events["exchange.timestamp"] = pd.to_datetime(
-            events["exchange.timestamp"] / 1000, unit="s"
+        events["exchange_timestamp"] = pd.to_datetime(
+            events["exchange_timestamp"] / 1000, unit="s"
         )
         events["action"] = pd.Categorical(
             events["action"], categories=["created", "changed", "deleted"], ordered=True
@@ -85,7 +87,7 @@ class BitstampLoader:
             kind="stable",
         )
 
-        events["event.id"] = np.arange(1, len(events) + 1)
+        events["event_id"] = np.arange(1, len(events) + 1)
         events = self._remove_duplicates(events)
 
         fill_deltas = events.groupby("id")["volume"].diff().fillna(0)
@@ -109,13 +111,13 @@ class BitstampLoader:
         dup_ids = deletes.loc[deletes["id"].duplicated(), "id"]
         duplicate_deletes = deletes[deletes["id"].isin(dup_ids)]
         duplicate_event_ids = duplicate_deletes.loc[
-            duplicate_deletes["id"].duplicated(), "event.id"
+            duplicate_deletes["id"].duplicated(), "event_id"
         ]
 
         rem_dup = len(duplicate_event_ids)
         if rem_dup > 0:
             removed_ids = events.loc[
-                events["event.id"].isin(duplicate_event_ids), "id"
+                events["event_id"].isin(duplicate_event_ids), "id"
             ]
             logger.warning(
                 "Removed %d duplicate order cancellations: %s",
@@ -123,7 +125,7 @@ class BitstampLoader:
                 " ".join(removed_ids.astype(str)),
             )
 
-        return events[~events["event.id"].isin(duplicate_event_ids)]
+        return events[~events["event_id"].isin(duplicate_event_ids)]
 
 
 # ── Backward-compatible module-level function ─────────────────────────
@@ -172,11 +174,11 @@ def order_aggressiveness(
     Returns
     -------
     pandas.DataFrame
-        The events DataFrame with an added 'aggressiveness.bps' column.
+        The events DataFrame with an added ``aggressiveness_bps`` column.
     """
     validate_columns(
         events,
-        {"direction", "action", "type", "timestamp", "event.id", "price"},
+        {"direction", "action", "type", "timestamp", "event_id", "price"},
         "order_aggressiveness(events)",
     )
     validate_columns(
@@ -199,7 +201,7 @@ def order_aggressiveness(
                 "Ensure depth_summary covers the full event time range."
             )
 
-        best_price_col = f"best.{side}.price"
+        best_price_col = f"best_{side}_price"
 
         unique_depth_summary = depth_summary.drop_duplicates(subset=["timestamp"])
         merged = pd.merge(
@@ -216,20 +218,20 @@ def order_aggressiveness(
 
         diff_price = direction * (merged["price"] - best)
         diff_bps = 10000 * diff_price / best
-        return pd.DataFrame({"event.id": merged["event.id"], "diff.bps": diff_bps})
+        return pd.DataFrame({"event_id": merged["event_id"], "diff_bps": diff_bps})
 
     bid_diff = event_diff_bps(events, 1)
     ask_diff = event_diff_bps(events, -1)
-    events["aggressiveness.bps"] = np.nan
+    events["aggressiveness_bps"] = np.nan
 
     if not bid_diff.empty:
-        events = pd.merge(events, bid_diff, on="event.id", how="left")
-        events["aggressiveness.bps"] = events["aggressiveness.bps"].fillna(events["diff.bps"])
-        events.drop(columns=["diff.bps"], inplace=True)
+        events = pd.merge(events, bid_diff, on="event_id", how="left")
+        events["aggressiveness_bps"] = events["aggressiveness_bps"].fillna(events["diff_bps"])
+        events.drop(columns=["diff_bps"], inplace=True)
 
     if not ask_diff.empty:
-        events = pd.merge(events, ask_diff, on="event.id", how="left")
-        events["aggressiveness.bps"] = events["aggressiveness.bps"].fillna(events["diff.bps"])
-        events.drop(columns=["diff.bps"], inplace=True)
+        events = pd.merge(events, ask_diff, on="event_id", how="left")
+        events["aggressiveness_bps"] = events["aggressiveness_bps"].fillna(events["diff_bps"])
+        events.drop(columns=["diff_bps"], inplace=True)
 
     return events

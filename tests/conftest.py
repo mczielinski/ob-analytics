@@ -25,7 +25,7 @@ def tiny_events() -> pd.DataFrame:
     ts = pd.Timestamp("2015-10-10 21:32:00", tz="UTC")
     return pd.DataFrame(
         {
-            "event.id": [1, 2, 3, 4],
+            "event_id": [1, 2, 3, 4],
             "id": [100, 200, 300, 400],
             "timestamp": [
                 ts,
@@ -33,7 +33,7 @@ def tiny_events() -> pd.DataFrame:
                 ts + pd.Timedelta(seconds=10),
                 ts + pd.Timedelta(seconds=10, milliseconds=10),
             ],
-            "exchange.timestamp": [
+            "exchange_timestamp": [
                 ts - pd.Timedelta(seconds=1),
                 ts - pd.Timedelta(seconds=1),
                 ts + pd.Timedelta(seconds=9),
@@ -82,7 +82,7 @@ def tiny_depth() -> pd.DataFrame:
 
 @pytest.fixture
 def matched_events(tiny_events: pd.DataFrame) -> pd.DataFrame:
-    """Events with matching.event column populated."""
+    """Events with matching_event column populated."""
     df = tiny_events.copy()
-    df["matching.event"] = [2, 1, 4, 3]
+    df["matching_event"] = [2, 1, 4, 3]
     return df

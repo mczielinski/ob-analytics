@@ -34,12 +34,12 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
 
     validate_columns(
         events,
-        {"id", "price", "action", "event.id", "direction"},
+        {"id", "price", "action", "event_id", "direction"},
         "set_order_types(events)",
     )
     validate_columns(
         trades,
-        {"maker.event.id", "taker.event.id"},
+        {"maker_event_id", "taker_event_id"},
         "set_order_types(trades)",
     )
     validate_non_empty(events, "set_order_types")
@@ -103,8 +103,8 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
         ~created["id"].isin(changed["id"]) & ~created["id"].isin(deleted["id"])
     ]["id"].reset_index(drop=True)
 
-    maker_ids = events[events["event.id"].isin(trades["maker.event.id"])]["id"].unique()
-    taker_ids = events[events["event.id"].isin(trades["taker.event.id"])]["id"].unique()
+    maker_ids = events[events["event_id"].isin(trades["maker_event_id"])]["id"].unique()
+    taker_ids = events[events["event_id"].isin(trades["taker_event_id"])]["id"].unique()
     maker_ids = maker_ids[~np.isin(maker_ids, taker_ids)]
     maker_ids = maker_ids[~np.isin(maker_ids, pacman_ids)]
 
@@ -117,7 +117,7 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
     ml_ids = taker_ids[
         np.isin(
             taker_ids,
-            events[events["event.id"].isin(trades["maker.event.id"])]["id"].unique(),
+            events[events["event_id"].isin(trades["maker_event_id"])]["id"].unique(),
         )
     ]
     ml_ids = ml_ids[~np.isin(ml_ids, pacman_ids)]
@@ -127,7 +127,7 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
     mo_ids = taker_ids[
         ~np.isin(
             taker_ids,
-            events[events["event.id"].isin(trades["maker.event.id"])]["id"].unique(),
+            events[events["event_id"].isin(trades["maker_event_id"])]["id"].unique(),
         )
     ]
     mo_ids = mo_ids[~np.isin(mo_ids, pacman_ids)]
