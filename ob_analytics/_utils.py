@@ -117,25 +117,6 @@ def norml(
     return (v - minv) / (maxv - minv)
 
 
-def to_pandas(v: np.ndarray) -> pd.DataFrame:
-    """
-    Convert a NumPy array to a pandas DataFrame.
-
-    Parameters
-    ----------
-    v : numpy.ndarray
-        A 2D NumPy array, where the first column is assumed to be timestamps.
-
-    Returns
-    -------
-    pandas.DataFrame
-        A pandas DataFrame representing the time series data.
-    """
-    df = pd.DataFrame(v[:, 1:], columns=[f"col{i}" for i in range(1, v.shape[1])])
-    df["timestamp"] = pd.to_datetime(v[:, 0])
-    df.set_index("timestamp", inplace=True)
-    return df
-
 
 def interval_sum_breaks(v: np.ndarray, breaks: np.ndarray) -> np.ndarray:
     """

@@ -31,7 +31,7 @@ class NeedlemanWunschMatcher:
         self._config = config or PipelineConfig()
 
     def match(self, events: pd.DataFrame) -> pd.DataFrame:
-        """Add a ``matching.event`` column pairing bid/ask fills.
+        """Add a ``matching_event`` column pairing bid/ask fills.
 
         For each unique fill volume, bid and ask fills within
         ``match_cutoff_ms`` are paired.  When a simple closest-match is
