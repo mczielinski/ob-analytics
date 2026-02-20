@@ -20,13 +20,19 @@ All processing stages are pluggable via :mod:`~ob_analytics.protocols`.
 """
 
 from loguru import logger
-
-logger.disable("ob_analytics")
-
 from ob_analytics.config import PipelineConfig
 from ob_analytics.data import get_zombie_ids, load_data, process_data, save_data
-from ob_analytics.depth import depth_metrics, filter_depth, get_spread, price_level_volume
-from ob_analytics.event_processing import BitstampLoader, load_event_data, order_aggressiveness
+from ob_analytics.depth import (
+    depth_metrics,
+    filter_depth,
+    get_spread,
+    price_level_volume,
+)
+from ob_analytics.event_processing import (
+    BitstampLoader,
+    load_event_data,
+    order_aggressiveness,
+)
 from ob_analytics.exceptions import (
     ConfigurationError,
     InsufficientDataError,
@@ -55,6 +61,8 @@ from ob_analytics.visualisation import (
     save_figure,
     set_plot_theme,
 )
+
+logger.disable("ob_analytics")
 
 __all__ = [
     # Pipeline class

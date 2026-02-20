@@ -4,7 +4,6 @@ The R package has 3 tests for eventMatch; these are direct translations
 using the same timestamps, directions, fill volumes, and expected outputs.
 """
 
-from __future__ import annotations
 
 import numpy as np
 import pandas as pd

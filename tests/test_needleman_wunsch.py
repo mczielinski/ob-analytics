@@ -1,10 +1,8 @@
 """Tests for ob_analytics._needleman_wunsch."""
 
-from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from ob_analytics._needleman_wunsch import align_sequences, create_similarity_matrix
 

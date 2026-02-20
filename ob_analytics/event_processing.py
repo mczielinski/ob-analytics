@@ -4,7 +4,6 @@ Contains :class:`BitstampLoader` (the default :class:`EventLoader`
 implementation) and the :func:`order_aggressiveness` calculation.
 """
 
-from __future__ import annotations
 
 from pathlib import Path
 

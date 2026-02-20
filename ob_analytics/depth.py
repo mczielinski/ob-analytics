@@ -5,7 +5,6 @@ metrics, along with :func:`price_level_volume`, :func:`filter_depth`,
 :func:`depth_metrics` (backward-compatible wrapper), and :func:`get_spread`.
 """
 
-from __future__ import annotations
 
 from functools import lru_cache
 

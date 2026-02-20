@@ -10,7 +10,6 @@ These models serve as **data contracts** at package boundaries:
 The pipeline continues to use DataFrames internally for performance.
 """
 
-from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal

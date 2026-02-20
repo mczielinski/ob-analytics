@@ -1,6 +1,5 @@
 """Tests for ob_analytics.visualisation – Phase 5 visualization improvements."""
 
-from __future__ import annotations
 
 import matplotlib
 matplotlib.use("Agg")
@@ -19,7 +18,6 @@ from ob_analytics.visualisation import (
     plot_current_depth,
     plot_event_map,
     plot_events_histogram,
-    plot_price_levels,
     plot_time_series,
     plot_trades,
     plot_volume_map,

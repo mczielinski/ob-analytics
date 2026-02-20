@@ -4,7 +4,6 @@ Contains :class:`DefaultTradeInferrer` (the default
 :class:`TradeInferrer` implementation) and :func:`trade_impacts`.
 """
 
-from __future__ import annotations
 
 import numpy as np
 import pandas as pd

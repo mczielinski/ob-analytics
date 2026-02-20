@@ -4,7 +4,6 @@ Array helpers, DataFrame validation, and other shared internals.  Nothing
 in this module is part of the public API.
 """
 
-from __future__ import annotations
 
 from typing import Iterable
 

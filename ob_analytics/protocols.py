@@ -15,7 +15,6 @@ Users can substitute their own by passing any object that satisfies the
 protocol to :class:`Pipeline`.
 """
 
-from __future__ import annotations
 
 from pathlib import Path
 from typing import Protocol, runtime_checkable

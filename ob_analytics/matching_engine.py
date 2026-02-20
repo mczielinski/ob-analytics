@@ -5,7 +5,6 @@ Contains :class:`NeedlemanWunschMatcher` (the default
 ask fills to identify trades.
 """
 
-from __future__ import annotations
 
 import numpy as np
 import pandas as pd

@@ -24,7 +24,6 @@ Usage with a custom loader (any object satisfying EventLoader)::
     Pipeline(loader=my_custom_loader).run("data/feed.csv")
 """
 
-from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path

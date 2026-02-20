@@ -1,6 +1,5 @@
 """Tests for ob_analytics.data (save/load, zombie detection)."""
 
-from __future__ import annotations
 
 from pathlib import Path
 

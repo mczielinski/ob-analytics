@@ -4,7 +4,6 @@ Centralises the numeric thresholds and parameters that were previously
 scattered as literals across multiple modules.
 """
 
-from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
