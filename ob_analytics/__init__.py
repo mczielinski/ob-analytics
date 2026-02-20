@@ -19,9 +19,9 @@ The package exposes two layers:
 All processing stages are pluggable via :mod:`~ob_analytics.protocols`.
 """
 
-import logging
+from loguru import logger
 
-logging.getLogger(__name__).addHandler(logging.NullHandler())
+logger.disable("ob_analytics")
 
 from ob_analytics.config import PipelineConfig
 from ob_analytics.data import get_zombie_ids, load_data, process_data, save_data

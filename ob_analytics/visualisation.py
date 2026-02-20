@@ -8,7 +8,6 @@ Plot types: depth heatmaps, event maps, volume maps, order book snapshots,
 trade price charts, volume percentiles, and event histograms.
 """
 
-import logging
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -25,10 +24,10 @@ from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.figure import Figure
 from matplotlib.patches import Patch
 
+from loguru import logger
+
 from ob_analytics._utils import reverse_matrix
 from ob_analytics.depth import filter_depth
-
-logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------

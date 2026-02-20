@@ -6,16 +6,14 @@ Contains :class:`DefaultTradeInferrer` (the default
 
 from __future__ import annotations
 
-import logging
-
 import numpy as np
 import pandas as pd
+
+from loguru import logger
 
 from ob_analytics._utils import validate_columns, validate_non_empty, vwap
 from ob_analytics.config import PipelineConfig
 from ob_analytics.exceptions import MatchingError
-
-logger = logging.getLogger(__name__)
 
 
 class DefaultTradeInferrer:
@@ -143,7 +141,7 @@ class DefaultTradeInferrer:
             jumps = jumps[1:]
 
         logger.warning(
-            "%s: %d jumps > $%.0f (swapping makers with takers)",
+            "{}: {} jumps > ${:.0f} (swapping makers with takers)",
             combined["timestamp"].iloc[0].strftime("%Y-%m-%d"),
             len(jumps),
             threshold,

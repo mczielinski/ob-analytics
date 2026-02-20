@@ -5,14 +5,12 @@ Classifies each order as one of: *market*, *resting-limit*,
 interacts with the book over its lifetime.
 """
 
-import logging
-
 import numpy as np
 import pandas as pd
 
-from ob_analytics._utils import validate_columns, validate_non_empty
+from loguru import logger
 
-logger = logging.getLogger(__name__)
+from ob_analytics._utils import validate_columns, validate_non_empty
 
 
 def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
@@ -135,6 +133,6 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
 
     unidentified = (events["type"] == "unknown").sum()
     if unidentified > 0:
-        logger.warning("Could not identify %d orders", unidentified)
+        logger.warning("Could not identify {} orders", unidentified)
 
     return events

@@ -26,7 +26,6 @@ Usage with a custom loader (any object satisfying EventLoader)::
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,10 +37,10 @@ from ob_analytics.depth import depth_metrics, price_level_volume
 from ob_analytics.event_processing import BitstampLoader, order_aggressiveness
 from ob_analytics.matching_engine import NeedlemanWunschMatcher
 from ob_analytics.order_types import set_order_types
+from loguru import logger
+
 from ob_analytics.protocols import EventLoader, MatchingEngine, TradeInferrer
 from ob_analytics.trades import DefaultTradeInferrer
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -127,10 +126,10 @@ class Pipeline:
         7. Compute depth metrics
         8. Compute order aggressiveness
         """
-        logger.info("Pipeline: loading events from %s", source)
+        logger.info("Pipeline: loading events from {}", source)
         events = self.loader.load(source)
 
-        logger.info("Pipeline: matching %d events", len(events))
+        logger.info("Pipeline: matching {} events", len(events))
         events = self.matcher.match(events)
 
         logger.info("Pipeline: inferring trades")
@@ -142,7 +141,7 @@ class Pipeline:
         logger.info("Pipeline: detecting zombie orders")
         zombie_ids = get_zombie_ids(events, trades)
         if zombie_ids:
-            logger.info("Pipeline: removing %d zombie orders", len(zombie_ids))
+            logger.info("Pipeline: removing {} zombie orders", len(zombie_ids))
         events = events[~events["id"].isin(zombie_ids)]
 
         logger.info("Pipeline: computing price-level volume")

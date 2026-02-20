@@ -6,17 +6,16 @@ implementation) and the :func:`order_aggressiveness` calculation.
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+from loguru import logger
+
 from ob_analytics._utils import validate_columns, validate_non_empty
 from ob_analytics.config import PipelineConfig
 from ob_analytics.exceptions import InvalidDataError
-
-logger = logging.getLogger(__name__)
 
 
 class BitstampLoader:
@@ -120,7 +119,7 @@ class BitstampLoader:
                 events["event_id"].isin(duplicate_event_ids), "id"
             ]
             logger.warning(
-                "Removed %d duplicate order cancellations: %s",
+                "Removed {} duplicate order cancellations: {}",
                 rem_dup,
                 " ".join(removed_ids.astype(str)),
             )

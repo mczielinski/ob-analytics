@@ -1,13 +1,12 @@
 """Data processing utilities: loading, saving, and processing order book data."""
 
-import logging
 from pathlib import Path
 
 import pandas as pd
 
-from ob_analytics._utils import validate_columns, validate_non_empty
+from loguru import logger
 
-logger = logging.getLogger(__name__)
+from ob_analytics._utils import validate_columns, validate_non_empty
 from ob_analytics.depth import depth_metrics, price_level_volume
 from ob_analytics.event_processing import load_event_data, order_aggressiveness
 from ob_analytics.matching_engine import event_match
@@ -149,7 +148,7 @@ def load_data(path: str | Path) -> dict[str, pd.DataFrame]:
         return result
     if p.suffix in (".pkl", ".pickle"):
         logger.warning(
-            "Loading from pickle (%s). Pickle is insecure for untrusted "
+            "Loading from pickle ({}). Pickle is insecure for untrusted "
             "data; prefer Parquet via save_data().",
             p,
         )
