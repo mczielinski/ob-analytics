@@ -121,7 +121,7 @@ class NeedlemanWunschMatcher:
                 res.extend(matches)
             else:
                 similarity_matrix = create_similarity_matrix(
-                    bids["timestamp"], asks["timestamp"], cut_off_td
+                    bids["timestamp"], asks["timestamp"], self._config.match_cutoff_ms
                 )
                 aligned_indices = align_sequences(similarity_matrix)
                 matched_indices = aligned_indices[

@@ -64,7 +64,7 @@ class BitstampLoader:
 
         events = events[events["volume"] >= 0]
         events = events.reset_index().rename(columns={"index": "original_number"})
-        events.original_number = events.original_number + 1
+        events["original_number"] = events["original_number"] + 1
         events["volume"] = events["volume"].round(volume_digits)
         events["price"] = events["price"].round(price_digits)
 
@@ -93,8 +93,8 @@ class BitstampLoader:
         fill_deltas = fill_deltas.where(price_deltas == 0, 0)
         events["fill"] = fill_deltas.abs().round(volume_digits)
 
-        ts_sorted = events.groupby("id")["timestamp"].transform(
-            lambda x: np.sort(x.values, kind="stable")
+        ts_sorted: pd.Series = events.groupby("id")["timestamp"].transform(
+            lambda x: np.sort(np.asarray(x.values), kind="stable")
         )
         events["timestamp"] = ts_sorted
 

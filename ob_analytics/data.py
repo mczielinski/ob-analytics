@@ -186,6 +186,6 @@ def save_data(
             "Saving as pickle. Consider using fmt='parquet' for "
             "portability and security."
         )
-        pd.to_pickle(lob_data, p)
+        pd.to_pickle(lob_data, p)  # type: ignore
     else:
         raise ValueError(f"Unsupported format: {fmt!r}. Use 'parquet' or 'pickle'.")

@@ -65,7 +65,9 @@ class DefaultTradeInferrer:
             (events["direction"] == "ask") & ~pd.isna(events["matching_event"])
         ].sort_values(by="matching_event", kind="stable")
 
-        if not all(matching_bids["event_id"].values == matching_asks["matching_event"].values):
+        if not np.asarray(
+            matching_bids["event_id"].values == matching_asks["matching_event"].values
+        ).all():
             raise MatchingError(
                 "Bid event IDs do not align with ask matching events. "
                 "This indicates a matching error in the upstream eventMatch step."
@@ -223,7 +225,7 @@ def trade_impacts(trades: pd.DataFrame) -> pd.DataFrame:
             "id": impact["taker"].iloc[-1],
             "min_price": impact["price"].min(),
             "max_price": impact["price"].max(),
-            "vwap": vwap(impact["price"], impact["volume"]),
+            "vwap": vwap(np.asarray(impact["price"].values), np.asarray(impact["volume"].values)),
             "hits": len(impact),
             "vol": impact["volume"].sum(),
             "start_time": impact["timestamp"].min(),
@@ -231,5 +233,5 @@ def trade_impacts(trades: pd.DataFrame) -> pd.DataFrame:
             "dir": impact["direction"].iloc[-1],
         }
 
-    impacts = trades.groupby("taker").apply(impact_summary).reset_index(drop=True)
+    impacts = trades.groupby("taker").apply(impact_summary).reset_index(drop=True)  # type: ignore
     return pd.DataFrame(impacts)

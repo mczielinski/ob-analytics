@@ -135,7 +135,7 @@ def interval_sum_breaks(v: np.ndarray, breaks: np.ndarray) -> np.ndarray:
     """
     cs = np.cumsum(v)
     intervals = cs[breaks]
-    return np.concatenate(([intervals[0]], np.diff(intervals)))
+    return np.concatenate((np.array([intervals[0]]), np.diff(intervals)))
 
 
 def vwap(price: np.ndarray, volume: np.ndarray) -> float:

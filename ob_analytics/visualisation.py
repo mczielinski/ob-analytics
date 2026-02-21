@@ -87,7 +87,7 @@ def get_plot_theme() -> PlotTheme:
 def _apply_theme() -> None:
     """Apply the current theme to matplotlib / seaborn."""
     t = _current_theme
-    sns.set_theme(style=t.style, context=t.context, font_scale=t.font_scale, rc=dict(t.rc))
+    sns.set_theme(style=t.style, context=t.context, font_scale=t.font_scale, rc=dict(t.rc))  # type: ignore
 
 
 def _create_axes(
@@ -123,7 +123,7 @@ def save_figure(
         Additional keyword arguments forwarded to
         :meth:`~matplotlib.figure.Figure.savefig`.
     """
-    fig.savefig(path, dpi=dpi, bbox_inches="tight", **kwargs)
+    fig.savefig(path, dpi=dpi, bbox_inches="tight", **kwargs)  # type: ignore
 
 
 # ---------------------------------------------------------------------------
@@ -350,7 +350,7 @@ def plot_price_levels(
                 and timestamps[1] == end_time
             )
 
-        grouped = depth_filtered.groupby("price")["timestamp"].apply(list)
+        grouped = depth_filtered.groupby("price")["timestamp"].apply(list)  # type: ignore
         unchanged_prices = grouped[grouped.apply(is_unchanged)].index
         depth_filtered = depth_filtered[~depth_filtered["price"].isin(unchanged_prices)]
 
@@ -417,7 +417,7 @@ def plot_price_levels_faster(
     if log_10:
         if vmin <= 0:
             vmin = depth["volume"][depth["volume"] > 0].min()
-        norm = mcolors.LogNorm(vmin=vmin, vmax=vmax)
+        norm: mcolors.Normalize = mcolors.LogNorm(vmin=vmin, vmax=vmax)  # type: ignore
     else:
         norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
 
@@ -435,7 +435,7 @@ def plot_price_levels_faster(
             continue
         points = np.array([x, y]).T.reshape(-1, 1, 2)
         segments = np.concatenate([points[:-1], points[1:]], axis=1)
-        seg_colors = cmap(norm(v[:-1]))
+        seg_colors = cmap(norm(np.asarray(v[:-1])))
         seg_colors[:, -1] = a[:-1]
         lc = collections.LineCollection(segments, colors=seg_colors, linewidths=2)
         ax.add_collection(lc)
@@ -519,7 +519,7 @@ def plot_price_levels_faster(
 
     ymin = depth["price"].min()
     ymax = depth["price"].max()
-    ax.set_ylim([ymin, ymax])
+    ax.set_ylim((ymin, ymax))
 
     if price_by is not None:
         y_ticks = np.arange(round(ymin), round(ymax) + price_by, price_by)
@@ -785,6 +785,8 @@ def plot_current_depth(
     """
     bids = reverse_matrix(order_book["bids"])
     asks = reverse_matrix(order_book["asks"])
+    assert isinstance(bids, pd.DataFrame)
+    assert isinstance(asks, pd.DataFrame)
 
     x = np.concatenate(
         [
@@ -921,9 +923,9 @@ def plot_volume_percentiles(
     ob_percentiles.set_index("timestamp", inplace=True)
 
     if frequency == "mins":
-        intervals = ob_percentiles.index.floor("T")
+        intervals = pd.DatetimeIndex(ob_percentiles.index).floor("T")
     else:
-        intervals = ob_percentiles.index.floor("S")
+        intervals = pd.DatetimeIndex(ob_percentiles.index).floor("S")
 
     aggregated = ob_percentiles.groupby(intervals).mean()
 
@@ -934,7 +936,7 @@ def plot_volume_percentiles(
 
     bid_names = [f"bid_vol{int(i):03d}bps" for i in range(25, 501, 25)]
     ask_names = [f"ask_vol{int(i):03d}bps" for i in range(25, 501, 25)]
-    ob_percentiles.columns = ["timestamp"] + bid_names + ask_names
+    ob_percentiles.columns = pd.Index(["timestamp"] + bid_names + ask_names)
 
     max_ask = ob_percentiles[ask_names].sum(axis=1).max()
     max_bid = ob_percentiles[bid_names].sum(axis=1).max()
@@ -1060,8 +1062,7 @@ def plot_volume_percentiles(
         ncol=1,
         borderaxespad=0.0,
     )
-
-    fig.tight_layout(rect=[0, 0, 0.85, 1])
+    fig.tight_layout(rect=(0.0, 0.0, 0.85, 1.0))
     return fig
 
 

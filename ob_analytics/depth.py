@@ -105,7 +105,7 @@ class DepthMetricsEngine:
         volumes = ordered["volume"].values
         sides = np.where(ordered["direction"].values == "bid", 0, 1)
 
-        self._initialise_best(prices_int, sides)
+        self._initialise_best(np.asarray(prices_int), np.asarray(sides))
 
         n = len(ordered)
         result = np.zeros((n, self._row_len), dtype=np.float64)
@@ -337,7 +337,7 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
         ]
         filled_volume["fill"] = -filled_volume["fill"]
         filled_volume = filled_volume[filled_volume["id"].isin(added_volume["id"])]
-        filled_volume.columns = cols
+        filled_volume.columns = pd.Index(cols)
 
         volume_deltas = pd.concat([added_volume, cancelled_volume, filled_volume])
         volume_deltas = volume_deltas.sort_values(by=["price", "timestamp"], kind="stable")
