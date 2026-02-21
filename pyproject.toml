@@ -28,6 +28,8 @@ dev = [
     "mkdocs>=1.6.1",
     "mkdocs-material>=9.7.2",
     "mkdocstrings[python]>=1.0.3",
+    "pandas-stubs>=3.0.0.260204",
+    "types-seaborn>=0.13.2.20251221",
 ]
 
 [tool.hatch.build.targets.sdist]
