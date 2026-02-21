@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from loguru import logger
@@ -45,33 +46,50 @@ def get_zombie_ids(events: pd.DataFrame, trades: pd.DataFrame) -> list[int]:
     cancelled = events[events["action"] == "deleted"]["id"]
     zombies = events[~events["id"].isin(cancelled)]
 
+    # We only care about the last state of each zombie
+    zombies_last = zombies.drop_duplicates(subset=["id"], keep="last")
+
     # Separate bid and ask zombies
-    bid_zombies = zombies[zombies["direction"] == "bid"]
-    ask_zombies = zombies[zombies["direction"] == "ask"]
+    bid_zombies = zombies_last[zombies_last["direction"] == "bid"].copy()
+    ask_zombies = zombies_last[zombies_last["direction"] == "ask"].copy()
 
-    # Identify bid zombies
-    bid_zombie_ids = bid_zombies["id"].unique()
+    trades = trades.sort_values("timestamp")
+
+    sell_trades = trades[trades["direction"] == "sell"].copy()
+    if not sell_trades.empty:
+        sell_trades["min_price_after"] = np.minimum.accumulate(
+            np.asarray(sell_trades["price"].values[::-1])
+        )[::-1]
+
+    buy_trades = trades[trades["direction"] == "buy"].copy()
+    if not buy_trades.empty:
+        buy_trades["max_price_after"] = np.maximum.accumulate(
+            np.asarray(buy_trades["price"].values[::-1])
+        )[::-1]
+
     valid_bid_zombies = []
-    for bid_id in bid_zombie_ids:
-        zombie = bid_zombies[bid_zombies["id"] == bid_id].iloc[-1]
-        if any(
-            (trades["direction"] == "sell")
-            & (trades["timestamp"] >= zombie["timestamp"])
-            & (trades["price"] < zombie["price"])
-        ):
-            valid_bid_zombies.append(bid_id)
+    if not bid_zombies.empty and not sell_trades.empty:
+        bid_zombies = bid_zombies.sort_values("timestamp")
+        merged_bids = pd.merge_asof(
+            bid_zombies,
+            sell_trades[["timestamp", "min_price_after"]],
+            on="timestamp",
+            direction="forward",
+        )
+        valid_bids = merged_bids[merged_bids["price"] > merged_bids["min_price_after"]]
+        valid_bid_zombies = valid_bids["id"].tolist()
 
-    # Identify ask zombies
-    ask_zombie_ids = ask_zombies["id"].unique()
     valid_ask_zombies = []
-    for ask_id in ask_zombie_ids:
-        zombie = ask_zombies[ask_zombies["id"] == ask_id].iloc[-1]
-        if any(
-            (trades["direction"] == "buy")
-            & (trades["timestamp"] >= zombie["timestamp"])
-            & (trades["price"] > zombie["price"])
-        ):
-            valid_ask_zombies.append(ask_id)
+    if not ask_zombies.empty and not buy_trades.empty:
+        ask_zombies = ask_zombies.sort_values("timestamp")
+        merged_asks = pd.merge_asof(
+            ask_zombies,
+            buy_trades[["timestamp", "max_price_after"]],
+            on="timestamp",
+            direction="forward",
+        )
+        valid_asks = merged_asks[merged_asks["price"] < merged_asks["max_price_after"]]
+        valid_ask_zombies = valid_asks["id"].tolist()
 
     # Combine bid and ask zombies
     return valid_bid_zombies + valid_ask_zombies
