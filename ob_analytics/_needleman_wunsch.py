@@ -27,32 +27,13 @@ def create_similarity_matrix(a: pd.Series, b: pd.Series, cut_off_ms: int) -> np.
     numpy.ndarray
         A NumPy array representing the similarity matrix.
     """
-
-    def similarity_score(t1: pd.Timestamp, t2: pd.Timestamp) -> float:
-        """
-        Calculate the similarity score between two timestamps.
-
-        Parameters
-        ----------
-        t1 : pandas.Timestamp
-            The first timestamp.
-        t2 : pandas.Timestamp
-            The second timestamp.
-
-        Returns
-        -------
-        float
-            The similarity score based on the time difference.
-        """
-        diff_ms = abs((t1 - t2).total_seconds() * 1000)
-        return cut_off_ms / diff_ms if diff_ms != 0 else cut_off_ms
-
-    similarity_matrix = np.zeros((len(a), len(b)), dtype="float64")
-    for i, t1 in enumerate(a):
-        for j, t2 in enumerate(b):
-            similarity_matrix[i, j] = similarity_score(t1, t2)
-
-    return similarity_matrix
+    a_ns = a.values.astype("datetime64[ns]").astype(np.float64)
+    b_ns = b.values.astype("datetime64[ns]").astype(np.float64)
+    diff_ms = np.abs(a_ns.reshape(-1, 1) - b_ns) / 1e6
+    # Avoid divide-by-zero warning: replace zeros before dividing,
+    # then overwrite those positions with cut_off_ms via np.where.
+    safe_diff = np.where(diff_ms != 0, diff_ms, 1.0)
+    return np.where(diff_ms != 0, cut_off_ms / safe_diff, float(cut_off_ms))
 
 
 def align_sequences(s_matrix: np.ndarray, gap_penalty: int = -1) -> np.ndarray:
