@@ -342,17 +342,17 @@ def plot_price_levels(
 
     if not show_all_depth:
 
-        def is_unchanged(timestamps: list[pd.Timestamp]) -> bool:
-            timestamps = sorted(timestamps)
-            return (
-                len(timestamps) == 2
-                and timestamps[0] == start_time
-                and timestamps[1] == end_time
-            )
-
-        grouped = depth_filtered.groupby("price")["timestamp"].apply(list)  # type: ignore
-        unchanged_prices = grouped[grouped.apply(is_unchanged)].index
-        depth_filtered = depth_filtered[~depth_filtered["price"].isin(unchanged_prices)]
+        counts = depth_filtered.groupby("price", as_index=False)["timestamp"].agg(
+            count="size",
+            first_ts="min",
+            last_ts="max"
+        )
+        unchanged = counts[
+            (counts["count"] == 2) &
+            (counts["first_ts"] == start_time) &
+            (counts["last_ts"] == end_time)
+        ]
+        depth_filtered = depth_filtered[~depth_filtered["price"].isin(unchanged["price"])]
 
     depth_filtered.loc[depth_filtered["volume"] == 0, "volume"] = np.nan
 

@@ -42,25 +42,8 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
     )
     validate_non_empty(events, "set_order_types")
 
-    def is_pacman(events: pd.DataFrame) -> pd.Series:
-        """
-        Identify 'pacman' orders where the price changes over time.
-
-        Parameters
-        ----------
-        events : pandas.DataFrame
-            DataFrame containing order events.
-
-        Returns
-        -------
-        pandas.Series
-            A boolean Series indicating whether each order ID is a 'pacman' order.
-        """
-        return events.groupby("id")["price"].transform(lambda x: x.diff().any())
-
-    events["type"] = "unknown"
     events["type"] = pd.Categorical(
-        events["type"],
+        np.repeat("unknown", len(events)),
         categories=[
             "unknown",
             "flashed-limit",
@@ -73,7 +56,8 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
     )
 
     # Pacman orders
-    pacman_ids = events[is_pacman(events)]["id"]
+    price_ranges = events.groupby("id")["price"].agg(["min", "max"])
+    pacman_ids = set(price_ranges[price_ranges["min"] != price_ranges["max"]].index)
     events.loc[events["id"].isin(pacman_ids), "type"] = "pacman"
 
     # Flashed and resting limit orders
@@ -84,6 +68,7 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
     created_deleted_ids = created[
         created["id"].isin(deleted["id"]) & ~created["id"].isin(changed["id"])
     ]["id"].reset_index(drop=True)
+
     # Get volumes from the 'deleted' DataFrame with matched IDs and reset the index
     deleted_volumes = deleted.loc[
         deleted["id"].isin(created_deleted_ids), "volume"
@@ -96,39 +81,37 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
 
     # Compare volumes
     volume_matched = deleted_volumes == created_volumes
-    flashed_ids = created_deleted_ids[volume_matched]
-    forever_ids = created[
-        ~created["id"].isin(changed["id"]) & ~created["id"].isin(deleted["id"])
-    ]["id"].reset_index(drop=True)
+    flashed_ids = set(created_deleted_ids[volume_matched])
+    forever_ids = set(
+        created[
+            ~created["id"].isin(changed["id"]) & ~created["id"].isin(deleted["id"])
+        ]["id"]
+    )
 
-    maker_ids = events[events["event_id"].isin(trades["maker_event_id"])]["id"].unique()
-    taker_ids = events[events["event_id"].isin(trades["taker_event_id"])]["id"].unique()
-    maker_ids = maker_ids[~np.isin(maker_ids, taker_ids)]
-    maker_ids = maker_ids[~np.isin(maker_ids, pacman_ids)]
+    maker_event_ids_set = set(trades["maker_event_id"].dropna())
+    taker_event_ids_set = set(trades["taker_event_id"].dropna())
+
+    maker_ids = set(events[events["event_id"].isin(maker_event_ids_set)]["id"])
+    taker_ids = set(events[events["event_id"].isin(taker_event_ids_set)]["id"])
+
+    # Pure maker: was a maker, never a taker, never a pacman
+    pure_maker_ids = maker_ids - taker_ids - pacman_ids
+
+    # Market limit: was both a maker and a taker, never a pacman
+    ml_ids = (taker_ids & maker_ids) - pacman_ids
+
+    # Pure market: was a taker, never a maker, never a pacman
+    mo_ids = taker_ids - maker_ids - pacman_ids
 
     events.loc[events["id"].isin(flashed_ids), "type"] = "flashed-limit"
     events.loc[
-        events["id"].isin(forever_ids) | events["id"].isin(maker_ids), "type"
+        events["id"].isin(forever_ids | pure_maker_ids), "type"
     ] = "resting-limit"
 
     # Market limit orders
-    ml_ids = taker_ids[
-        np.isin(
-            taker_ids,
-            events[events["event_id"].isin(trades["maker_event_id"])]["id"].unique(),
-        )
-    ]
-    ml_ids = ml_ids[~np.isin(ml_ids, pacman_ids)]
     events.loc[events["id"].isin(ml_ids), "type"] = "market-limit"
 
     # Market orders
-    mo_ids = taker_ids[
-        ~np.isin(
-            taker_ids,
-            events[events["event_id"].isin(trades["maker_event_id"])]["id"].unique(),
-        )
-    ]
-    mo_ids = mo_ids[~np.isin(mo_ids, pacman_ids)]
     events.loc[events["id"].isin(mo_ids), "type"] = "market"
 
     unidentified = (events["type"] == "unknown").sum()

@@ -383,7 +383,7 @@ def filter_depth(
     pre = pre[pre["volume"] > 0]
 
     if not pre.empty:
-        pre["timestamp"] = pre["timestamp"].apply(lambda r: max(from_timestamp, r))
+        pre["timestamp"] = pre["timestamp"].clip(lower=from_timestamp)  # type: ignore
 
     mid = d[(d["timestamp"] > from_timestamp) & (d["timestamp"] < to_timestamp)]
     range_combined = pd.concat([pre, mid])

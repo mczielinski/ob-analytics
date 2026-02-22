@@ -220,18 +220,25 @@ def trade_impacts(trades: pd.DataFrame) -> pd.DataFrame:
     )
     validate_non_empty(trades, "trade_impacts")
 
-    def impact_summary(impact: pd.DataFrame) -> dict:
-        return {
-            "id": impact["taker"].iloc[-1],
-            "min_price": impact["price"].min(),
-            "max_price": impact["price"].max(),
-            "vwap": vwap(np.asarray(impact["price"].values), np.asarray(impact["volume"].values)),
-            "hits": len(impact),
-            "vol": impact["volume"].sum(),
-            "start_time": impact["timestamp"].min(),
-            "end_time": impact["timestamp"].max(),
-            "dir": impact["direction"].iloc[-1],
-        }
-
-    impacts = trades.groupby("taker").apply(impact_summary).reset_index(drop=True)  # type: ignore
-    return pd.DataFrame(impacts)
+    trades_pv = trades.assign(_pv=trades["price"] * trades["volume"])
+    impacts = (
+        trades_pv.groupby("taker")
+        .agg(
+            id=("taker", "last"),
+            min_price=("price", "min"),
+            max_price=("price", "max"),
+            hits=("taker", "size"),
+            vol=("volume", "sum"),
+            start_time=("timestamp", "min"),
+            end_time=("timestamp", "max"),
+            dir=("direction", "last"),
+            pv_sum=("_pv", "sum"),
+        )
+        .reset_index(drop=True)
+    )
+    impacts["vwap"] = impacts["pv_sum"] / impacts["vol"]
+    cols = [
+        "id", "min_price", "max_price", "vwap", "hits", 
+        "vol", "start_time", "end_time", "dir"
+    ]
+    return impacts[cols]
