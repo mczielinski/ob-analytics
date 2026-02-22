@@ -184,6 +184,23 @@ class TestDepthMetricsEngine:
         with pytest.raises(InsufficientDataError):
             DepthMetricsEngine().compute(df)
 
+    def test_fractional_volume_preserved(self):
+        """Sub-integer volumes (e.g. 0.5 BTC) must not be truncated to 0."""
+        ts = pd.Timestamp("2025-01-01")
+        depth = pd.DataFrame(
+            {
+                "timestamp": [ts, ts + pd.Timedelta(seconds=1)],
+                "price": [100.00, 200.00],
+                "volume": [0.5, 0.75],
+                "direction": pd.Categorical(
+                    ["bid", "ask"], categories=["bid", "ask"], ordered=True
+                ),
+            }
+        )
+        result = DepthMetricsEngine().compute(depth)
+        assert result["best_bid_vol"].iloc[-1] == 0.5
+        assert result["best_ask_vol"].iloc[-1] == 0.75
+
     def test_dynamic_price_range(self):
         """Prices >$9999.99 should not overflow (unlike the old np.zeros(1M) approach)."""
         ts = pd.Timestamp("2025-01-01")

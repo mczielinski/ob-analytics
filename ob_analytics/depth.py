@@ -32,7 +32,7 @@ class DepthMetricsEngine:
 
     Fixes over the legacy R implementation:
 
-    * **Dynamic price support** -- uses ``dict[int, int]`` instead of
+    * **Dynamic price support** -- uses ``dict[int, float]`` instead of
       ``np.zeros(1_000_000)``, so any price range and precision works.
     * **Correct best-price initialisation** -- ``min()`` for asks and
       ``max()`` for bids (the R code had them inverted).
@@ -58,12 +58,12 @@ class DepthMetricsEngine:
     ) -> None:
         self._config = config or PipelineConfig()
 
-        self._ask_levels: dict[int, int] = {}
-        self._bid_levels: dict[int, int] = {}
+        self._ask_levels: dict[int, float] = {}
+        self._bid_levels: dict[int, float] = {}
         self._best_ask: int | None = None
-        self._best_ask_vol: int = 0
+        self._best_ask_vol: float = 0.0
         self._best_bid: int | None = None
-        self._best_bid_vol: int = 0
+        self._best_bid_vol: float = 0.0
 
         self._bps = self._config.depth_bps
         self._bins = self._config.depth_bins
@@ -151,19 +151,18 @@ class DepthMetricsEngine:
         if self._best_bid is not None and price <= self._best_bid:
             return
 
-        int_vol = int(volume)
-        if int_vol > 0:
-            self._ask_levels[price] = int_vol
+        if volume > 0:
+            self._ask_levels[price] = volume
         elif price in self._ask_levels:
             del self._ask_levels[price]
 
-        self._refresh_best_ask(price, int_vol)
+        self._refresh_best_ask(price, volume)
         self._write_ask_metrics(out)
 
-    def _refresh_best_ask(self, price: int, volume: int) -> None:
+    def _refresh_best_ask(self, price: int, volume: float) -> None:
         if not self._ask_levels:
             self._best_ask = None
-            self._best_ask_vol = 0
+            self._best_ask_vol = 0.0
             return
         if volume > 0:
             if self._best_ask is None or price < self._best_ask:
@@ -200,19 +199,18 @@ class DepthMetricsEngine:
         if self._best_ask is not None and price >= self._best_ask:
             return
 
-        int_vol = int(volume)
-        if int_vol > 0:
-            self._bid_levels[price] = int_vol
+        if volume > 0:
+            self._bid_levels[price] = volume
         elif price in self._bid_levels:
             del self._bid_levels[price]
 
-        self._refresh_best_bid(price, int_vol)
+        self._refresh_best_bid(price, volume)
         self._write_bid_metrics(out)
 
-    def _refresh_best_bid(self, price: int, volume: int) -> None:
+    def _refresh_best_bid(self, price: int, volume: float) -> None:
         if not self._bid_levels:
             self._best_bid = None
-            self._best_bid_vol = 0
+            self._best_bid_vol = 0.0
             return
         if volume > 0:
             if self._best_bid is None or price > self._best_bid:
