@@ -135,12 +135,49 @@ class TestDepthMetricsEngine:
         assert result["best_bid_price"].iloc[-1] > 0
         assert result["best_ask_price"].iloc[-1] > 0
 
-    def test_compat_mode_flag(self, tiny_depth):
-        engine_compat = DepthMetricsEngine(compat_mode=True)
-        engine_correct = DepthMetricsEngine(compat_mode=False)
-        r1 = engine_compat.compute(tiny_depth)
-        r2 = engine_correct.compute(tiny_depth)
-        assert r1.shape == r2.shape
+    def test_best_bid_vol_updated_on_new_best(self):
+        """best_bid_vol must reflect the new volume when a higher bid arrives."""
+        ts = pd.Timestamp("2025-01-01")
+        depth = pd.DataFrame(
+            {
+                "timestamp": [
+                    ts,
+                    ts + pd.Timedelta(seconds=1),
+                    ts + pd.Timedelta(seconds=2),
+                ],
+                "price": [100.00, 200.00, 101.00],
+                "volume": [5, 10, 7],
+                "direction": pd.Categorical(
+                    ["bid", "ask", "bid"],
+                    categories=["bid", "ask"],
+                    ordered=True,
+                ),
+            }
+        )
+        result = DepthMetricsEngine().compute(depth)
+        # After the second bid (101 > 100), best_bid_vol must be 7, not stale 5
+        assert result["best_bid_vol"].iloc[-1] == 7
+
+    def test_initialise_best_correct(self):
+        """Initial best ask = min(ask prices), best bid = max(bid prices)."""
+        ts = pd.Timestamp("2025-01-01")
+        depth = pd.DataFrame(
+            {
+                "timestamp": [ts] * 4,
+                "price": [100.00, 102.00, 200.00, 198.00],
+                "volume": [10, 20, 30, 40],
+                "direction": pd.Categorical(
+                    ["bid", "bid", "ask", "ask"],
+                    categories=["bid", "ask"],
+                    ordered=True,
+                ),
+            }
+        )
+        result = DepthMetricsEngine().compute(depth)
+        # best bid should be max(100, 102) = 102
+        assert result["best_bid_price"].iloc[-1] == 102.00
+        # best ask should be min(200, 198) = 198
+        assert result["best_ask_price"].iloc[-1] == 198.00
 
     def test_rejects_empty_dataframe(self):
         df = pd.DataFrame(columns=["timestamp", "price", "volume", "direction"])

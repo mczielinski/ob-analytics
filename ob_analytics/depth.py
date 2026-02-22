@@ -30,10 +30,12 @@ class DepthMetricsEngine:
     stateful, testable class.  Each call to :meth:`update` processes one
     depth event and returns a metrics row as a numpy array.
 
-    Fixes over the legacy implementation:
+    Fixes over the legacy R implementation:
 
     * **Dynamic price support** -- uses ``dict[int, int]`` instead of
       ``np.zeros(1_000_000)``, so any price range and precision works.
+    * **Correct best-price initialisation** -- ``min()`` for asks and
+      ``max()`` for bids (the R code had them inverted).
     * **Correct best-price tracking** -- ``min()``/``max()`` over active
       levels only (hundreds of entries) instead of scanning a 1M array.
     * **Numpy output** -- pre-allocates a numpy matrix and converts to
@@ -41,28 +43,20 @@ class DepthMetricsEngine:
       in the hot loop).
     * **Breaks caching** -- ``@lru_cache`` avoids recomputing bin
       boundaries every iteration.
-    * **Correct ``best_bid_vol``** by default -- when a new higher bid
-      arrives, ``best_bid_vol`` is set to the new volume.  Set
-      ``compat_mode=True`` to replicate the R bug where it is left stale.
+    * **Correct ``best_bid_vol``** -- when a new higher bid arrives,
+      ``best_bid_vol`` is set to the new volume.
 
     Parameters
     ----------
     config : PipelineConfig, optional
         Pipeline configuration.
-    compat_mode : bool
-        If *True*, replicate the R package's ``best.bid.vol`` bug for
-        parity testing.  Default *True* to avoid breaking existing
-        comparisons.
     """
 
     def __init__(
         self,
         config: PipelineConfig | None = None,
-        *,
-        compat_mode: bool = True,
     ) -> None:
         self._config = config or PipelineConfig()
-        self._compat_mode = compat_mode
 
         self._ask_levels: dict[int, int] = {}
         self._bid_levels: dict[int, int] = {}
@@ -223,8 +217,7 @@ class DepthMetricsEngine:
         if volume > 0:
             if self._best_bid is None or price > self._best_bid:
                 self._best_bid = price
-                if not self._compat_mode:
-                    self._best_bid_vol = volume
+                self._best_bid_vol = volume
             elif price == self._best_bid:
                 self._best_bid_vol = volume
         elif self._best_bid is not None and price == self._best_bid:
@@ -252,13 +245,13 @@ class DepthMetricsEngine:
     # ── Helpers ───────────────────────────────────────────────────────
 
     def _initialise_best(self, prices: np.ndarray, sides: np.ndarray) -> None:
-        """Set initial best bid/ask to match the legacy R behaviour."""
+        """Set initial best bid/ask from the first snapshot of depth data."""
         ask_prices = prices[sides == 1]
         bid_prices = prices[sides == 0]
         if len(ask_prices) > 0:
-            self._best_ask = int(ask_prices.max())
+            self._best_ask = int(ask_prices.min())
         if len(bid_prices) > 0:
-            self._best_bid = int(bid_prices.min())
+            self._best_bid = int(bid_prices.max())
 
     def _compute_breaks(self, range_len: int) -> np.ndarray:
         return _cached_breaks(range_len, self._bins)
@@ -423,7 +416,7 @@ def depth_metrics(depth: pd.DataFrame, bps: int = 25, bins: int = 20) -> pd.Data
         DataFrame containing depth metrics over time.
     """
     config = PipelineConfig(depth_bps=bps, depth_bins=bins)
-    return DepthMetricsEngine(config, compat_mode=True).compute(depth)
+    return DepthMetricsEngine(config).compute(depth)
 
 
 def get_spread(depth_summary: pd.DataFrame) -> pd.DataFrame:
