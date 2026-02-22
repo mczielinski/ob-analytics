@@ -68,9 +68,10 @@ class BitstampLoader:
         events["volume"] = events["volume"].round(volume_digits)
         events["price"] = events["price"].round(price_digits)
 
-        events["timestamp"] = pd.to_datetime(events["timestamp"] / 1000, unit="s")
+        ts_unit = self._config.timestamp_unit
+        events["timestamp"] = pd.to_datetime(events["timestamp"], unit=ts_unit)
         events["exchange_timestamp"] = pd.to_datetime(
-            events["exchange_timestamp"] / 1000, unit="s"
+            events["exchange_timestamp"], unit=ts_unit
         )
         events["action"] = pd.Categorical(
             events["action"], categories=["created", "changed", "deleted"], ordered=True

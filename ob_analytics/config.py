@@ -5,6 +5,8 @@ scattered as literals across multiple modules.
 """
 
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -34,6 +36,14 @@ class PipelineConfig(BaseModel):
         ge=0,
         le=18,
         description="Number of decimal places in volume.",
+    )
+    timestamp_unit: Literal["ms", "us", "ns"] = Field(
+        default="ms",
+        description=(
+            "Unit of raw integer timestamps in the source data.  "
+            "'ms' (milliseconds, default) matches Bitstamp CSV format; "
+            "'us' for microseconds; 'ns' for nanosecond-precision feeds."
+        ),
     )
 
     # ── Matching engine ───────────────────────────────────────────────────
