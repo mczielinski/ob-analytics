@@ -375,10 +375,10 @@ def filter_depth(
     pre = pre.sort_values(by=["price", "timestamp"], kind="stable")
 
     pre = pre.drop_duplicates(subset="price", keep="last")
-    pre = pre[pre["volume"] > 0]
+    pre = pre[pre["volume"] > 0].copy()
 
     if not pre.empty:
-        pre["timestamp"] = pre["timestamp"].clip(lower=from_timestamp)  # type: ignore
+        pre["timestamp"] = pre["timestamp"].clip(lower=from_timestamp)
 
     mid = d[(d["timestamp"] > from_timestamp) & (d["timestamp"] < to_timestamp)]
     range_combined = pd.concat([pre, mid])
