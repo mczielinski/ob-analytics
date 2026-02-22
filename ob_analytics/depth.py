@@ -148,7 +148,7 @@ class DepthMetricsEngine:
     # ── Internal: ask side ────────────────────────────────────────────
 
     def _update_ask(self, price: int, volume: float, out: np.ndarray) -> None:
-        if self._best_bid is not None and price <= self._best_bid:
+        if self._best_bid is not None and price < self._best_bid:
             return
 
         if volume > 0:
@@ -196,7 +196,7 @@ class DepthMetricsEngine:
     # ── Internal: bid side ────────────────────────────────────────────
 
     def _update_bid(self, price: int, volume: float, out: np.ndarray) -> None:
-        if self._best_ask is not None and price >= self._best_ask:
+        if self._best_ask is not None and price > self._best_ask:
             return
 
         if volume > 0:
