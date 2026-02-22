@@ -56,6 +56,17 @@ class TestPipelineConfig:
         with pytest.raises(ValidationError):
             PipelineConfig(depth_bins=0)
 
+    def test_timestamp_unit_default_ms(self):
+        assert PipelineConfig().timestamp_unit == "ms"
+
+    def test_timestamp_unit_accepts_valid(self):
+        assert PipelineConfig(timestamp_unit="us").timestamp_unit == "us"
+        assert PipelineConfig(timestamp_unit="ns").timestamp_unit == "ns"
+
+    def test_timestamp_unit_rejects_invalid(self):
+        with pytest.raises(ValidationError):
+            PipelineConfig(timestamp_unit="s")
+
 
 class TestExceptionHierarchy:
     def test_all_inherit_from_base(self):

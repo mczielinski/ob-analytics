@@ -38,6 +38,24 @@ class TestCreateSimilarityMatrix:
         result = create_similarity_matrix(a, b, cut_off_ms=3000)
         assert result[0, 0] == 3000
 
+    def test_vectorised_matches_naive_loop(self):
+        """The numpy-broadcast version must produce identical scores to a naive loop."""
+        ts = pd.Timestamp("2015-01-01")
+        a = pd.Series([ts + pd.Timedelta(milliseconds=i * 37) for i in range(8)])
+        b = pd.Series([ts + pd.Timedelta(milliseconds=i * 53) for i in range(5)])
+        cut_off = 2000
+
+        result = create_similarity_matrix(a, b, cut_off_ms=cut_off)
+
+        # Naive reference implementation
+        expected = np.zeros((len(a), len(b)))
+        for i in range(len(a)):
+            for j in range(len(b)):
+                diff_ms = abs((a.iloc[i] - b.iloc[j]).total_seconds()) * 1000
+                expected[i, j] = cut_off if diff_ms == 0 else cut_off / diff_ms
+
+        np.testing.assert_allclose(result, expected, rtol=1e-4)
+
 
 class TestAlignSequences:
     def test_perfect_diagonal(self):
