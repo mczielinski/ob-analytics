@@ -67,21 +67,15 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
 
     created_deleted_ids = created[
         created["id"].isin(deleted["id"]) & ~created["id"].isin(changed["id"])
-    ]["id"].reset_index(drop=True)
+    ]["id"]
 
-    # Get volumes from the 'deleted' DataFrame with matched IDs and reset the index
-    deleted_volumes = deleted.loc[
-        deleted["id"].isin(created_deleted_ids), "volume"
-    ].reset_index(drop=True)
-
-    # Get volumes from the 'created' DataFrame with matched IDs and reset the index
-    created_volumes = created.loc[
-        created["id"].isin(created_deleted_ids), "volume"
-    ].reset_index(drop=True)
-
-    # Compare volumes
-    volume_matched = deleted_volumes == created_volumes
-    flashed_ids = set(created_deleted_ids[volume_matched])
+    # Merge on id to safely compare created vs deleted volumes
+    cd_created = created[created["id"].isin(created_deleted_ids)][["id", "volume"]]
+    cd_deleted = deleted[deleted["id"].isin(created_deleted_ids)][["id", "volume"]]
+    cd_merged = cd_created.merge(cd_deleted, on="id", suffixes=("_created", "_deleted"))
+    flashed_ids = set(
+        cd_merged.loc[cd_merged["volume_created"] == cd_merged["volume_deleted"], "id"]
+    )
     forever_ids = set(
         created[
             ~created["id"].isin(changed["id"]) & ~created["id"].isin(deleted["id"])
