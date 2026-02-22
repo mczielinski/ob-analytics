@@ -5,7 +5,7 @@ events up to that point.  Used by :func:`order_book` and the
 visualization functions that need a static depth snapshot.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -21,7 +21,7 @@ def order_book(
     bps_range: int = 0,
     min_bid: float = 0,
     max_ask: float = np.inf,
-) -> dict[str, datetime | pd.DataFrame]:
+) -> dict[str, datetime | pd.Timestamp | pd.DataFrame]:
     """
     Reconstruct the order book at a specific point in time.
 
@@ -29,9 +29,9 @@ def order_book(
     ----------
     events : pandas.DataFrame
         DataFrame containing order events.
-    tp : datetime.datetime, optional
+    tp : datetime.datetime or pandas.Timestamp, optional
         The point in time at which to evaluate the order book.
-        If None, uses the current UTC time.
+        If None, uses the latest event timestamp in the data.
     max_levels : int, optional
         The maximum number of price levels to include for bids and asks.
     bps_range : int, optional
@@ -60,7 +60,7 @@ def order_book(
     validate_non_empty(events, "order_book")
 
     if tp is None:
-        tp = datetime.now(timezone.utc)
+        tp = events["timestamp"].max()
 
     pct_range = bps_range * 0.0001
 
