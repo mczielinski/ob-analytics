@@ -201,18 +201,19 @@ def order_aggressiveness(
 
         best_price_col = f"best_{side}_price"
 
-        unique_depth_summary = depth_summary.drop_duplicates(subset=["timestamp"])
-        merged = pd.merge(
+        depth_summary_sorted = depth_summary.sort_values("event_id")
+        orders = orders.sort_values("event_id")
+
+        merged = pd.merge_asof(
             orders,
-            unique_depth_summary[["timestamp", best_price_col]],
-            on="timestamp",
-            how="left",
+            depth_summary_sorted[["event_id", best_price_col]],
+            on="event_id",
+            direction="backward",
+            allow_exact_matches=False,
         )
 
-        best = merged[best_price_col].shift(1)
-
-        merged = merged.iloc[1:].copy()
-        best = best.iloc[1:]
+        merged = merged.dropna(subset=[best_price_col]).copy()
+        best = merged[best_price_col]
 
         diff_price = direction * (merged["price"] - best)
         diff_bps = 10000 * diff_price / best

@@ -101,6 +101,7 @@ class DepthMetricsEngine:
 
         multiplier = self._config.price_multiplier
         ordered = depth.sort_values(by="timestamp", kind="stable")
+
         prices_int = (multiplier * ordered["price"]).round().astype(int).values
         volumes = ordered["volume"].values
         sides = np.where(ordered["direction"].values == "bid", 0, 1)
@@ -118,7 +119,10 @@ class DepthMetricsEngine:
         col_names = self._column_names()
         metrics = pd.DataFrame(result, columns=col_names)
 
-        timestamps = ordered.reset_index(drop=True)["timestamp"]
+        if "event_id" in ordered.columns:
+            timestamps = ordered.reset_index(drop=True)[["timestamp", "event_id"]]
+        else:
+            timestamps = ordered.reset_index(drop=True)["timestamp"]
         res = pd.concat([timestamps, metrics], axis=1)
 
         price_cols = ["best_bid_price", "best_ask_price"]
@@ -345,7 +349,7 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
         volume_deltas["volume"] = volume_deltas.groupby("price")["volume"].cumsum()
         volume_deltas["volume"] = volume_deltas["volume"].clip(lower=0)
 
-        return volume_deltas[["timestamp", "price", "volume", "direction"]]
+        return volume_deltas[["event_id", "timestamp", "price", "volume", "direction"]]
 
     bids = events[events["direction"] == "bid"]
     depth_bid = directional_price_level_volume(bids)
