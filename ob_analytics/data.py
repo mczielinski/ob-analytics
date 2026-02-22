@@ -70,9 +70,10 @@ def get_zombie_ids(events: pd.DataFrame, trades: pd.DataFrame) -> list[int]:
     valid_bid_zombies = []
     if not bid_zombies.empty and not sell_trades.empty:
         bid_zombies = bid_zombies.sort_values("timestamp")
+        sell_sorted = sell_trades[["timestamp", "min_price_after"]].sort_values("timestamp")
         merged_bids = pd.merge_asof(
             bid_zombies,
-            sell_trades[["timestamp", "min_price_after"]],
+            sell_sorted,
             on="timestamp",
             direction="forward",
         )
@@ -82,9 +83,10 @@ def get_zombie_ids(events: pd.DataFrame, trades: pd.DataFrame) -> list[int]:
     valid_ask_zombies = []
     if not ask_zombies.empty and not buy_trades.empty:
         ask_zombies = ask_zombies.sort_values("timestamp")
+        buy_sorted = buy_trades[["timestamp", "max_price_after"]].sort_values("timestamp")
         merged_asks = pd.merge_asof(
             ask_zombies,
-            buy_trades[["timestamp", "max_price_after"]],
+            buy_sorted,
             on="timestamp",
             direction="forward",
         )
