@@ -96,20 +96,18 @@ class NeedlemanWunschMatcher:
             bids = id_bid_fills[id_bid_fills["fill"] == volume]
             asks = id_ask_fills[id_ask_fills["fill"] == volume]
 
-            distance_matrix_ms = (
-                (bids["timestamp"].values.reshape(-1, 1) - asks["timestamp"].values)
-                .astype("timedelta64[ns]")
-                .astype("int64")
-            )
+            time_deltas = (
+                bids["timestamp"].values.reshape(-1, 1) - asks["timestamp"].values
+            ).astype("timedelta64[ns]")
 
             if len(asks) == 1:
-                distance_matrix_ms = distance_matrix_ms.reshape(-1, 1)
+                time_deltas = time_deltas.reshape(-1, 1)
 
-            closest_ask_indices = np.argmin(np.abs(distance_matrix_ms), axis=1)
+            closest_ask_indices = np.argmin(np.abs(time_deltas), axis=1)
             ask_event_ids = asks["event_id"].values[closest_ask_indices]
 
             mask = (
-                np.abs(distance_matrix_ms[np.arange(len(bids)), closest_ask_indices])
+                np.abs(time_deltas[np.arange(len(bids)), closest_ask_indices])
                 <= cut_off_td
             )
             ask_event_ids = np.where(mask, ask_event_ids, np.nan)
