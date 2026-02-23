@@ -74,6 +74,7 @@ nav:
       - Event Processing: api/event_processing.md
       - Matching Engine: api/matching_engine.md
       - Trades: api/trades.md
+      - Flow Toxicity: api/flow_toxicity.md
       - Depth Metrics: api/depth.md
       - Order Book: api/order_book.md
       - Order Types: api/order_types.md

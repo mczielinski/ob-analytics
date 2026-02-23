@@ -34,3 +34,11 @@ All plot functions return `matplotlib.figure.Figure` and accept an optional
 ::: ob_analytics.visualisation.plot_volume_percentiles
 
 ::: ob_analytics.visualisation.plot_events_histogram
+
+## Flow Toxicity Plots
+
+::: ob_analytics.visualisation.plot_vpin
+
+::: ob_analytics.visualisation.plot_order_flow_imbalance
+
+::: ob_analytics.visualisation.plot_kyle_lambda

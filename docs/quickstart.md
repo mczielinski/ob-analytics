@@ -493,6 +493,65 @@ trades = data["trades"]
 
 ---
 
+## 7. Flow Toxicity Analysis
+
+Detect informed trading and measure price impact using three
+microstructure metrics.  These work on any trades DataFrame.
+
+### VPIN — Informed Trading Detection
+
+```python
+from ob_analytics import compute_vpin, plot_vpin, save_figure
+
+# Partition trade volume into equal-sized buckets
+vpin = compute_vpin(result.trades, bucket_volume=5.0)
+
+# Trailing average > 0.7 signals toxic (informed) flow
+print(vpin[["timestamp_end", "vpin", "vpin_avg"]].tail())
+
+fig = plot_vpin(vpin, threshold=0.7)
+save_figure(fig, "vpin.png")
+```
+
+### Kyle's Lambda — Price Impact
+
+```python
+from ob_analytics import compute_kyle_lambda, plot_kyle_lambda
+
+kyle = compute_kyle_lambda(result.trades, window="5min")
+print(f"λ = {kyle.lambda_:.6f}, t = {kyle.t_stat:.2f}, R² = {kyle.r_squared:.3f}")
+
+fig = plot_kyle_lambda(kyle)
+save_figure(fig, "kyle_lambda.png")
+```
+
+### Order Flow Imbalance
+
+```python
+from ob_analytics import order_flow_imbalance, plot_order_flow_imbalance
+
+ofi = order_flow_imbalance(result.trades, window="1min")
+print(ofi[["timestamp", "ofi"]].head())
+
+fig = plot_order_flow_imbalance(ofi, trades=result.trades)
+save_figure(fig, "ofi.png")
+```
+
+### Pipeline Integration (opt-in)
+
+```python
+from ob_analytics import Pipeline, PipelineConfig
+
+config = PipelineConfig(vpin_bucket_volume=5.0)
+result = Pipeline(config=config).run("orders.csv")
+
+# Automatically computed
+print(result.vpin.shape)
+print(result.ofi.shape)
+```
+
+---
+
 ## Next Steps
 
 - Browse the [API Reference](api/pipeline.md) for detailed documentation

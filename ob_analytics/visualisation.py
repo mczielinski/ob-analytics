@@ -1238,7 +1238,16 @@ def plot_order_flow_imbalance(
     colors = [
         "#27ae60" if v >= 0 else "#e74c3c" for v in ofi_df["ofi"]
     ]
-    ax.bar(ofi_df["timestamp"], ofi_df["ofi"], color=colors, alpha=0.7)
+    # Calculate bar width from timestamp spacing (matplotlib dates are in days)
+    if len(ofi_df) > 1:
+        median_gap = ofi_df["timestamp"].diff().median()
+        bar_width = mdates.date2num(ofi_df["timestamp"].iloc[0] + median_gap * 0.8) - mdates.date2num(ofi_df["timestamp"].iloc[0])
+    else:
+        bar_width = 0.001
+    ax.bar(
+        ofi_df["timestamp"], ofi_df["ofi"],
+        width=bar_width, color=colors, alpha=0.7, edgecolor="white", linewidth=0.3,
+    )
 
     ax.axhline(y=0, color="white", linewidth=0.8, alpha=0.5)
     ax.set_ylim(-1.05, 1.05)
