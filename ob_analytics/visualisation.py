@@ -1130,3 +1130,201 @@ def plot_events_histogram(
     ax.set_ylabel("Count")
     fig.tight_layout()
     return fig
+
+
+# ---------------------------------------------------------------------------
+# Flow toxicity plots
+# ---------------------------------------------------------------------------
+
+
+def plot_vpin(
+    vpin_df: pd.DataFrame,
+    threshold: float = 0.7,
+    ax: Axes | None = None,
+) -> Figure:
+    """Plot VPIN time series with a toxicity threshold.
+
+    Parameters
+    ----------
+    vpin_df : pandas.DataFrame
+        Output of :func:`~ob_analytics.flow_toxicity.compute_vpin`
+        with columns ``timestamp_end``, ``vpin``, and ``vpin_avg``.
+    threshold : float, optional
+        Horizontal line indicating "toxic" threshold.  Default 0.7.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on.  A new figure is created when *None*.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+    """
+    fig, ax = _create_axes(ax, figsize=(12, 5))
+
+    ax.bar(
+        vpin_df["timestamp_end"],
+        vpin_df["vpin"],
+        width=0.6 * (
+            (vpin_df["timestamp_end"].iloc[-1] - vpin_df["timestamp_end"].iloc[0])
+            / max(len(vpin_df) - 1, 1)
+        ) if len(vpin_df) > 1 else 0.001,
+        color="#5dade2",
+        alpha=0.35,
+        label="Per-bucket VPIN",
+    )
+
+    if "vpin_avg" in vpin_df.columns:
+        ax.plot(
+            vpin_df["timestamp_end"],
+            vpin_df["vpin_avg"],
+            color="#e74c3c",
+            linewidth=2,
+            label="VPIN (rolling avg)",
+        )
+
+    ax.axhline(
+        y=threshold,
+        color="#f39c12",
+        linewidth=1.5,
+        linestyle="--",
+        label=f"Threshold ({threshold})",
+    )
+
+    # Shade regions above threshold
+    if "vpin_avg" in vpin_df.columns:
+        above = vpin_df["vpin_avg"] >= threshold
+        ax.fill_between(
+            vpin_df["timestamp_end"],
+            threshold,
+            vpin_df["vpin_avg"],
+            where=above,
+            color="#e74c3c",
+            alpha=0.15,
+        )
+
+    ax.set_ylim(0, 1.05)
+    ax.set_xlabel("Time")
+    ax.set_ylabel("VPIN")
+    ax.set_title("Volume-Synchronized Probability of Informed Trading")
+    ax.legend(loc="upper left", fontsize=9)
+    fig.tight_layout()
+    return fig
+
+
+def plot_order_flow_imbalance(
+    ofi_df: pd.DataFrame,
+    trades: pd.DataFrame | None = None,
+    ax: Axes | None = None,
+) -> Figure:
+    """Plot order flow imbalance as a bar chart with optional price overlay.
+
+    Parameters
+    ----------
+    ofi_df : pandas.DataFrame
+        Output of :func:`~ob_analytics.flow_toxicity.order_flow_imbalance`
+        with columns ``timestamp`` and ``ofi``.
+    trades : pandas.DataFrame, optional
+        Trades DataFrame with ``timestamp`` and ``price`` columns.
+        When provided, the trade price is drawn as a line on a
+        secondary y-axis.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on.  A new figure is created when *None*.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+    """
+    fig, ax = _create_axes(ax, figsize=(12, 5))
+
+    colors = [
+        "#27ae60" if v >= 0 else "#e74c3c" for v in ofi_df["ofi"]
+    ]
+    ax.bar(ofi_df["timestamp"], ofi_df["ofi"], color=colors, alpha=0.7)
+
+    ax.axhline(y=0, color="white", linewidth=0.8, alpha=0.5)
+    ax.set_ylim(-1.05, 1.05)
+    ax.set_xlabel("Time")
+    ax.set_ylabel("OFI")
+    ax.set_title("Order Flow Imbalance")
+
+    if trades is not None and "price" in trades.columns:
+        ax2 = ax.twinx()
+        ax2.plot(
+            trades["timestamp"],
+            trades["price"],
+            color="#f1c40f",
+            linewidth=1.2,
+            alpha=0.8,
+            label="Price",
+        )
+        ax2.set_ylabel("Price", color="#f1c40f")
+        ax2.tick_params(axis="y", labelcolor="#f1c40f")
+
+    fig.tight_layout()
+    return fig
+
+
+def plot_kyle_lambda(
+    kyle_result: object,
+    ax: Axes | None = None,
+) -> Figure:
+    """Plot Kyle's Lambda regression: signed volume vs ΔPrice.
+
+    Parameters
+    ----------
+    kyle_result : KyleLambdaResult
+        Output of :func:`~ob_analytics.flow_toxicity.compute_kyle_lambda`.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on.  A new figure is created when *None*.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+    """
+    reg_df = kyle_result.regression_df  # type: ignore[union-attr]
+    lambda_ = kyle_result.lambda_  # type: ignore[union-attr]
+    r_squared = kyle_result.r_squared  # type: ignore[union-attr]
+    t_stat = kyle_result.t_stat  # type: ignore[union-attr]
+
+    fig, ax = _create_axes(ax, figsize=(8, 6))
+
+    ax.scatter(
+        reg_df["signed_volume"],
+        reg_df["delta_price"],
+        color="#5dade2",
+        alpha=0.6,
+        edgecolors="white",
+        linewidths=0.5,
+        s=50,
+        zorder=3,
+    )
+
+    # Regression line
+    if not np.isnan(lambda_):
+        x_range = np.linspace(
+            reg_df["signed_volume"].min(),
+            reg_df["signed_volume"].max(),
+            100,
+        )
+        intercept = reg_df["delta_price"].mean() - lambda_ * reg_df["signed_volume"].mean()
+        ax.plot(
+            x_range,
+            intercept + lambda_ * x_range,
+            color="#e74c3c",
+            linewidth=2,
+            label=f"λ = {lambda_:.6f}",
+            zorder=4,
+        )
+
+    ax.axhline(y=0, color="white", linewidth=0.5, alpha=0.3)
+    ax.axvline(x=0, color="white", linewidth=0.5, alpha=0.3)
+
+    ax.set_xlabel("Signed Order Flow (net volume)")
+    ax.set_ylabel("ΔPrice")
+    title = "Kyle's Lambda — Price Impact Regression"
+    if not np.isnan(r_squared):
+        title += f"\nR² = {r_squared:.3f}, t = {t_stat:.2f}"
+    ax.set_title(title)
+    ax.legend(loc="upper left")
+    fig.tight_layout()
+    return fig
+

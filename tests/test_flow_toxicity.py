@@ -226,3 +226,60 @@ class TestOrderFlowImbalance:
         bad = pd.DataFrame({"timestamp": [1]})
         with pytest.raises(InvalidDataError):
             order_flow_imbalance(bad)
+
+
+# ── Visualization ────────────────────────────────────────────────────
+
+import matplotlib
+
+matplotlib.use("Agg")
+from matplotlib.figure import Figure  # noqa: E402
+
+from ob_analytics.visualisation import (  # noqa: E402
+    plot_kyle_lambda,
+    plot_order_flow_imbalance,
+    plot_vpin,
+)
+
+
+class TestFlowToxicityPlots:
+    def test_plot_vpin_returns_figure(self):
+        """plot_vpin returns a Figure."""
+        trades = _trades(["buy"] * 10, volumes=[1.0] * 10)
+        vpin_df = compute_vpin(trades, bucket_volume=2.0)
+        fig = plot_vpin(vpin_df)
+        assert isinstance(fig, Figure)
+
+    def test_plot_ofi_returns_figure(self):
+        """plot_order_flow_imbalance returns a Figure."""
+        trades = _trades(
+            ["buy", "sell"] * 5,
+            volumes=[1.0] * 10,
+        )
+        ofi_df = order_flow_imbalance(trades, window="1min")
+        fig = plot_order_flow_imbalance(ofi_df)
+        assert isinstance(fig, Figure)
+
+    def test_plot_ofi_with_price_overlay(self):
+        """plot_order_flow_imbalance with trades overlay returns a Figure."""
+        trades = _trades(
+            ["buy", "sell"] * 5,
+            volumes=[1.0] * 10,
+            prices=[100.0 + i for i in range(10)],
+        )
+        ofi_df = order_flow_imbalance(trades, window="1min")
+        fig = plot_order_flow_imbalance(ofi_df, trades=trades)
+        assert isinstance(fig, Figure)
+
+    def test_plot_kyle_lambda_returns_figure(self):
+        """plot_kyle_lambda returns a Figure."""
+        trades = _trades(
+            ["buy", "buy", "sell", "sell"],
+            volumes=[10.0, 10.0, 10.0, 10.0],
+            prices=[100.0, 105.0, 105.0, 100.0],
+            base_sec_offsets=[0, 60, 300, 360],
+        )
+        result = compute_kyle_lambda(trades, window="5min")
+        fig = plot_kyle_lambda(result)
+        assert isinstance(fig, Figure)
+
