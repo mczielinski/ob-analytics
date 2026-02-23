@@ -66,6 +66,7 @@ from ob_analytics.visualisation import (
     plot_volume_map,
     plot_volume_percentiles,
     plot_vpin,
+    register_plot_backend,
     save_figure,
     set_plot_theme,
 )
@@ -117,6 +118,7 @@ __all__ = [
     "set_plot_theme",
     "get_plot_theme",
     "save_figure",
+    "register_plot_backend",
     "plot_time_series",
     "plot_trades",
     "plot_price_levels",
