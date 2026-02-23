@@ -34,6 +34,7 @@ from ob_analytics.config import PipelineConfig
 from ob_analytics.data import get_zombie_ids
 from ob_analytics.depth import depth_metrics, price_level_volume
 from ob_analytics.event_processing import BitstampLoader, order_aggressiveness
+from ob_analytics.flow_toxicity import compute_vpin, order_flow_imbalance
 from ob_analytics.matching_engine import NeedlemanWunschMatcher
 from ob_analytics.order_types import set_order_types
 from loguru import logger
@@ -56,12 +57,18 @@ class PipelineResult:
         Price-level volume time series.
     depth_summary : pandas.DataFrame
         Depth metrics (best bid/ask, BPS bins, spread).
+    vpin : pandas.DataFrame or None
+        VPIN buckets (only when ``config.vpin_bucket_volume`` is set).
+    ofi : pandas.DataFrame or None
+        Order flow imbalance per minute (only when VPIN is computed).
     """
 
     events: pd.DataFrame
     trades: pd.DataFrame
     depth: pd.DataFrame
     depth_summary: pd.DataFrame
+    vpin: pd.DataFrame | None = None
+    ofi: pd.DataFrame | None = None
 
 
 class Pipeline:
@@ -112,7 +119,8 @@ class Pipeline:
         -------
         PipelineResult
             Frozen dataclass with ``events``, ``trades``, ``depth``,
-            and ``depth_summary`` DataFrames.
+            ``depth_summary``, and optionally ``vpin`` and ``ofi``
+            DataFrames.
 
         Steps
         -----
@@ -124,6 +132,7 @@ class Pipeline:
         6. Compute price-level depth
         7. Compute depth metrics
         8. Compute order aggressiveness
+        9. (Optional) Compute VPIN and order flow imbalance
         """
         logger.info("Pipeline: loading events from {}", source)
         events = self.loader.load(source)
@@ -161,10 +170,24 @@ class Pipeline:
             depth_summary["timestamp"] >= events["timestamp"].min() + offset
         ]
 
+        # ── Optional flow toxicity metrics ─────────────────────────────
+        vpin_df = None
+        ofi_df = None
+        if self.config.vpin_bucket_volume is not None:
+            logger.info(
+                "Pipeline: computing VPIN (bucket_volume={})",
+                self.config.vpin_bucket_volume,
+            )
+            vpin_df = compute_vpin(trades, self.config.vpin_bucket_volume)
+            logger.info("Pipeline: computing order flow imbalance")
+            ofi_df = order_flow_imbalance(trades)
+
         logger.info("Pipeline: complete")
         return PipelineResult(
             events=events,
             trades=trades,
             depth=depth,
             depth_summary=depth_summary,
+            vpin=vpin_df,
+            ofi=ofi_df,
         )

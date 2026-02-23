@@ -11,10 +11,12 @@ The pipeline continues to use DataFrames internally for performance.
 """
 
 
+
 from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
+import pandas as pd
 from pydantic import BaseModel, Field
 
 
@@ -88,3 +90,34 @@ class OrderBookSnapshot(BaseModel):
     timestamp: datetime
     bids: list[DepthLevel] = Field(default_factory=list)
     asks: list[DepthLevel] = Field(default_factory=list)
+
+
+class KyleLambdaResult(BaseModel):
+    """Result of a Kyle's Lambda OLS regression.
+
+    Attributes
+    ----------
+    lambda_ : float
+        Slope coefficient — price change per unit of signed order flow.
+        Higher values indicate a less liquid (more adverse-selection-
+        prone) market.
+    t_stat : float
+        *t*-statistic for ``lambda_``.  ``|t_stat| > 2`` is a common
+        threshold for statistical significance.
+    r_squared : float
+        Coefficient of determination (fraction of ΔPrice variance
+        explained by signed order flow).
+    n_windows : int
+        Number of time windows used in the regression.
+    regression_df : pandas.DataFrame
+        Per-window data with columns ``timestamp``, ``delta_price``,
+        ``signed_volume`` — useful for scatter-plot visualisation.
+    """
+
+    model_config = {"frozen": True, "arbitrary_types_allowed": True}
+
+    lambda_: float
+    t_stat: float
+    r_squared: float
+    n_windows: int
+    regression_df: pd.DataFrame

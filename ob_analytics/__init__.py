@@ -40,8 +40,13 @@ from ob_analytics.exceptions import (
     MatchingError,
     ObAnalyticsError,
 )
+from ob_analytics.flow_toxicity import (
+    compute_kyle_lambda,
+    compute_vpin,
+    order_flow_imbalance,
+)
 from ob_analytics.matching_engine import NeedlemanWunschMatcher, event_match
-from ob_analytics.models import DepthLevel, OrderBookSnapshot, OrderEvent, Trade
+from ob_analytics.models import DepthLevel, KyleLambdaResult, OrderBookSnapshot, OrderEvent, Trade
 from ob_analytics.order_book_reconstruction import order_book
 from ob_analytics.order_types import set_order_types
 from ob_analytics.pipeline import Pipeline, PipelineResult
@@ -84,6 +89,11 @@ __all__ = [
     "set_order_types",
     "match_trades",
     "trade_impacts",
+    # Flow toxicity
+    "compute_vpin",
+    "compute_kyle_lambda",
+    "order_flow_imbalance",
+    "KyleLambdaResult",
     # Configuration
     "PipelineConfig",
     # Protocols

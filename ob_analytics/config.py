@@ -90,6 +90,19 @@ class PipelineConfig(BaseModel):
         ),
     )
 
+    # ── Flow toxicity ─────────────────────────────────────────────────
+    vpin_bucket_volume: float | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Volume per VPIN bucket.  When set, the pipeline computes "
+            "VPIN and Order Flow Imbalance as part of the standard run.  "
+            "When None (default), these metrics are skipped — call "
+            "compute_vpin() directly with an instrument-appropriate "
+            "bucket size."
+        ),
+    )
+
     # ── Derived helpers ───────────────────────────────────────────────────
     @property
     def price_multiplier(self) -> int:
