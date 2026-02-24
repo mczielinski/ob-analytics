@@ -59,6 +59,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   architecture overview, configuration reference, and extensibility guide.
 - **CHANGELOG** — this file.
 - **Module-level docstrings** for all modules.
+- **Interactive Plotly backend** — all `plot_*()` functions accept
+  `backend="plotly"` for interactive figures with zoom, pan, and hover
+  tooltips.  Install via `pip install ob-analytics[interactive]`.
+- **`register_plot_backend()`** — public API for registering third-party
+  visualization backends (e.g. Bokeh).
+- **Three-layer visualization architecture** — data preparation
+  (`_chart_data.py`), rendering backends (`_matplotlib.py`, `_plotly.py`),
+  and public facade (`visualisation.py`) for clean separation of concerns.
 
 ### Changed
 

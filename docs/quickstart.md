@@ -552,9 +552,65 @@ print(result.ofi.shape)
 
 ---
 
+## 8. Interactive Visualizations (Plotly)
+
+All plot functions accept an optional `backend` parameter.  Set
+`backend="plotly"` to get interactive Plotly figures with zoom, pan,
+hover tooltips, and export controls.
+
+### Install
+
+Plotly is an **optional** dependency:
+
+```bash
+pip install ob-analytics[interactive]
+```
+
+### Quick example
+
+```python
+from ob_analytics import Pipeline, plot_price_levels, plot_trades, get_spread
+
+result = Pipeline().run("inst/extdata/orders.csv")
+spread = get_spread(result.depth_summary)
+
+# Interactive depth heatmap
+fig = plot_price_levels(
+    result.depth, spread,
+    volume_scale=1e-8, col_bias=0.1,
+    price_from=232,
+    backend="plotly",
+)
+fig.show()               # opens in browser
+fig.write_html("depth.html")  # save as standalone HTML
+
+# Interactive trade chart
+fig = plot_trades(result.trades, backend="plotly")
+fig.show()
+```
+
+Every `plot_*()` function supports the `backend` parameter — including
+`plot_vpin()`, `plot_order_flow_imbalance()`, and `plot_kyle_lambda()`.
+
+### Registering a custom backend
+
+Third-party packages can register additional backends (e.g. Bokeh):
+
+```python
+from ob_analytics import register_plot_backend
+
+# Expects the module to export bokeh_trades(), bokeh_price_levels(), etc.
+register_plot_backend("bokeh", "my_package._bokeh_backend")
+
+fig = plot_trades(result.trades, backend="bokeh")
+```
+
+---
+
 ## Next Steps
 
 - Browse the [API Reference](api/pipeline.md) for detailed documentation
 - Check the [Changelog](changelog.md) for the latest changes
 - Read the [README](https://github.com/mczielinski/ob-analytics) for
   architecture diagrams and financial concept glossary
+

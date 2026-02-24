@@ -4,8 +4,11 @@ title: Visualization
 
 # Visualization
 
-All plot functions return `matplotlib.figure.Figure` and accept an optional
-`ax` parameter for subplot composition.
+All plot functions accept an optional `backend` parameter
+(default `"matplotlib"`).  Set `backend="plotly"` for interactive figures
+with zoom, pan, and hover tooltips.
+
+Plotly is an optional dependency — install via `pip install ob-analytics[interactive]`.
 
 ## Theme
 
@@ -16,6 +19,10 @@ All plot functions return `matplotlib.figure.Figure` and accept an optional
 ::: ob_analytics.visualisation.get_plot_theme
 
 ::: ob_analytics.visualisation.save_figure
+
+## Backend Registration
+
+::: ob_analytics.visualisation.register_plot_backend
 
 ## Plot Functions
 
