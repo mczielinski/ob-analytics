@@ -246,3 +246,53 @@ class TestSubplotComposition:
         assert fig1 is fig
         assert fig2 is fig
         assert len(fig.axes) >= 2
+
+
+# ---------------------------------------------------------------------------
+# Backend dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestBackendDispatch:
+    def test_default_backend_returns_matplotlib_figure(self, sample_trades):
+        fig = plot_trades(sample_trades)
+        assert isinstance(fig, Figure)
+
+    def test_explicit_matplotlib_returns_figure(self, sample_trades):
+        fig = plot_trades(sample_trades, backend="matplotlib")
+        assert isinstance(fig, Figure)
+
+    def test_invalid_backend_raises_value_error(self, sample_trades):
+        with pytest.raises(ValueError, match="Unknown backend"):
+            plot_trades(sample_trades, backend="nonexistent")
+
+
+class TestRegisterBackend:
+    def test_register_and_dispatch(self, sample_trades, tmp_path):
+        """Register a dummy backend and verify dispatch calls it."""
+        from ob_analytics.visualisation import _BACKENDS, _FUNC_PREFIX, register_plot_backend
+
+        # Create a temporary dummy module
+        dummy_module = tmp_path / "dummy_backend.py"
+        dummy_module.write_text(
+            "class _Sentinel:\n"
+            "    pass\n"
+            "def dummy_trades(data, *a, **kw):\n"
+            "    return _Sentinel()\n"
+        )
+
+        import sys
+        sys.path.insert(0, str(tmp_path))
+        try:
+            register_plot_backend("dummy", "dummy_backend", func_prefix="dummy_")
+            assert "dummy" in _BACKENDS
+
+            fig = plot_trades(sample_trades, backend="dummy")
+            # Should return the sentinel, not a matplotlib Figure
+            assert type(fig).__name__ == "_Sentinel"
+        finally:
+            sys.path.pop(0)
+            _BACKENDS.pop("dummy", None)
+            _FUNC_PREFIX.pop("dummy", None)
+            sys.modules.pop("dummy_backend", None)
+

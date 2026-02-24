@@ -277,8 +277,12 @@ def prepare_current_depth_data(
     """Prepare data for order book depth snapshot."""
     bids = reverse_matrix(order_book["bids"])
     asks = reverse_matrix(order_book["asks"])
-    assert isinstance(bids, pd.DataFrame)
-    assert isinstance(asks, pd.DataFrame)
+
+    # reverse_matrix may return ndarray; ensure we have DataFrames
+    if isinstance(bids, np.ndarray):
+        bids = pd.DataFrame(bids, columns=["price", "volume", "liquidity"])
+    if isinstance(asks, np.ndarray):
+        asks = pd.DataFrame(asks, columns=["price", "volume", "liquidity"])
 
     x = np.concatenate([
         bids["price"].values,
