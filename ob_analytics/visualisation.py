@@ -24,11 +24,13 @@ from ob_analytics._chart_data import (
     prepare_current_depth_data,
     prepare_event_map_data,
     prepare_events_histogram_data,
+    prepare_hidden_executions_data,
     prepare_kyle_lambda_data,
     prepare_ofi_data,
     prepare_price_levels_data,
     prepare_time_series_data,
     prepare_trades_data,
+    prepare_trading_halts_data,
     prepare_volume_map_data,
     prepare_volume_percentiles_data,
     prepare_vpin_data,
@@ -667,6 +669,94 @@ def plot_kyle_lambda(
     """
     data = prepare_kyle_lambda_data(kyle_result)
     renderer = _get_renderer(backend, "kyle_lambda")
+    if backend == "matplotlib":
+        return renderer(data, ax)
+    return renderer(data)
+
+
+# ---------------------------------------------------------------------------
+# LOBSTER-enriched plots (gracefully degrade for non-LOBSTER data)
+# ---------------------------------------------------------------------------
+
+
+def plot_hidden_executions(
+    events: pd.DataFrame,
+    trades: pd.DataFrame,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+    ax: Axes | None = None,
+    backend: str = "matplotlib",
+) -> Any:
+    """Plot hidden order execution volume overlaid on the trade price.
+
+    Works with any data that has ``raw_event_type == 5`` events.
+    Degrades gracefully (empty plot with message) when no hidden
+    execution data exists -- safe to call on Bitstamp data.
+
+    Parameters
+    ----------
+    events : pandas.DataFrame
+        Events DataFrame (should have ``raw_event_type`` column).
+    trades : pandas.DataFrame
+        Trades DataFrame with ``timestamp`` and ``price``.
+    start_time : pandas.Timestamp, optional
+        Start time for the plot.
+    end_time : pandas.Timestamp, optional
+        End time for the plot.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on (matplotlib only).
+    backend : str, optional
+        Rendering backend (default ``"matplotlib"``).
+
+    Returns
+    -------
+    matplotlib.figure.Figure or plotly.graph_objects.Figure
+    """
+    data = prepare_hidden_executions_data(events, trades, start_time, end_time)
+    renderer = _get_renderer(backend, "hidden_executions")
+    if backend == "matplotlib":
+        return renderer(data, ax)
+    return renderer(data)
+
+
+def plot_trading_halts(
+    trades: pd.DataFrame,
+    halts: pd.DataFrame | None = None,
+    events: pd.DataFrame | None = None,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+    ax: Axes | None = None,
+    backend: str = "matplotlib",
+) -> Any:
+    """Plot trade price with shaded trading halt periods.
+
+    Accepts either a ``halts`` DataFrame directly or extracts halt
+    events (``raw_event_type == 7``) from *events*.  Degrades
+    gracefully when no halt data exists.
+
+    Parameters
+    ----------
+    trades : pandas.DataFrame
+        Trades DataFrame with ``timestamp`` and ``price``.
+    halts : pandas.DataFrame, optional
+        Trading halt events.
+    events : pandas.DataFrame, optional
+        Full events DataFrame (halt events extracted if *halts* not given).
+    start_time : pandas.Timestamp, optional
+        Start time for the plot.
+    end_time : pandas.Timestamp, optional
+        End time for the plot.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on (matplotlib only).
+    backend : str, optional
+        Rendering backend (default ``"matplotlib"``).
+
+    Returns
+    -------
+    matplotlib.figure.Figure or plotly.graph_objects.Figure
+    """
+    data = prepare_trading_halts_data(trades, halts, events, start_time, end_time)
+    renderer = _get_renderer(backend, "trading_halts")
     if backend == "matplotlib":
         return renderer(data, ax)
     return renderer(data)

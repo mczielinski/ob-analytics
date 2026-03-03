@@ -595,3 +595,93 @@ def mpl_kyle_lambda(data: dict, ax: Axes | None = None) -> Figure:
     ax.legend(loc="upper left")
     fig.tight_layout()
     return fig
+
+
+# ---------------------------------------------------------------------------
+# LOBSTER-enriched plots
+# ---------------------------------------------------------------------------
+
+
+def mpl_hidden_executions(data: dict, ax: Axes | None = None) -> Figure:
+    """Render hidden execution volume overlaid on the trade price."""
+    trades = data["trades"]
+    hidden = data["hidden"]
+    has_hidden = data["has_hidden"]
+
+    fig, ax = _create_axes(ax, figsize=(12, 6))
+
+    if not trades.empty:
+        ax.step(
+            trades["timestamp"], trades["price"],
+            where="post", color="#5dade2", linewidth=1, alpha=0.7,
+            label="Trade price",
+        )
+
+    if has_hidden and not hidden.empty:
+        scatter = ax.scatter(
+            hidden["timestamp"],
+            hidden["price"],
+            s=hidden["volume"] * 2,
+            c="#e74c3c",
+            alpha=0.6,
+            edgecolors="white",
+            linewidths=0.3,
+            label="Hidden executions",
+            zorder=3,
+        )
+        ax.set_title("Hidden Order Executions")
+    else:
+        ax.set_title("Hidden Order Executions (no hidden execution data)")
+        ax.text(
+            0.5, 0.5,
+            "No hidden execution events\n(raw_event_type == 5)\nin this dataset",
+            transform=ax.transAxes,
+            ha="center", va="center",
+            fontsize=14, color="#888",
+        )
+
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Price")
+    ax.legend(loc="upper left")
+    fig.tight_layout()
+    return fig
+
+
+def mpl_trading_halts(data: dict, ax: Axes | None = None) -> Figure:
+    """Render trade price with shaded halt periods."""
+    trades = data["trades"]
+    halt_periods = data["halt_periods"]
+    has_halts = data["has_halts"]
+
+    fig, ax = _create_axes(ax, figsize=(12, 6))
+
+    if not trades.empty:
+        ax.step(
+            trades["timestamp"], trades["price"],
+            where="post", color="#5dade2", linewidth=1, alpha=0.8,
+            label="Trade price",
+        )
+
+    if has_halts and halt_periods:
+        for i, (h_start, h_end) in enumerate(halt_periods):
+            ax.axvspan(
+                h_start, h_end,
+                color="#e74c3c", alpha=0.2,
+                label="Trading halt" if i == 0 else None,
+            )
+        ax.set_title("Trading Halts")
+    else:
+        ax.set_title("Trading Halts (no halt data)")
+        ax.text(
+            0.5, 0.5,
+            "No trading halt events\n(raw_event_type == 7)\nin this dataset",
+            transform=ax.transAxes,
+            ha="center", va="center",
+            fontsize=14, color="#888",
+        )
+
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Price")
+    ax.legend(loc="upper left")
+    fig.tight_layout()
+    return fig

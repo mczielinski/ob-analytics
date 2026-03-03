@@ -493,3 +493,98 @@ def plotly_kyle_lambda(data: dict) -> Any:
     fig.update_xaxes(title_text="Signed Order Flow (net volume)")
     fig.update_yaxes(title_text="ΔPrice")
     return fig
+
+
+# ---------------------------------------------------------------------------
+# LOBSTER-enriched plots
+# ---------------------------------------------------------------------------
+
+
+def plotly_hidden_executions(data: dict) -> Any:
+    """Render hidden execution volume overlaid on the trade price."""
+    go = _import_plotly()
+    trades = data["trades"]
+    hidden = data["hidden"]
+    has_hidden = data["has_hidden"]
+
+    title = (
+        "Hidden Order Executions"
+        if has_hidden
+        else "Hidden Order Executions (no hidden execution data)"
+    )
+    fig = _base_figure(go, title=title)
+
+    if not trades.empty:
+        fig.add_trace(go.Scatter(
+            x=trades["timestamp"], y=trades["price"],
+            mode="lines", line=dict(color="#5dade2", width=1, shape="hv"),
+            name="Trade price", opacity=0.7,
+        ))
+
+    if has_hidden and not hidden.empty:
+        fig.add_trace(go.Scatter(
+            x=hidden["timestamp"], y=hidden["price"],
+            mode="markers",
+            marker=dict(
+                size=hidden["volume"].clip(upper=30) * 2,
+                color="#e74c3c",
+                opacity=0.6,
+                line=dict(width=0.3, color="white"),
+            ),
+            name="Hidden executions",
+            hovertemplate=(
+                "Time: %{x}<br>Price: %{y:.2f}<br>"
+                "Volume: %{marker.size}<extra></extra>"
+            ),
+        ))
+    elif not has_hidden:
+        fig.add_annotation(
+            text="No hidden execution events (raw_event_type == 5)",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False, font=dict(size=16, color="#888"),
+        )
+
+    fig.update_xaxes(title_text="Time")
+    fig.update_yaxes(title_text="Price")
+    return fig
+
+
+def plotly_trading_halts(data: dict) -> Any:
+    """Render trade price with shaded halt periods."""
+    go = _import_plotly()
+    trades = data["trades"]
+    halt_periods = data["halt_periods"]
+    has_halts = data["has_halts"]
+
+    title = (
+        "Trading Halts"
+        if has_halts
+        else "Trading Halts (no halt data)"
+    )
+    fig = _base_figure(go, title=title)
+
+    if not trades.empty:
+        fig.add_trace(go.Scatter(
+            x=trades["timestamp"], y=trades["price"],
+            mode="lines", line=dict(color="#5dade2", width=1, shape="hv"),
+            name="Trade price", opacity=0.8,
+        ))
+
+    if has_halts and halt_periods:
+        for i, (h_start, h_end) in enumerate(halt_periods):
+            fig.add_vrect(
+                x0=h_start, x1=h_end,
+                fillcolor="#e74c3c", opacity=0.2,
+                layer="below", line_width=0,
+                annotation_text="Halt" if i == 0 else None,
+            )
+    elif not has_halts:
+        fig.add_annotation(
+            text="No trading halt events (raw_event_type == 7)",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False, font=dict(size=16, color="#888"),
+        )
+
+    fig.update_xaxes(title_text="Time")
+    fig.update_yaxes(title_text="Price")
+    return fig

@@ -504,3 +504,99 @@ def prepare_kyle_lambda_data(kyle_result: object) -> dict[str, Any]:
         "r_squared": r_squared,
         "t_stat": t_stat,
     }
+
+
+# ---------------------------------------------------------------------------
+# LOBSTER-enriched plots (gracefully degrade for non-LOBSTER data)
+# ---------------------------------------------------------------------------
+
+
+def prepare_hidden_executions_data(
+    events: pd.DataFrame,
+    trades: pd.DataFrame,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+) -> dict[str, Any]:
+    """Prepare data for a hidden-executions overlay chart.
+
+    Shows hidden execution volume (``raw_event_type == 5``) scattered
+    over the trade price time series.  Degrades to an empty plot with a
+    message when no hidden execution data is present.
+    """
+    has_hidden = (
+        "raw_event_type" in events.columns
+        and events["raw_event_type"].notna().any()
+        and (events["raw_event_type"] == 5).any()
+    )
+
+    if has_hidden:
+        hidden = events[events["raw_event_type"] == 5].copy()
+    else:
+        hidden = pd.DataFrame(columns=events.columns)
+
+    start_time, end_time = _default_start_end(trades, start_time, end_time)
+    trades_f = trades[
+        (trades["timestamp"] >= start_time) & (trades["timestamp"] <= end_time)
+    ]
+    if not hidden.empty:
+        hidden = hidden[
+            (hidden["timestamp"] >= start_time)
+            & (hidden["timestamp"] <= end_time)
+        ]
+
+    return {
+        "trades": trades_f,
+        "hidden": hidden,
+        "has_hidden": has_hidden and not hidden.empty,
+    }
+
+
+def prepare_trading_halts_data(
+    trades: pd.DataFrame,
+    halts: pd.DataFrame | None = None,
+    events: pd.DataFrame | None = None,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+) -> dict[str, Any]:
+    """Prepare data for a trading-halts overlay chart.
+
+    Draws vertical shaded bands on the trade price chart for halt
+    periods.  Accepts either a halts DataFrame directly or extracts
+    halt events (``raw_event_type == 7``) from the events DataFrame.
+    """
+    if halts is None and events is not None:
+        if (
+            "raw_event_type" in events.columns
+            and events["raw_event_type"].notna().any()
+            and (events["raw_event_type"] == 7).any()
+        ):
+            halts = events[events["raw_event_type"] == 7].copy()
+
+    has_halts = halts is not None and not halts.empty
+
+    start_time, end_time = _default_start_end(trades, start_time, end_time)
+    trades_f = trades[
+        (trades["timestamp"] >= start_time) & (trades["timestamp"] <= end_time)
+    ]
+
+    halt_periods: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+    if has_halts:
+        assert halts is not None
+        halts_f = halts[
+            (halts["timestamp"] >= start_time) & (halts["timestamp"] <= end_time)
+        ].sort_values("timestamp")
+        # Group consecutive halt events into periods.
+        # Halts come in pairs: start (direction == -1 or price == -1)
+        # and end (direction == 1 or next non-halt event).
+        # Simple heuristic: treat each halt timestamp as a point and
+        # create thin bands around them.
+        for _, row in halts_f.iterrows():
+            ts = row["timestamp"]
+            half = pd.Timedelta(seconds=30)
+            halt_periods.append((ts - half, ts + half))
+
+    return {
+        "trades": trades_f,
+        "halt_periods": halt_periods,
+        "has_halts": has_halts,
+    }

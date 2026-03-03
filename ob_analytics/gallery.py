@@ -32,10 +32,12 @@ from ob_analytics.visualisation import (
     plot_current_depth,
     plot_event_map,
     plot_events_histogram,
+    plot_hidden_executions,
     plot_kyle_lambda,
     plot_order_flow_imbalance,
     plot_price_levels,
     plot_trades,
+    plot_trading_halts,
     plot_volume_map,
     plot_volume_percentiles,
     plot_vpin,
@@ -205,6 +207,24 @@ def default_specs(
             },
         ),
     ]
+
+    # Hidden executions and trading halts (LOBSTER-enriched, degrade gracefully)
+    specs.append(
+        PlotSpec(
+            "08b_hidden_executions",
+            "Hidden Order Executions",
+            plot_hidden_executions,
+            {"events": events, "trades": trades},
+        )
+    )
+    specs.append(
+        PlotSpec(
+            "08c_trading_halts",
+            "Trading Halts",
+            plot_trading_halts,
+            {"trades": trades, "events": events},
+        )
+    )
 
     # Order book snapshot (requires 'type' column from set_order_types)
     if "type" in events.columns:
