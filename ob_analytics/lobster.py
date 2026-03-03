@@ -1,0 +1,656 @@
+"""LOBSTER data format support.
+
+Provides loader, matcher, trade inferrer, writer, format descriptor,
+and sample-data download for the LOBSTER limit-order-book data set
+(https://lobsterdata.com).
+
+LOBSTER message files contain six headerless columns::
+
+    Time, EventType, OrderID, Size, Price, Direction
+
+Event types:
+    1 = Submission of a new limit order
+    2 = Cancellation (partial deletion)
+    3 = Deletion (total cancellation)
+    4 = Execution of a visible limit order
+    5 = Execution of a hidden limit order
+    6 = Cross trade (non-book)
+    7 = Trading halt indicator
+
+Prices are integers scaled by 10 000 (e.g. 2459800 = $245.98).
+Timestamps are seconds after midnight.
+"""
+
+from __future__ import annotations
+
+import zipfile
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pandas as pd
+from loguru import logger
+
+from ob_analytics.config import PipelineConfig
+from ob_analytics.protocols import (
+    DataWriter,
+    EventLoader,
+    Format,
+    MatchingEngine,
+    TradeInferrer,
+)
+
+
+# ── Constants ─────────────────────────────────────────────────────────
+
+_LOBSTER_COLS = ["time", "event_type", "id", "volume", "price", "direction"]
+
+_EVENT_TYPE_TO_ACTION: dict[int, str] = {
+    1: "created",
+    2: "changed",
+    3: "deleted",
+    4: "changed",
+    5: "changed",
+}
+
+_ACTION_TO_EVENT_TYPE: dict[str, int] = {
+    "created": 1,
+    "deleted": 3,
+}
+
+_DIRECTION_MAP: dict[int, str] = {1: "bid", -1: "ask"}
+_DIRECTION_REVERSE: dict[str, int] = {"bid": 1, "ask": -1}
+
+AVAILABLE_TICKERS = ("AAPL", "AMZN", "GOOG", "INTC", "MSFT")
+SAMPLE_DATE = "2012-06-21"
+_SAMPLE_URL = (
+    "https://lobsterdata.com/info/sample/"
+    "LOBSTER_SampleFile_{ticker}_{date}_{levels}.zip"
+)
+
+_DUMMY_BID_PRICE = -9999999999
+_DUMMY_ASK_PRICE = 9999999999
+
+
+# ── LobsterLoader ────────────────────────────────────────────────────
+
+
+class LobsterLoader:
+    """Load raw limit-order events from LOBSTER message files.
+
+    Satisfies the :class:`~ob_analytics.protocols.EventLoader` protocol.
+
+    Parameters
+    ----------
+    config : PipelineConfig, optional
+        Pipeline configuration.
+    trading_date : str or pd.Timestamp
+        The calendar date of the trading session (LOBSTER timestamps are
+        seconds after midnight and need a date anchor).
+    """
+
+    def __init__(
+        self,
+        config: PipelineConfig | None = None,
+        *,
+        trading_date: str | pd.Timestamp,
+    ) -> None:
+        self._config = config or PipelineConfig()
+        self._trading_date = pd.Timestamp(trading_date).normalize()
+        self._trading_halts: pd.DataFrame | None = None
+        self._cross_trades: pd.DataFrame | None = None
+
+    @property
+    def trading_halts(self) -> pd.DataFrame | None:
+        """Trading halt events extracted during the last :meth:`load`, if any."""
+        return self._trading_halts
+
+    @property
+    def cross_trades(self) -> pd.DataFrame | None:
+        """Cross-trade events extracted during the last :meth:`load`, if any."""
+        return self._cross_trades
+
+    def load(self, source: Any) -> pd.DataFrame:
+        """Load LOBSTER message data and return a cleaned events DataFrame.
+
+        Parameters
+        ----------
+        source : str, Path, or directory
+            Path to a LOBSTER message CSV, or a directory containing
+            message/orderbook file pairs.  When a directory is given the
+            loader auto-discovers files by the LOBSTER naming convention.
+
+        Returns
+        -------
+        pandas.DataFrame
+        """
+        source = Path(source)
+        msg_path = self._resolve_message_file(source)
+
+        logger.info("LobsterLoader: reading {}", msg_path)
+        raw = pd.read_csv(msg_path, header=None, names=_LOBSTER_COLS)
+
+        cfg = self._config
+        divisor = cfg.price_divisor
+
+        raw["price"] = (raw["price"] / divisor).round(cfg.price_decimals)
+        raw["volume"] = raw["volume"].astype(float).round(cfg.volume_decimals)
+
+        raw["timestamp"] = self._trading_date + pd.to_timedelta(
+            raw["time"], unit="s"
+        )
+        raw["exchange_timestamp"] = raw["timestamp"]
+
+        raw["raw_event_type"] = raw["event_type"]
+        raw["direction"] = raw["direction"].map(_DIRECTION_MAP)
+
+        # Separate special event types before mapping actions
+        halts = raw[raw["event_type"] == 7].copy()
+        cross = raw[raw["event_type"] == 6].copy()
+        self._trading_halts = halts if not halts.empty else None
+        self._cross_trades = cross if not cross.empty else None
+
+        events = raw[raw["event_type"].isin(_EVENT_TYPE_TO_ACTION)].copy()
+        events["action"] = events["event_type"].map(_EVENT_TYPE_TO_ACTION)
+
+        events["action"] = pd.Categorical(
+            events["action"],
+            categories=["created", "changed", "deleted"],
+            ordered=True,
+        )
+        events["direction"] = pd.Categorical(
+            events["direction"],
+            categories=["bid", "ask"],
+            ordered=True,
+        )
+
+        # Fill column: execution events carry the executed size
+        events["fill"] = np.where(
+            events["event_type"].isin([4, 5]),
+            events["volume"],
+            0.0,
+        )
+
+        events = events.reset_index(drop=True)
+        events["event_id"] = np.arange(1, len(events) + 1)
+        events["original_number"] = events["event_id"]
+
+        events = events[
+            [
+                "id",
+                "timestamp",
+                "exchange_timestamp",
+                "price",
+                "volume",
+                "action",
+                "direction",
+                "fill",
+                "event_id",
+                "original_number",
+                "raw_event_type",
+            ]
+        ]
+
+        logger.info(
+            "LobsterLoader: {} events ({} executions, {} halts, {} cross trades)",
+            len(events),
+            (events["raw_event_type"].isin([4, 5])).sum(),
+            len(halts),
+            len(cross),
+        )
+        return events
+
+    @staticmethod
+    def _resolve_message_file(source: Path) -> Path:
+        """Find the message CSV from *source* (file or directory)."""
+        if source.is_file():
+            return source
+        if source.is_dir():
+            candidates = sorted(source.glob("*_message*.csv"))
+            if not candidates:
+                candidates = sorted(source.glob("*message*.csv"))
+            if candidates:
+                return candidates[0]
+            raise FileNotFoundError(
+                f"No LOBSTER message file found in {source}"
+            )
+        raise FileNotFoundError(f"Path does not exist: {source}")
+
+
+# ── LobsterMatcher ───────────────────────────────────────────────────
+
+
+class LobsterMatcher:
+    """Pass-through matcher for LOBSTER data.
+
+    LOBSTER provides single-sided execution events (the resting order
+    only), so there are no bid/ask pairs to match.  This matcher simply
+    adds the required ``matching_event`` column filled with NaN.
+
+    Satisfies the :class:`~ob_analytics.protocols.MatchingEngine` protocol.
+    """
+
+    def __init__(self, config: PipelineConfig | None = None) -> None:
+        self._config = config or PipelineConfig()
+
+    def match(self, events: pd.DataFrame) -> pd.DataFrame:
+        events = events.copy()
+        events["matching_event"] = np.nan
+        return events
+
+
+# ── LobsterTradeInferrer ─────────────────────────────────────────────
+
+
+class LobsterTradeInferrer:
+    """Infer trades directly from LOBSTER execution events.
+
+    In LOBSTER, each execution event (type 4 or 5) represents one side
+    of a trade -- the **resting** (maker) order.  This inferrer builds
+    trade records directly from those events without requiring matched
+    pairs.
+
+    Satisfies the :class:`~ob_analytics.protocols.TradeInferrer` protocol.
+    """
+
+    def __init__(self, config: PipelineConfig | None = None) -> None:
+        self._config = config or PipelineConfig()
+
+    def infer_trades(self, events: pd.DataFrame) -> pd.DataFrame:
+        """Build a trades DataFrame from LOBSTER execution events.
+
+        Parameters
+        ----------
+        events : pandas.DataFrame
+            Events with ``raw_event_type`` column populated.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Trades with ``timestamp``, ``price``, ``volume``,
+            ``direction``, ``maker_event_id``, ``taker_event_id``,
+            ``maker``, ``taker``.
+        """
+        execs = events[
+            events["raw_event_type"].isin([4, 5])
+        ].copy().reset_index(drop=True)
+
+        if execs.empty:
+            return pd.DataFrame(
+                columns=[
+                    "timestamp", "price", "volume", "direction",
+                    "maker_event_id", "taker_event_id", "maker", "taker",
+                    "maker_og", "taker_og",
+                ]
+            )
+
+        # Direction inversion: execution of a resting ask = buyer-initiated
+        trade_direction = np.where(execs["direction"] == "ask", "buy", "sell")
+
+        maker_event_id = execs["event_id"].values
+        maker_id = execs["id"].values
+        maker_og = execs["original_number"].values
+
+        # Best-effort taker identification
+        taker_event_id = self._find_takers(events, execs)
+        id_to_id = dict(zip(events["event_id"], events["id"]))
+        id_to_og = dict(zip(events["event_id"], events["original_number"]))
+        taker_id = pd.array(
+            [id_to_id.get(t) if pd.notna(t) else pd.NA for t in taker_event_id],
+            dtype="object",
+        )
+        taker_og = pd.array(
+            [id_to_og.get(t) if pd.notna(t) else pd.NA for t in taker_event_id],
+            dtype="object",
+        )
+
+        trades = pd.DataFrame(
+            {
+                "timestamp": execs["timestamp"].values,
+                "price": execs["price"].values,
+                "volume": execs["volume"].values,
+                "direction": pd.Categorical(
+                    trade_direction, categories=["buy", "sell"], ordered=True
+                ),
+                "maker_event_id": maker_event_id,
+                "taker_event_id": taker_event_id,
+                "maker": maker_id,
+                "taker": taker_id,
+                "maker_og": maker_og,
+                "taker_og": taker_og,
+            }
+        )
+        trades = trades.sort_values("timestamp", kind="stable").reset_index(
+            drop=True
+        )
+
+        logger.info(
+            "LobsterTradeInferrer: {} trades ({} with identified taker)",
+            len(trades),
+            trades["taker_event_id"].notna().sum(),
+        )
+        return trades
+
+    @staticmethod
+    def _find_takers(
+        all_events: pd.DataFrame, execs: pd.DataFrame
+    ) -> np.ndarray:
+        """Best-effort heuristic to identify taker orders.
+
+        For each execution, look for the most recent type-1 submission
+        on the **opposite** side at a marketable price.
+        """
+        submissions = all_events[
+            all_events["raw_event_type"] == 1
+        ].copy()
+
+        if submissions.empty:
+            return pd.array([pd.NA] * len(execs), dtype="Int64")
+
+        result = pd.array([pd.NA] * len(execs), dtype="Int64")
+
+        for side, opp_side in [("bid", "ask"), ("ask", "bid")]:
+            side_execs = execs[execs["direction"] == side]
+            if side_execs.empty:
+                continue
+            opp_subs = submissions[
+                submissions["direction"] == opp_side
+            ].sort_values("timestamp", kind="stable")
+
+            if opp_subs.empty:
+                continue
+
+            merged = pd.merge_asof(
+                side_execs[["event_id", "timestamp", "price"]].sort_values(
+                    "timestamp"
+                ),
+                opp_subs[["event_id", "timestamp", "price"]].rename(
+                    columns={
+                        "event_id": "taker_eid",
+                        "price": "sub_price",
+                    }
+                ),
+                on="timestamp",
+                direction="backward",
+            )
+
+            if side == "bid":
+                marketable = merged["sub_price"] <= merged["price"]
+            else:
+                marketable = merged["sub_price"] >= merged["price"]
+
+            for idx, row in merged[marketable].iterrows():
+                exec_mask = execs["event_id"] == row["event_id"]
+                pos = exec_mask.values.nonzero()[0]
+                if len(pos) > 0:
+                    result[pos[0]] = int(row["taker_eid"])
+
+        return result
+
+
+# ── LobsterWriter ────────────────────────────────────────────────────
+
+
+class LobsterWriter:
+    """Write pipeline events back to LOBSTER dual-file format.
+
+    Satisfies the :class:`~ob_analytics.protocols.DataWriter` protocol.
+
+    Parameters
+    ----------
+    trading_date : str or pd.Timestamp
+        Calendar date of the session.
+    price_divisor : int
+        Multiplier to convert decimal prices back to LOBSTER integers.
+    """
+
+    def __init__(
+        self,
+        *,
+        trading_date: str | pd.Timestamp,
+        price_divisor: int = 10_000,
+    ) -> None:
+        self._trading_date = pd.Timestamp(trading_date).normalize()
+        self._price_divisor = price_divisor
+
+    def write(
+        self,
+        data: dict[str, pd.DataFrame],
+        dest: str | Path,
+        *,
+        ticker: str = "DATA",
+        num_levels: int = 10,
+        **kwargs: Any,
+    ) -> tuple[Path, Path]:
+        """Write events to LOBSTER message + orderbook files.
+
+        Parameters
+        ----------
+        data : dict
+            Must contain ``"events"`` key.
+        dest : str or Path
+            Output directory.
+        ticker : str
+            Ticker symbol for filename.
+        num_levels : int
+            Number of orderbook levels to write.
+
+        Returns
+        -------
+        tuple of Path
+            ``(message_path, orderbook_path)``
+        """
+        events = data["events"].copy()
+        dest = Path(dest)
+        dest.mkdir(parents=True, exist_ok=True)
+
+        date_str = self._trading_date.strftime("%Y-%m-%d")
+        base = f"{ticker}_{date_str}_{num_levels}"
+        msg_path = dest / f"{base}_message.csv"
+        ob_path = dest / f"{base}_orderbook.csv"
+
+        msg_df = self._events_to_message(events)
+        msg_df.to_csv(msg_path, index=False, header=False)
+
+        ob_df = self._reconstruct_orderbook(events, num_levels)
+        ob_df.to_csv(ob_path, index=False, header=False)
+
+        logger.info(
+            "LobsterWriter: wrote {} events to {} and {}",
+            len(msg_df),
+            msg_path.name,
+            ob_path.name,
+        )
+        return msg_path, ob_path
+
+    def _events_to_message(self, events: pd.DataFrame) -> pd.DataFrame:
+        """Convert pipeline events back to LOBSTER message format."""
+        if "raw_event_type" in events.columns and events["raw_event_type"].notna().any():
+            event_type = events["raw_event_type"].astype(int)
+        else:
+            event_type = events["action"].map(_ACTION_TO_EVENT_TYPE).fillna(2).astype(int)
+
+        midnight = self._trading_date
+        time_seconds = (events["timestamp"] - midnight).dt.total_seconds()
+
+        price_int = (events["price"] * self._price_divisor).round(0).astype(int)
+        direction_int = events["direction"].astype(str).map(_DIRECTION_REVERSE)
+
+        return pd.DataFrame(
+            {
+                "time": time_seconds,
+                "event_type": event_type,
+                "id": events["id"],
+                "volume": events["volume"],
+                "price": price_int,
+                "direction": direction_int,
+            }
+        )
+
+    def _reconstruct_orderbook(
+        self, events: pd.DataFrame, num_levels: int
+    ) -> pd.DataFrame:
+        """Rebuild the orderbook state at each event timestamp."""
+        book: dict[str, dict[float, float]] = {"bid": {}, "ask": {}}
+        rows: list[list[float]] = []
+
+        for _, ev in events.iterrows():
+            action = str(ev["action"])
+            direction = str(ev["direction"])
+            price = float(ev["price"])
+            volume = float(ev["volume"])
+            order_id = ev["id"]
+
+            if action == "created":
+                book[direction][price] = book[direction].get(price, 0) + volume
+            elif action == "deleted":
+                if price in book[direction]:
+                    book[direction][price] -= volume
+                    if book[direction][price] <= 1e-12:
+                        del book[direction][price]
+            elif action == "changed":
+                raw_type = ev.get("raw_event_type")
+                if raw_type in (4, 5):
+                    if price in book[direction]:
+                        book[direction][price] -= volume
+                        if book[direction][price] <= 1e-12:
+                            del book[direction][price]
+
+            row = self._snapshot_row(book, num_levels)
+            rows.append(row)
+
+        cols: list[str] = []
+        for i in range(1, num_levels + 1):
+            cols.extend([
+                f"ask_price_{i}", f"ask_size_{i}",
+                f"bid_price_{i}", f"bid_size_{i}",
+            ])
+
+        ob = pd.DataFrame(rows, columns=cols)
+
+        for col in cols:
+            if "price" in col:
+                ob[col] = (ob[col] * self._price_divisor).round(0).astype(int)
+
+        return ob
+
+    @staticmethod
+    def _snapshot_row(
+        book: dict[str, dict[float, float]], num_levels: int
+    ) -> list[float]:
+        """Build a single orderbook snapshot row."""
+        asks_sorted = sorted(book["ask"].items())
+        bids_sorted = sorted(book["bid"].items(), reverse=True)
+
+        row: list[float] = []
+        for i in range(num_levels):
+            if i < len(asks_sorted):
+                row.extend([asks_sorted[i][0], asks_sorted[i][1]])
+            else:
+                row.extend([_DUMMY_ASK_PRICE, 0])
+            if i < len(bids_sorted):
+                row.extend([bids_sorted[i][0], bids_sorted[i][1]])
+            else:
+                row.extend([_DUMMY_BID_PRICE, 0])
+
+        return row
+
+
+# ── LobsterFormat descriptor ─────────────────────────────────────────
+
+
+@dataclass
+class LobsterFormat(Format):
+    """Format descriptor for LOBSTER limit-order-book data.
+
+    Parameters
+    ----------
+    trading_date : str or pd.Timestamp
+        Calendar date of the trading session.
+    """
+
+    trading_date: str | pd.Timestamp = field(default=SAMPLE_DATE)
+
+    def create_loader(self, config: PipelineConfig) -> EventLoader:
+        return LobsterLoader(config, trading_date=self.trading_date)
+
+    def create_matcher(self, config: PipelineConfig) -> MatchingEngine:
+        return LobsterMatcher(config)
+
+    def create_trade_inferrer(self, config: PipelineConfig) -> TradeInferrer:
+        return LobsterTradeInferrer(config)
+
+    def create_writer(self, config: PipelineConfig) -> DataWriter:
+        return LobsterWriter(
+            trading_date=self.trading_date,
+            price_divisor=config.price_divisor,
+        )
+
+    def config_defaults(self) -> dict[str, Any]:
+        return {
+            "price_decimals": 2,
+            "price_divisor": 10_000,
+            "volume_decimals": 0,
+            "match_cutoff_ms": 100,
+            "price_jump_threshold": 5.0,
+        }
+
+
+# ── Sample data download ─────────────────────────────────────────────
+
+
+def download_sample(
+    ticker: str = "AAPL",
+    dest: str | Path | None = None,
+    levels: int = 10,
+) -> Path:
+    """Download a free LOBSTER sample data file.
+
+    Parameters
+    ----------
+    ticker : str
+        One of AAPL, AMZN, GOOG, INTC, MSFT.
+    dest : str or Path, optional
+        Destination directory.  Defaults to
+        ``~/.cache/ob-analytics/lobster/``.
+    levels : int
+        Number of orderbook levels (the sample files use 10).
+
+    Returns
+    -------
+    Path
+        Directory containing the extracted message and orderbook files.
+    """
+    import urllib.request
+
+    ticker = ticker.upper()
+    if ticker not in AVAILABLE_TICKERS:
+        raise ValueError(
+            f"Unknown ticker {ticker!r}. Available: {', '.join(AVAILABLE_TICKERS)}"
+        )
+
+    if dest is None:
+        dest = Path.home() / ".cache" / "ob-analytics" / "lobster"
+    dest = Path(dest)
+    extract_dir = dest / f"{ticker}_{SAMPLE_DATE}_{levels}"
+
+    expected_msg = list(extract_dir.glob("*_message*.csv"))
+    if expected_msg:
+        logger.info("download_sample: using cached data in {}", extract_dir)
+        return extract_dir
+
+    url = _SAMPLE_URL.format(ticker=ticker, date=SAMPLE_DATE, levels=levels)
+    dest.mkdir(parents=True, exist_ok=True)
+    zip_path = dest / f"{ticker}_{SAMPLE_DATE}_{levels}.zip"
+
+    logger.info("download_sample: downloading {} ...", url)
+    urllib.request.urlretrieve(url, zip_path)
+
+    extract_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path) as zf:
+        zf.extractall(extract_dir)
+
+    zip_path.unlink()
+    logger.info("download_sample: extracted to {}", extract_dir)
+    return extract_dir

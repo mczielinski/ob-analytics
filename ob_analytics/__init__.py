@@ -21,7 +21,13 @@ All processing stages are pluggable via :mod:`~ob_analytics.protocols`.
 
 from loguru import logger
 from ob_analytics.config import PipelineConfig
-from ob_analytics.data import get_zombie_ids, load_data, process_data, save_data
+from ob_analytics.data import (
+    get_zombie_ids,
+    load_data,
+    process_data,
+    register_writer,
+    save_data,
+)
 from ob_analytics.depth import (
     depth_metrics,
     filter_depth,
@@ -29,7 +35,9 @@ from ob_analytics.depth import (
     price_level_volume,
 )
 from ob_analytics.event_processing import (
+    BitstampFormat,
     BitstampLoader,
+    BitstampWriter,
     load_event_data,
     order_aggressiveness,
 )
@@ -45,12 +53,20 @@ from ob_analytics.flow_toxicity import (
     compute_vpin,
     order_flow_imbalance,
 )
+from ob_analytics.lobster import (
+    LobsterFormat,
+    LobsterLoader,
+    LobsterMatcher,
+    LobsterTradeInferrer,
+    LobsterWriter,
+    download_sample,
+)
 from ob_analytics.matching_engine import NeedlemanWunschMatcher, event_match
 from ob_analytics.models import DepthLevel, KyleLambdaResult, OrderBookSnapshot, OrderEvent, Trade
 from ob_analytics.order_book_reconstruction import order_book
 from ob_analytics.order_types import set_order_types
-from ob_analytics.pipeline import Pipeline, PipelineResult
-from ob_analytics.protocols import EventLoader, MatchingEngine, TradeInferrer
+from ob_analytics.pipeline import Pipeline, PipelineResult, register_format
+from ob_analytics.protocols import DataWriter, EventLoader, Format, MatchingEngine, TradeInferrer
 from ob_analytics.trades import DefaultTradeInferrer, match_trades, trade_impacts
 from ob_analytics.visualisation import (
     PlotTheme,
@@ -70,6 +86,12 @@ from ob_analytics.visualisation import (
     save_figure,
     set_plot_theme,
 )
+
+# ── Register built-in formats and writers ─────────────────────────────
+register_format("bitstamp", BitstampFormat)
+register_format("lobster", LobsterFormat)
+register_writer("bitstamp", BitstampWriter)
+register_writer("lobster", LobsterWriter)
 
 logger.disable("ob_analytics")
 
@@ -100,12 +122,27 @@ __all__ = [
     "KyleLambdaResult",
     # Configuration
     "PipelineConfig",
-    # Protocols
+    # Protocols and base classes
     "EventLoader",
     "MatchingEngine",
     "TradeInferrer",
-    # Default implementations
+    "DataWriter",
+    "Format",
+    # Format registration
+    "register_format",
+    "register_writer",
+    # Bitstamp implementations
     "BitstampLoader",
+    "BitstampWriter",
+    "BitstampFormat",
+    # LOBSTER implementations
+    "LobsterLoader",
+    "LobsterMatcher",
+    "LobsterTradeInferrer",
+    "LobsterWriter",
+    "LobsterFormat",
+    "download_sample",
+    # Other implementations
     "NeedlemanWunschMatcher",
     "DefaultTradeInferrer",
     # Domain models
