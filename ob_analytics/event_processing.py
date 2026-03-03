@@ -1,11 +1,15 @@
-"""Event loading and aggressiveness computation.
+"""Event loading, writing, and aggressiveness computation.
 
 Contains :class:`BitstampLoader` (the default :class:`EventLoader`
-implementation) and the :func:`order_aggressiveness` calculation.
+implementation), :class:`BitstampWriter` (Bitstamp CSV writer),
+:class:`BitstampFormat` (format descriptor), and the
+:func:`order_aggressiveness` calculation.
 """
 
+from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -15,6 +19,13 @@ from loguru import logger
 from ob_analytics._utils import validate_columns, validate_non_empty
 from ob_analytics.config import PipelineConfig
 from ob_analytics.exceptions import InvalidDataError
+from ob_analytics.protocols import (
+    DataWriter,
+    EventLoader,
+    Format,
+    MatchingEngine,
+    TradeInferrer,
+)
 
 
 class BitstampLoader:
@@ -98,6 +109,8 @@ class BitstampLoader:
             lambda x: np.sort(np.asarray(x.values), kind="stable")
         )
         events["timestamp"] = ts_sorted
+
+        events["raw_event_type"] = pd.NA
 
         return events
 
@@ -235,3 +248,96 @@ def order_aggressiveness(
         events.drop(columns=["diff_bps"], inplace=True)
 
     return events
+
+
+# ── BitstampWriter ────────────────────────────────────────────────────
+
+
+def _datetime_to_numeric(series: pd.Series, unit: str) -> pd.Series:
+    """Convert a datetime Series back to numeric timestamps."""
+    epoch = pd.Timestamp("1970-01-01")
+    delta = series - epoch
+    divisors = {"ms": 1_000_000, "us": 1_000, "ns": 1}
+    return (delta.view("int64") // divisors[unit]).astype("int64")
+
+
+class BitstampWriter:
+    """Write pipeline events back to Bitstamp-format CSV.
+
+    Satisfies the :class:`~ob_analytics.protocols.DataWriter` protocol.
+    """
+
+    def __init__(self, config: PipelineConfig | None = None) -> None:
+        self._config = config or PipelineConfig()
+
+    def write(
+        self,
+        data: dict[str, pd.DataFrame],
+        dest: str | Path,
+        **kwargs: Any,
+    ) -> Path:
+        """Write the events DataFrame to a Bitstamp-format CSV.
+
+        Parameters
+        ----------
+        data : dict of str to DataFrame
+            Must contain an ``"events"`` key.
+        dest : str or Path
+            Output CSV file path.
+
+        Returns
+        -------
+        Path
+            The written file path.
+        """
+        events = data["events"]
+        p = Path(dest)
+        ts_unit = self._config.timestamp_unit
+        out = pd.DataFrame(
+            {
+                "id": events["id"],
+                "timestamp": _datetime_to_numeric(events["timestamp"], ts_unit),
+                "exchange.timestamp": _datetime_to_numeric(
+                    events["exchange_timestamp"], ts_unit
+                ),
+                "price": events["price"],
+                "volume": events["volume"],
+                "action": events["action"].astype(str),
+                "direction": events["direction"].astype(str),
+            }
+        )
+        p.parent.mkdir(parents=True, exist_ok=True)
+        out.to_csv(p, index=False)
+        return p
+
+
+# ── BitstampFormat descriptor ─────────────────────────────────────────
+
+
+class BitstampFormat(Format):
+    """Format descriptor for Bitstamp-style CSV data."""
+
+    def create_loader(self, config: PipelineConfig) -> EventLoader:
+        return BitstampLoader(config)
+
+    def create_matcher(self, config: PipelineConfig) -> MatchingEngine:
+        from ob_analytics.matching_engine import NeedlemanWunschMatcher
+
+        return NeedlemanWunschMatcher(config)
+
+    def create_trade_inferrer(self, config: PipelineConfig) -> TradeInferrer:
+        from ob_analytics.trades import DefaultTradeInferrer
+
+        return DefaultTradeInferrer(config)
+
+    def create_writer(self, config: PipelineConfig) -> DataWriter:
+        return BitstampWriter(config)
+
+    def config_defaults(self) -> dict[str, Any]:
+        return {
+            "price_decimals": 2,
+            "volume_decimals": 8,
+            "timestamp_unit": "ms",
+            "match_cutoff_ms": 5000,
+            "price_jump_threshold": 10.0,
+        }

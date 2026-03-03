@@ -1,6 +1,9 @@
 """Data processing utilities: loading, saving, and processing order book data."""
 
+from __future__ import annotations
+
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -12,7 +15,20 @@ from ob_analytics.depth import depth_metrics, price_level_volume
 from ob_analytics.event_processing import load_event_data, order_aggressiveness
 from ob_analytics.matching_engine import event_match
 from ob_analytics.order_types import set_order_types
+from ob_analytics.protocols import DataWriter
 from ob_analytics.trades import match_trades
+
+
+# ── Writer registry ───────────────────────────────────────────────────
+
+_WRITERS: dict[str, type] = {}
+
+
+def register_writer(name: str, writer_cls: type) -> None:
+    """Register a :class:`DataWriter` implementation under *name* for use
+    with ``save_data(fmt=name)``.
+    """
+    _WRITERS[name.lower()] = writer_cls
 
 
 def get_zombie_ids(events: pd.DataFrame, trades: pd.DataFrame) -> list[int]:
@@ -183,6 +199,8 @@ def save_data(
     path: str | Path,
     *,
     fmt: str = "parquet",
+    writer: DataWriter | None = None,
+    **write_kwargs: Any,
 ) -> None:
     """Save pipeline data to disk.
 
@@ -192,11 +210,31 @@ def save_data(
         The DataFrames to save (keys become file stems).
     path : str or Path
         Destination directory (Parquet) or file (pickle).
-    fmt : ``"parquet"`` or ``"pickle"``
-        Serialisation format.  Parquet is the default and recommended
-        format -- it is portable, fast, and safe for untrusted data.
+    fmt : str
+        Serialisation format.  Built-in values are ``"parquet"``
+        (default) and ``"pickle"``.  Additional formats (e.g.
+        ``"bitstamp"``, ``"lobster"``) are available when the
+        corresponding writer has been registered via
+        :func:`register_writer`.
+    writer : DataWriter, optional
+        A pre-constructed writer instance.  When provided, *fmt* is
+        ignored and the writer is used directly.  This is the preferred
+        path when saving from a :class:`Pipeline` that already holds a
+        configured writer.
+    **write_kwargs
+        Extra keyword arguments forwarded to ``writer.write()``.
     """
     p = Path(path)
+
+    if writer is not None:
+        writer.write(lob_data, p, **write_kwargs)
+        return
+
+    if fmt in _WRITERS:
+        w = _WRITERS[fmt]()
+        w.write(lob_data, p, **write_kwargs)
+        return
+
     if fmt == "parquet":
         p.mkdir(parents=True, exist_ok=True)
         for name, df in lob_data.items():
@@ -208,4 +246,7 @@ def save_data(
         )
         pd.to_pickle(lob_data, p)  # type: ignore
     else:
-        raise ValueError(f"Unsupported format: {fmt!r}. Use 'parquet' or 'pickle'.")
+        available = ["parquet", "pickle"] + sorted(_WRITERS)
+        raise ValueError(
+            f"Unsupported format: {fmt!r}. Available: {', '.join(available)}"
+        )

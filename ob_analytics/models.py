@@ -30,7 +30,7 @@ class OrderEvent(BaseModel):
     model_config = {"frozen": True}
 
     event_id: int = Field(description="Sequential event identifier assigned during loading.")
-    order_id: int = Field(description="Exchange-assigned order identifier.")
+    order_id: int | str = Field(description="Exchange-assigned order identifier.")
     timestamp: datetime
     exchange_timestamp: datetime
     price: Decimal = Field(gt=0)

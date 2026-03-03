@@ -79,7 +79,7 @@ class DefaultTradeInferrer:
         ask_exchange_ts = matching_asks["exchange_timestamp"]
         bid_maker = (bid_exchange_ts < ask_exchange_ts) | (
             (bid_exchange_ts == ask_exchange_ts)
-            & (matching_bids["id"] < matching_asks["id"])
+            & (matching_bids["event_id"] < matching_asks["event_id"])
         )
 
         timestamp = np.where(

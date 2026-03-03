@@ -46,6 +46,16 @@ class PipelineConfig(BaseModel):
         ),
     )
 
+    price_divisor: int = Field(
+        default=1,
+        ge=1,
+        description=(
+            "Divisor applied to raw prices before rounding.  1 (default) "
+            "means no scaling.  LOBSTER uses 10 000 (prices are in "
+            "ten-thousandths of a dollar)."
+        ),
+    )
+
     # ── Matching engine ───────────────────────────────────────────────────
     match_cutoff_ms: int = Field(
         default=5000,

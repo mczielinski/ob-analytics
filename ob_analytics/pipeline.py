@@ -22,11 +22,20 @@ Usage with custom configuration::
 Usage with a custom loader (any object satisfying EventLoader)::
 
     Pipeline(loader=my_custom_loader).run("data/feed.csv")
+
+Usage with a Format descriptor::
+
+    from ob_analytics.event_processing import BitstampFormat
+
+    result = Pipeline(format=BitstampFormat()).run("orders.csv")
 """
 
 
-from dataclasses import dataclass
+from __future__ import annotations
+
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -39,8 +48,26 @@ from ob_analytics.matching_engine import NeedlemanWunschMatcher
 from ob_analytics.order_types import set_order_types
 from loguru import logger
 
-from ob_analytics.protocols import EventLoader, MatchingEngine, TradeInferrer
+from ob_analytics.protocols import (
+    DataWriter,
+    EventLoader,
+    Format,
+    MatchingEngine,
+    TradeInferrer,
+)
 from ob_analytics.trades import DefaultTradeInferrer
+
+
+# ── Format registry ───────────────────────────────────────────────────
+
+_FORMATS: dict[str, type[Format]] = {}
+
+
+def register_format(name: str, format_cls: type[Format]) -> None:
+    """Register a :class:`Format` subclass under *name* for lookup via
+    :meth:`Pipeline.from_format`.
+    """
+    _FORMATS[name.lower()] = format_cls
 
 
 @dataclass(frozen=True)
@@ -61,6 +88,8 @@ class PipelineResult:
         VPIN buckets (only when ``config.vpin_bucket_volume`` is set).
     ofi : pandas.DataFrame or None
         Order flow imbalance per minute (only when VPIN is computed).
+    metadata : dict
+        Provenance and format-specific metadata populated during the run.
     """
 
     events: pd.DataFrame
@@ -69,6 +98,7 @@ class PipelineResult:
     depth_summary: pd.DataFrame
     vpin: pd.DataFrame | None = None
     ofi: pd.DataFrame | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class Pipeline:
@@ -83,6 +113,10 @@ class Pipeline:
     config : PipelineConfig, optional
         Central configuration.  Passed to default components when they
         are not explicitly provided.
+    format : Format, optional
+        A format descriptor that provides default loader, matcher,
+        trade inferrer, writer, and config overrides.  Explicit
+        component arguments take precedence over format defaults.
     loader : EventLoader, optional
         Loads raw events from a data source.  Defaults to
         :class:`BitstampLoader`.
@@ -98,29 +132,73 @@ class Pipeline:
         self,
         config: PipelineConfig | None = None,
         *,
+        format: Format | None = None,
         loader: EventLoader | None = None,
         matcher: MatchingEngine | None = None,
         trade_inferrer: TradeInferrer | None = None,
     ) -> None:
-        self.config = config or PipelineConfig()
-        self.loader = loader or BitstampLoader(self.config)
-        self.matcher = matcher or NeedlemanWunschMatcher(self.config)
-        self.trade_inferrer = trade_inferrer or DefaultTradeInferrer(self.config)
+        if format is not None:
+            defaults = format.config_defaults()
+            if config is None:
+                config = PipelineConfig(**defaults)
+            self.config = config
+            self.loader = loader or format.create_loader(config)
+            self.matcher = matcher or format.create_matcher(config)
+            self.trade_inferrer = (
+                trade_inferrer or format.create_trade_inferrer(config)
+            )
+            self._writer: DataWriter | None = format.create_writer(config)
+        else:
+            self.config = config or PipelineConfig()
+            self.loader = loader or BitstampLoader(self.config)
+            self.matcher = matcher or NeedlemanWunschMatcher(self.config)
+            self.trade_inferrer = (
+                trade_inferrer or DefaultTradeInferrer(self.config)
+            )
+            self._writer = None
 
-    def run(self, source: str | Path) -> PipelineResult:
+        self._format = format
+
+    @property
+    def writer(self) -> DataWriter | None:
+        """The format-provided writer, if any."""
+        return self._writer
+
+    @classmethod
+    def from_format(cls, name: str, **kwargs: Any) -> Pipeline:
+        """Create a pipeline from a registered format name.
+
+        Parameters
+        ----------
+        name : str
+            Registered format name (case-insensitive), e.g. ``"bitstamp"``
+            or ``"lobster"``.
+        **kwargs
+            Passed to the :class:`Format` constructor.
+        """
+        key = name.lower()
+        if key not in _FORMATS:
+            available = ", ".join(sorted(_FORMATS)) or "(none)"
+            raise ValueError(
+                f"Unknown format {name!r}. Registered formats: {available}"
+            )
+        fmt = _FORMATS[key](**kwargs)
+        return cls(format=fmt)
+
+    def run(self, source: Any) -> PipelineResult:
         """Execute the full pipeline on *source* and return results.
 
         Parameters
         ----------
-        source : str or Path
-            Path to the raw events file (e.g. a Bitstamp CSV).
+        source
+            Data source for the loader (typically a file path).
 
         Returns
         -------
         PipelineResult
             Frozen dataclass with ``events``, ``trades``, ``depth``,
-            ``depth_summary``, and optionally ``vpin`` and ``ofi``
-            DataFrames.
+            ``depth_summary``, and optionally ``vpin``, ``ofi``, and
+            ``metadata`` fields.
 
         Steps
         -----
@@ -182,6 +260,15 @@ class Pipeline:
             logger.info("Pipeline: computing order flow imbalance")
             ofi_df = order_flow_imbalance(trades)
 
+        # ── Provenance metadata ────────────────────────────────────────
+        metadata: dict[str, Any] = {
+            "source": str(source),
+            "format": type(self._format).__name__ if self._format else None,
+            "config": self.config.model_dump(),
+            "n_events": len(events),
+            "n_trades": len(trades),
+        }
+
         logger.info("Pipeline: complete")
         return PipelineResult(
             events=events,
@@ -190,4 +277,5 @@ class Pipeline:
             depth_summary=depth_summary,
             vpin=vpin_df,
             ofi=ofi_df,
+            metadata=metadata,
         )

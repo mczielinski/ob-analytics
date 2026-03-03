@@ -16,8 +16,10 @@ protocol to :class:`Pipeline`.
 """
 
 
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import pandas as pd
 
@@ -30,13 +32,15 @@ class EventLoader(Protocol):
     in :class:`~ob_analytics.models.OrderEvent`.
     """
 
-    def load(self, source: str | Path) -> pd.DataFrame:
+    def load(self, source: Any) -> pd.DataFrame:
         """Load events from *source* and return a DataFrame.
 
         Parameters
         ----------
-        source : str or Path
-            Data source identifier (e.g. a file path).
+        source
+            Data source identifier.  The canonical type is ``str | Path``
+            (a file path), but loaders may accept richer descriptors
+            such as dicts, dataclasses, or connection strings.
 
         Returns
         -------
@@ -75,7 +79,7 @@ class MatchingEngine(Protocol):
 class TradeInferrer(Protocol):
     """Constructs trade records from matched event pairs.
 
-    Receives the events DataFrame (with ``matching.event`` populated)
+    Receives the events DataFrame (with ``matching_event`` populated)
     and returns a trades DataFrame.
     """
 
@@ -94,3 +98,69 @@ class TradeInferrer(Protocol):
             ``direction``, ``maker_event_id``, ``taker_event_id``.
         """
         ...
+
+
+@runtime_checkable
+class DataWriter(Protocol):
+    """Writes pipeline results to a format-specific output."""
+
+    def write(
+        self,
+        data: dict[str, pd.DataFrame],
+        dest: str | Path,
+        **kwargs: Any,
+    ) -> Path | tuple[Path, ...]:
+        """Write pipeline DataFrames to *dest*.
+
+        Parameters
+        ----------
+        data : dict of str to DataFrame
+            Pipeline output keyed by name (e.g. ``"events"``, ``"trades"``,
+            ``"depth"``, ``"depth_summary"``).
+        dest : str or Path
+            Output path (file or directory, format-dependent).
+        """
+        ...
+
+
+class Format:
+    """Base class for data format descriptors.
+
+    Subclass to define how a specific data format's events should be
+    loaded, matched, trade-inferred, and optionally written back.  Pass
+    instances to ``Pipeline(format=...)`` for one-line setup.
+
+    Individual components can still be overridden::
+
+        Pipeline(format=LobsterFormat(...), matcher=MyMatcher())
+    """
+
+    def create_loader(self, config: Any) -> EventLoader:
+        """Return a loader for this format."""
+        raise NotImplementedError
+
+    def create_matcher(self, config: Any) -> MatchingEngine:
+        """Return a matching engine for this format.
+
+        Defaults to :class:`NeedlemanWunschMatcher`.
+        """
+        from ob_analytics.matching_engine import NeedlemanWunschMatcher
+
+        return NeedlemanWunschMatcher(config)
+
+    def create_trade_inferrer(self, config: Any) -> TradeInferrer:
+        """Return a trade inferrer for this format.
+
+        Defaults to :class:`DefaultTradeInferrer`.
+        """
+        from ob_analytics.trades import DefaultTradeInferrer
+
+        return DefaultTradeInferrer(config)
+
+    def create_writer(self, config: Any) -> DataWriter | None:
+        """Return a writer for this format, or ``None`` if not supported."""
+        return None
+
+    def config_defaults(self) -> dict[str, Any]:
+        """Return default :class:`PipelineConfig` overrides for this format."""
+        return {}
