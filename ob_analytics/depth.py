@@ -100,8 +100,6 @@ class DepthMetricsEngine:
         volumes = ordered["volume"].values
         sides = np.where(ordered["direction"].values == "bid", 0, 1)
 
-        self._initialise_best(np.asarray(prices_int), np.asarray(sides))
-
         n = len(ordered)
         result = np.zeros((n, self._row_len), dtype=np.float64)
 

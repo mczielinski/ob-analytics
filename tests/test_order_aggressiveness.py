@@ -135,8 +135,8 @@ class TestOrderAggressiveness:
         row2 = result[result["event_id"] == 2].iloc[0]
         assert pd.isna(row2["aggressiveness_bps"])
 
-    def test_missing_timestamps_raises(self):
-        """Raise InvalidDataError when order timestamps aren't in depth_summary."""
+    def test_missing_timestamps_handled_gracefully(self):
+        """Missing depth_summary timestamps don't crash -- merge_asof handles gaps."""
         events, depth = _make_events_and_depth(
             [
                 (1, "bid", "created", "resting-limit", "2015-01-01 00:00:01", 100),
@@ -147,5 +147,5 @@ class TestOrderAggressiveness:
                 (1, "2015-01-01 00:00:01", 100, 110),
             ],
         )
-        with pytest.raises(InvalidDataError, match="Not all order timestamps"):
-            order_aggressiveness(events, depth)
+        result = order_aggressiveness(events, depth)
+        assert "aggressiveness_bps" in result.columns

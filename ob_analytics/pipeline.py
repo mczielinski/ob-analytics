@@ -224,21 +224,38 @@ class Pipeline:
         logger.info("Pipeline: classifying order types")
         events = set_order_types(events, trades)
 
-        logger.info("Pipeline: detecting zombie orders")
-        zombie_ids = get_zombie_ids(events, trades)
-        if zombie_ids:
-            logger.info("Pipeline: removing {} zombie orders", len(zombie_ids))
-        events = events[~events["id"].isin(zombie_ids)]
+        if self.config.skip_zombie_detection:
+            logger.info("Pipeline: zombie detection skipped (config)")
+        else:
+            logger.info("Pipeline: detecting zombie orders")
+            zombie_ids = get_zombie_ids(events, trades)
+            if zombie_ids:
+                logger.info("Pipeline: removing {} zombie orders", len(zombie_ids))
+            events = events[~events["id"].isin(zombie_ids)]
 
-        logger.info("Pipeline: computing price-level volume")
-        depth = price_level_volume(events)
+        depth_override = None
+        if self._format is not None:
+            depth_override = self._format.compute_depth(
+                events, self.config, source
+            )
 
-        logger.info("Pipeline: computing depth metrics")
-        depth_summary = depth_metrics(
-            depth,
-            bps=self.config.depth_bps,
-            bins=self.config.depth_bins,
-        )
+        if depth_override is not None:
+            depth, depth_summary = depth_override
+            logger.info(
+                "Pipeline: using format-provided depth ({} rows, {} summary rows)",
+                len(depth),
+                len(depth_summary),
+            )
+        else:
+            logger.info("Pipeline: computing price-level volume")
+            depth = price_level_volume(events)
+
+            logger.info("Pipeline: computing depth metrics")
+            depth_summary = depth_metrics(
+                depth,
+                bps=self.config.depth_bps,
+                bins=self.config.depth_bins,
+            )
 
         logger.info("Pipeline: computing order aggressiveness")
         events = order_aggressiveness(events, depth_summary)

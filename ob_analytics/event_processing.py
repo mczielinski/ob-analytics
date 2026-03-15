@@ -207,10 +207,14 @@ def order_aggressiveness(
             & events["type"].isin(["flashed-limit", "resting-limit"])
         ].sort_values(by="timestamp", kind="stable")
 
-        if not all(orders["timestamp"].isin(depth_summary["timestamp"])):
-            raise InvalidDataError(
-                "Not all order timestamps are present in depth_summary. "
-                "Ensure depth_summary covers the full event time range."
+        missing = ~orders["timestamp"].isin(depth_summary["timestamp"])
+        if missing.any():
+            logger.debug(
+                "order_aggressiveness: {}/{} {} order timestamps not in "
+                "depth_summary (merge_asof will handle gracefully)",
+                missing.sum(),
+                len(orders),
+                side,
             )
 
         best_price_col = f"best_{side}_price"

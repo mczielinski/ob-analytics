@@ -161,6 +161,21 @@ class Format:
         """Return a writer for this format, or ``None`` if not supported."""
         return None
 
+    def compute_depth(
+        self,
+        events: pd.DataFrame,
+        config: Any,
+        source: Any,
+    ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
+        """Optionally compute depth and depth_summary directly.
+
+        Return ``None`` (default) to use the standard
+        ``price_level_volume`` → ``depth_metrics`` pipeline.  Return
+        ``(depth, depth_summary)`` to override with format-specific
+        ground-truth data (e.g. LOBSTER orderbook files).
+        """
+        return None
+
     def config_defaults(self) -> dict[str, Any]:
         """Return default :class:`PipelineConfig` overrides for this format."""
         return {}

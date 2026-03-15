@@ -99,6 +99,14 @@ class PipelineConfig(BaseModel):
             "the order book to populate before computing metrics."
         ),
     )
+    skip_zombie_detection: bool = Field(
+        default=False,
+        description=(
+            "Skip zombie order detection.  Enable for data sources like "
+            "where orders consumed through execution do not "
+            "receive explicit deletion events."
+        ),
+    )
 
     # ── Flow toxicity ─────────────────────────────────────────────────
     vpin_bucket_volume: float | None = Field(
