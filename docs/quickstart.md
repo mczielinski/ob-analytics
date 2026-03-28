@@ -449,9 +449,69 @@ register_plot_backend("bokeh", "my_package._bokeh_backend")
 
 ---
 
+## 9. Demo Scripts
+
+Both demo scripts run the full pipeline, save Parquet output, verify round-trip
+I/O, and generate an HTML plot gallery.
+
+**Bitstamp:**
+
+```bash
+uv run python scripts/bitstamp_demo.py
+uv run python scripts/bitstamp_demo.py --input path/to/orders.csv
+uv run python scripts/bitstamp_demo.py --output ~/Desktop/bitstamp_gallery
+```
+
+**LOBSTER:**
+
+```bash
+uv run python scripts/lobster_demo.py
+uv run python scripts/lobster_demo.py --ticker MSFT
+uv run python scripts/lobster_demo.py --output ~/Desktop/lobster_gallery
+```
+
+---
+
+## 10. Command-Line Interface
+
+Installing the package registers the `ob-analytics` command. All subcommands
+accept `-v` / `--verbose` for debug-level logging.
+
+### Process a data source
+
+```bash
+ob-analytics process orders.csv -o results/
+ob-analytics process data/ --format lobster --trading-date 2012-06-21
+ob-analytics process orders.csv -o results/ --gallery
+```
+
+### Generate a gallery from saved Parquet
+
+```bash
+ob-analytics gallery results/parquet/ -o my_gallery/
+ob-analytics gallery results/parquet/ --volume-scale 1e-8 --title "My Analysis"
+```
+
+### Run demos
+
+```bash
+ob-analytics bitstamp-demo --input orders.csv -o demo_out/
+ob-analytics lobster-demo --ticker AAPL -o demo_out/
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `process` | Run the pipeline on a data source, save Parquet (optional `--gallery`) |
+| `gallery` | Generate an HTML plot gallery from saved Parquet data |
+| `bitstamp-demo` | Run the Bitstamp demo (pipeline + gallery) |
+| `lobster-demo` | Download LOBSTER sample data and run the demo (pipeline + gallery) |
+
+---
+
 ## Next steps
 
 - [API Reference](api/pipeline.md) for detailed documentation
+- [CLI Reference](api/cli.md) for CLI API docs
 - [Changelog](changelog.md) for recent changes
 - [GitHub README](https://github.com/mczielinski/ob-analytics) for
   architecture diagrams

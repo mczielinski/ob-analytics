@@ -1,7 +1,7 @@
 # ob-analytics
 
 [![License](http://img.shields.io/badge/license-GPL%20%28%3E=%202%29-blue.svg?style=flat)](http://www.gnu.org/licenses/gpl-2.0.html)
-[![Tests](https://img.shields.io/badge/tests-207%20passed-brightgreen.svg)](tests/)
+[![CI](https://github.com/mczielinski/ob-analytics/actions/workflows/ci.yml/badge.svg)](https://github.com/mczielinski/ob-analytics/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org)
 
 **Limit order book analytics and visualization for Python.**
@@ -28,10 +28,12 @@ or [LOBSTER](https://lobsterdata.com/) message and orderbook files.
 - [Quickstart](#quickstart)
 - [Architecture](#architecture)
 - [Data Formats](#data-formats)
+- [Demo Scripts](#demo-scripts)
+- [CLI](#cli)
 - [Configuration](#configuration)
 - [Visualization](#visualization)
 - [Extending the Package](#extending-the-package)
-- [Testing](#testing)
+- [Testing & CI](#testing--ci)
 - [Documentation](#documentation)
 - [License](#license)
 
@@ -240,6 +242,7 @@ ob_analytics/
 ├── protocols.py          # EventLoader, MatchingEngine, TradeInferrer, DataWriter, Format
 ├── models.py             # OrderEvent, Trade, DepthLevel, OrderBookSnapshot, KyleLambdaResult
 ├── exceptions.py         # ObAnalyticsError hierarchy
+├── cli.py               # CLI entry point (process, gallery, bitstamp-demo, lobster-demo)
 │
 ├── event_processing.py   # BitstampLoader, BitstampWriter, BitstampFormat
 ├── lobster.py            # LobsterLoader/Matcher/TradeInferrer/Writer/Format, download_sample
@@ -269,13 +272,52 @@ ob_analytics/
 | **Bitstamp CSV** | `Pipeline()` (default) | Needleman–Wunsch | Single CSV with order events |
 | **LOBSTER** | `Pipeline(format=LobsterFormat(trading_date=...))` | Pass-through | Message file + optional orderbook; round-trip I/O via `LobsterWriter` |
 
-LOBSTER demo (downloads sample data, runs pipeline, writes Parquet and a plot
-gallery):
+---
+
+## Demo Scripts
+
+Both demo scripts run the full pipeline, save Parquet output, perform a
+round-trip write/re-read verification, and generate an HTML plot gallery.
+
+**Bitstamp** (uses bundled or user-supplied CSV):
 
 ```bash
-uv run python scripts/lobster_demo.py          # AAPL by default
-uv run python scripts/lobster_demo.py --ticker MSFT
+uv run python scripts/bitstamp_demo.py
+uv run python scripts/bitstamp_demo.py --input path/to/orders.csv
+uv run python scripts/bitstamp_demo.py --output ~/Desktop/bitstamp_gallery
 ```
+
+**LOBSTER** (downloads free sample data):
+
+```bash
+uv run python scripts/lobster_demo.py
+uv run python scripts/lobster_demo.py --ticker MSFT
+uv run python scripts/lobster_demo.py --output ~/Desktop/lobster_gallery
+```
+
+---
+
+## CLI
+
+Installing the package registers the `ob-analytics` command via
+`[project.scripts]` in `pyproject.toml`.
+
+```bash
+ob-analytics process orders.csv -o results/
+ob-analytics process data/ --format lobster --trading-date 2012-06-21 --gallery
+ob-analytics gallery results/parquet/ -o my_gallery/ --volume-scale 1e-8
+ob-analytics bitstamp-demo --input orders.csv -o demo_out/
+ob-analytics lobster-demo --ticker AAPL -o demo_out/
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `process` | Run the pipeline on a data source, save Parquet results (optional `--gallery`) |
+| `gallery` | Generate an HTML plot gallery from saved Parquet data |
+| `bitstamp-demo` | Run the Bitstamp demo (pipeline + gallery) |
+| `lobster-demo` | Download LOBSTER sample data and run the demo (pipeline + gallery) |
+
+Pass `-v` / `--verbose` for debug-level logging.
 
 ---
 
@@ -364,15 +406,25 @@ Pipeline(format=LobsterFormat(...), matcher=MyMatcher())
 
 ---
 
-## Testing
+## Testing & CI
 
 ```bash
 uv run pytest tests/ -v
 uv run pytest tests/ --cov=ob_analytics
+uv run ruff check ob_analytics/ tests/        # lint
+uv run ruff format --check ob_analytics/ tests/  # format check
+uv run ty check ob_analytics/                  # type check (Astral ty)
 ```
 
 200+ pytest tests covering loaders, matching, trades, depth, visualization,
 LOBSTER paths, and pipeline integration.
+
+**CI** runs automatically on push/PR via GitHub Actions (`.github/workflows/ci.yml`):
+
+- **Lint** — `ruff check` + `ruff format --check`
+- **Type check** — `ty check` (Astral's type checker)
+- **Test** — `pytest` with coverage on Python 3.11, 3.12, 3.13
+- **Coverage** — uploaded to Codecov on push to `main`
 
 ---
 

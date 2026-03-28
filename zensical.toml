@@ -23,6 +23,7 @@ nav = [
     { "Data I/O" = "api/data.md" },
     { "Visualization" = "api/visualisation.md" },
     { "Exceptions" = "api/exceptions.md" },
+    { "CLI" = "api/cli.md" },
   ] },
   { "Changelog" = "changelog.md" },
 ]

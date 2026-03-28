@@ -79,8 +79,23 @@ result = Pipeline(format=LobsterFormat(trading_date="2012-06-21")).run(
 )
 ```
 
+## CLI
+
+A command-line interface is included for common workflows:
+
+```bash
+ob-analytics process orders.csv -o results/
+ob-analytics gallery results/parquet/ -o my_gallery/
+ob-analytics bitstamp-demo --input orders.csv
+ob-analytics lobster-demo --ticker AAPL
+```
+
+See the [Quickstart CLI section](quickstart.md#9-command-line-interface) for
+full details.
+
 ## Next steps
 
-- **[Quickstart](quickstart.md)** — full walkthrough with visualization, configuration, and custom loaders
+- **[Quickstart](quickstart.md)** — full walkthrough with visualization, configuration, custom loaders, and CLI
 - **[API Reference](api/pipeline.md)** — detailed documentation for every module
+- **[CLI Reference](api/cli.md)** — command-line interface API docs
 - **[Changelog](changelog.md)** — recent changes

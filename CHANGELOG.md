@@ -40,12 +40,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Parquet I/O** — `load_data()` / `save_data()` via pyarrow.
 - **Test suite** — 200+ pytest tests (unit, integration, LOBSTER, visualization).
 - **Docs** — Zensical site with API reference from docstrings.
-- **Demo script** — `scripts/lobster_demo.py` for LOBSTER sample download and
-  gallery generation.
+- **Demo scripts** — `scripts/lobster_demo.py` for LOBSTER sample download and
+  gallery generation; `scripts/bitstamp_demo.py` for Bitstamp CSV processing
+  and gallery generation.
+- **CLI** — `ob-analytics` entry point with subcommands: `process`, `gallery`,
+  `bitstamp-demo`, `lobster-demo`. Registered via `[project.scripts]` in
+  `pyproject.toml`.
+- **CI/CD** — GitHub Actions workflow (`.github/workflows/ci.yml`): `ruff`
+  lint/format, `ty` type check, `pytest` on Python 3.11/3.12/3.13, Codecov
+  coverage upload.
 
 ### Changed
 
-- All `print()` statements replaced with `loguru` logging.
+- All `print()` statements replaced with `loguru` logging (library, CLI, and
+  demo scripts).
+- Type checking moved from `mypy` to Astral's `ty`; all `ty` errors resolved.
 - `sns.set_theme()` moved from module-level into per-function `_apply_theme()`
   calls (no global side effects on import).
 - All bare `assert` statements replaced with proper exception raising.
