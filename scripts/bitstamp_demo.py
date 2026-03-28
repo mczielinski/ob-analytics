@@ -29,6 +29,7 @@ logger.remove()
 logger.add(sys.stderr, level="INFO")
 
 from ob_analytics.data import save_data
+from ob_analytics.event_processing import BitstampWriter
 from ob_analytics.gallery import generate_gallery
 from ob_analytics.pipeline import Pipeline
 
@@ -91,7 +92,7 @@ def main() -> None:
     logger.info("Round-trip verification...")
     roundtrip_dir = output_dir / "roundtrip"
     roundtrip_csv = roundtrip_dir / "orders.csv"
-    save_data(result_dict, roundtrip_csv, writer=pipeline.writer)
+    save_data(result_dict, roundtrip_csv, writer=BitstampWriter())
     logger.info("Bitstamp CSV written to: {}", roundtrip_csv)
 
     rt_result = Pipeline().run(str(roundtrip_csv))
