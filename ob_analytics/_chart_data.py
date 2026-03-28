@@ -284,20 +284,16 @@ def prepare_current_depth_data(
     if isinstance(asks, np.ndarray):
         asks = pd.DataFrame(asks, columns=["price", "volume", "liquidity"])
 
-    x = np.concatenate([
-        bids["price"].values,
-        [bids["price"].values[-1]],
-        [asks["price"].values[0]],
-        asks["price"].values,
-    ])
-    y1 = (
-        np.concatenate([bids["liquidity"].values, [0], [0], asks["liquidity"].values])
-        * volume_scale
-    )
-    y2 = (
-        np.concatenate([bids["volume"].values, [0], [0], asks["volume"].values])
-        * volume_scale
-    )
+    bid_prices = bids["price"].to_numpy()
+    ask_prices = asks["price"].to_numpy()
+    bid_liq = bids["liquidity"].to_numpy()
+    ask_liq = asks["liquidity"].to_numpy()
+    bid_vol = bids["volume"].to_numpy()
+    ask_vol = asks["volume"].to_numpy()
+
+    x = np.concatenate([bid_prices, [bid_prices[-1]], [ask_prices[0]], ask_prices])
+    y1 = np.concatenate([bid_liq, [0], [0], ask_liq]) * volume_scale
+    y2 = np.concatenate([bid_vol, [0], [0], ask_vol]) * volume_scale
     side = ["bid"] * (len(bids) + 1) + ["ask"] * (len(asks) + 1)
 
     depth_df = pd.DataFrame({"price": x, "liquidity": y1, "volume": y2, "side": side})
@@ -492,12 +488,12 @@ def prepare_ofi_data(
     }
 
 
-def prepare_kyle_lambda_data(kyle_result: object) -> dict[str, Any]:
+def prepare_kyle_lambda_data(kyle_result: Any) -> dict[str, Any]:
     """Prepare data for Kyle's Lambda regression scatter."""
-    reg_df = kyle_result.regression_df  # type: ignore[union-attr]
-    lambda_ = kyle_result.lambda_  # type: ignore[union-attr]
-    r_squared = kyle_result.r_squared  # type: ignore[union-attr]
-    t_stat = kyle_result.t_stat  # type: ignore[union-attr]
+    reg_df = kyle_result.regression_df
+    lambda_ = kyle_result.lambda_
+    r_squared = kyle_result.r_squared
+    t_stat = kyle_result.t_stat
     return {
         "reg_df": reg_df,
         "lambda_": lambda_,

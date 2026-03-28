@@ -93,7 +93,9 @@ def _create_axes(
 ) -> tuple[Figure, Axes]:
     """Return ``(fig, ax)``, creating a new figure only when *ax* is ``None``."""
     if ax is not None:
-        return ax.get_figure(), ax  # type: ignore[return-value]
+        fig = ax.get_figure()
+        assert isinstance(fig, Figure)
+        return fig, ax
     _apply_theme()
     fig, new_ax = plt.subplots(figsize=figsize)
     return fig, new_ax
@@ -190,7 +192,7 @@ def mpl_price_levels(data: dict, ax: Axes | None = None) -> Figure:
     if log_10:
         if vmin <= 0:
             vmin = depth["volume"][depth["volume"] > 0].min()
-        norm: mcolors.Normalize = mcolors.LogNorm(vmin=vmin, vmax=vmax)  # type: ignore
+        norm: mcolors.Normalize = mcolors.LogNorm(vmin=vmin, vmax=vmax)
     else:
         norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
 
@@ -210,7 +212,7 @@ def mpl_price_levels(data: dict, ax: Axes | None = None) -> Figure:
         segments = np.concatenate([points[:-1], points[1:]], axis=1)
         seg_colors = cmap(norm(np.asarray(v[:-1])))
         seg_colors[:, -1] = a[:-1]
-        lc = collections.LineCollection(segments, colors=seg_colors, linewidths=2)
+        lc = collections.LineCollection(segments.tolist(), colors=seg_colors, linewidths=2)
         ax.add_collection(lc)
 
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)

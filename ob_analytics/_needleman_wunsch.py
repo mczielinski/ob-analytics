@@ -27,8 +27,8 @@ def create_similarity_matrix(a: pd.Series, b: pd.Series, cut_off_ms: int) -> np.
     numpy.ndarray
         A NumPy array representing the similarity matrix.
     """
-    a_ns = a.values.astype("datetime64[ns]").astype(np.float64)
-    b_ns = b.values.astype("datetime64[ns]").astype(np.float64)
+    a_ns = a.to_numpy().astype("datetime64[ns]").astype(np.float64)
+    b_ns = b.to_numpy().astype("datetime64[ns]").astype(np.float64)
     diff_ms = np.abs(a_ns.reshape(-1, 1) - b_ns) / 1e6
     # Avoid divide-by-zero warning: replace zeros before dividing,
     # then overwrite those positions with cut_off_ms via np.where.

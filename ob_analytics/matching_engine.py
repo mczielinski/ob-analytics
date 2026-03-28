@@ -97,7 +97,8 @@ class NeedlemanWunschMatcher:
             asks = id_ask_fills[id_ask_fills["fill"] == volume]
 
             time_deltas = (
-                bids["timestamp"].values.reshape(-1, 1) - asks["timestamp"].values
+                bids["timestamp"].to_numpy(dtype="datetime64[ns]").reshape(-1, 1)
+                - asks["timestamp"].to_numpy(dtype="datetime64[ns]")
             ).astype("timedelta64[ns]")
 
             if len(asks) == 1:
@@ -122,12 +123,12 @@ class NeedlemanWunschMatcher:
                     bids["timestamp"], asks["timestamp"], self._config.match_cutoff_ms
                 )
                 aligned_indices = align_sequences(similarity_matrix)
+                bid_ts = bids["timestamp"].to_numpy(dtype="datetime64[ns]")
+                ask_ts = asks["timestamp"].to_numpy(dtype="datetime64[ns]")
                 matched_indices = aligned_indices[
                     np.abs(
-                        (
-                            bids["timestamp"].values[aligned_indices[:, 0]]
-                            - asks["timestamp"].values[aligned_indices[:, 1]]
-                        )
+                        bid_ts[aligned_indices[:, 0]]
+                        - ask_ts[aligned_indices[:, 1]]
                     )
                     <= cut_off_td
                 ]

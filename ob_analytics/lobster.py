@@ -64,8 +64,9 @@ _DIRECTION_REVERSE: dict[str, int] = {"bid": 1, "ask": -1}
 
 AVAILABLE_TICKERS = ("AAPL", "AMZN", "GOOG", "INTC", "MSFT")
 SAMPLE_DATE = "2012-06-21"
+_SAMPLE_PAGE = "https://data.lobsterdata.com/info/DataSamples.php"
 _SAMPLE_URL = (
-    "https://lobsterdata.com/info/sample/"
+    "https://data.lobsterdata.com/info/sample/"
     "LOBSTER_SampleFile_{ticker}_{date}_{levels}.zip"
 )
 
@@ -165,12 +166,25 @@ class LobsterLoader:
             ordered=True,
         )
 
-        # Fill column: execution events carry the executed size
+        # Fill column: partial cancellations (2) and executions (4, 5)
+        # carry a volume delta that price_level_volume subtracts.
         events["fill"] = np.where(
-            events["event_type"].isin([4, 5]),
+            events["event_type"].isin([2, 4, 5]),
             events["volume"],
             0.0,
         )
+
+        # Hidden order executions (type 5) all share id=0 which causes
+        # downstream misclassification as "pacman" (multiple prices for
+        # the same id).  Assign each a unique synthetic id so they are
+        # handled independently.
+        hidden_mask = events["event_type"] == 5
+        n_hidden = hidden_mask.sum()
+        if n_hidden > 0:
+            max_id = events["id"].max()
+            events.loc[hidden_mask, "id"] = np.arange(
+                max_id + 1, max_id + 1 + n_hidden
+            )
 
         events = events.reset_index(drop=True)
         events["event_id"] = np.arange(1, len(events) + 1)
@@ -199,7 +213,16 @@ class LobsterLoader:
             len(halts),
             len(cross),
         )
+
+        # Discover and store the orderbook file path for depth computation
+        self._orderbook_path = self._resolve_orderbook_file(source)
+
         return events
+
+    @property
+    def orderbook_path(self) -> Path | None:
+        """Path to the LOBSTER orderbook file discovered during :meth:`load`."""
+        return self._orderbook_path
 
     @staticmethod
     def _resolve_message_file(source: Path) -> Path:
@@ -216,6 +239,18 @@ class LobsterLoader:
                 f"No LOBSTER message file found in {source}"
             )
         raise FileNotFoundError(f"Path does not exist: {source}")
+
+    @staticmethod
+    def _resolve_orderbook_file(source: Path) -> Path | None:
+        """Find the orderbook CSV from *source* (file or directory)."""
+        source = Path(source)
+        if source.is_dir():
+            candidates = sorted(source.glob("*_orderbook*.csv"))
+            if not candidates:
+                candidates = sorted(source.glob("*orderbook*.csv"))
+            if candidates:
+                return candidates[0]
+        return None
 
 
 # ── LobsterMatcher ───────────────────────────────────────────────────
@@ -335,7 +370,7 @@ class LobsterTradeInferrer:
     @staticmethod
     def _find_takers(
         all_events: pd.DataFrame, execs: pd.DataFrame
-    ) -> np.ndarray:
+    ) -> pd.api.extensions.ExtensionArray:
         """Best-effort heuristic to identify taker orders.
 
         For each execution, look for the most recent type-1 submission
@@ -382,7 +417,7 @@ class LobsterTradeInferrer:
 
             for idx, row in merged[marketable].iterrows():
                 exec_mask = execs["event_id"] == row["event_id"]
-                pos = exec_mask.values.nonzero()[0]
+                pos = exec_mask.to_numpy().nonzero()[0]
                 if len(pos) > 0:
                     result[pos[0]] = int(row["taker_eid"])
 
@@ -511,7 +546,7 @@ class LobsterWriter:
                         del book[direction][price]
             elif action == "changed":
                 raw_type = ev.get("raw_event_type")
-                if raw_type in (4, 5):
+                if raw_type in (2, 4, 5):
                     if price in book[direction]:
                         book[direction][price] -= volume
                         if book[direction][price] <= 1e-12:
@@ -557,6 +592,135 @@ class LobsterWriter:
         return row
 
 
+# ── LOBSTER depth computation ─────────────────────────────────────────
+
+
+def lobster_depth_from_orderbook(
+    events: pd.DataFrame,
+    orderbook_path: Path,
+    config: PipelineConfig,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Compute depth and depth summary from the LOBSTER orderbook file.
+
+    The LOBSTER orderbook file is ground truth: it records the complete
+    visible book state after every message event.  This function converts
+    it into the ``(depth, depth_summary)`` pair the pipeline expects,
+    avoiding the need to reconstruct depth from message events (which
+    fails when events reference pre-market orders absent from the
+    message file).
+
+    Parameters
+    ----------
+    events : pandas.DataFrame
+        Events DataFrame (used only for timestamps and event IDs).
+    orderbook_path : Path
+        Path to the LOBSTER orderbook CSV.
+    config : PipelineConfig
+        Pipeline configuration.
+
+    Returns
+    -------
+    tuple of (depth DataFrame, depth_summary DataFrame)
+    """
+    from ob_analytics.depth import DepthMetricsEngine
+
+    ob_raw = pd.read_csv(orderbook_path, header=None).values
+    num_levels = ob_raw.shape[1] // 4
+
+    book_events = events[
+        events["raw_event_type"].isin([1, 2, 3, 4, 5])
+    ].reset_index(drop=True)
+
+    n_ob, n_ev = ob_raw.shape[0], len(book_events)
+    if n_ob != n_ev:
+        logger.warning(
+            "lobster_depth: orderbook rows ({}) != book events ({}); "
+            "using min",
+            n_ob,
+            n_ev,
+        )
+    n = min(n_ob, n_ev)
+
+    timestamps = book_events["timestamp"].values[:n]
+    event_ids = book_events["event_id"].values[:n]
+
+    # Vectorised extraction of prices and volumes per level, then diff
+    # consecutive rows to find changes.
+    depth_rows: list[dict] = []
+    prev_levels: dict[tuple[str, float], float] = {}
+
+    # Pre-compute rounded price arrays for all levels in one shot
+    price_divisor = config.price_divisor
+    price_dec = config.price_decimals
+
+    ask_price_cols = [j * 4 for j in range(num_levels)]
+    ask_size_cols = [j * 4 + 1 for j in range(num_levels)]
+    bid_price_cols = [j * 4 + 2 for j in range(num_levels)]
+    bid_size_cols = [j * 4 + 3 for j in range(num_levels)]
+
+    ask_prices_all = ob_raw[:n, ask_price_cols]
+    ask_sizes_all = ob_raw[:n, ask_size_cols]
+    bid_prices_all = ob_raw[:n, bid_price_cols]
+    bid_sizes_all = ob_raw[:n, bid_size_cols]
+
+    for i in range(n):
+        curr_levels: dict[tuple[str, float], float] = {}
+
+        for j in range(num_levels):
+            ap = ask_prices_all[i, j]
+            av = ask_sizes_all[i, j]
+            if ap != _DUMMY_ASK_PRICE and av > 0:
+                price = round(ap / price_divisor, price_dec)
+                curr_levels[("ask", price)] = (
+                    curr_levels.get(("ask", price), 0) + av
+                )
+
+            bp = bid_prices_all[i, j]
+            bv = bid_sizes_all[i, j]
+            if bp != _DUMMY_BID_PRICE and bv > 0:
+                price = round(bp / price_divisor, price_dec)
+                curr_levels[("bid", price)] = (
+                    curr_levels.get(("bid", price), 0) + bv
+                )
+
+        all_keys = set(prev_levels) | set(curr_levels)
+        for key in all_keys:
+            pv = prev_levels.get(key, 0.0)
+            cv = curr_levels.get(key, 0.0)
+            if pv != cv:
+                side, price = key
+                depth_rows.append(
+                    {
+                        "event_id": event_ids[i],
+                        "timestamp": timestamps[i],
+                        "price": price,
+                        "volume": cv,
+                        "direction": side,
+                    }
+                )
+        prev_levels = curr_levels
+
+    depth = pd.DataFrame(depth_rows)
+    if depth.empty:
+        depth = pd.DataFrame(
+            columns=["event_id", "timestamp", "price", "volume", "direction"]
+        )
+
+    depth["direction"] = pd.Categorical(
+        depth["direction"], categories=["bid", "ask"], ordered=True
+    )
+    depth = depth.sort_values("timestamp", kind="stable").reset_index(
+        drop=True
+    )
+
+    logger.info("lobster_depth: {} depth rows from orderbook", len(depth))
+
+    engine = DepthMetricsEngine(config)
+    depth_summary = engine.compute(depth)
+
+    return depth, depth_summary
+
+
 # ── LobsterFormat descriptor ─────────────────────────────────────────
 
 
@@ -572,8 +736,11 @@ class LobsterFormat(Format):
 
     trading_date: str | pd.Timestamp = field(default=SAMPLE_DATE)
 
+    _loader: LobsterLoader | None = field(default=None, repr=False, init=False)
+
     def create_loader(self, config: PipelineConfig) -> EventLoader:
-        return LobsterLoader(config, trading_date=self.trading_date)
+        self._loader = LobsterLoader(config, trading_date=self.trading_date)
+        return self._loader
 
     def create_matcher(self, config: PipelineConfig) -> MatchingEngine:
         return LobsterMatcher(config)
@@ -587,6 +754,25 @@ class LobsterFormat(Format):
             price_divisor=config.price_divisor,
         )
 
+    def compute_depth(
+        self,
+        events: pd.DataFrame,
+        config: Any,
+        source: Any,
+    ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
+        ob_path = (
+            self._loader.orderbook_path if self._loader is not None else None
+        )
+        if ob_path is None:
+            ob_path = LobsterLoader._resolve_orderbook_file(Path(source))
+        if ob_path is None:
+            logger.warning(
+                "LobsterFormat: no orderbook file found; "
+                "falling back to event-based depth"
+            )
+            return None
+        return lobster_depth_from_orderbook(events, ob_path, config)
+
     def config_defaults(self) -> dict[str, Any]:
         return {
             "price_decimals": 2,
@@ -594,6 +780,7 @@ class LobsterFormat(Format):
             "volume_decimals": 0,
             "match_cutoff_ms": 100,
             "price_jump_threshold": 5.0,
+            "skip_zombie_detection": True,
         }
 
 
@@ -645,12 +832,40 @@ def download_sample(
     zip_path = dest / f"{ticker}_{SAMPLE_DATE}_{levels}.zip"
 
     logger.info("download_sample: downloading {} ...", url)
-    urllib.request.urlretrieve(url, zip_path)
+    try:
+        urllib.request.urlretrieve(url, zip_path)
+    except Exception as exc:
+        zip_path.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"Failed to download LOBSTER sample: {exc}\n"
+            f"Download manually from {_SAMPLE_PAGE} and extract to:\n"
+            f"  {extract_dir}"
+        ) from exc
 
-    extract_dir.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(zip_path) as zf:
-        zf.extractall(extract_dir)
+    # Verify the download is a valid zip (the site may return HTML instead)
+    if zip_path.stat().st_size < 1000:
+        zip_path.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"Downloaded file is too small ({zip_path.stat().st_size} bytes) "
+            f"-- the LOBSTER site may require browser-based download.\n"
+            f"Download manually from {_SAMPLE_PAGE} and extract to:\n"
+            f"  {extract_dir}"
+        )
 
-    zip_path.unlink()
+    try:
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extractall(extract_dir)
+    except zipfile.BadZipFile:
+        extract_dir.rmdir()
+        zip_path.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"Downloaded file is not a valid zip archive -- the LOBSTER "
+            f"site may require browser-based download.\n"
+            f"Download manually from {_SAMPLE_PAGE} and extract to:\n"
+            f"  {extract_dir}"
+        )
+
+    zip_path.unlink(missing_ok=True)
     logger.info("download_sample: extracted to {}", extract_dir)
     return extract_dir
