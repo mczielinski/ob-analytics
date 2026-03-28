@@ -116,7 +116,7 @@ class BitstampLoader:
 
     @staticmethod
     def _remove_duplicates(events: pd.DataFrame) -> pd.DataFrame:
-        """Remove duplicate delete events, matching R's removeDuplicates."""
+        """Remove duplicate delete events (port of R ``removeDuplicates``)."""
         deletes = events[events["action"] == "deleted"].sort_values(
             by=["id", "volume"], kind="stable"
         )

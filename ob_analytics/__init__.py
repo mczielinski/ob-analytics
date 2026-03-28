@@ -11,8 +11,9 @@ Quick start::
 
 The package exposes two layers:
 
-* **High-level**: :class:`Pipeline` runs the full 8-step processing
-  sequence with sensible defaults.
+* **High-level**: :class:`Pipeline` runs the full processing
+  sequence (load → match → trades → classify → depth → metrics)
+  with sensible defaults.
 * **Low-level**: Individual functions (``load_event_data``,
   ``event_match``, ``match_trades``, etc.) for step-by-step control.
 
@@ -78,6 +79,7 @@ from ob_analytics.visualisation import (
     plot_kyle_lambda,
     plot_order_flow_imbalance,
     plot_price_levels,
+    plot_price_levels_faster,
     plot_time_series,
     plot_trades,
     plot_trading_halts,
@@ -161,6 +163,7 @@ __all__ = [
     "plot_time_series",
     "plot_trades",
     "plot_price_levels",
+    "plot_price_levels_faster",
     "plot_event_map",
     "plot_volume_map",
     "plot_current_depth",

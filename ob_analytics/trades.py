@@ -70,7 +70,7 @@ class DefaultTradeInferrer:
         ).all():
             raise MatchingError(
                 "Bid event IDs do not align with ask matching events. "
-                "This indicates a matching error in the upstream eventMatch step."
+                "This indicates a matching error in the upstream event_match step."
             )
 
         matching_bids = matching_bids.reset_index(drop=True)

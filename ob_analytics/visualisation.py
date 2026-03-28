@@ -287,12 +287,12 @@ def plot_price_levels_faster(
     backend: str = "matplotlib",
 ) -> Any:
     """
-    Fast plotting of price levels using Matplotlib.
+    Plot price levels from pre-filtered depth data (skips internal filtering).
 
     Parameters
     ----------
     depth : pandas.DataFrame
-        Filtered depth DataFrame.
+        Pre-filtered depth DataFrame.
     spread : pandas.DataFrame, optional
         Spread DataFrame. Default is None.
     trades : pandas.DataFrame, optional

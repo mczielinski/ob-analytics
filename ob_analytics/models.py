@@ -24,7 +24,7 @@ class OrderEvent(BaseModel):
     """A single order-book event as received from the exchange.
 
     Corresponds to one row of the events DataFrame that flows through
-    ``loadEventData → eventMatch → setOrderTypes → orderAggressiveness``.
+    ``load_event_data → event_match → set_order_types → order_aggressiveness``.
     """
 
     model_config = {"frozen": True}
@@ -51,7 +51,7 @@ class Trade(BaseModel):
     """An inferred trade execution.
 
     Corresponds to one row of the trades DataFrame produced by
-    ``matchTrades``.
+    ``match_trades``.
     """
 
     model_config = {"frozen": True}
@@ -68,7 +68,7 @@ class DepthLevel(BaseModel):
     """Volume at a single price level at a point in time.
 
     Corresponds to one row of the depth DataFrame produced by
-    ``priceLevelVolume``.
+    ``price_level_volume``.
     """
 
     model_config = {"frozen": True}

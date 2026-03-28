@@ -1,4 +1,5 @@
-"""Data processing utilities: loading, saving, and processing order book data."""
+"""Data I/O and processing: Parquet/pickle serialization, zombie order
+detection, and the legacy :func:`process_data` monolithic pipeline."""
 
 from __future__ import annotations
 

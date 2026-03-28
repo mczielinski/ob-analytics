@@ -4,13 +4,11 @@ title: Visualization
 
 # Visualization
 
-All plot functions accept an optional `backend` parameter
-(default `"matplotlib"`).  Set `backend="plotly"` for interactive figures
-with zoom, pan, and hover tooltips.
+All plot functions return a figure and accept `backend="matplotlib"` (default)
+or `backend="plotly"` for interactive figures. Plotly requires
+`pip install ob-analytics[interactive]`. Functions never call `plt.show()`.
 
-Plotly is an optional dependency — install via `pip install ob-analytics[interactive]`.
-
-## Theme
+## Theme and Saving
 
 ::: ob_analytics.visualisation.PlotTheme
 
@@ -24,13 +22,13 @@ Plotly is an optional dependency — install via `pip install ob-analytics[inter
 
 ::: ob_analytics.visualisation.register_plot_backend
 
-## Plot Functions
-
-::: ob_analytics.visualisation.plot_time_series
-
-::: ob_analytics.visualisation.plot_trades
+## Core Plots
 
 ::: ob_analytics.visualisation.plot_price_levels
+
+::: ob_analytics.visualisation.plot_price_levels_faster
+
+::: ob_analytics.visualisation.plot_trades
 
 ::: ob_analytics.visualisation.plot_event_map
 
@@ -42,6 +40,8 @@ Plotly is an optional dependency — install via `pip install ob-analytics[inter
 
 ::: ob_analytics.visualisation.plot_events_histogram
 
+::: ob_analytics.visualisation.plot_time_series
+
 ## Flow Toxicity Plots
 
 ::: ob_analytics.visualisation.plot_vpin
@@ -49,3 +49,9 @@ Plotly is an optional dependency — install via `pip install ob-analytics[inter
 ::: ob_analytics.visualisation.plot_order_flow_imbalance
 
 ::: ob_analytics.visualisation.plot_kyle_lambda
+
+## LOBSTER-Specific Plots
+
+::: ob_analytics.visualisation.plot_hidden_executions
+
+::: ob_analytics.visualisation.plot_trading_halts

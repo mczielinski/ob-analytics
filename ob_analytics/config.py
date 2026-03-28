@@ -74,7 +74,7 @@ class PipelineConfig(BaseModel):
         gt=0,
         description=(
             "Absolute price difference between consecutive trades that "
-            "triggers the maker/taker swap heuristic in matchTrades.  "
+            "triggers the maker/taker swap heuristic in match_trades.  "
             "The original value ($10) targets 2015 BTC prices."
         ),
     )
@@ -102,9 +102,9 @@ class PipelineConfig(BaseModel):
     skip_zombie_detection: bool = Field(
         default=False,
         description=(
-            "Skip zombie order detection.  Enable for data sources like "
-            "where orders consumed through execution do not "
-            "receive explicit deletion events."
+            "Skip zombie order detection.  Enable for data sources "
+            "where orders consumed through execution do not receive "
+            "explicit deletion events (e.g. LOBSTER)."
         ),
     )
 
