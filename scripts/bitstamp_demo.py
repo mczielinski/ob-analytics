@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""LOBSTER data demo for ob-analytics.
+"""Bitstamp data demo for ob-analytics.
 
-Downloads free LOBSTER sample data (AAPL, 2012-06-21), runs the full
-pipeline, performs a round-trip write/re-read verification, and
+Runs the full pipeline on a Bitstamp-format CSV, saves results as
+Parquet, performs a round-trip write/re-read verification, and
 generates a plot gallery.
 
 Usage::
 
-    uv run python scripts/lobster_demo.py
-    uv run python scripts/lobster_demo.py --ticker MSFT
-    uv run python scripts/lobster_demo.py --output ~/Desktop/lobster_gallery
+    uv run python scripts/bitstamp_demo.py
+    uv run python scripts/bitstamp_demo.py --input path/to/orders.csv
+    uv run python scripts/bitstamp_demo.py --output ~/Desktop/bitstamp_gallery
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 
 from loguru import logger
@@ -29,58 +30,53 @@ logger.add(sys.stderr, level="INFO")
 
 from ob_analytics.data import save_data
 from ob_analytics.gallery import generate_gallery
-from ob_analytics.lobster import LobsterFormat, download_sample
 from ob_analytics.pipeline import Pipeline
+
+_DEFAULT_CSV = Path(__file__).resolve().parent.parent / "inst" / "extdata" / "orders.csv"
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="LOBSTER data demo")
+    parser = argparse.ArgumentParser(description="Bitstamp data demo")
     parser.add_argument(
-        "--ticker",
-        default="AAPL",
-        choices=["AAPL", "AMZN", "GOOG", "INTC", "MSFT"],
-        help="Ticker to download (default: AAPL)",
+        "--input",
+        default=None,
+        help=f"Path to Bitstamp-format CSV (default: {_DEFAULT_CSV})",
     )
     parser.add_argument(
         "--output",
         default=None,
-        help="Output directory for gallery (default: ./lobster_output/<ticker>)",
-    )
-    parser.add_argument(
-        "--levels",
-        type=int,
-        default=10,
-        help="Number of orderbook levels (default: 10)",
+        help="Output directory (default: ./bitstamp_output)",
     )
     args = parser.parse_args()
 
-    ticker: str = args.ticker
-    levels: int = args.levels
-    trading_date = "2012-06-21"
+    csv_path = Path(args.input) if args.input else _DEFAULT_CSV
+    if not csv_path.exists():
+        logger.error("CSV file not found: {}", csv_path)
+        logger.error(
+            "Provide a Bitstamp-format CSV with --input or place one at {}",
+            _DEFAULT_CSV,
+        )
+        sys.exit(1)
 
-    output_dir = Path(args.output) if args.output else Path("lobster_output") / ticker
+    output_dir = Path(args.output) if args.output else Path("bitstamp_output")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Download sample data
     logger.info("=" * 60)
-    logger.info("LOBSTER Demo: {} ({})", ticker, trading_date)
+    logger.info("Bitstamp Demo: {}", csv_path.name)
     logger.info("=" * 60)
+    logger.info("Input: {}", csv_path)
 
-    data_dir = download_sample(ticker=ticker, levels=levels)
-    logger.info("Data directory: {}", data_dir)
-
-    # 2. Run pipeline
+    # 1. Run pipeline
     logger.info("Running pipeline...")
-    fmt = LobsterFormat(trading_date=trading_date)
-    pipeline = Pipeline(format=fmt)
-    result = pipeline.run(data_dir)
+    pipeline = Pipeline()
+    result = pipeline.run(str(csv_path))
 
     logger.info("Events:  {:,}", len(result.events))
     logger.info("Trades:  {:,}", len(result.trades))
     logger.info("Depth:   {:,}", len(result.depth))
     logger.info("Metadata: {}", result.metadata)
 
-    # 3. Save as parquet
+    # 2. Save as Parquet
     parquet_dir = output_dir / "parquet"
     result_dict = {
         "events": result.events,
@@ -91,34 +87,28 @@ def main() -> None:
     save_data(result_dict, parquet_dir)
     logger.info("Parquet saved to: {}", parquet_dir)
 
-    # 4. Round-trip: write as LOBSTER format, re-read, verify
+    # 3. Round-trip: write as Bitstamp CSV, re-read, verify
     logger.info("Round-trip verification...")
     roundtrip_dir = output_dir / "roundtrip"
-    save_data(
-        result_dict,
-        roundtrip_dir,
-        writer=pipeline.writer,
-        ticker=ticker,
-        num_levels=levels,
-    )
-    logger.info("LOBSTER files written to: {}", roundtrip_dir)
+    roundtrip_csv = roundtrip_dir / "orders.csv"
+    save_data(result_dict, roundtrip_csv, writer=pipeline.writer)
+    logger.info("Bitstamp CSV written to: {}", roundtrip_csv)
 
-    rt_pipeline = Pipeline(format=LobsterFormat(trading_date=trading_date))
-    rt_result = rt_pipeline.run(roundtrip_dir)
+    rt_result = Pipeline().run(str(roundtrip_csv))
     logger.info("Re-read events:  {:,}", len(rt_result.events))
     logger.info("Re-read trades:  {:,}", len(rt_result.trades))
 
     events_match = len(result.events) == len(rt_result.events)
     logger.info("Event count match: {}", "YES" if events_match else "NO")
 
-    # 5. Generate gallery
+    # 4. Generate gallery
     logger.info("Generating plot gallery...")
     gallery_dir = output_dir / "gallery"
     gallery_path = generate_gallery(
         result,
         gallery_dir,
-        volume_scale=1.0,
-        title=f"LOBSTER {ticker} ({trading_date}) -- ob-analytics",
+        volume_scale=1e-8,
+        title=f"Bitstamp ({csv_path.name}) -- ob-analytics",
     )
     logger.info("Gallery: {}", gallery_path)
     logger.info("Open in browser: file://{}", gallery_path.resolve())
