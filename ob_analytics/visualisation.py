@@ -13,12 +13,10 @@ trade price charts, volume percentiles, and event histograms.
 from __future__ import annotations
 
 import importlib
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
 from matplotlib.axes import Axes
-from matplotlib.figure import Figure
 
 from ob_analytics._chart_data import (
     prepare_current_depth_data,
@@ -65,7 +63,9 @@ _FUNC_PREFIX: dict[str, str] = {
 }
 
 
-def register_plot_backend(name: str, module_path: str, *, func_prefix: str | None = None) -> None:
+def register_plot_backend(
+    name: str, module_path: str, *, func_prefix: str | None = None
+) -> None:
     """Register a visualization backend.
 
     The module at *module_path* must export rendering functions following
@@ -111,9 +111,7 @@ def _get_renderer(backend: str, plot_name: str) -> Any:
         If *backend* is not registered.
     """
     if backend not in _BACKENDS:
-        raise ValueError(
-            f"Unknown backend {backend!r}. Available: {sorted(_BACKENDS)}"
-        )
+        raise ValueError(f"Unknown backend {backend!r}. Available: {sorted(_BACKENDS)}")
     mod = importlib.import_module(_BACKENDS[backend])
     func_name = _FUNC_PREFIX[backend] + plot_name
     return getattr(mod, func_name)
@@ -161,7 +159,9 @@ def plot_time_series(
     -------
     matplotlib.figure.Figure or plotly.graph_objects.Figure
     """
-    data = prepare_time_series_data(timestamp, series, start_time, end_time, title, y_label)
+    data = prepare_time_series_data(
+        timestamp, series, start_time, end_time, title, y_label
+    )
     renderer = _get_renderer(backend, "time_series")
     if backend == "matplotlib":
         return renderer(data, ax)
@@ -265,9 +265,20 @@ def plot_price_levels(
     matplotlib.figure.Figure or plotly.graph_objects.Figure
     """
     data = prepare_price_levels_data(
-        depth, spread, trades, show_mp, show_all_depth, col_bias,
-        start_time, end_time, price_from, price_to, volume_from, volume_to,
-        volume_scale, price_by,
+        depth,
+        spread,
+        trades,
+        show_mp,
+        show_all_depth,
+        col_bias,
+        start_time,
+        end_time,
+        price_from,
+        price_to,
+        volume_from,
+        volume_to,
+        volume_scale,
+        price_by,
     )
     renderer = _get_renderer(backend, "price_levels")
     if backend == "matplotlib":
@@ -373,8 +384,14 @@ def plot_event_map(
     matplotlib.figure.Figure or plotly.graph_objects.Figure
     """
     data = prepare_event_map_data(
-        events, start_time, end_time, price_from, price_to,
-        volume_from, volume_to, volume_scale,
+        events,
+        start_time,
+        end_time,
+        price_from,
+        price_to,
+        volume_from,
+        volume_to,
+        volume_scale,
     )
     renderer = _get_renderer(backend, "event_map")
     if backend == "matplotlib":
@@ -437,9 +454,17 @@ def plot_volume_map(
     if event_type is None:
         event_type = ["flashed-limit"]
     data = prepare_volume_map_data(
-        events, action, event_type, start_time, end_time,
-        price_from, price_to, volume_from, volume_to,
-        volume_scale, log_scale,
+        events,
+        action,
+        event_type,
+        start_time,
+        end_time,
+        price_from,
+        price_to,
+        volume_from,
+        volume_to,
+        volume_scale,
+        log_scale,
     )
     renderer = _get_renderer(backend, "volume_map")
     if backend == "matplotlib":
@@ -478,7 +503,9 @@ def plot_current_depth(
     -------
     matplotlib.figure.Figure or plotly.graph_objects.Figure
     """
-    data = prepare_current_depth_data(order_book, volume_scale, show_quantiles, show_volume)
+    data = prepare_current_depth_data(
+        order_book, volume_scale, show_quantiles, show_volume
+    )
     renderer = _get_renderer(backend, "current_depth")
     if backend == "matplotlib":
         return renderer(data, ax)
@@ -523,7 +550,12 @@ def plot_volume_percentiles(
     matplotlib.figure.Figure or plotly.graph_objects.Figure
     """
     data = prepare_volume_percentiles_data(
-        depth_summary, start_time, end_time, volume_scale, perc_line, side_line,
+        depth_summary,
+        start_time,
+        end_time,
+        volume_scale,
+        perc_line,
+        side_line,
     )
     renderer = _get_renderer(backend, "volume_percentiles")
     if backend == "matplotlib":

@@ -126,9 +126,7 @@ def default_specs(
     price_from = max(0, price_mid - 3 * price_std) if price_std > 0 else None
 
     offset = events["timestamp"].min() + pd.Timedelta(minutes=1)
-    depth_summary_offset = depth_summary[
-        depth_summary["timestamp"] >= offset
-    ]
+    depth_summary_offset = depth_summary[depth_summary["timestamp"] >= offset]
 
     specs: list[PlotSpec] = [
         PlotSpec(
@@ -268,29 +266,31 @@ def default_specs(
     price_range = q99 - q01
     price_bw = max(0.01, round(price_range / 100, 2))
 
-    specs.extend([
-        PlotSpec(
-            "11_events_hist_price",
-            "Events Histogram -- Price",
-            plot_events_histogram,
-            {"events": hist_price, "val": "price", "bw": price_bw},
-        ),
-        PlotSpec(
-            "12_events_hist_volume",
-            "Events Histogram -- Volume",
-            plot_events_histogram,
-            {
-                "events": hist_events[
-                    hist_events["volume"] < hist_events["volume"].quantile(0.99)
-                ],
-                "val": "volume",
-                "bw": max(
-                    0.01,
-                    round(hist_events["volume"].quantile(0.99) / 20, 2),
-                ),
-            },
-        ),
-    ])
+    specs.extend(
+        [
+            PlotSpec(
+                "11_events_hist_price",
+                "Events Histogram -- Price",
+                plot_events_histogram,
+                {"events": hist_price, "val": "price", "bw": price_bw},
+            ),
+            PlotSpec(
+                "12_events_hist_volume",
+                "Events Histogram -- Volume",
+                plot_events_histogram,
+                {
+                    "events": hist_events[
+                        hist_events["volume"] < hist_events["volume"].quantile(0.99)
+                    ],
+                    "val": "volume",
+                    "bw": max(
+                        0.01,
+                        round(hist_events["volume"].quantile(0.99) / 20, 2),
+                    ),
+                },
+            ),
+        ]
+    )
 
     # Flow toxicity plots
     if vpin_bucket_volume is not None and len(trades) > 10:
@@ -372,6 +372,7 @@ def generate_gallery(
         Path to the generated HTML gallery file.
     """
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -382,6 +383,7 @@ def generate_gallery(
         backends = ["matplotlib"]
         try:
             import plotly  # noqa: F401
+
             backends.append("plotly")
         except ImportError:
             pass
@@ -451,16 +453,16 @@ def _write_gallery_html(
             if has_plotly:
                 plotly_panel = (
                     f'<div class="panel plotly-panel">'
-                    f'<h3>Plotly</h3>'
+                    f"<h3>Plotly</h3>"
                     f'<iframe src="{plotly_src}" loading="lazy"></iframe>'
-                    f'</div>'
+                    f"</div>"
                 )
             else:
                 plotly_panel = (
                     '<div class="panel plotly-panel">'
-                    '<h3>Plotly</h3>'
+                    "<h3>Plotly</h3>"
                     '<p class="na">Not available</p>'
-                    '</div>'
+                    "</div>"
                 )
 
         cards.append(
@@ -468,11 +470,11 @@ def _write_gallery_html(
             f'<div class="card-title">{escaped_title}</div>'
             f'<div class="card-body">'
             f'<div class="panel mpl-panel">'
-            f'<h3>Matplotlib</h3>'
+            f"<h3>Matplotlib</h3>"
             f'<img src="{mpl_img}" alt="{escaped_title}" onclick="zoom(this.src)">'
-            f'</div>'
-            f'{plotly_panel}'
-            f'</div></div>'
+            f"</div>"
+            f"{plotly_panel}"
+            f"</div></div>"
         )
 
     escaped_title = html_mod.escape(title)

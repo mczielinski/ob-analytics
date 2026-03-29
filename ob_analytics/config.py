@@ -4,7 +4,6 @@ Centralises the numeric thresholds and parameters that were previously
 scattered as literals across multiple modules.
 """
 
-
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -130,7 +129,4 @@ class PipelineConfig(BaseModel):
     @property
     def bps_labels(self) -> list[str]:
         """Column suffixes for depth-metric BPS bins (e.g. '25bps', '50bps' …)."""
-        return [
-            f"{i * self.depth_bps}bps"
-            for i in range(1, self.depth_bins + 1)
-        ]
+        return [f"{i * self.depth_bps}bps" for i in range(1, self.depth_bins + 1)]

@@ -8,9 +8,9 @@ from ob_analytics.depth import DepthMetricsEngine
 
 def _depth(*rows):
     """Build a depth DataFrame from (timestamp, price, volume, direction) tuples."""
-    return pd.DataFrame(rows, columns=["timestamp", "price", "volume", "direction"]).assign(
-        timestamp=lambda df: pd.to_datetime(df["timestamp"])
-    )
+    return pd.DataFrame(
+        rows, columns=["timestamp", "price", "volume", "direction"]
+    ).assign(timestamp=lambda df: pd.to_datetime(df["timestamp"]))
 
 
 class TestCrossedBookGuards:
@@ -48,7 +48,7 @@ class TestCrossedBookGuards:
         out = np.zeros(engine._row_len)
 
         engine.update(100, 5.0, 0, out)  # bid at 100
-        engine.update(99, 3.0, 1, out)   # ask at 99 < bid 100
+        engine.update(99, 3.0, 1, out)  # ask at 99 < bid 100
 
         assert 99 not in engine._ask_levels
 
@@ -83,7 +83,7 @@ class TestBestPriceRecalculation:
         out = np.zeros(engine._row_len)
 
         engine.update(100, 5.0, 0, out)  # bid at 100
-        engine.update(95, 3.0, 0, out)   # bid at 95
+        engine.update(95, 3.0, 0, out)  # bid at 95
         assert engine._best_bid == 100
 
         engine.update(100, 0.0, 0, out)  # delete best bid
@@ -106,13 +106,21 @@ class TestEventIdPassthrough:
     """If depth has event_id, depth_summary should preserve it."""
 
     def test_event_id_in_output(self):
-        depth = pd.DataFrame({
-            "event_id": [1, 2, 3],
-            "timestamp": pd.to_datetime(["2015-01-01 00:00:01", "2015-01-01 00:00:02", "2015-01-01 00:00:03"]),
-            "price": [100.0, 110.0, 100.0],
-            "volume": [5.0, 3.0, 0.0],
-            "direction": ["bid", "ask", "bid"],
-        })
+        depth = pd.DataFrame(
+            {
+                "event_id": [1, 2, 3],
+                "timestamp": pd.to_datetime(
+                    [
+                        "2015-01-01 00:00:01",
+                        "2015-01-01 00:00:02",
+                        "2015-01-01 00:00:03",
+                    ]
+                ),
+                "price": [100.0, 110.0, 100.0],
+                "volume": [5.0, 3.0, 0.0],
+                "direction": ["bid", "ask", "bid"],
+            }
+        )
         engine = DepthMetricsEngine()
         result = engine.compute(depth)
         assert "event_id" in result.columns
@@ -120,12 +128,16 @@ class TestEventIdPassthrough:
 
     def test_no_event_id_still_works(self):
         """Backward compat: depth without event_id still works."""
-        depth = pd.DataFrame({
-            "timestamp": pd.to_datetime(["2015-01-01 00:00:01", "2015-01-01 00:00:02"]),
-            "price": [100.0, 110.0],
-            "volume": [5.0, 3.0],
-            "direction": ["bid", "ask"],
-        })
+        depth = pd.DataFrame(
+            {
+                "timestamp": pd.to_datetime(
+                    ["2015-01-01 00:00:01", "2015-01-01 00:00:02"]
+                ),
+                "price": [100.0, 110.0],
+                "volume": [5.0, 3.0],
+                "direction": ["bid", "ask"],
+            }
+        )
         engine = DepthMetricsEngine()
         result = engine.compute(depth)
         assert "event_id" not in result.columns

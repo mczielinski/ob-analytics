@@ -192,9 +192,7 @@ def _cmd_lobster_demo(args: argparse.Namespace) -> None:
     levels: int = args.levels
     trading_date = "2012-06-21"
 
-    output_dir = (
-        Path(args.output) if args.output else Path("lobster_output") / ticker
-    )
+    output_dir = Path(args.output) if args.output else Path("lobster_output") / ticker
     output_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info("=" * 60)

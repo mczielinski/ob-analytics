@@ -30,11 +30,9 @@ Usage with a Format descriptor::
     result = Pipeline(format=BitstampFormat()).run("orders.csv")
 """
 
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -144,17 +142,13 @@ class Pipeline:
             self.config = config
             self.loader = loader or format.create_loader(config)
             self.matcher = matcher or format.create_matcher(config)
-            self.trade_inferrer = (
-                trade_inferrer or format.create_trade_inferrer(config)
-            )
+            self.trade_inferrer = trade_inferrer or format.create_trade_inferrer(config)
             self._writer: DataWriter | None = format.create_writer(config)
         else:
             self.config = config or PipelineConfig()
             self.loader = loader or BitstampLoader(self.config)
             self.matcher = matcher or NeedlemanWunschMatcher(self.config)
-            self.trade_inferrer = (
-                trade_inferrer or DefaultTradeInferrer(self.config)
-            )
+            self.trade_inferrer = trade_inferrer or DefaultTradeInferrer(self.config)
             self._writer = None
 
         self._format = format
@@ -235,9 +229,7 @@ class Pipeline:
 
         depth_override = None
         if self._format is not None:
-            depth_override = self._format.compute_depth(
-                events, self.config, source
-            )
+            depth_override = self._format.compute_depth(events, self.config, source)
 
         if depth_override is not None:
             depth, depth_summary = depth_override

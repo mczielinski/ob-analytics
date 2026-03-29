@@ -51,8 +51,14 @@ def order_book(
     validate_columns(
         events,
         {
-            "action", "timestamp", "id", "direction", "type",
-            "price", "volume", "exchange_timestamp",
+            "action",
+            "timestamp",
+            "id",
+            "direction",
+            "type",
+            "price",
+            "volume",
+            "exchange_timestamp",
         },
         "order_book",
     )
@@ -81,7 +87,9 @@ def order_book(
             (active_orders["direction"] == "bid") & (active_orders["type"] != "market")
         ]
         # Order by price descending, then by id ascending (FIFO)
-        bids = bids.sort_values(by=["price", "id"], ascending=[False, True], kind="stable")
+        bids = bids.sort_values(
+            by=["price", "id"], ascending=[False, True], kind="stable"
+        )
         first_price = bids.iloc[0]["price"] if not bids.empty else np.nan
         bids["bps"] = (
             ((first_price - bids["price"]) / first_price) * 10000
@@ -109,7 +117,9 @@ def order_book(
             (active_orders["direction"] == "ask") & (active_orders["type"] != "market")
         ]
         # Order by price ascending, then by id ascending (FIFO)
-        asks = asks.sort_values(by=["price", "id"], ascending=[True, True], kind="stable")
+        asks = asks.sort_values(
+            by=["price", "id"], ascending=[True, True], kind="stable"
+        )
         first_price = asks.iloc[0]["price"] if not asks.empty else np.nan
         asks["bps"] = (
             ((asks["price"] - first_price) / first_price) * 10000
@@ -135,7 +145,9 @@ def order_book(
     # Handle changed orders
     changed_orders_mask = active_orders["action"] == "changed"
     changed_before = active_orders[changed_orders_mask]
-    changed_before = changed_before.sort_values(by="timestamp", ascending=False, kind="stable")
+    changed_before = changed_before.sort_values(
+        by="timestamp", ascending=False, kind="stable"
+    )
     changed_before = changed_before.drop_duplicates(subset="id", keep="first")
 
     # Remove changed orders and their initial creations

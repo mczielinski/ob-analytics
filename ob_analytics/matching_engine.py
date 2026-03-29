@@ -5,7 +5,6 @@ Contains :class:`NeedlemanWunschMatcher` (the default
 ask fills to identify trades.
 """
 
-
 import numpy as np
 import pandas as pd
 
@@ -127,8 +126,7 @@ class NeedlemanWunschMatcher:
                 ask_ts = asks["timestamp"].to_numpy(dtype="datetime64[ns]")
                 matched_indices = aligned_indices[
                     np.abs(
-                        bid_ts[aligned_indices[:, 0]]
-                        - ask_ts[aligned_indices[:, 1]]
+                        bid_ts[aligned_indices[:, 0]] - ask_ts[aligned_indices[:, 1]]
                     )
                     <= cut_off_td
                 ]

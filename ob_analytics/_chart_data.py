@@ -37,7 +37,8 @@ def _default_start_end(
 
 
 def _price_axis_breaks(
-    price_min: float, price_max: float,
+    price_min: float,
+    price_max: float,
 ) -> tuple[float, np.ndarray]:
     """Compute tick step and break array for a price axis."""
     price_range = price_max - price_min
@@ -86,7 +87,8 @@ def prepare_trades_data(
         (trades["timestamp"] >= start_time) & (trades["timestamp"] <= end_time)
     ]
     _, y_breaks = _price_axis_breaks(
-        filtered["price"].min(), filtered["price"].max(),
+        filtered["price"].min(),
+        filtered["price"].max(),
     )
     return {"filtered_trades": filtered, "y_breaks": y_breaks}
 
@@ -153,7 +155,9 @@ def prepare_price_levels_data(
 
     if not show_all_depth:
         counts = depth_filtered.groupby("price", as_index=False)["timestamp"].agg(
-            count="size", first_ts="min", last_ts="max",
+            count="size",
+            first_ts="min",
+            last_ts="max",
         )
         unchanged = counts[
             (counts["count"] == 2)
@@ -367,28 +371,44 @@ def prepare_volume_percentiles_data(
     max_bid = ob[bid_names_fmt].sum(axis=1).max()
 
     melted_asks = ob.melt(
-        id_vars="timestamp", value_vars=ask_names_fmt,
-        var_name="percentile", value_name="liquidity",
+        id_vars="timestamp",
+        value_vars=ask_names_fmt,
+        var_name="percentile",
+        value_name="liquidity",
     )
     melted_asks["percentile"] = pd.Categorical(
-        melted_asks["percentile"], categories=ask_names_fmt[::-1], ordered=True,
+        melted_asks["percentile"],
+        categories=ask_names_fmt[::-1],
+        ordered=True,
     )
     melted_asks["liquidity"] *= volume_scale
 
     melted_bids = ob.melt(
-        id_vars="timestamp", value_vars=bid_names_fmt,
-        var_name="percentile", value_name="liquidity",
+        id_vars="timestamp",
+        value_vars=bid_names_fmt,
+        var_name="percentile",
+        value_name="liquidity",
     )
     melted_bids["percentile"] = pd.Categorical(
-        melted_bids["percentile"], categories=bid_names_fmt[::-1], ordered=True,
+        melted_bids["percentile"],
+        categories=bid_names_fmt[::-1],
+        ordered=True,
     )
     melted_bids["liquidity"] *= volume_scale
 
     from matplotlib.colors import LinearSegmentedColormap
 
     colors_list = [
-        "#f92b20", "#fe701b", "#facd1f", "#d6fd1c", "#65fe1b",
-        "#1bfe42", "#1cfdb4", "#1fb9fa", "#1e71fb", "#261cfd",
+        "#f92b20",
+        "#fe701b",
+        "#facd1f",
+        "#d6fd1c",
+        "#65fe1b",
+        "#1bfe42",
+        "#1cfdb4",
+        "#1fb9fa",
+        "#1e71fb",
+        "#261cfd",
     ]
     cmap = LinearSegmentedColormap.from_list("custom_cmap", colors_list, N=20)
     col_pal = [cmap(i / 19) for i in range(20)]
@@ -399,10 +419,14 @@ def prepare_volume_percentiles_data(
     ]
 
     asks_pivot = melted_asks.pivot(
-        index="timestamp", columns="percentile", values="liquidity",
+        index="timestamp",
+        columns="percentile",
+        values="liquidity",
     )
     bids_pivot = melted_bids.pivot(
-        index="timestamp", columns="percentile", values="liquidity",
+        index="timestamp",
+        columns="percentile",
+        values="liquidity",
     )
     asks_pivot = asks_pivot[ask_names_fmt[::-1]]
     bids_pivot = bids_pivot[bid_names_fmt[::-1]]
@@ -474,10 +498,9 @@ def prepare_ofi_data(
     colors = ["#27ae60" if v >= 0 else "#e74c3c" for v in ofi_df["ofi"]]
     if len(ofi_df) > 1:
         median_gap = ofi_df["timestamp"].diff().median()
-        bar_width = (
-            mdates.date2num(ofi_df["timestamp"].iloc[0] + median_gap * 0.8)
-            - mdates.date2num(ofi_df["timestamp"].iloc[0])
-        )
+        bar_width = mdates.date2num(
+            ofi_df["timestamp"].iloc[0] + median_gap * 0.8
+        ) - mdates.date2num(ofi_df["timestamp"].iloc[0])
     else:
         bar_width = 0.001
     return {
@@ -536,8 +559,7 @@ def prepare_hidden_executions_data(
     ]
     if not hidden.empty:
         hidden = hidden[
-            (hidden["timestamp"] >= start_time)
-            & (hidden["timestamp"] <= end_time)
+            (hidden["timestamp"] >= start_time) & (hidden["timestamp"] <= end_time)
         ]
 
     return {

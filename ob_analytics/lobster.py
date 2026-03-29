@@ -138,9 +138,7 @@ class LobsterLoader:
         raw["price"] = (raw["price"] / divisor).round(cfg.price_decimals)
         raw["volume"] = raw["volume"].astype(float).round(cfg.volume_decimals)
 
-        raw["timestamp"] = self._trading_date + pd.to_timedelta(
-            raw["time"], unit="s"
-        )
+        raw["timestamp"] = self._trading_date + pd.to_timedelta(raw["time"], unit="s")
         raw["exchange_timestamp"] = raw["timestamp"]
 
         raw["raw_event_type"] = raw["event_type"]
@@ -182,9 +180,7 @@ class LobsterLoader:
         n_hidden = hidden_mask.sum()
         if n_hidden > 0:
             max_id = events["id"].max()
-            events.loc[hidden_mask, "id"] = np.arange(
-                max_id + 1, max_id + 1 + n_hidden
-            )
+            events.loc[hidden_mask, "id"] = np.arange(max_id + 1, max_id + 1 + n_hidden)
 
         events = events.reset_index(drop=True)
         events["event_id"] = np.arange(1, len(events) + 1)
@@ -235,9 +231,7 @@ class LobsterLoader:
                 candidates = sorted(source.glob("*message*.csv"))
             if candidates:
                 return candidates[0]
-            raise FileNotFoundError(
-                f"No LOBSTER message file found in {source}"
-            )
+            raise FileNotFoundError(f"No LOBSTER message file found in {source}")
         raise FileNotFoundError(f"Path does not exist: {source}")
 
     @staticmethod
@@ -307,16 +301,23 @@ class LobsterTradeInferrer:
             ``direction``, ``maker_event_id``, ``taker_event_id``,
             ``maker``, ``taker``.
         """
-        execs = events[
-            events["raw_event_type"].isin([4, 5])
-        ].copy().reset_index(drop=True)
+        execs = (
+            events[events["raw_event_type"].isin([4, 5])].copy().reset_index(drop=True)
+        )
 
         if execs.empty:
             return pd.DataFrame(
                 columns=[
-                    "timestamp", "price", "volume", "direction",
-                    "maker_event_id", "taker_event_id", "maker", "taker",
-                    "maker_og", "taker_og",
+                    "timestamp",
+                    "price",
+                    "volume",
+                    "direction",
+                    "maker_event_id",
+                    "taker_event_id",
+                    "maker",
+                    "taker",
+                    "maker_og",
+                    "taker_og",
                 ]
             )
 
@@ -356,9 +357,7 @@ class LobsterTradeInferrer:
                 "taker_og": taker_og,
             }
         )
-        trades = trades.sort_values("timestamp", kind="stable").reset_index(
-            drop=True
-        )
+        trades = trades.sort_values("timestamp", kind="stable").reset_index(drop=True)
 
         logger.info(
             "LobsterTradeInferrer: {} trades ({} with identified taker)",
@@ -376,9 +375,7 @@ class LobsterTradeInferrer:
         For each execution, look for the most recent type-1 submission
         on the **opposite** side at a marketable price.
         """
-        submissions = all_events[
-            all_events["raw_event_type"] == 1
-        ].copy()
+        submissions = all_events[all_events["raw_event_type"] == 1].copy()
 
         if submissions.empty:
             return pd.array([pd.NA] * len(execs), dtype="Int64")
@@ -389,17 +386,15 @@ class LobsterTradeInferrer:
             side_execs = execs[execs["direction"] == side]
             if side_execs.empty:
                 continue
-            opp_subs = submissions[
-                submissions["direction"] == opp_side
-            ].sort_values("timestamp", kind="stable")
+            opp_subs = submissions[submissions["direction"] == opp_side].sort_values(
+                "timestamp", kind="stable"
+            )
 
             if opp_subs.empty:
                 continue
 
             merged = pd.merge_asof(
-                side_execs[["event_id", "timestamp", "price"]].sort_values(
-                    "timestamp"
-                ),
+                side_execs[["event_id", "timestamp", "price"]].sort_values("timestamp"),
                 opp_subs[["event_id", "timestamp", "price"]].rename(
                     columns={
                         "event_id": "taker_eid",
@@ -501,10 +496,15 @@ class LobsterWriter:
 
     def _events_to_message(self, events: pd.DataFrame) -> pd.DataFrame:
         """Convert pipeline events back to LOBSTER message format."""
-        if "raw_event_type" in events.columns and events["raw_event_type"].notna().any():
+        if (
+            "raw_event_type" in events.columns
+            and events["raw_event_type"].notna().any()
+        ):
             event_type = events["raw_event_type"].astype(int)
         else:
-            event_type = events["action"].map(_ACTION_TO_EVENT_TYPE).fillna(2).astype(int)
+            event_type = (
+                events["action"].map(_ACTION_TO_EVENT_TYPE).fillna(2).astype(int)
+            )
 
         midnight = self._trading_date
         time_seconds = (events["timestamp"] - midnight).dt.total_seconds()
@@ -535,7 +535,7 @@ class LobsterWriter:
             direction = str(ev["direction"])
             price = float(ev["price"])
             volume = float(ev["volume"])
-            order_id = ev["id"]
+            ev["id"]
 
             if action == "created":
                 book[direction][price] = book[direction].get(price, 0) + volume
@@ -557,10 +557,14 @@ class LobsterWriter:
 
         cols: list[str] = []
         for i in range(1, num_levels + 1):
-            cols.extend([
-                f"ask_price_{i}", f"ask_size_{i}",
-                f"bid_price_{i}", f"bid_size_{i}",
-            ])
+            cols.extend(
+                [
+                    f"ask_price_{i}",
+                    f"ask_size_{i}",
+                    f"bid_price_{i}",
+                    f"bid_size_{i}",
+                ]
+            )
 
         ob = pd.DataFrame(rows, columns=cols)
 
@@ -627,15 +631,14 @@ def lobster_depth_from_orderbook(
     ob_raw = pd.read_csv(orderbook_path, header=None).values
     num_levels = ob_raw.shape[1] // 4
 
-    book_events = events[
-        events["raw_event_type"].isin([1, 2, 3, 4, 5])
-    ].reset_index(drop=True)
+    book_events = events[events["raw_event_type"].isin([1, 2, 3, 4, 5])].reset_index(
+        drop=True
+    )
 
     n_ob, n_ev = ob_raw.shape[0], len(book_events)
     if n_ob != n_ev:
         logger.warning(
-            "lobster_depth: orderbook rows ({}) != book events ({}); "
-            "using min",
+            "lobster_depth: orderbook rows ({}) != book events ({}); using min",
             n_ob,
             n_ev,
         )
@@ -671,17 +674,13 @@ def lobster_depth_from_orderbook(
             av = ask_sizes_all[i, j]
             if ap != _DUMMY_ASK_PRICE and av > 0:
                 price = round(ap / price_divisor, price_dec)
-                curr_levels[("ask", price)] = (
-                    curr_levels.get(("ask", price), 0) + av
-                )
+                curr_levels[("ask", price)] = curr_levels.get(("ask", price), 0) + av
 
             bp = bid_prices_all[i, j]
             bv = bid_sizes_all[i, j]
             if bp != _DUMMY_BID_PRICE and bv > 0:
                 price = round(bp / price_divisor, price_dec)
-                curr_levels[("bid", price)] = (
-                    curr_levels.get(("bid", price), 0) + bv
-                )
+                curr_levels[("bid", price)] = curr_levels.get(("bid", price), 0) + bv
 
         all_keys = set(prev_levels) | set(curr_levels)
         for key in all_keys:
@@ -709,9 +708,7 @@ def lobster_depth_from_orderbook(
     depth["direction"] = pd.Categorical(
         depth["direction"], categories=["bid", "ask"], ordered=True
     )
-    depth = depth.sort_values("timestamp", kind="stable").reset_index(
-        drop=True
-    )
+    depth = depth.sort_values("timestamp", kind="stable").reset_index(drop=True)
 
     logger.info("lobster_depth: {} depth rows from orderbook", len(depth))
 
@@ -760,9 +757,7 @@ class LobsterFormat(Format):
         config: Any,
         source: Any,
     ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
-        ob_path = (
-            self._loader.orderbook_path if self._loader is not None else None
-        )
+        ob_path = self._loader.orderbook_path if self._loader is not None else None
         if ob_path is None:
             ob_path = LobsterLoader._resolve_orderbook_file(Path(source))
         if ob_path is None:

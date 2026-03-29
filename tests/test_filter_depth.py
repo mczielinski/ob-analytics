@@ -19,7 +19,7 @@ class TestFilterDepth:
         """Timestamps before from_timestamp are clipped upward to from_timestamp."""
         d = _depth(
             ("2015-01-01 00:00:00", 100, 5.0),  # before range
-            ("2015-01-01 00:00:30", 100, 3.0),   # in range
+            ("2015-01-01 00:00:30", 100, 3.0),  # in range
         )
         from_ts = pd.Timestamp("2015-01-01 00:00:10")
         to_ts = pd.Timestamp("2015-01-01 00:01:00")
@@ -35,8 +35,8 @@ class TestFilterDepth:
         """Price levels with volume=0 before the range are dead and excluded."""
         d = _depth(
             ("2015-01-01 00:00:00", 100, 5.0),
-            ("2015-01-01 00:00:05", 100, 0.0),   # vol went to 0 before range
-            ("2015-01-01 00:00:30", 200, 3.0),    # in range
+            ("2015-01-01 00:00:05", 100, 0.0),  # vol went to 0 before range
+            ("2015-01-01 00:00:30", 200, 3.0),  # in range
         )
         from_ts = pd.Timestamp("2015-01-01 00:00:10")
         to_ts = pd.Timestamp("2015-01-01 00:01:00")

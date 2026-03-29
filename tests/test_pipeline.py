@@ -1,6 +1,5 @@
 """Tests for the Pipeline orchestrator."""
 
-
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -26,7 +25,16 @@ def _make_full_events() -> pd.DataFrame:
             "price": [236.50, 237.00, 236.50, 237.00, 236.60, 237.10, 236.60, 237.10],
             "volume": [10000, 5000, 8000, 3000, 7000, 4000, 5000, 2000],
             "action": pd.Categorical(
-                ["created", "created", "changed", "changed", "created", "created", "changed", "changed"],
+                [
+                    "created",
+                    "created",
+                    "changed",
+                    "changed",
+                    "created",
+                    "created",
+                    "changed",
+                    "changed",
+                ],
                 categories=["created", "changed", "deleted"],
                 ordered=True,
             ),
@@ -39,9 +47,24 @@ def _make_full_events() -> pd.DataFrame:
             "original_number": list(range(1, n + 1)),
             "matching_event": [np.nan, np.nan, 4.0, 3.0, np.nan, np.nan, 8.0, 7.0],
             "type": pd.Categorical(
-                ["resting-limit", "resting-limit", "resting-limit", "resting-limit",
-                 "resting-limit", "resting-limit", "resting-limit", "resting-limit"],
-                categories=["unknown", "flashed-limit", "resting-limit", "market-limit", "pacman", "market"],
+                [
+                    "resting-limit",
+                    "resting-limit",
+                    "resting-limit",
+                    "resting-limit",
+                    "resting-limit",
+                    "resting-limit",
+                    "resting-limit",
+                    "resting-limit",
+                ],
+                categories=[
+                    "unknown",
+                    "flashed-limit",
+                    "resting-limit",
+                    "market-limit",
+                    "pacman",
+                    "market",
+                ],
                 ordered=True,
             ),
         }

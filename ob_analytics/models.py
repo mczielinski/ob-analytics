@@ -10,8 +10,6 @@ These models serve as **data contracts** at package boundaries:
 The pipeline continues to use DataFrames internally for performance.
 """
 
-
-
 from datetime import datetime
 from decimal import Decimal
 from typing import Literal
@@ -29,7 +27,9 @@ class OrderEvent(BaseModel):
 
     model_config = {"frozen": True}
 
-    event_id: int = Field(description="Sequential event identifier assigned during loading.")
+    event_id: int = Field(
+        description="Sequential event identifier assigned during loading."
+    )
     order_id: int | str = Field(description="Exchange-assigned order identifier.")
     timestamp: datetime
     exchange_timestamp: datetime

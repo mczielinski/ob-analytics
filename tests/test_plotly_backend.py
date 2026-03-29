@@ -4,6 +4,7 @@ Skipped entirely if plotly is not installed.
 """
 
 import matplotlib
+
 matplotlib.use("Agg")
 
 import numpy as np
@@ -12,7 +13,7 @@ import pytest
 
 go = pytest.importorskip("plotly.graph_objects", reason="plotly not installed")
 
-from ob_analytics._chart_data import (
+from ob_analytics._chart_data import (  # noqa: E402
     prepare_current_depth_data,
     prepare_event_map_data,
     prepare_events_histogram_data,
@@ -25,7 +26,7 @@ from ob_analytics._chart_data import (
     prepare_volume_percentiles_data,
     prepare_vpin_data,
 )
-from ob_analytics._plotly import (
+from ob_analytics._plotly import (  # noqa: E402
     plotly_current_depth,
     plotly_event_map,
     plotly_events_histogram,
@@ -187,11 +188,13 @@ class TestPlotlyEventsHistogram:
 class TestPlotlyVpin:
     def test_returns_plotly_figure(self) -> None:
         ts = pd.date_range("2015-01-01", periods=5, freq="min")
-        vpin_df = pd.DataFrame({
-            "timestamp_end": ts,
-            "vpin": [0.3, 0.5, 0.7, 0.4, 0.6],
-            "vpin_avg": [0.3, 0.4, 0.5, 0.45, 0.5],
-        })
+        vpin_df = pd.DataFrame(
+            {
+                "timestamp_end": ts,
+                "vpin": [0.3, 0.5, 0.7, 0.4, 0.6],
+                "vpin_avg": [0.3, 0.4, 0.5, 0.45, 0.5],
+            }
+        )
         data = prepare_vpin_data(vpin_df)
         fig = plotly_vpin(data)
         assert isinstance(fig, go.Figure)
@@ -210,10 +213,12 @@ class TestPlotlyOfi:
 class TestPlotlyKyleLambda:
     def test_returns_plotly_figure(self) -> None:
         class FakeResult:
-            regression_df = pd.DataFrame({
-                "signed_volume": [1.0, -2.0, 3.0],
-                "delta_price": [0.01, -0.02, 0.03],
-            })
+            regression_df = pd.DataFrame(
+                {
+                    "signed_volume": [1.0, -2.0, 3.0],
+                    "delta_price": [0.01, -0.02, 0.03],
+                }
+            )
             lambda_ = 0.01
             r_squared = 0.5
             t_stat = 2.1
@@ -230,12 +235,16 @@ class TestPlotlyKyleLambda:
 
 
 class TestBackendDispatch:
-    def test_plotly_backend_returns_plotly_figure(self, sample_trades: pd.DataFrame) -> None:
+    def test_plotly_backend_returns_plotly_figure(
+        self, sample_trades: pd.DataFrame
+    ) -> None:
         from ob_analytics.visualisation import plot_trades
+
         fig = plot_trades(sample_trades, backend="plotly")
         assert isinstance(fig, go.Figure)
 
     def test_invalid_backend_raises(self, sample_trades: pd.DataFrame) -> None:
         from ob_analytics.visualisation import plot_trades
+
         with pytest.raises(ValueError, match="Unknown backend"):
             plot_trades(sample_trades, backend="nonexistent")

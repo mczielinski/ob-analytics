@@ -1,6 +1,5 @@
 """Tests for ob_analytics.data (save/load, zombie detection)."""
 
-
 from pathlib import Path
 
 import pandas as pd

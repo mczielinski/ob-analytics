@@ -1,16 +1,15 @@
 """Tests for get_zombie_ids — vectorised O(N log M) zombie detection."""
 
 import pandas as pd
-import pytest
 
 from ob_analytics.data import get_zombie_ids
 
 
 def _events(*rows):
     """Helper: build an events DataFrame from (id, action, direction, timestamp, price) tuples."""
-    return pd.DataFrame(rows, columns=["id", "action", "direction", "timestamp", "price"]).assign(
-        timestamp=lambda df: pd.to_datetime(df["timestamp"])
-    )
+    return pd.DataFrame(
+        rows, columns=["id", "action", "direction", "timestamp", "price"]
+    ).assign(timestamp=lambda df: pd.to_datetime(df["timestamp"]))
 
 
 def _trades(*rows):

@@ -5,13 +5,16 @@ metrics, along with :func:`price_level_volume`, :func:`filter_depth`,
 :func:`depth_metrics` (backward-compatible wrapper), and :func:`get_spread`.
 """
 
-
 from functools import lru_cache
 
 import numpy as np
 import pandas as pd
 
-from ob_analytics._utils import interval_sum_breaks, validate_columns, validate_non_empty
+from ob_analytics._utils import (
+    interval_sum_breaks,
+    validate_columns,
+    validate_non_empty,
+)
 from ob_analytics.config import PipelineConfig
 
 
@@ -89,7 +92,9 @@ class DepthMetricsEngine:
             and volume-in-BPS-bin columns (e.g. ``bid_vol25bps``).
         """
         validate_columns(
-            depth, {"timestamp", "price", "volume", "direction"}, "DepthMetricsEngine.compute"
+            depth,
+            {"timestamp", "price", "volume", "direction"},
+            "DepthMetricsEngine.compute",
         )
         validate_non_empty(depth, "DepthMetricsEngine.compute")
 
@@ -118,13 +123,13 @@ class DepthMetricsEngine:
         res = pd.concat([timestamps, metrics], axis=1)
 
         price_cols = ["best_bid_price", "best_ask_price"]
-        res[price_cols] = round(res[price_cols] / multiplier, self._config.price_decimals)
+        res[price_cols] = round(
+            res[price_cols] / multiplier, self._config.price_decimals
+        )
 
         return res
 
-    def update(
-        self, price: int, volume: float, side: int, out: np.ndarray
-    ) -> None:
+    def update(self, price: int, volume: float, side: int, out: np.ndarray) -> None:
         """Process one depth event and write a metrics row into *out*.
 
         Parameters
@@ -177,7 +182,7 @@ class DepthMetricsEngine:
         if self._best_ask is None:
             out[offset] = 0
             out[offset + 1] = 0
-            out[offset + 2: offset + 2 + self._bins] = 0
+            out[offset + 2 : offset + 2 + self._bins] = 0
             return
 
         out[offset] = self._best_ask
@@ -189,7 +194,9 @@ class DepthMetricsEngine:
             [self._ask_levels.get(p, 0) for p in price_range], dtype=np.float64
         )
         breaks = self._compute_breaks(len(price_range))
-        out[offset + 2: offset + 2 + self._bins] = interval_sum_breaks(vol_array, breaks)
+        out[offset + 2 : offset + 2 + self._bins] = interval_sum_breaks(
+            vol_array, breaks
+        )
 
     # ── Internal: bid side ────────────────────────────────────────────
 
@@ -224,7 +231,7 @@ class DepthMetricsEngine:
         if self._best_bid is None:
             out[0] = 0
             out[1] = 0
-            out[2: 2 + self._bins] = 0
+            out[2 : 2 + self._bins] = 0
             return
 
         out[0] = self._best_bid
@@ -236,7 +243,7 @@ class DepthMetricsEngine:
             [self._bid_levels.get(p, 0) for p in price_range], dtype=np.float64
         )
         breaks = self._compute_breaks(len(price_range))
-        out[2: 2 + self._bins] = interval_sum_breaks(vol_array, breaks)
+        out[2 : 2 + self._bins] = interval_sum_breaks(vol_array, breaks)
 
     # ── Helpers ───────────────────────────────────────────────────────
 
@@ -285,8 +292,16 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
     validate_columns(
         events,
         {
-            "event_id", "id", "timestamp", "exchange_timestamp",
-            "price", "volume", "direction", "action", "fill", "type",
+            "event_id",
+            "id",
+            "timestamp",
+            "exchange_timestamp",
+            "price",
+            "volume",
+            "direction",
+            "action",
+            "fill",
+            "type",
         },
         "price_level_volume",
     )
@@ -294,8 +309,14 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
 
     def directional_price_level_volume(dir_events: pd.DataFrame) -> pd.DataFrame:
         cols = [
-            "event_id", "id", "timestamp", "exchange_timestamp",
-            "price", "volume", "direction", "action",
+            "event_id",
+            "id",
+            "timestamp",
+            "exchange_timestamp",
+            "price",
+            "volume",
+            "direction",
+            "action",
         ]
 
         added_volume = dir_events[
@@ -324,8 +345,14 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
             & (dir_events["type"] != "market")
         ][
             [
-                "event_id", "id", "timestamp", "exchange_timestamp",
-                "price", "fill", "direction", "action",
+                "event_id",
+                "id",
+                "timestamp",
+                "exchange_timestamp",
+                "price",
+                "fill",
+                "direction",
+                "action",
             ]
         ]
         filled_volume["fill"] = -filled_volume["fill"]
@@ -333,7 +360,9 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
         filled_volume.columns = pd.Index(cols)
 
         volume_deltas = pd.concat([added_volume, cancelled_volume, filled_volume])
-        volume_deltas = volume_deltas.sort_values(by=["price", "timestamp"], kind="stable")
+        volume_deltas = volume_deltas.sort_values(
+            by=["price", "timestamp"], kind="stable"
+        )
 
         volume_deltas["volume"] = volume_deltas.groupby("price")["volume"].cumsum()
         volume_deltas["volume"] = volume_deltas["volume"].clip(lower=0)
@@ -389,7 +418,9 @@ def filter_depth(
     open_ends["volume"] = 0
 
     range_combined = pd.concat([range_combined, open_ends])
-    range_combined = range_combined.sort_values(by=["price", "timestamp"], kind="stable")
+    range_combined = range_combined.sort_values(
+        by=["price", "timestamp"], kind="stable"
+    )
 
     return range_combined
 
@@ -432,7 +463,13 @@ def get_spread(depth_summary: pd.DataFrame) -> pd.DataFrame:
     """
     validate_columns(
         depth_summary,
-        {"timestamp", "best_bid_price", "best_bid_vol", "best_ask_price", "best_ask_vol"},
+        {
+            "timestamp",
+            "best_bid_price",
+            "best_bid_vol",
+            "best_ask_price",
+            "best_ask_vol",
+        },
         "get_spread",
     )
 

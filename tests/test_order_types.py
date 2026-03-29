@@ -8,7 +8,8 @@ from ob_analytics.order_types import set_order_types
 def _events(*rows):
     """Build events DataFrame from (event_id, id, action, direction, price, volume) tuples."""
     return pd.DataFrame(
-        rows, columns=["event_id", "id", "action", "direction", "price", "volume"],
+        rows,
+        columns=["event_id", "id", "action", "direction", "price", "volume"],
     )
 
 
@@ -77,8 +78,8 @@ class TestSetOrderTypes:
             (2, 10, "deleted", "bid", 100, 0),
         )
         trades = _trades(
-            (1, 99),   # event 1 is a maker
-            (88, 1),   # event 1 is also a taker
+            (1, 99),  # event 1 is a maker
+            (88, 1),  # event 1 is also a taker
         )
         result = set_order_types(events, trades)
         assert (result[result["id"] == 10]["type"] == "market-limit").all()

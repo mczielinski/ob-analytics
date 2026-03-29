@@ -4,7 +4,6 @@ Array helpers, DataFrame validation, and other shared internals.  Nothing
 in this module is part of the public API.
 """
 
-
 from typing import Iterable
 
 import numpy as np
@@ -114,7 +113,6 @@ def norml(
     minv = np.min(v) if minv is None else minv
     maxv = np.max(v) if maxv is None else maxv
     return (v - minv) / (maxv - minv)
-
 
 
 def interval_sum_breaks(v: np.ndarray, breaks: np.ndarray) -> np.ndarray:

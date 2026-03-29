@@ -28,9 +28,7 @@ def _trades(directions, volumes=None, prices=None, base_sec_offsets=None):
         prices = [100.0] * n
     return pd.DataFrame(
         {
-            "timestamp": [
-                base + pd.Timedelta(seconds=s) for s in base_sec_offsets
-            ],
+            "timestamp": [base + pd.Timedelta(seconds=s) for s in base_sec_offsets],
             "price": prices,
             "volume": volumes,
             "direction": directions,
@@ -230,7 +228,7 @@ class TestOrderFlowImbalance:
 
 # ── Visualization ────────────────────────────────────────────────────
 
-import matplotlib
+import matplotlib  # noqa: E402
 
 matplotlib.use("Agg")
 from matplotlib.figure import Figure  # noqa: E402
@@ -282,4 +280,3 @@ class TestFlowToxicityPlots:
         result = compute_kyle_lambda(trades, window="5min")
         fig = plot_kyle_lambda(result)
         assert isinstance(fig, Figure)
-

@@ -12,7 +12,6 @@ from ob_analytics._chart_data import (
     prepare_events_histogram_data,
     prepare_kyle_lambda_data,
     prepare_ofi_data,
-    prepare_price_levels_data,
     prepare_time_series_data,
     prepare_trades_data,
     prepare_volume_map_data,
@@ -230,11 +229,13 @@ class TestPrepareEventsHistogram:
 class TestPrepareVpin:
     def test_returns_vpin_data(self) -> None:
         ts = pd.date_range("2015-01-01", periods=5, freq="min")
-        vpin_df = pd.DataFrame({
-            "timestamp_end": ts,
-            "vpin": [0.3, 0.5, 0.7, 0.4, 0.6],
-            "vpin_avg": [0.3, 0.4, 0.5, 0.45, 0.5],
-        })
+        vpin_df = pd.DataFrame(
+            {
+                "timestamp_end": ts,
+                "vpin": [0.3, 0.5, 0.7, 0.4, 0.6],
+                "vpin_avg": [0.3, 0.4, 0.5, 0.45, 0.5],
+            }
+        )
         data = prepare_vpin_data(vpin_df, threshold=0.7)
         assert data["threshold"] == 0.7
         assert "bar_width" in data
@@ -244,10 +245,12 @@ class TestPrepareVpin:
 class TestPrepareOfi:
     def test_returns_colors_and_bar_width(self) -> None:
         ts = pd.date_range("2015-01-01", periods=5, freq="min")
-        ofi_df = pd.DataFrame({
-            "timestamp": ts,
-            "ofi": [0.3, -0.5, 0.7, -0.4, 0.6],
-        })
+        ofi_df = pd.DataFrame(
+            {
+                "timestamp": ts,
+                "ofi": [0.3, -0.5, 0.7, -0.4, 0.6],
+            }
+        )
         data = prepare_ofi_data(ofi_df)
         assert "colors" in data
         assert len(data["colors"]) == 5
@@ -258,10 +261,12 @@ class TestPrepareOfi:
 class TestPrepareKyleLambda:
     def test_extracts_fields(self) -> None:
         class FakeResult:
-            regression_df = pd.DataFrame({
-                "signed_volume": [1.0, -2.0, 3.0],
-                "delta_price": [0.01, -0.02, 0.03],
-            })
+            regression_df = pd.DataFrame(
+                {
+                    "signed_volume": [1.0, -2.0, 3.0],
+                    "delta_price": [0.01, -0.02, 0.03],
+                }
+            )
             lambda_ = 0.01
             r_squared = 0.5
             t_stat = 2.1

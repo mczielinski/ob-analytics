@@ -1,7 +1,7 @@
 """Tests for ob_analytics.visualisation – Phase 5 visualization improvements."""
 
-
 import matplotlib
+
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
@@ -270,7 +270,11 @@ class TestBackendDispatch:
 class TestRegisterBackend:
     def test_register_and_dispatch(self, sample_trades, tmp_path):
         """Register a dummy backend and verify dispatch calls it."""
-        from ob_analytics.visualisation import _BACKENDS, _FUNC_PREFIX, register_plot_backend
+        from ob_analytics.visualisation import (
+            _BACKENDS,
+            _FUNC_PREFIX,
+            register_plot_backend,
+        )
 
         # Create a temporary dummy module
         dummy_module = tmp_path / "dummy_backend.py"
@@ -282,6 +286,7 @@ class TestRegisterBackend:
         )
 
         import sys
+
         sys.path.insert(0, str(tmp_path))
         try:
             register_plot_backend("dummy", "dummy_backend", func_prefix="dummy_")
@@ -295,4 +300,3 @@ class TestRegisterBackend:
             _BACKENDS.pop("dummy", None)
             _FUNC_PREFIX.pop("dummy", None)
             sys.modules.pop("dummy_backend", None)
-

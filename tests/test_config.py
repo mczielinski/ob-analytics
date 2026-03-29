@@ -1,6 +1,5 @@
 """Tests for ob_analytics.config and ob_analytics.exceptions."""
 
-
 import pytest
 from pydantic import ValidationError
 

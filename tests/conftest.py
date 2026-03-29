@@ -1,6 +1,5 @@
 """Shared fixtures for ob-analytics tests."""
 
-
 from pathlib import Path
 
 import pandas as pd

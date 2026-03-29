@@ -63,11 +63,23 @@ from ob_analytics.lobster import (
     download_sample,
 )
 from ob_analytics.matching_engine import NeedlemanWunschMatcher, event_match
-from ob_analytics.models import DepthLevel, KyleLambdaResult, OrderBookSnapshot, OrderEvent, Trade
+from ob_analytics.models import (
+    DepthLevel,
+    KyleLambdaResult,
+    OrderBookSnapshot,
+    OrderEvent,
+    Trade,
+)
 from ob_analytics.order_book_reconstruction import order_book
 from ob_analytics.order_types import set_order_types
 from ob_analytics.pipeline import Pipeline, PipelineResult, register_format
-from ob_analytics.protocols import DataWriter, EventLoader, Format, MatchingEngine, TradeInferrer
+from ob_analytics.protocols import (
+    DataWriter,
+    EventLoader,
+    Format,
+    MatchingEngine,
+    TradeInferrer,
+)
 from ob_analytics.trades import DefaultTradeInferrer, match_trades, trade_impacts
 from ob_analytics.visualisation import (
     PlotTheme,

@@ -89,7 +89,7 @@ def compute_vpin(
     is_buy = df["direction"] == "buy"
     buy_vol = df["volume"].where(is_buy, 0.0).to_numpy(dtype=np.float64)
     sell_vol = df["volume"].where(~is_buy, 0.0).to_numpy(dtype=np.float64)
-    cum_vol = df["volume"].cumsum().to_numpy(dtype=np.float64)
+    df["volume"].cumsum().to_numpy(dtype=np.float64)
     timestamps = df["timestamp"].to_numpy()
 
     # Walk through trades, splitting volume into equal-sized buckets.
@@ -191,9 +191,7 @@ def compute_kyle_lambda(
     validate_non_empty(trades, "compute_kyle_lambda")
 
     df = trades.sort_values("timestamp").copy()
-    df["signed_volume"] = df["volume"].where(
-        df["direction"] == "buy", -df["volume"]
-    )
+    df["signed_volume"] = df["volume"].where(df["direction"] == "buy", -df["volume"])
 
     # Group by time window
     grouped = df.groupby(pd.Grouper(key="timestamp", freq=window))
@@ -203,9 +201,7 @@ def compute_kyle_lambda(
             continue
         dp = group["price"].iloc[-1] - group["price"].iloc[0]
         sv = group["signed_volume"].sum()
-        rows.append(
-            {"timestamp": ts, "delta_price": dp, "signed_volume": sv}
-        )
+        rows.append({"timestamp": ts, "delta_price": dp, "signed_volume": sv})
 
     reg_df = pd.DataFrame(rows)
 
@@ -237,9 +233,7 @@ def compute_kyle_lambda(
             regression_df=reg_df,
         )
 
-    XtX_inv = (
-        np.array([[XtX[1, 1], -XtX[0, 1]], [-XtX[1, 0], XtX[0, 0]]]) / det
-    )
+    XtX_inv = np.array([[XtX[1, 1], -XtX[0, 1]], [-XtX[1, 0], XtX[0, 0]]]) / det
     beta = XtX_inv @ (X.T @ y)
     lambda_ = float(beta[1])
 

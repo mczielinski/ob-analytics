@@ -1,11 +1,8 @@
 """Tests for order_aggressiveness — event_id merge_asof boundary conditions."""
 
-import numpy as np
 import pandas as pd
-import pytest
 
 from ob_analytics.event_processing import order_aggressiveness
-from ob_analytics.exceptions import InvalidDataError
 
 
 def _make_events_and_depth(event_rows, depth_rows):

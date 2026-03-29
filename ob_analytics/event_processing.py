@@ -18,7 +18,6 @@ from loguru import logger
 
 from ob_analytics._utils import validate_columns, validate_non_empty
 from ob_analytics.config import PipelineConfig
-from ob_analytics.exceptions import InvalidDataError
 from ob_analytics.protocols import (
     DataWriter,
     EventLoader,
@@ -68,7 +67,15 @@ class BitstampLoader:
             events = events.rename(columns={"exchange.timestamp": "exchange_timestamp"})
         validate_columns(
             events,
-            {"id", "timestamp", "exchange_timestamp", "price", "volume", "action", "direction"},
+            {
+                "id",
+                "timestamp",
+                "exchange_timestamp",
+                "price",
+                "volume",
+                "action",
+                "direction",
+            },
             "BitstampLoader.load",
         )
         validate_non_empty(events, "BitstampLoader.load")
@@ -128,9 +135,7 @@ class BitstampLoader:
 
         rem_dup = len(duplicate_event_ids)
         if rem_dup > 0:
-            removed_ids = events.loc[
-                events["event_id"].isin(duplicate_event_ids), "id"
-            ]
+            removed_ids = events.loc[events["event_id"].isin(duplicate_event_ids), "id"]
             logger.warning(
                 "Removed {} duplicate order cancellations: {}",
                 rem_dup,
@@ -243,12 +248,16 @@ def order_aggressiveness(
 
     if not bid_diff.empty:
         events = pd.merge(events, bid_diff, on="event_id", how="left")
-        events["aggressiveness_bps"] = events["aggressiveness_bps"].fillna(events["diff_bps"])
+        events["aggressiveness_bps"] = events["aggressiveness_bps"].fillna(
+            events["diff_bps"]
+        )
         events.drop(columns=["diff_bps"], inplace=True)
 
     if not ask_diff.empty:
         events = pd.merge(events, ask_diff, on="event_id", how="left")
-        events["aggressiveness_bps"] = events["aggressiveness_bps"].fillna(events["diff_bps"])
+        events["aggressiveness_bps"] = events["aggressiveness_bps"].fillna(
+            events["diff_bps"]
+        )
         events.drop(columns=["diff_bps"], inplace=True)
 
     return events

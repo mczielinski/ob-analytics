@@ -4,7 +4,6 @@ Covers BitstampLoader, NeedlemanWunschMatcher, DefaultTradeInferrer,
 and DepthMetricsEngine with synthetic data.
 """
 
-
 from pathlib import Path
 
 import pandas as pd
@@ -25,8 +24,8 @@ class TestBitstampLoader:
         """Write a minimal Bitstamp-format CSV and return its path."""
         csv = tmp_path / "orders.csv"
         ts1 = 1430441820000  # 2015-05-01 01:37:00 UTC in milliseconds
-        ts2 = ts1 + 10       # +10ms
-        ts3 = ts1 + 100      # +100ms
+        ts2 = ts1 + 10  # +10ms
+        ts3 = ts1 + 100  # +100ms
         rows = [
             f"100,{ts1},{ts1 - 1000},236.50,50000000,created,bid",
             f"200,{ts1},{ts1 - 1000},237.00,30000000,created,ask",
@@ -48,7 +47,16 @@ class TestBitstampLoader:
         events = loader.load(sample_csv)
         assert isinstance(events, pd.DataFrame)
         assert len(events) == 4
-        for col in ["id", "timestamp", "price", "volume", "action", "direction", "fill", "event_id"]:
+        for col in [
+            "id",
+            "timestamp",
+            "price",
+            "volume",
+            "action",
+            "direction",
+            "fill",
+            "event_id",
+        ]:
             assert col in events.columns
 
     def test_fill_computed(self, sample_csv: Path):
@@ -104,7 +112,14 @@ class TestDefaultTradeInferrer:
         trades = inferrer.infer_trades(matched_events)
         assert isinstance(trades, pd.DataFrame)
         assert len(trades) == 2
-        for col in ["timestamp", "price", "volume", "direction", "maker_event_id", "taker_event_id"]:
+        for col in [
+            "timestamp",
+            "price",
+            "volume",
+            "direction",
+            "maker_event_id",
+            "taker_event_id",
+        ]:
             assert col in trades.columns
 
     def test_rejects_missing_columns(self):
@@ -126,7 +141,9 @@ class TestDepthMetricsEngine:
         config = PipelineConfig(depth_bins=5)
         engine = DepthMetricsEngine(config)
         result = engine.compute(tiny_depth)
-        expected_cols = 1 + 2 * (2 + 5)  # timestamp + bid(price,vol,5bins) + ask(price,vol,5bins)
+        expected_cols = 1 + 2 * (
+            2 + 5
+        )  # timestamp + bid(price,vol,5bins) + ask(price,vol,5bins)
         assert len(result.columns) == expected_cols
 
     def test_best_prices_populated(self, tiny_depth):

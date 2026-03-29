@@ -98,9 +98,9 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
     mo_ids = taker_ids - maker_ids - pacman_ids
 
     events.loc[events["id"].isin(flashed_ids), "type"] = "flashed-limit"
-    events.loc[
-        events["id"].isin(forever_ids | pure_maker_ids), "type"
-    ] = "resting-limit"
+    events.loc[events["id"].isin(forever_ids | pure_maker_ids), "type"] = (
+        "resting-limit"
+    )
 
     # Market limit orders
     events.loc[events["id"].isin(ml_ids), "type"] = "market-limit"

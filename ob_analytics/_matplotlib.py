@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, cast
 
 import matplotlib.collections as collections
 import matplotlib.colors as mcolors
@@ -84,7 +85,12 @@ def get_plot_theme() -> PlotTheme:
 def _apply_theme() -> None:
     """Apply the current theme to matplotlib / seaborn."""
     t = _current_theme
-    sns.set_theme(style=t.style, context=t.context, font_scale=t.font_scale, rc=dict(t.rc))  # type: ignore
+    sns.set_theme(
+        style=cast(Any, t.style),
+        context=cast(Any, t.context),
+        font_scale=t.font_scale,
+        rc=dict(t.rc),
+    )
 
 
 def _create_axes(
@@ -149,8 +155,11 @@ def mpl_trades(data: dict, ax: Axes | None = None) -> Figure:
     y_breaks = data["y_breaks"]
     fig, ax = _create_axes(ax, figsize=(10, 6))
     sns.lineplot(
-        data=filtered, x="timestamp", y="price",
-        drawstyle="steps-post", ax=ax,
+        data=filtered,
+        x="timestamp",
+        y="price",
+        drawstyle="steps-post",
+        ax=ax,
     )
     ax.set_xlabel("Time")
     ax.set_ylabel("Limit Price")
@@ -212,7 +221,9 @@ def mpl_price_levels(data: dict, ax: Axes | None = None) -> Figure:
         segments = np.concatenate([points[:-1], points[1:]], axis=1)
         seg_colors = cmap(norm(np.asarray(v[:-1])))
         seg_colors[:, -1] = a[:-1]
-        lc = collections.LineCollection(segments.tolist(), colors=seg_colors, linewidths=2)
+        lc = collections.LineCollection(
+            segments.tolist(), colors=seg_colors, linewidths=2
+        )
         ax.add_collection(lc)
 
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
@@ -228,19 +239,30 @@ def mpl_price_levels(data: dict, ax: Axes | None = None) -> Figure:
                 spread["best_bid_price"] + spread["best_ask_price"]
             ) / 2
             ax.plot(
-                spread["timestamp"], spread["midprice"],
-                color="#ffffff", linewidth=1.1, label="Midprice",
+                spread["timestamp"],
+                spread["midprice"],
+                color="#ffffff",
+                linewidth=1.1,
+                label="Midprice",
             )
         else:
             if "best_ask_price" in spread:
                 ax.step(
-                    spread["timestamp"], spread["best_ask_price"],
-                    color="#ff0000", linewidth=1.5, where="post", label="Best Ask",
+                    spread["timestamp"],
+                    spread["best_ask_price"],
+                    color="#ff0000",
+                    linewidth=1.5,
+                    where="post",
+                    label="Best Ask",
                 )
             if "best_bid_price" in spread:
                 ax.step(
-                    spread["timestamp"], spread["best_bid_price"],
-                    color="#00ff00", linewidth=1.5, where="post", label="Best Bid",
+                    spread["timestamp"],
+                    spread["best_bid_price"],
+                    color="#00ff00",
+                    linewidth=1.5,
+                    where="post",
+                    label="Best Bid",
                 )
 
     if trades is not None:
@@ -249,15 +271,27 @@ def mpl_price_levels(data: dict, ax: Axes | None = None) -> Figure:
 
         if not sells.empty:
             ax.scatter(
-                sells["timestamp"], sells["price"],
-                s=50, facecolors="none", edgecolors="#ff0000",
-                linewidths=1.5, zorder=5, marker="v", label="Sell Trades",
+                sells["timestamp"],
+                sells["price"],
+                s=50,
+                facecolors="none",
+                edgecolors="#ff0000",
+                linewidths=1.5,
+                zorder=5,
+                marker="v",
+                label="Sell Trades",
             )
         if not buys.empty:
             ax.scatter(
-                buys["timestamp"], buys["price"],
-                s=50, facecolors="none", edgecolors="#00ff00",
-                linewidths=1.5, zorder=5, marker="^", label="Buy Trades",
+                buys["timestamp"],
+                buys["price"],
+                s=50,
+                facecolors="none",
+                edgecolors="#00ff00",
+                linewidths=1.5,
+                zorder=5,
+                marker="^",
+                label="Buy Trades",
             )
 
     ax.xaxis_date()
@@ -296,19 +330,38 @@ def mpl_event_map(data: dict, ax: Axes | None = None) -> Figure:
     fig, ax = _create_axes(ax, figsize=(10, 6))
 
     sns.scatterplot(
-        data=created, x="timestamp", y="price",
-        size="volume", sizes=(20, 200), color="#333333",
-        ax=ax, legend=False, marker="o",
+        data=created,
+        x="timestamp",
+        y="price",
+        size="volume",
+        sizes=(20, 200),
+        color="#333333",
+        ax=ax,
+        legend=False,
+        marker="o",
     )
     sns.scatterplot(
-        data=deleted, x="timestamp", y="price",
-        size="volume", sizes=(20, 200), color="#333333",
-        ax=ax, legend=False, marker="o", edgecolor="black", alpha=0.5,
+        data=deleted,
+        x="timestamp",
+        y="price",
+        size="volume",
+        sizes=(20, 200),
+        color="#333333",
+        ax=ax,
+        legend=False,
+        marker="o",
+        edgecolor="black",
+        alpha=0.5,
     )
     sns.scatterplot(
-        data=events, x="timestamp", y="price",
-        hue="direction", size=0.1, palette=col_pal,
-        ax=ax, legend=False,
+        data=events,
+        x="timestamp",
+        y="price",
+        hue="direction",
+        size=0.1,
+        palette=col_pal,
+        ax=ax,
+        legend=False,
     )
 
     ax.set_xlabel("Time")
@@ -334,8 +387,14 @@ def mpl_volume_map(data: dict, ax: Axes | None = None) -> Figure:
     if log_scale:
         ax.set_yscale("log")
     sns.scatterplot(
-        data=events, x="timestamp", y="volume",
-        hue="direction", palette=col_pal, size=0.5, marker="o", ax=ax,
+        data=events,
+        x="timestamp",
+        y="volume",
+        hue="direction",
+        palette=col_pal,
+        size=0.5,
+        marker="o",
+        ax=ax,
     )
     ax.set_xlabel("Time")
     ax.set_ylabel("Volume")
@@ -364,16 +423,24 @@ def mpl_current_depth(data: dict, ax: Axes | None = None) -> Figure:
         bar_width = np.min(price_diffs) if len(price_diffs) > 0 else 1
 
         ax.bar(
-            depth_df["price"], depth_df["volume"],
-            width=bar_width, color="white", align="center", edgecolor=None,
+            depth_df["price"],
+            depth_df["volume"],
+            width=bar_width,
+            color="white",
+            align="center",
+            edgecolor=None,
         )
 
     col_pal = {"ask": "#ff0000", "bid": "#0000ff"}
     for side_value in ["bid", "ask"]:
         side_data = depth_df[depth_df["side"] == side_value]
         ax.step(
-            side_data["price"], side_data["liquidity"],
-            where="pre", color=col_pal[side_value], label=side_value, linewidth=2,
+            side_data["price"],
+            side_data["liquidity"],
+            where="pre",
+            color=col_pal[side_value],
+            label=side_value,
+            linewidth=2,
         )
 
     if show_quantiles:
@@ -419,7 +486,9 @@ def mpl_volume_percentiles(data: dict, ax: Axes | None = None) -> Figure:
     for percentile in asks_cols:
         current = asks_cumsum[percentile].values
         ax.fill_between(
-            x, prev, current,
+            x,
+            prev,
+            current,
             facecolor=colors_dict[percentile],
             edgecolor="black" if perc_line else None,
             linewidth=pl,
@@ -431,7 +500,9 @@ def mpl_volume_percentiles(data: dict, ax: Axes | None = None) -> Figure:
     for percentile in bids_cols:
         current = bids_cumsum_neg[percentile].values
         ax.fill_between(
-            x, prev, current,
+            x,
+            prev,
+            current,
             facecolor=colors_dict[percentile],
             edgecolor="black" if perc_line else None,
             linewidth=pl,
@@ -456,9 +527,12 @@ def mpl_volume_percentiles(data: dict, ax: Axes | None = None) -> Figure:
         legend_elements.append(patch)
 
     ax.legend(
-        handles=legend_elements, title="depth         \n",
-        loc="center left", bbox_to_anchor=(1.01, 0.5),
-        ncol=1, borderaxespad=0.0,
+        handles=legend_elements,
+        title="depth         \n",
+        loc="center left",
+        bbox_to_anchor=(1.01, 0.5),
+        ncol=1,
+        borderaxespad=0.0,
     )
     fig.tight_layout(rect=(0.0, 0.0, 0.85, 1.0))
     return fig
@@ -472,10 +546,15 @@ def mpl_events_histogram(data: dict, ax: Axes | None = None) -> Figure:
 
     fig, ax = _create_axes(ax, figsize=(12, 7))
     sns.histplot(
-        data=events, x=val, hue="direction",
-        multiple="dodge", binwidth=bw,
+        data=events,
+        x=val,
+        hue="direction",
+        multiple="dodge",
+        binwidth=bw,
         palette={"bid": "#0000ff", "ask": "#ff0000"},
-        edgecolor="white", linewidth=0.5, ax=ax,
+        edgecolor="white",
+        linewidth=0.5,
+        ax=ax,
     )
     ax.set_title(f"Events {val} distribution")
     ax.set_xlabel(val.capitalize())
@@ -493,26 +572,40 @@ def mpl_vpin(data: dict, ax: Axes | None = None) -> Figure:
     fig, ax = _create_axes(ax, figsize=(12, 5))
 
     ax.bar(
-        vpin_df["timestamp_end"], vpin_df["vpin"],
-        width=bar_width, color="#5dade2", alpha=0.35, label="Per-bucket VPIN",
+        vpin_df["timestamp_end"],
+        vpin_df["vpin"],
+        width=bar_width,
+        color="#5dade2",
+        alpha=0.35,
+        label="Per-bucket VPIN",
     )
 
     if "vpin_avg" in vpin_df.columns:
         ax.plot(
-            vpin_df["timestamp_end"], vpin_df["vpin_avg"],
-            color="#e74c3c", linewidth=2, label="VPIN (rolling avg)",
+            vpin_df["timestamp_end"],
+            vpin_df["vpin_avg"],
+            color="#e74c3c",
+            linewidth=2,
+            label="VPIN (rolling avg)",
         )
 
     ax.axhline(
-        y=threshold, color="#f39c12", linewidth=1.5, linestyle="--",
+        y=threshold,
+        color="#f39c12",
+        linewidth=1.5,
+        linestyle="--",
         label=f"Threshold ({threshold})",
     )
 
     if "vpin_avg" in vpin_df.columns:
         above = vpin_df["vpin_avg"] >= threshold
         ax.fill_between(
-            vpin_df["timestamp_end"], threshold, vpin_df["vpin_avg"],
-            where=above, color="#e74c3c", alpha=0.15,
+            vpin_df["timestamp_end"],
+            threshold,
+            vpin_df["vpin_avg"],
+            where=above,
+            color="#e74c3c",
+            alpha=0.15,
         )
 
     ax.set_ylim(0, 1.05)
@@ -534,9 +627,13 @@ def mpl_order_flow_imbalance(data: dict, ax: Axes | None = None) -> Figure:
     fig, ax = _create_axes(ax, figsize=(12, 5))
 
     ax.bar(
-        ofi_df["timestamp"], ofi_df["ofi"],
-        width=bar_width, color=colors, alpha=0.7,
-        edgecolor="white", linewidth=0.3,
+        ofi_df["timestamp"],
+        ofi_df["ofi"],
+        width=bar_width,
+        color=colors,
+        alpha=0.7,
+        edgecolor="white",
+        linewidth=0.3,
     )
 
     ax.axhline(y=0, color="white", linewidth=0.8, alpha=0.5)
@@ -548,8 +645,12 @@ def mpl_order_flow_imbalance(data: dict, ax: Axes | None = None) -> Figure:
     if trades is not None and "price" in trades.columns:
         ax2 = ax.twinx()
         ax2.plot(
-            trades["timestamp"], trades["price"],
-            color="#f1c40f", linewidth=1.2, alpha=0.8, label="Price",
+            trades["timestamp"],
+            trades["price"],
+            color="#f1c40f",
+            linewidth=1.2,
+            alpha=0.8,
+            label="Price",
         )
         ax2.set_ylabel("Price", color="#f1c40f")
         ax2.tick_params(axis="y", labelcolor="#f1c40f")
@@ -568,9 +669,14 @@ def mpl_kyle_lambda(data: dict, ax: Axes | None = None) -> Figure:
     fig, ax = _create_axes(ax, figsize=(8, 6))
 
     ax.scatter(
-        reg_df["signed_volume"], reg_df["delta_price"],
-        color="#5dade2", alpha=0.6, edgecolors="white",
-        linewidths=0.5, s=50, zorder=3,
+        reg_df["signed_volume"],
+        reg_df["delta_price"],
+        color="#5dade2",
+        alpha=0.6,
+        edgecolors="white",
+        linewidths=0.5,
+        s=50,
+        zorder=3,
     )
 
     if not np.isnan(lambda_):
@@ -579,10 +685,16 @@ def mpl_kyle_lambda(data: dict, ax: Axes | None = None) -> Figure:
             reg_df["signed_volume"].max(),
             100,
         )
-        intercept = reg_df["delta_price"].mean() - lambda_ * reg_df["signed_volume"].mean()
+        intercept = (
+            reg_df["delta_price"].mean() - lambda_ * reg_df["signed_volume"].mean()
+        )
         ax.plot(
-            x_range, intercept + lambda_ * x_range,
-            color="#e74c3c", linewidth=2, label=f"λ = {lambda_:.6f}", zorder=4,
+            x_range,
+            intercept + lambda_ * x_range,
+            color="#e74c3c",
+            linewidth=2,
+            label=f"λ = {lambda_:.6f}",
+            zorder=4,
         )
 
     ax.axhline(y=0, color="white", linewidth=0.5, alpha=0.3)
@@ -614,13 +726,17 @@ def mpl_hidden_executions(data: dict, ax: Axes | None = None) -> Figure:
 
     if not trades.empty:
         ax.step(
-            trades["timestamp"], trades["price"],
-            where="post", color="#5dade2", linewidth=1, alpha=0.7,
+            trades["timestamp"],
+            trades["price"],
+            where="post",
+            color="#5dade2",
+            linewidth=1,
+            alpha=0.7,
             label="Trade price",
         )
 
     if has_hidden and not hidden.empty:
-        scatter = ax.scatter(
+        ax.scatter(
             hidden["timestamp"],
             hidden["price"],
             s=hidden["volume"] * 2,
@@ -635,11 +751,14 @@ def mpl_hidden_executions(data: dict, ax: Axes | None = None) -> Figure:
     else:
         ax.set_title("Hidden Order Executions (no hidden execution data)")
         ax.text(
-            0.5, 0.5,
+            0.5,
+            0.5,
             "No hidden execution events\n(raw_event_type == 5)\nin this dataset",
             transform=ax.transAxes,
-            ha="center", va="center",
-            fontsize=14, color="#888",
+            ha="center",
+            va="center",
+            fontsize=14,
+            color="#888",
         )
 
     ax.set_xlabel("Time")
@@ -659,27 +778,36 @@ def mpl_trading_halts(data: dict, ax: Axes | None = None) -> Figure:
 
     if not trades.empty:
         ax.step(
-            trades["timestamp"], trades["price"],
-            where="post", color="#5dade2", linewidth=1, alpha=0.8,
+            trades["timestamp"],
+            trades["price"],
+            where="post",
+            color="#5dade2",
+            linewidth=1,
+            alpha=0.8,
             label="Trade price",
         )
 
     if has_halts and halt_periods:
         for i, (h_start, h_end) in enumerate(halt_periods):
             ax.axvspan(
-                h_start, h_end,
-                color="#e74c3c", alpha=0.2,
+                h_start,
+                h_end,
+                color="#e74c3c",
+                alpha=0.2,
                 label="Trading halt" if i == 0 else None,
             )
         ax.set_title("Trading Halts")
     else:
         ax.set_title("Trading Halts (no halt data)")
         ax.text(
-            0.5, 0.5,
+            0.5,
+            0.5,
             "No trading halt events\n(raw_event_type == 7)\nin this dataset",
             transform=ax.transAxes,
-            ha="center", va="center",
-            fontsize=14, color="#888",
+            ha="center",
+            va="center",
+            fontsize=14,
+            color="#888",
         )
 
     ax.set_xlabel("Time")

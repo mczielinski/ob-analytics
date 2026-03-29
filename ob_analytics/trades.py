@@ -4,13 +4,12 @@ Contains :class:`DefaultTradeInferrer` (the default
 :class:`TradeInferrer` implementation) and :func:`trade_impacts`.
 """
 
-
 import numpy as np
 import pandas as pd
 
 from loguru import logger
 
-from ob_analytics._utils import validate_columns, validate_non_empty, vwap
+from ob_analytics._utils import validate_columns, validate_non_empty
 from ob_analytics.config import PipelineConfig
 from ob_analytics.exceptions import MatchingError
 
@@ -51,8 +50,15 @@ class DefaultTradeInferrer:
         validate_columns(
             events,
             {
-                "direction", "matching_event", "event_id", "exchange_timestamp",
-                "timestamp", "price", "fill", "id", "original_number",
+                "direction",
+                "matching_event",
+                "event_id",
+                "exchange_timestamp",
+                "timestamp",
+                "price",
+                "fill",
+                "id",
+                "original_number",
             },
             "DefaultTradeInferrer.infer_trades",
         )
@@ -129,9 +135,7 @@ class DefaultTradeInferrer:
         self._fix_price_jumps(combined, events)
         return combined
 
-    def _fix_price_jumps(
-        self, combined: pd.DataFrame, events: pd.DataFrame
-    ) -> None:
+    def _fix_price_jumps(self, combined: pd.DataFrame, events: pd.DataFrame) -> None:
         """Swap maker/taker when consecutive prices jump beyond threshold."""
         threshold = self._config.price_jump_threshold
         jumps = np.where(abs(np.diff(combined["price"])) > threshold)[0]
@@ -152,9 +156,9 @@ class DefaultTradeInferrer:
             prev_jump, this_jump = combined.iloc[i - 1], combined.iloc[i]
             if abs(this_jump["price"] - prev_jump["price"]) > threshold:
                 taker_eid = this_jump["taker_event_id"]
-                taker_price = events.loc[
-                    events["event_id"] == taker_eid, "price"
-                ].iloc[0]
+                taker_price = events.loc[events["event_id"] == taker_eid, "price"].iloc[
+                    0
+                ]
                 taker_dir = "sell" if this_jump["direction"] == "buy" else "buy"
                 swap = pd.DataFrame(
                     {
@@ -172,9 +176,14 @@ class DefaultTradeInferrer:
                 combined.loc[
                     i,
                     [
-                        "price", "direction", "maker_event_id",
-                        "taker_event_id", "maker", "taker",
-                        "maker_og", "taker_og",
+                        "price",
+                        "direction",
+                        "maker_event_id",
+                        "taker_event_id",
+                        "maker",
+                        "taker",
+                        "maker_og",
+                        "taker_og",
                     ],
                 ] = swap.iloc[0]
 
@@ -238,7 +247,14 @@ def trade_impacts(trades: pd.DataFrame) -> pd.DataFrame:
     )
     impacts["vwap"] = impacts["pv_sum"] / impacts["vol"]
     cols = [
-        "id", "min_price", "max_price", "vwap", "hits", 
-        "vol", "start_time", "end_time", "dir"
+        "id",
+        "min_price",
+        "max_price",
+        "vwap",
+        "hits",
+        "vol",
+        "start_time",
+        "end_time",
+        "dir",
     ]
     return impacts[cols]
