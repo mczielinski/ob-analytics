@@ -43,7 +43,7 @@ jobs:
         with:
           enable-cache: true
       - run: uv python install ${{ matrix.python-version }}
-      - run: uv sync --group dev --python ${{ matrix.python-version }}
+      - run: uv sync --group dev --extra interactive --python ${{ matrix.python-version }}
       - run: uv run pytest tests/ --cov=ob_analytics --cov-report=xml -q
       - name: Upload coverage
         if: matrix.python-version == '3.11' && github.event_name == 'push'
