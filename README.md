@@ -244,14 +244,15 @@ ob_analytics/
 ├── exceptions.py         # ObAnalyticsError hierarchy
 ├── cli.py               # CLI entry point (process, gallery, bitstamp-demo, lobster-demo)
 │
-├── event_processing.py   # BitstampLoader, BitstampWriter, BitstampFormat
+├── bitstamp.py           # BitstampLoader/Matcher/TradeInferrer/Writer/Format
 ├── lobster.py            # LobsterLoader/Matcher/TradeInferrer/Writer/Format, download_sample
-├── matching_engine.py    # NeedlemanWunschMatcher, event_match
-├── trades.py             # DefaultTradeInferrer, match_trades, trade_impacts
+├── analytics.py          # order_aggressiveness, trade_impacts (format-agnostic)
+├── matching_engine.py    # NeedlemanWunschMatcher (internal algorithm)
 ├── order_types.py        # set_order_types (market, flashed-limit, pacman, …)
 ├── order_book_reconstruction.py  # Point-in-time book snapshots
 ├── depth.py              # DepthMetricsEngine, price_level_volume, depth_metrics, get_spread
-├── data.py               # save_data, load_data, process_data, get_zombie_ids
+├── data.py               # save_data, load_data, get_zombie_ids
+├── _time_utils.py        # Shared timestamp conversion helpers (epoch ↔ datetime)
 ├── flow_toxicity.py      # compute_vpin, compute_kyle_lambda, order_flow_imbalance
 │
 ├── visualisation.py      # plot_* dispatchers, PlotTheme, save_figure, backend registry

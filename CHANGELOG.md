@@ -8,6 +8,74 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added (Bitstamp/LOBSTER symmetry refactor)
+
+- **`ob_analytics.bitstamp`** — new module (renamed from `event_processing.py`)
+  containing the complete Bitstamp-specific stack:
+  `BitstampLoader`, `BitstampMatcher`, `BitstampTradeInferrer`,
+  `BitstampWriter`, `BitstampFormat`.
+- **`BitstampMatcher`** — named matching class (thin wrapper over
+  `NeedlemanWunschMatcher`); symmetric with `LobsterMatcher`.
+- **`BitstampTradeInferrer`** — renamed from `DefaultTradeInferrer`; symmetric
+  with `LobsterTradeInferrer`.
+- **`ob_analytics.analytics`** — new format-agnostic analytics module with
+  `order_aggressiveness()` and `trade_impacts()` (moved from Bitstamp-specific
+  modules; now available to all formats).
+- **`ob_analytics._time_utils`** — internal shared timestamp conversion helpers:
+  `epoch_to_datetime`, `datetime_to_epoch`,
+  `seconds_after_midnight_to_datetime`, `datetime_to_seconds_after_midnight`.
+  Both loaders and writers use these instead of inline conversions.
+- **`Format.name`** — new string attribute on the `Format` base class;
+  subclasses set e.g. `name = "bitstamp"`. Used in `PipelineResult.metadata`.
+- **`list_formats()`** in `pipeline.py` — returns sorted list of registered format names.
+- **`list_writers()`** in `data.py` — returns sorted list of registered writer names.
+
+### Changed (Bitstamp/LOBSTER symmetry refactor)
+
+- `event_processing.py` **renamed** to `bitstamp.py`. Hard break — no shim.
+- `LobsterWriter.__init__` now accepts `config` as first positional argument
+  (previously it had no `config` parameter), matching `BitstampWriter(config)`.
+- `LobsterFormat.create_writer(config)` now passes `config` to `LobsterWriter`.
+- `BitstampFormat` converted to `@dataclass` (was plain class); symmetric with
+  `LobsterFormat`.
+- `Format.create_matcher()` and `Format.create_trade_inferrer()` now raise
+  `NotImplementedError` instead of silently defaulting to Bitstamp implementations.
+  Both `BitstampFormat` and `LobsterFormat` already override these correctly.
+- `Pipeline` no-format defaults updated to use `BitstampMatcher` and
+  `BitstampTradeInferrer` (previously `NeedlemanWunschMatcher` and
+  `DefaultTradeInferrer`).
+- `PipelineResult.metadata["format"]` now stores `format.name` (e.g.
+  `"bitstamp"`) instead of the Python class name.
+- `scripts/bitstamp_demo.py` — uses `Pipeline(format=BitstampFormat())` instead
+  of bare `Pipeline()`, matching the `lobster_demo.py` pattern.
+- Docs nav: `api/event_processing.md` → `api/bitstamp.md`; `api/analytics.md`
+  added; `api/trades.md` removed (module deleted).
+
+### Removed (Bitstamp/LOBSTER symmetry refactor)
+
+- `load_event_data()` — legacy Bitstamp-only pipeline wrapper.
+- `event_match()` — legacy wrapper around `NeedlemanWunschMatcher.match()`.
+- `match_trades()` — legacy wrapper around `DefaultTradeInferrer.infer_trades()`.
+- `process_data()` — legacy monolithic Bitstamp-only pipeline.
+- `plot_price_levels_faster()` — legacy alias for `plot_price_levels()`.
+- `DefaultTradeInferrer` — renamed to `BitstampTradeInferrer`.
+- `NeedlemanWunschMatcher` removed from public `__all__` (still importable
+  directly via `from ob_analytics.matching_engine import NeedlemanWunschMatcher`).
+- `register_writer("lobster", LobsterWriter)` registration removed from
+  `__init__.py` — it was always broken (required `trading_date`). A clear
+  `ValueError` is now raised by `save_data(fmt="lobster", ...)`.
+- `ob_analytics/trades.py` deleted; all content moved to `bitstamp.py` or
+  `analytics.py`.
+
+### Fixed (Bitstamp/LOBSTER symmetry refactor)
+
+- `datetime_to_epoch` in `_time_utils.py` uses `.astype("int64")` instead of
+  deprecated `.view("int64")`.
+
+---
+
+## [Unreleased — previous]
+
 ### Added
 
 - **`Pipeline` class** — composable orchestrator with pluggable `EventLoader`,
