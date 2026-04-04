@@ -142,7 +142,9 @@ class LobsterLoader:
         raw["price"] = (raw["price"] / divisor).round(cfg.price_decimals)
         raw["volume"] = raw["volume"].astype(float).round(cfg.volume_decimals)
 
-        raw["timestamp"] = seconds_after_midnight_to_datetime(raw["time"], self._trading_date)
+        raw["timestamp"] = seconds_after_midnight_to_datetime(
+            raw["time"], self._trading_date
+        )
         raw["exchange_timestamp"] = raw["timestamp"]
 
         raw["raw_event_type"] = raw["event_type"]
@@ -449,7 +451,9 @@ class LobsterWriter:
         self._config = config or PipelineConfig()
         self._trading_date = pd.Timestamp(trading_date).normalize()
         # Explicit price_divisor overrides config (for manual construction)
-        self._price_divisor = price_divisor if price_divisor is not None else self._config.price_divisor
+        self._price_divisor = (
+            price_divisor if price_divisor is not None else self._config.price_divisor
+        )
 
     def write(
         self,

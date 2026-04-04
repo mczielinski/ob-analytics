@@ -40,7 +40,7 @@ def epoch_to_datetime(series: pd.Series, unit: str) -> pd.Series:
     pandas.Series
         Datetime series (dtype ``datetime64[ns]``).
     """
-    return pd.to_datetime(series, unit=unit)
+    return pd.to_datetime(series, unit=unit)  # ty: ignore[no-matching-overload]
 
 
 def datetime_to_epoch(series: pd.Series, unit: str) -> pd.Series:

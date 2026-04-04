@@ -140,5 +140,3 @@ class NeedlemanWunschMatcher:
                 )
 
         return np.array(res, dtype=int)
-
-

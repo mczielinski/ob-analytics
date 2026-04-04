@@ -80,7 +80,12 @@ from ob_analytics.models import (
 )
 from ob_analytics.order_book_reconstruction import order_book
 from ob_analytics.order_types import set_order_types
-from ob_analytics.pipeline import Pipeline, PipelineResult, list_formats, register_format
+from ob_analytics.pipeline import (
+    Pipeline,
+    PipelineResult,
+    list_formats,
+    register_format,
+)
 from ob_analytics.protocols import (
     DataWriter,
     EventLoader,
@@ -122,11 +127,16 @@ logger.disable("ob_analytics")
 
 __all__ = [
     # ── Symmetric format pairs (Bitstamp ↔ LOBSTER) ───────────────────
-    "BitstampFormat",        "LobsterFormat",
-    "BitstampLoader",        "LobsterLoader",
-    "BitstampMatcher",       "LobsterMatcher",
-    "BitstampTradeInferrer", "LobsterTradeInferrer",
-    "BitstampWriter",        "LobsterWriter",
+    "BitstampFormat",
+    "LobsterFormat",
+    "BitstampLoader",
+    "LobsterLoader",
+    "BitstampMatcher",
+    "LobsterMatcher",
+    "BitstampTradeInferrer",
+    "LobsterTradeInferrer",
+    "BitstampWriter",
+    "LobsterWriter",
     # ── Pipeline orchestration ─────────────────────────────���──────────
     "Pipeline",
     "PipelineResult",
