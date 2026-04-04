@@ -5,7 +5,7 @@ title: LOBSTER
 # LOBSTER Format
 
 Support for [LOBSTER](https://lobsterdata.com/) message files (event types
-1–7), orderbook-backed depth, sample-data download, and round-trip writers.
+1–7), orderbook-backed depth, and round-trip writers.
 
 Use via `Pipeline(format=LobsterFormat(...))` or
 `Pipeline.from_format("lobster", ...)`.
@@ -28,5 +28,3 @@ Key differences from Bitstamp:
 ::: ob_analytics.lobster.LobsterWriter
 
 ::: ob_analytics.lobster.LobsterFormat
-
-::: ob_analytics.lobster.download_sample

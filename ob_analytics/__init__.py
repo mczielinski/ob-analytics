@@ -68,7 +68,6 @@ from ob_analytics.lobster import (
     LobsterMatcher,
     LobsterTradeInferrer,
     LobsterWriter,
-    download_sample,
     lobster_depth_from_orderbook,
 )
 from ob_analytics.models import (
@@ -167,7 +166,6 @@ __all__ = [
     "list_writers",
     # ── LOBSTER-specific utilities ──────────────────────��─────────────
     "lobster_depth_from_orderbook",
-    "download_sample",
     # ── Flow toxicity ─────────────────────────────���───────────────────
     "compute_vpin",
     "compute_kyle_lambda",

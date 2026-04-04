@@ -87,7 +87,7 @@ A command-line interface is included for common workflows:
 ob-analytics process orders.csv -o results/
 ob-analytics gallery results/parquet/ -o my_gallery/
 ob-analytics bitstamp-demo --input orders.csv
-ob-analytics lobster-demo --ticker AAPL
+ob-analytics lobster-demo /path/to/lobster_data --trading-date 2012-06-21
 ```
 
 See the [Quickstart CLI section](quickstart.md#9-command-line-interface) for

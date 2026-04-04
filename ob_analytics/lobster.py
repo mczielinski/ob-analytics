@@ -23,7 +23,6 @@ Timestamps are seconds after midnight.
 
 from __future__ import annotations
 
-import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -65,14 +64,6 @@ _ACTION_TO_EVENT_TYPE: dict[str, int] = {
 
 _DIRECTION_MAP: dict[int, str] = {1: "bid", -1: "ask"}
 _DIRECTION_REVERSE: dict[str, int] = {"bid": 1, "ask": -1}
-
-AVAILABLE_TICKERS = ("AAPL", "AMZN", "GOOG", "INTC", "MSFT")
-SAMPLE_DATE = "2012-06-21"
-_SAMPLE_PAGE = "https://data.lobsterdata.com/info/DataSamples.php"
-_SAMPLE_URL = (
-    "https://data.lobsterdata.com/info/sample/"
-    "LOBSTER_SampleFile_{ticker}_{date}_{levels}.zip"
-)
 
 _DUMMY_BID_PRICE = -9999999999
 _DUMMY_ASK_PRICE = 9999999999
@@ -743,7 +734,7 @@ class LobsterFormat(Format):
     """
 
     name: str = field(default="lobster", init=False, repr=False)
-    trading_date: str | pd.Timestamp = field(default=SAMPLE_DATE)
+    trading_date: str | pd.Timestamp = field()
 
     _loader: LobsterLoader | None = field(default=None, repr=False, init=False)
 
@@ -788,88 +779,3 @@ class LobsterFormat(Format):
         }
 
 
-# ── Sample data download ─────────────────────────────────────────────
-
-
-def download_sample(
-    ticker: str = "AAPL",
-    dest: str | Path | None = None,
-    levels: int = 10,
-) -> Path:
-    """Download a free LOBSTER sample data file.
-
-    Parameters
-    ----------
-    ticker : str
-        One of AAPL, AMZN, GOOG, INTC, MSFT.
-    dest : str or Path, optional
-        Destination directory.  Defaults to
-        ``~/.cache/ob-analytics/lobster/``.
-    levels : int
-        Number of orderbook levels (the sample files use 10).
-
-    Returns
-    -------
-    Path
-        Directory containing the extracted message and orderbook files.
-    """
-    import urllib.request
-
-    ticker = ticker.upper()
-    if ticker not in AVAILABLE_TICKERS:
-        raise ValueError(
-            f"Unknown ticker {ticker!r}. Available: {', '.join(AVAILABLE_TICKERS)}"
-        )
-
-    if dest is None:
-        dest = Path.home() / ".cache" / "ob-analytics" / "lobster"
-    dest = Path(dest)
-    extract_dir = dest / f"{ticker}_{SAMPLE_DATE}_{levels}"
-
-    expected_msg = list(extract_dir.glob("*_message*.csv"))
-    if expected_msg:
-        logger.info("download_sample: using cached data in {}", extract_dir)
-        return extract_dir
-
-    url = _SAMPLE_URL.format(ticker=ticker, date=SAMPLE_DATE, levels=levels)
-    dest.mkdir(parents=True, exist_ok=True)
-    zip_path = dest / f"{ticker}_{SAMPLE_DATE}_{levels}.zip"
-
-    logger.info("download_sample: downloading {} ...", url)
-    try:
-        urllib.request.urlretrieve(url, zip_path)
-    except Exception as exc:
-        zip_path.unlink(missing_ok=True)
-        raise RuntimeError(
-            f"Failed to download LOBSTER sample: {exc}\n"
-            f"Download manually from {_SAMPLE_PAGE} and extract to:\n"
-            f"  {extract_dir}"
-        ) from exc
-
-    # Verify the download is a valid zip (the site may return HTML instead)
-    if zip_path.stat().st_size < 1000:
-        zip_path.unlink(missing_ok=True)
-        raise RuntimeError(
-            f"Downloaded file is too small ({zip_path.stat().st_size} bytes) "
-            f"-- the LOBSTER site may require browser-based download.\n"
-            f"Download manually from {_SAMPLE_PAGE} and extract to:\n"
-            f"  {extract_dir}"
-        )
-
-    try:
-        extract_dir.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(zip_path) as zf:
-            zf.extractall(extract_dir)
-    except zipfile.BadZipFile:
-        extract_dir.rmdir()
-        zip_path.unlink(missing_ok=True)
-        raise RuntimeError(
-            f"Downloaded file is not a valid zip archive -- the LOBSTER "
-            f"site may require browser-based download.\n"
-            f"Download manually from {_SAMPLE_PAGE} and extract to:\n"
-            f"  {extract_dir}"
-        )
-
-    zip_path.unlink(missing_ok=True)
-    logger.info("download_sample: extracted to {}", extract_dir)
-    return extract_dir

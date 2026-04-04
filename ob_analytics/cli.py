@@ -8,7 +8,7 @@ Usage::
     ob-analytics process data/ --format lobster --trading-date 2012-06-21
     ob-analytics gallery results/parquet/ --output my_gallery/
     ob-analytics bitstamp-demo --input orders.csv --output demo_out/
-    ob-analytics lobster-demo --ticker AAPL --output demo_out/
+    ob-analytics lobster-demo /path/to/lobster_data --trading-date 2012-06-21 --output demo_out/
 """
 
 from __future__ import annotations
@@ -185,26 +185,22 @@ def _cmd_lobster_demo(args: argparse.Namespace) -> None:
 
     from ob_analytics.data import save_data
     from ob_analytics.gallery import generate_gallery
-    from ob_analytics.lobster import LobsterFormat, download_sample
+    from ob_analytics.lobster import LobsterFormat
     from ob_analytics.pipeline import Pipeline
 
-    ticker: str = args.ticker
-    levels: int = args.levels
-    trading_date = "2012-06-21"
+    source = args.source
+    trading_date = args.trading_date
 
-    output_dir = Path(args.output) if args.output else Path("lobster_output") / ticker
+    output_dir = Path(args.output) if args.output else Path("lobster_output")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info("=" * 60)
-    logger.info("LOBSTER Demo: {} ({})", ticker, trading_date)
+    logger.info("LOBSTER Demo: {} ({})", source, trading_date)
     logger.info("=" * 60)
-
-    data_dir = download_sample(ticker=ticker, levels=levels)
-    logger.info("Data directory: {}", data_dir)
 
     fmt = LobsterFormat(trading_date=trading_date)
     pipeline = Pipeline(format=fmt)
-    result = pipeline.run(data_dir)
+    result = pipeline.run(source)
 
     logger.info("Events: {:,}", len(result.events))
     logger.info("Trades: {:,}", len(result.trades))
@@ -354,25 +350,22 @@ def main() -> None:
     # -- lobster-demo --
     p_lob = subparsers.add_parser(
         "lobster-demo",
-        help="Download LOBSTER sample data and run the demo (pipeline + gallery)",
+        help="Run the LOBSTER demo on local data (pipeline + gallery)",
     )
     p_lob.add_argument(
-        "--ticker",
-        default="AAPL",
-        choices=["AAPL", "AMZN", "GOOG", "INTC", "MSFT"],
-        help="Ticker to download (default: AAPL)",
+        "source",
+        help="Path to LOBSTER data directory (containing message + orderbook CSVs)",
     )
     p_lob.add_argument(
-        "--levels",
-        type=int,
-        default=10,
-        help="Number of orderbook levels (default: 10)",
+        "--trading-date",
+        required=True,
+        help="Trading date for LOBSTER format (YYYY-MM-DD)",
     )
     p_lob.add_argument(
         "-o",
         "--output",
         default=None,
-        help="Output directory (default: ./lobster_output/<ticker>)",
+        help="Output directory (default: ./lobster_output)",
     )
     p_lob.set_defaults(func=_cmd_lobster_demo)
 
