@@ -12,13 +12,8 @@ import pandas as pd
 from loguru import logger
 
 from ob_analytics._utils import validate_columns
-from ob_analytics.analytics import order_aggressiveness
 from ob_analytics.depth import depth_metrics, price_level_volume
-from ob_analytics.event_processing import load_event_data
-from ob_analytics.matching_engine import event_match
-from ob_analytics.order_types import set_order_types
 from ob_analytics.protocols import DataWriter
-from ob_analytics.trades import match_trades
 
 
 # ── Writer registry ───────────────────────────────────────────────────
@@ -122,51 +117,6 @@ def get_zombie_ids(events: pd.DataFrame, trades: pd.DataFrame) -> list[int]:
 
     # Combine bid and ask zombies
     return valid_bid_zombies + valid_ask_zombies
-
-
-def process_data(
-    csv_file: str, price_digits: int = 2, volume_digits: int = 8
-) -> dict[str, pd.DataFrame]:
-    """
-    Import and preprocess limit order data from a CSV file.
-
-    Parameters
-    ----------
-    csv_file : str
-        The path to the CSV file containing limit order data.
-    price_digits : int, optional
-        The number of decimal places for the 'price' column. Default is 2.
-    volume_digits : int, optional
-        The number of decimal places for the 'volume' column. Default is 8.
-
-    Returns
-    -------
-    dict of str to pandas.DataFrame
-        A dictionary containing four pandas DataFrames:
-        - 'events': Limit order events.
-        - 'trades': Inferred trades (executions).
-        - 'depth': Order book price level depth through time.
-        - 'depth_summary': Limit order book summary statistics.
-    """
-    events = load_event_data(csv_file, price_digits, volume_digits)
-    events = event_match(events)
-    trades = match_trades(events)
-    events = set_order_types(events, trades)
-    zombie_ids = get_zombie_ids(events, trades)
-    events = events[~events["id"].isin(zombie_ids)]
-
-    depth = price_level_volume(events)
-    depth_summary = depth_metrics(depth)
-    events = order_aggressiveness(events, depth_summary)
-    offset = pd.Timedelta(minutes=1)
-    return {
-        "events": events,
-        "trades": trades,
-        "depth": depth,
-        "depth_summary": depth_summary[
-            depth_summary["timestamp"] >= events["timestamp"].min() + offset
-        ],
-    }
 
 
 def load_data(path: str | Path) -> dict[str, pd.DataFrame]:

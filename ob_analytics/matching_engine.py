@@ -142,27 +142,3 @@ class NeedlemanWunschMatcher:
         return np.array(res, dtype=int)
 
 
-# ── Backward-compatible module-level function ─────────────────────────
-
-
-def event_match(events: pd.DataFrame, cut_off_ms: int = 5000) -> pd.DataFrame:
-    """Match market orders (takers) to limit orders (makers).
-
-    This is a convenience wrapper around :class:`NeedlemanWunschMatcher`.
-
-    Parameters
-    ----------
-    events : pandas.DataFrame
-        A pandas DataFrame of order book events.
-    cut_off_ms : int, optional
-        The time window in milliseconds for considering candidate matches.
-        Default is 5000.
-
-    Returns
-    -------
-    pandas.DataFrame
-        The events DataFrame with a ``matching_event`` column indicating
-        matched events.
-    """
-    config = PipelineConfig(match_cutoff_ms=cut_off_ms)
-    return NeedlemanWunschMatcher(config).match(events)

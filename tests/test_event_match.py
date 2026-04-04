@@ -7,7 +7,8 @@ using the same timestamps, directions, fill volumes, and expected outputs.
 import numpy as np
 import pandas as pd
 
-from ob_analytics.matching_engine import event_match
+from ob_analytics.matching_engine import NeedlemanWunschMatcher
+from ob_analytics.config import PipelineConfig
 
 
 def _make_events(
@@ -45,7 +46,8 @@ class TestSimpleEventMatching:
             directions=["bid", "ask", "bid", "ask"],
             event_ids=[1, 2, 3, 4],
         )
-        matched = event_match(events, cut_off_ms=1000)
+        config = PipelineConfig(match_cutoff_ms=1000)
+        matched = NeedlemanWunschMatcher(config).match(events)
         expected = [2, 1, 4, 3]
         result = matched.sort_values("event_id")["matching_event"].tolist()
         assert result == expected
@@ -66,7 +68,8 @@ class TestLeftOverEventMatching:
             directions=["bid", "ask", "bid", "ask", "ask"],
             event_ids=[1, 2, 3, 4, 5],
         )
-        matched = event_match(events, cut_off_ms=1000)
+        config = PipelineConfig(match_cutoff_ms=1000)
+        matched = NeedlemanWunschMatcher(config).match(events)
         result = matched.sort_values("event_id")["matching_event"].tolist()
         assert result[0] == 2
         assert result[1] == 1
@@ -90,7 +93,8 @@ class TestConflictingEventMatching:
             directions=["bid", "ask", "bid", "bid", "ask"],
             event_ids=[1, 2, 3, 4, 5],
         )
-        matched = event_match(events, cut_off_ms=1000)
+        config = PipelineConfig(match_cutoff_ms=1000)
+        matched = NeedlemanWunschMatcher(config).match(events)
         result = matched.sort_values("event_id")["matching_event"].tolist()
         assert result[0] == 2
         assert result[1] == 1
@@ -110,7 +114,8 @@ class TestConflictingEventMatching:
             directions=["bid", "ask", "ask", "bid", "bid"],
             event_ids=[1, 2, 3, 4, 5],
         )
-        matched = event_match(events, cut_off_ms=1000)
+        config = PipelineConfig(match_cutoff_ms=1000)
+        matched = NeedlemanWunschMatcher(config).match(events)
         result = matched.sort_values("event_id")["matching_event"].tolist()
         assert result[0] == 2
         assert result[1] == 1

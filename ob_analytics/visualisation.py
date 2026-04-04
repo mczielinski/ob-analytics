@@ -286,60 +286,6 @@ def plot_price_levels(
     return renderer(data)
 
 
-# Keep the fast variant as a thin wrapper for backward compat.
-def plot_price_levels_faster(
-    depth: pd.DataFrame,
-    spread: pd.DataFrame | None = None,
-    trades: pd.DataFrame | None = None,
-    show_mp: bool = True,
-    col_bias: float = 0.1,
-    price_by: float | None = None,
-    ax: Axes | None = None,
-    backend: str = "matplotlib",
-) -> Any:
-    """
-    Plot price levels from pre-filtered depth data (skips internal filtering).
-
-    Parameters
-    ----------
-    depth : pandas.DataFrame
-        Pre-filtered depth DataFrame.
-    spread : pandas.DataFrame, optional
-        Spread DataFrame. Default is None.
-    trades : pandas.DataFrame, optional
-        Trades DataFrame. Default is None.
-    show_mp : bool, optional
-        Whether to show midprice. Default is True.
-    col_bias : float, optional
-        Color bias for volume mapping. Default is 0.1.
-    price_by : float, optional
-        Step size for y-axis ticks (price levels). Default is None.
-    ax : matplotlib.axes.Axes, optional
-        Axes to draw on.  A new figure is created when *None*.
-        Ignored when *backend* is not ``"matplotlib"``.
-    backend : str, optional
-        Rendering backend (default ``"matplotlib"``).
-
-    Returns
-    -------
-    matplotlib.figure.Figure or plotly.graph_objects.Figure
-    """
-    # This function wraps the same renderer as plot_price_levels;
-    # the data dict it passes already has pre-filtered depth.
-    data = {
-        "depth": depth,
-        "spread": spread,
-        "trades": trades,
-        "show_mp": show_mp,
-        "col_bias": col_bias,
-        "price_by": price_by,
-    }
-    renderer = _get_renderer(backend, "price_levels")
-    if backend == "matplotlib":
-        return renderer(data, ax)
-    return renderer(data)
-
-
 def plot_event_map(
     events: pd.DataFrame,
     start_time: pd.Timestamp | None = None,

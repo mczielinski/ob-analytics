@@ -149,35 +149,6 @@ class BitstampLoader:
         return events[~events["event_id"].isin(duplicate_event_ids)]
 
 
-# ── Backward-compatible module-level function ─────────────────────────
-
-
-def load_event_data(
-    file: str, price_digits: int = 2, volume_digits: int = 8
-) -> pd.DataFrame:
-    """Read raw limit order event data from a CSV file.
-
-    This is a convenience wrapper around :class:`BitstampLoader`.
-
-    Parameters
-    ----------
-    file : str
-        The path to the CSV file containing limit order events.
-    price_digits : int, optional
-        The number of decimal places for the 'price' column. Default is 2.
-    volume_digits : int, optional
-        The number of decimal places for the 'volume' column. Default is 8.
-
-    Returns
-    -------
-    pandas.DataFrame
-        A DataFrame containing the raw limit order events data.
-    """
-    config = PipelineConfig(price_decimals=price_digits, volume_decimals=volume_digits)
-    return BitstampLoader(config).load(file)
-
-
-
 # ── BitstampWriter ────────────────────────────────────────────────────
 
 

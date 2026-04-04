@@ -26,7 +26,6 @@ from ob_analytics.data import (
     get_zombie_ids,
     list_writers,
     load_data,
-    process_data,
     register_writer,
     save_data,
 )
@@ -41,7 +40,6 @@ from ob_analytics.event_processing import (
     BitstampFormat,
     BitstampLoader,
     BitstampWriter,
-    load_event_data,
 )
 from ob_analytics.exceptions import (
     ConfigurationError,
@@ -63,7 +61,7 @@ from ob_analytics.lobster import (
     LobsterWriter,
     download_sample,
 )
-from ob_analytics.matching_engine import NeedlemanWunschMatcher, event_match
+from ob_analytics.matching_engine import NeedlemanWunschMatcher
 from ob_analytics.models import (
     DepthLevel,
     KyleLambdaResult,
@@ -81,7 +79,7 @@ from ob_analytics.protocols import (
     MatchingEngine,
     TradeInferrer,
 )
-from ob_analytics.trades import DefaultTradeInferrer, match_trades
+from ob_analytics.trades import DefaultTradeInferrer
 from ob_analytics.visualisation import (
     PlotTheme,
     get_plot_theme,
@@ -92,7 +90,6 @@ from ob_analytics.visualisation import (
     plot_kyle_lambda,
     plot_order_flow_imbalance,
     plot_price_levels,
-    plot_price_levels_faster,
     plot_time_series,
     plot_trades,
     plot_trading_halts,
@@ -119,22 +116,21 @@ __all__ = [
     # Pipeline class
     "Pipeline",
     "PipelineResult",
-    # Pipeline functions (backward-compatible)
+    # Data I/O
     "get_zombie_ids",
     "load_data",
-    "process_data",
     "save_data",
+    # Depth computation
     "depth_metrics",
     "filter_depth",
     "get_spread",
     "price_level_volume",
-    "load_event_data",
+    # Format-agnostic analytics
     "order_aggressiveness",
-    "event_match",
+    "trade_impacts",
+    # Order book processing
     "order_book",
     "set_order_types",
-    "match_trades",
-    "trade_impacts",
     # Flow toxicity
     "compute_vpin",
     "compute_kyle_lambda",

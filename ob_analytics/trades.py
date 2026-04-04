@@ -188,24 +188,3 @@ class DefaultTradeInferrer:
                 ] = swap.iloc[0]
 
 
-# ── Backward-compatible module-level functions ────────────────────────
-
-
-def match_trades(events: pd.DataFrame) -> pd.DataFrame:
-    """Construct a DataFrame of inferred trades (executions).
-
-    This is a convenience wrapper around :class:`DefaultTradeInferrer`.
-
-    Parameters
-    ----------
-    events : pandas.DataFrame
-        The limit order events DataFrame with assigned maker/taker event IDs.
-
-    Returns
-    -------
-    pandas.DataFrame
-        A DataFrame describing trade executions.
-    """
-    return DefaultTradeInferrer().infer_trades(events)
-
-
