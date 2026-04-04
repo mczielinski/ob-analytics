@@ -52,7 +52,8 @@ class Trade(BaseModel):
     """An inferred trade execution.
 
     Corresponds to one row of the trades DataFrame produced by
-    ``match_trades``.
+    :class:`~ob_analytics.bitstamp.BitstampTradeInferrer` or
+    :class:`~ob_analytics.lobster.LobsterTradeInferrer`.
     """
 
     model_config = {"frozen": True}

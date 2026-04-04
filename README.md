@@ -118,14 +118,21 @@ result = Pipeline(format=LobsterFormat(trading_date="2012-06-21")).run(
 
 ```python
 from ob_analytics import (
-    load_event_data, event_match, match_trades, set_order_types,
-    get_zombie_ids, price_level_volume, depth_metrics, order_aggressiveness,
-    get_spread, plot_price_levels, save_figure,
+    BitstampLoader, BitstampMatcher, BitstampTradeInferrer,
+    set_order_types, get_zombie_ids, price_level_volume,
+    depth_metrics, order_aggressiveness, get_spread,
+    plot_price_levels, save_figure,
 )
 
-events = load_event_data("inst/extdata/orders.csv")
-events = event_match(events)
-trades = match_trades(events)
+loader = BitstampLoader()
+events = loader.load("inst/extdata/orders.csv")
+
+matcher = BitstampMatcher()
+events = matcher.match(events)
+
+inferrer = BitstampTradeInferrer()
+trades = inferrer.infer_trades(events)
+
 events = set_order_types(events, trades)
 zombie_ids = get_zombie_ids(events, trades)
 events = events[~events["id"].isin(zombie_ids)]
@@ -227,8 +234,8 @@ classDiagram
 
 - **DataFrames internally; Pydantic at boundaries.** Pandas for speed;
   `OrderEvent`, `Trade`, etc. document column contracts.
-- **Backward-compatible functions** — `load_event_data`, `event_match`, etc.
-  remain available alongside `Pipeline`.
+- **Two API levels** — `Pipeline` for one-line runs; individual classes
+  (`BitstampLoader`, `BitstampMatcher`, etc.) for step-by-step control.
 - **Pluggable everything** — any object with the right method signature works;
   no inheritance required (structural typing via `Protocol`).
 
@@ -245,7 +252,7 @@ ob_analytics/
 ├── cli.py               # CLI entry point (process, gallery, bitstamp-demo, lobster-demo)
 │
 ├── bitstamp.py           # BitstampLoader/Matcher/TradeInferrer/Writer/Format
-├── lobster.py            # LobsterLoader/Matcher/TradeInferrer/Writer/Format, download_sample
+├── lobster.py            # LobsterLoader/Matcher/TradeInferrer/Writer/Format
 ├── analytics.py          # order_aggressiveness, trade_impacts (format-agnostic)
 ├── matching_engine.py    # NeedlemanWunschMatcher (internal algorithm)
 ├── order_types.py        # set_order_types (market, flashed-limit, pacman, …)
@@ -288,12 +295,12 @@ uv run python scripts/bitstamp_demo.py --input path/to/orders.csv
 uv run python scripts/bitstamp_demo.py --output ~/Desktop/bitstamp_gallery
 ```
 
-**LOBSTER** (downloads free sample data):
+**LOBSTER** (requires locally available data):
 
 ```bash
-uv run python scripts/lobster_demo.py
-uv run python scripts/lobster_demo.py --ticker MSFT
-uv run python scripts/lobster_demo.py --output ~/Desktop/lobster_gallery
+uv run python scripts/lobster_demo.py /path/to/lobster_data
+uv run python scripts/lobster_demo.py /path/to/lobster_data --trading-date 2012-06-21
+uv run python scripts/lobster_demo.py /path/to/lobster_data --output ~/Desktop/lobster_gallery
 ```
 
 ---
@@ -308,7 +315,7 @@ ob-analytics process orders.csv -o results/
 ob-analytics process data/ --format lobster --trading-date 2012-06-21 --gallery
 ob-analytics gallery results/parquet/ -o my_gallery/ --volume-scale 1e-8
 ob-analytics bitstamp-demo --input orders.csv -o demo_out/
-ob-analytics lobster-demo --ticker AAPL -o demo_out/
+ob-analytics lobster-demo /path/to/lobster_data --trading-date 2012-06-21 -o demo_out/
 ```
 
 | Subcommand | Description |
@@ -316,7 +323,7 @@ ob-analytics lobster-demo --ticker AAPL -o demo_out/
 | `process` | Run the pipeline on a data source, save Parquet results (optional `--gallery`) |
 | `gallery` | Generate an HTML plot gallery from saved Parquet data |
 | `bitstamp-demo` | Run the Bitstamp demo (pipeline + gallery) |
-| `lobster-demo` | Download LOBSTER sample data and run the demo (pipeline + gallery) |
+| `lobster-demo` | Run the LOBSTER demo on local data (pipeline + gallery) |
 
 Pass `-v` / `--verbose` for debug-level logging.
 

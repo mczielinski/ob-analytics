@@ -76,23 +76,29 @@ fig.savefig("combined.png", dpi=150)
 
 ### Step-by-step (full control)
 
-Use individual functions when you need access to intermediate results:
+Use individual classes when you need access to intermediate results:
 
 ```python
 from ob_analytics import (
-    load_event_data, event_match, match_trades, set_order_types,
-    get_zombie_ids, price_level_volume, depth_metrics,
-    order_aggressiveness, get_spread,
+    BitstampLoader, BitstampMatcher, BitstampTradeInferrer,
+    set_order_types, get_zombie_ids, price_level_volume,
+    depth_metrics, order_aggressiveness, get_spread,
 )
 
-events = load_event_data("inst/extdata/orders.csv")
-events = event_match(events)                        # Needleman-Wunsch fill pairing
-trades = match_trades(events)
-events = set_order_types(events, trades)            # market, flashed-limit, pacman, …
+loader = BitstampLoader()
+events = loader.load("inst/extdata/orders.csv")
+
+matcher = BitstampMatcher()
+events = matcher.match(events)                       # Needleman-Wunsch fill pairing
+
+inferrer = BitstampTradeInferrer()
+trades = inferrer.infer_trades(events)
+
+events = set_order_types(events, trades)             # market, flashed-limit, pacman, …
 zombie_ids = get_zombie_ids(events, trades)
 events = events[~events["id"].isin(zombie_ids)]
 depth = price_level_volume(events)
-depth_summary = depth_metrics(depth)                # best bid/ask, BPS bins
+depth_summary = depth_metrics(depth)                 # best bid/ask, BPS bins
 events = order_aggressiveness(events, depth_summary)
 ```
 
@@ -288,12 +294,11 @@ result = Pipeline.from_format("lobster", trading_date="2012-06-21").run(
 )
 ```
 
-Free sample files can be fetched with `download_sample()`. The included
-`scripts/lobster_demo.py` downloads a sample, runs the pipeline, saves
-Parquet, verifies round-trip I/O, and builds an HTML plot gallery:
+The included `scripts/lobster_demo.py` runs the pipeline on local data,
+saves Parquet, verifies round-trip I/O, and builds an HTML plot gallery:
 
 ```bash
-uv run python scripts/lobster_demo.py --ticker AAPL
+uv run python scripts/lobster_demo.py /path/to/lobster_data --trading-date 2012-06-21
 ```
 
 !!! note
@@ -465,9 +470,8 @@ uv run python scripts/bitstamp_demo.py --output ~/Desktop/bitstamp_gallery
 **LOBSTER:**
 
 ```bash
-uv run python scripts/lobster_demo.py
-uv run python scripts/lobster_demo.py --ticker MSFT
-uv run python scripts/lobster_demo.py --output ~/Desktop/lobster_gallery
+uv run python scripts/lobster_demo.py /path/to/lobster_data --trading-date 2012-06-21
+uv run python scripts/lobster_demo.py /path/to/lobster_data --output ~/Desktop/lobster_gallery
 ```
 
 ---
@@ -496,7 +500,7 @@ ob-analytics gallery results/parquet/ --volume-scale 1e-8 --title "My Analysis"
 
 ```bash
 ob-analytics bitstamp-demo --input orders.csv -o demo_out/
-ob-analytics lobster-demo --ticker AAPL -o demo_out/
+ob-analytics lobster-demo /path/to/lobster_data --trading-date 2012-06-21 -o demo_out/
 ```
 
 | Subcommand | Description |
@@ -504,7 +508,7 @@ ob-analytics lobster-demo --ticker AAPL -o demo_out/
 | `process` | Run the pipeline on a data source, save Parquet (optional `--gallery`) |
 | `gallery` | Generate an HTML plot gallery from saved Parquet data |
 | `bitstamp-demo` | Run the Bitstamp demo (pipeline + gallery) |
-| `lobster-demo` | Download LOBSTER sample data and run the demo (pipeline + gallery) |
+| `lobster-demo` | Run the LOBSTER demo on local data (pipeline + gallery) |
 
 ---
 

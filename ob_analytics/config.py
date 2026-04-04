@@ -73,7 +73,7 @@ class PipelineConfig(BaseModel):
         gt=0,
         description=(
             "Absolute price difference between consecutive trades that "
-            "triggers the maker/taker swap heuristic in match_trades.  "
+            "triggers the maker/taker swap heuristic in trade inference.  "
             "The original value ($10) targets 2015 BTC prices."
         ),
     )
