@@ -21,8 +21,9 @@ from pydantic import BaseModel, Field
 class OrderEvent(BaseModel):
     """A single order-book event as received from the exchange.
 
-    Corresponds to one row of the events DataFrame that flows through
-    ``load_event_data → event_match → set_order_types → order_aggressiveness``.
+    Corresponds to one row of the events DataFrame produced by the
+    :class:`~ob_analytics.pipeline.Pipeline` (load → match → trades → classify
+    → depth → :func:`~ob_analytics.analytics.order_aggressiveness`).
     """
 
     model_config = {"frozen": True}

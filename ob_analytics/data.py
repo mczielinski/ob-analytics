@@ -12,8 +12,9 @@ import pandas as pd
 from loguru import logger
 
 from ob_analytics._utils import validate_columns
+from ob_analytics.analytics import order_aggressiveness
 from ob_analytics.depth import depth_metrics, price_level_volume
-from ob_analytics.event_processing import load_event_data, order_aggressiveness
+from ob_analytics.event_processing import load_event_data
 from ob_analytics.matching_engine import event_match
 from ob_analytics.order_types import set_order_types
 from ob_analytics.protocols import DataWriter

@@ -1,9 +1,11 @@
-"""Event loading, writing, and aggressiveness computation.
+"""Bitstamp data format: event loading and writing.
 
-Contains :class:`BitstampLoader` (the default :class:`EventLoader`
-implementation), :class:`BitstampWriter` (Bitstamp CSV writer),
-:class:`BitstampFormat` (format descriptor), and the
-:func:`order_aggressiveness` calculation.
+Contains :class:`BitstampLoader` (the :class:`EventLoader` implementation
+for Bitstamp CSV data), :class:`BitstampWriter` (Bitstamp CSV writer),
+and :class:`BitstampFormat` (format descriptor).
+
+Format-agnostic analytics (e.g. :func:`~ob_analytics.analytics.order_aggressiveness`)
+live in :mod:`ob_analytics.analytics`.
 """
 
 from __future__ import annotations
@@ -172,95 +174,6 @@ def load_event_data(
     config = PipelineConfig(price_decimals=price_digits, volume_decimals=volume_digits)
     return BitstampLoader(config).load(file)
 
-
-# ── Order aggressiveness (standalone function) ────────────────────────
-
-
-def order_aggressiveness(
-    events: pd.DataFrame, depth_summary: pd.DataFrame
-) -> pd.DataFrame:
-    """Calculate order aggressiveness with respect to the best bid or ask in BPS.
-
-    Parameters
-    ----------
-    events : pandas.DataFrame
-        The events DataFrame.
-    depth_summary : pandas.DataFrame
-        The order book summary statistics DataFrame.
-
-    Returns
-    -------
-    pandas.DataFrame
-        The events DataFrame with an added ``aggressiveness_bps`` column.
-    """
-    validate_columns(
-        events,
-        {"direction", "action", "type", "timestamp", "event_id", "price"},
-        "order_aggressiveness(events)",
-    )
-    validate_columns(
-        depth_summary,
-        {"timestamp"},
-        "order_aggressiveness(depth_summary)",
-    )
-
-    def event_diff_bps(events: pd.DataFrame, direction: int) -> pd.DataFrame:
-        side = "bid" if direction == 1 else "ask"
-        orders = events[
-            (events["direction"] == side)
-            & (events["action"] != "changed")
-            & events["type"].isin(["flashed-limit", "resting-limit"])
-        ].sort_values(by="timestamp", kind="stable")
-
-        missing = ~orders["timestamp"].isin(depth_summary["timestamp"])
-        if missing.any():
-            logger.debug(
-                "order_aggressiveness: {}/{} {} order timestamps not in "
-                "depth_summary (merge_asof will handle gracefully)",
-                missing.sum(),
-                len(orders),
-                side,
-            )
-
-        best_price_col = f"best_{side}_price"
-
-        depth_summary_sorted = depth_summary.sort_values("event_id")
-        orders = orders.sort_values("event_id")
-
-        merged = pd.merge_asof(
-            orders,
-            depth_summary_sorted[["event_id", best_price_col]],
-            on="event_id",
-            direction="backward",
-            allow_exact_matches=False,
-        )
-
-        merged = merged.dropna(subset=[best_price_col]).copy()
-        best = merged[best_price_col]
-
-        diff_price = direction * (merged["price"] - best)
-        diff_bps = 10000 * diff_price / best
-        return pd.DataFrame({"event_id": merged["event_id"], "diff_bps": diff_bps})
-
-    bid_diff = event_diff_bps(events, 1)
-    ask_diff = event_diff_bps(events, -1)
-    events["aggressiveness_bps"] = np.nan
-
-    if not bid_diff.empty:
-        events = pd.merge(events, bid_diff, on="event_id", how="left")
-        events["aggressiveness_bps"] = events["aggressiveness_bps"].fillna(
-            events["diff_bps"]
-        )
-        events.drop(columns=["diff_bps"], inplace=True)
-
-    if not ask_diff.empty:
-        events = pd.merge(events, ask_diff, on="event_id", how="left")
-        events["aggressiveness_bps"] = events["aggressiveness_bps"].fillna(
-            events["diff_bps"]
-        )
-        events.drop(columns=["diff_bps"], inplace=True)
-
-    return events
 
 
 # ── BitstampWriter ────────────────────────────────────────────────────

@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from ob_analytics.event_processing import order_aggressiveness
+from ob_analytics.analytics import order_aggressiveness
 
 
 def _make_events_and_depth(event_rows, depth_rows):

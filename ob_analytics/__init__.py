@@ -35,12 +35,12 @@ from ob_analytics.depth import (
     get_spread,
     price_level_volume,
 )
+from ob_analytics.analytics import order_aggressiveness, trade_impacts
 from ob_analytics.event_processing import (
     BitstampFormat,
     BitstampLoader,
     BitstampWriter,
     load_event_data,
-    order_aggressiveness,
 )
 from ob_analytics.exceptions import (
     ConfigurationError,
@@ -80,7 +80,7 @@ from ob_analytics.protocols import (
     MatchingEngine,
     TradeInferrer,
 )
-from ob_analytics.trades import DefaultTradeInferrer, match_trades, trade_impacts
+from ob_analytics.trades import DefaultTradeInferrer, match_trades
 from ob_analytics.visualisation import (
     PlotTheme,
     get_plot_theme,

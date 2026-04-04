@@ -3,7 +3,8 @@
 import pandas as pd
 import pytest
 
-from ob_analytics.trades import DefaultTradeInferrer, trade_impacts
+from ob_analytics.analytics import trade_impacts
+from ob_analytics.trades import DefaultTradeInferrer
 from ob_analytics.config import PipelineConfig
 from ob_analytics.exceptions import MatchingError
 
