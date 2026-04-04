@@ -54,7 +54,7 @@ from ob_analytics.protocols import (
     MatchingEngine,
     TradeInferrer,
 )
-from ob_analytics.trades import DefaultTradeInferrer
+from ob_analytics.event_processing import BitstampTradeInferrer
 
 
 # ── Format registry ───────────────────────────────────────────────────
@@ -129,7 +129,7 @@ class Pipeline:
         :class:`NeedlemanWunschMatcher`.
     trade_inferrer : TradeInferrer, optional
         Builds trade records from matched events.  Defaults to
-        :class:`DefaultTradeInferrer`.
+        :class:`BitstampTradeInferrer`.
     """
 
     def __init__(
@@ -154,7 +154,7 @@ class Pipeline:
             self.config = config or PipelineConfig()
             self.loader = loader or BitstampLoader(self.config)
             self.matcher = matcher or NeedlemanWunschMatcher(self.config)
-            self.trade_inferrer = trade_inferrer or DefaultTradeInferrer(self.config)
+            self.trade_inferrer = trade_inferrer or BitstampTradeInferrer(self.config)
             self._writer = None
 
         self._format = format

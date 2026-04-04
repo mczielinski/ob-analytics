@@ -4,15 +4,19 @@ These define the contracts that pluggable components must satisfy.
 Implementations are discovered by structural (duck) typing -- there is
 no need to inherit from these classes.
 
-Default implementations ship with the package:
+Built-in implementations ship with the package (one symmetric set per format):
 
-* :class:`BitstampLoader` in ``event_processing.py``
-* :class:`NeedlemanWunschMatcher` in ``matching_engine.py``
-* :class:`DefaultTradeInferrer` in ``trades.py``
-* :class:`DepthMetricsEngine` in ``depth.py``
+* Bitstamp: :class:`~ob_analytics.bitstamp.BitstampLoader`,
+  :class:`~ob_analytics.bitstamp.BitstampMatcher`,
+  :class:`~ob_analytics.bitstamp.BitstampTradeInferrer`,
+  :class:`~ob_analytics.bitstamp.BitstampWriter`
+* LOBSTER: :class:`~ob_analytics.lobster.LobsterLoader`,
+  :class:`~ob_analytics.lobster.LobsterMatcher`,
+  :class:`~ob_analytics.lobster.LobsterTradeInferrer`,
+  :class:`~ob_analytics.lobster.LobsterWriter`
 
 Users can substitute their own by passing any object that satisfies the
-protocol to :class:`Pipeline`.
+protocol to :class:`~ob_analytics.pipeline.Pipeline`.
 """
 
 from __future__ import annotations
@@ -141,20 +145,20 @@ class Format:
     def create_matcher(self, config: Any) -> MatchingEngine:
         """Return a matching engine for this format.
 
-        Defaults to :class:`NeedlemanWunschMatcher`.
+        Subclasses must override this method.
         """
-        from ob_analytics.matching_engine import NeedlemanWunschMatcher
-
-        return NeedlemanWunschMatcher(config)
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement create_matcher()"
+        )
 
     def create_trade_inferrer(self, config: Any) -> TradeInferrer:
         """Return a trade inferrer for this format.
 
-        Defaults to :class:`DefaultTradeInferrer`.
+        Subclasses must override this method.
         """
-        from ob_analytics.trades import DefaultTradeInferrer
-
-        return DefaultTradeInferrer(config)
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement create_trade_inferrer()"
+        )
 
     def create_writer(self, config: Any) -> DataWriter | None:
         """Return a writer for this format, or ``None`` if not supported."""

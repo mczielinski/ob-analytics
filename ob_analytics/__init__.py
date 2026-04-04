@@ -39,6 +39,7 @@ from ob_analytics.analytics import order_aggressiveness, trade_impacts
 from ob_analytics.event_processing import (
     BitstampFormat,
     BitstampLoader,
+    BitstampTradeInferrer,
     BitstampWriter,
 )
 from ob_analytics.exceptions import (
@@ -79,7 +80,6 @@ from ob_analytics.protocols import (
     MatchingEngine,
     TradeInferrer,
 )
-from ob_analytics.trades import DefaultTradeInferrer
 from ob_analytics.visualisation import (
     PlotTheme,
     get_plot_theme,
@@ -151,6 +151,7 @@ __all__ = [
     "list_writers",
     # Bitstamp implementations
     "BitstampLoader",
+    "BitstampTradeInferrer",
     "BitstampWriter",
     "BitstampFormat",
     # LOBSTER implementations
@@ -162,7 +163,6 @@ __all__ = [
     "download_sample",
     # Other implementations
     "NeedlemanWunschMatcher",
-    "DefaultTradeInferrer",
     # Domain models
     "OrderEvent",
     "Trade",

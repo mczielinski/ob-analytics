@@ -1,6 +1,6 @@
 """Tests for the protocol-satisfying classes.
 
-Covers BitstampLoader, NeedlemanWunschMatcher, DefaultTradeInferrer,
+Covers BitstampLoader, NeedlemanWunschMatcher, BitstampTradeInferrer,
 and DepthMetricsEngine with synthetic data.
 """
 
@@ -15,7 +15,7 @@ from ob_analytics.event_processing import BitstampLoader
 from ob_analytics.exceptions import InsufficientDataError, InvalidDataError
 from ob_analytics.matching_engine import NeedlemanWunschMatcher
 from ob_analytics.protocols import EventLoader, MatchingEngine, TradeInferrer
-from ob_analytics.trades import DefaultTradeInferrer
+from ob_analytics.event_processing import BitstampTradeInferrer
 
 
 class TestBitstampLoader:
@@ -103,12 +103,12 @@ class TestNeedlemanWunschMatcher:
         assert matched_count <= 4
 
 
-class TestDefaultTradeInferrer:
+class TestBitstampTradeInferrer:
     def test_satisfies_protocol(self):
-        assert isinstance(DefaultTradeInferrer(), TradeInferrer)
+        assert isinstance(BitstampTradeInferrer(), TradeInferrer)
 
     def test_infer_trades_basic(self, matched_events):
-        inferrer = DefaultTradeInferrer()
+        inferrer = BitstampTradeInferrer()
         trades = inferrer.infer_trades(matched_events)
         assert isinstance(trades, pd.DataFrame)
         assert len(trades) == 2
@@ -125,7 +125,7 @@ class TestDefaultTradeInferrer:
     def test_rejects_missing_columns(self):
         df = pd.DataFrame({"x": [1]})
         with pytest.raises(InvalidDataError):
-            DefaultTradeInferrer().infer_trades(df)
+            BitstampTradeInferrer().infer_trades(df)
 
 
 class TestDepthMetricsEngine:

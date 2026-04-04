@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from ob_analytics.analytics import trade_impacts
-from ob_analytics.trades import DefaultTradeInferrer
+from ob_analytics.event_processing import BitstampTradeInferrer
 from ob_analytics.config import PipelineConfig
 from ob_analytics.exceptions import MatchingError
 
@@ -69,7 +69,7 @@ class TestFixPriceJumps:
                 (3, 4, 101.0, 101.0, 1.0, 2, 3),
             ]
         )
-        inferrer = DefaultTradeInferrer(PipelineConfig(price_jump_threshold=10.0))
+        inferrer = BitstampTradeInferrer(PipelineConfig(price_jump_threshold=10.0))
         trades = inferrer.infer_trades(events)
         # No swap needed
         assert len(trades) == 2
@@ -83,7 +83,7 @@ class TestFixPriceJumps:
                 (5, 6, 200.0, 200.0, 1.0, 4, 5),  # $100 jump!
             ]
         )
-        inferrer = DefaultTradeInferrer(PipelineConfig(price_jump_threshold=10.0))
+        inferrer = BitstampTradeInferrer(PipelineConfig(price_jump_threshold=10.0))
         trades = inferrer.infer_trades(events)
         assert len(trades) == 3
 
@@ -101,7 +101,7 @@ class TestFixPriceJumps:
                 (3, 4, 100.0, 100.0, 1.0, 2, 3),
             ]
         )
-        inferrer = DefaultTradeInferrer(PipelineConfig(price_jump_threshold=10.0))
+        inferrer = BitstampTradeInferrer(PipelineConfig(price_jump_threshold=10.0))
         trades = inferrer.infer_trades(events)
         assert len(trades) == 2
 
@@ -114,7 +114,7 @@ class TestFixPriceJumps:
         )
         # Corrupt the matching_event value
         events.loc[events["direction"] == "ask", "matching_event"] = 999
-        inferrer = DefaultTradeInferrer()
+        inferrer = BitstampTradeInferrer()
         with pytest.raises(MatchingError):
             inferrer.infer_trades(events)
 
