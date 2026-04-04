@@ -38,7 +38,7 @@ def _cmd_process(args: argparse.Namespace) -> None:
 
     from ob_analytics.config import PipelineConfig
     from ob_analytics.data import save_data
-    from ob_analytics.event_processing import BitstampFormat
+    from ob_analytics.bitstamp import BitstampFormat
     from ob_analytics.lobster import LobsterFormat
     from ob_analytics.pipeline import Pipeline
 

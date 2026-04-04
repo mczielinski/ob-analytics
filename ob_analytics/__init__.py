@@ -36,7 +36,7 @@ from ob_analytics.depth import (
     price_level_volume,
 )
 from ob_analytics.analytics import order_aggressiveness, trade_impacts
-from ob_analytics.event_processing import (
+from ob_analytics.bitstamp import (
     BitstampFormat,
     BitstampLoader,
     BitstampMatcher,

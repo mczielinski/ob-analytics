@@ -29,7 +29,7 @@ logger.remove()
 logger.add(sys.stderr, level="INFO")
 
 from ob_analytics.data import save_data
-from ob_analytics.event_processing import BitstampWriter
+from ob_analytics.bitstamp import BitstampWriter
 from ob_analytics.gallery import generate_gallery
 from ob_analytics.pipeline import Pipeline
 

@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from ob_analytics.analytics import trade_impacts
-from ob_analytics.event_processing import BitstampTradeInferrer
+from ob_analytics.bitstamp import BitstampTradeInferrer
 from ob_analytics.config import PipelineConfig
 from ob_analytics.exceptions import MatchingError
 
