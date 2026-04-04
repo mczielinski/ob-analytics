@@ -12,7 +12,6 @@ import pandas as pd
 from loguru import logger
 
 from ob_analytics._utils import validate_columns
-from ob_analytics.depth import depth_metrics, price_level_volume
 from ob_analytics.protocols import DataWriter
 
 
