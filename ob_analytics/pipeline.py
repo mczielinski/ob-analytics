@@ -276,7 +276,7 @@ class Pipeline:
         # ── Provenance metadata ────────────────────────────────────────
         metadata: dict[str, Any] = {
             "source": str(source),
-            "format": type(self._format).__name__ if self._format else None,
+            "format": self._format.name if self._format else None,
             "config": self.config.model_dump(),
             "n_events": len(events),
             "n_trades": len(trades),

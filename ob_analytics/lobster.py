@@ -738,6 +738,7 @@ class LobsterFormat(Format):
         Calendar date of the trading session.
     """
 
+    name: str = field(default="lobster", init=False, repr=False)
     trading_date: str | pd.Timestamp = field(default=SAMPLE_DATE)
 
     _loader: LobsterLoader | None = field(default=None, repr=False, init=False)

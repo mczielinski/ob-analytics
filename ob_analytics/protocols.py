@@ -136,7 +136,13 @@ class Format:
     Individual components can still be overridden::
 
         Pipeline(format=LobsterFormat(...), matcher=MyMatcher())
+
+    Subclasses should set the ``name`` class variable to a short lowercase
+    string identifying the exchange format (e.g. ``name = "bitstamp"``).
+    This value appears in ``PipelineResult.metadata["format"]``.
     """
+
+    name: str = ""
 
     def create_loader(self, config: Any) -> EventLoader:
         """Return a loader for this format."""

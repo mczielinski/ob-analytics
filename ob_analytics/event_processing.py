@@ -421,6 +421,8 @@ class BitstampWriter:
 class BitstampFormat(Format):
     """Format descriptor for Bitstamp-style CSV data."""
 
+    name: str = "bitstamp"
+
     def create_loader(self, config: PipelineConfig) -> EventLoader:
         return BitstampLoader(config)
 
