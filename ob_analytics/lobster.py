@@ -441,12 +441,15 @@ class LobsterWriter:
 
     def __init__(
         self,
+        config: PipelineConfig | None = None,
         *,
         trading_date: str | pd.Timestamp,
-        price_divisor: int = 10_000,
+        price_divisor: int | None = None,
     ) -> None:
+        self._config = config or PipelineConfig()
         self._trading_date = pd.Timestamp(trading_date).normalize()
-        self._price_divisor = price_divisor
+        # Explicit price_divisor overrides config (for manual construction)
+        self._price_divisor = price_divisor if price_divisor is not None else self._config.price_divisor
 
     def write(
         self,
@@ -750,10 +753,7 @@ class LobsterFormat(Format):
         return LobsterTradeInferrer(config)
 
     def create_writer(self, config: PipelineConfig) -> DataWriter:
-        return LobsterWriter(
-            trading_date=self.trading_date,
-            price_divisor=config.price_divisor,
-        )
+        return LobsterWriter(config, trading_date=self.trading_date)
 
     def compute_depth(
         self,

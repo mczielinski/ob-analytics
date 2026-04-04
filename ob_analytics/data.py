@@ -33,6 +33,11 @@ def register_writer(name: str, writer_cls: type) -> None:
     _WRITERS[name.lower()] = writer_cls
 
 
+def list_writers() -> list[str]:
+    """Return a sorted list of registered writer names."""
+    return sorted(_WRITERS)
+
+
 def get_zombie_ids(events: pd.DataFrame, trades: pd.DataFrame) -> list[int]:
     """
     Identify zombie orders that should be removed from the events DataFrame.
@@ -235,6 +240,13 @@ def save_data(
     if writer is not None:
         writer.write(lob_data, p, **write_kwargs)
         return
+
+    if fmt == "lobster":
+        raise ValueError(
+            "LOBSTER write requires a configured writer. "
+            "Use LobsterFormat(trading_date=...).create_writer(config) "
+            "or pass writer= directly to save_data()."
+        )
 
     if fmt in _WRITERS:
         w = _WRITERS[fmt]()

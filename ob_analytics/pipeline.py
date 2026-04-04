@@ -69,6 +69,11 @@ def register_format(name: str, format_cls: type[Format]) -> None:
     _FORMATS[name.lower()] = format_cls
 
 
+def list_formats() -> list[str]:
+    """Return a sorted list of registered format names."""
+    return sorted(_FORMATS)
+
+
 @dataclass(frozen=True)
 class PipelineResult:
     """Immutable container for the outputs of a pipeline run.

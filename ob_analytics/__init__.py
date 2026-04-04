@@ -24,6 +24,7 @@ from loguru import logger
 from ob_analytics.config import PipelineConfig
 from ob_analytics.data import (
     get_zombie_ids,
+    list_writers,
     load_data,
     process_data,
     register_writer,
@@ -72,7 +73,7 @@ from ob_analytics.models import (
 )
 from ob_analytics.order_book_reconstruction import order_book
 from ob_analytics.order_types import set_order_types
-from ob_analytics.pipeline import Pipeline, PipelineResult, register_format
+from ob_analytics.pipeline import Pipeline, PipelineResult, list_formats, register_format
 from ob_analytics.protocols import (
     DataWriter,
     EventLoader,
@@ -107,7 +108,10 @@ from ob_analytics.visualisation import (
 register_format("bitstamp", BitstampFormat)
 register_format("lobster", LobsterFormat)
 register_writer("bitstamp", BitstampWriter)
-register_writer("lobster", LobsterWriter)
+# Note: LobsterWriter is NOT registered here because it requires a trading_date
+# argument that cannot be auto-inferred. Use:
+#   LobsterFormat(trading_date=...).create_writer(config)
+# or pass writer= directly to save_data().
 
 logger.disable("ob_analytics")
 
@@ -146,7 +150,9 @@ __all__ = [
     "Format",
     # Format registration
     "register_format",
+    "list_formats",
     "register_writer",
+    "list_writers",
     # Bitstamp implementations
     "BitstampLoader",
     "BitstampWriter",
