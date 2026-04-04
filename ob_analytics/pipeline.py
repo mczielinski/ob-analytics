@@ -41,9 +41,8 @@ from ob_analytics.config import PipelineConfig
 from ob_analytics.data import get_zombie_ids
 from ob_analytics.depth import depth_metrics, price_level_volume
 from ob_analytics.analytics import order_aggressiveness
-from ob_analytics.event_processing import BitstampLoader
+from ob_analytics.event_processing import BitstampLoader, BitstampMatcher, BitstampTradeInferrer
 from ob_analytics.flow_toxicity import compute_vpin, order_flow_imbalance
-from ob_analytics.matching_engine import NeedlemanWunschMatcher
 from ob_analytics.order_types import set_order_types
 from loguru import logger
 
@@ -54,7 +53,6 @@ from ob_analytics.protocols import (
     MatchingEngine,
     TradeInferrer,
 )
-from ob_analytics.event_processing import BitstampTradeInferrer
 
 
 # ── Format registry ───────────────────────────────────────────────────
@@ -126,7 +124,7 @@ class Pipeline:
         :class:`BitstampLoader`.
     matcher : MatchingEngine, optional
         Pairs bid/ask fills.  Defaults to
-        :class:`NeedlemanWunschMatcher`.
+        :class:`BitstampMatcher`.
     trade_inferrer : TradeInferrer, optional
         Builds trade records from matched events.  Defaults to
         :class:`BitstampTradeInferrer`.
@@ -153,7 +151,7 @@ class Pipeline:
         else:
             self.config = config or PipelineConfig()
             self.loader = loader or BitstampLoader(self.config)
-            self.matcher = matcher or NeedlemanWunschMatcher(self.config)
+            self.matcher = matcher or BitstampMatcher(self.config)
             self.trade_inferrer = trade_inferrer or BitstampTradeInferrer(self.config)
             self._writer = None
 

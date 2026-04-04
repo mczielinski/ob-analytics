@@ -154,6 +154,35 @@ class BitstampLoader:
         return events[~events["event_id"].isin(duplicate_event_ids)]
 
 
+# ── BitstampMatcher ───────────────────────────────────────────────────
+
+
+class BitstampMatcher:
+    """Matching engine for Bitstamp event data.
+
+    Thin wrapper around :class:`~ob_analytics.matching_engine.NeedlemanWunschMatcher`
+    providing a stable, exchange-named API entry point.  Symmetric with
+    :class:`~ob_analytics.lobster.LobsterMatcher`.  The Needleman-Wunsch
+    algorithm is an implementation detail.
+
+    Satisfies the :class:`~ob_analytics.protocols.MatchingEngine` protocol.
+
+    Parameters
+    ----------
+    config : PipelineConfig, optional
+        Pipeline configuration.
+    """
+
+    def __init__(self, config: PipelineConfig | None = None) -> None:
+        from ob_analytics.matching_engine import NeedlemanWunschMatcher
+
+        self._matcher = NeedlemanWunschMatcher(config)
+
+    def match(self, events: pd.DataFrame) -> pd.DataFrame:
+        """Pair bid/ask fills; return events with ``matching_event`` column."""
+        return self._matcher.match(events)
+
+
 # ── BitstampTradeInferrer ─────────────────────────────────────────────
 
 
@@ -396,9 +425,7 @@ class BitstampFormat(Format):
         return BitstampLoader(config)
 
     def create_matcher(self, config: PipelineConfig) -> MatchingEngine:
-        from ob_analytics.matching_engine import NeedlemanWunschMatcher
-
-        return NeedlemanWunschMatcher(config)
+        return BitstampMatcher(config)
 
     def create_trade_inferrer(self, config: PipelineConfig) -> TradeInferrer:
         return BitstampTradeInferrer(config)

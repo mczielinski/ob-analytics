@@ -39,6 +39,7 @@ from ob_analytics.analytics import order_aggressiveness, trade_impacts
 from ob_analytics.event_processing import (
     BitstampFormat,
     BitstampLoader,
+    BitstampMatcher,
     BitstampTradeInferrer,
     BitstampWriter,
 )
@@ -151,6 +152,7 @@ __all__ = [
     "list_writers",
     # Bitstamp implementations
     "BitstampLoader",
+    "BitstampMatcher",
     "BitstampTradeInferrer",
     "BitstampWriter",
     "BitstampFormat",
@@ -161,8 +163,6 @@ __all__ = [
     "LobsterWriter",
     "LobsterFormat",
     "download_sample",
-    # Other implementations
-    "NeedlemanWunschMatcher",
     # Domain models
     "OrderEvent",
     "Trade",
