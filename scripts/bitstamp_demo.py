@@ -28,8 +28,8 @@ logger.enable("ob_analytics")
 logger.remove()
 logger.add(sys.stderr, level="INFO")
 
+from ob_analytics.bitstamp import BitstampFormat, BitstampWriter
 from ob_analytics.data import save_data
-from ob_analytics.bitstamp import BitstampWriter
 from ob_analytics.gallery import generate_gallery
 from ob_analytics.pipeline import Pipeline
 
@@ -69,7 +69,7 @@ def main() -> None:
 
     # 1. Run pipeline
     logger.info("Running pipeline...")
-    pipeline = Pipeline()
+    pipeline = Pipeline(format=BitstampFormat())
     result = pipeline.run(str(csv_path))
 
     logger.info("Events:  {:,}", len(result.events))
@@ -95,7 +95,7 @@ def main() -> None:
     save_data(result_dict, roundtrip_csv, writer=BitstampWriter())
     logger.info("Bitstamp CSV written to: {}", roundtrip_csv)
 
-    rt_result = Pipeline().run(str(roundtrip_csv))
+    rt_result = Pipeline(format=BitstampFormat()).run(str(roundtrip_csv))
     logger.info("Re-read events:  {:,}", len(rt_result.events))
     logger.info("Re-read trades:  {:,}", len(rt_result.trades))
 

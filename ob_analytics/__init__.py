@@ -5,17 +5,24 @@ compute depth metrics, and visualize market microstructure.
 
 Quick start::
 
-    from ob_analytics import Pipeline
+    from ob_analytics import Pipeline, BitstampFormat
 
-    result = Pipeline().run("orders.csv")
+    result = Pipeline(format=BitstampFormat()).run("orders.csv")
 
 The package exposes two layers:
 
 * **High-level**: :class:`Pipeline` runs the full processing
   sequence (load → match → trades → classify → depth → metrics)
   with sensible defaults.
-* **Low-level**: Individual functions (``load_event_data``,
-  ``event_match``, ``match_trades``, etc.) for step-by-step control.
+* **Low-level**: Individual classes and functions for step-by-step control.
+  Two symmetric format implementations are provided:
+
+  - Bitstamp: :class:`BitstampLoader`, :class:`BitstampMatcher`,
+    :class:`BitstampTradeInferrer`, :class:`BitstampWriter`,
+    :class:`BitstampFormat`
+  - LOBSTER: :class:`LobsterLoader`, :class:`LobsterMatcher`,
+    :class:`LobsterTradeInferrer`, :class:`LobsterWriter`,
+    :class:`LobsterFormat`
 
 All processing stages are pluggable via :mod:`~ob_analytics.protocols`.
 """
@@ -62,8 +69,8 @@ from ob_analytics.lobster import (
     LobsterTradeInferrer,
     LobsterWriter,
     download_sample,
+    lobster_depth_from_orderbook,
 )
-from ob_analytics.matching_engine import NeedlemanWunschMatcher
 from ob_analytics.models import (
     DepthLevel,
     KyleLambdaResult,
@@ -114,61 +121,62 @@ register_writer("bitstamp", BitstampWriter)
 logger.disable("ob_analytics")
 
 __all__ = [
-    # Pipeline class
+    # ── Symmetric format pairs (Bitstamp ↔ LOBSTER) ───────────────────
+    "BitstampFormat",        "LobsterFormat",
+    "BitstampLoader",        "LobsterLoader",
+    "BitstampMatcher",       "LobsterMatcher",
+    "BitstampTradeInferrer", "LobsterTradeInferrer",
+    "BitstampWriter",        "LobsterWriter",
+    # ── Pipeline orchestration ─────────────────────────────���──────────
     "Pipeline",
     "PipelineResult",
-    # Data I/O
-    "get_zombie_ids",
-    "load_data",
-    "save_data",
-    # Depth computation
-    "depth_metrics",
-    "filter_depth",
-    "get_spread",
-    "price_level_volume",
-    # Format-agnostic analytics
-    "order_aggressiveness",
-    "trade_impacts",
-    # Order book processing
-    "order_book",
-    "set_order_types",
-    # Flow toxicity
-    "compute_vpin",
-    "compute_kyle_lambda",
-    "order_flow_imbalance",
-    "KyleLambdaResult",
-    # Configuration
-    "PipelineConfig",
-    # Protocols and base classes
+    "register_format",
+    "list_formats",
+    # ── Protocols / extension points ────────────────────────────��────
     "EventLoader",
     "MatchingEngine",
     "TradeInferrer",
     "DataWriter",
     "Format",
-    # Format registration
-    "register_format",
-    "list_formats",
+    # ── Format-agnostic analytics ─────────────────────────────────────
+    "order_aggressiveness",
+    "trade_impacts",
+    # ── Order book processing ──────────────────────────��──────────────
+    "set_order_types",
+    "order_book",
+    # ── Depth computation ─────────────���───────────────────────────────
+    "price_level_volume",
+    "depth_metrics",
+    "filter_depth",
+    "get_spread",
+    # ── Data I/O + writer registry ────────────────────────────��───────
+    "save_data",
+    "load_data",
+    "get_zombie_ids",
     "register_writer",
     "list_writers",
-    # Bitstamp implementations
-    "BitstampLoader",
-    "BitstampMatcher",
-    "BitstampTradeInferrer",
-    "BitstampWriter",
-    "BitstampFormat",
-    # LOBSTER implementations
-    "LobsterLoader",
-    "LobsterMatcher",
-    "LobsterTradeInferrer",
-    "LobsterWriter",
-    "LobsterFormat",
+    # ── LOBSTER-specific utilities ──────────────────────��─────────────
+    "lobster_depth_from_orderbook",
     "download_sample",
-    # Domain models
+    # ── Flow toxicity ─────────────────────────────���───────────────────
+    "compute_vpin",
+    "compute_kyle_lambda",
+    "order_flow_imbalance",
+    # ── Domain models ─────────────────────────���───────────────────────
     "OrderEvent",
     "Trade",
     "DepthLevel",
     "OrderBookSnapshot",
-    # Visualization
+    "KyleLambdaResult",
+    # ── Configuration ──────────────────────────��──────────────────────
+    "PipelineConfig",
+    # ── Exceptions ───────────────────────────────────────────────────
+    "ObAnalyticsError",
+    "InvalidDataError",
+    "MatchingError",
+    "InsufficientDataError",
+    "ConfigurationError",
+    # ── Visualization ─────────────────────────────────────────────────
     "PlotTheme",
     "set_plot_theme",
     "get_plot_theme",
@@ -177,7 +185,6 @@ __all__ = [
     "plot_time_series",
     "plot_trades",
     "plot_price_levels",
-    "plot_price_levels_faster",
     "plot_event_map",
     "plot_volume_map",
     "plot_current_depth",
@@ -188,10 +195,4 @@ __all__ = [
     "plot_kyle_lambda",
     "plot_hidden_executions",
     "plot_trading_halts",
-    # Exceptions
-    "ObAnalyticsError",
-    "InvalidDataError",
-    "MatchingError",
-    "InsufficientDataError",
-    "ConfigurationError",
 ]
