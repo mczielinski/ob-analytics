@@ -32,6 +32,10 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from ob_analytics._time_utils import (
+    datetime_to_seconds_after_midnight,
+    seconds_after_midnight_to_datetime,
+)
 from ob_analytics.config import PipelineConfig
 from ob_analytics.protocols import (
     DataWriter,
@@ -138,7 +142,7 @@ class LobsterLoader:
         raw["price"] = (raw["price"] / divisor).round(cfg.price_decimals)
         raw["volume"] = raw["volume"].astype(float).round(cfg.volume_decimals)
 
-        raw["timestamp"] = self._trading_date + pd.to_timedelta(raw["time"], unit="s")
+        raw["timestamp"] = seconds_after_midnight_to_datetime(raw["time"], self._trading_date)
         raw["exchange_timestamp"] = raw["timestamp"]
 
         raw["raw_event_type"] = raw["event_type"]
@@ -507,7 +511,7 @@ class LobsterWriter:
             )
 
         midnight = self._trading_date
-        time_seconds = (events["timestamp"] - midnight).dt.total_seconds()
+        time_seconds = datetime_to_seconds_after_midnight(events["timestamp"], midnight)
 
         price_int = (events["price"] * self._price_divisor).round(0).astype(int)
         direction_int = events["direction"].astype(str).map(_DIRECTION_REVERSE)

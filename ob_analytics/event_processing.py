@@ -10,6 +10,7 @@ live in :mod:`ob_analytics.analytics`.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ import pandas as pd
 
 from loguru import logger
 
+from ob_analytics._time_utils import datetime_to_epoch, epoch_to_datetime
 from ob_analytics._utils import validate_columns, validate_non_empty
 from ob_analytics.config import PipelineConfig
 from ob_analytics.protocols import (
@@ -89,9 +91,9 @@ class BitstampLoader:
         events["price"] = events["price"].round(price_digits)
 
         ts_unit = self._config.timestamp_unit
-        events["timestamp"] = pd.to_datetime(events["timestamp"], unit=ts_unit)
-        events["exchange_timestamp"] = pd.to_datetime(
-            events["exchange_timestamp"], unit=ts_unit
+        events["timestamp"] = epoch_to_datetime(events["timestamp"], ts_unit)
+        events["exchange_timestamp"] = epoch_to_datetime(
+            events["exchange_timestamp"], ts_unit
         )
         events["action"] = pd.Categorical(
             events["action"], categories=["created", "changed", "deleted"], ordered=True
@@ -179,14 +181,6 @@ def load_event_data(
 # ── BitstampWriter ────────────────────────────────────────────────────
 
 
-def _datetime_to_numeric(series: pd.Series, unit: str) -> pd.Series:
-    """Convert a datetime Series back to numeric timestamps."""
-    epoch = pd.Timestamp("1970-01-01")
-    delta = series - epoch
-    divisors = {"ms": 1_000_000, "us": 1_000, "ns": 1}
-    return (delta.view("int64") // divisors[unit]).astype("int64")
-
-
 class BitstampWriter:
     """Write pipeline events back to Bitstamp-format CSV.
 
@@ -222,8 +216,8 @@ class BitstampWriter:
         out = pd.DataFrame(
             {
                 "id": events["id"],
-                "timestamp": _datetime_to_numeric(events["timestamp"], ts_unit),
-                "exchange.timestamp": _datetime_to_numeric(
+                "timestamp": datetime_to_epoch(events["timestamp"], ts_unit),
+                "exchange.timestamp": datetime_to_epoch(
                     events["exchange_timestamp"], ts_unit
                 ),
                 "price": events["price"],
@@ -240,6 +234,7 @@ class BitstampWriter:
 # ── BitstampFormat descriptor ─────────────────────────────────────────
 
 
+@dataclass
 class BitstampFormat(Format):
     """Format descriptor for Bitstamp-style CSV data."""
 
