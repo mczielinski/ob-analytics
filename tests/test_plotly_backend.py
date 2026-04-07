@@ -238,13 +238,13 @@ class TestBackendDispatch:
     def test_plotly_backend_returns_plotly_figure(
         self, sample_trades: pd.DataFrame
     ) -> None:
-        from ob_analytics.visualisation import plot_trades
+        from ob_analytics.visualization import plot_trades
 
         fig = plot_trades(sample_trades, backend="plotly")
         assert isinstance(fig, go.Figure)
 
     def test_invalid_backend_raises(self, sample_trades: pd.DataFrame) -> None:
-        from ob_analytics.visualisation import plot_trades
+        from ob_analytics.visualization import plot_trades
 
         with pytest.raises(ValueError, match="Unknown backend"):
             plot_trades(sample_trades, backend="nonexistent")

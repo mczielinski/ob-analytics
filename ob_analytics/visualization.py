@@ -35,7 +35,7 @@ from ob_analytics._chart_data import (
 )
 
 # Re-export theme infrastructure from the matplotlib backend so
-# existing ``from ob_analytics.visualisation import PlotTheme`` keeps working.
+# existing ``from ob_analytics.visualization import PlotTheme`` keeps working.
 from ob_analytics._matplotlib import (  # noqa: F401 – re-exports
     PlotTheme,
     _apply_theme,
@@ -83,7 +83,7 @@ def register_plot_backend(
 
     Examples
     --------
-    >>> from ob_analytics.visualisation import register_plot_backend
+    >>> from ob_analytics.visualization import register_plot_backend
     >>> register_plot_backend("bokeh", "my_pkg._bokeh")  # expects bokeh_trades(), etc.
     """
     _BACKENDS[name] = module_path

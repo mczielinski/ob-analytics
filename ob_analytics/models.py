@@ -113,7 +113,7 @@ class KyleLambdaResult(BaseModel):
         Number of time windows used in the regression.
     regression_df : pandas.DataFrame
         Per-window data with columns ``timestamp``, ``delta_price``,
-        ``signed_volume`` — useful for scatter-plot visualisation.
+        ``signed_volume`` — useful for scatter-plot visualization.
     """
 
     model_config = {"frozen": True, "arbitrary_types_allowed": True}

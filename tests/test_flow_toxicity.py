@@ -233,7 +233,7 @@ import matplotlib  # noqa: E402
 matplotlib.use("Agg")
 from matplotlib.figure import Figure  # noqa: E402
 
-from ob_analytics.visualisation import (  # noqa: E402
+from ob_analytics.visualization import (  # noqa: E402
     plot_kyle_lambda,
     plot_order_flow_imbalance,
     plot_vpin,

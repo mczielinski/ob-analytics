@@ -1,4 +1,4 @@
-"""Tests for ob_analytics.visualisation – Phase 5 visualization improvements."""
+"""Tests for ob_analytics.visualization."""
 
 import matplotlib
 
@@ -11,7 +11,7 @@ import pytest
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
-from ob_analytics.visualisation import (
+from ob_analytics.visualization import (
     PlotTheme,
     _create_axes,
     get_plot_theme,
@@ -270,7 +270,7 @@ class TestBackendDispatch:
 class TestRegisterBackend:
     def test_register_and_dispatch(self, sample_trades, tmp_path):
         """Register a dummy backend and verify dispatch calls it."""
-        from ob_analytics.visualisation import (
+        from ob_analytics.visualization import (
             _BACKENDS,
             _FUNC_PREFIX,
             register_plot_backend,

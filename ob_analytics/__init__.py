@@ -96,7 +96,7 @@ from ob_analytics.protocols import (
     MatchingEngine,
     TradeInferrer,
 )
-from ob_analytics.visualisation import (
+from ob_analytics.visualization import (
     PlotTheme,
     get_plot_theme,
     plot_current_depth,

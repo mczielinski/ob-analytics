@@ -28,7 +28,7 @@ from ob_analytics.flow_toxicity import (
 )
 from ob_analytics.order_book_reconstruction import order_book
 from ob_analytics.pipeline import PipelineResult
-from ob_analytics.visualisation import (
+from ob_analytics.visualization import (
     plot_current_depth,
     plot_event_map,
     plot_events_histogram,
@@ -56,7 +56,7 @@ class PlotSpec:
     title : str
         Human-readable title for the gallery card.
     plot_fn : Callable
-        The ``plot_*`` function from ``ob_analytics.visualisation``.
+        The ``plot_*`` function from ``ob_analytics.visualization``.
     kwargs : dict
         Keyword arguments to pass to *plot_fn*.
     needs : str or None

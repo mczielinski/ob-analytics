@@ -270,7 +270,7 @@ ob_analytics/
 ├── _time_utils.py        # Shared timestamp conversion helpers (epoch ↔ datetime)
 ├── flow_toxicity.py      # compute_vpin, compute_kyle_lambda, order_flow_imbalance
 │
-├── visualisation.py      # plot_* dispatchers, PlotTheme, save_figure, backend registry
+├── visualization.py      # plot_* dispatchers, PlotTheme, save_figure, backend registry
 ├── gallery.py            # HTML gallery generation
 ├── _matplotlib.py        # Matplotlib renderers
 ├── _plotly.py            # Plotly renderers
