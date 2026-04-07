@@ -12,7 +12,7 @@ galleries, and running demo pipelines.
 ob-analytics process orders.csv -o results/
 ob-analytics gallery results/parquet/ -o my_gallery/
 ob-analytics bitstamp-demo --input orders.csv
-ob-analytics lobster-demo --ticker AAPL
+ob-analytics lobster-demo /path/to/lobster_data --trading-date 2012-06-21
 ```
 
 Pass `-v` / `--verbose` for debug-level logging.

@@ -1,7 +1,7 @@
 """LOBSTER data format support.
 
-Provides loader, matcher, trade inferrer, writer, format descriptor,
-and sample-data download for the LOBSTER limit-order-book data set
+Provides loader, matcher, trade inferrer, writer, and format descriptor
+for the LOBSTER limit-order-book data set
 (https://lobsterdata.com).
 
 LOBSTER message files contain six headerless columns::
@@ -777,5 +777,3 @@ class LobsterFormat(Format):
             "price_jump_threshold": 5.0,
             "skip_zombie_detection": True,
         }
-
-

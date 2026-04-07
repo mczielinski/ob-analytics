@@ -90,7 +90,7 @@ ob-analytics bitstamp-demo --input orders.csv
 ob-analytics lobster-demo /path/to/lobster_data --trading-date 2012-06-21
 ```
 
-See the [Quickstart CLI section](quickstart.md#9-command-line-interface) for
+See the [Quickstart CLI section](quickstart.md#10-command-line-interface) for
 full details.
 
 ## Next steps

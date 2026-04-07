@@ -161,3 +161,6 @@ cython_debug/
 
 # Git worktrees
 .worktrees/
+
+# Pre-commit (developer-local)
+.pre-commit-config.yaml

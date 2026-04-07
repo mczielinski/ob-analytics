@@ -17,13 +17,7 @@ import sys
 from pathlib import Path
 
 import matplotlib
-matplotlib.use("Agg")
-
 from loguru import logger
-
-logger.enable("ob_analytics")
-logger.remove()
-logger.add(sys.stderr, level="INFO")
 
 from ob_analytics.data import save_data
 from ob_analytics.gallery import generate_gallery
@@ -32,6 +26,11 @@ from ob_analytics.pipeline import Pipeline
 
 
 def main() -> None:
+    matplotlib.use("Agg")
+    logger.enable("ob_analytics")
+    logger.remove()
+    logger.add(sys.stderr, level="INFO")
+
     parser = argparse.ArgumentParser(description="LOBSTER data demo")
     parser.add_argument(
         "source",

@@ -26,8 +26,6 @@ or `backend="plotly"` for interactive figures. Plotly requires
 
 ::: ob_analytics.visualisation.plot_price_levels
 
-::: ob_analytics.visualisation.plot_price_levels_faster
-
 ::: ob_analytics.visualisation.plot_trades
 
 ::: ob_analytics.visualisation.plot_event_map

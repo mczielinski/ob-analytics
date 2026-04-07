@@ -28,3 +28,5 @@ Key differences from Bitstamp:
 ::: ob_analytics.lobster.LobsterWriter
 
 ::: ob_analytics.lobster.LobsterFormat
+
+::: ob_analytics.lobster.lobster_depth_from_orderbook

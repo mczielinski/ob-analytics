@@ -90,7 +90,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `DataWriter`, and abstract `Format` base for venue-specific bundles.
 - **Bitstamp stack** — `BitstampLoader`, `BitstampWriter`, `BitstampFormat`.
 - **LOBSTER stack** — `LobsterLoader`, `LobsterMatcher`, `LobsterTradeInferrer`,
-  `LobsterWriter`, `LobsterFormat`, orderbook-backed depth, `download_sample()`.
+  `LobsterWriter`, `LobsterFormat`, orderbook-backed depth.
 - **`register_format()` / `register_writer()`** — built-in `"bitstamp"` and
   `"lobster"` registrations; `Pipeline.from_format(name, **kwargs)`.
 - **`DepthMetricsEngine`** — incremental depth metrics with dynamic price

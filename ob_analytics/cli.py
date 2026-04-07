@@ -221,7 +221,7 @@ def _cmd_lobster_demo(args: argparse.Namespace) -> None:
         result,
         gallery_dir,
         volume_scale=1.0,
-        title=f"LOBSTER {ticker} ({trading_date}) -- ob-analytics",
+        title=f"LOBSTER {Path(source).name} ({trading_date}) -- ob-analytics",
     )
     logger.info("Gallery: {}", gallery_path.resolve())
     logger.info("Open in browser: file://{}", gallery_path.resolve())

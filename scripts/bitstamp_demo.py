@@ -19,24 +19,24 @@ import sys
 from pathlib import Path
 
 import matplotlib
-
-matplotlib.use("Agg")
-
 from loguru import logger
-
-logger.enable("ob_analytics")
-logger.remove()
-logger.add(sys.stderr, level="INFO")
 
 from ob_analytics.bitstamp import BitstampFormat, BitstampWriter
 from ob_analytics.data import save_data
 from ob_analytics.gallery import generate_gallery
 from ob_analytics.pipeline import Pipeline
 
-_DEFAULT_CSV = Path(__file__).resolve().parent.parent / "inst" / "extdata" / "orders.csv"
+_DEFAULT_CSV = (
+    Path(__file__).resolve().parent.parent / "inst" / "extdata" / "orders.csv"
+)
 
 
 def main() -> None:
+    matplotlib.use("Agg")
+    logger.enable("ob_analytics")
+    logger.remove()
+    logger.add(sys.stderr, level="INFO")
+
     parser = argparse.ArgumentParser(description="Bitstamp data demo")
     parser.add_argument(
         "--input",

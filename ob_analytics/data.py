@@ -1,5 +1,4 @@
-"""Data I/O and processing: Parquet/pickle serialization, zombie order
-detection, and the legacy :func:`process_data` monolithic pipeline."""
+"""Data I/O: Parquet serialization, zombie order detection, and writer registry."""
 
 from __future__ import annotations
 

@@ -11,6 +11,8 @@ for LOBSTER or other registered formats, or pass individual components
 
 ::: ob_analytics.pipeline.register_format
 
+::: ob_analytics.pipeline.list_formats
+
 ::: ob_analytics.pipeline.PipelineResult
 
 ::: ob_analytics.pipeline.Pipeline
