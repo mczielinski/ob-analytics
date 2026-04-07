@@ -3,6 +3,7 @@ name = "ob-analytics"
 version = "0.1.0"
 description = "Limit order book analytics and visualization — reconstruct trades, classify orders, and visualize market microstructure from raw exchange events."
 authors = [{ name = "mczielinski", email = "mczielinski@gmail.com" }]
+license = { text = "GPL-2.0-or-later" }
 requires-python = ">=3.11"
 readme = "README.md"
 dependencies = [

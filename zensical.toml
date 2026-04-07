@@ -22,6 +22,7 @@ nav = [
     { "Order Types" = "api/order_types.md" },
     { "Data I/O" = "api/data.md" },
     { "Visualization" = "api/visualisation.md" },
+    { "Gallery" = "api/gallery.md" },
     { "Exceptions" = "api/exceptions.md" },
     { "CLI" = "api/cli.md" },
   ] },

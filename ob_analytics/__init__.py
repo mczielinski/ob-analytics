@@ -5,15 +5,16 @@ compute depth metrics, and visualize market microstructure.
 
 Quick start::
 
-    from ob_analytics import Pipeline, BitstampFormat
+    from ob_analytics import Pipeline, sample_csv_path
 
-    result = Pipeline(format=BitstampFormat()).run("orders.csv")
+    result = Pipeline().run(sample_csv_path())
 
 The package exposes two layers:
 
 * **High-level**: :class:`Pipeline` runs the full processing
   sequence (load → match → trades → classify → depth → metrics)
-  with sensible defaults.
+  with sensible defaults.  When called without arguments it defaults
+  to the Bitstamp format.
 * **Low-level**: Individual classes and functions for step-by-step control.
   Two symmetric format implementations are provided:
 
@@ -27,6 +28,8 @@ The package exposes two layers:
 All processing stages are pluggable via :mod:`~ob_analytics.protocols`.
 """
 
+from pathlib import Path
+
 from loguru import logger
 from ob_analytics.config import PipelineConfig
 from ob_analytics.data import (
@@ -37,6 +40,7 @@ from ob_analytics.data import (
     save_data,
 )
 from ob_analytics.depth import (
+    DepthMetricsEngine,
     depth_metrics,
     filter_depth,
     get_spread,
@@ -124,7 +128,19 @@ register_writer("bitstamp", BitstampWriter)
 
 logger.disable("ob_analytics")
 
+
+def sample_csv_path() -> Path:
+    """Return the path to the bundled Bitstamp sample CSV.
+
+    The file contains ~5 hours of Bitstamp BTC/USD limit order events
+    (2015-05-01 00:00--05:00 UTC).
+    """
+    return Path(__file__).parent / "_sample_data" / "orders.csv"
+
+
 __all__ = [
+    # ── Sample data ──────────────────────────────────────────────────
+    "sample_csv_path",
     # ── Symmetric format pairs (Bitstamp ↔ LOBSTER) ───────────────────
     "BitstampFormat",
     "LobsterFormat",
@@ -154,6 +170,7 @@ __all__ = [
     "set_order_types",
     "order_book",
     # ── Depth computation ─────────────���───────────────────────────────
+    "DepthMetricsEngine",
     "price_level_volume",
     "depth_metrics",
     "filter_depth",

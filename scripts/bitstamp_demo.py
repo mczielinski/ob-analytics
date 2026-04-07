@@ -27,7 +27,10 @@ from ob_analytics.gallery import generate_gallery
 from ob_analytics.pipeline import Pipeline
 
 _DEFAULT_CSV = (
-    Path(__file__).resolve().parent.parent / "inst" / "extdata" / "orders.csv"
+    Path(__file__).resolve().parent.parent
+    / "ob_analytics"
+    / "_sample_data"
+    / "orders.csv"
 )
 
 

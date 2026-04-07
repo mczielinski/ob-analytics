@@ -1,5 +1,6 @@
 obAnalytics
 Copyright (C) 2015,2016 Philip Stubbings <phil@parasec.net>
+Copyright (C) 2024-present mczielinski (Python port)
 
                     GNU GENERAL PUBLIC LICENSE
                        Version 2, June 1991

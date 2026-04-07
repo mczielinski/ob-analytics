@@ -63,9 +63,9 @@ for a full class diagram and module map.
 ### Bitstamp (bundled sample)
 
 ```python
-from ob_analytics import Pipeline
+from ob_analytics import Pipeline, sample_csv_path
 
-result = Pipeline().run("inst/extdata/orders.csv")
+result = Pipeline().run(sample_csv_path())
 print(result.events.shape, result.trades.shape)
 ```
 
@@ -90,8 +90,7 @@ ob-analytics bitstamp-demo --input orders.csv
 ob-analytics lobster-demo /path/to/lobster_data --trading-date 2012-06-21
 ```
 
-See the [Quickstart CLI section](quickstart.md#10-command-line-interface) for
-full details.
+See the [Quickstart CLI section](quickstart.md#cli) for full details.
 
 ## Next steps
 

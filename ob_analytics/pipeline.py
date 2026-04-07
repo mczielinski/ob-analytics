@@ -6,18 +6,17 @@ pluggable components that satisfy the protocols defined in
 
 Usage with defaults (Bitstamp CSV, Needleman-Wunsch matching)::
 
-    from ob_analytics.pipeline import Pipeline
+    from ob_analytics import Pipeline, sample_csv_path
 
-    result = Pipeline().run("orders.csv")
+    result = Pipeline().run(sample_csv_path())
     print(result.events.shape, result.trades.shape)
 
 Usage with custom configuration::
 
-    from ob_analytics.pipeline import Pipeline
-    from ob_analytics.config import PipelineConfig
+    from ob_analytics import Pipeline, PipelineConfig, sample_csv_path
 
     config = PipelineConfig(match_cutoff_ms=1000, price_jump_threshold=50.0)
-    result = Pipeline(config=config).run("orders.csv")
+    result = Pipeline(config=config).run(sample_csv_path())
 
 Usage with a custom loader (any object satisfying EventLoader)::
 
@@ -25,9 +24,9 @@ Usage with a custom loader (any object satisfying EventLoader)::
 
 Usage with a Format descriptor::
 
-    from ob_analytics.bitstamp import BitstampFormat
+    from ob_analytics import Pipeline, BitstampFormat
 
-    result = Pipeline(format=BitstampFormat()).run("orders.csv")
+    result = Pipeline(format=BitstampFormat()).run("my_data.csv")
 """
 
 from __future__ import annotations

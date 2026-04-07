@@ -12,14 +12,14 @@ one-liner to writing your own exchange adapter.
 ## 1. Bitstamp — Bundled Sample Data
 
 The package ships with ~5 hours of Bitstamp BTC/USD limit order events
-(2015-05-01). This is the fastest way to see what the package does.
+(2015-05-01). Access the bundled data via `sample_csv_path()`.
 
 ### One-line pipeline
 
 ```python
-from ob_analytics import Pipeline
+from ob_analytics import Pipeline, sample_csv_path
 
-result = Pipeline().run("inst/extdata/orders.csv")
+result = Pipeline().run(sample_csv_path())
 
 print(f"Events:        {result.events.shape}")
 print(f"Trades:        {result.trades.shape}")
@@ -83,10 +83,11 @@ from ob_analytics import (
     BitstampLoader, BitstampMatcher, BitstampTradeInferrer,
     set_order_types, get_zombie_ids, price_level_volume,
     depth_metrics, order_aggressiveness, get_spread,
+    sample_csv_path,
 )
 
 loader = BitstampLoader()
-events = loader.load("inst/extdata/orders.csv")
+events = loader.load(sample_csv_path())
 
 matcher = BitstampMatcher()
 events = matcher.match(events)                       # Needleman-Wunsch fill pairing
@@ -314,7 +315,7 @@ Replace the default Needleman-Wunsch matcher:
 
 ```python
 import pandas as pd
-from ob_analytics import Pipeline, PipelineConfig
+from ob_analytics import Pipeline, PipelineConfig, sample_csv_path
 
 class SimpleTimeMatcher:
     """Match fills by closest timestamp (toy example)."""
@@ -330,7 +331,7 @@ class SimpleTimeMatcher:
         return events
 
 pipeline = Pipeline(matcher=SimpleTimeMatcher())
-result = pipeline.run("inst/extdata/orders.csv")
+result = pipeline.run(sample_csv_path())
 ```
 
 ---
@@ -432,9 +433,9 @@ pip install ob-analytics[interactive]
 ```
 
 ```python
-from ob_analytics import Pipeline, plot_price_levels, get_spread
+from ob_analytics import Pipeline, plot_price_levels, get_spread, sample_csv_path
 
-result = Pipeline().run("inst/extdata/orders.csv")
+result = Pipeline().run(sample_csv_path())
 spread = get_spread(result.depth_summary)
 
 fig = plot_price_levels(
@@ -467,16 +468,16 @@ uv run python scripts/bitstamp_demo.py --input path/to/orders.csv
 uv run python scripts/bitstamp_demo.py --output ~/Desktop/bitstamp_gallery
 ```
 
-**LOBSTER:**
+**LOBSTER** (`--trading-date` is required):
 
 ```bash
 uv run python scripts/lobster_demo.py /path/to/lobster_data --trading-date 2012-06-21
-uv run python scripts/lobster_demo.py /path/to/lobster_data --output ~/Desktop/lobster_gallery
+uv run python scripts/lobster_demo.py /path/to/lobster_data --trading-date 2012-06-21 --output ~/Desktop/lobster_gallery
 ```
 
 ---
 
-## 10. Command-Line Interface
+## 10. Command-Line Interface {#cli}
 
 Installing the package registers the `ob-analytics` command. All subcommands
 accept `-v` / `--verbose` for debug-level logging.

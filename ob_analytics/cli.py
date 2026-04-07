@@ -129,9 +129,7 @@ def _cmd_bitstamp_demo(args: argparse.Namespace) -> None:
     from ob_analytics.gallery import generate_gallery
     from ob_analytics.pipeline import Pipeline
 
-    default_csv = (
-        Path(__file__).resolve().parent.parent / "inst" / "extdata" / "orders.csv"
-    )
+    default_csv = Path(__file__).resolve().parent / "_sample_data" / "orders.csv"
 
     csv_path = Path(args.input) if args.input else default_csv
     if not csv_path.exists():
@@ -337,7 +335,7 @@ def main() -> None:
     p_bs.add_argument(
         "--input",
         default=None,
-        help="Path to Bitstamp CSV (default: inst/extdata/orders.csv)",
+        help="Path to Bitstamp CSV (default: bundled sample data)",
     )
     p_bs.add_argument(
         "-o",

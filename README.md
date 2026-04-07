@@ -2,6 +2,7 @@
 
 [![License](http://img.shields.io/badge/license-GPL%20%28%3E=%202%29-blue.svg?style=flat)](http://www.gnu.org/licenses/gpl-2.0.html)
 [![CI](https://github.com/mczielinski/ob-analytics/actions/workflows/ci.yml/badge.svg)](https://github.com/mczielinski/ob-analytics/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/mczielinski/ob-analytics/branch/main/graph/badge.svg)](https://codecov.io/gh/mczielinski/ob-analytics)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org)
 
 **Limit order book analytics and visualization for Python.**
@@ -59,6 +60,8 @@ into structured analytics:
 
 ## Installation
 
+The package is not yet published on PyPI. Install directly from GitHub:
+
 ```bash
 pip install git+https://github.com/mczielinski/ob-analytics.git
 ```
@@ -92,10 +95,13 @@ seaborn, pydantic, pyarrow, loguru.
 
 ### Pipeline (one line)
 
-```python
-from ob_analytics import Pipeline
+The default pipeline processes Bitstamp-format CSV files. A sample dataset
+(~5 hours of Bitstamp BTC/USD events) is bundled with the package.
 
-result = Pipeline().run("inst/extdata/orders.csv")
+```python
+from ob_analytics import Pipeline, sample_csv_path
+
+result = Pipeline().run(sample_csv_path())
 
 result.events       # enriched events with order types and aggressiveness
 result.trades       # inferred trades with maker/taker attribution
@@ -121,11 +127,11 @@ from ob_analytics import (
     BitstampLoader, BitstampMatcher, BitstampTradeInferrer,
     set_order_types, get_zombie_ids, price_level_volume,
     depth_metrics, order_aggressiveness, get_spread,
-    plot_price_levels, save_figure,
+    plot_price_levels, save_figure, sample_csv_path,
 )
 
 loader = BitstampLoader()
-events = loader.load("inst/extdata/orders.csv")
+events = loader.load(sample_csv_path())
 
 matcher = BitstampMatcher()
 events = matcher.match(events)
@@ -243,7 +249,9 @@ classDiagram
 
 ```
 ob_analytics/
-├── __init__.py           # Public API surface + format registration
+├── __init__.py           # Public API surface + format registration + sample_csv_path()
+├── _sample_data/         # Bundled Bitstamp sample dataset
+│   └── orders.csv
 ├── pipeline.py           # Pipeline, PipelineResult, register_format
 ├── config.py             # PipelineConfig (frozen Pydantic model)
 ├── protocols.py          # EventLoader, MatchingEngine, TradeInferrer, DataWriter, Format
@@ -280,6 +288,9 @@ ob_analytics/
 | **Bitstamp CSV** | `Pipeline()` (default) | Needleman–Wunsch | Single CSV with order events |
 | **LOBSTER** | `Pipeline(format=LobsterFormat(trading_date=...))` | Pass-through | Message file + optional orderbook; round-trip I/O via `LobsterWriter` |
 
+The bundled sample CSV was parsed from raw Bitstamp websocket logs using
+`scripts/parse_bitstamp_log.sh`.
+
 ---
 
 ## Demo Scripts
@@ -295,12 +306,11 @@ uv run python scripts/bitstamp_demo.py --input path/to/orders.csv
 uv run python scripts/bitstamp_demo.py --output ~/Desktop/bitstamp_gallery
 ```
 
-**LOBSTER** (requires locally available data):
+**LOBSTER** (requires locally available data; `--trading-date` is required):
 
 ```bash
-uv run python scripts/lobster_demo.py /path/to/lobster_data
 uv run python scripts/lobster_demo.py /path/to/lobster_data --trading-date 2012-06-21
-uv run python scripts/lobster_demo.py /path/to/lobster_data --output ~/Desktop/lobster_gallery
+uv run python scripts/lobster_demo.py /path/to/lobster_data --trading-date 2012-06-21 --output ~/Desktop/lobster_gallery
 ```
 
 ---
@@ -424,7 +434,7 @@ uv run ruff format --check ob_analytics/ tests/  # format check
 uv run ty check ob_analytics/                  # type check (Astral ty)
 ```
 
-200+ pytest tests covering loaders, matching, trades, depth, visualization,
+Pytest tests covering loaders, matching, trades, depth, visualization,
 LOBSTER paths, and pipeline integration.
 
 **CI** runs automatically on push/PR via GitHub Actions (`.github/workflows/ci.yml`):
@@ -438,11 +448,13 @@ LOBSTER paths, and pipeline integration.
 
 ## Documentation
 
-Zensical site with API reference generated from docstrings:
+API reference generated from docstrings using
+[Zensical](https://github.com/zensicalHQ/zensical) (installed as a dev
+dependency):
 
 ```bash
-zensical serve      # local preview at http://localhost:8000
-zensical build      # static site in site/
+uv run zensical serve      # local preview at http://localhost:8000
+uv run zensical build      # static site in site/
 ```
 
 ---
