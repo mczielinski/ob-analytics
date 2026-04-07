@@ -58,7 +58,7 @@ class BitstampLoader:
         ----------
         source : str or Path
             Path to a Bitstamp-format CSV with columns ``id``,
-            ``timestamp``, ``exchange.timestamp`` (or ``exchange_timestamp``),
+            ``timestamp``, ``exchange_timestamp``,
             ``price``, ``volume``, ``action``, ``direction``.
 
         Returns
@@ -72,8 +72,6 @@ class BitstampLoader:
         volume_digits = self._config.volume_decimals
 
         events = pd.read_csv(source)
-        if "exchange.timestamp" in events.columns:
-            events = events.rename(columns={"exchange.timestamp": "exchange_timestamp"})
         validate_columns(
             events,
             {
@@ -400,7 +398,7 @@ class BitstampWriter:
             {
                 "id": events["id"],
                 "timestamp": datetime_to_epoch(events["timestamp"], ts_unit),
-                "exchange.timestamp": datetime_to_epoch(
+                "exchange_timestamp": datetime_to_epoch(
                     events["exchange_timestamp"], ts_unit
                 ),
                 "price": events["price"],

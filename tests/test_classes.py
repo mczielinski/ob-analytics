@@ -33,7 +33,7 @@ class TestBitstampLoader:
             f"200,{ts3},{ts3 - 1000},237.00,20000000,changed,ask",
         ]
         csv.write_text(
-            "id,timestamp,exchange.timestamp,price,volume,action,direction\n"
+            "id,timestamp,exchange_timestamp,price,volume,action,direction\n"
             + "\n".join(rows)
             + "\n"
         )

@@ -1,4 +1,4 @@
-id,timestamp,exchange.timestamp,price,volume,action,direction
+id,timestamp,exchange_timestamp,price,volume,action,direction
 65595247,1430438404518,1430438404000,236.47,200000000,created,bid
 65595247,1430438404635,1430438404000,236.47,178855669,changed,bid
 65595187,1430438404637,1430438340000,236.47,0,deleted,ask
