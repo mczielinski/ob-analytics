@@ -55,8 +55,52 @@ flowchart LR
 ```
 
 All processing stages are pluggable via [Protocol interfaces](api/protocols.md).
-See the [GitHub README](https://github.com/mczielinski/ob-analytics#architecture)
-for a full class diagram and module map.
+
+```mermaid
+classDiagram
+    class Pipeline {
+        +config: PipelineConfig
+        +loader: EventLoader
+        +matcher: MatchingEngine
+        +trade_inferrer: TradeInferrer
+        +writer: DataWriter | None
+        +run(source) PipelineResult
+        +from_format(name, **kwargs)$ Pipeline
+    }
+
+    class Format {
+        <<abstract>>
+        +create_loader()
+        +create_matcher()
+        +create_trade_inferrer()
+        +create_writer()
+        +compute_depth()
+        +config_defaults()
+    }
+
+    class BitstampFormat
+    class LobsterFormat
+
+    class EventLoader {
+        <<Protocol>>
+        +load(source) DataFrame
+    }
+    class MatchingEngine {
+        <<Protocol>>
+        +match(events) DataFrame
+    }
+    class TradeInferrer {
+        <<Protocol>>
+        +infer_trades(events) DataFrame
+    }
+
+    Pipeline --> EventLoader
+    Pipeline --> MatchingEngine
+    Pipeline --> TradeInferrer
+    Pipeline ..> Format : optional
+    Format <|-- BitstampFormat
+    Format <|-- LobsterFormat
+```
 
 ## Quick example
 

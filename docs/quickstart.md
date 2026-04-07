@@ -429,7 +429,7 @@ All plot functions accept `backend="plotly"` for interactive figures with
 zoom, pan, and hover tooltips.
 
 ```bash
-pip install ob-analytics[interactive]
+pip install -e ".[interactive]"
 ```
 
 ```python

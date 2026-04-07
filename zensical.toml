@@ -59,6 +59,9 @@ anchor_linenums = true
 
 [project.markdown_extensions.pymdownx.inlinehilite]
 
+[project.markdown_extensions.pymdownx.snippets]
+check_paths = true
+
 [project.markdown_extensions.pymdownx.tabbed]
 alternate_style = true
 

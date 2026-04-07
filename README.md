@@ -34,7 +34,7 @@ or [LOBSTER](https://lobsterdata.com/) message and orderbook files.
 - [Configuration](#configuration)
 - [Visualization](#visualization)
 - [Extending the Package](#extending-the-package)
-- [Testing & CI](#testing--ci)
+- [Development](#development)
 - [Documentation](#documentation)
 - [License](#license)
 
@@ -80,10 +80,10 @@ cd ob-analytics
 pip install -e .
 ```
 
-Interactive Plotly figures (optional):
+Interactive Plotly figures (optional — from a local clone):
 
 ```bash
-pip install "ob-analytics[interactive]"
+pip install -e ".[interactive]"
 ```
 
 **Requires** Python 3.11+. Core dependencies: NumPy, pandas, matplotlib,
@@ -289,7 +289,19 @@ ob_analytics/
 | **LOBSTER** | `Pipeline(format=LobsterFormat(trading_date=...))` | Pass-through | Message file + optional orderbook; round-trip I/O via `LobsterWriter` |
 
 The bundled sample CSV was parsed from raw Bitstamp websocket logs using
-`scripts/parse_bitstamp_log.sh`.
+`scripts/parse_bitstamp_log.sh`. To process your own Bitstamp websocket log
+(xz-compressed, one JSON event per line with a millisecond timestamp prefix):
+
+```bash
+cd /dir/containing/your/log
+bash /path/to/scripts/parse_bitstamp_log.sh   # reads 2015-05-01.log.xz, writes orders.csv
+```
+
+Edit the script to change the input filename. The expected input format is:
+
+```
+1430524794466 order_changed {"price": "231.00", "amount": "306.59220434", "datetime": "1430524794", "id": 65714203, "order_type": 0}
+```
 
 ---
 
@@ -373,16 +385,16 @@ result = Pipeline(config=config).run("my_data.csv")
 
 Plot functions return `matplotlib.figure.Figure` by default. Pass
 `backend="plotly"` for interactive figures (requires
-`pip install ob-analytics[interactive]`). Functions never call `plt.show()`.
+`pip install -e ".[interactive]"`). Functions never call `plt.show()`.
 
 | Function | Description |
 |----------|-------------|
-| `plot_price_levels` | Depth heatmap with midprice and trade overlay |
+| `plot_price_levels` | Depth heatmap with mid-price and trade overlay |
 | `plot_trades` | Trade price step plot |
 | `plot_event_map` | Order placements/cancellations in price–time space |
 | `plot_volume_map` | Flashed-order volume |
 | `plot_current_depth` | Book snapshot (cumulative volume vs price) |
-| `plot_volume_percentiles` | Stacked liquidity in BPS bins over time |
+| `plot_volume_percentiles` | Stacked liquidity in basis-point (BPS) bins over time |
 | `plot_events_histogram` | Price or volume distribution by side |
 | `plot_time_series` | Generic step plot |
 | `plot_vpin` | VPIN with toxicity threshold |
@@ -398,6 +410,22 @@ Custom backends: `register_plot_backend(name, module_path)`.
 ---
 
 ## Extending the Package
+
+### Additional public API
+
+Beyond the pipeline and plot functions, several utilities are available for
+fine-grained work:
+
+| Function / Class | Description |
+|------------------|-------------|
+| `order_book(events, tp=...)` | Reconstruct a point-in-time order book snapshot |
+| `trade_impacts(trades)` | Aggregate trade records by taker order — price range, fills, VWAP, duration |
+| `filter_depth(depth, from_ts, to_ts)` | Slice depth data to a time window |
+| `lobster_depth_from_orderbook(events, path, config)` | Compute depth from a LOBSTER orderbook file |
+| `list_formats()` | List registered format names |
+| `list_writers()` | List registered writer names |
+
+### Custom components
 
 **Custom loader** — implement `load(source) -> DataFrame` with columns matching
 `OrderEvent`:
@@ -424,7 +452,25 @@ Pipeline(format=LobsterFormat(...), matcher=MyMatcher())
 
 ---
 
-## Testing & CI
+## Development
+
+The project uses [uv](https://github.com/astral-sh/uv) for dependency
+management. A `uv.lock` lockfile is committed for reproducible installs.
+
+```bash
+git clone https://github.com/mczielinski/ob-analytics.git
+cd ob-analytics
+uv sync --group dev --extra interactive
+```
+
+Pre-commit hooks (Ruff lint/format, `ty` type check) are configured in
+`.pre-commit-config.yaml`:
+
+```bash
+uv run pre-commit install
+```
+
+### Testing & CI
 
 ```bash
 uv run pytest tests/ -v
@@ -434,7 +480,7 @@ uv run ruff format --check ob_analytics/ tests/  # format check
 uv run ty check ob_analytics/                  # type check (Astral ty)
 ```
 
-Pytest tests covering loaders, matching, trades, depth, visualization,
+Pytest tests cover loaders, matching, trades, depth, visualization,
 LOBSTER paths, and pipeline integration.
 
 **CI** runs automatically on push/PR via GitHub Actions (`.github/workflows/ci.yml`):
