@@ -1,6 +1,6 @@
 [project]
 name = "ob-analytics"
-version = "0.1.0"
+version = "0.2.0.dev0"
 description = "Limit order book analytics and visualization — reconstruct trades, classify orders, and visualize market microstructure from raw exchange events."
 authors = [{ name = "Mark Zielinski", email = "mczielinski@gmail.com" }]
 license = { text = "GPL-2.0-or-later" }

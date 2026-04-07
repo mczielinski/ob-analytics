@@ -13,3 +13,5 @@ Pydantic models defining the data contracts at package boundaries.
 ::: ob_analytics.models.DepthLevel
 
 ::: ob_analytics.models.OrderBookSnapshot
+
+::: ob_analytics.models.KyleLambdaResult

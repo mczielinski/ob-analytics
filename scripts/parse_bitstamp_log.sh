@@ -23,7 +23,7 @@
 #           exchange_timestamp  = time (in milliseconds) when order first received at exchange.
 #           price              = price level of order event.
 #           volume             = remaining volume of order (in lowest denomination) e.g., 0.05 Bitcoin = 5000000 Satoshi.
-#           action             = created, modified, deleted.
+#           action             = created, changed, deleted.
 #           direction          = bid, ask.
 echo "id,timestamp,exchange_timestamp,price,volume,action,direction" >orders.csv
 xzcat 2015-05-01.log.xz \

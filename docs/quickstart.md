@@ -103,6 +103,24 @@ depth_summary = depth_metrics(depth)                 # best bid/ask, BPS bins
 events = order_aggressiveness(events, depth_summary)
 ```
 
+### Point-in-time order book snapshot
+
+Once you have processed events, reconstruct the full bid/ask ladder at any
+timestamp:
+
+```python
+from datetime import datetime
+from ob_analytics import order_book
+
+snapshot = order_book(events, tp=datetime(2015, 5, 1, 3, 0), max_levels=5)
+print(snapshot["timestamp"])
+print(snapshot["bids"].head())
+print(snapshot["asks"].head())
+```
+
+Use `bps_range` to filter to a basis-point band around the mid-price,
+or `max_levels` to cap the number of price levels returned.
+
 ---
 
 ## 2. Custom Bitstamp-Format CSV

@@ -68,6 +68,17 @@ classDiagram
         +from_format(name, **kwargs)$ Pipeline
     }
 
+    class PipelineConfig {
+        +price_decimals: int
+        +volume_decimals: int
+        +price_divisor: int
+        +timestamp_unit: str
+        +match_cutoff_ms: int
+        +depth_bps: int
+        +depth_bins: int
+        +vpin_bucket_volume: float | None
+    }
+
     class Format {
         <<abstract>>
         +create_loader()
@@ -93,10 +104,27 @@ classDiagram
         <<Protocol>>
         +infer_trades(events) DataFrame
     }
+    class DataWriter {
+        <<Protocol>>
+        +write(data, dest, **kwargs)
+    }
 
+    class PipelineResult {
+        +events: DataFrame
+        +trades: DataFrame
+        +depth: DataFrame
+        +depth_summary: DataFrame
+        +vpin: DataFrame | None
+        +ofi: DataFrame | None
+        +metadata: dict
+    }
+
+    Pipeline --> PipelineConfig
     Pipeline --> EventLoader
     Pipeline --> MatchingEngine
     Pipeline --> TradeInferrer
+    Pipeline --> DataWriter
+    Pipeline --> PipelineResult
     Pipeline ..> Format : optional
     Format <|-- BitstampFormat
     Format <|-- LobsterFormat
