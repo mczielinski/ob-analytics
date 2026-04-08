@@ -1,8 +1,10 @@
 """Internal utility functions for ob-analytics.
 
-Array helpers, DataFrame validation, and other shared internals.  Nothing
-in this module is part of the public API.
+Array helpers, DataFrame validation, timestamp conversions, and other
+shared internals.  Nothing in this module is part of the public API.
 """
+
+from __future__ import annotations
 
 from typing import Iterable
 
@@ -197,3 +199,93 @@ def interval_price_level_gaps(volume: np.ndarray, breaks: np.ndarray) -> np.ndar
         A NumPy array with the number of price level gaps in each interval.
     """
     return interval_sum_breaks(np.where(volume == 0, 1, 0), breaks)
+
+
+# ---------------------------------------------------------------------------
+# Timestamp conversions
+# ---------------------------------------------------------------------------
+
+_EPOCH_DIVISORS: dict[str, int] = {"ms": 1_000_000, "us": 1_000, "ns": 1}
+
+
+def epoch_to_datetime(series: pd.Series, unit: str) -> pd.Series:
+    """Convert numeric epoch timestamps to :class:`pandas.Timestamp`.
+
+    Parameters
+    ----------
+    series : pandas.Series
+        Numeric timestamps (integers or floats).
+    unit : str
+        Epoch unit — one of ``"ms"``, ``"us"``, or ``"ns"``.
+
+    Returns
+    -------
+    pandas.Series
+        Datetime series (dtype ``datetime64[ns]``).
+    """
+    return pd.to_datetime(series, unit=unit)  # ty: ignore[no-matching-overload]
+
+
+def datetime_to_epoch(series: pd.Series, unit: str) -> pd.Series:
+    """Convert a datetime :class:`pandas.Series` back to numeric epoch values.
+
+    Parameters
+    ----------
+    series : pandas.Series
+        Datetime series (dtype ``datetime64[ns]``).
+    unit : str
+        Target epoch unit — one of ``"ms"``, ``"us"``, or ``"ns"``.
+
+    Returns
+    -------
+    pandas.Series
+        Integer epoch values in the requested unit.
+    """
+    epoch = pd.Timestamp("1970-01-01")
+    delta = series - epoch
+    divisor = _EPOCH_DIVISORS[unit]
+    return (delta.astype("int64") // divisor).astype("int64")
+
+
+def seconds_after_midnight_to_datetime(
+    series: pd.Series, date: pd.Timestamp
+) -> pd.Series:
+    """Convert seconds-after-midnight floats to :class:`pandas.Timestamp`.
+
+    LOBSTER message files record timestamps as fractional seconds elapsed
+    since the start of the trading day (midnight local time).
+
+    Parameters
+    ----------
+    series : pandas.Series
+        Seconds after midnight (float).
+    date : pandas.Timestamp
+        Calendar date of the trading session.  Must be normalised to
+        midnight (``date.normalize()``).
+
+    Returns
+    -------
+    pandas.Series
+        Absolute datetime series anchored to *date*.
+    """
+    return date + pd.to_timedelta(series, unit="s")
+
+
+def datetime_to_seconds_after_midnight(
+    series: pd.Series, date: pd.Timestamp
+) -> pd.Series:
+    """Convert absolute datetimes to seconds elapsed since midnight.
+
+    Parameters
+    ----------
+    series : pandas.Series
+        Absolute datetime series.
+    date : pandas.Timestamp
+        Calendar date of the trading session (midnight anchor).
+
+    Returns
+    -------
+    pandas.Series
+        Float seconds after midnight.
+    """
+    return (series - date).dt.total_seconds()

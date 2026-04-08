@@ -5,7 +5,7 @@ saves them to disk, and produces a standalone HTML gallery page.
 
 Usage::
 
-    from ob_analytics.gallery import generate_gallery
+    from ob_analytics.visualization.gallery import generate_gallery
 
     gallery_path = generate_gallery(result, "output/gallery/")
 """
@@ -26,7 +26,7 @@ from ob_analytics.flow_toxicity import (
     compute_vpin,
     order_flow_imbalance,
 )
-from ob_analytics.order_book_reconstruction import order_book
+from ob_analytics.analytics import order_book
 from ob_analytics.pipeline import PipelineResult
 from ob_analytics.visualization import (
     plot_current_depth,

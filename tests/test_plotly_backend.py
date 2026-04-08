@@ -13,7 +13,7 @@ import pytest
 
 go = pytest.importorskip("plotly.graph_objects", reason="plotly not installed")
 
-from ob_analytics._chart_data import (  # noqa: E402
+from ob_analytics.visualization._data import (  # noqa: E402
     prepare_current_depth_data,
     prepare_event_map_data,
     prepare_events_histogram_data,
@@ -26,7 +26,7 @@ from ob_analytics._chart_data import (  # noqa: E402
     prepare_volume_percentiles_data,
     prepare_vpin_data,
 )
-from ob_analytics._plotly import (  # noqa: E402
+from ob_analytics.visualization._plotly import (  # noqa: E402
     plotly_current_depth,
     plotly_event_map,
     plotly_events_histogram,

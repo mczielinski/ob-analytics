@@ -31,7 +31,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from ob_analytics._time_utils import (
+from ob_analytics._utils import (
     datetime_to_seconds_after_midnight,
     seconds_after_midnight_to_datetime,
 )

@@ -148,24 +148,20 @@ ob_analytics/
 ├── protocols.py          # EventLoader, MatchingEngine, TradeInferrer, DataWriter, Format
 ├── models.py             # OrderEvent, Trade, DepthLevel, OrderBookSnapshot, KyleLambdaResult
 ├── exceptions.py         # ObAnalyticsError hierarchy
-├── cli.py               # CLI entry point (process, gallery, bitstamp-demo, lobster-demo)
+├── cli.py                # CLI entry point (process, gallery, bitstamp-demo, lobster-demo)
 │
-├── bitstamp.py           # BitstampLoader/Matcher/TradeInferrer/Writer/Format
+├── bitstamp.py           # BitstampLoader/Matcher/TradeInferrer/Writer/Format + NeedlemanWunschMatcher
 ├── lobster.py            # LobsterLoader/Matcher/TradeInferrer/Writer/Format
-├── analytics.py          # order_aggressiveness, trade_impacts (format-agnostic)
-├── matching_engine.py    # NeedlemanWunschMatcher (internal algorithm)
-├── order_types.py        # set_order_types (market, flashed-limit, pacman, …)
-├── order_book_reconstruction.py  # Point-in-time book snapshots
+├── analytics.py          # order_aggressiveness, trade_impacts, set_order_types, order_book
 ├── depth.py              # DepthMetricsEngine, price_level_volume, depth_metrics, get_spread
 ├── data.py               # save_data, load_data, get_zombie_ids
-├── _time_utils.py        # Shared timestamp conversion helpers (epoch ↔ datetime)
 ├── flow_toxicity.py      # compute_vpin, compute_kyle_lambda, order_flow_imbalance
+├── _utils.py             # Validation, numerics, timestamp conversion helpers
 │
-├── visualization.py      # plot_* dispatchers, PlotTheme, save_figure, backend registry
-├── gallery.py            # HTML gallery generation
-├── _matplotlib.py        # Matplotlib renderers
-├── _plotly.py            # Plotly renderers
-├── _chart_data.py        # Shared data prep for plot backends
-├── _needleman_wunsch.py  # Sequence alignment internals
-└── _utils.py             # Validation, numerics helpers
+└── visualization/        # Plotting subsystem
+    ├── __init__.py       # plot_* dispatchers, PlotTheme, save_figure, backend registry
+    ├── gallery.py        # HTML gallery generation
+    ├── _data.py          # Shared data prep for plot backends
+    ├── _matplotlib.py    # Matplotlib renderers
+    └── _plotly.py        # Plotly renderers
 ```

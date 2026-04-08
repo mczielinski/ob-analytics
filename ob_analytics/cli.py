@@ -91,7 +91,7 @@ def _cmd_gallery(args: argparse.Namespace) -> None:
     from loguru import logger
 
     from ob_analytics.data import load_data
-    from ob_analytics.gallery import generate_gallery
+    from ob_analytics.visualization.gallery import generate_gallery
     from ob_analytics.pipeline import PipelineResult
 
     data_path = Path(args.data)
@@ -126,7 +126,7 @@ def _cmd_bitstamp_demo(args: argparse.Namespace) -> None:
     from loguru import logger
 
     from ob_analytics.data import save_data
-    from ob_analytics.gallery import generate_gallery
+    from ob_analytics.visualization.gallery import generate_gallery
     from ob_analytics.pipeline import Pipeline
 
     default_csv = Path(__file__).resolve().parent / "_sample_data" / "orders.csv"
@@ -182,7 +182,7 @@ def _cmd_lobster_demo(args: argparse.Namespace) -> None:
     from loguru import logger
 
     from ob_analytics.data import save_data
-    from ob_analytics.gallery import generate_gallery
+    from ob_analytics.visualization.gallery import generate_gallery
     from ob_analytics.lobster import LobsterFormat
     from ob_analytics.pipeline import Pipeline
 
@@ -232,7 +232,7 @@ def _generate_gallery_from_result(
     """Helper to generate a gallery alongside process output."""
     from loguru import logger
 
-    from ob_analytics.gallery import generate_gallery
+    from ob_analytics.visualization.gallery import generate_gallery
 
     volume_scale = 1e-8 if fmt_name == "bitstamp" else 1.0
     gallery_dir = output / "gallery"

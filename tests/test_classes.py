@@ -13,7 +13,7 @@ from ob_analytics.config import PipelineConfig
 from ob_analytics.depth import DepthMetricsEngine
 from ob_analytics.bitstamp import BitstampLoader
 from ob_analytics.exceptions import InsufficientDataError, InvalidDataError
-from ob_analytics.matching_engine import NeedlemanWunschMatcher
+from ob_analytics.bitstamp import NeedlemanWunschMatcher
 from ob_analytics.protocols import EventLoader, MatchingEngine, TradeInferrer
 from ob_analytics.bitstamp import BitstampTradeInferrer
 

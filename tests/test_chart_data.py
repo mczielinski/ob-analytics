@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ob_analytics._chart_data import (
+from ob_analytics.visualization._data import (
     _default_start_end,
     _price_axis_breaks,
     prepare_current_depth_data,

@@ -1,9 +1,12 @@
-"""Tests for ob_analytics._needleman_wunsch."""
+"""Tests for Needleman-Wunsch alignment internals (in ob_analytics.bitstamp)."""
 
 import numpy as np
 import pandas as pd
 
-from ob_analytics._needleman_wunsch import align_sequences, create_similarity_matrix
+from ob_analytics.bitstamp import (
+    _align_sequences as align_sequences,
+    _create_similarity_matrix as create_similarity_matrix,
+)
 
 
 class TestCreateSimilarityMatrix:

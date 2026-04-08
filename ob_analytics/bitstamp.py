@@ -23,8 +23,12 @@ import pandas as pd
 
 from loguru import logger
 
-from ob_analytics._time_utils import datetime_to_epoch, epoch_to_datetime
-from ob_analytics._utils import validate_columns, validate_non_empty
+from ob_analytics._utils import (
+    datetime_to_epoch,
+    epoch_to_datetime,
+    validate_columns,
+    validate_non_empty,
+)
 from ob_analytics.config import PipelineConfig
 from ob_analytics.exceptions import MatchingError
 from ob_analytics.protocols import (
@@ -34,6 +38,222 @@ from ob_analytics.protocols import (
     MatchingEngine,
     TradeInferrer,
 )
+
+
+# ---------------------------------------------------------------------------
+# Needleman-Wunsch sequence alignment (bid/ask fill matching)
+# ---------------------------------------------------------------------------
+
+
+def _create_similarity_matrix(
+    a: pd.Series, b: pd.Series, cut_off_ms: int
+) -> np.ndarray:
+    """Create a similarity matrix based on time differences and cut-off window.
+
+    Parameters
+    ----------
+    a : pandas.Series
+        A pandas Series of timestamps.
+    b : pandas.Series
+        A pandas Series of timestamps.
+    cut_off_ms : int
+        The cut-off time window in milliseconds.
+
+    Returns
+    -------
+    numpy.ndarray
+        A NumPy array representing the similarity matrix.
+    """
+    a_ns = a.to_numpy().astype("datetime64[ns]").astype(np.float64)
+    b_ns = b.to_numpy().astype("datetime64[ns]").astype(np.float64)
+    diff_ms = np.abs(a_ns.reshape(-1, 1) - b_ns) / 1e6
+    safe_diff = np.where(diff_ms != 0, diff_ms, 1.0)
+    return np.where(diff_ms != 0, cut_off_ms / safe_diff, float(cut_off_ms))
+
+
+def _align_sequences(s_matrix: np.ndarray, gap_penalty: int = -1) -> np.ndarray:
+    """Perform Needleman-Wunsch alignment and return aligned indices.
+
+    Parameters
+    ----------
+    s_matrix : numpy.ndarray
+        The similarity matrix.
+    gap_penalty : int, optional
+        The penalty for gaps in the alignment. Default is -1.
+
+    Returns
+    -------
+    numpy.ndarray
+        A NumPy array with aligned indices from the two sequences.
+    """
+    m, n = s_matrix.shape
+    f_matrix = np.zeros((m + 1, n + 1))
+    f_matrix[0, :] = np.arange(n + 1) * gap_penalty
+    f_matrix[:, 0] = np.arange(m + 1) * gap_penalty
+
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            match = f_matrix[i - 1, j - 1] + s_matrix[i - 1, j - 1]
+            delete = f_matrix[i - 1, j] + gap_penalty
+            insert = f_matrix[i, j - 1] + gap_penalty
+            f_matrix[i, j] = max(match, delete, insert)
+
+    aligned_indices = []
+    i, j = m, n
+    while i > 0 or j > 0:
+        if (
+            i > 0
+            and j > 0
+            and f_matrix[i, j] == f_matrix[i - 1, j - 1] + s_matrix[i - 1, j - 1]
+        ):
+            aligned_indices.append((i - 1, j - 1))
+            i -= 1
+            j -= 1
+        elif i > 0 and f_matrix[i, j] == f_matrix[i - 1, j] + gap_penalty:
+            i -= 1
+        else:
+            j -= 1
+
+    return np.array(aligned_indices[::-1])
+
+
+# ---------------------------------------------------------------------------
+# NeedlemanWunschMatcher
+# ---------------------------------------------------------------------------
+
+
+class NeedlemanWunschMatcher:
+    """Match bid/ask fills using volume equality and Needleman-Wunsch alignment.
+
+    Satisfies the :class:`~ob_analytics.protocols.MatchingEngine` protocol.
+
+    Parameters
+    ----------
+    config : PipelineConfig, optional
+        Pipeline configuration.  ``match_cutoff_ms`` controls the maximum
+        time window between fills to consider a match.
+    """
+
+    def __init__(self, config: PipelineConfig | None = None) -> None:
+        self._config = config or PipelineConfig()
+
+    def match(self, events: pd.DataFrame) -> pd.DataFrame:
+        """Add a ``matching_event`` column pairing bid/ask fills.
+
+        For each unique fill volume, bid and ask fills within
+        ``match_cutoff_ms`` are paired.  When a simple closest-match is
+        ambiguous (duplicates or gaps), Needleman-Wunsch sequence
+        alignment is used as a fallback.
+
+        Parameters
+        ----------
+        events : pandas.DataFrame
+            Events with columns ``direction``, ``fill``,
+            ``original_number``, ``event_id``, ``timestamp``.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Same events with a ``matching_event`` column added.
+            Unmatched rows have ``NaN``.
+        """
+        validate_columns(
+            events,
+            {"direction", "fill", "original_number", "event_id", "timestamp"},
+            "NeedlemanWunschMatcher.match",
+        )
+        validate_non_empty(events, "NeedlemanWunschMatcher.match")
+
+        matched = self._run_matching(events)
+
+        events["matching_event"] = np.nan
+        if len(matched) == 0:
+            return events
+        matched_bids = pd.DataFrame(matched, columns=["event_id", "matching_event"])
+        matched_asks = pd.DataFrame(matched, columns=["matching_event", "event_id"])
+        events = pd.merge(events, matched_bids, on="event_id", how="left")
+        events = pd.merge(events, matched_asks, on="event_id", how="left")
+
+        events["matching_event"] = (
+            events["matching_event_y"]
+            .fillna(events["matching_event_x"])
+            .fillna(events["matching_event"])
+        )
+
+        events = events.drop(columns=["matching_event_x", "matching_event_y"])
+        return events
+
+    def _run_matching(self, events: pd.DataFrame) -> np.ndarray:
+        cut_off_td = np.timedelta64(self._config.match_cutoff_ms * 1_000_000, "ns")
+        res: list[np.ndarray] = []
+        cols = ["original_number", "event_id", "fill", "timestamp"]
+
+        bid_fills = events[(events["direction"] == "bid") & (events["fill"] != 0)][cols]
+        ask_fills = events[(events["direction"] == "ask") & (events["fill"] != 0)][cols]
+
+        def fill_id(src: pd.DataFrame, dst: pd.DataFrame) -> pd.DataFrame:
+            id_fills = src[src["fill"].isin(dst["fill"])]
+            return id_fills.sort_values(
+                by=["fill", "timestamp"], ascending=[False, True], kind="stable"
+            )
+
+        id_bid_fills = fill_id(bid_fills, ask_fills)
+        id_ask_fills = fill_id(ask_fills, bid_fills)
+
+        for volume in id_bid_fills["fill"].unique():
+            bids = id_bid_fills[id_bid_fills["fill"] == volume]
+            asks = id_ask_fills[id_ask_fills["fill"] == volume]
+
+            time_deltas = (
+                bids["timestamp"].to_numpy(dtype="datetime64[ns]").reshape(-1, 1)
+                - asks["timestamp"].to_numpy(dtype="datetime64[ns]")
+            ).astype("timedelta64[ns]")
+
+            if len(asks) == 1:
+                time_deltas = time_deltas.reshape(-1, 1)
+
+            closest_ask_indices = np.argmin(np.abs(time_deltas), axis=1)
+            ask_event_ids = asks["event_id"].values[closest_ask_indices]
+
+            mask = (
+                np.abs(time_deltas[np.arange(len(bids)), closest_ask_indices])
+                <= cut_off_td
+            )
+            ask_event_ids = np.where(mask, ask_event_ids, np.nan)
+
+            if not any(pd.isna(ask_event_ids)) and len(ask_event_ids) == len(
+                set(ask_event_ids)
+            ):
+                matches = np.column_stack((bids["event_id"], ask_event_ids))
+                res.extend(matches)
+            else:
+                similarity_matrix = _create_similarity_matrix(
+                    bids["timestamp"], asks["timestamp"], self._config.match_cutoff_ms
+                )
+                aligned_indices = _align_sequences(similarity_matrix)
+                bid_ts = bids["timestamp"].to_numpy(dtype="datetime64[ns]")
+                ask_ts = asks["timestamp"].to_numpy(dtype="datetime64[ns]")
+                matched_indices = aligned_indices[
+                    np.abs(
+                        bid_ts[aligned_indices[:, 0]] - ask_ts[aligned_indices[:, 1]]
+                    )
+                    <= cut_off_td
+                ]
+                res.extend(
+                    np.column_stack(
+                        (
+                            bids["event_id"].values[matched_indices[:, 0]],
+                            asks["event_id"].values[matched_indices[:, 1]],
+                        )
+                    )
+                )
+
+        return np.array(res, dtype=int)
+
+
+# ---------------------------------------------------------------------------
+# BitstampLoader
+# ---------------------------------------------------------------------------
 
 
 class BitstampLoader:
@@ -158,10 +378,9 @@ class BitstampLoader:
 class BitstampMatcher:
     """Matching engine for Bitstamp event data.
 
-    Thin wrapper around :class:`~ob_analytics.matching_engine.NeedlemanWunschMatcher`
-    providing a stable, exchange-named API entry point.  Symmetric with
-    :class:`~ob_analytics.lobster.LobsterMatcher`.  The Needleman-Wunsch
-    algorithm is an implementation detail.
+    Thin wrapper around :class:`NeedlemanWunschMatcher` providing a stable,
+    exchange-named API entry point.  Symmetric with
+    :class:`~ob_analytics.lobster.LobsterMatcher`.
 
     Satisfies the :class:`~ob_analytics.protocols.MatchingEngine` protocol.
 
@@ -172,8 +391,6 @@ class BitstampMatcher:
     """
 
     def __init__(self, config: PipelineConfig | None = None) -> None:
-        from ob_analytics.matching_engine import NeedlemanWunschMatcher
-
         self._matcher = NeedlemanWunschMatcher(config)
 
     def match(self, events: pd.DataFrame) -> pd.DataFrame:

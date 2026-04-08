@@ -20,7 +20,7 @@ import matplotlib
 from loguru import logger
 
 from ob_analytics.data import save_data
-from ob_analytics.gallery import generate_gallery
+from ob_analytics.visualization.gallery import generate_gallery
 from ob_analytics.lobster import LobsterFormat
 from ob_analytics.pipeline import Pipeline
 

@@ -7,7 +7,7 @@ using the same timestamps, directions, fill volumes, and expected outputs.
 import numpy as np
 import pandas as pd
 
-from ob_analytics.matching_engine import NeedlemanWunschMatcher
+from ob_analytics.bitstamp import NeedlemanWunschMatcher
 from ob_analytics.config import PipelineConfig
 
 

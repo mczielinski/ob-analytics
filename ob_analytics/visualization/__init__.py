@@ -18,7 +18,7 @@ from typing import Any
 import pandas as pd
 from matplotlib.axes import Axes
 
-from ob_analytics._chart_data import (
+from ob_analytics.visualization._data import (
     prepare_current_depth_data,
     prepare_event_map_data,
     prepare_events_histogram_data,
@@ -34,9 +34,7 @@ from ob_analytics._chart_data import (
     prepare_vpin_data,
 )
 
-# Re-export theme infrastructure from the matplotlib backend so
-# existing ``from ob_analytics.visualization import PlotTheme`` keeps working.
-from ob_analytics._matplotlib import (  # noqa: F401 – re-exports
+from ob_analytics.visualization._matplotlib import (  # noqa: F401 – re-exports
     PlotTheme,
     _apply_theme,
     _create_axes,
@@ -51,8 +49,8 @@ from ob_analytics._matplotlib import (  # noqa: F401 – re-exports
 # ---------------------------------------------------------------------------
 
 _BACKENDS: dict[str, str] = {
-    "matplotlib": "ob_analytics._matplotlib",
-    "plotly": "ob_analytics._plotly",
+    "matplotlib": "ob_analytics.visualization._matplotlib",
+    "plotly": "ob_analytics.visualization._plotly",
 }
 
 # Mapping from public function name → backend function name pattern.

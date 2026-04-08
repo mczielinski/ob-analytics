@@ -42,7 +42,7 @@ from ob_analytics.depth import depth_metrics, price_level_volume
 from ob_analytics.analytics import order_aggressiveness
 from ob_analytics.bitstamp import BitstampLoader, BitstampMatcher, BitstampTradeInferrer
 from ob_analytics.flow_toxicity import compute_vpin, order_flow_imbalance
-from ob_analytics.order_types import set_order_types
+from ob_analytics.analytics import set_order_types
 from loguru import logger
 
 from ob_analytics.protocols import (

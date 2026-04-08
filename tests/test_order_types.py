@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from ob_analytics.order_types import set_order_types
+from ob_analytics.analytics import set_order_types
 
 
 def _events(*rows):
