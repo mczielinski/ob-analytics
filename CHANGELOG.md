@@ -27,10 +27,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **LOBSTER stack** — `LobsterLoader`, `LobsterMatcher`, `LobsterTradeInferrer`,
   `LobsterWriter`, `LobsterFormat`, orderbook-backed depth.
 - **`ob_analytics.analytics`** — format-agnostic analytics module with
-  `order_aggressiveness()` and `trade_impacts()`.
-- **`ob_analytics._time_utils`** — internal shared timestamp conversion helpers:
-  `epoch_to_datetime`, `datetime_to_epoch`,
-  `seconds_after_midnight_to_datetime`, `datetime_to_seconds_after_midnight`.
+  `order_aggressiveness()`, `trade_impacts()`, `set_order_types()`, and
+  `order_book()`.
+- **Timestamp conversion helpers** — `epoch_to_datetime`, `datetime_to_epoch`,
+  `seconds_after_midnight_to_datetime`, `datetime_to_seconds_after_midnight`
+  (in `_utils.py`).
 - **`register_format()` / `register_writer()`** — built-in `"bitstamp"` and
   `"lobster"` registrations; `Pipeline.from_format(name, **kwargs)`.
 - **`list_formats()`** in `pipeline.py` — returns sorted list of registered
@@ -50,7 +51,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Visualization** — `PlotTheme`, `save_figure`, Matplotlib + optional Plotly
   (`backend="plotly"`), `register_plot_backend()`, LOBSTER-specific plots
   (`plot_hidden_executions`, `plot_trading_halts`).
-- **`gallery.generate_gallery`** — HTML gallery of standard plots.
+- **`visualization.gallery.generate_gallery`** — HTML gallery of standard plots.
 - **Parquet I/O** — `load_data()` / `save_data()` via pyarrow.
 - **Test suite** — pytest tests (unit, integration, LOBSTER, visualization).
 - **Docs** — [Zensical](https://github.com/zensicalHQ/zensical) site with API
@@ -94,8 +95,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Internal modules renamed with underscore prefix: `auxiliary.py` →
   `_utils.py`, `needleman_wunsch.py` → `_needleman_wunsch.py`.
 - `_validation.py` merged into `_utils.py`.
+- `_time_utils.py` merged into `_utils.py`.
+- `matching_engine.py` and `_needleman_wunsch.py` merged into `bitstamp.py`.
+- `order_types.py` and `order_book_reconstruction.py` merged into `analytics.py`.
+- Visualization files (`visualization.py`, `_chart_data.py`, `_matplotlib.py`,
+  `_plotly.py`, `gallery.py`) moved into `visualization/` subpackage.
 - Docs nav: `api/event_processing.md` → `api/bitstamp.md`; `api/analytics.md`
-  added; `api/trades.md` removed (module deleted).
+  added; `api/trades.md`, `api/order_types.md`, `api/order_book.md`, and
+  `api/matching_engine.md` merged into their parent module pages.
 
 ### Removed
 
@@ -105,7 +112,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `process_data()` — legacy monolithic Bitstamp-only pipeline.
 - `plot_price_levels_faster()` — legacy alias for `plot_price_levels()`.
 - `NeedlemanWunschMatcher` removed from public `__all__` (still importable
-  directly via `from ob_analytics.matching_engine import NeedlemanWunschMatcher`).
+  directly via `from ob_analytics.bitstamp import NeedlemanWunschMatcher`).
 - `register_writer("lobster", LobsterWriter)` registration removed from
   `__init__.py` — it was always broken (required `trading_date`). A clear
   `ValueError` is now raised by `save_data(fmt="lobster", ...)`.
@@ -117,7 +124,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- `datetime_to_epoch` in `_time_utils.py` uses `.astype("int64")` instead of
+- `datetime_to_epoch` in `_utils.py` uses `.astype("int64")` instead of
   deprecated `.view("int64")`.
 - **BUG-1**: Hardcoded local file paths in debug CSV exports.
 - **BUG-2**: `depth_metrics` state array overflow for prices > $9,999.99 — now

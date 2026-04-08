@@ -16,3 +16,7 @@ Bitstamp-specific components: event loading, matching, trade inference, and writ
 ::: ob_analytics.bitstamp.BitstampWriter
 
 ::: ob_analytics.bitstamp.BitstampFormat
+
+## Matching Internals
+
+::: ob_analytics.bitstamp.NeedlemanWunschMatcher
