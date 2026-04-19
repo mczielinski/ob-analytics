@@ -372,12 +372,15 @@ class LobsterTradeInferrer:
         For each execution, look for the most recent type-1 submission
         on the **opposite** side at a marketable price.
         """
-        submissions = all_events[all_events["raw_event_type"] == 1].copy()
+        submissions = all_events[all_events["raw_event_type"] == 1]
 
         if submissions.empty:
             return pd.array([pd.NA] * len(execs), dtype="Int64")
 
         result = pd.array([pd.NA] * len(execs), dtype="Int64")
+
+        # Position lookup keyed by event_id -- avoids per-row linear scans.
+        eid_to_pos = pd.Series(np.arange(len(execs)), index=execs["event_id"])
 
         for side, opp_side in [("bid", "ask"), ("ask", "bid")]:
             side_execs = execs[execs["direction"] == side]
@@ -407,11 +410,14 @@ class LobsterTradeInferrer:
             else:
                 marketable = merged["sub_price"] >= merged["price"]
 
-            for idx, row in merged[marketable].iterrows():
-                exec_mask = execs["event_id"] == row["event_id"]
-                pos = exec_mask.to_numpy().nonzero()[0]
-                if len(pos) > 0:
-                    result[pos[0]] = int(row["taker_eid"])
+            matched = merged.loc[marketable, ["event_id", "taker_eid"]].dropna(
+                subset=["taker_eid"]
+            )
+            if matched.empty:
+                continue
+
+            positions = eid_to_pos.loc[matched["event_id"].to_numpy()].to_numpy()
+            result[positions] = matched["taker_eid"].astype("int64").to_numpy()
 
         return result
 
