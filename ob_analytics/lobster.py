@@ -534,34 +534,53 @@ class LobsterWriter:
     def _reconstruct_orderbook(
         self, events: pd.DataFrame, num_levels: int
     ) -> pd.DataFrame:
-        """Rebuild the orderbook state at each event timestamp."""
+        """Rebuild the orderbook state at each event timestamp.
+
+        The book is stateful so the per-event update is inherently
+        sequential, but DataFrame row access is the dominant cost.  We
+        extract every column we need to a numpy array up front and
+        iterate via indexed access, which is roughly an order of
+        magnitude faster than ``DataFrame.iterrows()``.
+        """
         book: dict[str, dict[float, float]] = {"bid": {}, "ask": {}}
         rows: list[list[float]] = []
 
-        for _, ev in events.iterrows():
-            action = str(ev["action"])
-            direction = str(ev["direction"])
-            price = float(ev["price"])
-            volume = float(ev["volume"])
-            ev["id"]
+        n = len(events)
+        actions = events["action"].astype(str).to_numpy()
+        directions = events["direction"].astype(str).to_numpy()
+        prices = events["price"].to_numpy(dtype=np.float64)
+        volumes = events["volume"].to_numpy(dtype=np.float64)
+        if "raw_event_type" in events.columns:
+            raw_types = events["raw_event_type"].to_numpy(dtype=np.float64)
+        else:
+            raw_types = np.full(n, np.nan, dtype=np.float64)
+
+        # Membership test against a set is O(1); covers both int and
+        # float scalars because hash(2) == hash(2.0).
+        decrement_raw_types = {2, 4, 5}
+
+        for i in range(n):
+            action = actions[i]
+            direction = directions[i]
+            price = prices[i]
+            volume = volumes[i]
+            side = book[direction]
 
             if action == "created":
-                book[direction][price] = book[direction].get(price, 0) + volume
+                side[price] = side.get(price, 0.0) + volume
             elif action == "deleted":
-                if price in book[direction]:
-                    book[direction][price] -= volume
-                    if book[direction][price] <= 1e-12:
-                        del book[direction][price]
+                if price in side:
+                    side[price] -= volume
+                    if side[price] <= 1e-12:
+                        del side[price]
             elif action == "changed":
-                raw_type = ev.get("raw_event_type")
-                if raw_type in (2, 4, 5):
-                    if price in book[direction]:
-                        book[direction][price] -= volume
-                        if book[direction][price] <= 1e-12:
-                            del book[direction][price]
+                raw_type = raw_types[i]
+                if raw_type in decrement_raw_types and price in side:
+                    side[price] -= volume
+                    if side[price] <= 1e-12:
+                        del side[price]
 
-            row = self._snapshot_row(book, num_levels)
-            rows.append(row)
+            rows.append(self._snapshot_row(book, num_levels))
 
         cols: list[str] = []
         for i in range(1, num_levels + 1):
