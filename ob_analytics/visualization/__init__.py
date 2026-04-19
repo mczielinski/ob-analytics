@@ -18,7 +18,8 @@ from typing import Any
 import pandas as pd
 from matplotlib.axes import Axes
 
-from ob_analytics.visualization._data import (
+from ob_analytics.visualization._data import (  # noqa: F401 – re-exports
+    infer_volume_scale,
     prepare_current_depth_data,
     prepare_event_map_data,
     prepare_events_histogram_data,
@@ -214,7 +215,7 @@ def plot_price_levels(
     price_to: float | None = None,
     volume_from: float | None = None,
     volume_to: float | None = None,
-    volume_scale: float = 1,
+    volume_scale: float | None = None,
     price_by: float | None = None,
     ax: Axes | None = None,
     backend: str = "matplotlib",
@@ -248,8 +249,9 @@ def plot_price_levels(
         Minimum volume for filtering depth data. Default is None.
     volume_to : float, optional
         Maximum volume for filtering depth data. Default is None.
-    volume_scale : float, optional
-        Scaling factor for volume. Default is 1.
+    volume_scale : float or None, optional
+        Multiplicative scaling factor for volume. ``None`` (default)
+        auto-infers a power-of-10 scale via :func:`infer_volume_scale`.
     price_by : float, optional
         Step size for y-axis ticks (price levels). Default is None.
     ax : matplotlib.axes.Axes, optional
@@ -292,7 +294,7 @@ def plot_event_map(
     price_to: float | None = None,
     volume_from: float | None = None,
     volume_to: float | None = None,
-    volume_scale: float = 1,
+    volume_scale: float | None = None,
     ax: Axes | None = None,
     backend: str = "matplotlib",
 ) -> Any:
@@ -315,8 +317,9 @@ def plot_event_map(
         Minimum volume for filtering events. Default is None.
     volume_to : float, optional
         Maximum volume for filtering events. Default is None.
-    volume_scale : float, optional
-        Scaling factor for volume. Default is 1.
+    volume_scale : float or None, optional
+        Multiplicative scaling factor for volume. ``None`` (default)
+        auto-infers a power-of-10 scale via :func:`infer_volume_scale`.
     ax : matplotlib.axes.Axes, optional
         Axes to draw on.  A new figure is created when *None*.
         Ignored when *backend* is not ``"matplotlib"``.
@@ -353,7 +356,7 @@ def plot_volume_map(
     price_to: float | None = None,
     volume_from: float | None = None,
     volume_to: float | None = None,
-    volume_scale: float = 1,
+    volume_scale: float | None = None,
     log_scale: bool = False,
     ax: Axes | None = None,
     backend: str = "matplotlib",
@@ -381,8 +384,9 @@ def plot_volume_map(
         Minimum volume for filtering events. Default is None.
     volume_to : float, optional
         Maximum volume for filtering events. Default is None.
-    volume_scale : float, optional
-        Scaling factor for volume. Default is 1.
+    volume_scale : float or None, optional
+        Multiplicative scaling factor for volume. ``None`` (default)
+        auto-infers a power-of-10 scale via :func:`infer_volume_scale`.
     log_scale : bool, optional
         Whether to use a logarithmic scale on the y-axis. Default is False.
     ax : matplotlib.axes.Axes, optional
@@ -418,7 +422,7 @@ def plot_volume_map(
 
 def plot_current_depth(
     order_book: dict,
-    volume_scale: float = 1,
+    volume_scale: float | None = None,
     show_quantiles: bool = True,
     show_volume: bool = True,
     ax: Axes | None = None,
@@ -431,8 +435,9 @@ def plot_current_depth(
     ----------
     order_book : dict
         Dictionary containing 'bids', 'asks', and 'timestamp'.
-    volume_scale : float, optional
-        Scaling factor for volume. Default is 1.
+    volume_scale : float or None, optional
+        Multiplicative scaling factor for volume. ``None`` (default)
+        auto-infers a power-of-10 scale via :func:`infer_volume_scale`.
     show_quantiles : bool, optional
         Whether to highlight highest 1%% volume with vertical lines. Default is True.
     show_volume : bool, optional
@@ -460,7 +465,7 @@ def plot_volume_percentiles(
     depth_summary: pd.DataFrame,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
-    volume_scale: float = 1,
+    volume_scale: float | None = None,
     perc_line: bool = True,
     side_line: bool = True,
     ax: Axes | None = None,
@@ -477,8 +482,9 @@ def plot_volume_percentiles(
         Start time for the plot. Default is None.
     end_time : pandas.Timestamp, optional
         End time for the plot. Default is None.
-    volume_scale : float, optional
-        Scaling factor for volume. Default is 1.
+    volume_scale : float or None, optional
+        Multiplicative scaling factor for volume. ``None`` (default)
+        auto-infers a power-of-10 scale via :func:`infer_volume_scale`.
     perc_line : bool, optional
         Whether to draw lines between percentiles. Default is True.
     side_line : bool, optional

@@ -7,6 +7,7 @@ DataFrames into plain dicts consumable by **any** rendering backend
 
 from __future__ import annotations
 
+import math
 from datetime import timedelta
 from typing import Any
 
@@ -20,6 +21,36 @@ from ob_analytics.depth import filter_depth
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def infer_volume_scale(volumes: pd.Series | np.ndarray) -> float:
+    """Pick a power-of-10 scale so the median volume lands in [0.1, 100].
+
+    Useful for plot axes: integer-satoshi or share volumes (median ~1e8)
+    benefit from being scaled down to single-digit numbers, while
+    fractional FX volumes (median ~1e-4) benefit from being scaled up.
+
+    Parameters
+    ----------
+    volumes : pandas.Series or numpy.ndarray
+        Vector of positive volume samples.  Empty / non-positive medians
+        fall back to a scale of ``1.0``.
+
+    Returns
+    -------
+    float
+        Multiplicative scale factor.  Multiplying *volumes* by the
+        returned value yields a series whose median is in the
+        ``[0.1, 100)`` range.
+    """
+    arr = np.asarray(volumes, dtype=float)
+    if arr.size == 0:
+        return 1.0
+    median = float(np.nanmedian(arr))
+    if not np.isfinite(median) or median <= 0:
+        return 1.0
+    exp = math.floor(math.log10(median))
+    return 10.0 ** (-exp)
 
 
 def _default_start_end(
@@ -106,11 +137,18 @@ def prepare_price_levels_data(
     price_to: float | None = None,
     volume_from: float | None = None,
     volume_to: float | None = None,
-    volume_scale: float = 1,
+    volume_scale: float | None = None,
     price_by: float | None = None,
 ) -> dict[str, Any]:
-    """Prepare data for the price-level depth heatmap."""
+    """Prepare data for the price-level depth heatmap.
+
+    When ``volume_scale`` is ``None`` (the default), an order-of-magnitude
+    scale is auto-inferred from the input depth via
+    :func:`infer_volume_scale`.
+    """
     depth_local = depth.copy()
+    if volume_scale is None:
+        volume_scale = infer_volume_scale(depth_local["volume"])
     depth_local["volume"] = depth_local["volume"] * volume_scale
 
     if start_time is None:
@@ -188,9 +226,13 @@ def prepare_event_map_data(
     price_to: float | None = None,
     volume_from: float | None = None,
     volume_to: float | None = None,
-    volume_scale: float = 1,
+    volume_scale: float | None = None,
 ) -> dict[str, Any]:
-    """Prepare data for a limit-order event map."""
+    """Prepare data for a limit-order event map.
+
+    ``volume_scale=None`` auto-infers a power-of-10 scale from the
+    filtered events.
+    """
     start_time, end_time = _default_start_end(events, start_time, end_time)
 
     events = events[
@@ -199,6 +241,8 @@ def prepare_event_map_data(
         & ((events["type"] == "flashed-limit") | (events["type"] == "resting-limit"))
     ].copy()
 
+    if volume_scale is None:
+        volume_scale = infer_volume_scale(events["volume"])
     events["volume"] *= volume_scale
 
     if volume_from is not None:
@@ -236,10 +280,14 @@ def prepare_volume_map_data(
     price_to: float | None = None,
     volume_from: float | None = None,
     volume_to: float | None = None,
-    volume_scale: float = 1,
+    volume_scale: float | None = None,
     log_scale: bool = False,
 ) -> dict[str, Any]:
-    """Prepare data for a volume map of flashed limit orders."""
+    """Prepare data for a volume map of flashed limit orders.
+
+    ``volume_scale=None`` auto-infers a power-of-10 scale from the
+    incoming events.
+    """
     if event_type is None:
         event_type = ["flashed-limit"]
     if action not in ("deleted", "created"):
@@ -248,6 +296,8 @@ def prepare_volume_map_data(
     start_time, end_time = _default_start_end(events, start_time, end_time)
 
     events = events.copy()
+    if volume_scale is None:
+        volume_scale = infer_volume_scale(events["volume"])
     events["volume"] *= volume_scale
 
     mask = (
@@ -274,11 +324,15 @@ def prepare_volume_map_data(
 
 def prepare_current_depth_data(
     order_book: dict,
-    volume_scale: float = 1,
+    volume_scale: float | None = None,
     show_quantiles: bool = True,
     show_volume: bool = True,
 ) -> dict[str, Any]:
-    """Prepare data for order book depth snapshot."""
+    """Prepare data for order book depth snapshot.
+
+    ``volume_scale=None`` auto-infers a power-of-10 scale from the
+    combined bid/ask volumes.
+    """
     bids = reverse_matrix(order_book["bids"])
     asks = reverse_matrix(order_book["asks"])
 
@@ -294,6 +348,9 @@ def prepare_current_depth_data(
     ask_liq = asks["liquidity"].to_numpy()
     bid_vol = bids["volume"].to_numpy()
     ask_vol = asks["volume"].to_numpy()
+
+    if volume_scale is None:
+        volume_scale = infer_volume_scale(np.concatenate([bid_vol, ask_vol]))
 
     x = np.concatenate([bid_prices, [bid_prices[-1]], [ask_prices[0]], ask_prices])
     y1 = np.concatenate([bid_liq, [0], [0], ask_liq]) * volume_scale
@@ -328,11 +385,15 @@ def prepare_volume_percentiles_data(
     depth_summary: pd.DataFrame,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
-    volume_scale: float = 1,
+    volume_scale: float | None = None,
     perc_line: bool = True,
     side_line: bool = True,
 ) -> dict[str, Any]:
-    """Prepare data for volume-percentile stacked area chart."""
+    """Prepare data for volume-percentile stacked area chart.
+
+    ``volume_scale=None`` auto-infers a power-of-10 scale from the
+    aggregated bin volumes (after the time-window filter is applied).
+    """
     if start_time is None:
         start_time = depth_summary["timestamp"].iloc[0]
     if end_time is None:
@@ -369,6 +430,11 @@ def prepare_volume_percentiles_data(
 
     max_ask = ob[ask_names_fmt].sum(axis=1).max()
     max_bid = ob[bid_names_fmt].sum(axis=1).max()
+
+    if volume_scale is None:
+        volume_scale = infer_volume_scale(
+            ob[bid_names_fmt + ask_names_fmt].to_numpy().ravel()
+        )
 
     melted_asks = ob.melt(
         id_vars="timestamp",

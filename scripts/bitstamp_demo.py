@@ -111,7 +111,6 @@ def main() -> None:
     gallery_path = generate_gallery(
         result,
         gallery_dir,
-        volume_scale=1e-8,
         title=f"Bitstamp ({csv_path.name}) -- ob-analytics",
     )
     logger.info("Gallery: {}", gallery_path)

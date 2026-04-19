@@ -29,6 +29,7 @@ from ob_analytics.flow_toxicity import (
 from ob_analytics.analytics import order_book
 from ob_analytics.pipeline import PipelineResult
 from ob_analytics.visualization import (
+    infer_volume_scale,
     plot_current_depth,
     plot_event_map,
     plot_events_histogram,
@@ -93,7 +94,7 @@ def _auto_time_slices(
 def default_specs(
     result: PipelineResult,
     *,
-    volume_scale: float = 1.0,
+    volume_scale: float | None = None,
     vpin_bucket_volume: float | None = None,
 ) -> list[PlotSpec]:
     """Build the default set of plot specifications from pipeline results.
@@ -102,8 +103,11 @@ def default_specs(
     ----------
     result : PipelineResult
         Pipeline output.
-    volume_scale : float
-        Scaling factor for volume display.
+    volume_scale : float or None
+        Scaling factor for volume display.  ``None`` (default)
+        auto-infers a power-of-10 scale from ``result.events['volume']``
+        via :func:`infer_volume_scale` so the gallery works without
+        per-asset tuning.
     vpin_bucket_volume : float or None
         Bucket volume for VPIN computation.  When None, VPIN/OFI/Kyle
         plots are skipped.
@@ -116,6 +120,9 @@ def default_specs(
     trades = result.trades
     depth = result.depth
     depth_summary = result.depth_summary
+
+    if volume_scale is None:
+        volume_scale = infer_volume_scale(events["volume"])
 
     spread = get_spread(depth_summary)
     slices = _auto_time_slices(events)
@@ -341,7 +348,7 @@ def generate_gallery(
     output_dir: str | Path,
     *,
     specs: list[PlotSpec] | None = None,
-    volume_scale: float = 1.0,
+    volume_scale: float | None = None,
     vpin_bucket_volume: float | None = None,
     backends: list[str] | None = None,
     title: str = "ob-analytics Plot Gallery",
@@ -356,8 +363,9 @@ def generate_gallery(
         Root directory for gallery output.
     specs : list of PlotSpec, optional
         Plot specifications.  Defaults to :func:`default_specs`.
-    volume_scale : float
-        Volume display scale factor.
+    volume_scale : float or None
+        Volume display scale factor.  ``None`` (default) auto-infers a
+        sensible power-of-10 scale from the events.
     vpin_bucket_volume : float or None
         Bucket volume for VPIN.  None skips flow toxicity plots.
     backends : list of str, optional

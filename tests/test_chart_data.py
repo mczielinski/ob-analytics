@@ -7,6 +7,7 @@ import pytest
 from ob_analytics.visualization._data import (
     _default_start_end,
     _price_axis_breaks,
+    infer_volume_scale,
     prepare_current_depth_data,
     prepare_event_map_data,
     prepare_events_histogram_data,
@@ -105,6 +106,40 @@ class TestDefaultStartEnd:
         start, end = _default_start_end(sample_trades, explicit_start, explicit_end)
         assert start == explicit_start
         assert end == explicit_end
+
+
+class TestInferVolumeScale:
+    def test_already_in_target_range_returns_one(self) -> None:
+        assert infer_volume_scale(np.array([1.0, 2.0, 3.0, 5.0])) == 1.0
+
+    def test_satoshi_scale_volumes(self) -> None:
+        # Bitstamp-style volumes (≈1e8 satoshis): scale should bring
+        # the median into [0.1, 100).
+        scale = infer_volume_scale(np.array([1e8, 2e8, 5e8]))
+        scaled_median = float(np.median(np.array([1e8, 2e8, 5e8]) * scale))
+        assert 0.1 <= scaled_median < 100
+        assert scale == 1e-8
+
+    def test_fractional_volumes_scaled_up(self) -> None:
+        scale = infer_volume_scale(np.array([1e-4, 5e-4, 9e-4]))
+        scaled_median = float(np.median(np.array([1e-4, 5e-4, 9e-4]) * scale))
+        assert 0.1 <= scaled_median < 100
+        assert scale == 1e4
+
+    def test_empty_input_returns_one(self) -> None:
+        assert infer_volume_scale(np.array([])) == 1.0
+
+    def test_nonpositive_median_returns_one(self) -> None:
+        assert infer_volume_scale(np.array([0.0, 0.0, 0.0, 1.0])) == 1.0
+
+    def test_nan_handled(self) -> None:
+        # nanmedian ignores NaNs.
+        scale = infer_volume_scale(np.array([np.nan, 100.0, 100.0]))
+        assert scale == 0.01
+
+    def test_accepts_pandas_series(self) -> None:
+        s = pd.Series([1e6, 2e6, 3e6])
+        assert infer_volume_scale(s) == 1e-6
 
 
 class TestPriceAxisBreaks:

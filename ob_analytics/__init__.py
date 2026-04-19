@@ -102,6 +102,7 @@ from ob_analytics.protocols import (
 from ob_analytics.visualization import (
     PlotTheme,
     get_plot_theme,
+    infer_volume_scale,
     plot_current_depth,
     plot_event_map,
     plot_events_histogram,
@@ -209,6 +210,7 @@ __all__ = [
     "set_plot_theme",
     "get_plot_theme",
     "save_figure",
+    "infer_volume_scale",
     "register_plot_backend",
     "plot_time_series",
     "plot_trades",

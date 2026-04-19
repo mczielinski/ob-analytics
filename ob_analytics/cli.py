@@ -168,7 +168,6 @@ def _cmd_bitstamp_demo(args: argparse.Namespace) -> None:
     gallery_path = generate_gallery(
         result,
         gallery_dir,
-        volume_scale=1e-8,
         title=f"Bitstamp ({csv_path.name}) -- ob-analytics",
     )
     logger.info("Gallery: {}", gallery_path.resolve())
@@ -218,7 +217,6 @@ def _cmd_lobster_demo(args: argparse.Namespace) -> None:
     gallery_path = generate_gallery(
         result,
         gallery_dir,
-        volume_scale=1.0,
         title=f"LOBSTER {Path(source).name} ({trading_date}) -- ob-analytics",
     )
     logger.info("Gallery: {}", gallery_path.resolve())
@@ -229,17 +227,20 @@ def _cmd_lobster_demo(args: argparse.Namespace) -> None:
 def _generate_gallery_from_result(
     result: Any, output: Path, fmt_name: str, source: str
 ) -> None:
-    """Helper to generate a gallery alongside process output."""
+    """Helper to generate a gallery alongside process output.
+
+    ``volume_scale`` is intentionally left to the gallery's auto-inference;
+    the previous ``1e-8`` / ``1.0`` hard-codes leaked Bitstamp/LOBSTER
+    conventions into the CLI.
+    """
     from loguru import logger
 
     from ob_analytics.visualization.gallery import generate_gallery
 
-    volume_scale = 1e-8 if fmt_name == "bitstamp" else 1.0
     gallery_dir = output / "gallery"
     gallery_path = generate_gallery(
         result,
         gallery_dir,
-        volume_scale=volume_scale,
         title=f"{fmt_name} ({Path(source).name}) -- ob-analytics",
     )
     logger.info("Gallery: {}", gallery_path.resolve())
@@ -317,8 +318,11 @@ def main() -> None:
     p_gallery.add_argument(
         "--volume-scale",
         type=float,
-        default=1.0,
-        help="Volume display scale factor (default: 1.0)",
+        default=None,
+        help=(
+            "Volume display scale factor. Omit to auto-infer a "
+            "power-of-10 scale from the data."
+        ),
     )
     p_gallery.add_argument(
         "--title",
