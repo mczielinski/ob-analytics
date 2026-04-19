@@ -344,7 +344,7 @@ def default_specs(
 
 
 def generate_gallery(
-    result: PipelineResult,
+    result: PipelineResult | None,
     output_dir: str | Path,
     *,
     specs: list[PlotSpec] | None = None,
@@ -357,8 +357,9 @@ def generate_gallery(
 
     Parameters
     ----------
-    result : PipelineResult
-        Pipeline output.
+    result : PipelineResult or None
+        Pipeline output.  May be ``None`` when *specs* is provided
+        explicitly (the result is only consulted by :func:`default_specs`).
     output_dir : str or Path
         Root directory for gallery output.
     specs : list of PlotSpec, optional
@@ -369,8 +370,9 @@ def generate_gallery(
     vpin_bucket_volume : float or None
         Bucket volume for VPIN.  None skips flow toxicity plots.
     backends : list of str, optional
-        Backends to render.  Defaults to ``["matplotlib"]``, with
-        ``"plotly"`` added if plotly is installed.
+        Backends to render.  Defaults to ``["plotly", "matplotlib"]``
+        when ``plotly`` is installed (Plotly is rendered as the primary
+        column), or ``["matplotlib"]`` otherwise.
     title : str
         Gallery page title.
 
@@ -378,6 +380,13 @@ def generate_gallery(
     -------
     Path
         Path to the generated HTML gallery file.
+
+    Notes
+    -----
+    When ``backends`` is left at the default and ``plotly`` is installed,
+    the gallery renders Plotly **first** (the primary/larger column in the
+    HTML layout) so the interactive view is front-and-center.  Pass
+    ``backends=["matplotlib"]`` to opt out.
     """
     import matplotlib
 
@@ -388,101 +397,137 @@ def generate_gallery(
     out.mkdir(parents=True, exist_ok=True)
 
     if backends is None:
-        backends = ["matplotlib"]
         try:
             import plotly  # noqa: F401
 
-            backends.append("plotly")
+            backends = ["plotly", "matplotlib"]
         except ImportError:
-            pass
+            backends = ["matplotlib"]
 
     if specs is None:
+        if result is None:
+            raise ValueError(
+                "generate_gallery requires either `result` or explicit `specs`."
+            )
         specs = default_specs(
             result,
             volume_scale=volume_scale,
             vpin_bucket_volume=vpin_bucket_volume,
         )
 
-    mpl_dir = out / "matplotlib"
-    plotly_dir = out / "plotly"
+    backend_dirs = {b: out / b for b in backends}
 
-    generated: list[tuple[str, str, bool]] = []  # (name, title, has_plotly)
+    # generated[i] = (name, title, {backend: success})
+    generated: list[tuple[str, str, dict[str, bool]]] = []
 
     for spec in specs:
         logger.info("Gallery: generating {}", spec.name)
-        has_plotly = False
+        statuses: dict[str, bool] = {}
 
-        # Matplotlib
-        if "matplotlib" in backends:
-            mpl_dir.mkdir(parents=True, exist_ok=True)
+        for backend in backends:
+            backend_dirs[backend].mkdir(parents=True, exist_ok=True)
             try:
-                fig = spec.plot_fn(**spec.kwargs, backend="matplotlib")
-                save_figure(fig, str(mpl_dir / f"{spec.name}.png"))
-                plt.close(fig)
+                fig = spec.plot_fn(**spec.kwargs, backend=backend)
             except Exception as e:
-                logger.warning("Gallery: matplotlib {} failed: {}", spec.name, e)
+                logger.warning("Gallery: {} {} failed: {}", backend, spec.name, e)
+                statuses[backend] = False
+                continue
 
-        # Plotly
-        if "plotly" in backends:
-            plotly_dir.mkdir(parents=True, exist_ok=True)
             try:
-                fig = spec.plot_fn(**spec.kwargs, backend="plotly")
-                fig.write_html(
-                    str(plotly_dir / f"{spec.name}.html"),
-                    include_plotlyjs="cdn",
+                if backend == "matplotlib":
+                    save_figure(fig, str(backend_dirs[backend] / f"{spec.name}.png"))
+                    plt.close(fig)
+                elif backend == "plotly":
+                    fig.write_html(
+                        str(backend_dirs[backend] / f"{spec.name}.html"),
+                        include_plotlyjs="cdn",
+                    )
+                else:  # custom backend: best-effort
+                    save_figure(fig, str(backend_dirs[backend] / f"{spec.name}.png"))
+                statuses[backend] = True
+            except Exception as e:
+                logger.warning(
+                    "Gallery: persisting {} {} failed: {}", backend, spec.name, e
                 )
-                has_plotly = True
-            except Exception as e:
-                logger.warning("Gallery: plotly {} failed: {}", spec.name, e)
+                statuses[backend] = False
 
-        generated.append((spec.name, spec.title, has_plotly))
+        generated.append((spec.name, spec.title, statuses))
 
     html_path = out / "gallery.html"
-    _write_gallery_html(html_path, generated, title, "plotly" in backends)
+    _write_gallery_html(html_path, generated, title, backends)
     logger.info("Gallery: {} plots saved to {}", len(generated), out)
     return html_path
 
 
+_BACKEND_LABELS = {"plotly": "Plotly", "matplotlib": "Matplotlib"}
+_PANEL_CLASSES = {"plotly": "plotly-panel", "matplotlib": "mpl-panel"}
+
+
+def _render_panel(
+    backend: str,
+    name: str,
+    rendered: bool,
+    role: str,
+    escaped_title: str,
+) -> str:
+    """Render one ``<div class="panel">`` for a given backend.
+
+    *role* is ``"primary"`` for the first listed backend (larger column)
+    and ``"secondary"`` for the rest.
+    """
+    label = _BACKEND_LABELS.get(backend, backend.capitalize())
+    panel_cls = _PANEL_CLASSES.get(backend, f"{backend}-panel")
+    classes = f"panel {panel_cls} panel-{role}"
+
+    if not rendered:
+        body = '<p class="na">Not available</p>'
+    elif backend == "plotly":
+        body = (
+            f'<iframe src="plotly/{name}.html" loading="lazy" '
+            f'title="{escaped_title} (Plotly)"></iframe>'
+        )
+    elif backend == "matplotlib":
+        body = (
+            f'<img src="matplotlib/{name}.png" alt="{escaped_title}" '
+            f'onclick="zoom(this.src)">'
+        )
+    else:
+        body = (
+            f'<img src="{backend}/{name}.png" alt="{escaped_title}" '
+            f'onclick="zoom(this.src)">'
+        )
+
+    return f'<div class="{classes}"><h3>{label}</h3>{body}</div>'
+
+
 def _write_gallery_html(
     path: Path,
-    plots: list[tuple[str, str, bool]],
+    plots: list[tuple[str, str, dict[str, bool]]],
     title: str,
-    has_plotly_backend: bool,
+    backends: list[str],
 ) -> None:
-    """Write the standalone HTML gallery page."""
-    cards = []
-    for name, plot_title, has_plotly in plots:
-        mpl_img = f"matplotlib/{name}.png"
-        plotly_src = f"plotly/{name}.html" if has_plotly else ""
+    """Write the standalone HTML gallery page.
+
+    The first entry in *backends* is rendered as the primary (wider)
+    panel; subsequent backends become secondary panels.
+    """
+    cards: list[str] = []
+    for name, plot_title, statuses in plots:
         escaped_title = html_mod.escape(plot_title)
-
-        plotly_panel = ""
-        if has_plotly_backend:
-            if has_plotly:
-                plotly_panel = (
-                    f'<div class="panel plotly-panel">'
-                    f"<h3>Plotly</h3>"
-                    f'<iframe src="{plotly_src}" loading="lazy"></iframe>'
-                    f"</div>"
-                )
-            else:
-                plotly_panel = (
-                    '<div class="panel plotly-panel">'
-                    "<h3>Plotly</h3>"
-                    '<p class="na">Not available</p>'
-                    "</div>"
-                )
-
+        panels = [
+            _render_panel(
+                backend,
+                name,
+                statuses.get(backend, False),
+                "primary" if i == 0 else "secondary",
+                escaped_title,
+            )
+            for i, backend in enumerate(backends)
+        ]
         cards.append(
-            f'<div class="card">'
+            '<div class="card">'
             f'<div class="card-title">{escaped_title}</div>'
-            f'<div class="card-body">'
-            f'<div class="panel mpl-panel">'
-            f"<h3>Matplotlib</h3>"
-            f'<img src="{mpl_img}" alt="{escaped_title}" onclick="zoom(this.src)">'
-            f"</div>"
-            f"{plotly_panel}"
-            f"</div></div>"
+            '<div class="card-body">' + "".join(panels) + "</div></div>"
         )
 
     escaped_title = html_mod.escape(title)
@@ -504,14 +549,18 @@ h1{{text-align:center;margin-bottom:24px;color:#e94560}}
 .card-title{{background:#0f3460;padding:12px 20px;font-size:1.1em;
   font-weight:600;color:#e94560}}
 .card-body{{display:flex;gap:0}}
-.panel{{flex:1;text-align:center;padding:10px}}
+.panel{{text-align:center;padding:10px;min-width:0}}
+.panel-primary{{flex:2}}
+.panel-secondary{{flex:1}}
 .panel+.panel{{border-left:1px solid #333}}
 .panel h3{{margin-bottom:8px;font-size:.85em;text-transform:uppercase;letter-spacing:1px}}
 .mpl-panel h3{{color:#81c784}}
 .plotly-panel h3{{color:#ffb74d}}
 .panel img{{max-width:100%;height:auto;border-radius:4px;cursor:pointer;transition:transform .2s}}
 .panel img:hover{{transform:scale(1.02)}}
-.panel iframe{{width:100%;height:450px;border:none;border-radius:4px;background:#1e1e1e}}
+.panel iframe{{width:100%;border:none;border-radius:4px;background:#1e1e1e}}
+.panel-primary iframe{{height:600px}}
+.panel-secondary iframe{{height:300px}}
 .panel .na{{color:#666;font-style:italic;margin-top:40px}}
 .overlay{{display:none;position:fixed;top:0;left:0;width:100%;height:100%;
   background:rgba(0,0,0,.9);z-index:1000;justify-content:center;
