@@ -142,3 +142,52 @@ class TestEventIdPassthrough:
         result = engine.compute(depth)
         assert "event_id" not in result.columns
         assert "timestamp" in result.columns
+
+
+class TestBpsBinVolumes:
+    """Lock in the BPS-bin volume aggregation used by the depth summary."""
+
+    def test_ask_volumes_bucketed_by_bps(self):
+        """Two ask levels at +25bps and +50bps should land in their bins."""
+        # Use a coarse grid: bps=100, bins=5 → 100bps-wide buckets.
+        from ob_analytics.config import PipelineConfig
+
+        cfg = PipelineConfig(depth_bps=100, depth_bins=5, price_decimals=2)
+        engine = DepthMetricsEngine(cfg)
+        out = np.zeros(engine._row_len)
+
+        # best ask at 10000 (=$100.00 in cents)
+        engine.update(10000, 4.0, 1, out)
+        # additional ask 100bps higher = 10100
+        engine.update(10100, 7.0, 1, out)
+
+        # Column layout: best_bid_price, best_bid_vol, bid_vol... (5),
+        #                best_ask_price, best_ask_vol, ask_vol... (5)
+        ask_offset = 2 + 5
+        # best_ask volume is in best_ask_vol slot (offset+1), bin volumes
+        # follow.  The first bin (0-100bps) covers the best ask itself.
+        assert out[ask_offset] == 10000
+        assert out[ask_offset + 1] == 4.0
+        # The first 100bps window contains both the best (4.0) and the
+        # +100bps level (7.0)
+        bins = out[ask_offset + 2 : ask_offset + 2 + 5]
+        assert bins.sum() == 11.0
+        # The +100bps level falls in the first bin in this layout
+        assert bins[0] > 0
+
+    def test_bid_volumes_bucketed_by_bps(self):
+        from ob_analytics.config import PipelineConfig
+
+        cfg = PipelineConfig(depth_bps=100, depth_bins=5, price_decimals=2)
+        engine = DepthMetricsEngine(cfg)
+        out = np.zeros(engine._row_len)
+
+        engine.update(10000, 4.0, 0, out)  # best bid
+        engine.update(9900, 7.0, 0, out)  # 100bps below
+        engine.update(9000, 1.0, 0, out)  # 1000bps below — outside 5*100bps window
+
+        assert out[0] == 10000
+        assert out[1] == 4.0
+        bins = out[2 : 2 + 5]
+        # 4.0 (best) + 7.0 (+100bps) inside window; 1.0 outside
+        assert bins.sum() == 11.0

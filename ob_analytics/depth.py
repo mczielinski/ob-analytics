@@ -188,12 +188,23 @@ class DepthMetricsEngine:
         out[offset] = self._best_ask
         out[offset + 1] = self._best_ask_vol
 
-        end_value = round((1 + self._bps * self._bins * 0.0001) * self._best_ask) + 1
-        price_range = np.arange(self._best_ask, end_value + 1, 1, dtype=int)
-        vol_array = np.array(
-            [self._ask_levels.get(p, 0) for p in price_range], dtype=np.float64
-        )
-        breaks = self._compute_breaks(len(price_range))
+        # Window covered by the BPS bins, mirroring the legacy code:
+        # arange(best_ask, end_value + 1) inclusive of best_ask..end_value.
+        best = self._best_ask
+        end_value = round((1 + self._bps * self._bins * 0.0001) * best) + 1
+        range_len = end_value - best + 1
+
+        # Iterate over active price levels (typically O(few hundred))
+        # instead of scanning every integer price in the window
+        # (potentially O(price * bps * bins)), which avoids the dict
+        # lookup per-tick that dominated the old hot loop.
+        vol_array = np.zeros(range_len, dtype=np.float64)
+        for p, v in self._ask_levels.items():
+            idx = p - best
+            if 0 <= idx < range_len:
+                vol_array[idx] = v
+
+        breaks = self._compute_breaks(range_len)
         out[offset + 2 : offset + 2 + self._bins] = interval_sum_breaks(
             vol_array, breaks
         )
@@ -237,12 +248,19 @@ class DepthMetricsEngine:
         out[0] = self._best_bid
         out[1] = self._best_bid_vol
 
-        end_value = round((1 - self._bps * self._bins * 0.0001) * self._best_bid)
-        price_range = np.arange(self._best_bid, end_value - 1, -1, dtype=int)
-        vol_array = np.array(
-            [self._bid_levels.get(p, 0) for p in price_range], dtype=np.float64
-        )
-        breaks = self._compute_breaks(len(price_range))
+        # Window mirrors arange(best_bid, end_value - 1, -1): inclusive
+        # of best_bid down to end_value (descending).
+        best = self._best_bid
+        end_value = round((1 - self._bps * self._bins * 0.0001) * best)
+        range_len = best - end_value + 1
+
+        vol_array = np.zeros(range_len, dtype=np.float64)
+        for p, v in self._bid_levels.items():
+            idx = best - p
+            if 0 <= idx < range_len:
+                vol_array[idx] = v
+
+        breaks = self._compute_breaks(range_len)
         out[2 : 2 + self._bins] = interval_sum_breaks(vol_array, breaks)
 
     # ── Helpers ───────────────────────────────────────────────────────
