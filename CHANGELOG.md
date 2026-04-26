@@ -15,9 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `PipelineResult` output (events, trades, depth, depth_summary, optional
   VPIN/OFI, metadata).
 - **`PipelineConfig`** — frozen Pydantic model centralising all tunable
-  parameters (`price_decimals`, `match_cutoff_ms`, `depth_bps`,
-  `price_divisor`, `timestamp_unit`, `skip_zombie_detection`,
-  `vpin_bucket_volume`, …).
+  parameters (`price_decimals`, `volume_decimals`, `price_divisor`,
+  `timestamp_unit`, `match_cutoff_ms`, `price_jump_threshold`, `depth_bps`,
+  `depth_bins`, `zombie_offset_seconds`, `skip_zombie_detection`,
+  `vpin_bucket_volume`).
 - **Protocol interfaces** — `EventLoader`, `MatchingEngine`, `TradeInferrer`,
   `DataWriter`, and abstract `Format` base for venue-specific bundles.
 - **`ob_analytics.bitstamp`** — complete Bitstamp-specific stack:

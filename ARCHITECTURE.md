@@ -55,6 +55,7 @@ classDiagram
         +price_jump_threshold: float
         +depth_bps: int
         +depth_bins: int
+        +zombie_offset_seconds: int
         +skip_zombie_detection: bool
         +vpin_bucket_volume: float | None
     }

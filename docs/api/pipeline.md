@@ -9,10 +9,12 @@ classify → depth → metrics → (optional VPIN/OFI). Use `Pipeline(format=...
 for LOBSTER or other registered formats, or pass individual components
 (`loader=`, `matcher=`, `trade_inferrer=`) to override specific stages.
 
-::: ob_analytics.pipeline.register_format
-
-::: ob_analytics.pipeline.list_formats
+::: ob_analytics.pipeline.Pipeline
 
 ::: ob_analytics.pipeline.PipelineResult
 
-::: ob_analytics.pipeline.Pipeline
+## Format registry
+
+::: ob_analytics.pipeline.register_format
+
+::: ob_analytics.pipeline.list_formats

@@ -18,6 +18,8 @@ or `backend="plotly"` for interactive figures. Plotly requires
 
 ::: ob_analytics.visualization.save_figure
 
+::: ob_analytics.visualization.infer_volume_scale
+
 ## Backend Registration
 
 ::: ob_analytics.visualization.register_plot_backend

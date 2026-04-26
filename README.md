@@ -118,8 +118,10 @@ uv run ty check ob_analytics/
 CI runs automatically on push/PR via GitHub Actions — lint, type check,
 pytest on Python 3.11/3.12/3.13, and Codecov coverage upload.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for design decisions, the module map,
-and class diagrams.
+See [ARCHITECTURE.md](ARCHITECTURE.md) (or the rendered
+[Architecture page](https://mczielinski.github.io/ob-analytics/architecture/))
+for design decisions, the module map, and class diagrams.
+See [CHANGELOG.md](CHANGELOG.md) for the release history.
 
 ---
 
