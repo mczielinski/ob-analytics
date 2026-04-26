@@ -4,12 +4,23 @@ title: Quickstart
 
 # Quickstart
 
-This guide covers the main ways to use ob-analytics, from the simplest
-one-liner to writing your own exchange adapter.
+This page covers everyday usage. Skim the [Walkthrough](#walkthrough) to get
+something running on the bundled sample data, then jump to the recipe you
+need.
+
+| If you want to… | Go to |
+|-----------------|-------|
+| Run the pipeline on bundled data and plot it | [Walkthrough](#walkthrough) |
+| Use your own Bitstamp CSV or another instrument | [Working with your data](#working-with-your-data) |
+| Process LOBSTER message + orderbook files | [LOBSTER](#lobster) |
+| Plug in your own loader, matcher, or format | [Custom components](#custom-components) |
+| Theme plots, save artefacts, or use Plotly | [Customising the output](#customising-the-output) |
+| Compute VPIN / Kyle's λ / OFI | [Flow toxicity](#flow-toxicity) |
+| Run from a shell | [Command-line interface](#cli) |
 
 ---
 
-## 1. Bitstamp — Bundled Sample Data
+## Walkthrough
 
 The package ships with ~5 hours of Bitstamp BTC/USD limit order events
 (2015-05-01). Access the bundled data via `sample_csv_path()`.
@@ -34,7 +45,7 @@ Depth:         (49376, 5)
 Depth summary: (49216, 46)
 ```
 
-### Visualize
+### Visualise
 
 ```python
 from ob_analytics import get_spread, plot_price_levels, plot_trades, save_figure
@@ -48,14 +59,12 @@ fig = plot_trades(result.trades)
 save_figure(fig, "trades.png")
 ```
 
-### Subplot composition
-
 All plot functions accept an `ax` parameter for multi-panel figures:
 
 ```python
 import matplotlib.pyplot as plt
-from ob_analytics import plot_trades, plot_events_histogram
 import pandas as pd
+from ob_analytics import plot_trades, plot_events_histogram
 
 t3 = pd.Timestamp("2015-05-01 03:00:00")
 t4 = pd.Timestamp("2015-05-01 04:00:00")
@@ -123,7 +132,9 @@ or `max_levels` to cap the number of price levels returned.
 
 ---
 
-## 2. Custom Bitstamp-Format CSV
+## Working with your data
+
+### Custom Bitstamp-format CSV
 
 Point the pipeline at your own data and adjust `PipelineConfig` for
 the instrument:
@@ -139,7 +150,7 @@ config = PipelineConfig(
 result = Pipeline(config=config).run("my_bitstamp_data.csv")
 ```
 
-### Configuration for different instruments
+#### Configuration presets
 
 === "BTC/USD (default)"
 
@@ -183,35 +194,24 @@ result = Pipeline(config=config).run("my_bitstamp_data.csv")
     )
     ```
 
----
+### LOBSTER
 
-## 3. LOBSTER (built-in)
-
-[LOBSTER](https://lobsterdata.com/) message and orderbook files are supported
-out of the box via `LobsterLoader`, `LobsterMatcher`, `LobsterTradeInferrer`,
-`LobsterWriter`, and `LobsterFormat`. Depth is read directly from the official
-orderbook file (ground-truth) when present.
+[LOBSTER](https://lobsterdata.com/) message and orderbook files are
+supported out of the box via `LobsterLoader`, `LobsterMatcher`,
+`LobsterTradeInferrer`, `LobsterWriter`, and `LobsterFormat`. Depth is
+read from the official orderbook file (ground-truth) when present.
 
 ```python
 from ob_analytics import LobsterFormat, Pipeline
 
-pipeline = Pipeline(format=LobsterFormat(trading_date="2012-06-21"))
-result = pipeline.run("/path/to/extracted_lobster_folder")
-```
+result = Pipeline(format=LobsterFormat(trading_date="2012-06-21")).run(
+    "/path/to/extracted_lobster_folder"
+)
 
-Equivalent shorthand via the format registry:
-
-```python
+# equivalent shorthand via the format registry:
 result = Pipeline.from_format("lobster", trading_date="2012-06-21").run(
     "/path/to/extracted_lobster_folder"
 )
-```
-
-The included `scripts/lobster_demo.py` runs the pipeline on local data,
-saves Parquet, verifies round-trip I/O, and builds an HTML plot gallery:
-
-```bash
-uv run python scripts/lobster_demo.py /path/to/lobster_data --trading-date 2012-06-21
 ```
 
 !!! note
@@ -222,11 +222,16 @@ uv run python scripts/lobster_demo.py /path/to/lobster_data --trading-date 2012-
 
 ---
 
-## 4. Custom Exchange Adapter
+## Custom components
+
+Every pipeline stage is a [Protocol](api/protocols.md). Implement the right
+method signature on any object and pass it in — no inheritance required.
+
+### Custom event loader
 
 For non-Bitstamp, non-LOBSTER data, implement the `EventLoader` protocol.
-Your class needs a `load` method returning a DataFrame with the columns
-that subsequent stages consume:
+Your `load` method must return a DataFrame with the columns subsequent
+stages consume:
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -242,10 +247,9 @@ that subsequent stages consume:
 | `fill` | float | Volume executed by this event (0 for non-fills) |
 
 [`OrderEvent`](api/models.md#ob_analytics.models.OrderEvent) is the
-Pydantic-level contract; the DataFrame columns above are what the pipeline
-actually reads.
+Pydantic-level contract; the columns above are what the pipeline reads.
 
-### Example: generic CSV loader
+#### Generic CSV loader
 
 ```python
 from pathlib import Path
@@ -280,11 +284,10 @@ class GenericCsvLoader:
         ...
         return df
 
-pipeline = Pipeline(loader=GenericCsvLoader())
-result = pipeline.run("my_exchange_data.csv")
+result = Pipeline(loader=GenericCsvLoader()).run("my_exchange_data.csv")
 ```
 
-### Example: cryptofeed adapter (conceptual)
+#### Cryptofeed L3 adapter (conceptual)
 
 ```python
 from pathlib import Path
@@ -341,16 +344,14 @@ class CryptofeedLoader:
 ```
 
 !!! note
-    This is a conceptual example. A production adapter would handle
-    out-of-order messages, reconnection gaps, and exchange-specific quirks.
-    The key point: **any object with a `load` method returning the right
-    DataFrame works** — no subclassing required.
+    A production adapter would handle out-of-order messages, reconnection
+    gaps, and exchange-specific quirks. The key point: any object with a
+    `load` method returning the right DataFrame works — no subclassing
+    required.
 
----
+### Custom matcher
 
-## 5. Custom Matching Algorithm
-
-Replace the default Needleman-Wunsch matcher:
+Replace the default Needleman–Wunsch matcher:
 
 ```python
 import pandas as pd
@@ -369,13 +370,18 @@ class SimpleTimeMatcher:
         ...
         return events
 
-pipeline = Pipeline(matcher=SimpleTimeMatcher())
-result = pipeline.run(sample_csv_path())
+result = Pipeline(matcher=SimpleTimeMatcher()).run(sample_csv_path())
 ```
+
+The same pattern applies to `trade_inferrer=` (any object with
+`infer_trades(events) -> DataFrame`) and to bundling everything in a
+`Format` subclass — see [Protocols](api/protocols.md).
 
 ---
 
-## 6. Theming and Saving
+## Customising the output
+
+### Themes and saving
 
 ```python
 from ob_analytics import PlotTheme, set_plot_theme, plot_trades, save_figure
@@ -391,9 +397,7 @@ fig = plot_trades(result.trades)
 save_figure(fig, "trades_hires.png", dpi=300)
 ```
 
----
-
-## 7. Serialization
+### Serialisation
 
 Pipeline outputs are dict-of-DataFrames; `save_data` writes one Parquet
 file per key, `load_data` reads them back.
@@ -414,65 +418,19 @@ save_data(
 data = load_data("output/my_analysis")
 ```
 
-For LOBSTER round-trip output (back to message + orderbook CSVs), use
-`LobsterFormat.create_writer(config).write(data, dest)` or pass the writer
-explicitly: `save_data(data, dest, writer=LobsterWriter(config))`.
-
----
-
-## 8. Flow Toxicity
-
-Detect informed trading and measure price impact. These work on any trades
-DataFrame.
-
-### VPIN
+For LOBSTER round-trip output (back to message + orderbook CSVs), use the
+format-provided writer:
 
 ```python
-from ob_analytics import compute_vpin, plot_vpin, save_figure
-
-vpin = compute_vpin(result.trades, bucket_volume=5.0)
-fig = plot_vpin(vpin, threshold=0.7)
-save_figure(fig, "vpin.png")
+from ob_analytics import LobsterFormat, save_data
+writer = LobsterFormat(trading_date="2012-06-21").create_writer(config)
+save_data(data, "round_trip/", writer=writer)
 ```
 
-### Kyle's Lambda
-
-```python
-from ob_analytics import compute_kyle_lambda, plot_kyle_lambda
-
-kyle = compute_kyle_lambda(result.trades, window="5min")
-print(f"λ={kyle.lambda_:.6f}, t={kyle.t_stat:.2f}, R²={kyle.r_squared:.3f}")
-
-fig = plot_kyle_lambda(kyle)
-save_figure(fig, "kyle_lambda.png")
-```
-
-### Order Flow Imbalance
-
-```python
-from ob_analytics import order_flow_imbalance, plot_order_flow_imbalance
-
-ofi = order_flow_imbalance(result.trades, window="1min")
-fig = plot_order_flow_imbalance(ofi, trades=result.trades)
-save_figure(fig, "ofi.png")
-```
-
-### Pipeline integration (opt-in)
-
-```python
-from ob_analytics import Pipeline, PipelineConfig
-
-config = PipelineConfig(vpin_bucket_volume=5.0)
-result = Pipeline(config=config).run("orders.csv")
-# result.vpin and result.ofi are automatically populated
-```
-
----
-
-## 9. Interactive Visualizations (Plotly)
+### Plotly (interactive)
 
 All plot functions accept `backend="plotly"` for interactive figures with
-zoom, pan, and hover tooltips.
+zoom, pan, and hover tooltips. Plotly is an optional dependency:
 
 ```bash
 pip install -e ".[interactive]"
@@ -501,54 +459,62 @@ register_plot_backend("bokeh", "my_package._bokeh_backend")
 
 ---
 
-## 10. Demo Scripts
+## Flow toxicity
 
-Both demo scripts run the full pipeline, save Parquet output, verify round-trip
-I/O, and generate an HTML plot gallery.
+Detect informed trading and measure price impact. These work on any trades
+DataFrame.
 
-**Bitstamp:**
+### VPIN
 
-```bash
-uv run python scripts/bitstamp_demo.py
-uv run python scripts/bitstamp_demo.py --input path/to/orders.csv
-uv run python scripts/bitstamp_demo.py --output ~/Desktop/bitstamp_gallery
+```python
+from ob_analytics import compute_vpin, plot_vpin, save_figure
+
+vpin = compute_vpin(result.trades, bucket_volume=5.0)
+fig = plot_vpin(vpin, threshold=0.7)
+save_figure(fig, "vpin.png")
 ```
 
-**LOBSTER** (`--trading-date` is required):
+### Kyle's lambda
 
-```bash
-uv run python scripts/lobster_demo.py /path/to/lobster_data --trading-date 2012-06-21
-uv run python scripts/lobster_demo.py /path/to/lobster_data --trading-date 2012-06-21 --output ~/Desktop/lobster_gallery
+```python
+from ob_analytics import compute_kyle_lambda, plot_kyle_lambda
+
+kyle = compute_kyle_lambda(result.trades, window="5min")
+print(f"λ={kyle.lambda_:.6f}, t={kyle.t_stat:.2f}, R²={kyle.r_squared:.3f}")
+
+fig = plot_kyle_lambda(kyle)
+save_figure(fig, "kyle_lambda.png")
+```
+
+### Order flow imbalance
+
+```python
+from ob_analytics import order_flow_imbalance, plot_order_flow_imbalance
+
+ofi = order_flow_imbalance(result.trades, window="1min")
+fig = plot_order_flow_imbalance(ofi, trades=result.trades)
+save_figure(fig, "ofi.png")
+```
+
+### Pipeline integration (opt-in)
+
+Set `vpin_bucket_volume` on the config and the pipeline will compute
+VPIN and OFI as part of the standard run:
+
+```python
+from ob_analytics import Pipeline, PipelineConfig
+
+config = PipelineConfig(vpin_bucket_volume=5.0)
+result = Pipeline(config=config).run("orders.csv")
+# result.vpin and result.ofi are automatically populated
 ```
 
 ---
 
-## 11. Command-Line Interface {#cli}
+## Command-line interface {#cli}
 
-Installing the package registers the `ob-analytics` command. All subcommands
-accept `-v` / `--verbose` for debug-level logging.
-
-### Process a data source
-
-```bash
-ob-analytics process orders.csv -o results/
-ob-analytics process data/ --format lobster --trading-date 2012-06-21
-ob-analytics process orders.csv -o results/ --gallery
-```
-
-### Generate a gallery from saved Parquet
-
-```bash
-ob-analytics gallery results/parquet/ -o my_gallery/
-ob-analytics gallery results/parquet/ --volume-scale 1e-8 --title "My Analysis"
-```
-
-### Run demos
-
-```bash
-ob-analytics bitstamp-demo --input orders.csv -o demo_out/
-ob-analytics lobster-demo /path/to/lobster_data --trading-date 2012-06-21 -o demo_out/
-```
+Installing the package registers the `ob-analytics` command. All
+subcommands accept `-v` / `--verbose` for debug-level logging.
 
 | Subcommand | Description |
 |------------|-------------|
@@ -557,12 +523,32 @@ ob-analytics lobster-demo /path/to/lobster_data --trading-date 2012-06-21 -o dem
 | `bitstamp-demo` | Run the Bitstamp demo (pipeline + gallery) |
 | `lobster-demo` | Run the LOBSTER demo on local data (pipeline + gallery) |
 
+```bash
+# Process a data source
+ob-analytics process orders.csv -o results/
+ob-analytics process data/ --format lobster --trading-date 2012-06-21
+ob-analytics process orders.csv -o results/ --gallery
+
+# Build a gallery from saved Parquet
+ob-analytics gallery results/parquet/ -o my_gallery/
+ob-analytics gallery results/parquet/ --volume-scale 1e-8 --title "My Analysis"
+
+# End-to-end demos (pipeline + gallery)
+ob-analytics bitstamp-demo --input orders.csv -o demo_out/
+ob-analytics lobster-demo /path/to/lobster_data --trading-date 2012-06-21 -o demo_out/
+```
+
+The `bitstamp-demo` and `lobster-demo` subcommands are equivalent to
+running `scripts/bitstamp_demo.py` / `scripts/lobster_demo.py` from a
+clone — both run the pipeline, save Parquet, verify round-trip I/O, and
+build an HTML plot gallery.
+
 ---
 
 ## Next steps
 
-- [API Reference](api/pipeline.md) for detailed documentation
-- [CLI Reference](api/cli.md) for CLI API docs
-- [Changelog](changelog.md) for recent changes
-- [GitHub README](https://github.com/mczielinski/ob-analytics) for
-  architecture diagrams
+- [Architecture](architecture.md) — pipeline stages, design decisions, class diagram, module map
+- [Glossary](glossary.md) — market-microstructure terms used throughout
+- [API Reference](api/pipeline.md) — detailed module documentation
+- [CLI Reference](api/cli.md) — argparse-level CLI docs
+- [Changelog](changelog.md) — recent changes

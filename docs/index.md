@@ -96,6 +96,7 @@ See the [Quickstart CLI section](quickstart.md#cli) for full details.
 
 - **[Quickstart](quickstart.md)** — full walkthrough with visualization, configuration, custom loaders, and CLI
 - **[Architecture](architecture.md)** — pipeline stages, design decisions, class diagram, module map
+- **[Glossary](glossary.md)** — market-microstructure terms used throughout
 - **[API Reference](api/pipeline.md)** — detailed documentation for every module
 - **[CLI Reference](api/cli.md)** — command-line interface API docs
 - **[Changelog](changelog.md)** — recent changes

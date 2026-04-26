@@ -138,6 +138,11 @@ uv run zensical build      # static site in site/
 
 ---
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style,
+and conventions for adding new formats.
+
 ## License
 
 GPL (>= 2)
