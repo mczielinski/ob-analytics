@@ -185,11 +185,65 @@ result = Pipeline(config=config).run("my_bitstamp_data.csv")
 
 ---
 
-## 3. Custom Exchange Adapter
+## 3. LOBSTER (built-in)
 
-For non-Bitstamp data, implement the `EventLoader` protocol. Your class
-needs a `load` method returning a DataFrame with the columns documented
-in `OrderEvent`.
+[LOBSTER](https://lobsterdata.com/) message and orderbook files are supported
+out of the box via `LobsterLoader`, `LobsterMatcher`, `LobsterTradeInferrer`,
+`LobsterWriter`, and `LobsterFormat`. Depth is read directly from the official
+orderbook file (ground-truth) when present.
+
+```python
+from ob_analytics import LobsterFormat, Pipeline
+
+pipeline = Pipeline(format=LobsterFormat(trading_date="2012-06-21"))
+result = pipeline.run("/path/to/extracted_lobster_folder")
+```
+
+Equivalent shorthand via the format registry:
+
+```python
+result = Pipeline.from_format("lobster", trading_date="2012-06-21").run(
+    "/path/to/extracted_lobster_folder"
+)
+```
+
+The included `scripts/lobster_demo.py` runs the pipeline on local data,
+saves Parquet, verifies round-trip I/O, and builds an HTML plot gallery:
+
+```bash
+uv run python scripts/lobster_demo.py /path/to/lobster_data --trading-date 2012-06-21
+```
+
+!!! note
+    When message files contain cross trades (event type 6) or trading halts
+    (event type 7), filtered rows may not align one-to-one with orderbook
+    rows; the implementation logs a warning and uses the minimum consistent
+    length.
+
+---
+
+## 4. Custom Exchange Adapter
+
+For non-Bitstamp, non-LOBSTER data, implement the `EventLoader` protocol.
+Your class needs a `load` method returning a DataFrame with the columns
+that subsequent stages consume:
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | int / str | Exchange-assigned order identifier |
+| `event_id` | int | Sequential, 1-based, unique per event |
+| `original_number` | int | Original input row number (used by the matcher) |
+| `timestamp` | datetime64 | Local receive time |
+| `exchange_timestamp` | datetime64 | Server time stamp |
+| `price` | float | Order price |
+| `volume` | float | Remaining size |
+| `action` | category | `created` / `changed` / `deleted` |
+| `direction` | category | `bid` / `ask` |
+| `fill` | float | Volume executed by this event (0 for non-fills) |
+
+[`OrderEvent`](api/models.md#ob_analytics.models.OrderEvent) is the
+Pydantic-level contract; the DataFrame columns above are what the pipeline
+actually reads.
 
 ### Example: generic CSV loader
 
@@ -292,42 +346,9 @@ class CryptofeedLoader:
     The key point: **any object with a `load` method returning the right
     DataFrame works** — no subclassing required.
 
-### LOBSTER (built-in)
-
-[LOBSTER](https://lobsterdata.com/) is supported out of the box with
-`LobsterLoader`, `LobsterMatcher`, `LobsterTradeInferrer`, and optional
-orderbook-backed depth via `LobsterFormat.compute_depth`.
-
-```python
-from ob_analytics import LobsterFormat, Pipeline
-
-pipeline = Pipeline(format=LobsterFormat(trading_date="2012-06-21"))
-result = pipeline.run("/path/to/extracted_lobster_folder")
-```
-
-Equivalent shorthand:
-
-```python
-result = Pipeline.from_format("lobster", trading_date="2012-06-21").run(
-    "/path/to/extracted_lobster_folder"
-)
-```
-
-The included `scripts/lobster_demo.py` runs the pipeline on local data,
-saves Parquet, verifies round-trip I/O, and builds an HTML plot gallery:
-
-```bash
-uv run python scripts/lobster_demo.py /path/to/lobster_data --trading-date 2012-06-21
-```
-
-!!! note
-    When message files contain cross trades (type 6) or trading halts
-    (type 7), filtered rows may not align one-to-one with orderbook rows;
-    the implementation logs a warning and uses the minimum consistent length.
-
 ---
 
-## 4. Custom Matching Algorithm
+## 5. Custom Matching Algorithm
 
 Replace the default Needleman-Wunsch matcher:
 
@@ -354,7 +375,7 @@ result = pipeline.run(sample_csv_path())
 
 ---
 
-## 5. Theming and Saving
+## 6. Theming and Saving
 
 ```python
 from ob_analytics import PlotTheme, set_plot_theme, plot_trades, save_figure
@@ -372,7 +393,10 @@ save_figure(fig, "trades_hires.png", dpi=300)
 
 ---
 
-## 6. Serialization
+## 7. Serialization
+
+Pipeline outputs are dict-of-DataFrames; `save_data` writes one Parquet
+file per key, `load_data` reads them back.
 
 ```python
 from ob_analytics import save_data, load_data
@@ -390,9 +414,13 @@ save_data(
 data = load_data("output/my_analysis")
 ```
 
+For LOBSTER round-trip output (back to message + orderbook CSVs), use
+`LobsterFormat.create_writer(config).write(data, dest)` or pass the writer
+explicitly: `save_data(data, dest, writer=LobsterWriter(config))`.
+
 ---
 
-## 7. Flow Toxicity
+## 8. Flow Toxicity
 
 Detect informed trading and measure price impact. These work on any trades
 DataFrame.
@@ -441,7 +469,7 @@ result = Pipeline(config=config).run("orders.csv")
 
 ---
 
-## 8. Interactive Visualizations (Plotly)
+## 9. Interactive Visualizations (Plotly)
 
 All plot functions accept `backend="plotly"` for interactive figures with
 zoom, pan, and hover tooltips.
@@ -473,7 +501,7 @@ register_plot_backend("bokeh", "my_package._bokeh_backend")
 
 ---
 
-## 9. Demo Scripts
+## 10. Demo Scripts
 
 Both demo scripts run the full pipeline, save Parquet output, verify round-trip
 I/O, and generate an HTML plot gallery.
@@ -495,7 +523,7 @@ uv run python scripts/lobster_demo.py /path/to/lobster_data --trading-date 2012-
 
 ---
 
-## 10. Command-Line Interface {#cli}
+## 11. Command-Line Interface {#cli}
 
 Installing the package registers the `ob-analytics` command. All subcommands
 accept `-v` / `--verbose` for debug-level logging.
