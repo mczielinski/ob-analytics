@@ -12,8 +12,8 @@ Use via `Pipeline(format=LobsterFormat(...))` or
 
 Key differences from Bitstamp:
 
-- **Single-sided executions** — `LobsterMatcher` is a pass-through; trades are
-  inferred directly from type 4/5 events by `LobsterTradeInferrer`
+- **Executions in the message file** — `LobsterTradeReader` builds trades
+  directly from type 4/5 rows in the events DataFrame (no separate trades file).
 - **Orderbook-backed depth** — `LobsterFormat.compute_depth` reads the official
   orderbook file for ground-truth depth instead of reconstructing from events
 - **Integer prices** — raw prices are in ten-thousandths of a dollar
@@ -21,9 +21,7 @@ Key differences from Bitstamp:
 
 ::: ob_analytics.lobster.LobsterLoader
 
-::: ob_analytics.lobster.LobsterMatcher
-
-::: ob_analytics.lobster.LobsterTradeInferrer
+::: ob_analytics.lobster.LobsterTradeReader
 
 ::: ob_analytics.lobster.LobsterWriter
 

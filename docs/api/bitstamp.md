@@ -4,19 +4,18 @@ title: Bitstamp
 
 # Bitstamp
 
-Bitstamp-specific components: event loading, matching, trade inference, and writing.
-`BitstampFormat` bundles these as the default pipeline format.
+Bitstamp-specific components: event loading, trade reading from companion
+`trades.csv`, CSV writing, and `BitstampFormat` as the default pipeline format.
+
+Modern workflows pair `orders.csv` with `trades.csv` (for example from
+`scripts/collect_bitstamp_btcusd.py`). The pipeline resolves
+`trades.csv` from the same directory as the `orders.csv` path passed to
+`Pipeline.run`.
 
 ::: ob_analytics.bitstamp.BitstampLoader
 
-::: ob_analytics.bitstamp.BitstampMatcher
-
-::: ob_analytics.bitstamp.BitstampTradeInferrer
+::: ob_analytics.bitstamp.BitstampTradeReader
 
 ::: ob_analytics.bitstamp.BitstampWriter
 
 ::: ob_analytics.bitstamp.BitstampFormat
-
-## Matching Internals
-
-::: ob_analytics.bitstamp.NeedlemanWunschMatcher

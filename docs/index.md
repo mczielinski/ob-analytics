@@ -6,17 +6,17 @@ title: Home
 
 **Limit order book analytics and visualization for Python.**
 
-Reconstruct trades from raw exchange events, classify order types, compute
-depth metrics, and visualize market microstructure — from Bitstamp-style CSVs
-or [LOBSTER](https://lobsterdata.com/) message and orderbook files.
+Load order events, attach authoritative trades (Bitstamp `trades.csv` or
+LOBSTER executions), classify order types, compute depth metrics, and
+visualize market microstructure — from Bitstamp-style CSVs or
+[LOBSTER](https://lobsterdata.com/) message and orderbook files.
 
 ## What it does
 
 | Stage | Description |
 |-------|-------------|
 | **Load & normalize** | Parse Bitstamp CSV or LOBSTER message file into a uniform event DataFrame |
-| **Match fills** | Pair bid/ask fills (Needleman–Wunsch for Bitstamp; pass-through for LOBSTER) |
-| **Infer trades** | Build trade records with maker/taker attribution |
+| **Build trades** | Bitstamp: companion `trades.csv`. LOBSTER: execution rows (types 4/5) in the message file |
 | **Classify orders** | Label as market, resting-limit, flashed-limit, pacman, market-limit, or unknown |
 | **Depth & metrics** | Price-level volume, best bid/ask, spread, liquidity in BPS bins |
 | **Flow toxicity** *(opt-in)* | VPIN, Kyle's lambda, order-flow imbalance |
@@ -27,18 +27,17 @@ or [LOBSTER](https://lobsterdata.com/) message and orderbook files.
 ```mermaid
 flowchart LR
     subgraph in["Inputs"]
-        CSV[Bitstamp CSV]
+        CSV[Bitstamp orders + trades]
         LOB[LOBSTER msg + orderbook]
     end
 
     subgraph pipeline["Pipeline"]
         direction TB
         L[Load & normalize]
-        M[Match fills]
-        T[Infer trades]
+        T[Build trades]
         C[Classify orders]
         D[Depth metrics]
-        L --> M --> T --> C --> D
+        L --> T --> C --> D
     end
 
     subgraph out["Outputs"]

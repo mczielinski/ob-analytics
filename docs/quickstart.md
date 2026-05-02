@@ -13,7 +13,7 @@ need.
 | Run the pipeline on bundled data and plot it | [Walkthrough](#walkthrough) |
 | Use your own Bitstamp CSV or another instrument | [Working with your data](#working-with-your-data) |
 | Process LOBSTER message + orderbook files | [LOBSTER](#lobster) |
-| Plug in your own loader, matcher, or format | [Custom components](#custom-components) |
+| Plug in your own loader, trade source, or format | [Custom components](#custom-components) |
 | Theme plots, save artefacts, or use Plotly | [Customising the output](#customising-the-output) |
 | Compute VPIN / Kyle's λ / OFI | [Flow toxicity](#flow-toxicity) |
 | Run from a shell | [Command-line interface](#cli) |
@@ -22,8 +22,10 @@ need.
 
 ## Walkthrough
 
-The package ships with ~5 hours of Bitstamp BTC/USD limit order events
-(2015-05-01). Access the bundled data via `sample_csv_path()`.
+The package ships with a bundled Bitstamp BTC/USD capture: `orders.csv` and
+sibling `trades.csv` under `ob_analytics/_sample_data/`. Access the orders
+path via `sample_csv_path()` (the pipeline loads `trades.csv` from the same
+directory).
 
 ### One-line pipeline
 
@@ -39,10 +41,10 @@ print(f"Depth summary: {result.depth_summary.shape}")
 ```
 
 ```
-Events:        (50393, 14)
-Trades:        (482, 10)
-Depth:         (49376, 5)
-Depth summary: (49216, 46)
+Events:        (~314000, …)   # shape depends on bundled capture
+Trades:        (~280, …)
+Depth:         (…, 5)
+Depth summary: (…, 46)
 ```
 
 ### Visualise
@@ -88,25 +90,27 @@ fig.savefig("combined.png", dpi=150)
 Use individual classes when you need access to intermediate results:
 
 ```python
+from pathlib import Path
 from ob_analytics import (
-    BitstampLoader, BitstampMatcher, BitstampTradeInferrer,
-    set_order_types, get_zombie_ids, price_level_volume,
-    depth_metrics, order_aggressiveness, get_spread,
+    BitstampLoader,
+    BitstampTradeReader,
+    set_order_types,
+    price_level_volume,
+    depth_metrics,
+    order_aggressiveness,
     sample_csv_path,
 )
 
+orders_path = sample_csv_path()
+run_dir = Path(orders_path).parent
+
 loader = BitstampLoader()
-events = loader.load(sample_csv_path())
+events = loader.load(orders_path)
 
-matcher = BitstampMatcher()
-events = matcher.match(events)                       # Needleman-Wunsch fill pairing
-
-inferrer = BitstampTradeInferrer()
-trades = inferrer.infer_trades(events)
+reader = BitstampTradeReader()
+trades = reader.load(events, run_dir)
 
 events = set_order_types(events, trades)             # market, flashed-limit, pacman, …
-zombie_ids = get_zombie_ids(events, trades)
-events = events[~events["id"].isin(zombie_ids)]
 depth = price_level_volume(events)
 depth_summary = depth_metrics(depth)                 # best bid/ask, BPS bins
 events = order_aggressiveness(events, depth_summary)
@@ -136,18 +140,16 @@ or `max_levels` to cap the number of price levels returned.
 
 ### Custom Bitstamp-format CSV
 
-Point the pipeline at your own data and adjust `PipelineConfig` for
-the instrument:
+Place `orders.csv` and `trades.csv` in the same directory (see
+`scripts/collect_bitstamp_btcusd.py` for the expected `trades.csv` schema).
+Point the pipeline at the **orders** path; it resolves sibling `trades.csv`
+automatically.
 
 ```python
 from ob_analytics import Pipeline, PipelineConfig
 
-config = PipelineConfig(
-    price_decimals=2,
-    match_cutoff_ms=5000,
-    price_jump_threshold=10.0,
-)
-result = Pipeline(config=config).run("my_bitstamp_data.csv")
+config = PipelineConfig(price_decimals=2, volume_decimals=8)
+result = Pipeline(config=config).run("my_run/orders.csv")
 ```
 
 #### Configuration presets
@@ -155,21 +157,13 @@ result = Pipeline(config=config).run("my_bitstamp_data.csv")
 === "BTC/USD (default)"
 
     ```python
-    config = PipelineConfig(
-        price_decimals=2,
-        match_cutoff_ms=5000,
-        price_jump_threshold=10.0,
-    )
+    config = PipelineConfig(price_decimals=2, volume_decimals=8)
     ```
 
 === "ETH/USD"
 
     ```python
-    config = PipelineConfig(
-        price_decimals=2,
-        match_cutoff_ms=3000,
-        price_jump_threshold=5.0,
-    )
+    config = PipelineConfig(price_decimals=2, volume_decimals=6)
     ```
 
 === "FX (EUR/USD)"
@@ -177,8 +171,7 @@ result = Pipeline(config=config).run("my_bitstamp_data.csv")
     ```python
     config = PipelineConfig(
         price_decimals=4,
-        match_cutoff_ms=500,
-        price_jump_threshold=0.01,
+        volume_decimals=2,
         depth_bps=5,
         depth_bins=100,
     )
@@ -187,19 +180,15 @@ result = Pipeline(config=config).run("my_bitstamp_data.csv")
 === "High-Price Equity"
 
     ```python
-    config = PipelineConfig(
-        price_decimals=2,
-        match_cutoff_ms=100,
-        price_jump_threshold=50.0,
-    )
+    config = PipelineConfig(price_decimals=2, volume_decimals=0)
     ```
 
 ### LOBSTER
 
 [LOBSTER](https://lobsterdata.com/) message and orderbook files are
-supported out of the box via `LobsterLoader`, `LobsterMatcher`,
-`LobsterTradeInferrer`, `LobsterWriter`, and `LobsterFormat`. Depth is
-read from the official orderbook file (ground-truth) when present.
+supported out of the box via `LobsterLoader`, `LobsterTradeReader`,
+`LobsterWriter`, and `LobsterFormat`. Depth is read from the official
+orderbook file (ground-truth) when present.
 
 ```python
 from ob_analytics import LobsterFormat, Pipeline
@@ -237,7 +226,7 @@ stages consume:
 |--------|------|-------|
 | `id` | int / str | Exchange-assigned order identifier |
 | `event_id` | int | Sequential, 1-based, unique per event |
-| `original_number` | int | Original input row number (used by the matcher) |
+| `original_number` | int | Original input row number (stable event order) |
 | `timestamp` | datetime64 | Local receive time |
 | `exchange_timestamp` | datetime64 | Server time stamp |
 | `price` | float | Order price |
@@ -255,6 +244,7 @@ Pydantic-level contract; the columns above are what the pipeline reads.
 from pathlib import Path
 import pandas as pd
 from ob_analytics import Pipeline, PipelineConfig
+from ob_analytics.bitstamp import BitstampTradeReader
 
 class GenericCsvLoader:
     """Load events from a CSV with different column names."""
@@ -284,7 +274,10 @@ class GenericCsvLoader:
         ...
         return df
 
-result = Pipeline(loader=GenericCsvLoader()).run("my_exchange_data.csv")
+result = Pipeline(
+    loader=GenericCsvLoader(),
+    trade_source=BitstampTradeReader(),
+).run("my_exchange_data/orders.csv")  # requires sibling trades.csv
 ```
 
 #### Cryptofeed L3 adapter (conceptual)
@@ -349,33 +342,28 @@ class CryptofeedLoader:
     `load` method returning the right DataFrame works — no subclassing
     required.
 
-### Custom matcher
+### Custom trade source
 
-Replace the default Needleman–Wunsch matcher:
+Implement `TradeSource` (a `load(events, source) -> DataFrame` method) when
+trades come from an API, a database, or a non-CSV layout:
 
 ```python
 import pandas as pd
 from ob_analytics import Pipeline, PipelineConfig, sample_csv_path
 
-class SimpleTimeMatcher:
-    """Match fills by closest timestamp (toy example)."""
+class ApiTradeSource:
+    def load(self, events: pd.DataFrame, source: object) -> pd.DataFrame:
+        # Build the canonical trades DataFrame (timestamp, price, volume,
+        # direction, maker_event_id, taker_event_id, maker, taker, …)
+        raise NotImplementedError
 
-    def __init__(self, config: PipelineConfig | None = None):
-        self.config = config or PipelineConfig()
-
-    def match(self, events: pd.DataFrame) -> pd.DataFrame:
-        events = events.copy()
-        events["matching_event"] = float("nan")
-        # Your matching logic — must populate 'matching_event'
-        ...
-        return events
-
-result = Pipeline(matcher=SimpleTimeMatcher()).run(sample_csv_path())
+result = Pipeline(
+    config=PipelineConfig(),
+    trade_source=ApiTradeSource(),
+).run(sample_csv_path())
 ```
 
-The same pattern applies to `trade_inferrer=` (any object with
-`infer_trades(events) -> DataFrame`) and to bundling everything in a
-`Format` subclass — see [Protocols](api/protocols.md).
+Bundle defaults in a `Format` subclass — see [Protocols](api/protocols.md).
 
 ---
 

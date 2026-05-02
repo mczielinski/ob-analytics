@@ -8,7 +8,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Breaking
+
+- **Bitstamp trades** — The pipeline no longer infers trades from matched
+  fills. A companion `trades.csv` next to `orders.csv` is required (capture
+  format from `scripts/collect_bitstamp_btcusd.py`). Removed: Needleman–Wunsch
+  matching, `BitstampMatcher`, `BitstampTradeInferrer`, `MatchingEngine`,
+  `TradeInferrer`, and related `PipelineConfig` fields (`match_cutoff_ms`,
+  `price_jump_threshold`).
+- **Zombie detection** — Removed `get_zombie_ids` and `PipelineConfig` fields
+  `zombie_offset_seconds`, `skip_zombie_detection`.
+- **`Pipeline`** — Takes `trade_source=` instead of `matcher=` /
+  `trade_inferrer=`. `Format` provides `create_trade_source()` only.
+- **LOBSTER** — `LobsterMatcher` removed; `LobsterTradeInferrer` renamed to
+  `LobsterTradeReader` with `load(events, source)`.
+- **Bundled sample** — `ob_analytics/_sample_data/` now ships `orders.csv` and
+  `trades.csv` from a modern live capture (replaces the legacy 2015-only
+  orders slice).
+
 ### Added
+
+- **`TradeSource` protocol** and **`BitstampTradeReader`** — read authoritative
+  `trades.csv` and join to events via the `fill` column.
+
+### 0.1.x baseline (historical; several items superseded by **Breaking** above)
 
 - **`Pipeline` class** — composable orchestrator with pluggable `EventLoader`,
   `MatchingEngine`, `TradeInferrer`, optional `Format` descriptors, and

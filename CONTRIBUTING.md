@@ -81,9 +81,9 @@ on `git commit` once `pre-commit install` has been run.
 
 ## Adding a new format
 
-1. Create `ob_analytics/<venue>.py` with `<Venue>Loader`, `<Venue>Matcher`,
-   `<Venue>TradeInferrer`, `<Venue>Writer`, and a `<Venue>Format(Format)`
-   subclass with `name = "<venue>"`.
+1. Create `ob_analytics/<venue>.py` with `<Venue>Loader`, `<Venue>TradeReader`
+   (or another type satisfying `TradeSource`), `<Venue>Writer`, and a
+   `<Venue>Format(Format)` subclass with `name = "<venue>"`.
 2. Register in `ob_analytics/__init__.py`:
    `register_format("<venue>", <Venue>Format)`.
 3. Add `docs/api/<venue>.md` and an entry in `zensical.toml` nav.

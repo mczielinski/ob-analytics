@@ -61,12 +61,6 @@ without ever filling. Common in HFT quote-stuffing patterns.
 modifications, consuming liquidity as it goes — named for the arcade
 character that eats dots.
 
-**Zombie order**
-: An order that should have been filled or cancelled but was never
-explicitly closed in the source feed (a data-quality artefact). Detected
-by [`get_zombie_ids`](api/data.md#ob_analytics.data.get_zombie_ids) and
-removed by the pipeline unless `skip_zombie_detection` is set.
-
 ## Flow toxicity
 
 Implemented in [`flow_toxicity`](api/flow_toxicity.md).
@@ -86,21 +80,14 @@ with the regression DataFrame attached.
 : Per-window net buy-minus-sell volume normalised by total traded volume.
 A short-horizon proxy for directional pressure.
 
-## Algorithms
-
-**Needleman–Wunsch**
-: Dynamic-programming sequence-alignment algorithm originally from
-bioinformatics. ob-analytics' Bitstamp matcher uses it to pair simultaneous
-bid and ask fills under a configurable time cutoff
-(`match_cutoff_ms`). See
-[`BitstampMatcher`](api/bitstamp.md#ob_analytics.bitstamp.BitstampMatcher).
-
 ## Data formats
 
 **Bitstamp CSV**
 : One row per order event with columns `id, timestamp, exchange_timestamp,
-price, volume, action, direction`. The bundled sample is parsed from raw
-websocket logs by `scripts/parse_bitstamp_log.sh`.
+price, volume, action, direction`. The pipeline also expects a sibling
+`trades.csv` with live-trade columns (`trade_id`, `timestamp`, `price`,
+`amount`, `buy_order_id`, `sell_order_id`, `side`, …) — see
+`scripts/collect_bitstamp_btcusd.py`.
 
 **LOBSTER**
 : Lim-Order-Book-System-The-Efficient-Reconstructor data set

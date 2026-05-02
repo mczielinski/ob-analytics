@@ -11,16 +11,13 @@ inheritance required.
 | Protocol | Method | Purpose |
 |----------|--------|---------|
 | `EventLoader` | `load(source) → DataFrame` | Parse raw data into events |
-| `MatchingEngine` | `match(events) → DataFrame` | Pair bid/ask fills |
-| `TradeInferrer` | `infer_trades(events) → DataFrame` | Build trade records |
+| `TradeSource` | `load(events, source) → DataFrame` | Build the canonical trades DataFrame |
 | `DataWriter` | `write(data, dest)` | Serialize pipeline outputs |
-| `Format` | factory methods | Bundle all of the above for a venue |
+| `Format` | factory methods | Bundle loader, trade source, and writer for a venue |
 
 ::: ob_analytics.protocols.EventLoader
 
-::: ob_analytics.protocols.MatchingEngine
-
-::: ob_analytics.protocols.TradeInferrer
+::: ob_analytics.protocols.TradeSource
 
 ::: ob_analytics.protocols.DataWriter
 
