@@ -334,9 +334,12 @@ class BitstampLoader:
         events["event_id"] = np.arange(1, len(events) + 1)
         events = self._remove_duplicates(events)
 
+        # A volume drop between consecutive events for the same id is always a
+        # fill on Bitstamp — the venue does not allow order amendments, so a
+        # price change between events is the matching engine reporting the
+        # fill price (taker orders) or the order walking the book (aggressors),
+        # not an in-place modification.
         fill_deltas = events.groupby("id")["volume"].diff().fillna(0)
-        price_deltas = events.groupby("id")["price"].diff().fillna(0)
-        fill_deltas = fill_deltas.where(price_deltas == 0, 0)
         events["fill"] = fill_deltas.abs().round(volume_digits)
 
         ts_sorted: pd.Series = events.groupby("id")["timestamp"].transform(
