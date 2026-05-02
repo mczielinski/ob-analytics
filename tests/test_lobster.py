@@ -1,7 +1,7 @@
 """Tests for LOBSTER format components.
 
 Focused on behaviors that are easy to break during performance
-refactors: ``LobsterTradeInferrer._find_takers`` (taker identification
+refactors: ``LobsterTradeReader._find_takers`` (taker identification
 heuristic) and ``LobsterWriter._reconstruct_orderbook`` (book replay).
 """
 
@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 
 from ob_analytics.lobster import (
-    LobsterTradeInferrer,
+    LobsterTradeReader,
     LobsterWriter,
 )
 
@@ -33,7 +33,7 @@ def _events(rows: list[dict]) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# LobsterTradeInferrer._find_takers
+# LobsterTradeReader._find_takers
 # ---------------------------------------------------------------------------
 
 
@@ -53,7 +53,7 @@ class TestFindTakers:
             ]
         )
         all_events = execs.copy()  # only execs; no type-1 rows
-        result = LobsterTradeInferrer._find_takers(all_events, execs)
+        result = LobsterTradeReader._find_takers(all_events, execs)
         assert len(result) == 1
         assert pd.isna(result[0])
 
@@ -72,7 +72,7 @@ class TestFindTakers:
             ]
         )
         execs = all_events.iloc[0:0]
-        result = LobsterTradeInferrer._find_takers(all_events, execs)
+        result = LobsterTradeReader._find_takers(all_events, execs)
         assert len(result) == 0
 
     def test_marketable_bid_exec_matched_to_recent_ask_submission(self):
@@ -100,7 +100,7 @@ class TestFindTakers:
             ]
         )
         execs = all_events[all_events["raw_event_type"] == 4].reset_index(drop=True)
-        result = LobsterTradeInferrer._find_takers(all_events, execs)
+        result = LobsterTradeReader._find_takers(all_events, execs)
         assert int(result[0]) == 1
 
     def test_non_marketable_ask_submission_does_not_match_bid_exec(self):
@@ -128,7 +128,7 @@ class TestFindTakers:
             ]
         )
         execs = all_events[all_events["raw_event_type"] == 4].reset_index(drop=True)
-        result = LobsterTradeInferrer._find_takers(all_events, execs)
+        result = LobsterTradeReader._find_takers(all_events, execs)
         assert pd.isna(result[0])
 
     def test_marketable_ask_exec_matched_to_recent_bid_submission(self):
@@ -156,7 +156,7 @@ class TestFindTakers:
             ]
         )
         execs = all_events[all_events["raw_event_type"] == 4].reset_index(drop=True)
-        result = LobsterTradeInferrer._find_takers(all_events, execs)
+        result = LobsterTradeReader._find_takers(all_events, execs)
         assert int(result[0]) == 1
 
     def test_uses_most_recent_opposite_side_submission(self):
@@ -193,7 +193,7 @@ class TestFindTakers:
             ]
         )
         execs = all_events[all_events["raw_event_type"] == 4].reset_index(drop=True)
-        result = LobsterTradeInferrer._find_takers(all_events, execs)
+        result = LobsterTradeReader._find_takers(all_events, execs)
         assert int(result[0]) == 2  # most recent ask submission
 
     def test_handles_mixed_directions_and_preserves_order(self):
@@ -243,7 +243,7 @@ class TestFindTakers:
             ]
         )
         execs = all_events[all_events["raw_event_type"] == 4].reset_index(drop=True)
-        result = LobsterTradeInferrer._find_takers(all_events, execs)
+        result = LobsterTradeReader._find_takers(all_events, execs)
         # execs preserves order: bid exec first, then ask exec
         assert int(result[0]) == 1
         assert int(result[1]) == 2
@@ -284,7 +284,7 @@ class TestFindTakers:
             ]
         )
         execs = all_events[all_events["raw_event_type"] == 4].reset_index(drop=True)
-        result = LobsterTradeInferrer._find_takers(all_events, execs)
+        result = LobsterTradeReader._find_takers(all_events, execs)
         assert int(result[0]) == 1
         assert pd.isna(result[1])
 

@@ -80,11 +80,3 @@ def tiny_depth() -> pd.DataFrame:
             ),
         }
     )
-
-
-@pytest.fixture
-def matched_events(tiny_events: pd.DataFrame) -> pd.DataFrame:
-    """Events with matching_event column populated."""
-    df = tiny_events.copy()
-    df["matching_event"] = [2, 1, 4, 3]
-    return df

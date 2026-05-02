@@ -18,11 +18,8 @@ class TestPipelineConfig:
         cfg = PipelineConfig()
         assert cfg.price_decimals == 2
         assert cfg.volume_decimals == 8
-        assert cfg.match_cutoff_ms == 5000
-        assert cfg.price_jump_threshold == 10.0
         assert cfg.depth_bps == 25
         assert cfg.depth_bins == 20
-        assert cfg.zombie_offset_seconds == 60
 
     def test_price_multiplier(self):
         assert PipelineConfig(price_decimals=2).price_multiplier == 100
@@ -40,16 +37,10 @@ class TestPipelineConfig:
     def test_custom_values(self):
         cfg = PipelineConfig(
             price_decimals=4,
-            match_cutoff_ms=100,
-            price_jump_threshold=5.0,
+            depth_bps=50,
         )
         assert cfg.price_decimals == 4
-        assert cfg.match_cutoff_ms == 100
-        assert cfg.price_jump_threshold == 5.0
-
-    def test_validation_rejects_negative_match_cutoff(self):
-        with pytest.raises(ValidationError):
-            PipelineConfig(match_cutoff_ms=-1)
+        assert cfg.depth_bps == 50
 
     def test_validation_rejects_zero_depth_bins(self):
         with pytest.raises(ValidationError):

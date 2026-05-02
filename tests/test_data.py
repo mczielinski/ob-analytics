@@ -1,4 +1,4 @@
-"""Tests for ob_analytics.data (save/load, zombie detection)."""
+"""Tests for ob_analytics.data (save/load)."""
 
 from pathlib import Path
 

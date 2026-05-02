@@ -1,7 +1,6 @@
 """Tests for the protocol-satisfying classes.
 
-Covers BitstampLoader, NeedlemanWunschMatcher, BitstampTradeInferrer,
-and DepthMetricsEngine with synthetic data.
+Covers BitstampLoader and DepthMetricsEngine with synthetic data.
 """
 
 from pathlib import Path
@@ -13,9 +12,7 @@ from ob_analytics.config import PipelineConfig
 from ob_analytics.depth import DepthMetricsEngine
 from ob_analytics.bitstamp import BitstampLoader
 from ob_analytics.exceptions import InsufficientDataError, InvalidDataError
-from ob_analytics.bitstamp import NeedlemanWunschMatcher
-from ob_analytics.protocols import EventLoader, MatchingEngine, TradeInferrer
-from ob_analytics.bitstamp import BitstampTradeInferrer
+from ob_analytics.protocols import EventLoader
 
 
 class TestBitstampLoader:
@@ -73,59 +70,6 @@ class TestBitstampLoader:
         config = PipelineConfig(price_decimals=4, volume_decimals=4)
         events = BitstampLoader(config).load(sample_csv)
         assert events["price"].iloc[0] == 236.5
-
-
-class TestNeedlemanWunschMatcher:
-    def test_satisfies_protocol(self):
-        assert isinstance(NeedlemanWunschMatcher(), MatchingEngine)
-
-    def test_match_simple_pairs(self, tiny_events):
-        matcher = NeedlemanWunschMatcher()
-        result = matcher.match(tiny_events)
-        assert "matching_event" in result.columns
-        matched_count = result["matching_event"].notna().sum()
-        assert matched_count == 4
-
-    def test_rejects_empty_dataframe(self):
-        df = pd.DataFrame(
-            columns=["direction", "fill", "original_number", "event_id", "timestamp"]
-        )
-        with pytest.raises(InsufficientDataError):
-            NeedlemanWunschMatcher().match(df)
-
-    def test_custom_cutoff_narrow_window(self, tiny_events):
-        """A very narrow cutoff should match fewer (or zero) events."""
-        config = PipelineConfig(match_cutoff_ms=1)
-        matcher = NeedlemanWunschMatcher(config)
-        result = matcher.match(tiny_events)
-        assert "matching_event" in result.columns
-        matched_count = result["matching_event"].notna().sum()
-        assert matched_count <= 4
-
-
-class TestBitstampTradeInferrer:
-    def test_satisfies_protocol(self):
-        assert isinstance(BitstampTradeInferrer(), TradeInferrer)
-
-    def test_infer_trades_basic(self, matched_events):
-        inferrer = BitstampTradeInferrer()
-        trades = inferrer.infer_trades(matched_events)
-        assert isinstance(trades, pd.DataFrame)
-        assert len(trades) == 2
-        for col in [
-            "timestamp",
-            "price",
-            "volume",
-            "direction",
-            "maker_event_id",
-            "taker_event_id",
-        ]:
-            assert col in trades.columns
-
-    def test_rejects_missing_columns(self):
-        df = pd.DataFrame({"x": [1]})
-        with pytest.raises(InvalidDataError):
-            BitstampTradeInferrer().infer_trades(df)
 
 
 class TestDepthMetricsEngine:
