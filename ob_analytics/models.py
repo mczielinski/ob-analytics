@@ -49,11 +49,11 @@ class OrderEvent(BaseModel):
 
 
 class Trade(BaseModel):
-    """An inferred trade execution.
+    """A trade execution.
 
     Corresponds to one row of the trades DataFrame produced by
-    :class:`~ob_analytics.bitstamp.BitstampTradeInferrer` or
-    :class:`~ob_analytics.lobster.LobsterTradeInferrer`.
+    :class:`~ob_analytics.bitstamp.BitstampTradeReader` or
+    :class:`~ob_analytics.lobster.LobsterTradeReader`.
     """
 
     model_config = {"frozen": True}

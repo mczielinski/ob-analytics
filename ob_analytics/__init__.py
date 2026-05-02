@@ -1,7 +1,8 @@
 """Limit order book analytics and visualization.
 
-Reconstruct trades from raw exchange events, classify order types,
-compute depth metrics, and visualize market microstructure.
+Load order events, attach trades (from ``trades.csv`` or embedded
+executions), classify order types, compute depth metrics, and visualize
+market microstructure.
 
 Quick start::
 
@@ -12,18 +13,16 @@ Quick start::
 The package exposes two layers:
 
 * **High-level**: :class:`Pipeline` runs the full processing
-  sequence (load → match → trades → classify → depth → metrics)
+  sequence (load → trades → classify → depth → metrics)
   with sensible defaults.  When called without arguments it defaults
-  to the Bitstamp format.
+  to the Bitstamp format (orders + companion ``trades.csv``).
 * **Low-level**: Individual classes and functions for step-by-step control.
   Two symmetric format implementations are provided:
 
-  - Bitstamp: :class:`BitstampLoader`, :class:`BitstampMatcher`,
-    :class:`BitstampTradeInferrer`, :class:`BitstampWriter`,
-    :class:`BitstampFormat`
-  - LOBSTER: :class:`LobsterLoader`, :class:`LobsterMatcher`,
-    :class:`LobsterTradeInferrer`, :class:`LobsterWriter`,
-    :class:`LobsterFormat`
+  - Bitstamp: :class:`BitstampLoader`, :class:`BitstampTradeReader`,
+    :class:`BitstampWriter`, :class:`BitstampFormat`
+  - LOBSTER: :class:`LobsterLoader`, :class:`LobsterTradeReader`,
+    :class:`LobsterWriter`, :class:`LobsterFormat`
 
 All processing stages are pluggable via :mod:`~ob_analytics.protocols`.
 """
@@ -33,7 +32,6 @@ from pathlib import Path
 from loguru import logger
 from ob_analytics.config import PipelineConfig
 from ob_analytics.data import (
-    get_zombie_ids,
     list_writers,
     load_data,
     register_writer,
@@ -55,8 +53,7 @@ from ob_analytics.analytics import (
 from ob_analytics.bitstamp import (
     BitstampFormat,
     BitstampLoader,
-    BitstampMatcher,
-    BitstampTradeInferrer,
+    BitstampTradeReader,
     BitstampWriter,
 )
 from ob_analytics.exceptions import (
@@ -74,8 +71,7 @@ from ob_analytics.flow_toxicity import (
 from ob_analytics.lobster import (
     LobsterFormat,
     LobsterLoader,
-    LobsterMatcher,
-    LobsterTradeInferrer,
+    LobsterTradeReader,
     LobsterWriter,
     lobster_depth_from_orderbook,
 )
@@ -92,13 +88,7 @@ from ob_analytics.pipeline import (
     list_formats,
     register_format,
 )
-from ob_analytics.protocols import (
-    DataWriter,
-    EventLoader,
-    Format,
-    MatchingEngine,
-    TradeInferrer,
-)
+from ob_analytics.protocols import DataWriter, EventLoader, Format, TradeSource
 from ob_analytics.visualization import (
     PlotTheme,
     get_plot_theme,
@@ -134,10 +124,10 @@ logger.disable("ob_analytics")
 
 
 def sample_csv_path() -> Path:
-    """Return the path to the bundled Bitstamp sample CSV.
+    """Return the path to the bundled Bitstamp sample ``orders.csv``.
 
-    The file contains ~5 hours of Bitstamp BTC/USD limit order events
-    (2015-05-01 00:00--05:00 UTC).
+    The companion ``trades.csv`` in the same directory is produced by
+    the live capture script and is required for :class:`Pipeline` runs.
     """
     return Path(__file__).parent / "_sample_data" / "orders.csv"
 
@@ -150,10 +140,8 @@ __all__ = [
     "LobsterFormat",
     "BitstampLoader",
     "LobsterLoader",
-    "BitstampMatcher",
-    "LobsterMatcher",
-    "BitstampTradeInferrer",
-    "LobsterTradeInferrer",
+    "BitstampTradeReader",
+    "LobsterTradeReader",
     "BitstampWriter",
     "LobsterWriter",
     # ── Pipeline orchestration ───────────────────────────────────────
@@ -163,17 +151,16 @@ __all__ = [
     "list_formats",
     # ── Protocols / extension points ─────────────────────────────────
     "EventLoader",
-    "MatchingEngine",
-    "TradeInferrer",
+    "TradeSource",
     "DataWriter",
     "Format",
-    # ── Format-agnostic analytics ────────────────────────────────────
+    # ── Format-agnostic analytics ───────────────────────────────────
     "order_aggressiveness",
     "trade_impacts",
     # ── Order book processing ────────────────────────────────────────
     "set_order_types",
     "order_book",
-    # ── Depth computation ────────────────────────────────────────────
+    # ── Depth computation ───────────────────────────────────────────
     "DepthMetricsEngine",
     "price_level_volume",
     "depth_metrics",
@@ -182,12 +169,11 @@ __all__ = [
     # ── Data I/O + writer registry ───────────────────────────────────
     "save_data",
     "load_data",
-    "get_zombie_ids",
     "register_writer",
     "list_writers",
     # ── LOBSTER-specific utilities ───────────────────────────────────
     "lobster_depth_from_orderbook",
-    # ── Flow toxicity ────────────────────────────────────────────────
+    # ── Flow toxicity ───────────────────────────────────────────────
     "compute_vpin",
     "compute_kyle_lambda",
     "order_flow_imbalance",

@@ -4,7 +4,7 @@
 pluggable components that satisfy the protocols defined in
 :mod:`ob_analytics.protocols`.
 
-Usage with defaults (Bitstamp CSV, Needleman-Wunsch matching)::
+Usage with defaults (Bitstamp CSV + companion ``trades.csv`)::
 
     from ob_analytics import Pipeline, sample_csv_path
 
@@ -15,18 +15,18 @@ Usage with custom configuration::
 
     from ob_analytics import Pipeline, PipelineConfig, sample_csv_path
 
-    config = PipelineConfig(match_cutoff_ms=1000, price_jump_threshold=50.0)
+    config = PipelineConfig(depth_bps=50)
     result = Pipeline(config=config).run(sample_csv_path())
 
 Usage with a custom loader (any object satisfying EventLoader)::
 
-    Pipeline(loader=my_custom_loader).run("data/feed.csv")
+    Pipeline(loader=my_custom_loader, trade_source=my_trade_source).run("data/")
 
 Usage with a Format descriptor::
 
     from ob_analytics import Pipeline, BitstampFormat
 
-    result = Pipeline(format=BitstampFormat()).run("my_data.csv")
+    result = Pipeline(format=BitstampFormat()).run("my_data/orders.csv")
 """
 
 from __future__ import annotations
@@ -37,21 +37,14 @@ from typing import Any
 import pandas as pd
 
 from ob_analytics.config import PipelineConfig
-from ob_analytics.data import get_zombie_ids
 from ob_analytics.depth import depth_metrics, price_level_volume
 from ob_analytics.analytics import order_aggressiveness
-from ob_analytics.bitstamp import BitstampLoader, BitstampMatcher, BitstampTradeInferrer
+from ob_analytics.bitstamp import BitstampLoader, BitstampTradeReader
 from ob_analytics.flow_toxicity import compute_vpin, order_flow_imbalance
 from ob_analytics.analytics import set_order_types
 from loguru import logger
 
-from ob_analytics.protocols import (
-    DataWriter,
-    EventLoader,
-    Format,
-    MatchingEngine,
-    TradeInferrer,
-)
+from ob_analytics.protocols import DataWriter, EventLoader, Format, TradeSource
 
 
 # ── Format registry ───────────────────────────────────────────────────
@@ -80,7 +73,7 @@ class PipelineResult:
     events : pandas.DataFrame
         Processed events with order types and aggressiveness.
     trades : pandas.DataFrame
-        Inferred trades with maker/taker attribution.
+        Trade records with maker/taker attribution.
     depth : pandas.DataFrame
         Price-level volume time series.
     depth_summary : pandas.DataFrame
@@ -115,18 +108,15 @@ class Pipeline:
         Central configuration.  Passed to default components when they
         are not explicitly provided.
     format : Format, optional
-        A format descriptor that provides default loader, matcher,
-        trade inferrer, writer, and config overrides.  Explicit
-        component arguments take precedence over format defaults.
+        A format descriptor that provides default loader, trade source,
+        writer, and config overrides.  Explicit component arguments take
+        precedence over format defaults.
     loader : EventLoader, optional
         Loads raw events from a data source.  Defaults to
         :class:`BitstampLoader`.
-    matcher : MatchingEngine, optional
-        Pairs bid/ask fills.  Defaults to
-        :class:`BitstampMatcher`.
-    trade_inferrer : TradeInferrer, optional
-        Builds trade records from matched events.  Defaults to
-        :class:`BitstampTradeInferrer`.
+    trade_source : TradeSource, optional
+        Builds the trades DataFrame.  Defaults to
+        :class:`BitstampTradeReader`.
     """
 
     def __init__(
@@ -135,8 +125,7 @@ class Pipeline:
         *,
         format: Format | None = None,
         loader: EventLoader | None = None,
-        matcher: MatchingEngine | None = None,
-        trade_inferrer: TradeInferrer | None = None,
+        trade_source: TradeSource | None = None,
     ) -> None:
         if format is not None:
             defaults = format.config_defaults()
@@ -144,14 +133,15 @@ class Pipeline:
                 config = PipelineConfig(**defaults)
             self.config = config
             self.loader = loader or format.create_loader(config)
-            self.matcher = matcher or format.create_matcher(config)
-            self.trade_inferrer = trade_inferrer or format.create_trade_inferrer(config)
+            self.trade_source = trade_source or format.create_trade_source(config)
             self._writer: DataWriter | None = format.create_writer(config)
         else:
             self.config = config or PipelineConfig()
             self.loader = loader or BitstampLoader(self.config)
-            self.matcher = matcher or BitstampMatcher(self.config)
-            self.trade_inferrer = trade_inferrer or BitstampTradeInferrer(self.config)
+            if trade_source is not None:
+                self.trade_source = trade_source
+            else:
+                self.trade_source = BitstampTradeReader(self.config)
             self._writer = None
 
         self._format = format
@@ -200,35 +190,21 @@ class Pipeline:
         Steps
         -----
         1. Load events (``EventLoader.load``)
-        2. Match bid/ask fills (``MatchingEngine.match``)
-        3. Infer trades (``TradeInferrer.infer_trades``)
-        4. Classify order types
-        5. Remove zombie orders
-        6. Compute price-level depth
-        7. Compute depth metrics
-        8. Compute order aggressiveness
-        9. (Optional) Compute VPIN and order flow imbalance
+        2. Build trades (``TradeSource.load``)
+        3. Classify order types
+        4. Compute price-level depth
+        5. Compute depth metrics
+        6. Compute order aggressiveness
+        7. (Optional) Compute VPIN and order flow imbalance
         """
         logger.info("Pipeline: loading events from {}", source)
         events = self.loader.load(source)
 
-        logger.info("Pipeline: matching {} events", len(events))
-        events = self.matcher.match(events)
-
-        logger.info("Pipeline: inferring trades")
-        trades = self.trade_inferrer.infer_trades(events)
+        logger.info("Pipeline: building trades")
+        trades = self.trade_source.load(events, source)
 
         logger.info("Pipeline: classifying order types")
         events = set_order_types(events, trades)
-
-        if self.config.skip_zombie_detection:
-            logger.info("Pipeline: zombie detection skipped (config)")
-        else:
-            logger.info("Pipeline: detecting zombie orders")
-            zombie_ids = get_zombie_ids(events, trades)
-            if zombie_ids:
-                logger.info("Pipeline: removing {} zombie orders", len(zombie_ids))
-            events = events[~events["id"].isin(zombie_ids)]
 
         depth_override = None
         if self._format is not None:
@@ -255,12 +231,6 @@ class Pipeline:
         logger.info("Pipeline: computing order aggressiveness")
         events = order_aggressiveness(events, depth_summary)
 
-        offset = pd.Timedelta(seconds=self.config.zombie_offset_seconds)
-        depth_summary = depth_summary[
-            depth_summary["timestamp"] >= events["timestamp"].min() + offset
-        ]
-
-        # ── Optional flow toxicity metrics ─────────────────────────────
         vpin_df = None
         ofi_df = None
         if self.config.vpin_bucket_volume is not None:
@@ -272,7 +242,6 @@ class Pipeline:
             logger.info("Pipeline: computing order flow imbalance")
             ofi_df = order_flow_imbalance(trades)
 
-        # ── Provenance metadata ────────────────────────────────────────
         metadata: dict[str, Any] = {
             "source": str(source),
             "format": self._format.name if self._format else None,

@@ -1,6 +1,6 @@
 """LOBSTER data format support.
 
-Provides loader, matcher, trade inferrer, writer, and format descriptor
+Provides loader, trade reader, writer, and format descriptor
 for the LOBSTER limit-order-book data set
 (https://lobsterdata.com).
 
@@ -36,13 +36,7 @@ from ob_analytics._utils import (
     seconds_after_midnight_to_datetime,
 )
 from ob_analytics.config import PipelineConfig
-from ob_analytics.protocols import (
-    DataWriter,
-    EventLoader,
-    Format,
-    MatchingEngine,
-    TradeInferrer,
-)
+from ob_analytics.protocols import DataWriter, EventLoader, Format, TradeSource
 
 
 # ── Constants ─────────────────────────────────────────────────────────
@@ -244,52 +238,32 @@ class LobsterLoader:
         return None
 
 
-# ── LobsterMatcher ───────────────────────────────────────────────────
+# ── LobsterTradeReader ────────────────────────────────────────────────
 
 
-class LobsterMatcher:
-    """Pass-through matcher for LOBSTER data.
+class LobsterTradeReader:
+    """Build trades directly from LOBSTER execution events.
 
-    LOBSTER provides single-sided execution events (the resting order
-    only), so there are no bid/ask pairs to match.  This matcher simply
-    adds the required ``matching_event`` column filled with NaN.
+    In LOBSTER, each execution event (type 4 or 5) represents the
+    resting (maker) side of a trade.  This reader builds trade records
+    directly from those rows in the events frame; no matching is needed
+    because the data already pairs maker rows with executions.
 
-    Satisfies the :class:`~ob_analytics.protocols.MatchingEngine` protocol.
+    Satisfies the :class:`~ob_analytics.protocols.TradeSource` protocol.
     """
 
     def __init__(self, config: PipelineConfig | None = None) -> None:
         self._config = config or PipelineConfig()
 
-    def match(self, events: pd.DataFrame) -> pd.DataFrame:
-        events = events.copy()
-        events["matching_event"] = np.nan
-        return events
-
-
-# ── LobsterTradeInferrer ─────────────────────────────────────────────
-
-
-class LobsterTradeInferrer:
-    """Infer trades directly from LOBSTER execution events.
-
-    In LOBSTER, each execution event (type 4 or 5) represents one side
-    of a trade -- the **resting** (maker) order.  This inferrer builds
-    trade records directly from those events without requiring matched
-    pairs.
-
-    Satisfies the :class:`~ob_analytics.protocols.TradeInferrer` protocol.
-    """
-
-    def __init__(self, config: PipelineConfig | None = None) -> None:
-        self._config = config or PipelineConfig()
-
-    def infer_trades(self, events: pd.DataFrame) -> pd.DataFrame:
+    def load(self, events: pd.DataFrame, source: Any) -> pd.DataFrame:
         """Build a trades DataFrame from LOBSTER execution events.
 
         Parameters
         ----------
         events : pandas.DataFrame
             Events with ``raw_event_type`` column populated.
+        source
+            Unused; trade information is embedded in *events*.
 
         Returns
         -------
@@ -357,7 +331,7 @@ class LobsterTradeInferrer:
         trades = trades.sort_values("timestamp", kind="stable").reset_index(drop=True)
 
         logger.info(
-            "LobsterTradeInferrer: {} trades ({} with identified taker)",
+            "LobsterTradeReader: {} trades ({} with identified taker)",
             len(trades),
             trades["taker_event_id"].notna().sum(),
         )
@@ -767,11 +741,8 @@ class LobsterFormat(Format):
         self._loader = LobsterLoader(config, trading_date=self.trading_date)
         return self._loader
 
-    def create_matcher(self, config: PipelineConfig) -> MatchingEngine:
-        return LobsterMatcher(config)
-
-    def create_trade_inferrer(self, config: PipelineConfig) -> TradeInferrer:
-        return LobsterTradeInferrer(config)
+    def create_trade_source(self, config: PipelineConfig) -> TradeSource:
+        return LobsterTradeReader(config)
 
     def create_writer(self, config: PipelineConfig) -> DataWriter:
         return LobsterWriter(config, trading_date=self.trading_date)
@@ -798,7 +769,4 @@ class LobsterFormat(Format):
             "price_decimals": 2,
             "price_divisor": 10_000,
             "volume_decimals": 0,
-            "match_cutoff_ms": 100,
-            "price_jump_threshold": 5.0,
-            "skip_zombie_detection": True,
         }

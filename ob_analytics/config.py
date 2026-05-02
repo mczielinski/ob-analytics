@@ -55,29 +55,6 @@ class PipelineConfig(BaseModel):
         ),
     )
 
-    # ── Matching engine ───────────────────────────────────────────────────
-    match_cutoff_ms: int = Field(
-        default=5000,
-        gt=0,
-        description=(
-            "Maximum elapsed time (ms) between a bid fill and an ask fill "
-            "for the Needleman-Wunsch matcher to consider them part of the "
-            "same trade.  5 000 ms suits 2015 Bitstamp; modern HFT venues "
-            "may need < 100 ms."
-        ),
-    )
-
-    # ── Trade inference ───────────────────────────────────────────────────
-    price_jump_threshold: float = Field(
-        default=10.0,
-        gt=0,
-        description=(
-            "Absolute price difference between consecutive trades that "
-            "triggers the maker/taker swap heuristic in trade inference.  "
-            "The original value ($10) targets 2015 BTC prices."
-        ),
-    )
-
     # ── Depth metrics ─────────────────────────────────────────────────────
     depth_bps: int = Field(
         default=25,
@@ -88,23 +65,6 @@ class PipelineConfig(BaseModel):
         default=20,
         gt=0,
         description="Number of depth bins on each side of the book.",
-    )
-    # ── Data processing ───────────────────────────────────────────────────
-    zombie_offset_seconds: int = Field(
-        default=60,
-        ge=0,
-        description=(
-            "Seconds to skip at the start of the depth summary to allow "
-            "the order book to populate before computing metrics."
-        ),
-    )
-    skip_zombie_detection: bool = Field(
-        default=False,
-        description=(
-            "Skip zombie order detection.  Enable for data sources "
-            "where orders consumed through execution do not receive "
-            "explicit deletion events (e.g. LOBSTER)."
-        ),
     )
 
     # ── Flow toxicity ─────────────────────────────────────────────────

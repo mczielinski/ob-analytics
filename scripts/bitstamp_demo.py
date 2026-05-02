@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Bitstamp data demo for ob-analytics.
 
-Runs the full pipeline on a Bitstamp-format CSV, saves results as
-Parquet, performs a round-trip write/re-read verification, and
-generates a plot gallery.
+Runs the full pipeline on Bitstamp-format `orders.csv` with a sibling
+`trades.csv`, saves results as Parquet, performs a round-trip write/re-read
+verification, and generates a plot gallery.
 
 Usage::
 
     uv run python scripts/bitstamp_demo.py
     uv run python scripts/bitstamp_demo.py --input path/to/orders.csv
+    uv run python scripts/bitstamp_demo.py --input path/to/run_dir
     uv run python scripts/bitstamp_demo.py --output ~/Desktop/bitstamp_gallery
 """
 
@@ -19,6 +20,8 @@ import sys
 from pathlib import Path
 
 import matplotlib
+import numpy as np
+import pandas as pd
 from loguru import logger
 
 from ob_analytics.bitstamp import BitstampFormat, BitstampWriter
@@ -34,6 +37,49 @@ _DEFAULT_CSV = (
 )
 
 
+def _resolve_orders_path(path: Path) -> Path:
+    """Return path to orders.csv (directory containing orders.csv is ok)."""
+    if path.is_dir():
+        return path / "orders.csv"
+    return path
+
+
+def _write_trades_csv_for_reader(trades: pd.DataFrame, dest: Path) -> None:
+    """Write capture-style trades.csv so BitstampTradeReader can load after round-trip."""
+    cols = [
+        "trade_id",
+        "timestamp",
+        "exchange_timestamp",
+        "price",
+        "amount",
+        "buy_order_id",
+        "sell_order_id",
+        "side",
+    ]
+    if trades.empty:
+        pd.DataFrame(columns=cols).to_csv(dest, index=False)
+        return
+
+    side = trades["direction"].astype(str)
+    buy_order_id = np.where(side == "buy", trades["taker"], trades["maker"])
+    sell_order_id = np.where(side == "buy", trades["maker"], trades["taker"])
+    ts_ns = trades["timestamp"].astype("datetime64[ns]").astype(np.int64)
+    ts_ms = ts_ns // 1_000_000
+    out = pd.DataFrame(
+        {
+            "trade_id": np.arange(1, len(trades) + 1, dtype=np.int64),
+            "timestamp": ts_ms,
+            "exchange_timestamp": ts_ms,
+            "price": trades["price"].to_numpy(),
+            "amount": trades["volume"].to_numpy(),
+            "buy_order_id": buy_order_id,
+            "sell_order_id": sell_order_id,
+            "side": side.to_numpy(),
+        }
+    )
+    out.to_csv(dest, index=False)
+
+
 def main() -> None:
     matplotlib.use("Agg")
     logger.enable("ob_analytics")
@@ -44,7 +90,10 @@ def main() -> None:
     parser.add_argument(
         "--input",
         default=None,
-        help=f"Path to Bitstamp-format CSV (default: {_DEFAULT_CSV})",
+        help=(
+            "Path to orders.csv, or directory containing orders.csv + trades.csv "
+            f"(default: {_DEFAULT_CSV})"
+        ),
     )
     parser.add_argument(
         "--output",
@@ -53,12 +102,23 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    csv_path = Path(args.input) if args.input else _DEFAULT_CSV
-    if not csv_path.exists():
-        logger.error("CSV file not found: {}", csv_path)
+    raw_input = Path(args.input) if args.input else _DEFAULT_CSV
+    orders_path = _resolve_orders_path(raw_input)
+    if not orders_path.exists():
+        logger.error("orders.csv not found: {}", orders_path)
         logger.error(
-            "Provide a Bitstamp-format CSV with --input or place one at {}",
-            _DEFAULT_CSV,
+            "Provide --input pointing to orders.csv or a directory that contains it "
+            "(see {})",
+            _DEFAULT_CSV.parent,
+        )
+        sys.exit(1)
+
+    trades_path = orders_path.parent / "trades.csv"
+    if not trades_path.exists():
+        logger.error(
+            "Companion trades.csv missing next to {}. "
+            "Capture both with scripts/collect_bitstamp_btcusd.py.",
+            orders_path.name,
         )
         sys.exit(1)
 
@@ -66,14 +126,15 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info("=" * 60)
-    logger.info("Bitstamp Demo: {}", csv_path.name)
+    logger.info("Bitstamp Demo: {}", orders_path.name)
     logger.info("=" * 60)
-    logger.info("Input: {}", csv_path)
+    logger.info("Orders:  {}", orders_path)
+    logger.info("Trades:  {}", trades_path)
 
     # 1. Run pipeline
     logger.info("Running pipeline...")
     pipeline = Pipeline(format=BitstampFormat())
-    result = pipeline.run(str(csv_path))
+    result = pipeline.run(str(orders_path))
 
     logger.info("Events:  {:,}", len(result.events))
     logger.info("Trades:  {:,}", len(result.trades))
@@ -91,19 +152,24 @@ def main() -> None:
     save_data(result_dict, parquet_dir)
     logger.info("Parquet saved to: {}", parquet_dir)
 
-    # 3. Round-trip: write as Bitstamp CSV, re-read, verify
+    # 3. Round-trip: write as Bitstamp CSV + trades, re-read, verify
     logger.info("Round-trip verification...")
     roundtrip_dir = output_dir / "roundtrip"
+    roundtrip_dir.mkdir(parents=True, exist_ok=True)
     roundtrip_csv = roundtrip_dir / "orders.csv"
     save_data(result_dict, roundtrip_csv, writer=BitstampWriter())
+    _write_trades_csv_for_reader(result.trades, roundtrip_dir / "trades.csv")
     logger.info("Bitstamp CSV written to: {}", roundtrip_csv)
+    logger.info("Synthetic trades.csv written next to round-trip orders.")
 
     rt_result = Pipeline(format=BitstampFormat()).run(str(roundtrip_csv))
     logger.info("Re-read events:  {:,}", len(rt_result.events))
     logger.info("Re-read trades:  {:,}", len(rt_result.trades))
 
     events_match = len(result.events) == len(rt_result.events)
+    trades_match = len(result.trades) == len(rt_result.trades)
     logger.info("Event count match: {}", "YES" if events_match else "NO")
+    logger.info("Trade count match: {}", "YES" if trades_match else "NO")
 
     # 4. Generate gallery
     logger.info("Generating plot gallery...")
@@ -111,7 +177,7 @@ def main() -> None:
     gallery_path = generate_gallery(
         result,
         gallery_dir,
-        title=f"Bitstamp ({csv_path.name}) -- ob-analytics",
+        title=f"Bitstamp ({orders_path.name}) -- ob-analytics",
     )
     logger.info("Gallery: {}", gallery_path)
     logger.info("Open in browser: file://{}", gallery_path.resolve())

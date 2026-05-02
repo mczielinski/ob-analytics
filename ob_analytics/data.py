@@ -1,16 +1,14 @@
-"""Data I/O: Parquet serialization, zombie order detection, and writer registry."""
+"""Data I/O: Parquet serialization and writer registry."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
 from loguru import logger
 
-from ob_analytics._utils import validate_columns
 from ob_analytics.protocols import DataWriter
 
 
@@ -29,92 +27,6 @@ def register_writer(name: str, writer_cls: type) -> None:
 def list_writers() -> list[str]:
     """Return a sorted list of registered writer names."""
     return sorted(_WRITERS)
-
-
-def get_zombie_ids(events: pd.DataFrame, trades: pd.DataFrame) -> list[int]:
-    """
-    Identify zombie orders that should be removed from the events DataFrame.
-
-    Parameters
-    ----------
-    events : pandas.DataFrame
-        DataFrame containing limit order events.
-    trades : pandas.DataFrame
-        DataFrame containing trade executions.
-
-    Returns
-    -------
-    list of int
-        A list of order IDs that are considered zombies.
-    """
-    validate_columns(
-        events,
-        {"action", "id", "direction", "timestamp", "price"},
-        "get_zombie_ids(events)",
-    )
-    validate_columns(
-        trades,
-        {"direction", "timestamp", "price"},
-        "get_zombie_ids(trades)",
-    )
-
-    # Filter cancelled events
-    cancelled = events[events["action"] == "deleted"]["id"]
-    zombies = events[~events["id"].isin(cancelled)]
-
-    # We only care about the last state of each zombie
-    zombies_last = zombies.drop_duplicates(subset=["id"], keep="last")
-
-    # Separate bid and ask zombies
-    bid_zombies = zombies_last[zombies_last["direction"] == "bid"].copy()
-    ask_zombies = zombies_last[zombies_last["direction"] == "ask"].copy()
-
-    trades = trades.sort_values("timestamp")
-
-    sell_trades = trades[trades["direction"] == "sell"].copy()
-    if not sell_trades.empty:
-        sell_trades["min_price_after"] = np.minimum.accumulate(
-            np.asarray(sell_trades["price"].values[::-1])
-        )[::-1]
-
-    buy_trades = trades[trades["direction"] == "buy"].copy()
-    if not buy_trades.empty:
-        buy_trades["max_price_after"] = np.maximum.accumulate(
-            np.asarray(buy_trades["price"].values[::-1])
-        )[::-1]
-
-    valid_bid_zombies = []
-    if not bid_zombies.empty and not sell_trades.empty:
-        bid_zombies = bid_zombies.sort_values("timestamp")
-        sell_sorted = sell_trades[["timestamp", "min_price_after"]].sort_values(
-            "timestamp"
-        )
-        merged_bids = pd.merge_asof(
-            bid_zombies,
-            sell_sorted,
-            on="timestamp",
-            direction="forward",
-        )
-        valid_bids = merged_bids[merged_bids["price"] > merged_bids["min_price_after"]]
-        valid_bid_zombies = valid_bids["id"].tolist()
-
-    valid_ask_zombies = []
-    if not ask_zombies.empty and not buy_trades.empty:
-        ask_zombies = ask_zombies.sort_values("timestamp")
-        buy_sorted = buy_trades[["timestamp", "max_price_after"]].sort_values(
-            "timestamp"
-        )
-        merged_asks = pd.merge_asof(
-            ask_zombies,
-            buy_sorted,
-            on="timestamp",
-            direction="forward",
-        )
-        valid_asks = merged_asks[merged_asks["price"] < merged_asks["max_price_after"]]
-        valid_ask_zombies = valid_asks["id"].tolist()
-
-    # Combine bid and ask zombies
-    return valid_bid_zombies + valid_ask_zombies
 
 
 def load_data(path: str | Path) -> dict[str, pd.DataFrame]:

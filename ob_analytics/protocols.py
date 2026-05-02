@@ -7,12 +7,10 @@ no need to inherit from these classes.
 Built-in implementations ship with the package (one symmetric set per format):
 
 * Bitstamp: :class:`~ob_analytics.bitstamp.BitstampLoader`,
-  :class:`~ob_analytics.bitstamp.BitstampMatcher`,
-  :class:`~ob_analytics.bitstamp.BitstampTradeInferrer`,
+  :class:`~ob_analytics.bitstamp.BitstampTradeReader`,
   :class:`~ob_analytics.bitstamp.BitstampWriter`
 * LOBSTER: :class:`~ob_analytics.lobster.LobsterLoader`,
-  :class:`~ob_analytics.lobster.LobsterMatcher`,
-  :class:`~ob_analytics.lobster.LobsterTradeInferrer`,
+  :class:`~ob_analytics.lobster.LobsterTradeReader`,
   :class:`~ob_analytics.lobster.LobsterWriter`
 
 Users can substitute their own by passing any object that satisfies the
@@ -55,50 +53,41 @@ class EventLoader(Protocol):
 
 
 @runtime_checkable
-class MatchingEngine(Protocol):
-    """Pairs bid and ask fills to identify which events are part of the same trade.
+class TradeSource(Protocol):
+    """Builds the trades DataFrame for a given run.
 
-    Receives the events DataFrame (with ``fill`` column populated) and
-    returns the same DataFrame with a ``matching_event`` column added.
+    Implementations read explicit trade records (a separate
+    ``trades.csv``, LOBSTER execution rows embedded in the events
+    frame, etc.) and project them into the canonical trades schema.
+
+    Returned DataFrame columns:
+
+    * ``timestamp``        — pandas datetime64[ns]
+    * ``price``            — float
+    * ``volume``           — float
+    * ``direction``        — categorical ``buy``/``sell`` (taker side)
+    * ``maker_event_id``   — integer event id of the resting order
+    * ``taker_event_id``   — integer event id of the aggressing order
+    * ``maker``            — order id of the resting order
+    * ``taker``            — order id of the aggressing order
+    * ``maker_og``         — original_number of the maker event
+    * ``taker_og``         — original_number of the taker event
     """
 
-    def match(self, events: pd.DataFrame) -> pd.DataFrame:
-        """Pair bid/ask fills and return events with a ``matching_event`` column.
+    def load(self, events: pd.DataFrame, source: Any) -> pd.DataFrame:
+        """Build the trades DataFrame.
 
         Parameters
         ----------
         events : pandas.DataFrame
-            Events DataFrame with a ``fill`` column.
+            The processed events frame (post-loader).
+        source
+            The same ``source`` value passed to :meth:`EventLoader.load`.
+            Used by file-based readers to locate companion files.
 
         Returns
         -------
         pandas.DataFrame
-            Same DataFrame with ``matching_event`` added.
-        """
-        ...
-
-
-@runtime_checkable
-class TradeInferrer(Protocol):
-    """Constructs trade records from matched event pairs.
-
-    Receives the events DataFrame (with ``matching_event`` populated)
-    and returns a trades DataFrame.
-    """
-
-    def infer_trades(self, events: pd.DataFrame) -> pd.DataFrame:
-        """Build a trades DataFrame from matched events.
-
-        Parameters
-        ----------
-        events : pandas.DataFrame
-            Events with ``matching_event`` column populated.
-
-        Returns
-        -------
-        pandas.DataFrame
-            Trades with ``timestamp``, ``price``, ``volume``,
-            ``direction``, ``maker_event_id``, ``taker_event_id``.
         """
         ...
 
@@ -130,12 +119,12 @@ class Format:
     """Base class for data format descriptors.
 
     Subclass to define how a specific data format's events should be
-    loaded, matched, trade-inferred, and optionally written back.  Pass
+    loaded, how trades are acquired, and optionally written back.  Pass
     instances to ``Pipeline(format=...)`` for one-line setup.
 
     Individual components can still be overridden::
 
-        Pipeline(format=LobsterFormat(...), matcher=MyMatcher())
+        Pipeline(format=LobsterFormat(...), loader=MyLoader())
 
     Subclasses should set the ``name`` class variable to a short lowercase
     string identifying the exchange format (e.g. ``name = "bitstamp"``).
@@ -148,22 +137,10 @@ class Format:
         """Return a loader for this format."""
         raise NotImplementedError
 
-    def create_matcher(self, config: Any) -> MatchingEngine:
-        """Return a matching engine for this format.
-
-        Subclasses must override this method.
-        """
+    def create_trade_source(self, config: Any) -> TradeSource:
+        """Return a trade source for this format."""
         raise NotImplementedError(
-            f"{type(self).__name__} must implement create_matcher()"
-        )
-
-    def create_trade_inferrer(self, config: Any) -> TradeInferrer:
-        """Return a trade inferrer for this format.
-
-        Subclasses must override this method.
-        """
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement create_trade_inferrer()"
+            f"{type(self).__name__} must implement create_trade_source()"
         )
 
     def create_writer(self, config: Any) -> DataWriter | None:

@@ -10,9 +10,8 @@ trading and quantifying price impact:
 * :func:`order_flow_imbalance` — Normalised buy/sell volume imbalance
   per time window.
 
-All functions accept a trades DataFrame produced by
-:class:`~ob_analytics.trades.DefaultTradeInferrer` (or any DataFrame
-with the required columns).
+All functions accept a trades DataFrame from the pipeline (or any
+DataFrame with the required columns).
 """
 
 from __future__ import annotations

@@ -1,10 +1,9 @@
-"""Bitstamp data format: event loading, matching, trade inference, and writing.
+"""Bitstamp data format: event loading, trade reading, and writing.
 
-Contains the full symmetric set of Bitstamp-specific components:
+Contains the symmetric set of Bitstamp-specific components:
 
 * :class:`BitstampLoader` — loads Bitstamp CSV event data
-* :class:`BitstampMatcher` — matches bid/ask fills (Needleman-Wunsch)
-* :class:`BitstampTradeInferrer` — infers trades from matched events
+* :class:`BitstampTradeReader` — reads companion ``trades.csv`` (live capture)
 * :class:`BitstampWriter` — writes events back to Bitstamp CSV
 * :class:`BitstampFormat` — format descriptor bundling all of the above
 
@@ -30,230 +29,10 @@ from ob_analytics._utils import (
     validate_non_empty,
 )
 from ob_analytics.config import PipelineConfig
-from ob_analytics.exceptions import MatchingError
-from ob_analytics.protocols import (
-    DataWriter,
-    EventLoader,
-    Format,
-    MatchingEngine,
-    TradeInferrer,
-)
+from ob_analytics.protocols import DataWriter, EventLoader, Format, TradeSource
 
 
-# ---------------------------------------------------------------------------
-# Needleman-Wunsch sequence alignment (bid/ask fill matching)
-# ---------------------------------------------------------------------------
-
-
-def _create_similarity_matrix(
-    a: pd.Series, b: pd.Series, cut_off_ms: int
-) -> np.ndarray:
-    """Create a similarity matrix based on time differences and cut-off window.
-
-    Parameters
-    ----------
-    a : pandas.Series
-        A pandas Series of timestamps.
-    b : pandas.Series
-        A pandas Series of timestamps.
-    cut_off_ms : int
-        The cut-off time window in milliseconds.
-
-    Returns
-    -------
-    numpy.ndarray
-        A NumPy array representing the similarity matrix.
-    """
-    a_ns = a.to_numpy().astype("datetime64[ns]").astype(np.float64)
-    b_ns = b.to_numpy().astype("datetime64[ns]").astype(np.float64)
-    diff_ms = np.abs(a_ns.reshape(-1, 1) - b_ns) / 1e6
-    safe_diff = np.where(diff_ms != 0, diff_ms, 1.0)
-    return np.where(diff_ms != 0, cut_off_ms / safe_diff, float(cut_off_ms))
-
-
-def _align_sequences(s_matrix: np.ndarray, gap_penalty: int = -1) -> np.ndarray:
-    """Perform Needleman-Wunsch alignment and return aligned indices.
-
-    Parameters
-    ----------
-    s_matrix : numpy.ndarray
-        The similarity matrix.
-    gap_penalty : int, optional
-        The penalty for gaps in the alignment. Default is -1.
-
-    Returns
-    -------
-    numpy.ndarray
-        A NumPy array with aligned indices from the two sequences.
-    """
-    m, n = s_matrix.shape
-    f_matrix = np.zeros((m + 1, n + 1))
-    f_matrix[0, :] = np.arange(n + 1) * gap_penalty
-    f_matrix[:, 0] = np.arange(m + 1) * gap_penalty
-
-    for i in range(1, m + 1):
-        for j in range(1, n + 1):
-            match = f_matrix[i - 1, j - 1] + s_matrix[i - 1, j - 1]
-            delete = f_matrix[i - 1, j] + gap_penalty
-            insert = f_matrix[i, j - 1] + gap_penalty
-            f_matrix[i, j] = max(match, delete, insert)
-
-    aligned_indices = []
-    i, j = m, n
-    while i > 0 or j > 0:
-        if (
-            i > 0
-            and j > 0
-            and f_matrix[i, j] == f_matrix[i - 1, j - 1] + s_matrix[i - 1, j - 1]
-        ):
-            aligned_indices.append((i - 1, j - 1))
-            i -= 1
-            j -= 1
-        elif i > 0 and f_matrix[i, j] == f_matrix[i - 1, j] + gap_penalty:
-            i -= 1
-        else:
-            j -= 1
-
-    return np.array(aligned_indices[::-1])
-
-
-# ---------------------------------------------------------------------------
-# NeedlemanWunschMatcher
-# ---------------------------------------------------------------------------
-
-
-class NeedlemanWunschMatcher:
-    """Match bid/ask fills using volume equality and Needleman-Wunsch alignment.
-
-    Satisfies the :class:`~ob_analytics.protocols.MatchingEngine` protocol.
-
-    Parameters
-    ----------
-    config : PipelineConfig, optional
-        Pipeline configuration.  ``match_cutoff_ms`` controls the maximum
-        time window between fills to consider a match.
-    """
-
-    def __init__(self, config: PipelineConfig | None = None) -> None:
-        self._config = config or PipelineConfig()
-
-    def match(self, events: pd.DataFrame) -> pd.DataFrame:
-        """Add a ``matching_event`` column pairing bid/ask fills.
-
-        For each unique fill volume, bid and ask fills within
-        ``match_cutoff_ms`` are paired.  When a simple closest-match is
-        ambiguous (duplicates or gaps), Needleman-Wunsch sequence
-        alignment is used as a fallback.
-
-        Parameters
-        ----------
-        events : pandas.DataFrame
-            Events with columns ``direction``, ``fill``,
-            ``original_number``, ``event_id``, ``timestamp``.
-
-        Returns
-        -------
-        pandas.DataFrame
-            Same events with a ``matching_event`` column added.
-            Unmatched rows have ``NaN``.
-        """
-        validate_columns(
-            events,
-            {"direction", "fill", "original_number", "event_id", "timestamp"},
-            "NeedlemanWunschMatcher.match",
-        )
-        validate_non_empty(events, "NeedlemanWunschMatcher.match")
-
-        matched = self._run_matching(events)
-
-        events["matching_event"] = np.nan
-        if len(matched) == 0:
-            return events
-        matched_bids = pd.DataFrame(matched, columns=["event_id", "matching_event"])
-        matched_asks = pd.DataFrame(matched, columns=["matching_event", "event_id"])
-        events = pd.merge(events, matched_bids, on="event_id", how="left")
-        events = pd.merge(events, matched_asks, on="event_id", how="left")
-
-        events["matching_event"] = (
-            events["matching_event_y"]
-            .fillna(events["matching_event_x"])
-            .fillna(events["matching_event"])
-        )
-
-        events = events.drop(columns=["matching_event_x", "matching_event_y"])
-        return events
-
-    def _run_matching(self, events: pd.DataFrame) -> np.ndarray:
-        cut_off_td = np.timedelta64(self._config.match_cutoff_ms * 1_000_000, "ns")
-        res: list[np.ndarray] = []
-        cols = ["original_number", "event_id", "fill", "timestamp"]
-
-        bid_fills = events[(events["direction"] == "bid") & (events["fill"] != 0)][cols]
-        ask_fills = events[(events["direction"] == "ask") & (events["fill"] != 0)][cols]
-
-        def fill_id(src: pd.DataFrame, dst: pd.DataFrame) -> pd.DataFrame:
-            id_fills = src[src["fill"].isin(dst["fill"])]
-            return id_fills.sort_values(
-                by=["fill", "timestamp"], ascending=[False, True], kind="stable"
-            )
-
-        id_bid_fills = fill_id(bid_fills, ask_fills)
-        id_ask_fills = fill_id(ask_fills, bid_fills)
-
-        for volume in id_bid_fills["fill"].unique():
-            bids = id_bid_fills[id_bid_fills["fill"] == volume]
-            asks = id_ask_fills[id_ask_fills["fill"] == volume]
-
-            time_deltas = (
-                bids["timestamp"].to_numpy(dtype="datetime64[ns]").reshape(-1, 1)
-                - asks["timestamp"].to_numpy(dtype="datetime64[ns]")
-            ).astype("timedelta64[ns]")
-
-            if len(asks) == 1:
-                time_deltas = time_deltas.reshape(-1, 1)
-
-            closest_ask_indices = np.argmin(np.abs(time_deltas), axis=1)
-            ask_event_ids = asks["event_id"].values[closest_ask_indices]
-
-            mask = (
-                np.abs(time_deltas[np.arange(len(bids)), closest_ask_indices])
-                <= cut_off_td
-            )
-            ask_event_ids = np.where(mask, ask_event_ids, np.nan)
-
-            if not any(pd.isna(ask_event_ids)) and len(ask_event_ids) == len(
-                set(ask_event_ids)
-            ):
-                matches = np.column_stack((bids["event_id"], ask_event_ids))
-                res.extend(matches)
-            else:
-                similarity_matrix = _create_similarity_matrix(
-                    bids["timestamp"], asks["timestamp"], self._config.match_cutoff_ms
-                )
-                aligned_indices = _align_sequences(similarity_matrix)
-                bid_ts = bids["timestamp"].to_numpy(dtype="datetime64[ns]")
-                ask_ts = asks["timestamp"].to_numpy(dtype="datetime64[ns]")
-                matched_indices = aligned_indices[
-                    np.abs(
-                        bid_ts[aligned_indices[:, 0]] - ask_ts[aligned_indices[:, 1]]
-                    )
-                    <= cut_off_td
-                ]
-                res.extend(
-                    np.column_stack(
-                        (
-                            bids["event_id"].values[matched_indices[:, 0]],
-                            asks["event_id"].values[matched_indices[:, 1]],
-                        )
-                    )
-                )
-
-        return np.array(res, dtype=int)
-
-
-# ---------------------------------------------------------------------------
-# BitstampLoader
-# ---------------------------------------------------------------------------
+# ── BitstampLoader ────────────────────────────────────────────────────
 
 
 class BitstampLoader:
@@ -375,208 +154,163 @@ class BitstampLoader:
         return events[~events["event_id"].isin(duplicate_event_ids)]
 
 
-# ── BitstampMatcher ───────────────────────────────────────────────────
+# ── BitstampTradeReader ───────────────────────────────────────────────
 
 
-class BitstampMatcher:
-    """Matching engine for Bitstamp event data.
+_TRADES_COLUMNS = (
+    "trade_id",
+    "timestamp",
+    "exchange_timestamp",
+    "price",
+    "amount",
+    "buy_order_id",
+    "sell_order_id",
+    "side",
+)
 
-    Thin wrapper around :class:`NeedlemanWunschMatcher` providing a stable,
-    exchange-named API entry point.  Symmetric with
-    :class:`~ob_analytics.lobster.LobsterMatcher`.
-
-    Satisfies the :class:`~ob_analytics.protocols.MatchingEngine` protocol.
-
-    Parameters
-    ----------
-    config : PipelineConfig, optional
-        Pipeline configuration.
-    """
-
-    def __init__(self, config: PipelineConfig | None = None) -> None:
-        self._matcher = NeedlemanWunschMatcher(config)
-
-    def match(self, events: pd.DataFrame) -> pd.DataFrame:
-        """Pair bid/ask fills; return events with ``matching_event`` column."""
-        return self._matcher.match(events)
+_EMPTY_TRADES = pd.DataFrame(
+    columns=[
+        "timestamp",
+        "price",
+        "volume",
+        "direction",
+        "maker_event_id",
+        "taker_event_id",
+        "maker",
+        "taker",
+        "maker_og",
+        "taker_og",
+    ]
+)
 
 
-# ── BitstampTradeInferrer ─────────────────────────────────────────────
+class BitstampTradeReader:
+    """Build trades from the companion ``trades.csv`` produced by
+    ``scripts/collect_bitstamp_btcusd.py``.
 
+    Reads each row from ``<source_dir>/trades.csv`` and projects it into
+    the canonical trades schema, joining against the events frame to
+    resolve ``buy_order_id`` / ``sell_order_id`` into ``event_id`` and
+    ``original_number`` references.
 
-class BitstampTradeInferrer:
-    """Construct trade records from matched bid/ask event pairs.
-
-    Satisfies the :class:`~ob_analytics.protocols.TradeInferrer` protocol.
-    Symmetric with :class:`~ob_analytics.lobster.LobsterTradeInferrer`.
-
-    Parameters
-    ----------
-    config : PipelineConfig, optional
-        Pipeline configuration.  ``price_jump_threshold`` controls when the
-        maker/taker swap heuristic is triggered.
+    Satisfies the :class:`~ob_analytics.protocols.TradeSource` protocol.
     """
 
     def __init__(self, config: PipelineConfig | None = None) -> None:
         self._config = config or PipelineConfig()
 
-    def infer_trades(self, events: pd.DataFrame) -> pd.DataFrame:
-        """Build a trades DataFrame from matched events.
+    def load(self, events: pd.DataFrame, source: Any) -> pd.DataFrame:
+        path = self._resolve_trades_path(source)
+        raw = pd.read_csv(path)
 
-        Determines maker vs taker using exchange timestamps, and applies
-        a price-jump heuristic to correct misattributions.
+        if raw.empty:
+            return _EMPTY_TRADES.copy()
 
-        Parameters
-        ----------
-        events : pandas.DataFrame
-            Events with ``matching_event`` column populated.
+        validate_columns(raw, set(_TRADES_COLUMNS), "BitstampTradeReader.load")
 
-        Returns
-        -------
-        pandas.DataFrame
-            Trades with columns ``timestamp``, ``price``, ``volume``,
-            ``direction``, ``maker_event_id``, ``taker_event_id``,
-            ``maker``, ``taker``.
-        """
-        validate_columns(
-            events,
+        # `side` is the taker side: "buy" => taker is the buyer.
+        taker_id = np.where(
+            raw["side"].astype(str) == "buy",
+            raw["buy_order_id"],
+            raw["sell_order_id"],
+        )
+        maker_id = np.where(
+            raw["side"].astype(str) == "buy",
+            raw["sell_order_id"],
+            raw["buy_order_id"],
+        )
+
+        ev_lookup = self._build_lookup(events)
+
+        recv_ms = pd.to_datetime(raw["timestamp"], unit="ms", utc=True).dt.tz_convert(
+            None
+        )
+        amounts = raw["amount"].astype(float).round(self._config.volume_decimals)
+
+        maker_event_id = self._resolve_event_ids(maker_id, amounts, ev_lookup)
+        taker_event_id = self._resolve_event_ids(taker_id, amounts, ev_lookup)
+
+        id_to_og = dict(zip(events["event_id"], events["original_number"]))
+        maker_og = pd.Series(maker_event_id).map(id_to_og)
+        taker_og = pd.Series(taker_event_id).map(id_to_og)
+
+        trades = pd.DataFrame(
             {
-                "direction",
-                "matching_event",
-                "event_id",
-                "exchange_timestamp",
-                "timestamp",
-                "price",
-                "fill",
-                "id",
-                "original_number",
-            },
-            "BitstampTradeInferrer.infer_trades",
-        )
-        validate_non_empty(events, "BitstampTradeInferrer.infer_trades")
-
-        matching_bids = events[
-            (events["direction"] == "bid") & ~pd.isna(events["matching_event"])
-        ].sort_values(by="event_id", kind="stable")
-        matching_asks = events[
-            (events["direction"] == "ask") & ~pd.isna(events["matching_event"])
-        ].sort_values(by="matching_event", kind="stable")
-
-        if not np.asarray(
-            matching_bids["event_id"].values == matching_asks["matching_event"].values
-        ).all():
-            raise MatchingError(
-                "Bid event IDs do not align with ask matching events. "
-                "This indicates a matching error in the upstream matching step."
-            )
-
-        matching_bids = matching_bids.reset_index(drop=True)
-        matching_asks = matching_asks.reset_index(drop=True)
-        bid_exchange_ts = matching_bids["exchange_timestamp"]
-        ask_exchange_ts = matching_asks["exchange_timestamp"]
-        bid_maker = (bid_exchange_ts < ask_exchange_ts) | (
-            (bid_exchange_ts == ask_exchange_ts)
-            & (matching_bids["event_id"] < matching_asks["event_id"])
-        )
-
-        timestamp = np.where(
-            matching_bids["timestamp"] <= matching_asks["timestamp"],
-            matching_bids["timestamp"],
-            matching_asks["timestamp"],
-        )
-
-        price = np.where(bid_maker, matching_bids["price"], matching_asks["price"])
-        volume = matching_bids["fill"]
-
-        direction = pd.Categorical(
-            np.where(bid_maker, "sell", "buy"), categories=["buy", "sell"], ordered=True
-        ).astype(str)
-
-        maker_event_id = np.where(
-            bid_maker, matching_bids["event_id"], matching_asks["event_id"]
-        )
-        taker_event_id = np.where(
-            bid_maker, matching_asks["event_id"], matching_bids["event_id"]
-        )
-
-        id_to_id = dict(zip(events["event_id"], events["id"]))
-        id_to_original_number = dict(zip(events["event_id"], events["original_number"]))
-
-        maker = pd.Series(maker_event_id).map(id_to_id).values
-        taker = pd.Series(taker_event_id).map(id_to_id).values
-        maker_og = pd.Series(maker_event_id).map(id_to_original_number).values
-        taker_og = pd.Series(taker_event_id).map(id_to_original_number).values
-
-        combined = pd.DataFrame(
-            {
-                "timestamp": timestamp,
-                "price": price,
-                "volume": volume,
-                "direction": direction,
+                "timestamp": recv_ms.values,
+                "price": raw["price"].astype(float).values,
+                "volume": amounts.values,
+                "direction": pd.Categorical(
+                    raw["side"].astype(str), categories=["buy", "sell"], ordered=True
+                ),
                 "maker_event_id": maker_event_id,
                 "taker_event_id": taker_event_id,
-                "maker": maker,
-                "taker": taker,
-                "maker_og": maker_og,
-                "taker_og": taker_og,
+                "maker": maker_id,
+                "taker": taker_id,
+                "maker_og": maker_og.values,
+                "taker_og": taker_og.values,
             }
         )
-        combined = combined.sort_values(by="timestamp", kind="stable")
 
-        self._fix_price_jumps(combined, events)
-        return combined
+        trades = trades.sort_values("timestamp", kind="stable").reset_index(drop=True)
 
-    def _fix_price_jumps(self, combined: pd.DataFrame, events: pd.DataFrame) -> None:
-        """Swap maker/taker when consecutive prices jump beyond threshold."""
-        threshold = self._config.price_jump_threshold
-        jumps = np.where(abs(np.diff(combined["price"])) > threshold)[0]
-        if len(jumps) == 0:
-            return
-
-        if jumps[0] == 0:
-            jumps = jumps[1:]
-
-        logger.warning(
-            "{}: {} jumps > ${:.0f} (swapping makers with takers)",
-            combined["timestamp"].iloc[0].strftime("%Y-%m-%d"),
-            len(jumps),
-            threshold,
+        logger.info(
+            "BitstampTradeReader: {} trades ({} maker_event_id resolved, "
+            "{} taker_event_id resolved)",
+            len(trades),
+            trades["maker_event_id"].notna().sum(),
+            trades["taker_event_id"].notna().sum(),
         )
+        return trades
 
-        for i in jumps:
-            prev_jump, this_jump = combined.iloc[i - 1], combined.iloc[i]
-            if abs(this_jump["price"] - prev_jump["price"]) > threshold:
-                taker_eid = this_jump["taker_event_id"]
-                taker_price = events.loc[events["event_id"] == taker_eid, "price"].iloc[
-                    0
-                ]
-                taker_dir = "sell" if this_jump["direction"] == "buy" else "buy"
-                swap = pd.DataFrame(
-                    {
-                        "price": taker_price,
-                        "direction": taker_dir,
-                        "maker_event_id": taker_eid,
-                        "taker_event_id": this_jump["maker_event_id"],
-                        "maker": this_jump["taker"],
-                        "taker": this_jump["maker"],
-                        "maker_og": this_jump["taker_og"],
-                        "taker_og": this_jump["maker_og"],
-                    },
-                    index=[i],
-                )
-                combined.loc[
-                    i,
-                    [
-                        "price",
-                        "direction",
-                        "maker_event_id",
-                        "taker_event_id",
-                        "maker",
-                        "taker",
-                        "maker_og",
-                        "taker_og",
-                    ],
-                ] = swap.iloc[0]
+    @staticmethod
+    def _resolve_trades_path(source: Any) -> Path:
+        p = Path(source)
+        if p.is_file():
+            p = p.parent
+        candidate = p / "trades.csv"
+        if not candidate.exists():
+            raise FileNotFoundError(
+                f"BitstampTradeReader: no trades.csv next to {source!r} "
+                f"(looked at {candidate}). Capture trades alongside orders "
+                f"with scripts/collect_bitstamp_btcusd.py."
+            )
+        return candidate
+
+    @staticmethod
+    def _build_lookup(
+        events: pd.DataFrame,
+    ) -> dict[int, list[tuple[float, int]]]:
+        out: dict[int, list[tuple[float, int]]] = {}
+        non_zero = events[events["fill"] > 0]
+        for oid, fill, eid in zip(
+            non_zero["id"], non_zero["fill"], non_zero["event_id"]
+        ):
+            out.setdefault(int(oid), []).append((float(fill), int(eid)))
+        return out
+
+    def _resolve_event_ids(
+        self,
+        order_ids: np.ndarray,
+        amounts: pd.Series,
+        ev_lookup: dict[int, list[tuple[float, int]]],
+    ) -> np.ndarray:
+        result: list[int | float] = []
+        used: dict[int, list[tuple[float, int]]] = {
+            k: list(v) for k, v in ev_lookup.items()
+        }
+        digits = self._config.volume_decimals
+
+        for oid, amt in zip(order_ids, amounts):
+            cand = used.get(int(oid), ())
+            picked: int | float = float("nan")
+            for i, (fill, eid) in enumerate(cand):
+                if round(fill, digits) == round(float(amt), digits):
+                    picked = eid
+                    cand.pop(i)
+                    break
+            result.append(picked)
+
+        return np.array(result, dtype=object)
 
 
 # ── BitstampWriter ────────────────────────────────────────────────────
@@ -644,11 +378,8 @@ class BitstampFormat(Format):
     def create_loader(self, config: PipelineConfig) -> EventLoader:
         return BitstampLoader(config)
 
-    def create_matcher(self, config: PipelineConfig) -> MatchingEngine:
-        return BitstampMatcher(config)
-
-    def create_trade_inferrer(self, config: PipelineConfig) -> TradeInferrer:
-        return BitstampTradeInferrer(config)
+    def create_trade_source(self, config: PipelineConfig) -> TradeSource:
+        return BitstampTradeReader(config)
 
     def create_writer(self, config: PipelineConfig) -> DataWriter:
         return BitstampWriter(config)
@@ -658,6 +389,4 @@ class BitstampFormat(Format):
             "price_decimals": 2,
             "volume_decimals": 8,
             "timestamp_unit": "ms",
-            "match_cutoff_ms": 5000,
-            "price_jump_threshold": 10.0,
         }

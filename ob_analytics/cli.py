@@ -7,7 +7,7 @@ Usage::
     ob-analytics process orders.csv --output results/
     ob-analytics process data/ --format lobster --trading-date 2012-06-21
     ob-analytics gallery results/parquet/ --output my_gallery/
-    ob-analytics bitstamp-demo --input orders.csv --output demo_out/
+    ob-analytics bitstamp-demo --input /path/to/dir_with_orders_and_trades/ --output demo_out/
     ob-analytics lobster-demo /path/to/lobster_data --trading-date 2012-06-21 --output demo_out/
 """
 
