@@ -1,0 +1,21 @@
+{
+  "started_at": "2026-05-02T02:36:20.506380+00:00",
+  "ended_at": "2026-05-02T03:06:20.520689+00:00",
+  "duration_minutes": 30.0,
+  "pair": "btcusd",
+  "channels": [
+    "live_orders_btcusd",
+    "live_trades_btcusd"
+  ],
+  "ws_url": "wss://ws.bitstamp.net",
+  "rest_book_url": "https://www.bitstamp.net/api/v2/order_book/btcusd/?group=2",
+  "snapshot_microtimestamp": 1777689380521321,
+  "synthetic_created": 6512,
+  "synthetic_deleted": 6518,
+  "pre_snapshot_skipped": 0,
+  "live_orders": 301027,
+  "trades": 284,
+  "dropped": 0,
+  "reconnects": 0,
+  "total_order_rows": 314057
+}

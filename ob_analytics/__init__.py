@@ -123,18 +123,30 @@ register_writer("bitstamp", BitstampWriter)
 logger.disable("ob_analytics")
 
 
+def sample_data_dir() -> Path:
+    """Return the directory holding the bundled Bitstamp sample.
+
+    The directory contains ``orders.csv``, ``trades.csv``, and a
+    ``meta.json`` describing the live capture.  Pass this directory to
+    :class:`Pipeline` (or to :class:`BitstampTradeReader.load`) so the
+    companion ``trades.csv`` is auto-located.
+    """
+    return Path(__file__).parent / "_sample_data"
+
+
 def sample_csv_path() -> Path:
     """Return the path to the bundled Bitstamp sample ``orders.csv``.
 
     The companion ``trades.csv`` in the same directory is produced by
     the live capture script and is required for :class:`Pipeline` runs.
     """
-    return Path(__file__).parent / "_sample_data" / "orders.csv"
+    return sample_data_dir() / "orders.csv"
 
 
 __all__ = [
     # ── Sample data ──────────────────────────────────────────────────
     "sample_csv_path",
+    "sample_data_dir",
     # ── Symmetric format pairs (Bitstamp ↔ LOBSTER) ──────────────────
     "BitstampFormat",
     "LobsterFormat",

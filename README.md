@@ -59,17 +59,18 @@ seaborn, pydantic, pyarrow, loguru.
 
 ### Bitstamp (bundled sample)
 
-A sample dataset (~5 hours of Bitstamp BTC/USD events) is bundled with the
-package:
+A 30-minute Bitstamp BTC/USD live capture (~314k events, ~280 trades) is
+bundled with the package as paired `orders.csv` + `trades.csv`. Point the
+pipeline at the orders path; the companion trades file is auto-resolved:
 
 ```python
 from ob_analytics import Pipeline, sample_csv_path
 
 result = Pipeline().run(sample_csv_path())
 
-result.events       # enriched events with order types and aggressiveness
-result.trades       # inferred trades with maker/taker attribution
-result.depth        # price-level volume time series
+result.events         # enriched events with order types and aggressiveness
+result.trades         # trades from the live feed, with maker/taker attribution
+result.depth          # price-level volume time series
 result.depth_summary  # best bid/ask, BPS bins, spread
 ```
 

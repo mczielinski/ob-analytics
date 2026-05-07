@@ -21,6 +21,22 @@ def sample_csv_path() -> Path:
     return SAMPLE_CSV
 
 
+@pytest.fixture(scope="module")
+def bitstamp_sample_dir() -> Path:
+    """Path to the bundled Bitstamp sample directory (orders.csv + trades.csv).
+
+    Use when a test needs the directory itself (e.g. to feed
+    ``BitstampTradeReader.load(events, source=...)``) rather than just
+    the orders.csv path.
+    """
+    from ob_analytics import sample_data_dir
+
+    d = sample_data_dir()
+    if not (d / "orders.csv").exists() or not (d / "trades.csv").exists():
+        pytest.skip(f"Bitstamp sample data not found in: {d}")
+    return d
+
+
 @pytest.fixture
 def tiny_events() -> pd.DataFrame:
     """Minimal valid events DataFrame (4 rows, 2 bid + 2 ask fills)."""

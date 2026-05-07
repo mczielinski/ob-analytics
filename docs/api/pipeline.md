@@ -4,10 +4,10 @@ title: Pipeline
 
 # Pipeline
 
-The main orchestrator. Runs the full sequence: load → match → infer trades →
+The main orchestrator. Runs the full sequence: load → build trades →
 classify → depth → metrics → (optional VPIN/OFI). Use `Pipeline(format=...)`
 for LOBSTER or other registered formats, or pass individual components
-(`loader=`, `matcher=`, `trade_inferrer=`) to override specific stages.
+(`loader=`, `trade_source=`) to override specific stages.
 
 ::: ob_analytics.pipeline.Pipeline
 

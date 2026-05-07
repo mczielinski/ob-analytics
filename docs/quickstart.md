@@ -68,13 +68,15 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from ob_analytics import plot_trades, plot_events_histogram
 
-t3 = pd.Timestamp("2015-05-01 03:00:00")
-t4 = pd.Timestamp("2015-05-01 04:00:00")
+# Pick a 10-minute window inside the sample (it spans 30 minutes).
+t_start = result.trades["timestamp"].min()
+t3 = t_start + pd.Timedelta(minutes=10)
+t4 = t3 + pd.Timedelta(minutes=10)
 
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 6))
 
 plot_trades(result.trades, start_time=t3, end_time=t4, ax=ax1)
-ax1.set_title("Trades 03:00–04:00")
+ax1.set_title(f"Trades {t3:%H:%M}–{t4:%H:%M}")
 
 hist_data = result.events[["timestamp", "direction", "price", "volume"]].copy()
 hist_data["volume"] *= 1e-8
@@ -122,10 +124,12 @@ Once you have processed events, reconstruct the full bid/ask ladder at any
 timestamp:
 
 ```python
-from datetime import datetime
+import pandas as pd
 from ob_analytics import order_book
 
-snapshot = order_book(events, tp=datetime(2015, 5, 1, 3, 0), max_levels=5)
+# Snapshot ten minutes into the run (events.timestamp is timezone-naive UTC).
+tp = events["timestamp"].iloc[0] + pd.Timedelta(minutes=10)
+snapshot = order_book(events, tp=tp, max_levels=5)
 print(snapshot["timestamp"])
 print(snapshot["bids"].head())
 print(snapshot["asks"].head())
