@@ -29,7 +29,10 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --group dev --extra interactive
-      - run: uv run ty check ob_analytics/
+      # Pass --extra to `uv run` too: its implicit sync would otherwise
+      # re-resolve to the project default (no extras) and uninstall plotly,
+      # making `import plotly` unresolvable in ob_analytics/visualization/.
+      - run: uv run --group dev --extra interactive ty check ob_analytics/
 
   test:
     runs-on: ubuntu-latest
@@ -44,7 +47,11 @@ jobs:
           enable-cache: true
       - run: uv python install ${{ matrix.python-version }}
       - run: uv sync --group dev --extra interactive --python ${{ matrix.python-version }}
-      - run: uv run pytest tests/ --cov=ob_analytics --cov-report=xml -q
+      # Pass --extra to `uv run` too: its implicit sync would otherwise
+      # re-resolve to the project default (no extras) and uninstall plotly,
+      # which causes test_plotly_backend.py to skip and the gallery
+      # default-backends test to fail because `import plotly` raises.
+      - run: uv run --group dev --extra interactive --python ${{ matrix.python-version }} pytest tests/ --cov=ob_analytics --cov-report=xml -q
       - name: Upload coverage
         if: matrix.python-version == '3.11' && github.event_name == 'push'
         uses: codecov/codecov-action@v4
