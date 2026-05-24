@@ -102,9 +102,7 @@ class TestBitstampTradeReader:
         assert trades.loc[0, "maker_event_id"] in events["event_id"].values
         assert trades.loc[0, "taker_event_id"] in events["event_id"].values
 
-    def test_reader_returns_empty_with_correct_schema_when_no_trades(
-        self, tmp_path
-    ):
+    def test_reader_returns_empty_with_correct_schema_when_no_trades(self, tmp_path):
         from ob_analytics.bitstamp import BitstampLoader, BitstampTradeReader
 
         orders = pd.DataFrame(

@@ -301,7 +301,7 @@ class BitstampTradeReader:
         digits = self._config.volume_decimals
 
         for oid, amt in zip(order_ids, amounts):
-            cand = used.get(int(oid), ())
+            cand = used.get(int(oid), [])
             picked: int | float = float("nan")
             for i, (fill, eid) in enumerate(cand):
                 if round(fill, digits) == round(float(amt), digits):
