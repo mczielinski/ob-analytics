@@ -52,7 +52,6 @@ def _make_full_events() -> pd.DataFrame:
                     "flashed-limit",
                     "resting-limit",
                     "market-limit",
-                    "pacman",
                     "market",
                 ],
                 ordered=True,

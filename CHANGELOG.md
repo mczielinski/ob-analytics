@@ -10,6 +10,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Breaking
 
+- **`pacman` order type removed.** Legacy artifact of the 2015 Bitstamp HTTP
+  API, where a single `order_id` could appear at multiple prices over its
+  lifetime. Modern Bitstamp WS v2 and LOBSTER do not produce this pattern
+  by design (price-modifies become cancel + new id). The label preempted
+  market/maker/taker classification via set subtractions in
+  `set_order_types`, and forced `LobsterLoader` to renumber hidden-execution
+  ids to dodge misclassification. The `type` Categorical no longer includes
+  `"pacman"`. On the bundled live-capture sample, 347 rows previously
+  labelled `pacman` are now classified by their maker/taker behaviour
+  (337 → `market`, 6 → `unknown`, 4 → `market-limit`); `depth` and
+  `depth_summary` correspondingly gain those rows (no longer filtered out
+  of `price_level_volume`). `LobsterLoader` no longer renumbers
+  hidden-execution event ids (raw event type 5), which now retain the
+  native LOBSTER convention of `id=0`.
 - **Bitstamp trades** — The pipeline no longer infers trades from matched
   fills. A companion `trades.csv` next to `orders.csv` is required (capture
   format from `scripts/collect_bitstamp_btcusd.py`). Removed: Needleman–Wunsch
