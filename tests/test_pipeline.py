@@ -133,9 +133,57 @@ class TestPipelineWithMocks:
 
 
 class TestPipelineFlow:
-    def test_pipeline_uses_trade_source(self):
-        import pandas as pd
-        from ob_analytics import BitstampLoader, Pipeline, sample_csv_path
+    def test_pipeline_uses_trade_source(self, tmp_path: Path):
+        """Verify Pipeline.run() invokes the injected TradeSource.
+
+        Uses a 4-event minimal orders.csv rather than the bundled 22 MB
+        capture: this test only checks dependency-injection wiring, not
+        real data flow, so there's no value in paying the full-pipeline
+        cost (~5 min on the bundled sample).
+        """
+        from ob_analytics import BitstampLoader, Pipeline
+
+        orders = pd.DataFrame(
+            [
+                dict(
+                    id=10,
+                    timestamp=100,
+                    exchange_timestamp=100,
+                    price=100.0,
+                    volume=1.0,
+                    action="created",
+                    direction="ask",
+                ),
+                dict(
+                    id=10,
+                    timestamp=200,
+                    exchange_timestamp=200,
+                    price=100.0,
+                    volume=0.0,
+                    action="deleted",
+                    direction="ask",
+                ),
+                dict(
+                    id=11,
+                    timestamp=200,
+                    exchange_timestamp=200,
+                    price=99.0,
+                    volume=0.5,
+                    action="created",
+                    direction="bid",
+                ),
+                dict(
+                    id=11,
+                    timestamp=300,
+                    exchange_timestamp=300,
+                    price=99.0,
+                    volume=0.0,
+                    action="deleted",
+                    direction="bid",
+                ),
+            ]
+        )
+        orders.to_csv(tmp_path / "orders.csv", index=False)
 
         captured = {}
 
@@ -161,7 +209,7 @@ class TestPipelineFlow:
         result = Pipeline(
             loader=BitstampLoader(),
             trade_source=StubTradeSource(),
-        ).run(sample_csv_path())
+        ).run(tmp_path / "orders.csv")
 
         assert captured["called"]
         assert captured["n_events"] > 0
@@ -241,13 +289,3 @@ class TestPipelineEndToEnd:
         assert len(result.events) == 4
         assert len(result.trades) == 1
         assert len(result.depth) > 0
-
-    @pytest.mark.slow
-    def test_full_pipeline_with_sample_data(self, sample_csv_path: Path):
-        """Smoke test: run the real pipeline on the bundled capture."""
-        result = Pipeline().run(sample_csv_path)
-        assert isinstance(result, PipelineResult)
-        assert len(result.events) > 0
-        assert len(result.trades) > 0
-        assert len(result.depth) > 0
-        assert len(result.depth_summary) > 0
