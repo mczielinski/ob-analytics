@@ -174,8 +174,8 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
     """Determine limit order types.
 
     Classifies each order as one of: *market*, *resting-limit*,
-    *flashed-limit*, *pacman*, or *market-limit*, based on how the order
-    interacts with the book over its lifetime.
+    *flashed-limit*, or *market-limit*, based on how the order interacts
+    with the book over its lifetime.
 
     Parameters
     ----------
@@ -208,15 +208,10 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
             "flashed-limit",
             "resting-limit",
             "market-limit",
-            "pacman",
             "market",
         ],
         ordered=True,
     )
-
-    price_ranges = events.groupby("id")["price"].agg(["min", "max"])
-    pacman_ids = set(price_ranges[price_ranges["min"] != price_ranges["max"]].index)
-    events.loc[events["id"].isin(pacman_ids), "type"] = "pacman"
 
     created = events[events["action"] == "created"].sort_values(by="id", kind="stable")
     deleted = events[events["action"] == "deleted"].sort_values(by="id", kind="stable")
@@ -244,9 +239,9 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
     maker_ids = set(events[events["event_id"].isin(maker_event_ids_set)]["id"])
     taker_ids = set(events[events["event_id"].isin(taker_event_ids_set)]["id"])
 
-    pure_maker_ids = maker_ids - taker_ids - pacman_ids
-    ml_ids = (taker_ids & maker_ids) - pacman_ids
-    mo_ids = taker_ids - maker_ids - pacman_ids
+    pure_maker_ids = maker_ids - taker_ids
+    ml_ids = taker_ids & maker_ids
+    mo_ids = taker_ids - maker_ids
 
     events.loc[events["id"].isin(flashed_ids), "type"] = "flashed-limit"
     events.loc[events["id"].isin(forever_ids | pure_maker_ids), "type"] = (

@@ -163,16 +163,6 @@ class LobsterLoader:
             0.0,
         )
 
-        # Hidden order executions (type 5) all share id=0 which causes
-        # downstream misclassification as "pacman" (multiple prices for
-        # the same id).  Assign each a unique synthetic id so they are
-        # handled independently.
-        hidden_mask = events["event_type"] == 5
-        n_hidden = hidden_mask.sum()
-        if n_hidden > 0:
-            max_id = events["id"].max()
-            events.loc[hidden_mask, "id"] = np.arange(max_id + 1, max_id + 1 + n_hidden)
-
         events = events.reset_index(drop=True)
         events["event_id"] = np.arange(1, len(events) + 1)
         events["original_number"] = events["event_id"]

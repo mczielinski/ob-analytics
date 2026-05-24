@@ -60,16 +60,24 @@ class TestSetOrderTypes:
         result = set_order_types(events, trades)
         assert (result[result["id"] == 10]["type"] == "flashed-limit").all()
 
-    def test_pacman_order(self):
-        """Order with multiple distinct prices → 'pacman'."""
+    def test_price_modified_order_no_longer_special_cased(self):
+        """An order whose price changes mid-life is classified by maker/taker
+        behaviour like any other order — there is no separate 'pacman' bucket.
+
+        Regression test for Plan 1 (remove-pacman): previously, any order
+        with multiple distinct prices was labelled 'pacman' and excluded
+        from the maker/taker/market sets. After removal, such orders fall
+        through to the normal classification.
+        """
         events = _events(
             (1, 10, "created", "bid", 100, 5),
-            (2, 10, "changed", "bid", 101, 4),  # price changed!
+            (2, 10, "changed", "bid", 101, 4),  # price changed mid-life
             (3, 10, "deleted", "bid", 101, 0),
         )
-        trades = _trades()
+        trades = _trades((1, 99))  # event 1 was a maker
         result = set_order_types(events, trades)
-        assert (result[result["id"] == 10]["type"] == "pacman").all()
+        assert "pacman" not in result["type"].cat.categories
+        assert (result[result["id"] == 10]["type"] == "resting-limit").all()
 
     def test_market_limit_order(self):
         """Both maker and taker → 'market-limit'."""

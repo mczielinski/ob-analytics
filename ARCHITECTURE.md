@@ -9,7 +9,7 @@ into structured analytics:
 |-------|-------------|
 | **Load & normalize** | Parse Bitstamp CSV or LOBSTER message file into a uniform event DataFrame |
 | **Build trades** | Bitstamp: read companion `trades.csv` (live capture). LOBSTER: extract type 4/5 executions from the events frame via `LobsterTradeReader` |
-| **Classify orders** | Label each order as *market*, *resting-limit*, *flashed-limit*, *pacman*, *market-limit*, or *unknown* |
+| **Classify orders** | Label each order as *market*, *resting-limit*, *flashed-limit*, *market-limit*, or *unknown* |
 | **Depth & metrics** | Track price-level volume, best bid/ask, spread, and liquidity in configurable BPS bins. LOBSTER can use the official orderbook file for ground-truth depth |
 | **Flow toxicity** *(optional)* | VPIN, Kyle's lambda, order-flow imbalance |
 | **Visualize / export** | Depth heatmaps, event maps, trade charts, flow-toxicity plots, HTML galleries. Matplotlib (default) or Plotly backend. Parquet and LOBSTER round-trip I/O |

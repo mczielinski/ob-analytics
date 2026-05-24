@@ -56,11 +56,6 @@ to rest as a passive order at a price inside the book.
 : A limit order that is created and cancelled within a very short window
 without ever filling. Common in HFT quote-stuffing patterns.
 
-**Pacman**
-: A limit order that walks through multiple price levels via successive
-modifications, consuming liquidity as it goes — named for the arcade
-character that eats dots.
-
 ## Flow toxicity
 
 Implemented in [`flow_toxicity`](api/flow_toxicity.md).

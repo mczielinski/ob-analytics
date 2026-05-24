@@ -342,14 +342,12 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
                 (dir_events["action"] == "created")
                 | ((dir_events["action"] == "changed") & (dir_events["fill"] == 0))
             )
-            & (dir_events["type"] != "pacman")
             & (dir_events["type"] != "market")
         ][cols]
 
         cancelled_volume = dir_events[
             (dir_events["action"] == "deleted")
             & (dir_events["volume"] > 0)
-            & (dir_events["type"] != "pacman")
             & (dir_events["type"] != "market")
         ][cols]
         cancelled_volume["volume"] = -cancelled_volume["volume"]
@@ -358,9 +356,7 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
         ]
 
         filled_volume = dir_events[
-            (dir_events["fill"] > 0)
-            & (dir_events["type"] != "pacman")
-            & (dir_events["type"] != "market")
+            (dir_events["fill"] > 0) & (dir_events["type"] != "market")
         ][
             [
                 "event_id",

@@ -112,7 +112,7 @@ events = loader.load(orders_path)
 reader = BitstampTradeReader()
 trades = reader.load(events, run_dir)
 
-events = set_order_types(events, trades)             # market, flashed-limit, pacman, …
+events = set_order_types(events, trades)             # market, flashed-limit, market-limit, …
 depth = price_level_volume(events)
 depth_summary = depth_metrics(depth)                 # best bid/ask, BPS bins
 events = order_aggressiveness(events, depth_summary)
