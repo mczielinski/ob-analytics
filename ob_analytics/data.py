@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
@@ -11,17 +12,28 @@ from loguru import logger
 
 from ob_analytics.protocols import DataWriter
 
+if TYPE_CHECKING:
+    from ob_analytics.protocols import RunContext
+
 
 # ── Writer registry ───────────────────────────────────────────────────
 
-_WRITERS: dict[str, type] = {}
+WriterFactory = Callable[[Any, "RunContext"], DataWriter]
+
+_WRITERS: dict[str, WriterFactory] = {}
 
 
-def register_writer(name: str, writer_cls: type) -> None:
-    """Register a :class:`DataWriter` implementation under *name* for use
-    with ``save_data(fmt=name)``.
+def register_writer(name: str, factory: WriterFactory) -> None:
+    """Register a writer *factory* under *name* for use with
+    ``save_data(fmt=name, ctx=...)``.
+
+    The factory is called as ``factory(config, ctx)`` and must return a
+    :class:`DataWriter`. This is what lets format-specific writers
+    (e.g. :class:`~ob_analytics.lobster.LobsterWriter`, which needs
+    ``trading_date``) participate in the registry — they pull required
+    parameters from the :class:`~ob_analytics.protocols.RunContext`.
     """
-    _WRITERS[name.lower()] = writer_cls
+    _WRITERS[name.lower()] = factory
 
 
 def list_writers() -> list[str]:
@@ -71,6 +83,8 @@ def save_data(
     *,
     fmt: str = "parquet",
     writer: DataWriter | None = None,
+    config: Any = None,
+    ctx: Any = None,
     **write_kwargs: Any,
 ) -> None:
     """Save pipeline data to disk.
@@ -85,13 +99,17 @@ def save_data(
         Serialisation format.  Built-in values are ``"parquet"``
         (default) and ``"pickle"``.  Additional formats (e.g.
         ``"bitstamp"``, ``"lobster"``) are available when the
-        corresponding writer has been registered via
+        corresponding writer factory has been registered via
         :func:`register_writer`.
     writer : DataWriter, optional
         A pre-constructed writer instance.  When provided, *fmt* is
         ignored and the writer is used directly.  This is the preferred
         path when saving from a :class:`Pipeline` that already holds a
         configured writer.
+    config, ctx
+        Forwarded to a registered writer factory when ``fmt`` names one.
+        ``ctx`` defaults to an empty
+        :class:`~ob_analytics.protocols.RunContext`.
     **write_kwargs
         Extra keyword arguments forwarded to ``writer.write()``.
     """
@@ -101,15 +119,13 @@ def save_data(
         writer.write(lob_data, p, **write_kwargs)
         return
 
-    if fmt == "lobster":
-        raise ValueError(
-            "LOBSTER write requires a configured writer. "
-            "Use LobsterFormat(trading_date=...).create_writer(config) "
-            "or pass writer= directly to save_data()."
-        )
-
     if fmt in _WRITERS:
-        w = _WRITERS[fmt]()
+        from ob_analytics.config import PipelineConfig
+        from ob_analytics.protocols import RunContext
+
+        cfg = config if config is not None else PipelineConfig()
+        rctx = ctx if ctx is not None else RunContext()
+        w = _WRITERS[fmt](cfg, rctx)
         w.write(lob_data, p, **write_kwargs)
         return
 

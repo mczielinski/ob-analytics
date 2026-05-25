@@ -29,6 +29,7 @@ All processing stages are pluggable via :mod:`~ob_analytics.protocols`.
 
 from pathlib import Path
 
+import pandas as pd
 from loguru import logger
 from ob_analytics.config import PipelineConfig
 from ob_analytics.data import (
@@ -88,7 +89,13 @@ from ob_analytics.pipeline import (
     list_formats,
     register_format,
 )
-from ob_analytics.protocols import DataWriter, EventLoader, Format, TradeSource
+from ob_analytics.protocols import (
+    DataWriter,
+    EventLoader,
+    Format,
+    RunContext,
+    TradeSource,
+)
 from ob_analytics.visualization import (
     PlotTheme,
     get_plot_theme,
@@ -111,14 +118,26 @@ from ob_analytics.visualization import (
     set_plot_theme,
 )
 
+
 # ── Register built-in formats and writers ─────────────────────────────
+def _make_lobster_writer(config, ctx):
+    td = ctx.trading_date
+    if td is None:
+        raise ValueError(
+            "LOBSTER writer requires ctx.trading_date. "
+            "Pass ctx=RunContext(trading_date=...) to save_data()."
+        )
+    if not isinstance(td, (str, pd.Timestamp)):
+        raise TypeError(
+            f"ctx.trading_date must be str or pandas.Timestamp, got {type(td).__name__}"
+        )
+    return LobsterWriter(config, trading_date=td)
+
+
 register_format("bitstamp", BitstampFormat)
 register_format("lobster", LobsterFormat)
-register_writer("bitstamp", BitstampWriter)
-# Note: LobsterWriter is NOT registered here because it requires a trading_date
-# argument that cannot be auto-inferred. Use:
-#   LobsterFormat(trading_date=...).create_writer(config)
-# or pass writer= directly to save_data().
+register_writer("bitstamp", lambda config, ctx: BitstampWriter(config))
+register_writer("lobster", _make_lobster_writer)
 
 logger.disable("ob_analytics")
 
@@ -166,6 +185,7 @@ __all__ = [
     "TradeSource",
     "DataWriter",
     "Format",
+    "RunContext",
     # ── Format-agnostic analytics ───────────────────────────────────
     "order_aggressiveness",
     "trade_impacts",

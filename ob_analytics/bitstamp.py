@@ -29,7 +29,13 @@ from ob_analytics._utils import (
     validate_non_empty,
 )
 from ob_analytics.config import PipelineConfig
-from ob_analytics.protocols import DataWriter, EventLoader, Format, TradeSource
+from ob_analytics.protocols import (
+    DataWriter,
+    EventLoader,
+    Format,
+    RunContext,
+    TradeSource,
+)
 
 
 # ── BitstampLoader ────────────────────────────────────────────────────
@@ -375,13 +381,15 @@ class BitstampFormat(Format):
 
     name: str = "bitstamp"
 
-    def create_loader(self, config: PipelineConfig) -> EventLoader:
+    def create_loader(self, config: PipelineConfig, ctx: RunContext) -> EventLoader:
         return BitstampLoader(config)
 
-    def create_trade_source(self, config: PipelineConfig) -> TradeSource:
+    def create_trade_source(
+        self, config: PipelineConfig, ctx: RunContext
+    ) -> TradeSource:
         return BitstampTradeReader(config)
 
-    def create_writer(self, config: PipelineConfig) -> DataWriter:
+    def create_writer(self, config: PipelineConfig, ctx: RunContext) -> DataWriter:
         return BitstampWriter(config)
 
     def config_defaults(self) -> dict[str, Any]:

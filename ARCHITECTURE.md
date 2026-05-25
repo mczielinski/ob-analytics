@@ -24,6 +24,12 @@ into structured analytics:
   (`BitstampLoader`, `BitstampTradeReader`, etc.) for step-by-step control.
 - **Pluggable everything** — any object with the right method signature works;
   no inheritance required (structural typing via `Protocol`).
+- **Per-run parameters live on `RunContext`, not `Format`.** Construction-time
+  parameters (schema choice, fixed venue config) belong on the `Format` ctor;
+  per-session parameters (trading date, write-time level cap) live on
+  `RunContext` and are passed to `Pipeline(format=..., ctx=...)`. This keeps
+  formats reusable across multiple runs without re-instantiation and avoids
+  baking session state into long-lived objects.
 
 ---
 
@@ -55,11 +61,17 @@ classDiagram
 
     class Format {
         <<abstract>>
-        +create_loader()
-        +create_trade_source()
-        +create_writer()
-        +compute_depth()
-        +config_defaults()
+        +create_loader(config, ctx) EventLoader
+        +create_trade_source(config, ctx) TradeSource
+        +create_writer(config, ctx) DataWriter | None
+        +compute_depth(events, config, source, ctx) tuple | None
+        +collect_extras(loader, events, source, ctx) dict
+        +config_defaults() dict
+    }
+
+    class RunContext {
+        +trading_date: object | None
+        +extras: dict
     }
 
     class BitstampFormat
@@ -86,6 +98,7 @@ classDiagram
         +vpin: DataFrame | None
         +ofi: DataFrame | None
         +metadata: dict
+        +extras: dict[str, DataFrame]
     }
 
     Pipeline --> PipelineConfig
@@ -94,6 +107,7 @@ classDiagram
     Pipeline --> DataWriter
     Pipeline --> PipelineResult
     Pipeline ..> Format : optional
+    Pipeline ..> RunContext : per-run params
     Format <|-- BitstampFormat
     Format <|-- LobsterFormat
 ```
@@ -105,7 +119,7 @@ classDiagram
 | Format | Entry point | Trades |
 |--------|-------------|--------|
 | **Bitstamp CSV** | `Pipeline()` (default) | Companion `trades.csv` next to `orders.csv` (e.g. `scripts/collect_bitstamp_btcusd.py`) |
-| **LOBSTER** | `Pipeline(format=LobsterFormat(trading_date=...))` | Embedded execution rows (types 4/5) in the message file |
+| **LOBSTER** | `Pipeline(format=LobsterFormat(), ctx=RunContext(trading_date=...))` | Embedded execution rows (types 4/5) in the message file |
 
 The bundled sample under `ob_analytics/_sample_data/` is a modern BTC/USD
 capture (`orders.csv` + `trades.csv`).

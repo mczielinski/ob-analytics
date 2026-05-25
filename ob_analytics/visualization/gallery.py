@@ -213,13 +213,16 @@ def default_specs(
         ),
     ]
 
-    # Hidden executions and trading halts (LOBSTER-enriched, degrade gracefully)
+    # Hidden executions and trading halts (LOBSTER-enriched).
+    # These pull from result.extras and are skipped by the gallery loop
+    # when the extras key is missing (e.g. Bitstamp data).
     specs.append(
         PlotSpec(
             "08b_hidden_executions",
             "Hidden Order Executions",
             plot_hidden_executions,
-            {"events": events, "trades": trades},
+            {"result": result},
+            needs="extras:hidden_executions",
         )
     )
     specs.append(
@@ -227,7 +230,8 @@ def default_specs(
             "08c_trading_halts",
             "Trading Halts",
             plot_trading_halts,
-            {"trades": trades, "events": events},
+            {"result": result},
+            needs="extras:trading_halts",
         )
     )
 
@@ -421,6 +425,20 @@ def generate_gallery(
     generated: list[tuple[str, str, dict[str, bool]]] = []
 
     for spec in specs:
+        # Skip plots whose required extras key is missing/empty.
+        if spec.needs and spec.needs.startswith("extras:"):
+            key = spec.needs.removeprefix("extras:")
+            extras_val = result.extras.get(key) if result is not None else None
+            if extras_val is None or (
+                hasattr(extras_val, "empty") and extras_val.empty
+            ):
+                logger.info(
+                    "Gallery: skipping {} (no '{}' in result.extras)",
+                    spec.name,
+                    key,
+                )
+                continue
+
         logger.info("Gallery: generating {}", spec.name)
         statuses: dict[str, bool] = {}
 

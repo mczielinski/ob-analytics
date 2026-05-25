@@ -662,8 +662,10 @@ def plot_kyle_lambda(
 
 
 def plot_hidden_executions(
-    events: pd.DataFrame,
-    trades: pd.DataFrame,
+    events: "pd.DataFrame | Any | None" = None,
+    trades: pd.DataFrame | None = None,
+    *,
+    result: Any = None,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
     ax: Axes | None = None,
@@ -671,20 +673,26 @@ def plot_hidden_executions(
 ) -> Any:
     """Plot hidden order execution volume overlaid on the trade price.
 
-    Works with any data that has ``raw_event_type == 5`` events.
-    Degrades gracefully (empty plot with message) when no hidden
-    execution data exists -- safe to call on Bitstamp data.
+    Accepts either a :class:`~ob_analytics.pipeline.PipelineResult` via
+    ``result=`` (preferred — reads from
+    ``result.extras['hidden_executions']``) or raw ``events`` / ``trades``
+    DataFrames (legacy).  Degrades gracefully when no hidden execution
+    data exists -- safe to call on Bitstamp data.
 
     Parameters
     ----------
-    events : pandas.DataFrame
+    events : pandas.DataFrame, optional
         Events DataFrame (should have ``raw_event_type`` column).
-    trades : pandas.DataFrame
-        Trades DataFrame with ``timestamp`` and ``price``.
-    start_time : pandas.Timestamp, optional
-        Start time for the plot.
-    end_time : pandas.Timestamp, optional
-        End time for the plot.
+        Ignored when ``result`` is given.
+    trades : pandas.DataFrame, optional
+        Trades DataFrame with ``timestamp`` and ``price``.  Ignored when
+        ``result`` is given.
+    result : PipelineResult, optional
+        Pipeline output; ``extras['hidden_executions']`` supplies the
+        hidden-execution events and ``result.trades`` supplies the
+        trades.  Takes precedence over the positional arguments.
+    start_time, end_time : pandas.Timestamp, optional
+        Time window for the plot.
     ax : matplotlib.axes.Axes, optional
         Axes to draw on (matplotlib only).
     backend : str, optional
@@ -694,6 +702,23 @@ def plot_hidden_executions(
     -------
     matplotlib.figure.Figure or plotly.graph_objects.Figure
     """
+    if result is not None:
+        from ob_analytics.pipeline import PipelineResult
+
+        if not isinstance(result, PipelineResult):
+            raise TypeError("result must be a PipelineResult")
+        events = result.extras.get("hidden_executions")
+        if events is None or events.empty:
+            raise ValueError(
+                "plot_hidden_executions: no 'hidden_executions' in "
+                "PipelineResult.extras. Format may not produce hidden execs."
+            )
+        trades = result.trades
+    if events is None or trades is None:
+        raise TypeError(
+            "plot_hidden_executions: pass either result=PipelineResult or "
+            "both events= and trades= DataFrames."
+        )
     data = prepare_hidden_executions_data(events, trades, start_time, end_time)
     renderer = _get_renderer(backend, "hidden_executions")
     if backend == "matplotlib":
@@ -702,9 +727,11 @@ def plot_hidden_executions(
 
 
 def plot_trading_halts(
-    trades: pd.DataFrame,
+    trades: pd.DataFrame | None = None,
     halts: pd.DataFrame | None = None,
     events: pd.DataFrame | None = None,
+    *,
+    result: Any = None,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
     ax: Axes | None = None,
@@ -712,22 +739,28 @@ def plot_trading_halts(
 ) -> Any:
     """Plot trade price with shaded trading halt periods.
 
-    Accepts either a ``halts`` DataFrame directly or extracts halt
-    events (``raw_event_type == 7``) from *events*.  Degrades
-    gracefully when no halt data exists.
+    Accepts a :class:`~ob_analytics.pipeline.PipelineResult` via
+    ``result=`` (preferred — reads from
+    ``result.extras['trading_halts']`` and ``result.trades``), or raw
+    ``trades`` plus an explicit ``halts`` / ``events`` DataFrame
+    (legacy).  Degrades gracefully when no halt data exists.
 
     Parameters
     ----------
-    trades : pandas.DataFrame
-        Trades DataFrame with ``timestamp`` and ``price``.
+    trades : pandas.DataFrame, optional
+        Trades DataFrame with ``timestamp`` and ``price``.  Ignored when
+        ``result`` is given.
     halts : pandas.DataFrame, optional
-        Trading halt events.
+        Trading halt events.  Ignored when ``result`` is given.
     events : pandas.DataFrame, optional
         Full events DataFrame (halt events extracted if *halts* not given).
-    start_time : pandas.Timestamp, optional
-        Start time for the plot.
-    end_time : pandas.Timestamp, optional
-        End time for the plot.
+        Ignored when ``result`` is given.
+    result : PipelineResult, optional
+        Pipeline output; ``extras['trading_halts']`` supplies the halts
+        frame and ``result.trades`` supplies the trades.  Takes
+        precedence over the positional arguments.
+    start_time, end_time : pandas.Timestamp, optional
+        Time window for the plot.
     ax : matplotlib.axes.Axes, optional
         Axes to draw on (matplotlib only).
     backend : str, optional
@@ -737,6 +770,24 @@ def plot_trading_halts(
     -------
     matplotlib.figure.Figure or plotly.graph_objects.Figure
     """
+    if result is not None:
+        from ob_analytics.pipeline import PipelineResult
+
+        if not isinstance(result, PipelineResult):
+            raise TypeError("result must be a PipelineResult")
+        halts = result.extras.get("trading_halts")
+        if halts is None or halts.empty:
+            raise ValueError(
+                "plot_trading_halts: no 'trading_halts' in "
+                "PipelineResult.extras. Format may not produce halts."
+            )
+        trades = result.trades
+        events = None
+    if trades is None:
+        raise TypeError(
+            "plot_trading_halts: pass either result=PipelineResult or "
+            "trades= (and optionally halts=/events=)."
+        )
     data = prepare_trading_halts_data(trades, halts, events, start_time, end_time)
     renderer = _get_renderer(backend, "trading_halts")
     if backend == "matplotlib":

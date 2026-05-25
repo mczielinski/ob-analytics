@@ -36,7 +36,13 @@ from ob_analytics._utils import (
     seconds_after_midnight_to_datetime,
 )
 from ob_analytics.config import PipelineConfig
-from ob_analytics.protocols import DataWriter, EventLoader, Format, TradeSource
+from ob_analytics.protocols import (
+    DataWriter,
+    EventLoader,
+    Format,
+    RunContext,
+    TradeSource,
+)
 
 
 # ── Constants ─────────────────────────────────────────────────────────
@@ -90,16 +96,7 @@ class LobsterLoader:
         self._trading_date = pd.Timestamp(trading_date).normalize()
         self._trading_halts: pd.DataFrame | None = None
         self._cross_trades: pd.DataFrame | None = None
-
-    @property
-    def trading_halts(self) -> pd.DataFrame | None:
-        """Trading halt events extracted during the last :meth:`load`, if any."""
-        return self._trading_halts
-
-    @property
-    def cross_trades(self) -> pd.DataFrame | None:
-        """Cross-trade events extracted during the last :meth:`load`, if any."""
-        return self._cross_trades
+        self._orderbook_path: Path | None = None
 
     def load(self, source: Any) -> pd.DataFrame:
         """Load LOBSTER message data and return a cleaned events DataFrame.
@@ -195,11 +192,6 @@ class LobsterLoader:
         self._orderbook_path = self._resolve_orderbook_file(source)
 
         return events
-
-    @property
-    def orderbook_path(self) -> Path | None:
-        """Path to the LOBSTER orderbook file discovered during :meth:`load`."""
-        return self._orderbook_path
 
     @staticmethod
     def _resolve_message_file(source: Path) -> Path:
@@ -716,34 +708,38 @@ def lobster_depth_from_orderbook(
 class LobsterFormat(Format):
     """Format descriptor for LOBSTER limit-order-book data.
 
-    Parameters
-    ----------
-    trading_date : str or pd.Timestamp
-        Calendar date of the trading session.
+    ``trading_date`` is taken from the per-run
+    :class:`~ob_analytics.protocols.RunContext`, not the format
+    constructor — so the same ``LobsterFormat()`` instance can be reused
+    across runs with different sessions.
     """
 
     name: str = field(default="lobster", init=False, repr=False)
-    trading_date: str | pd.Timestamp = field()
 
     _loader: LobsterLoader | None = field(default=None, repr=False, init=False)
 
-    def create_loader(self, config: PipelineConfig) -> EventLoader:
-        self._loader = LobsterLoader(config, trading_date=self.trading_date)
+    def create_loader(self, config: PipelineConfig, ctx: RunContext) -> EventLoader:
+        td = self._require_trading_date(ctx, "create_loader")
+        self._loader = LobsterLoader(config, trading_date=td)
         return self._loader
 
-    def create_trade_source(self, config: PipelineConfig) -> TradeSource:
+    def create_trade_source(
+        self, config: PipelineConfig, ctx: RunContext
+    ) -> TradeSource:
         return LobsterTradeReader(config)
 
-    def create_writer(self, config: PipelineConfig) -> DataWriter:
-        return LobsterWriter(config, trading_date=self.trading_date)
+    def create_writer(self, config: PipelineConfig, ctx: RunContext) -> DataWriter:
+        td = self._require_trading_date(ctx, "create_writer")
+        return LobsterWriter(config, trading_date=td)
 
     def compute_depth(
         self,
         events: pd.DataFrame,
         config: Any,
         source: Any,
+        ctx: RunContext,
     ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
-        ob_path = self._loader.orderbook_path if self._loader is not None else None
+        ob_path = self._loader._orderbook_path if self._loader is not None else None
         if ob_path is None:
             ob_path = LobsterLoader._resolve_orderbook_file(Path(source))
         if ob_path is None:
@@ -754,9 +750,46 @@ class LobsterFormat(Format):
             return None
         return lobster_depth_from_orderbook(events, ob_path, config)
 
+    def collect_extras(
+        self,
+        loader: EventLoader,
+        events: pd.DataFrame,
+        source: Any,
+        ctx: RunContext,
+    ) -> dict[str, pd.DataFrame]:
+        out: dict[str, pd.DataFrame] = {}
+        lob = loader if isinstance(loader, LobsterLoader) else None
+        if lob is None:
+            return out
+        if lob._trading_halts is not None and not lob._trading_halts.empty:
+            out["trading_halts"] = lob._trading_halts
+        if lob._cross_trades is not None and not lob._cross_trades.empty:
+            out["cross_trades"] = lob._cross_trades
+        hidden = events[events["raw_event_type"] == 5]
+        if not hidden.empty:
+            out["hidden_executions"] = hidden.copy()
+        return out
+
     def config_defaults(self) -> dict[str, Any]:
         return {
             "price_decimals": 2,
             "price_divisor": 10_000,
             "volume_decimals": 0,
         }
+
+    @staticmethod
+    def _require_trading_date(ctx: RunContext, where: str) -> str | pd.Timestamp:
+        td = ctx.trading_date
+        if td is None:
+            raise ValueError(
+                f"LobsterFormat.{where}: trading_date is required. "
+                f"Pass it via Pipeline(format=LobsterFormat(), "
+                f"ctx=RunContext(trading_date=...)) or "
+                f"Pipeline.from_format('lobster', ctx=RunContext(trading_date=...))."
+            )
+        if not isinstance(td, (str, pd.Timestamp)):
+            raise TypeError(
+                f"LobsterFormat.{where}: trading_date must be str or "
+                f"pandas.Timestamp, got {type(td).__name__}"
+            )
+        return td

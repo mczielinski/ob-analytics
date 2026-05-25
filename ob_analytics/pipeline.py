@@ -44,7 +44,13 @@ from ob_analytics.flow_toxicity import compute_vpin, order_flow_imbalance
 from ob_analytics.analytics import set_order_types
 from loguru import logger
 
-from ob_analytics.protocols import DataWriter, EventLoader, Format, TradeSource
+from ob_analytics.protocols import (
+    DataWriter,
+    EventLoader,
+    Format,
+    RunContext,
+    TradeSource,
+)
 
 
 # ── Format registry ───────────────────────────────────────────────────
@@ -84,6 +90,10 @@ class PipelineResult:
         Order flow imbalance per minute (only when VPIN is computed).
     metadata : dict
         Provenance and format-specific metadata populated during the run.
+    extras : dict of str to DataFrame
+        Per-format auxiliary DataFrames populated by
+        ``Format.collect_extras`` (e.g. LOBSTER ``trading_halts`` and
+        ``cross_trades``).  Empty for formats that supply no extras.
     """
 
     events: pd.DataFrame
@@ -93,6 +103,7 @@ class PipelineResult:
     vpin: pd.DataFrame | None = None
     ofi: pd.DataFrame | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    extras: dict[str, pd.DataFrame] = field(default_factory=dict)
 
 
 class Pipeline:
@@ -126,15 +137,19 @@ class Pipeline:
         format: Format | None = None,
         loader: EventLoader | None = None,
         trade_source: TradeSource | None = None,
+        ctx: RunContext | None = None,
     ) -> None:
+        self._ctx = ctx or RunContext()
         if format is not None:
             defaults = format.config_defaults()
             if config is None:
                 config = PipelineConfig(**defaults)
             self.config = config
-            self.loader = loader or format.create_loader(config)
-            self.trade_source = trade_source or format.create_trade_source(config)
-            self._writer: DataWriter | None = format.create_writer(config)
+            self.loader = loader or format.create_loader(config, self._ctx)
+            self.trade_source = trade_source or format.create_trade_source(
+                config, self._ctx
+            )
+            self._writer: DataWriter | None = format.create_writer(config, self._ctx)
         else:
             self.config = config or PipelineConfig()
             self.loader = loader or BitstampLoader(self.config)
@@ -152,7 +167,9 @@ class Pipeline:
         return self._writer
 
     @classmethod
-    def from_format(cls, name: str, **kwargs: Any) -> Pipeline:
+    def from_format(
+        cls, name: str, *, ctx: RunContext | None = None, **kwargs: Any
+    ) -> Pipeline:
         """Create a pipeline from a registered format name.
 
         Parameters
@@ -160,6 +177,9 @@ class Pipeline:
         name : str
             Registered format name (case-insensitive), e.g. ``"bitstamp"``
             or ``"lobster"``.
+        ctx : RunContext, optional
+            Per-run parameters (e.g. ``trading_date``) forwarded to
+            ``Format.create_*`` factories.
         **kwargs
             Passed to the :class:`Format` constructor.
         """
@@ -170,22 +190,26 @@ class Pipeline:
                 f"Unknown format {name!r}. Registered formats: {available}"
             )
         fmt = _FORMATS[key](**kwargs)
-        return cls(format=fmt)
+        return cls(format=fmt, ctx=ctx)
 
-    def run(self, source: Any) -> PipelineResult:
+    def run(self, source: Any, *, ctx: RunContext | None = None) -> PipelineResult:
         """Execute the full pipeline on *source* and return results.
 
         Parameters
         ----------
         source
             Data source for the loader (typically a file path).
+        ctx : RunContext, optional
+            Override the pipeline's default :class:`RunContext` for this
+            single call.  When ``None``, the ``ctx`` provided at
+            construction (or the default empty context) is used.
 
         Returns
         -------
         PipelineResult
             Frozen dataclass with ``events``, ``trades``, ``depth``,
-            ``depth_summary``, and optionally ``vpin``, ``ofi``, and
-            ``metadata`` fields.
+            ``depth_summary``, and optionally ``vpin``, ``ofi``,
+            ``metadata``, and ``extras`` fields.
 
         Steps
         -----
@@ -196,7 +220,10 @@ class Pipeline:
         5. Compute depth metrics
         6. Compute order aggressiveness
         7. (Optional) Compute VPIN and order flow imbalance
+        8. Collect format-specific extras (``Format.collect_extras``)
         """
+        run_ctx = ctx if ctx is not None else self._ctx
+
         logger.info("Pipeline: loading events from {}", source)
         events = self.loader.load(source)
 
@@ -208,7 +235,9 @@ class Pipeline:
 
         depth_override = None
         if self._format is not None:
-            depth_override = self._format.compute_depth(events, self.config, source)
+            depth_override = self._format.compute_depth(
+                events, self.config, source, run_ctx
+            )
 
         if depth_override is not None:
             depth, depth_summary = depth_override
@@ -242,6 +271,10 @@ class Pipeline:
             logger.info("Pipeline: computing order flow imbalance")
             ofi_df = order_flow_imbalance(trades)
 
+        extras: dict[str, pd.DataFrame] = {}
+        if self._format is not None:
+            extras = self._format.collect_extras(self.loader, events, source, run_ctx)
+
         metadata: dict[str, Any] = {
             "source": str(source),
             "format": self._format.name if self._format else None,
@@ -259,4 +292,5 @@ class Pipeline:
             vpin=vpin_df,
             ofi=ofi_df,
             metadata=metadata,
+            extras=extras,
         )
