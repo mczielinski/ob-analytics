@@ -19,10 +19,32 @@ protocol to :class:`~ob_analytics.pipeline.Pipeline`.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 import pandas as pd
+
+
+@dataclass(frozen=True)
+class RunContext:
+    """Per-run parameters that don't belong on the Format constructor.
+
+    Passed to ``Pipeline.run(source, ctx=...)`` and forwarded to
+    ``Format.create_loader/create_trade_source/create_writer/collect_extras``.
+
+    Attributes
+    ----------
+    trading_date : str or pd.Timestamp, optional
+        Calendar date anchor (LOBSTER needs this; venues with continuous
+        trading do not).
+    extras : dict, optional
+        Free-form per-run options. Format implementations may consume
+        keys they recognise (e.g. ``num_levels`` for LobsterWriter).
+    """
+
+    trading_date: object | None = None
+    extras: dict = field(default_factory=dict)
 
 
 @runtime_checkable
@@ -133,17 +155,17 @@ class Format:
 
     name: str = ""
 
-    def create_loader(self, config: Any) -> EventLoader:
+    def create_loader(self, config: Any, ctx: RunContext) -> EventLoader:
         """Return a loader for this format."""
         raise NotImplementedError
 
-    def create_trade_source(self, config: Any) -> TradeSource:
+    def create_trade_source(self, config: Any, ctx: RunContext) -> TradeSource:
         """Return a trade source for this format."""
         raise NotImplementedError(
             f"{type(self).__name__} must implement create_trade_source()"
         )
 
-    def create_writer(self, config: Any) -> DataWriter | None:
+    def create_writer(self, config: Any, ctx: RunContext) -> DataWriter | None:
         """Return a writer for this format, or ``None`` if not supported."""
         return None
 
@@ -152,6 +174,7 @@ class Format:
         events: pd.DataFrame,
         config: Any,
         source: Any,
+        ctx: RunContext,
     ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
         """Optionally compute depth and depth_summary directly.
 
@@ -161,6 +184,17 @@ class Format:
         ground-truth data (e.g. LOBSTER orderbook files).
         """
         return None
+
+    def collect_extras(
+        self,
+        loader: EventLoader,
+        events: pd.DataFrame,
+        source: Any,
+        ctx: RunContext,
+    ) -> dict[str, pd.DataFrame]:
+        """Return any per-format auxiliary DataFrames to attach to
+        ``PipelineResult.extras``. Default: nothing."""
+        return {}
 
     def config_defaults(self) -> dict[str, Any]:
         """Return default :class:`PipelineConfig` overrides for this format."""

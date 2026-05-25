@@ -10,6 +10,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Breaking
 
+- **`Format` API:** `create_loader`, `create_trade_source`, `create_writer`,
+  and `compute_depth` now take a second positional argument `ctx: RunContext`.
+  New optional method `collect_extras(loader, events, source, ctx) -> dict`
+  contributes per-format auxiliary DataFrames to `PipelineResult.extras`.
+- **`LobsterFormat`:** `trading_date` moved from the constructor to
+  `RunContext`. Use
+  `Pipeline(format=LobsterFormat(), ctx=RunContext(trading_date=...))` or
+  `Pipeline.from_format("lobster", ctx=RunContext(trading_date=...))`.
+- **`LobsterLoader`:** public properties `trading_halts`, `cross_trades`,
+  and `orderbook_path` removed. The data is on `PipelineResult.extras`
+  instead (`result.extras["trading_halts"]`,
+  `result.extras["cross_trades"]`). Hidden executions surface as
+  `result.extras["hidden_executions"]`.
+- **`PipelineResult`:** new field `extras: dict[str, pd.DataFrame]` (empty
+  for formats that don't produce per-run extras).
+- **`save_data`:** `fmt="lobster"` now works. Registered writers are
+  factories taking `(config, ctx)`; pass
+  `save_data(data, p, fmt="lobster", ctx=RunContext(trading_date=...))`.
+- **`plot_hidden_executions` / `plot_trading_halts`:** accept a
+  `PipelineResult` via `result=` and read from `result.extras`. Old
+  DataFrame-arg form still works.
+
+### Added
+
+- `RunContext` dataclass in `ob_analytics.protocols` (also exported from
+  the top-level package) for per-run parameters that don't belong on
+  long-lived `Format` instances.
+
 - **`pacman` order type removed.** Legacy artifact of the 2015 Bitstamp HTTP
   API, where a single `order_id` could appear at multiple prices over its
   lifetime. Modern Bitstamp WS v2 and LOBSTER do not produce this pattern

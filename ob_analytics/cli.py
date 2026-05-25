@@ -42,17 +42,20 @@ def _cmd_process(args: argparse.Namespace) -> None:
     from ob_analytics.lobster import LobsterFormat
     from ob_analytics.pipeline import Pipeline
 
+    from ob_analytics.protocols import RunContext
+
     source = args.source
     fmt_name = args.format
 
     if fmt_name == "lobster":
-        trading_date = args.trading_date
-        if trading_date is None:
+        if args.trading_date is None:
             logger.error("--trading-date is required for LOBSTER format")
             sys.exit(1)
-        fmt = LobsterFormat(trading_date=trading_date)
+        fmt = LobsterFormat()
+        ctx = RunContext(trading_date=args.trading_date)
     elif fmt_name == "bitstamp":
         fmt = BitstampFormat()
+        ctx = RunContext()
     else:
         logger.error("Unknown format {!r}", fmt_name)
         sys.exit(1)
@@ -62,7 +65,7 @@ def _cmd_process(args: argparse.Namespace) -> None:
         config_overrides["vpin_bucket_volume"] = args.vpin_bucket_volume
 
     config = PipelineConfig(**{**fmt.config_defaults(), **config_overrides})
-    pipeline = Pipeline(config=config, format=fmt)
+    pipeline = Pipeline(config=config, format=fmt, ctx=ctx)
 
     logger.info("Processing {} (format={})...", source, fmt_name)
     result = pipeline.run(source)
@@ -195,8 +198,11 @@ def _cmd_lobster_demo(args: argparse.Namespace) -> None:
     logger.info("LOBSTER Demo: {} ({})", source, trading_date)
     logger.info("=" * 60)
 
-    fmt = LobsterFormat(trading_date=trading_date)
-    pipeline = Pipeline(format=fmt)
+    from ob_analytics.protocols import RunContext
+
+    fmt = LobsterFormat()
+    ctx = RunContext(trading_date=trading_date)
+    pipeline = Pipeline(format=fmt, ctx=ctx)
     result = pipeline.run(source)
 
     logger.info("Events: {:,}", len(result.events))

@@ -196,16 +196,37 @@ orderbook file (ground-truth) when present.
 
 ```python
 from ob_analytics import LobsterFormat, Pipeline
+from ob_analytics.protocols import RunContext
 
-result = Pipeline(format=LobsterFormat(trading_date="2012-06-21")).run(
+fmt = LobsterFormat()
+ctx = RunContext(trading_date="2012-06-21")
+result = Pipeline(format=fmt, ctx=ctx).run(
     "/path/to/extracted_lobster_folder"
 )
 
 # equivalent shorthand via the format registry:
-result = Pipeline.from_format("lobster", trading_date="2012-06-21").run(
-    "/path/to/extracted_lobster_folder"
-)
+result = Pipeline.from_format(
+    "lobster", ctx=RunContext(trading_date="2012-06-21"),
+).run("/path/to/extracted_lobster_folder")
 ```
+
+#### Per-format extras
+
+Some formats expose auxiliary event tables that don't fit the universal
+events schema — LOBSTER trading halts, cross trades, and hidden
+executions, for example. The pipeline attaches these to
+`PipelineResult.extras`:
+
+```python
+result = Pipeline(format=LobsterFormat(), ctx=RunContext(trading_date="...")).run(path)
+result.extras["trading_halts"]
+result.extras["cross_trades"]
+result.extras["hidden_executions"]
+```
+
+Bitstamp runs produce no extras (`result.extras == {}`). Plot helpers
+`plot_trading_halts(result=result)` and
+`plot_hidden_executions(result=result)` read from extras automatically.
 
 !!! note
     When message files contain cross trades (event type 6) or trading halts
@@ -410,13 +431,18 @@ save_data(
 data = load_data("output/my_analysis")
 ```
 
-For LOBSTER round-trip output (back to message + orderbook CSVs), use the
-format-provided writer:
+For LOBSTER round-trip output (back to message + orderbook CSVs), pass
+`fmt="lobster"` and a `RunContext` so the registered writer factory can
+pick up `trading_date`:
 
 ```python
-from ob_analytics import LobsterFormat, save_data
-writer = LobsterFormat(trading_date="2012-06-21").create_writer(config)
-save_data(data, "round_trip/", writer=writer)
+from ob_analytics import save_data
+from ob_analytics.protocols import RunContext
+
+save_data(
+    data, "round_trip/", fmt="lobster",
+    config=config, ctx=RunContext(trading_date="2012-06-21"),
+)
 ```
 
 ### Plotly (interactive)
