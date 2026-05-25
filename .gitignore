@@ -161,3 +161,10 @@ cython_debug/
 
 # Git worktrees
 .worktrees/
+
+# Demo / runtime outputs
+bitstamp_output/
+bitstamp_output_live/
+lobster_output/
+gallery_output/
+output/

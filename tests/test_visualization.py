@@ -13,7 +13,6 @@ from matplotlib.figure import Figure
 
 from ob_analytics.visualization import (
     PlotTheme,
-    _create_axes,
     get_plot_theme,
     plot_current_depth,
     plot_event_map,
@@ -25,6 +24,7 @@ from ob_analytics.visualization import (
     save_figure,
     set_plot_theme,
 )
+from ob_analytics.visualization._matplotlib import _create_axes
 
 
 @pytest.fixture(autouse=True)

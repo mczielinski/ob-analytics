@@ -143,64 +143,114 @@ class DepthMetricsEngine:
         out : np.ndarray
             Pre-allocated 1-D array of length ``row_len`` to fill.
         """
+        self._update_side(side, price, volume, out)
+
+    # ── Internal: side-parameterised hot path ─────────────────────────
+
+    def _update_side(
+        self, side: int, price: int, volume: float, out: np.ndarray
+    ) -> None:
+        # Cross-check: ignore quotes that would cross the opposing best.
         if side == 1:
-            self._update_ask(price, volume, out)
+            if self._best_bid is not None and price < self._best_bid:
+                return
+            levels = self._ask_levels
         else:
-            self._update_bid(price, volume, out)
-
-    # ── Internal: ask side ────────────────────────────────────────────
-
-    def _update_ask(self, price: int, volume: float, out: np.ndarray) -> None:
-        if self._best_bid is not None and price < self._best_bid:
-            return
+            if self._best_ask is not None and price > self._best_ask:
+                return
+            levels = self._bid_levels
 
         if volume > 0:
-            self._ask_levels[price] = volume
-        elif price in self._ask_levels:
-            del self._ask_levels[price]
+            levels[price] = volume
+        elif price in levels:
+            del levels[price]
 
-        self._refresh_best_ask(price, volume)
-        self._write_ask_metrics(out)
+        self._refresh_best(side, price, volume)
+        self._write_side_metrics(side, out)
 
-    def _refresh_best_ask(self, price: int, volume: float) -> None:
-        if not self._ask_levels:
-            self._best_ask = None
-            self._best_ask_vol = 0.0
+    def _refresh_best(self, side: int, price: int, volume: float) -> None:
+        if side == 1:
+            levels = self._ask_levels
+            current_best = self._best_ask
+        else:
+            levels = self._bid_levels
+            current_best = self._best_bid
+
+        if not levels:
+            if side == 1:
+                self._best_ask = None
+                self._best_ask_vol = 0.0
+            else:
+                self._best_bid = None
+                self._best_bid_vol = 0.0
             return
-        if volume > 0:
-            if self._best_ask is None or price < self._best_ask:
-                self._best_ask = price
-                self._best_ask_vol = volume
-            elif price == self._best_ask:
-                self._best_ask_vol = volume
-        elif self._best_ask is not None and price == self._best_ask:
-            self._best_ask = min(self._ask_levels)
-            self._best_ask_vol = self._ask_levels[self._best_ask]
 
-    def _write_ask_metrics(self, out: np.ndarray) -> None:
-        offset = 2 + self._bins
-        if self._best_ask is None:
+        new_best: int | None = current_best
+        new_vol: float | None = None
+
+        if volume > 0:
+            better = (
+                ((price < current_best) if side == 1 else (price > current_best))
+                if current_best is not None
+                else True
+            )
+            if better:
+                new_best = price
+                new_vol = volume
+            elif price == current_best:
+                new_vol = volume
+        elif current_best is not None and price == current_best:
+            new_best = min(levels) if side == 1 else max(levels)
+            new_vol = levels[new_best]
+
+        if new_vol is None:
+            return
+
+        if side == 1:
+            self._best_ask = new_best
+            self._best_ask_vol = new_vol
+        else:
+            self._best_bid = new_best
+            self._best_bid_vol = new_vol
+
+    def _write_side_metrics(self, side: int, out: np.ndarray) -> None:
+        if side == 1:
+            offset = 2 + self._bins
+            best = self._best_ask
+            best_vol = self._best_ask_vol
+            levels = self._ask_levels
+        else:
+            offset = 0
+            best = self._best_bid
+            best_vol = self._best_bid_vol
+            levels = self._bid_levels
+
+        if best is None:
             out[offset] = 0
             out[offset + 1] = 0
             out[offset + 2 : offset + 2 + self._bins] = 0
             return
 
-        out[offset] = self._best_ask
-        out[offset + 1] = self._best_ask_vol
+        out[offset] = best
+        out[offset + 1] = best_vol
 
         # Window covered by the BPS bins, mirroring the legacy code:
-        # arange(best_ask, end_value + 1) inclusive of best_ask..end_value.
-        best = self._best_ask
-        end_value = round((1 + self._bps * self._bins * 0.0001) * best) + 1
-        range_len = end_value - best + 1
+        #   ask: arange(best_ask, end_value + 1) inclusive ascending.
+        #   bid: arange(best_bid, end_value - 1, -1) inclusive descending.
+        if side == 1:
+            end_value = round((1 + self._bps * self._bins * 0.0001) * best) + 1
+            range_len = end_value - best + 1
+        else:
+            end_value = round((1 - self._bps * self._bins * 0.0001) * best)
+            range_len = best - end_value + 1
 
         # Iterate over active price levels (typically O(few hundred))
         # instead of scanning every integer price in the window
         # (potentially O(price * bps * bins)), which avoids the dict
         # lookup per-tick that dominated the old hot loop.
         vol_array = np.zeros(range_len, dtype=np.float64)
-        for p, v in self._ask_levels.items():
-            idx = p - best
+        for p, v in levels.items():
+            idx = (p - best) if side == 1 else (best - p)
             if 0 <= idx < range_len:
                 vol_array[idx] = v
 
@@ -209,70 +259,7 @@ class DepthMetricsEngine:
             vol_array, breaks
         )
 
-    # ── Internal: bid side ────────────────────────────────────────────
-
-    def _update_bid(self, price: int, volume: float, out: np.ndarray) -> None:
-        if self._best_ask is not None and price > self._best_ask:
-            return
-
-        if volume > 0:
-            self._bid_levels[price] = volume
-        elif price in self._bid_levels:
-            del self._bid_levels[price]
-
-        self._refresh_best_bid(price, volume)
-        self._write_bid_metrics(out)
-
-    def _refresh_best_bid(self, price: int, volume: float) -> None:
-        if not self._bid_levels:
-            self._best_bid = None
-            self._best_bid_vol = 0.0
-            return
-        if volume > 0:
-            if self._best_bid is None or price > self._best_bid:
-                self._best_bid = price
-                self._best_bid_vol = volume
-            elif price == self._best_bid:
-                self._best_bid_vol = volume
-        elif self._best_bid is not None and price == self._best_bid:
-            self._best_bid = max(self._bid_levels)
-            self._best_bid_vol = self._bid_levels[self._best_bid]
-
-    def _write_bid_metrics(self, out: np.ndarray) -> None:
-        if self._best_bid is None:
-            out[0] = 0
-            out[1] = 0
-            out[2 : 2 + self._bins] = 0
-            return
-
-        out[0] = self._best_bid
-        out[1] = self._best_bid_vol
-
-        # Window mirrors arange(best_bid, end_value - 1, -1): inclusive
-        # of best_bid down to end_value (descending).
-        best = self._best_bid
-        end_value = round((1 - self._bps * self._bins * 0.0001) * best)
-        range_len = best - end_value + 1
-
-        vol_array = np.zeros(range_len, dtype=np.float64)
-        for p, v in self._bid_levels.items():
-            idx = best - p
-            if 0 <= idx < range_len:
-                vol_array[idx] = v
-
-        breaks = self._compute_breaks(range_len)
-        out[2 : 2 + self._bins] = interval_sum_breaks(vol_array, breaks)
-
     # ── Helpers ───────────────────────────────────────────────────────
-
-    def _initialise_best(self, prices: np.ndarray, sides: np.ndarray) -> None:
-        """Set initial best bid/ask from the first snapshot of depth data."""
-        ask_prices = prices[sides == 1]
-        bid_prices = prices[sides == 0]
-        if len(ask_prices) > 0:
-            self._best_ask = int(ask_prices.min())
-        if len(bid_prices) > 0:
-            self._best_bid = int(bid_prices.max())
 
     def _compute_breaks(self, range_len: int) -> np.ndarray:
         return _cached_breaks(range_len, self._bins)
