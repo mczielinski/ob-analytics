@@ -88,7 +88,6 @@ def compute_vpin(
     is_buy = df["direction"] == "buy"
     buy_vol = df["volume"].where(is_buy, 0.0).to_numpy(dtype=np.float64)
     sell_vol = df["volume"].where(~is_buy, 0.0).to_numpy(dtype=np.float64)
-    df["volume"].cumsum().to_numpy(dtype=np.float64)
     timestamps = df["timestamp"].to_numpy()
 
     # Walk through trades, splitting volume into equal-sized buckets.

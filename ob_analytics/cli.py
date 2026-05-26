@@ -126,108 +126,17 @@ def _cmd_gallery(args: argparse.Namespace) -> None:
 def _cmd_bitstamp_demo(args: argparse.Namespace) -> None:
     """Run the Bitstamp demo pipeline with gallery generation."""
     _setup_logging(args.verbose)
-    from loguru import logger
+    from ob_analytics._demos import run_bitstamp_demo
 
-    from ob_analytics.data import save_data
-    from ob_analytics.visualization.gallery import generate_gallery
-    from ob_analytics.pipeline import Pipeline
-
-    default_csv = Path(__file__).resolve().parent / "_sample_data" / "orders.csv"
-
-    csv_path = Path(args.input) if args.input else default_csv
-    if not csv_path.exists():
-        logger.error("CSV file not found: {}", csv_path)
-        logger.error(
-            "Provide a Bitstamp-format CSV with --input or place one at {}",
-            default_csv,
-        )
-        sys.exit(1)
-
-    output_dir = Path(args.output) if args.output else Path("bitstamp_output")
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    logger.info("=" * 60)
-    logger.info("Bitstamp Demo: {}", csv_path.name)
-    logger.info("=" * 60)
-
-    pipeline = Pipeline()
-    result = pipeline.run(str(csv_path))
-
-    logger.info("Events: {:,}", len(result.events))
-    logger.info("Trades: {:,}", len(result.trades))
-    logger.info("Depth:  {:,}", len(result.depth))
-
-    result_dict = {
-        "events": result.events,
-        "trades": result.trades,
-        "depth": result.depth,
-        "depth_summary": result.depth_summary,
-    }
-    parquet_dir = output_dir / "parquet"
-    save_data(result_dict, parquet_dir)
-    logger.info("Parquet saved to: {}", parquet_dir)
-
-    gallery_dir = output_dir / "gallery"
-    gallery_path = generate_gallery(
-        result,
-        gallery_dir,
-        title=f"Bitstamp ({csv_path.name}) -- ob-analytics",
-    )
-    logger.info("Gallery: {}", gallery_path.resolve())
-    logger.info("Open in browser: file://{}", gallery_path.resolve())
-    logger.info("Done! All output in: {}", output_dir.resolve())
+    run_bitstamp_demo(args.input, args.output)
 
 
 def _cmd_lobster_demo(args: argparse.Namespace) -> None:
     """Run the LOBSTER demo pipeline with gallery generation."""
     _setup_logging(args.verbose)
-    from loguru import logger
+    from ob_analytics._demos import run_lobster_demo
 
-    from ob_analytics.data import save_data
-    from ob_analytics.visualization.gallery import generate_gallery
-    from ob_analytics.lobster import LobsterFormat
-    from ob_analytics.pipeline import Pipeline
-
-    source = args.source
-    trading_date = args.trading_date
-
-    output_dir = Path(args.output) if args.output else Path("lobster_output")
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    logger.info("=" * 60)
-    logger.info("LOBSTER Demo: {} ({})", source, trading_date)
-    logger.info("=" * 60)
-
-    from ob_analytics.protocols import RunContext
-
-    fmt = LobsterFormat()
-    ctx = RunContext(trading_date=trading_date)
-    pipeline = Pipeline(format=fmt, ctx=ctx)
-    result = pipeline.run(source)
-
-    logger.info("Events: {:,}", len(result.events))
-    logger.info("Trades: {:,}", len(result.trades))
-    logger.info("Depth:  {:,}", len(result.depth))
-
-    result_dict = {
-        "events": result.events,
-        "trades": result.trades,
-        "depth": result.depth,
-        "depth_summary": result.depth_summary,
-    }
-    parquet_dir = output_dir / "parquet"
-    save_data(result_dict, parquet_dir)
-    logger.info("Parquet saved to: {}", parquet_dir)
-
-    gallery_dir = output_dir / "gallery"
-    gallery_path = generate_gallery(
-        result,
-        gallery_dir,
-        title=f"LOBSTER {Path(source).name} ({trading_date}) -- ob-analytics",
-    )
-    logger.info("Gallery: {}", gallery_path.resolve())
-    logger.info("Open in browser: file://{}", gallery_path.resolve())
-    logger.info("Done! All output in: {}", output_dir.resolve())
+    run_lobster_demo(args.source, args.trading_date, args.output)
 
 
 def _generate_gallery_from_result(

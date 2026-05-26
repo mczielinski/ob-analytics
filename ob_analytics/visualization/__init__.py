@@ -18,31 +18,18 @@ from typing import Any
 import pandas as pd
 from matplotlib.axes import Axes
 
-from ob_analytics.visualization._data import (  # noqa: F401 – re-exports
-    infer_volume_scale,
-    prepare_current_depth_data,
-    prepare_event_map_data,
-    prepare_events_histogram_data,
-    prepare_hidden_executions_data,
-    prepare_kyle_lambda_data,
-    prepare_ofi_data,
-    prepare_price_levels_data,
-    prepare_time_series_data,
-    prepare_trades_data,
-    prepare_trading_halts_data,
-    prepare_volume_map_data,
-    prepare_volume_percentiles_data,
-    prepare_vpin_data,
-)
-
-from ob_analytics.visualization._matplotlib import (  # noqa: F401 – re-exports
+from ob_analytics.visualization import _data as _viz_data
+from ob_analytics.visualization._matplotlib import (
     PlotTheme,
-    _apply_theme,
-    _create_axes,
     get_plot_theme,
     save_figure,
     set_plot_theme,
 )
+
+# `infer_volume_scale` is a stable, user-facing helper that gallery callers
+# import from this namespace; keep it as a public re-export. The `prepare_*`
+# helpers are strictly internal — access them via `_viz_data.prepare_*`.
+infer_volume_scale = _viz_data.infer_volume_scale
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +145,7 @@ def plot_time_series(
     -------
     matplotlib.figure.Figure or plotly.graph_objects.Figure
     """
-    data = prepare_time_series_data(
+    data = _viz_data.prepare_time_series_data(
         timestamp, series, start_time, end_time, title, y_label
     )
     renderer = _get_renderer(backend, "time_series")
@@ -195,7 +182,7 @@ def plot_trades(
     -------
     matplotlib.figure.Figure or plotly.graph_objects.Figure
     """
-    data = prepare_trades_data(trades, start_time, end_time)
+    data = _viz_data.prepare_trades_data(trades, start_time, end_time)
     renderer = _get_renderer(backend, "trades")
     if backend == "matplotlib":
         return renderer(data, ax)
@@ -264,7 +251,7 @@ def plot_price_levels(
     -------
     matplotlib.figure.Figure or plotly.graph_objects.Figure
     """
-    data = prepare_price_levels_data(
+    data = _viz_data.prepare_price_levels_data(
         depth,
         spread,
         trades,
@@ -330,7 +317,7 @@ def plot_event_map(
     -------
     matplotlib.figure.Figure or plotly.graph_objects.Figure
     """
-    data = prepare_event_map_data(
+    data = _viz_data.prepare_event_map_data(
         events,
         start_time,
         end_time,
@@ -401,7 +388,7 @@ def plot_volume_map(
     """
     if event_type is None:
         event_type = ["flashed-limit"]
-    data = prepare_volume_map_data(
+    data = _viz_data.prepare_volume_map_data(
         events,
         action,
         event_type,
@@ -452,7 +439,7 @@ def plot_current_depth(
     -------
     matplotlib.figure.Figure or plotly.graph_objects.Figure
     """
-    data = prepare_current_depth_data(
+    data = _viz_data.prepare_current_depth_data(
         order_book, volume_scale, show_quantiles, show_volume
     )
     renderer = _get_renderer(backend, "current_depth")
@@ -499,7 +486,7 @@ def plot_volume_percentiles(
     -------
     matplotlib.figure.Figure or plotly.graph_objects.Figure
     """
-    data = prepare_volume_percentiles_data(
+    data = _viz_data.prepare_volume_percentiles_data(
         depth_summary,
         start_time,
         end_time,
@@ -550,7 +537,9 @@ def plot_events_histogram(
     -------
     matplotlib.figure.Figure or plotly.graph_objects.Figure
     """
-    data = prepare_events_histogram_data(events, start_time, end_time, val, bw)
+    data = _viz_data.prepare_events_histogram_data(
+        events, start_time, end_time, val, bw
+    )
     renderer = _get_renderer(backend, "events_histogram")
     if backend == "matplotlib":
         return renderer(data, ax)
@@ -587,7 +576,7 @@ def plot_vpin(
     -------
     matplotlib.figure.Figure or plotly.graph_objects.Figure
     """
-    data = prepare_vpin_data(vpin_df, threshold)
+    data = _viz_data.prepare_vpin_data(vpin_df, threshold)
     renderer = _get_renderer(backend, "vpin")
     if backend == "matplotlib":
         return renderer(data, ax)
@@ -621,7 +610,7 @@ def plot_order_flow_imbalance(
     -------
     matplotlib.figure.Figure or plotly.graph_objects.Figure
     """
-    data = prepare_ofi_data(ofi_df, trades)
+    data = _viz_data.prepare_ofi_data(ofi_df, trades)
     renderer = _get_renderer(backend, "order_flow_imbalance")
     if backend == "matplotlib":
         return renderer(data, ax)
@@ -649,7 +638,7 @@ def plot_kyle_lambda(
     -------
     matplotlib.figure.Figure or plotly.graph_objects.Figure
     """
-    data = prepare_kyle_lambda_data(kyle_result)
+    data = _viz_data.prepare_kyle_lambda_data(kyle_result)
     renderer = _get_renderer(backend, "kyle_lambda")
     if backend == "matplotlib":
         return renderer(data, ax)
@@ -719,7 +708,9 @@ def plot_hidden_executions(
             "plot_hidden_executions: pass either result=PipelineResult or "
             "both events= and trades= DataFrames."
         )
-    data = prepare_hidden_executions_data(events, trades, start_time, end_time)
+    data = _viz_data.prepare_hidden_executions_data(
+        events, trades, start_time, end_time
+    )
     renderer = _get_renderer(backend, "hidden_executions")
     if backend == "matplotlib":
         return renderer(data, ax)
@@ -788,8 +779,37 @@ def plot_trading_halts(
             "plot_trading_halts: pass either result=PipelineResult or "
             "trades= (and optionally halts=/events=)."
         )
-    data = prepare_trading_halts_data(trades, halts, events, start_time, end_time)
+    data = _viz_data.prepare_trading_halts_data(
+        trades, halts, events, start_time, end_time
+    )
     renderer = _get_renderer(backend, "trading_halts")
     if backend == "matplotlib":
         return renderer(data, ax)
     return renderer(data)
+
+
+__all__ = [
+    # Backends
+    "register_plot_backend",
+    # Themes / persistence
+    "PlotTheme",
+    "get_plot_theme",
+    "set_plot_theme",
+    "save_figure",
+    # Helpers users actually call
+    "infer_volume_scale",
+    # Plot functions
+    "plot_current_depth",
+    "plot_event_map",
+    "plot_events_histogram",
+    "plot_hidden_executions",
+    "plot_kyle_lambda",
+    "plot_order_flow_imbalance",
+    "plot_price_levels",
+    "plot_time_series",
+    "plot_trades",
+    "plot_trading_halts",
+    "plot_volume_map",
+    "plot_volume_percentiles",
+    "plot_vpin",
+]

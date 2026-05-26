@@ -32,6 +32,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `PipelineResult` via `result=` and read from `result.extras`. Old
   DataFrame-arg form still works.
 
+### Changed
+
+- Demo logic consolidated into `ob_analytics._demos`. Both
+  `scripts/bitstamp_demo.py` and `scripts/lobster_demo.py` (and the CLI's
+  `bitstamp-demo`/`lobster-demo` subcommands) are now thin argparse wrappers.
+  Behaviour unchanged.
+- `ob_analytics.depth.DepthMetricsEngine`: internal `_update_bid`/`_update_ask`
+  and `_write_bid_metrics`/`_write_ask_metrics` consolidated into one
+  side-parameterised path (`_update_side`, `_refresh_best`,
+  `_write_side_metrics`). Public API unchanged.
+- `ob_analytics.visualization` no longer re-exports the private helpers
+  `_apply_theme`, `_create_axes`, or the `prepare_*` data shapers. Import
+  these from `ob_analytics.visualization._matplotlib` /
+  `ob_analytics.visualization._data` if you need them (internal use only).
+  `infer_volume_scale` is still re-exported. An explicit `__all__` now
+  documents the public surface.
+
+### Removed
+
+- Dead `df["volume"].cumsum().to_numpy(...)` line in `flow_toxicity.py`.
+- Unused `DepthMetricsEngine._initialise_best`.
+
 ### Added
 
 - `RunContext` dataclass in `ob_analytics.protocols` (also exported from
