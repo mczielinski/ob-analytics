@@ -31,8 +31,9 @@ Usage with a Format descriptor::
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
@@ -40,7 +41,6 @@ from ob_analytics.config import PipelineConfig
 from ob_analytics.depth import depth_metrics, price_level_volume
 from ob_analytics.analytics import order_aggressiveness
 from ob_analytics.bitstamp import BitstampLoader, BitstampTradeReader
-from ob_analytics.flow_toxicity import compute_vpin, order_flow_imbalance
 from ob_analytics.analytics import set_order_types
 from loguru import logger
 
@@ -51,6 +51,9 @@ from ob_analytics.protocols import (
     RunContext,
     TradeSource,
 )
+
+if TYPE_CHECKING:
+    from ob_analytics.metrics._base import ToxicityMetric
 
 
 # ── Format registry ───────────────────────────────────────────────────
@@ -94,6 +97,10 @@ class PipelineResult:
         Per-format auxiliary DataFrames populated by
         ``Format.collect_extras`` (e.g. LOBSTER ``trading_halts`` and
         ``cross_trades``).  Empty for formats that supply no extras.
+    metrics : dict of str to DataFrame
+        Outputs of any :class:`~ob_analytics.metrics.ToxicityMetric`
+        passed via ``Pipeline(metrics=...)``, keyed by ``metric.name``.
+        ``vpin`` and ``ofi`` are mirrored here for back-compat.
     """
 
     events: pd.DataFrame
@@ -104,6 +111,7 @@ class PipelineResult:
     ofi: pd.DataFrame | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     extras: dict[str, pd.DataFrame] = field(default_factory=dict)
+    metrics: dict[str, pd.DataFrame] = field(default_factory=dict)
 
 
 class Pipeline:
@@ -138,6 +146,7 @@ class Pipeline:
         loader: EventLoader | None = None,
         trade_source: TradeSource | None = None,
         ctx: RunContext | None = None,
+        metrics: Sequence["ToxicityMetric"] | None = None,
     ) -> None:
         self._ctx = ctx or RunContext()
         if format is not None:
@@ -160,6 +169,17 @@ class Pipeline:
             self._writer = None
 
         self._format = format
+
+        self._metrics: list[ToxicityMetric] = list(metrics) if metrics else []
+        # Back-compat: if config.vpin_bucket_volume is set and the user did not
+        # explicitly pass metrics=, materialise a Vpin + Ofi automatically.
+        if not self._metrics and self.config.vpin_bucket_volume is not None:
+            from ob_analytics.metrics import Ofi, Vpin
+
+            self._metrics = [
+                Vpin(bucket_volume=self.config.vpin_bucket_volume),
+                Ofi(),
+            ]
 
     @property
     def writer(self) -> DataWriter | None:
@@ -260,16 +280,37 @@ class Pipeline:
         logger.info("Pipeline: computing order aggressiveness")
         events = order_aggressiveness(events, depth_summary)
 
-        vpin_df = None
-        ofi_df = None
-        if self.config.vpin_bucket_volume is not None:
-            logger.info(
-                "Pipeline: computing VPIN (bucket_volume={})",
-                self.config.vpin_bucket_volume,
-            )
-            vpin_df = compute_vpin(trades, self.config.vpin_bucket_volume)
-            logger.info("Pipeline: computing order flow imbalance")
-            ofi_df = order_flow_imbalance(trades)
+        # Provisional result so metrics can read the standard tables.
+        provisional = PipelineResult(
+            events=events,
+            trades=trades,
+            depth=depth,
+            depth_summary=depth_summary,
+            metadata={},
+        )
+
+        metrics_out: dict[str, pd.DataFrame] = {}
+        for metric in self._metrics:
+            # Skip metrics whose required tables are empty/missing.
+            missing = False
+            for req in metric.requires:
+                tbl = getattr(provisional, req, None)
+                if tbl is None or tbl.empty:
+                    missing = True
+                    break
+            if missing:
+                logger.info(
+                    "Pipeline: skipping metric '{}' (missing required: {})",
+                    metric.name,
+                    metric.requires,
+                )
+                continue
+            logger.info("Pipeline: computing metric '{}'", metric.name)
+            metrics_out[metric.name] = metric.compute(provisional, self.config)
+
+        # Back-compat mirrors.
+        vpin_df = metrics_out.get("vpin")
+        ofi_df = metrics_out.get("ofi")
 
         extras: dict[str, pd.DataFrame] = {}
         if self._format is not None:
@@ -293,4 +334,5 @@ class Pipeline:
             ofi=ofi_df,
             metadata=metadata,
             extras=extras,
+            metrics=metrics_out,
         )

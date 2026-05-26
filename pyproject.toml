@@ -37,6 +37,7 @@ dev = [
     "mkdocstrings[python]>=1.0.4",
     "pandas-stubs>=3.0.0.260204",
     "types-seaborn>=0.13.2.20260518",
+    "plotly>=6.7.0",
 ]
 
 [tool.hatch.build.targets.sdist]

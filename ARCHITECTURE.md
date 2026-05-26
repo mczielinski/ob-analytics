@@ -99,7 +99,20 @@ classDiagram
         +ofi: DataFrame | None
         +metadata: dict
         +extras: dict[str, DataFrame]
+        +metrics: dict[str, DataFrame]
     }
+
+    class ToxicityMetric {
+        <<Protocol>>
+        +name: str
+        +requires: tuple[str, ...]
+        +primary_column: str
+        +compute(result, config) DataFrame
+    }
+
+    class Vpin
+    class KyleLambda
+    class Ofi
 
     Pipeline --> PipelineConfig
     Pipeline --> EventLoader
@@ -108,8 +121,12 @@ classDiagram
     Pipeline --> PipelineResult
     Pipeline ..> Format : optional
     Pipeline ..> RunContext : per-run params
+    Pipeline ..> ToxicityMetric : metrics=[...]
     Format <|-- BitstampFormat
     Format <|-- LobsterFormat
+    ToxicityMetric <|.. Vpin
+    ToxicityMetric <|.. KyleLambda
+    ToxicityMetric <|.. Ofi
 ```
 
 ---
@@ -146,6 +163,13 @@ ob_analytics/
 ├── data.py               # save_data, load_data, writer registry
 ├── flow_toxicity.py      # compute_vpin, compute_kyle_lambda, order_flow_imbalance
 ├── _utils.py             # Validation, numerics, timestamp conversion helpers
+│
+├── metrics/              # Pluggable ToxicityMetric protocol + built-ins
+│   ├── __init__.py       # registry: register_metric, list_metrics
+│   ├── _base.py          # ToxicityMetric protocol
+│   ├── vpin.py           # Vpin (wraps compute_vpin)
+│   ├── kyle_lambda.py    # KyleLambda (wraps compute_kyle_lambda)
+│   └── ofi.py            # Ofi (wraps order_flow_imbalance)
 │
 └── visualization/        # Plotting subsystem
     ├── __init__.py       # plot_* dispatchers, PlotTheme, save_figure, backend registry

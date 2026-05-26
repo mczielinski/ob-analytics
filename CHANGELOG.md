@@ -56,6 +56,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`ToxicityMetric`** protocol and `ob_analytics.metrics` sub-package.
+  Three built-in implementations: `Vpin`, `Ofi`, `KyleLambda`.
+- `Pipeline(metrics=...)` accepts any sequence of `ToxicityMetric`.
+  Computed outputs land in `PipelineResult.metrics: dict[str, DataFrame]`,
+  keyed by `metric.name`.
+- `register_metric(name, cls)` / `list_metrics()` registry for plugging in
+  user-defined metrics (Amihud, BVC, PIN, Roll, etc.) without modifying
+  `Pipeline`.
+- `PipelineResult.metrics` field.
 - `RunContext` dataclass in `ob_analytics.protocols` (also exported from
   the top-level package) for per-run parameters that don't belong on
   long-lived `Format` instances.
@@ -156,6 +165,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `Pipeline` still honours legacy `config.vpin_bucket_volume`: when set and
+  no explicit `metrics=` is passed, materialises `Vpin` + `Ofi` for
+  back-compat. The `result.vpin` and `result.ofi` attributes still work
+  but are mirrors of `result.metrics["vpin"]` / `["ofi"]`.
+- Gallery now iterates `result.metrics` instead of hard-coding the
+  VPIN/OFI/Kyle panels. Built-ins keep their dedicated plotters; future
+  user-registered metrics can plug in their own.
 - `event_processing.py` **renamed** to `bitstamp.py`. Hard break — no shim.
 - `DefaultTradeInferrer` renamed to `BitstampTradeInferrer`; symmetric with
   `LobsterTradeInferrer`.
@@ -191,6 +207,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Docs nav: `api/event_processing.md` → `api/bitstamp.md`; `api/analytics.md`
   added; `api/trades.md`, `api/order_types.md`, `api/order_book.md`, and
   `api/matching_engine.md` merged into their parent module pages.
+
+### Deprecated
+
+- `PipelineResult.vpin` and `PipelineResult.ofi`. Use
+  `result.metrics["vpin"]` / `result.metrics["ofi"]` instead. These
+  attribute mirrors will be removed in a future release.
 
 ### Removed
 
