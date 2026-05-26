@@ -2,12 +2,12 @@
 
 from pathlib import Path
 
-from ob_analytics import LobsterFormat, Pipeline, sample_csv_path
+from ob_analytics import LobsterFormat, Pipeline
 from ob_analytics.protocols import RunContext
 
 
-def test_bitstamp_run_produces_empty_extras():
-    result = Pipeline().run(sample_csv_path())
+def test_bitstamp_run_produces_empty_extras(tiny_bitstamp_orders_csv: Path):
+    result = Pipeline().run(tiny_bitstamp_orders_csv)
     assert isinstance(result.extras, dict)
     assert result.extras == {}
 

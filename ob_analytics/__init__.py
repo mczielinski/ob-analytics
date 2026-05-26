@@ -69,6 +69,14 @@ from ob_analytics.flow_toxicity import (
     compute_vpin,
     order_flow_imbalance,
 )
+from ob_analytics.metrics import (
+    KyleLambda,
+    Ofi,
+    ToxicityMetric,
+    Vpin,
+    list_metrics,
+    register_metric,
+)
 from ob_analytics.lobster import (
     LobsterFormat,
     LobsterLoader,
@@ -209,6 +217,13 @@ __all__ = [
     "compute_vpin",
     "compute_kyle_lambda",
     "order_flow_imbalance",
+    # ── Pluggable metrics ───────────────────────────────────────────
+    "ToxicityMetric",
+    "Vpin",
+    "KyleLambda",
+    "Ofi",
+    "register_metric",
+    "list_metrics",
     # ── Domain models ────────────────────────────────────────────────
     "OrderEvent",
     "Trade",

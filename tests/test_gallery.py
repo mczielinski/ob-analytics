@@ -143,7 +143,7 @@ class TestGenerateGallery:
     def test_default_backends_prefer_plotly_when_available(
         self, tmp_path: Path
     ) -> None:
-        # plotly is installed in the dev env; default ordering should be
+        # When plotly is installed, default ordering should be
         # ["plotly", "matplotlib"].
         path = generate_gallery(
             result=None,

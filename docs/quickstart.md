@@ -527,6 +527,54 @@ result = Pipeline(config=config).run("orders.csv")
 # result.vpin and result.ofi are automatically populated
 ```
 
+### Pluggable metrics
+
+`Pipeline` accepts a `metrics=` keyword that takes any sequence of
+`ToxicityMetric` implementations. The computed outputs land in
+`result.metrics: dict[str, DataFrame]`:
+
+```python
+from ob_analytics import Pipeline, Vpin, Ofi, KyleLambda
+
+result = Pipeline(
+    metrics=[Vpin(bucket_volume=1_000), Ofi(window="1min"), KyleLambda()],
+).run("orders.csv")
+
+result.metrics["vpin"]         # DataFrame
+result.metrics["kyle_lambda"]  # DataFrame
+```
+
+To plug in your own metric, implement the protocol:
+
+```python
+from dataclasses import dataclass
+from ob_analytics import ToxicityMetric, register_metric
+
+@dataclass(frozen=True)
+class Amihud:
+    """Amihud (2002) illiquidity = |return| / volume."""
+    freq: str = "1min"
+    name: str = "amihud"
+    requires: tuple[str, ...] = ("trades",)
+    primary_column: str = "amihud"
+
+    def compute(self, result, config):
+        trades = result.trades.set_index("timestamp").sort_index()
+        ret = trades["price"].pct_change().abs()
+        vol = trades["volume"]
+        amihud = (ret / vol).resample(self.freq).mean()
+        return amihud.reset_index().rename(columns={0: "amihud"})
+
+register_metric("amihud", Amihud)
+
+result = Pipeline(metrics=[Amihud()]).run("orders.csv")
+result.metrics["amihud"]
+```
+
+The gallery automatically iterates over `result.metrics`. Built-in
+metrics get their dedicated plotters (`plot_vpin`, etc.); user-defined
+metrics are available on `result.metrics` for ad-hoc plotting.
+
 ---
 
 ## Command-line interface {#cli}
