@@ -83,7 +83,20 @@ on `git commit` once `pre-commit install` has been run.
 
 1. Create `ob_analytics/<venue>.py` with `<Venue>Loader`, `<Venue>TradeReader`
    (or another type satisfying `TradeSource`), `<Venue>Writer`, and a
-   `<Venue>Format(Format)` subclass with `name = "<venue>"`.
+   `<Venue>Format(Format)` subclass with `name = "<venue>"`. `Format` methods
+   take `(config: PipelineConfig, ctx: RunContext)`:
+   - `create_loader(config, ctx) -> EventLoader`
+   - `create_trade_source(config, ctx) -> TradeSource`
+   - `create_writer(config, ctx) -> DataWriter`
+   - `compute_depth(config, ctx, events) -> tuple[depth, depth_summary]`
+     (override only if your venue computes depth differently)
+   - `collect_extras(loader, events, source, ctx) -> dict[str, DataFrame]`
+     (optional — contributes per-format DataFrames to `PipelineResult.extras`,
+     used by LOBSTER for trading halts / cross trades / hidden executions).
+
+   Per-run parameters that vary across runs of the same `Format` instance
+   (e.g. LOBSTER `trading_date`) belong on `RunContext`, not on the
+   `Format` constructor.
 2. Register in `ob_analytics/__init__.py`:
    `register_format("<venue>", <Venue>Format)`.
 3. Add `docs/api/<venue>.md` and an entry in `zensical.toml` nav.

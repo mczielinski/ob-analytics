@@ -31,9 +31,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`plot_hidden_executions` / `plot_trading_halts`:** accept a
   `PipelineResult` via `result=` and read from `result.extras`. Old
   DataFrame-arg form still works.
+- **`Pipeline`** takes `trade_source=` instead of `matcher=` /
+  `trade_inferrer=`. `Format` provides `create_trade_source()` only.
 
 ### Changed
 
+- **Bundled sample** — `ob_analytics/_sample_data/` now ships `orders.csv` and
+  `trades.csv` from a modern live capture (replaces the legacy 2015-only
+  orders slice).
 - `scripts/collect_bitstamp_btcusd.py` reduced from ~600 LOC to a ~80-line
   wrapper around `ob_analytics.live.bitstamp.BitstampCapturer`. Same CLI
   flags; behaviour unchanged.
@@ -52,11 +57,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `infer_volume_scale` is still re-exported. An explicit `__all__` now
   documents the public surface.
 
-### Removed
-
-- Dead `df["volume"].cumsum().to_numpy(...)` line in `flow_toxicity.py`.
-- Unused `DepthMetricsEngine._initialise_best`.
-
 ### Added
 
 - **`ob_analytics.live`** -- new optional sub-package for live order-book
@@ -71,6 +71,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   back-compat wrapper around it (same CLI flags).
 - **`[project.optional-dependencies] live = ["websockets>=12"]`** --
   install with `pip install "ob-analytics[live]"`.
+- **`ToxicityMetric`** protocol and `ob_analytics.metrics` sub-package.
+  Three built-in implementations: `Vpin`, `Ofi`, `KyleLambda`.
+- `Pipeline(metrics=...)` accepts any sequence of `ToxicityMetric`.
+  Computed outputs land in `PipelineResult.metrics: dict[str, DataFrame]`,
+  keyed by `metric.name`.
+- `register_metric(name, cls)` / `list_metrics()` registry for plugging in
+  user-defined metrics (Amihud, BVC, PIN, Roll, etc.) without modifying
+  `Pipeline`.
+- `PipelineResult.metrics` field.
+- `RunContext` dataclass in `ob_analytics.protocols` (also exported from
+  the top-level package) for per-run parameters that don't belong on
+  long-lived `Format` instances.
+- **`TradeSource` protocol** and **`BitstampTradeReader`** — read authoritative
+  `trades.csv` and join to events via the `fill` column.
 - `tests/test_bitstamp.py` — dedicated coverage for `BitstampLoader`,
   `BitstampTradeReader`, `BitstampWriter`, and `BitstampFormat`, including
   a round-trip and a missing-companion error-path test. Uses the existing
@@ -87,18 +101,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   fixtures.
 - `ob_analytics/__main__.py` — enables `python -m ob_analytics` (used by
   the CLI subprocess tests).
-- **`ToxicityMetric`** protocol and `ob_analytics.metrics` sub-package.
-  Three built-in implementations: `Vpin`, `Ofi`, `KyleLambda`.
-- `Pipeline(metrics=...)` accepts any sequence of `ToxicityMetric`.
-  Computed outputs land in `PipelineResult.metrics: dict[str, DataFrame]`,
-  keyed by `metric.name`.
-- `register_metric(name, cls)` / `list_metrics()` registry for plugging in
-  user-defined metrics (Amihud, BVC, PIN, Roll, etc.) without modifying
-  `Pipeline`.
-- `PipelineResult.metrics` field.
-- `RunContext` dataclass in `ob_analytics.protocols` (also exported from
-  the top-level package) for per-run parameters that don't belong on
-  long-lived `Format` instances.
+
+### Removed
 
 - **`pacman` order type removed.** Legacy artifact of the 2015 Bitstamp HTTP
   API, where a single `order_id` could appear at multiple prices over its
@@ -114,26 +118,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   of `price_level_volume`). `LobsterLoader` no longer renumbers
   hidden-execution event ids (raw event type 5), which now retain the
   native LOBSTER convention of `id=0`.
-- **Bitstamp trades** — The pipeline no longer infers trades from matched
-  fills. A companion `trades.csv` next to `orders.csv` is required (capture
-  format from `scripts/collect_bitstamp_btcusd.py`). Removed: Needleman–Wunsch
-  matching, `BitstampMatcher`, `BitstampTradeInferrer`, `MatchingEngine`,
-  `TradeInferrer`, and related `PipelineConfig` fields (`match_cutoff_ms`,
-  `price_jump_threshold`).
+- **Bitstamp trade inference** — The pipeline no longer infers trades from
+  matched fills. A companion `trades.csv` next to `orders.csv` is required
+  (capture format from `scripts/collect_bitstamp_btcusd.py`). Removed:
+  Needleman–Wunsch matching, `BitstampMatcher`, `BitstampTradeInferrer`,
+  `MatchingEngine`, `TradeInferrer`, and the `match_cutoff_ms` /
+  `price_jump_threshold` fields on `PipelineConfig`.
 - **Zombie detection** — Removed `get_zombie_ids` and `PipelineConfig` fields
   `zombie_offset_seconds`, `skip_zombie_detection`.
-- **`Pipeline`** — Takes `trade_source=` instead of `matcher=` /
-  `trade_inferrer=`. `Format` provides `create_trade_source()` only.
-- **LOBSTER** — `LobsterMatcher` removed; `LobsterTradeInferrer` renamed to
+- **LOBSTER `LobsterMatcher`** — removed; `LobsterTradeInferrer` renamed to
   `LobsterTradeReader` with `load(events, source)`.
-- **Bundled sample** — `ob_analytics/_sample_data/` now ships `orders.csv` and
-  `trades.csv` from a modern live capture (replaces the legacy 2015-only
-  orders slice).
-
-### Added
-
-- **`TradeSource` protocol** and **`BitstampTradeReader`** — read authoritative
-  `trades.csv` and join to events via the `fill` column.
+- Dead `df["volume"].cumsum().to_numpy(...)` line in `flow_toxicity.py`.
+- Unused `DepthMetricsEngine._initialise_best`.
 
 ### 0.1.x baseline (historical; several items superseded by **Breaking** above)
 

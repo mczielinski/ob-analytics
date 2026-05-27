@@ -71,11 +71,12 @@ print(result.events.shape, result.trades.shape)
 ### LOBSTER
 
 ```python
-from ob_analytics import LobsterFormat, Pipeline
+from ob_analytics import LobsterFormat, Pipeline, RunContext
 
-result = Pipeline(format=LobsterFormat(trading_date="2012-06-21")).run(
-    "/path/to/lobster_data"
-)
+result = Pipeline(
+    format=LobsterFormat(),
+    ctx=RunContext(trading_date="2012-06-21"),
+).run("/path/to/lobster_data")
 ```
 
 ## CLI
