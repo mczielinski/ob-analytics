@@ -44,10 +44,11 @@ cd ob-analytics
 pip install -e .
 ```
 
-Interactive Plotly figures (optional — from a local clone):
+Optional extras (from a local clone):
 
 ```bash
-pip install -e ".[interactive]"
+pip install -e ".[interactive]"   # Plotly figures
+pip install -e ".[live]"          # live exchange capture (websockets)
 ```
 
 **Requires** Python 3.11+. Core dependencies: NumPy, pandas, matplotlib,
@@ -76,13 +77,47 @@ result.depth_summary  # best bid/ask, BPS bins, spread
 
 ### LOBSTER
 
-```python
-from ob_analytics import Pipeline, LobsterFormat
+`trading_date` lives on `RunContext`, not on `LobsterFormat`:
 
-result = Pipeline(format=LobsterFormat(trading_date="2012-06-21")).run(
-    "/path/to/lobster_data"
-)
+```python
+from ob_analytics import Pipeline, LobsterFormat, RunContext
+
+result = Pipeline(
+    format=LobsterFormat(),
+    ctx=RunContext(trading_date="2012-06-21"),
+).run("/path/to/lobster_data")
 ```
+
+### Pluggable flow-toxicity metrics
+
+Metrics are first-class plugins behind a `ToxicityMetric` protocol. Built-in
+implementations: `Vpin`, `Ofi`, `KyleLambda`. Outputs land in
+`result.metrics[name]`:
+
+```python
+from ob_analytics import Pipeline, Vpin, KyleLambda, sample_csv_path
+
+result = Pipeline(metrics=[Vpin(bucket_volume=10.0), KyleLambda()]).run(
+    sample_csv_path()
+)
+result.metrics["vpin"]
+result.metrics["kyle_lambda"]
+```
+
+Register your own (`register_metric("amihud", Amihud)`) and it shows up in
+`list_metrics()` and the gallery.
+
+### Live capture (Bitstamp)
+
+With the `[live]` extra installed, capture a live order book straight to
+`orders.csv` / `trades.csv` that the pipeline understands:
+
+```bash
+ob-analytics capture bitstamp --pair btcusd --out ./capture --minutes 30
+```
+
+`ob-analytics capture --list` shows registered venues. Add new ones by
+implementing the `LiveCapturer` protocol in `ob_analytics.live`.
 
 See the [full quickstart](https://mczielinski.github.io/ob-analytics/quickstart/)
 for step-by-step usage, configuration, custom loaders, flow-toxicity metrics,
