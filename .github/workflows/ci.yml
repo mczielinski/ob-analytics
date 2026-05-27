@@ -28,11 +28,11 @@ jobs:
       - uses: astral-sh/setup-uv@v8.1.0
         with:
           enable-cache: true
-      - run: uv sync --group dev --extra interactive
+      - run: uv sync --group dev --extra interactive --extra live
       # Pass --extra to `uv run` too: its implicit sync would otherwise
-      # re-resolve to the project default (no extras) and uninstall plotly,
-      # making `import plotly` unresolvable in ob_analytics/visualization/.
-      - run: uv run --group dev --extra interactive ty check ob_analytics/
+      # re-resolve to the project default (no extras) and uninstall plotly /
+      # websockets, leaving imports in visualization/ and live/ unresolvable.
+      - run: uv run --group dev --extra interactive --extra live ty check ob_analytics/
 
   test:
     runs-on: ubuntu-latest
@@ -46,12 +46,12 @@ jobs:
         with:
           enable-cache: true
       - run: uv python install ${{ matrix.python-version }}
-      - run: uv sync --group dev --extra interactive --python ${{ matrix.python-version }}
+      - run: uv sync --group dev --extra interactive --extra live --python ${{ matrix.python-version }}
       # Pass --extra to `uv run` too: its implicit sync would otherwise
-      # re-resolve to the project default (no extras) and uninstall plotly,
-      # which causes test_plotly_backend.py to skip and the gallery
-      # default-backends test to fail because `import plotly` raises.
-      - run: uv run --group dev --extra interactive --python ${{ matrix.python-version }} pytest tests/ --cov=ob_analytics --cov-report=xml -q
+      # re-resolve to the project default (no extras) and uninstall plotly /
+      # websockets, which causes test_plotly_backend.py to skip and any
+      # test_live_protocol tests that import bitstamp capturer to break.
+      - run: uv run --group dev --extra interactive --extra live --python ${{ matrix.python-version }} pytest tests/ --cov=ob_analytics --cov-report=xml -q
       - name: Upload coverage
         if: matrix.python-version == '3.11' && github.event_name == 'push'
         uses: codecov/codecov-action@v6

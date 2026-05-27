@@ -9,6 +9,7 @@ Usage::
     ob-analytics gallery results/parquet/ --output my_gallery/
     ob-analytics bitstamp-demo --input /path/to/dir_with_orders_and_trades/ --output demo_out/
     ob-analytics lobster-demo /path/to/lobster_data --trading-date 2012-06-21 --output demo_out/
+    ob-analytics capture bitstamp --pair btcusd --minutes 30 --out /tmp/capture
 """
 
 from __future__ import annotations
@@ -137,6 +138,55 @@ def _cmd_lobster_demo(args: argparse.Namespace) -> None:
     from ob_analytics._demos import run_lobster_demo
 
     run_lobster_demo(args.source, args.trading_date, args.output)
+
+
+def _cmd_capture(args: argparse.Namespace) -> None:
+    """Run a live market-data capture."""
+    _setup_logging(args.verbose)
+    import asyncio
+
+    from loguru import logger
+
+    from ob_analytics.live import get_capturer, list_capturers
+    from ob_analytics.live._base import CaptureConfig
+    from ob_analytics.live._runner import run_capturer
+
+    if getattr(args, "list", False):
+        registered = list_capturers()
+        if not registered:
+            logger.error(
+                "No capturers registered. Install with: "
+                'pip install "ob-analytics[live]"'
+            )
+            sys.exit(1)
+        for name in registered:
+            print(name)
+        return
+
+    if not args.venue:
+        logger.error(
+            "venue is required (e.g. 'bitstamp'). Use --list to see registered capturers."
+        )
+        sys.exit(2)
+    if not args.out:
+        logger.error("--out is required")
+        sys.exit(2)
+
+    try:
+        capturer_cls = get_capturer(args.venue)
+    except ValueError as exc:
+        logger.error(str(exc))
+        sys.exit(1)
+
+    capturer = capturer_cls()
+    config = CaptureConfig(
+        pair=args.pair,
+        out_dir=Path(args.out),
+        minutes=args.minutes,
+        keep_raw=not args.no_raw,
+    )
+    result = asyncio.run(run_capturer(capturer, config))
+    logger.info("Capture complete: {}", result.out_dir)
 
 
 def _generate_gallery_from_result(
@@ -285,6 +335,49 @@ def main() -> None:
         help="Output directory (default: ./lobster_output)",
     )
     p_lob.set_defaults(func=_cmd_lobster_demo)
+
+    # -- capture --
+    p_cap = subparsers.add_parser(
+        "capture",
+        help="Live-capture market data from a registered venue",
+    )
+    p_cap.add_argument(
+        "venue",
+        nargs="?",
+        help=("Venue name (e.g. 'bitstamp'). Use --list to see registered capturers."),
+    )
+    p_cap.add_argument(
+        "--pair",
+        default="btcusd",
+        help="Venue-specific pair symbol (default: btcusd)",
+    )
+    p_cap.add_argument(
+        "--minutes",
+        type=float,
+        default=10.0,
+        help="Capture duration in minutes (default: 10.0)",
+    )
+    p_cap.add_argument(
+        "--out",
+        default=None,
+        help=(
+            "Output directory (will contain orders.csv, trades.csv, "
+            "raw.jsonl, meta.json). Required unless --list."
+        ),
+    )
+    p_cap.add_argument(
+        "--no-raw",
+        action="store_true",
+        default=False,
+        help="Don't write raw.jsonl (saves disk for long runs)",
+    )
+    p_cap.add_argument(
+        "--list",
+        action="store_true",
+        default=False,
+        help="List registered capturers and exit (ignores other flags)",
+    )
+    p_cap.set_defaults(func=_cmd_capture)
 
     args = parser.parse_args()
     args.func(args)
