@@ -18,6 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 interactive = ["plotly>=6.7.0"]
+live = ["websockets>=12"]
 
 [project.scripts]
 ob-analytics = "ob_analytics.cli:main"

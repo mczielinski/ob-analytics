@@ -34,6 +34,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `scripts/collect_bitstamp_btcusd.py` reduced from ~600 LOC to a ~80-line
+  wrapper around `ob_analytics.live.bitstamp.BitstampCapturer`. Same CLI
+  flags; behaviour unchanged.
 - Demo logic consolidated into `ob_analytics._demos`. Both
   `scripts/bitstamp_demo.py` and `scripts/lobster_demo.py` (and the CLI's
   `bitstamp-demo`/`lobster-demo` subcommands) are now thin argparse wrappers.
@@ -56,6 +59,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`ob_analytics.live`** -- new optional sub-package for live order-book
+  capture. Introduces `LiveCapturer` protocol, `CaptureConfig`,
+  `CaptureResult`, `CaptureSink`, and a generic asyncio runner. Capture
+  output drops straight into the pipeline (`orders.csv` schema unchanged).
+- **`ob-analytics capture <venue>`** -- new CLI verb. Built-in `bitstamp`
+  capturer ships with the `[live]` extra. Use `--list` to see registered
+  capturers.
+- **`ob_analytics/live/bitstamp.py`** -- `BitstampCapturer` implementing
+  the protocol. `scripts/collect_bitstamp_btcusd.py` becomes a thin
+  back-compat wrapper around it (same CLI flags).
+- **`[project.optional-dependencies] live = ["websockets>=12"]`** --
+  install with `pip install "ob-analytics[live]"`.
 - `tests/test_bitstamp.py` — dedicated coverage for `BitstampLoader`,
   `BitstampTradeReader`, `BitstampWriter`, and `BitstampFormat`, including
   a round-trip and a missing-companion error-path test. Uses the existing

@@ -154,7 +154,7 @@ ob_analytics/
 ├── protocols.py          # EventLoader, TradeSource, DataWriter, Format
 ├── models.py             # OrderEvent, Trade, DepthLevel, OrderBookSnapshot, KyleLambdaResult
 ├── exceptions.py         # ObAnalyticsError hierarchy
-├── cli.py                # CLI entry point (process, gallery, bitstamp-demo, lobster-demo)
+├── cli.py                # CLI entry point (process, gallery, bitstamp-demo, lobster-demo, capture)
 │
 ├── bitstamp.py           # BitstampLoader, BitstampTradeReader, BitstampWriter, BitstampFormat
 ├── lobster.py            # LobsterLoader, LobsterTradeReader, LobsterWriter, LobsterFormat
@@ -171,6 +171,12 @@ ob_analytics/
 │   ├── kyle_lambda.py    # KyleLambda (wraps compute_kyle_lambda)
 │   └── ofi.py            # Ofi (wraps order_flow_imbalance)
 │
+├── live/                 # Optional live order-book capture ([live] extra)
+│   ├── __init__.py       # registry: register_capturer, list_capturers, get_capturer
+│   ├── _base.py          # LiveCapturer protocol, CaptureConfig, CaptureResult, CaptureSink
+│   ├── _runner.py        # Generic asyncio driver + FileCaptureSink
+│   └── bitstamp.py       # BitstampCapturer (built-in)
+│
 └── visualization/        # Plotting subsystem
     ├── __init__.py       # plot_* dispatchers, PlotTheme, save_figure, backend registry
     ├── gallery.py        # HTML gallery generation
@@ -178,3 +184,13 @@ ob_analytics/
     ├── _matplotlib.py    # Matplotlib renderers
     └── _plotly.py        # Plotly renderers
 ```
+
+**`ob_analytics.live`** is an optional async sub-package (install with
+`pip install "ob-analytics[live]"`) that captures live exchange data into
+the same CSV schema the pipeline reads. Implement the `LiveCapturer`
+protocol -- three async-iterator methods (`snapshot`, `stream`,
+`shutdown_synthetic_events`) -- and call `register_capturer` to add a
+new venue; the registry pattern mirrors `Format` and `register_writer`.
+The runner (`run_capturer`) handles persistence, raw-frame archival,
+signal handling, and `meta.json` finalisation so capturer authors only
+write the per-venue parser.
