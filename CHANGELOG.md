@@ -71,6 +71,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   back-compat wrapper around it (same CLI flags).
 - **`[project.optional-dependencies] live = ["websockets>=12"]`** --
   install with `pip install "ob-analytics[live]"`.
+- `tests/test_bitstamp.py` — dedicated coverage for `BitstampLoader`,
+  `BitstampTradeReader`, `BitstampWriter`, and `BitstampFormat`, including
+  a round-trip and a missing-companion error-path test. Uses the existing
+  `tiny_bitstamp_orders_csv` fixture for the writer round-trip to keep
+  the suite fast.
+- `tests/test_cli.py` — subprocess smoke tests for all four CLI
+  subcommands (`process`, `gallery`, `bitstamp-demo`, `lobster-demo`).
+- `tests/test_exceptions.py` — pins the exception hierarchy contract
+  (inheritance, isolation between siblings, picklability).
+- `tests/test_data_registry.py` — pins `register_writer` /
+  `list_writers` / `save_data(fmt=...)` semantics via a stub writer,
+  including the explicit-writer override.
+- `tests/conftest.py` — new `cli_runner` and `bitstamp_sample_orders_only`
+  fixtures.
+- `ob_analytics/__main__.py` — enables `python -m ob_analytics` (used by
+  the CLI subprocess tests).
 - **`ToxicityMetric`** protocol and `ob_analytics.metrics` sub-package.
   Three built-in implementations: `Vpin`, `Ofi`, `KyleLambda`.
 - `Pipeline(metrics=...)` accepts any sequence of `ToxicityMetric`.

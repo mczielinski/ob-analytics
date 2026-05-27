@@ -1,5 +1,7 @@
 """Shared fixtures for ob-analytics tests."""
 
+import subprocess
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -279,6 +281,41 @@ def tiny_events() -> pd.DataFrame:
             "original_number": [1, 2, 3, 4],
         }
     )
+
+
+@pytest.fixture
+def cli_runner():
+    """Invoke the ob-analytics CLI as a subprocess.
+
+    Returns a callable: ``run(*args, **kwargs) -> subprocess.CompletedProcess``.
+    Always passes ``check=False`` (the test decides whether to assert).
+    """
+
+    def _run(*args: str, **kwargs) -> subprocess.CompletedProcess:
+        cmd = [sys.executable, "-m", "ob_analytics", *args]
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            **kwargs,
+        )
+
+    return _run
+
+
+@pytest.fixture
+def bitstamp_sample_orders_only(tmp_path, sample_csv_path) -> Path:
+    """Copy just orders.csv into a temp dir (no trades.csv).
+
+    Use to test the error path when BitstampTradeReader can't find its
+    companion file.
+    """
+    import shutil
+
+    dest = tmp_path / "orders.csv"
+    shutil.copy(sample_csv_path, dest)
+    return dest
 
 
 @pytest.fixture
