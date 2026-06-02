@@ -41,6 +41,39 @@ def validate_non_empty(df: pd.DataFrame, context: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Trades schema
+# ---------------------------------------------------------------------------
+
+# Canonical trades columns, verified identical against the bitstamp.py and
+# lobster.py trade readers. Carries BOTH the event-id attribution
+# (maker_event_id / taker_event_id, required by trade_impacts /
+# order_aggressiveness in analytics.py) AND the order-id / original-number
+# columns. Named EMPTY_TRADES_COLUMNS — not "TRADE_COLUMNS" — to leave room
+# for a smaller *required* validation subset under a different name later.
+EMPTY_TRADES_COLUMNS: tuple[str, ...] = (
+    "timestamp",
+    "price",
+    "volume",
+    "direction",
+    "maker_event_id",
+    "taker_event_id",
+    "maker",
+    "taker",
+    "maker_og",
+    "taker_og",
+)
+
+
+def empty_trades() -> pd.DataFrame:
+    """Return an empty trades DataFrame with the canonical column set.
+
+    Columns default to ``object`` dtype, matching the inline empty frames
+    this helper replaces in the Bitstamp and LOBSTER trade readers.
+    """
+    return pd.DataFrame(columns=list(EMPTY_TRADES_COLUMNS))
+
+
+# ---------------------------------------------------------------------------
 # Array / DataFrame helpers
 # ---------------------------------------------------------------------------
 

@@ -24,6 +24,7 @@ from loguru import logger
 
 from ob_analytics._utils import (
     datetime_to_epoch,
+    empty_trades,
     epoch_to_datetime,
     validate_columns,
     validate_non_empty,
@@ -174,21 +175,6 @@ _TRADES_COLUMNS = (
     "side",
 )
 
-_EMPTY_TRADES = pd.DataFrame(
-    columns=[
-        "timestamp",
-        "price",
-        "volume",
-        "direction",
-        "maker_event_id",
-        "taker_event_id",
-        "maker",
-        "taker",
-        "maker_og",
-        "taker_og",
-    ]
-)
-
 
 class BitstampTradeReader:
     """Build trades from the companion ``trades.csv`` produced by
@@ -210,7 +196,7 @@ class BitstampTradeReader:
         raw = pd.read_csv(path)
 
         if raw.empty:
-            return _EMPTY_TRADES.copy()
+            return empty_trades()
 
         validate_columns(raw, set(_TRADES_COLUMNS), "BitstampTradeReader.load")
 

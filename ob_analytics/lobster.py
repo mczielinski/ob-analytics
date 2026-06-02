@@ -33,6 +33,7 @@ from loguru import logger
 
 from ob_analytics._utils import (
     datetime_to_seconds_after_midnight,
+    empty_trades,
     seconds_after_midnight_to_datetime,
 )
 from ob_analytics.config import PipelineConfig
@@ -259,20 +260,7 @@ class LobsterTradeReader:
         )
 
         if execs.empty:
-            return pd.DataFrame(
-                columns=[
-                    "timestamp",
-                    "price",
-                    "volume",
-                    "direction",
-                    "maker_event_id",
-                    "taker_event_id",
-                    "maker",
-                    "taker",
-                    "maker_og",
-                    "taker_og",
-                ]
-            )
+            return empty_trades()
 
         # Direction inversion: execution of a resting ask = buyer-initiated
         trade_direction = np.where(execs["direction"] == "ask", "buy", "sell")
