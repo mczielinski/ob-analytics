@@ -30,6 +30,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from loguru import logger
+from sortedcontainers import SortedDict
 
 from ob_analytics._utils import (
     datetime_to_seconds_after_midnight,
@@ -492,7 +493,11 @@ class LobsterWriter:
         iterate via indexed access, which is roughly an order of
         magnitude faster than ``DataFrame.iterrows()``.
         """
-        book: dict[str, dict[float, float]] = {"bid": {}, "ask": {}}
+        # Book sides are kept as SortedDicts keyed by price so each snapshot
+        # reads the top-N levels directly (peekitem is O(log n)) instead of
+        # re-sorting the whole side on every event.  Prices are unique keys,
+        # so key-ordering matches the previous ``sorted(items())`` exactly.
+        book: dict[str, SortedDict] = {"bid": SortedDict(), "ask": SortedDict()}
         rows: list[list[float]] = []
 
         n = len(events)
@@ -552,21 +557,29 @@ class LobsterWriter:
         return ob
 
     @staticmethod
-    def _snapshot_row(
-        book: dict[str, dict[float, float]], num_levels: int
-    ) -> list[float]:
-        """Build a single orderbook snapshot row."""
-        asks_sorted = sorted(book["ask"].items())
-        bids_sorted = sorted(book["bid"].items(), reverse=True)
+    def _snapshot_row(book: dict[str, SortedDict], num_levels: int) -> list[float]:
+        """Build a single orderbook snapshot row.
+
+        ``ask`` is read low-to-high (ascending keys, ``peekitem(i)``) and
+        ``bid`` high-to-low (descending keys, ``peekitem(-(i + 1))``),
+        reproducing the previous ``sorted()`` / ``sorted(reverse=True)``
+        ordering without materialising the full side.
+        """
+        asks = book["ask"]
+        bids = book["bid"]
+        n_ask = len(asks)
+        n_bid = len(bids)
 
         row: list[float] = []
         for i in range(num_levels):
-            if i < len(asks_sorted):
-                row.extend([asks_sorted[i][0], asks_sorted[i][1]])
+            if i < n_ask:
+                ask_price, ask_size = asks.peekitem(i)
+                row.extend([ask_price, ask_size])
             else:
                 row.extend([_DUMMY_ASK_PRICE, 0])
-            if i < len(bids_sorted):
-                row.extend([bids_sorted[i][0], bids_sorted[i][1]])
+            if i < n_bid:
+                bid_price, bid_size = bids.peekitem(-(i + 1))
+                row.extend([bid_price, bid_size])
             else:
                 row.extend([_DUMMY_BID_PRICE, 0])
 
