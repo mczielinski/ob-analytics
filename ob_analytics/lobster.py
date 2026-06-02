@@ -195,16 +195,26 @@ class LobsterLoader:
         return events
 
     @staticmethod
+    def _glob_lobster_file(directory: Path, kind: str) -> Path | None:
+        """Return the first ``*{kind}*.csv`` in *directory* (or None).
+
+        Prefers the underscored ``*_{kind}*.csv`` form (LOBSTER's own naming)
+        and falls back to the looser ``*{kind}*.csv``.
+        """
+        candidates = sorted(directory.glob(f"*_{kind}*.csv"))
+        if not candidates:
+            candidates = sorted(directory.glob(f"*{kind}*.csv"))
+        return candidates[0] if candidates else None
+
+    @staticmethod
     def _resolve_message_file(source: Path) -> Path:
         """Find the message CSV from *source* (file or directory)."""
         if source.is_file():
             return source
         if source.is_dir():
-            candidates = sorted(source.glob("*_message*.csv"))
-            if not candidates:
-                candidates = sorted(source.glob("*message*.csv"))
-            if candidates:
-                return candidates[0]
+            found = LobsterLoader._glob_lobster_file(source, "message")
+            if found is not None:
+                return found
             raise FileNotFoundError(f"No LOBSTER message file found in {source}")
         raise FileNotFoundError(f"Path does not exist: {source}")
 
@@ -213,11 +223,7 @@ class LobsterLoader:
         """Find the orderbook CSV from *source* (file or directory)."""
         source = Path(source)
         if source.is_dir():
-            candidates = sorted(source.glob("*_orderbook*.csv"))
-            if not candidates:
-                candidates = sorted(source.glob("*orderbook*.csv"))
-            if candidates:
-                return candidates[0]
+            return LobsterLoader._glob_lobster_file(source, "orderbook")
         return None
 
 
