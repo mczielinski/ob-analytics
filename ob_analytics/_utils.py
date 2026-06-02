@@ -205,7 +205,14 @@ def interval_price_level_gaps(volume: np.ndarray, breaks: np.ndarray) -> np.ndar
 # Timestamp conversions
 # ---------------------------------------------------------------------------
 
-_EPOCH_DIVISORS: dict[str, int] = {"ms": 1_000_000, "us": 1_000, "ns": 1}
+# Nanoseconds per unit: ``datetime_to_epoch`` takes a Timedelta's int64 ns
+# count and divides by this to land in the requested unit.
+_EPOCH_DIVISORS: dict[str, int] = {
+    "s": 1_000_000_000,
+    "ms": 1_000_000,
+    "us": 1_000,
+    "ns": 1,
+}
 
 
 def epoch_to_datetime(series: pd.Series, unit: str) -> pd.Series:
@@ -216,7 +223,7 @@ def epoch_to_datetime(series: pd.Series, unit: str) -> pd.Series:
     series : pandas.Series
         Numeric timestamps (integers or floats).
     unit : str
-        Epoch unit — one of ``"ms"``, ``"us"``, or ``"ns"``.
+        Epoch unit — one of ``"s"``, ``"ms"``, ``"us"``, or ``"ns"``.
 
     Returns
     -------
@@ -234,7 +241,7 @@ def datetime_to_epoch(series: pd.Series, unit: str) -> pd.Series:
     series : pandas.Series
         Datetime series (dtype ``datetime64[ns]``).
     unit : str
-        Target epoch unit — one of ``"ms"``, ``"us"``, or ``"ns"``.
+        Target epoch unit — one of ``"s"``, ``"ms"``, ``"us"``, or ``"ns"``.
 
     Returns
     -------

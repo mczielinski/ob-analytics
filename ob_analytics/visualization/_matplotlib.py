@@ -2,7 +2,7 @@
 
 This module contains all matplotlib-specific rendering logic.  Each
 ``mpl_*()`` function takes a prepared data dict (from
-:mod:`~ob_analytics._chart_data`) and an optional *ax* parameter, and
+:mod:`~ob_analytics.visualization._data`) and an optional *ax* parameter, and
 returns a :class:`~matplotlib.figure.Figure`.
 
 The :class:`PlotTheme` dataclass and related helpers also live here.

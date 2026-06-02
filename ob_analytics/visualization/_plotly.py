@@ -1,7 +1,7 @@
 """Plotly interactive rendering backend for ob-analytics.
 
 Each ``plotly_*()`` function takes a prepared data dict (from
-:mod:`~ob_analytics._chart_data`) and returns a
+:mod:`~ob_analytics.visualization._data`) and returns a
 :class:`plotly.graph_objects.Figure` with interactive zoom, pan, and hover.
 
 Install via ``pip install ob-analytics[interactive]``.
