@@ -13,6 +13,7 @@ live in :mod:`ob_analytics.analytics`.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -286,20 +287,30 @@ class BitstampTradeReader:
         amounts: pd.Series,
         ev_lookup: dict[int, list[tuple[float, int]]],
     ) -> np.ndarray:
-        result: list[int | float] = []
-        used: dict[int, list[tuple[float, int]]] = {
-            k: list(v) for k, v in ev_lookup.items()
-        }
         digits = self._config.volume_decimals
 
+        # Bucket each order's candidate fills by rounded volume, preserving the
+        # original candidate order within each bucket.  The previous version
+        # linearly scanned every candidate for an order id on each trade and
+        # popped the first volume match; bucketing reproduces that exactly
+        # (earliest unconsumed match wins) while making resolution O(1) per
+        # trade.  The index is built fresh per call, so the maker and taker
+        # passes consume independently — matching the old per-call copy.
+        index: dict[int, dict[float, deque[int]]] = {}
+        for oid, cand in ev_lookup.items():
+            by_fill: dict[float, deque[int]] = {}
+            for fill, eid in cand:
+                by_fill.setdefault(round(fill, digits), deque()).append(eid)
+            index[oid] = by_fill
+
+        result: list[int | float] = []
         for oid, amt in zip(order_ids, amounts):
-            cand = used.get(int(oid), [])
             picked: int | float = float("nan")
-            for i, (fill, eid) in enumerate(cand):
-                if round(fill, digits) == round(float(amt), digits):
-                    picked = eid
-                    cand.pop(i)
-                    break
+            bucket = index.get(int(oid))
+            if bucket is not None:
+                matches = bucket.get(round(float(amt), digits))
+                if matches:
+                    picked = matches.popleft()
             result.append(picked)
 
         return np.array(result, dtype=object)
