@@ -72,10 +72,10 @@ class PlotSpec:
     needs: str | None = None
 
 
-def _auto_time_slices(
+def _auto_zoom_window(
     events: pd.DataFrame,
-) -> dict[str, tuple[pd.Timestamp, pd.Timestamp]]:
-    """Derive sensible zoom windows from the data's time range."""
+) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """Derive a sensible (start, end) zoom window from the data's time range."""
     t_min = events["timestamp"].min()
     t_max = events["timestamp"].max()
     duration = t_max - t_min
@@ -83,12 +83,10 @@ def _auto_time_slices(
     if duration < pd.Timedelta(hours=2):
         mid = t_min + duration / 2
         half = duration / 4
-        return {"zoom": (mid - half, mid + half)}
+        return (mid - half, mid + half)
 
     quarter = duration / 4
-    return {
-        "zoom": (t_min + quarter, t_min + 2 * quarter),
-    }
+    return (t_min + quarter, t_min + 2 * quarter)
 
 
 def default_specs(
@@ -125,8 +123,7 @@ def default_specs(
         volume_scale = infer_volume_scale(events["volume"])
 
     spread = get_spread(depth_summary)
-    slices = _auto_time_slices(events)
-    zoom_start, zoom_end = slices["zoom"]
+    zoom_start, zoom_end = _auto_zoom_window(events)
 
     price_mid = trades["price"].median()
     price_std = trades["price"].std()
@@ -524,8 +521,18 @@ def generate_gallery(
     return html_path
 
 
-_BACKEND_LABELS = {"plotly": "Plotly", "matplotlib": "Matplotlib"}
-_PANEL_CLASSES = {"plotly": "plotly-panel", "matplotlib": "mpl-panel"}
+@dataclass(frozen=True)
+class _BackendStyle:
+    """Per-backend display metadata for the gallery HTML."""
+
+    label: str  # human-readable name, e.g. "Plotly"
+    panel_cls: str  # CSS class for the panel div, e.g. "plotly-panel"
+
+
+_BACKEND_STYLES: dict[str, _BackendStyle] = {
+    "plotly": _BackendStyle("Plotly", "plotly-panel"),
+    "matplotlib": _BackendStyle("Matplotlib", "mpl-panel"),
+}
 
 
 def _render_panel(
@@ -540,8 +547,9 @@ def _render_panel(
     *role* is ``"primary"`` for the first listed backend (larger column)
     and ``"secondary"`` for the rest.
     """
-    label = _BACKEND_LABELS.get(backend, backend.capitalize())
-    panel_cls = _PANEL_CLASSES.get(backend, f"{backend}-panel")
+    style = _BACKEND_STYLES.get(backend)
+    label = style.label if style else backend.capitalize()
+    panel_cls = style.panel_cls if style else f"{backend}-panel"
     classes = f"panel {panel_cls} panel-{role}"
 
     if not rendered:
