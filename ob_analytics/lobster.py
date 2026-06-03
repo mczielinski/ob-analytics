@@ -800,8 +800,26 @@ class LobsterFormat:
         return td
 
 
-# Self-register with the pipeline's format registry (see bitstamp.py for the
-# rationale behind the bottom-of-module import).
+# ── Register this format and its writer ───────────────────────────────
+# Imports sit at the bottom (deferred from the top of the module) to avoid a
+# circular import: ``pipeline`` imports loaders/readers from the format modules.
+from ob_analytics.data import register_writer  # noqa: E402
 from ob_analytics.pipeline import register_format  # noqa: E402
 
+
+def _make_lobster_writer(config, ctx):
+    td = ctx.trading_date
+    if td is None:
+        raise ValueError(
+            "LOBSTER writer requires ctx.trading_date. "
+            "Pass ctx=RunContext(trading_date=...) to save_data()."
+        )
+    if not isinstance(td, (str, pd.Timestamp)):
+        raise TypeError(
+            f"ctx.trading_date must be str or pandas.Timestamp, got {type(td).__name__}"
+        )
+    return LobsterWriter(config, trading_date=td)
+
+
 register_format("lobster", LobsterFormat)
+register_writer("lobster", _make_lobster_writer)

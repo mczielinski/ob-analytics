@@ -29,7 +29,6 @@ All processing stages are pluggable via :mod:`~ob_analytics.protocols`.
 
 from pathlib import Path
 
-import pandas as pd
 from loguru import logger
 from ob_analytics.config import PipelineConfig
 from ob_analytics.data import (
@@ -127,26 +126,8 @@ from ob_analytics.visualization import (
 )
 
 
-# ── Register built-in formats and writers ─────────────────────────────
-def _make_lobster_writer(config, ctx):
-    td = ctx.trading_date
-    if td is None:
-        raise ValueError(
-            "LOBSTER writer requires ctx.trading_date. "
-            "Pass ctx=RunContext(trading_date=...) to save_data()."
-        )
-    if not isinstance(td, (str, pd.Timestamp)):
-        raise TypeError(
-            f"ctx.trading_date must be str or pandas.Timestamp, got {type(td).__name__}"
-        )
-    return LobsterWriter(config, trading_date=td)
-
-
-# Formats self-register at import time (see ob_analytics/bitstamp.py and
-# ob_analytics/lobster.py). Writers are still registered here until S3.3.
-register_writer("bitstamp", lambda config, ctx: BitstampWriter(config))
-register_writer("lobster", _make_lobster_writer)
-
+# Built-in formats and writers self-register at import time (see
+# ob_analytics/bitstamp.py and ob_analytics/lobster.py).
 logger.disable("ob_analytics")
 
 

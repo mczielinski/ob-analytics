@@ -470,9 +470,12 @@ class BitstampFormat:
         }
 
 
-# Self-register with the pipeline's format registry. The import is at the
-# bottom (and deferred from the top of the module) to avoid a circular import:
-# ``pipeline`` imports ``BitstampLoader``/``BitstampTradeReader`` from here.
+# ── Register this format and its writer ───────────────────────────────
+# Imports sit at the bottom (deferred from the top of the module) to avoid a
+# circular import: ``pipeline`` imports ``BitstampLoader``/``BitstampTradeReader``
+# from here.
+from ob_analytics.data import register_writer  # noqa: E402
 from ob_analytics.pipeline import register_format  # noqa: E402
 
 register_format("bitstamp", BitstampFormat)
+register_writer("bitstamp", lambda config, ctx: BitstampWriter(config))

@@ -11,6 +11,7 @@ import pandas as pd
 from loguru import logger
 
 from ob_analytics.protocols import DataWriter
+from ob_analytics._registry import Registry
 
 if TYPE_CHECKING:
     from ob_analytics.protocols import RunContext
@@ -20,7 +21,7 @@ if TYPE_CHECKING:
 
 WriterFactory = Callable[[Any, "RunContext"], DataWriter]
 
-_WRITERS: dict[str, WriterFactory] = {}
+WRITERS: Registry[str, WriterFactory] = Registry("writer")
 
 
 def register_writer(name: str, factory: WriterFactory) -> None:
@@ -33,12 +34,12 @@ def register_writer(name: str, factory: WriterFactory) -> None:
     ``trading_date``) participate in the registry — they pull required
     parameters from the :class:`~ob_analytics.protocols.RunContext`.
     """
-    _WRITERS[name.lower()] = factory
+    WRITERS.register(name, factory)
 
 
 def list_writers() -> list[str]:
     """Return a sorted list of registered writer names."""
-    return sorted(_WRITERS)
+    return WRITERS.list()
 
 
 def load_data(path: str | Path) -> dict[str, pd.DataFrame]:
@@ -119,13 +120,13 @@ def save_data(
         writer.write(lob_data, p, **write_kwargs)
         return
 
-    if fmt in _WRITERS:
+    if fmt in WRITERS:
         from ob_analytics.config import PipelineConfig
         from ob_analytics.protocols import RunContext
 
         cfg = config if config is not None else PipelineConfig()
         rctx = ctx if ctx is not None else RunContext()
-        w = _WRITERS[fmt](cfg, rctx)
+        w = WRITERS.get(fmt)(cfg, rctx)
         w.write(lob_data, p, **write_kwargs)
         return
 
@@ -140,7 +141,7 @@ def save_data(
         )
         pd.to_pickle(lob_data, p)  # type: ignore
     else:
-        available = ["parquet", "pickle"] + sorted(_WRITERS)
+        available = ["parquet", "pickle"] + WRITERS.list()
         raise ValueError(
             f"Unsupported format: {fmt!r}. Available: {', '.join(available)}"
         )
