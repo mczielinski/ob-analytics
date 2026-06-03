@@ -41,7 +41,6 @@ from ob_analytics.config import PipelineConfig
 from ob_analytics.protocols import (
     DataWriter,
     EventLoader,
-    Format,
     RunContext,
     TradeSource,
 )
@@ -711,7 +710,7 @@ def lobster_depth_from_orderbook(
 
 
 @dataclass
-class LobsterFormat(Format):
+class LobsterFormat:
     """Format descriptor for LOBSTER limit-order-book data.
 
     ``trading_date`` is taken from the per-run

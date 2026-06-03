@@ -34,7 +34,6 @@ from ob_analytics.config import PipelineConfig
 from ob_analytics.protocols import (
     DataWriter,
     EventLoader,
-    Format,
     RunContext,
     TradeSource,
 )
@@ -423,8 +422,12 @@ class BitstampWriter:
 
 
 @dataclass
-class BitstampFormat(Format):
-    """Format descriptor for Bitstamp-style CSV data."""
+class BitstampFormat:
+    """Format descriptor for Bitstamp-style CSV data.
+
+    Conforms structurally to the :class:`~ob_analytics.protocols.Format`
+    Protocol — no inheritance required.
+    """
 
     name: str = "bitstamp"
 
@@ -438,6 +441,26 @@ class BitstampFormat(Format):
 
     def create_writer(self, config: PipelineConfig, ctx: RunContext) -> DataWriter:
         return BitstampWriter(config)
+
+    def compute_depth(
+        self,
+        events: pd.DataFrame,
+        config: Any,
+        source: Any,
+        ctx: RunContext,
+    ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
+        # Bitstamp uses the standard price_level_volume -> depth_metrics path.
+        return None
+
+    def collect_extras(
+        self,
+        loader: Any,
+        events: pd.DataFrame,
+        source: Any,
+        ctx: RunContext,
+    ) -> dict[str, pd.DataFrame]:
+        # No auxiliary frames for Bitstamp. (collect_extras is removed in S7.)
+        return {}
 
     def config_defaults(self) -> dict[str, Any]:
         return {
