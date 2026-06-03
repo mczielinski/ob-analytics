@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ob_analytics.exceptions import InsufficientDataError, InvalidDataError
+from ob_analytics.exceptions import ConfigError, ObAnalyticsError
 from ob_analytics.flow_toxicity import (
     KyleLambdaResult,
     compute_kyle_lambda,
@@ -92,15 +92,15 @@ class TestComputeVpin:
         assert abs(result.iloc[0]["vpin_avg"] - 1.0) < 1e-10
 
     def test_empty_trades_raises(self):
-        """Empty DataFrame raises InsufficientDataError."""
+        """Empty DataFrame raises ObAnalyticsError."""
         empty = pd.DataFrame(columns=["timestamp", "price", "volume", "direction"])
-        with pytest.raises(InsufficientDataError):
+        with pytest.raises(ObAnalyticsError):
             compute_vpin(empty, bucket_volume=1.0)
 
     def test_missing_columns_raises(self):
-        """Missing required columns raises InvalidDataError."""
+        """Missing required columns raises ConfigError."""
         bad = pd.DataFrame({"timestamp": [1], "price": [100]})
-        with pytest.raises(InvalidDataError):
+        with pytest.raises(ConfigError):
             compute_vpin(bad, bucket_volume=1.0)
 
     def test_negative_bucket_volume_raises(self):
@@ -206,15 +206,15 @@ class TestComputeKyleLambda:
         }
 
     def test_empty_raises(self):
-        """Empty DataFrame raises InsufficientDataError."""
+        """Empty DataFrame raises ObAnalyticsError."""
         empty = pd.DataFrame(columns=["timestamp", "price", "volume", "direction"])
-        with pytest.raises(InsufficientDataError):
+        with pytest.raises(ObAnalyticsError):
             compute_kyle_lambda(empty)
 
     def test_missing_columns_raises(self):
-        """Missing columns raises InvalidDataError."""
+        """Missing columns raises ConfigError."""
         bad = pd.DataFrame({"timestamp": [1]})
-        with pytest.raises(InvalidDataError):
+        with pytest.raises(ConfigError):
             compute_kyle_lambda(bad)
 
 
@@ -252,15 +252,15 @@ class TestOrderFlowImbalance:
         assert all(abs(v) < 1e-10 for v in result["ofi"])
 
     def test_empty_raises(self):
-        """Empty DataFrame raises InsufficientDataError."""
+        """Empty DataFrame raises ObAnalyticsError."""
         empty = pd.DataFrame(columns=["timestamp", "volume", "direction"])
-        with pytest.raises(InsufficientDataError):
+        with pytest.raises(ObAnalyticsError):
             order_flow_imbalance(empty)
 
     def test_missing_columns_raises(self):
-        """Missing columns raises InvalidDataError."""
+        """Missing columns raises ConfigError."""
         bad = pd.DataFrame({"timestamp": [1]})
-        with pytest.raises(InvalidDataError):
+        with pytest.raises(ConfigError):
             order_flow_imbalance(bad)
 
 

@@ -92,9 +92,9 @@ def compute_vpin(
 
     Raises
     ------
-    InvalidDataError
+    ConfigError
         If required columns are missing.
-    InsufficientDataError
+    ObAnalyticsError
         If *trades* is empty.
     ValueError
         If *bucket_volume* is not positive.
@@ -202,9 +202,9 @@ def compute_kyle_lambda(
 
     Raises
     ------
-    InvalidDataError
+    ConfigError
         If required columns are missing.
-    InsufficientDataError
+    ObAnalyticsError
         If *trades* is empty.
     """
     validate_columns(
@@ -307,9 +307,9 @@ def order_flow_imbalance(
 
     Raises
     ------
-    InvalidDataError
+    ConfigError
         If required columns are missing.
-    InsufficientDataError
+    ObAnalyticsError
         If *trades* is empty.
     """
     validate_columns(

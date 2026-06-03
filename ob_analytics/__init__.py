@@ -57,10 +57,7 @@ from ob_analytics.bitstamp import (
     BitstampWriter,
 )
 from ob_analytics.exceptions import (
-    ConfigurationError,
-    InsufficientDataError,
-    InvalidDataError,
-    MatchingError,
+    ConfigError,
     ObAnalyticsError,
 )
 from ob_analytics.flow_toxicity import (
@@ -189,10 +186,7 @@ __all__ = [
     "PipelineConfig",
     # ── Exceptions ───────────────────────────────────────────────────
     "ObAnalyticsError",
-    "InvalidDataError",
-    "MatchingError",
-    "InsufficientDataError",
-    "ConfigurationError",
+    "ConfigError",
     # ── Visualization ────────────────────────────────────────────────
     "PlotTheme",
     "set_plot_theme",

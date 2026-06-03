@@ -4,13 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from ob_analytics.config import PipelineConfig
-from ob_analytics.exceptions import (
-    ConfigurationError,
-    InsufficientDataError,
-    InvalidDataError,
-    MatchingError,
-    ObAnalyticsError,
-)
+from ob_analytics.exceptions import ConfigError, ObAnalyticsError
 
 
 class TestPipelineConfig:
@@ -59,19 +53,16 @@ class TestPipelineConfig:
 
 
 class TestExceptionHierarchy:
-    def test_all_inherit_from_base(self):
-        assert issubclass(InvalidDataError, ObAnalyticsError)
-        assert issubclass(MatchingError, ObAnalyticsError)
-        assert issubclass(InsufficientDataError, ObAnalyticsError)
-        assert issubclass(ConfigurationError, ObAnalyticsError)
+    def test_config_error_inherits_from_base(self):
+        assert issubclass(ConfigError, ObAnalyticsError)
 
     def test_base_inherits_from_exception(self):
         assert issubclass(ObAnalyticsError, Exception)
 
     def test_catchable_by_base(self):
         with pytest.raises(ObAnalyticsError):
-            raise InvalidDataError("test")
+            raise ConfigError("test")
 
     def test_message_preserved(self):
-        err = MatchingError("something went wrong")
+        err = ObAnalyticsError("something went wrong")
         assert str(err) == "something went wrong"

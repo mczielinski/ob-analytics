@@ -1,7 +1,11 @@
-"""Custom exception hierarchy for the ob-analytics package.
+"""Custom exceptions for the ob-analytics package.
 
-All exceptions inherit from :class:`ObAnalyticsError`, allowing callers to
-catch every package-specific error with a single ``except`` clause.
+Two exceptions only:
+
+* :class:`ObAnalyticsError` — base for every package-specific error, so
+  callers can catch them all with a single ``except`` clause.
+* :class:`ConfigError` — invalid or inconsistent configuration *or* input
+  data (bad config values, DataFrames missing required columns).
 """
 
 
@@ -9,17 +13,5 @@ class ObAnalyticsError(Exception):
     """Base exception for all ob-analytics errors."""
 
 
-class InvalidDataError(ObAnalyticsError):
-    """Input data is missing required columns or has invalid values."""
-
-
-class MatchingError(ObAnalyticsError):
-    """Event matching or trade inference encountered an unrecoverable problem."""
-
-
-class InsufficientDataError(ObAnalyticsError):
-    """Not enough data to perform the requested operation."""
-
-
-class ConfigurationError(ObAnalyticsError):
-    """Pipeline configuration values are invalid or inconsistent."""
+class ConfigError(ObAnalyticsError):
+    """Configuration values or input data are invalid or inconsistent."""

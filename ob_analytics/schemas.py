@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from ob_analytics.exceptions import InvalidDataError
+from ob_analytics.exceptions import ConfigError
 
 # Required by price_level_volume / set_order_types (see depth.py).
 EVENT_COLUMNS: tuple[str, ...] = (
@@ -51,22 +51,22 @@ DEPTH_COLUMNS: tuple[str, ...] = (
 def _require(df: pd.DataFrame, cols: tuple[str, ...], who: str) -> None:
     missing = [c for c in cols if c not in df.columns]
     if missing:
-        raise InvalidDataError(
+        raise ConfigError(
             f"{who}: DataFrame is missing required columns {missing}. "
             f"Present: {list(df.columns)}"
         )
 
 
 def validate_events_df(df: pd.DataFrame) -> None:
-    """Raise :class:`InvalidDataError` unless *df* has all :data:`EVENT_COLUMNS`."""
+    """Raise :class:`ConfigError` unless *df* has all :data:`EVENT_COLUMNS`."""
     _require(df, EVENT_COLUMNS, "validate_events_df")
 
 
 def validate_trades_df(df: pd.DataFrame) -> None:
-    """Raise :class:`InvalidDataError` unless *df* has all :data:`TRADE_COLUMNS`."""
+    """Raise :class:`ConfigError` unless *df* has all :data:`TRADE_COLUMNS`."""
     _require(df, TRADE_COLUMNS, "validate_trades_df")
 
 
 def validate_depth_df(df: pd.DataFrame) -> None:
-    """Raise :class:`InvalidDataError` unless *df* has all :data:`DEPTH_COLUMNS`."""
+    """Raise :class:`ConfigError` unless *df* has all :data:`DEPTH_COLUMNS`."""
     _require(df, DEPTH_COLUMNS, "validate_depth_df")

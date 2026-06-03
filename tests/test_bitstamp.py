@@ -26,7 +26,7 @@ from ob_analytics.bitstamp import (
     BitstampWriter,
 )
 from ob_analytics.config import PipelineConfig
-from ob_analytics.exceptions import InvalidDataError
+from ob_analytics.exceptions import ConfigError
 from ob_analytics.pipeline import Pipeline
 from ob_analytics.protocols import RunContext
 
@@ -115,7 +115,7 @@ class TestBitstampLoader:
 
     def test_missing_file_raises(self, tmp_path):
         loader = BitstampLoader()
-        with pytest.raises((FileNotFoundError, InvalidDataError)):
+        with pytest.raises((FileNotFoundError, ConfigError)):
             loader.load(tmp_path / "does_not_exist.csv")
 
 
@@ -150,7 +150,7 @@ class TestBitstampTradeReader:
         try:
             trades = reader.load(events, bitstamp_sample_orders_only)
             assert isinstance(trades, pd.DataFrame)
-        except (FileNotFoundError, InvalidDataError):
+        except (FileNotFoundError, ConfigError):
             pass
 
 

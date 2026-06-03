@@ -15,7 +15,7 @@ import pandas as pd
 from loguru import logger
 
 from ob_analytics._utils import validate_columns, validate_non_empty
-from ob_analytics.exceptions import InvalidDataError
+from ob_analytics.exceptions import ConfigError
 
 
 def _event_diff_bps(
@@ -381,11 +381,11 @@ def order_book(
     active_orders = pd.concat([active_orders, changed_before], ignore_index=True)
 
     if not all(active_orders["timestamp"] <= tp):
-        raise InvalidDataError(
+        raise ConfigError(
             f"Some active orders have timestamps after the requested time {tp}."
         )
     if active_orders["id"].duplicated().any():
-        raise InvalidDataError(
+        raise ConfigError(
             "Duplicate order IDs found in active orders. "
             "This indicates a data integrity issue."
         )

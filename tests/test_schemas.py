@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from ob_analytics import schemas
-from ob_analytics.exceptions import InvalidDataError
+from ob_analytics.exceptions import ConfigError
 
 
 def test_validate_events_df_accepts_valid(tiny_events):
@@ -16,7 +16,7 @@ def test_validate_events_df_accepts_valid(tiny_events):
 
 
 def test_validate_events_df_rejects_missing():
-    with pytest.raises(InvalidDataError, match="missing required columns"):
+    with pytest.raises(ConfigError, match="missing required columns"):
         schemas.validate_events_df(pd.DataFrame({"price": [1.0]}))
 
 
@@ -25,5 +25,5 @@ def test_validate_depth_df_uses_direction(tiny_depth):
 
 
 def test_validate_trades_df_rejects_missing():
-    with pytest.raises(InvalidDataError, match="missing required columns"):
+    with pytest.raises(ConfigError, match="missing required columns"):
         schemas.validate_trades_df(pd.DataFrame({"price": [1.0]}))

@@ -14,7 +14,7 @@ from typing import Any
 
 import numpy as np
 
-from ob_analytics.exceptions import ConfigurationError
+from ob_analytics.exceptions import ConfigError
 
 
 @lru_cache(maxsize=1)
@@ -23,7 +23,7 @@ def _import_plotly() -> Any:
 
     Cached so plotly is imported once per process rather than on every
     render call.  ``lru_cache`` only stores successful returns, so when
-    plotly is missing the ``ConfigurationError`` is re-raised on each call
+    plotly is missing the ``ConfigError`` is re-raised on each call
     exactly as before.
     """
     try:
@@ -31,7 +31,7 @@ def _import_plotly() -> Any:
 
         return go
     except ImportError:
-        raise ConfigurationError(
+        raise ConfigError(
             "Plotly is required for interactive visualizations. "
             "Install it with:  pip install ob-analytics[interactive]"
         ) from None
