@@ -294,15 +294,12 @@ class DepthMetricsEngine:
         # Sum the active price levels (typically O(few hundred)) straight
         # into the BPS bins, without materialising or cumsum-ing the full,
         # mostly-zero integer-price window (potentially O(price * bps * bins)).
-        breaks = self._compute_breaks(range_len)
+        breaks = _cached_breaks(range_len, self._bins)
         out[offset + 2 : offset + 2 + self._bins] = _interval_sums_sparse(
             levels, best, side, range_len, breaks
         )
 
     # ── Helpers ───────────────────────────────────────────────────────
-
-    def _compute_breaks(self, range_len: int) -> np.ndarray:
-        return _cached_breaks(range_len, self._bins)
 
     def _column_names(self) -> list[str]:
         bps, bins = self._bps, self._bins
