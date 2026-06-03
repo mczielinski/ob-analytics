@@ -141,7 +141,8 @@ class TestPipelineFlow:
         real data flow, so there's no value in paying the full-pipeline
         cost (~5 min on the bundled sample).
         """
-        from ob_analytics import BitstampLoader, Pipeline
+        from ob_analytics import Pipeline
+        from ob_analytics.bitstamp import BitstampLoader
 
         orders = pd.DataFrame(
             [
