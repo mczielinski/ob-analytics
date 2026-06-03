@@ -203,26 +203,7 @@ def compute_kyle_lambda(
 
     reg_df = pd.DataFrame(rows)
 
-    # Need at least 2 points for a regression
-    if len(reg_df) < 2:
-        return KyleLambdaResult(
-            lambda_=float("nan"),
-            t_stat=float("nan"),
-            r_squared=float("nan"),
-            n_windows=len(reg_df),
-            regression_df=reg_df,
-        )
-
-    # OLS via normal equations: y = α + λ·x
-    x = reg_df["signed_volume"].to_numpy(dtype=np.float64)
-    y = reg_df["delta_price"].to_numpy(dtype=np.float64)
-    n = len(x)
-
-    X = np.column_stack([np.ones(n), x])  # [1, x] design matrix
-    # β = (X'X)^{-1} X'y
-    XtX = X.T @ X
-    det = XtX[0, 0] * XtX[1, 1] - XtX[0, 1] * XtX[1, 0]
-    if abs(det) < 1e-15:
+    def _nan_result(n: int) -> KyleLambdaResult:
         return KyleLambdaResult(
             lambda_=float("nan"),
             t_stat=float("nan"),
@@ -231,21 +212,31 @@ def compute_kyle_lambda(
             regression_df=reg_df,
         )
 
-    XtX_inv = np.array([[XtX[1, 1], -XtX[0, 1]], [-XtX[1, 0], XtX[0, 0]]]) / det
-    beta = XtX_inv @ (X.T @ y)
+    n = len(reg_df)
+    if n < 2:
+        return _nan_result(n)
+
+    # OLS fit y = α + λ·x via least squares (numerically safer than the
+    # explicit normal-equations inverse it replaces; rank flags singularity).
+    x = reg_df["signed_volume"].to_numpy(dtype=np.float64)
+    y = reg_df["delta_price"].to_numpy(dtype=np.float64)
+    X = np.column_stack([np.ones(n), x])  # design matrix [1, x]
+
+    beta, _residuals, rank, _sv = np.linalg.lstsq(X, y, rcond=None)
+    if rank < 2:  # singular design (e.g. all signed_volume equal)
+        return _nan_result(n)
     lambda_ = float(beta[1])
 
-    # Residuals and statistics
     y_hat = X @ beta
     residuals = y - y_hat
     ss_res = float(residuals @ residuals)
     ss_tot = float((y - y.mean()) @ (y - y.mean()))
     r_squared = 1.0 - ss_res / ss_tot if ss_tot > 1e-15 else float("nan")
 
-    # Standard error of lambda
     if n > 2:
+        cov = np.linalg.inv(X.T @ X)  # safe: rank == 2 guarantees invertible
         mse = ss_res / (n - 2)
-        se_lambda = float(np.sqrt(mse * XtX_inv[1, 1]))
+        se_lambda = float(np.sqrt(mse * cov[1, 1]))
         t_stat = lambda_ / se_lambda if se_lambda > 1e-15 else float("nan")
     else:
         t_stat = float("nan")
