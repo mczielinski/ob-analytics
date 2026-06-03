@@ -18,6 +18,44 @@ from ob_analytics._utils import reverse_matrix
 from ob_analytics.depth import filter_depth
 
 
+# The volume-percentile chart colours a fixed 20-step rainbow gradient,
+# shared verbatim by every rendering backend.  It was historically built
+# at call time with ``matplotlib.colors.LinearSegmentedColormap`` from the
+# ten anchor colours below; that pulled a rendering dependency into this
+# backend-agnostic data layer.  The exact RGBA values are deterministic, so
+# they are precomputed here once (round-trip-exact float literals) — keeping
+# ``colors_dict`` byte-identical while removing the matplotlib import.
+#
+# To regenerate (e.g. to tweak the anchors), run:
+#     from matplotlib.colors import LinearSegmentedColormap
+#     anchors = ["#f92b20", "#fe701b", "#facd1f", "#d6fd1c", "#65fe1b",
+#                "#1bfe42", "#1cfdb4", "#1fb9fa", "#1e71fb", "#261cfd"]
+#     cmap = LinearSegmentedColormap.from_list("custom_cmap", anchors, N=20)
+#     [cmap(i / 19) for i in range(20)]
+_VOLUME_PERCENTILE_PALETTE: tuple[tuple[float, float, float, float], ...] = (
+    (0.9764705882352941, 0.16862745098039217, 0.12549019607843137, 1.0),
+    (0.9857585139318885, 0.29680082559339527, 0.11620227038183695, 1.0),
+    (0.9950464396284829, 0.4249742002063983, 0.10691434468524252, 1.0),
+    (0.9894736842105263, 0.5927760577915376, 0.11248710010319918, 1.0),
+    (0.9820433436532507, 0.765531475748194, 0.11991744066047472, 1.0),
+    (0.9283797729618163, 0.8732714138286894, 0.11723426212590299, 1.0),
+    (0.8615067079463364, 0.9624355005159959, 0.11166150670794633, 1.0),
+    (0.6992776057791538, 0.9933952528379774, 0.1085655314757482, 1.0),
+    (0.48937048503611974, 0.9952528379772962, 0.10670794633642931, 1.0),
+    (0.31971104231166153, 0.996078431372549, 0.1461300309597523, 1.0),
+    (0.18224974200206398, 0.996078431372549, 0.21857585139318886, 1.0),
+    (0.10670794633642931, 0.9952528379772962, 0.3529411764705883, 1.0),
+    (0.1085655314757482, 0.9933952528379774, 0.5647058823529414, 1.0),
+    (0.11166150670794633, 0.9500515995872034, 0.7492260061919503, 1.0),
+    (0.117234262125903, 0.8237358101135188, 0.8792569659442727, 1.0),
+    (0.12115583075335397, 0.6957688338493289, 0.9808049535603715, 1.0),
+    (0.11929824561403508, 0.5620227038183693, 0.9826625386996903, 1.0),
+    (0.11929824561403503, 0.42559339525283857, 0.9847265221878224, 1.0),
+    (0.13415892672858618, 0.26769865841073276, 0.9884416924664603, 1.0),
+    (0.14901960784313725, 0.10980392156862745, 0.9921568627450981, 1.0),
+)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -462,23 +500,9 @@ def prepare_volume_percentiles_data(
     )
     melted_bids["liquidity"] *= volume_scale
 
-    from matplotlib.colors import LinearSegmentedColormap
-
-    colors_list = [
-        "#f92b20",
-        "#fe701b",
-        "#facd1f",
-        "#d6fd1c",
-        "#65fe1b",
-        "#1bfe42",
-        "#1cfdb4",
-        "#1fb9fa",
-        "#1e71fb",
-        "#261cfd",
-    ]
-    cmap = LinearSegmentedColormap.from_list("custom_cmap", colors_list, N=20)
-    col_pal = [cmap(i / 19) for i in range(20)]
-    col_pal *= 2
+    # Two copies of the shared palette: one for the ask columns, one for
+    # the bid columns (40 entries total, matching all_cols below).
+    col_pal = list(_VOLUME_PERCENTILE_PALETTE) * 2
 
     legend_names = [f"+{int(i):03d}bps" for i in range(500, 49, -50)] + [
         f"-{int(i):03d}bps" for i in range(50, 501, 50)
@@ -558,22 +582,17 @@ def prepare_ofi_data(
     ofi_df: pd.DataFrame,
     trades: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
-    """Prepare data for an order-flow-imbalance bar chart."""
-    import matplotlib.dates as mdates
+    """Prepare data for an order-flow-imbalance bar chart.
 
+    Bar colours are a backend-agnostic green/red split on the sign of the
+    OFI.  Bar *width* depends on the renderer's x-axis units (matplotlib
+    uses date numbers), so it is computed by each backend rather than here.
+    """
     colors = ["#27ae60" if v >= 0 else "#e74c3c" for v in ofi_df["ofi"]]
-    if len(ofi_df) > 1:
-        median_gap = ofi_df["timestamp"].diff().median()
-        bar_width = mdates.date2num(
-            ofi_df["timestamp"].iloc[0] + median_gap * 0.8
-        ) - mdates.date2num(ofi_df["timestamp"].iloc[0])
-    else:
-        bar_width = 0.001
     return {
         "ofi_df": ofi_df,
         "trades": trades,
         "colors": colors,
-        "bar_width": bar_width,
     }
 
 

@@ -18,6 +18,52 @@ from ob_analytics._utils import validate_columns, validate_non_empty
 from ob_analytics.exceptions import InvalidDataError
 
 
+def _event_diff_bps(
+    events: pd.DataFrame, depth_summary: pd.DataFrame, direction: int
+) -> pd.DataFrame:
+    """Per-event aggressiveness in BPS vs the contemporaneous best price.
+
+    *direction* is ``1`` for bids, ``-1`` for asks. Helper for
+    :func:`order_aggressiveness`.
+    """
+    side = "bid" if direction == 1 else "ask"
+    orders = events[
+        (events["direction"] == side)
+        & (events["action"] != "changed")
+        & events["type"].isin(["flashed-limit", "resting-limit"])
+    ].sort_values(by="timestamp", kind="stable")
+
+    missing = ~orders["timestamp"].isin(depth_summary["timestamp"])
+    if missing.any():
+        logger.debug(
+            "order_aggressiveness: {}/{} {} order timestamps not in "
+            "depth_summary (merge_asof will handle gracefully)",
+            missing.sum(),
+            len(orders),
+            side,
+        )
+
+    best_price_col = f"best_{side}_price"
+
+    depth_summary_sorted = depth_summary.sort_values("event_id")
+    orders = orders.sort_values("event_id")
+
+    merged = pd.merge_asof(
+        orders,
+        depth_summary_sorted[["event_id", best_price_col]],
+        on="event_id",
+        direction="backward",
+        allow_exact_matches=False,
+    )
+
+    merged = merged.dropna(subset=[best_price_col]).copy()
+    best = merged[best_price_col]
+
+    diff_price = direction * (merged["price"] - best)
+    diff_bps = 10000 * diff_price / best
+    return pd.DataFrame({"event_id": merged["event_id"], "diff_bps": diff_bps})
+
+
 def order_aggressiveness(
     events: pd.DataFrame, depth_summary: pd.DataFrame
 ) -> pd.DataFrame:
@@ -48,46 +94,8 @@ def order_aggressiveness(
         "order_aggressiveness(depth_summary)",
     )
 
-    def event_diff_bps(events: pd.DataFrame, direction: int) -> pd.DataFrame:
-        side = "bid" if direction == 1 else "ask"
-        orders = events[
-            (events["direction"] == side)
-            & (events["action"] != "changed")
-            & events["type"].isin(["flashed-limit", "resting-limit"])
-        ].sort_values(by="timestamp", kind="stable")
-
-        missing = ~orders["timestamp"].isin(depth_summary["timestamp"])
-        if missing.any():
-            logger.debug(
-                "order_aggressiveness: {}/{} {} order timestamps not in "
-                "depth_summary (merge_asof will handle gracefully)",
-                missing.sum(),
-                len(orders),
-                side,
-            )
-
-        best_price_col = f"best_{side}_price"
-
-        depth_summary_sorted = depth_summary.sort_values("event_id")
-        orders = orders.sort_values("event_id")
-
-        merged = pd.merge_asof(
-            orders,
-            depth_summary_sorted[["event_id", best_price_col]],
-            on="event_id",
-            direction="backward",
-            allow_exact_matches=False,
-        )
-
-        merged = merged.dropna(subset=[best_price_col]).copy()
-        best = merged[best_price_col]
-
-        diff_price = direction * (merged["price"] - best)
-        diff_bps = 10000 * diff_price / best
-        return pd.DataFrame({"event_id": merged["event_id"], "diff_bps": diff_bps})
-
-    bid_diff = event_diff_bps(events, 1)
-    ask_diff = event_diff_bps(events, -1)
+    bid_diff = _event_diff_bps(events, depth_summary, 1)
+    ask_diff = _event_diff_bps(events, depth_summary, -1)
     events["aggressiveness_bps"] = np.nan
 
     if not bid_diff.empty:
@@ -262,6 +270,38 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
+def _active_bids(active_orders: pd.DataFrame) -> pd.DataFrame:
+    """Bid side of *active_orders*: best-first, with bps + cumulative liquidity."""
+    bids = active_orders[
+        (active_orders["direction"] == "bid") & (active_orders["type"] != "market")
+    ]
+    bids = bids.sort_values(by=["price", "id"], ascending=[False, True], kind="stable")
+    first_price = bids.iloc[0]["price"] if not bids.empty else np.nan
+    bids["bps"] = (
+        ((first_price - bids["price"]) / first_price) * 10000
+        if not bids.empty
+        else np.nan
+    )
+    bids["liquidity"] = bids["volume"].cumsum()
+    return bids
+
+
+def _active_asks(active_orders: pd.DataFrame) -> pd.DataFrame:
+    """Ask side of *active_orders*: best-first, with bps + cumulative liquidity."""
+    asks = active_orders[
+        (active_orders["direction"] == "ask") & (active_orders["type"] != "market")
+    ]
+    asks = asks.sort_values(by=["price", "id"], ascending=[True, True], kind="stable")
+    first_price = asks.iloc[0]["price"] if not asks.empty else np.nan
+    asks["bps"] = (
+        ((asks["price"] - first_price) / first_price) * 10000
+        if not asks.empty
+        else np.nan
+    )
+    asks["liquidity"] = asks["volume"].cumsum()
+    return asks
+
+
 def order_book(
     events: pd.DataFrame,
     tp: datetime | None = None,
@@ -317,38 +357,6 @@ def order_book(
 
     pct_range = bps_range * 0.0001
 
-    def active_bids(active_orders: pd.DataFrame) -> pd.DataFrame:
-        bids = active_orders[
-            (active_orders["direction"] == "bid") & (active_orders["type"] != "market")
-        ]
-        bids = bids.sort_values(
-            by=["price", "id"], ascending=[False, True], kind="stable"
-        )
-        first_price = bids.iloc[0]["price"] if not bids.empty else np.nan
-        bids["bps"] = (
-            ((first_price - bids["price"]) / first_price) * 10000
-            if not bids.empty
-            else np.nan
-        )
-        bids["liquidity"] = bids["volume"].cumsum()
-        return bids
-
-    def active_asks(active_orders: pd.DataFrame) -> pd.DataFrame:
-        asks = active_orders[
-            (active_orders["direction"] == "ask") & (active_orders["type"] != "market")
-        ]
-        asks = asks.sort_values(
-            by=["price", "id"], ascending=[True, True], kind="stable"
-        )
-        first_price = asks.iloc[0]["price"] if not asks.empty else np.nan
-        asks["bps"] = (
-            ((asks["price"] - first_price) / first_price) * 10000
-            if not asks.empty
-            else np.nan
-        )
-        asks["liquidity"] = asks["volume"].cumsum()
-        return asks
-
     created_before = events[
         (events["action"] == "created") & (events["timestamp"] <= tp)
     ]["id"]
@@ -382,13 +390,13 @@ def order_book(
             "This indicates a data integrity issue."
         )
 
-    asks = active_asks(active_orders)
+    asks = _active_asks(active_orders)
     asks = asks[
         ["id", "timestamp", "exchange_timestamp", "price", "volume", "liquidity", "bps"]
     ]
     asks = asks.iloc[::-1].reset_index(drop=True)
 
-    bids = active_bids(active_orders)
+    bids = _active_bids(active_orders)
     bids = bids[
         ["id", "timestamp", "exchange_timestamp", "price", "volume", "liquidity", "bps"]
     ]

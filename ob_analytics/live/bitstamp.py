@@ -27,6 +27,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack
 from typing import Any
 
 import pandas as pd
@@ -83,9 +84,12 @@ class BitstampCapturer(LiveCapturer):
         self._open_orders: dict[int, tuple[float, str, float]] = {}
         self._snapshot_us: int = 0
 
-        # WebSocket state -- created in ``snapshot``, used in ``stream``.
+        # WebSocket state -- opened in ``snapshot``, used in ``stream``.
+        # The live connection is entered through an ``AsyncExitStack`` so it
+        # can be opened in one coroutine and closed deterministically from
+        # another (``stream``'s ``finally`` / ``_reconnect``).
         self._ws: Any = None
-        self._ws_cm: Any = None
+        self._ws_stack: AsyncExitStack | None = None
         # Buffered WS frames received during the REST snapshot fetch.
         self._buffered: list[tuple[dict[str, Any], int]] = []
 
@@ -110,19 +114,11 @@ class BitstampCapturer(LiveCapturer):
         orders_channel = f"live_orders_{config.pair}"
         trades_channel = f"live_trades_{config.pair}"
 
-        # Open the websocket connection. ``connect`` returns an async-context
-        # manager; we enter it manually so the connection survives across
-        # ``snapshot`` -> ``stream`` -> ``shutdown_synthetic_events``.
-        self._ws_cm = websockets.connect(
-            WS_URL,
-            ping_interval=20,
-            ping_timeout=20,
-            max_size=2**22,
-            close_timeout=2,
-        )
-        self._ws = await self._ws_cm.__aenter__()
-
-        await self._subscribe(self._ws, [orders_channel, trades_channel])
+        # Open the websocket connection and subscribe. The connection is held
+        # open via ``self._ws_stack`` so it survives across
+        # ``snapshot`` -> ``stream`` -> ``shutdown_synthetic_events`` and is
+        # closed deterministically in ``stream``'s ``finally``.
+        await self._open_ws([orders_channel, trades_channel])
 
         snap_task = asyncio.create_task(
             asyncio.to_thread(_fetch_book_snapshot, config.pair)
@@ -263,13 +259,7 @@ class BitstampCapturer(LiveCapturer):
         finally:
             # Close WS cleanly. ``shutdown_synthetic_events`` does not need
             # the websocket -- the synthetic deletes come from local state.
-            if self._ws_cm is not None:
-                try:
-                    await self._ws_cm.__aexit__(None, None, None)
-                except Exception as exc:  # noqa: BLE001
-                    logger.debug("[bitstamp] ws close raised: {!r}", exc)
-                self._ws_cm = None
-                self._ws = None
+            await self._close_ws()
 
     # ---------------------------------------------------------------
     # shutdown
@@ -303,6 +293,43 @@ class BitstampCapturer(LiveCapturer):
                 json.dumps({"event": "bts:subscribe", "data": {"channel": ch}})
             )
 
+    async def _open_ws(self, channels: list[str]) -> None:
+        """Open a fresh WS connection and subscribe to *channels*.
+
+        The connection is entered through a per-connection
+        :class:`~contextlib.AsyncExitStack` stored on ``self`` so it can be
+        closed later from a different coroutine via :meth:`_close_ws`. On any
+        failure during connect/subscribe the partially-opened connection is
+        closed before the exception propagates (no socket is leaked).
+        """
+        stack = AsyncExitStack()
+        try:
+            ws = await stack.enter_async_context(
+                websockets.connect(
+                    WS_URL,
+                    ping_interval=20,
+                    ping_timeout=20,
+                    max_size=2**22,
+                    close_timeout=2,
+                )
+            )
+            await self._subscribe(ws, channels)
+        except BaseException:
+            await stack.aclose()
+            raise
+        self._ws_stack = stack
+        self._ws = ws
+
+    async def _close_ws(self) -> None:
+        """Close the live WS connection if one is open. Idempotent."""
+        if self._ws_stack is not None:
+            try:
+                await self._ws_stack.aclose()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("[bitstamp] ws close raised: {!r}", exc)
+            self._ws_stack = None
+            self._ws = None
+
     async def _reconnect(self, orders_channel: str, trades_channel: str) -> bool:
         """Tear down the dead WS, open a new one, and re-subscribe.
 
@@ -312,25 +339,13 @@ class BitstampCapturer(LiveCapturer):
         unavoidably lost.
         """
         try:
-            if self._ws_cm is not None:
-                try:
-                    await self._ws_cm.__aexit__(None, None, None)
-                except Exception:  # noqa: BLE001
-                    pass
-            self._ws_cm = websockets.connect(
-                WS_URL,
-                ping_interval=20,
-                ping_timeout=20,
-                max_size=2**22,
-                close_timeout=2,
-            )
-            self._ws = await self._ws_cm.__aenter__()
-            await self._subscribe(self._ws, [orders_channel, trades_channel])
+            await self._close_ws()
+            await self._open_ws([orders_channel, trades_channel])
             return True
         except Exception as exc:  # noqa: BLE001
             logger.error("[bitstamp] reconnect failed: {!r}", exc)
             self._ws = None
-            self._ws_cm = None
+            self._ws_stack = None
             return False
 
     def _parse_buffered(

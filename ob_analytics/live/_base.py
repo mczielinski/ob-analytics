@@ -93,6 +93,10 @@ class LiveCapturer(Protocol):
     Implementors only worry about parsing. Persistence, raw-frame archival,
     rate-limiting reconnects, and signal handling all live in
     ``ob_analytics.live._runner``.
+
+    A capturer MAY additionally implement :class:`SupportsDiagnostics` to
+    surface per-run counters in ``meta.json``; that hook is a separate,
+    optional protocol so it is never required to conform to this one.
     """
 
     name: str
@@ -129,4 +133,21 @@ class LiveCapturer(Protocol):
         ``action="deleted"``. Gives every ``id`` in orders.csv a complete
         ``created -> ... -> deleted`` lifecycle.
         """
+        ...
+
+
+@runtime_checkable
+class SupportsDiagnostics(Protocol):
+    """Optional capturer capability: per-run counters for ``meta.json``.
+
+    Kept deliberately separate from :class:`LiveCapturer` so that writing a
+    capturer never forces a ``diagnostics()`` method onto it. A capturer that
+    wants to expose counters (dropped frames, reconnects, synthetic-event
+    tallies, ...) just defines this method; the runner detects it structurally
+    (``isinstance(capturer, SupportsDiagnostics)``) and merges the returned
+    mapping into :attr:`CaptureResult.extras` (and thus ``meta.json``).
+    """
+
+    def diagnostics(self) -> dict[str, Any]:
+        """Return a JSON-serialisable mapping of per-run counters."""
         ...

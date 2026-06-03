@@ -136,6 +136,44 @@ class TestComputeKyleLambda:
         assert np.isnan(result.lambda_)
         assert result.n_windows == 1
 
+    def test_lambda_matches_independent_lstsq(self):
+        """λ must equal an independent lstsq fit of its own regression_df.
+
+        Guards the OLS implementation against drift: the slope reported by
+        ``compute_kyle_lambda`` is compared (rtol=1e-10) to a fresh
+        ``np.linalg.lstsq`` fit of the same (signed_volume, delta_price)
+        points. Run against the normal-equations code it passes too — which
+        is precisely why swapping in ``lstsq`` is behaviour-preserving.
+        """
+        rng = np.random.default_rng(0)
+        directions: list[str] = []
+        volumes: list[float] = []
+        prices: list[float] = []
+        offsets: list[int] = []
+        # 12 distinct 5-min windows, two trades each so delta_price != 0 and
+        # signed_volume varies across windows (non-degenerate design matrix).
+        for w in range(12):
+            base = w * 300
+            p0 = 100.0 + float(rng.normal(0, 5))
+            p1 = p0 + float(rng.normal(0, 2))
+            directions += ["buy", "sell"]
+            volumes += [float(rng.uniform(1, 10)), float(rng.uniform(1, 10))]
+            prices += [p0, p1]
+            offsets += [base, base + 60]
+        trades = _trades(
+            directions, volumes=volumes, prices=prices, base_sec_offsets=offsets
+        )
+        result = compute_kyle_lambda(trades, window="5min")
+
+        reg = result.regression_df
+        x = reg["signed_volume"].to_numpy(dtype=float)
+        y = reg["delta_price"].to_numpy(dtype=float)
+        assert len(reg) >= 2
+        assert np.ptp(x) > 0  # design matrix has full rank
+        X = np.column_stack([np.ones(len(x)), x])
+        beta_ref = np.linalg.lstsq(X, y, rcond=None)[0]
+        assert np.isclose(result.lambda_, beta_ref[1], rtol=1e-10)
+
     def test_result_fields(self):
         """KyleLambdaResult has all expected attributes."""
         trades = _trades(

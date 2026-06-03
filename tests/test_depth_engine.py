@@ -191,3 +191,43 @@ class TestBpsBinVolumes:
         bins = out[2 : 2 + 5]
         # 4.0 (best) + 7.0 (+100bps) inside window; 1.0 outside
         assert bins.sum() == 11.0
+
+
+def test_interval_sums_sparse_matches_dense():
+    """_interval_sums_sparse must byte-match interval_sum_breaks on the dense array.
+
+    This is the correctness proof for the depth-engine performance fix: summing
+    only the active levels into the bins must reproduce, bit-for-bit, the legacy
+    ``np.cumsum(dense)[breaks]`` differencing over the full zero-padded window.
+    """
+    from ob_analytics._utils import interval_sum_breaks
+    from ob_analytics.depth import _cached_breaks, _interval_sums_sparse
+
+    rng = np.random.default_rng(20260602)
+    for _ in range(3000):
+        bins = int(rng.integers(1, 7))
+        range_len = int(rng.choice([1, 2, 3, 5, 10, 100, 1000, 50000]))
+        side = int(rng.integers(0, 2))
+        best = int(rng.integers(1000, 6_000_000))
+        n_active = int(rng.integers(0, 20))
+        raw_idx = rng.integers(-3, max(range_len, 1) + 3, size=n_active)
+        levels: dict[int, float] = {}
+        for idx in raw_idx:
+            idx = int(idx)
+            price = best + idx if side == 1 else best - idx
+            if price <= 0 or price in levels:
+                continue
+            levels[price] = float(rng.random() * 1000)
+
+        breaks = _cached_breaks(range_len, bins)
+        dense = np.zeros(range_len, dtype=np.float64)
+        for p, v in levels.items():
+            idx = (p - best) if side == 1 else (best - p)
+            if 0 <= idx < range_len:
+                dense[idx] = v
+        ref = interval_sum_breaks(dense, breaks)
+        got = _interval_sums_sparse(levels, best, side, range_len, breaks)
+        assert np.array_equal(got, ref), (
+            f"mismatch: side={side} range_len={range_len} bins={bins} "
+            f"levels={levels} got={got} ref={ref}"
+        )

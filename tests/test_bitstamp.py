@@ -97,6 +97,22 @@ class TestBitstampLoader:
         sorted_events = events.sort_values("event_id")
         assert (sorted_events["event_id"].diff().dropna() >= 1).all()
 
+    def test_original_number_tracks_source_row(self):
+        """original_number is the 1-based source CSV row, not an event_id alias.
+
+        The reference convention the LOBSTER loader now mirrors: original_number
+        is assigned before the [id, volume, action, timestamp] sort and carried
+        through it, so it stays distinct from the post-sort event_id surrogate.
+        """
+        events = BitstampLoader().load(sample_csv_path())
+        assert events["original_number"].is_unique
+        assert events["original_number"].min() >= 1
+        assert (
+            not events["original_number"]
+            .reset_index(drop=True)
+            .equals(events["event_id"].reset_index(drop=True))
+        )
+
     def test_missing_file_raises(self, tmp_path):
         loader = BitstampLoader()
         with pytest.raises((FileNotFoundError, InvalidDataError)):
@@ -156,19 +172,21 @@ class TestBitstampWriter:
             },
             rt_csv,
         )
-        # Synthesise companion trades.csv the way the demo does
-        from ob_analytics._demos import _write_trades_csv_for_reader
+        # The writer emits a companion trades.csv automatically whenever the
+        # payload carries a "trades" frame, so a full re-read round-trips
+        # without any demo-side shim.
+        assert (rt_csv.parent / "trades.csv").exists()
 
-        _write_trades_csv_for_reader(result.trades, rt_csv.parent / "trades.csv")
-
-        rt_events = BitstampLoader().load(rt_csv)
-        assert len(rt_events) == len(result.events)
+        rt = Pipeline(format=BitstampFormat()).run(str(rt_csv))
+        assert len(rt.events) == len(result.events)
 
     def test_writer_creates_file(self, tmp_path, tiny_pipeline_result):
         target = tmp_path / "orders.csv"
         BitstampWriter().write({"events": tiny_pipeline_result.events}, target)
         assert target.exists()
         assert target.stat().st_size > 0
+        # No "trades" key -> no companion trades.csv is written.
+        assert not (target.parent / "trades.csv").exists()
 
 
 # ---------------------------------------------------------------------------

@@ -13,6 +13,7 @@ live in :mod:`ob_analytics.analytics`.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ from loguru import logger
 
 from ob_analytics._utils import (
     datetime_to_epoch,
+    empty_trades,
     epoch_to_datetime,
     validate_columns,
     validate_non_empty,
@@ -138,7 +140,7 @@ class BitstampLoader:
 
     @staticmethod
     def _remove_duplicates(events: pd.DataFrame) -> pd.DataFrame:
-        """Remove duplicate delete events (port of R ``removeDuplicates``)."""
+        """Drop redundant 'deleted' events that repeat a cancellation for one order id."""
         deletes = events[events["action"] == "deleted"].sort_values(
             by=["id", "volume"], kind="stable"
         )
@@ -174,21 +176,6 @@ _TRADES_COLUMNS = (
     "side",
 )
 
-_EMPTY_TRADES = pd.DataFrame(
-    columns=[
-        "timestamp",
-        "price",
-        "volume",
-        "direction",
-        "maker_event_id",
-        "taker_event_id",
-        "maker",
-        "taker",
-        "maker_og",
-        "taker_og",
-    ]
-)
-
 
 class BitstampTradeReader:
     """Build trades from the companion ``trades.csv`` produced by
@@ -210,7 +197,7 @@ class BitstampTradeReader:
         raw = pd.read_csv(path)
 
         if raw.empty:
-            return _EMPTY_TRADES.copy()
+            return empty_trades()
 
         validate_columns(raw, set(_TRADES_COLUMNS), "BitstampTradeReader.load")
 
@@ -300,20 +287,30 @@ class BitstampTradeReader:
         amounts: pd.Series,
         ev_lookup: dict[int, list[tuple[float, int]]],
     ) -> np.ndarray:
-        result: list[int | float] = []
-        used: dict[int, list[tuple[float, int]]] = {
-            k: list(v) for k, v in ev_lookup.items()
-        }
         digits = self._config.volume_decimals
 
+        # Bucket each order's candidate fills by rounded volume, preserving the
+        # original candidate order within each bucket.  The previous version
+        # linearly scanned every candidate for an order id on each trade and
+        # popped the first volume match; bucketing reproduces that exactly
+        # (earliest unconsumed match wins) while making resolution O(1) per
+        # trade.  The index is built fresh per call, so the maker and taker
+        # passes consume independently — matching the old per-call copy.
+        index: dict[int, dict[float, deque[int]]] = {}
+        for oid, cand in ev_lookup.items():
+            by_fill: dict[float, deque[int]] = {}
+            for fill, eid in cand:
+                by_fill.setdefault(round(fill, digits), deque()).append(eid)
+            index[oid] = by_fill
+
+        result: list[int | float] = []
         for oid, amt in zip(order_ids, amounts):
-            cand = used.get(int(oid), [])
             picked: int | float = float("nan")
-            for i, (fill, eid) in enumerate(cand):
-                if round(fill, digits) == round(float(amt), digits):
-                    picked = eid
-                    cand.pop(i)
-                    break
+            bucket = index.get(int(oid))
+            if bucket is not None:
+                matches = bucket.get(round(float(amt), digits))
+                if matches:
+                    picked = matches.popleft()
             result.append(picked)
 
         return np.array(result, dtype=object)
@@ -339,17 +336,23 @@ class BitstampWriter:
     ) -> Path:
         """Write the events DataFrame to a Bitstamp-format CSV.
 
+        When *data* also carries a ``"trades"`` frame, a companion
+        ``trades.csv`` is written next to *dest* in capture format, so that a
+        subsequent :class:`BitstampTradeReader` can reconstruct trades when the
+        orders.csv is re-read.
+
         Parameters
         ----------
         data : dict of str to DataFrame
-            Must contain an ``"events"`` key.
+            Must contain an ``"events"`` key.  An optional ``"trades"`` key
+            triggers a companion ``trades.csv`` alongside *dest*.
         dest : str or Path
             Output CSV file path.
 
         Returns
         -------
         Path
-            The written file path.
+            The written events CSV path.
         """
         events = data["events"]
         p = Path(dest)
@@ -369,7 +372,51 @@ class BitstampWriter:
         )
         p.parent.mkdir(parents=True, exist_ok=True)
         out.to_csv(p, index=False)
+
+        trades = data.get("trades")
+        if trades is not None:
+            self._write_companion_trades(trades, p.parent / "trades.csv")
         return p
+
+    @staticmethod
+    def _write_companion_trades(trades: pd.DataFrame, dest: Path) -> None:
+        """Write a capture-style ``trades.csv`` next to the events CSV.
+
+        Reconstructs the live-capture trade schema from the pipeline's
+        ``maker``/``taker`` fields so that :class:`BitstampTradeReader` can
+        re-read it.  An empty *trades* frame yields a header-only file.
+        """
+        cols = [
+            "trade_id",
+            "timestamp",
+            "exchange_timestamp",
+            "price",
+            "amount",
+            "buy_order_id",
+            "sell_order_id",
+            "side",
+        ]
+        if trades.empty:
+            pd.DataFrame(columns=cols).to_csv(dest, index=False)
+            return
+        side = trades["direction"].astype(str)
+        buy_order_id = np.where(side == "buy", trades["taker"], trades["maker"])
+        sell_order_id = np.where(side == "buy", trades["maker"], trades["taker"])
+        ts_ns = trades["timestamp"].astype("datetime64[ns]").astype(np.int64)
+        ts_ms = ts_ns // 1_000_000
+        out = pd.DataFrame(
+            {
+                "trade_id": np.arange(1, len(trades) + 1, dtype=np.int64),
+                "timestamp": ts_ms,
+                "exchange_timestamp": ts_ms,
+                "price": trades["price"].to_numpy(),
+                "amount": trades["volume"].to_numpy(),
+                "buy_order_id": buy_order_id,
+                "sell_order_id": sell_order_id,
+                "side": side.to_numpy(),
+            }
+        )
+        out.to_csv(dest, index=False)
 
 
 # ── BitstampFormat descriptor ─────────────────────────────────────────

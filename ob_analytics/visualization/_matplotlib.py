@@ -2,7 +2,7 @@
 
 This module contains all matplotlib-specific rendering logic.  Each
 ``mpl_*()`` function takes a prepared data dict (from
-:mod:`~ob_analytics._chart_data`) and an optional *ax* parameter, and
+:mod:`~ob_analytics.visualization._data`) and an optional *ax* parameter, and
 returns a :class:`~matplotlib.figure.Figure`.
 
 The :class:`PlotTheme` dataclass and related helpers also live here.
@@ -622,7 +622,17 @@ def mpl_order_flow_imbalance(data: dict, ax: Axes | None = None) -> Figure:
     ofi_df = data["ofi_df"]
     trades = data["trades"]
     colors = data["colors"]
-    bar_width = data["bar_width"]
+
+    # Bar width in matplotlib date-number units (days): 80% of the median
+    # inter-bar gap. Computed here because it is backend-specific to the
+    # date-number x-axis.
+    if len(ofi_df) > 1:
+        median_gap = ofi_df["timestamp"].diff().median()
+        bar_width = mdates.date2num(
+            ofi_df["timestamp"].iloc[0] + median_gap * 0.8
+        ) - mdates.date2num(ofi_df["timestamp"].iloc[0])
+    else:
+        bar_width = 0.001
 
     fig, ax = _create_axes(ax, figsize=(12, 5))
 

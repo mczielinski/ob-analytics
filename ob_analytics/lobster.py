@@ -30,9 +30,11 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from loguru import logger
+from sortedcontainers import SortedDict
 
 from ob_analytics._utils import (
     datetime_to_seconds_after_midnight,
+    empty_trades,
     seconds_after_midnight_to_datetime,
 )
 from ob_analytics.config import PipelineConfig
@@ -96,7 +98,10 @@ class LobsterLoader:
         self._trading_date = pd.Timestamp(trading_date).normalize()
         self._trading_halts: pd.DataFrame | None = None
         self._cross_trades: pd.DataFrame | None = None
-        self._orderbook_path: Path | None = None
+        #: Path to the companion LOBSTER orderbook file, discovered during
+        #: :meth:`load`. Public so :class:`LobsterFormat` can read it for depth
+        #: computation without reaching into a private attribute.
+        self.orderbook_path: Path | None = None
 
     def load(self, source: Any) -> pd.DataFrame:
         """Load LOBSTER message data and return a cleaned events DataFrame.
@@ -160,9 +165,14 @@ class LobsterLoader:
             0.0,
         )
 
-        events = events.reset_index(drop=True)
+        # ``original_number`` captures the 1-based row in the source message
+        # file (gaps appear where halt/cross/other event types were filtered
+        # out above). ``event_id`` is a contiguous 1..N surrogate. These match
+        # the Bitstamp loader's convention so trade provenance (maker_og /
+        # taker_og) is comparable across formats.
+        events = events.reset_index().rename(columns={"index": "original_number"})
+        events["original_number"] = events["original_number"] + 1
         events["event_id"] = np.arange(1, len(events) + 1)
-        events["original_number"] = events["event_id"]
 
         events = events[
             [
@@ -189,9 +199,21 @@ class LobsterLoader:
         )
 
         # Discover and store the orderbook file path for depth computation
-        self._orderbook_path = self._resolve_orderbook_file(source)
+        self.orderbook_path = self._resolve_orderbook_file(source)
 
         return events
+
+    @staticmethod
+    def _glob_lobster_file(directory: Path, kind: str) -> Path | None:
+        """Return the first ``*{kind}*.csv`` in *directory* (or None).
+
+        Prefers the underscored ``*_{kind}*.csv`` form (LOBSTER's own naming)
+        and falls back to the looser ``*{kind}*.csv``.
+        """
+        candidates = sorted(directory.glob(f"*_{kind}*.csv"))
+        if not candidates:
+            candidates = sorted(directory.glob(f"*{kind}*.csv"))
+        return candidates[0] if candidates else None
 
     @staticmethod
     def _resolve_message_file(source: Path) -> Path:
@@ -199,11 +221,9 @@ class LobsterLoader:
         if source.is_file():
             return source
         if source.is_dir():
-            candidates = sorted(source.glob("*_message*.csv"))
-            if not candidates:
-                candidates = sorted(source.glob("*message*.csv"))
-            if candidates:
-                return candidates[0]
+            found = LobsterLoader._glob_lobster_file(source, "message")
+            if found is not None:
+                return found
             raise FileNotFoundError(f"No LOBSTER message file found in {source}")
         raise FileNotFoundError(f"Path does not exist: {source}")
 
@@ -212,11 +232,7 @@ class LobsterLoader:
         """Find the orderbook CSV from *source* (file or directory)."""
         source = Path(source)
         if source.is_dir():
-            candidates = sorted(source.glob("*_orderbook*.csv"))
-            if not candidates:
-                candidates = sorted(source.glob("*orderbook*.csv"))
-            if candidates:
-                return candidates[0]
+            return LobsterLoader._glob_lobster_file(source, "orderbook")
         return None
 
 
@@ -259,20 +275,7 @@ class LobsterTradeReader:
         )
 
         if execs.empty:
-            return pd.DataFrame(
-                columns=[
-                    "timestamp",
-                    "price",
-                    "volume",
-                    "direction",
-                    "maker_event_id",
-                    "taker_event_id",
-                    "maker",
-                    "taker",
-                    "maker_og",
-                    "taker_og",
-                ]
-            )
+            return empty_trades()
 
         # Direction inversion: execution of a resting ask = buyer-initiated
         trade_direction = np.where(execs["direction"] == "ask", "buy", "sell")
@@ -498,7 +501,11 @@ class LobsterWriter:
         iterate via indexed access, which is roughly an order of
         magnitude faster than ``DataFrame.iterrows()``.
         """
-        book: dict[str, dict[float, float]] = {"bid": {}, "ask": {}}
+        # Book sides are kept as SortedDicts keyed by price so each snapshot
+        # reads the top-N levels directly (peekitem is O(log n)) instead of
+        # re-sorting the whole side on every event.  Prices are unique keys,
+        # so key-ordering matches the previous ``sorted(items())`` exactly.
+        book: dict[str, SortedDict] = {"bid": SortedDict(), "ask": SortedDict()}
         rows: list[list[float]] = []
 
         n = len(events)
@@ -558,21 +565,29 @@ class LobsterWriter:
         return ob
 
     @staticmethod
-    def _snapshot_row(
-        book: dict[str, dict[float, float]], num_levels: int
-    ) -> list[float]:
-        """Build a single orderbook snapshot row."""
-        asks_sorted = sorted(book["ask"].items())
-        bids_sorted = sorted(book["bid"].items(), reverse=True)
+    def _snapshot_row(book: dict[str, SortedDict], num_levels: int) -> list[float]:
+        """Build a single orderbook snapshot row.
+
+        ``ask`` is read low-to-high (ascending keys, ``peekitem(i)``) and
+        ``bid`` high-to-low (descending keys, ``peekitem(-(i + 1))``),
+        reproducing the previous ``sorted()`` / ``sorted(reverse=True)``
+        ordering without materialising the full side.
+        """
+        asks = book["ask"]
+        bids = book["bid"]
+        n_ask = len(asks)
+        n_bid = len(bids)
 
         row: list[float] = []
         for i in range(num_levels):
-            if i < len(asks_sorted):
-                row.extend([asks_sorted[i][0], asks_sorted[i][1]])
+            if i < n_ask:
+                ask_price, ask_size = asks.peekitem(i)
+                row.extend([ask_price, ask_size])
             else:
                 row.extend([_DUMMY_ASK_PRICE, 0])
-            if i < len(bids_sorted):
-                row.extend([bids_sorted[i][0], bids_sorted[i][1]])
+            if i < n_bid:
+                bid_price, bid_size = bids.peekitem(-(i + 1))
+                row.extend([bid_price, bid_size])
             else:
                 row.extend([_DUMMY_BID_PRICE, 0])
 
@@ -630,37 +645,28 @@ def lobster_depth_from_orderbook(
     timestamps = book_events["timestamp"].values[:n]
     event_ids = book_events["event_id"].values[:n]
 
-    # Vectorised extraction of prices and volumes per level, then diff
-    # consecutive rows to find changes.
+    # Walk the orderbook rows and diff consecutive states to find changes.
+    # LOBSTER columns repeat (ask_price, ask_size, bid_price, bid_size) per
+    # level, so level ``j`` lives at offsets ``j*4 .. j*4+3``.
     depth_rows: list[dict] = []
     prev_levels: dict[tuple[str, float], float] = {}
 
-    # Pre-compute rounded price arrays for all levels in one shot
     price_divisor = config.price_divisor
     price_dec = config.price_decimals
-
-    ask_price_cols = [j * 4 for j in range(num_levels)]
-    ask_size_cols = [j * 4 + 1 for j in range(num_levels)]
-    bid_price_cols = [j * 4 + 2 for j in range(num_levels)]
-    bid_size_cols = [j * 4 + 3 for j in range(num_levels)]
-
-    ask_prices_all = ob_raw[:n, ask_price_cols]
-    ask_sizes_all = ob_raw[:n, ask_size_cols]
-    bid_prices_all = ob_raw[:n, bid_price_cols]
-    bid_sizes_all = ob_raw[:n, bid_size_cols]
 
     for i in range(n):
         curr_levels: dict[tuple[str, float], float] = {}
 
         for j in range(num_levels):
-            ap = ask_prices_all[i, j]
-            av = ask_sizes_all[i, j]
+            base = j * 4
+            ap = ob_raw[i, base]
+            av = ob_raw[i, base + 1]
             if ap != _DUMMY_ASK_PRICE and av > 0:
                 price = round(ap / price_divisor, price_dec)
                 curr_levels[("ask", price)] = curr_levels.get(("ask", price), 0) + av
 
-            bp = bid_prices_all[i, j]
-            bv = bid_sizes_all[i, j]
+            bp = ob_raw[i, base + 2]
+            bv = ob_raw[i, base + 3]
             if bp != _DUMMY_BID_PRICE and bv > 0:
                 price = round(bp / price_divisor, price_dec)
                 curr_levels[("bid", price)] = curr_levels.get(("bid", price), 0) + bv
@@ -739,7 +745,7 @@ class LobsterFormat(Format):
         source: Any,
         ctx: RunContext,
     ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
-        ob_path = self._loader._orderbook_path if self._loader is not None else None
+        ob_path = self._loader.orderbook_path if self._loader is not None else None
         if ob_path is None:
             ob_path = LobsterLoader._resolve_orderbook_file(Path(source))
         if ob_path is None:

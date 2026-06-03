@@ -18,6 +18,7 @@ from ob_analytics.live._base import (
     CaptureSink,
     EventDict,
     LiveCapturer,
+    SupportsDiagnostics,
 )
 
 
@@ -126,7 +127,6 @@ async def run_capturer(
     Handles SIGINT/SIGTERM by cancelling the streaming task; the shutdown
     synthetic events still run so every order id keeps a full lifecycle.
     """
-    own_sink = sink is None
     if sink is None:
         sink = FileCaptureSink(config.out_dir, keep_raw=config.keep_raw)
     started = pd.Timestamp.now(tz="UTC")
@@ -197,11 +197,11 @@ async def run_capturer(
 
         ended = pd.Timestamp.now(tz="UTC")
         extras: dict[str, Any] = {}
-        # Capturers may expose a ``diagnostics()`` method to enrich meta.json.
-        diag = getattr(capturer, "diagnostics", None)
-        if callable(diag):
+        # Capturers may implement the optional SupportsDiagnostics capability
+        # to enrich meta.json with per-run counters.
+        if isinstance(capturer, SupportsDiagnostics):
             try:
-                extras.update(diag())
+                extras.update(capturer.diagnostics())
             except Exception as exc:  # noqa: BLE001
                 logger.debug(
                     "Capturer '{}' diagnostics() raised: {!r}",
@@ -217,8 +217,7 @@ async def run_capturer(
             ended=ended,
             extras=extras,
         )
-        if own_sink or sink is not None:
-            sink.finalize(result)
+        sink.finalize(result)
         logger.info(
             "Capturer '{}': finished. orders={}, trades={}, raw={}, dur={:.1f}s",
             capturer.name,
