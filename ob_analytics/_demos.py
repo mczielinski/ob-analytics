@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 from loguru import logger
 
@@ -55,41 +54,6 @@ def _save_and_gallery(
 # ---------------------------------------------------------------------------
 # Bitstamp demo
 # ---------------------------------------------------------------------------
-
-
-def _write_trades_csv_for_reader(trades: pd.DataFrame, dest: Path) -> None:
-    """Write capture-style trades.csv so BitstampTradeReader can re-read."""
-    cols = [
-        "trade_id",
-        "timestamp",
-        "exchange_timestamp",
-        "price",
-        "amount",
-        "buy_order_id",
-        "sell_order_id",
-        "side",
-    ]
-    if trades.empty:
-        pd.DataFrame(columns=cols).to_csv(dest, index=False)
-        return
-    side = trades["direction"].astype(str)
-    buy_order_id = np.where(side == "buy", trades["taker"], trades["maker"])
-    sell_order_id = np.where(side == "buy", trades["maker"], trades["taker"])
-    ts_ns = trades["timestamp"].astype("datetime64[ns]").astype(np.int64)
-    ts_ms = ts_ns // 1_000_000
-    out = pd.DataFrame(
-        {
-            "trade_id": np.arange(1, len(trades) + 1, dtype=np.int64),
-            "timestamp": ts_ms,
-            "exchange_timestamp": ts_ms,
-            "price": trades["price"].to_numpy(),
-            "amount": trades["volume"].to_numpy(),
-            "buy_order_id": buy_order_id,
-            "sell_order_id": sell_order_id,
-            "side": side.to_numpy(),
-        }
-    )
-    out.to_csv(dest, index=False)
 
 
 def _resolve_orders_path(path: Path) -> Path:
@@ -152,8 +116,9 @@ def run_bitstamp_demo(
         rt_dir = out / "roundtrip"
         rt_dir.mkdir(parents=True, exist_ok=True)
         rt_csv = rt_dir / "orders.csv"
+        # BitstampWriter emits the companion trades.csv from the "trades"
+        # frame in _result_dict, so no separate shim is needed here.
         save_data(_result_dict(result), rt_csv, writer=BitstampWriter())
-        _write_trades_csv_for_reader(result.trades, rt_dir / "trades.csv")
         rt = Pipeline(format=BitstampFormat()).run(str(rt_csv))
         logger.info(
             "Round-trip events: {} (match: {})",

@@ -336,17 +336,23 @@ class BitstampWriter:
     ) -> Path:
         """Write the events DataFrame to a Bitstamp-format CSV.
 
+        When *data* also carries a ``"trades"`` frame, a companion
+        ``trades.csv`` is written next to *dest* in capture format, so that a
+        subsequent :class:`BitstampTradeReader` can reconstruct trades when the
+        orders.csv is re-read.
+
         Parameters
         ----------
         data : dict of str to DataFrame
-            Must contain an ``"events"`` key.
+            Must contain an ``"events"`` key.  An optional ``"trades"`` key
+            triggers a companion ``trades.csv`` alongside *dest*.
         dest : str or Path
             Output CSV file path.
 
         Returns
         -------
         Path
-            The written file path.
+            The written events CSV path.
         """
         events = data["events"]
         p = Path(dest)
@@ -366,7 +372,51 @@ class BitstampWriter:
         )
         p.parent.mkdir(parents=True, exist_ok=True)
         out.to_csv(p, index=False)
+
+        trades = data.get("trades")
+        if trades is not None:
+            self._write_companion_trades(trades, p.parent / "trades.csv")
         return p
+
+    @staticmethod
+    def _write_companion_trades(trades: pd.DataFrame, dest: Path) -> None:
+        """Write a capture-style ``trades.csv`` next to the events CSV.
+
+        Reconstructs the live-capture trade schema from the pipeline's
+        ``maker``/``taker`` fields so that :class:`BitstampTradeReader` can
+        re-read it.  An empty *trades* frame yields a header-only file.
+        """
+        cols = [
+            "trade_id",
+            "timestamp",
+            "exchange_timestamp",
+            "price",
+            "amount",
+            "buy_order_id",
+            "sell_order_id",
+            "side",
+        ]
+        if trades.empty:
+            pd.DataFrame(columns=cols).to_csv(dest, index=False)
+            return
+        side = trades["direction"].astype(str)
+        buy_order_id = np.where(side == "buy", trades["taker"], trades["maker"])
+        sell_order_id = np.where(side == "buy", trades["maker"], trades["taker"])
+        ts_ns = trades["timestamp"].astype("datetime64[ns]").astype(np.int64)
+        ts_ms = ts_ns // 1_000_000
+        out = pd.DataFrame(
+            {
+                "trade_id": np.arange(1, len(trades) + 1, dtype=np.int64),
+                "timestamp": ts_ms,
+                "exchange_timestamp": ts_ms,
+                "price": trades["price"].to_numpy(),
+                "amount": trades["volume"].to_numpy(),
+                "buy_order_id": buy_order_id,
+                "sell_order_id": sell_order_id,
+                "side": side.to_numpy(),
+            }
+        )
+        out.to_csv(dest, index=False)
 
 
 # ── BitstampFormat descriptor ─────────────────────────────────────────
