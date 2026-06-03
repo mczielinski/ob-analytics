@@ -637,37 +637,28 @@ def lobster_depth_from_orderbook(
     timestamps = book_events["timestamp"].values[:n]
     event_ids = book_events["event_id"].values[:n]
 
-    # Vectorised extraction of prices and volumes per level, then diff
-    # consecutive rows to find changes.
+    # Walk the orderbook rows and diff consecutive states to find changes.
+    # LOBSTER columns repeat (ask_price, ask_size, bid_price, bid_size) per
+    # level, so level ``j`` lives at offsets ``j*4 .. j*4+3``.
     depth_rows: list[dict] = []
     prev_levels: dict[tuple[str, float], float] = {}
 
-    # Pre-compute rounded price arrays for all levels in one shot
     price_divisor = config.price_divisor
     price_dec = config.price_decimals
-
-    ask_price_cols = [j * 4 for j in range(num_levels)]
-    ask_size_cols = [j * 4 + 1 for j in range(num_levels)]
-    bid_price_cols = [j * 4 + 2 for j in range(num_levels)]
-    bid_size_cols = [j * 4 + 3 for j in range(num_levels)]
-
-    ask_prices_all = ob_raw[:n, ask_price_cols]
-    ask_sizes_all = ob_raw[:n, ask_size_cols]
-    bid_prices_all = ob_raw[:n, bid_price_cols]
-    bid_sizes_all = ob_raw[:n, bid_size_cols]
 
     for i in range(n):
         curr_levels: dict[tuple[str, float], float] = {}
 
         for j in range(num_levels):
-            ap = ask_prices_all[i, j]
-            av = ask_sizes_all[i, j]
+            base = j * 4
+            ap = ob_raw[i, base]
+            av = ob_raw[i, base + 1]
             if ap != _DUMMY_ASK_PRICE and av > 0:
                 price = round(ap / price_divisor, price_dec)
                 curr_levels[("ask", price)] = curr_levels.get(("ask", price), 0) + av
 
-            bp = bid_prices_all[i, j]
-            bv = bid_sizes_all[i, j]
+            bp = ob_raw[i, base + 2]
+            bv = ob_raw[i, base + 3]
             if bp != _DUMMY_BID_PRICE and bv > 0:
                 price = round(bp / price_divisor, price_dec)
                 curr_levels[("bid", price)] = curr_levels.get(("bid", price), 0) + bv

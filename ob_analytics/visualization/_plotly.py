@@ -9,6 +9,7 @@ Install via ``pip install ob-analytics[interactive]``.
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Any
 
 import numpy as np
@@ -16,8 +17,15 @@ import numpy as np
 from ob_analytics.exceptions import ConfigurationError
 
 
+@lru_cache(maxsize=1)
 def _import_plotly() -> Any:
-    """Lazy-import plotly with a friendly error message."""
+    """Lazy-import plotly with a friendly error message.
+
+    Cached so plotly is imported once per process rather than on every
+    render call.  ``lru_cache`` only stores successful returns, so when
+    plotly is missing the ``ConfigurationError`` is re-raised on each call
+    exactly as before.
+    """
     try:
         import plotly.graph_objects as go
 
