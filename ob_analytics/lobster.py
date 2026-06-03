@@ -165,9 +165,14 @@ class LobsterLoader:
             0.0,
         )
 
-        events = events.reset_index(drop=True)
+        # ``original_number`` captures the 1-based row in the source message
+        # file (gaps appear where halt/cross/other event types were filtered
+        # out above). ``event_id`` is a contiguous 1..N surrogate. These match
+        # the Bitstamp loader's convention so trade provenance (maker_og /
+        # taker_og) is comparable across formats.
+        events = events.reset_index().rename(columns={"index": "original_number"})
+        events["original_number"] = events["original_number"] + 1
         events["event_id"] = np.arange(1, len(events) + 1)
-        events["original_number"] = events["event_id"]
 
         events = events[
             [

@@ -97,6 +97,22 @@ class TestBitstampLoader:
         sorted_events = events.sort_values("event_id")
         assert (sorted_events["event_id"].diff().dropna() >= 1).all()
 
+    def test_original_number_tracks_source_row(self):
+        """original_number is the 1-based source CSV row, not an event_id alias.
+
+        The reference convention the LOBSTER loader now mirrors: original_number
+        is assigned before the [id, volume, action, timestamp] sort and carried
+        through it, so it stays distinct from the post-sort event_id surrogate.
+        """
+        events = BitstampLoader().load(sample_csv_path())
+        assert events["original_number"].is_unique
+        assert events["original_number"].min() >= 1
+        assert (
+            not events["original_number"]
+            .reset_index(drop=True)
+            .equals(events["event_id"].reset_index(drop=True))
+        )
+
     def test_missing_file_raises(self, tmp_path):
         loader = BitstampLoader()
         with pytest.raises((FileNotFoundError, InvalidDataError)):

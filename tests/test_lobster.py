@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 from ob_analytics.lobster import (
+    LobsterLoader,
     LobsterTradeReader,
     LobsterWriter,
 )
@@ -477,3 +478,42 @@ class TestReconstructOrderbook:
         )
         ob = writer._reconstruct_orderbook(events, num_levels=3)
         assert len(ob) == 5
+
+
+# ---------------------------------------------------------------------------
+# original_number convention (cross-format parity)
+# ---------------------------------------------------------------------------
+
+
+class TestOriginalNumberConvention:
+    """``original_number`` tracks the 1-based source-file row, not ``event_id``.
+
+    The Bitstamp and LOBSTER loaders historically diverged: Bitstamp carried
+    the original CSV row through its ``[id, volume, action, timestamp]`` sort,
+    while LOBSTER simply aliased ``original_number = event_id`` and discarded
+    the source position of filtered rows (halts / cross trades). They now share
+    one convention so trade provenance (``maker_og`` / ``taker_og``) is
+    comparable across formats. This pins the LOBSTER side of that contract.
+    """
+
+    def test_original_number_tracks_source_rows(self, tmp_path):
+        # LOBSTER message schema: time,event_type,id,volume,price,direction.
+        # Row 2 (halt, type 7) and row 5 (cross, type 6) are filtered out, so
+        # the surviving events keep their 1-based source-file row in
+        # original_number while event_id is renumbered contiguously.
+        msg = tmp_path / "AAPL_2024-01-01_34200000_57600000_message_1.csv"
+        msg.write_text(
+            "34200.0,1,1,100,1000000,1\n"  # row 1 -> kept (created bid)
+            "34200.1,7,0,0,0,1\n"  # row 2 -> halt (dropped)
+            "34200.2,1,2,100,1010000,-1\n"  # row 3 -> kept (created ask)
+            "34200.3,4,1,50,1000000,1\n"  # row 4 -> kept (execution)
+            "34200.4,6,0,0,0,1\n"  # row 5 -> cross (dropped)
+            "34200.5,3,2,100,1010000,-1\n"  # row 6 -> kept (deleted ask)
+        )
+        events = LobsterLoader(trading_date="2024-01-01").load(msg)
+
+        assert list(events["event_id"]) == [1, 2, 3, 4]
+        assert list(events["original_number"]) == [1, 3, 4, 6]
+        # The two columns are distinct concepts once any source row is filtered.
+        assert not events["original_number"].equals(events["event_id"])
+        assert events["original_number"].is_unique
