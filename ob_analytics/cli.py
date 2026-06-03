@@ -39,27 +39,26 @@ def _cmd_process(args: argparse.Namespace) -> None:
 
     from ob_analytics.config import PipelineConfig
     from ob_analytics.data import save_data
-    from ob_analytics.bitstamp import BitstampFormat
-    from ob_analytics.lobster import LobsterFormat
-    from ob_analytics.pipeline import Pipeline
+    from ob_analytics.pipeline import FORMATS, Pipeline
 
     from ob_analytics.protocols import RunContext
 
     source = args.source
     fmt_name = args.format
 
+    try:
+        fmt = FORMATS.get(fmt_name)()
+    except KeyError as exc:
+        logger.error(str(exc))
+        sys.exit(1)
+
     if fmt_name == "lobster":
         if args.trading_date is None:
             logger.error("--trading-date is required for LOBSTER format")
             sys.exit(1)
-        fmt = LobsterFormat()
         ctx = RunContext(trading_date=args.trading_date)
-    elif fmt_name == "bitstamp":
-        fmt = BitstampFormat()
-        ctx = RunContext()
     else:
-        logger.error("Unknown format {!r}", fmt_name)
-        sys.exit(1)
+        ctx = RunContext()
 
     config_overrides: dict = {}
     if args.vpin_bucket_volume is not None:
