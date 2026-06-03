@@ -271,11 +271,7 @@ import matplotlib  # noqa: E402
 matplotlib.use("Agg")
 from matplotlib.figure import Figure  # noqa: E402
 
-from ob_analytics.visualization import (  # noqa: E402
-    plot_kyle_lambda,
-    plot_order_flow_imbalance,
-    plot_vpin,
-)
+from ob_analytics.visualization import _data, plot  # noqa: E402
 
 
 class TestFlowToxicityPlots:
@@ -283,7 +279,7 @@ class TestFlowToxicityPlots:
         """plot_vpin returns a Figure."""
         trades = _trades(["buy"] * 10, volumes=[1.0] * 10)
         vpin_df = compute_vpin(trades, bucket_volume=2.0)
-        fig = plot_vpin(vpin_df)
+        fig = plot("vpin", **_data.prepare_vpin_data(vpin_df))
         assert isinstance(fig, Figure)
 
     def test_plot_ofi_returns_figure(self):
@@ -293,7 +289,7 @@ class TestFlowToxicityPlots:
             volumes=[1.0] * 10,
         )
         ofi_df = order_flow_imbalance(trades, window="1min")
-        fig = plot_order_flow_imbalance(ofi_df)
+        fig = plot("order_flow_imbalance", **_data.prepare_ofi_data(ofi_df))
         assert isinstance(fig, Figure)
 
     def test_plot_ofi_with_price_overlay(self):
@@ -304,7 +300,7 @@ class TestFlowToxicityPlots:
             prices=[100.0 + i for i in range(10)],
         )
         ofi_df = order_flow_imbalance(trades, window="1min")
-        fig = plot_order_flow_imbalance(ofi_df, trades=trades)
+        fig = plot("order_flow_imbalance", **_data.prepare_ofi_data(ofi_df, trades))
         assert isinstance(fig, Figure)
 
     def test_plot_kyle_lambda_returns_figure(self):
@@ -316,5 +312,5 @@ class TestFlowToxicityPlots:
             base_sec_offsets=[0, 60, 300, 360],
         )
         result = compute_kyle_lambda(trades, window="5min")
-        fig = plot_kyle_lambda(result)
+        fig = plot("kyle_lambda", **_data.prepare_kyle_lambda_data(result))
         assert isinstance(fig, Figure)

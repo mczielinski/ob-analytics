@@ -23,17 +23,10 @@ from loguru import logger
 from ob_analytics.depth import get_spread
 from ob_analytics.analytics import order_book
 from ob_analytics.pipeline import PipelineResult
+from ob_analytics.visualization import _data as _viz_data
 from ob_analytics.visualization import (
     infer_volume_scale,
-    plot_current_depth,
-    plot_event_map,
-    plot_events_histogram,
-    plot_hidden_executions,
-    plot_price_levels,
-    plot_trades,
-    plot_trading_halts,
-    plot_volume_map,
-    plot_volume_percentiles,
+    plot,
     save_figure,
 )
 
@@ -48,10 +41,13 @@ class PlotSpec:
         File stem, e.g. ``"01_trades_full"``.
     title : str
         Human-readable title for the gallery card.
-    plot_fn : Callable
-        The ``plot_*`` function from ``ob_analytics.visualization``.
-    kwargs : dict
-        Keyword arguments to pass to *plot_fn*.
+    plot_name : str
+        Dispatcher key for :func:`ob_analytics.visualization.plot`,
+        e.g. ``"trades"``.
+    prepare : Callable
+        ``prepare_<name>_data`` helper that returns the renderer payload.
+    prep_kwargs : dict
+        Keyword arguments passed to *prepare*.
     needs : str or None
         If set, the plot is skipped when this key is missing or empty
         in the data context (e.g. ``"vpin"`` for VPIN-dependent plots).
@@ -59,8 +55,9 @@ class PlotSpec:
 
     name: str
     title: str
-    plot_fn: Callable[..., Any]
-    kwargs: dict[str, Any] = field(default_factory=dict)
+    plot_name: str
+    prepare: Callable[..., dict]
+    prep_kwargs: dict[str, Any] = field(default_factory=dict)
     needs: str | None = None
 
 
@@ -124,19 +121,22 @@ def default_specs(
         PlotSpec(
             "01_trades_full",
             "Trades (Full Range)",
-            plot_trades,
+            "trades",
+            _viz_data.prepare_trades_data,
             {"trades": trades},
         ),
         PlotSpec(
             "02_trades_zoom",
             "Trades (Zoomed)",
-            plot_trades,
+            "trades",
+            _viz_data.prepare_trades_data,
             {"trades": trades, "start_time": zoom_start, "end_time": zoom_end},
         ),
         PlotSpec(
             "03_price_levels_full",
             "Price Levels / Depth Heatmap (Full)",
-            plot_price_levels,
+            "price_levels",
+            _viz_data.prepare_price_levels_data,
             {
                 "depth": depth,
                 "spread": spread,
@@ -148,7 +148,8 @@ def default_specs(
         PlotSpec(
             "04_price_levels_zoom",
             "Price Levels (Zoomed + Trades)",
-            plot_price_levels,
+            "price_levels",
+            _viz_data.prepare_price_levels_data,
             {
                 "depth": depth,
                 "spread": spread,
@@ -161,13 +162,15 @@ def default_specs(
         PlotSpec(
             "05_event_map_full",
             "Event Map (Full Range)",
-            plot_event_map,
+            "event_map",
+            _viz_data.prepare_event_map_data,
             {"events": events, "volume_scale": volume_scale},
         ),
         PlotSpec(
             "06_event_map_zoom",
             "Event Map (Zoomed)",
-            plot_event_map,
+            "event_map",
+            _viz_data.prepare_event_map_data,
             {
                 "events": events,
                 "start_time": zoom_start,
@@ -178,7 +181,8 @@ def default_specs(
         PlotSpec(
             "07_volume_map_deleted",
             "Volume Map -- Cancelled (log)",
-            plot_volume_map,
+            "volume_map",
+            _viz_data.prepare_volume_map_data,
             {
                 "events": events,
                 "volume_scale": volume_scale,
@@ -188,7 +192,8 @@ def default_specs(
         PlotSpec(
             "08_volume_map_created",
             "Volume Map -- Created (log)",
-            plot_volume_map,
+            "volume_map",
+            _viz_data.prepare_volume_map_data,
             {
                 "events": events,
                 "action": "created",
@@ -198,28 +203,6 @@ def default_specs(
         ),
     ]
 
-    # Hidden executions and trading halts (LOBSTER-enriched).
-    # These pull from result.extras and are skipped by the gallery loop
-    # when the extras key is missing (e.g. Bitstamp data).
-    specs.append(
-        PlotSpec(
-            "08b_hidden_executions",
-            "Hidden Order Executions",
-            plot_hidden_executions,
-            {"result": result},
-            needs="extras:hidden_executions",
-        )
-    )
-    specs.append(
-        PlotSpec(
-            "08c_trading_halts",
-            "Trading Halts",
-            plot_trading_halts,
-            {"result": result},
-            needs="extras:trading_halts",
-        )
-    )
-
     # Order book snapshot (requires 'type' column from set_order_types)
     if "type" in events.columns:
         snap_time = zoom_end
@@ -227,7 +210,8 @@ def default_specs(
             PlotSpec(
                 "09_current_depth",
                 f"Current Depth ({snap_time.strftime('%H:%M')})",
-                plot_current_depth,
+                "current_depth",
+                _viz_data.prepare_current_depth_data,
                 {
                     "order_book": order_book(events, tp=snap_time, bps_range=150),
                     "volume_scale": volume_scale,
@@ -241,7 +225,8 @@ def default_specs(
             PlotSpec(
                 "10_volume_percentiles",
                 "Volume Percentiles",
-                plot_volume_percentiles,
+                "volume_percentiles",
+                _viz_data.prepare_volume_percentiles_data,
                 {
                     "depth_summary": depth_summary_offset,
                     "start_time": zoom_start,
@@ -267,13 +252,15 @@ def default_specs(
             PlotSpec(
                 "11_events_hist_price",
                 "Events Histogram -- Price",
-                plot_events_histogram,
+                "events_histogram",
+                _viz_data.prepare_events_histogram_data,
                 {"events": hist_price, "val": "price", "bw": price_bw},
             ),
             PlotSpec(
                 "12_events_hist_volume",
                 "Events Histogram -- Volume",
-                plot_events_histogram,
+                "events_histogram",
+                _viz_data.prepare_events_histogram_data,
                 {
                     "events": hist_events[
                         hist_events["volume"] < hist_events["volume"].quantile(0.99)
@@ -291,11 +278,45 @@ def default_specs(
     return specs
 
 
+def vpin_panel(vpin_df: pd.DataFrame, *, threshold: float = 0.7) -> PlotSpec:
+    """Build a VPIN gallery panel for ``extra_panels=``."""
+    return PlotSpec(
+        "vpin",
+        "VPIN",
+        "vpin",
+        _viz_data.prepare_vpin_data,
+        {"vpin_df": vpin_df, "threshold": threshold},
+    )
+
+
+def ofi_panel(ofi_df: pd.DataFrame, trades: pd.DataFrame | None = None) -> PlotSpec:
+    """Build an order-flow-imbalance gallery panel for ``extra_panels=``."""
+    return PlotSpec(
+        "ofi",
+        "Order Flow Imbalance",
+        "order_flow_imbalance",
+        _viz_data.prepare_ofi_data,
+        {"ofi_df": ofi_df, "trades": trades},
+    )
+
+
+def kyle_panel(kyle_result: Any) -> PlotSpec:
+    """Build a Kyle's-Lambda gallery panel for ``extra_panels=``."""
+    return PlotSpec(
+        "kyle_lambda",
+        f"Kyle's Lambda (lambda={kyle_result.lambda_:.4f})",
+        "kyle_lambda",
+        _viz_data.prepare_kyle_lambda_data,
+        {"kyle_result": kyle_result},
+    )
+
+
 def generate_gallery(
     result: PipelineResult | None,
     output_dir: str | Path,
     *,
     specs: list[PlotSpec] | None = None,
+    extra_panels: list[PlotSpec] | None = None,
     volume_scale: float | None = None,
     backends: list[str] | None = None,
     title: str = "ob-analytics Plot Gallery",
@@ -311,6 +332,9 @@ def generate_gallery(
         Root directory for gallery output.
     specs : list of PlotSpec, optional
         Plot specifications.  Defaults to :func:`default_specs`.
+    extra_panels : list of PlotSpec, optional
+        Additional panels appended after the built-ins (or after *specs*).
+        Build them with the ``*_panel`` helpers, e.g. :func:`vpin_panel`.
     volume_scale : float or None
         Volume display scale factor.  ``None`` (default) auto-infers a
         sensible power-of-10 scale from the events.
@@ -359,6 +383,9 @@ def generate_gallery(
             volume_scale=volume_scale,
         )
 
+    if extra_panels:
+        specs = [*specs, *extra_panels]
+
     backend_dirs = {b: out / b for b in backends}
 
     # generated[i] = (name, title, {backend: success})
@@ -391,7 +418,8 @@ def generate_gallery(
         for backend in backends:
             backend_dirs[backend].mkdir(parents=True, exist_ok=True)
             try:
-                fig = spec.plot_fn(**spec.kwargs, backend=backend)
+                data = spec.prepare(**spec.prep_kwargs)
+                fig = plot(spec.plot_name, backend=backend, **data)
             except Exception as e:
                 logger.warning("Gallery: {} {} failed: {}", backend, spec.name, e)
                 statuses[backend] = False

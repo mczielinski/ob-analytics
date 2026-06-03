@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 
 import pytest
 
+from ob_analytics.visualization import RENDERERS
 from ob_analytics.visualization.gallery import (
     PlotSpec,
     _render_panel,
@@ -26,25 +27,52 @@ from ob_analytics.visualization.gallery import (
 
 
 # ---------------------------------------------------------------------------
-# Stub plot functions
+# Stub renderers
+#
+# The gallery dispatches through ``plot(spec.plot_name, backend=...)``, which
+# resolves a renderer from the ``RENDERERS`` registry.  These stubs register
+# tiny renderers under the ``"stub"`` / ``"stubfail"`` plot names so the
+# generator can be exercised without running a pipeline.  Matplotlib renderers
+# take ``(data, ax)``; plotly renderers take ``(data,)``.
 # ---------------------------------------------------------------------------
 
 
-def _stub_mpl(backend: str = "matplotlib"):
-    """Return a tiny matplotlib or plotly figure depending on backend."""
-    if backend == "matplotlib":
-        fig, ax = plt.subplots()
-        ax.plot([0, 1], [0, 1])
-        return fig
-    if backend == "plotly":
-        import plotly.graph_objects as go
-
-        return go.Figure(data=go.Scatter(x=[0, 1], y=[0, 1]))
-    raise ValueError(f"unsupported backend: {backend}")
+def _stub_mpl_renderer(data, ax=None):
+    fig, ax = plt.subplots()
+    ax.plot([0, 1], [0, 1])
+    return fig
 
 
-def _stub_failing(backend: str = "matplotlib"):
-    raise RuntimeError(f"deliberate {backend} failure")
+def _stub_plotly_renderer(data):
+    import plotly.graph_objects as go
+
+    return go.Figure(data=go.Scatter(x=[0, 1], y=[0, 1]))
+
+
+def _stub_fail_mpl(data, ax=None):
+    raise RuntimeError("deliberate matplotlib failure")
+
+
+def _stub_fail_plotly(data):
+    raise RuntimeError("deliberate plotly failure")
+
+
+_STUB_RENDERERS = {
+    ("stub", "matplotlib"): _stub_mpl_renderer,
+    ("stub", "plotly"): _stub_plotly_renderer,
+    ("stubfail", "matplotlib"): _stub_fail_mpl,
+    ("stubfail", "plotly"): _stub_fail_plotly,
+}
+
+
+@pytest.fixture(autouse=True)
+def _register_stub_renderers():
+    """Register stub renderers for the gallery dispatch; clean up after."""
+    for key, fn in _STUB_RENDERERS.items():
+        RENDERERS.register(key, fn)
+    yield
+    for key in _STUB_RENDERERS:
+        RENDERERS._items.pop(key, None)
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +166,7 @@ class TestWriteGalleryHtml:
 
 class TestGenerateGallery:
     def _specs(self) -> list[PlotSpec]:
-        return [PlotSpec("01_demo", "Demo Plot", _stub_mpl, {})]
+        return [PlotSpec("01_demo", "Demo Plot", "stub", lambda: {}, {})]
 
     def test_default_backends_prefer_plotly_when_available(
         self, tmp_path: Path
@@ -198,7 +226,7 @@ class TestGenerateGallery:
         assert mpl_idx < plotly_idx
 
     def test_failure_in_one_backend_does_not_skip_others(self, tmp_path: Path) -> None:
-        spec = PlotSpec("01_demo", "Demo", _stub_failing, {})
+        spec = PlotSpec("01_demo", "Demo", "stubfail", lambda: {}, {})
         path = generate_gallery(
             result=None,
             output_dir=tmp_path,
