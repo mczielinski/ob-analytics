@@ -42,6 +42,7 @@ from ob_analytics.depth import depth_metrics, price_level_volume
 from ob_analytics.analytics import order_aggressiveness
 from ob_analytics.bitstamp import BitstampLoader, BitstampTradeReader
 from ob_analytics.analytics import set_order_types
+from ob_analytics.schemas import validate_events_df, validate_trades_df
 from loguru import logger
 
 from ob_analytics.protocols import (
@@ -249,9 +250,11 @@ class Pipeline:
 
         logger.info("Pipeline: building trades")
         trades = self.trade_source.load(events, source)
+        validate_trades_df(trades)  # data contract (schemas.py)
 
         logger.info("Pipeline: classifying order types")
         events = set_order_types(events, trades)
+        validate_events_df(events)  # data contract (schemas.py)
 
         depth_override = None
         if self._format is not None:
