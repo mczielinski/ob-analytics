@@ -64,6 +64,7 @@ from ob_analytics.exceptions import (
     ObAnalyticsError,
 )
 from ob_analytics.flow_toxicity import (
+    KyleLambdaResult,
     compute_kyle_lambda,
     compute_vpin,
     order_flow_imbalance,
@@ -82,13 +83,6 @@ from ob_analytics.lobster import (
     LobsterTradeReader,
     LobsterWriter,
     lobster_depth_from_orderbook,
-)
-from ob_analytics.models import (
-    DepthLevel,
-    KyleLambdaResult,
-    OrderBookSnapshot,
-    OrderEvent,
-    Trade,
 )
 from ob_analytics.pipeline import (
     Pipeline,
@@ -198,6 +192,7 @@ __all__ = [
     "compute_vpin",
     "compute_kyle_lambda",
     "order_flow_imbalance",
+    "KyleLambdaResult",
     # ── Pluggable metrics ───────────────────────────────────────────
     "ToxicityMetric",
     "Vpin",
@@ -205,12 +200,6 @@ __all__ = [
     "Ofi",
     "register_metric",
     "list_metrics",
-    # ── Domain models ────────────────────────────────────────────────
-    "OrderEvent",
-    "Trade",
-    "DepthLevel",
-    "OrderBookSnapshot",
-    "KyleLambdaResult",
     # ── Configuration ────────────────────────────────────────────────
     "PipelineConfig",
     # ── Exceptions ───────────────────────────────────────────────────

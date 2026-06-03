@@ -16,11 +16,37 @@ DataFrame with the required columns).
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 import numpy as np
 import pandas as pd
 
 from ob_analytics._utils import validate_columns, validate_non_empty
-from ob_analytics.models import KyleLambdaResult
+
+
+@dataclass(frozen=True)
+class KyleLambdaResult:
+    """Result of a Kyle's λ OLS regression.
+
+    Attributes
+    ----------
+    lambda_ : float
+        Slope — price change per unit signed order flow (higher = less liquid).
+    t_stat : float
+        t-statistic for ``lambda_``.
+    r_squared : float
+        Fraction of ΔPrice variance explained by signed order flow.
+    n_windows : int
+        Number of time windows in the regression.
+    regression_df : pandas.DataFrame
+        Per-window ``timestamp``/``delta_price``/``signed_volume`` data.
+    """
+
+    lambda_: float
+    t_stat: float
+    r_squared: float
+    n_windows: int
+    regression_df: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 # ── VPIN ─────────────────────────────────────────────────────────────
