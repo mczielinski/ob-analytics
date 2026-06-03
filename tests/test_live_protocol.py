@@ -12,6 +12,7 @@ import pytest
 from ob_analytics.live import (
     CaptureConfig,
     LiveCapturer,
+    SupportsDiagnostics,
     get_capturer,
     list_capturers,
     register_capturer,
@@ -93,6 +94,15 @@ class _FakeCapturer:
             }
 
 
+class _DiagCapturer(_FakeCapturer):
+    """A capturer that also implements the optional diagnostics() hook."""
+
+    name = "diag"
+
+    def diagnostics(self) -> dict[str, Any]:
+        return {"dropped": 7, "reconnects": 2}
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -118,6 +128,33 @@ class TestProtocolConformance:
     def test_fake_is_a_livecapturer(self):
         # runtime_checkable Protocol check
         assert isinstance(_FakeCapturer(), LiveCapturer)
+
+
+class TestDiagnosticsProtocol:
+    """diagnostics() is an *optional* capability, not part of LiveCapturer."""
+
+    def test_diagnostics_is_optional_for_livecapturer(self):
+        # A plain capturer with no diagnostics() still conforms to
+        # LiveCapturer but is NOT a SupportsDiagnostics.
+        cap = _FakeCapturer()
+        assert isinstance(cap, LiveCapturer)
+        assert not isinstance(cap, SupportsDiagnostics)
+
+    def test_capturer_with_diagnostics_conforms(self):
+        cap = _DiagCapturer()
+        assert isinstance(cap, LiveCapturer)
+        assert isinstance(cap, SupportsDiagnostics)
+
+    def test_runner_merges_diagnostics_into_extras(self, tmp_path):
+        cfg = CaptureConfig(pair="btcusd", out_dir=tmp_path / "cap", minutes=0.001)
+        result = asyncio.run(run_capturer(_DiagCapturer(), cfg))
+        assert result.extras["dropped"] == 7
+        assert result.extras["reconnects"] == 2
+
+    def test_runner_no_diagnostics_leaves_extras_empty(self, tmp_path):
+        cfg = CaptureConfig(pair="btcusd", out_dir=tmp_path / "cap", minutes=0.001)
+        result = asyncio.run(run_capturer(_FakeCapturer(), cfg))
+        assert result.extras == {}
 
 
 class TestRunner:

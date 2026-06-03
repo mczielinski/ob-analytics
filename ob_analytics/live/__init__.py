@@ -5,6 +5,7 @@ Public API:
     list_capturers() -> list[str]
     get_capturer(name) -> type[LiveCapturer]
     LiveCapturer, CaptureConfig, CaptureResult
+    SupportsDiagnostics (optional capturer capability)
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from ob_analytics.live._base import (
     CaptureSink,
     EventDict,
     LiveCapturer,
+    SupportsDiagnostics,
 )
 
 _CAPTURERS: dict[str, type[LiveCapturer]] = {}
@@ -62,6 +64,7 @@ __all__ = [
     "CaptureSink",
     "EventDict",
     "LiveCapturer",
+    "SupportsDiagnostics",
     "get_capturer",
     "list_capturers",
     "register_capturer",

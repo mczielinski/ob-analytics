@@ -18,6 +18,7 @@ from ob_analytics.live._base import (
     CaptureSink,
     EventDict,
     LiveCapturer,
+    SupportsDiagnostics,
 )
 
 
@@ -196,11 +197,11 @@ async def run_capturer(
 
         ended = pd.Timestamp.now(tz="UTC")
         extras: dict[str, Any] = {}
-        # Capturers may expose a ``diagnostics()`` method to enrich meta.json.
-        diag = getattr(capturer, "diagnostics", None)
-        if callable(diag):
+        # Capturers may implement the optional SupportsDiagnostics capability
+        # to enrich meta.json with per-run counters.
+        if isinstance(capturer, SupportsDiagnostics):
             try:
-                extras.update(diag())
+                extras.update(capturer.diagnostics())
             except Exception as exc:  # noqa: BLE001
                 logger.debug(
                     "Capturer '{}' diagnostics() raised: {!r}",
