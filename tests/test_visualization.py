@@ -266,37 +266,60 @@ class TestBackendDispatch:
         with pytest.raises(ValueError, match="Unknown backend"):
             plot_trades(sample_trades, backend="nonexistent")
 
+    def test_plot_dispatch_matplotlib(self, sample_trades):
+        """The unified plot() dispatcher renders from already-prepared data."""
+        from ob_analytics.visualization import _data, plot
+
+        fig = plot(
+            "trades",
+            backend="matplotlib",
+            **_data.prepare_trades_data(sample_trades),
+        )
+        assert isinstance(fig, Figure)
+
+    def test_plot_unknown_backend_raises(self):
+        from ob_analytics.visualization import plot
+
+        with pytest.raises(ValueError, match="Unknown backend"):
+            plot("trades", backend="nope")
+
 
 class TestRegisterBackend:
     def test_register_and_dispatch(self, sample_trades, tmp_path):
-        """Register a dummy backend and verify dispatch calls it."""
+        """A backend module self-registers its renderers; plot() dispatches."""
         from ob_analytics.visualization import (
-            _BACKENDS,
-            _FUNC_PREFIX,
+            RENDERERS,
+            _BACKEND_MODULES,
+            plot,
             register_plot_backend,
         )
 
-        # Create a temporary dummy module
+        # The new extension contract: the backend module registers each
+        # renderer into RENDERERS under (plot_name, backend) at import time.
         dummy_module = tmp_path / "dummy_backend.py"
         dummy_module.write_text(
+            "from ob_analytics.visualization import RENDERERS\n"
             "class _Sentinel:\n"
             "    pass\n"
             "def dummy_trades(data, *a, **kw):\n"
             "    return _Sentinel()\n"
+            "RENDERERS.register(('trades', 'dummy'), dummy_trades)\n"
         )
 
         import sys
 
         sys.path.insert(0, str(tmp_path))
         try:
-            register_plot_backend("dummy", "dummy_backend", func_prefix="dummy_")
-            assert "dummy" in _BACKENDS
+            register_plot_backend("dummy", "dummy_backend")
+            assert "dummy" in _BACKEND_MODULES
 
-            fig = plot_trades(sample_trades, backend="dummy")
-            # Should return the sentinel, not a matplotlib Figure
+            fig = plot("trades", backend="dummy")
+            # Should return the sentinel, not a matplotlib Figure.
             assert type(fig).__name__ == "_Sentinel"
         finally:
             sys.path.pop(0)
-            _BACKENDS.pop("dummy", None)
-            _FUNC_PREFIX.pop("dummy", None)
+            _BACKEND_MODULES.pop("dummy", None)
             sys.modules.pop("dummy_backend", None)
+            # Registry has no public removal; the inert (trades, dummy) entry
+            # is dropped here so the dummy module's renderer doesn't linger.
+            RENDERERS._items.pop(("trades", "dummy"), None)

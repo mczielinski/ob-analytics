@@ -1,10 +1,15 @@
 """Visualization functions for limit order book analytics.
 
-All plot functions return a figure object and accept an optional
-``backend`` parameter (default ``"matplotlib"``).  When
-``backend="plotly"``, an interactive Plotly figure is returned instead.
+The unified :func:`plot` dispatcher renders a named plot on a chosen backend
+from already-prepared data::
 
-The backend registry is extensible — see :func:`register_plot_backend`.
+    from ob_analytics.visualization import plot, _data
+    fig = plot("trades", backend="matplotlib", **_data.prepare_trades_data(trades))
+
+Backends self-register their renderers into :data:`RENDERERS` (keyed by
+``(plot_name, backend)``); the registry is extensible via
+:func:`register_plot_backend`.  ``backend="matplotlib"`` (default) returns a
+Matplotlib figure; ``backend="plotly"`` returns an interactive Plotly figure.
 
 Plot types: depth heatmaps, event maps, volume maps, order book snapshots,
 trade price charts, volume percentiles, and event histograms.
@@ -13,18 +18,14 @@ trade price charts, volume percentiles, and event histograms.
 from __future__ import annotations
 
 import importlib
+from collections.abc import Callable
 from typing import Any
 
 import pandas as pd
 from matplotlib.axes import Axes
 
+from ob_analytics._registry import Registry
 from ob_analytics.visualization import _data as _viz_data
-from ob_analytics.visualization._matplotlib import (
-    PlotTheme,
-    get_plot_theme,
-    save_figure,
-    set_plot_theme,
-)
 
 # `infer_volume_scale` is a stable, user-facing helper that gallery callers
 # import from this namespace; keep it as a public re-export. The `prepare_*`
@@ -33,74 +34,108 @@ infer_volume_scale = _viz_data.infer_volume_scale
 
 
 # ---------------------------------------------------------------------------
-# Backend registry
+# Renderer registry + unified dispatcher
 # ---------------------------------------------------------------------------
 
-_BACKENDS: dict[str, str] = {
+RendererFn = Callable[..., Any]
+
+#: Registry of ``(plot_name, backend)`` → renderer function.  Renderer
+#: modules (``_matplotlib``, ``_plotly``) self-register at import time -- see
+#: the self-registration block at the bottom of each module.
+RENDERERS: Registry[tuple[str, str], RendererFn] = Registry("renderer")
+
+# Lazy-import bootstrap: backend name → module that self-registers its
+# renderers on import.  matplotlib is a hard dep (imported just below for its
+# theme helpers, which also fires its registration); plotly is optional and
+# imported on first use.
+_BACKEND_MODULES: dict[str, str] = {
     "matplotlib": "ob_analytics.visualization._matplotlib",
     "plotly": "ob_analytics.visualization._plotly",
 }
 
-# Mapping from public function name → backend function name pattern.
-# matplotlib: "mpl_{name}", plotly: "plotly_{name}", etc.
-_FUNC_PREFIX: dict[str, str] = {
-    "matplotlib": "mpl_",
-    "plotly": "plotly_",
-}
 
+def register_plot_backend(name: str, module_path: str) -> None:
+    """Register a visualization backend module.
 
-def register_plot_backend(
-    name: str, module_path: str, *, func_prefix: str | None = None
-) -> None:
-    """Register a visualization backend.
-
-    The module at *module_path* must export rendering functions following
-    the naming convention ``{prefix}{plot_name}(data, ...)``.  The default
-    prefix is ``"{name}_"``.
+    The module at *module_path* must call ``RENDERERS.register((plot_name,
+    name), fn)`` for each plot it supports (typically at import time).  It is
+    imported lazily on the first :func:`plot` call that targets *name*.
 
     Parameters
     ----------
     name : str
-        Backend name used in ``plot_*(backend=name)``.
+        Backend name used in ``plot(..., backend=name)``.
     module_path : str
         Dotted import path, e.g. ``"my_package._bokeh_backend"``.
-    func_prefix : str, optional
-        Function name prefix. Defaults to ``"{name}_"``.
 
     Examples
     --------
     >>> from ob_analytics.visualization import register_plot_backend
-    >>> register_plot_backend("bokeh", "my_pkg._bokeh")  # expects bokeh_trades(), etc.
+    >>> register_plot_backend("bokeh", "my_pkg._bokeh")
     """
-    _BACKENDS[name] = module_path
-    _FUNC_PREFIX[name] = func_prefix if func_prefix is not None else f"{name}_"
+    _BACKEND_MODULES[name] = module_path
 
 
-def _get_renderer(backend: str, plot_name: str) -> Any:
-    """Lazy-import the backend module and return the renderer function.
+def plot(
+    name: str,
+    *,
+    backend: str = "matplotlib",
+    ax: Axes | None = None,
+    **data: Any,
+) -> Any:
+    """Render plot *name* on *backend* from already-prepared *data*.
+
+    Prepare data with the matching ``prepare_<name>_data`` in
+    :mod:`ob_analytics.visualization._data` (or a gallery helper) and spread
+    it as keyword arguments::
+
+        from ob_analytics.visualization import plot
+        from ob_analytics.visualization import _data
+        fig = plot("trades", backend="matplotlib",
+                   **_data.prepare_trades_data(trades))
 
     Parameters
     ----------
-    backend : str
-        Registered backend name.
-    plot_name : str
-        Short plot name without prefix (e.g. ``"trades"``).
+    name : str
+        Plot name, e.g. ``"trades"`` or ``"event_map"``.
+    backend : str, optional
+        Registered backend name (default ``"matplotlib"``).
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on (matplotlib only; ignored by other backends).
+    **data
+        Prepared plot data, as returned by the matching ``prepare_*`` helper.
 
     Returns
     -------
-    Callable
-        The backend-specific rendering function.
+    matplotlib.figure.Figure or plotly.graph_objects.Figure
 
     Raises
     ------
     ValueError
         If *backend* is not registered.
     """
-    if backend not in _BACKENDS:
-        raise ValueError(f"Unknown backend {backend!r}. Available: {sorted(_BACKENDS)}")
-    mod = importlib.import_module(_BACKENDS[backend])
-    func_name = _FUNC_PREFIX[backend] + plot_name
-    return getattr(mod, func_name)
+    if (name, backend) not in RENDERERS:
+        if backend not in _BACKEND_MODULES:
+            raise ValueError(
+                f"Unknown backend {backend!r}. Available: {sorted(_BACKEND_MODULES)}"
+            )
+        importlib.import_module(_BACKEND_MODULES[backend])  # fires registration
+    renderer = RENDERERS.get((name, backend))
+    if backend == "matplotlib":
+        return renderer(data, ax)
+    return renderer(data)
+
+
+# matplotlib theme helpers.  Imported *after* RENDERERS is defined: the
+# self-registration block at the bottom of _matplotlib imports RENDERERS from
+# this (partially initialized) package, so RENDERERS must already exist to
+# avoid a circular-import deadlock.
+from ob_analytics.visualization._matplotlib import (  # noqa: E402
+    PlotTheme,
+    get_plot_theme,
+    save_figure,
+    set_plot_theme,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -148,10 +183,7 @@ def plot_time_series(
     data = _viz_data.prepare_time_series_data(
         timestamp, series, start_time, end_time, title, y_label
     )
-    renderer = _get_renderer(backend, "time_series")
-    if backend == "matplotlib":
-        return renderer(data, ax)
-    return renderer(data)
+    return plot("time_series", backend=backend, ax=ax, **data)
 
 
 def plot_trades(
@@ -183,10 +215,7 @@ def plot_trades(
     matplotlib.figure.Figure or plotly.graph_objects.Figure
     """
     data = _viz_data.prepare_trades_data(trades, start_time, end_time)
-    renderer = _get_renderer(backend, "trades")
-    if backend == "matplotlib":
-        return renderer(data, ax)
-    return renderer(data)
+    return plot("trades", backend=backend, ax=ax, **data)
 
 
 def plot_price_levels(
@@ -267,10 +296,7 @@ def plot_price_levels(
         volume_scale,
         price_by,
     )
-    renderer = _get_renderer(backend, "price_levels")
-    if backend == "matplotlib":
-        return renderer(data, ax)
-    return renderer(data)
+    return plot("price_levels", backend=backend, ax=ax, **data)
 
 
 def plot_event_map(
@@ -327,10 +353,7 @@ def plot_event_map(
         volume_to,
         volume_scale,
     )
-    renderer = _get_renderer(backend, "event_map")
-    if backend == "matplotlib":
-        return renderer(data, ax)
-    return renderer(data)
+    return plot("event_map", backend=backend, ax=ax, **data)
 
 
 def plot_volume_map(
@@ -401,10 +424,7 @@ def plot_volume_map(
         volume_scale,
         log_scale,
     )
-    renderer = _get_renderer(backend, "volume_map")
-    if backend == "matplotlib":
-        return renderer(data, ax)
-    return renderer(data)
+    return plot("volume_map", backend=backend, ax=ax, **data)
 
 
 def plot_current_depth(
@@ -442,10 +462,7 @@ def plot_current_depth(
     data = _viz_data.prepare_current_depth_data(
         order_book, volume_scale, show_quantiles, show_volume
     )
-    renderer = _get_renderer(backend, "current_depth")
-    if backend == "matplotlib":
-        return renderer(data, ax)
-    return renderer(data)
+    return plot("current_depth", backend=backend, ax=ax, **data)
 
 
 def plot_volume_percentiles(
@@ -494,10 +511,7 @@ def plot_volume_percentiles(
         perc_line,
         side_line,
     )
-    renderer = _get_renderer(backend, "volume_percentiles")
-    if backend == "matplotlib":
-        return renderer(data, ax)
-    return renderer(data)
+    return plot("volume_percentiles", backend=backend, ax=ax, **data)
 
 
 def plot_events_histogram(
@@ -540,10 +554,7 @@ def plot_events_histogram(
     data = _viz_data.prepare_events_histogram_data(
         events, start_time, end_time, val, bw
     )
-    renderer = _get_renderer(backend, "events_histogram")
-    if backend == "matplotlib":
-        return renderer(data, ax)
-    return renderer(data)
+    return plot("events_histogram", backend=backend, ax=ax, **data)
 
 
 # ---------------------------------------------------------------------------
@@ -577,10 +588,7 @@ def plot_vpin(
     matplotlib.figure.Figure or plotly.graph_objects.Figure
     """
     data = _viz_data.prepare_vpin_data(vpin_df, threshold)
-    renderer = _get_renderer(backend, "vpin")
-    if backend == "matplotlib":
-        return renderer(data, ax)
-    return renderer(data)
+    return plot("vpin", backend=backend, ax=ax, **data)
 
 
 def plot_order_flow_imbalance(
@@ -611,10 +619,7 @@ def plot_order_flow_imbalance(
     matplotlib.figure.Figure or plotly.graph_objects.Figure
     """
     data = _viz_data.prepare_ofi_data(ofi_df, trades)
-    renderer = _get_renderer(backend, "order_flow_imbalance")
-    if backend == "matplotlib":
-        return renderer(data, ax)
-    return renderer(data)
+    return plot("order_flow_imbalance", backend=backend, ax=ax, **data)
 
 
 def plot_kyle_lambda(
@@ -639,10 +644,7 @@ def plot_kyle_lambda(
     matplotlib.figure.Figure or plotly.graph_objects.Figure
     """
     data = _viz_data.prepare_kyle_lambda_data(kyle_result)
-    renderer = _get_renderer(backend, "kyle_lambda")
-    if backend == "matplotlib":
-        return renderer(data, ax)
-    return renderer(data)
+    return plot("kyle_lambda", backend=backend, ax=ax, **data)
 
 
 # ---------------------------------------------------------------------------
@@ -711,10 +713,7 @@ def plot_hidden_executions(
     data = _viz_data.prepare_hidden_executions_data(
         events, trades, start_time, end_time
     )
-    renderer = _get_renderer(backend, "hidden_executions")
-    if backend == "matplotlib":
-        return renderer(data, ax)
-    return renderer(data)
+    return plot("hidden_executions", backend=backend, ax=ax, **data)
 
 
 def plot_trading_halts(
@@ -782,14 +781,13 @@ def plot_trading_halts(
     data = _viz_data.prepare_trading_halts_data(
         trades, halts, events, start_time, end_time
     )
-    renderer = _get_renderer(backend, "trading_halts")
-    if backend == "matplotlib":
-        return renderer(data, ax)
-    return renderer(data)
+    return plot("trading_halts", backend=backend, ax=ax, **data)
 
 
 __all__ = [
-    # Backends
+    # Dispatcher + registry
+    "plot",
+    "RENDERERS",
     "register_plot_backend",
     # Themes / persistence
     "PlotTheme",

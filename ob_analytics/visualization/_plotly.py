@@ -724,3 +724,28 @@ def plotly_trading_halts(data: dict) -> Any:
     fig.update_xaxes(title_text="Time")
     fig.update_yaxes(title_text="Price")
     return fig
+
+
+# ---------------------------------------------------------------------------
+# Renderer self-registration
+# ---------------------------------------------------------------------------
+# Imported here (not at module top) so RENDERERS -- defined in the package
+# __init__ -- already exists when this (lazily imported) module is loaded.
+from ob_analytics.visualization import RENDERERS  # noqa: E402
+
+for _plot_name, _fn in {
+    "time_series": plotly_time_series,
+    "trades": plotly_trades,
+    "price_levels": plotly_price_levels,
+    "event_map": plotly_event_map,
+    "volume_map": plotly_volume_map,
+    "current_depth": plotly_current_depth,
+    "volume_percentiles": plotly_volume_percentiles,
+    "events_histogram": plotly_events_histogram,
+    "vpin": plotly_vpin,
+    "order_flow_imbalance": plotly_order_flow_imbalance,
+    "kyle_lambda": plotly_kyle_lambda,
+    "hidden_executions": plotly_hidden_executions,
+    "trading_halts": plotly_trading_halts,
+}.items():
+    RENDERERS.register((_plot_name, "plotly"), _fn)

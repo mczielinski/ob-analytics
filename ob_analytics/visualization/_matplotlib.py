@@ -825,3 +825,28 @@ def mpl_trading_halts(data: dict, ax: Axes | None = None) -> Figure:
     ax.legend(loc="upper left")
     fig.tight_layout()
     return fig
+
+
+# ---------------------------------------------------------------------------
+# Renderer self-registration
+# ---------------------------------------------------------------------------
+# Imported here (not at module top) so RENDERERS -- defined in the package
+# __init__ -- already exists when this module is imported during package init.
+from ob_analytics.visualization import RENDERERS  # noqa: E402
+
+for _plot_name, _fn in {
+    "time_series": mpl_time_series,
+    "trades": mpl_trades,
+    "price_levels": mpl_price_levels,
+    "event_map": mpl_event_map,
+    "volume_map": mpl_volume_map,
+    "current_depth": mpl_current_depth,
+    "volume_percentiles": mpl_volume_percentiles,
+    "events_histogram": mpl_events_histogram,
+    "vpin": mpl_vpin,
+    "order_flow_imbalance": mpl_order_flow_imbalance,
+    "kyle_lambda": mpl_kyle_lambda,
+    "hidden_executions": mpl_hidden_executions,
+    "trading_halts": mpl_trading_halts,
+}.items():
+    RENDERERS.register((_plot_name, "matplotlib"), _fn)
