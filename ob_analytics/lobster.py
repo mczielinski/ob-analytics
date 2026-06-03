@@ -98,7 +98,10 @@ class LobsterLoader:
         self._trading_date = pd.Timestamp(trading_date).normalize()
         self._trading_halts: pd.DataFrame | None = None
         self._cross_trades: pd.DataFrame | None = None
-        self._orderbook_path: Path | None = None
+        #: Path to the companion LOBSTER orderbook file, discovered during
+        #: :meth:`load`. Public so :class:`LobsterFormat` can read it for depth
+        #: computation without reaching into a private attribute.
+        self.orderbook_path: Path | None = None
 
     def load(self, source: Any) -> pd.DataFrame:
         """Load LOBSTER message data and return a cleaned events DataFrame.
@@ -191,7 +194,7 @@ class LobsterLoader:
         )
 
         # Discover and store the orderbook file path for depth computation
-        self._orderbook_path = self._resolve_orderbook_file(source)
+        self.orderbook_path = self._resolve_orderbook_file(source)
 
         return events
 
@@ -737,7 +740,7 @@ class LobsterFormat(Format):
         source: Any,
         ctx: RunContext,
     ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
-        ob_path = self._loader._orderbook_path if self._loader is not None else None
+        ob_path = self._loader.orderbook_path if self._loader is not None else None
         if ob_path is None:
             ob_path = LobsterLoader._resolve_orderbook_file(Path(source))
         if ob_path is None:
