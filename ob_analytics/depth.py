@@ -11,7 +11,6 @@ import numpy as np
 import pandas as pd
 
 from ob_analytics._utils import (
-    interval_sum_breaks,
     validate_columns,
     validate_non_empty,
 )
@@ -24,6 +23,54 @@ def _cached_breaks(range_len: int, bins: int) -> np.ndarray:
     breaks = ((np.arange(1, bins + 1) * range_len + bins - 1) // bins) - 1
     breaks[-1] = breaks[-1] - 1
     return breaks
+
+
+def _interval_sums_sparse(
+    levels: dict[int, float],
+    best: int,
+    side: int,
+    range_len: int,
+    breaks: np.ndarray,
+) -> np.ndarray:
+    """Sum active book volume into the bins delimited by *breaks*.
+
+    Byte-identical replacement for ``interval_sum_breaks(dense, breaks)``
+    where ``dense`` is the length-``range_len`` array holding each active
+    level's volume at ``idx = price - best`` (asks) / ``best - price``
+    (bids) and zeros everywhere else.
+
+    ``interval_sum_breaks`` computes ``np.cumsum(dense)[breaks]`` and then
+    differences it.  ``dense`` is sparse — a few hundred active levels among
+    tens of thousands of integer prices — so the full cumsum is almost all
+    wasted work.  Because volumes are non-negative and ``x + 0.0 == x`` for
+    finite ``x``, accumulating only the active levels in ascending-``idx``
+    order reproduces ``cumsum(dense)`` at every index bit-for-bit; we sample
+    those prefix sums at ``breaks`` and difference exactly as before.
+    """
+    idxs: list[int] = []
+    vols: list[float] = []
+    for p, v in levels.items():
+        idx = (p - best) if side == 1 else (best - p)
+        if 0 <= idx < range_len:
+            idxs.append(idx)
+            vols.append(v)
+
+    bins = len(breaks)
+    if not idxs:
+        return np.zeros(bins, dtype=np.float64)
+
+    order = np.argsort(idxs, kind="stable")
+    idxs_sorted = np.asarray(idxs)[order]
+    prefix = np.cumsum(np.asarray(vols, dtype=np.float64)[order])
+
+    # cs[j] over the dense array equals the prefix sum of active vols with
+    # idx <= j.  Negative break indices address from the end, matching the
+    # numpy fancy indexing ``cs[breaks]`` they replace.
+    breaks_norm = np.where(breaks < 0, range_len + breaks, breaks)
+    pos = np.searchsorted(idxs_sorted, breaks_norm, side="right") - 1
+    intervals = np.where(pos >= 0, prefix[np.clip(pos, 0, len(prefix) - 1)], 0.0)
+
+    return np.concatenate(([intervals[0]], np.diff(intervals)))
 
 
 class DepthMetricsEngine:
@@ -244,19 +291,12 @@ class DepthMetricsEngine:
             end_value = round((1 - self._bps * self._bins * 0.0001) * best)
             range_len = best - end_value + 1
 
-        # Iterate over active price levels (typically O(few hundred))
-        # instead of scanning every integer price in the window
-        # (potentially O(price * bps * bins)), which avoids the dict
-        # lookup per-tick that dominated the old hot loop.
-        vol_array = np.zeros(range_len, dtype=np.float64)
-        for p, v in levels.items():
-            idx = (p - best) if side == 1 else (best - p)
-            if 0 <= idx < range_len:
-                vol_array[idx] = v
-
+        # Sum the active price levels (typically O(few hundred)) straight
+        # into the BPS bins, without materialising or cumsum-ing the full,
+        # mostly-zero integer-price window (potentially O(price * bps * bins)).
         breaks = self._compute_breaks(range_len)
-        out[offset + 2 : offset + 2 + self._bins] = interval_sum_breaks(
-            vol_array, breaks
+        out[offset + 2 : offset + 2 + self._bins] = _interval_sums_sparse(
+            levels, best, side, range_len, breaks
         )
 
     # ── Helpers ───────────────────────────────────────────────────────
