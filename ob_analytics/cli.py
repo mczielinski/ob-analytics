@@ -60,11 +60,7 @@ def _cmd_process(args: argparse.Namespace) -> None:
     else:
         ctx = RunContext()
 
-    config_overrides: dict = {}
-    if args.vpin_bucket_volume is not None:
-        config_overrides["vpin_bucket_volume"] = args.vpin_bucket_volume
-
-    config = PipelineConfig(**{**fmt.config_defaults(), **config_overrides})
+    config = PipelineConfig(**fmt.config_defaults())
     pipeline = Pipeline(config=config, format=fmt, ctx=ctx)
 
     logger.info("Processing {} (format={})...", source, fmt_name)
@@ -93,6 +89,7 @@ def _cmd_gallery(args: argparse.Namespace) -> None:
     _setup_logging(args.verbose)
     from loguru import logger
 
+    from ob_analytics.config import PipelineConfig
     from ob_analytics.data import load_data
     from ob_analytics.visualization.gallery import generate_gallery
     from ob_analytics.pipeline import PipelineResult
@@ -108,8 +105,7 @@ def _cmd_gallery(args: argparse.Namespace) -> None:
         trades=data["trades"],
         depth=data["depth"],
         depth_summary=data["depth_summary"],
-        vpin=data.get("vpin"),
-        ofi=data.get("ofi"),
+        config=PipelineConfig(),
     )
 
     gallery_path = generate_gallery(
@@ -249,12 +245,6 @@ def main() -> None:
         "--trading-date",
         default=None,
         help="Trading date for LOBSTER format (YYYY-MM-DD)",
-    )
-    p_process.add_argument(
-        "--vpin-bucket-volume",
-        type=float,
-        default=None,
-        help="Bucket volume for VPIN computation (omit to skip)",
     )
     p_process.add_argument(
         "--gallery",

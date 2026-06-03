@@ -21,11 +21,6 @@ import pandas as pd
 from loguru import logger
 
 from ob_analytics.depth import get_spread
-from ob_analytics.flow_toxicity import (
-    compute_kyle_lambda,
-    compute_vpin,
-    order_flow_imbalance,
-)
 from ob_analytics.analytics import order_book
 from ob_analytics.pipeline import PipelineResult
 from ob_analytics.visualization import (
@@ -34,14 +29,11 @@ from ob_analytics.visualization import (
     plot_event_map,
     plot_events_histogram,
     plot_hidden_executions,
-    plot_kyle_lambda,
-    plot_order_flow_imbalance,
     plot_price_levels,
     plot_trades,
     plot_trading_halts,
     plot_volume_map,
     plot_volume_percentiles,
-    plot_vpin,
     save_figure,
 )
 
@@ -93,7 +85,6 @@ def default_specs(
     result: PipelineResult,
     *,
     volume_scale: float | None = None,
-    vpin_bucket_volume: float | None = None,
 ) -> list[PlotSpec]:
     """Build the default set of plot specifications from pipeline results.
 
@@ -106,9 +97,6 @@ def default_specs(
         auto-infers a power-of-10 scale from ``result.events['volume']``
         via :func:`infer_volume_scale` so the gallery works without
         per-asset tuning.
-    vpin_bucket_volume : float or None
-        Bucket volume for VPIN computation.  When None, VPIN/OFI/Kyle
-        plots are skipped.
 
     Returns
     -------
@@ -300,94 +288,6 @@ def default_specs(
         ]
     )
 
-    # Flow toxicity / pluggable metrics.
-    # Iterate metrics that the pipeline already computed (Pipeline(metrics=...)
-    # or the legacy config.vpin_bucket_volume path). Built-ins (vpin, ofi,
-    # kyle_lambda) have dedicated plotters; other registered metrics are
-    # available in result.metrics for ad-hoc plotting by the user.
-    metrics = result.metrics or {}
-
-    # Backward-compat: if the caller passed vpin_bucket_volume but the
-    # pipeline didn't materialise metrics, compute them inline so old
-    # gallery scripts keep working.
-    if not metrics and vpin_bucket_volume is not None and len(trades) > 10:
-        inline: dict[str, pd.DataFrame | Any] = {}
-        try:
-            inline["vpin"] = compute_vpin(trades, vpin_bucket_volume)
-        except Exception:
-            logger.warning("Could not compute VPIN -- skipping plot")
-        try:
-            inline["ofi"] = order_flow_imbalance(trades, window="5min")
-        except Exception:
-            logger.warning("Could not compute OFI -- skipping plot")
-        try:
-            inline["kyle_lambda_result"] = compute_kyle_lambda(trades, window="5min")
-        except Exception:
-            logger.warning("Could not compute Kyle's lambda -- skipping plot")
-        metrics = inline  # type: ignore[assignment]
-
-    panel_idx = 13
-    for metric_name, metric_df in metrics.items():
-        if metric_name == "vpin":
-            if metric_df is None or (hasattr(metric_df, "empty") and metric_df.empty):
-                continue
-            specs.append(
-                PlotSpec(
-                    f"{panel_idx:02d}_vpin",
-                    "VPIN",
-                    plot_vpin,
-                    {"vpin_df": metric_df, "threshold": 0.7},
-                )
-            )
-            panel_idx += 1
-        elif metric_name == "ofi":
-            if metric_df is None or (hasattr(metric_df, "empty") and metric_df.empty):
-                continue
-            specs.append(
-                PlotSpec(
-                    f"{panel_idx:02d}_ofi",
-                    "Order Flow Imbalance",
-                    plot_order_flow_imbalance,
-                    {"ofi_df": metric_df, "trades": trades},
-                )
-            )
-            panel_idx += 1
-        elif metric_name == "kyle_lambda":
-            # Dedicated plotter needs the KyleLambdaResult (with
-            # regression_df), which is lost when KyleLambda.compute()
-            # flattens to a summary DataFrame. Recompute for the plot.
-            try:
-                kyle = compute_kyle_lambda(trades, window="5min")
-                specs.append(
-                    PlotSpec(
-                        f"{panel_idx:02d}_kyle_lambda",
-                        f"Kyle's Lambda (lambda={kyle.lambda_:.4f})",
-                        plot_kyle_lambda,
-                        {"kyle_result": kyle},
-                    )
-                )
-                panel_idx += 1
-            except Exception:
-                logger.warning("Could not render Kyle's lambda -- skipping plot")
-        elif metric_name == "kyle_lambda_result":
-            # Inline back-compat path provides the raw KyleLambdaResult.
-            kyle = metric_df  # type: ignore[assignment]
-            specs.append(
-                PlotSpec(
-                    f"{panel_idx:02d}_kyle_lambda",
-                    f"Kyle's Lambda (lambda={kyle.lambda_:.4f})",
-                    plot_kyle_lambda,
-                    {"kyle_result": kyle},
-                )
-            )
-            panel_idx += 1
-        else:
-            logger.info(
-                "Gallery: no dedicated plotter for metric '{}'; "
-                "skipping (available via result.metrics)",
-                metric_name,
-            )
-
     return specs
 
 
@@ -397,7 +297,6 @@ def generate_gallery(
     *,
     specs: list[PlotSpec] | None = None,
     volume_scale: float | None = None,
-    vpin_bucket_volume: float | None = None,
     backends: list[str] | None = None,
     title: str = "ob-analytics Plot Gallery",
 ) -> Path:
@@ -415,8 +314,6 @@ def generate_gallery(
     volume_scale : float or None
         Volume display scale factor.  ``None`` (default) auto-infers a
         sensible power-of-10 scale from the events.
-    vpin_bucket_volume : float or None
-        Bucket volume for VPIN.  None skips flow toxicity plots.
     backends : list of str, optional
         Backends to render.  Defaults to ``["plotly", "matplotlib"]``
         when ``plotly`` is installed (Plotly is rendered as the primary
@@ -460,7 +357,6 @@ def generate_gallery(
         specs = default_specs(
             result,
             volume_scale=volume_scale,
-            vpin_bucket_volume=vpin_bucket_volume,
         )
 
     backend_dirs = {b: out / b for b in backends}
@@ -472,7 +368,13 @@ def generate_gallery(
         # Skip plots whose required extras key is missing/empty.
         if spec.needs and spec.needs.startswith("extras:"):
             key = spec.needs.removeprefix("extras:")
-            extras_val = result.extras.get(key) if result is not None else None
+            # ``extras`` was dropped from PipelineResult; the extras-gated
+            # panels (hidden executions, trading halts) and the
+            # RunContext.extras / Format.collect_extras plumbing are removed
+            # in S7.  Until then, getattr keeps these panels gracefully
+            # skipped instead of raising AttributeError.
+            extras = getattr(result, "extras", {}) if result is not None else {}
+            extras_val = extras.get(key)
             if extras_val is None or (
                 hasattr(extras_val, "empty") and extras_val.empty
             ):

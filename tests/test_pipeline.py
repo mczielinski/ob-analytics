@@ -87,6 +87,7 @@ class TestPipelineResult:
             trades=pd.DataFrame(),
             depth=pd.DataFrame(),
             depth_summary=pd.DataFrame(),
+            config=PipelineConfig(),
         )
         with pytest.raises(AttributeError):
             result.events = pd.DataFrame({"new": [1]})
@@ -288,3 +289,79 @@ class TestPipelineEndToEnd:
         assert len(result.events) == 4
         assert len(result.trades) == 1
         assert len(result.depth) > 0
+
+
+def test_pipeline_result_is_slim(tmp_path: Path):
+    """PipelineResult carries only the core tables plus config.
+
+    Analytic outputs (VPIN/OFI/Kyle's λ) and the old metadata/extras/metrics
+    bags are gone — compute them post-pipeline from ``result.trades``.
+    """
+    assert set(PipelineResult.__dataclass_fields__) == {
+        "events",
+        "trades",
+        "depth",
+        "depth_summary",
+        "config",
+    }
+
+    orders = pd.DataFrame(
+        [
+            dict(
+                id=10,
+                timestamp=100,
+                exchange_timestamp=100,
+                price=100.0,
+                volume=1.0,
+                action="created",
+                direction="ask",
+            ),
+            dict(
+                id=10,
+                timestamp=200,
+                exchange_timestamp=200,
+                price=100.0,
+                volume=0.0,
+                action="deleted",
+                direction="ask",
+            ),
+            dict(
+                id=11,
+                timestamp=200,
+                exchange_timestamp=200,
+                price=99.0,
+                volume=0.5,
+                action="created",
+                direction="bid",
+            ),
+            dict(
+                id=11,
+                timestamp=300,
+                exchange_timestamp=300,
+                price=99.0,
+                volume=0.0,
+                action="deleted",
+                direction="bid",
+            ),
+        ]
+    )
+    orders.to_csv(tmp_path / "orders.csv", index=False)
+    # BitstampTradeReader requires a companion trades.csv; a header-only file
+    # exercises the no-trades path (load() returns empty_trades()), which is
+    # all this shape test needs.
+    pd.DataFrame(
+        columns=[
+            "trade_id",
+            "timestamp",
+            "exchange_timestamp",
+            "price",
+            "amount",
+            "buy_order_id",
+            "sell_order_id",
+            "side",
+        ]
+    ).to_csv(tmp_path / "trades.csv", index=False)
+
+    res = Pipeline().run(tmp_path / "orders.csv")
+    assert isinstance(res, PipelineResult)
+    assert res.config is not None
