@@ -798,3 +798,10 @@ class LobsterFormat:
                 f"pandas.Timestamp, got {type(td).__name__}"
             )
         return td
+
+
+# Self-register with the pipeline's format registry (see bitstamp.py for the
+# rationale behind the bottom-of-module import).
+from ob_analytics.pipeline import register_format  # noqa: E402
+
+register_format("lobster", LobsterFormat)

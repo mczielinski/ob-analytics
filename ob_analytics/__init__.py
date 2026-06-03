@@ -142,8 +142,8 @@ def _make_lobster_writer(config, ctx):
     return LobsterWriter(config, trading_date=td)
 
 
-register_format("bitstamp", BitstampFormat)
-register_format("lobster", LobsterFormat)
+# Formats self-register at import time (see ob_analytics/bitstamp.py and
+# ob_analytics/lobster.py). Writers are still registered here until S3.3.
 register_writer("bitstamp", lambda config, ctx: BitstampWriter(config))
 register_writer("lobster", _make_lobster_writer)
 

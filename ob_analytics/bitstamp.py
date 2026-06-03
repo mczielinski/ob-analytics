@@ -468,3 +468,11 @@ class BitstampFormat:
             "volume_decimals": 8,
             "timestamp_unit": "ms",
         }
+
+
+# Self-register with the pipeline's format registry. The import is at the
+# bottom (and deferred from the top of the module) to avoid a circular import:
+# ``pipeline`` imports ``BitstampLoader``/``BitstampTradeReader`` from here.
+from ob_analytics.pipeline import register_format  # noqa: E402
+
+register_format("bitstamp", BitstampFormat)

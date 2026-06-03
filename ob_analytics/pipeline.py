@@ -39,10 +39,9 @@ import pandas as pd
 
 from ob_analytics.config import PipelineConfig
 from ob_analytics.depth import depth_metrics, price_level_volume
-from ob_analytics.analytics import order_aggressiveness
-from ob_analytics.bitstamp import BitstampLoader, BitstampTradeReader
-from ob_analytics.analytics import set_order_types
+from ob_analytics.analytics import order_aggressiveness, set_order_types
 from ob_analytics.schemas import validate_events_df, validate_trades_df
+from ob_analytics._registry import Registry
 from loguru import logger
 
 from ob_analytics.protocols import (
@@ -58,20 +57,32 @@ if TYPE_CHECKING:
 
 
 # ── Format registry ───────────────────────────────────────────────────
+#
+# Defined *before* the ``bitstamp`` import below so format modules can
+# self-register at import time. ``bitstamp`` and ``lobster`` end with
+# ``from ob_analytics.pipeline import register_format``; that runs while this
+# module is still partially initialised, so ``register_format`` must already
+# exist at that point.
 
-_FORMATS: dict[str, type[Format]] = {}
+FORMATS: Registry[str, type[Format]] = Registry("format")
 
 
 def register_format(name: str, format_cls: type[Format]) -> None:
-    """Register a :class:`Format` subclass under *name* for lookup via
+    """Register a :class:`Format` implementation under *name* for lookup via
     :meth:`Pipeline.from_format`.
     """
-    _FORMATS[name.lower()] = format_cls
+    FORMATS.register(name, format_cls)
 
 
 def list_formats() -> list[str]:
     """Return a sorted list of registered format names."""
-    return sorted(_FORMATS)
+    return FORMATS.list()
+
+
+# Imported here (not with the other top-of-module imports) so the registry
+# above already exists when the format modules self-register. See the note
+# above the registry definition.
+from ob_analytics.bitstamp import BitstampLoader, BitstampTradeReader  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -204,13 +215,11 @@ class Pipeline:
         **kwargs
             Passed to the :class:`Format` constructor.
         """
-        key = name.lower()
-        if key not in _FORMATS:
-            available = ", ".join(sorted(_FORMATS)) or "(none)"
-            raise ValueError(
-                f"Unknown format {name!r}. Registered formats: {available}"
-            )
-        fmt = _FORMATS[key](**kwargs)
+        try:
+            fmt_cls = FORMATS.get(name)
+        except KeyError as exc:
+            raise ValueError(str(exc)) from exc
+        fmt = fmt_cls(**kwargs)
         return cls(format=fmt, ctx=ctx)
 
     def run(self, source: Any, *, ctx: RunContext | None = None) -> PipelineResult:
