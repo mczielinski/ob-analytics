@@ -712,6 +712,26 @@ def lobster_depth_from_orderbook(
 # ── LobsterFormat descriptor ─────────────────────────────────────────
 
 
+def _require_trading_date(td: object, where: str) -> str | pd.Timestamp:
+    """Validate a LOBSTER ``trading_date`` (taken from :class:`RunContext`).
+
+    Single source of truth for the loader, writer, and standalone
+    writer-factory paths.  Returns *td* unchanged when valid; raises
+    :class:`ValueError` when missing and :class:`TypeError` on a bad type.
+    """
+    if td is None:
+        raise ValueError(
+            f"LobsterFormat.{where}: trading_date is required. "
+            f"Pass it via ctx=RunContext(trading_date=...)."
+        )
+    if not isinstance(td, (str, pd.Timestamp)):
+        raise TypeError(
+            f"LobsterFormat.{where}: trading_date must be str or "
+            f"pandas.Timestamp, got {type(td).__name__}"
+        )
+    return td
+
+
 @dataclass
 class LobsterFormat:
     """Format descriptor for LOBSTER limit-order-book data.
@@ -727,7 +747,7 @@ class LobsterFormat:
     _loader: LobsterLoader | None = field(default=None, repr=False, init=False)
 
     def create_loader(self, config: PipelineConfig, ctx: RunContext) -> EventLoader:
-        td = self._require_trading_date(ctx, "create_loader")
+        td = _require_trading_date(ctx.trading_date, "create_loader")
         self._loader = LobsterLoader(config, trading_date=td)
         return self._loader
 
@@ -737,7 +757,7 @@ class LobsterFormat:
         return LobsterTradeReader(config)
 
     def create_writer(self, config: PipelineConfig, ctx: RunContext) -> DataWriter:
-        td = self._require_trading_date(ctx, "create_writer")
+        td = _require_trading_date(ctx.trading_date, "create_writer")
         return LobsterWriter(config, trading_date=td)
 
     def compute_depth(
@@ -765,23 +785,6 @@ class LobsterFormat:
             "volume_decimals": 0,
         }
 
-    @staticmethod
-    def _require_trading_date(ctx: RunContext, where: str) -> str | pd.Timestamp:
-        td = ctx.trading_date
-        if td is None:
-            raise ValueError(
-                f"LobsterFormat.{where}: trading_date is required. "
-                f"Pass it via Pipeline(format=LobsterFormat(), "
-                f"ctx=RunContext(trading_date=...)) or "
-                f"Pipeline.from_format('lobster', ctx=RunContext(trading_date=...))."
-            )
-        if not isinstance(td, (str, pd.Timestamp)):
-            raise TypeError(
-                f"LobsterFormat.{where}: trading_date must be str or "
-                f"pandas.Timestamp, got {type(td).__name__}"
-            )
-        return td
-
 
 # ── Register this format and its writer ───────────────────────────────
 # Imports sit at the bottom (deferred from the top of the module) to avoid a
@@ -791,16 +794,7 @@ from ob_analytics.pipeline import register_format  # noqa: E402
 
 
 def _make_lobster_writer(config, ctx):
-    td = ctx.trading_date
-    if td is None:
-        raise ValueError(
-            "LOBSTER writer requires ctx.trading_date. "
-            "Pass ctx=RunContext(trading_date=...) to save_data()."
-        )
-    if not isinstance(td, (str, pd.Timestamp)):
-        raise TypeError(
-            f"ctx.trading_date must be str or pandas.Timestamp, got {type(td).__name__}"
-        )
+    td = _require_trading_date(ctx.trading_date, "create_writer")
     return LobsterWriter(config, trading_date=td)
 
 
