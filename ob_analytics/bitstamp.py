@@ -452,16 +452,6 @@ class BitstampFormat:
         # Bitstamp uses the standard price_level_volume -> depth_metrics path.
         return None
 
-    def collect_extras(
-        self,
-        loader: Any,
-        events: pd.DataFrame,
-        source: Any,
-        ctx: RunContext,
-    ) -> dict[str, pd.DataFrame]:
-        # No auxiliary frames for Bitstamp. (collect_extras is removed in S7.)
-        return {}
-
     def config_defaults(self) -> dict[str, Any]:
         return {
             "price_decimals": 2,

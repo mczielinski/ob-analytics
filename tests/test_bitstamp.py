@@ -214,12 +214,3 @@ class TestBitstampFormat:
         assert isinstance(loader, BitstampLoader)
         assert isinstance(ts, BitstampTradeReader)
         assert isinstance(writer, BitstampWriter)
-
-    def test_collect_extras_is_empty(self):
-        fmt = BitstampFormat()
-        cfg = PipelineConfig(**fmt.config_defaults())
-        ctx = RunContext()
-        loader = fmt.create_loader(cfg, ctx)
-        events = loader.load(sample_csv_path())
-        extras = fmt.collect_extras(loader, events, sample_csv_path(), ctx)
-        assert extras == {}

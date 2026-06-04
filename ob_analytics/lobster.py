@@ -95,8 +95,11 @@ class LobsterLoader:
     ) -> None:
         self._config = config or PipelineConfig()
         self._trading_date = pd.Timestamp(trading_date).normalize()
-        self._trading_halts: pd.DataFrame | None = None
-        self._cross_trades: pd.DataFrame | None = None
+        #: Trading-halt (event_type 7) and cross-trade (event_type 6) rows,
+        #: split out during :meth:`load`. Public so callers can overlay them on
+        #: the gallery via ``extra_panels`` (LOBSTER-only; ``None`` if absent).
+        self.trading_halts: pd.DataFrame | None = None
+        self.cross_trades: pd.DataFrame | None = None
         #: Path to the companion LOBSTER orderbook file, discovered during
         #: :meth:`load`. Public so :class:`LobsterFormat` can read it for depth
         #: computation without reaching into a private attribute.
@@ -139,8 +142,8 @@ class LobsterLoader:
         # Separate special event types before mapping actions
         halts = raw[raw["event_type"] == 7].copy()
         cross = raw[raw["event_type"] == 6].copy()
-        self._trading_halts = halts if not halts.empty else None
-        self._cross_trades = cross if not cross.empty else None
+        self.trading_halts = halts if not halts.empty else None
+        self.cross_trades = cross if not cross.empty else None
 
         events = raw[raw["event_type"].isin(_EVENT_TYPE_TO_ACTION)].copy()
         events["action"] = events["event_type"].map(_EVENT_TYPE_TO_ACTION)
@@ -754,26 +757,6 @@ class LobsterFormat:
             )
             return None
         return lobster_depth_from_orderbook(events, ob_path, config)
-
-    def collect_extras(
-        self,
-        loader: EventLoader,
-        events: pd.DataFrame,
-        source: Any,
-        ctx: RunContext,
-    ) -> dict[str, pd.DataFrame]:
-        out: dict[str, pd.DataFrame] = {}
-        lob = loader if isinstance(loader, LobsterLoader) else None
-        if lob is None:
-            return out
-        if lob._trading_halts is not None and not lob._trading_halts.empty:
-            out["trading_halts"] = lob._trading_halts
-        if lob._cross_trades is not None and not lob._cross_trades.empty:
-            out["cross_trades"] = lob._cross_trades
-        hidden = events[events["raw_event_type"] == 5]
-        if not hidden.empty:
-            out["hidden_executions"] = hidden.copy()
-        return out
 
     def config_defaults(self) -> dict[str, Any]:
         return {

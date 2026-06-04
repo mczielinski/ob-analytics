@@ -19,7 +19,7 @@ protocol to :class:`~ob_analytics.pipeline.Pipeline`.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -31,20 +31,16 @@ class RunContext:
     """Per-run parameters that don't belong on the Format constructor.
 
     Passed to ``Pipeline.run(source, ctx=...)`` and forwarded to
-    ``Format.create_loader/create_trade_source/create_writer/collect_extras``.
+    ``Format.create_loader/create_trade_source/create_writer``.
 
     Attributes
     ----------
     trading_date : str or pd.Timestamp, optional
         Calendar date anchor (LOBSTER needs this; venues with continuous
         trading do not).
-    extras : dict, optional
-        Free-form per-run options. Format implementations may consume
-        keys they recognise (e.g. ``num_levels`` for LobsterWriter).
     """
 
     trading_date: object | None = None
-    extras: dict = field(default_factory=dict)
 
 
 @runtime_checkable
@@ -174,20 +170,6 @@ class Format(Protocol):
     ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
         """Return ``(depth, depth_summary)`` to override the standard
         depth pipeline, or ``None`` to use it."""
-        ...
-
-    def collect_extras(
-        self,
-        loader: Any,
-        events: pd.DataFrame,
-        source: Any,
-        ctx: RunContext,
-    ) -> dict[str, pd.DataFrame]:
-        """Return format-specific auxiliary frames (e.g. LOBSTER halts).
-
-        Kept here so the suite stays green; **removed in S7** along with
-        ``RunContext.extras`` and the pipeline's extras plumbing.
-        """
         ...
 
     def config_defaults(self) -> dict[str, Any]:

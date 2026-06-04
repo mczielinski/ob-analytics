@@ -48,9 +48,6 @@ class PlotSpec:
         ``prepare_<name>_data`` helper that returns the renderer payload.
     prep_kwargs : dict
         Keyword arguments passed to *prepare*.
-    needs : str or None
-        If set, the plot is skipped when this key is missing or empty
-        in the data context (e.g. ``"vpin"`` for VPIN-dependent plots).
     """
 
     name: str
@@ -58,7 +55,6 @@ class PlotSpec:
     plot_name: str
     prepare: Callable[..., dict]
     prep_kwargs: dict[str, Any] = field(default_factory=dict)
-    needs: str | None = None
 
 
 def _auto_zoom_window(
@@ -326,6 +322,22 @@ def kyle_panel(kyle_result: Any) -> PlotSpec:
     )
 
 
+def trading_halts_panel(trades: pd.DataFrame, halts: pd.DataFrame) -> PlotSpec:
+    """Build a trading-halts gallery panel for ``extra_panels=``.
+
+    LOBSTER halts are not part of the slim :class:`PipelineResult`; read them
+    from :attr:`~ob_analytics.lobster.LobsterLoader.trading_halts` and pass
+    them here.
+    """
+    return PlotSpec(
+        "trading_halts",
+        "Trading Halts",
+        "trading_halts",
+        _viz_data.prepare_trading_halts_data,
+        {"trades": trades, "halts": halts},
+    )
+
+
 def generate_gallery(
     result: PipelineResult | None,
     output_dir: str | Path,
@@ -407,26 +419,6 @@ def generate_gallery(
     generated: list[tuple[str, str, dict[str, bool]]] = []
 
     for spec in specs:
-        # Skip plots whose required extras key is missing/empty.
-        if spec.needs and spec.needs.startswith("extras:"):
-            key = spec.needs.removeprefix("extras:")
-            # ``extras`` was dropped from PipelineResult; the extras-gated
-            # panels (hidden executions, trading halts) and the
-            # RunContext.extras / Format.collect_extras plumbing are removed
-            # in S7.  Until then, getattr keeps these panels gracefully
-            # skipped instead of raising AttributeError.
-            extras = getattr(result, "extras", {}) if result is not None else {}
-            extras_val = extras.get(key)
-            if extras_val is None or (
-                hasattr(extras_val, "empty") and extras_val.empty
-            ):
-                logger.info(
-                    "Gallery: skipping {} (no '{}' in result.extras)",
-                    spec.name,
-                    key,
-                )
-                continue
-
         logger.info("Gallery: generating {}", spec.name)
         statuses: dict[str, bool] = {}
 
