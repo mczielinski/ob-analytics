@@ -128,7 +128,7 @@ Scopes commonly used: `pipeline`, `bitstamp`, `lobster`, `depth`,
 
 User-visible changes go under `## [Unreleased]` in `CHANGELOG.md` in the
 appropriate section (`Added` / `Changed` / `Removed` / `Fixed`). Keep
-entries short and link to the migration when behaviour changes.
+entries short.
 
 ## Documentation
 

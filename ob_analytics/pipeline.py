@@ -87,7 +87,7 @@ class PipelineResult:
 
     Analytic outputs (VPIN, OFI, Kyle's λ) are intentionally **not** stored
     here — compute them post-pipeline from ``trades`` and pass them to the
-    gallery via ``extra_panels=`` (see the migration guide).
+    gallery via ``extra_panels=``.
 
     Attributes
     ----------

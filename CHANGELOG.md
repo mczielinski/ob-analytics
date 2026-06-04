@@ -12,9 +12,7 @@ First stable release: a deliberate **breaking** cut that de-bloats the package
 and unifies its extension surfaces behind one registry primitive and one data
 contract. The **numeric output of the pipeline is unchanged** from 0.1.x — the
 regression fingerprints still pass; only the *shape of the public API* moved.
-See [the migration guide](docs/migration-to-v1.md) for before/after on every
-breaking change (its sections are cited as §N below), and
-[Extending ob-analytics](docs/extending.md) for the new extension walkthrough.
+See [Extending ob-analytics](docs/extending.md) for the extension walkthrough.
 
 ### Breaking
 
@@ -22,45 +20,38 @@ breaking change (its sections are cited as §N below), and
   `DepthLevel`, `OrderBookSnapshot`) deleted; the data contract is now
   column-list constants + `validate_events_df` / `validate_trades_df` /
   `validate_depth_df` in `ob_analytics.schemas`.
-  (§1)
 - **`metrics/` package removed.** `ToxicityMetric`, `Vpin`, `Ofi`,
   `KyleLambda`, `register_metric`, and `list_metrics` are gone. Call
   `compute_vpin`, `compute_kyle_lambda`, and `order_flow_imbalance` on
-  `result.trades` directly. (§2)
+  `result.trades` directly.
 - **`Pipeline(metrics=...)` removed.** Metrics are no longer a pipeline stage —
-  compute them after the run. (§3)
+  compute them after the run.
 - **`PipelineConfig.vpin_bucket_volume` removed** — pass `bucket_volume=` to
-  `compute_vpin`. (§4)
+  `compute_vpin`.
 - **`PipelineResult` slimmed** to exactly `events`, `trades`, `depth`,
   `depth_summary`, and `config`. The `vpin`, `ofi`, `metrics`, `metadata`, and
-  `extras` attributes are gone. (§5)
+  `extras` attributes are gone.
 - **The thirteen `plot_*` wrappers removed** → one
   `plot(name, *, backend="matplotlib", ax=None, **data)` dispatcher keyed by
   `(plot_name, backend)`; renderers self-register into `RENDERERS`.
-  (§6)
 - **Global theme state removed.** `set_plot_theme` / `get_plot_theme` /
   `_current_theme` deleted; pass `theme=PlotTheme(...)` to `plot()`.
-  (§7)
 - **Exception hierarchy collapsed** to `ObAnalyticsError` + `ConfigError`.
   `InvalidDataError`, `MatchingError`, `InsufficientDataError`, and
-  `ConfigurationError` are removed. (§8)
+  `ConfigurationError` are removed.
 - **Top-level `__all__` trimmed** to ~22 orchestration names. Low-level helpers
   now import from their submodules — `ob_analytics.bitstamp`,
   `ob_analytics.lobster`, `ob_analytics.analytics`, `ob_analytics.depth`,
   `ob_analytics.data`, `ob_analytics.visualization`, `ob_analytics.flow_toxicity`.
-  (§9)
 - **`Format` is now a `typing.Protocol`** — there is no base class to inherit;
   any conforming object is recognised structurally.
-  (§10)
 - **Low-level helpers no longer re-exported from the package root** (e.g.
   `depth_metrics` is now `from ob_analytics.depth import depth_metrics`).
-  (§11)
 - **`RunContext.extras` and `Format.collect_extras` removed.** LOBSTER trading
   halts are read from `LobsterLoader.trading_halts` and composed into the
-  gallery via `extra_panels=`. (§12)
+  gallery via `extra_panels=`.
 - **`DepthMetricsEngine.update()` removed** → the public hot-path method is
   `update_side(price, volume, side, out)`.
-  (§13)
 
 ### Added
 
@@ -90,8 +81,8 @@ breaking change (its sections are cited as §N below), and
 - **`RunContext`** dataclass (`ob_analytics.protocols`, re-exported at the top
   level) for per-run parameters such as LOBSTER `trading_date` that don't
   belong on long-lived `Format` instances.
-- **Docs** — `docs/migration-to-v1.md` (breaking-change before/after guide) and
-  `docs/extending.md` (add a data source / writer / plot / metric / capturer).
+- **Docs** — `docs/extending.md` (add a data source / writer / plot / metric /
+  capturer).
 - **Tests** — `test_bitstamp.py`, `test_cli.py` (subprocess smoke tests for all
   CLI subcommands), `test_exceptions.py`, `test_data_registry.py`, a regression
   snapshot suite pinning demo Parquet hashes + the Kyle-λ baseline, and
@@ -114,9 +105,7 @@ breaking change (its sections are cited as §N below), and
   agrees with the prior implementation to `rtol=1e-10`).
 - **Internal modules reorganized** (renames from the 0.x line): e.g.
   `event_processing.py` → `bitstamp.py`, validation/time helpers → `_utils.py`,
-  and the visualization modules split into a `visualization/` subpackage. The
-  resulting public import surface is documented in
-  §9](docs/migration-to-v1.md).
+  and the visualization modules split into a `visualization/` subpackage.
 - Type checking is Astral's `ty` (not mypy); lint and format are Ruff.
 
 ### Removed
