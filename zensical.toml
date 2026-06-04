@@ -7,6 +7,7 @@ repo_name = "mczielinski/ob-analytics"
 nav = [
   { "Home" = "index.md" },
   { "Quickstart" = "quickstart.md" },
+  { "Migrating to v1.0" = "migration-to-v1.md" },
   { "Architecture" = "architecture.md" },
   { "Glossary" = "glossary.md" },
   { "API Reference" = [
