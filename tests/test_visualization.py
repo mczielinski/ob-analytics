@@ -13,10 +13,8 @@ from matplotlib.figure import Figure
 
 from ob_analytics.visualization import (
     PlotTheme,
-    get_plot_theme,
     plot,
     save_figure,
-    set_plot_theme,
 )
 from ob_analytics.visualization import _data
 from ob_analytics.visualization._matplotlib import _create_axes
@@ -109,13 +107,18 @@ class TestPlotTheme:
         with pytest.raises(AttributeError):
             theme.style = "whitegrid"  # type: ignore[misc]
 
-    def test_set_get_roundtrip(self):
-        original = get_plot_theme()
+    def test_theme_kwarg_threads_through_create_axes(self):
+        # A per-call theme is applied when _create_axes builds a new figure;
+        # there is no global theme to set or restore.
         custom = PlotTheme(style="white", font_scale=2.0)
-        set_plot_theme(custom)
-        assert get_plot_theme() is custom
-        set_plot_theme(original)
-        assert get_plot_theme() is original
+        fig, _ = _create_axes(None, theme=custom)
+        assert isinstance(fig, Figure)
+
+    def test_plot_accepts_theme_kwarg(self, sample_trades):
+        # plot() pops theme= from kwargs and forwards it to the renderer.
+        custom = PlotTheme(style="whitegrid", font_scale=1.0)
+        fig = plot("trades", theme=custom, **_data.prepare_trades_data(sample_trades))
+        assert isinstance(fig, Figure)
 
 
 # ---------------------------------------------------------------------------

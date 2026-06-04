@@ -103,6 +103,8 @@ def plot(
         Axes to draw on (matplotlib only; ignored by other backends).
     **data
         Prepared plot data, as returned by the matching ``prepare_*`` helper.
+        May include ``theme=PlotTheme(...)`` to override :data:`DEFAULT_THEME`
+        (matplotlib backend only; ignored by other backends).
 
     Returns
     -------
@@ -113,6 +115,7 @@ def plot(
     ValueError
         If *backend* is not registered.
     """
+    theme = data.pop("theme", None)
     if (name, backend) not in RENDERERS:
         if backend not in _BACKEND_MODULES:
             raise ValueError(
@@ -121,19 +124,18 @@ def plot(
         importlib.import_module(_BACKEND_MODULES[backend])  # fires registration
     renderer = RENDERERS.get((name, backend))
     if backend == "matplotlib":
-        return renderer(data, ax)
+        return renderer(data, ax) if theme is None else renderer(data, ax, theme=theme)
     return renderer(data)
 
 
-# matplotlib theme helpers.  Imported *after* RENDERERS is defined: the
+# matplotlib theme + save exports.  Imported *after* RENDERERS is defined: the
 # self-registration block at the bottom of _matplotlib imports RENDERERS from
 # this (partially initialized) package, so RENDERERS must already exist to
 # avoid a circular-import deadlock.
 from ob_analytics.visualization._matplotlib import (  # noqa: E402
+    DEFAULT_THEME,
     PlotTheme,
-    get_plot_theme,
     save_figure,
-    set_plot_theme,
 )
 
 
@@ -144,8 +146,7 @@ __all__ = [
     "register_plot_backend",
     # Themes / persistence
     "PlotTheme",
-    "get_plot_theme",
-    "set_plot_theme",
+    "DEFAULT_THEME",
     "save_figure",
     # Helpers users actually call
     "infer_volume_scale",
