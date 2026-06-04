@@ -9,6 +9,7 @@ nav = [
   { "Quickstart" = "quickstart.md" },
   { "Migrating to v1.0" = "migration-to-v1.md" },
   { "Architecture" = "architecture.md" },
+  { "Extending" = "extending.md" },
   { "Glossary" = "glossary.md" },
   { "API Reference" = [
     { "Pipeline" = "api/pipeline.md" },
