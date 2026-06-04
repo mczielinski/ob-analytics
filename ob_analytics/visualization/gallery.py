@@ -275,6 +275,21 @@ def default_specs(
         ]
     )
 
+    # Hidden executions are LOBSTER-only (raw_event_type == 5); derive the
+    # panel from result.events instead of a pre-collected extras payload.
+    if "raw_event_type" in events.columns:
+        hidden = events[events["raw_event_type"] == 5]
+        if not hidden.empty:
+            specs.append(
+                PlotSpec(
+                    "13_hidden_executions",
+                    "Hidden Executions",
+                    "hidden_executions",
+                    _viz_data.prepare_hidden_executions_data,
+                    {"events": events, "trades": trades},
+                )
+            )
+
     return specs
 
 
