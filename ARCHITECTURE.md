@@ -11,15 +11,15 @@ into structured analytics:
 | **Build trades** | Bitstamp: read companion `trades.csv` (live capture). LOBSTER: extract type 4/5 executions from the events frame via `LobsterTradeReader` |
 | **Classify orders** | Label each order as *market*, *resting-limit*, *flashed-limit*, *market-limit*, or *unknown* |
 | **Depth & metrics** | Track price-level volume, best bid/ask, spread, and liquidity in configurable BPS bins. LOBSTER can use the official orderbook file for ground-truth depth |
-| **Flow toxicity** *(optional)* | VPIN, Kyle's lambda, order-flow imbalance |
+| **Flow toxicity** *(post-run)* | VPIN, Kyle's lambda, order-flow imbalance computed from `result.trades` |
 | **Visualize / export** | Depth heatmaps, event maps, trade charts, flow-toxicity plots, HTML galleries. Matplotlib (default) or Plotly backend. Parquet and LOBSTER round-trip I/O |
 
 ---
 
 ## Design decisions
 
-- **DataFrames internally; Pydantic at boundaries.** Pandas for speed;
-  `OrderEvent`, `Trade`, etc. document column contracts.
+- **DataFrames end to end.** Pandas for speed; the column-list constants and
+  `validate_*` functions in `schemas.py` document the column contracts.
 - **Two API levels** — `Pipeline` for one-line runs; individual classes
   (`BitstampLoader`, `BitstampTradeReader`, etc.) for step-by-step control.
 - **Pluggable everything** — any object with the right method signature works;
@@ -56,22 +56,20 @@ classDiagram
         +timestamp_unit: str
         +depth_bps: int
         +depth_bins: int
-        +vpin_bucket_volume: float | None
     }
 
     class Format {
-        <<abstract>>
+        <<Protocol>>
+        +name: str
         +create_loader(config, ctx) EventLoader
         +create_trade_source(config, ctx) TradeSource
         +create_writer(config, ctx) DataWriter | None
         +compute_depth(events, config, source, ctx) tuple | None
-        +collect_extras(loader, events, source, ctx) dict
         +config_defaults() dict
     }
 
     class RunContext {
         +trading_date: object | None
-        +extras: dict
     }
 
     class BitstampFormat
@@ -95,24 +93,8 @@ classDiagram
         +trades: DataFrame
         +depth: DataFrame
         +depth_summary: DataFrame
-        +vpin: DataFrame | None
-        +ofi: DataFrame | None
-        +metadata: dict
-        +extras: dict[str, DataFrame]
-        +metrics: dict[str, DataFrame]
+        +config: PipelineConfig
     }
-
-    class ToxicityMetric {
-        <<Protocol>>
-        +name: str
-        +requires: tuple[str, ...]
-        +primary_column: str
-        +compute(result, config) DataFrame
-    }
-
-    class Vpin
-    class KyleLambda
-    class Ofi
 
     Pipeline --> PipelineConfig
     Pipeline --> EventLoader
@@ -121,12 +103,8 @@ classDiagram
     Pipeline --> PipelineResult
     Pipeline ..> Format : optional
     Pipeline ..> RunContext : per-run params
-    Pipeline ..> ToxicityMetric : metrics=[...]
-    Format <|-- BitstampFormat
-    Format <|-- LobsterFormat
-    ToxicityMetric <|.. Vpin
-    ToxicityMetric <|.. KyleLambda
-    ToxicityMetric <|.. Ofi
+    Format <|.. BitstampFormat
+    Format <|.. LobsterFormat
 ```
 
 ---
@@ -152,7 +130,7 @@ ob_analytics/
 ├── pipeline.py           # Pipeline, PipelineResult, register_format
 ├── config.py             # PipelineConfig (frozen Pydantic model)
 ├── protocols.py          # EventLoader, TradeSource, DataWriter, Format
-├── models.py             # OrderEvent, Trade, DepthLevel, OrderBookSnapshot, KyleLambdaResult
+├── schemas.py            # column constants + validators (validate_events_df, …)
 ├── exceptions.py         # ObAnalyticsError hierarchy
 ├── cli.py                # CLI entry point (process, gallery, bitstamp-demo, lobster-demo, capture)
 │
@@ -161,15 +139,8 @@ ob_analytics/
 ├── analytics.py          # order_aggressiveness, trade_impacts, set_order_types, order_book
 ├── depth.py              # DepthMetricsEngine, price_level_volume, depth_metrics, get_spread
 ├── data.py               # save_data, load_data, writer registry
-├── flow_toxicity.py      # compute_vpin, compute_kyle_lambda, order_flow_imbalance
+├── flow_toxicity.py      # compute_vpin, compute_kyle_lambda, order_flow_imbalance, KyleLambdaResult
 ├── _utils.py             # Validation, numerics, timestamp conversion helpers
-│
-├── metrics/              # Pluggable ToxicityMetric protocol + built-ins
-│   ├── __init__.py       # registry: register_metric, list_metrics
-│   ├── _base.py          # ToxicityMetric protocol
-│   ├── vpin.py           # Vpin (wraps compute_vpin)
-│   ├── kyle_lambda.py    # KyleLambda (wraps compute_kyle_lambda)
-│   └── ofi.py            # Ofi (wraps order_flow_imbalance)
 │
 ├── live/                 # Optional live order-book capture ([live] extra)
 │   ├── __init__.py       # registry: register_capturer, list_capturers, get_capturer
@@ -178,7 +149,7 @@ ob_analytics/
 │   └── bitstamp.py       # BitstampCapturer (built-in)
 │
 └── visualization/        # Plotting subsystem
-    ├── __init__.py       # plot_* dispatchers, PlotTheme, save_figure, backend registry
+    ├── __init__.py       # plot() dispatcher + RENDERERS registry, PlotTheme, save_figure
     ├── gallery.py        # HTML gallery generation
     ├── _data.py          # Shared data prep for plot backends
     ├── _matplotlib.py    # Matplotlib renderers

@@ -22,7 +22,7 @@ price crosses the spread on arrival.
 : The maker is the resting side of a trade (the limit order that was
 already in the book); the taker is the aggressive side that crossed the
 spread to consume it. See the `maker_event_id` / `taker_event_id` columns
-on the [`Trade`](api/models.md#ob_analytics.models.Trade) model.
+documented in [Data Contracts](api/schemas.md).
 
 **Spread**
 : Best ask price minus best bid price. Extracted from the depth summary
@@ -68,7 +68,7 @@ absolute imbalance. High values (≳0.7) signal informed-trader pressure.
 **Kyle's lambda (λ)**
 : Kyle (1985). Slope of `Δprice ~ signed_volume` regression over a rolling
 window. Higher λ → less liquid market (more adverse-selection cost per unit
-of order flow). Returned as a [`KyleLambdaResult`](api/models.md#ob_analytics.models.KyleLambdaResult)
+of order flow). Returned as a [`KyleLambdaResult`](api/flow_toxicity.md#ob_analytics.flow_toxicity.KyleLambdaResult)
 with the regression DataFrame attached.
 
 **Order flow imbalance (OFI)**

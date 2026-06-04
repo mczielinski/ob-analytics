@@ -65,9 +65,9 @@ on `git commit` once `pre-commit install` has been run.
 
 ## Architectural conventions
 
-- **DataFrames internally; Pydantic at boundaries.** New stages should
-  accept and return DataFrames; Pydantic models in `models.py` document the
-  column contract.
+- **DataFrames end to end.** New stages should accept and return DataFrames;
+  the column-list constants + validators in `schemas.py` document the column
+  contract.
 - **Protocols, not inheritance.** New extension points should be declared as
   `typing.Protocol` in `protocols.py`. Format-specific bundles go in a
   `Format` subclass (`bitstamp.py`, `lobster.py`).
@@ -81,18 +81,25 @@ on `git commit` once `pre-commit install` has been run.
 
 ## Adding a new format
 
+For the full, copy-pasteable walkthrough of every extension point — new data
+source, export format, plot, flow-toxicity metric, or live capturer — see
+[docs/extending.md](docs/extending.md). The summary below covers a new format.
+
 1. Create `ob_analytics/<venue>.py` with `<Venue>Loader`, `<Venue>TradeReader`
    (or another type satisfying `TradeSource`), `<Venue>Writer`, and a
-   `<Venue>Format(Format)` subclass with `name = "<venue>"`. `Format` methods
-   take `(config: PipelineConfig, ctx: RunContext)`:
+   `<Venue>Format` class with `name = "<venue>"` (no base class — `Format` is a
+   structural `Protocol`). `Format` methods take
+   `(config: PipelineConfig, ctx: RunContext)`:
    - `create_loader(config, ctx) -> EventLoader`
    - `create_trade_source(config, ctx) -> TradeSource`
    - `create_writer(config, ctx) -> DataWriter`
    - `compute_depth(config, ctx, events) -> tuple[depth, depth_summary]`
      (override only if your venue computes depth differently)
-   - `collect_extras(loader, events, source, ctx) -> dict[str, DataFrame]`
-     (optional — contributes per-format DataFrames to `PipelineResult.extras`,
-     used by LOBSTER for trading halts / cross trades / hidden executions).
+
+   Auxiliary per-format tables (e.g. LOBSTER trading halts / cross trades /
+   hidden executions) ride on the loader itself — expose them as an attribute
+   such as `loader.trading_halts` and feed them to the gallery via
+   `extra_panels=`; they are no longer attached to `PipelineResult`.
 
    Per-run parameters that vary across runs of the same `Format` instance
    (e.g. LOBSTER `trading_date`) belong on `RunContext`, not on the

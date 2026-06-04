@@ -50,24 +50,35 @@ Depth summary: (…, 46)
 
 ### Visualise
 
+All plots go through one `plot()` dispatcher: prepare the data with the
+matching `prepare_<name>_data` helper, then render it on a backend.
+
 ```python
-from ob_analytics import get_spread, plot_price_levels, plot_trades, save_figure
+from ob_analytics.depth import get_spread
+from ob_analytics.visualization import plot, save_figure
+from ob_analytics.visualization import _data
 
 spread = get_spread(result.depth_summary)
 
-fig = plot_price_levels(result.depth, spread, volume_scale=1e-8, col_bias=0.1)
+fig = plot(
+    "price_levels",
+    **_data.prepare_price_levels_data(
+        result.depth, spread, volume_scale=1e-8, col_bias=0.1
+    ),
+)
 save_figure(fig, "price_levels.png")
 
-fig = plot_trades(result.trades)
+fig = plot("trades", **_data.prepare_trades_data(result.trades))
 save_figure(fig, "trades.png")
 ```
 
-All plot functions accept an `ax` parameter for multi-panel figures:
+`plot()` accepts an `ax` parameter for multi-panel figures:
 
 ```python
 import matplotlib.pyplot as plt
 import pandas as pd
-from ob_analytics import plot_trades, plot_events_histogram
+from ob_analytics.visualization import plot
+from ob_analytics.visualization import _data
 
 # Pick a 10-minute window inside the sample (it spans 30 minutes).
 t_start = result.trades["timestamp"].min()
@@ -76,12 +87,15 @@ t4 = t3 + pd.Timedelta(minutes=10)
 
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 6))
 
-plot_trades(result.trades, start_time=t3, end_time=t4, ax=ax1)
+plot("trades", ax=ax1, **_data.prepare_trades_data(result.trades, start_time=t3, end_time=t4))
 ax1.set_title(f"Trades {t3:%H:%M}–{t4:%H:%M}")
 
 hist_data = result.events[["timestamp", "direction", "price", "volume"]].copy()
-hist_data["volume"] *= 1e-8
-plot_events_histogram(hist_data, val="price", bw=0.25, ax=ax2)
+# Drop sentinel-priced events (market orders / deletions) before binning.
+q01, q99 = hist_data["price"].quantile([0.01, 0.99])
+hist_data = hist_data[hist_data["price"].between(q01, q99)]
+bw = max(0.01, round((q99 - q01) / 100, 2))
+plot("events_histogram", ax=ax2, **_data.prepare_events_histogram_data(hist_data, val="price", bw=bw))
 ax2.set_title("Price distribution")
 
 fig.tight_layout()
@@ -215,19 +229,32 @@ result = Pipeline.from_format(
 
 Some formats expose auxiliary event tables that don't fit the universal
 events schema — LOBSTER trading halts, cross trades, and hidden
-executions, for example. The pipeline attaches these to
-`PipelineResult.extras`:
+executions, for example. These no longer ride on `PipelineResult`; a
+`LobsterLoader` splits them out during `load()` and exposes them as a public
+attribute (`None` when absent):
 
 ```python
-result = Pipeline(format=LobsterFormat(), ctx=RunContext(trading_date="...")).run(path)
-result.extras["trading_halts"]
-result.extras["cross_trades"]
-result.extras["hidden_executions"]
+from ob_analytics import Pipeline, RunContext
+from ob_analytics.lobster import LobsterFormat, LobsterLoader
+from ob_analytics.visualization.gallery import generate_gallery, trading_halts_panel
+
+ctx = RunContext(trading_date="2015-05-01")
+result = Pipeline(format=LobsterFormat()).run(path, ctx=ctx)
+
+loader = LobsterLoader(trading_date="2015-05-01")
+loader.load(path)             # populates loader.trading_halts
+halts = loader.trading_halts  # pd.DataFrame | None
+
+if halts is not None:
+    generate_gallery(
+        result, "out/gallery",
+        extra_panels=[trading_halts_panel(result.trades, halts)],
+    )
 ```
 
-Bitstamp runs produce no extras (`result.extras == {}`). Plot helpers
-`plot_trading_halts(result=result)` and
-`plot_hidden_executions(result=result)` read from extras automatically.
+Bitstamp runs have no such tables (`loader.trading_halts is None`). Hidden
+executions are detected automatically by the gallery's `default_specs` when
+the events frame contains LOBSTER hidden-execution rows.
 
 !!! note
     When message files contain cross trades (event type 6) or trading halts
@@ -261,8 +288,9 @@ stages consume:
 | `direction` | category | `bid` / `ask` |
 | `fill` | float | Volume executed by this event (0 for non-fills) |
 
-[`OrderEvent`](api/models.md#ob_analytics.models.OrderEvent) is the
-Pydantic-level contract; the columns above are what the pipeline reads.
+The columns above are the contract the pipeline reads; see
+[Data Contracts](api/schemas.md) for the canonical column lists and the
+`validate_*` helpers.
 
 #### Generic CSV loader
 
@@ -397,17 +425,21 @@ Bundle defaults in a `Format` subclass — see [Protocols](api/protocols.md).
 
 ### Themes and saving
 
-```python
-from ob_analytics import PlotTheme, set_plot_theme, plot_trades, save_figure
+There is no global theme to set. Pass a `PlotTheme` to `plot()` and it
+applies only to that call (matplotlib backend only):
 
-set_plot_theme(PlotTheme(
+```python
+from ob_analytics.visualization import plot, save_figure, PlotTheme
+from ob_analytics.visualization import _data
+
+theme = PlotTheme(
     style="whitegrid",
     context="talk",
     font_scale=1.2,
     rc={"axes.facecolor": "#f8f9fa", "figure.facecolor": "#ffffff"},
-))
+)
 
-fig = plot_trades(result.trades)
+fig = plot("trades", theme=theme, **_data.prepare_trades_data(result.trades))
 save_figure(fig, "trades_hires.png", dpi=300)
 ```
 
@@ -448,7 +480,7 @@ save_data(
 
 ### Plotly (interactive)
 
-All plot functions accept `backend="plotly"` for interactive figures with
+`plot()` accepts `backend="plotly"` for interactive figures with
 zoom, pan, and hover tooltips. Plotly is an optional dependency:
 
 ```bash
@@ -456,23 +488,29 @@ pip install -e ".[interactive]"
 ```
 
 ```python
-from ob_analytics import Pipeline, plot_price_levels, get_spread, sample_csv_path
+from ob_analytics import Pipeline, sample_csv_path
+from ob_analytics.depth import get_spread
+from ob_analytics.visualization import plot
+from ob_analytics.visualization import _data
 
 result = Pipeline().run(sample_csv_path())
 spread = get_spread(result.depth_summary)
 
-fig = plot_price_levels(
-    result.depth, spread, volume_scale=1e-8, col_bias=0.1,
-    price_from=232, backend="plotly",
+fig = plot(
+    "price_levels",
+    backend="plotly",
+    **_data.prepare_price_levels_data(
+        result.depth, spread, volume_scale=1e-8, col_bias=0.1, price_from=232
+    ),
 )
 fig.show()
 fig.write_html("depth.html")
 ```
 
-Custom backends can be registered:
+Whole new backends can be registered by module path:
 
 ```python
-from ob_analytics import register_plot_backend
+from ob_analytics.visualization import register_plot_backend
 register_plot_backend("bokeh", "my_package._bokeh_backend")
 ```
 
@@ -486,95 +524,62 @@ DataFrame.
 ### VPIN
 
 ```python
-from ob_analytics import compute_vpin, plot_vpin, save_figure
+from ob_analytics import compute_vpin
+from ob_analytics.visualization import plot, save_figure
+from ob_analytics.visualization import _data
 
 vpin = compute_vpin(result.trades, bucket_volume=5.0)
-fig = plot_vpin(vpin, threshold=0.7)
+fig = plot("vpin", **_data.prepare_vpin_data(vpin, threshold=0.7))
 save_figure(fig, "vpin.png")
 ```
 
 ### Kyle's lambda
 
 ```python
-from ob_analytics import compute_kyle_lambda, plot_kyle_lambda
+from ob_analytics import compute_kyle_lambda
+from ob_analytics.visualization import plot, save_figure
+from ob_analytics.visualization import _data
 
 kyle = compute_kyle_lambda(result.trades, window="5min")
 print(f"λ={kyle.lambda_:.6f}, t={kyle.t_stat:.2f}, R²={kyle.r_squared:.3f}")
 
-fig = plot_kyle_lambda(kyle)
+fig = plot("kyle_lambda", **_data.prepare_kyle_lambda_data(kyle))
 save_figure(fig, "kyle_lambda.png")
 ```
 
 ### Order flow imbalance
 
 ```python
-from ob_analytics import order_flow_imbalance, plot_order_flow_imbalance
+from ob_analytics import order_flow_imbalance
+from ob_analytics.visualization import plot, save_figure
+from ob_analytics.visualization import _data
 
 ofi = order_flow_imbalance(result.trades, window="1min")
-fig = plot_order_flow_imbalance(ofi, trades=result.trades)
+fig = plot("order_flow_imbalance", **_data.prepare_ofi_data(ofi, trades=result.trades))
 save_figure(fig, "ofi.png")
 ```
 
-### Pipeline integration (opt-in)
+### Adding your own metric
 
-Set `vpin_bucket_volume` on the config and the pipeline will compute
-VPIN and OFI as part of the standard run:
-
-```python
-from ob_analytics import Pipeline, PipelineConfig
-
-config = PipelineConfig(vpin_bucket_volume=5.0)
-result = Pipeline(config=config).run("orders.csv")
-# result.vpin and result.ofi are automatically populated
-```
-
-### Pluggable metrics
-
-`Pipeline` accepts a `metrics=` keyword that takes any sequence of
-`ToxicityMetric` implementations. The computed outputs land in
-`result.metrics: dict[str, DataFrame]`:
+There is no metrics plugin registry — a flow-toxicity metric is just a
+function over a trades DataFrame. Write one and call it on `result.trades`:
 
 ```python
-from ob_analytics import Pipeline, Vpin, Ofi, KyleLambda
+import pandas as pd
 
-result = Pipeline(
-    metrics=[Vpin(bucket_volume=1_000), Ofi(window="1min"), KyleLambda()],
-).run("orders.csv")
-
-result.metrics["vpin"]         # DataFrame
-result.metrics["kyle_lambda"]  # DataFrame
-```
-
-To plug in your own metric, implement the protocol:
-
-```python
-from dataclasses import dataclass
-from ob_analytics import ToxicityMetric, register_metric
-
-@dataclass(frozen=True)
-class Amihud:
+def amihud(trades: pd.DataFrame, freq: str = "1min") -> pd.DataFrame:
     """Amihud (2002) illiquidity = |return| / volume."""
-    freq: str = "1min"
-    name: str = "amihud"
-    requires: tuple[str, ...] = ("trades",)
-    primary_column: str = "amihud"
+    t = trades.set_index("timestamp").sort_index()
+    ret = t["price"].pct_change().abs()
+    illiq = (ret / t["volume"]).resample(freq).mean()
+    return illiq.rename("amihud").reset_index()
 
-    def compute(self, result, config):
-        trades = result.trades.set_index("timestamp").sort_index()
-        ret = trades["price"].pct_change().abs()
-        vol = trades["volume"]
-        amihud = (ret / vol).resample(self.freq).mean()
-        return amihud.reset_index().rename(columns={0: "amihud"})
-
-register_metric("amihud", Amihud)
-
-result = Pipeline(metrics=[Amihud()]).run("orders.csv")
-result.metrics["amihud"]
+amihud_df = amihud(result.trades)
 ```
 
-The gallery automatically iterates over `result.metrics`. Built-in
-metrics get their dedicated plotters (`plot_vpin`, etc.); user-defined
-metrics are available on `result.metrics` for ad-hoc plotting.
+To fold a metric into the HTML gallery, wrap it in a panel builder and pass it
+via `extra_panels=` — see [Extending ob-analytics](extending.md) for the full
+walkthrough (new data source, export format, plot, metric, or live capturer).
 
 ---
 
