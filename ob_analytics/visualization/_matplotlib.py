@@ -5,7 +5,7 @@ This module contains all matplotlib-specific rendering logic.  Each
 :mod:`~ob_analytics.visualization._data`) and an optional *ax* parameter, and
 returns a :class:`~matplotlib.figure.Figure`.
 
-The :class:`PlotTheme` dataclass and related helpers also live here.
+The :class:`PlotTheme` value object and :data:`DEFAULT_THEME` also live here.
 """
 
 from __future__ import annotations
@@ -56,53 +56,33 @@ class PlotTheme:
     )
 
 
-_current_theme: PlotTheme = PlotTheme()
+#: Default theme applied when a renderer creates its own figure.  Pass a
+#: ``theme=`` kwarg to :func:`~ob_analytics.visualization.plot` (or directly to
+#: a renderer) to override it per call; there is no global mutable theme.
+DEFAULT_THEME: PlotTheme = PlotTheme()
 
 
-def set_plot_theme(theme: PlotTheme) -> None:
-    """Set the global plot theme used by all ob-analytics plot functions.
-
-    Parameters
-    ----------
-    theme : PlotTheme
-        Theme configuration to apply globally.
-    """
-    global _current_theme
-    _current_theme = theme
-
-
-def get_plot_theme() -> PlotTheme:
-    """Return the current global plot theme.
-
-    Returns
-    -------
-    PlotTheme
-        The active theme configuration.
-    """
-    return _current_theme
-
-
-def _apply_theme() -> None:
-    """Apply the current theme to matplotlib / seaborn."""
-    t = _current_theme
+def _apply_theme(theme: PlotTheme = DEFAULT_THEME) -> None:
+    """Apply *theme* to matplotlib / seaborn."""
     sns.set_theme(
-        style=cast(Any, t.style),
-        context=cast(Any, t.context),
-        font_scale=t.font_scale,
-        rc=dict(t.rc),
+        style=cast(Any, theme.style),
+        context=cast(Any, theme.context),
+        font_scale=theme.font_scale,
+        rc=dict(theme.rc),
     )
 
 
 def _create_axes(
     ax: Axes | None,
     figsize: tuple[float, float] = (10, 6),
+    theme: PlotTheme = DEFAULT_THEME,
 ) -> tuple[Figure, Axes]:
     """Return ``(fig, ax)``, creating a new figure only when *ax* is ``None``."""
     if ax is not None:
         fig = ax.get_figure()
         assert isinstance(fig, Figure)
         return fig, ax
-    _apply_theme()
+    _apply_theme(theme)
     fig, new_ax = plt.subplots(figsize=figsize)
     return fig, new_ax
 
@@ -136,10 +116,12 @@ def save_figure(
 # ---------------------------------------------------------------------------
 
 
-def mpl_time_series(data: dict, ax: Axes | None = None) -> Figure:
+def mpl_time_series(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
     """Render a time-series step plot."""
     df = data["df"]
-    fig, ax = _create_axes(ax, figsize=(10, 6))
+    fig, ax = _create_axes(ax, figsize=(10, 6), theme=theme)
     sns.lineplot(data=df, x="ts", y="val", drawstyle="steps-post", ax=ax)
     ax.set_title(data["title"])
     ax.set_xlabel("time")
@@ -149,11 +131,13 @@ def mpl_time_series(data: dict, ax: Axes | None = None) -> Figure:
     return fig
 
 
-def mpl_trades(data: dict, ax: Axes | None = None) -> Figure:
+def mpl_trades(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
     """Render a trade-price step plot."""
     filtered = data["filtered_trades"]
     y_breaks = data["y_breaks"]
-    fig, ax = _create_axes(ax, figsize=(10, 6))
+    fig, ax = _create_axes(ax, figsize=(10, 6), theme=theme)
     sns.lineplot(
         data=filtered,
         x="timestamp",
@@ -169,7 +153,9 @@ def mpl_trades(data: dict, ax: Axes | None = None) -> Figure:
     return fig
 
 
-def mpl_price_levels(data: dict, ax: Axes | None = None) -> Figure:
+def mpl_price_levels(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
     """Render the price-level depth heatmap."""
     depth = data["depth"]
     spread = data["spread"]
@@ -182,7 +168,7 @@ def mpl_price_levels(data: dict, ax: Axes | None = None) -> Figure:
     depth.sort_values(by="timestamp", inplace=True, kind="stable")
     if depth.empty or depth.groupby("price").size().min() < 2:
         logger.warning("Not enough data for any price level")
-        fig, ax = _create_axes(ax, figsize=(12, 7))
+        fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
         return fig
 
     depth["alpha"] = np.where(
@@ -205,7 +191,7 @@ def mpl_price_levels(data: dict, ax: Axes | None = None) -> Figure:
     else:
         norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
 
-    fig, ax = _create_axes(ax, figsize=(12, 7))
+    fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
 
     depth["timestamp_numeric"] = mdates.date2num(depth["timestamp"])
 
@@ -318,7 +304,9 @@ def mpl_price_levels(data: dict, ax: Axes | None = None) -> Figure:
     return fig
 
 
-def mpl_event_map(data: dict, ax: Axes | None = None) -> Figure:
+def mpl_event_map(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
     """Render a limit-order event map."""
     events = data["events"]
     created = data["created"]
@@ -327,7 +315,7 @@ def mpl_event_map(data: dict, ax: Axes | None = None) -> Figure:
 
     col_pal = {"bid": "#0000ff", "ask": "#ff0000"}
 
-    fig, ax = _create_axes(ax, figsize=(10, 6))
+    fig, ax = _create_axes(ax, figsize=(10, 6), theme=theme)
 
     sns.scatterplot(
         data=created,
@@ -377,13 +365,15 @@ def mpl_event_map(data: dict, ax: Axes | None = None) -> Figure:
     return fig
 
 
-def mpl_volume_map(data: dict, ax: Axes | None = None) -> Figure:
+def mpl_volume_map(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
     """Render a volume map of flashed limit orders."""
     events = data["events"]
     log_scale = data["log_scale"]
     col_pal = {"bid": "#0000ff", "ask": "#ff0000"}
 
-    fig, ax = _create_axes(ax, figsize=(10, 6))
+    fig, ax = _create_axes(ax, figsize=(10, 6), theme=theme)
     if log_scale:
         ax.set_yscale("log")
     sns.scatterplot(
@@ -403,7 +393,9 @@ def mpl_volume_map(data: dict, ax: Axes | None = None) -> Figure:
     return fig
 
 
-def mpl_current_depth(data: dict, ax: Axes | None = None) -> Figure:
+def mpl_current_depth(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
     """Render order book depth snapshot."""
     depth_df = data["depth_df"]
     bids = data["bids"]
@@ -414,7 +406,7 @@ def mpl_current_depth(data: dict, ax: Axes | None = None) -> Figure:
     ask_quantiles = data["ask_quantiles"]
     timestamp = data["timestamp"]
 
-    fig, ax = _create_axes(ax, figsize=(12, 7))
+    fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
 
     if show_volume:
         unique_prices = np.sort(np.unique(depth_df["price"]))
@@ -462,7 +454,9 @@ def mpl_current_depth(data: dict, ax: Axes | None = None) -> Figure:
     return fig
 
 
-def mpl_volume_percentiles(data: dict, ax: Axes | None = None) -> Figure:
+def mpl_volume_percentiles(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
     """Render volume-percentile stacked area chart."""
     asks_cumsum = data["asks_cumsum"]
     bids_cumsum_neg = data["bids_cumsum_neg"]
@@ -479,7 +473,7 @@ def mpl_volume_percentiles(data: dict, ax: Axes | None = None) -> Figure:
 
     pl = 0.1 if perc_line else 0
 
-    fig, ax = _create_axes(ax, figsize=(12, 8))
+    fig, ax = _create_axes(ax, figsize=(12, 8), theme=theme)
 
     prev = np.zeros(len(asks_cumsum))
     x = asks_cumsum.index
@@ -538,13 +532,15 @@ def mpl_volume_percentiles(data: dict, ax: Axes | None = None) -> Figure:
     return fig
 
 
-def mpl_events_histogram(data: dict, ax: Axes | None = None) -> Figure:
+def mpl_events_histogram(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
     """Render an events price/volume histogram."""
     events = data["events"]
     val = data["val"]
     bw = data["bw"]
 
-    fig, ax = _create_axes(ax, figsize=(12, 7))
+    fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
     sns.histplot(
         data=events,
         x=val,
@@ -563,13 +559,15 @@ def mpl_events_histogram(data: dict, ax: Axes | None = None) -> Figure:
     return fig
 
 
-def mpl_vpin(data: dict, ax: Axes | None = None) -> Figure:
+def mpl_vpin(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
     """Render VPIN time series."""
     vpin_df = data["vpin_df"]
     threshold = data["threshold"]
     bar_width = data["bar_width"]
 
-    fig, ax = _create_axes(ax, figsize=(12, 5))
+    fig, ax = _create_axes(ax, figsize=(12, 5), theme=theme)
 
     ax.bar(
         vpin_df["timestamp_end"],
@@ -617,7 +615,9 @@ def mpl_vpin(data: dict, ax: Axes | None = None) -> Figure:
     return fig
 
 
-def mpl_order_flow_imbalance(data: dict, ax: Axes | None = None) -> Figure:
+def mpl_order_flow_imbalance(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
     """Render order flow imbalance bar chart."""
     ofi_df = data["ofi_df"]
     trades = data["trades"]
@@ -634,7 +634,7 @@ def mpl_order_flow_imbalance(data: dict, ax: Axes | None = None) -> Figure:
     else:
         bar_width = 0.001
 
-    fig, ax = _create_axes(ax, figsize=(12, 5))
+    fig, ax = _create_axes(ax, figsize=(12, 5), theme=theme)
 
     ax.bar(
         ofi_df["timestamp"],
@@ -669,14 +669,16 @@ def mpl_order_flow_imbalance(data: dict, ax: Axes | None = None) -> Figure:
     return fig
 
 
-def mpl_kyle_lambda(data: dict, ax: Axes | None = None) -> Figure:
+def mpl_kyle_lambda(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
     """Render Kyle's Lambda regression scatter."""
     reg_df = data["reg_df"]
     lambda_ = data["lambda_"]
     r_squared = data["r_squared"]
     t_stat = data["t_stat"]
 
-    fig, ax = _create_axes(ax, figsize=(8, 6))
+    fig, ax = _create_axes(ax, figsize=(8, 6), theme=theme)
 
     ax.scatter(
         reg_df["signed_volume"],
@@ -726,13 +728,15 @@ def mpl_kyle_lambda(data: dict, ax: Axes | None = None) -> Figure:
 # ---------------------------------------------------------------------------
 
 
-def mpl_hidden_executions(data: dict, ax: Axes | None = None) -> Figure:
+def mpl_hidden_executions(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
     """Render hidden execution volume overlaid on the trade price."""
     trades = data["trades"]
     hidden = data["hidden"]
     has_hidden = data["has_hidden"]
 
-    fig, ax = _create_axes(ax, figsize=(12, 6))
+    fig, ax = _create_axes(ax, figsize=(12, 6), theme=theme)
 
     if not trades.empty:
         ax.step(
@@ -778,13 +782,15 @@ def mpl_hidden_executions(data: dict, ax: Axes | None = None) -> Figure:
     return fig
 
 
-def mpl_trading_halts(data: dict, ax: Axes | None = None) -> Figure:
+def mpl_trading_halts(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
     """Render trade price with shaded halt periods."""
     trades = data["trades"]
     halt_periods = data["halt_periods"]
     has_halts = data["has_halts"]
 
-    fig, ax = _create_axes(ax, figsize=(12, 6))
+    fig, ax = _create_axes(ax, figsize=(12, 6), theme=theme)
 
     if not trades.empty:
         ax.step(
@@ -825,3 +831,28 @@ def mpl_trading_halts(data: dict, ax: Axes | None = None) -> Figure:
     ax.legend(loc="upper left")
     fig.tight_layout()
     return fig
+
+
+# ---------------------------------------------------------------------------
+# Renderer self-registration
+# ---------------------------------------------------------------------------
+# Imported here (not at module top) so RENDERERS -- defined in the package
+# __init__ -- already exists when this module is imported during package init.
+from ob_analytics.visualization import RENDERERS  # noqa: E402
+
+for _plot_name, _fn in {
+    "time_series": mpl_time_series,
+    "trades": mpl_trades,
+    "price_levels": mpl_price_levels,
+    "event_map": mpl_event_map,
+    "volume_map": mpl_volume_map,
+    "current_depth": mpl_current_depth,
+    "volume_percentiles": mpl_volume_percentiles,
+    "events_histogram": mpl_events_histogram,
+    "vpin": mpl_vpin,
+    "order_flow_imbalance": mpl_order_flow_imbalance,
+    "kyle_lambda": mpl_kyle_lambda,
+    "hidden_executions": mpl_hidden_executions,
+    "trading_halts": mpl_trading_halts,
+}.items():
+    RENDERERS.register((_plot_name, "matplotlib"), _fn)

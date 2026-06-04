@@ -9,7 +9,6 @@ from ob_analytics.protocols import RunContext
 def test_run_context_defaults_are_empty():
     ctx = RunContext()
     assert ctx.trading_date is None
-    assert ctx.extras == {}
 
 
 def test_run_context_is_frozen():

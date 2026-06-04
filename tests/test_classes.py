@@ -11,7 +11,7 @@ import pytest
 from ob_analytics.config import PipelineConfig
 from ob_analytics.depth import DepthMetricsEngine
 from ob_analytics.bitstamp import BitstampLoader
-from ob_analytics.exceptions import InsufficientDataError, InvalidDataError
+from ob_analytics.exceptions import ConfigError, ObAnalyticsError
 from ob_analytics.protocols import EventLoader
 
 
@@ -63,7 +63,7 @@ class TestBitstampLoader:
     def test_rejects_missing_columns(self, tmp_path: Path):
         csv = tmp_path / "bad.csv"
         csv.write_text("id,price\n1,100\n")
-        with pytest.raises(InvalidDataError, match="missing required columns"):
+        with pytest.raises(ConfigError, match="missing required columns"):
             BitstampLoader().load(csv)
 
     def test_config_precision(self, sample_csv: Path):
@@ -142,7 +142,7 @@ class TestDepthMetricsEngine:
 
     def test_rejects_empty_dataframe(self):
         df = pd.DataFrame(columns=["timestamp", "price", "volume", "direction"])
-        with pytest.raises(InsufficientDataError):
+        with pytest.raises(ObAnalyticsError):
             DepthMetricsEngine().compute(df)
 
     def test_fractional_volume_preserved(self):

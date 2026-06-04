@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ob_analytics.exceptions import InsufficientDataError, InvalidDataError
+from ob_analytics.exceptions import ConfigError, ObAnalyticsError
 from ob_analytics.flow_toxicity import (
     KyleLambdaResult,
     compute_kyle_lambda,
@@ -92,15 +92,15 @@ class TestComputeVpin:
         assert abs(result.iloc[0]["vpin_avg"] - 1.0) < 1e-10
 
     def test_empty_trades_raises(self):
-        """Empty DataFrame raises InsufficientDataError."""
+        """Empty DataFrame raises ObAnalyticsError."""
         empty = pd.DataFrame(columns=["timestamp", "price", "volume", "direction"])
-        with pytest.raises(InsufficientDataError):
+        with pytest.raises(ObAnalyticsError):
             compute_vpin(empty, bucket_volume=1.0)
 
     def test_missing_columns_raises(self):
-        """Missing required columns raises InvalidDataError."""
+        """Missing required columns raises ConfigError."""
         bad = pd.DataFrame({"timestamp": [1], "price": [100]})
-        with pytest.raises(InvalidDataError):
+        with pytest.raises(ConfigError):
             compute_vpin(bad, bucket_volume=1.0)
 
     def test_negative_bucket_volume_raises(self):
@@ -206,15 +206,15 @@ class TestComputeKyleLambda:
         }
 
     def test_empty_raises(self):
-        """Empty DataFrame raises InsufficientDataError."""
+        """Empty DataFrame raises ObAnalyticsError."""
         empty = pd.DataFrame(columns=["timestamp", "price", "volume", "direction"])
-        with pytest.raises(InsufficientDataError):
+        with pytest.raises(ObAnalyticsError):
             compute_kyle_lambda(empty)
 
     def test_missing_columns_raises(self):
-        """Missing columns raises InvalidDataError."""
+        """Missing columns raises ConfigError."""
         bad = pd.DataFrame({"timestamp": [1]})
-        with pytest.raises(InvalidDataError):
+        with pytest.raises(ConfigError):
             compute_kyle_lambda(bad)
 
 
@@ -252,15 +252,15 @@ class TestOrderFlowImbalance:
         assert all(abs(v) < 1e-10 for v in result["ofi"])
 
     def test_empty_raises(self):
-        """Empty DataFrame raises InsufficientDataError."""
+        """Empty DataFrame raises ObAnalyticsError."""
         empty = pd.DataFrame(columns=["timestamp", "volume", "direction"])
-        with pytest.raises(InsufficientDataError):
+        with pytest.raises(ObAnalyticsError):
             order_flow_imbalance(empty)
 
     def test_missing_columns_raises(self):
-        """Missing columns raises InvalidDataError."""
+        """Missing columns raises ConfigError."""
         bad = pd.DataFrame({"timestamp": [1]})
-        with pytest.raises(InvalidDataError):
+        with pytest.raises(ConfigError):
             order_flow_imbalance(bad)
 
 
@@ -271,11 +271,7 @@ import matplotlib  # noqa: E402
 matplotlib.use("Agg")
 from matplotlib.figure import Figure  # noqa: E402
 
-from ob_analytics.visualization import (  # noqa: E402
-    plot_kyle_lambda,
-    plot_order_flow_imbalance,
-    plot_vpin,
-)
+from ob_analytics.visualization import _data, plot  # noqa: E402
 
 
 class TestFlowToxicityPlots:
@@ -283,7 +279,7 @@ class TestFlowToxicityPlots:
         """plot_vpin returns a Figure."""
         trades = _trades(["buy"] * 10, volumes=[1.0] * 10)
         vpin_df = compute_vpin(trades, bucket_volume=2.0)
-        fig = plot_vpin(vpin_df)
+        fig = plot("vpin", **_data.prepare_vpin_data(vpin_df))
         assert isinstance(fig, Figure)
 
     def test_plot_ofi_returns_figure(self):
@@ -293,7 +289,7 @@ class TestFlowToxicityPlots:
             volumes=[1.0] * 10,
         )
         ofi_df = order_flow_imbalance(trades, window="1min")
-        fig = plot_order_flow_imbalance(ofi_df)
+        fig = plot("order_flow_imbalance", **_data.prepare_ofi_data(ofi_df))
         assert isinstance(fig, Figure)
 
     def test_plot_ofi_with_price_overlay(self):
@@ -304,7 +300,7 @@ class TestFlowToxicityPlots:
             prices=[100.0 + i for i in range(10)],
         )
         ofi_df = order_flow_imbalance(trades, window="1min")
-        fig = plot_order_flow_imbalance(ofi_df, trades=trades)
+        fig = plot("order_flow_imbalance", **_data.prepare_ofi_data(ofi_df, trades))
         assert isinstance(fig, Figure)
 
     def test_plot_kyle_lambda_returns_figure(self):
@@ -316,5 +312,5 @@ class TestFlowToxicityPlots:
             base_sec_offsets=[0, 60, 300, 360],
         )
         result = compute_kyle_lambda(trades, window="5min")
-        fig = plot_kyle_lambda(result)
+        fig = plot("kyle_lambda", **_data.prepare_kyle_lambda_data(result))
         assert isinstance(fig, Figure)

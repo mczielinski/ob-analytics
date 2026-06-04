@@ -19,7 +19,7 @@ visualize market microstructure — from Bitstamp-style CSVs or
 | **Build trades** | Bitstamp: companion `trades.csv`. LOBSTER: execution rows (types 4/5) in the message file |
 | **Classify orders** | Label as market, resting-limit, flashed-limit, market-limit, or unknown |
 | **Depth & metrics** | Price-level volume, best bid/ask, spread, liquidity in BPS bins |
-| **Flow toxicity** *(opt-in)* | VPIN, Kyle's lambda, order-flow imbalance |
+| **Flow toxicity** *(post-run)* | VPIN, Kyle's lambda, order-flow imbalance from `result.trades` |
 | **Visualize / export** | Depth heatmaps, event maps, trade charts, galleries; Matplotlib or Plotly; Parquet and LOBSTER round-trip I/O |
 
 ## Pipeline

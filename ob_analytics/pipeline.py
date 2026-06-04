@@ -31,17 +31,16 @@ Usage with a Format descriptor::
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
+from typing import Any
 
 import pandas as pd
 
 from ob_analytics.config import PipelineConfig
 from ob_analytics.depth import depth_metrics, price_level_volume
-from ob_analytics.analytics import order_aggressiveness
-from ob_analytics.bitstamp import BitstampLoader, BitstampTradeReader
-from ob_analytics.analytics import set_order_types
+from ob_analytics.analytics import order_aggressiveness, set_order_types
+from ob_analytics.schemas import validate_events_df, validate_trades_df
+from ob_analytics._registry import Registry
 from loguru import logger
 
 from ob_analytics.protocols import (
@@ -52,66 +51,57 @@ from ob_analytics.protocols import (
     TradeSource,
 )
 
-if TYPE_CHECKING:
-    from ob_analytics.metrics._base import ToxicityMetric
-
 
 # ── Format registry ───────────────────────────────────────────────────
+#
+# Defined *before* the ``bitstamp`` import below so format modules can
+# self-register at import time. ``bitstamp`` and ``lobster`` end with
+# ``from ob_analytics.pipeline import register_format``; that runs while this
+# module is still partially initialised, so ``register_format`` must already
+# exist at that point.
 
-_FORMATS: dict[str, type[Format]] = {}
+FORMATS: Registry[str, type[Format]] = Registry("format")
 
 
 def register_format(name: str, format_cls: type[Format]) -> None:
-    """Register a :class:`Format` subclass under *name* for lookup via
+    """Register a :class:`Format` implementation under *name* for lookup via
     :meth:`Pipeline.from_format`.
     """
-    _FORMATS[name.lower()] = format_cls
+    FORMATS.register(name, format_cls)
 
 
 def list_formats() -> list[str]:
     """Return a sorted list of registered format names."""
-    return sorted(_FORMATS)
+    return FORMATS.list()
+
+
+# Imported here (not with the other top-of-module imports) so the registry
+# above already exists when the format modules self-register. See the note
+# above the registry definition.
+from ob_analytics.bitstamp import BitstampLoader, BitstampTradeReader  # noqa: E402
 
 
 @dataclass(frozen=True)
 class PipelineResult:
-    """Immutable container for the outputs of a pipeline run.
+    """Immutable container for the core outputs of a pipeline run.
+
+    Analytic outputs (VPIN, OFI, Kyle's λ) are intentionally **not** stored
+    here — compute them post-pipeline from ``trades`` and pass them to the
+    gallery via ``extra_panels=``.
 
     Attributes
     ----------
-    events : pandas.DataFrame
-        Processed events with order types and aggressiveness.
-    trades : pandas.DataFrame
-        Trade records with maker/taker attribution.
-    depth : pandas.DataFrame
-        Price-level volume time series.
-    depth_summary : pandas.DataFrame
-        Depth metrics (best bid/ask, BPS bins, spread).
-    vpin : pandas.DataFrame or None
-        VPIN buckets (only when ``config.vpin_bucket_volume`` is set).
-    ofi : pandas.DataFrame or None
-        Order flow imbalance per minute (only when VPIN is computed).
-    metadata : dict
-        Provenance and format-specific metadata populated during the run.
-    extras : dict of str to DataFrame
-        Per-format auxiliary DataFrames populated by
-        ``Format.collect_extras`` (e.g. LOBSTER ``trading_halts`` and
-        ``cross_trades``).  Empty for formats that supply no extras.
-    metrics : dict of str to DataFrame
-        Outputs of any :class:`~ob_analytics.metrics.ToxicityMetric`
-        passed via ``Pipeline(metrics=...)``, keyed by ``metric.name``.
-        ``vpin`` and ``ofi`` are mirrored here for back-compat.
+    events, trades, depth, depth_summary : pandas.DataFrame
+        Core pipeline tables.
+    config : PipelineConfig
+        The configuration used for the run.
     """
 
     events: pd.DataFrame
     trades: pd.DataFrame
     depth: pd.DataFrame
     depth_summary: pd.DataFrame
-    vpin: pd.DataFrame | None = None
-    ofi: pd.DataFrame | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
-    extras: dict[str, pd.DataFrame] = field(default_factory=dict)
-    metrics: dict[str, pd.DataFrame] = field(default_factory=dict)
+    config: PipelineConfig
 
 
 class Pipeline:
@@ -146,7 +136,6 @@ class Pipeline:
         loader: EventLoader | None = None,
         trade_source: TradeSource | None = None,
         ctx: RunContext | None = None,
-        metrics: Sequence["ToxicityMetric"] | None = None,
     ) -> None:
         self._ctx = ctx or RunContext()
         if format is not None:
@@ -170,17 +159,6 @@ class Pipeline:
 
         self._format = format
 
-        self._metrics: list[ToxicityMetric] = list(metrics) if metrics else []
-        # Back-compat: if config.vpin_bucket_volume is set and the user did not
-        # explicitly pass metrics=, materialise a Vpin + Ofi automatically.
-        if not self._metrics and self.config.vpin_bucket_volume is not None:
-            from ob_analytics.metrics import Ofi, Vpin
-
-            self._metrics = [
-                Vpin(bucket_volume=self.config.vpin_bucket_volume),
-                Ofi(),
-            ]
-
     @property
     def writer(self) -> DataWriter | None:
         """The format-provided writer, if any."""
@@ -203,13 +181,11 @@ class Pipeline:
         **kwargs
             Passed to the :class:`Format` constructor.
         """
-        key = name.lower()
-        if key not in _FORMATS:
-            available = ", ".join(sorted(_FORMATS)) or "(none)"
-            raise ValueError(
-                f"Unknown format {name!r}. Registered formats: {available}"
-            )
-        fmt = _FORMATS[key](**kwargs)
+        try:
+            fmt_cls = FORMATS.get(name)
+        except KeyError as exc:
+            raise ValueError(str(exc)) from exc
+        fmt = fmt_cls(**kwargs)
         return cls(format=fmt, ctx=ctx)
 
     def run(self, source: Any, *, ctx: RunContext | None = None) -> PipelineResult:
@@ -228,8 +204,7 @@ class Pipeline:
         -------
         PipelineResult
             Frozen dataclass with ``events``, ``trades``, ``depth``,
-            ``depth_summary``, and optionally ``vpin``, ``ofi``,
-            ``metadata``, and ``extras`` fields.
+            ``depth_summary``, and ``config``.
 
         Steps
         -----
@@ -239,8 +214,6 @@ class Pipeline:
         4. Compute price-level depth
         5. Compute depth metrics
         6. Compute order aggressiveness
-        7. (Optional) Compute VPIN and order flow imbalance
-        8. Collect format-specific extras (``Format.collect_extras``)
         """
         run_ctx = ctx if ctx is not None else self._ctx
 
@@ -249,9 +222,11 @@ class Pipeline:
 
         logger.info("Pipeline: building trades")
         trades = self.trade_source.load(events, source)
+        validate_trades_df(trades)  # data contract (schemas.py)
 
         logger.info("Pipeline: classifying order types")
         events = set_order_types(events, trades)
+        validate_events_df(events)  # data contract (schemas.py)
 
         depth_override = None
         if self._format is not None:
@@ -280,59 +255,11 @@ class Pipeline:
         logger.info("Pipeline: computing order aggressiveness")
         events = order_aggressiveness(events, depth_summary)
 
-        # Provisional result so metrics can read the standard tables.
-        provisional = PipelineResult(
-            events=events,
-            trades=trades,
-            depth=depth,
-            depth_summary=depth_summary,
-            metadata={},
-        )
-
-        metrics_out: dict[str, pd.DataFrame] = {}
-        for metric in self._metrics:
-            # Skip metrics whose required tables are empty/missing.
-            missing = False
-            for req in metric.requires:
-                tbl = getattr(provisional, req, None)
-                if tbl is None or tbl.empty:
-                    missing = True
-                    break
-            if missing:
-                logger.info(
-                    "Pipeline: skipping metric '{}' (missing required: {})",
-                    metric.name,
-                    metric.requires,
-                )
-                continue
-            logger.info("Pipeline: computing metric '{}'", metric.name)
-            metrics_out[metric.name] = metric.compute(provisional, self.config)
-
-        # Back-compat mirrors.
-        vpin_df = metrics_out.get("vpin")
-        ofi_df = metrics_out.get("ofi")
-
-        extras: dict[str, pd.DataFrame] = {}
-        if self._format is not None:
-            extras = self._format.collect_extras(self.loader, events, source, run_ctx)
-
-        metadata: dict[str, Any] = {
-            "source": str(source),
-            "format": self._format.name if self._format else None,
-            "config": self.config.model_dump(),
-            "n_events": len(events),
-            "n_trades": len(trades),
-        }
-
         logger.info("Pipeline: complete")
         return PipelineResult(
             events=events,
             trades=trades,
             depth=depth,
             depth_summary=depth_summary,
-            vpin=vpin_df,
-            ofi=ofi_df,
-            metadata=metadata,
-            extras=extras,
-            metrics=metrics_out,
+            config=self.config,
         )

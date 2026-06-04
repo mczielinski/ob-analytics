@@ -19,7 +19,7 @@ protocol to :class:`~ob_analytics.pipeline.Pipeline`.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -31,28 +31,24 @@ class RunContext:
     """Per-run parameters that don't belong on the Format constructor.
 
     Passed to ``Pipeline.run(source, ctx=...)`` and forwarded to
-    ``Format.create_loader/create_trade_source/create_writer/collect_extras``.
+    ``Format.create_loader/create_trade_source/create_writer``.
 
     Attributes
     ----------
     trading_date : str or pd.Timestamp, optional
         Calendar date anchor (LOBSTER needs this; venues with continuous
         trading do not).
-    extras : dict, optional
-        Free-form per-run options. Format implementations may consume
-        keys they recognise (e.g. ``num_levels`` for LobsterWriter).
     """
 
     trading_date: object | None = None
-    extras: dict = field(default_factory=dict)
 
 
 @runtime_checkable
 class EventLoader(Protocol):
     """Loads raw order-book events from a data source.
 
-    The returned DataFrame must contain at least the columns documented
-    in :class:`~ob_analytics.models.OrderEvent`.
+    The returned DataFrame must contain at least the columns required by
+    ``ob_analytics.schemas.validate_events_df``.
     """
 
     def load(self, source: Any) -> pd.DataFrame:
@@ -68,8 +64,8 @@ class EventLoader(Protocol):
         Returns
         -------
         pandas.DataFrame
-            Events with at least the columns described by
-            :class:`~ob_analytics.models.OrderEvent`.
+            Events with at least the columns required by
+            ``ob_analytics.schemas.validate_events_df``.
         """
         ...
 
@@ -137,37 +133,33 @@ class DataWriter(Protocol):
         ...
 
 
-class Format:
-    """Base class for data format descriptors.
+@runtime_checkable
+class Format(Protocol):
+    """Structural contract for a data-format descriptor.
 
-    Subclass to define how a specific data format's events should be
-    loaded, how trades are acquired, and optionally written back.  Pass
-    instances to ``Pipeline(format=...)`` for one-line setup.
+    A Format bundles the per-format factories the pipeline needs: how to
+    load events, how to acquire trades, and (optionally) how to write
+    results or compute depth directly. Pass instances to
+    ``Pipeline(format=...)``.
 
-    Individual components can still be overridden::
-
-        Pipeline(format=LobsterFormat(...), loader=MyLoader())
-
-    Subclasses should set the ``name`` class variable to a short lowercase
-    string identifying the exchange format (e.g. ``name = "bitstamp"``).
-    This value appears in ``PipelineResult.metadata["format"]``.
+    There is **no base class to inherit** — any object providing these
+    members satisfies the contract (structural typing). ``name`` is a
+    short lowercase identifier (e.g. ``"bitstamp"``).
     """
 
-    name: str = ""
+    name: str
 
     def create_loader(self, config: Any, ctx: RunContext) -> EventLoader:
         """Return a loader for this format."""
-        raise NotImplementedError
+        ...
 
     def create_trade_source(self, config: Any, ctx: RunContext) -> TradeSource:
         """Return a trade source for this format."""
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement create_trade_source()"
-        )
+        ...
 
     def create_writer(self, config: Any, ctx: RunContext) -> DataWriter | None:
-        """Return a writer for this format, or ``None`` if not supported."""
-        return None
+        """Return a writer for this format, or ``None`` if unsupported."""
+        ...
 
     def compute_depth(
         self,
@@ -176,26 +168,10 @@ class Format:
         source: Any,
         ctx: RunContext,
     ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
-        """Optionally compute depth and depth_summary directly.
-
-        Return ``None`` (default) to use the standard
-        ``price_level_volume`` → ``depth_metrics`` pipeline.  Return
-        ``(depth, depth_summary)`` to override with format-specific
-        ground-truth data (e.g. LOBSTER orderbook files).
-        """
-        return None
-
-    def collect_extras(
-        self,
-        loader: EventLoader,
-        events: pd.DataFrame,
-        source: Any,
-        ctx: RunContext,
-    ) -> dict[str, pd.DataFrame]:
-        """Return any per-format auxiliary DataFrames to attach to
-        ``PipelineResult.extras``. Default: nothing."""
-        return {}
+        """Return ``(depth, depth_summary)`` to override the standard
+        depth pipeline, or ``None`` to use it."""
+        ...
 
     def config_defaults(self) -> dict[str, Any]:
         """Return default :class:`PipelineConfig` overrides for this format."""
-        return {}
+        ...

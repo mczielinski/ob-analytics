@@ -88,24 +88,21 @@ result = Pipeline(
 ).run("/path/to/lobster_data")
 ```
 
-### Pluggable flow-toxicity metrics
+### Flow-toxicity metrics
 
-Metrics are first-class plugins behind a `ToxicityMetric` protocol. Built-in
-implementations: `Vpin`, `Ofi`, `KyleLambda`. Outputs land in
-`result.metrics[name]`:
+Flow-toxicity metrics are plain functions you call on `result.trades` after
+the run — no pipeline configuration, no plugin registry:
 
 ```python
-from ob_analytics import Pipeline, Vpin, KyleLambda, sample_csv_path
+from ob_analytics import Pipeline, compute_vpin, compute_kyle_lambda, sample_csv_path
 
-result = Pipeline(metrics=[Vpin(bucket_volume=10.0), KyleLambda()]).run(
-    sample_csv_path()
-)
-result.metrics["vpin"]
-result.metrics["kyle_lambda"]
+result = Pipeline().run(sample_csv_path())
+vpin = compute_vpin(result.trades, bucket_volume=10.0)
+kyle = compute_kyle_lambda(result.trades)
 ```
 
-Register your own (`register_metric("amihud", Amihud)`) and it shows up in
-`list_metrics()` and the gallery.
+Add your own by writing a function over a trades DataFrame — see the
+[Extending guide](docs/extending.md).
 
 ### Live capture (Bitstamp)
 

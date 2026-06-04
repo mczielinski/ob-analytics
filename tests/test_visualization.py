@@ -13,17 +13,10 @@ from matplotlib.figure import Figure
 
 from ob_analytics.visualization import (
     PlotTheme,
-    get_plot_theme,
-    plot_current_depth,
-    plot_event_map,
-    plot_events_histogram,
-    plot_time_series,
-    plot_trades,
-    plot_volume_map,
-    plot_volume_percentiles,
+    plot,
     save_figure,
-    set_plot_theme,
 )
+from ob_analytics.visualization import _data
 from ob_analytics.visualization._matplotlib import _create_axes
 
 
@@ -114,13 +107,18 @@ class TestPlotTheme:
         with pytest.raises(AttributeError):
             theme.style = "whitegrid"  # type: ignore[misc]
 
-    def test_set_get_roundtrip(self):
-        original = get_plot_theme()
+    def test_theme_kwarg_threads_through_create_axes(self):
+        # A per-call theme is applied when _create_axes builds a new figure;
+        # there is no global theme to set or restore.
         custom = PlotTheme(style="white", font_scale=2.0)
-        set_plot_theme(custom)
-        assert get_plot_theme() is custom
-        set_plot_theme(original)
-        assert get_plot_theme() is original
+        fig, _ = _create_axes(None, theme=custom)
+        assert isinstance(fig, Figure)
+
+    def test_plot_accepts_theme_kwarg(self, sample_trades):
+        # plot() pops theme= from kwargs and forwards it to the renderer.
+        custom = PlotTheme(style="whitegrid", font_scale=1.0)
+        fig = plot("trades", theme=custom, **_data.prepare_trades_data(sample_trades))
+        assert isinstance(fig, Figure)
 
 
 # ---------------------------------------------------------------------------
@@ -159,47 +157,53 @@ class TestPlotTimeSeries:
     def test_returns_figure(self):
         ts = pd.Series(pd.date_range("2020-01-01", periods=5, freq="s"))
         vals = pd.Series([1, 2, 3, 2, 1])
-        fig = plot_time_series(ts, vals)
+        fig = plot("time_series", **_data.prepare_time_series_data(ts, vals))
         assert isinstance(fig, Figure)
 
     def test_accepts_ax(self):
         fig_orig, ax_orig = plt.subplots()
         ts = pd.Series(pd.date_range("2020-01-01", periods=5, freq="s"))
         vals = pd.Series([1, 2, 3, 2, 1])
-        fig = plot_time_series(ts, vals, ax=ax_orig)
+        fig = plot(
+            "time_series", ax=ax_orig, **_data.prepare_time_series_data(ts, vals)
+        )
         assert fig is fig_orig
 
 
 class TestPlotTrades:
     def test_returns_figure(self, sample_trades):
-        fig = plot_trades(sample_trades)
+        fig = plot("trades", **_data.prepare_trades_data(sample_trades))
         assert isinstance(fig, Figure)
 
     def test_accepts_ax(self, sample_trades):
         fig_orig, ax_orig = plt.subplots()
-        fig = plot_trades(sample_trades, ax=ax_orig)
+        fig = plot("trades", ax=ax_orig, **_data.prepare_trades_data(sample_trades))
         assert fig is fig_orig
 
 
 class TestPlotEventMap:
     def test_returns_figure(self, sample_events):
-        fig = plot_event_map(sample_events)
+        fig = plot("event_map", **_data.prepare_event_map_data(sample_events))
         assert isinstance(fig, Figure)
 
     def test_accepts_ax(self, sample_events):
         fig_orig, ax_orig = plt.subplots()
-        fig = plot_event_map(sample_events, ax=ax_orig)
+        fig = plot(
+            "event_map", ax=ax_orig, **_data.prepare_event_map_data(sample_events)
+        )
         assert fig is fig_orig
 
 
 class TestPlotVolumeMap:
     def test_returns_figure(self, sample_events):
-        fig = plot_volume_map(sample_events)
+        fig = plot("volume_map", **_data.prepare_volume_map_data(sample_events))
         assert isinstance(fig, Figure)
 
     def test_accepts_ax(self, sample_events):
         fig_orig, ax_orig = plt.subplots()
-        fig = plot_volume_map(sample_events, ax=ax_orig)
+        fig = plot(
+            "volume_map", ax=ax_orig, **_data.prepare_volume_map_data(sample_events)
+        )
         assert fig is fig_orig
 
 
@@ -212,24 +216,34 @@ class TestPlotCurrentDepth:
             {"price": [237.00, 237.50], "volume": [150, 250], "liquidity": [150, 400]}
         )
         ob = {"bids": bids, "asks": asks, "timestamp": 1430438400}
-        fig = plot_current_depth(ob)
+        fig = plot("current_depth", **_data.prepare_current_depth_data(ob))
         assert isinstance(fig, Figure)
 
 
 class TestPlotVolumePercentiles:
     def test_returns_figure(self, sample_depth_summary):
-        fig = plot_volume_percentiles(sample_depth_summary)
+        fig = plot(
+            "volume_percentiles",
+            **_data.prepare_volume_percentiles_data(sample_depth_summary),
+        )
         assert isinstance(fig, Figure)
 
 
 class TestPlotEventsHistogram:
     def test_returns_figure(self, sample_events):
-        fig = plot_events_histogram(sample_events, val="price", bw=0.25)
+        fig = plot(
+            "events_histogram",
+            **_data.prepare_events_histogram_data(sample_events, val="price", bw=0.25),
+        )
         assert isinstance(fig, Figure)
 
     def test_accepts_ax(self, sample_events):
         fig_orig, ax_orig = plt.subplots()
-        fig = plot_events_histogram(sample_events, val="price", bw=0.25, ax=ax_orig)
+        fig = plot(
+            "events_histogram",
+            ax=ax_orig,
+            **_data.prepare_events_histogram_data(sample_events, val="price", bw=0.25),
+        )
         assert fig is fig_orig
 
 
@@ -241,8 +255,8 @@ class TestPlotEventsHistogram:
 class TestSubplotComposition:
     def test_two_plots_on_shared_figure(self, sample_trades):
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
-        fig1 = plot_trades(sample_trades, ax=ax1)
-        fig2 = plot_trades(sample_trades, ax=ax2)
+        fig1 = plot("trades", ax=ax1, **_data.prepare_trades_data(sample_trades))
+        fig2 = plot("trades", ax=ax2, **_data.prepare_trades_data(sample_trades))
         assert fig1 is fig
         assert fig2 is fig
         assert len(fig.axes) >= 2
@@ -255,48 +269,77 @@ class TestSubplotComposition:
 
 class TestBackendDispatch:
     def test_default_backend_returns_matplotlib_figure(self, sample_trades):
-        fig = plot_trades(sample_trades)
+        fig = plot("trades", **_data.prepare_trades_data(sample_trades))
         assert isinstance(fig, Figure)
 
     def test_explicit_matplotlib_returns_figure(self, sample_trades):
-        fig = plot_trades(sample_trades, backend="matplotlib")
+        fig = plot(
+            "trades", backend="matplotlib", **_data.prepare_trades_data(sample_trades)
+        )
         assert isinstance(fig, Figure)
 
     def test_invalid_backend_raises_value_error(self, sample_trades):
         with pytest.raises(ValueError, match="Unknown backend"):
-            plot_trades(sample_trades, backend="nonexistent")
+            plot(
+                "trades",
+                backend="nonexistent",
+                **_data.prepare_trades_data(sample_trades),
+            )
+
+    def test_plot_dispatch_matplotlib(self, sample_trades):
+        """The unified plot() dispatcher renders from already-prepared data."""
+        from ob_analytics.visualization import _data, plot
+
+        fig = plot(
+            "trades",
+            backend="matplotlib",
+            **_data.prepare_trades_data(sample_trades),
+        )
+        assert isinstance(fig, Figure)
+
+    def test_plot_unknown_backend_raises(self):
+        from ob_analytics.visualization import plot
+
+        with pytest.raises(ValueError, match="Unknown backend"):
+            plot("trades", backend="nope")
 
 
 class TestRegisterBackend:
     def test_register_and_dispatch(self, sample_trades, tmp_path):
-        """Register a dummy backend and verify dispatch calls it."""
+        """A backend module self-registers its renderers; plot() dispatches."""
         from ob_analytics.visualization import (
-            _BACKENDS,
-            _FUNC_PREFIX,
+            RENDERERS,
+            _BACKEND_MODULES,
+            plot,
             register_plot_backend,
         )
 
-        # Create a temporary dummy module
+        # The new extension contract: the backend module registers each
+        # renderer into RENDERERS under (plot_name, backend) at import time.
         dummy_module = tmp_path / "dummy_backend.py"
         dummy_module.write_text(
+            "from ob_analytics.visualization import RENDERERS\n"
             "class _Sentinel:\n"
             "    pass\n"
             "def dummy_trades(data, *a, **kw):\n"
             "    return _Sentinel()\n"
+            "RENDERERS.register(('trades', 'dummy'), dummy_trades)\n"
         )
 
         import sys
 
         sys.path.insert(0, str(tmp_path))
         try:
-            register_plot_backend("dummy", "dummy_backend", func_prefix="dummy_")
-            assert "dummy" in _BACKENDS
+            register_plot_backend("dummy", "dummy_backend")
+            assert "dummy" in _BACKEND_MODULES
 
-            fig = plot_trades(sample_trades, backend="dummy")
-            # Should return the sentinel, not a matplotlib Figure
+            fig = plot("trades", backend="dummy")
+            # Should return the sentinel, not a matplotlib Figure.
             assert type(fig).__name__ == "_Sentinel"
         finally:
             sys.path.pop(0)
-            _BACKENDS.pop("dummy", None)
-            _FUNC_PREFIX.pop("dummy", None)
+            _BACKEND_MODULES.pop("dummy", None)
             sys.modules.pop("dummy_backend", None)
+            # Registry has no public removal; the inert (trades, dummy) entry
+            # is dropped here so the dummy module's renderer doesn't linger.
+            RENDERERS._items.pop(("trades", "dummy"), None)

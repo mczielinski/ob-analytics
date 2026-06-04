@@ -17,3 +17,16 @@ them.
 ::: ob_analytics.visualization.gallery.PlotSpec
 
 ::: ob_analytics.visualization.gallery.default_specs
+
+## Extra panels
+
+Build optional flow-toxicity and LOBSTER panels and append them via
+`generate_gallery(..., extra_panels=[...])`.
+
+::: ob_analytics.visualization.gallery.vpin_panel
+
+::: ob_analytics.visualization.gallery.ofi_panel
+
+::: ob_analytics.visualization.gallery.kyle_panel
+
+::: ob_analytics.visualization.gallery.trading_halts_panel

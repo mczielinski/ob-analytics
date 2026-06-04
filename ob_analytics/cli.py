@@ -39,33 +39,28 @@ def _cmd_process(args: argparse.Namespace) -> None:
 
     from ob_analytics.config import PipelineConfig
     from ob_analytics.data import save_data
-    from ob_analytics.bitstamp import BitstampFormat
-    from ob_analytics.lobster import LobsterFormat
-    from ob_analytics.pipeline import Pipeline
+    from ob_analytics.pipeline import FORMATS, Pipeline
 
     from ob_analytics.protocols import RunContext
 
     source = args.source
     fmt_name = args.format
 
+    try:
+        fmt = FORMATS.get(fmt_name)()
+    except KeyError as exc:
+        logger.error(str(exc))
+        sys.exit(1)
+
     if fmt_name == "lobster":
         if args.trading_date is None:
             logger.error("--trading-date is required for LOBSTER format")
             sys.exit(1)
-        fmt = LobsterFormat()
         ctx = RunContext(trading_date=args.trading_date)
-    elif fmt_name == "bitstamp":
-        fmt = BitstampFormat()
-        ctx = RunContext()
     else:
-        logger.error("Unknown format {!r}", fmt_name)
-        sys.exit(1)
+        ctx = RunContext()
 
-    config_overrides: dict = {}
-    if args.vpin_bucket_volume is not None:
-        config_overrides["vpin_bucket_volume"] = args.vpin_bucket_volume
-
-    config = PipelineConfig(**{**fmt.config_defaults(), **config_overrides})
+    config = PipelineConfig(**fmt.config_defaults())
     pipeline = Pipeline(config=config, format=fmt, ctx=ctx)
 
     logger.info("Processing {} (format={})...", source, fmt_name)
@@ -94,6 +89,7 @@ def _cmd_gallery(args: argparse.Namespace) -> None:
     _setup_logging(args.verbose)
     from loguru import logger
 
+    from ob_analytics.config import PipelineConfig
     from ob_analytics.data import load_data
     from ob_analytics.visualization.gallery import generate_gallery
     from ob_analytics.pipeline import PipelineResult
@@ -109,8 +105,7 @@ def _cmd_gallery(args: argparse.Namespace) -> None:
         trades=data["trades"],
         depth=data["depth"],
         depth_summary=data["depth_summary"],
-        vpin=data.get("vpin"),
-        ofi=data.get("ofi"),
+        config=PipelineConfig(),
     )
 
     gallery_path = generate_gallery(
@@ -250,12 +245,6 @@ def main() -> None:
         "--trading-date",
         default=None,
         help="Trading date for LOBSTER format (YYYY-MM-DD)",
-    )
-    p_process.add_argument(
-        "--vpin-bucket-volume",
-        type=float,
-        default=None,
-        help="Bucket volume for VPIN computation (omit to skip)",
     )
     p_process.add_argument(
         "--gallery",

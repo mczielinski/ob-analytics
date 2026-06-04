@@ -10,6 +10,7 @@ Public API:
 
 from __future__ import annotations
 
+from ob_analytics._registry import Registry
 from ob_analytics.live._base import (
     CaptureConfig,
     CaptureResult,
@@ -19,7 +20,7 @@ from ob_analytics.live._base import (
     SupportsDiagnostics,
 )
 
-_CAPTURERS: dict[str, type[LiveCapturer]] = {}
+CAPTURERS: Registry[str, type[LiveCapturer]] = Registry("capturer")
 
 
 def register_capturer(name: str, capturer_cls: type[LiveCapturer]) -> None:
@@ -28,21 +29,20 @@ def register_capturer(name: str, capturer_cls: type[LiveCapturer]) -> None:
     Idempotent: overwriting an existing registration is allowed (useful for
     monkey-patching in tests).
     """
-    _CAPTURERS[name.lower()] = capturer_cls
+    CAPTURERS.register(name, capturer_cls)
 
 
 def list_capturers() -> list[str]:
     """Return the sorted list of registered capturer names."""
-    return sorted(_CAPTURERS)
+    return CAPTURERS.list()
 
 
 def get_capturer(name: str) -> type[LiveCapturer]:
     """Return the capturer class registered under *name* (case-insensitive)."""
-    key = name.lower()
-    if key not in _CAPTURERS:
-        available = ", ".join(list_capturers()) or "(none)"
-        raise ValueError(f"Unknown capturer {name!r}. Registered: {available}")
-    return _CAPTURERS[key]
+    try:
+        return CAPTURERS.get(name)
+    except KeyError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 # -- Register built-ins -----------------------------------------------------

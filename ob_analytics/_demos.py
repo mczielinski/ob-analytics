@@ -17,7 +17,11 @@ from ob_analytics.data import save_data
 from ob_analytics.lobster import LobsterFormat
 from ob_analytics.pipeline import Pipeline, PipelineResult
 from ob_analytics.protocols import RunContext
-from ob_analytics.visualization.gallery import generate_gallery
+from ob_analytics.visualization.gallery import (
+    PlotSpec,
+    generate_gallery,
+    trading_halts_panel,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -38,6 +42,7 @@ def _save_and_gallery(
     result: PipelineResult,
     output_dir: Path,
     title: str,
+    extra_panels: list[PlotSpec] | None = None,
 ) -> Path:
     """Save Parquet + generate gallery; return the gallery HTML path."""
     parquet_dir = output_dir / "parquet"
@@ -45,7 +50,9 @@ def _save_and_gallery(
     logger.info("Parquet saved to: {}", parquet_dir)
 
     gallery_dir = output_dir / "gallery"
-    gallery_path = generate_gallery(result, gallery_dir, title=title)
+    gallery_path = generate_gallery(
+        result, gallery_dir, title=title, extra_panels=extra_panels
+    )
     logger.info("Gallery: {}", gallery_path.resolve())
     logger.info("Open in browser: file://{}", gallery_path.resolve())
     return gallery_path
@@ -164,8 +171,16 @@ def run_lobster_demo(
     logger.info("Trades: {:,}", len(result.trades))
     logger.info("Depth:  {:,}", len(result.depth))
 
+    # LOBSTER halts are not part of the slim PipelineResult; read them off the
+    # loader and overlay them on the gallery via extra_panels.
+    halts = getattr(pipeline.loader, "trading_halts", None)
+    extra_panels: list[PlotSpec] = []
+    if halts is not None and not halts.empty:
+        extra_panels.append(trading_halts_panel(result.trades, halts))
+
     return _save_and_gallery(
         result,
         out,
         title=f"LOBSTER {src.name} ({trading_date}) -- ob-analytics",
+        extra_panels=extra_panels,
     )

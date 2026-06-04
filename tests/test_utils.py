@@ -15,7 +15,7 @@ from ob_analytics._utils import (
     vector_diff,
     vwap,
 )
-from ob_analytics.exceptions import InsufficientDataError, InvalidDataError
+from ob_analytics.exceptions import ConfigError, ObAnalyticsError
 
 
 class TestValidateColumns:
@@ -25,12 +25,12 @@ class TestValidateColumns:
 
     def test_raises_on_missing_column(self):
         df = pd.DataFrame({"a": [1], "b": [2]})
-        with pytest.raises(InvalidDataError, match="missing required columns.*'c'"):
+        with pytest.raises(ConfigError, match="missing required columns.*'c'"):
             validate_columns(df, {"a", "c"}, "test")
 
     def test_error_message_includes_context(self):
         df = pd.DataFrame({"x": [1]})
-        with pytest.raises(InvalidDataError, match="my_function"):
+        with pytest.raises(ConfigError, match="my_function"):
             validate_columns(df, {"y"}, "my_function")
 
     def test_empty_required_passes(self):
@@ -45,7 +45,7 @@ class TestValidateNonEmpty:
 
     def test_raises_on_empty_dataframe(self):
         df = pd.DataFrame({"a": [], "b": []})
-        with pytest.raises(InsufficientDataError, match="empty DataFrame"):
+        with pytest.raises(ObAnalyticsError, match="empty DataFrame"):
             validate_non_empty(df, "test")
 
 

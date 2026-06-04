@@ -41,7 +41,6 @@ from ob_analytics.config import PipelineConfig
 from ob_analytics.protocols import (
     DataWriter,
     EventLoader,
-    Format,
     RunContext,
     TradeSource,
 )
@@ -96,8 +95,11 @@ class LobsterLoader:
     ) -> None:
         self._config = config or PipelineConfig()
         self._trading_date = pd.Timestamp(trading_date).normalize()
-        self._trading_halts: pd.DataFrame | None = None
-        self._cross_trades: pd.DataFrame | None = None
+        #: Trading-halt (event_type 7) and cross-trade (event_type 6) rows,
+        #: split out during :meth:`load`. Public so callers can overlay them on
+        #: the gallery via ``extra_panels`` (LOBSTER-only; ``None`` if absent).
+        self.trading_halts: pd.DataFrame | None = None
+        self.cross_trades: pd.DataFrame | None = None
         #: Path to the companion LOBSTER orderbook file, discovered during
         #: :meth:`load`. Public so :class:`LobsterFormat` can read it for depth
         #: computation without reaching into a private attribute.
@@ -140,8 +142,8 @@ class LobsterLoader:
         # Separate special event types before mapping actions
         halts = raw[raw["event_type"] == 7].copy()
         cross = raw[raw["event_type"] == 6].copy()
-        self._trading_halts = halts if not halts.empty else None
-        self._cross_trades = cross if not cross.empty else None
+        self.trading_halts = halts if not halts.empty else None
+        self.cross_trades = cross if not cross.empty else None
 
         events = raw[raw["event_type"].isin(_EVENT_TYPE_TO_ACTION)].copy()
         events["action"] = events["event_type"].map(_EVENT_TYPE_TO_ACTION)
@@ -710,8 +712,28 @@ def lobster_depth_from_orderbook(
 # ── LobsterFormat descriptor ─────────────────────────────────────────
 
 
+def _require_trading_date(td: object, where: str) -> str | pd.Timestamp:
+    """Validate a LOBSTER ``trading_date`` (taken from :class:`RunContext`).
+
+    Single source of truth for the loader, writer, and standalone
+    writer-factory paths.  Returns *td* unchanged when valid; raises
+    :class:`ValueError` when missing and :class:`TypeError` on a bad type.
+    """
+    if td is None:
+        raise ValueError(
+            f"LobsterFormat.{where}: trading_date is required. "
+            f"Pass it via ctx=RunContext(trading_date=...)."
+        )
+    if not isinstance(td, (str, pd.Timestamp)):
+        raise TypeError(
+            f"LobsterFormat.{where}: trading_date must be str or "
+            f"pandas.Timestamp, got {type(td).__name__}"
+        )
+    return td
+
+
 @dataclass
-class LobsterFormat(Format):
+class LobsterFormat:
     """Format descriptor for LOBSTER limit-order-book data.
 
     ``trading_date`` is taken from the per-run
@@ -725,7 +747,7 @@ class LobsterFormat(Format):
     _loader: LobsterLoader | None = field(default=None, repr=False, init=False)
 
     def create_loader(self, config: PipelineConfig, ctx: RunContext) -> EventLoader:
-        td = self._require_trading_date(ctx, "create_loader")
+        td = _require_trading_date(ctx.trading_date, "create_loader")
         self._loader = LobsterLoader(config, trading_date=td)
         return self._loader
 
@@ -735,7 +757,7 @@ class LobsterFormat(Format):
         return LobsterTradeReader(config)
 
     def create_writer(self, config: PipelineConfig, ctx: RunContext) -> DataWriter:
-        td = self._require_trading_date(ctx, "create_writer")
+        td = _require_trading_date(ctx.trading_date, "create_writer")
         return LobsterWriter(config, trading_date=td)
 
     def compute_depth(
@@ -756,26 +778,6 @@ class LobsterFormat(Format):
             return None
         return lobster_depth_from_orderbook(events, ob_path, config)
 
-    def collect_extras(
-        self,
-        loader: EventLoader,
-        events: pd.DataFrame,
-        source: Any,
-        ctx: RunContext,
-    ) -> dict[str, pd.DataFrame]:
-        out: dict[str, pd.DataFrame] = {}
-        lob = loader if isinstance(loader, LobsterLoader) else None
-        if lob is None:
-            return out
-        if lob._trading_halts is not None and not lob._trading_halts.empty:
-            out["trading_halts"] = lob._trading_halts
-        if lob._cross_trades is not None and not lob._cross_trades.empty:
-            out["cross_trades"] = lob._cross_trades
-        hidden = events[events["raw_event_type"] == 5]
-        if not hidden.empty:
-            out["hidden_executions"] = hidden.copy()
-        return out
-
     def config_defaults(self) -> dict[str, Any]:
         return {
             "price_decimals": 2,
@@ -783,19 +785,18 @@ class LobsterFormat(Format):
             "volume_decimals": 0,
         }
 
-    @staticmethod
-    def _require_trading_date(ctx: RunContext, where: str) -> str | pd.Timestamp:
-        td = ctx.trading_date
-        if td is None:
-            raise ValueError(
-                f"LobsterFormat.{where}: trading_date is required. "
-                f"Pass it via Pipeline(format=LobsterFormat(), "
-                f"ctx=RunContext(trading_date=...)) or "
-                f"Pipeline.from_format('lobster', ctx=RunContext(trading_date=...))."
-            )
-        if not isinstance(td, (str, pd.Timestamp)):
-            raise TypeError(
-                f"LobsterFormat.{where}: trading_date must be str or "
-                f"pandas.Timestamp, got {type(td).__name__}"
-            )
-        return td
+
+# ── Register this format and its writer ───────────────────────────────
+# Imports sit at the bottom (deferred from the top of the module) to avoid a
+# circular import: ``pipeline`` imports loaders/readers from the format modules.
+from ob_analytics.data import register_writer  # noqa: E402
+from ob_analytics.pipeline import register_format  # noqa: E402
+
+
+def _make_lobster_writer(config, ctx):
+    td = _require_trading_date(ctx.trading_date, "create_writer")
+    return LobsterWriter(config, trading_date=td)
+
+
+register_format("lobster", LobsterFormat)
+register_writer("lobster", _make_lobster_writer)

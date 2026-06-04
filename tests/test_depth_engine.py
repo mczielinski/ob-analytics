@@ -22,11 +22,11 @@ class TestCrossedBookGuards:
         out = np.zeros(engine._row_len)
 
         # Set up: bid at 100
-        engine.update(100, 5.0, 0, out)
+        engine.update_side(100, 5.0, 0, out)
         assert engine._best_bid == 100
 
         # Ask at exactly 100 — with strict < guard, this IS processed
-        engine.update(100, 3.0, 1, out)
+        engine.update_side(100, 3.0, 1, out)
         assert 100 in engine._ask_levels
 
     def test_bid_at_best_ask_is_processed(self):
@@ -35,11 +35,11 @@ class TestCrossedBookGuards:
         out = np.zeros(engine._row_len)
 
         # Set up: ask at 110
-        engine.update(110, 5.0, 1, out)
+        engine.update_side(110, 5.0, 1, out)
         assert engine._best_ask == 110
 
         # Bid at exactly 110 — with strict > guard, this IS processed
-        engine.update(110, 3.0, 0, out)
+        engine.update_side(110, 3.0, 0, out)
         assert 110 in engine._bid_levels
 
     def test_ask_below_best_bid_is_dropped(self):
@@ -47,8 +47,8 @@ class TestCrossedBookGuards:
         engine = DepthMetricsEngine()
         out = np.zeros(engine._row_len)
 
-        engine.update(100, 5.0, 0, out)  # bid at 100
-        engine.update(99, 3.0, 1, out)  # ask at 99 < bid 100
+        engine.update_side(100, 5.0, 0, out)  # bid at 100
+        engine.update_side(99, 3.0, 1, out)  # ask at 99 < bid 100
 
         assert 99 not in engine._ask_levels
 
@@ -57,8 +57,8 @@ class TestCrossedBookGuards:
         engine = DepthMetricsEngine()
         out = np.zeros(engine._row_len)
 
-        engine.update(110, 5.0, 1, out)  # ask at 110
-        engine.update(111, 3.0, 0, out)  # bid at 111 > ask 110
+        engine.update_side(110, 5.0, 1, out)  # ask at 110
+        engine.update_side(111, 3.0, 0, out)  # bid at 111 > ask 110
 
         assert 111 not in engine._bid_levels
 
@@ -70,11 +70,11 @@ class TestBestPriceRecalculation:
         engine = DepthMetricsEngine()
         out = np.zeros(engine._row_len)
 
-        engine.update(100, 5.0, 1, out)  # ask at 100
-        engine.update(105, 3.0, 1, out)  # ask at 105
+        engine.update_side(100, 5.0, 1, out)  # ask at 100
+        engine.update_side(105, 3.0, 1, out)  # ask at 105
         assert engine._best_ask == 100
 
-        engine.update(100, 0.0, 1, out)  # delete best ask
+        engine.update_side(100, 0.0, 1, out)  # delete best ask
         assert engine._best_ask == 105
         assert engine._best_ask_vol == 3.0
 
@@ -82,11 +82,11 @@ class TestBestPriceRecalculation:
         engine = DepthMetricsEngine()
         out = np.zeros(engine._row_len)
 
-        engine.update(100, 5.0, 0, out)  # bid at 100
-        engine.update(95, 3.0, 0, out)  # bid at 95
+        engine.update_side(100, 5.0, 0, out)  # bid at 100
+        engine.update_side(95, 3.0, 0, out)  # bid at 95
         assert engine._best_bid == 100
 
-        engine.update(100, 0.0, 0, out)  # delete best bid
+        engine.update_side(100, 0.0, 0, out)  # delete best bid
         assert engine._best_bid == 95
         assert engine._best_bid_vol == 3.0
 
@@ -95,8 +95,8 @@ class TestBestPriceRecalculation:
         engine = DepthMetricsEngine()
         out = np.zeros(engine._row_len)
 
-        engine.update(100, 5.0, 1, out)
-        engine.update(100, 0.0, 1, out)
+        engine.update_side(100, 5.0, 1, out)
+        engine.update_side(100, 0.0, 1, out)
 
         assert engine._best_ask is None
         assert engine._best_ask_vol == 0.0
@@ -157,9 +157,9 @@ class TestBpsBinVolumes:
         out = np.zeros(engine._row_len)
 
         # best ask at 10000 (=$100.00 in cents)
-        engine.update(10000, 4.0, 1, out)
+        engine.update_side(10000, 4.0, 1, out)
         # additional ask 100bps higher = 10100
-        engine.update(10100, 7.0, 1, out)
+        engine.update_side(10100, 7.0, 1, out)
 
         # Column layout: best_bid_price, best_bid_vol, bid_vol... (5),
         #                best_ask_price, best_ask_vol, ask_vol... (5)
@@ -182,9 +182,9 @@ class TestBpsBinVolumes:
         engine = DepthMetricsEngine(cfg)
         out = np.zeros(engine._row_len)
 
-        engine.update(10000, 4.0, 0, out)  # best bid
-        engine.update(9900, 7.0, 0, out)  # 100bps below
-        engine.update(9000, 1.0, 0, out)  # 1000bps below — outside 5*100bps window
+        engine.update_side(10000, 4.0, 0, out)  # best bid
+        engine.update_side(9900, 7.0, 0, out)  # 100bps below
+        engine.update_side(9000, 1.0, 0, out)  # 1000bps below — outside 5*100bps window
 
         assert out[0] == 10000
         assert out[1] == 4.0

@@ -11,7 +11,7 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 
-from ob_analytics.exceptions import InsufficientDataError, InvalidDataError
+from ob_analytics.exceptions import ConfigError, ObAnalyticsError
 
 # ---------------------------------------------------------------------------
 # DataFrame validation
@@ -23,19 +23,19 @@ def validate_columns(
     required: Iterable[str],
     context: str,
 ) -> None:
-    """Raise :class:`InvalidDataError` if *required* columns are missing."""
+    """Raise :class:`ConfigError` if *required* columns are missing."""
     missing = set(required) - set(df.columns)
     if missing:
-        raise InvalidDataError(
+        raise ConfigError(
             f"{context}: missing required columns {sorted(missing)}. "
             f"Available columns: {sorted(df.columns)}"
         )
 
 
 def validate_non_empty(df: pd.DataFrame, context: str) -> None:
-    """Raise :class:`InsufficientDataError` if *df* is empty."""
+    """Raise :class:`ObAnalyticsError` if *df* is empty."""
     if df.empty:
-        raise InsufficientDataError(
+        raise ObAnalyticsError(
             f"{context}: received empty DataFrame ({len(df.columns)} columns, 0 rows)"
         )
 

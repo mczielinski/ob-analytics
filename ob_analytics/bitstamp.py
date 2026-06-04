@@ -34,7 +34,6 @@ from ob_analytics.config import PipelineConfig
 from ob_analytics.protocols import (
     DataWriter,
     EventLoader,
-    Format,
     RunContext,
     TradeSource,
 )
@@ -423,8 +422,12 @@ class BitstampWriter:
 
 
 @dataclass
-class BitstampFormat(Format):
-    """Format descriptor for Bitstamp-style CSV data."""
+class BitstampFormat:
+    """Format descriptor for Bitstamp-style CSV data.
+
+    Conforms structurally to the :class:`~ob_analytics.protocols.Format`
+    Protocol — no inheritance required.
+    """
 
     name: str = "bitstamp"
 
@@ -439,9 +442,30 @@ class BitstampFormat(Format):
     def create_writer(self, config: PipelineConfig, ctx: RunContext) -> DataWriter:
         return BitstampWriter(config)
 
+    def compute_depth(
+        self,
+        events: pd.DataFrame,
+        config: Any,
+        source: Any,
+        ctx: RunContext,
+    ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
+        # Bitstamp uses the standard price_level_volume -> depth_metrics path.
+        return None
+
     def config_defaults(self) -> dict[str, Any]:
         return {
             "price_decimals": 2,
             "volume_decimals": 8,
             "timestamp_unit": "ms",
         }
+
+
+# ── Register this format and its writer ───────────────────────────────
+# Imports sit at the bottom (deferred from the top of the module) to avoid a
+# circular import: ``pipeline`` imports ``BitstampLoader``/``BitstampTradeReader``
+# from here.
+from ob_analytics.data import register_writer  # noqa: E402
+from ob_analytics.pipeline import register_format  # noqa: E402
+
+register_format("bitstamp", BitstampFormat)
+register_writer("bitstamp", lambda config, ctx: BitstampWriter(config))

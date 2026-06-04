@@ -21,27 +21,12 @@ import pandas as pd
 from loguru import logger
 
 from ob_analytics.depth import get_spread
-from ob_analytics.flow_toxicity import (
-    compute_kyle_lambda,
-    compute_vpin,
-    order_flow_imbalance,
-)
 from ob_analytics.analytics import order_book
 from ob_analytics.pipeline import PipelineResult
+from ob_analytics.visualization import _data as _viz_data
 from ob_analytics.visualization import (
     infer_volume_scale,
-    plot_current_depth,
-    plot_event_map,
-    plot_events_histogram,
-    plot_hidden_executions,
-    plot_kyle_lambda,
-    plot_order_flow_imbalance,
-    plot_price_levels,
-    plot_trades,
-    plot_trading_halts,
-    plot_volume_map,
-    plot_volume_percentiles,
-    plot_vpin,
+    plot,
     save_figure,
 )
 
@@ -56,20 +41,20 @@ class PlotSpec:
         File stem, e.g. ``"01_trades_full"``.
     title : str
         Human-readable title for the gallery card.
-    plot_fn : Callable
-        The ``plot_*`` function from ``ob_analytics.visualization``.
-    kwargs : dict
-        Keyword arguments to pass to *plot_fn*.
-    needs : str or None
-        If set, the plot is skipped when this key is missing or empty
-        in the data context (e.g. ``"vpin"`` for VPIN-dependent plots).
+    plot_name : str
+        Dispatcher key for :func:`ob_analytics.visualization.plot`,
+        e.g. ``"trades"``.
+    prepare : Callable
+        ``prepare_<name>_data`` helper that returns the renderer payload.
+    prep_kwargs : dict
+        Keyword arguments passed to *prepare*.
     """
 
     name: str
     title: str
-    plot_fn: Callable[..., Any]
-    kwargs: dict[str, Any] = field(default_factory=dict)
-    needs: str | None = None
+    plot_name: str
+    prepare: Callable[..., dict]
+    prep_kwargs: dict[str, Any] = field(default_factory=dict)
 
 
 def _auto_zoom_window(
@@ -93,7 +78,6 @@ def default_specs(
     result: PipelineResult,
     *,
     volume_scale: float | None = None,
-    vpin_bucket_volume: float | None = None,
 ) -> list[PlotSpec]:
     """Build the default set of plot specifications from pipeline results.
 
@@ -106,9 +90,6 @@ def default_specs(
         auto-infers a power-of-10 scale from ``result.events['volume']``
         via :func:`infer_volume_scale` so the gallery works without
         per-asset tuning.
-    vpin_bucket_volume : float or None
-        Bucket volume for VPIN computation.  When None, VPIN/OFI/Kyle
-        plots are skipped.
 
     Returns
     -------
@@ -136,19 +117,22 @@ def default_specs(
         PlotSpec(
             "01_trades_full",
             "Trades (Full Range)",
-            plot_trades,
+            "trades",
+            _viz_data.prepare_trades_data,
             {"trades": trades},
         ),
         PlotSpec(
             "02_trades_zoom",
             "Trades (Zoomed)",
-            plot_trades,
+            "trades",
+            _viz_data.prepare_trades_data,
             {"trades": trades, "start_time": zoom_start, "end_time": zoom_end},
         ),
         PlotSpec(
             "03_price_levels_full",
             "Price Levels / Depth Heatmap (Full)",
-            plot_price_levels,
+            "price_levels",
+            _viz_data.prepare_price_levels_data,
             {
                 "depth": depth,
                 "spread": spread,
@@ -160,7 +144,8 @@ def default_specs(
         PlotSpec(
             "04_price_levels_zoom",
             "Price Levels (Zoomed + Trades)",
-            plot_price_levels,
+            "price_levels",
+            _viz_data.prepare_price_levels_data,
             {
                 "depth": depth,
                 "spread": spread,
@@ -173,13 +158,15 @@ def default_specs(
         PlotSpec(
             "05_event_map_full",
             "Event Map (Full Range)",
-            plot_event_map,
+            "event_map",
+            _viz_data.prepare_event_map_data,
             {"events": events, "volume_scale": volume_scale},
         ),
         PlotSpec(
             "06_event_map_zoom",
             "Event Map (Zoomed)",
-            plot_event_map,
+            "event_map",
+            _viz_data.prepare_event_map_data,
             {
                 "events": events,
                 "start_time": zoom_start,
@@ -190,7 +177,8 @@ def default_specs(
         PlotSpec(
             "07_volume_map_deleted",
             "Volume Map -- Cancelled (log)",
-            plot_volume_map,
+            "volume_map",
+            _viz_data.prepare_volume_map_data,
             {
                 "events": events,
                 "volume_scale": volume_scale,
@@ -200,7 +188,8 @@ def default_specs(
         PlotSpec(
             "08_volume_map_created",
             "Volume Map -- Created (log)",
-            plot_volume_map,
+            "volume_map",
+            _viz_data.prepare_volume_map_data,
             {
                 "events": events,
                 "action": "created",
@@ -210,28 +199,6 @@ def default_specs(
         ),
     ]
 
-    # Hidden executions and trading halts (LOBSTER-enriched).
-    # These pull from result.extras and are skipped by the gallery loop
-    # when the extras key is missing (e.g. Bitstamp data).
-    specs.append(
-        PlotSpec(
-            "08b_hidden_executions",
-            "Hidden Order Executions",
-            plot_hidden_executions,
-            {"result": result},
-            needs="extras:hidden_executions",
-        )
-    )
-    specs.append(
-        PlotSpec(
-            "08c_trading_halts",
-            "Trading Halts",
-            plot_trading_halts,
-            {"result": result},
-            needs="extras:trading_halts",
-        )
-    )
-
     # Order book snapshot (requires 'type' column from set_order_types)
     if "type" in events.columns:
         snap_time = zoom_end
@@ -239,7 +206,8 @@ def default_specs(
             PlotSpec(
                 "09_current_depth",
                 f"Current Depth ({snap_time.strftime('%H:%M')})",
-                plot_current_depth,
+                "current_depth",
+                _viz_data.prepare_current_depth_data,
                 {
                     "order_book": order_book(events, tp=snap_time, bps_range=150),
                     "volume_scale": volume_scale,
@@ -253,7 +221,8 @@ def default_specs(
             PlotSpec(
                 "10_volume_percentiles",
                 "Volume Percentiles",
-                plot_volume_percentiles,
+                "volume_percentiles",
+                _viz_data.prepare_volume_percentiles_data,
                 {
                     "depth_summary": depth_summary_offset,
                     "start_time": zoom_start,
@@ -279,13 +248,15 @@ def default_specs(
             PlotSpec(
                 "11_events_hist_price",
                 "Events Histogram -- Price",
-                plot_events_histogram,
+                "events_histogram",
+                _viz_data.prepare_events_histogram_data,
                 {"events": hist_price, "val": "price", "bw": price_bw},
             ),
             PlotSpec(
                 "12_events_hist_volume",
                 "Events Histogram -- Volume",
-                plot_events_histogram,
+                "events_histogram",
+                _viz_data.prepare_events_histogram_data,
                 {
                     "events": hist_events[
                         hist_events["volume"] < hist_events["volume"].quantile(0.99)
@@ -300,95 +271,71 @@ def default_specs(
         ]
     )
 
-    # Flow toxicity / pluggable metrics.
-    # Iterate metrics that the pipeline already computed (Pipeline(metrics=...)
-    # or the legacy config.vpin_bucket_volume path). Built-ins (vpin, ofi,
-    # kyle_lambda) have dedicated plotters; other registered metrics are
-    # available in result.metrics for ad-hoc plotting by the user.
-    metrics = result.metrics or {}
-
-    # Backward-compat: if the caller passed vpin_bucket_volume but the
-    # pipeline didn't materialise metrics, compute them inline so old
-    # gallery scripts keep working.
-    if not metrics and vpin_bucket_volume is not None and len(trades) > 10:
-        inline: dict[str, pd.DataFrame | Any] = {}
-        try:
-            inline["vpin"] = compute_vpin(trades, vpin_bucket_volume)
-        except Exception:
-            logger.warning("Could not compute VPIN -- skipping plot")
-        try:
-            inline["ofi"] = order_flow_imbalance(trades, window="5min")
-        except Exception:
-            logger.warning("Could not compute OFI -- skipping plot")
-        try:
-            inline["kyle_lambda_result"] = compute_kyle_lambda(trades, window="5min")
-        except Exception:
-            logger.warning("Could not compute Kyle's lambda -- skipping plot")
-        metrics = inline  # type: ignore[assignment]
-
-    panel_idx = 13
-    for metric_name, metric_df in metrics.items():
-        if metric_name == "vpin":
-            if metric_df is None or (hasattr(metric_df, "empty") and metric_df.empty):
-                continue
+    # Hidden executions are LOBSTER-only (raw_event_type == 5); derive the
+    # panel from result.events instead of a pre-collected extras payload.
+    if "raw_event_type" in events.columns:
+        hidden = events[events["raw_event_type"] == 5]
+        if not hidden.empty:
             specs.append(
                 PlotSpec(
-                    f"{panel_idx:02d}_vpin",
-                    "VPIN",
-                    plot_vpin,
-                    {"vpin_df": metric_df, "threshold": 0.7},
+                    "13_hidden_executions",
+                    "Hidden Executions",
+                    "hidden_executions",
+                    _viz_data.prepare_hidden_executions_data,
+                    {"events": events, "trades": trades},
                 )
-            )
-            panel_idx += 1
-        elif metric_name == "ofi":
-            if metric_df is None or (hasattr(metric_df, "empty") and metric_df.empty):
-                continue
-            specs.append(
-                PlotSpec(
-                    f"{panel_idx:02d}_ofi",
-                    "Order Flow Imbalance",
-                    plot_order_flow_imbalance,
-                    {"ofi_df": metric_df, "trades": trades},
-                )
-            )
-            panel_idx += 1
-        elif metric_name == "kyle_lambda":
-            # Dedicated plotter needs the KyleLambdaResult (with
-            # regression_df), which is lost when KyleLambda.compute()
-            # flattens to a summary DataFrame. Recompute for the plot.
-            try:
-                kyle = compute_kyle_lambda(trades, window="5min")
-                specs.append(
-                    PlotSpec(
-                        f"{panel_idx:02d}_kyle_lambda",
-                        f"Kyle's Lambda (lambda={kyle.lambda_:.4f})",
-                        plot_kyle_lambda,
-                        {"kyle_result": kyle},
-                    )
-                )
-                panel_idx += 1
-            except Exception:
-                logger.warning("Could not render Kyle's lambda -- skipping plot")
-        elif metric_name == "kyle_lambda_result":
-            # Inline back-compat path provides the raw KyleLambdaResult.
-            kyle = metric_df  # type: ignore[assignment]
-            specs.append(
-                PlotSpec(
-                    f"{panel_idx:02d}_kyle_lambda",
-                    f"Kyle's Lambda (lambda={kyle.lambda_:.4f})",
-                    plot_kyle_lambda,
-                    {"kyle_result": kyle},
-                )
-            )
-            panel_idx += 1
-        else:
-            logger.info(
-                "Gallery: no dedicated plotter for metric '{}'; "
-                "skipping (available via result.metrics)",
-                metric_name,
             )
 
     return specs
+
+
+def vpin_panel(vpin_df: pd.DataFrame, *, threshold: float = 0.7) -> PlotSpec:
+    """Build a VPIN gallery panel for ``extra_panels=``."""
+    return PlotSpec(
+        "vpin",
+        "VPIN",
+        "vpin",
+        _viz_data.prepare_vpin_data,
+        {"vpin_df": vpin_df, "threshold": threshold},
+    )
+
+
+def ofi_panel(ofi_df: pd.DataFrame, trades: pd.DataFrame | None = None) -> PlotSpec:
+    """Build an order-flow-imbalance gallery panel for ``extra_panels=``."""
+    return PlotSpec(
+        "ofi",
+        "Order Flow Imbalance",
+        "order_flow_imbalance",
+        _viz_data.prepare_ofi_data,
+        {"ofi_df": ofi_df, "trades": trades},
+    )
+
+
+def kyle_panel(kyle_result: Any) -> PlotSpec:
+    """Build a Kyle's-Lambda gallery panel for ``extra_panels=``."""
+    return PlotSpec(
+        "kyle_lambda",
+        f"Kyle's Lambda (lambda={kyle_result.lambda_:.4f})",
+        "kyle_lambda",
+        _viz_data.prepare_kyle_lambda_data,
+        {"kyle_result": kyle_result},
+    )
+
+
+def trading_halts_panel(trades: pd.DataFrame, halts: pd.DataFrame) -> PlotSpec:
+    """Build a trading-halts gallery panel for ``extra_panels=``.
+
+    LOBSTER halts are not part of the slim :class:`PipelineResult`; read them
+    from :attr:`~ob_analytics.lobster.LobsterLoader.trading_halts` and pass
+    them here.
+    """
+    return PlotSpec(
+        "trading_halts",
+        "Trading Halts",
+        "trading_halts",
+        _viz_data.prepare_trading_halts_data,
+        {"trades": trades, "halts": halts},
+    )
 
 
 def generate_gallery(
@@ -396,8 +343,8 @@ def generate_gallery(
     output_dir: str | Path,
     *,
     specs: list[PlotSpec] | None = None,
+    extra_panels: list[PlotSpec] | None = None,
     volume_scale: float | None = None,
-    vpin_bucket_volume: float | None = None,
     backends: list[str] | None = None,
     title: str = "ob-analytics Plot Gallery",
 ) -> Path:
@@ -412,11 +359,12 @@ def generate_gallery(
         Root directory for gallery output.
     specs : list of PlotSpec, optional
         Plot specifications.  Defaults to :func:`default_specs`.
+    extra_panels : list of PlotSpec, optional
+        Additional panels appended after the built-ins (or after *specs*).
+        Build them with the ``*_panel`` helpers, e.g. :func:`vpin_panel`.
     volume_scale : float or None
         Volume display scale factor.  ``None`` (default) auto-infers a
         sensible power-of-10 scale from the events.
-    vpin_bucket_volume : float or None
-        Bucket volume for VPIN.  None skips flow toxicity plots.
     backends : list of str, optional
         Backends to render.  Defaults to ``["plotly", "matplotlib"]``
         when ``plotly`` is installed (Plotly is rendered as the primary
@@ -460,8 +408,10 @@ def generate_gallery(
         specs = default_specs(
             result,
             volume_scale=volume_scale,
-            vpin_bucket_volume=vpin_bucket_volume,
         )
+
+    if extra_panels:
+        specs = [*specs, *extra_panels]
 
     backend_dirs = {b: out / b for b in backends}
 
@@ -469,27 +419,14 @@ def generate_gallery(
     generated: list[tuple[str, str, dict[str, bool]]] = []
 
     for spec in specs:
-        # Skip plots whose required extras key is missing/empty.
-        if spec.needs and spec.needs.startswith("extras:"):
-            key = spec.needs.removeprefix("extras:")
-            extras_val = result.extras.get(key) if result is not None else None
-            if extras_val is None or (
-                hasattr(extras_val, "empty") and extras_val.empty
-            ):
-                logger.info(
-                    "Gallery: skipping {} (no '{}' in result.extras)",
-                    spec.name,
-                    key,
-                )
-                continue
-
         logger.info("Gallery: generating {}", spec.name)
         statuses: dict[str, bool] = {}
 
         for backend in backends:
             backend_dirs[backend].mkdir(parents=True, exist_ok=True)
             try:
-                fig = spec.plot_fn(**spec.kwargs, backend=backend)
+                data = spec.prepare(**spec.prep_kwargs)
+                fig = plot(spec.plot_name, backend=backend, **data)
             except Exception as e:
                 logger.warning("Gallery: {} {} failed: {}", backend, spec.name, e)
                 statuses[backend] = False

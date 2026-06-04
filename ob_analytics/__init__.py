@@ -29,68 +29,22 @@ All processing stages are pluggable via :mod:`~ob_analytics.protocols`.
 
 from pathlib import Path
 
-import pandas as pd
 from loguru import logger
+
+# Importing the bitstamp and lobster modules fires their format/writer
+# self-registration at import time; the Format classes are also the public
+# symmetric-pair entry points.
+from ob_analytics.bitstamp import BitstampFormat
 from ob_analytics.config import PipelineConfig
-from ob_analytics.data import (
-    list_writers,
-    load_data,
-    register_writer,
-    save_data,
-)
-from ob_analytics.depth import (
-    DepthMetricsEngine,
-    depth_metrics,
-    filter_depth,
-    get_spread,
-    price_level_volume,
-)
-from ob_analytics.analytics import (
-    order_aggressiveness,
-    order_book,
-    set_order_types,
-    trade_impacts,
-)
-from ob_analytics.bitstamp import (
-    BitstampFormat,
-    BitstampLoader,
-    BitstampTradeReader,
-    BitstampWriter,
-)
-from ob_analytics.exceptions import (
-    ConfigurationError,
-    InsufficientDataError,
-    InvalidDataError,
-    MatchingError,
-    ObAnalyticsError,
-)
+from ob_analytics.data import load_data, save_data
+from ob_analytics.exceptions import ConfigError, ObAnalyticsError
 from ob_analytics.flow_toxicity import (
+    KyleLambdaResult,
     compute_kyle_lambda,
     compute_vpin,
     order_flow_imbalance,
 )
-from ob_analytics.metrics import (
-    KyleLambda,
-    Ofi,
-    ToxicityMetric,
-    Vpin,
-    list_metrics,
-    register_metric,
-)
-from ob_analytics.lobster import (
-    LobsterFormat,
-    LobsterLoader,
-    LobsterTradeReader,
-    LobsterWriter,
-    lobster_depth_from_orderbook,
-)
-from ob_analytics.models import (
-    DepthLevel,
-    KyleLambdaResult,
-    OrderBookSnapshot,
-    OrderEvent,
-    Trade,
-)
+from ob_analytics.lobster import LobsterFormat
 from ob_analytics.pipeline import (
     Pipeline,
     PipelineResult,
@@ -104,48 +58,6 @@ from ob_analytics.protocols import (
     RunContext,
     TradeSource,
 )
-from ob_analytics.visualization import (
-    PlotTheme,
-    get_plot_theme,
-    infer_volume_scale,
-    plot_current_depth,
-    plot_event_map,
-    plot_events_histogram,
-    plot_hidden_executions,
-    plot_kyle_lambda,
-    plot_order_flow_imbalance,
-    plot_price_levels,
-    plot_time_series,
-    plot_trades,
-    plot_trading_halts,
-    plot_volume_map,
-    plot_volume_percentiles,
-    plot_vpin,
-    register_plot_backend,
-    save_figure,
-    set_plot_theme,
-)
-
-
-# ── Register built-in formats and writers ─────────────────────────────
-def _make_lobster_writer(config, ctx):
-    td = ctx.trading_date
-    if td is None:
-        raise ValueError(
-            "LOBSTER writer requires ctx.trading_date. "
-            "Pass ctx=RunContext(trading_date=...) to save_data()."
-        )
-    if not isinstance(td, (str, pd.Timestamp)):
-        raise TypeError(
-            f"ctx.trading_date must be str or pandas.Timestamp, got {type(td).__name__}"
-        )
-    return LobsterWriter(config, trading_date=td)
-
-
-register_format("bitstamp", BitstampFormat)
-register_format("lobster", LobsterFormat)
-register_writer("bitstamp", lambda config, ctx: BitstampWriter(config))
-register_writer("lobster", _make_lobster_writer)
 
 logger.disable("ob_analytics")
 
@@ -174,88 +86,30 @@ __all__ = [
     # ── Sample data ──────────────────────────────────────────────────
     "sample_csv_path",
     "sample_data_dir",
-    # ── Symmetric format pairs (Bitstamp ↔ LOBSTER) ──────────────────
-    "BitstampFormat",
-    "LobsterFormat",
-    "BitstampLoader",
-    "LobsterLoader",
-    "BitstampTradeReader",
-    "LobsterTradeReader",
-    "BitstampWriter",
-    "LobsterWriter",
     # ── Pipeline orchestration ───────────────────────────────────────
     "Pipeline",
     "PipelineResult",
+    "PipelineConfig",
     "register_format",
     "list_formats",
+    # ── Formats (symmetric-pair entry points) ────────────────────────
+    "BitstampFormat",
+    "LobsterFormat",
     # ── Protocols / extension points ─────────────────────────────────
+    "Format",
     "EventLoader",
     "TradeSource",
     "DataWriter",
-    "Format",
     "RunContext",
-    # ── Format-agnostic analytics ───────────────────────────────────
-    "order_aggressiveness",
-    "trade_impacts",
-    # ── Order book processing ────────────────────────────────────────
-    "set_order_types",
-    "order_book",
-    # ── Depth computation ───────────────────────────────────────────
-    "DepthMetricsEngine",
-    "price_level_volume",
-    "depth_metrics",
-    "filter_depth",
-    "get_spread",
-    # ── Data I/O + writer registry ───────────────────────────────────
+    # ── Data I/O ─────────────────────────────────────────────────────
     "save_data",
     "load_data",
-    "register_writer",
-    "list_writers",
-    # ── LOBSTER-specific utilities ───────────────────────────────────
-    "lobster_depth_from_orderbook",
-    # ── Flow toxicity ───────────────────────────────────────────────
+    # ── Flow toxicity ────────────────────────────────────────────────
     "compute_vpin",
     "compute_kyle_lambda",
     "order_flow_imbalance",
-    # ── Pluggable metrics ───────────────────────────────────────────
-    "ToxicityMetric",
-    "Vpin",
-    "KyleLambda",
-    "Ofi",
-    "register_metric",
-    "list_metrics",
-    # ── Domain models ────────────────────────────────────────────────
-    "OrderEvent",
-    "Trade",
-    "DepthLevel",
-    "OrderBookSnapshot",
     "KyleLambdaResult",
-    # ── Configuration ────────────────────────────────────────────────
-    "PipelineConfig",
     # ── Exceptions ───────────────────────────────────────────────────
     "ObAnalyticsError",
-    "InvalidDataError",
-    "MatchingError",
-    "InsufficientDataError",
-    "ConfigurationError",
-    # ── Visualization ────────────────────────────────────────────────
-    "PlotTheme",
-    "set_plot_theme",
-    "get_plot_theme",
-    "save_figure",
-    "infer_volume_scale",
-    "register_plot_backend",
-    "plot_time_series",
-    "plot_trades",
-    "plot_price_levels",
-    "plot_event_map",
-    "plot_volume_map",
-    "plot_current_depth",
-    "plot_volume_percentiles",
-    "plot_events_histogram",
-    "plot_vpin",
-    "plot_order_flow_imbalance",
-    "plot_kyle_lambda",
-    "plot_hidden_executions",
-    "plot_trading_halts",
+    "ConfigError",
 ]
