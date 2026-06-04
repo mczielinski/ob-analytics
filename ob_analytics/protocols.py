@@ -47,8 +47,8 @@ class RunContext:
 class EventLoader(Protocol):
     """Loads raw order-book events from a data source.
 
-    The returned DataFrame must contain at least the columns documented
-    in :class:`~ob_analytics.models.OrderEvent`.
+    The returned DataFrame must contain at least the columns required by
+    ``ob_analytics.schemas.validate_events_df``.
     """
 
     def load(self, source: Any) -> pd.DataFrame:
@@ -64,8 +64,8 @@ class EventLoader(Protocol):
         Returns
         -------
         pandas.DataFrame
-            Events with at least the columns described by
-            :class:`~ob_analytics.models.OrderEvent`.
+            Events with at least the columns required by
+            ``ob_analytics.schemas.validate_events_df``.
         """
         ...
 

@@ -17,4 +17,4 @@ quantifying price impact.
 
 ## Models
 
-::: ob_analytics.models.KyleLambdaResult
+::: ob_analytics.flow_toxicity.KyleLambdaResult
