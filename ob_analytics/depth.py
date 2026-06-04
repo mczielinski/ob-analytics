@@ -158,7 +158,7 @@ class DepthMetricsEngine:
         for i in range(n):
             if i > 0:
                 result[i] = result[i - 1]
-            self.update(int(prices_int[i]), volumes[i], int(sides[i]), result[i])
+            self.update_side(int(prices_int[i]), volumes[i], int(sides[i]), result[i])
 
         col_names = self._column_names()
         metrics = pd.DataFrame(result, columns=col_names)
@@ -176,7 +176,9 @@ class DepthMetricsEngine:
 
         return res
 
-    def update(self, price: int, volume: float, side: int, out: np.ndarray) -> None:
+    def update_side(
+        self, price: int, volume: float, side: int, out: np.ndarray
+    ) -> None:
         """Process one depth event and write a metrics row into *out*.
 
         Parameters
@@ -190,13 +192,6 @@ class DepthMetricsEngine:
         out : np.ndarray
             Pre-allocated 1-D array of length ``row_len`` to fill.
         """
-        self._update_side(side, price, volume, out)
-
-    # ── Internal: side-parameterised hot path ─────────────────────────
-
-    def _update_side(
-        self, side: int, price: int, volume: float, out: np.ndarray
-    ) -> None:
         # Cross-check: ignore quotes that would cross the opposing best.
         if side == 1:
             if self._best_bid is not None and price < self._best_bid:
