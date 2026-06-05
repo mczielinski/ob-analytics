@@ -77,8 +77,9 @@ class DepthMetricsEngine:
     """Incrementally compute order book depth metrics.
 
     Replaces the monolithic :func:`depth_metrics` function with a
-    stateful, testable class.  Each call to :meth:`update` processes one
-    depth event and returns a metrics row as a numpy array.
+    stateful, testable class.  :meth:`compute` processes a whole depth
+    frame; internally each event is applied via :meth:`update_side`,
+    which writes one metrics row into a pre-allocated numpy buffer.
 
     Fixes over the legacy R implementation:
 
