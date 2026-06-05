@@ -194,13 +194,12 @@ class TestBpsBinVolumes:
 
 
 def test_interval_sums_sparse_matches_dense():
-    """_interval_sums_sparse must byte-match interval_sum_breaks on the dense array.
+    """_interval_sums_sparse must byte-match the dense cumsum reference.
 
     This is the correctness proof for the depth-engine performance fix: summing
     only the active levels into the bins must reproduce, bit-for-bit, the legacy
     ``np.cumsum(dense)[breaks]`` differencing over the full zero-padded window.
     """
-    from ob_analytics._utils import interval_sum_breaks
     from ob_analytics.depth import _cached_breaks, _interval_sums_sparse
 
     rng = np.random.default_rng(20260602)
@@ -225,7 +224,10 @@ def test_interval_sums_sparse_matches_dense():
             idx = (p - best) if side == 1 else (best - p)
             if 0 <= idx < range_len:
                 dense[idx] = v
-        ref = interval_sum_breaks(dense, breaks)
+        # Legacy reference: cumulative sum sampled at the bin breaks, then
+        # differenced into per-bin sums (the original interval_sum_breaks).
+        cumulative = np.cumsum(dense)[breaks]
+        ref = np.concatenate((np.array([cumulative[0]]), np.diff(cumulative)))
         got = _interval_sums_sparse(levels, best, side, range_len, breaks)
         assert np.array_equal(got, ref), (
             f"mismatch: side={side} range_len={range_len} bins={bins} "
