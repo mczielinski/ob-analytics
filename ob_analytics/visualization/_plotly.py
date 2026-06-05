@@ -15,6 +15,7 @@ from typing import Any
 import numpy as np
 
 from ob_analytics.exceptions import ConfigError
+from ob_analytics.visualization._data import mpl_marker_area_to_plotly_size
 
 
 @lru_cache(maxsize=1)
@@ -128,7 +129,7 @@ def plotly_price_levels(data: dict) -> Any:
                     colorscale="Viridis",
                     cmin=0,
                     cmax=vol_max,
-                    colorbar=dict(title="Volume"),
+                    colorbar=dict(title="Volume", x=1.02, len=0.75),
                     opacity=np.where(vol > 0, 0.8, 0.1),
                 ),
                 hovertemplate=(
@@ -138,6 +139,7 @@ def plotly_price_levels(data: dict) -> Any:
                 name="Depth",
             )
         )
+        fig.update_layout(margin=dict(l=60, r=90, t=50, b=50))
 
     if spread is not None and show_mp:
         if "best_bid_price" in spread and "best_ask_price" in spread:
@@ -147,7 +149,7 @@ def plotly_price_levels(data: dict) -> Any:
                     x=spread["timestamp"],
                     y=mp,
                     mode="lines",
-                    line=dict(color="white", width=1.5),
+                    line=dict(color="white", width=1.5, shape="hv"),
                     name="Midprice",
                 )
             )
@@ -209,6 +211,9 @@ def plotly_price_levels(data: dict) -> Any:
 
     fig.update_xaxes(title_text="Time")
     fig.update_yaxes(title_text="Limit Price")
+    y_range = data.get("y_range")
+    if y_range is not None:
+        fig.update_yaxes(range=list(y_range))
     return fig
 
 
@@ -643,21 +648,28 @@ def plotly_hidden_executions(data: dict) -> Any:
         )
 
     if has_hidden and not hidden.empty:
+        vol = hidden["volume"]
+        vol_max = float(vol.max()) if vol.max() > 0 else 1.0
+        marker_area = data["marker_area"]
         fig.add_trace(
             go.Scatter(
                 x=hidden["timestamp"],
                 y=hidden["price"],
                 mode="markers",
+                customdata=vol,
                 marker=dict(
-                    size=hidden["volume"].clip(upper=30) * 2,
-                    color="#e74c3c",
+                    size=mpl_marker_area_to_plotly_size(marker_area),
+                    color=vol,
+                    colorscale="Reds",
+                    cmin=0,
+                    cmax=vol_max,
                     opacity=0.6,
                     line=dict(width=0.3, color="white"),
                 ),
                 name="Hidden executions",
                 hovertemplate=(
                     "Time: %{x}<br>Price: %{y:.2f}<br>"
-                    "Volume: %{marker.size}<extra></extra>"
+                    "Volume: %{customdata}<extra></extra>"
                 ),
             )
         )
@@ -674,6 +686,9 @@ def plotly_hidden_executions(data: dict) -> Any:
 
     fig.update_xaxes(title_text="Time")
     fig.update_yaxes(title_text="Price")
+    y_range = data.get("y_range")
+    if y_range is not None:
+        fig.update_yaxes(range=list(y_range))
     return fig
 
 

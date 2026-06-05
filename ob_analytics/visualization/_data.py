@@ -18,6 +18,44 @@ from ob_analytics._utils import reverse_matrix
 from ob_analytics.depth import filter_depth
 
 
+def _sanitize_spread(spread: pd.DataFrame) -> pd.DataFrame:
+    """Drop spread rows with non-physical bid/ask (e.g. LOBSTER book warmup)."""
+    if spread.empty:
+        return spread
+    mask = pd.Series(True, index=spread.index)
+    if "best_bid_price" in spread.columns:
+        mask &= spread["best_bid_price"] > 0
+    if "best_ask_price" in spread.columns:
+        mask &= spread["best_ask_price"] > 0
+    if "best_bid_price" in spread.columns and "best_ask_price" in spread.columns:
+        mask &= spread["best_ask_price"] >= spread["best_bid_price"]
+    return spread[mask]
+
+
+def price_y_range(*series: pd.Series | None) -> tuple[float, float] | None:
+    """Shared (ymin, ymax) from one or more price columns."""
+    parts: list[pd.Series] = []
+    for s in series:
+        if s is not None and not s.empty:
+            parts.append(s.dropna())
+    if not parts:
+        return None
+    prices = pd.concat(parts)
+    return float(prices.min()), float(prices.max())
+
+
+def volume_marker_areas(
+    volume: pd.Series | np.ndarray, *, scale: float = 2.0
+) -> np.ndarray:
+    """Matplotlib scatter ``s`` values proportional to volume."""
+    return np.asarray(volume, dtype=float) * scale
+
+
+def mpl_marker_area_to_plotly_size(area: np.ndarray) -> np.ndarray:
+    """Convert matplotlib scatter areas (pt²) to plotly marker diameters (px)."""
+    return np.sqrt(np.maximum(area, 0.0)) * 0.8
+
+
 # The volume-percentile chart colours a fixed 20-step rainbow gradient,
 # shared verbatim by every rendering backend.  It was historically built
 # at call time with ``matplotlib.colors.LinearSegmentedColormap`` from the
@@ -198,6 +236,7 @@ def prepare_price_levels_data(
         spread = spread[
             (spread["timestamp"] >= start_time) & (spread["timestamp"] <= end_time)
         ]
+        spread = _sanitize_spread(spread)
         if price_from is None:
             price_from = 0.995 * spread["best_bid_price"].min()
         if price_to is None:
@@ -253,6 +292,7 @@ def prepare_price_levels_data(
         "show_mp": show_mp,
         "col_bias": col_bias,
         "price_by": price_by,
+        "y_range": price_y_range(depth_filtered["price"]),
     }
 
 
@@ -647,10 +687,20 @@ def prepare_hidden_executions_data(
             (hidden["timestamp"] >= start_time) & (hidden["timestamp"] <= end_time)
         ]
 
+    price_series: list[pd.Series] = []
+    if not trades_f.empty:
+        price_series.append(trades_f["price"])
+    if not hidden.empty:
+        price_series.append(hidden["price"])
+
     return {
         "trades": trades_f,
         "hidden": hidden,
         "has_hidden": has_hidden and not hidden.empty,
+        "y_range": price_y_range(*price_series),
+        "marker_area": volume_marker_areas(hidden["volume"])
+        if not hidden.empty
+        else np.array([]),
     }
 
 

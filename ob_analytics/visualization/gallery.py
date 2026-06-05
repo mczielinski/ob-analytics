@@ -109,6 +109,7 @@ def default_specs(
     price_mid = trades["price"].median()
     price_std = trades["price"].std()
     price_from = max(0, price_mid - 3 * price_std) if price_std > 0 else None
+    price_to = price_mid + 3 * price_std if price_std > 0 else None
 
     offset = events["timestamp"].min() + pd.Timedelta(minutes=1)
     depth_summary_offset = depth_summary[depth_summary["timestamp"] >= offset]
@@ -139,6 +140,7 @@ def default_specs(
                 "volume_scale": volume_scale,
                 "col_bias": 0.1,
                 "price_from": price_from,
+                "price_to": price_to,
             },
         ),
         PlotSpec(

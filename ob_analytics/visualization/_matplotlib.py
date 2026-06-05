@@ -288,11 +288,16 @@ def mpl_price_levels(
     ax.set_ylabel("Limit Price")
     ax.set_title("Price Levels Over Time")
 
-    ymin = depth["price"].min()
-    ymax = depth["price"].max()
-    ax.set_ylim((ymin, ymax))
+    y_range = data.get("y_range")
+    if y_range is not None:
+        ax.set_ylim(y_range)
+    else:
+        ymin = depth["price"].min()
+        ymax = depth["price"].max()
+        ax.set_ylim((ymin, ymax))
 
-    if price_by is not None:
+    if price_by is not None and y_range is not None:
+        ymin, ymax = y_range
         y_ticks = np.arange(round(ymin), round(ymax) + price_by, price_by)
         ax.set_yticks(y_ticks)
 
@@ -750,11 +755,16 @@ def mpl_hidden_executions(
         )
 
     if has_hidden and not hidden.empty:
+        vol = hidden["volume"]
+        vol_max = float(vol.max()) if vol.max() > 0 else 1.0
         ax.scatter(
             hidden["timestamp"],
             hidden["price"],
-            s=hidden["volume"] * 2,
-            c="#e74c3c",
+            s=data["marker_area"],
+            c=vol,
+            cmap="Reds",
+            vmin=0,
+            vmax=vol_max,
             alpha=0.6,
             edgecolors="white",
             linewidths=0.3,
@@ -777,6 +787,9 @@ def mpl_hidden_executions(
 
     ax.set_xlabel("Time")
     ax.set_ylabel("Price")
+    y_range = data.get("y_range")
+    if y_range is not None:
+        ax.set_ylim(y_range)
     ax.legend(loc="upper left")
     fig.tight_layout()
     return fig
