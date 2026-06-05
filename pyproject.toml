@@ -54,13 +54,11 @@ build-backend = "hatchling.build"
 
 [tool.pytest]
 testpaths = ["tests"]
-python_files = "test_*.py"
-python_classes = "Test*"
-python_functions = "test_*"
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = ["--cov=ob_analytics"]
 
 [tool.coverage.run]
 source = ["ob_analytics"]
 omit = ["tests/*"]
-
-[tool.pytest.ini_options]
-addopts = "--cov=ob_analytics"
