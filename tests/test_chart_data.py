@@ -8,7 +8,7 @@ from ob_analytics.visualization._data import (
     _default_start_end,
     _price_axis_breaks,
     infer_volume_scale,
-    prepare_current_depth_data,
+    prepare_book_snapshot_data,
     prepare_event_map_data,
     prepare_events_histogram_data,
     prepare_kyle_lambda_data,
@@ -224,19 +224,43 @@ class TestPrepareVolumeMap:
         assert data["log_scale"] is True
 
 
-class TestPrepareCurrentDepth:
-    def test_returns_depth_df(self, sample_order_book: dict) -> None:
-        data = prepare_current_depth_data(sample_order_book)
-        assert "depth_df" in data
+class TestPrepareBookSnapshot:
+    def test_returns_book_sides(self, sample_order_book: dict) -> None:
+        data = prepare_book_snapshot_data(sample_order_book)
         assert "bids" in data
         assert "asks" in data
         assert "timestamp" in data
-        assert isinstance(data["depth_df"], pd.DataFrame)
+        assert data["per_order"] is False
+        for side in (data["bids"], data["asks"]):
+            assert isinstance(side, pd.DataFrame)
+            assert {"price", "volume", "liquidity", "seg_lo", "seg_hi"} <= set(
+                side.columns
+            )
 
     def test_volume_scale_applied(self, sample_order_book: dict) -> None:
-        data = prepare_current_depth_data(sample_order_book, volume_scale=0.5)
-        # Liquidity and volume should be scaled
-        assert data["depth_df"]["liquidity"].max() <= 200  # 400 * 0.5
+        data = prepare_book_snapshot_data(sample_order_book, volume_scale=0.5)
+        # Cumulative liquidity is scaled: ask cumsum 400 * 0.5 == 200.
+        assert data["asks"]["liquidity"].max() <= 200
+
+    def test_aggregate_zeroes_segment_floor(self, sample_order_book: dict) -> None:
+        # L2 bars sit on the axis: each level is one segment from 0.
+        data = prepare_book_snapshot_data(sample_order_book, per_order=False)
+        assert (data["bids"]["seg_lo"] == 0).all()
+        assert (data["asks"]["seg_lo"] == 0).all()
+
+    def test_per_order_stacks_within_level(self) -> None:
+        # Two orders at one price stack: seg_lo of the second == seg_hi of first.
+        book = {
+            "timestamp": 1430445600,
+            "bids": np.array([[236.0, 100, 100], [236.0, 50, 150]]),
+            "asks": np.empty((0, 3)),
+        }
+        data = prepare_book_snapshot_data(book, per_order=True, volume_scale=1.0)
+        bids = data["bids"]
+        assert data["per_order"] is True
+        assert len(bids) == 2
+        assert bids["seg_lo"].tolist() == [0.0, 100.0]
+        assert bids["seg_hi"].tolist() == [100.0, 150.0]
 
 
 class TestPrepareVolumePercentiles:

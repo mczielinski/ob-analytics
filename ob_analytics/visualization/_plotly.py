@@ -311,52 +311,102 @@ def plotly_volume_map(data: dict) -> Any:
     return fig
 
 
-def plotly_current_depth(data: dict) -> Any:
-    """Render order book depth snapshot."""
+# Order-book snapshot palette, shared by the book_snapshot + depth_chart faces
+# (kept identical to the matplotlib backend for cross-backend parity).
+_BID_COLOR = "#4477dd"
+_ASK_COLOR = "#dd4444"
+
+
+def _rgba(hex_color: str, alpha: float) -> str:
+    """``"#4477dd"`` -> ``"rgba(68,119,221,0.15)"``."""
+    r, g, b = (int(hex_color.lstrip("#")[i : i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def _plotly_book_bars(data: dict, *, per_order: bool) -> Any:
+    """Book-snapshot bars: one bar per level (L2) or stacked per order (L3)."""
     go = _import_plotly()
-    depth_df = data["depth_df"]
-    show_volume = data["show_volume"]
-    show_quantiles = data["show_quantiles"]
-    bid_quantiles = data["bid_quantiles"]
-    ask_quantiles = data["ask_quantiles"]
-    timestamp = data["timestamp"]
+    fig = _base_figure(go, title=data["timestamp"].strftime("%Y-%m-%d %H:%M:%S UTC"))
 
-    fig = _base_figure(go, title=timestamp.strftime("%Y-%m-%d %H:%M:%S UTC"))
-
-    if show_volume:
+    line = dict(color="#1e1e1e", width=0.6) if per_order else dict(width=0)
+    for side, color, label in (
+        (data["bids"], _BID_COLOR, "Bid"),
+        (data["asks"], _ASK_COLOR, "Ask"),
+    ):
+        if side.empty:
+            continue
         fig.add_trace(
             go.Bar(
-                x=depth_df["price"],
-                y=depth_df["volume"],
-                marker_color="rgba(255,255,255,0.3)",
-                name="Volume",
-                hovertemplate="Price: %{x:.2f}<br>Volume: %{y:.4f}<extra></extra>",
+                x=side["price"],
+                y=side["seg_hi"] - side["seg_lo"],
+                base=side["seg_lo"],
+                marker=dict(color=color, line=line),
+                name=label,
+                hovertemplate="Price: %{x:.2f}<br>Size: %{y:.4f}<extra></extra>",
             )
         )
 
-    for side_value, color in [("bid", "#4444ff"), ("ask", "#ff4444")]:
-        side_data = depth_df[depth_df["side"] == side_value]
+    if data["show_quantiles"]:
+        for x_val in data["bid_quantiles"]:
+            fig.add_vline(x=x_val, line_dash="dash", line_color="#888888", line_width=1)
+        for x_val in data["ask_quantiles"]:
+            fig.add_vline(x=x_val, line_dash="dash", line_color="#888888", line_width=1)
+
+    fig.update_layout(barmode="overlay")
+    fig.update_xaxes(title_text="Price")
+    fig.update_yaxes(title_text="Size")
+    return fig
+
+
+def _plotly_depth_curve(data: dict, *, per_order: bool) -> Any:
+    """Cumulative-depth curve: stepped per level (L2) or per order (L3)."""
+    go = _import_plotly()
+    fig = _base_figure(go, title=data["timestamp"].strftime("%Y-%m-%d %H:%M:%S UTC"))
+
+    mode = "lines+markers" if per_order else "lines"
+    for side, color, label in (
+        (data["bids"], _BID_COLOR, "Bid"),
+        (data["asks"], _ASK_COLOR, "Ask"),
+    ):
+        if side.empty:
+            continue
+        s = side.sort_values("price")
         fig.add_trace(
             go.Scatter(
-                x=side_data["price"],
-                y=side_data["liquidity"],
-                mode="lines",
-                line=dict(shape="hv", color=color, width=2),
-                name=side_value.capitalize(),
+                x=s["price"],
+                y=s["liquidity"],
+                mode=mode,
+                line=dict(shape="vh", color=color, width=2),
+                marker=dict(size=6, color=color),
+                name=label,
                 fill="tozeroy",
-                fillcolor=f"rgba{tuple(list(int(color.lstrip('#')[i : i + 2], 16) for i in (0, 2, 4)) + [0.15])}",
+                fillcolor=_rgba(color, 0.15),
             )
         )
 
-    if show_quantiles:
-        for x_val in bid_quantiles:
-            fig.add_vline(x=x_val, line_dash="dash", line_color="#888888", line_width=1)
-        for x_val in ask_quantiles:
-            fig.add_vline(x=x_val, line_dash="dash", line_color="#888888", line_width=1)
-
     fig.update_xaxes(title_text="Price")
-    fig.update_yaxes(title_text="Liquidity")
+    fig.update_yaxes(title_text="Cumulative liquidity")
     return fig
+
+
+def plotly_book_snapshot_aggregate(data: dict) -> Any:
+    """L2 (MBP) book snapshot: aggregate size per price level."""
+    return _plotly_book_bars(data, per_order=False)
+
+
+def plotly_book_snapshot_per_order(data: dict) -> Any:
+    """L3 (MBO) book snapshot: each order a stacked segment within its level."""
+    return _plotly_book_bars(data, per_order=True)
+
+
+def plotly_depth_chart_aggregate(data: dict) -> Any:
+    """L2 (MBP) depth chart: cumulative liquidity stepped per price level."""
+    return _plotly_depth_curve(data, per_order=False)
+
+
+def plotly_depth_chart_per_order(data: dict) -> Any:
+    """L3 (MBO) depth chart: cumulative liquidity stepped per individual order."""
+    return _plotly_depth_curve(data, per_order=True)
 
 
 def plotly_volume_percentiles(data: dict) -> Any:
@@ -751,13 +801,17 @@ from ob_analytics.visualization import RENDERERS, Level  # noqa: E402
 # (concept, level, renderer); mirrors the matplotlib backend's coordinates so
 # every concept has both faces.  Analytics are level-less (``None``).
 _L2 = Level.L2
+_L3 = Level.L3
 for _concept, _level, _fn in [
     ("time_series", _L2, plotly_time_series),
     ("trade_tape", _L2, plotly_trades),
     ("depth_heatmap", _L2, plotly_price_levels),
     ("order_activity", _L2, plotly_event_map),
     ("cancellations", _L2, plotly_volume_map),
-    ("book_snapshot", _L2, plotly_current_depth),
+    ("book_snapshot", _L2, plotly_book_snapshot_aggregate),
+    ("book_snapshot", _L3, plotly_book_snapshot_per_order),
+    ("depth_chart", _L2, plotly_depth_chart_aggregate),
+    ("depth_chart", _L3, plotly_depth_chart_per_order),
     ("volume_percentiles", _L2, plotly_volume_percentiles),
     ("events_histogram", _L2, plotly_events_histogram),
     ("hidden_executions", _L2, plotly_hidden_executions),

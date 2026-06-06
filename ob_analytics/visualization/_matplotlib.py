@@ -19,6 +19,7 @@ import matplotlib.colors as mcolors
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import seaborn as sns
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
@@ -398,65 +399,120 @@ def mpl_volume_map(
     return fig
 
 
-def mpl_current_depth(
-    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+# Order-book snapshot palette, shared by the book_snapshot + depth_chart faces
+# (kept identical to the plotly backend for cross-backend parity).
+_BID_COLOR = "#4477dd"
+_ASK_COLOR = "#dd4444"
+
+
+def _book_bar_width(*sides: pd.DataFrame) -> float:
+    """Smallest positive gap between distinct prices across *sides*."""
+    arrays = [s["price"].to_numpy() for s in sides if not s.empty]
+    if not arrays:
+        return 1.0
+    uniq = np.unique(np.concatenate(arrays))
+    diffs = np.diff(uniq)
+    diffs = diffs[diffs > 0]
+    return float(np.min(diffs)) if diffs.size else 1.0
+
+
+def _mpl_book_bars(
+    data: dict, ax: Axes | None, theme: PlotTheme, *, per_order: bool
 ) -> Figure:
-    """Render order book depth snapshot."""
-    depth_df = data["depth_df"]
+    """Book-snapshot bars: one bar per level (L2) or stacked per order (L3)."""
     bids = data["bids"]
     asks = data["asks"]
-    show_volume = data["show_volume"]
-    show_quantiles = data["show_quantiles"]
-    bid_quantiles = data["bid_quantiles"]
-    ask_quantiles = data["ask_quantiles"]
-    timestamp = data["timestamp"]
-
     fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
 
-    if show_volume:
-        unique_prices = np.sort(np.unique(depth_df["price"]))
-        price_diffs = np.diff(unique_prices)
-        price_diffs = price_diffs[price_diffs > 0]
-        bar_width = np.min(price_diffs) if len(price_diffs) > 0 else 1
-
+    width = _book_bar_width(bids, asks) * 0.9
+    edge = "#1e1e1e" if per_order else "none"
+    for side, color, label in ((bids, _BID_COLOR, "bid"), (asks, _ASK_COLOR, "ask")):
+        if side.empty:
+            continue
         ax.bar(
-            depth_df["price"],
-            depth_df["volume"],
-            width=bar_width,
-            color="white",
+            side["price"],
+            side["seg_hi"] - side["seg_lo"],
+            bottom=side["seg_lo"],
+            width=width,
+            color=color,
+            edgecolor=edge,
+            linewidth=0.6,
             align="center",
-            edgecolor=None,
+            label=label,
         )
 
-    col_pal = {"ask": "#ff0000", "bid": "#0000ff"}
-    for side_value in ["bid", "ask"]:
-        side_data = depth_df[depth_df["side"] == side_value]
-        ax.step(
-            side_data["price"],
-            side_data["liquidity"],
-            where="pre",
-            color=col_pal[side_value],
-            label=side_value,
-            linewidth=2,
-        )
+    if data["show_quantiles"]:
+        for x_value in data["bid_quantiles"]:
+            ax.axvline(x=x_value, color="#222222", linestyle="--", linewidth=1)
+        for x_value in data["ask_quantiles"]:
+            ax.axvline(x=x_value, color="#222222", linestyle="--", linewidth=1)
 
-    if show_quantiles:
-        for x_value in bid_quantiles:
-            ax.axvline(x=x_value, color="#222222", linestyle="--")
-        for x_value in ask_quantiles:
-            ax.axvline(x=x_value, color="#222222", linestyle="--")
-
-    xmin = round(bids["price"].min())
-    xmax = round(asks["price"].max())
-    xticks = np.arange(xmin, xmax + 1, 1)
-    ax.set_xticks(xticks)
-
-    ax.set_title(timestamp.strftime("%Y-%m-%d %H:%M:%S UTC"))
+    ax.set_title(data["timestamp"].strftime("%Y-%m-%d %H:%M:%S UTC"))
     ax.set_xlabel("Price")
-    ax.set_ylabel("Liquidity")
-    ax.legend()
+    ax.set_ylabel("Size")
+    ax.legend(loc="upper center")
     fig.tight_layout()
     return fig
+
+
+def mpl_book_snapshot_aggregate(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """L2 (MBP) book snapshot: aggregate size per price level."""
+    return _mpl_book_bars(data, ax, theme, per_order=False)
+
+
+def mpl_book_snapshot_per_order(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """L3 (MBO) book snapshot: each order a stacked segment within its level."""
+    return _mpl_book_bars(data, ax, theme, per_order=True)
+
+
+def _mpl_depth_curve(
+    data: dict, ax: Axes | None, theme: PlotTheme, *, per_order: bool
+) -> Figure:
+    """Cumulative-depth curve: stepped per level (L2) or per order (L3)."""
+    fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
+    for side, color, label in (
+        (data["bids"], _BID_COLOR, "bid"),
+        (data["asks"], _ASK_COLOR, "ask"),
+    ):
+        if side.empty:
+            continue
+        s = side.sort_values("price")
+        ax.step(
+            s["price"],
+            s["liquidity"],
+            where="pre",
+            color=color,
+            linewidth=2,
+            label=label,
+        )
+        ax.fill_between(s["price"], s["liquidity"], step="pre", color=color, alpha=0.15)
+        if per_order:
+            ax.scatter(s["price"], s["liquidity"], s=18, color=color, zorder=3)
+
+    ax.set_title(data["timestamp"].strftime("%Y-%m-%d %H:%M:%S UTC"))
+    ax.set_xlabel("Price")
+    ax.set_ylabel("Cumulative liquidity")
+    ax.legend(loc="upper center")
+    fig.tight_layout()
+    return fig
+
+
+def mpl_depth_chart_aggregate(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """L2 (MBP) depth chart: cumulative liquidity stepped per price level."""
+    return _mpl_depth_curve(data, ax, theme, per_order=False)
+
+
+def mpl_depth_chart_per_order(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """L3 (MBO) depth chart: cumulative liquidity stepped per individual order."""
+    return _mpl_depth_curve(data, ax, theme, per_order=True)
 
 
 def mpl_volume_percentiles(
@@ -857,13 +913,17 @@ from ob_analytics.visualization import RENDERERS, Level  # noqa: E402
 # no level and register at ``None``.  The level is a registry *coordinate*, not
 # a name suffix -- L3 faces register the same concept at ``Level.L3``.
 _L2 = Level.L2
+_L3 = Level.L3
 for _concept, _level, _fn in [
     ("time_series", _L2, mpl_time_series),
     ("trade_tape", _L2, mpl_trades),
     ("depth_heatmap", _L2, mpl_price_levels),
     ("order_activity", _L2, mpl_event_map),
     ("cancellations", _L2, mpl_volume_map),
-    ("book_snapshot", _L2, mpl_current_depth),
+    ("book_snapshot", _L2, mpl_book_snapshot_aggregate),
+    ("book_snapshot", _L3, mpl_book_snapshot_per_order),
+    ("depth_chart", _L2, mpl_depth_chart_aggregate),
+    ("depth_chart", _L3, mpl_depth_chart_per_order),
     ("volume_percentiles", _L2, mpl_volume_percentiles),
     ("events_histogram", _L2, mpl_events_histogram),
     ("hidden_executions", _L2, mpl_hidden_executions),

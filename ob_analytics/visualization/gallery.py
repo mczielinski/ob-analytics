@@ -138,6 +138,25 @@ def _l2(
     return PlotConcept(key, title, {Level.L2: spec}, note=note)
 
 
+def _comparable(
+    key: str,
+    title: str,
+    prepare: Callable[..., dict],
+    base_kwargs: dict[str, Any],
+    *,
+    note: str = "",
+) -> PlotConcept:
+    """Build a comparable (L2 + L3) concept from one prepare + shared kwargs.
+
+    Both faces share *base_kwargs* and differ only in the ``per_order`` flag the
+    prepare/renderer pair keys off of: ``False`` aggregates per price (L2/MBP),
+    ``True`` keeps one primitive per order (L3/MBO).
+    """
+    l2 = PlotSpec(key, title, key, prepare, {**base_kwargs, "per_order": False})
+    l3 = PlotSpec(key, title, key, prepare, {**base_kwargs, "per_order": True})
+    return PlotConcept(key, title, {Level.L2: l2, Level.L3: l3}, note=note)
+
+
 def build_gallery_model(
     result: PipelineResult,
     *,
@@ -220,19 +239,27 @@ def build_gallery_model(
         ),
     ]
 
-    # Book snapshot requires the per-order 'type' column from set_order_types.
+    # Book snapshot + depth chart share one order-book slice; each ships an
+    # L2 (aggregate-per-price) and L3 (per-order) face, so both are comparable.
+    # Requires the per-order 'type' column from set_order_types.
     if "type" in events.columns:
         snap_time = zoom_end
+        snap_book = order_book(events, tp=snap_time, bps_range=150)
+        snap_label = snap_time.strftime("%H:%M")
         concepts.append(
-            _l2(
+            _comparable(
                 "book_snapshot",
-                f"Book Snapshot ({snap_time.strftime('%H:%M')})",
-                "book_snapshot",
-                _viz_data.prepare_current_depth_data,
-                {
-                    "order_book": order_book(events, tp=snap_time, bps_range=150),
-                    "volume_scale": volume_scale,
-                },
+                f"Book Snapshot ({snap_label})",
+                _viz_data.prepare_book_snapshot_data,
+                {"order_book": snap_book, "volume_scale": volume_scale},
+            )
+        )
+        concepts.append(
+            _comparable(
+                "depth_chart",
+                f"Depth Chart ({snap_label})",
+                _viz_data.prepare_book_snapshot_data,
+                {"order_book": snap_book, "volume_scale": volume_scale},
             )
         )
 

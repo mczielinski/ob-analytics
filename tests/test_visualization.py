@@ -12,6 +12,7 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
 from ob_analytics.visualization import (
+    Level,
     PlotTheme,
     plot,
     save_figure,
@@ -209,17 +210,29 @@ class TestPlotVolumeMap:
         assert fig is fig_orig
 
 
-class TestPlotCurrentDepth:
-    def test_returns_figure(self):
+class TestPlotBookSnapshot:
+    @staticmethod
+    def _order_book() -> dict:
         bids = pd.DataFrame(
             {"price": [236.50, 236.00], "volume": [100, 200], "liquidity": [100, 300]}
         )
         asks = pd.DataFrame(
             {"price": [237.00, 237.50], "volume": [150, 250], "liquidity": [150, 400]}
         )
-        ob = {"bids": bids, "asks": asks, "timestamp": 1430438400}
-        fig = plot("book_snapshot", **_data.prepare_current_depth_data(ob))
+        return {"bids": bids, "asks": asks, "timestamp": 1430438400}
+
+    @pytest.mark.parametrize("level", [Level.L2, Level.L3])
+    @pytest.mark.parametrize("concept", ["book_snapshot", "depth_chart"])
+    def test_returns_figure(self, concept: str, level: Level) -> None:
+        per_order = level is Level.L3
+        data = _data.prepare_book_snapshot_data(self._order_book(), per_order=per_order)
+        fig = plot(concept, level, **data)
         assert isinstance(fig, Figure)
+
+    def test_comparable_requires_level(self) -> None:
+        data = _data.prepare_book_snapshot_data(self._order_book())
+        with pytest.raises(ValueError, match="comparable"):
+            plot("book_snapshot", **data)
 
 
 class TestPlotVolumePercentiles:

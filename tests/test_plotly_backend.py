@@ -14,7 +14,7 @@ import pytest
 go = pytest.importorskip("plotly.graph_objects", reason="plotly not installed")
 
 from ob_analytics.visualization._data import (  # noqa: E402
-    prepare_current_depth_data,
+    prepare_book_snapshot_data,
     prepare_event_map_data,
     prepare_events_histogram_data,
     prepare_kyle_lambda_data,
@@ -27,7 +27,10 @@ from ob_analytics.visualization._data import (  # noqa: E402
     prepare_vpin_data,
 )
 from ob_analytics.visualization._plotly import (  # noqa: E402
-    plotly_current_depth,
+    plotly_book_snapshot_aggregate,
+    plotly_book_snapshot_per_order,
+    plotly_depth_chart_aggregate,
+    plotly_depth_chart_per_order,
     plotly_event_map,
     plotly_events_histogram,
     plotly_kyle_lambda,
@@ -162,12 +165,32 @@ class TestPlotlyVolumeMap:
         assert isinstance(fig, go.Figure)
 
 
-class TestPlotlyCurrentDepth:
-    def test_returns_plotly_figure(self, sample_order_book: dict) -> None:
-        data = prepare_current_depth_data(sample_order_book)
-        fig = plotly_current_depth(data)
+class TestPlotlyBookSnapshot:
+    def test_aggregate_returns_figure(self, sample_order_book: dict) -> None:
+        data = prepare_book_snapshot_data(sample_order_book, per_order=False)
+        fig = plotly_book_snapshot_aggregate(data)
         assert isinstance(fig, go.Figure)
-        assert len(fig.data) >= 2  # bid + ask step lines
+        assert len(fig.data) >= 2  # bid + ask bars
+
+    def test_per_order_returns_figure(self, sample_order_book: dict) -> None:
+        data = prepare_book_snapshot_data(sample_order_book, per_order=True)
+        fig = plotly_book_snapshot_per_order(data)
+        assert isinstance(fig, go.Figure)
+        assert len(fig.data) >= 2
+
+
+class TestPlotlyDepthChart:
+    def test_aggregate_returns_figure(self, sample_order_book: dict) -> None:
+        data = prepare_book_snapshot_data(sample_order_book, per_order=False)
+        fig = plotly_depth_chart_aggregate(data)
+        assert isinstance(fig, go.Figure)
+        assert len(fig.data) >= 2  # bid + ask step curves
+
+    def test_per_order_returns_figure(self, sample_order_book: dict) -> None:
+        data = prepare_book_snapshot_data(sample_order_book, per_order=True)
+        fig = plotly_depth_chart_per_order(data)
+        assert isinstance(fig, go.Figure)
+        assert len(fig.data) >= 2
 
 
 class TestPlotlyVolumePercentiles:

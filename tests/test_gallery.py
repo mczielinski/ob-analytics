@@ -371,7 +371,7 @@ class TestGenerateGallery:
 
 
 class TestBuildGalleryModel:
-    def test_inventory_is_l2_only(self, tiny_bitstamp_orders_csv) -> None:
+    def test_inventory_levels(self, tiny_bitstamp_orders_csv) -> None:
         from ob_analytics.bitstamp import BitstampFormat
         from ob_analytics.pipeline import Pipeline
 
@@ -387,8 +387,15 @@ class TestBuildGalleryModel:
             "cancellations",
             "events_histogram",
         } <= keys
-        # Stage 2 ships no L3 faces yet, so nothing is comparable.
-        assert all(not c.comparable for c in model.concepts)
-        assert all(c.at(Level.L2) is not None for c in model.concepts)
+        # Stage 3: book_snapshot + depth_chart ship both faces, so they are the
+        # only comparable concepts; every other concept is L2-only.
+        comparable = {c.key for c in model.concepts if c.comparable}
+        assert comparable == {"book_snapshot", "depth_chart"}
+        for c in model.concepts:
+            assert c.at(Level.L2) is not None
+            if c.comparable:
+                assert c.at(Level.L3) is not None
+            else:
+                assert c.at(Level.L3) is None
         # Analytics are appended by callers, not derived here.
         assert model.analytics == []

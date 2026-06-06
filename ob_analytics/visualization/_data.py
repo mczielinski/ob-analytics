@@ -14,7 +14,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from ob_analytics._utils import reverse_matrix
 from ob_analytics.depth import filter_depth
 
 
@@ -400,62 +399,116 @@ def prepare_volume_map_data(
     return {"events": events, "log_scale": log_scale}
 
 
-def prepare_current_depth_data(
+def _as_book_side_frame(side: pd.DataFrame | np.ndarray) -> pd.DataFrame:
+    """Coerce one order-book side to a DataFrame with at least price + volume.
+
+    :func:`ob_analytics.analytics.order_book` hands back per-order frames
+    carrying ``id`` and ``bps``; the synthetic/legacy path hands back a
+    3-column ``[price, volume, liquidity]`` ndarray.  Both normalise here.
+    """
+    if isinstance(side, np.ndarray):
+        return pd.DataFrame(side, columns=["price", "volume", "liquidity"])
+    return side.copy()
+
+
+def _book_side(
+    side: pd.DataFrame, *, ascending: bool, per_order: bool, scale: float
+) -> pd.DataFrame:
+    """Best-first side frame with stacking bounds + cumulative liquidity.
+
+    *ascending* is the price sort that places the touch first (asks ascending,
+    bids descending).  ``per_order=False`` sums every order at a price into one
+    row (L2 / MBP); ``per_order=True`` keeps each order with within-level
+    ``seg_lo``/``seg_hi`` stacking bounds (L3 / MBO).  Volume-like columns are
+    multiplied by *scale*.
+    """
+    cols = ["price", "volume", "liquidity", "seg_lo", "seg_hi"]
+    if side.empty:
+        return pd.DataFrame(columns=cols)
+
+    s = side.sort_values("price", ascending=ascending, kind="stable")
+    if per_order:
+        seg_hi = s.groupby("price", sort=False)["volume"].cumsum()
+        out = pd.DataFrame(
+            {
+                "price": s["price"].to_numpy(),
+                "volume": s["volume"].to_numpy(),
+                "seg_lo": (seg_hi - s["volume"]).to_numpy(),
+                "seg_hi": seg_hi.to_numpy(),
+            }
+        )
+    else:
+        agg = s.groupby("price", sort=False, as_index=False)["volume"].sum()
+        vol = agg["volume"].to_numpy()
+        out = pd.DataFrame(
+            {
+                "price": agg["price"].to_numpy(),
+                "volume": vol,
+                "seg_lo": np.zeros(len(vol)),
+                "seg_hi": vol.copy(),
+            }
+        )
+    out["liquidity"] = out["volume"].cumsum()
+    out[["volume", "liquidity", "seg_lo", "seg_hi"]] *= scale
+    return out
+
+
+def _high_volume_prices(side: pd.DataFrame, q: float = 0.99) -> pd.Series:
+    """Prices whose per-row volume is at or above the *q* quantile."""
+    if side.empty:
+        return pd.Series(dtype=float)
+    return side.loc[side["volume"] >= side["volume"].quantile(q), "price"]
+
+
+def prepare_book_snapshot_data(
     order_book: dict,
+    per_order: bool = False,
     volume_scale: float | None = None,
     show_quantiles: bool = True,
-    show_volume: bool = True,
 ) -> dict[str, Any]:
-    """Prepare data for order book depth snapshot.
+    """Prepare an order-book snapshot at one resolution.
 
-    ``volume_scale=None`` auto-infers a power-of-10 scale from the
-    combined bid/ask volumes.
+    Feeds both the ``book_snapshot`` bars and the ``depth_chart`` curve.
+    ``per_order=False`` collapses each price level to one row (L2 /
+    Market-By-Price); ``per_order=True`` keeps every order as its own row with
+    within-level stacking bounds (L3 / Market-By-Order).  ``volume_scale=None``
+    auto-infers a power-of-10 scale from the combined bid/ask volumes.
+
+    Returns ``bids``/``asks`` frames ordered best-first with columns ``price,
+    volume, liquidity, seg_lo, seg_hi`` (volumes already scaled), plus
+    high-volume ``*_quantiles`` price marks, ``timestamp``, ``volume_scale``,
+    and the ``per_order`` flag.
     """
-    bids = reverse_matrix(order_book["bids"])
-    asks = reverse_matrix(order_book["asks"])
-
-    # reverse_matrix may return ndarray; ensure we have DataFrames
-    if isinstance(bids, np.ndarray):
-        bids = pd.DataFrame(bids, columns=["price", "volume", "liquidity"])
-    if isinstance(asks, np.ndarray):
-        asks = pd.DataFrame(asks, columns=["price", "volume", "liquidity"])
-
-    bid_prices = bids["price"].to_numpy()
-    ask_prices = asks["price"].to_numpy()
-    bid_liq = bids["liquidity"].to_numpy()
-    ask_liq = asks["liquidity"].to_numpy()
-    bid_vol = bids["volume"].to_numpy()
-    ask_vol = asks["volume"].to_numpy()
+    bids = _as_book_side_frame(order_book["bids"])
+    asks = _as_book_side_frame(order_book["asks"])
 
     if volume_scale is None:
-        volume_scale = infer_volume_scale(np.concatenate([bid_vol, ask_vol]))
+        volume_scale = infer_volume_scale(
+            np.concatenate([bids["volume"].to_numpy(), asks["volume"].to_numpy()])
+        )
 
-    x = np.concatenate([bid_prices, [bid_prices[-1]], [ask_prices[0]], ask_prices])
-    y1 = np.concatenate([bid_liq, [0], [0], ask_liq]) * volume_scale
-    y2 = np.concatenate([bid_vol, [0], [0], ask_vol]) * volume_scale
-    side = ["bid"] * (len(bids) + 1) + ["ask"] * (len(asks) + 1)
-
-    depth_df = pd.DataFrame({"price": x, "liquidity": y1, "volume": y2, "side": side})
+    bid_side = _book_side(
+        bids, ascending=False, per_order=per_order, scale=volume_scale
+    )
+    ask_side = _book_side(asks, ascending=True, per_order=per_order, scale=volume_scale)
 
     bid_quantiles = pd.Series(dtype=float)
     ask_quantiles = pd.Series(dtype=float)
     if show_quantiles:
-        bq = bids["volume"].quantile(0.99)
-        bid_quantiles = bids.loc[bids["volume"] >= bq, "price"]
-        aq = asks["volume"].quantile(0.99)
-        ask_quantiles = asks.loc[asks["volume"] >= aq, "price"]
+        bid_quantiles = _high_volume_prices(bid_side)
+        ask_quantiles = _high_volume_prices(ask_side)
 
     timestamp = pd.to_datetime(order_book["timestamp"], unit="s", utc=True)
 
     return {
-        "depth_df": depth_df,
-        "bids": bids,
-        "asks": asks,
+        "bids": bid_side,
+        "asks": ask_side,
         "bid_quantiles": bid_quantiles,
         "ask_quantiles": ask_quantiles,
-        "show_volume": show_volume,
         "show_quantiles": show_quantiles,
+        "per_order": per_order,
         "timestamp": timestamp,
+        "volume_scale": volume_scale,
     }
 
 
