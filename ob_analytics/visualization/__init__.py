@@ -1,15 +1,22 @@
 """Visualization functions for limit order book analytics.
 
-The unified :func:`plot` dispatcher renders a named plot on a chosen backend
-from already-prepared data::
+The unified :func:`plot` dispatcher renders a plot *concept* at a resolution
+*level* on a chosen backend, from already-prepared data::
 
     from ob_analytics.visualization import plot, _data
-    fig = plot("trades", backend="matplotlib", **_data.prepare_trades_data(trades))
+    fig = plot("trade_tape", backend="matplotlib",
+               **_data.prepare_trades_data(trades))
 
-Backends self-register their renderers into :data:`RENDERERS` (keyed by
-``(plot_name, backend)``); the registry is extensible via
-:func:`register_plot_backend`.  ``backend="matplotlib"`` (default) returns a
-Matplotlib figure; ``backend="plotly"`` returns an interactive Plotly figure.
+Backends self-register their renderers into :data:`RENDERERS`, keyed by the
+coordinate ``(concept, level, backend)`` where *level* is a :class:`Level`
+(``L2``/``L3``) or ``None`` for level-less analytics.  The registry is
+extensible via :func:`register_plot_backend`.  ``backend="matplotlib"``
+(default) returns a Matplotlib figure; ``backend="plotly"`` returns an
+interactive Plotly figure.
+
+A concept registered at a single level resolves it automatically, so callers
+pass only the concept name; *comparable* concepts (both L2 and L3 registered)
+require an explicit ``level=``.
 
 Plot types: depth heatmaps, event maps, volume maps, order book snapshots,
 trade price charts, volume percentiles, and event histograms.
@@ -25,6 +32,7 @@ from matplotlib.axes import Axes
 
 from ob_analytics._registry import Registry
 from ob_analytics.visualization import _data as _viz_data
+from ob_analytics.visualization._model import Level
 
 # `infer_volume_scale` is a stable, user-facing helper that gallery callers
 # import from this namespace; keep it as a public re-export. The `prepare_*`
@@ -38,10 +46,15 @@ infer_volume_scale = _viz_data.infer_volume_scale
 
 RendererFn = Callable[..., Any]
 
-#: Registry of ``(plot_name, backend)`` → renderer function.  Renderer
-#: modules (``_matplotlib``, ``_plotly``) self-register at import time -- see
-#: the self-registration block at the bottom of each module.
-RENDERERS: Registry[tuple[str, str], RendererFn] = Registry("renderer")
+#: Registry of ``(concept, level, backend)`` → renderer function, where
+#: *level* is a :class:`Level` (``L2``/``L3``) or ``None`` for level-less
+#: analytics.  Renderer modules (``_matplotlib``, ``_plotly``) self-register
+#: at import time -- see the self-registration block at the bottom of each.
+RENDERERS: Registry[tuple[str, Level | None, str], RendererFn] = Registry("renderer")
+
+#: Sentinel for ``plot(level=...)`` meaning "resolve the level from the
+#: registry" -- distinct from ``None``, which is the explicit level of analytics.
+_UNSET: Any = object()
 
 # Lazy-import bootstrap: backend name → module that self-registers its
 # renderers on import.  matplotlib is a hard dep (imported just below for its
@@ -56,9 +69,9 @@ _BACKEND_MODULES: dict[str, str] = {
 def register_plot_backend(name: str, module_path: str) -> None:
     """Register a visualization backend module.
 
-    The module at *module_path* must call ``RENDERERS.register((plot_name,
-    name), fn)`` for each plot it supports (typically at import time).  It is
-    imported lazily on the first :func:`plot` call that targets *name*.
+    The module at *module_path* must call ``RENDERERS.register((concept,
+    level, name), fn)`` for each plot it supports (typically at import time).
+    It is imported lazily on the first :func:`plot` call that targets *name*.
 
     Parameters
     ----------
@@ -75,28 +88,63 @@ def register_plot_backend(name: str, module_path: str) -> None:
     _BACKEND_MODULES[name] = module_path
 
 
+def _registered_levels(concept: str, backend: str) -> list[Level | None]:
+    """Levels at which *concept* is registered for *backend* (in registry order)."""
+    return [
+        key[1] for key in RENDERERS.list() if key[0] == concept and key[2] == backend
+    ]
+
+
+def _resolve_level(concept: str, backend: str) -> Level | None:
+    """Resolve the implicit level of *concept* on *backend*.
+
+    A concept registered at exactly one level resolves to it -- this covers
+    L2-only plots and level-less analytics (registered at ``None``).  A
+    *comparable* concept, registered at both L2 and L3, is ambiguous and needs
+    an explicit ``level=`` from the caller.
+    """
+    levels = _registered_levels(concept, backend)
+    if not levels:
+        raise KeyError(
+            f"Unknown plot concept {concept!r} for backend {backend!r}. "
+            f"Registered: {RENDERERS.list()}"
+        )
+    if len(levels) > 1:
+        shown = ", ".join(str(lvl) for lvl in levels)
+        raise ValueError(
+            f"Plot concept {concept!r} is comparable (registered at levels "
+            f"{shown}); pass level=Level.L2 or level=Level.L3 to disambiguate."
+        )
+    return levels[0]
+
+
 def plot(
-    name: str,
+    concept: str,
+    level: Level | None = _UNSET,
     *,
     backend: str = "matplotlib",
     ax: Axes | None = None,
     **data: Any,
 ) -> Any:
-    """Render plot *name* on *backend* from already-prepared *data*.
+    """Render *concept* at *level* on *backend* from already-prepared *data*.
 
-    Prepare data with the matching ``prepare_<name>_data`` in
+    Prepare data with the matching ``prepare_<concept>_data`` in
     :mod:`ob_analytics.visualization._data` (or a gallery helper) and spread
     it as keyword arguments::
 
         from ob_analytics.visualization import plot
         from ob_analytics.visualization import _data
-        fig = plot("trades", backend="matplotlib",
+        fig = plot("trade_tape", backend="matplotlib",
                    **_data.prepare_trades_data(trades))
 
     Parameters
     ----------
-    name : str
-        Plot name, e.g. ``"trades"`` or ``"event_map"``.
+    concept : str
+        Plot concept, e.g. ``"trade_tape"`` or ``"order_activity"``.
+    level : Level, optional
+        Resolution level (``Level.L2``/``Level.L3``).  Omit to auto-resolve
+        when the concept is registered at a single level; required for a
+        *comparable* concept registered at both.
     backend : str, optional
         Registered backend name (default ``"matplotlib"``).
     ax : matplotlib.axes.Axes, optional
@@ -113,16 +161,23 @@ def plot(
     Raises
     ------
     ValueError
-        If *backend* is not registered.
+        If *backend* is not registered, or *concept* is comparable and no
+        *level* was given.
+    KeyError
+        If *concept* (at the resolved *level*) is not registered.
     """
     theme = data.pop("theme", None)
-    if (name, backend) not in RENDERERS:
-        if backend not in _BACKEND_MODULES:
-            raise ValueError(
-                f"Unknown backend {backend!r}. Available: {sorted(_BACKEND_MODULES)}"
-            )
-        importlib.import_module(_BACKEND_MODULES[backend])  # fires registration
-    renderer = RENDERERS.get((name, backend))
+    if backend not in _BACKEND_MODULES:
+        raise ValueError(
+            f"Unknown backend {backend!r}. Available: {sorted(_BACKEND_MODULES)}"
+        )
+    # Fire the backend's self-registration (cached after first import) so the
+    # registry is populated before we resolve the level coordinate.
+    importlib.import_module(_BACKEND_MODULES[backend])
+
+    if level is _UNSET:
+        level = _resolve_level(concept, backend)
+    renderer = RENDERERS.get((concept, level, backend))
     if backend == "matplotlib":
         return renderer(data, ax) if theme is None else renderer(data, ax, theme=theme)
     return renderer(data)
@@ -142,6 +197,7 @@ from ob_analytics.visualization._matplotlib import (  # noqa: E402
 __all__ = [
     # Dispatcher + registry
     "plot",
+    "Level",
     "RENDERERS",
     "register_plot_backend",
     # Themes / persistence

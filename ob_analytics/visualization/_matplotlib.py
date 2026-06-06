@@ -851,21 +851,25 @@ def mpl_trading_halts(
 # ---------------------------------------------------------------------------
 # Imported here (not at module top) so RENDERERS -- defined in the package
 # __init__ -- already exists when this module is imported during package init.
-from ob_analytics.visualization import RENDERERS  # noqa: E402
+from ob_analytics.visualization import RENDERERS, Level  # noqa: E402
 
-for _plot_name, _fn in {
-    "time_series": mpl_time_series,
-    "trades": mpl_trades,
-    "price_levels": mpl_price_levels,
-    "event_map": mpl_event_map,
-    "volume_map": mpl_volume_map,
-    "current_depth": mpl_current_depth,
-    "volume_percentiles": mpl_volume_percentiles,
-    "events_histogram": mpl_events_histogram,
-    "vpin": mpl_vpin,
-    "order_flow_imbalance": mpl_order_flow_imbalance,
-    "kyle_lambda": mpl_kyle_lambda,
-    "hidden_executions": mpl_hidden_executions,
-    "trading_halts": mpl_trading_halts,
-}.items():
-    RENDERERS.register((_plot_name, "matplotlib"), _fn)
+# (concept, level, renderer).  L2 = aggregate per price level; analytics carry
+# no level and register at ``None``.  The level is a registry *coordinate*, not
+# a name suffix -- L3 faces register the same concept at ``Level.L3``.
+_L2 = Level.L2
+for _concept, _level, _fn in [
+    ("time_series", _L2, mpl_time_series),
+    ("trade_tape", _L2, mpl_trades),
+    ("depth_heatmap", _L2, mpl_price_levels),
+    ("order_activity", _L2, mpl_event_map),
+    ("cancellations", _L2, mpl_volume_map),
+    ("book_snapshot", _L2, mpl_current_depth),
+    ("volume_percentiles", _L2, mpl_volume_percentiles),
+    ("events_histogram", _L2, mpl_events_histogram),
+    ("hidden_executions", _L2, mpl_hidden_executions),
+    ("vpin", None, mpl_vpin),
+    ("order_flow_imbalance", None, mpl_order_flow_imbalance),
+    ("kyle_lambda", None, mpl_kyle_lambda),
+    ("trading_halts", None, mpl_trading_halts),
+]:
+    RENDERERS.register((_concept, _level, "matplotlib"), _fn)

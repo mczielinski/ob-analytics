@@ -746,21 +746,24 @@ def plotly_trading_halts(data: dict) -> Any:
 # ---------------------------------------------------------------------------
 # Imported here (not at module top) so RENDERERS -- defined in the package
 # __init__ -- already exists when this (lazily imported) module is loaded.
-from ob_analytics.visualization import RENDERERS  # noqa: E402
+from ob_analytics.visualization import RENDERERS, Level  # noqa: E402
 
-for _plot_name, _fn in {
-    "time_series": plotly_time_series,
-    "trades": plotly_trades,
-    "price_levels": plotly_price_levels,
-    "event_map": plotly_event_map,
-    "volume_map": plotly_volume_map,
-    "current_depth": plotly_current_depth,
-    "volume_percentiles": plotly_volume_percentiles,
-    "events_histogram": plotly_events_histogram,
-    "vpin": plotly_vpin,
-    "order_flow_imbalance": plotly_order_flow_imbalance,
-    "kyle_lambda": plotly_kyle_lambda,
-    "hidden_executions": plotly_hidden_executions,
-    "trading_halts": plotly_trading_halts,
-}.items():
-    RENDERERS.register((_plot_name, "plotly"), _fn)
+# (concept, level, renderer); mirrors the matplotlib backend's coordinates so
+# every concept has both faces.  Analytics are level-less (``None``).
+_L2 = Level.L2
+for _concept, _level, _fn in [
+    ("time_series", _L2, plotly_time_series),
+    ("trade_tape", _L2, plotly_trades),
+    ("depth_heatmap", _L2, plotly_price_levels),
+    ("order_activity", _L2, plotly_event_map),
+    ("cancellations", _L2, plotly_volume_map),
+    ("book_snapshot", _L2, plotly_current_depth),
+    ("volume_percentiles", _L2, plotly_volume_percentiles),
+    ("events_histogram", _L2, plotly_events_histogram),
+    ("hidden_executions", _L2, plotly_hidden_executions),
+    ("vpin", None, plotly_vpin),
+    ("order_flow_imbalance", None, plotly_order_flow_imbalance),
+    ("kyle_lambda", None, plotly_kyle_lambda),
+    ("trading_halts", None, plotly_trading_halts),
+]:
+    RENDERERS.register((_concept, _level, "plotly"), _fn)

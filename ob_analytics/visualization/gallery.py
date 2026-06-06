@@ -118,21 +118,21 @@ def default_specs(
         PlotSpec(
             "01_trades_full",
             "Trades (Full Range)",
-            "trades",
+            "trade_tape",
             _viz_data.prepare_trades_data,
             {"trades": trades},
         ),
         PlotSpec(
             "02_trades_zoom",
             "Trades (Zoomed)",
-            "trades",
+            "trade_tape",
             _viz_data.prepare_trades_data,
             {"trades": trades, "start_time": zoom_start, "end_time": zoom_end},
         ),
         PlotSpec(
             "03_price_levels_full",
             "Price Levels / Depth Heatmap (Full)",
-            "price_levels",
+            "depth_heatmap",
             _viz_data.prepare_price_levels_data,
             {
                 "depth": depth,
@@ -146,7 +146,7 @@ def default_specs(
         PlotSpec(
             "04_price_levels_zoom",
             "Price Levels (Zoomed + Trades)",
-            "price_levels",
+            "depth_heatmap",
             _viz_data.prepare_price_levels_data,
             {
                 "depth": depth,
@@ -160,14 +160,14 @@ def default_specs(
         PlotSpec(
             "05_event_map_full",
             "Event Map (Full Range)",
-            "event_map",
+            "order_activity",
             _viz_data.prepare_event_map_data,
             {"events": events, "volume_scale": volume_scale},
         ),
         PlotSpec(
             "06_event_map_zoom",
             "Event Map (Zoomed)",
-            "event_map",
+            "order_activity",
             _viz_data.prepare_event_map_data,
             {
                 "events": events,
@@ -179,7 +179,7 @@ def default_specs(
         PlotSpec(
             "07_volume_map_deleted",
             "Volume Map -- Cancelled (log)",
-            "volume_map",
+            "cancellations",
             _viz_data.prepare_volume_map_data,
             {
                 "events": events,
@@ -190,7 +190,7 @@ def default_specs(
         PlotSpec(
             "08_volume_map_created",
             "Volume Map -- Created (log)",
-            "volume_map",
+            "cancellations",
             _viz_data.prepare_volume_map_data,
             {
                 "events": events,
@@ -208,7 +208,7 @@ def default_specs(
             PlotSpec(
                 "09_current_depth",
                 f"Current Depth ({snap_time.strftime('%H:%M')})",
-                "current_depth",
+                "book_snapshot",
                 _viz_data.prepare_current_depth_data,
                 {
                     "order_book": order_book(events, tp=snap_time, bps_range=150),

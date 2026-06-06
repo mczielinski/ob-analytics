@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 
 import pytest
 
-from ob_analytics.visualization import RENDERERS
+from ob_analytics.visualization import RENDERERS, Level
 from ob_analytics.visualization.gallery import (
     PlotSpec,
     _render_panel,
@@ -30,10 +30,11 @@ from ob_analytics.visualization.gallery import (
 # Stub renderers
 #
 # The gallery dispatches through ``plot(spec.plot_name, backend=...)``, which
-# resolves a renderer from the ``RENDERERS`` registry.  These stubs register
-# tiny renderers under the ``"stub"`` / ``"stubfail"`` plot names so the
-# generator can be exercised without running a pipeline.  Matplotlib renderers
-# take ``(data, ax)``; plotly renderers take ``(data,)``.
+# resolves a renderer from the ``RENDERERS`` registry by the coordinate
+# ``(concept, level, backend)``.  These stubs register tiny renderers for the
+# ``"stub"`` / ``"stubfail"`` concepts at a single level (so dispatch
+# auto-resolves it) without running a pipeline.  Matplotlib renderers take
+# ``(data, ax)``; plotly renderers take ``(data,)``.
 # ---------------------------------------------------------------------------
 
 
@@ -58,10 +59,10 @@ def _stub_fail_plotly(data):
 
 
 _STUB_RENDERERS = {
-    ("stub", "matplotlib"): _stub_mpl_renderer,
-    ("stub", "plotly"): _stub_plotly_renderer,
-    ("stubfail", "matplotlib"): _stub_fail_mpl,
-    ("stubfail", "plotly"): _stub_fail_plotly,
+    ("stub", Level.L2, "matplotlib"): _stub_mpl_renderer,
+    ("stub", Level.L2, "plotly"): _stub_plotly_renderer,
+    ("stubfail", Level.L2, "matplotlib"): _stub_fail_mpl,
+    ("stubfail", Level.L2, "plotly"): _stub_fail_plotly,
 }
 
 

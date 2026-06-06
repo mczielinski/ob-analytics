@@ -207,7 +207,13 @@ A plot is two pieces, deliberately split so the data layer never imports a
 plotting library:
 
 1. a **`prepare_*` function** that returns a plain dict of plot-ready data, and
-2. a **renderer** registered under `(plot_name, backend)`.
+2. a **renderer** registered under the coordinate `(concept, level, backend)`.
+
+The **level** is the order-book resolution the plot renders at: `Level.L2`
+(Market-By-Price aggregate) or `Level.L3` (Market-By-Order, per order), or
+`None` for a level-less plot such as a derived metric. A concept registered at
+a single level dispatches without naming it; registering the *same* concept at
+both `L2` and `L3` makes it *comparable*, and callers then pass `level=`.
 
 The matplotlib backend calls `renderer(data, ax)` (or
 `renderer(data, ax, theme=theme)` when a theme is passed); other backends call
@@ -219,7 +225,7 @@ from __future__ import annotations
 import pandas as pd
 from matplotlib.axes import Axes
 
-from ob_analytics.visualization import RENDERERS, DEFAULT_THEME, PlotTheme, plot
+from ob_analytics.visualization import RENDERERS, DEFAULT_THEME, Level, PlotTheme, plot
 
 
 def prepare_cumvol_data(trades: pd.DataFrame) -> dict:
@@ -243,7 +249,7 @@ def mpl_cumvol(data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT
     return ax.figure
 
 
-RENDERERS.register(("cumvol", "matplotlib"), mpl_cumvol)
+RENDERERS.register(("cumvol", Level.L2, "matplotlib"), mpl_cumvol)  # None = level-less metric
 ```
 
 Using it:
@@ -271,7 +277,7 @@ the dispatcher at the module so it imports lazily on first use:
 from ob_analytics.visualization import register_plot_backend
 
 # In your package, e.g. my_pkg/_bokeh.py, call at import time:
-#     RENDERERS.register(("cumvol", "bokeh"), bokeh_cumvol)  # def bokeh_cumvol(data): ...
+#     RENDERERS.register(("cumvol", Level.L2, "bokeh"), bokeh_cumvol)  # def bokeh_cumvol(data): ...
 register_plot_backend("bokeh", "my_pkg._bokeh")
 
 fig = plot("cumvol", backend="bokeh", **prepare_cumvol_data(result.trades))

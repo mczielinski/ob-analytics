@@ -61,14 +61,14 @@ from ob_analytics.visualization import _data
 spread = get_spread(result.depth_summary)
 
 fig = plot(
-    "price_levels",
+    "depth_heatmap",
     **_data.prepare_price_levels_data(
         result.depth, spread, volume_scale=1e-8, col_bias=0.1
     ),
 )
 save_figure(fig, "price_levels.png")
 
-fig = plot("trades", **_data.prepare_trades_data(result.trades))
+fig = plot("trade_tape", **_data.prepare_trades_data(result.trades))
 save_figure(fig, "trades.png")
 ```
 
@@ -87,7 +87,7 @@ t4 = t3 + pd.Timedelta(minutes=10)
 
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 6))
 
-plot("trades", ax=ax1, **_data.prepare_trades_data(result.trades, start_time=t3, end_time=t4))
+plot("trade_tape", ax=ax1, **_data.prepare_trades_data(result.trades, start_time=t3, end_time=t4))
 ax1.set_title(f"Trades {t3:%H:%M}–{t4:%H:%M}")
 
 hist_data = result.events[["timestamp", "direction", "price", "volume"]].copy()
@@ -439,7 +439,7 @@ theme = PlotTheme(
     rc={"axes.facecolor": "#f8f9fa", "figure.facecolor": "#ffffff"},
 )
 
-fig = plot("trades", theme=theme, **_data.prepare_trades_data(result.trades))
+fig = plot("trade_tape", theme=theme, **_data.prepare_trades_data(result.trades))
 save_figure(fig, "trades_hires.png", dpi=300)
 ```
 
@@ -497,7 +497,7 @@ result = Pipeline().run(sample_csv_path())
 spread = get_spread(result.depth_summary)
 
 fig = plot(
-    "price_levels",
+    "depth_heatmap",
     backend="plotly",
     **_data.prepare_price_levels_data(
         result.depth, spread, volume_scale=1e-8, col_bias=0.1, price_from=232

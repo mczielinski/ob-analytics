@@ -117,7 +117,9 @@ class TestPlotTheme:
     def test_plot_accepts_theme_kwarg(self, sample_trades):
         # plot() pops theme= from kwargs and forwards it to the renderer.
         custom = PlotTheme(style="whitegrid", font_scale=1.0)
-        fig = plot("trades", theme=custom, **_data.prepare_trades_data(sample_trades))
+        fig = plot(
+            "trade_tape", theme=custom, **_data.prepare_trades_data(sample_trades)
+        )
         assert isinstance(fig, Figure)
 
 
@@ -172,37 +174,37 @@ class TestPlotTimeSeries:
 
 class TestPlotTrades:
     def test_returns_figure(self, sample_trades):
-        fig = plot("trades", **_data.prepare_trades_data(sample_trades))
+        fig = plot("trade_tape", **_data.prepare_trades_data(sample_trades))
         assert isinstance(fig, Figure)
 
     def test_accepts_ax(self, sample_trades):
         fig_orig, ax_orig = plt.subplots()
-        fig = plot("trades", ax=ax_orig, **_data.prepare_trades_data(sample_trades))
+        fig = plot("trade_tape", ax=ax_orig, **_data.prepare_trades_data(sample_trades))
         assert fig is fig_orig
 
 
 class TestPlotEventMap:
     def test_returns_figure(self, sample_events):
-        fig = plot("event_map", **_data.prepare_event_map_data(sample_events))
+        fig = plot("order_activity", **_data.prepare_event_map_data(sample_events))
         assert isinstance(fig, Figure)
 
     def test_accepts_ax(self, sample_events):
         fig_orig, ax_orig = plt.subplots()
         fig = plot(
-            "event_map", ax=ax_orig, **_data.prepare_event_map_data(sample_events)
+            "order_activity", ax=ax_orig, **_data.prepare_event_map_data(sample_events)
         )
         assert fig is fig_orig
 
 
 class TestPlotVolumeMap:
     def test_returns_figure(self, sample_events):
-        fig = plot("volume_map", **_data.prepare_volume_map_data(sample_events))
+        fig = plot("cancellations", **_data.prepare_volume_map_data(sample_events))
         assert isinstance(fig, Figure)
 
     def test_accepts_ax(self, sample_events):
         fig_orig, ax_orig = plt.subplots()
         fig = plot(
-            "volume_map", ax=ax_orig, **_data.prepare_volume_map_data(sample_events)
+            "cancellations", ax=ax_orig, **_data.prepare_volume_map_data(sample_events)
         )
         assert fig is fig_orig
 
@@ -216,7 +218,7 @@ class TestPlotCurrentDepth:
             {"price": [237.00, 237.50], "volume": [150, 250], "liquidity": [150, 400]}
         )
         ob = {"bids": bids, "asks": asks, "timestamp": 1430438400}
-        fig = plot("current_depth", **_data.prepare_current_depth_data(ob))
+        fig = plot("book_snapshot", **_data.prepare_current_depth_data(ob))
         assert isinstance(fig, Figure)
 
 
@@ -255,8 +257,8 @@ class TestPlotEventsHistogram:
 class TestSubplotComposition:
     def test_two_plots_on_shared_figure(self, sample_trades):
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
-        fig1 = plot("trades", ax=ax1, **_data.prepare_trades_data(sample_trades))
-        fig2 = plot("trades", ax=ax2, **_data.prepare_trades_data(sample_trades))
+        fig1 = plot("trade_tape", ax=ax1, **_data.prepare_trades_data(sample_trades))
+        fig2 = plot("trade_tape", ax=ax2, **_data.prepare_trades_data(sample_trades))
         assert fig1 is fig
         assert fig2 is fig
         assert len(fig.axes) >= 2
@@ -269,19 +271,21 @@ class TestSubplotComposition:
 
 class TestBackendDispatch:
     def test_default_backend_returns_matplotlib_figure(self, sample_trades):
-        fig = plot("trades", **_data.prepare_trades_data(sample_trades))
+        fig = plot("trade_tape", **_data.prepare_trades_data(sample_trades))
         assert isinstance(fig, Figure)
 
     def test_explicit_matplotlib_returns_figure(self, sample_trades):
         fig = plot(
-            "trades", backend="matplotlib", **_data.prepare_trades_data(sample_trades)
+            "trade_tape",
+            backend="matplotlib",
+            **_data.prepare_trades_data(sample_trades),
         )
         assert isinstance(fig, Figure)
 
     def test_invalid_backend_raises_value_error(self, sample_trades):
         with pytest.raises(ValueError, match="Unknown backend"):
             plot(
-                "trades",
+                "trade_tape",
                 backend="nonexistent",
                 **_data.prepare_trades_data(sample_trades),
             )
@@ -291,7 +295,7 @@ class TestBackendDispatch:
         from ob_analytics.visualization import _data, plot
 
         fig = plot(
-            "trades",
+            "trade_tape",
             backend="matplotlib",
             **_data.prepare_trades_data(sample_trades),
         )
@@ -301,7 +305,7 @@ class TestBackendDispatch:
         from ob_analytics.visualization import plot
 
         with pytest.raises(ValueError, match="Unknown backend"):
-            plot("trades", backend="nope")
+            plot("trade_tape", backend="nope")
 
 
 class TestRegisterBackend:
@@ -309,21 +313,22 @@ class TestRegisterBackend:
         """A backend module self-registers its renderers; plot() dispatches."""
         from ob_analytics.visualization import (
             RENDERERS,
+            Level,
             _BACKEND_MODULES,
             plot,
             register_plot_backend,
         )
 
         # The new extension contract: the backend module registers each
-        # renderer into RENDERERS under (plot_name, backend) at import time.
+        # renderer into RENDERERS under (concept, level, backend) at import time.
         dummy_module = tmp_path / "dummy_backend.py"
         dummy_module.write_text(
-            "from ob_analytics.visualization import RENDERERS\n"
+            "from ob_analytics.visualization import RENDERERS, Level\n"
             "class _Sentinel:\n"
             "    pass\n"
             "def dummy_trades(data, *a, **kw):\n"
             "    return _Sentinel()\n"
-            "RENDERERS.register(('trades', 'dummy'), dummy_trades)\n"
+            "RENDERERS.register(('trade_tape', Level.L2, 'dummy'), dummy_trades)\n"
         )
 
         import sys
@@ -333,13 +338,13 @@ class TestRegisterBackend:
             register_plot_backend("dummy", "dummy_backend")
             assert "dummy" in _BACKEND_MODULES
 
-            fig = plot("trades", backend="dummy")
+            fig = plot("trade_tape", backend="dummy")
             # Should return the sentinel, not a matplotlib Figure.
             assert type(fig).__name__ == "_Sentinel"
         finally:
             sys.path.pop(0)
             _BACKEND_MODULES.pop("dummy", None)
             sys.modules.pop("dummy_backend", None)
-            # Registry has no public removal; the inert (trades, dummy) entry
-            # is dropped here so the dummy module's renderer doesn't linger.
-            RENDERERS._items.pop(("trades", "dummy"), None)
+            # Registry has no public removal; the inert (trade_tape, L2, dummy)
+            # entry is dropped here so the dummy module's renderer doesn't linger.
+            RENDERERS._items.pop(("trade_tape", Level.L2, "dummy"), None)
