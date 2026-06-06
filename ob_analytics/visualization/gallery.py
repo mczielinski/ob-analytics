@@ -1,13 +1,18 @@
 """Reusable plot gallery generator for ob-analytics.
 
-Generates all standard plots across matplotlib and plotly backends,
-saves them to disk, and produces a standalone HTML gallery page.
+A :class:`GalleryModel` is the single source of truth: leveled order-book
+:class:`PlotConcept` objects (each with up to one :class:`PlotSpec` variant per
+:class:`~ob_analytics.visualization.Level`) plus a separate list of level-less
+analytic panels.  A *view* (``l2`` / ``l3`` / ``both`` / ``comparison``)
+projects that model into gallery cards; :func:`generate_gallery` renders every
+selected face across the backend (or L2|L3) column axis, saves the figures, and
+writes a standalone HTML page.
 
 Usage::
 
     from ob_analytics.visualization.gallery import generate_gallery
 
-    gallery_path = generate_gallery(result, "output/gallery/")
+    gallery_path = generate_gallery(result, "output/gallery/", view="both")
 """
 
 from __future__ import annotations
@@ -25,27 +30,37 @@ from ob_analytics.analytics import order_book
 from ob_analytics.pipeline import PipelineResult
 from ob_analytics.visualization import _data as _viz_data
 from ob_analytics.visualization import (
+    Level,
     infer_volume_scale,
     plot,
     save_figure,
 )
 
+#: Views recognised by :func:`generate_gallery` / :func:`_project`.
+VIEWS = ("l2", "l3", "both", "comparison")
+
 
 @dataclass
 class PlotSpec:
-    """Specification for a single plot in the gallery.
+    """How to prepare and label a single plot face.
+
+    A spec carries no level of its own -- the level is a coordinate on the
+    owning :class:`PlotConcept` (for leveled concepts) or ``None`` (for the
+    level-less analytics in :attr:`GalleryModel.analytics`).
 
     Parameters
     ----------
     name : str
-        File stem, e.g. ``"01_trades_full"``.
+        Identifier / file stem for analytic panels (e.g. ``"vpin"``).  For a
+        concept variant the file stem is derived from the concept + level, so
+        ``name`` is only metadata there.
     title : str
-        Human-readable title for the gallery card.
+        Human-readable title (used directly for analytic cards; concept cards
+        take their title from the concept).
     plot_name : str
-        Dispatcher key for :func:`ob_analytics.visualization.plot`,
-        e.g. ``"trades"``.
+        Dispatcher concept key for :func:`ob_analytics.visualization.plot`.
     prepare : Callable
-        ``prepare_<name>_data`` helper that returns the renderer payload.
+        ``prepare_<name>_data`` helper returning the renderer payload.
     prep_kwargs : dict
         Keyword arguments passed to *prepare*.
     """
@@ -55,6 +70,41 @@ class PlotSpec:
     plot_name: str
     prepare: Callable[..., dict]
     prep_kwargs: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PlotConcept:
+    """A level-neutral plot identity with up to one variant per :class:`Level`.
+
+    The ``key`` never carries a level; the level lives in the registry
+    coordinate ``(concept, level, backend)`` and in the keys of ``variants``.
+    """
+
+    key: str
+    title: str
+    variants: dict[Level, PlotSpec]
+    note: str = ""
+
+    def at(self, level: Level) -> PlotSpec | None:
+        """Return the variant registered at *level*, or ``None``."""
+        return self.variants.get(level)
+
+    @property
+    def comparable(self) -> bool:
+        """True when both an L2 and an L3 face are registered.
+
+        Derived, never curated: the existence of both variants *is* the
+        L2<->L3 pairing, so it can never drift out of sync with what is built.
+        """
+        return Level.L2 in self.variants and Level.L3 in self.variants
+
+
+@dataclass
+class GalleryModel:
+    """The gallery's inventory: leveled concepts + level-less analytics."""
+
+    concepts: list[PlotConcept]
+    analytics: list[PlotSpec] = field(default_factory=list)
 
 
 def _auto_zoom_window(
@@ -74,26 +124,44 @@ def _auto_zoom_window(
     return (t_min + quarter, t_min + 2 * quarter)
 
 
-def default_specs(
+def _l2(
+    key: str,
+    title: str,
+    plot_name: str,
+    prepare: Callable[..., dict],
+    prep_kwargs: dict[str, Any],
+    *,
+    note: str = "",
+) -> PlotConcept:
+    """Build a single-variant (L2-only) concept."""
+    spec = PlotSpec(key, title, plot_name, prepare, prep_kwargs)
+    return PlotConcept(key, title, {Level.L2: spec}, note=note)
+
+
+def build_gallery_model(
     result: PipelineResult,
     *,
     volume_scale: float | None = None,
-) -> list[PlotSpec]:
-    """Build the default set of plot specifications from pipeline results.
+) -> GalleryModel:
+    """Build the default gallery model from pipeline results.
+
+    Every order-book concept is registered with its ``Level.L2`` variant (the
+    L3 faces are added by later renderers; a concept becomes
+    :attr:`~PlotConcept.comparable` automatically once both exist).  Analytics
+    are *not* derived here -- callers append computed analytic panels (built
+    with the ``*_panel`` helpers) to :attr:`GalleryModel.analytics`.
 
     Parameters
     ----------
     result : PipelineResult
         Pipeline output.
     volume_scale : float or None
-        Scaling factor for volume display.  ``None`` (default)
-        auto-infers a power-of-10 scale from ``result.events['volume']``
-        via :func:`infer_volume_scale` so the gallery works without
-        per-asset tuning.
+        Volume display scale.  ``None`` (default) auto-infers a power-of-10
+        scale from ``result.events['volume']`` via :func:`infer_volume_scale`.
 
     Returns
     -------
-    list of PlotSpec
+    GalleryModel
     """
     events = result.events
     trades = result.trades
@@ -114,24 +182,17 @@ def default_specs(
     offset = events["timestamp"].min() + pd.Timedelta(minutes=1)
     depth_summary_offset = depth_summary[depth_summary["timestamp"] >= offset]
 
-    specs: list[PlotSpec] = [
-        PlotSpec(
-            "01_trades_full",
-            "Trades (Full Range)",
+    concepts: list[PlotConcept] = [
+        _l2(
+            "trade_tape",
+            "Trade Tape",
             "trade_tape",
             _viz_data.prepare_trades_data,
             {"trades": trades},
         ),
-        PlotSpec(
-            "02_trades_zoom",
-            "Trades (Zoomed)",
-            "trade_tape",
-            _viz_data.prepare_trades_data,
-            {"trades": trades, "start_time": zoom_start, "end_time": zoom_end},
-        ),
-        PlotSpec(
-            "03_price_levels_full",
-            "Price Levels / Depth Heatmap (Full)",
+        _l2(
+            "depth_heatmap",
+            "Depth Heatmap",
             "depth_heatmap",
             _viz_data.prepare_price_levels_data,
             {
@@ -143,71 +204,29 @@ def default_specs(
                 "price_to": price_to,
             },
         ),
-        PlotSpec(
-            "04_price_levels_zoom",
-            "Price Levels (Zoomed + Trades)",
-            "depth_heatmap",
-            _viz_data.prepare_price_levels_data,
-            {
-                "depth": depth,
-                "spread": spread,
-                "trades": trades,
-                "start_time": zoom_start,
-                "end_time": zoom_end,
-                "volume_scale": volume_scale,
-            },
-        ),
-        PlotSpec(
-            "05_event_map_full",
-            "Event Map (Full Range)",
+        _l2(
+            "order_activity",
+            "Order Activity",
             "order_activity",
             _viz_data.prepare_event_map_data,
             {"events": events, "volume_scale": volume_scale},
         ),
-        PlotSpec(
-            "06_event_map_zoom",
-            "Event Map (Zoomed)",
-            "order_activity",
-            _viz_data.prepare_event_map_data,
-            {
-                "events": events,
-                "start_time": zoom_start,
-                "end_time": zoom_end,
-                "volume_scale": volume_scale,
-            },
-        ),
-        PlotSpec(
-            "07_volume_map_deleted",
-            "Volume Map -- Cancelled (log)",
+        _l2(
+            "cancellations",
+            "Cancellations (log)",
             "cancellations",
             _viz_data.prepare_volume_map_data,
-            {
-                "events": events,
-                "volume_scale": volume_scale,
-                "log_scale": True,
-            },
-        ),
-        PlotSpec(
-            "08_volume_map_created",
-            "Volume Map -- Created (log)",
-            "cancellations",
-            _viz_data.prepare_volume_map_data,
-            {
-                "events": events,
-                "action": "created",
-                "volume_scale": volume_scale,
-                "log_scale": True,
-            },
+            {"events": events, "volume_scale": volume_scale, "log_scale": True},
         ),
     ]
 
-    # Order book snapshot (requires 'type' column from set_order_types)
+    # Book snapshot requires the per-order 'type' column from set_order_types.
     if "type" in events.columns:
         snap_time = zoom_end
-        specs.append(
-            PlotSpec(
-                "09_current_depth",
-                f"Current Depth ({snap_time.strftime('%H:%M')})",
+        concepts.append(
+            _l2(
+                "book_snapshot",
+                f"Book Snapshot ({snap_time.strftime('%H:%M')})",
                 "book_snapshot",
                 _viz_data.prepare_current_depth_data,
                 {
@@ -217,11 +236,10 @@ def default_specs(
             )
         )
 
-    # Volume percentiles
     if not depth_summary_offset.empty:
-        specs.append(
-            PlotSpec(
-                "10_volume_percentiles",
+        concepts.append(
+            _l2(
+                "volume_percentiles",
                 "Volume Percentiles",
                 "volume_percentiles",
                 _viz_data.prepare_volume_percentiles_data,
@@ -234,7 +252,7 @@ def default_specs(
             )
         )
 
-    # Event histograms
+    # Events histogram (price). Clip the tails so the bandwidth is sensible.
     hist_events = events[["timestamp", "direction", "price", "volume"]].copy()
     hist_events["volume"] = hist_events["volume"] * volume_scale
     q01 = hist_events["price"].quantile(0.01)
@@ -244,43 +262,23 @@ def default_specs(
     ]
     price_range = q99 - q01
     price_bw = max(0.01, round(price_range / 100, 2))
-
-    specs.extend(
-        [
-            PlotSpec(
-                "11_events_hist_price",
-                "Events Histogram -- Price",
-                "events_histogram",
-                _viz_data.prepare_events_histogram_data,
-                {"events": hist_price, "val": "price", "bw": price_bw},
-            ),
-            PlotSpec(
-                "12_events_hist_volume",
-                "Events Histogram -- Volume",
-                "events_histogram",
-                _viz_data.prepare_events_histogram_data,
-                {
-                    "events": hist_events[
-                        hist_events["volume"] < hist_events["volume"].quantile(0.99)
-                    ],
-                    "val": "volume",
-                    "bw": max(
-                        0.01,
-                        round(hist_events["volume"].quantile(0.99) / 20, 2),
-                    ),
-                },
-            ),
-        ]
+    concepts.append(
+        _l2(
+            "events_histogram",
+            "Events Histogram (price)",
+            "events_histogram",
+            _viz_data.prepare_events_histogram_data,
+            {"events": hist_price, "val": "price", "bw": price_bw},
+        )
     )
 
-    # Hidden executions are LOBSTER-only (raw_event_type == 5); derive the
-    # panel from result.events instead of a pre-collected extras payload.
+    # Hidden executions are LOBSTER-only (raw_event_type == 5).
     if "raw_event_type" in events.columns:
         hidden = events[events["raw_event_type"] == 5]
         if not hidden.empty:
-            specs.append(
-                PlotSpec(
-                    "13_hidden_executions",
+            concepts.append(
+                _l2(
+                    "hidden_executions",
                     "Hidden Executions",
                     "hidden_executions",
                     _viz_data.prepare_hidden_executions_data,
@@ -288,11 +286,11 @@ def default_specs(
                 )
             )
 
-    return specs
+    return GalleryModel(concepts=concepts, analytics=[])
 
 
 def vpin_panel(vpin_df: pd.DataFrame, *, threshold: float = 0.7) -> PlotSpec:
-    """Build a VPIN gallery panel for ``extra_panels=``."""
+    """Build a VPIN analytic panel for :attr:`GalleryModel.analytics`."""
     return PlotSpec(
         "vpin",
         "VPIN",
@@ -303,7 +301,7 @@ def vpin_panel(vpin_df: pd.DataFrame, *, threshold: float = 0.7) -> PlotSpec:
 
 
 def ofi_panel(ofi_df: pd.DataFrame, trades: pd.DataFrame | None = None) -> PlotSpec:
-    """Build an order-flow-imbalance gallery panel for ``extra_panels=``."""
+    """Build an order-flow-imbalance analytic panel."""
     return PlotSpec(
         "ofi",
         "Order Flow Imbalance",
@@ -314,7 +312,7 @@ def ofi_panel(ofi_df: pd.DataFrame, trades: pd.DataFrame | None = None) -> PlotS
 
 
 def kyle_panel(kyle_result: Any) -> PlotSpec:
-    """Build a Kyle's-Lambda gallery panel for ``extra_panels=``."""
+    """Build a Kyle's-Lambda analytic panel."""
     return PlotSpec(
         "kyle_lambda",
         f"Kyle's Lambda (lambda={kyle_result.lambda_:.4f})",
@@ -325,7 +323,7 @@ def kyle_panel(kyle_result: Any) -> PlotSpec:
 
 
 def trading_halts_panel(trades: pd.DataFrame, halts: pd.DataFrame) -> PlotSpec:
-    """Build a trading-halts gallery panel for ``extra_panels=``.
+    """Build a trading-halts analytic panel.
 
     LOBSTER halts are not part of the slim :class:`PipelineResult`; read them
     from :attr:`~ob_analytics.lobster.LobsterLoader.trading_halts` and pass
@@ -340,37 +338,186 @@ def trading_halts_panel(trades: pd.DataFrame, halts: pd.DataFrame) -> PlotSpec:
     )
 
 
+# ---------------------------------------------------------------------------
+# View projection: GalleryModel -> gallery cards
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _Panel:
+    """One column within a gallery card: what to render and how to display it.
+
+    The render coordinate (``concept``/``level``/``prepare``) drives
+    :func:`ob_analytics.visualization.plot`; the display fields
+    (``backend``/``stem``/``label``/...) drive the HTML.  ``rendered`` is set by
+    the render loop and consumed by :func:`_render_panel`.
+    """
+
+    concept: str
+    level: Level | None
+    prepare: Callable[..., dict]
+    prep_kwargs: dict[str, Any]
+    backend: str
+    stem: str
+    label: str
+    panel_cls: str
+    role: str  # "primary" | "secondary" | "equal"
+    rendered: bool = False
+
+
+@dataclass
+class _Card:
+    """A gallery card: a title and one panel per column."""
+
+    title: str
+    panels: list[_Panel]
+
+
+_LEVEL_LABEL: dict[Level, str] = {
+    Level.L2: "L2 -- MBP (aggregate)",
+    Level.L3: "L3 -- MBO (per order)",
+}
+
+
+def _panel_cls(backend: str) -> str:
+    style = _BACKEND_STYLES.get(backend)
+    return style.panel_cls if style else f"{backend}-panel"
+
+
+def _backend_panels(
+    concept: str,
+    level: Level | None,
+    spec: PlotSpec,
+    stem: str,
+    backends: list[str],
+) -> list[_Panel]:
+    """One panel per backend (the column axis for l2/l3/both views)."""
+    panels: list[_Panel] = []
+    for i, backend in enumerate(backends):
+        style = _BACKEND_STYLES.get(backend)
+        panels.append(
+            _Panel(
+                concept=concept,
+                level=level,
+                prepare=spec.prepare,
+                prep_kwargs=spec.prep_kwargs,
+                backend=backend,
+                stem=stem,
+                label=style.label if style else backend.capitalize(),
+                panel_cls=_panel_cls(backend),
+                role="primary" if i == 0 else "secondary",
+            )
+        )
+    return panels
+
+
+def _comparison_backend(backends: list[str]) -> str:
+    """The single backend used for the side-by-side L2|L3 comparison view."""
+    return "plotly" if "plotly" in backends else backends[0]
+
+
+def _project(
+    model: GalleryModel,
+    view: str,
+    backends: list[str],
+) -> list[_Card]:
+    """Project *model* into gallery cards for *view*.
+
+    ``l2`` / ``l3`` / ``both`` lay each selected face across the *backend*
+    column axis (plus analytics for ``l2`` / ``both``); ``comparison`` pairs the
+    L2 and L3 faces of each :attr:`~PlotConcept.comparable` concept in a single
+    card with an L2|L3 column axis on one backend.
+    """
+    if view not in VIEWS:
+        raise ValueError(f"Unknown view {view!r}. Available: {list(VIEWS)}")
+
+    if view == "comparison":
+        backend = _comparison_backend(backends)
+        cards: list[_Card] = []
+        for concept in model.concepts:
+            if not concept.comparable:
+                continue
+            panels = []
+            for level in (Level.L2, Level.L3):
+                spec = concept.at(level)
+                assert spec is not None  # comparable => both variants exist
+                panels.append(
+                    _Panel(
+                        concept=concept.key,
+                        level=level,
+                        prepare=spec.prepare,
+                        prep_kwargs=spec.prep_kwargs,
+                        backend=backend,
+                        stem=f"{concept.key}.{level}",
+                        label=_LEVEL_LABEL[level],
+                        panel_cls=_panel_cls(backend),
+                        role="equal",
+                    )
+                )
+            cards.append(_Card(concept.title, panels))
+        return cards
+
+    levels_for_view = {
+        "l2": (Level.L2,),
+        "l3": (Level.L3,),
+        "both": (Level.L2, Level.L3),
+    }[view]
+
+    cards = []
+    for concept in model.concepts:
+        for level in levels_for_view:
+            spec = concept.at(level)
+            if spec is None:
+                continue
+            stem = f"{concept.key}.{level}"
+            title = f"{concept.title} -- {level}"
+            cards.append(
+                _Card(title, _backend_panels(concept.key, level, spec, stem, backends))
+            )
+
+    if view in ("l2", "both"):
+        for spec in model.analytics:
+            cards.append(
+                _Card(
+                    spec.title,
+                    _backend_panels(spec.plot_name, None, spec, spec.name, backends),
+                )
+            )
+    return cards
+
+
 def generate_gallery(
     result: PipelineResult | None,
     output_dir: str | Path,
     *,
-    specs: list[PlotSpec] | None = None,
-    extra_panels: list[PlotSpec] | None = None,
+    model: GalleryModel | None = None,
+    view: str = "both",
     volume_scale: float | None = None,
     backends: list[str] | None = None,
     title: str = "ob-analytics Plot Gallery",
 ) -> Path:
-    """Generate all plots and a standalone HTML gallery.
+    """Render a gallery view and write a standalone HTML page.
 
     Parameters
     ----------
     result : PipelineResult or None
-        Pipeline output.  May be ``None`` when *specs* is provided
-        explicitly (the result is only consulted by :func:`default_specs`).
+        Pipeline output.  May be ``None`` when *model* is supplied (the result
+        is only consulted by :func:`build_gallery_model`).
     output_dir : str or Path
         Root directory for gallery output.
-    specs : list of PlotSpec, optional
-        Plot specifications.  Defaults to :func:`default_specs`.
-    extra_panels : list of PlotSpec, optional
-        Additional panels appended after the built-ins (or after *specs*).
-        Build them with the ``*_panel`` helpers, e.g. :func:`vpin_panel`.
+    model : GalleryModel, optional
+        Inventory to render.  Defaults to :func:`build_gallery_model`.
+    view : str
+        One of ``"l2"``, ``"l3"``, ``"both"`` (default), ``"comparison"``.
     volume_scale : float or None
-        Volume display scale factor.  ``None`` (default) auto-infers a
-        sensible power-of-10 scale from the events.
+        Volume display scale, forwarded to :func:`build_gallery_model` when
+        *model* is built here.  Ignored when *model* is supplied.
     backends : list of str, optional
-        Backends to render.  Defaults to ``["plotly", "matplotlib"]``
-        when ``plotly`` is installed (Plotly is rendered as the primary
-        column), or ``["matplotlib"]`` otherwise.
+        Backends to render.  Defaults to ``["plotly", "matplotlib"]`` when
+        plotly is installed (plotly is the primary column), else
+        ``["matplotlib"]``.  In ``comparison`` view the backend axis collapses
+        to a single backend (plotly if available) so the two columns carry
+        L2 vs L3.
     title : str
         Gallery page title.
 
@@ -378,13 +525,6 @@ def generate_gallery(
     -------
     Path
         Path to the generated HTML gallery file.
-
-    Notes
-    -----
-    When ``backends`` is left at the default and ``plotly`` is installed,
-    the gallery renders Plotly **first** (the primary/larger column in the
-    HTML layout) so the interactive view is front-and-center.  Pass
-    ``backends=["matplotlib"]`` to opt out.
     """
     import matplotlib
 
@@ -402,62 +542,55 @@ def generate_gallery(
         except ImportError:
             backends = ["matplotlib"]
 
-    if specs is None:
+    if model is None:
         if result is None:
             raise ValueError(
-                "generate_gallery requires either `result` or explicit `specs`."
+                "generate_gallery requires either `result` or an explicit `model`."
             )
-        specs = default_specs(
-            result,
-            volume_scale=volume_scale,
-        )
+        model = build_gallery_model(result, volume_scale=volume_scale)
 
-    if extra_panels:
-        specs = [*specs, *extra_panels]
+    cards = _project(model, view, backends)
 
-    backend_dirs = {b: out / b for b in backends}
-
-    # generated[i] = (name, title, {backend: success})
-    generated: list[tuple[str, str, dict[str, bool]]] = []
-
-    for spec in specs:
-        logger.info("Gallery: generating {}", spec.name)
-        statuses: dict[str, bool] = {}
-
-        for backend in backends:
-            backend_dirs[backend].mkdir(parents=True, exist_ok=True)
-            try:
-                data = spec.prepare(**spec.prep_kwargs)
-                fig = plot(spec.plot_name, backend=backend, **data)
-            except Exception as e:
-                logger.warning("Gallery: {} {} failed: {}", backend, spec.name, e)
-                statuses[backend] = False
-                continue
-
-            try:
-                if backend == "matplotlib":
-                    save_figure(fig, str(backend_dirs[backend] / f"{spec.name}.png"))
-                    plt.close(fig)
-                elif backend == "plotly":
-                    fig.write_html(
-                        str(backend_dirs[backend] / f"{spec.name}.html"),
-                        include_plotlyjs="cdn",
-                    )
-                else:  # custom backend: best-effort
-                    save_figure(fig, str(backend_dirs[backend] / f"{spec.name}.png"))
-                statuses[backend] = True
-            except Exception as e:
-                logger.warning(
-                    "Gallery: persisting {} {} failed: {}", backend, spec.name, e
-                )
-                statuses[backend] = False
-
-        generated.append((spec.name, spec.title, statuses))
+    # Render each panel once and persist it under <backend>/<stem>.{png,html}.
+    rendered_dirs: set[str] = set()
+    for card in cards:
+        logger.info("Gallery: generating {}", card.title)
+        for panel in card.panels:
+            if panel.backend not in rendered_dirs:
+                (out / panel.backend).mkdir(parents=True, exist_ok=True)
+                rendered_dirs.add(panel.backend)
+            panel.rendered = _render_and_save(panel, out, plt)
 
     html_path = out / "gallery.html"
-    _write_gallery_html(html_path, generated, title, backends)
-    logger.info("Gallery: {} plots saved to {}", len(generated), out)
+    _write_gallery_html(html_path, cards, title)
+    logger.info("Gallery: {} cards ({} view) saved to {}", len(cards), view, out)
     return html_path
+
+
+def _render_and_save(panel: _Panel, out: Path, plt: Any) -> bool:
+    """Render one panel to a figure and persist it; return success."""
+    try:
+        data = panel.prepare(**panel.prep_kwargs)
+        fig = plot(panel.concept, panel.level, backend=panel.backend, **data)
+    except Exception as e:  # noqa: BLE001 -- one bad panel must not sink the gallery
+        logger.warning("Gallery: {} {} failed: {}", panel.backend, panel.stem, e)
+        return False
+
+    target = out / panel.backend / panel.stem
+    try:
+        if panel.backend == "matplotlib":
+            save_figure(fig, f"{target}.png")
+            plt.close(fig)
+        elif panel.backend == "plotly":
+            fig.write_html(f"{target}.html", include_plotlyjs="cdn")
+        else:  # custom backend: best-effort PNG
+            save_figure(fig, f"{target}.png")
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "Gallery: persisting {} {} failed: {}", panel.backend, panel.stem, e
+        )
+        return False
 
 
 @dataclass(frozen=True)
@@ -474,76 +607,53 @@ _BACKEND_STYLES: dict[str, _BackendStyle] = {
 }
 
 
-def _render_panel(
-    backend: str,
-    name: str,
-    rendered: bool,
-    role: str,
-    escaped_title: str,
-) -> str:
-    """Render one ``<div class="panel">`` for a given backend.
+def _render_panel(panel: _Panel, escaped_title: str) -> str:
+    """Render one ``<div class="panel">`` for a card column."""
+    classes = f"panel {panel.panel_cls} panel-{panel.role}"
 
-    *role* is ``"primary"`` for the first listed backend (larger column)
-    and ``"secondary"`` for the rest.
-    """
-    style = _BACKEND_STYLES.get(backend)
-    label = style.label if style else backend.capitalize()
-    panel_cls = style.panel_cls if style else f"{backend}-panel"
-    classes = f"panel {panel_cls} panel-{role}"
-
-    if not rendered:
+    if not panel.rendered:
         body = '<p class="na">Not available</p>'
-    elif backend == "plotly":
+    elif panel.backend == "plotly":
         body = (
-            f'<iframe src="plotly/{name}.html" loading="lazy" '
-            f'title="{escaped_title} (Plotly)"></iframe>'
+            f'<iframe src="plotly/{panel.stem}.html" loading="lazy" '
+            f'title="{escaped_title} ({panel.label})"></iframe>'
         )
-    elif backend == "matplotlib":
+    elif panel.backend == "matplotlib":
         body = (
-            f'<img src="matplotlib/{name}.png" alt="{escaped_title}" '
+            f'<img src="matplotlib/{panel.stem}.png" alt="{escaped_title}" '
             f'onclick="zoom(this.src)">'
         )
     else:
         body = (
-            f'<img src="{backend}/{name}.png" alt="{escaped_title}" '
+            f'<img src="{panel.backend}/{panel.stem}.png" alt="{escaped_title}" '
             f'onclick="zoom(this.src)">'
         )
 
-    return f'<div class="{classes}"><h3>{label}</h3>{body}</div>'
+    return f'<div class="{classes}"><h3>{panel.label}</h3>{body}</div>'
 
 
 def _write_gallery_html(
     path: Path,
-    plots: list[tuple[str, str, dict[str, bool]]],
+    cards: list[_Card],
     title: str,
-    backends: list[str],
 ) -> None:
-    """Write the standalone HTML gallery page.
-
-    The first entry in *backends* is rendered as the primary (wider)
-    panel; subsequent backends become secondary panels.
-    """
-    cards: list[str] = []
-    for name, plot_title, statuses in plots:
-        escaped_title = html_mod.escape(plot_title)
-        panels = [
-            _render_panel(
-                backend,
-                name,
-                statuses.get(backend, False),
-                "primary" if i == 0 else "secondary",
-                escaped_title,
-            )
-            for i, backend in enumerate(backends)
-        ]
-        cards.append(
+    """Write the standalone HTML gallery page from projected *cards*."""
+    rendered_cards: list[str] = []
+    for card in cards:
+        escaped_title = html_mod.escape(card.title)
+        panels = "".join(_render_panel(p, escaped_title) for p in card.panels)
+        rendered_cards.append(
             '<div class="card">'
             f'<div class="card-title">{escaped_title}</div>'
-            '<div class="card-body">' + "".join(panels) + "</div></div>"
+            f'<div class="card-body">{panels}</div></div>'
         )
 
     escaped_title = html_mod.escape(title)
-    content = "\n".join(cards)
+    content = (
+        "\n".join(rendered_cards)
+        if rendered_cards
+        else ('<p class="empty">No plots for this view.</p>')
+    )
 
     html = f"""\
 <!DOCTYPE html>
@@ -564,6 +674,7 @@ h1{{text-align:center;margin-bottom:24px;color:#e94560}}
 .panel{{text-align:center;padding:10px;min-width:0}}
 .panel-primary{{flex:2}}
 .panel-secondary{{flex:1}}
+.panel-equal{{flex:1}}
 .panel+.panel{{border-left:1px solid #333}}
 .panel h3{{margin-bottom:8px;font-size:.85em;text-transform:uppercase;letter-spacing:1px}}
 .mpl-panel h3{{color:#81c784}}
@@ -573,7 +684,9 @@ h1{{text-align:center;margin-bottom:24px;color:#e94560}}
 .panel iframe{{width:100%;border:none;border-radius:4px;background:#1e1e1e}}
 .panel-primary iframe{{height:600px}}
 .panel-secondary iframe{{height:300px}}
+.panel-equal iframe{{height:500px}}
 .panel .na{{color:#666;font-style:italic;margin-top:40px}}
+.empty{{text-align:center;color:#888;font-style:italic;margin-top:40px}}
 .overlay{{display:none;position:fixed;top:0;left:0;width:100%;height:100%;
   background:rgba(0,0,0,.9);z-index:1000;justify-content:center;
   align-items:center;cursor:zoom-out}}

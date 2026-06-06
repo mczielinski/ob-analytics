@@ -96,8 +96,8 @@ class LobsterLoader:
         self._config = config or PipelineConfig()
         self._trading_date = pd.Timestamp(trading_date).normalize()
         #: Trading-halt (event_type 7) and cross-trade (event_type 6) rows,
-        #: split out during :meth:`load`. Public so callers can overlay them on
-        #: the gallery via ``extra_panels`` (LOBSTER-only; ``None`` if absent).
+        #: split out during :meth:`load`. Public so callers can append them to
+        #: the gallery model's ``analytics`` (LOBSTER-only; ``None`` if absent).
         self.trading_halts: pd.DataFrame | None = None
         self.cross_trades: pd.DataFrame | None = None
         #: Path to the companion LOBSTER orderbook file, discovered during

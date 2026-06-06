@@ -81,7 +81,7 @@ def _cmd_process(args: argparse.Namespace) -> None:
     logger.info("Saved to: {}", output.resolve())
 
     if args.gallery:
-        _generate_gallery_from_result(result, output, fmt_name, source)
+        _generate_gallery_from_result(result, output, fmt_name, source, view=args.view)
 
 
 def _cmd_gallery(args: argparse.Namespace) -> None:
@@ -111,6 +111,7 @@ def _cmd_gallery(args: argparse.Namespace) -> None:
     gallery_path = generate_gallery(
         result,
         output,
+        view=args.view,
         volume_scale=args.volume_scale,
         title=args.title or f"ob-analytics gallery -- {data_path.name}",
     )
@@ -185,7 +186,7 @@ def _cmd_capture(args: argparse.Namespace) -> None:
 
 
 def _generate_gallery_from_result(
-    result: Any, output: Path, fmt_name: str, source: str
+    result: Any, output: Path, fmt_name: str, source: str, *, view: str = "both"
 ) -> None:
     """Helper to generate a gallery alongside process output.
 
@@ -201,6 +202,7 @@ def _generate_gallery_from_result(
     gallery_path = generate_gallery(
         result,
         gallery_dir,
+        view=view,
         title=f"{fmt_name} ({Path(source).name}) -- ob-analytics",
     )
     logger.info("Gallery: {}", gallery_path.resolve())
@@ -252,6 +254,15 @@ def main() -> None:
         default=False,
         help="Also generate an HTML plot gallery",
     )
+    p_process.add_argument(
+        "--view",
+        default="both",
+        choices=["l2", "l3", "both", "comparison"],
+        help=(
+            "Gallery view: resolution level(s) to render "
+            "(l2|l3|both|comparison; default: both)"
+        ),
+    )
     p_process.set_defaults(func=_cmd_process)
 
     # -- gallery --
@@ -282,6 +293,15 @@ def main() -> None:
         "--title",
         default=None,
         help="Gallery page title",
+    )
+    p_gallery.add_argument(
+        "--view",
+        default="both",
+        choices=["l2", "l3", "both", "comparison"],
+        help=(
+            "Gallery view: resolution level(s) to render "
+            "(l2|l3|both|comparison; default: both)"
+        ),
     )
     p_gallery.set_defaults(func=_cmd_gallery)
 

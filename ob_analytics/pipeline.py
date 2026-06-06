@@ -86,8 +86,8 @@ class PipelineResult:
     """Immutable container for the core outputs of a pipeline run.
 
     Analytic outputs (VPIN, OFI, Kyle's λ) are intentionally **not** stored
-    here — compute them post-pipeline from ``trades`` and pass them to the
-    gallery via ``extra_panels=``.
+    here — compute them post-pipeline from ``trades`` and append them to the
+    gallery model's ``analytics`` (build panels with the ``*_panel`` helpers).
 
     Attributes
     ----------

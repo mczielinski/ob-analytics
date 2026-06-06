@@ -19,6 +19,7 @@ from ob_analytics.pipeline import Pipeline, PipelineResult
 from ob_analytics.protocols import RunContext
 from ob_analytics.visualization.gallery import (
     PlotSpec,
+    build_gallery_model,
     generate_gallery,
     trading_halts_panel,
 )
@@ -42,16 +43,27 @@ def _save_and_gallery(
     result: PipelineResult,
     output_dir: Path,
     title: str,
-    extra_panels: list[PlotSpec] | None = None,
+    *,
+    analytics: list[PlotSpec] | None = None,
+    view: str = "both",
 ) -> Path:
-    """Save Parquet + generate gallery; return the gallery HTML path."""
+    """Save Parquet + generate gallery; return the gallery HTML path.
+
+    *analytics* are level-less panels (built with the ``*_panel`` helpers)
+    appended to the model's :attr:`~...gallery.GalleryModel.analytics`.
+    """
     parquet_dir = output_dir / "parquet"
     save_data(_result_dict(result), parquet_dir)
     logger.info("Parquet saved to: {}", parquet_dir)
 
+    model = None
+    if analytics:
+        model = build_gallery_model(result)
+        model.analytics.extend(analytics)
+
     gallery_dir = output_dir / "gallery"
     gallery_path = generate_gallery(
-        result, gallery_dir, title=title, extra_panels=extra_panels
+        result, gallery_dir, model=model, view=view, title=title
     )
     logger.info("Gallery: {}", gallery_path.resolve())
     logger.info("Open in browser: file://{}", gallery_path.resolve())
@@ -172,15 +184,15 @@ def run_lobster_demo(
     logger.info("Depth:  {:,}", len(result.depth))
 
     # LOBSTER halts are not part of the slim PipelineResult; read them off the
-    # loader and overlay them on the gallery via extra_panels.
+    # loader and append them to the gallery model's analytics.
     halts = getattr(pipeline.loader, "trading_halts", None)
-    extra_panels: list[PlotSpec] = []
+    analytics: list[PlotSpec] = []
     if halts is not None and not halts.empty:
-        extra_panels.append(trading_halts_panel(result.trades, halts))
+        analytics.append(trading_halts_panel(result.trades, halts))
 
     return _save_and_gallery(
         result,
         out,
         title=f"LOBSTER {src.name} ({trading_date}) -- ob-analytics",
-        extra_panels=extra_panels,
+        analytics=analytics,
     )
