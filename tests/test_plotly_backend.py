@@ -15,6 +15,7 @@ go = pytest.importorskip("plotly.graph_objects", reason="plotly not installed")
 
 from ob_analytics.visualization._data import (  # noqa: E402
     prepare_book_snapshot_data,
+    prepare_cancellations_l3_data,
     prepare_event_map_data,
     prepare_events_histogram_data,
     prepare_kyle_lambda_data,
@@ -29,6 +30,7 @@ from ob_analytics.visualization._data import (  # noqa: E402
 from ob_analytics.visualization._plotly import (  # noqa: E402
     plotly_book_snapshot_aggregate,
     plotly_book_snapshot_per_order,
+    plotly_cancellations_per_order,
     plotly_depth_chart_aggregate,
     plotly_depth_chart_per_order,
     plotly_event_map,
@@ -163,6 +165,26 @@ class TestPlotlyVolumeMap:
         data = prepare_volume_map_data(sample_events)
         fig = plotly_volume_map(data)
         assert isinstance(fig, go.Figure)
+
+
+class TestPlotlyCancellationsL3:
+    def test_returns_plotly_figure(
+        self, sample_cancellation_events: pd.DataFrame
+    ) -> None:
+        data = prepare_cancellations_l3_data(sample_cancellation_events)
+        fig = plotly_cancellations_per_order(data)
+        assert isinstance(fig, go.Figure)
+        assert len(fig.data) >= 1
+
+    def test_uses_webgl_scattergl(
+        self, sample_cancellation_events: pd.DataFrame
+    ) -> None:
+        # The per-order point cloud must use the WebGL Scattergl path (like the
+        # L2 volume map it pairs with), not the SVG Scatter path that fails to
+        # scale to one marker per cancelled order.
+        data = prepare_cancellations_l3_data(sample_cancellation_events)
+        fig = plotly_cancellations_per_order(data)
+        assert all(trace.type == "scattergl" for trace in fig.data)
 
 
 class TestPlotlyBookSnapshot:

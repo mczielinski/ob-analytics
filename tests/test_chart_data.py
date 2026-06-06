@@ -8,7 +8,9 @@ from ob_analytics.visualization._data import (
     _default_start_end,
     _price_axis_breaks,
     infer_volume_scale,
+    normalized_marker_areas,
     prepare_book_snapshot_data,
+    prepare_cancellations_l3_data,
     prepare_event_map_data,
     prepare_events_histogram_data,
     prepare_kyle_lambda_data,
@@ -142,6 +144,37 @@ class TestInferVolumeScale:
         assert infer_volume_scale(s) == 1e-6
 
 
+class TestNormalizedMarkerAreas:
+    def test_empty_input_returns_empty(self) -> None:
+        out = normalized_marker_areas(np.array([]))
+        assert out.shape == (0,)
+
+    def test_bounded_within_lo_hi(self) -> None:
+        vols = np.array([0.0, 1.0, 5.0, 50.0, 1000.0])
+        out = normalized_marker_areas(vols, lo=10.0, hi=120.0)
+        assert out.min() >= 10.0
+        assert out.max() <= 120.0
+
+    def test_zero_maps_to_lo(self) -> None:
+        out = normalized_marker_areas(np.array([0.0, 100.0]), lo=8.0, hi=90.0)
+        assert out[0] == pytest.approx(8.0)
+
+    def test_saturates_above_reference(self) -> None:
+        # Values at/above the reference quantile clamp to ``hi``.
+        vols = np.array([1.0, 2.0, 3.0, 4.0, 100.0])
+        out = normalized_marker_areas(vols, lo=10.0, hi=120.0, ref_quantile=0.8)
+        assert out[-1] == pytest.approx(120.0)
+
+    def test_degenerate_all_zero_returns_lo(self) -> None:
+        out = normalized_marker_areas(np.zeros(5), lo=12.0, hi=180.0)
+        assert np.all(out == 12.0)
+
+    def test_monotonic_in_volume(self) -> None:
+        vols = np.array([1.0, 2.0, 4.0, 8.0])
+        out = normalized_marker_areas(vols)
+        assert np.all(np.diff(out) >= 0)
+
+
 class TestPriceAxisBreaks:
     def test_positive_range(self) -> None:
         step, breaks = _price_axis_breaks(236.0, 237.0)
@@ -222,6 +255,54 @@ class TestPrepareVolumeMap:
     def test_log_scale_passed_through(self, sample_events: pd.DataFrame) -> None:
         data = prepare_volume_map_data(sample_events, log_scale=True)
         assert data["log_scale"] is True
+
+
+class TestPrepareCancellationsL3:
+    def test_returns_sided_frames(
+        self, sample_cancellation_events: pd.DataFrame
+    ) -> None:
+        data = prepare_cancellations_l3_data(sample_cancellation_events)
+        assert set(data) == {"bids", "asks", "volume_scale"}
+        for side in (data["bids"], data["asks"]):
+            assert isinstance(side, pd.DataFrame)
+            assert {"age_s", "distance_bps", "marker_area"} <= set(side.columns)
+
+    def test_age_nonnegative_and_bounded_markers(
+        self, sample_cancellation_events: pd.DataFrame
+    ) -> None:
+        data = prepare_cancellations_l3_data(sample_cancellation_events)
+        both = pd.concat([data["bids"], data["asks"]])
+        assert not both.empty
+        assert (both["age_s"] >= 0).all()
+        # normalized_marker_areas keeps every marker within its bounded range.
+        assert both["marker_area"].between(10.0, 120.0).all()
+
+    def test_drops_unmatched_and_uncreated(
+        self, sample_cancellation_events: pd.DataFrame
+    ) -> None:
+        # A deleted order whose creation we never saw has no distance_bps and
+        # must be dropped (the inner merge + dropna handles it).
+        extra = sample_cancellation_events.copy()
+        orphan = extra.iloc[[1]].copy()  # a 'deleted' row...
+        orphan["id"] = 999  # ...with no matching 'created'
+        extra = pd.concat([extra, orphan], ignore_index=True)
+        data = prepare_cancellations_l3_data(extra)
+        both = pd.concat([data["bids"], data["asks"]])
+        assert (both["age_s"].notna()).all()
+        assert 999 not in both["id"].to_numpy()
+
+    def test_per_order_flag_is_accepted(
+        self, sample_cancellation_events: pd.DataFrame
+    ) -> None:
+        # Accepted for comparable-concept signature symmetry; always per order.
+        d_true = prepare_cancellations_l3_data(
+            sample_cancellation_events, per_order=True
+        )
+        d_false = prepare_cancellations_l3_data(
+            sample_cancellation_events, per_order=False
+        )
+        assert len(d_true["bids"]) == len(d_false["bids"])
+        assert len(d_true["asks"]) == len(d_false["asks"])
 
 
 class TestPrepareBookSnapshot:

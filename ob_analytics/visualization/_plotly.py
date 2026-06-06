@@ -409,6 +409,44 @@ def plotly_depth_chart_per_order(data: dict) -> Any:
     return _plotly_depth_curve(data, per_order=True)
 
 
+def plotly_cancellations_per_order(data: dict) -> Any:
+    """L3 (MBO) cancellations: each cancelled order as an age x distance point.
+
+    Uses ``Scattergl`` (WebGL) like the L2 ``plotly_volume_map`` it pairs with:
+    a per-order face draws one marker per cancelled order, so the point cloud is
+    large and the SVG ``Scatter`` path does not scale.
+    """
+    go = _import_plotly()
+    fig = _base_figure(go, title="Cancelled orders by age and distance from touch")
+    for side, color, label in (
+        (data["bids"], _BID_COLOR, "Bid"),
+        (data["asks"], _ASK_COLOR, "Ask"),
+    ):
+        if side.empty:
+            continue
+        fig.add_trace(
+            go.Scattergl(
+                x=side["age_s"],
+                y=side["distance_bps"],
+                mode="markers",
+                marker=dict(
+                    size=mpl_marker_area_to_plotly_size(side["marker_area"].to_numpy()),
+                    color=color,
+                    opacity=0.4,
+                ),
+                name=label,
+                hovertemplate=(
+                    "Age: %{x:.2f}s<br>Distance: %{y:.2f} bps<extra></extra>"
+                ),
+            )
+        )
+    fig.add_hline(y=0, line_dash="dash", line_color="#888888", line_width=1)
+    fig.update_layout(hovermode="closest")
+    fig.update_xaxes(title_text="Order age (s)")
+    fig.update_yaxes(title_text="Placement distance from touch (bps)")
+    return fig
+
+
 def plotly_volume_percentiles(data: dict) -> Any:
     """Render volume-percentile stacked area chart."""
     go = _import_plotly()
@@ -808,6 +846,7 @@ for _concept, _level, _fn in [
     ("depth_heatmap", _L2, plotly_price_levels),
     ("order_activity", _L2, plotly_event_map),
     ("cancellations", _L2, plotly_volume_map),
+    ("cancellations", _L3, plotly_cancellations_per_order),
     ("book_snapshot", _L2, plotly_book_snapshot_aggregate),
     ("book_snapshot", _L3, plotly_book_snapshot_per_order),
     ("depth_chart", _L2, plotly_depth_chart_aggregate),

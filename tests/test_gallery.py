@@ -387,10 +387,11 @@ class TestBuildGalleryModel:
             "cancellations",
             "events_histogram",
         } <= keys
-        # Stage 3: book_snapshot + depth_chart ship both faces, so they are the
-        # only comparable concepts; every other concept is L2-only.
+        # book_snapshot + depth_chart (aggregate vs per-order) and cancellations
+        # (volume map vs age x distance scatter) ship both faces, so they are the
+        # comparable concepts; every other concept is L2-only.
         comparable = {c.key for c in model.concepts if c.comparable}
-        assert comparable == {"book_snapshot", "depth_chart"}
+        assert comparable == {"book_snapshot", "depth_chart", "cancellations"}
         for c in model.concepts:
             assert c.at(Level.L2) is not None
             if c.comparable:

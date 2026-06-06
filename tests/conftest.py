@@ -4,6 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -281,6 +282,53 @@ def tiny_events() -> pd.DataFrame:
             "original_number": [1, 2, 3, 4],
         }
     )
+
+
+@pytest.fixture
+def sample_cancellation_events() -> pd.DataFrame:
+    """Paired created/deleted flashed-limit orders for the L3 cancellations face.
+
+    Each order ``id`` has a ``created`` row carrying ``aggressiveness_bps``
+    (placement distance) and a later ``deleted`` row carrying the cancelled
+    volume -- exactly what :func:`prepare_cancellations_l3_data` merges on.
+    """
+    ts = pd.Timestamp("2015-05-01 01:00:00", tz="UTC")
+    rng = np.random.default_rng(7)
+    rows: list[dict] = []
+    for i in range(8):
+        oid = i + 1
+        direction = "bid" if i % 2 == 0 else "ask"
+        created_ts = ts + pd.Timedelta(seconds=i)
+        age = float(rng.uniform(1.0, 20.0))
+        vol = float(rng.uniform(100, 1000))
+        rows.append(
+            {
+                "id": oid,
+                "timestamp": created_ts,
+                "volume": vol,
+                "direction": direction,
+                "action": "created",
+                "type": "flashed-limit",
+                "aggressiveness_bps": float(rng.uniform(-10.0, 10.0)),
+            }
+        )
+        rows.append(
+            {
+                "id": oid,
+                "timestamp": created_ts + pd.Timedelta(seconds=age),
+                "volume": vol,
+                "direction": direction,
+                "action": "deleted",
+                "type": "flashed-limit",
+                "aggressiveness_bps": np.nan,
+            }
+        )
+    df = pd.DataFrame(rows)
+    df["direction"] = pd.Categorical(df["direction"], categories=["bid", "ask"])
+    df["action"] = pd.Categorical(
+        df["action"], categories=["created", "changed", "deleted"], ordered=True
+    )
+    return df
 
 
 @pytest.fixture

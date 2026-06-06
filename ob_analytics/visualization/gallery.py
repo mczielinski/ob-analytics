@@ -157,6 +157,23 @@ def _comparable(
     return PlotConcept(key, title, {Level.L2: l2, Level.L3: l3}, note=note)
 
 
+def _paired(
+    key: str,
+    title: str,
+    l2: PlotSpec,
+    l3: PlotSpec,
+    *,
+    note: str = "",
+) -> PlotConcept:
+    """Build a comparable concept from two explicit faces.
+
+    Unlike :func:`_comparable` (one prepare keyed by ``per_order``), the L2 and
+    L3 faces here use *different* prepares -- e.g. an aggregate volume map (L2)
+    paired with a per-order scatter (L3).
+    """
+    return PlotConcept(key, title, {Level.L2: l2, Level.L3: l3}, note=note)
+
+
 def build_gallery_model(
     result: PipelineResult,
     *,
@@ -230,12 +247,23 @@ def build_gallery_model(
             _viz_data.prepare_event_map_data,
             {"events": events, "volume_scale": volume_scale},
         ),
-        _l2(
+        _paired(
             "cancellations",
-            "Cancellations (log)",
-            "cancellations",
-            _viz_data.prepare_volume_map_data,
-            {"events": events, "volume_scale": volume_scale, "log_scale": True},
+            "Cancellations",
+            PlotSpec(
+                "cancellations",
+                "Cancellations (log)",
+                "cancellations",
+                _viz_data.prepare_volume_map_data,
+                {"events": events, "volume_scale": volume_scale, "log_scale": True},
+            ),
+            PlotSpec(
+                "cancellations",
+                "Cancellations (age x distance)",
+                "cancellations",
+                _viz_data.prepare_cancellations_l3_data,
+                {"events": events, "volume_scale": volume_scale},
+            ),
         ),
     ]
 

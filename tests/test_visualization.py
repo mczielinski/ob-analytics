@@ -199,15 +199,40 @@ class TestPlotEventMap:
 
 class TestPlotVolumeMap:
     def test_returns_figure(self, sample_events):
-        fig = plot("cancellations", **_data.prepare_volume_map_data(sample_events))
+        fig = plot(
+            "cancellations",
+            Level.L2,
+            **_data.prepare_volume_map_data(sample_events),
+        )
         assert isinstance(fig, Figure)
 
     def test_accepts_ax(self, sample_events):
         fig_orig, ax_orig = plt.subplots()
         fig = plot(
-            "cancellations", ax=ax_orig, **_data.prepare_volume_map_data(sample_events)
+            "cancellations",
+            Level.L2,
+            ax=ax_orig,
+            **_data.prepare_volume_map_data(sample_events),
         )
         assert fig is fig_orig
+
+
+class TestPlotCancellationsL3:
+    def test_returns_figure(self, sample_cancellation_events):
+        data = _data.prepare_cancellations_l3_data(sample_cancellation_events)
+        fig = plot("cancellations", Level.L3, **data)
+        assert isinstance(fig, Figure)
+
+    def test_accepts_ax(self, sample_cancellation_events):
+        fig_orig, ax_orig = plt.subplots()
+        data = _data.prepare_cancellations_l3_data(sample_cancellation_events)
+        fig = plot("cancellations", Level.L3, ax=ax_orig, **data)
+        assert fig is fig_orig
+
+    def test_comparable_requires_level(self, sample_cancellation_events):
+        data = _data.prepare_cancellations_l3_data(sample_cancellation_events)
+        with pytest.raises(ValueError, match="comparable"):
+            plot("cancellations", **data)
 
 
 class TestPlotBookSnapshot:

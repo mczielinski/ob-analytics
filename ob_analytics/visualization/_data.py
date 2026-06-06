@@ -50,6 +50,33 @@ def volume_marker_areas(
     return np.asarray(volume, dtype=float) * scale
 
 
+def normalized_marker_areas(
+    volume: pd.Series | np.ndarray,
+    *,
+    lo: float = 10.0,
+    hi: float = 120.0,
+    ref_quantile: float = 0.95,
+) -> np.ndarray:
+    """Bounded, outlier-robust matplotlib scatter ``s`` values.
+
+    Where :func:`volume_marker_areas` is raw-proportional and unbounded -- fine
+    for sparse overlays but degenerate when one whale order is 10,000x the
+    median -- this maps volume *linearly* into ``[lo, hi]`` against its
+    *ref_quantile*: anything at or above that reference saturates at *hi*, and
+    everything below scales down toward *lo* (volume ``0`` lands exactly on
+    *lo*, so no point is invisible).  Suited to the dense L3 per-order scatters
+    that draw one marker per order across a heavy-tailed volume range.
+    """
+    arr = np.asarray(volume, dtype=float)
+    if arr.size == 0:
+        return np.empty(0, dtype=float)
+    ref = float(np.nanquantile(arr, ref_quantile))
+    if not np.isfinite(ref) or ref <= 0:
+        return np.full(arr.shape, lo, dtype=float)
+    frac = np.clip(arr / ref, 0.0, 1.0)
+    return lo + frac * (hi - lo)
+
+
 def mpl_marker_area_to_plotly_size(area: np.ndarray) -> np.ndarray:
     """Convert matplotlib scatter areas (pt²) to plotly marker diameters (px)."""
     return np.sqrt(np.maximum(area, 0.0)) * 0.8
@@ -397,6 +424,75 @@ def prepare_volume_map_data(
     events = events[events["volume"] <= volume_to]
 
     return {"events": events, "log_scale": log_scale}
+
+
+def prepare_cancellations_l3_data(
+    events: pd.DataFrame,
+    per_order: bool = True,
+    volume_scale: float | None = None,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+    age_quantile: float = 0.95,
+    bps_quantiles: tuple[float, float] = (0.05, 0.95),
+) -> dict[str, Any]:
+    """Per-order cancellations: each cancelled order as one age x distance point.
+
+    The L3 (MBO) counterpart to the ``cancellations`` volume map.  Where the L2
+    map aggregates cancelled *volume* over price and time, this keeps each
+    cancelled order as a distinct point: ``age_s`` (seconds it rested between
+    creation and deletion) against ``distance_bps`` (placement aggressiveness --
+    signed bps from the prevailing best at creation; ``>0`` improved the touch,
+    ``<0`` sat deeper), sized by volume and split by side.
+
+    Cancellations are deleted *flashed-limit* orders, matching the L2 face.
+    Both axes are heavy-tailed (a large instant-cancel spike at age 0; a few
+    degenerate aggressiveness values), so robust quantile clips bound them:
+    age to *age_quantile*, distance to *bps_quantiles*.
+
+    ``per_order`` is accepted for signature symmetry with the comparable
+    concepts and is always effectively true here (the face is per order).
+    """
+    del per_order  # always per-order; kept for the comparable-concept signature
+
+    start_time, end_time = _default_start_end(events, start_time, end_time)
+    deleted = events[
+        (events["action"] == "deleted")
+        & (events["type"] == "flashed-limit")
+        & (events["timestamp"] >= start_time)
+        & (events["timestamp"] <= end_time)
+    ][["id", "timestamp", "volume", "direction"]]
+    created = events[events["action"] == "created"][
+        ["id", "timestamp", "aggressiveness_bps"]
+    ].rename(columns={"timestamp": "created_ts", "aggressiveness_bps": "distance_bps"})
+
+    cancels = deleted.merge(created, on="id", how="inner").dropna(
+        subset=["distance_bps"]
+    )
+    cancels["age_s"] = (cancels["timestamp"] - cancels["created_ts"]).dt.total_seconds()
+    cancels = cancels[cancels["age_s"] >= 0]
+
+    if volume_scale is None:
+        volume_scale = (
+            infer_volume_scale(cancels["volume"]) if not cancels.empty else 1.0
+        )
+    cancels = cancels.copy()
+    cancels["volume"] = cancels["volume"] * volume_scale
+
+    if not cancels.empty:
+        lo_q, hi_q = bps_quantiles
+        age_hi = cancels["age_s"].quantile(age_quantile)
+        bps_lo = cancels["distance_bps"].quantile(lo_q)
+        bps_hi = cancels["distance_bps"].quantile(hi_q)
+        cancels = cancels[
+            (cancels["age_s"] <= age_hi)
+            & (cancels["distance_bps"] >= bps_lo)
+            & (cancels["distance_bps"] <= bps_hi)
+        ]
+
+    cancels["marker_area"] = normalized_marker_areas(cancels["volume"])
+    bids = cancels[cancels["direction"] == "bid"]
+    asks = cancels[cancels["direction"] == "ask"]
+    return {"bids": bids, "asks": asks, "volume_scale": volume_scale}
 
 
 def _as_book_side_frame(side: pd.DataFrame | np.ndarray) -> pd.DataFrame:

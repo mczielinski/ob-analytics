@@ -515,6 +515,35 @@ def mpl_depth_chart_per_order(
     return _mpl_depth_curve(data, ax, theme, per_order=True)
 
 
+def mpl_cancellations_per_order(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """L3 (MBO) cancellations: each cancelled order as an age x distance point."""
+    fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
+    for side, color, label in (
+        (data["bids"], _BID_COLOR, "bid"),
+        (data["asks"], _ASK_COLOR, "ask"),
+    ):
+        if side.empty:
+            continue
+        ax.scatter(
+            side["age_s"],
+            side["distance_bps"],
+            s=side["marker_area"],
+            color=color,
+            alpha=0.4,
+            edgecolors="none",
+            label=label,
+        )
+    ax.axhline(y=0, color="#888888", linestyle="--", linewidth=1)
+    ax.set_title("Cancelled orders by age and distance from touch")
+    ax.set_xlabel("Order age (s)")
+    ax.set_ylabel("Placement distance from touch (bps)")
+    ax.legend(loc="upper right")
+    fig.tight_layout()
+    return fig
+
+
 def mpl_volume_percentiles(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -920,6 +949,7 @@ for _concept, _level, _fn in [
     ("depth_heatmap", _L2, mpl_price_levels),
     ("order_activity", _L2, mpl_event_map),
     ("cancellations", _L2, mpl_volume_map),
+    ("cancellations", _L3, mpl_cancellations_per_order),
     ("book_snapshot", _L2, mpl_book_snapshot_aggregate),
     ("book_snapshot", _L3, mpl_book_snapshot_per_order),
     ("depth_chart", _L2, mpl_depth_chart_aggregate),
