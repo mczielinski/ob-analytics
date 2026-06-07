@@ -379,30 +379,41 @@ class TestBuildGalleryModel:
         model = build_gallery_model(result)
 
         keys = {c.key for c in model.concepts}
-        # The unconditional order-book concepts are always present.
+        # The unconditional order-book concepts are always present.  order_outcome
+        # rides along because the pipeline emits aggressiveness_bps (it gates on
+        # that column).
         assert {
             "trade_tape",
             "depth_heatmap",
             "order_activity",
             "cancellations",
             "events_histogram",
+            "order_outcome",
         } <= keys
-        # book_snapshot + depth_chart (aggregate vs per-order), cancellations
-        # (volume map vs age x distance scatter) and order_activity (event map vs
-        # lifecycle Gantt) ship both faces, so they are the comparable concepts;
-        # every other concept is L2-only.
+        # The five concepts that ship both an aggregate (L2/MBP) and a per-order
+        # (L3/MBO) face are the comparable ones: book_snapshot + depth_chart
+        # (aggregate vs per-order), cancellations (volume map vs age x distance),
+        # order_activity (event map vs lifecycle Gantt) and trade_tape (price tape
+        # vs executions + maker lifecycles).
         comparable = {c.key for c in model.concepts if c.comparable}
         assert comparable == {
             "book_snapshot",
             "depth_chart",
             "cancellations",
             "order_activity",
+            "trade_tape",
         }
+        # Every concept exposes at least one face; comparable concepts expose
+        # both, single-level concepts exactly one.  order_outcome is L3-only.
         for c in model.concepts:
-            assert c.at(Level.L2) is not None
+            faces = {lvl for lvl in (Level.L2, Level.L3) if c.at(lvl) is not None}
+            assert faces, f"{c.key} has no faces"
             if c.comparable:
-                assert c.at(Level.L3) is not None
+                assert faces == {Level.L2, Level.L3}
             else:
-                assert c.at(Level.L3) is None
+                assert len(faces) == 1
+        order_outcome = next(c for c in model.concepts if c.key == "order_outcome")
+        assert order_outcome.at(Level.L2) is None
+        assert order_outcome.at(Level.L3) is not None
         # Analytics are appended by callers, not derived here.
         assert model.analytics == []

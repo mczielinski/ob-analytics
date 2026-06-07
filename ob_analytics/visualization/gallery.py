@@ -138,6 +138,24 @@ def _l2(
     return PlotConcept(key, title, {Level.L2: spec}, note=note)
 
 
+def _l3(
+    key: str,
+    title: str,
+    plot_name: str,
+    prepare: Callable[..., dict],
+    prep_kwargs: dict[str, Any],
+    *,
+    note: str = "",
+) -> PlotConcept:
+    """Build a single-variant (L3-only) concept.
+
+    Used for faces that require persistent order identity and have no aggregate
+    (L2/MBP) counterpart -- e.g. competing-risks order outcomes.
+    """
+    spec = PlotSpec(key, title, plot_name, prepare, prep_kwargs)
+    return PlotConcept(key, title, {Level.L3: spec}, note=note)
+
+
 def _comparable(
     key: str,
     title: str,
@@ -219,12 +237,23 @@ def build_gallery_model(
     depth_summary_offset = depth_summary[depth_summary["timestamp"] >= offset]
 
     concepts: list[PlotConcept] = [
-        _l2(
+        _paired(
             "trade_tape",
             "Trade Tape",
-            "trade_tape",
-            _viz_data.prepare_trades_data,
-            {"trades": trades},
+            PlotSpec(
+                "trade_tape",
+                "Trade Tape (price tape)",
+                "trade_tape",
+                _viz_data.prepare_trades_data,
+                {"trades": trades},
+            ),
+            PlotSpec(
+                "trade_tape",
+                "Trade tape with maker order lifecycles",
+                "trade_tape",
+                _viz_data.prepare_trade_tape_l3_data,
+                {"events": events, "trades": trades, "volume_scale": volume_scale},
+            ),
         ),
         _l2(
             "depth_heatmap",
@@ -302,7 +331,38 @@ def build_gallery_model(
             )
         )
 
+    # Order outcome is L3-only: it asks where each *order* was placed (distance
+    # from the touch, from order_aggressiveness) and how it ended (competing-risks
+    # fate).  No aggregate counterpart, and it needs the per-event bps column.
+    if "aggressiveness_bps" in events.columns:
+        concepts.append(
+            _l3(
+                "order_outcome",
+                "Order Outcome",
+                "order_outcome",
+                _viz_data.prepare_order_outcome_l3_data,
+                {"events": events, "trades": trades, "volume_scale": volume_scale},
+            )
+        )
+
     if not depth_summary_offset.empty:
+        # Liquidity at the touch is L2 (MBP): best bid/ask resting size over time.
+        # The L3 counterpart needs FIFO queue reconstruction and is deferred, so
+        # this concept ships single-variant (not comparable) for now.
+        concepts.append(
+            _l2(
+                "liquidity_at_touch",
+                "Liquidity at the Touch",
+                "liquidity_at_touch",
+                _viz_data.prepare_liquidity_at_touch_data,
+                {
+                    "depth_summary": depth_summary_offset,
+                    "start_time": zoom_start,
+                    "end_time": zoom_end,
+                    "volume_scale": volume_scale,
+                },
+            )
+        )
         concepts.append(
             _l2(
                 "volume_percentiles",

@@ -462,6 +462,182 @@ def prepare_order_activity_l3_data(
     }
 
 
+def prepare_liquidity_at_touch_data(
+    depth_summary: pd.DataFrame,
+    volume_scale: float | None = None,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+) -> dict[str, Any]:
+    """L2 (MBP) liquidity at the touch: best bid/ask resting size over time.
+
+    Two aggregate time series read straight from the depth summary -- the volume
+    resting at the best bid (``best_bid_vol``) and at the best ask
+    (``best_ask_vol``).  Size at a price level carries no order identity, so this
+    is an L2 quantity by construction; the per-order L3 counterpart (queue
+    composition at the touch) needs FIFO reconstruction and is deferred.
+    """
+    start_time, end_time = _default_start_end(depth_summary, start_time, end_time)
+    win = depth_summary[
+        (depth_summary["timestamp"] >= start_time)
+        & (depth_summary["timestamp"] <= end_time)
+    ]
+    bid_vol = win["best_bid_vol"]
+    ask_vol = win["best_ask_vol"]
+    if volume_scale is None:
+        combined = pd.concat([bid_vol, ask_vol])
+        volume_scale = infer_volume_scale(combined) if not combined.empty else 1.0
+    return {
+        "timestamp": win["timestamp"].reset_index(drop=True),
+        "bid_vol": (bid_vol * volume_scale).reset_index(drop=True),
+        "ask_vol": (ask_vol * volume_scale).reset_index(drop=True),
+        "volume_scale": volume_scale,
+    }
+
+
+def prepare_order_outcome_l3_data(
+    events: pd.DataFrame,
+    trades: pd.DataFrame,
+    volume_scale: float | None = None,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+    bps_quantiles: tuple[float, float] = (0.05, 0.95),
+) -> dict[str, Any]:
+    """L3 (MBO) order outcome: each limit order as outcome vs placement.
+
+    For every order created in the window, one point at its placement --
+    ``x = aggressiveness_bps`` (signed distance from the prevailing best at
+    creation; ``>0`` improved the touch) against ``y = size`` -- coloured by a
+    competing-risks *outcome*:
+
+    - **filled**: the whole order executed (its volume was consumed by trades).
+    - **partial**: some volume executed, the remainder was removed.
+    - **cancelled**: removed without any execution.
+
+    Outcome is recovered from the executions: volume filled per order is summed
+    over trades where the order was the maker or the taker, then compared with
+    the placed size.  Orders still resting at window end (no terminal event and
+    no fill) are censored and dropped.  Placement distance is heavy-tailed, so it
+    is quantile-clipped to *bps_quantiles*.
+    """
+    start_time, end_time = _default_start_end(events, start_time, end_time)
+    created = events[
+        (events["action"] == "created")
+        & (events["timestamp"] >= start_time)
+        & (events["timestamp"] <= end_time)
+    ][["id", "timestamp", "price", "volume", "direction", "aggressiveness_bps"]].rename(
+        columns={"aggressiveness_bps": "distance_bps", "volume": "placed"}
+    )
+
+    deleted_ids = set(events.loc[events["action"] == "deleted", "id"])
+
+    # Volume executed per order id: as maker (resting, hit) + as taker (crossed).
+    event_to_id = events[["event_id", "id"]]
+    maker = trades.merge(
+        event_to_id, left_on="maker_event_id", right_on="event_id", how="inner"
+    )
+    taker = trades.merge(
+        event_to_id, left_on="taker_event_id", right_on="event_id", how="inner"
+    )
+    filled = (
+        pd.concat([maker[["id", "volume"]], taker[["id", "volume"]]])
+        .groupby("id")["volume"]
+        .sum()
+    )
+    created = created.copy()
+    created["filled"] = created["id"].map(filled).fillna(0.0)
+
+    # Competing-risks outcome; censored = never filled and still open at end.
+    placed = created["placed"]
+    f = created["filled"]
+    is_deleted = created["id"].isin(deleted_ids)
+    outcome = pd.Series("censored", index=created.index)
+    outcome[f >= placed * 0.999] = "filled"
+    outcome[(f > 0) & (f < placed * 0.999)] = "partial"
+    outcome[(f <= 0) & is_deleted] = "cancelled"
+    created["outcome"] = outcome
+    created = created[created["outcome"] != "censored"].dropna(subset=["distance_bps"])
+
+    if volume_scale is None:
+        volume_scale = (
+            infer_volume_scale(created["placed"]) if not created.empty else 1.0
+        )
+    created = created.copy()
+    created["placed"] = created["placed"] * volume_scale
+
+    if not created.empty:
+        lo_q, hi_q = bps_quantiles
+        bps_lo = created["distance_bps"].quantile(lo_q)
+        bps_hi = created["distance_bps"].quantile(hi_q)
+        created = created[
+            (created["distance_bps"] >= bps_lo) & (created["distance_bps"] <= bps_hi)
+        ]
+
+    created["marker_area"] = normalized_marker_areas(created["placed"])
+    return {
+        "filled": created[created["outcome"] == "filled"],
+        "partial": created[created["outcome"] == "partial"],
+        "cancelled": created[created["outcome"] == "cancelled"],
+        "volume_scale": volume_scale,
+    }
+
+
+def prepare_trade_tape_l3_data(
+    events: pd.DataFrame,
+    trades: pd.DataFrame,
+    volume_scale: float | None = None,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+    price_from: float | None = None,
+    price_to: float | None = None,
+) -> dict[str, Any]:
+    """L3 (MBO) trade tape: executions plus each maker order's resting bar.
+
+    The L2 tape shows executions over time (price, volume).  The L3 face adds,
+    for every execution, the life of the *maker* order it consumed: a horizontal
+    bar from that order's creation to the fill, drawn at the maker's price and
+    coloured by the taker's aggressing side (buy/sell).  This reveals how long
+    the resting liquidity behind each trade had waited -- invisible in the
+    aggregate tape.
+    """
+    start_time, end_time = _default_start_end(trades, start_time, end_time)
+    tr = trades[
+        (trades["timestamp"] >= start_time) & (trades["timestamp"] <= end_time)
+    ][["timestamp", "price", "volume", "direction", "maker_event_id"]]
+
+    # Map each trade's maker event -> the maker order id -> its creation time.
+    event_to_id = events[["event_id", "id"]]
+    created_ts = (
+        events[events["action"] == "created"]
+        .groupby("id")["timestamp"]
+        .min()
+        .rename("created_ts")
+    )
+    tr = tr.merge(
+        event_to_id, left_on="maker_event_id", right_on="event_id", how="inner"
+    ).merge(created_ts, on="id", how="inner")
+
+    if not tr.empty:
+        if price_from is None:
+            price_from = tr["price"].quantile(0.01)
+        if price_to is None:
+            price_to = tr["price"].quantile(0.99)
+        tr = tr[(tr["price"] >= price_from) & (tr["price"] <= price_to)]
+
+    if volume_scale is None:
+        volume_scale = infer_volume_scale(tr["volume"]) if not tr.empty else 1.0
+    tr = tr.copy()
+    tr["volume"] = tr["volume"] * volume_scale
+    tr["marker_area"] = normalized_marker_areas(tr["volume"])
+
+    y_range = None if tr.empty else (float(tr["price"].min()), float(tr["price"].max()))
+    return {
+        "buys": tr[tr["direction"] == "buy"],
+        "sells": tr[tr["direction"] == "sell"],
+        "volume_scale": volume_scale,
+        "y_range": y_range,
+    }
+
+
 def prepare_volume_map_data(
     events: pd.DataFrame,
     action: str = "deleted",

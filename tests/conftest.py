@@ -445,6 +445,112 @@ def sample_order_lifecycle_events() -> pd.DataFrame:
 
 
 @pytest.fixture
+def sample_executed_orders() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Created limit orders + executing trades for the L3 execution faces.
+
+    Returns ``(events, trades)`` wired so each competing-risks outcome and both
+    fill roles are exercised by :func:`prepare_order_outcome_l3_data` and
+    :func:`prepare_trade_tape_l3_data`:
+
+    - **id 1** (bid): fully filled as the *maker* of trade T1  -> ``filled``.
+    - **id 2** (ask): half filled (maker of T2) then deleted   -> ``partial``.
+    - **id 3** (bid): deleted with no execution               -> ``cancelled``.
+    - **id 4** (ask): never filled, never deleted             -> ``censored`` (dropped).
+    - **id 5** (bid): fully filled as the *taker* of trade T3 -> ``filled``.
+    - **id 6** (ask): fully filled as the maker of trade T4   -> ``filled``.
+
+    Takers that are not measured orders (and the one un-tracked maker in T3) use
+    sentinel event ids absent from ``events``; the prep's inner merges drop them.
+    """
+    ts = pd.Timestamp("2015-05-01 01:00:00", tz="UTC")
+    created = [
+        dict(event_id=1, id=1, price=100.0, volume=10.0, direction="bid", bps=2.0),
+        dict(event_id=2, id=2, price=100.2, volume=10.0, direction="ask", bps=-1.0),
+        dict(event_id=3, id=3, price=100.0, volume=8.0, direction="bid", bps=1.0),
+        dict(event_id=4, id=4, price=100.2, volume=6.0, direction="ask", bps=-2.0),
+        dict(event_id=5, id=5, price=100.1, volume=12.0, direction="bid", bps=3.0),
+        dict(event_id=6, id=6, price=100.1, volume=9.0, direction="ask", bps=-3.0),
+    ]
+    rows: list[dict] = []
+    for offset, o in enumerate(created):
+        rows.append(
+            dict(
+                event_id=o["event_id"],
+                id=o["id"],
+                timestamp=ts + pd.Timedelta(seconds=offset),
+                price=o["price"],
+                volume=o["volume"],
+                direction=o["direction"],
+                action="created",
+                aggressiveness_bps=o["bps"],
+            )
+        )
+    # Terminal deletes: id 2 (after partial fill) and id 3 (cancelled, no fill).
+    for event_id, oid, price, direction in (
+        (12, 2, 100.2, "ask"),
+        (13, 3, 100.0, "bid"),
+    ):
+        rows.append(
+            dict(
+                event_id=event_id,
+                id=oid,
+                timestamp=ts + pd.Timedelta(seconds=30),
+                price=price,
+                volume=0.0,
+                direction=direction,
+                action="deleted",
+                aggressiveness_bps=np.nan,
+            )
+        )
+    events = pd.DataFrame(rows)
+    events["direction"] = pd.Categorical(events["direction"], categories=["bid", "ask"])
+    events["action"] = pd.Categorical(
+        events["action"], categories=["created", "changed", "deleted"], ordered=True
+    )
+
+    trades = pd.DataFrame(
+        [
+            # maker, taker, price, volume, aggressor direction
+            dict(
+                maker_event_id=1,
+                taker_event_id=9001,
+                price=100.0,
+                volume=10.0,
+                direction="sell",
+            ),
+            dict(
+                maker_event_id=2,
+                taker_event_id=9002,
+                price=100.2,
+                volume=5.0,
+                direction="buy",
+            ),
+            dict(
+                maker_event_id=9003,
+                taker_event_id=5,
+                price=100.1,
+                volume=12.0,
+                direction="buy",
+            ),
+            dict(
+                maker_event_id=6,
+                taker_event_id=9004,
+                price=100.1,
+                volume=9.0,
+                direction="sell",
+            ),
+        ]
+    )
+    trades["timestamp"] = [
+        ts + pd.Timedelta(seconds=10 + i) for i in range(len(trades))
+    ]
+    trades["direction"] = pd.Categorical(
+        trades["direction"], categories=["buy", "sell"]
+    )
+    return events, trades
+
+
+@pytest.fixture
 def cli_runner():
     """Invoke the ob-analytics CLI as a subprocess.
 

@@ -14,9 +14,12 @@ from ob_analytics.visualization._data import (
     prepare_event_map_data,
     prepare_events_histogram_data,
     prepare_kyle_lambda_data,
+    prepare_liquidity_at_touch_data,
     prepare_ofi_data,
     prepare_order_activity_l3_data,
+    prepare_order_outcome_l3_data,
     prepare_time_series_data,
+    prepare_trade_tape_l3_data,
     prepare_trades_data,
     prepare_volume_map_data,
     prepare_volume_percentiles_data,
@@ -369,6 +372,104 @@ class TestPrepareOrderActivityL3:
         )
         assert len(d_true["flashed"]) == len(d_false["flashed"])
         assert len(d_true["resting"]) == len(d_false["resting"])
+
+
+class TestPrepareLiquidityAtTouch:
+    def test_returns_paired_series(self, sample_depth_summary: pd.DataFrame) -> None:
+        data = prepare_liquidity_at_touch_data(sample_depth_summary)
+        assert set(data) == {"timestamp", "bid_vol", "ask_vol", "volume_scale"}
+        assert len(data["timestamp"]) == len(sample_depth_summary)
+        assert len(data["bid_vol"]) == len(data["ask_vol"]) == len(data["timestamp"])
+
+    def test_scales_volume(self, sample_depth_summary: pd.DataFrame) -> None:
+        raw = prepare_liquidity_at_touch_data(sample_depth_summary, volume_scale=1.0)
+        scaled = prepare_liquidity_at_touch_data(sample_depth_summary, volume_scale=2.0)
+        assert np.allclose(
+            scaled["bid_vol"].to_numpy(), raw["bid_vol"].to_numpy() * 2.0
+        )
+
+    def test_window_filters_by_time(self, sample_depth_summary: pd.DataFrame) -> None:
+        mid = sample_depth_summary["timestamp"].iloc[15]
+        data = prepare_liquidity_at_touch_data(sample_depth_summary, start_time=mid)
+        assert (data["timestamp"] >= mid).all()
+
+
+class TestPrepareOrderOutcomeL3:
+    def test_returns_outcome_frames(
+        self, sample_executed_orders: tuple[pd.DataFrame, pd.DataFrame]
+    ) -> None:
+        events, trades = sample_executed_orders
+        data = prepare_order_outcome_l3_data(events, trades, bps_quantiles=(0.0, 1.0))
+        assert set(data) == {"filled", "partial", "cancelled", "volume_scale"}
+        for frame in (data["filled"], data["partial"], data["cancelled"]):
+            assert {"distance_bps", "placed", "marker_area"} <= set(frame.columns)
+
+    def test_competing_risks_classification(
+        self, sample_executed_orders: tuple[pd.DataFrame, pd.DataFrame]
+    ) -> None:
+        events, trades = sample_executed_orders
+        data = prepare_order_outcome_l3_data(events, trades, bps_quantiles=(0.0, 1.0))
+        # filled via maker (1, 6) + via taker (5); partial=2; cancelled=3.
+        assert set(data["filled"]["id"]) == {1, 5, 6}
+        assert set(data["partial"]["id"]) == {2}
+        assert set(data["cancelled"]["id"]) == {3}
+
+    def test_censored_orders_dropped(
+        self, sample_executed_orders: tuple[pd.DataFrame, pd.DataFrame]
+    ) -> None:
+        events, trades = sample_executed_orders
+        data = prepare_order_outcome_l3_data(events, trades, bps_quantiles=(0.0, 1.0))
+        all_ids = pd.concat([data["filled"], data["partial"], data["cancelled"]])["id"]
+        # id 4 never filled and never deleted -> censored -> absent.
+        assert 4 not in all_ids.to_numpy()
+
+    def test_bounded_markers(
+        self, sample_executed_orders: tuple[pd.DataFrame, pd.DataFrame]
+    ) -> None:
+        events, trades = sample_executed_orders
+        data = prepare_order_outcome_l3_data(events, trades, bps_quantiles=(0.0, 1.0))
+        both = pd.concat([data["filled"], data["partial"], data["cancelled"]])
+        assert both["marker_area"].between(10.0, 120.0).all()
+
+
+class TestPrepareTradeTapeL3:
+    def test_returns_sided_frames(
+        self, sample_executed_orders: tuple[pd.DataFrame, pd.DataFrame]
+    ) -> None:
+        events, trades = sample_executed_orders
+        data = prepare_trade_tape_l3_data(events, trades, price_from=0.0, price_to=1e9)
+        assert set(data) == {"buys", "sells", "volume_scale", "y_range"}
+        for side in (data["buys"], data["sells"]):
+            assert {"created_ts", "timestamp", "price", "marker_area"} <= set(
+                side.columns
+            )
+
+    def test_maker_bars_precede_executions(
+        self, sample_executed_orders: tuple[pd.DataFrame, pd.DataFrame]
+    ) -> None:
+        events, trades = sample_executed_orders
+        data = prepare_trade_tape_l3_data(events, trades, price_from=0.0, price_to=1e9)
+        both = pd.concat([data["buys"], data["sells"]])
+        # Each maker order was created before the trade that consumed it.
+        assert (both["created_ts"] <= both["timestamp"]).all()
+
+    def test_split_by_aggressor_side(
+        self, sample_executed_orders: tuple[pd.DataFrame, pd.DataFrame]
+    ) -> None:
+        events, trades = sample_executed_orders
+        data = prepare_trade_tape_l3_data(events, trades, price_from=0.0, price_to=1e9)
+        # T2 (buy) -> maker id 2; T1+T4 (sell) -> maker ids 1, 6. The un-tracked
+        # maker in T3 (sentinel event) is dropped by the inner merge.
+        assert set(data["buys"]["id"]) == {2}
+        assert set(data["sells"]["id"]) == {1, 6}
+
+    def test_y_range_spans_prices(
+        self, sample_executed_orders: tuple[pd.DataFrame, pd.DataFrame]
+    ) -> None:
+        events, trades = sample_executed_orders
+        data = prepare_trade_tape_l3_data(events, trades, price_from=0.0, price_to=1e9)
+        lo, hi = data["y_range"]
+        assert lo <= hi
 
 
 class TestPrepareBookSnapshot:

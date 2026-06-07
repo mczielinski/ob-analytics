@@ -19,10 +19,13 @@ from ob_analytics.visualization._data import (  # noqa: E402
     prepare_event_map_data,
     prepare_events_histogram_data,
     prepare_kyle_lambda_data,
+    prepare_liquidity_at_touch_data,
     prepare_ofi_data,
     prepare_order_activity_l3_data,
+    prepare_order_outcome_l3_data,
     prepare_price_levels_data,
     prepare_time_series_data,
+    prepare_trade_tape_l3_data,
     prepare_trades_data,
     prepare_volume_map_data,
     prepare_volume_percentiles_data,
@@ -37,10 +40,13 @@ from ob_analytics.visualization._plotly import (  # noqa: E402
     plotly_event_map,
     plotly_events_histogram,
     plotly_kyle_lambda,
+    plotly_liquidity_at_touch,
     plotly_order_activity_per_order,
     plotly_order_flow_imbalance,
+    plotly_order_outcome_per_order,
     plotly_price_levels,
     plotly_time_series,
+    plotly_trade_tape_per_order,
     plotly_trades,
     plotly_volume_map,
     plotly_volume_percentiles,
@@ -209,6 +215,56 @@ class TestPlotlyOrderActivityL3:
         assert all(trace.type == "scattergl" for trace in fig.data)
 
 
+class TestPlotlyLiquidityAtTouch:
+    def test_returns_plotly_figure(self, sample_depth_summary: pd.DataFrame) -> None:
+        data = prepare_liquidity_at_touch_data(sample_depth_summary)
+        fig = plotly_liquidity_at_touch(data)
+        assert isinstance(fig, go.Figure)
+        # Two aggregate time series: best bid size + best ask size.
+        assert len(fig.data) == 2
+
+    def test_uses_svg_scatter(self, sample_depth_summary: pd.DataFrame) -> None:
+        # Two small aggregate series -- the SVG Scatter path is appropriate here,
+        # unlike the per-order WebGL clouds.
+        data = prepare_liquidity_at_touch_data(sample_depth_summary)
+        fig = plotly_liquidity_at_touch(data)
+        assert all(trace.type == "scatter" for trace in fig.data)
+
+
+class TestPlotlyOrderOutcomeL3:
+    def test_returns_plotly_figure(self, sample_executed_orders) -> None:
+        events, trades = sample_executed_orders
+        data = prepare_order_outcome_l3_data(events, trades, bps_quantiles=(0.0, 1.0))
+        fig = plotly_order_outcome_per_order(data)
+        assert isinstance(fig, go.Figure)
+        assert len(fig.data) >= 1
+
+    def test_uses_webgl_scattergl(self, sample_executed_orders) -> None:
+        # One marker per order -> the WebGL Scattergl path, like the other
+        # per-order faces.
+        events, trades = sample_executed_orders
+        data = prepare_order_outcome_l3_data(events, trades, bps_quantiles=(0.0, 1.0))
+        fig = plotly_order_outcome_per_order(data)
+        assert all(trace.type == "scattergl" for trace in fig.data)
+
+
+class TestPlotlyTradeTapeL3:
+    def test_returns_plotly_figure(self, sample_executed_orders) -> None:
+        events, trades = sample_executed_orders
+        data = prepare_trade_tape_l3_data(events, trades, price_from=0.0, price_to=1e9)
+        fig = plotly_trade_tape_per_order(data)
+        assert isinstance(fig, go.Figure)
+        assert len(fig.data) >= 1
+
+    def test_uses_webgl_scattergl(self, sample_executed_orders) -> None:
+        # Both the maker-bar segment cloud and the execution-marker cloud use the
+        # WebGL Scattergl path, like the L3 order-activity face it pairs with.
+        events, trades = sample_executed_orders
+        data = prepare_trade_tape_l3_data(events, trades, price_from=0.0, price_to=1e9)
+        fig = plotly_trade_tape_per_order(data)
+        assert all(trace.type == "scattergl" for trace in fig.data)
+
+
 class TestPlotlyBookSnapshot:
     def test_aggregate_returns_figure(self, sample_order_book: dict) -> None:
         data = prepare_book_snapshot_data(sample_order_book, per_order=False)
@@ -305,10 +361,13 @@ class TestBackendDispatch:
     def test_plotly_backend_returns_plotly_figure(
         self, sample_trades: pd.DataFrame
     ) -> None:
-        from ob_analytics.visualization import _data, plot
+        from ob_analytics.visualization import Level, _data, plot
 
         fig = plot(
-            "trade_tape", backend="plotly", **_data.prepare_trades_data(sample_trades)
+            "trade_tape",
+            Level.L2,
+            backend="plotly",
+            **_data.prepare_trades_data(sample_trades),
         )
         assert isinstance(fig, go.Figure)
 

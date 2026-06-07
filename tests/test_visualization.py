@@ -119,7 +119,10 @@ class TestPlotTheme:
         # plot() pops theme= from kwargs and forwards it to the renderer.
         custom = PlotTheme(style="whitegrid", font_scale=1.0)
         fig = plot(
-            "trade_tape", theme=custom, **_data.prepare_trades_data(sample_trades)
+            "trade_tape",
+            Level.L2,
+            theme=custom,
+            **_data.prepare_trades_data(sample_trades),
         )
         assert isinstance(fig, Figure)
 
@@ -175,13 +178,22 @@ class TestPlotTimeSeries:
 
 class TestPlotTrades:
     def test_returns_figure(self, sample_trades):
-        fig = plot("trade_tape", **_data.prepare_trades_data(sample_trades))
+        fig = plot("trade_tape", Level.L2, **_data.prepare_trades_data(sample_trades))
         assert isinstance(fig, Figure)
 
     def test_accepts_ax(self, sample_trades):
         fig_orig, ax_orig = plt.subplots()
-        fig = plot("trade_tape", ax=ax_orig, **_data.prepare_trades_data(sample_trades))
+        fig = plot(
+            "trade_tape",
+            Level.L2,
+            ax=ax_orig,
+            **_data.prepare_trades_data(sample_trades),
+        )
         assert fig is fig_orig
+
+    def test_comparable_requires_level(self, sample_trades):
+        with pytest.raises(ValueError, match="comparable"):
+            plot("trade_tape", **_data.prepare_trades_data(sample_trades))
 
 
 class TestPlotEventMap:
@@ -260,6 +272,66 @@ class TestPlotCancellationsL3:
             plot("cancellations", **data)
 
 
+class TestPlotTradeTapeL3:
+    def test_returns_figure(self, sample_executed_orders):
+        events, trades = sample_executed_orders
+        data = _data.prepare_trade_tape_l3_data(
+            events, trades, price_from=0.0, price_to=1e9
+        )
+        fig = plot("trade_tape", Level.L3, **data)
+        assert isinstance(fig, Figure)
+
+    def test_accepts_ax(self, sample_executed_orders):
+        events, trades = sample_executed_orders
+        fig_orig, ax_orig = plt.subplots()
+        data = _data.prepare_trade_tape_l3_data(
+            events, trades, price_from=0.0, price_to=1e9
+        )
+        fig = plot("trade_tape", Level.L3, ax=ax_orig, **data)
+        assert fig is fig_orig
+
+
+class TestPlotLiquidityAtTouch:
+    def test_returns_figure(self, sample_depth_summary):
+        data = _data.prepare_liquidity_at_touch_data(sample_depth_summary)
+        fig = plot("liquidity_at_touch", **data)
+        assert isinstance(fig, Figure)
+
+    def test_accepts_ax(self, sample_depth_summary):
+        fig_orig, ax_orig = plt.subplots()
+        data = _data.prepare_liquidity_at_touch_data(sample_depth_summary)
+        fig = plot("liquidity_at_touch", ax=ax_orig, **data)
+        assert fig is fig_orig
+
+
+class TestPlotOrderOutcomeL3:
+    def test_returns_figure(self, sample_executed_orders):
+        events, trades = sample_executed_orders
+        data = _data.prepare_order_outcome_l3_data(
+            events, trades, bps_quantiles=(0.0, 1.0)
+        )
+        fig = plot("order_outcome", Level.L3, **data)
+        assert isinstance(fig, Figure)
+
+    def test_accepts_ax(self, sample_executed_orders):
+        events, trades = sample_executed_orders
+        fig_orig, ax_orig = plt.subplots()
+        data = _data.prepare_order_outcome_l3_data(
+            events, trades, bps_quantiles=(0.0, 1.0)
+        )
+        fig = plot("order_outcome", Level.L3, ax=ax_orig, **data)
+        assert fig is fig_orig
+
+    def test_resolves_single_level(self, sample_executed_orders):
+        # L3-only: registered at exactly one level, so it resolves without level=.
+        events, trades = sample_executed_orders
+        data = _data.prepare_order_outcome_l3_data(
+            events, trades, bps_quantiles=(0.0, 1.0)
+        )
+        fig = plot("order_outcome", **data)
+        assert isinstance(fig, Figure)
+
+
 class TestPlotBookSnapshot:
     @staticmethod
     def _order_book() -> dict:
@@ -320,8 +392,12 @@ class TestPlotEventsHistogram:
 class TestSubplotComposition:
     def test_two_plots_on_shared_figure(self, sample_trades):
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
-        fig1 = plot("trade_tape", ax=ax1, **_data.prepare_trades_data(sample_trades))
-        fig2 = plot("trade_tape", ax=ax2, **_data.prepare_trades_data(sample_trades))
+        fig1 = plot(
+            "trade_tape", Level.L2, ax=ax1, **_data.prepare_trades_data(sample_trades)
+        )
+        fig2 = plot(
+            "trade_tape", Level.L2, ax=ax2, **_data.prepare_trades_data(sample_trades)
+        )
         assert fig1 is fig
         assert fig2 is fig
         assert len(fig.axes) >= 2
@@ -334,12 +410,13 @@ class TestSubplotComposition:
 
 class TestBackendDispatch:
     def test_default_backend_returns_matplotlib_figure(self, sample_trades):
-        fig = plot("trade_tape", **_data.prepare_trades_data(sample_trades))
+        fig = plot("trade_tape", Level.L2, **_data.prepare_trades_data(sample_trades))
         assert isinstance(fig, Figure)
 
     def test_explicit_matplotlib_returns_figure(self, sample_trades):
         fig = plot(
             "trade_tape",
+            Level.L2,
             backend="matplotlib",
             **_data.prepare_trades_data(sample_trades),
         )
@@ -359,6 +436,7 @@ class TestBackendDispatch:
 
         fig = plot(
             "trade_tape",
+            Level.L2,
             backend="matplotlib",
             **_data.prepare_trades_data(sample_trades),
         )

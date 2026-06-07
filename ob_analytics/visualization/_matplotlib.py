@@ -409,6 +409,17 @@ _ASK_COLOR = "#dd4444"
 _FLASHED_COLOR = "#e09f3e"  # flashed-limit: placed and pulled (cancelled)
 _RESTING_COLOR = "#2a9d8f"  # resting-limit: rested / filled
 
+# Trade-tape aggressor palette (taker side) for the L3 tape maker-bars;
+# identical to the plotly backend for cross-backend parity.
+_BUY_COLOR = "#2e9e5b"  # buyer-initiated execution (lifts the ask)
+_SELL_COLOR = "#dd4444"  # seller-initiated execution (hits the bid)
+
+# Competing-risks outcome palette for the order_outcome L3 scatter; identical to
+# the plotly backend for cross-backend parity.
+_FILLED_COLOR = "#2a9d8f"  # fully executed
+_PARTIAL_COLOR = "#8c8cd8"  # partially executed, remainder removed
+_CANCELLED_COLOR = "#e09f3e"  # removed without any execution
+
 
 def _book_bar_width(*sides: pd.DataFrame) -> float:
     """Smallest positive gap between distinct prices across *sides*."""
@@ -592,6 +603,118 @@ def mpl_order_activity_per_order(
     ax.set_ylabel("Limit Price")
     ax.set_title("Order lifecycles (place → outcome)")
     if not (flashed.empty and resting.empty):
+        ax.legend(loc="upper right")
+    fig.tight_layout()
+    return fig
+
+
+def mpl_liquidity_at_touch(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """L2 (MBP) liquidity at the touch: best bid/ask resting size over time."""
+    fig, ax = _create_axes(ax, figsize=(10, 6), theme=theme)
+    ts = data["timestamp"]
+    ax.plot(
+        ts,
+        data["bid_vol"],
+        color=_BID_COLOR,
+        linewidth=1.2,
+        drawstyle="steps-post",
+        label="Best bid size",
+    )
+    ax.plot(
+        ts,
+        data["ask_vol"],
+        color=_ASK_COLOR,
+        linewidth=1.2,
+        drawstyle="steps-post",
+        label="Best ask size",
+    )
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+    plt.xticks(rotation=45)
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Size at touch")
+    ax.set_title("Liquidity at the touch")
+    if len(ts) > 0:
+        ax.legend(loc="upper right")
+    ax.grid(True)
+    fig.tight_layout()
+    return fig
+
+
+def mpl_order_outcome_per_order(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """L3 (MBO) order outcome: each order as placement distance x size, by fate."""
+    fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
+    any_pts = False
+    for frame, color, label in (
+        (data["filled"], _FILLED_COLOR, "filled"),
+        (data["partial"], _PARTIAL_COLOR, "partial"),
+        (data["cancelled"], _CANCELLED_COLOR, "cancelled"),
+    ):
+        if frame.empty:
+            continue
+        any_pts = True
+        ax.scatter(
+            frame["distance_bps"],
+            frame["placed"],
+            s=frame["marker_area"],
+            color=color,
+            alpha=0.4,
+            edgecolors="none",
+            label=label,
+        )
+    ax.axvline(x=0, color="#888888", linestyle="--", linewidth=1)
+    ax.set_title("Order outcome by placement distance and size")
+    ax.set_xlabel("Placement distance from touch (bps)")
+    ax.set_ylabel("Order size")
+    if any_pts:
+        ax.legend(loc="upper right")
+    fig.tight_layout()
+    return fig
+
+
+def mpl_trade_tape_per_order(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """L3 (MBO) trade tape: executions plus each maker order's resting bar."""
+    fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
+    any_pts = False
+    for side, color, label in (
+        (data["buys"], _BUY_COLOR, "buy (lifts ask)"),
+        (data["sells"], _SELL_COLOR, "sell (hits bid)"),
+    ):
+        if side.empty:
+            continue
+        any_pts = True
+        ax.hlines(
+            side["price"],
+            mdates.date2num(side["created_ts"]),
+            mdates.date2num(side["timestamp"]),
+            colors=color,
+            linewidth=1.0,
+            alpha=0.35,
+        )
+        ax.scatter(
+            mdates.date2num(side["timestamp"]),
+            side["price"],
+            s=side["marker_area"],
+            color=color,
+            alpha=0.7,
+            edgecolors="none",
+            label=label,
+        )
+    ax.xaxis_date()
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+    plt.xticks(rotation=45)
+    y_range = data.get("y_range")
+    if y_range is not None:
+        ax.set_ylim(y_range)
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Execution Price")
+    ax.set_title("Trade tape with maker order lifecycles")
+    if any_pts:
         ax.legend(loc="upper right")
     fig.tight_layout()
     return fig
@@ -999,9 +1122,12 @@ _L3 = Level.L3
 for _concept, _level, _fn in [
     ("time_series", _L2, mpl_time_series),
     ("trade_tape", _L2, mpl_trades),
+    ("trade_tape", _L3, mpl_trade_tape_per_order),
     ("depth_heatmap", _L2, mpl_price_levels),
     ("order_activity", _L2, mpl_event_map),
     ("order_activity", _L3, mpl_order_activity_per_order),
+    ("order_outcome", _L3, mpl_order_outcome_per_order),
+    ("liquidity_at_touch", _L2, mpl_liquidity_at_touch),
     ("cancellations", _L2, mpl_volume_map),
     ("cancellations", _L3, mpl_cancellations_per_order),
     ("book_snapshot", _L2, mpl_book_snapshot_aggregate),

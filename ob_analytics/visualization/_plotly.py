@@ -321,6 +321,17 @@ _ASK_COLOR = "#dd4444"
 _FLASHED_COLOR = "#e09f3e"  # flashed-limit: placed and pulled (cancelled)
 _RESTING_COLOR = "#2a9d8f"  # resting-limit: rested / filled
 
+# Trade-tape aggressor palette (taker side) for the L3 tape maker-bars;
+# identical to the matplotlib backend for cross-backend parity.
+_BUY_COLOR = "#2e9e5b"  # buyer-initiated execution (lifts the ask)
+_SELL_COLOR = "#dd4444"  # seller-initiated execution (hits the bid)
+
+# Competing-risks outcome palette for the order_outcome L3 scatter; identical to
+# the matplotlib backend for cross-backend parity.
+_FILLED_COLOR = "#2a9d8f"  # fully executed
+_PARTIAL_COLOR = "#8c8cd8"  # partially executed, remainder removed
+_CANCELLED_COLOR = "#e09f3e"  # removed without any execution
+
 
 def _rgba(hex_color: str, alpha: float) -> str:
     """``"#4477dd"`` -> ``"rgba(68,119,221,0.15)"``."""
@@ -500,6 +511,116 @@ def plotly_order_activity_per_order(data: dict) -> Any:
         )
     fig.update_xaxes(title_text="Time")
     fig.update_yaxes(title_text="Limit Price")
+    y_range = data.get("y_range")
+    if y_range is not None:
+        fig.update_yaxes(range=list(y_range))
+    return fig
+
+
+def plotly_liquidity_at_touch(data: dict) -> Any:
+    """L2 (MBP) liquidity at the touch: best bid/ask resting size over time."""
+    go = _import_plotly()
+    fig = _base_figure(go, title="Liquidity at the touch")
+    ts = data["timestamp"]
+    for vol, color, label in (
+        (data["bid_vol"], _BID_COLOR, "Best bid size"),
+        (data["ask_vol"], _ASK_COLOR, "Best ask size"),
+    ):
+        fig.add_trace(
+            go.Scatter(
+                x=ts,
+                y=vol,
+                mode="lines",
+                line=dict(color=color, width=1.2, shape="hv"),
+                name=label,
+            )
+        )
+    fig.update_xaxes(title_text="Time")
+    fig.update_yaxes(title_text="Size at touch")
+    return fig
+
+
+def plotly_order_outcome_per_order(data: dict) -> Any:
+    """L3 (MBO) order outcome: each order as placement distance x size, by fate.
+
+    Uses ``Scattergl`` (WebGL) because a per-order face draws one marker per limit
+    order, so the point cloud is large and the SVG ``Scatter`` path does not scale.
+    """
+    go = _import_plotly()
+    fig = _base_figure(go, title="Order outcome by placement distance and size")
+    for frame, color, label in (
+        (data["filled"], _FILLED_COLOR, "filled"),
+        (data["partial"], _PARTIAL_COLOR, "partial"),
+        (data["cancelled"], _CANCELLED_COLOR, "cancelled"),
+    ):
+        if frame.empty:
+            continue
+        fig.add_trace(
+            go.Scattergl(
+                x=frame["distance_bps"],
+                y=frame["placed"],
+                mode="markers",
+                marker=dict(
+                    size=mpl_marker_area_to_plotly_size(
+                        frame["marker_area"].to_numpy()
+                    ),
+                    color=color,
+                    opacity=0.4,
+                    line=dict(width=0),
+                ),
+                name=label,
+            )
+        )
+    fig.add_vline(x=0, line_dash="dash", line_color="#888888", line_width=1)
+    fig.update_xaxes(title_text="Placement distance from touch (bps)")
+    fig.update_yaxes(title_text="Order size")
+    return fig
+
+
+def plotly_trade_tape_per_order(data: dict) -> Any:
+    """L3 (MBO) trade tape: executions plus each maker order's resting bar.
+
+    Uses ``Scattergl`` (WebGL) like the L3 order-activity face it pairs with: the
+    maker-bar segment cloud and the execution-marker cloud are both large, so the
+    SVG ``Scatter`` path does not scale.
+    """
+    go = _import_plotly()
+    fig = _base_figure(go, title="Trade tape with maker order lifecycles")
+    for side, color, label in (
+        (data["buys"], _BUY_COLOR, "buy (lifts ask)"),
+        (data["sells"], _SELL_COLOR, "sell (hits bid)"),
+    ):
+        if side.empty:
+            continue
+        xs, ys = _segments_xy(side["created_ts"], side["timestamp"], side["price"])
+        fig.add_trace(
+            go.Scattergl(
+                x=xs,
+                y=ys,
+                mode="lines",
+                line=dict(color=color, width=1.0),
+                opacity=0.35,
+                name=label,
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+        fig.add_trace(
+            go.Scattergl(
+                x=side["timestamp"],
+                y=side["price"],
+                mode="markers",
+                marker=dict(
+                    size=mpl_marker_area_to_plotly_size(side["marker_area"].to_numpy()),
+                    color=color,
+                    opacity=0.7,
+                    line=dict(width=0),
+                ),
+                name=label,
+            )
+        )
+    fig.update_xaxes(title_text="Time")
+    fig.update_yaxes(title_text="Execution Price")
     y_range = data.get("y_range")
     if y_range is not None:
         fig.update_yaxes(range=list(y_range))
@@ -902,9 +1023,12 @@ _L3 = Level.L3
 for _concept, _level, _fn in [
     ("time_series", _L2, plotly_time_series),
     ("trade_tape", _L2, plotly_trades),
+    ("trade_tape", _L3, plotly_trade_tape_per_order),
     ("depth_heatmap", _L2, plotly_price_levels),
     ("order_activity", _L2, plotly_event_map),
     ("order_activity", _L3, plotly_order_activity_per_order),
+    ("order_outcome", _L3, plotly_order_outcome_per_order),
+    ("liquidity_at_touch", _L2, plotly_liquidity_at_touch),
     ("cancellations", _L2, plotly_volume_map),
     ("cancellations", _L3, plotly_cancellations_per_order),
     ("book_snapshot", _L2, plotly_book_snapshot_aggregate),
