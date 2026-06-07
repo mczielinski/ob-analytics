@@ -85,6 +85,7 @@ def run_bitstamp_demo(
     output_dir: Path | str | None,
     *,
     roundtrip: bool = True,
+    view: str = "both",
 ) -> Path:
     """Run the Bitstamp demo pipeline.
 
@@ -97,6 +98,9 @@ def run_bitstamp_demo(
         Where to write parquet + gallery. Defaults to ./bitstamp_output.
     roundtrip
         If True, perform a write/re-read verification step.
+    view
+        Gallery view: ``l2``, ``l3``, ``both``, or ``comparison``. The
+        ``comparison`` view renders L2-vs-L3 counterpart plots side by side.
 
     Returns
     -------
@@ -149,6 +153,7 @@ def run_bitstamp_demo(
         result,
         out,
         title=f"Bitstamp ({orders_path.name}) -- ob-analytics",
+        view=view,
     )
 
 
@@ -161,8 +166,13 @@ def run_lobster_demo(
     source: Path | str,
     trading_date: str,
     output_dir: Path | str | None,
+    *,
+    view: str = "both",
 ) -> Path:
     """Run the LOBSTER demo pipeline.
+
+    *view* is the gallery view (``l2``, ``l3``, ``both``, or ``comparison``);
+    ``comparison`` renders L2-vs-L3 counterpart plots side by side.
 
     Returns the path to the generated gallery HTML.
     """
@@ -195,4 +205,5 @@ def run_lobster_demo(
         out,
         title=f"LOBSTER {src.name} ({trading_date}) -- ob-analytics",
         analytics=analytics,
+        view=view,
     )
