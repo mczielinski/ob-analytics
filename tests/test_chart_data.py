@@ -15,6 +15,7 @@ from ob_analytics.visualization._data import (
     prepare_events_histogram_data,
     prepare_kyle_lambda_data,
     prepare_ofi_data,
+    prepare_order_activity_l3_data,
     prepare_time_series_data,
     prepare_trades_data,
     prepare_volume_map_data,
@@ -303,6 +304,71 @@ class TestPrepareCancellationsL3:
         )
         assert len(d_true["bids"]) == len(d_false["bids"])
         assert len(d_true["asks"]) == len(d_false["asks"])
+
+
+class TestPrepareOrderActivityL3:
+    def test_returns_fate_frames(
+        self, sample_order_lifecycle_events: pd.DataFrame
+    ) -> None:
+        data = prepare_order_activity_l3_data(sample_order_lifecycle_events)
+        assert set(data) == {
+            "flashed",
+            "resting",
+            "volume_scale",
+            "price_by",
+            "y_range",
+        }
+        for fate in (data["flashed"], data["resting"]):
+            assert isinstance(fate, pd.DataFrame)
+            assert {"start_ts", "end_ts", "price"} <= set(fate.columns)
+        assert not data["flashed"].empty
+        assert not data["resting"].empty
+
+    def test_spans_split_by_fate(
+        self, sample_order_lifecycle_events: pd.DataFrame
+    ) -> None:
+        data = prepare_order_activity_l3_data(sample_order_lifecycle_events)
+        assert (data["flashed"]["type"] == "flashed-limit").all()
+        assert (data["resting"]["type"] == "resting-limit").all()
+        # One span per surviving order id, never per raw event.
+        assert data["flashed"]["id"].is_unique
+        assert data["resting"]["id"].is_unique
+
+    def test_cancelled_span_ends_at_delete(
+        self, sample_order_lifecycle_events: pd.DataFrame
+    ) -> None:
+        data = prepare_order_activity_l3_data(sample_order_lifecycle_events)
+        flashed = data["flashed"]
+        # Each flashed order ran 3s from create to delete (< the 11s window),
+        # so its span must terminate before the window end.
+        assert (flashed["end_ts"] > flashed["start_ts"]).all()
+        assert (
+            flashed["end_ts"] < sample_order_lifecycle_events["timestamp"].max()
+        ).all()
+
+    def test_forever_resting_span_extends_to_end(
+        self, sample_order_lifecycle_events: pd.DataFrame
+    ) -> None:
+        # The created-only order (id 300) never terminates, so its span runs to
+        # the window end rather than collapsing to its single event.
+        end_time = sample_order_lifecycle_events["timestamp"].max()
+        data = prepare_order_activity_l3_data(sample_order_lifecycle_events)
+        forever = data["resting"].set_index("id").loc[300]
+        assert forever["end_ts"] == end_time
+        assert forever["end_ts"] > forever["start_ts"]
+
+    def test_per_order_flag_is_accepted(
+        self, sample_order_lifecycle_events: pd.DataFrame
+    ) -> None:
+        # Accepted for comparable-concept signature symmetry; always per order.
+        d_true = prepare_order_activity_l3_data(
+            sample_order_lifecycle_events, per_order=True
+        )
+        d_false = prepare_order_activity_l3_data(
+            sample_order_lifecycle_events, per_order=False
+        )
+        assert len(d_true["flashed"]) == len(d_false["flashed"])
+        assert len(d_true["resting"]) == len(d_false["resting"])
 
 
 class TestPrepareBookSnapshot:

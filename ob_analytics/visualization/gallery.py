@@ -240,12 +240,23 @@ def build_gallery_model(
                 "price_to": price_to,
             },
         ),
-        _l2(
+        _paired(
             "order_activity",
             "Order Activity",
-            "order_activity",
-            _viz_data.prepare_event_map_data,
-            {"events": events, "volume_scale": volume_scale},
+            PlotSpec(
+                "order_activity",
+                "Order Activity (event map)",
+                "order_activity",
+                _viz_data.prepare_event_map_data,
+                {"events": events, "volume_scale": volume_scale},
+            ),
+            PlotSpec(
+                "order_activity",
+                "Order lifecycles (place → outcome)",
+                "order_activity",
+                _viz_data.prepare_order_activity_l3_data,
+                {"events": events, "volume_scale": volume_scale},
+            ),
         ),
         _paired(
             "cancellations",

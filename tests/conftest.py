@@ -332,6 +332,119 @@ def sample_cancellation_events() -> pd.DataFrame:
 
 
 @pytest.fixture
+def sample_order_lifecycle_events() -> pd.DataFrame:
+    """Limit-order lifecycles for the order_activity L3 Gantt face.
+
+    Three populations exercise every span branch in
+    :func:`prepare_order_activity_l3_data`:
+
+    - ``flashed-limit`` bids (ids 100-102): created then deleted with unchanged
+      volume -- placed and pulled (**cancelled**); the span ends at the delete.
+    - ``resting-limit`` asks (ids 200-202): created, changed, then deleted --
+      rested and provided liquidity before terminating at the delete.
+    - one ``resting-limit`` bid (id 300): created only, never removed -- still on
+      the book at window end, so its span must extend to *end_time*.
+
+    Prices sit in a tight band so the 1st--99th percentile clip keeps the
+    mid-band orders (notably the forever-resting id 300) the tests assert on.
+    """
+    ts = pd.Timestamp("2015-05-01 01:00:00", tz="UTC")
+    rows: list[dict] = []
+
+    flashed = {100: 236.40, 101: 236.45, 102: 236.50}
+    for offset, (oid, price) in enumerate(flashed.items()):
+        rows.append(
+            dict(
+                id=oid,
+                timestamp=ts + pd.Timedelta(seconds=offset),
+                price=price,
+                volume=300.0,
+                direction="bid",
+                action="created",
+                type="flashed-limit",
+            )
+        )
+        rows.append(
+            dict(
+                id=oid,
+                timestamp=ts + pd.Timedelta(seconds=offset + 3),
+                price=price,
+                volume=300.0,
+                direction="bid",
+                action="deleted",
+                type="flashed-limit",
+            )
+        )
+
+    resting = {200: 236.80, 201: 236.90, 202: 237.00}
+    for offset, (oid, price) in enumerate(resting.items()):
+        rows.append(
+            dict(
+                id=oid,
+                timestamp=ts + pd.Timedelta(seconds=offset),
+                price=price,
+                volume=500.0,
+                direction="ask",
+                action="created",
+                type="resting-limit",
+            )
+        )
+        rows.append(
+            dict(
+                id=oid,
+                timestamp=ts + pd.Timedelta(seconds=offset + 5),
+                price=price,
+                volume=300.0,
+                direction="ask",
+                action="changed",
+                type="resting-limit",
+            )
+        )
+        rows.append(
+            dict(
+                id=oid,
+                timestamp=ts + pd.Timedelta(seconds=offset + 9),
+                price=price,
+                volume=0.0,
+                direction="ask",
+                action="deleted",
+                type="resting-limit",
+            )
+        )
+
+    # Forever-resting bid: created once, never removed -> still on the book.
+    rows.append(
+        dict(
+            id=300,
+            timestamp=ts,
+            price=236.60,
+            volume=400.0,
+            direction="bid",
+            action="created",
+            type="resting-limit",
+        )
+    )
+
+    df = pd.DataFrame(rows)
+    df["direction"] = pd.Categorical(df["direction"], categories=["bid", "ask"])
+    df["action"] = pd.Categorical(
+        df["action"], categories=["created", "changed", "deleted"], ordered=True
+    )
+    df["type"] = pd.Categorical(
+        df["type"],
+        categories=[
+            "unknown",
+            "flashed-limit",
+            "resting-limit",
+            "market-limit",
+            "market",
+        ],
+        ordered=True,
+    )
+    return df
+
+
+@pytest.fixture
 def cli_runner():
     """Invoke the ob-analytics CLI as a subprocess.
 

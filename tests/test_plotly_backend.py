@@ -20,6 +20,7 @@ from ob_analytics.visualization._data import (  # noqa: E402
     prepare_events_histogram_data,
     prepare_kyle_lambda_data,
     prepare_ofi_data,
+    prepare_order_activity_l3_data,
     prepare_price_levels_data,
     prepare_time_series_data,
     prepare_trades_data,
@@ -36,6 +37,7 @@ from ob_analytics.visualization._plotly import (  # noqa: E402
     plotly_event_map,
     plotly_events_histogram,
     plotly_kyle_lambda,
+    plotly_order_activity_per_order,
     plotly_order_flow_imbalance,
     plotly_price_levels,
     plotly_time_series,
@@ -184,6 +186,26 @@ class TestPlotlyCancellationsL3:
         # scale to one marker per cancelled order.
         data = prepare_cancellations_l3_data(sample_cancellation_events)
         fig = plotly_cancellations_per_order(data)
+        assert all(trace.type == "scattergl" for trace in fig.data)
+
+
+class TestPlotlyOrderActivityL3:
+    def test_returns_plotly_figure(
+        self, sample_order_lifecycle_events: pd.DataFrame
+    ) -> None:
+        data = prepare_order_activity_l3_data(sample_order_lifecycle_events)
+        fig = plotly_order_activity_per_order(data)
+        assert isinstance(fig, go.Figure)
+        assert len(fig.data) >= 1
+
+    def test_uses_webgl_scattergl(
+        self, sample_order_lifecycle_events: pd.DataFrame
+    ) -> None:
+        # The per-order lifecycle cloud must use the WebGL Scattergl path (like
+        # the L2 event map it pairs with), not the SVG Scatter path that fails to
+        # scale to one segment per limit order.
+        data = prepare_order_activity_l3_data(sample_order_lifecycle_events)
+        fig = plotly_order_activity_per_order(data)
         assert all(trace.type == "scattergl" for trace in fig.data)
 
 

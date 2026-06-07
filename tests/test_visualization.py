@@ -186,15 +186,40 @@ class TestPlotTrades:
 
 class TestPlotEventMap:
     def test_returns_figure(self, sample_events):
-        fig = plot("order_activity", **_data.prepare_event_map_data(sample_events))
+        fig = plot(
+            "order_activity",
+            Level.L2,
+            **_data.prepare_event_map_data(sample_events),
+        )
         assert isinstance(fig, Figure)
 
     def test_accepts_ax(self, sample_events):
         fig_orig, ax_orig = plt.subplots()
         fig = plot(
-            "order_activity", ax=ax_orig, **_data.prepare_event_map_data(sample_events)
+            "order_activity",
+            Level.L2,
+            ax=ax_orig,
+            **_data.prepare_event_map_data(sample_events),
         )
         assert fig is fig_orig
+
+
+class TestPlotOrderActivityL3:
+    def test_returns_figure(self, sample_order_lifecycle_events):
+        data = _data.prepare_order_activity_l3_data(sample_order_lifecycle_events)
+        fig = plot("order_activity", Level.L3, **data)
+        assert isinstance(fig, Figure)
+
+    def test_accepts_ax(self, sample_order_lifecycle_events):
+        fig_orig, ax_orig = plt.subplots()
+        data = _data.prepare_order_activity_l3_data(sample_order_lifecycle_events)
+        fig = plot("order_activity", Level.L3, ax=ax_orig, **data)
+        assert fig is fig_orig
+
+    def test_comparable_requires_level(self, sample_order_lifecycle_events):
+        data = _data.prepare_order_activity_l3_data(sample_order_lifecycle_events)
+        with pytest.raises(ValueError, match="comparable"):
+            plot("order_activity", **data)
 
 
 class TestPlotVolumeMap:

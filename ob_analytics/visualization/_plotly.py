@@ -316,6 +316,11 @@ def plotly_volume_map(data: dict) -> Any:
 _BID_COLOR = "#4477dd"
 _ASK_COLOR = "#dd4444"
 
+# Order-lifecycle fate palette for the order_activity L3 Gantt (cancelled vs
+# filled/resting); identical to the matplotlib backend for cross-backend parity.
+_FLASHED_COLOR = "#e09f3e"  # flashed-limit: placed and pulled (cancelled)
+_RESTING_COLOR = "#2a9d8f"  # resting-limit: rested / filled
+
 
 def _rgba(hex_color: str, alpha: float) -> str:
     """``"#4477dd"`` -> ``"rgba(68,119,221,0.15)"``."""
@@ -444,6 +449,60 @@ def plotly_cancellations_per_order(data: dict) -> Any:
     fig.update_layout(hovermode="closest")
     fig.update_xaxes(title_text="Order age (s)")
     fig.update_yaxes(title_text="Placement distance from touch (bps)")
+    return fig
+
+
+def _segments_xy(start: Any, end: Any, y: Any) -> tuple[Any, Any]:
+    """Interleave per-order spans into one ``None``-gapped line for Scattergl.
+
+    Each order draws a horizontal segment ``(start, y) -> (end, y)``; a ``None``
+    gap separates consecutive orders so the whole fate frame renders as a single
+    WebGL trace (one trace per fate, like the L2 volume map this pairs with).
+    """
+    n = len(y)
+    xs = np.empty(n * 3, dtype=object)
+    xs[0::3] = start.to_numpy()
+    xs[1::3] = end.to_numpy()
+    xs[2::3] = None
+    ys = np.empty(n * 3, dtype=object)
+    ys[0::3] = y.to_numpy()
+    ys[1::3] = y.to_numpy()
+    ys[2::3] = None
+    return xs, ys
+
+
+def plotly_order_activity_per_order(data: dict) -> Any:
+    """L3 (MBO) order activity: each order one lifecycle bar, coloured by fate.
+
+    Uses ``Scattergl`` (WebGL) like the L2 ``plotly_event_map`` it pairs with: a
+    per-order face draws one segment per limit order, so the line cloud is large
+    and the SVG ``Scatter`` path does not scale.
+    """
+    go = _import_plotly()
+    fig = _base_figure(go, title="Order lifecycles (place → outcome)")
+    for side, color, label in (
+        (data["flashed"], _FLASHED_COLOR, "flashed-limit (cancelled)"),
+        (data["resting"], _RESTING_COLOR, "resting-limit (filled)"),
+    ):
+        if side.empty:
+            continue
+        xs, ys = _segments_xy(side["start_ts"], side["end_ts"], side["price"])
+        fig.add_trace(
+            go.Scattergl(
+                x=xs,
+                y=ys,
+                mode="lines",
+                line=dict(color=color, width=1.5),
+                opacity=0.5,
+                name=label,
+                hoverinfo="skip",
+            )
+        )
+    fig.update_xaxes(title_text="Time")
+    fig.update_yaxes(title_text="Limit Price")
+    y_range = data.get("y_range")
+    if y_range is not None:
+        fig.update_yaxes(range=list(y_range))
     return fig
 
 
@@ -845,6 +904,7 @@ for _concept, _level, _fn in [
     ("trade_tape", _L2, plotly_trades),
     ("depth_heatmap", _L2, plotly_price_levels),
     ("order_activity", _L2, plotly_event_map),
+    ("order_activity", _L3, plotly_order_activity_per_order),
     ("cancellations", _L2, plotly_volume_map),
     ("cancellations", _L3, plotly_cancellations_per_order),
     ("book_snapshot", _L2, plotly_book_snapshot_aggregate),

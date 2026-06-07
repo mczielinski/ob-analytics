@@ -374,6 +374,94 @@ def prepare_event_map_data(
     }
 
 
+def prepare_order_activity_l3_data(
+    events: pd.DataFrame,
+    per_order: bool = True,
+    volume_scale: float | None = None,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+    price_from: float | None = None,
+    price_to: float | None = None,
+) -> dict[str, Any]:
+    """Per-order lifecycle Gantt: each order one span place -> outcome, by fate.
+
+    The L3 (MBO) counterpart to the ``order_activity`` event map.  Where the L2
+    map scatters *decoupled* created/deleted events, this links each order's
+    events by ``id`` into a single horizontal span -- from creation to removal --
+    placed at the order's price and split by *fate*:
+
+    - ``flashed-limit`` orders were created and deleted with unchanged volume:
+      placed and pulled, never filled (**cancelled**).
+    - ``resting-limit`` orders rested and provided liquidity, or are still on the
+      book at window end (**filled / resting**); a span with no ``deleted`` event
+      extends to *end_time* to show it had not yet terminated.
+
+    Same population as the L2 face (flashed/resting limit orders), so the two are
+    directly comparable on shared time x price axes.  The price axis is clipped
+    to the 1st--99th percentile (like the event map) unless *price_from* /
+    *price_to* are given, keeping a few far orders from stretching the y-axis.
+
+    ``per_order`` is accepted for signature symmetry with the comparable
+    concepts and is always effectively true here (the face is per order).
+    """
+    del per_order  # always per-order; kept for the comparable-concept signature
+
+    start_time, end_time = _default_start_end(events, start_time, end_time)
+    limit = events[
+        events["type"].isin(["flashed-limit", "resting-limit"])
+        & (events["timestamp"] >= start_time)
+        & (events["timestamp"] <= end_time)
+    ]
+
+    if volume_scale is None:
+        volume_scale = infer_volume_scale(limit["volume"]) if not limit.empty else 1.0
+
+    # Collapse each order's events into one lifecycle span.  Price/direction/type
+    # are constant over a limit order's life, so ``first`` is unambiguous; volume
+    # only shrinks as fills consume it, so ``max`` recovers the placed size.
+    spans = (
+        limit.groupby("id", sort=False)
+        .agg(
+            start_ts=("timestamp", "min"),
+            last_ts=("timestamp", "max"),
+            price=("price", "first"),
+            direction=("direction", "first"),
+            type=("type", "first"),
+            volume=("volume", "max"),
+        )
+        .reset_index()
+    )
+
+    # A span ending in a ``deleted`` event terminated there; one without is still
+    # resting, so it runs to the window end.
+    deleted_ids = limit.loc[limit["action"] == "deleted", "id"].unique()
+    spans["end_ts"] = spans["last_ts"].where(spans["id"].isin(deleted_ids), end_time)
+    spans["volume"] = spans["volume"] * volume_scale
+
+    if not spans.empty:
+        if price_from is None:
+            price_from = spans["price"].quantile(0.01)
+        if price_to is None:
+            price_to = spans["price"].quantile(0.99)
+        spans = spans[(spans["price"] >= price_from) & (spans["price"] <= price_to)]
+
+    if spans.empty:
+        price_by, y_range = 1.0, None
+    else:
+        price_by, _ = _price_axis_breaks(spans["price"].min(), spans["price"].max())
+        y_range = (float(spans["price"].min()), float(spans["price"].max()))
+
+    flashed = spans[spans["type"] == "flashed-limit"]
+    resting = spans[spans["type"] == "resting-limit"]
+    return {
+        "flashed": flashed,
+        "resting": resting,
+        "volume_scale": volume_scale,
+        "price_by": price_by,
+        "y_range": y_range,
+    }
+
+
 def prepare_volume_map_data(
     events: pd.DataFrame,
     action: str = "deleted",

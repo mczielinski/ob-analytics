@@ -404,6 +404,11 @@ def mpl_volume_map(
 _BID_COLOR = "#4477dd"
 _ASK_COLOR = "#dd4444"
 
+# Order-lifecycle fate palette for the order_activity L3 Gantt (cancelled vs
+# filled/resting); identical to the plotly backend for cross-backend parity.
+_FLASHED_COLOR = "#e09f3e"  # flashed-limit: placed and pulled (cancelled)
+_RESTING_COLOR = "#2a9d8f"  # resting-limit: rested / filled
+
 
 def _book_bar_width(*sides: pd.DataFrame) -> float:
     """Smallest positive gap between distinct prices across *sides*."""
@@ -540,6 +545,54 @@ def mpl_cancellations_per_order(
     ax.set_xlabel("Order age (s)")
     ax.set_ylabel("Placement distance from touch (bps)")
     ax.legend(loc="upper right")
+    fig.tight_layout()
+    return fig
+
+
+def mpl_order_activity_per_order(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """L3 (MBO) order activity: each order one lifecycle bar, coloured by fate."""
+    fig, ax = _create_axes(ax, figsize=(10, 6), theme=theme)
+    flashed = data["flashed"]
+    resting = data["resting"]
+    for side, color, label in (
+        (flashed, _FLASHED_COLOR, "flashed-limit (cancelled)"),
+        (resting, _RESTING_COLOR, "resting-limit (filled)"),
+    ):
+        if side.empty:
+            continue
+        ax.hlines(
+            side["price"],
+            mdates.date2num(side["start_ts"]),
+            mdates.date2num(side["end_ts"]),
+            colors=color,
+            linewidth=1.2,
+            alpha=0.5,
+            label=label,
+        )
+
+    ax.xaxis_date()
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+    plt.xticks(rotation=45)
+
+    y_range = data.get("y_range")
+    price_by = data["price_by"]
+    if y_range is not None:
+        ax.set_ylim(y_range)
+        ax.set_yticks(
+            np.arange(
+                round(y_range[0] / price_by) * price_by,
+                round(y_range[1] / price_by) * price_by,
+                price_by,
+            )
+        )
+
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Limit Price")
+    ax.set_title("Order lifecycles (place → outcome)")
+    if not (flashed.empty and resting.empty):
+        ax.legend(loc="upper right")
     fig.tight_layout()
     return fig
 
@@ -948,6 +1001,7 @@ for _concept, _level, _fn in [
     ("trade_tape", _L2, mpl_trades),
     ("depth_heatmap", _L2, mpl_price_levels),
     ("order_activity", _L2, mpl_event_map),
+    ("order_activity", _L3, mpl_order_activity_per_order),
     ("cancellations", _L2, mpl_volume_map),
     ("cancellations", _L3, mpl_cancellations_per_order),
     ("book_snapshot", _L2, mpl_book_snapshot_aggregate),
