@@ -82,41 +82,24 @@ def mpl_marker_area_to_plotly_size(area: np.ndarray) -> np.ndarray:
     return np.sqrt(np.maximum(area, 0.0)) * 0.8
 
 
-# The volume-percentile chart colours a fixed 20-step rainbow gradient,
-# shared verbatim by every rendering backend.  It was historically built
-# at call time with ``matplotlib.colors.LinearSegmentedColormap`` from the
-# ten anchor colours below; that pulled a rendering dependency into this
-# backend-agnostic data layer.  The exact RGBA values are deterministic, so
-# they are precomputed here once (round-trip-exact float literals) — keeping
-# ``colors_dict`` byte-identical while removing the matplotlib import.
-#
-# To regenerate (e.g. to tweak the anchors), run:
-#     from matplotlib.colors import LinearSegmentedColormap
-#     anchors = ["#f92b20", "#fe701b", "#facd1f", "#d6fd1c", "#65fe1b",
-#                "#1bfe42", "#1cfdb4", "#1fb9fa", "#1e71fb", "#261cfd"]
-#     cmap = LinearSegmentedColormap.from_list("custom_cmap", anchors, N=20)
-#     [cmap(i / 19) for i in range(20)]
-_VOLUME_PERCENTILE_PALETTE: tuple[tuple[float, float, float, float], ...] = (
-    (0.9764705882352941, 0.16862745098039217, 0.12549019607843137, 1.0),
-    (0.9857585139318885, 0.29680082559339527, 0.11620227038183695, 1.0),
-    (0.9950464396284829, 0.4249742002063983, 0.10691434468524252, 1.0),
-    (0.9894736842105263, 0.5927760577915376, 0.11248710010319918, 1.0),
-    (0.9820433436532507, 0.765531475748194, 0.11991744066047472, 1.0),
-    (0.9283797729618163, 0.8732714138286894, 0.11723426212590299, 1.0),
-    (0.8615067079463364, 0.9624355005159959, 0.11166150670794633, 1.0),
-    (0.6992776057791538, 0.9933952528379774, 0.1085655314757482, 1.0),
-    (0.48937048503611974, 0.9952528379772962, 0.10670794633642931, 1.0),
-    (0.31971104231166153, 0.996078431372549, 0.1461300309597523, 1.0),
-    (0.18224974200206398, 0.996078431372549, 0.21857585139318886, 1.0),
-    (0.10670794633642931, 0.9952528379772962, 0.3529411764705883, 1.0),
-    (0.1085655314757482, 0.9933952528379774, 0.5647058823529414, 1.0),
-    (0.11166150670794633, 0.9500515995872034, 0.7492260061919503, 1.0),
-    (0.117234262125903, 0.8237358101135188, 0.8792569659442727, 1.0),
-    (0.12115583075335397, 0.6957688338493289, 0.9808049535603715, 1.0),
-    (0.11929824561403508, 0.5620227038183693, 0.9826625386996903, 1.0),
-    (0.11929824561403503, 0.42559339525283857, 0.9847265221878224, 1.0),
-    (0.13415892672858618, 0.26769865841073276, 0.9884416924664603, 1.0),
-    (0.14901960784313725, 0.10980392156862745, 0.9921568627450981, 1.0),
+# The volume-percentile chart colours a fixed 20-step gradient, shared
+# verbatim by every rendering backend.  Percentile rank is *ordered* data, so
+# the ramp encodes it as monotonically decreasing luminance (pale → dark blue)
+# rather than the old rainbow/jet sweep: hue carries no order, so a rainbow
+# made high and low percentiles equally vivid and forced the eye to read a
+# legend.  Channels walk linearly from a pale tint to a saturated blue as the
+# step index i goes 0 → 19, so every channel (and thus luminance) decreases
+# monotonically — keeping the perceptual ordering intact.
+# FUTURE(--color-by): a future opt-in could swap this ramp for an alternate
+# encoding column without touching consumers, since they only read the tuple.
+_VOLUME_PERCENTILE_PALETTE: tuple[tuple[float, float, float, float], ...] = tuple(
+    (
+        0.88 + (0.03 - 0.88) * (i / 19),
+        0.92 + (0.19 - 0.92) * (i / 19),
+        0.98 + (0.42 - 0.98) * (i / 19),
+        1.0,
+    )
+    for i in range(20)
 )
 
 
@@ -1007,6 +990,11 @@ def prepare_events_histogram_data(
     bw: float | None = None,
 ) -> dict[str, Any]:
     """Prepare data for an events price/volume histogram."""
+    # DEFERRED (events_histogram.L2 renders as a single 1px spike on heavy-tailed
+    # volume). FUTURE(--focus): clip x to a robust window (e.g. 1-99th pct) with
+    # a "N beyond +/-X" overflow annotation, or offer a log-x alternative that
+    # shows everything. Not wired now because this face is not in the default
+    # gallery and a proper fix needs the calling demo to opt into the window.
     if val not in ("volume", "price"):
         raise ValueError(f"val must be 'volume' or 'price', got {val!r}")
     start_time, end_time = _default_start_end(events, start_time, end_time)

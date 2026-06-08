@@ -521,6 +521,15 @@ class TestPrepareVolumePercentiles:
         assert len(data["asks_cols"]) == 20
         assert len(data["bids_cols"]) == 20
 
+    def test_palette_is_sequential_luminance(self) -> None:
+        from ob_analytics.visualization._data import _VOLUME_PERCENTILE_PALETTE
+
+        pal = np.array([c[:3] for c in _VOLUME_PERCENTILE_PALETTE])
+        lum = pal @ np.array([0.2126, 0.7152, 0.0722])
+        diffs = np.diff(lum)
+        # Monotonic luminance => ordered ramp, not a rainbow (jet zig-zags).
+        assert np.all(diffs < 0) or np.all(diffs > 0)
+
 
 class TestPrepareEventsHistogram:
     def test_returns_filtered_events(self, sample_events: pd.DataFrame) -> None:

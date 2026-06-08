@@ -417,3 +417,27 @@ class TestBuildGalleryModel:
         assert order_outcome.at(Level.L3) is not None
         # Analytics are appended by callers, not derived here.
         assert model.analytics == []
+
+    def test_order_activity_l3_shares_depth_heatmap_window(
+        self, tiny_bitstamp_orders_csv
+    ) -> None:
+        from ob_analytics.bitstamp import BitstampFormat
+        from ob_analytics.pipeline import Pipeline
+
+        result = Pipeline(format=BitstampFormat()).run(str(tiny_bitstamp_orders_csv))
+        model = build_gallery_model(result)
+
+        heatmap = next(c for c in model.concepts if c.key == "depth_heatmap").at(
+            Level.L2
+        )
+        activity_l3 = next(c for c in model.concepts if c.key == "order_activity").at(
+            Level.L3
+        )
+        assert heatmap is not None and activity_l3 is not None
+        # order_activity.L3 reuses the same mid-anchored window as the depth
+        # heatmap, so the per-order Gantt clips around the touch rather than its
+        # own raw-price percentile (the cause of the solid-colour flood).
+        assert (
+            activity_l3.prep_kwargs["price_from"] == heatmap.prep_kwargs["price_from"]
+        )
+        assert activity_l3.prep_kwargs["price_to"] == heatmap.prep_kwargs["price_to"]

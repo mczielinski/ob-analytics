@@ -149,6 +149,11 @@ class TestPlotlyTrades:
         fig = plotly_trades(data)
         assert fig.data[0].name == "Price"
 
+    def test_l2_ylabel_is_price(self, sample_trades: pd.DataFrame) -> None:
+        data = prepare_trades_data(sample_trades)
+        fig = plotly_trades(data)
+        assert fig.layout.yaxis.title.text == "Price"
+
 
 class TestPlotlyPriceLevels:
     def test_returns_plotly_figure(self, sample_events: pd.DataFrame) -> None:
@@ -277,6 +282,16 @@ class TestPlotlyBookSnapshot:
         fig = plotly_book_snapshot_per_order(data)
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 2
+
+    def test_per_order_uses_white_separators(self, sample_order_book: dict) -> None:
+        # Dark separators were invisible on the dark plot background; white shows.
+        data = prepare_book_snapshot_data(sample_order_book, per_order=True)
+        fig = plotly_book_snapshot_per_order(data)
+        assert any(
+            getattr(tr.marker, "line", None) is not None
+            and tr.marker.line.color == "white"
+            for tr in fig.data
+        )
 
 
 class TestPlotlyDepthChart:

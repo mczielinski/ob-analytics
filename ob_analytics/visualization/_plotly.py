@@ -99,7 +99,7 @@ def plotly_trades(data: dict) -> Any:
         )
     )
     fig.update_xaxes(title_text="Time")
-    fig.update_yaxes(title_text="Limit Price")
+    fig.update_yaxes(title_text="Price")
     return fig
 
 
@@ -344,7 +344,9 @@ def _plotly_book_bars(data: dict, *, per_order: bool) -> Any:
     go = _import_plotly()
     fig = _base_figure(go, title=data["timestamp"].strftime("%Y-%m-%d %H:%M:%S UTC"))
 
-    line = dict(color="#1e1e1e", width=0.6) if per_order else dict(width=0)
+    # Match the matplotlib backend: white per-order separators (dark ones were
+    # invisible against the dark plot background).
+    line = dict(color="white", width=0.6) if per_order else dict(width=0)
     for side, color, label in (
         (data["bids"], _BID_COLOR, "Bid"),
         (data["asks"], _ASK_COLOR, "Ask"),
@@ -548,10 +550,12 @@ def plotly_order_outcome_per_order(data: dict) -> Any:
     """
     go = _import_plotly()
     fig = _base_figure(go, title="Order outcome by placement distance and size")
-    for frame, color, label in (
-        (data["filled"], _FILLED_COLOR, "filled"),
-        (data["partial"], _PARTIAL_COLOR, "partial"),
-        (data["cancelled"], _CANCELLED_COLOR, "cancelled"),
+    # Cancelled first (underneath) and faded; see the matplotlib backend.
+    # FUTURE(--density): distance-binned composition + fill-rate dot plot.
+    for frame, color, label, pt_opacity in (
+        (data["cancelled"], _CANCELLED_COLOR, "cancelled", 0.18),
+        (data["partial"], _PARTIAL_COLOR, "partial", 0.6),
+        (data["filled"], _FILLED_COLOR, "filled", 0.85),
     ):
         if frame.empty:
             continue
@@ -565,7 +569,7 @@ def plotly_order_outcome_per_order(data: dict) -> Any:
                         frame["marker_area"].to_numpy()
                     ),
                     color=color,
-                    opacity=0.4,
+                    opacity=pt_opacity,
                     line=dict(width=0),
                 ),
                 name=label,
@@ -584,6 +588,11 @@ def plotly_trade_tape_per_order(data: dict) -> Any:
     maker-bar segment cloud and the execution-marker cloud are both large, so the
     SVG ``Scatter`` path does not scale.
     """
+    # DEFERRED. trade_tape.L3 currently sizes execution markers by bubble AREA
+    # (rank-5) and draws full maker-rest spans. FUTURE(--color-by) + encoding
+    # rethink: encode size by length (lollipop), keep side as hue, and reserve
+    # the long maker spans for an explicit "time resting" read. Left as-is for
+    # the simple pass.
     go = _import_plotly()
     fig = _base_figure(go, title="Trade tape with maker order lifecycles")
     for side, color, label in (

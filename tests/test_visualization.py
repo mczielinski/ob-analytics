@@ -195,6 +195,11 @@ class TestPlotTrades:
         with pytest.raises(ValueError, match="comparable"):
             plot("trade_tape", **_data.prepare_trades_data(sample_trades))
 
+    def test_l2_ylabel_is_price(self, sample_trades):
+        # The L2 tape plots execution prices, not limit prices.
+        fig = plot("trade_tape", Level.L2, **_data.prepare_trades_data(sample_trades))
+        assert fig.axes[0].get_ylabel() == "Price"
+
 
 class TestPlotEventMap:
     def test_returns_figure(self, sample_events):
@@ -271,6 +276,13 @@ class TestPlotCancellationsL3:
         with pytest.raises(ValueError, match="comparable"):
             plot("cancellations", **data)
 
+    def test_scatter_is_rasterized(self, sample_cancellation_events):
+        data = _data.prepare_cancellations_l3_data(sample_cancellation_events)
+        fig = plot("cancellations", Level.L3, **data)
+        ax = fig.axes[0]
+        assert ax.collections
+        assert all(c.get_rasterized() for c in ax.collections)
+
 
 class TestPlotTradeTapeL3:
     def test_returns_figure(self, sample_executed_orders):
@@ -331,6 +343,22 @@ class TestPlotOrderOutcomeL3:
         fig = plot("order_outcome", **data)
         assert isinstance(fig, Figure)
 
+    def test_draws_cancelled_underneath(self, sample_executed_orders):
+        import matplotlib.colors as mcolors
+
+        from ob_analytics.visualization._matplotlib import _CANCELLED_COLOR
+
+        events, trades = sample_executed_orders
+        data = _data.prepare_order_outcome_l3_data(
+            events, trades, bps_quantiles=(0.0, 1.0)
+        )
+        fig = plot("order_outcome", Level.L3, **data)
+        ax = fig.axes[0]
+        # The dominant cancelled class must be drawn first (underneath) so the
+        # rarer fills/partials are not buried; first collection == cancelled.
+        first_rgb = ax.collections[0].get_facecolor()[0][:3]
+        assert np.allclose(first_rgb, mcolors.to_rgba(_CANCELLED_COLOR)[:3], atol=0.01)
+
 
 class TestPlotBookSnapshot:
     @staticmethod
@@ -355,6 +383,17 @@ class TestPlotBookSnapshot:
         data = _data.prepare_book_snapshot_data(self._order_book())
         with pytest.raises(ValueError, match="comparable"):
             plot("book_snapshot", **data)
+
+    def test_per_order_uses_white_separators(self) -> None:
+        # Dark (#1e1e1e) per-order edges blacked out a dense L3 book; the
+        # separators must be white so segments show and bid/ask hue survives.
+        data = _data.prepare_book_snapshot_data(self._order_book(), per_order=True)
+        fig = plot("book_snapshot", Level.L3, **data)
+        ax = fig.axes[0]
+        edges = [c.patches[0].get_edgecolor() for c in ax.containers if len(c.patches)]
+        assert edges  # at least one side drawn
+        for rgba in edges:
+            assert np.allclose(rgba[:3], 1.0, atol=0.01)
 
 
 class TestPlotVolumePercentiles:

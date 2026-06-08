@@ -147,7 +147,7 @@ def mpl_trades(
         ax=ax,
     )
     ax.set_xlabel("Time")
-    ax.set_ylabel("Limit Price")
+    ax.set_ylabel("Price")
     ax.set_yticks(y_breaks)
     ax.grid(True)
     fig.tight_layout()
@@ -441,7 +441,9 @@ def _mpl_book_bars(
     fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
 
     width = _book_bar_width(bids, asks) * 0.9
-    edge = "#1e1e1e" if per_order else "none"
+    # Thin white separators delineate per-order segments without swamping the
+    # bars (dark edges previously blacked out a dense L3 book).
+    edge = "white" if per_order else "none"
     for side, color, label in ((bids, _BID_COLOR, "bid"), (asks, _ASK_COLOR, "ask")):
         if side.empty:
             continue
@@ -489,6 +491,9 @@ def _mpl_depth_curve(
     data: dict, ax: Axes | None, theme: PlotTheme, *, per_order: bool
 ) -> Figure:
     """Cumulative-depth curve: stepped per level (L2) or per order (L3)."""
+    # DEFERRED (lower priority). The L3 depth curve is visually identical to L2.
+    # FUTURE(--density): segment each riser by per-order composition (whale vs
+    # crowd) so the per-order resolution becomes legible. Left as-is for now.
     fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
     for side, color, label in (
         (data["bids"], _BID_COLOR, "bid"),
@@ -536,6 +541,9 @@ def mpl_cancellations_per_order(
 ) -> Figure:
     """L3 (MBO) cancellations: each cancelled order as an age x distance point."""
     fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
+    # FUTURE(--density): high-cardinality 2D cloud -> log-log hexbin (count as
+    # saturation). For now rasterize the marker layer so the vector file does
+    # not balloon (~140k points was ~839 KB) and fade overlapping points.
     for side, color, label in (
         (data["bids"], _BID_COLOR, "bid"),
         (data["asks"], _ASK_COLOR, "ask"),
@@ -547,8 +555,9 @@ def mpl_cancellations_per_order(
             side["distance_bps"],
             s=side["marker_area"],
             color=color,
-            alpha=0.4,
+            alpha=0.25,
             edgecolors="none",
+            rasterized=True,
             label=label,
         )
     ax.axhline(y=0, color="#888888", linestyle="--", linewidth=1)
@@ -648,10 +657,15 @@ def mpl_order_outcome_per_order(
     """L3 (MBO) order outcome: each order as placement distance x size, by fate."""
     fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
     any_pts = False
-    for frame, color, label in (
-        (data["filled"], _FILLED_COLOR, "filled"),
-        (data["partial"], _PARTIAL_COLOR, "partial"),
-        (data["cancelled"], _CANCELLED_COLOR, "cancelled"),
+    # Draw the dominant 'cancelled' class first (underneath) so the rarer
+    # filled/partial outcomes land on top instead of being buried, and fade it.
+    # FUTURE(--density): at high cancelled cardinality, degrade this raw scatter
+    # to a distance-binned stacked composition + a common-baseline fill-rate dot
+    # plot (parts-of-whole AND a position-encoded rate).
+    for frame, color, label, pt_alpha in (
+        (data["cancelled"], _CANCELLED_COLOR, "cancelled", 0.18),
+        (data["partial"], _PARTIAL_COLOR, "partial", 0.6),
+        (data["filled"], _FILLED_COLOR, "filled", 0.85),
     ):
         if frame.empty:
             continue
@@ -661,7 +675,7 @@ def mpl_order_outcome_per_order(
             frame["placed"],
             s=frame["marker_area"],
             color=color,
-            alpha=0.4,
+            alpha=pt_alpha,
             edgecolors="none",
             label=label,
         )
@@ -679,6 +693,11 @@ def mpl_trade_tape_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """L3 (MBO) trade tape: executions plus each maker order's resting bar."""
+    # DEFERRED. trade_tape.L3 currently sizes execution markers by bubble AREA
+    # (rank-5) and draws full maker-rest hlines. FUTURE(--color-by) + encoding
+    # rethink: encode size by length (lollipop), keep side as hue, and reserve
+    # the long maker spans for an explicit "time resting" read. Left as-is for
+    # the simple pass.
     fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
     any_pts = False
     for side, color, label in (

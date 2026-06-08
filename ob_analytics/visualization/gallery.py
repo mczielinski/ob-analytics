@@ -284,7 +284,16 @@ def build_gallery_model(
                 "Order lifecycles (place → outcome)",
                 "order_activity",
                 _viz_data.prepare_order_activity_l3_data,
-                {"events": events, "volume_scale": volume_scale},
+                # FUTURE(--focus): a shared mid-anchored FocusWindow would feed
+                # every L3 face here; for now reuse the depth heatmap's
+                # trades-median ±3σ window so the Gantt clips around the touch
+                # instead of its own raw-price percentile.
+                {
+                    "events": events,
+                    "volume_scale": volume_scale,
+                    "price_from": price_from,
+                    "price_to": price_to,
+                },
             ),
         ),
         _paired(
