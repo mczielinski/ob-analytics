@@ -757,8 +757,7 @@ class LobsterFormat:
         return LobsterTradeReader(config)
 
     def create_writer(self, config: PipelineConfig, ctx: RunContext) -> DataWriter:
-        td = _require_trading_date(ctx.trading_date, "create_writer")
-        return LobsterWriter(config, trading_date=td)
+        return _make_lobster_writer(config, ctx)
 
     def compute_depth(
         self,
