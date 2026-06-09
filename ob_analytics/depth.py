@@ -193,22 +193,42 @@ class DepthMetricsEngine:
         out : np.ndarray
             Pre-allocated 1-D array of length ``row_len`` to fill.
         """
-        # Cross-check: ignore quotes that would cross the opposing best.
         if side == 1:
-            if self._best_bid is not None and price < self._best_bid:
-                return
             levels = self._ask_levels
+            opposing = self._bid_levels
         else:
-            if self._best_ask is not None and price > self._best_ask:
-                return
             levels = self._bid_levels
+            opposing = self._ask_levels
 
+        evicted = False
         if volume > 0:
             levels[price] = volume
+            # A resting bid and ask coexist only when bid_price < ask_price.
+            # Trust the fresh quote: evict any *stale* opposing levels it
+            # strictly crosses (e.g. an orphaned best whose delete event is
+            # missing from the feed).  Equal-price touches are left intact,
+            # so genuine locked books are still tolerated.  The cheap best-vs-
+            # price comparison keeps the common, non-crossing event O(1); the
+            # full scan only runs when an actual cross is present.
+            if side == 1 and self._best_bid is not None and self._best_bid > price:
+                # new ask -> bids strictly above it are crossed
+                for op in [op for op in opposing if op > price]:
+                    del opposing[op]
+                evicted = True
+            elif side == 0 and self._best_ask is not None and self._best_ask < price:
+                # new bid -> asks strictly below it are crossed
+                for op in [op for op in opposing if op < price]:
+                    del opposing[op]
+                evicted = True
         elif price in levels:
             del levels[price]
 
         self._refresh_best(side, price, volume)
+        if evicted:
+            # Eviction mutated the opposing book; refresh and emit its metrics
+            # too, otherwise compute() carries the stale opposing columns over.
+            self._recompute_best(1 - side)
+            self._write_side_metrics(1 - side, out)
         self._write_side_metrics(side, out)
 
     def _refresh_best(self, side: int, price: int, volume: float) -> None:
@@ -255,6 +275,27 @@ class DepthMetricsEngine:
         else:
             self._best_bid = new_best
             self._best_bid_vol = new_vol
+
+    def _recompute_best(self, side: int) -> None:
+        """Recompute a side's best price/volume from its active levels.
+
+        Used after a bulk eviction of crossed opposing levels, where the
+        single-level :meth:`_refresh_best` fast-path does not apply.
+        """
+        if side == 1:
+            if self._ask_levels:
+                self._best_ask = min(self._ask_levels)
+                self._best_ask_vol = self._ask_levels[self._best_ask]
+            else:
+                self._best_ask = None
+                self._best_ask_vol = 0.0
+        else:
+            if self._bid_levels:
+                self._best_bid = max(self._bid_levels)
+                self._best_bid_vol = self._bid_levels[self._best_bid]
+            else:
+                self._best_bid = None
+                self._best_bid_vol = 0.0
 
     def _write_side_metrics(self, side: int, out: np.ndarray) -> None:
         if side == 1:

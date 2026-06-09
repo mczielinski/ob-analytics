@@ -14,7 +14,15 @@ def _depth(*rows):
 
 
 class TestCrossedBookGuards:
-    """The strict < / > guards (not <= / >=) ensure touching orders are processed."""
+    """Touching (equal-price) orders are kept; strictly-crossed stale levels are evicted.
+
+    A resting bid and ask can coexist only when ``bid_price < ask_price``.  When a
+    fresh quote strictly crosses the opposing best, the *stale* opposing levels are
+    evicted (the fresh quote is trusted) rather than the fresh quote dropped.  This
+    keeps an orphaned best level (e.g. one whose delete event is missing from the
+    feed) from freezing the touch forever.  Equal-price ``touching`` levels are
+    still permitted (locks are tolerated, matching the original design).
+    """
 
     def test_ask_at_best_bid_is_processed(self):
         """An ask at exactly the best bid should NOT be silently dropped."""
@@ -42,25 +50,72 @@ class TestCrossedBookGuards:
         engine.update_side(110, 3.0, 0, out)
         assert 110 in engine._bid_levels
 
-    def test_ask_below_best_bid_is_dropped(self):
-        """An ask strictly below the best bid is a crossed book → dropped."""
+    def test_ask_below_best_bid_evicts_crossed_bid(self):
+        """An ask strictly below the best bid is the fresh truth: evict the stale bid."""
         engine = DepthMetricsEngine()
         out = np.zeros(engine._row_len)
 
         engine.update_side(100, 5.0, 0, out)  # bid at 100
-        engine.update_side(99, 3.0, 1, out)  # ask at 99 < bid 100
+        engine.update_side(99, 3.0, 1, out)  # ask at 99 < bid 100 (strict cross)
 
-        assert 99 not in engine._ask_levels
+        assert 99 in engine._ask_levels  # fresh ask kept
+        assert 100 not in engine._bid_levels  # stale crossed bid evicted
+        assert engine._best_ask == 99
+        assert engine._best_bid is None
 
-    def test_bid_above_best_ask_is_dropped(self):
-        """A bid strictly above the best ask is a crossed book → dropped."""
+    def test_bid_above_best_ask_evicts_crossed_ask(self):
+        """A bid strictly above the best ask is the fresh truth: evict the stale ask."""
         engine = DepthMetricsEngine()
         out = np.zeros(engine._row_len)
 
         engine.update_side(110, 5.0, 1, out)  # ask at 110
-        engine.update_side(111, 3.0, 0, out)  # bid at 111 > ask 110
+        engine.update_side(111, 3.0, 0, out)  # bid at 111 > ask 110 (strict cross)
 
-        assert 111 not in engine._bid_levels
+        assert 111 in engine._bid_levels  # fresh bid kept
+        assert 110 not in engine._ask_levels  # stale crossed ask evicted
+        assert engine._best_bid == 111
+        assert engine._best_ask is None
+
+    def test_crossing_bid_unfreezes_orphaned_best_ask(self):
+        """Regression: an orphaned ask (missing delete) must not freeze best_ask.
+
+        Reproduces the depth-tracker freeze: two ask orders rest at a price
+        whose delete events never arrive, pinning best_ask.  Once bids climb
+        strictly above that stale level, it must be evicted so best_ask tracks
+        the genuine liquidity above it.
+        """
+        engine = DepthMetricsEngine()
+        out = np.zeros(engine._row_len)
+
+        engine.update_side(100, 0.17, 1, out)  # orphaned ask at 100 (never deleted)
+        engine.update_side(105, 1.0, 1, out)  # genuine ask above
+        assert engine._best_ask == 100
+
+        engine.update_side(101, 1.0, 0, out)  # bid climbs above the stale ask
+
+        assert 100 not in engine._ask_levels  # stale level evicted
+        assert engine._best_ask == 105  # best_ask tracks up, no longer frozen
+        assert engine._best_bid == 101
+
+    def test_compute_writes_opposing_side_after_eviction(self):
+        """End-to-end: depth_summary best_ask must track, and best_bid be written.
+
+        Eviction touches the *opposing* side, so ``compute`` must refresh and
+        write the opposing metrics columns rather than carry the stale prior row.
+        """
+        engine = DepthMetricsEngine()
+        depth = _depth(
+            ("2026-01-01T00:00:00", 100.0, 0.17, "ask"),  # orphan ask, never deleted
+            ("2026-01-01T00:00:01", 105.0, 1.0, "ask"),  # genuine ask above
+            ("2026-01-01T00:00:02", 101.0, 1.0, "bid"),  # bid crosses the orphan
+        )
+
+        out = engine.compute(depth)
+        last = out.iloc[-1]
+
+        assert last["best_ask_price"] == 105.0  # tracked, not frozen at 100
+        assert last["best_bid_price"] == 101.0  # opposing side written
+        assert last["best_bid_vol"] == 1.0
 
 
 class TestBestPriceRecalculation:
