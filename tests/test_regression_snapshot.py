@@ -63,11 +63,16 @@ def test_demo_fingerprints(demo_result):
     fps = {name: _df_fingerprint(df) for name, df in _frames(demo_result).items()}
     for name, fp in fps.items():
         print(f"FINGERPRINT {name} = {fp}")
+    # depth_summary + events updated for the crossed-book eviction fix: the depth
+    # engine no longer freezes best_ask at an orphaned level (missing delete), so
+    # depth_summary best-quote/BPS columns change, and order aggressiveness — the
+    # sole depth_summary consumer that writes events (aggressiveness_bps) — is
+    # recomputed against the corrected best quotes.  trades + depth are unaffected.
     EXPECTED: dict[str, str] = {
-        "events": "0161445c1ea48ff76e4db98ecc1c0b7bc3bdf44700444d8b01c16da8f4011a65",
+        "events": "eb342f2ac5dc0f97f945ba356bb2e25f1b9652176ca1195ee92afee478ecea5f",
         "trades": "adcc4919350776d58988031395b929f5326853ff3d4b76389d2ca61a03d4384a",
         "depth": "f43bcdb57648fce327d91c94dac03648cd8a31e367852db84e1ccdd01101fb92",
-        "depth_summary": "94d42be2c09571f82d50eb4751d341f3ef1c47b930f7119242a0f6123bf108bf",
+        "depth_summary": "5562e26cef9714827a28940856628b2c4457646179786b0ea61ead0120a16161",
     }
     if EXPECTED:
         assert fps == EXPECTED
