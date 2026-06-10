@@ -384,9 +384,10 @@ class TestPlotBookSnapshot:
         with pytest.raises(ValueError, match="comparable"):
             plot("book_snapshot", **data)
 
-    def test_per_order_uses_white_separators(self) -> None:
-        # Dark (#1e1e1e) per-order edges blacked out a dense L3 book; the
-        # separators must be white so segments show and bid/ask hue survives.
+    def test_per_order_uses_white_separators_when_bars_are_wide(self) -> None:
+        # Dark (#1e1e1e) per-order edges blacked out a dense L3 book; when the
+        # bars are wide enough to show one, the separator must be white so
+        # segments show and bid/ask hue survives.
         data = _data.prepare_book_snapshot_data(self._order_book(), per_order=True)
         fig = plot("book_snapshot", Level.L3, **data)
         ax = fig.axes[0]
@@ -394,6 +395,61 @@ class TestPlotBookSnapshot:
         assert edges  # at least one side drawn
         for rgba in edges:
             assert np.allclose(rgba[:3], 1.0, atol=0.01)
+
+    def test_separator_edge_hidden_for_subpixel_bars(self) -> None:
+        # A bar far narrower than a pixel must get no edge: a ~1px white edge
+        # would otherwise swamp the fill entirely (the dense full-range L3 book
+        # whited out on the light matplotlib theme).
+        from ob_analytics.visualization._matplotlib import _book_separator_edge
+
+        # width 0.9 over a 2000-wide span at a 1200px figure -> ~0.5px bar.
+        edge = _book_separator_edge(0.9, 2000.0, per_order=True, fig_width_px=1200.0)
+        assert edge == "none"
+
+    def test_separator_edge_white_for_wide_bars(self) -> None:
+        from ob_analytics.visualization._matplotlib import _book_separator_edge
+
+        # width 0.45 over a 1.5-wide span at 1200px -> hundreds of px per bar.
+        edge = _book_separator_edge(0.45, 1.5, per_order=True, fig_width_px=1200.0)
+        assert edge == "white"
+
+    def test_separator_edge_none_for_aggregate(self) -> None:
+        from ob_analytics.visualization._matplotlib import _book_separator_edge
+
+        # L2 (aggregate) bars never get a per-order separator regardless of width.
+        edge = _book_separator_edge(0.45, 1.5, per_order=False, fig_width_px=1200.0)
+        assert edge == "none"
+
+    def test_per_order_dense_book_keeps_fill(self) -> None:
+        # Regression: a dense, wide-span book has sub-pixel bars, so white
+        # separators must NOT be drawn or the L3 book whites out (measured
+        # 0.09% coloured px vs the L2 book's 0.33%).
+        bid_prices = np.arange(77000.0, 78000.0, 1.0)
+        ask_prices = np.arange(78000.0, 79000.0, 1.0)
+        order_book = {
+            "bids": pd.DataFrame(
+                {
+                    "price": bid_prices,
+                    "volume": np.ones_like(bid_prices),
+                    "liquidity": np.arange(1.0, len(bid_prices) + 1.0),
+                }
+            ),
+            "asks": pd.DataFrame(
+                {
+                    "price": ask_prices,
+                    "volume": np.ones_like(ask_prices),
+                    "liquidity": np.arange(1.0, len(ask_prices) + 1.0),
+                }
+            ),
+            "timestamp": 1430438400,
+        }
+        data = _data.prepare_book_snapshot_data(order_book, per_order=True)
+        fig = plot("book_snapshot", Level.L3, **data)
+        ax = fig.axes[0]
+        edges = [c.patches[0].get_edgecolor() for c in ax.containers if len(c.patches)]
+        assert edges  # at least one side drawn
+        for rgba in edges:
+            assert not np.allclose(rgba[:3], 1.0, atol=0.01)  # not white
 
 
 class TestPlotVolumePercentiles:

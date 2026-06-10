@@ -988,19 +988,27 @@ def prepare_events_histogram_data(
     end_time: pd.Timestamp | None = None,
     val: str = "volume",
     bw: float | None = None,
+    price_from: float | None = None,
+    price_to: float | None = None,
 ) -> dict[str, Any]:
-    """Prepare data for an events price/volume histogram."""
-    # DEFERRED (events_histogram.L2 renders as a single 1px spike on heavy-tailed
-    # volume). FUTURE(--focus): clip x to a robust window (e.g. 1-99th pct) with
-    # a "N beyond +/-X" overflow annotation, or offer a log-x alternative that
-    # shows everything. Not wired now because this face is not in the default
-    # gallery and a proper fix needs the calling demo to opt into the window.
+    """Prepare data for an events price/volume histogram.
+
+    ``price_from``/``price_to`` clip the events to a price window before
+    binning.  Without it the price face collapses to a single 1px spike: even
+    the 1st-99th percentile of a heavy-tailed book still spans the far-from-
+    touch flashed orders, so the caller passes a mid-anchored focus window (the
+    same one the depth heatmap uses) to keep the near-touch distribution legible.
+    """
     if val not in ("volume", "price"):
         raise ValueError(f"val must be 'volume' or 'price', got {val!r}")
     start_time, end_time = _default_start_end(events, start_time, end_time)
     filtered = events[
         (events["timestamp"] >= start_time) & (events["timestamp"] <= end_time)
     ]
+    if price_from is not None:
+        filtered = filtered[filtered["price"] >= price_from]
+    if price_to is not None:
+        filtered = filtered[filtered["price"] <= price_to]
     return {"events": filtered, "val": val, "bw": bw}
 
 

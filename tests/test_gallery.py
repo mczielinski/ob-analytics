@@ -441,3 +441,48 @@ class TestBuildGalleryModel:
             activity_l3.prep_kwargs["price_from"] == heatmap.prep_kwargs["price_from"]
         )
         assert activity_l3.prep_kwargs["price_to"] == heatmap.prep_kwargs["price_to"]
+
+    def test_events_histogram_shares_depth_heatmap_window(
+        self, tiny_bitstamp_orders_csv
+    ) -> None:
+        from ob_analytics.bitstamp import BitstampFormat
+        from ob_analytics.pipeline import Pipeline
+
+        result = Pipeline(format=BitstampFormat()).run(str(tiny_bitstamp_orders_csv))
+        model = build_gallery_model(result)
+
+        heatmap = next(c for c in model.concepts if c.key == "depth_heatmap").at(
+            Level.L2
+        )
+        histogram = next(c for c in model.concepts if c.key == "events_histogram").at(
+            Level.L2
+        )
+        assert heatmap is not None and histogram is not None
+        # The price histogram clips to the same mid-anchored window as the depth
+        # heatmap, so it shows the near-touch distribution instead of a single
+        # 1px spike (q01-q99 of a heavy-tailed book still spans flashed orders).
+        assert histogram.prep_kwargs["price_from"] == heatmap.prep_kwargs["price_from"]
+        assert histogram.prep_kwargs["price_to"] == heatmap.prep_kwargs["price_to"]
+
+    def test_order_activity_l2_shares_depth_heatmap_window(
+        self, tiny_bitstamp_orders_csv
+    ) -> None:
+        from ob_analytics.bitstamp import BitstampFormat
+        from ob_analytics.pipeline import Pipeline
+
+        result = Pipeline(format=BitstampFormat()).run(str(tiny_bitstamp_orders_csv))
+        model = build_gallery_model(result)
+
+        heatmap = next(c for c in model.concepts if c.key == "depth_heatmap").at(
+            Level.L2
+        )
+        activity_l2 = next(c for c in model.concepts if c.key == "order_activity").at(
+            Level.L2
+        )
+        assert heatmap is not None and activity_l2 is not None
+        # The L2 event map clips to the same mid-anchored window as the depth
+        # heatmap so near-touch activity is not squished by far flashed orders.
+        assert (
+            activity_l2.prep_kwargs["price_from"] == heatmap.prep_kwargs["price_from"]
+        )
+        assert activity_l2.prep_kwargs["price_to"] == heatmap.prep_kwargs["price_to"]

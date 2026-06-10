@@ -277,7 +277,15 @@ def build_gallery_model(
                 "Order Activity (event map)",
                 "order_activity",
                 _viz_data.prepare_event_map_data,
-                {"events": events, "volume_scale": volume_scale},
+                # Share the depth heatmap's mid-anchored window so the L2 event
+                # map clips around the touch rather than its own raw-price
+                # percentile (far flashed orders otherwise squish the activity).
+                {
+                    "events": events,
+                    "volume_scale": volume_scale,
+                    "price_from": price_from,
+                    "price_to": price_to,
+                },
             ),
             PlotSpec(
                 "order_activity",
@@ -387,23 +395,32 @@ def build_gallery_model(
             )
         )
 
-    # Events histogram (price). Clip the tails so the bandwidth is sensible.
+    # Events histogram (price). Clip to the shared mid-anchored focus window so
+    # the near-touch distribution stays legible: even q01-q99 of a heavy-tailed
+    # book still spans the far-from-touch flashed orders, collapsing the face to
+    # a single 1px spike.  The prepare clips; here we only size the bandwidth.
     hist_events = events[["timestamp", "direction", "price", "volume"]].copy()
     hist_events["volume"] = hist_events["volume"] * volume_scale
-    q01 = hist_events["price"].quantile(0.01)
-    q99 = hist_events["price"].quantile(0.99)
-    hist_price = hist_events[
-        (hist_events["price"] >= q01) & (hist_events["price"] <= q99)
-    ]
-    price_range = q99 - q01
-    price_bw = max(0.01, round(price_range / 100, 2))
+    if price_from is not None and price_to is not None:
+        price_window = price_to - price_from
+    else:  # no focus window (degenerate trades): fall back to the tail span
+        price_window = hist_events["price"].quantile(0.99) - hist_events[
+            "price"
+        ].quantile(0.01)
+    price_bw = max(0.01, round(price_window / 100, 2))
     concepts.append(
         _l2(
             "events_histogram",
             "Events Histogram (price)",
             "events_histogram",
             _viz_data.prepare_events_histogram_data,
-            {"events": hist_price, "val": "price", "bw": price_bw},
+            {
+                "events": hist_events,
+                "val": "price",
+                "bw": price_bw,
+                "price_from": price_from,
+                "price_to": price_to,
+            },
         )
     )
 

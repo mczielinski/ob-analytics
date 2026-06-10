@@ -541,6 +541,18 @@ class TestPrepareEventsHistogram:
         with pytest.raises(ValueError, match="val must be"):
             prepare_events_histogram_data(sample_events, val="invalid")
 
+    def test_clips_price_to_focus_window(self, sample_events: pd.DataFrame) -> None:
+        # The price face was a single 1px spike because q01-q99 of a heavy-tailed
+        # book still spans far-from-touch flashed orders.  A caller-supplied
+        # focus window must clip the events to the near-touch band.
+        data = prepare_events_histogram_data(
+            sample_events, val="price", price_from=236.4, price_to=236.7
+        )
+        prices = data["events"]["price"]
+        assert prices.min() >= 236.4
+        assert prices.max() <= 236.7
+        assert len(prices) < len(sample_events)  # outliers were clipped
+
 
 class TestPrepareVpin:
     def test_returns_vpin_data(self) -> None:

@@ -432,6 +432,30 @@ def _book_bar_width(*sides: pd.DataFrame) -> float:
     return float(np.min(diffs)) if diffs.size else 1.0
 
 
+# A per-order separator is drawn as the bar's edge, so it only reads when the
+# bar is at least a couple of pixels wide.  On the dense, full-range book the
+# bars are sub-pixel and a ~1px white edge then covers the fill entirely -- it
+# whited the L3 book out on the light matplotlib theme.  Gate the separator on
+# the rendered bar width so it appears only when it actually delineates segments.
+_MIN_SEPARATOR_BAR_PX = 2.0
+
+
+def _book_separator_edge(
+    width: float, price_span: float, *, per_order: bool, fig_width_px: float
+) -> str:
+    """Edge colour for book-snapshot bars.
+
+    Returns ``"white"`` for per-order (L3) bars wide enough to show a separator,
+    otherwise ``"none"``.  Aggregate (L2) bars never get a per-order separator.
+    """
+    if not per_order:
+        return "none"
+    if price_span <= 0:
+        return "white"  # a single price level fills the axis -> always wide
+    bar_px = (width / price_span) * fig_width_px
+    return "white" if bar_px >= _MIN_SEPARATOR_BAR_PX else "none"
+
+
 def _mpl_book_bars(
     data: dict, ax: Axes | None, theme: PlotTheme, *, per_order: bool
 ) -> Figure:
@@ -441,9 +465,18 @@ def _mpl_book_bars(
     fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
 
     width = _book_bar_width(bids, asks) * 0.9
-    # Thin white separators delineate per-order segments without swamping the
-    # bars (dark edges previously blacked out a dense L3 book).
-    edge = "white" if per_order else "none"
+    mins = [float(s["price"].min()) for s in (bids, asks) if not s.empty]
+    maxs = [float(s["price"].max()) for s in (bids, asks) if not s.empty]
+    price_span = (max(maxs) - min(mins)) if mins else 0.0
+    # White per-order separators help only when each bar is wide enough to show
+    # one; on a dense, full-range book the bars are sub-pixel and a white edge
+    # swamps the fill (it whited the L3 book out on the light matplotlib theme).
+    edge = _book_separator_edge(
+        width,
+        price_span,
+        per_order=per_order,
+        fig_width_px=fig.get_figwidth() * fig.dpi,
+    )
     for side, color, label in ((bids, _BID_COLOR, "bid"), (asks, _ASK_COLOR, "ask")):
         if side.empty:
             continue
