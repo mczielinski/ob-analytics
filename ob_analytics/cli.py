@@ -8,6 +8,7 @@ Usage::
     ob-analytics process data/ --format lobster --trading-date 2012-06-21
     ob-analytics gallery results/parquet/ --output my_gallery/
     ob-analytics bitstamp-demo --input /path/to/dir_with_orders_and_trades/ --output demo_out/
+    ob-analytics bitstamp-demo --view comparison   # L2-vs-L3 counterparts side by side
     ob-analytics lobster-demo /path/to/lobster_data --trading-date 2012-06-21 --output demo_out/
     ob-analytics capture bitstamp --pair btcusd --minutes 30 --out /tmp/capture
 """
@@ -81,7 +82,7 @@ def _cmd_process(args: argparse.Namespace) -> None:
     logger.info("Saved to: {}", output.resolve())
 
     if args.gallery:
-        _generate_gallery_from_result(result, output, fmt_name, source)
+        _generate_gallery_from_result(result, output, fmt_name, source, view=args.view)
 
 
 def _cmd_gallery(args: argparse.Namespace) -> None:
@@ -111,6 +112,7 @@ def _cmd_gallery(args: argparse.Namespace) -> None:
     gallery_path = generate_gallery(
         result,
         output,
+        view=args.view,
         volume_scale=args.volume_scale,
         title=args.title or f"ob-analytics gallery -- {data_path.name}",
     )
@@ -124,7 +126,7 @@ def _cmd_bitstamp_demo(args: argparse.Namespace) -> None:
     _setup_logging(args.verbose)
     from ob_analytics._demos import run_bitstamp_demo
 
-    run_bitstamp_demo(args.input, args.output)
+    run_bitstamp_demo(args.input, args.output, view=args.view)
 
 
 def _cmd_lobster_demo(args: argparse.Namespace) -> None:
@@ -132,7 +134,7 @@ def _cmd_lobster_demo(args: argparse.Namespace) -> None:
     _setup_logging(args.verbose)
     from ob_analytics._demos import run_lobster_demo
 
-    run_lobster_demo(args.source, args.trading_date, args.output)
+    run_lobster_demo(args.source, args.trading_date, args.output, view=args.view)
 
 
 def _cmd_capture(args: argparse.Namespace) -> None:
@@ -185,7 +187,7 @@ def _cmd_capture(args: argparse.Namespace) -> None:
 
 
 def _generate_gallery_from_result(
-    result: Any, output: Path, fmt_name: str, source: str
+    result: Any, output: Path, fmt_name: str, source: str, *, view: str = "both"
 ) -> None:
     """Helper to generate a gallery alongside process output.
 
@@ -201,6 +203,7 @@ def _generate_gallery_from_result(
     gallery_path = generate_gallery(
         result,
         gallery_dir,
+        view=view,
         title=f"{fmt_name} ({Path(source).name}) -- ob-analytics",
     )
     logger.info("Gallery: {}", gallery_path.resolve())
@@ -252,6 +255,15 @@ def main() -> None:
         default=False,
         help="Also generate an HTML plot gallery",
     )
+    p_process.add_argument(
+        "--view",
+        default="both",
+        choices=["l2", "l3", "both", "comparison"],
+        help=(
+            "Gallery view: resolution level(s) to render "
+            "(l2|l3|both|comparison; default: both)"
+        ),
+    )
     p_process.set_defaults(func=_cmd_process)
 
     # -- gallery --
@@ -283,6 +295,15 @@ def main() -> None:
         default=None,
         help="Gallery page title",
     )
+    p_gallery.add_argument(
+        "--view",
+        default="both",
+        choices=["l2", "l3", "both", "comparison"],
+        help=(
+            "Gallery view: resolution level(s) to render "
+            "(l2|l3|both|comparison; default: both)"
+        ),
+    )
     p_gallery.set_defaults(func=_cmd_gallery)
 
     # -- bitstamp-demo --
@@ -300,6 +321,15 @@ def main() -> None:
         "--output",
         default=None,
         help="Output directory (default: ./bitstamp_output)",
+    )
+    p_bs.add_argument(
+        "--view",
+        default="both",
+        choices=["l2", "l3", "both", "comparison"],
+        help=(
+            "Gallery view: resolution level(s) to render "
+            "(l2|l3|both|comparison; default: both)"
+        ),
     )
     p_bs.set_defaults(func=_cmd_bitstamp_demo)
 
@@ -322,6 +352,15 @@ def main() -> None:
         "--output",
         default=None,
         help="Output directory (default: ./lobster_output)",
+    )
+    p_lob.add_argument(
+        "--view",
+        default="both",
+        choices=["l2", "l3", "both", "comparison"],
+        help=(
+            "Gallery view: resolution level(s) to render "
+            "(l2|l3|both|comparison; default: both)"
+        ),
     )
     p_lob.set_defaults(func=_cmd_lobster_demo)
 

@@ -1,14 +1,17 @@
 """Tests for ``ob_analytics.visualization.gallery``.
 
-These tests exercise the gallery generator directly with hand-built
-``PlotSpec`` lists and stub ``plot_fn`` callables, so they don't depend
-on running a full pipeline.
+The gallery is driven by a :class:`GalleryModel` (leveled
+:class:`PlotConcept` objects + level-less analytic :class:`PlotSpec` panels).
+A *view* projects that model into cards; :func:`generate_gallery` renders and
+saves them.  These tests build hand-made models + stub renderers so they don't
+need a full pipeline (one test runs the tiny pipeline to check the real
+inventory from :func:`build_gallery_model`).
 """
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
-from unittest.mock import patch
 
 import matplotlib
 
@@ -17,11 +20,17 @@ import matplotlib.pyplot as plt
 
 import pytest
 
-from ob_analytics.visualization import RENDERERS
+from ob_analytics.visualization import RENDERERS, Level
 from ob_analytics.visualization.gallery import (
+    GalleryModel,
+    PlotConcept,
     PlotSpec,
+    _Card,
+    _Panel,
+    _project,
     _render_panel,
     _write_gallery_html,
+    build_gallery_model,
     generate_gallery,
 )
 
@@ -29,21 +38,22 @@ from ob_analytics.visualization.gallery import (
 # ---------------------------------------------------------------------------
 # Stub renderers
 #
-# The gallery dispatches through ``plot(spec.plot_name, backend=...)``, which
-# resolves a renderer from the ``RENDERERS`` registry.  These stubs register
-# tiny renderers under the ``"stub"`` / ``"stubfail"`` plot names so the
-# generator can be exercised without running a pipeline.  Matplotlib renderers
+# The gallery dispatches through ``plot(concept, level, backend=...)``, which
+# resolves a renderer from ``RENDERERS`` by the coordinate
+# ``(concept, level, backend)``.  These stubs cover an L2 face, an L3 face (so
+# ``"stub"`` can be made comparable), a deliberately-failing face, and a
+# level-less analytic -- all without running a pipeline.  Matplotlib renderers
 # take ``(data, ax)``; plotly renderers take ``(data,)``.
 # ---------------------------------------------------------------------------
 
 
-def _stub_mpl_renderer(data, ax=None):
+def _stub_mpl(data, ax=None):
     fig, ax = plt.subplots()
     ax.plot([0, 1], [0, 1])
     return fig
 
 
-def _stub_plotly_renderer(data):
+def _stub_plotly(data):
     import plotly.graph_objects as go
 
     return go.Figure(data=go.Scatter(x=[0, 1], y=[0, 1]))
@@ -58,16 +68,20 @@ def _stub_fail_plotly(data):
 
 
 _STUB_RENDERERS = {
-    ("stub", "matplotlib"): _stub_mpl_renderer,
-    ("stub", "plotly"): _stub_plotly_renderer,
-    ("stubfail", "matplotlib"): _stub_fail_mpl,
-    ("stubfail", "plotly"): _stub_fail_plotly,
+    ("stub", Level.L2, "matplotlib"): _stub_mpl,
+    ("stub", Level.L2, "plotly"): _stub_plotly,
+    ("stub", Level.L3, "matplotlib"): _stub_mpl,
+    ("stub", Level.L3, "plotly"): _stub_plotly,
+    ("stubfail", Level.L2, "matplotlib"): _stub_fail_mpl,
+    ("stubfail", Level.L2, "plotly"): _stub_fail_plotly,
+    ("stubmetric", None, "matplotlib"): _stub_mpl,
+    ("stubmetric", None, "plotly"): _stub_plotly,
 }
 
 
 @pytest.fixture(autouse=True)
 def _register_stub_renderers():
-    """Register stub renderers for the gallery dispatch; clean up after."""
+    """Register stub renderers for gallery dispatch; clean up after."""
     for key, fn in _STUB_RENDERERS.items():
         RENDERERS.register(key, fn)
     yield
@@ -75,38 +89,170 @@ def _register_stub_renderers():
         RENDERERS._items.pop(key, None)
 
 
+@pytest.fixture(autouse=True)
+def _close_figures():
+    yield
+    plt.close("all")
+
+
+# ---------------------------------------------------------------------------
+# Builders
+# ---------------------------------------------------------------------------
+
+
+def _spec(name="stub", title="Stub", plot_name="stub", **kw) -> PlotSpec:
+    return PlotSpec(name, title, plot_name, lambda: {}, kw)
+
+
+def _l2_concept(key="stub", title="Stub") -> PlotConcept:
+    return PlotConcept(key, title, {Level.L2: _spec(plot_name=key)})
+
+
+def _comparable_concept(key="stub", title="Stub") -> PlotConcept:
+    return PlotConcept(
+        key,
+        title,
+        {Level.L2: _spec(plot_name=key), Level.L3: _spec(plot_name=key)},
+    )
+
+
+def _metric_spec() -> PlotSpec:
+    return PlotSpec("stubmetric", "Stub Metric", "stubmetric", lambda: {}, {})
+
+
+# ---------------------------------------------------------------------------
+# Model semantics
+# ---------------------------------------------------------------------------
+
+
+class TestPlotConcept:
+    def test_at_returns_variant(self) -> None:
+        c = _l2_concept()
+        assert c.at(Level.L2) is not None
+        assert c.at(Level.L3) is None
+
+    def test_comparable_requires_both_faces(self) -> None:
+        assert not _l2_concept().comparable
+        assert _comparable_concept().comparable
+
+    def test_frozen(self) -> None:
+        c = _l2_concept()
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            setattr(c, "key", "other")
+
+
+class TestGalleryModel:
+    def test_analytics_defaults_empty(self) -> None:
+        m = GalleryModel(concepts=[_l2_concept()])
+        assert m.analytics == []
+
+
+# ---------------------------------------------------------------------------
+# View projection
+# ---------------------------------------------------------------------------
+
+
+class TestProject:
+    def test_l2_renders_l2_face_across_backends(self) -> None:
+        model = GalleryModel(concepts=[_l2_concept()])
+        cards = _project(model, "l2", ["plotly", "matplotlib"])
+        assert len(cards) == 1
+        card = cards[0]
+        assert card.title == "Stub -- L2"
+        assert [p.backend for p in card.panels] == ["plotly", "matplotlib"]
+        assert all(p.stem == "stub.L2" for p in card.panels)
+        assert [p.role for p in card.panels] == ["primary", "secondary"]
+
+    def test_l2_includes_analytics(self) -> None:
+        model = GalleryModel(concepts=[_l2_concept()], analytics=[_metric_spec()])
+        cards = _project(model, "l2", ["matplotlib"])
+        titles = [c.title for c in cards]
+        assert "Stub Metric" in titles
+        metric_card = next(c for c in cards if c.title == "Stub Metric")
+        assert metric_card.panels[0].level is None
+        assert metric_card.panels[0].stem == "stubmetric"
+
+    def test_l3_skips_l2_only_concepts_and_analytics(self) -> None:
+        model = GalleryModel(concepts=[_l2_concept()], analytics=[_metric_spec()])
+        assert _project(model, "l3", ["matplotlib"]) == []
+
+    def test_l3_renders_l3_face_only(self) -> None:
+        model = GalleryModel(
+            concepts=[_comparable_concept()], analytics=[_metric_spec()]
+        )
+        cards = _project(model, "l3", ["matplotlib"])
+        assert [c.title for c in cards] == ["Stub -- L3"]
+        assert cards[0].panels[0].stem == "stub.L3"
+
+    def test_both_renders_each_face_plus_analytics(self) -> None:
+        model = GalleryModel(
+            concepts=[_comparable_concept()], analytics=[_metric_spec()]
+        )
+        cards = _project(model, "both", ["matplotlib"])
+        assert [c.title for c in cards] == ["Stub -- L2", "Stub -- L3", "Stub Metric"]
+
+    def test_comparison_pairs_l2_l3_in_one_card(self) -> None:
+        model = GalleryModel(
+            concepts=[_comparable_concept(), _l2_concept("only", "OnlyL2")],
+            analytics=[_metric_spec()],
+        )
+        cards = _project(model, "comparison", ["plotly", "matplotlib"])
+        # Only the comparable concept appears; analytics + L2-only are excluded.
+        assert len(cards) == 1
+        card = cards[0]
+        assert card.title == "Stub"
+        assert [p.level for p in card.panels] == [Level.L2, Level.L3]
+        assert [p.stem for p in card.panels] == ["stub.L2", "stub.L3"]
+        assert all(p.role == "equal" for p in card.panels)
+        # Single backend axis -> plotly when available.
+        assert {p.backend for p in card.panels} == {"plotly"}
+
+    def test_comparison_falls_back_to_matplotlib(self) -> None:
+        model = GalleryModel(concepts=[_comparable_concept()])
+        cards = _project(model, "comparison", ["matplotlib"])
+        assert {p.backend for p in cards[0].panels} == {"matplotlib"}
+
+    def test_unknown_view_raises(self) -> None:
+        with pytest.raises(ValueError, match="Unknown view"):
+            _project(GalleryModel(concepts=[]), "nope", ["matplotlib"])
+
+
 # ---------------------------------------------------------------------------
 # _render_panel
 # ---------------------------------------------------------------------------
 
 
+def _panel(backend="plotly", stem="stub.L2", rendered=True, role="primary") -> _Panel:
+    return _Panel(
+        concept="stub",
+        level=Level.L2,
+        prepare=lambda: {},
+        prep_kwargs={},
+        backend=backend,
+        stem=stem,
+        label=backend.capitalize(),
+        panel_cls=f"{backend}-panel" if backend != "matplotlib" else "mpl-panel",
+        role=role,
+        rendered=rendered,
+    )
+
+
 class TestRenderPanel:
     def test_plotly_rendered_uses_iframe(self) -> None:
-        html = _render_panel(
-            "plotly", "01_demo", rendered=True, role="primary", escaped_title="Demo"
-        )
+        html = _render_panel(_panel("plotly", "01.L2"), "Demo")
         assert "<iframe" in html
-        assert 'src="plotly/01_demo.html"' in html
-        assert "plotly-panel" in html
+        assert 'src="plotly/01.L2.html"' in html
         assert "panel-primary" in html
 
     def test_matplotlib_rendered_uses_img(self) -> None:
-        html = _render_panel(
-            "matplotlib",
-            "01_demo",
-            rendered=True,
-            role="secondary",
-            escaped_title="Demo",
-        )
+        html = _render_panel(_panel("matplotlib", "01.L2", role="secondary"), "Demo")
         assert "<img" in html
-        assert 'src="matplotlib/01_demo.png"' in html
+        assert 'src="matplotlib/01.L2.png"' in html
         assert "mpl-panel" in html
         assert "panel-secondary" in html
 
     def test_not_rendered_shows_na(self) -> None:
-        html = _render_panel(
-            "plotly", "x", rendered=False, role="primary", escaped_title="x"
-        )
+        html = _render_panel(_panel("plotly", "x", rendered=False), "x")
         assert "Not available" in html
         assert "<iframe" not in html
         assert "<img" not in html
@@ -118,140 +264,225 @@ class TestRenderPanel:
 
 
 class TestWriteGalleryHtml:
-    def test_plotly_first_renders_as_primary(self, tmp_path: Path) -> None:
+    def test_renders_card_with_panels(self, tmp_path: Path) -> None:
         out = tmp_path / "g.html"
-        plots = [("01_demo", "Demo", {"plotly": True, "matplotlib": True})]
-        _write_gallery_html(out, plots, "Title", ["plotly", "matplotlib"])
+        card = _Card("Demo", [_panel("plotly"), _panel("matplotlib", role="secondary")])
+        _write_gallery_html(out, [card], "Title")
         body = out.read_text().split("<body>", 1)[1]
-        plotly_pos = body.index("plotly-panel")
-        mpl_pos = body.index("mpl-panel")
-        assert plotly_pos < mpl_pos
-        primary_idx = body.index("panel-primary")
-        secondary_idx = body.index("panel-secondary")
-        assert primary_idx < secondary_idx
-        # The primary marker sits inside the plotly panel.
-        assert body[plotly_pos:mpl_pos].count("panel-primary") == 1
-
-    def test_matplotlib_only_has_no_secondary(self, tmp_path: Path) -> None:
-        out = tmp_path / "g.html"
-        plots = [("01_demo", "Demo", {"matplotlib": True})]
-        _write_gallery_html(out, plots, "Title", ["matplotlib"])
-        body = out.read_text().split("<body>", 1)[1]
+        assert body.index("plotly-panel") < body.index("mpl-panel")
         assert "panel-primary" in body
-        assert "panel-secondary" not in body
-        assert "plotly-panel" not in body
+        assert "panel-secondary" in body
 
-    def test_failed_backend_renders_na_panel(self, tmp_path: Path) -> None:
+    def test_empty_cards_show_placeholder(self, tmp_path: Path) -> None:
         out = tmp_path / "g.html"
-        plots = [("01_demo", "Demo", {"plotly": False, "matplotlib": True})]
-        _write_gallery_html(out, plots, "Title", ["plotly", "matplotlib"])
-        body = out.read_text().split("<body>", 1)[1]
-        plotly_chunk = body[body.index("plotly-panel") : body.index("mpl-panel")]
-        assert "Not available" in plotly_chunk
-        assert "iframe" not in plotly_chunk
+        _write_gallery_html(out, [], "Title")
+        assert "No plots for this view." in out.read_text()
 
-    def test_html_escapes_plot_titles(self, tmp_path: Path) -> None:
+    def test_failed_panel_renders_na(self, tmp_path: Path) -> None:
         out = tmp_path / "g.html"
-        plots = [("01", "<script>X</script>", {"matplotlib": True})]
-        _write_gallery_html(out, plots, "Page", ["matplotlib"])
+        card = _Card("Demo", [_panel("plotly", rendered=False)])
+        _write_gallery_html(out, [card], "Title")
+        assert "Not available" in out.read_text()
+
+    def test_html_escapes_card_titles(self, tmp_path: Path) -> None:
+        out = tmp_path / "g.html"
+        card = _Card("<script>X</script>", [_panel("matplotlib")])
+        _write_gallery_html(out, [card], "Page")
         html = out.read_text()
         assert "<script>X</script>" not in html
         assert "&lt;script&gt;X&lt;/script&gt;" in html
 
 
 # ---------------------------------------------------------------------------
-# generate_gallery
+# generate_gallery (end-to-end with a stub model)
 # ---------------------------------------------------------------------------
 
 
 class TestGenerateGallery:
-    def _specs(self) -> list[PlotSpec]:
-        return [PlotSpec("01_demo", "Demo Plot", "stub", lambda: {}, {})]
+    def _model(self) -> GalleryModel:
+        return GalleryModel(concepts=[_l2_concept()])
 
-    def test_default_backends_prefer_plotly_when_available(
-        self, tmp_path: Path
-    ) -> None:
-        # When plotly is installed, default ordering should be
-        # ["plotly", "matplotlib"].
+    def test_writes_concept_level_file_stems(self, tmp_path: Path) -> None:
+        path = generate_gallery(result=None, output_dir=tmp_path, model=self._model())
+        assert path.exists()
+        assert (tmp_path / "plotly" / "stub.L2.html").exists()
+        assert (tmp_path / "matplotlib" / "stub.L2.png").exists()
+
+    def test_default_backends_prefer_plotly(self, tmp_path: Path) -> None:
+        path = generate_gallery(result=None, output_dir=tmp_path, model=self._model())
+        body = path.read_text().split("<body>", 1)[1]
+        assert body.index("plotly-panel") < body.index("mpl-panel")
+
+    def test_explicit_backends_order(self, tmp_path: Path) -> None:
         path = generate_gallery(
             result=None,
             output_dir=tmp_path,
-            specs=self._specs(),
+            model=self._model(),
+            backends=["matplotlib", "plotly"],
         )
-        assert path.exists()
-        assert (tmp_path / "plotly" / "01_demo.html").exists()
-        assert (tmp_path / "matplotlib" / "01_demo.png").exists()
         body = path.read_text().split("<body>", 1)[1]
-        # Plotly comes first → primary class lands on the plotly panel.
-        plotly_idx = body.index("plotly-panel")
-        mpl_idx = body.index("mpl-panel")
-        assert plotly_idx < mpl_idx
+        assert body.index("mpl-panel") < body.index("plotly-panel")
 
-    def test_plotly_unavailable_falls_back_to_matplotlib(self, tmp_path: Path) -> None:
-        # Simulate plotly missing via ImportError on `import plotly`.
-        real_import = (
-            __builtins__["__import__"]
-            if isinstance(__builtins__, dict)
-            else __builtins__.__import__
-        )
-
-        def fake_import(name, *a, **kw):
-            if name == "plotly":
-                raise ImportError("simulated")
-            return real_import(name, *a, **kw)
-
-        with patch("builtins.__import__", side_effect=fake_import):
-            path = generate_gallery(
-                result=None,
-                output_dir=tmp_path,
-                specs=self._specs(),
-            )
-        assert path.exists()
-        assert (tmp_path / "matplotlib" / "01_demo.png").exists()
-        assert not (tmp_path / "plotly").exists()
-        body = path.read_text().split("<body>", 1)[1]
-        assert "plotly-panel" not in body
-
-    def test_explicit_backends_preserved(self, tmp_path: Path) -> None:
+    def test_view_comparison_single_backend_both_faces(self, tmp_path: Path) -> None:
+        model = GalleryModel(concepts=[_comparable_concept()])
         path = generate_gallery(
-            result=None,
-            output_dir=tmp_path,
-            specs=self._specs(),
-            backends=["matplotlib", "plotly"],  # mpl primary
+            result=None, output_dir=tmp_path, model=model, view="comparison"
         )
-        body = path.read_text().split("<body>", 1)[1]
-        # mpl listed first → mpl panel is primary.
-        mpl_idx = body.index("mpl-panel")
-        plotly_idx = body.index("plotly-panel")
-        assert mpl_idx < plotly_idx
-
-    def test_failure_in_one_backend_does_not_skip_others(self, tmp_path: Path) -> None:
-        spec = PlotSpec("01_demo", "Demo", "stubfail", lambda: {}, {})
-        path = generate_gallery(
-            result=None,
-            output_dir=tmp_path,
-            specs=[spec],
-            backends=["plotly", "matplotlib"],
-        )
-        assert path.exists()
-        # Neither backend produced a file, but the HTML still mentions the card.
+        # Comparison collapses to plotly; both L2 and L3 land under plotly/.
+        assert (tmp_path / "plotly" / "stub.L2.html").exists()
+        assert (tmp_path / "plotly" / "stub.L3.html").exists()
+        assert not (tmp_path / "matplotlib").exists()
         html = path.read_text()
-        assert "Demo" in html
-        assert html.count("Not available") == 2  # one per backend
+        assert "L2 -- MBP" in html
+        assert "L3 -- MBO" in html
 
-    def test_at_least_one_panel_per_card(self, tmp_path: Path) -> None:
+    def test_view_l2_includes_analytics(self, tmp_path: Path) -> None:
+        model = GalleryModel(concepts=[_l2_concept()], analytics=[_metric_spec()])
         path = generate_gallery(
             result=None,
             output_dir=tmp_path,
-            specs=self._specs(),
+            model=model,
+            view="l2",
             backends=["matplotlib"],
         )
+        assert (tmp_path / "matplotlib" / "stubmetric.png").exists()
+        assert "Stub Metric" in path.read_text()
+
+    def test_renderer_failure_yields_na_card(self, tmp_path: Path) -> None:
+        model = GalleryModel(concepts=[_l2_concept("stubfail", "Fails")])
+        path = generate_gallery(
+            result=None,
+            output_dir=tmp_path,
+            model=model,
+            backends=["plotly", "matplotlib"],
+        )
         html = path.read_text()
-        # Single backend → exactly one panel per card.
-        assert html.count('class="panel ') == 1
+        assert "Fails -- L2" in html
+        assert html.count("Not available") == 2  # one per backend
+
+    def test_requires_result_or_model(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="requires either"):
+            generate_gallery(result=None, output_dir=tmp_path)
 
 
-@pytest.fixture(autouse=True)
-def _close_figures():
-    yield
-    plt.close("all")
+# ---------------------------------------------------------------------------
+# build_gallery_model (real tiny pipeline)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildGalleryModel:
+    def test_inventory_levels(self, tiny_bitstamp_orders_csv) -> None:
+        from ob_analytics.bitstamp import BitstampFormat
+        from ob_analytics.pipeline import Pipeline
+
+        result = Pipeline(format=BitstampFormat()).run(str(tiny_bitstamp_orders_csv))
+        model = build_gallery_model(result)
+
+        keys = {c.key for c in model.concepts}
+        # The unconditional order-book concepts are always present.  order_outcome
+        # rides along because the pipeline emits aggressiveness_bps (it gates on
+        # that column).
+        assert {
+            "trade_tape",
+            "depth_heatmap",
+            "order_activity",
+            "cancellations",
+            "events_histogram",
+            "order_outcome",
+        } <= keys
+        # The five concepts that ship both an aggregate (L2/MBP) and a per-order
+        # (L3/MBO) face are the comparable ones: book_snapshot + depth_chart
+        # (aggregate vs per-order), cancellations (volume map vs age x distance),
+        # order_activity (event map vs lifecycle Gantt) and trade_tape (price tape
+        # vs executions + maker lifecycles).
+        comparable = {c.key for c in model.concepts if c.comparable}
+        assert comparable == {
+            "book_snapshot",
+            "depth_chart",
+            "cancellations",
+            "order_activity",
+            "trade_tape",
+        }
+        # Every concept exposes at least one face; comparable concepts expose
+        # both, single-level concepts exactly one.  order_outcome is L3-only.
+        for c in model.concepts:
+            faces = {lvl for lvl in (Level.L2, Level.L3) if c.at(lvl) is not None}
+            assert faces, f"{c.key} has no faces"
+            if c.comparable:
+                assert faces == {Level.L2, Level.L3}
+            else:
+                assert len(faces) == 1
+        order_outcome = next(c for c in model.concepts if c.key == "order_outcome")
+        assert order_outcome.at(Level.L2) is None
+        assert order_outcome.at(Level.L3) is not None
+        # Analytics are appended by callers, not derived here.
+        assert model.analytics == []
+
+    def test_order_activity_l3_shares_depth_heatmap_window(
+        self, tiny_bitstamp_orders_csv
+    ) -> None:
+        from ob_analytics.bitstamp import BitstampFormat
+        from ob_analytics.pipeline import Pipeline
+
+        result = Pipeline(format=BitstampFormat()).run(str(tiny_bitstamp_orders_csv))
+        model = build_gallery_model(result)
+
+        heatmap = next(c for c in model.concepts if c.key == "depth_heatmap").at(
+            Level.L2
+        )
+        activity_l3 = next(c for c in model.concepts if c.key == "order_activity").at(
+            Level.L3
+        )
+        assert heatmap is not None and activity_l3 is not None
+        # order_activity.L3 reuses the same mid-anchored window as the depth
+        # heatmap, so the per-order Gantt clips around the touch rather than its
+        # own raw-price percentile (the cause of the solid-colour flood).
+        assert (
+            activity_l3.prep_kwargs["price_from"] == heatmap.prep_kwargs["price_from"]
+        )
+        assert activity_l3.prep_kwargs["price_to"] == heatmap.prep_kwargs["price_to"]
+
+    def test_events_histogram_shares_depth_heatmap_window(
+        self, tiny_bitstamp_orders_csv
+    ) -> None:
+        from ob_analytics.bitstamp import BitstampFormat
+        from ob_analytics.pipeline import Pipeline
+
+        result = Pipeline(format=BitstampFormat()).run(str(tiny_bitstamp_orders_csv))
+        model = build_gallery_model(result)
+
+        heatmap = next(c for c in model.concepts if c.key == "depth_heatmap").at(
+            Level.L2
+        )
+        histogram = next(c for c in model.concepts if c.key == "events_histogram").at(
+            Level.L2
+        )
+        assert heatmap is not None and histogram is not None
+        # The price histogram clips to the same mid-anchored window as the depth
+        # heatmap, so it shows the near-touch distribution instead of a single
+        # 1px spike (q01-q99 of a heavy-tailed book still spans flashed orders).
+        assert histogram.prep_kwargs["price_from"] == heatmap.prep_kwargs["price_from"]
+        assert histogram.prep_kwargs["price_to"] == heatmap.prep_kwargs["price_to"]
+
+    def test_order_activity_l2_shares_depth_heatmap_window(
+        self, tiny_bitstamp_orders_csv
+    ) -> None:
+        from ob_analytics.bitstamp import BitstampFormat
+        from ob_analytics.pipeline import Pipeline
+
+        result = Pipeline(format=BitstampFormat()).run(str(tiny_bitstamp_orders_csv))
+        model = build_gallery_model(result)
+
+        heatmap = next(c for c in model.concepts if c.key == "depth_heatmap").at(
+            Level.L2
+        )
+        activity_l2 = next(c for c in model.concepts if c.key == "order_activity").at(
+            Level.L2
+        )
+        assert heatmap is not None and activity_l2 is not None
+        # The L2 event map clips to the same mid-anchored window as the depth
+        # heatmap so near-touch activity is not squished by far flashed orders.
+        assert (
+            activity_l2.prep_kwargs["price_from"] == heatmap.prep_kwargs["price_from"]
+        )
+        assert activity_l2.prep_kwargs["price_to"] == heatmap.prep_kwargs["price_to"]

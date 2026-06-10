@@ -99,7 +99,7 @@ def plotly_trades(data: dict) -> Any:
         )
     )
     fig.update_xaxes(title_text="Time")
-    fig.update_yaxes(title_text="Limit Price")
+    fig.update_yaxes(title_text="Price")
     return fig
 
 
@@ -311,51 +311,328 @@ def plotly_volume_map(data: dict) -> Any:
     return fig
 
 
-def plotly_current_depth(data: dict) -> Any:
-    """Render order book depth snapshot."""
+# Order-book snapshot palette, shared by the book_snapshot + depth_chart faces
+# (kept identical to the matplotlib backend for cross-backend parity).
+_BID_COLOR = "#4477dd"
+_ASK_COLOR = "#dd4444"
+
+# Order-lifecycle fate palette for the order_activity L3 Gantt (cancelled vs
+# filled/resting); identical to the matplotlib backend for cross-backend parity.
+_FLASHED_COLOR = "#e09f3e"  # flashed-limit: placed and pulled (cancelled)
+_RESTING_COLOR = "#2a9d8f"  # resting-limit: rested / filled
+
+# Trade-tape aggressor palette (taker side) for the L3 tape maker-bars;
+# identical to the matplotlib backend for cross-backend parity.
+_BUY_COLOR = "#2e9e5b"  # buyer-initiated execution (lifts the ask)
+_SELL_COLOR = "#dd4444"  # seller-initiated execution (hits the bid)
+
+# Competing-risks outcome palette for the order_outcome L3 scatter; identical to
+# the matplotlib backend for cross-backend parity.
+_FILLED_COLOR = "#2a9d8f"  # fully executed
+_PARTIAL_COLOR = "#8c8cd8"  # partially executed, remainder removed
+_CANCELLED_COLOR = "#e09f3e"  # removed without any execution
+
+
+def _rgba(hex_color: str, alpha: float) -> str:
+    """``"#4477dd"`` -> ``"rgba(68,119,221,0.15)"``."""
+    r, g, b = (int(hex_color.lstrip("#")[i : i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def _plotly_book_bars(data: dict, *, per_order: bool) -> Any:
+    """Book-snapshot bars: one bar per level (L2) or stacked per order (L3)."""
     go = _import_plotly()
-    depth_df = data["depth_df"]
-    show_volume = data["show_volume"]
-    show_quantiles = data["show_quantiles"]
-    bid_quantiles = data["bid_quantiles"]
-    ask_quantiles = data["ask_quantiles"]
-    timestamp = data["timestamp"]
+    fig = _base_figure(go, title=data["timestamp"].strftime("%Y-%m-%d %H:%M:%S UTC"))
 
-    fig = _base_figure(go, title=timestamp.strftime("%Y-%m-%d %H:%M:%S UTC"))
-
-    if show_volume:
+    # Match the matplotlib backend: white per-order separators (dark ones were
+    # invisible against the dark plot background).
+    line = dict(color="white", width=0.6) if per_order else dict(width=0)
+    for side, color, label in (
+        (data["bids"], _BID_COLOR, "Bid"),
+        (data["asks"], _ASK_COLOR, "Ask"),
+    ):
+        if side.empty:
+            continue
         fig.add_trace(
             go.Bar(
-                x=depth_df["price"],
-                y=depth_df["volume"],
-                marker_color="rgba(255,255,255,0.3)",
-                name="Volume",
-                hovertemplate="Price: %{x:.2f}<br>Volume: %{y:.4f}<extra></extra>",
+                x=side["price"],
+                y=side["seg_hi"] - side["seg_lo"],
+                base=side["seg_lo"],
+                marker=dict(color=color, line=line),
+                name=label,
+                hovertemplate="Price: %{x:.2f}<br>Size: %{y:.4f}<extra></extra>",
             )
         )
 
-    for side_value, color in [("bid", "#4444ff"), ("ask", "#ff4444")]:
-        side_data = depth_df[depth_df["side"] == side_value]
+    if data["show_quantiles"]:
+        for x_val in data["bid_quantiles"]:
+            fig.add_vline(x=x_val, line_dash="dash", line_color="#888888", line_width=1)
+        for x_val in data["ask_quantiles"]:
+            fig.add_vline(x=x_val, line_dash="dash", line_color="#888888", line_width=1)
+
+    fig.update_layout(barmode="overlay")
+    fig.update_xaxes(title_text="Price")
+    fig.update_yaxes(title_text="Size")
+    return fig
+
+
+def _plotly_depth_curve(data: dict, *, per_order: bool) -> Any:
+    """Cumulative-depth curve: stepped per level (L2) or per order (L3)."""
+    go = _import_plotly()
+    fig = _base_figure(go, title=data["timestamp"].strftime("%Y-%m-%d %H:%M:%S UTC"))
+
+    mode = "lines+markers" if per_order else "lines"
+    for side, color, label in (
+        (data["bids"], _BID_COLOR, "Bid"),
+        (data["asks"], _ASK_COLOR, "Ask"),
+    ):
+        if side.empty:
+            continue
+        s = side.sort_values("price")
         fig.add_trace(
             go.Scatter(
-                x=side_data["price"],
-                y=side_data["liquidity"],
-                mode="lines",
-                line=dict(shape="hv", color=color, width=2),
-                name=side_value.capitalize(),
+                x=s["price"],
+                y=s["liquidity"],
+                mode=mode,
+                line=dict(shape="vh", color=color, width=2),
+                marker=dict(size=6, color=color),
+                name=label,
                 fill="tozeroy",
-                fillcolor=f"rgba{tuple(list(int(color.lstrip('#')[i : i + 2], 16) for i in (0, 2, 4)) + [0.15])}",
+                fillcolor=_rgba(color, 0.15),
             )
         )
 
-    if show_quantiles:
-        for x_val in bid_quantiles:
-            fig.add_vline(x=x_val, line_dash="dash", line_color="#888888", line_width=1)
-        for x_val in ask_quantiles:
-            fig.add_vline(x=x_val, line_dash="dash", line_color="#888888", line_width=1)
-
     fig.update_xaxes(title_text="Price")
-    fig.update_yaxes(title_text="Liquidity")
+    fig.update_yaxes(title_text="Cumulative liquidity")
+    return fig
+
+
+def plotly_book_snapshot_aggregate(data: dict) -> Any:
+    """L2 (MBP) book snapshot: aggregate size per price level."""
+    return _plotly_book_bars(data, per_order=False)
+
+
+def plotly_book_snapshot_per_order(data: dict) -> Any:
+    """L3 (MBO) book snapshot: each order a stacked segment within its level."""
+    return _plotly_book_bars(data, per_order=True)
+
+
+def plotly_depth_chart_aggregate(data: dict) -> Any:
+    """L2 (MBP) depth chart: cumulative liquidity stepped per price level."""
+    return _plotly_depth_curve(data, per_order=False)
+
+
+def plotly_depth_chart_per_order(data: dict) -> Any:
+    """L3 (MBO) depth chart: cumulative liquidity stepped per individual order."""
+    return _plotly_depth_curve(data, per_order=True)
+
+
+def plotly_cancellations_per_order(data: dict) -> Any:
+    """L3 (MBO) cancellations: each cancelled order as an age x distance point.
+
+    Uses ``Scattergl`` (WebGL) like the L2 ``plotly_volume_map`` it pairs with:
+    a per-order face draws one marker per cancelled order, so the point cloud is
+    large and the SVG ``Scatter`` path does not scale.
+    """
+    go = _import_plotly()
+    fig = _base_figure(go, title="Cancelled orders by age and distance from touch")
+    for side, color, label in (
+        (data["bids"], _BID_COLOR, "Bid"),
+        (data["asks"], _ASK_COLOR, "Ask"),
+    ):
+        if side.empty:
+            continue
+        fig.add_trace(
+            go.Scattergl(
+                x=side["age_s"],
+                y=side["distance_bps"],
+                mode="markers",
+                marker=dict(
+                    size=mpl_marker_area_to_plotly_size(side["marker_area"].to_numpy()),
+                    color=color,
+                    opacity=0.4,
+                ),
+                name=label,
+                hovertemplate=(
+                    "Age: %{x:.2f}s<br>Distance: %{y:.2f} bps<extra></extra>"
+                ),
+            )
+        )
+    fig.add_hline(y=0, line_dash="dash", line_color="#888888", line_width=1)
+    fig.update_layout(hovermode="closest")
+    fig.update_xaxes(title_text="Order age (s)")
+    fig.update_yaxes(title_text="Placement distance from touch (bps)")
+    return fig
+
+
+def _segments_xy(start: Any, end: Any, y: Any) -> tuple[Any, Any]:
+    """Interleave per-order spans into one ``None``-gapped line for Scattergl.
+
+    Each order draws a horizontal segment ``(start, y) -> (end, y)``; a ``None``
+    gap separates consecutive orders so the whole fate frame renders as a single
+    WebGL trace (one trace per fate, like the L2 volume map this pairs with).
+    """
+    n = len(y)
+    xs = np.empty(n * 3, dtype=object)
+    xs[0::3] = start.to_numpy()
+    xs[1::3] = end.to_numpy()
+    xs[2::3] = None
+    ys = np.empty(n * 3, dtype=object)
+    ys[0::3] = y.to_numpy()
+    ys[1::3] = y.to_numpy()
+    ys[2::3] = None
+    return xs, ys
+
+
+def plotly_order_activity_per_order(data: dict) -> Any:
+    """L3 (MBO) order activity: each order one lifecycle bar, coloured by fate.
+
+    Uses ``Scattergl`` (WebGL) like the L2 ``plotly_event_map`` it pairs with: a
+    per-order face draws one segment per limit order, so the line cloud is large
+    and the SVG ``Scatter`` path does not scale.
+    """
+    go = _import_plotly()
+    fig = _base_figure(go, title="Order lifecycles (place → outcome)")
+    for side, color, label in (
+        (data["flashed"], _FLASHED_COLOR, "flashed-limit (cancelled)"),
+        (data["resting"], _RESTING_COLOR, "resting-limit (filled)"),
+    ):
+        if side.empty:
+            continue
+        xs, ys = _segments_xy(side["start_ts"], side["end_ts"], side["price"])
+        fig.add_trace(
+            go.Scattergl(
+                x=xs,
+                y=ys,
+                mode="lines",
+                line=dict(color=color, width=1.5),
+                opacity=0.5,
+                name=label,
+                hoverinfo="skip",
+            )
+        )
+    fig.update_xaxes(title_text="Time")
+    fig.update_yaxes(title_text="Limit Price")
+    y_range = data.get("y_range")
+    if y_range is not None:
+        fig.update_yaxes(range=list(y_range))
+    return fig
+
+
+def plotly_liquidity_at_touch(data: dict) -> Any:
+    """L2 (MBP) liquidity at the touch: best bid/ask resting size over time."""
+    go = _import_plotly()
+    fig = _base_figure(go, title="Liquidity at the touch")
+    ts = data["timestamp"]
+    for vol, color, label in (
+        (data["bid_vol"], _BID_COLOR, "Best bid size"),
+        (data["ask_vol"], _ASK_COLOR, "Best ask size"),
+    ):
+        fig.add_trace(
+            go.Scatter(
+                x=ts,
+                y=vol,
+                mode="lines",
+                line=dict(color=color, width=1.2, shape="hv"),
+                name=label,
+            )
+        )
+    fig.update_xaxes(title_text="Time")
+    fig.update_yaxes(title_text="Size at touch")
+    return fig
+
+
+def plotly_order_outcome_per_order(data: dict) -> Any:
+    """L3 (MBO) order outcome: each order as placement distance x size, by fate.
+
+    Uses ``Scattergl`` (WebGL) because a per-order face draws one marker per limit
+    order, so the point cloud is large and the SVG ``Scatter`` path does not scale.
+    """
+    go = _import_plotly()
+    fig = _base_figure(go, title="Order outcome by placement distance and size")
+    # Cancelled first (underneath) and faded; see the matplotlib backend.
+    # FUTURE(--density): distance-binned composition + fill-rate dot plot.
+    for frame, color, label, pt_opacity in (
+        (data["cancelled"], _CANCELLED_COLOR, "cancelled", 0.18),
+        (data["partial"], _PARTIAL_COLOR, "partial", 0.6),
+        (data["filled"], _FILLED_COLOR, "filled", 0.85),
+    ):
+        if frame.empty:
+            continue
+        fig.add_trace(
+            go.Scattergl(
+                x=frame["distance_bps"],
+                y=frame["placed"],
+                mode="markers",
+                marker=dict(
+                    size=mpl_marker_area_to_plotly_size(
+                        frame["marker_area"].to_numpy()
+                    ),
+                    color=color,
+                    opacity=pt_opacity,
+                    line=dict(width=0),
+                ),
+                name=label,
+            )
+        )
+    fig.add_vline(x=0, line_dash="dash", line_color="#888888", line_width=1)
+    fig.update_xaxes(title_text="Placement distance from touch (bps)")
+    fig.update_yaxes(title_text="Order size")
+    return fig
+
+
+def plotly_trade_tape_per_order(data: dict) -> Any:
+    """L3 (MBO) trade tape: executions plus each maker order's resting bar.
+
+    Uses ``Scattergl`` (WebGL) like the L3 order-activity face it pairs with: the
+    maker-bar segment cloud and the execution-marker cloud are both large, so the
+    SVG ``Scatter`` path does not scale.
+    """
+    # DEFERRED. trade_tape.L3 currently sizes execution markers by bubble AREA
+    # (rank-5) and draws full maker-rest spans. FUTURE(--color-by) + encoding
+    # rethink: encode size by length (lollipop), keep side as hue, and reserve
+    # the long maker spans for an explicit "time resting" read. Left as-is for
+    # the simple pass.
+    go = _import_plotly()
+    fig = _base_figure(go, title="Trade tape with maker order lifecycles")
+    for side, color, label in (
+        (data["buys"], _BUY_COLOR, "buy (lifts ask)"),
+        (data["sells"], _SELL_COLOR, "sell (hits bid)"),
+    ):
+        if side.empty:
+            continue
+        xs, ys = _segments_xy(side["created_ts"], side["timestamp"], side["price"])
+        fig.add_trace(
+            go.Scattergl(
+                x=xs,
+                y=ys,
+                mode="lines",
+                line=dict(color=color, width=1.0),
+                opacity=0.35,
+                name=label,
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+        fig.add_trace(
+            go.Scattergl(
+                x=side["timestamp"],
+                y=side["price"],
+                mode="markers",
+                marker=dict(
+                    size=mpl_marker_area_to_plotly_size(side["marker_area"].to_numpy()),
+                    color=color,
+                    opacity=0.7,
+                    line=dict(width=0),
+                ),
+                name=label,
+            )
+        )
+    fig.update_xaxes(title_text="Time")
+    fig.update_yaxes(title_text="Execution Price")
+    y_range = data.get("y_range")
+    if y_range is not None:
+        fig.update_yaxes(range=list(y_range))
     return fig
 
 
@@ -746,21 +1023,33 @@ def plotly_trading_halts(data: dict) -> Any:
 # ---------------------------------------------------------------------------
 # Imported here (not at module top) so RENDERERS -- defined in the package
 # __init__ -- already exists when this (lazily imported) module is loaded.
-from ob_analytics.visualization import RENDERERS  # noqa: E402
+from ob_analytics.visualization import RENDERERS, Level  # noqa: E402
 
-for _plot_name, _fn in {
-    "time_series": plotly_time_series,
-    "trades": plotly_trades,
-    "price_levels": plotly_price_levels,
-    "event_map": plotly_event_map,
-    "volume_map": plotly_volume_map,
-    "current_depth": plotly_current_depth,
-    "volume_percentiles": plotly_volume_percentiles,
-    "events_histogram": plotly_events_histogram,
-    "vpin": plotly_vpin,
-    "order_flow_imbalance": plotly_order_flow_imbalance,
-    "kyle_lambda": plotly_kyle_lambda,
-    "hidden_executions": plotly_hidden_executions,
-    "trading_halts": plotly_trading_halts,
-}.items():
-    RENDERERS.register((_plot_name, "plotly"), _fn)
+# (concept, level, renderer); mirrors the matplotlib backend's coordinates so
+# every concept has both faces.  Analytics are level-less (``None``).
+_L2 = Level.L2
+_L3 = Level.L3
+for _concept, _level, _fn in [
+    ("time_series", _L2, plotly_time_series),
+    ("trade_tape", _L2, plotly_trades),
+    ("trade_tape", _L3, plotly_trade_tape_per_order),
+    ("depth_heatmap", _L2, plotly_price_levels),
+    ("order_activity", _L2, plotly_event_map),
+    ("order_activity", _L3, plotly_order_activity_per_order),
+    ("order_outcome", _L3, plotly_order_outcome_per_order),
+    ("liquidity_at_touch", _L2, plotly_liquidity_at_touch),
+    ("cancellations", _L2, plotly_volume_map),
+    ("cancellations", _L3, plotly_cancellations_per_order),
+    ("book_snapshot", _L2, plotly_book_snapshot_aggregate),
+    ("book_snapshot", _L3, plotly_book_snapshot_per_order),
+    ("depth_chart", _L2, plotly_depth_chart_aggregate),
+    ("depth_chart", _L3, plotly_depth_chart_per_order),
+    ("volume_percentiles", _L2, plotly_volume_percentiles),
+    ("events_histogram", _L2, plotly_events_histogram),
+    ("hidden_executions", _L2, plotly_hidden_executions),
+    ("vpin", None, plotly_vpin),
+    ("order_flow_imbalance", None, plotly_order_flow_imbalance),
+    ("kyle_lambda", None, plotly_kyle_lambda),
+    ("trading_halts", None, plotly_trading_halts),
+]:
+    RENDERERS.register((_concept, _level, "plotly"), _fn)

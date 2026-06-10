@@ -149,6 +149,36 @@ class TestBitstampDemoSubcommand:
         assert (out / "parquet" / "events.parquet").exists()
         assert (out / "gallery" / "gallery.html").exists()
 
+    def test_view_comparison(self, cli_runner, tmp_path, tiny_bitstamp_orders_csv):
+        """``--view comparison`` threads through to the gallery (L2-vs-L3)."""
+        out = tmp_path / "bs_cmp"
+        r = cli_runner(
+            "bitstamp-demo",
+            "--input",
+            str(tiny_bitstamp_orders_csv.parent),
+            "--output",
+            str(out),
+            "--view",
+            "comparison",
+        )
+        assert r.returncode == 0, r.stderr
+        assert (out / "gallery" / "gallery.html").exists()
+
+    def test_invalid_view_rejected(
+        self, cli_runner, tmp_path, tiny_bitstamp_orders_csv
+    ):
+        """An unknown ``--view`` is rejected by argparse before any work."""
+        r = cli_runner(
+            "bitstamp-demo",
+            "--input",
+            str(tiny_bitstamp_orders_csv.parent),
+            "--output",
+            str(tmp_path / "bs_bad"),
+            "--view",
+            "nope",
+        )
+        assert r.returncode != 0
+
 
 # ---------------------------------------------------------------------------
 # lobster-demo

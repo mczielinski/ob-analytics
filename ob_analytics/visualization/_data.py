@@ -14,7 +14,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from ob_analytics._utils import reverse_matrix
 from ob_analytics.depth import filter_depth
 
 
@@ -51,46 +50,56 @@ def volume_marker_areas(
     return np.asarray(volume, dtype=float) * scale
 
 
+def normalized_marker_areas(
+    volume: pd.Series | np.ndarray,
+    *,
+    lo: float = 10.0,
+    hi: float = 120.0,
+    ref_quantile: float = 0.95,
+) -> np.ndarray:
+    """Bounded, outlier-robust matplotlib scatter ``s`` values.
+
+    Where :func:`volume_marker_areas` is raw-proportional and unbounded -- fine
+    for sparse overlays but degenerate when one whale order is 10,000x the
+    median -- this maps volume *linearly* into ``[lo, hi]`` against its
+    *ref_quantile*: anything at or above that reference saturates at *hi*, and
+    everything below scales down toward *lo* (volume ``0`` lands exactly on
+    *lo*, so no point is invisible).  Suited to the dense L3 per-order scatters
+    that draw one marker per order across a heavy-tailed volume range.
+    """
+    arr = np.asarray(volume, dtype=float)
+    if arr.size == 0:
+        return np.empty(0, dtype=float)
+    ref = float(np.nanquantile(arr, ref_quantile))
+    if not np.isfinite(ref) or ref <= 0:
+        return np.full(arr.shape, lo, dtype=float)
+    frac = np.clip(arr / ref, 0.0, 1.0)
+    return lo + frac * (hi - lo)
+
+
 def mpl_marker_area_to_plotly_size(area: np.ndarray) -> np.ndarray:
     """Convert matplotlib scatter areas (pt²) to plotly marker diameters (px)."""
     return np.sqrt(np.maximum(area, 0.0)) * 0.8
 
 
-# The volume-percentile chart colours a fixed 20-step rainbow gradient,
-# shared verbatim by every rendering backend.  It was historically built
-# at call time with ``matplotlib.colors.LinearSegmentedColormap`` from the
-# ten anchor colours below; that pulled a rendering dependency into this
-# backend-agnostic data layer.  The exact RGBA values are deterministic, so
-# they are precomputed here once (round-trip-exact float literals) — keeping
-# ``colors_dict`` byte-identical while removing the matplotlib import.
-#
-# To regenerate (e.g. to tweak the anchors), run:
-#     from matplotlib.colors import LinearSegmentedColormap
-#     anchors = ["#f92b20", "#fe701b", "#facd1f", "#d6fd1c", "#65fe1b",
-#                "#1bfe42", "#1cfdb4", "#1fb9fa", "#1e71fb", "#261cfd"]
-#     cmap = LinearSegmentedColormap.from_list("custom_cmap", anchors, N=20)
-#     [cmap(i / 19) for i in range(20)]
-_VOLUME_PERCENTILE_PALETTE: tuple[tuple[float, float, float, float], ...] = (
-    (0.9764705882352941, 0.16862745098039217, 0.12549019607843137, 1.0),
-    (0.9857585139318885, 0.29680082559339527, 0.11620227038183695, 1.0),
-    (0.9950464396284829, 0.4249742002063983, 0.10691434468524252, 1.0),
-    (0.9894736842105263, 0.5927760577915376, 0.11248710010319918, 1.0),
-    (0.9820433436532507, 0.765531475748194, 0.11991744066047472, 1.0),
-    (0.9283797729618163, 0.8732714138286894, 0.11723426212590299, 1.0),
-    (0.8615067079463364, 0.9624355005159959, 0.11166150670794633, 1.0),
-    (0.6992776057791538, 0.9933952528379774, 0.1085655314757482, 1.0),
-    (0.48937048503611974, 0.9952528379772962, 0.10670794633642931, 1.0),
-    (0.31971104231166153, 0.996078431372549, 0.1461300309597523, 1.0),
-    (0.18224974200206398, 0.996078431372549, 0.21857585139318886, 1.0),
-    (0.10670794633642931, 0.9952528379772962, 0.3529411764705883, 1.0),
-    (0.1085655314757482, 0.9933952528379774, 0.5647058823529414, 1.0),
-    (0.11166150670794633, 0.9500515995872034, 0.7492260061919503, 1.0),
-    (0.117234262125903, 0.8237358101135188, 0.8792569659442727, 1.0),
-    (0.12115583075335397, 0.6957688338493289, 0.9808049535603715, 1.0),
-    (0.11929824561403508, 0.5620227038183693, 0.9826625386996903, 1.0),
-    (0.11929824561403503, 0.42559339525283857, 0.9847265221878224, 1.0),
-    (0.13415892672858618, 0.26769865841073276, 0.9884416924664603, 1.0),
-    (0.14901960784313725, 0.10980392156862745, 0.9921568627450981, 1.0),
+# The volume-percentile chart colours a fixed 20-step gradient, shared
+# verbatim by every rendering backend.  Percentile rank is *ordered* data, so
+# the ramp encodes it as monotonically decreasing luminance (pale → dark blue)
+# rather than the old rainbow/jet sweep: hue carries no order, so a rainbow
+# made high and low percentiles equally vivid and forced the eye to read a
+# legend.  Channels walk linearly from a pale tint to a saturated blue as the
+# step index i goes 0 → 19, so every channel (and thus luminance) decreases
+# monotonically — keeping the perceptual ordering intact.
+# FUTURE(--color-by): a future opt-in could swap this ramp for an alternate
+# encoding column without touching consumers, since they only read the tuple.
+_VOLUME_PERCENTILE_PALETTE: tuple[tuple[float, float, float, float], ...] = tuple(
+    (
+        0.88 + (0.03 - 0.88) * (i / 19),
+        0.92 + (0.19 - 0.92) * (i / 19),
+        0.98 + (0.42 - 0.98) * (i / 19),
+        1.0,
+    )
+    for i in range(20)
 )
 
 
@@ -348,6 +357,270 @@ def prepare_event_map_data(
     }
 
 
+def prepare_order_activity_l3_data(
+    events: pd.DataFrame,
+    per_order: bool = True,
+    volume_scale: float | None = None,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+    price_from: float | None = None,
+    price_to: float | None = None,
+) -> dict[str, Any]:
+    """Per-order lifecycle Gantt: each order one span place -> outcome, by fate.
+
+    The L3 (MBO) counterpart to the ``order_activity`` event map.  Where the L2
+    map scatters *decoupled* created/deleted events, this links each order's
+    events by ``id`` into a single horizontal span -- from creation to removal --
+    placed at the order's price and split by *fate*:
+
+    - ``flashed-limit`` orders were created and deleted with unchanged volume:
+      placed and pulled, never filled (**cancelled**).
+    - ``resting-limit`` orders rested and provided liquidity, or are still on the
+      book at window end (**filled / resting**); a span with no ``deleted`` event
+      extends to *end_time* to show it had not yet terminated.
+
+    Same population as the L2 face (flashed/resting limit orders), so the two are
+    directly comparable on shared time x price axes.  The price axis is clipped
+    to the 1st--99th percentile (like the event map) unless *price_from* /
+    *price_to* are given, keeping a few far orders from stretching the y-axis.
+
+    ``per_order`` is accepted for signature symmetry with the comparable
+    concepts and is always effectively true here (the face is per order).
+    """
+    del per_order  # always per-order; kept for the comparable-concept signature
+
+    start_time, end_time = _default_start_end(events, start_time, end_time)
+    limit = events[
+        events["type"].isin(["flashed-limit", "resting-limit"])
+        & (events["timestamp"] >= start_time)
+        & (events["timestamp"] <= end_time)
+    ]
+
+    if volume_scale is None:
+        volume_scale = infer_volume_scale(limit["volume"]) if not limit.empty else 1.0
+
+    # Collapse each order's events into one lifecycle span.  Price/direction/type
+    # are constant over a limit order's life, so ``first`` is unambiguous; volume
+    # only shrinks as fills consume it, so ``max`` recovers the placed size.
+    spans = (
+        limit.groupby("id", sort=False)
+        .agg(
+            start_ts=("timestamp", "min"),
+            last_ts=("timestamp", "max"),
+            price=("price", "first"),
+            direction=("direction", "first"),
+            type=("type", "first"),
+            volume=("volume", "max"),
+        )
+        .reset_index()
+    )
+
+    # A span ending in a ``deleted`` event terminated there; one without is still
+    # resting, so it runs to the window end.
+    deleted_ids = limit.loc[limit["action"] == "deleted", "id"].unique()
+    spans["end_ts"] = spans["last_ts"].where(spans["id"].isin(deleted_ids), end_time)
+    spans["volume"] = spans["volume"] * volume_scale
+
+    if not spans.empty:
+        if price_from is None:
+            price_from = spans["price"].quantile(0.01)
+        if price_to is None:
+            price_to = spans["price"].quantile(0.99)
+        spans = spans[(spans["price"] >= price_from) & (spans["price"] <= price_to)]
+
+    if spans.empty:
+        price_by, y_range = 1.0, None
+    else:
+        price_by, _ = _price_axis_breaks(spans["price"].min(), spans["price"].max())
+        y_range = (float(spans["price"].min()), float(spans["price"].max()))
+
+    flashed = spans[spans["type"] == "flashed-limit"]
+    resting = spans[spans["type"] == "resting-limit"]
+    return {
+        "flashed": flashed,
+        "resting": resting,
+        "volume_scale": volume_scale,
+        "price_by": price_by,
+        "y_range": y_range,
+    }
+
+
+def prepare_liquidity_at_touch_data(
+    depth_summary: pd.DataFrame,
+    volume_scale: float | None = None,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+) -> dict[str, Any]:
+    """L2 (MBP) liquidity at the touch: best bid/ask resting size over time.
+
+    Two aggregate time series read straight from the depth summary -- the volume
+    resting at the best bid (``best_bid_vol``) and at the best ask
+    (``best_ask_vol``).  Size at a price level carries no order identity, so this
+    is an L2 quantity by construction; the per-order L3 counterpart (queue
+    composition at the touch) needs FIFO reconstruction and is deferred.
+    """
+    start_time, end_time = _default_start_end(depth_summary, start_time, end_time)
+    win = depth_summary[
+        (depth_summary["timestamp"] >= start_time)
+        & (depth_summary["timestamp"] <= end_time)
+    ]
+    bid_vol = win["best_bid_vol"]
+    ask_vol = win["best_ask_vol"]
+    if volume_scale is None:
+        combined = pd.concat([bid_vol, ask_vol])
+        volume_scale = infer_volume_scale(combined) if not combined.empty else 1.0
+    return {
+        "timestamp": win["timestamp"].reset_index(drop=True),
+        "bid_vol": (bid_vol * volume_scale).reset_index(drop=True),
+        "ask_vol": (ask_vol * volume_scale).reset_index(drop=True),
+        "volume_scale": volume_scale,
+    }
+
+
+def prepare_order_outcome_l3_data(
+    events: pd.DataFrame,
+    trades: pd.DataFrame,
+    volume_scale: float | None = None,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+    bps_quantiles: tuple[float, float] = (0.05, 0.95),
+) -> dict[str, Any]:
+    """L3 (MBO) order outcome: each limit order as outcome vs placement.
+
+    For every order created in the window, one point at its placement --
+    ``x = aggressiveness_bps`` (signed distance from the prevailing best at
+    creation; ``>0`` improved the touch) against ``y = size`` -- coloured by a
+    competing-risks *outcome*:
+
+    - **filled**: the whole order executed (its volume was consumed by trades).
+    - **partial**: some volume executed, the remainder was removed.
+    - **cancelled**: removed without any execution.
+
+    Outcome is recovered from the executions: volume filled per order is summed
+    over trades where the order was the maker or the taker, then compared with
+    the placed size.  Orders still resting at window end (no terminal event and
+    no fill) are censored and dropped.  Placement distance is heavy-tailed, so it
+    is quantile-clipped to *bps_quantiles*.
+    """
+    start_time, end_time = _default_start_end(events, start_time, end_time)
+    created = events[
+        (events["action"] == "created")
+        & (events["timestamp"] >= start_time)
+        & (events["timestamp"] <= end_time)
+    ][["id", "timestamp", "price", "volume", "direction", "aggressiveness_bps"]].rename(
+        columns={"aggressiveness_bps": "distance_bps", "volume": "placed"}
+    )
+
+    deleted_ids = set(events.loc[events["action"] == "deleted", "id"])
+
+    # Volume executed per order id: as maker (resting, hit) + as taker (crossed).
+    event_to_id = events[["event_id", "id"]]
+    maker = trades.merge(
+        event_to_id, left_on="maker_event_id", right_on="event_id", how="inner"
+    )
+    taker = trades.merge(
+        event_to_id, left_on="taker_event_id", right_on="event_id", how="inner"
+    )
+    filled = (
+        pd.concat([maker[["id", "volume"]], taker[["id", "volume"]]])
+        .groupby("id")["volume"]
+        .sum()
+    )
+    created = created.copy()
+    created["filled"] = created["id"].map(filled).fillna(0.0)
+
+    # Competing-risks outcome; censored = never filled and still open at end.
+    placed = created["placed"]
+    f = created["filled"]
+    is_deleted = created["id"].isin(deleted_ids)
+    outcome = pd.Series("censored", index=created.index)
+    outcome[f >= placed * 0.999] = "filled"
+    outcome[(f > 0) & (f < placed * 0.999)] = "partial"
+    outcome[(f <= 0) & is_deleted] = "cancelled"
+    created["outcome"] = outcome
+    created = created[created["outcome"] != "censored"].dropna(subset=["distance_bps"])
+
+    if volume_scale is None:
+        volume_scale = (
+            infer_volume_scale(created["placed"]) if not created.empty else 1.0
+        )
+    created = created.copy()
+    created["placed"] = created["placed"] * volume_scale
+
+    if not created.empty:
+        lo_q, hi_q = bps_quantiles
+        bps_lo = created["distance_bps"].quantile(lo_q)
+        bps_hi = created["distance_bps"].quantile(hi_q)
+        created = created[
+            (created["distance_bps"] >= bps_lo) & (created["distance_bps"] <= bps_hi)
+        ]
+
+    created["marker_area"] = normalized_marker_areas(created["placed"])
+    return {
+        "filled": created[created["outcome"] == "filled"],
+        "partial": created[created["outcome"] == "partial"],
+        "cancelled": created[created["outcome"] == "cancelled"],
+        "volume_scale": volume_scale,
+    }
+
+
+def prepare_trade_tape_l3_data(
+    events: pd.DataFrame,
+    trades: pd.DataFrame,
+    volume_scale: float | None = None,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+    price_from: float | None = None,
+    price_to: float | None = None,
+) -> dict[str, Any]:
+    """L3 (MBO) trade tape: executions plus each maker order's resting bar.
+
+    The L2 tape shows executions over time (price, volume).  The L3 face adds,
+    for every execution, the life of the *maker* order it consumed: a horizontal
+    bar from that order's creation to the fill, drawn at the maker's price and
+    coloured by the taker's aggressing side (buy/sell).  This reveals how long
+    the resting liquidity behind each trade had waited -- invisible in the
+    aggregate tape.
+    """
+    start_time, end_time = _default_start_end(trades, start_time, end_time)
+    tr = trades[
+        (trades["timestamp"] >= start_time) & (trades["timestamp"] <= end_time)
+    ][["timestamp", "price", "volume", "direction", "maker_event_id"]]
+
+    # Map each trade's maker event -> the maker order id -> its creation time.
+    event_to_id = events[["event_id", "id"]]
+    created_ts = (
+        events[events["action"] == "created"]
+        .groupby("id")["timestamp"]
+        .min()
+        .rename("created_ts")
+    )
+    tr = tr.merge(
+        event_to_id, left_on="maker_event_id", right_on="event_id", how="inner"
+    ).merge(created_ts, on="id", how="inner")
+
+    if not tr.empty:
+        if price_from is None:
+            price_from = tr["price"].quantile(0.01)
+        if price_to is None:
+            price_to = tr["price"].quantile(0.99)
+        tr = tr[(tr["price"] >= price_from) & (tr["price"] <= price_to)]
+
+    if volume_scale is None:
+        volume_scale = infer_volume_scale(tr["volume"]) if not tr.empty else 1.0
+    tr = tr.copy()
+    tr["volume"] = tr["volume"] * volume_scale
+    tr["marker_area"] = normalized_marker_areas(tr["volume"])
+
+    y_range = None if tr.empty else (float(tr["price"].min()), float(tr["price"].max()))
+    return {
+        "buys": tr[tr["direction"] == "buy"],
+        "sells": tr[tr["direction"] == "sell"],
+        "volume_scale": volume_scale,
+        "y_range": y_range,
+    }
+
+
 def prepare_volume_map_data(
     events: pd.DataFrame,
     action: str = "deleted",
@@ -400,62 +673,185 @@ def prepare_volume_map_data(
     return {"events": events, "log_scale": log_scale}
 
 
-def prepare_current_depth_data(
-    order_book: dict,
+def prepare_cancellations_l3_data(
+    events: pd.DataFrame,
+    per_order: bool = True,
     volume_scale: float | None = None,
-    show_quantiles: bool = True,
-    show_volume: bool = True,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+    age_quantile: float = 0.95,
+    bps_quantiles: tuple[float, float] = (0.05, 0.95),
 ) -> dict[str, Any]:
-    """Prepare data for order book depth snapshot.
+    """Per-order cancellations: each cancelled order as one age x distance point.
 
-    ``volume_scale=None`` auto-infers a power-of-10 scale from the
-    combined bid/ask volumes.
+    The L3 (MBO) counterpart to the ``cancellations`` volume map.  Where the L2
+    map aggregates cancelled *volume* over price and time, this keeps each
+    cancelled order as a distinct point: ``age_s`` (seconds it rested between
+    creation and deletion) against ``distance_bps`` (placement aggressiveness --
+    signed bps from the prevailing best at creation; ``>0`` improved the touch,
+    ``<0`` sat deeper), sized by volume and split by side.
+
+    Cancellations are deleted *flashed-limit* orders, matching the L2 face.
+    Both axes are heavy-tailed (a large instant-cancel spike at age 0; a few
+    degenerate aggressiveness values), so robust quantile clips bound them:
+    age to *age_quantile*, distance to *bps_quantiles*.
+
+    ``per_order`` is accepted for signature symmetry with the comparable
+    concepts and is always effectively true here (the face is per order).
     """
-    bids = reverse_matrix(order_book["bids"])
-    asks = reverse_matrix(order_book["asks"])
+    del per_order  # always per-order; kept for the comparable-concept signature
 
-    # reverse_matrix may return ndarray; ensure we have DataFrames
-    if isinstance(bids, np.ndarray):
-        bids = pd.DataFrame(bids, columns=["price", "volume", "liquidity"])
-    if isinstance(asks, np.ndarray):
-        asks = pd.DataFrame(asks, columns=["price", "volume", "liquidity"])
+    start_time, end_time = _default_start_end(events, start_time, end_time)
+    deleted = events[
+        (events["action"] == "deleted")
+        & (events["type"] == "flashed-limit")
+        & (events["timestamp"] >= start_time)
+        & (events["timestamp"] <= end_time)
+    ][["id", "timestamp", "volume", "direction"]]
+    created = events[events["action"] == "created"][
+        ["id", "timestamp", "aggressiveness_bps"]
+    ].rename(columns={"timestamp": "created_ts", "aggressiveness_bps": "distance_bps"})
 
-    bid_prices = bids["price"].to_numpy()
-    ask_prices = asks["price"].to_numpy()
-    bid_liq = bids["liquidity"].to_numpy()
-    ask_liq = asks["liquidity"].to_numpy()
-    bid_vol = bids["volume"].to_numpy()
-    ask_vol = asks["volume"].to_numpy()
+    cancels = deleted.merge(created, on="id", how="inner").dropna(
+        subset=["distance_bps"]
+    )
+    cancels["age_s"] = (cancels["timestamp"] - cancels["created_ts"]).dt.total_seconds()
+    cancels = cancels[cancels["age_s"] >= 0]
 
     if volume_scale is None:
-        volume_scale = infer_volume_scale(np.concatenate([bid_vol, ask_vol]))
+        volume_scale = (
+            infer_volume_scale(cancels["volume"]) if not cancels.empty else 1.0
+        )
+    cancels = cancels.copy()
+    cancels["volume"] = cancels["volume"] * volume_scale
 
-    x = np.concatenate([bid_prices, [bid_prices[-1]], [ask_prices[0]], ask_prices])
-    y1 = np.concatenate([bid_liq, [0], [0], ask_liq]) * volume_scale
-    y2 = np.concatenate([bid_vol, [0], [0], ask_vol]) * volume_scale
-    side = ["bid"] * (len(bids) + 1) + ["ask"] * (len(asks) + 1)
+    if not cancels.empty:
+        lo_q, hi_q = bps_quantiles
+        age_hi = cancels["age_s"].quantile(age_quantile)
+        bps_lo = cancels["distance_bps"].quantile(lo_q)
+        bps_hi = cancels["distance_bps"].quantile(hi_q)
+        cancels = cancels[
+            (cancels["age_s"] <= age_hi)
+            & (cancels["distance_bps"] >= bps_lo)
+            & (cancels["distance_bps"] <= bps_hi)
+        ]
 
-    depth_df = pd.DataFrame({"price": x, "liquidity": y1, "volume": y2, "side": side})
+    cancels["marker_area"] = normalized_marker_areas(cancels["volume"])
+    bids = cancels[cancels["direction"] == "bid"]
+    asks = cancels[cancels["direction"] == "ask"]
+    return {"bids": bids, "asks": asks, "volume_scale": volume_scale}
+
+
+def _as_book_side_frame(side: pd.DataFrame | np.ndarray) -> pd.DataFrame:
+    """Coerce one order-book side to a DataFrame with at least price + volume.
+
+    :func:`ob_analytics.analytics.order_book` hands back per-order frames
+    carrying ``id`` and ``bps``; the synthetic/legacy path hands back a
+    3-column ``[price, volume, liquidity]`` ndarray.  Both normalise here.
+    """
+    if isinstance(side, np.ndarray):
+        return pd.DataFrame(side, columns=["price", "volume", "liquidity"])
+    return side.copy()
+
+
+def _book_side(
+    side: pd.DataFrame, *, ascending: bool, per_order: bool, scale: float
+) -> pd.DataFrame:
+    """Best-first side frame with stacking bounds + cumulative liquidity.
+
+    *ascending* is the price sort that places the touch first (asks ascending,
+    bids descending).  ``per_order=False`` sums every order at a price into one
+    row (L2 / MBP); ``per_order=True`` keeps each order with within-level
+    ``seg_lo``/``seg_hi`` stacking bounds (L3 / MBO).  Volume-like columns are
+    multiplied by *scale*.
+    """
+    cols = ["price", "volume", "liquidity", "seg_lo", "seg_hi"]
+    if side.empty:
+        return pd.DataFrame(columns=cols)
+
+    s = side.sort_values("price", ascending=ascending, kind="stable")
+    if per_order:
+        seg_hi = s.groupby("price", sort=False)["volume"].cumsum()
+        out = pd.DataFrame(
+            {
+                "price": s["price"].to_numpy(),
+                "volume": s["volume"].to_numpy(),
+                "seg_lo": (seg_hi - s["volume"]).to_numpy(),
+                "seg_hi": seg_hi.to_numpy(),
+            }
+        )
+    else:
+        agg = s.groupby("price", sort=False, as_index=False)["volume"].sum()
+        vol = agg["volume"].to_numpy()
+        out = pd.DataFrame(
+            {
+                "price": agg["price"].to_numpy(),
+                "volume": vol,
+                "seg_lo": np.zeros(len(vol)),
+                "seg_hi": vol.copy(),
+            }
+        )
+    out["liquidity"] = out["volume"].cumsum()
+    out[["volume", "liquidity", "seg_lo", "seg_hi"]] *= scale
+    return out
+
+
+def _high_volume_prices(side: pd.DataFrame, q: float = 0.99) -> pd.Series:
+    """Prices whose per-row volume is at or above the *q* quantile."""
+    if side.empty:
+        return pd.Series(dtype=float)
+    return side.loc[side["volume"] >= side["volume"].quantile(q), "price"]
+
+
+def prepare_book_snapshot_data(
+    order_book: dict,
+    per_order: bool = False,
+    volume_scale: float | None = None,
+    show_quantiles: bool = True,
+) -> dict[str, Any]:
+    """Prepare an order-book snapshot at one resolution.
+
+    Feeds both the ``book_snapshot`` bars and the ``depth_chart`` curve.
+    ``per_order=False`` collapses each price level to one row (L2 /
+    Market-By-Price); ``per_order=True`` keeps every order as its own row with
+    within-level stacking bounds (L3 / Market-By-Order).  ``volume_scale=None``
+    auto-infers a power-of-10 scale from the combined bid/ask volumes.
+
+    Returns ``bids``/``asks`` frames ordered best-first with columns ``price,
+    volume, liquidity, seg_lo, seg_hi`` (volumes already scaled), plus
+    high-volume ``*_quantiles`` price marks, ``timestamp``, ``volume_scale``,
+    and the ``per_order`` flag.
+    """
+    bids = _as_book_side_frame(order_book["bids"])
+    asks = _as_book_side_frame(order_book["asks"])
+
+    if volume_scale is None:
+        volume_scale = infer_volume_scale(
+            np.concatenate([bids["volume"].to_numpy(), asks["volume"].to_numpy()])
+        )
+
+    bid_side = _book_side(
+        bids, ascending=False, per_order=per_order, scale=volume_scale
+    )
+    ask_side = _book_side(asks, ascending=True, per_order=per_order, scale=volume_scale)
 
     bid_quantiles = pd.Series(dtype=float)
     ask_quantiles = pd.Series(dtype=float)
     if show_quantiles:
-        bq = bids["volume"].quantile(0.99)
-        bid_quantiles = bids.loc[bids["volume"] >= bq, "price"]
-        aq = asks["volume"].quantile(0.99)
-        ask_quantiles = asks.loc[asks["volume"] >= aq, "price"]
+        bid_quantiles = _high_volume_prices(bid_side)
+        ask_quantiles = _high_volume_prices(ask_side)
 
     timestamp = pd.to_datetime(order_book["timestamp"], unit="s", utc=True)
 
     return {
-        "depth_df": depth_df,
-        "bids": bids,
-        "asks": asks,
+        "bids": bid_side,
+        "asks": ask_side,
         "bid_quantiles": bid_quantiles,
         "ask_quantiles": ask_quantiles,
-        "show_volume": show_volume,
         "show_quantiles": show_quantiles,
+        "per_order": per_order,
         "timestamp": timestamp,
+        "volume_scale": volume_scale,
     }
 
 
@@ -592,14 +988,27 @@ def prepare_events_histogram_data(
     end_time: pd.Timestamp | None = None,
     val: str = "volume",
     bw: float | None = None,
+    price_from: float | None = None,
+    price_to: float | None = None,
 ) -> dict[str, Any]:
-    """Prepare data for an events price/volume histogram."""
+    """Prepare data for an events price/volume histogram.
+
+    ``price_from``/``price_to`` clip the events to a price window before
+    binning.  Without it the price face collapses to a single 1px spike: even
+    the 1st-99th percentile of a heavy-tailed book still spans the far-from-
+    touch flashed orders, so the caller passes a mid-anchored focus window (the
+    same one the depth heatmap uses) to keep the near-touch distribution legible.
+    """
     if val not in ("volume", "price"):
         raise ValueError(f"val must be 'volume' or 'price', got {val!r}")
     start_time, end_time = _default_start_end(events, start_time, end_time)
     filtered = events[
         (events["timestamp"] >= start_time) & (events["timestamp"] <= end_time)
     ]
+    if price_from is not None:
+        filtered = filtered[filtered["price"] >= price_from]
+    if price_to is not None:
+        filtered = filtered[filtered["price"] <= price_to]
     return {"events": filtered, "val": val, "bw": bw}
 
 

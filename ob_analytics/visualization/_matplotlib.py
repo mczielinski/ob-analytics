@@ -19,6 +19,7 @@ import matplotlib.colors as mcolors
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import seaborn as sns
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
@@ -146,7 +147,7 @@ def mpl_trades(
         ax=ax,
     )
     ax.set_xlabel("Time")
-    ax.set_ylabel("Limit Price")
+    ax.set_ylabel("Price")
     ax.set_yticks(y_breaks)
     ax.grid(True)
     fig.tight_layout()
@@ -360,11 +361,7 @@ def mpl_event_map(
     ax.set_xlabel("Time")
     ax.set_ylabel("Limit Price")
     ax.set_yticks(
-        np.arange(
-            round(events["price"].min() / price_by) * price_by,
-            round(events["price"].max() / price_by) * price_by,
-            price_by,
-        )
+        _rounded_price_ticks(events["price"].min(), events["price"].max(), price_by)
     )
     fig.tight_layout()
     return fig
@@ -398,63 +395,392 @@ def mpl_volume_map(
     return fig
 
 
-def mpl_current_depth(
-    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+# Order-book snapshot palette, shared by the book_snapshot + depth_chart faces
+# (kept identical to the plotly backend for cross-backend parity).
+_BID_COLOR = "#4477dd"
+_ASK_COLOR = "#dd4444"
+
+# Order-lifecycle fate palette for the order_activity L3 Gantt (cancelled vs
+# filled/resting); identical to the plotly backend for cross-backend parity.
+_FLASHED_COLOR = "#e09f3e"  # flashed-limit: placed and pulled (cancelled)
+_RESTING_COLOR = "#2a9d8f"  # resting-limit: rested / filled
+
+# Trade-tape aggressor palette (taker side) for the L3 tape maker-bars;
+# identical to the plotly backend for cross-backend parity.
+_BUY_COLOR = "#2e9e5b"  # buyer-initiated execution (lifts the ask)
+_SELL_COLOR = "#dd4444"  # seller-initiated execution (hits the bid)
+
+# Competing-risks outcome palette for the order_outcome L3 scatter; identical to
+# the plotly backend for cross-backend parity.
+_FILLED_COLOR = "#2a9d8f"  # fully executed
+_PARTIAL_COLOR = "#8c8cd8"  # partially executed, remainder removed
+_CANCELLED_COLOR = "#e09f3e"  # removed without any execution
+
+
+def _book_bar_width(*sides: pd.DataFrame) -> float:
+    """Smallest positive gap between distinct prices across *sides*."""
+    arrays = [s["price"].to_numpy() for s in sides if not s.empty]
+    if not arrays:
+        return 1.0
+    uniq = np.unique(np.concatenate(arrays))
+    diffs = np.diff(uniq)
+    diffs = diffs[diffs > 0]
+    return float(np.min(diffs)) if diffs.size else 1.0
+
+
+# A per-order separator is drawn as the bar's edge, so it only reads when the
+# bar is at least a couple of pixels wide.  On the dense, full-range book the
+# bars are sub-pixel and a ~1px white edge then covers the fill entirely -- it
+# whited the L3 book out on the light matplotlib theme.  Gate the separator on
+# the rendered bar width so it appears only when it actually delineates segments.
+_MIN_SEPARATOR_BAR_PX = 2.0
+
+
+def _book_separator_edge(
+    width: float, price_span: float, *, per_order: bool, fig_width_px: float
+) -> str:
+    """Edge colour for book-snapshot bars.
+
+    Returns ``"white"`` for per-order (L3) bars wide enough to show a separator,
+    otherwise ``"none"``.  Aggregate (L2) bars never get a per-order separator.
+    """
+    if not per_order:
+        return "none"
+    if price_span <= 0:
+        return "white"  # a single price level fills the axis -> always wide
+    bar_px = (width / price_span) * fig_width_px
+    return "white" if bar_px >= _MIN_SEPARATOR_BAR_PX else "none"
+
+
+def _rounded_price_ticks(
+    lo: float, hi: float, price_by: float, *, max_ticks: int = 12
+) -> np.ndarray:
+    """Round-number price ticks spanning ``[lo, hi]``, thinned to <= ``max_ticks``.
+
+    The base grid steps by ``price_by``; when that would place more than
+    ``max_ticks`` ticks the step is widened to the next integer multiple of
+    ``price_by`` so the labels stay legible (the dense L3 Gantt and the event
+    map otherwise stacked one label per level into an unreadable smear).
+    """
+    if price_by <= 0:
+        return np.array([lo])
+    start = round(lo / price_by) * price_by
+    stop = round(hi / price_by) * price_by
+    n_steps = max(1, round((stop - start) / price_by))
+    factor = max(1, int(np.ceil(n_steps / max_ticks)))
+    return np.arange(start, stop, price_by * factor)
+
+
+def _mpl_book_bars(
+    data: dict, ax: Axes | None, theme: PlotTheme, *, per_order: bool
 ) -> Figure:
-    """Render order book depth snapshot."""
-    depth_df = data["depth_df"]
+    """Book-snapshot bars: one bar per level (L2) or stacked per order (L3)."""
     bids = data["bids"]
     asks = data["asks"]
-    show_volume = data["show_volume"]
-    show_quantiles = data["show_quantiles"]
-    bid_quantiles = data["bid_quantiles"]
-    ask_quantiles = data["ask_quantiles"]
-    timestamp = data["timestamp"]
-
     fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
 
-    if show_volume:
-        unique_prices = np.sort(np.unique(depth_df["price"]))
-        price_diffs = np.diff(unique_prices)
-        price_diffs = price_diffs[price_diffs > 0]
-        bar_width = np.min(price_diffs) if len(price_diffs) > 0 else 1
-
+    width = _book_bar_width(bids, asks) * 0.9
+    mins = [float(s["price"].min()) for s in (bids, asks) if not s.empty]
+    maxs = [float(s["price"].max()) for s in (bids, asks) if not s.empty]
+    price_span = (max(maxs) - min(mins)) if mins else 0.0
+    # White per-order separators help only when each bar is wide enough to show
+    # one; on a dense, full-range book the bars are sub-pixel and a white edge
+    # swamps the fill (it whited the L3 book out on the light matplotlib theme).
+    edge = _book_separator_edge(
+        width,
+        price_span,
+        per_order=per_order,
+        fig_width_px=fig.get_figwidth() * fig.dpi,
+    )
+    for side, color, label in ((bids, _BID_COLOR, "bid"), (asks, _ASK_COLOR, "ask")):
+        if side.empty:
+            continue
         ax.bar(
-            depth_df["price"],
-            depth_df["volume"],
-            width=bar_width,
-            color="white",
+            side["price"],
+            side["seg_hi"] - side["seg_lo"],
+            bottom=side["seg_lo"],
+            width=width,
+            color=color,
+            edgecolor=edge,
+            linewidth=0.6,
             align="center",
-            edgecolor=None,
+            label=label,
         )
 
-    col_pal = {"ask": "#ff0000", "bid": "#0000ff"}
-    for side_value in ["bid", "ask"]:
-        side_data = depth_df[depth_df["side"] == side_value]
-        ax.step(
-            side_data["price"],
-            side_data["liquidity"],
-            where="pre",
-            color=col_pal[side_value],
-            label=side_value,
-            linewidth=2,
-        )
+    if data["show_quantiles"]:
+        for x_value in data["bid_quantiles"]:
+            ax.axvline(x=x_value, color="#222222", linestyle="--", linewidth=1)
+        for x_value in data["ask_quantiles"]:
+            ax.axvline(x=x_value, color="#222222", linestyle="--", linewidth=1)
 
-    if show_quantiles:
-        for x_value in bid_quantiles:
-            ax.axvline(x=x_value, color="#222222", linestyle="--")
-        for x_value in ask_quantiles:
-            ax.axvline(x=x_value, color="#222222", linestyle="--")
-
-    xmin = round(bids["price"].min())
-    xmax = round(asks["price"].max())
-    xticks = np.arange(xmin, xmax + 1, 1)
-    ax.set_xticks(xticks)
-
-    ax.set_title(timestamp.strftime("%Y-%m-%d %H:%M:%S UTC"))
+    ax.set_title(data["timestamp"].strftime("%Y-%m-%d %H:%M:%S UTC"))
     ax.set_xlabel("Price")
-    ax.set_ylabel("Liquidity")
-    ax.legend()
+    ax.set_ylabel("Size")
+    ax.legend(loc="upper center")
+    fig.tight_layout()
+    return fig
+
+
+def mpl_book_snapshot_aggregate(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """L2 (MBP) book snapshot: aggregate size per price level."""
+    return _mpl_book_bars(data, ax, theme, per_order=False)
+
+
+def mpl_book_snapshot_per_order(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """L3 (MBO) book snapshot: each order a stacked segment within its level."""
+    return _mpl_book_bars(data, ax, theme, per_order=True)
+
+
+def _mpl_depth_curve(
+    data: dict, ax: Axes | None, theme: PlotTheme, *, per_order: bool
+) -> Figure:
+    """Cumulative-depth curve: stepped per level (L2) or per order (L3)."""
+    # DEFERRED (lower priority). The L3 depth curve is visually identical to L2.
+    # FUTURE(--density): segment each riser by per-order composition (whale vs
+    # crowd) so the per-order resolution becomes legible. Left as-is for now.
+    fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
+    for side, color, label in (
+        (data["bids"], _BID_COLOR, "bid"),
+        (data["asks"], _ASK_COLOR, "ask"),
+    ):
+        if side.empty:
+            continue
+        s = side.sort_values("price")
+        ax.step(
+            s["price"],
+            s["liquidity"],
+            where="pre",
+            color=color,
+            linewidth=2,
+            label=label,
+        )
+        ax.fill_between(s["price"], s["liquidity"], step="pre", color=color, alpha=0.15)
+        if per_order:
+            ax.scatter(s["price"], s["liquidity"], s=18, color=color, zorder=3)
+
+    ax.set_title(data["timestamp"].strftime("%Y-%m-%d %H:%M:%S UTC"))
+    ax.set_xlabel("Price")
+    ax.set_ylabel("Cumulative liquidity")
+    ax.legend(loc="upper center")
+    fig.tight_layout()
+    return fig
+
+
+def mpl_depth_chart_aggregate(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """L2 (MBP) depth chart: cumulative liquidity stepped per price level."""
+    return _mpl_depth_curve(data, ax, theme, per_order=False)
+
+
+def mpl_depth_chart_per_order(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """L3 (MBO) depth chart: cumulative liquidity stepped per individual order."""
+    return _mpl_depth_curve(data, ax, theme, per_order=True)
+
+
+def mpl_cancellations_per_order(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """L3 (MBO) cancellations: each cancelled order as an age x distance point."""
+    fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
+    # FUTURE(--density): high-cardinality 2D cloud -> log-log hexbin (count as
+    # saturation). For now rasterize the marker layer so the vector file does
+    # not balloon (~140k points was ~839 KB) and fade overlapping points.
+    for side, color, label in (
+        (data["bids"], _BID_COLOR, "bid"),
+        (data["asks"], _ASK_COLOR, "ask"),
+    ):
+        if side.empty:
+            continue
+        ax.scatter(
+            side["age_s"],
+            side["distance_bps"],
+            s=side["marker_area"],
+            color=color,
+            alpha=0.25,
+            edgecolors="none",
+            rasterized=True,
+            label=label,
+        )
+    ax.axhline(y=0, color="#888888", linestyle="--", linewidth=1)
+    ax.set_title("Cancelled orders by age and distance from touch")
+    ax.set_xlabel("Order age (s)")
+    ax.set_ylabel("Placement distance from touch (bps)")
+    ax.legend(loc="upper right")
+    fig.tight_layout()
+    return fig
+
+
+def mpl_order_activity_per_order(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """L3 (MBO) order activity: each order one lifecycle bar, coloured by fate."""
+    fig, ax = _create_axes(ax, figsize=(10, 6), theme=theme)
+    flashed = data["flashed"]
+    resting = data["resting"]
+    for side, color, label in (
+        (flashed, _FLASHED_COLOR, "flashed-limit (cancelled)"),
+        (resting, _RESTING_COLOR, "resting-limit (filled)"),
+    ):
+        if side.empty:
+            continue
+        ax.hlines(
+            side["price"],
+            mdates.date2num(side["start_ts"]),
+            mdates.date2num(side["end_ts"]),
+            colors=color,
+            linewidth=1.2,
+            alpha=0.5,
+            label=label,
+        )
+
+    ax.xaxis_date()
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+    plt.xticks(rotation=45)
+
+    y_range = data.get("y_range")
+    price_by = data["price_by"]
+    if y_range is not None:
+        ax.set_ylim(y_range)
+        ax.set_yticks(_rounded_price_ticks(y_range[0], y_range[1], price_by))
+
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Limit Price")
+    ax.set_title("Order lifecycles (place → outcome)")
+    if not (flashed.empty and resting.empty):
+        ax.legend(loc="upper right")
+    fig.tight_layout()
+    return fig
+
+
+def mpl_liquidity_at_touch(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """L2 (MBP) liquidity at the touch: best bid/ask resting size over time."""
+    fig, ax = _create_axes(ax, figsize=(10, 6), theme=theme)
+    ts = data["timestamp"]
+    # Thin, semi-transparent step lines so the bid and ask series stay legible
+    # where they overplot in the dense band near the touch.
+    ax.plot(
+        ts,
+        data["bid_vol"],
+        color=_BID_COLOR,
+        linewidth=0.9,
+        alpha=0.7,
+        drawstyle="steps-post",
+        label="Best bid size",
+    )
+    ax.plot(
+        ts,
+        data["ask_vol"],
+        color=_ASK_COLOR,
+        linewidth=0.9,
+        alpha=0.7,
+        drawstyle="steps-post",
+        label="Best ask size",
+    )
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+    plt.xticks(rotation=45)
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Size at touch")
+    ax.set_title("Liquidity at the touch")
+    if len(ts) > 0:
+        ax.legend(loc="upper right")
+    ax.grid(True)
+    fig.tight_layout()
+    return fig
+
+
+def mpl_order_outcome_per_order(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """L3 (MBO) order outcome: each order as placement distance x size, by fate."""
+    fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
+    any_pts = False
+    # Draw the dominant 'cancelled' class first (underneath) so the rarer
+    # filled/partial outcomes land on top instead of being buried, and fade it.
+    # FUTURE(--density): at high cancelled cardinality, degrade this raw scatter
+    # to a distance-binned stacked composition + a common-baseline fill-rate dot
+    # plot (parts-of-whole AND a position-encoded rate).
+    for frame, color, label, pt_alpha in (
+        (data["cancelled"], _CANCELLED_COLOR, "cancelled", 0.18),
+        (data["partial"], _PARTIAL_COLOR, "partial", 0.6),
+        (data["filled"], _FILLED_COLOR, "filled", 0.85),
+    ):
+        if frame.empty:
+            continue
+        any_pts = True
+        ax.scatter(
+            frame["distance_bps"],
+            frame["placed"],
+            s=frame["marker_area"],
+            color=color,
+            alpha=pt_alpha,
+            edgecolors="none",
+            label=label,
+        )
+    ax.axvline(x=0, color="#888888", linestyle="--", linewidth=1)
+    ax.set_title("Order outcome by placement distance and size")
+    ax.set_xlabel("Placement distance from touch (bps)")
+    ax.set_ylabel("Order size")
+    if any_pts:
+        ax.legend(loc="upper right")
+    fig.tight_layout()
+    return fig
+
+
+def mpl_trade_tape_per_order(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """L3 (MBO) trade tape: executions plus each maker order's resting bar."""
+    # DEFERRED. trade_tape.L3 currently sizes execution markers by bubble AREA
+    # (rank-5) and draws full maker-rest hlines. FUTURE(--color-by) + encoding
+    # rethink: encode size by length (lollipop), keep side as hue, and reserve
+    # the long maker spans for an explicit "time resting" read. Left as-is for
+    # the simple pass.
+    fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
+    any_pts = False
+    for side, color, label in (
+        (data["buys"], _BUY_COLOR, "buy (lifts ask)"),
+        (data["sells"], _SELL_COLOR, "sell (hits bid)"),
+    ):
+        if side.empty:
+            continue
+        any_pts = True
+        ax.hlines(
+            side["price"],
+            mdates.date2num(side["created_ts"]),
+            mdates.date2num(side["timestamp"]),
+            colors=color,
+            linewidth=1.0,
+            alpha=0.35,
+        )
+        ax.scatter(
+            mdates.date2num(side["timestamp"]),
+            side["price"],
+            s=side["marker_area"],
+            color=color,
+            alpha=0.7,
+            edgecolors="none",
+            label=label,
+        )
+    ax.xaxis_date()
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+    plt.xticks(rotation=45)
+    y_range = data.get("y_range")
+    if y_range is not None:
+        ax.set_ylim(y_range)
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Execution Price")
+    ax.set_title("Trade tape with maker order lifecycles")
+    if any_pts:
+        ax.legend(loc="upper right")
     fig.tight_layout()
     return fig
 
@@ -851,21 +1177,34 @@ def mpl_trading_halts(
 # ---------------------------------------------------------------------------
 # Imported here (not at module top) so RENDERERS -- defined in the package
 # __init__ -- already exists when this module is imported during package init.
-from ob_analytics.visualization import RENDERERS  # noqa: E402
+from ob_analytics.visualization import RENDERERS, Level  # noqa: E402
 
-for _plot_name, _fn in {
-    "time_series": mpl_time_series,
-    "trades": mpl_trades,
-    "price_levels": mpl_price_levels,
-    "event_map": mpl_event_map,
-    "volume_map": mpl_volume_map,
-    "current_depth": mpl_current_depth,
-    "volume_percentiles": mpl_volume_percentiles,
-    "events_histogram": mpl_events_histogram,
-    "vpin": mpl_vpin,
-    "order_flow_imbalance": mpl_order_flow_imbalance,
-    "kyle_lambda": mpl_kyle_lambda,
-    "hidden_executions": mpl_hidden_executions,
-    "trading_halts": mpl_trading_halts,
-}.items():
-    RENDERERS.register((_plot_name, "matplotlib"), _fn)
+# (concept, level, renderer).  L2 = aggregate per price level; analytics carry
+# no level and register at ``None``.  The level is a registry *coordinate*, not
+# a name suffix -- L3 faces register the same concept at ``Level.L3``.
+_L2 = Level.L2
+_L3 = Level.L3
+for _concept, _level, _fn in [
+    ("time_series", _L2, mpl_time_series),
+    ("trade_tape", _L2, mpl_trades),
+    ("trade_tape", _L3, mpl_trade_tape_per_order),
+    ("depth_heatmap", _L2, mpl_price_levels),
+    ("order_activity", _L2, mpl_event_map),
+    ("order_activity", _L3, mpl_order_activity_per_order),
+    ("order_outcome", _L3, mpl_order_outcome_per_order),
+    ("liquidity_at_touch", _L2, mpl_liquidity_at_touch),
+    ("cancellations", _L2, mpl_volume_map),
+    ("cancellations", _L3, mpl_cancellations_per_order),
+    ("book_snapshot", _L2, mpl_book_snapshot_aggregate),
+    ("book_snapshot", _L3, mpl_book_snapshot_per_order),
+    ("depth_chart", _L2, mpl_depth_chart_aggregate),
+    ("depth_chart", _L3, mpl_depth_chart_per_order),
+    ("volume_percentiles", _L2, mpl_volume_percentiles),
+    ("events_histogram", _L2, mpl_events_histogram),
+    ("hidden_executions", _L2, mpl_hidden_executions),
+    ("vpin", None, mpl_vpin),
+    ("order_flow_imbalance", None, mpl_order_flow_imbalance),
+    ("kyle_lambda", None, mpl_kyle_lambda),
+    ("trading_halts", None, mpl_trading_halts),
+]:
+    RENDERERS.register((_concept, _level, "matplotlib"), _fn)

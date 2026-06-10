@@ -4,6 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -281,6 +282,272 @@ def tiny_events() -> pd.DataFrame:
             "original_number": [1, 2, 3, 4],
         }
     )
+
+
+@pytest.fixture
+def sample_cancellation_events() -> pd.DataFrame:
+    """Paired created/deleted flashed-limit orders for the L3 cancellations face.
+
+    Each order ``id`` has a ``created`` row carrying ``aggressiveness_bps``
+    (placement distance) and a later ``deleted`` row carrying the cancelled
+    volume -- exactly what :func:`prepare_cancellations_l3_data` merges on.
+    """
+    ts = pd.Timestamp("2015-05-01 01:00:00", tz="UTC")
+    rng = np.random.default_rng(7)
+    rows: list[dict] = []
+    for i in range(8):
+        oid = i + 1
+        direction = "bid" if i % 2 == 0 else "ask"
+        created_ts = ts + pd.Timedelta(seconds=i)
+        age = float(rng.uniform(1.0, 20.0))
+        vol = float(rng.uniform(100, 1000))
+        rows.append(
+            {
+                "id": oid,
+                "timestamp": created_ts,
+                "volume": vol,
+                "direction": direction,
+                "action": "created",
+                "type": "flashed-limit",
+                "aggressiveness_bps": float(rng.uniform(-10.0, 10.0)),
+            }
+        )
+        rows.append(
+            {
+                "id": oid,
+                "timestamp": created_ts + pd.Timedelta(seconds=age),
+                "volume": vol,
+                "direction": direction,
+                "action": "deleted",
+                "type": "flashed-limit",
+                "aggressiveness_bps": np.nan,
+            }
+        )
+    df = pd.DataFrame(rows)
+    df["direction"] = pd.Categorical(df["direction"], categories=["bid", "ask"])
+    df["action"] = pd.Categorical(
+        df["action"], categories=["created", "changed", "deleted"], ordered=True
+    )
+    return df
+
+
+@pytest.fixture
+def sample_order_lifecycle_events() -> pd.DataFrame:
+    """Limit-order lifecycles for the order_activity L3 Gantt face.
+
+    Three populations exercise every span branch in
+    :func:`prepare_order_activity_l3_data`:
+
+    - ``flashed-limit`` bids (ids 100-102): created then deleted with unchanged
+      volume -- placed and pulled (**cancelled**); the span ends at the delete.
+    - ``resting-limit`` asks (ids 200-202): created, changed, then deleted --
+      rested and provided liquidity before terminating at the delete.
+    - one ``resting-limit`` bid (id 300): created only, never removed -- still on
+      the book at window end, so its span must extend to *end_time*.
+
+    Prices sit in a tight band so the 1st--99th percentile clip keeps the
+    mid-band orders (notably the forever-resting id 300) the tests assert on.
+    """
+    ts = pd.Timestamp("2015-05-01 01:00:00", tz="UTC")
+    rows: list[dict] = []
+
+    flashed = {100: 236.40, 101: 236.45, 102: 236.50}
+    for offset, (oid, price) in enumerate(flashed.items()):
+        rows.append(
+            dict(
+                id=oid,
+                timestamp=ts + pd.Timedelta(seconds=offset),
+                price=price,
+                volume=300.0,
+                direction="bid",
+                action="created",
+                type="flashed-limit",
+            )
+        )
+        rows.append(
+            dict(
+                id=oid,
+                timestamp=ts + pd.Timedelta(seconds=offset + 3),
+                price=price,
+                volume=300.0,
+                direction="bid",
+                action="deleted",
+                type="flashed-limit",
+            )
+        )
+
+    resting = {200: 236.80, 201: 236.90, 202: 237.00}
+    for offset, (oid, price) in enumerate(resting.items()):
+        rows.append(
+            dict(
+                id=oid,
+                timestamp=ts + pd.Timedelta(seconds=offset),
+                price=price,
+                volume=500.0,
+                direction="ask",
+                action="created",
+                type="resting-limit",
+            )
+        )
+        rows.append(
+            dict(
+                id=oid,
+                timestamp=ts + pd.Timedelta(seconds=offset + 5),
+                price=price,
+                volume=300.0,
+                direction="ask",
+                action="changed",
+                type="resting-limit",
+            )
+        )
+        rows.append(
+            dict(
+                id=oid,
+                timestamp=ts + pd.Timedelta(seconds=offset + 9),
+                price=price,
+                volume=0.0,
+                direction="ask",
+                action="deleted",
+                type="resting-limit",
+            )
+        )
+
+    # Forever-resting bid: created once, never removed -> still on the book.
+    rows.append(
+        dict(
+            id=300,
+            timestamp=ts,
+            price=236.60,
+            volume=400.0,
+            direction="bid",
+            action="created",
+            type="resting-limit",
+        )
+    )
+
+    df = pd.DataFrame(rows)
+    df["direction"] = pd.Categorical(df["direction"], categories=["bid", "ask"])
+    df["action"] = pd.Categorical(
+        df["action"], categories=["created", "changed", "deleted"], ordered=True
+    )
+    df["type"] = pd.Categorical(
+        df["type"],
+        categories=[
+            "unknown",
+            "flashed-limit",
+            "resting-limit",
+            "market-limit",
+            "market",
+        ],
+        ordered=True,
+    )
+    return df
+
+
+@pytest.fixture
+def sample_executed_orders() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Created limit orders + executing trades for the L3 execution faces.
+
+    Returns ``(events, trades)`` wired so each competing-risks outcome and both
+    fill roles are exercised by :func:`prepare_order_outcome_l3_data` and
+    :func:`prepare_trade_tape_l3_data`:
+
+    - **id 1** (bid): fully filled as the *maker* of trade T1  -> ``filled``.
+    - **id 2** (ask): half filled (maker of T2) then deleted   -> ``partial``.
+    - **id 3** (bid): deleted with no execution               -> ``cancelled``.
+    - **id 4** (ask): never filled, never deleted             -> ``censored`` (dropped).
+    - **id 5** (bid): fully filled as the *taker* of trade T3 -> ``filled``.
+    - **id 6** (ask): fully filled as the maker of trade T4   -> ``filled``.
+
+    Takers that are not measured orders (and the one un-tracked maker in T3) use
+    sentinel event ids absent from ``events``; the prep's inner merges drop them.
+    """
+    ts = pd.Timestamp("2015-05-01 01:00:00", tz="UTC")
+    created = [
+        dict(event_id=1, id=1, price=100.0, volume=10.0, direction="bid", bps=2.0),
+        dict(event_id=2, id=2, price=100.2, volume=10.0, direction="ask", bps=-1.0),
+        dict(event_id=3, id=3, price=100.0, volume=8.0, direction="bid", bps=1.0),
+        dict(event_id=4, id=4, price=100.2, volume=6.0, direction="ask", bps=-2.0),
+        dict(event_id=5, id=5, price=100.1, volume=12.0, direction="bid", bps=3.0),
+        dict(event_id=6, id=6, price=100.1, volume=9.0, direction="ask", bps=-3.0),
+    ]
+    rows: list[dict] = []
+    for offset, o in enumerate(created):
+        rows.append(
+            dict(
+                event_id=o["event_id"],
+                id=o["id"],
+                timestamp=ts + pd.Timedelta(seconds=offset),
+                price=o["price"],
+                volume=o["volume"],
+                direction=o["direction"],
+                action="created",
+                aggressiveness_bps=o["bps"],
+            )
+        )
+    # Terminal deletes: id 2 (after partial fill) and id 3 (cancelled, no fill).
+    for event_id, oid, price, direction in (
+        (12, 2, 100.2, "ask"),
+        (13, 3, 100.0, "bid"),
+    ):
+        rows.append(
+            dict(
+                event_id=event_id,
+                id=oid,
+                timestamp=ts + pd.Timedelta(seconds=30),
+                price=price,
+                volume=0.0,
+                direction=direction,
+                action="deleted",
+                aggressiveness_bps=np.nan,
+            )
+        )
+    events = pd.DataFrame(rows)
+    events["direction"] = pd.Categorical(events["direction"], categories=["bid", "ask"])
+    events["action"] = pd.Categorical(
+        events["action"], categories=["created", "changed", "deleted"], ordered=True
+    )
+
+    trades = pd.DataFrame(
+        [
+            # maker, taker, price, volume, aggressor direction
+            dict(
+                maker_event_id=1,
+                taker_event_id=9001,
+                price=100.0,
+                volume=10.0,
+                direction="sell",
+            ),
+            dict(
+                maker_event_id=2,
+                taker_event_id=9002,
+                price=100.2,
+                volume=5.0,
+                direction="buy",
+            ),
+            dict(
+                maker_event_id=9003,
+                taker_event_id=5,
+                price=100.1,
+                volume=12.0,
+                direction="buy",
+            ),
+            dict(
+                maker_event_id=6,
+                taker_event_id=9004,
+                price=100.1,
+                volume=9.0,
+                direction="sell",
+            ),
+        ]
+    )
+    trades["timestamp"] = [
+        ts + pd.Timedelta(seconds=10 + i) for i in range(len(trades))
+    ]
+    trades["direction"] = pd.Categorical(
+        trades["direction"], categories=["buy", "sell"]
+    )
+    return events, trades
 
 
 @pytest.fixture
