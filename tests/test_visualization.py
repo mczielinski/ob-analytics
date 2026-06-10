@@ -238,6 +238,37 @@ class TestPlotOrderActivityL3:
         with pytest.raises(ValueError, match="comparable"):
             plot("order_activity", **data)
 
+    def test_rounded_price_ticks_caps_count(self) -> None:
+        # The Gantt placed one tick per price_by step, stacking labels into an
+        # unreadable smear on a wide book; round-number ticks must be thinned.
+        from ob_analytics.visualization._matplotlib import _rounded_price_ticks
+
+        ticks = _rounded_price_ticks(78250.0, 78510.0, 5.0, max_ticks=12)
+        assert 0 < len(ticks) <= 12
+        for t in ticks:
+            assert abs(t / 5.0 - round(t / 5.0)) < 1e-9  # still multiples of price_by
+
+    def test_gantt_thins_y_ticks_on_wide_book(self) -> None:
+        # 260-wide window at a 5-unit grid would place 52 ticks; the renderer
+        # must thin them to a legible count.
+        empty = pd.DataFrame({"price": [], "start_ts": [], "end_ts": []})
+        one = pd.DataFrame(
+            {
+                "price": [78300.0],
+                "start_ts": pd.to_datetime(["2026-01-01T00:00:00"]),
+                "end_ts": pd.to_datetime(["2026-01-01T00:00:10"]),
+            }
+        )
+        data = {
+            "flashed": one,
+            "resting": empty,
+            "y_range": (78250.0, 78510.0),
+            "price_by": 5.0,
+        }
+        fig = plot("order_activity", Level.L3, **data)
+        ax = fig.axes[0]
+        assert 0 < len(ax.get_yticks()) <= 13
+
 
 class TestPlotVolumeMap:
     def test_returns_figure(self, sample_events):
@@ -314,6 +345,18 @@ class TestPlotLiquidityAtTouch:
         data = _data.prepare_liquidity_at_touch_data(sample_depth_summary)
         fig = plot("liquidity_at_touch", ax=ax_orig, **data)
         assert fig is fig_orig
+
+    def test_lines_drawn_with_transparency(self, sample_depth_summary):
+        # The bid/ask step series overplot heavily in the dense band; drawing
+        # them with alpha < 1 keeps both legible where they overlap.
+        data = _data.prepare_liquidity_at_touch_data(sample_depth_summary)
+        fig = plot("liquidity_at_touch", **data)
+        ax = fig.axes[0]
+        lines = ax.get_lines()
+        assert lines  # both series drawn
+        for ln in lines:
+            alpha = ln.get_alpha()
+            assert alpha is not None and alpha < 1.0
 
 
 class TestPlotOrderOutcomeL3:

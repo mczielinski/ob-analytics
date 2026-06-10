@@ -361,11 +361,7 @@ def mpl_event_map(
     ax.set_xlabel("Time")
     ax.set_ylabel("Limit Price")
     ax.set_yticks(
-        np.arange(
-            round(events["price"].min() / price_by) * price_by,
-            round(events["price"].max() / price_by) * price_by,
-            price_by,
-        )
+        _rounded_price_ticks(events["price"].min(), events["price"].max(), price_by)
     )
     fig.tight_layout()
     return fig
@@ -454,6 +450,25 @@ def _book_separator_edge(
         return "white"  # a single price level fills the axis -> always wide
     bar_px = (width / price_span) * fig_width_px
     return "white" if bar_px >= _MIN_SEPARATOR_BAR_PX else "none"
+
+
+def _rounded_price_ticks(
+    lo: float, hi: float, price_by: float, *, max_ticks: int = 12
+) -> np.ndarray:
+    """Round-number price ticks spanning ``[lo, hi]``, thinned to <= ``max_ticks``.
+
+    The base grid steps by ``price_by``; when that would place more than
+    ``max_ticks`` ticks the step is widened to the next integer multiple of
+    ``price_by`` so the labels stay legible (the dense L3 Gantt and the event
+    map otherwise stacked one label per level into an unreadable smear).
+    """
+    if price_by <= 0:
+        return np.array([lo])
+    start = round(lo / price_by) * price_by
+    stop = round(hi / price_by) * price_by
+    n_steps = max(1, round((stop - start) / price_by))
+    factor = max(1, int(np.ceil(n_steps / max_ticks)))
+    return np.arange(start, stop, price_by * factor)
 
 
 def _mpl_book_bars(
@@ -633,13 +648,7 @@ def mpl_order_activity_per_order(
     price_by = data["price_by"]
     if y_range is not None:
         ax.set_ylim(y_range)
-        ax.set_yticks(
-            np.arange(
-                round(y_range[0] / price_by) * price_by,
-                round(y_range[1] / price_by) * price_by,
-                price_by,
-            )
-        )
+        ax.set_yticks(_rounded_price_ticks(y_range[0], y_range[1], price_by))
 
     ax.set_xlabel("Time")
     ax.set_ylabel("Limit Price")
@@ -656,11 +665,14 @@ def mpl_liquidity_at_touch(
     """L2 (MBP) liquidity at the touch: best bid/ask resting size over time."""
     fig, ax = _create_axes(ax, figsize=(10, 6), theme=theme)
     ts = data["timestamp"]
+    # Thin, semi-transparent step lines so the bid and ask series stay legible
+    # where they overplot in the dense band near the touch.
     ax.plot(
         ts,
         data["bid_vol"],
         color=_BID_COLOR,
-        linewidth=1.2,
+        linewidth=0.9,
+        alpha=0.7,
         drawstyle="steps-post",
         label="Best bid size",
     )
@@ -668,7 +680,8 @@ def mpl_liquidity_at_touch(
         ts,
         data["ask_vol"],
         color=_ASK_COLOR,
-        linewidth=1.2,
+        linewidth=0.9,
+        alpha=0.7,
         drawstyle="steps-post",
         label="Best ask size",
     )
