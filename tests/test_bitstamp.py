@@ -18,7 +18,6 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from ob_analytics import sample_csv_path
 from ob_analytics.bitstamp import (
     BitstampFormat,
     BitstampLoader,
@@ -52,9 +51,12 @@ def tiny_pipeline_result(tiny_bitstamp_orders_csv: Path):
 
 
 class TestBitstampLoader:
-    def test_loads_sample_data(self):
-        loader = BitstampLoader()
-        events = loader.load(sample_csv_path())
+    # These six tests share one session-scoped load of the bundled sample
+    # (the `sample_events` fixture in conftest.py) instead of paying the
+    # ~15s load each.
+
+    def test_loads_sample_data(self, sample_events: pd.DataFrame):
+        events = sample_events
         assert len(events) > 0
         for col in (
             "event_id",
@@ -68,21 +70,21 @@ class TestBitstampLoader:
         ):
             assert col in events.columns, f"missing column: {col}"
 
-    def test_timestamps_are_datetime(self):
-        events = BitstampLoader().load(sample_csv_path())
+    def test_timestamps_are_datetime(self, sample_events: pd.DataFrame):
+        events = sample_events
         # BitstampLoader converts epoch -> tz-naive datetime64 (the loader uses
         # pd.to_datetime without utc=True). Pin that contract.
         assert pd.api.types.is_datetime64_any_dtype(events["timestamp"])
         assert pd.api.types.is_datetime64_any_dtype(events["exchange_timestamp"])
 
-    def test_direction_is_ordered_categorical(self):
-        events = BitstampLoader().load(sample_csv_path())
+    def test_direction_is_ordered_categorical(self, sample_events: pd.DataFrame):
+        events = sample_events
         assert events["direction"].dtype.name == "category"
         assert list(events["direction"].cat.categories) == ["bid", "ask"]
         assert events["direction"].cat.ordered
 
-    def test_action_is_ordered_categorical(self):
-        events = BitstampLoader().load(sample_csv_path())
+    def test_action_is_ordered_categorical(self, sample_events: pd.DataFrame):
+        events = sample_events
         assert events["action"].dtype.name == "category"
         assert list(events["action"].cat.categories) == [
             "created",
@@ -91,20 +93,20 @@ class TestBitstampLoader:
         ]
         assert events["action"].cat.ordered
 
-    def test_event_ids_unique_and_sequential(self):
-        events = BitstampLoader().load(sample_csv_path())
+    def test_event_ids_unique_and_sequential(self, sample_events: pd.DataFrame):
+        events = sample_events
         assert events["event_id"].is_unique
         sorted_events = events.sort_values("event_id")
         assert (sorted_events["event_id"].diff().dropna() >= 1).all()
 
-    def test_original_number_tracks_source_row(self):
+    def test_original_number_tracks_source_row(self, sample_events: pd.DataFrame):
         """original_number is the 1-based source CSV row, not an event_id alias.
 
         The reference convention the LOBSTER loader now mirrors: original_number
         is assigned before the [id, volume, action, timestamp] sort and carried
         through it, so it stays distinct from the post-sort event_id surrogate.
         """
-        events = BitstampLoader().load(sample_csv_path())
+        events = sample_events
         assert events["original_number"].is_unique
         assert events["original_number"].min() >= 1
         assert (

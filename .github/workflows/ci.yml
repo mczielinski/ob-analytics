@@ -51,7 +51,7 @@ jobs:
       # re-resolve to the project default (no extras) and uninstall plotly /
       # websockets, which causes test_plotly_backend.py to skip and any
       # test_live_protocol tests that import bitstamp capturer to break.
-      - run: uv run --group dev --extra interactive --extra live --python ${{ matrix.python-version }} pytest tests/ --cov=ob_analytics --cov-report=xml -q
+      - run: uv run --group dev --extra interactive --extra live --python ${{ matrix.python-version }} pytest tests/ --cov=ob_analytics --cov-report=xml -q --durations=15
       - name: Upload coverage
         if: matrix.python-version == '3.11' && github.event_name == 'push'
         uses: codecov/codecov-action@v7

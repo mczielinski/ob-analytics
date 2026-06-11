@@ -1,9 +1,8 @@
 """Generic registry — the single plumbing primitive for pluggable surfaces.
 
 One :class:`Registry` instance per pluggable surface (formats, writers,
-capturers, renderers). Replaces the hand-rolled module-level dicts
-(``_FORMATS``, ``_WRITERS``, ``_BACKENDS``, ``_CAPTURERS``, ``_METRICS``)
-that drifted apart with subtly different error messages and lookup rules.
+capturers, renderers), so every surface shares the same lookup rules and
+error messages.
 """
 
 from __future__ import annotations

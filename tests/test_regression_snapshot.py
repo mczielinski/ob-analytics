@@ -24,15 +24,24 @@ from ob_analytics.pipeline import Pipeline, PipelineResult
 
 
 def _df_fingerprint(df: pd.DataFrame) -> str:
-    """Stable content hash of a DataFrame (column names + dtypes + values)."""
+    """Stable content hash of a DataFrame (column names + dtypes + values).
+
+    Numeric and datetime columns hash their raw value buffers (IEEE-754 /
+    int64 bytes, native order — stable across pandas/pyarrow versions, unlike
+    CSV float formatting, and ~200x faster than a to_csv dump on the sample);
+    object-like columns (categoricals, mixed id columns) hash a string join.
+    """
     if df is None:
         return "None"
     h = hashlib.sha256()
     h.update("|".join(map(str, df.columns)).encode())
     h.update("|".join(map(str, df.dtypes)).encode())
-    # to_parquet bytes are stable for identical content within a pyarrow version;
-    # use a value-based CSV dump instead to be version-independent.
-    h.update(df.to_csv(index=False).encode())
+    for col in df.columns:
+        arr = df[col].to_numpy()
+        if arr.dtype == object:
+            h.update("\x1f".join(map(str, arr.tolist())).encode())
+        else:
+            h.update(np.ascontiguousarray(arr).tobytes())
     return h.hexdigest()
 
 
@@ -63,16 +72,13 @@ def test_demo_fingerprints(demo_result):
     fps = {name: _df_fingerprint(df) for name, df in _frames(demo_result).items()}
     for name, fp in fps.items():
         print(f"FINGERPRINT {name} = {fp}")
-    # depth_summary + events updated for the crossed-book eviction fix: the depth
-    # engine no longer freezes best_ask at an orphaned level (missing delete), so
-    # depth_summary best-quote/BPS columns change, and order aggressiveness — the
-    # sole depth_summary consumer that writes events (aggressiveness_bps) — is
-    # recomputed against the corrected best quotes.  trades + depth are unaffected.
+    # Update these ONLY when an intended output change lands (separate,
+    # labeled commit with a before/after rationale).
     EXPECTED: dict[str, str] = {
-        "events": "eb342f2ac5dc0f97f945ba356bb2e25f1b9652176ca1195ee92afee478ecea5f",
-        "trades": "adcc4919350776d58988031395b929f5326853ff3d4b76389d2ca61a03d4384a",
-        "depth": "f43bcdb57648fce327d91c94dac03648cd8a31e367852db84e1ccdd01101fb92",
-        "depth_summary": "5562e26cef9714827a28940856628b2c4457646179786b0ea61ead0120a16161",
+        "events": "8d7a5c6e30fc0761cf28121bc3b910470d76716b80dbccfa24f54f83cd89db46",
+        "trades": "e724c05b6584bfaf111f054e5066da8aec9d59e3315bb2f0a8ca38ae9696dc1a",
+        "depth": "763e6ea8f00d6f88ae9e27cb3c89c8eaf28181297d1f01c35b371aebc37c75b0",
+        "depth_summary": "453474cd31de6b6717ef71200a85c4efff6ef1f26b067002682fa8bd3bcfdf4e",
     }
     if EXPECTED:
         assert fps == EXPECTED

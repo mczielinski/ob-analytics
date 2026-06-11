@@ -82,16 +82,10 @@ def mpl_marker_area_to_plotly_size(area: np.ndarray) -> np.ndarray:
     return np.sqrt(np.maximum(area, 0.0)) * 0.8
 
 
-# The volume-percentile chart colours a fixed 20-step gradient, shared
-# verbatim by every rendering backend.  Percentile rank is *ordered* data, so
-# the ramp encodes it as monotonically decreasing luminance (pale → dark blue)
-# rather than the old rainbow/jet sweep: hue carries no order, so a rainbow
-# made high and low percentiles equally vivid and forced the eye to read a
-# legend.  Channels walk linearly from a pale tint to a saturated blue as the
-# step index i goes 0 → 19, so every channel (and thus luminance) decreases
-# monotonically — keeping the perceptual ordering intact.
-# FUTURE(--color-by): a future opt-in could swap this ramp for an alternate
-# encoding column without touching consumers, since they only read the tuple.
+# Volume-percentile gradient, shared by every rendering backend.  Percentile
+# rank is ordered data, so the 20 steps walk monotonically in luminance
+# (pale → saturated blue) — hue carries no order.  Ramp direction and per-side
+# hue split are revisited in roadmap §3.7 (docs/plans/).
 _VOLUME_PERCENTILE_PALETTE: tuple[tuple[float, float, float, float], ...] = tuple(
     (
         0.88 + (0.03 - 0.88) * (i / 19),
@@ -359,7 +353,6 @@ def prepare_event_map_data(
 
 def prepare_order_activity_l3_data(
     events: pd.DataFrame,
-    per_order: bool = True,
     volume_scale: float | None = None,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
@@ -383,12 +376,7 @@ def prepare_order_activity_l3_data(
     directly comparable on shared time x price axes.  The price axis is clipped
     to the 1st--99th percentile (like the event map) unless *price_from* /
     *price_to* are given, keeping a few far orders from stretching the y-axis.
-
-    ``per_order`` is accepted for signature symmetry with the comparable
-    concepts and is always effectively true here (the face is per order).
     """
-    del per_order  # always per-order; kept for the comparable-concept signature
-
     start_time, end_time = _default_start_end(events, start_time, end_time)
     limit = events[
         events["type"].isin(["flashed-limit", "resting-limit"])
@@ -675,7 +663,6 @@ def prepare_volume_map_data(
 
 def prepare_cancellations_l3_data(
     events: pd.DataFrame,
-    per_order: bool = True,
     volume_scale: float | None = None,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
@@ -695,12 +682,7 @@ def prepare_cancellations_l3_data(
     Both axes are heavy-tailed (a large instant-cancel spike at age 0; a few
     degenerate aggressiveness values), so robust quantile clips bound them:
     age to *age_quantile*, distance to *bps_quantiles*.
-
-    ``per_order`` is accepted for signature symmetry with the comparable
-    concepts and is always effectively true here (the face is per order).
     """
-    del per_order  # always per-order; kept for the comparable-concept signature
-
     start_time, end_time = _default_start_end(events, start_time, end_time)
     deleted = events[
         (events["action"] == "deleted")

@@ -133,10 +133,7 @@ def compute_vpin(
         while trade_total > 0:
             alloc = min(trade_total, bucket_remaining)
             # Proportionally split the buy/sell within this trade
-            if trade_total > 0:
-                frac = alloc / trade_total
-            else:
-                frac = 0.0
+            frac = alloc / trade_total
 
             bucket_buy += trade_buy * frac
             bucket_sell += trade_sell * frac

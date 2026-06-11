@@ -16,6 +16,17 @@ import numpy as np
 
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.visualization._data import mpl_marker_area_to_plotly_size
+from ob_analytics.visualization._palette import (
+    _ASK_COLOR,
+    _BID_COLOR,
+    _BUY_COLOR,
+    _CANCELLED_COLOR,
+    _FILLED_COLOR,
+    _FLASHED_COLOR,
+    _PARTIAL_COLOR,
+    _RESTING_COLOR,
+    _SELL_COLOR,
+)
 
 
 @lru_cache(maxsize=1)
@@ -220,7 +231,6 @@ def plotly_price_levels(data: dict) -> Any:
 def plotly_event_map(data: dict) -> Any:
     """Render a limit-order event map."""
     go = _import_plotly()
-    data["events"]
     created = data["created"]
     deleted = data["deleted"]
 
@@ -309,28 +319,6 @@ def plotly_volume_map(data: dict) -> Any:
     fig.update_xaxes(title_text="Time")
     fig.update_yaxes(title_text="Volume", type="log" if log_scale else "linear")
     return fig
-
-
-# Order-book snapshot palette, shared by the book_snapshot + depth_chart faces
-# (kept identical to the matplotlib backend for cross-backend parity).
-_BID_COLOR = "#4477dd"
-_ASK_COLOR = "#dd4444"
-
-# Order-lifecycle fate palette for the order_activity L3 Gantt (cancelled vs
-# filled/resting); identical to the matplotlib backend for cross-backend parity.
-_FLASHED_COLOR = "#e09f3e"  # flashed-limit: placed and pulled (cancelled)
-_RESTING_COLOR = "#2a9d8f"  # resting-limit: rested / filled
-
-# Trade-tape aggressor palette (taker side) for the L3 tape maker-bars;
-# identical to the matplotlib backend for cross-backend parity.
-_BUY_COLOR = "#2e9e5b"  # buyer-initiated execution (lifts the ask)
-_SELL_COLOR = "#dd4444"  # seller-initiated execution (hits the bid)
-
-# Competing-risks outcome palette for the order_outcome L3 scatter; identical to
-# the matplotlib backend for cross-backend parity.
-_FILLED_COLOR = "#2a9d8f"  # fully executed
-_PARTIAL_COLOR = "#8c8cd8"  # partially executed, remainder removed
-_CANCELLED_COLOR = "#e09f3e"  # removed without any execution
 
 
 def _rgba(hex_color: str, alpha: float) -> str:
@@ -551,7 +539,7 @@ def plotly_order_outcome_per_order(data: dict) -> Any:
     go = _import_plotly()
     fig = _base_figure(go, title="Order outcome by placement distance and size")
     # Cancelled first (underneath) and faded; see the matplotlib backend.
-    # FUTURE(--density): distance-binned composition + fill-rate dot plot.
+    # A distance-binned fate variant is roadmap §3.8 (docs/plans/).
     for frame, color, label, pt_opacity in (
         (data["cancelled"], _CANCELLED_COLOR, "cancelled", 0.18),
         (data["partial"], _PARTIAL_COLOR, "partial", 0.6),
@@ -587,12 +575,10 @@ def plotly_trade_tape_per_order(data: dict) -> Any:
     Uses ``Scattergl`` (WebGL) like the L3 order-activity face it pairs with: the
     maker-bar segment cloud and the execution-marker cloud are both large, so the
     SVG ``Scatter`` path does not scale.
+
+    Size is encoded as marker area for now; the signed-lollipop re-encoding is
+    roadmap §3.4 (docs/plans/).
     """
-    # DEFERRED. trade_tape.L3 currently sizes execution markers by bubble AREA
-    # (rank-5) and draws full maker-rest spans. FUTURE(--color-by) + encoding
-    # rethink: encode size by length (lollipop), keep side as hue, and reserve
-    # the long maker spans for an explicit "time resting" read. Left as-is for
-    # the simple pass.
     go = _import_plotly()
     fig = _base_figure(go, title="Trade tape with maker order lifecycles")
     for side, color, label in (
@@ -662,7 +648,6 @@ def plotly_volume_percentiles(data: dict) -> Any:
     label_map = dict(zip(all_cols, legend_names))
 
     # Asks (positive side) — draw from outermost to innermost for stacking
-    np.zeros(len(asks_cumsum))
     for col in asks_cols:
         current = asks_cumsum[col].values
         fig.add_trace(

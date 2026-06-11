@@ -25,6 +25,26 @@ def sample_csv_path() -> Path:
 
 
 @pytest.fixture(scope="session")
+def _sample_events_cache() -> pd.DataFrame:
+    """Bundled sample loaded once per session (the load costs ~15s)."""
+    if not SAMPLE_CSV.exists():
+        pytest.skip(f"Sample data not found: {SAMPLE_CSV}")
+    from ob_analytics.bitstamp import BitstampLoader
+
+    return BitstampLoader().load(SAMPLE_CSV)
+
+
+@pytest.fixture
+def sample_events(_sample_events_cache: pd.DataFrame) -> pd.DataFrame:
+    """Per-test copy of the session-cached sample events.
+
+    The copy (~0.1s) keeps tests isolated from each other's mutations while
+    sharing the single expensive load.
+    """
+    return _sample_events_cache.copy()
+
+
+@pytest.fixture(scope="session")
 def tiny_bitstamp_orders_csv(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> Path:

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from typing import Iterable
 
-import numpy as np
 import pandas as pd
 
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
@@ -44,12 +43,9 @@ def validate_non_empty(df: pd.DataFrame, context: str) -> None:
 # Trades schema
 # ---------------------------------------------------------------------------
 
-# Canonical trades columns, verified identical against the bitstamp.py and
-# lobster.py trade readers. Carries BOTH the event-id attribution
-# (maker_event_id / taker_event_id, required by trade_impacts /
-# order_aggressiveness in analytics.py) AND the order-id / original-number
-# columns. Named EMPTY_TRADES_COLUMNS — not "TRADE_COLUMNS" — to leave room
-# for a smaller *required* validation subset under a different name later.
+# Canonical trades columns shared by the Bitstamp and LOBSTER trade readers:
+# event-id attribution (maker_event_id / taker_event_id, required by
+# analytics.py) plus order-id / original-number provenance.
 EMPTY_TRADES_COLUMNS: tuple[str, ...] = (
     "timestamp",
     "price",
@@ -71,38 +67,6 @@ def empty_trades() -> pd.DataFrame:
     this helper replaces in the Bitstamp and LOBSTER trade readers.
     """
     return pd.DataFrame(columns=list(EMPTY_TRADES_COLUMNS))
-
-
-# ---------------------------------------------------------------------------
-# Array / DataFrame helpers
-# ---------------------------------------------------------------------------
-
-
-def reverse_matrix(m: pd.DataFrame | np.ndarray) -> pd.DataFrame | np.ndarray:
-    """
-    Reverse the rows of a DataFrame or 2D NumPy array.
-
-    Parameters
-    ----------
-    m : pandas.DataFrame or numpy.ndarray
-        A pandas DataFrame or 2D NumPy array.
-
-    Returns
-    -------
-    pandas.DataFrame or numpy.ndarray
-        A DataFrame or 2D NumPy array with the rows reversed.
-
-    Raises
-    ------
-    TypeError
-        If the input `m` is not a pandas DataFrame or a NumPy array.
-    """
-    if isinstance(m, pd.DataFrame):
-        return m.iloc[::-1].reset_index(drop=True)
-    elif isinstance(m, np.ndarray):
-        return m[::-1, :]
-    else:
-        raise TypeError("Input must be a pandas DataFrame or a NumPy array.")
 
 
 # ---------------------------------------------------------------------------

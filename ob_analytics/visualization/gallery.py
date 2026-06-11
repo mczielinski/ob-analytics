@@ -292,10 +292,9 @@ def build_gallery_model(
                 "Order lifecycles (place → outcome)",
                 "order_activity",
                 _viz_data.prepare_order_activity_l3_data,
-                # FUTURE(--focus): a shared mid-anchored FocusWindow would feed
-                # every L3 face here; for now reuse the depth heatmap's
-                # trades-median ±3σ window so the Gantt clips around the touch
-                # instead of its own raw-price percentile.
+                # Reuses the depth heatmap's trades-median ±3σ window so the
+                # Gantt clips around the touch.  A shared FocusWindow primitive
+                # replaces these per-face clips in roadmap §3.0 (docs/plans/).
                 {
                     "events": events,
                     "volume_scale": volume_scale,
