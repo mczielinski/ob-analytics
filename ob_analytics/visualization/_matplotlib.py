@@ -119,9 +119,13 @@ def save_figure(
         Resolution in dots per inch (default 150).
     **kwargs
         Additional keyword arguments forwarded to
-        :meth:`~matplotlib.figure.Figure.savefig`.
+        :meth:`~matplotlib.figure.Figure.savefig`.  Pass
+        ``bbox_inches="tight"`` explicitly to crop to artist extents —
+        it is not the default because it forces a second full draw
+        (roughly doubling save time on dense figures), and every
+        renderer already applies ``tight_layout``.
     """
-    fig.savefig(path, dpi=dpi, bbox_inches="tight", **kwargs)  # type: ignore
+    fig.savefig(path, dpi=dpi, **kwargs)  # type: ignore
 
 
 # ---------------------------------------------------------------------------
