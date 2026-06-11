@@ -599,6 +599,90 @@ class LobsterWriter:
 # ── LOBSTER depth computation ─────────────────────────────────────────
 
 
+def _side_level_changes(
+    p: np.ndarray,
+    v: np.ndarray,
+    dummy: float,
+    divisor: int,
+    decimals: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Volume changes of one book side across consecutive orderbook rows.
+
+    *p*/*v* are the side's ``(n_rows, n_levels)`` price/size arrays.  A level
+    is active when its price is not the *dummy* sentinel and its size is
+    positive.  Prices are rounded (``round(price / divisor, decimals)``,
+    Python semantics, applied once per unique raw price) before keying, and
+    duplicate rounded prices within a row are summed in level order — both
+    matching the dict-diff this replaces bit-for-bit.
+
+    Returns ``(row_indices, prices, volumes_after)`` for every (row, price)
+    whose volume differs from the previous row (missing level = 0.0), prices
+    ascending within each row.
+    """
+    n = p.shape[0]
+    valid = (p != dummy) & (v > 0)
+
+    rp = np.full(p.shape, np.inf)
+    if valid.any():
+        uniq = np.unique(p[valid])
+        rounded = np.array([round(x / divisor, decimals) for x in uniq.tolist()])
+        idx = np.clip(np.searchsorted(uniq, p), 0, uniq.size - 1)
+        ok = valid & (uniq[idx] == p)
+        rp[ok] = rounded[idx[ok]]
+    vv = np.where(valid, v.astype(np.float64), 0.0)
+
+    # Sort each row by rounded price; inactive levels (+inf) sort last.
+    order = np.argsort(rp, axis=1, kind="stable")
+    rp = np.take_along_axis(rp, order, axis=1)
+    vv = np.take_along_axis(vv, order, axis=1)
+    counts = valid.sum(axis=1)
+
+    # Collapse duplicate rounded prices within a row (summed, level order).
+    dup_rows = np.unique(
+        np.nonzero((rp[:, 1:] == rp[:, :-1]) & np.isfinite(rp[:, 1:]))[0]
+    )
+    collapsed: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+    for r in dup_rows.tolist():
+        pr = rp[r, : counts[r]]
+        first = np.ones(pr.size, dtype=bool)
+        first[1:] = pr[1:] != pr[:-1]
+        starts = np.nonzero(first)[0]
+        collapsed[r] = (pr[first], np.add.reduceat(vv[r, : counts[r]], starts))
+
+    out_rows: list[np.ndarray] = []
+    out_prices: list[np.ndarray] = []
+    out_vols: list[np.ndarray] = []
+    prev_p: np.ndarray = np.empty(0)
+    prev_v: np.ndarray = np.empty(0)
+    for i in range(n):
+        if i in collapsed:
+            cur_p, cur_v = collapsed[i]
+        else:
+            k = counts[i]
+            cur_p, cur_v = rp[i, :k], vv[i, :k]
+
+        union = np.union1d(prev_p, cur_p)
+        va = np.zeros(union.size)
+        va[np.searchsorted(union, prev_p)] = prev_v
+        vb = np.zeros(union.size)
+        vb[np.searchsorted(union, cur_p)] = cur_v
+        changed = va != vb
+        if changed.any():
+            out_rows.append(np.full(int(changed.sum()), i, dtype=np.int64))
+            out_prices.append(union[changed])
+            out_vols.append(vb[changed])
+        prev_p, prev_v = cur_p, cur_v
+
+    if not out_rows:
+        empty_f = np.empty(0, dtype=np.float64)
+        return np.empty(0, dtype=np.int64), empty_f, empty_f
+    return (
+        np.concatenate(out_rows),
+        np.concatenate(out_prices),
+        np.concatenate(out_vols),
+    )
+
+
 def lobster_depth_from_orderbook(
     events: pd.DataFrame,
     orderbook_path: Path,
@@ -647,51 +731,43 @@ def lobster_depth_from_orderbook(
     timestamps = book_events["timestamp"].values[:n]
     event_ids = book_events["event_id"].values[:n]
 
-    # Walk the orderbook rows and diff consecutive states to find changes.
-    # LOBSTER columns repeat (ask_price, ask_size, bid_price, bid_size) per
-    # level, so level ``j`` lives at offsets ``j*4 .. j*4+3``.
-    depth_rows: list[dict] = []
-    prev_levels: dict[tuple[str, float], float] = {}
-
+    # Diff consecutive book states per side.  LOBSTER columns repeat
+    # (ask_price, ask_size, bid_price, bid_size) per level, so each row
+    # reshapes to (levels, 4) and each side becomes an (n, levels) array
+    # pair handled by :func:`_side_level_changes`.  Within an event the
+    # changes are emitted asks first, then bids, each ascending in price
+    # (the previous dict-diff emitted them in unspecified set order).
     price_divisor = config.price_divisor
     price_dec = config.price_decimals
 
-    for i in range(n):
-        curr_levels: dict[tuple[str, float], float] = {}
+    lv = ob_raw[:n].astype(np.float64).reshape(n, num_levels, 4)
 
-        for j in range(num_levels):
-            base = j * 4
-            ap = ob_raw[i, base]
-            av = ob_raw[i, base + 1]
-            if ap != _DUMMY_ASK_PRICE and av > 0:
-                price = round(ap / price_divisor, price_dec)
-                curr_levels[("ask", price)] = curr_levels.get(("ask", price), 0) + av
+    ask_idx, ask_p, ask_v = _side_level_changes(
+        lv[:, :, 0], lv[:, :, 1], _DUMMY_ASK_PRICE, price_divisor, price_dec
+    )
+    bid_idx, bid_p, bid_v = _side_level_changes(
+        lv[:, :, 2], lv[:, :, 3], _DUMMY_BID_PRICE, price_divisor, price_dec
+    )
 
-            bp = ob_raw[i, base + 2]
-            bv = ob_raw[i, base + 3]
-            if bp != _DUMMY_BID_PRICE and bv > 0:
-                price = round(bp / price_divisor, price_dec)
-                curr_levels[("bid", price)] = curr_levels.get(("bid", price), 0) + bv
+    row_idx = np.concatenate([ask_idx, bid_idx])
+    prices = np.concatenate([ask_p, bid_p])
+    vols = np.concatenate([ask_v, bid_v])
+    side_code = np.concatenate(
+        [np.zeros(ask_idx.size, dtype=np.int8), np.ones(bid_idx.size, dtype=np.int8)]
+    )
+    order = np.lexsort((side_code, row_idx))
 
-        all_keys = set(prev_levels) | set(curr_levels)
-        for key in all_keys:
-            pv = prev_levels.get(key, 0.0)
-            cv = curr_levels.get(key, 0.0)
-            if pv != cv:
-                side, price = key
-                depth_rows.append(
-                    {
-                        "event_id": event_ids[i],
-                        "timestamp": timestamps[i],
-                        "price": price,
-                        "volume": cv,
-                        "direction": side,
-                    }
-                )
-        prev_levels = curr_levels
-
-    depth = pd.DataFrame(depth_rows)
-    if depth.empty:
+    if row_idx.size:
+        depth = pd.DataFrame(
+            {
+                "event_id": event_ids[row_idx[order]],
+                "timestamp": timestamps[row_idx[order]],
+                "price": prices[order],
+                "volume": vols[order],
+                "direction": np.where(side_code[order] == 0, "ask", "bid"),
+            }
+        )
+    else:
         depth = pd.DataFrame(
             columns=["event_id", "timestamp", "price", "volume", "direction"]
         )
