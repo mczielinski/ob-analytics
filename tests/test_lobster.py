@@ -517,3 +517,116 @@ class TestOriginalNumberConvention:
         # The two columns are distinct concepts once any source row is filtered.
         assert not events["original_number"].equals(events["event_id"])
         assert events["original_number"].is_unique
+
+
+class TestLobsterDepthFromOrderbook:
+    """Oracle test: the vectorized per-side diff must match a dict-diff
+    reference (the algorithm it replaced) modulo within-event row order,
+    which is now deterministic (asks then bids, ascending price)."""
+
+    def test_matches_dict_diff_reference(self, tmp_path):
+        from ob_analytics.config import PipelineConfig
+        from ob_analytics.lobster import (
+            _DUMMY_ASK_PRICE,
+            _DUMMY_BID_PRICE,
+            lobster_depth_from_orderbook,
+        )
+
+        rng = np.random.default_rng(20260611)
+        n, levels, divisor, dec = 60, 3, 10_000, 2
+
+        # Random walk of a tiny book: occasional empty levels (dummy price),
+        # occasional zero sizes, occasional unchanged consecutive rows.
+        rows = []
+        for i in range(n):
+            row = []
+            base = 5_000_000 + int(rng.integers(-3, 4)) * 100
+            for lv in range(levels):
+                ap = base + (lv + 1) * 100
+                bp = base - (lv + 1) * 100
+                av = int(rng.integers(0, 4)) * 100
+                bv = int(rng.integers(0, 4)) * 100
+                if rng.random() < 0.15:
+                    ap, av = _DUMMY_ASK_PRICE, 0
+                if rng.random() < 0.15:
+                    bp, bv = _DUMMY_BID_PRICE, 0
+                row.extend([ap, av, bp, bv])
+            rows.append(row)
+            if rng.random() < 0.2 and i + 1 < n:
+                rows.append(list(row))  # unchanged consecutive row
+        ob = pd.DataFrame(rows[:n])
+        ob_path = tmp_path / "TEST_orderbook_3.csv"
+        ob.to_csv(ob_path, index=False, header=False)
+
+        events = pd.DataFrame(
+            {
+                "event_id": np.arange(1, n + 1),
+                "timestamp": pd.date_range("2012-06-21 09:30", periods=n, freq="s"),
+                "raw_event_type": np.ones(n, dtype=int),
+            }
+        )
+
+        cfg = PipelineConfig(
+            price_decimals=dec, price_divisor=divisor, volume_decimals=0
+        )
+        depth, _summary = lobster_depth_from_orderbook(events, ob_path, cfg)
+
+        # Dict-diff reference (previous implementation, verbatim semantics).
+        arr = ob.to_numpy()
+        ref_rows, prev = [], {}
+        for i in range(n):
+            curr: dict[tuple[str, float], float] = {}
+            for j in range(levels):
+                b = j * 4
+                ap, av, bp, bv = arr[i, b], arr[i, b + 1], arr[i, b + 2], arr[i, b + 3]
+                if ap != _DUMMY_ASK_PRICE and av > 0:
+                    pr = round(ap / divisor, dec)
+                    curr[("ask", pr)] = curr.get(("ask", pr), 0) + av
+                if bp != _DUMMY_BID_PRICE and bv > 0:
+                    pr = round(bp / divisor, dec)
+                    curr[("bid", pr)] = curr.get(("bid", pr), 0) + bv
+            for key in set(prev) | set(curr):
+                pv, cv = prev.get(key, 0.0), curr.get(key, 0.0)
+                if pv != cv:
+                    ref_rows.append(
+                        {
+                            "event_id": events["event_id"].iloc[i],
+                            "timestamp": events["timestamp"].iloc[i],
+                            "price": key[1],
+                            "volume": float(cv),
+                            "direction": key[0],
+                        }
+                    )
+            prev = curr
+        ref = pd.DataFrame(ref_rows)
+
+        def canon(df: pd.DataFrame) -> pd.DataFrame:
+            out = df.copy()
+            out["direction"] = out["direction"].astype(str)
+            return out.sort_values(
+                ["event_id", "direction", "price"], kind="stable"
+            ).reset_index(drop=True)[
+                ["event_id", "timestamp", "price", "volume", "direction"]
+            ]
+
+        pd.testing.assert_frame_equal(canon(ref), canon(depth), check_dtype=False)
+
+    def test_within_event_order_is_asks_then_bids_ascending(self, tmp_path):
+        from ob_analytics.config import PipelineConfig
+        from ob_analytics.lobster import lobster_depth_from_orderbook
+
+        # One row: two asks + two bids -> first event emits everything.
+        ob = pd.DataFrame([[5001000, 100, 4999000, 200, 5002000, 300, 4998000, 400]])
+        ob_path = tmp_path / "TEST_orderbook_2.csv"
+        ob.to_csv(ob_path, index=False, header=False)
+        events = pd.DataFrame(
+            {
+                "event_id": [1],
+                "timestamp": pd.to_datetime(["2012-06-21 09:30"]),
+                "raw_event_type": [1],
+            }
+        )
+        cfg = PipelineConfig(price_decimals=2, price_divisor=10_000)
+        depth, _ = lobster_depth_from_orderbook(events, ob_path, cfg)
+        assert list(depth["direction"].astype(str)) == ["ask", "ask", "bid", "bid"]
+        assert list(depth["price"]) == [500.1, 500.2, 499.8, 499.9]
