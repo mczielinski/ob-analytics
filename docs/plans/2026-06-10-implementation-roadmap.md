@@ -143,16 +143,23 @@ engine 4.2s · everything else <1s**; Bitstamp `both` gallery: **45.3s for 15 ca
 (depth_heatmap 18.2s, order_activity L2+L3 16.3s, cancellations 5.7s). Full test suite:
 **9m29s** (with coverage on). Package import: 0.63s (fine).
 
-Validated fixes, in order of measured impact:
+Validated fixes, in order of measured impact (all five shipped 2026-06-11):
 
-| # | Target | Now | After (measured/projected) | Status |
+| # | Target | Before | Shipped result | Status |
 |---|---|---|---|---|
-| 2.1 | depth engine binning | 49.8–68.8s | ~10–12s numpy tier; ~4s incremental tier | prototyped, identical output |
-| 2.2 | Bitstamp loader transform | 19.4s | **0.017s (1,139×), exact-equal verified** | prototyped |
-| 2.3 | LOBSTER orderbook-diff loop | ~30s | numpy diff core measured **0.15s** | core prototyped |
-| 2.4 | gallery: heatmap card | ~25s | **2.7s (9×)** via one LineCollection | prototyped |
-| 2.5 | gallery: `save_figure` double-draw | ~half of every card's cost | drop `bbox_inches="tight"` | verified cause |
-| 2.6 | test suite | 9m29s | ~2 min (est.) | causes measured |
+| 2.1 | depth engine binning | 49.8–68.8s | **13.2s (~4.5×)**, byte-identical | **PR #20** |
+| 2.2 | Bitstamp loader transform | 14.7s load | **0.65s load (23×)**, exact-equal | **PR #19** |
+| 2.3 | LOBSTER orderbook-diff loop | 31.5s | **~2s (~15×)**, equal mod. intra-event order; 2 oracle tests added | **PR #21** |
+| 2.4 | gallery: heatmap card | ~25s | **1.8s (~11×)**, pixel-identical | **PR #22** |
+| 2.5 | gallery: `save_figure` double-draw | ~half of card cost | dropped; at-risk faces visually verified | **PR #23** |
+| 2.6 | test suite | 9m29s | **~2:00** (1:15 once 19+20 merge) | shipped in Phase 0 PR #18 |
+
+**Lesson learned in 2.4 (applies to §3.2 Gantt and any dense date-axis collection):**
+`ax.xaxis_date()` registers matplotlib's date *units converter*, and an axis with units
+forces the slow collection-draw path — one `Path` rebuilt per segment on *every* draw
+(~2M `Path.__init__`/save profiled). Plot `date2num` floats and set
+`AutoDateLocator` + `DateFormatter` explicitly instead; batching collections alone does
+not help while units are registered.
 
 ### 2.1 Depth-engine binning (the pipeline hot loop)
 
