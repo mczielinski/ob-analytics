@@ -25,6 +25,39 @@ def _cached_breaks(range_len: int, bins: int) -> np.ndarray:
     return breaks
 
 
+def _interval_sums_sorted(
+    idxs: np.ndarray,
+    vols: np.ndarray,
+    range_len: int,
+    breaks: np.ndarray,
+) -> np.ndarray:
+    """Bin per-level volumes whose offsets *idxs* are sorted ascending.
+
+    Contract: byte-identical to ``np.diff`` over ``np.cumsum(dense)[breaks]``,
+    where ``dense`` is the length-``range_len`` array with ``dense[idxs] =
+    vols`` and zeros everywhere else.  Because volumes are non-negative and
+    ``x + 0.0 == x`` for finite ``x``, accumulating the active levels in
+    ascending-offset order reproduces ``cumsum(dense)`` at every index
+    bit-for-bit; the prefix sums are sampled at ``breaks`` and differenced.
+
+    *idxs* must already be clipped to ``[0, range_len)``.
+    """
+    bins = len(breaks)
+    if idxs.size == 0:
+        return np.zeros(bins, dtype=np.float64)
+
+    prefix = np.cumsum(vols)
+
+    # prefix[j] equals the dense cumulative sum at the j-th active offset.
+    # Negative break indices address from the end, matching the numpy fancy
+    # indexing ``cs[breaks]`` of the dense reference.
+    breaks_norm = np.where(breaks < 0, range_len + breaks, breaks)
+    pos = np.searchsorted(idxs, breaks_norm, side="right") - 1
+    intervals = np.where(pos >= 0, prefix[np.clip(pos, 0, prefix.size - 1)], 0.0)
+
+    return np.concatenate(([intervals[0]], np.diff(intervals)))
+
+
 def _interval_sums_sparse(
     levels: dict[int, float],
     best: int,
@@ -34,42 +67,22 @@ def _interval_sums_sparse(
 ) -> np.ndarray:
     """Sum active book volume into the bins delimited by *breaks*.
 
-    Contract: byte-identical to ``np.diff`` over ``np.cumsum(dense)[breaks]``,
-    where ``dense`` is the length-``range_len`` array holding each active
-    level's volume at ``idx = price - best`` (asks) / ``best - price`` (bids)
-    and zeros everywhere else.  Because volumes are non-negative and
-    ``x + 0.0 == x`` for finite ``x``, accumulating only the active levels in
-    ascending-``idx`` order reproduces ``cumsum(dense)`` at every index
-    bit-for-bit; the prefix sums are sampled at ``breaks`` and differenced.
-
-    Iterating the whole levels dict per call is the pipeline's hot loop
-    (levels average ~1.8k entries per side on the bundled sample); the
-    vectorized rework is roadmap §2.1 (docs/plans/).
+    Dict adapter over :func:`_interval_sums_sorted`, kept for the dense
+    cumsum oracle test; the engine hot path holds price-sorted arrays and
+    calls the core directly.
     """
-    idxs: list[int] = []
-    vols: list[float] = []
+    idx_list: list[int] = []
+    vol_list: list[float] = []
     for p, v in levels.items():
         idx = (p - best) if side == 1 else (best - p)
         if 0 <= idx < range_len:
-            idxs.append(idx)
-            vols.append(v)
+            idx_list.append(idx)
+            vol_list.append(v)
 
-    bins = len(breaks)
-    if not idxs:
-        return np.zeros(bins, dtype=np.float64)
-
-    order = np.argsort(idxs, kind="stable")
-    idxs_sorted = np.asarray(idxs)[order]
-    prefix = np.cumsum(np.asarray(vols, dtype=np.float64)[order])
-
-    # cs[j] over the dense array equals the prefix sum of active vols with
-    # idx <= j.  Negative break indices address from the end, matching the
-    # numpy fancy indexing ``cs[breaks]`` they replace.
-    breaks_norm = np.where(breaks < 0, range_len + breaks, breaks)
-    pos = np.searchsorted(idxs_sorted, breaks_norm, side="right") - 1
-    intervals = np.where(pos >= 0, prefix[np.clip(pos, 0, len(prefix) - 1)], 0.0)
-
-    return np.concatenate(([intervals[0]], np.diff(intervals)))
+    order = np.argsort(idx_list, kind="stable")
+    idxs = np.asarray(idx_list)[order]
+    vols = np.asarray(vol_list, dtype=np.float64)[order]
+    return _interval_sums_sorted(idxs, vols, range_len, breaks)
 
 
 class DepthMetricsEngine:
@@ -80,21 +93,16 @@ class DepthMetricsEngine:
     frame; internally each event is applied via :meth:`update_side`,
     which writes one metrics row into a pre-allocated numpy buffer.
 
-    Fixes over the legacy R implementation:
+    Each book side is held as a pair of parallel numpy arrays sorted
+    ascending by integer price: best lookup is O(1) (asks at index 0, bids
+    at index -1), membership is O(log L) via ``searchsorted``, crossed-level
+    eviction is a contiguous slice, and BPS-bin sums vectorize over the
+    in-window slice instead of iterating every active level in Python
+    (levels average ~1.8k per side on the bundled sample, making that
+    iteration the pipeline's former hot loop).
 
-    * **Dynamic price support** -- uses ``dict[int, float]`` instead of
-      ``np.zeros(1_000_000)``, so any price range and precision works.
-    * **Correct best-price initialisation** -- ``min()`` for asks and
-      ``max()`` for bids (the R code had them inverted).
-    * **Correct best-price tracking** -- ``min()``/``max()`` over active
-      levels only (hundreds of entries) instead of scanning a 1M array.
-    * **Numpy output** -- pre-allocates a numpy matrix and converts to
-      DataFrame only at the end (5-10x faster than ``DataFrame.iloc``
-      in the hot loop).
-    * **Breaks caching** -- ``@lru_cache`` avoids recomputing bin
-      boundaries every iteration.
-    * **Correct ``best_bid_vol``** -- when a new higher bid arrives,
-      ``best_bid_vol`` is set to the new volume.
+    Output is written into a pre-allocated numpy matrix and converted to a
+    DataFrame once at the end; bin boundaries are ``@lru_cache``-d.
 
     Parameters
     ----------
@@ -108,16 +116,42 @@ class DepthMetricsEngine:
     ) -> None:
         self._config = config or PipelineConfig()
 
-        self._ask_levels: dict[int, float] = {}
-        self._bid_levels: dict[int, float] = {}
-        self._best_ask: int | None = None
-        self._best_ask_vol: float = 0.0
-        self._best_bid: int | None = None
-        self._best_bid_vol: float = 0.0
+        self._ask_prices: np.ndarray = np.empty(0, dtype=np.int64)
+        self._ask_vols: np.ndarray = np.empty(0, dtype=np.float64)
+        self._bid_prices: np.ndarray = np.empty(0, dtype=np.int64)
+        self._bid_vols: np.ndarray = np.empty(0, dtype=np.float64)
 
         self._bps = self._config.depth_bps
         self._bins = self._config.depth_bins
         self._row_len = 2 * (2 + self._bins)
+
+    # ── Diagnostic views (state lives in the sorted arrays) ──────────
+
+    @property
+    def _ask_levels(self) -> dict[int, float]:
+        """Active ask levels as ``{price: volume}`` (diagnostic view)."""
+        return dict(zip(self._ask_prices.tolist(), self._ask_vols.tolist()))
+
+    @property
+    def _bid_levels(self) -> dict[int, float]:
+        """Active bid levels as ``{price: volume}`` (diagnostic view)."""
+        return dict(zip(self._bid_prices.tolist(), self._bid_vols.tolist()))
+
+    @property
+    def _best_ask(self) -> int | None:
+        return int(self._ask_prices[0]) if self._ask_prices.size else None
+
+    @property
+    def _best_ask_vol(self) -> float:
+        return float(self._ask_vols[0]) if self._ask_vols.size else 0.0
+
+    @property
+    def _best_bid(self) -> int | None:
+        return int(self._bid_prices[-1]) if self._bid_prices.size else None
+
+    @property
+    def _best_bid_vol(self) -> float:
+        return float(self._bid_vols[-1]) if self._bid_vols.size else 0.0
 
     def compute(self, depth: pd.DataFrame) -> pd.DataFrame:
         """Process an entire depth DataFrame and return metrics.
@@ -193,146 +227,98 @@ class DepthMetricsEngine:
             Pre-allocated 1-D array of length ``row_len`` to fill.
         """
         if side == 1:
-            levels = self._ask_levels
-            opposing = self._bid_levels
+            prices, vols = self._ask_prices, self._ask_vols
         else:
-            levels = self._bid_levels
-            opposing = self._ask_levels
+            prices, vols = self._bid_prices, self._bid_vols
 
         evicted = False
         if volume > 0:
-            levels[price] = volume
+            i = int(np.searchsorted(prices, price))
+            if i < prices.size and prices[i] == price:
+                vols[i] = volume
+            else:
+                prices = np.insert(prices, i, price)
+                vols = np.insert(vols, i, volume)
             # A resting bid and ask coexist only when bid_price < ask_price.
             # Trust the fresh quote: evict any *stale* opposing levels it
             # strictly crosses (e.g. an orphaned best whose delete event is
             # missing from the feed).  Equal-price touches are left intact,
-            # so genuine locked books are still tolerated.  The cheap best-vs-
-            # price comparison keeps the common, non-crossing event O(1); the
-            # full scan only runs when an actual cross is present.
-            if side == 1 and self._best_bid is not None and self._best_bid > price:
-                # new ask -> bids strictly above it are crossed
-                for op in [op for op in opposing if op > price]:
-                    del opposing[op]
-                evicted = True
-            elif side == 0 and self._best_ask is not None and self._best_ask < price:
-                # new bid -> asks strictly below it are crossed
-                for op in [op for op in opposing if op < price]:
-                    del opposing[op]
-                evicted = True
-        elif price in levels:
-            del levels[price]
+            # so genuine locked books are still tolerated.  Crossed levels
+            # are contiguous at the opposing array's best end, so eviction
+            # is a single slice.
+            if side == 1:
+                opp_p, opp_v = self._bid_prices, self._bid_vols
+                if opp_p.size and opp_p[-1] > price:
+                    # new ask -> bids strictly above it are crossed
+                    k = int(np.searchsorted(opp_p, price, side="right"))
+                    self._bid_prices = opp_p[:k].copy()
+                    self._bid_vols = opp_v[:k].copy()
+                    evicted = True
+            else:
+                opp_p, opp_v = self._ask_prices, self._ask_vols
+                if opp_p.size and opp_p[0] < price:
+                    # new bid -> asks strictly below it are crossed
+                    k = int(np.searchsorted(opp_p, price, side="left"))
+                    self._ask_prices = opp_p[k:].copy()
+                    self._ask_vols = opp_v[k:].copy()
+                    evicted = True
+        else:
+            i = int(np.searchsorted(prices, price))
+            if i < prices.size and prices[i] == price:
+                prices = np.delete(prices, i)
+                vols = np.delete(vols, i)
 
-        self._refresh_best(side, price, volume)
+        if side == 1:
+            self._ask_prices, self._ask_vols = prices, vols
+        else:
+            self._bid_prices, self._bid_vols = prices, vols
+
         if evicted:
-            # Eviction mutated the opposing book; refresh and emit its metrics
-            # too, otherwise compute() carries the stale opposing columns over.
-            self._recompute_best(1 - side)
+            # Eviction mutated the opposing book; emit its metrics too,
+            # otherwise compute() carries the stale opposing columns over.
             self._write_side_metrics(1 - side, out)
         self._write_side_metrics(side, out)
-
-    def _refresh_best(self, side: int, price: int, volume: float) -> None:
-        if side == 1:
-            levels = self._ask_levels
-            current_best = self._best_ask
-        else:
-            levels = self._bid_levels
-            current_best = self._best_bid
-
-        if not levels:
-            if side == 1:
-                self._best_ask = None
-                self._best_ask_vol = 0.0
-            else:
-                self._best_bid = None
-                self._best_bid_vol = 0.0
-            return
-
-        new_best: int | None = current_best
-        new_vol: float | None = None
-
-        if volume > 0:
-            better = (
-                ((price < current_best) if side == 1 else (price > current_best))
-                if current_best is not None
-                else True
-            )
-            if better:
-                new_best = price
-                new_vol = volume
-            elif price == current_best:
-                new_vol = volume
-        elif current_best is not None and price == current_best:
-            new_best = min(levels) if side == 1 else max(levels)
-            new_vol = levels[new_best]
-
-        if new_vol is None:
-            return
-
-        if side == 1:
-            self._best_ask = new_best
-            self._best_ask_vol = new_vol
-        else:
-            self._best_bid = new_best
-            self._best_bid_vol = new_vol
-
-    def _recompute_best(self, side: int) -> None:
-        """Recompute a side's best price/volume from its active levels.
-
-        Used after a bulk eviction of crossed opposing levels, where the
-        single-level :meth:`_refresh_best` fast-path does not apply.
-        """
-        if side == 1:
-            if self._ask_levels:
-                self._best_ask = min(self._ask_levels)
-                self._best_ask_vol = self._ask_levels[self._best_ask]
-            else:
-                self._best_ask = None
-                self._best_ask_vol = 0.0
-        else:
-            if self._bid_levels:
-                self._best_bid = max(self._bid_levels)
-                self._best_bid_vol = self._bid_levels[self._best_bid]
-            else:
-                self._best_bid = None
-                self._best_bid_vol = 0.0
 
     def _write_side_metrics(self, side: int, out: np.ndarray) -> None:
         if side == 1:
             offset = 2 + self._bins
-            best = self._best_ask
-            best_vol = self._best_ask_vol
-            levels = self._ask_levels
+            prices, vols = self._ask_prices, self._ask_vols
         else:
             offset = 0
-            best = self._best_bid
-            best_vol = self._best_bid_vol
-            levels = self._bid_levels
+            prices, vols = self._bid_prices, self._bid_vols
 
-        if best is None:
+        if not prices.size:
             out[offset] = 0
             out[offset + 1] = 0
             out[offset + 2 : offset + 2 + self._bins] = 0
             return
 
+        best = int(prices[0]) if side == 1 else int(prices[-1])
         out[offset] = best
-        out[offset + 1] = best_vol
+        out[offset + 1] = vols[0] if side == 1 else vols[-1]
 
         # Window covered by the BPS bins, mirroring the legacy code:
         #   ask: arange(best_ask, end_value + 1) inclusive ascending.
         #   bid: arange(best_bid, end_value - 1, -1) inclusive descending.
+        # The in-window levels are a contiguous slice of the sorted arrays;
+        # offsets are handed to the binning core in ascending order (bids
+        # reversed), reproducing the dense cumsum accumulation order.
         if side == 1:
             end_value = round((1 + self._bps * self._bins * 0.0001) * best) + 1
             range_len = end_value - best + 1
+            k = int(np.searchsorted(prices, best + range_len, side="left"))
+            idxs = prices[:k] - best
+            win_vols = vols[:k]
         else:
             end_value = round((1 - self._bps * self._bins * 0.0001) * best)
             range_len = best - end_value + 1
+            j = int(np.searchsorted(prices, best - range_len, side="right"))
+            idxs = (best - prices[j:])[::-1]
+            win_vols = vols[j:][::-1]
 
-        # Sum the active price levels (~1.8k per side on the bundled sample)
-        # straight into the BPS bins, without materialising the full,
-        # mostly-zero integer-price window (potentially O(price * bps * bins)).
         breaks = _cached_breaks(range_len, self._bins)
-        out[offset + 2 : offset + 2 + self._bins] = _interval_sums_sparse(
-            levels, best, side, range_len, breaks
+        out[offset + 2 : offset + 2 + self._bins] = _interval_sums_sorted(
+            idxs, win_vols, range_len, breaks
         )
 
     # ── Helpers ───────────────────────────────────────────────────────
