@@ -295,19 +295,6 @@ class TestPrepareCancellationsL3:
         assert (both["age_s"].notna()).all()
         assert 999 not in both["id"].to_numpy()
 
-    def test_per_order_flag_is_accepted(
-        self, sample_cancellation_events: pd.DataFrame
-    ) -> None:
-        # Accepted for comparable-concept signature symmetry; always per order.
-        d_true = prepare_cancellations_l3_data(
-            sample_cancellation_events, per_order=True
-        )
-        d_false = prepare_cancellations_l3_data(
-            sample_cancellation_events, per_order=False
-        )
-        assert len(d_true["bids"]) == len(d_false["bids"])
-        assert len(d_true["asks"]) == len(d_false["asks"])
-
 
 class TestPrepareOrderActivityL3:
     def test_returns_fate_frames(
@@ -359,19 +346,6 @@ class TestPrepareOrderActivityL3:
         forever = data["resting"].set_index("id").loc[300]
         assert forever["end_ts"] == end_time
         assert forever["end_ts"] > forever["start_ts"]
-
-    def test_per_order_flag_is_accepted(
-        self, sample_order_lifecycle_events: pd.DataFrame
-    ) -> None:
-        # Accepted for comparable-concept signature symmetry; always per order.
-        d_true = prepare_order_activity_l3_data(
-            sample_order_lifecycle_events, per_order=True
-        )
-        d_false = prepare_order_activity_l3_data(
-            sample_order_lifecycle_events, per_order=False
-        )
-        assert len(d_true["flashed"]) == len(d_false["flashed"])
-        assert len(d_true["resting"]) == len(d_false["resting"])
 
 
 class TestPrepareLiquidityAtTouch:

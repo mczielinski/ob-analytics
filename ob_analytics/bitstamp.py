@@ -288,13 +288,10 @@ class BitstampTradeReader:
     ) -> np.ndarray:
         digits = self._config.volume_decimals
 
-        # Bucket each order's candidate fills by rounded volume, preserving the
-        # original candidate order within each bucket.  The previous version
-        # linearly scanned every candidate for an order id on each trade and
-        # popped the first volume match; bucketing reproduces that exactly
-        # (earliest unconsumed match wins) while making resolution O(1) per
-        # trade.  The index is built fresh per call, so the maker and taker
-        # passes consume independently — matching the old per-call copy.
+        # Bucket each order's candidate fills by rounded volume, preserving
+        # candidate order within each bucket: the earliest unconsumed match
+        # wins, at O(1) per trade.  The index is built fresh per call so the
+        # maker and taker passes consume independently.
         index: dict[int, dict[float, deque[int]]] = {}
         for oid, cand in ev_lookup.items():
             by_fill: dict[float, deque[int]] = {}

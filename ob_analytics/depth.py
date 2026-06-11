@@ -34,18 +34,17 @@ def _interval_sums_sparse(
 ) -> np.ndarray:
     """Sum active book volume into the bins delimited by *breaks*.
 
-    Byte-identical replacement for ``interval_sum_breaks(dense, breaks)``
+    Contract: byte-identical to ``np.diff`` over ``np.cumsum(dense)[breaks]``,
     where ``dense`` is the length-``range_len`` array holding each active
-    level's volume at ``idx = price - best`` (asks) / ``best - price``
-    (bids) and zeros everywhere else.
+    level's volume at ``idx = price - best`` (asks) / ``best - price`` (bids)
+    and zeros everywhere else.  Because volumes are non-negative and
+    ``x + 0.0 == x`` for finite ``x``, accumulating only the active levels in
+    ascending-``idx`` order reproduces ``cumsum(dense)`` at every index
+    bit-for-bit; the prefix sums are sampled at ``breaks`` and differenced.
 
-    ``interval_sum_breaks`` computes ``np.cumsum(dense)[breaks]`` and then
-    differences it.  ``dense`` is sparse — a few hundred active levels among
-    tens of thousands of integer prices — so the full cumsum is almost all
-    wasted work.  Because volumes are non-negative and ``x + 0.0 == x`` for
-    finite ``x``, accumulating only the active levels in ascending-``idx``
-    order reproduces ``cumsum(dense)`` at every index bit-for-bit; we sample
-    those prefix sums at ``breaks`` and difference exactly as before.
+    Iterating the whole levels dict per call is the pipeline's hot loop
+    (levels average ~1.8k entries per side on the bundled sample); the
+    vectorized rework is roadmap §2.1 (docs/plans/).
     """
     idxs: list[int] = []
     vols: list[float] = []
@@ -328,8 +327,8 @@ class DepthMetricsEngine:
             end_value = round((1 - self._bps * self._bins * 0.0001) * best)
             range_len = best - end_value + 1
 
-        # Sum the active price levels (typically O(few hundred)) straight
-        # into the BPS bins, without materialising or cumsum-ing the full,
+        # Sum the active price levels (~1.8k per side on the bundled sample)
+        # straight into the BPS bins, without materialising the full,
         # mostly-zero integer-price window (potentially O(price * bps * bins)).
         breaks = _cached_breaks(range_len, self._bins)
         out[offset + 2 : offset + 2 + self._bins] = _interval_sums_sparse(

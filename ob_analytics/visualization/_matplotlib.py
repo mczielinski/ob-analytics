@@ -27,6 +27,18 @@ from matplotlib.patches import Patch
 
 from loguru import logger
 
+from ob_analytics.visualization._palette import (
+    _ASK_COLOR,
+    _BID_COLOR,
+    _BUY_COLOR,
+    _CANCELLED_COLOR,
+    _FILLED_COLOR,
+    _FLASHED_COLOR,
+    _PARTIAL_COLOR,
+    _RESTING_COLOR,
+    _SELL_COLOR,
+)
+
 
 # ---------------------------------------------------------------------------
 # Theme system
@@ -395,28 +407,6 @@ def mpl_volume_map(
     return fig
 
 
-# Order-book snapshot palette, shared by the book_snapshot + depth_chart faces
-# (kept identical to the plotly backend for cross-backend parity).
-_BID_COLOR = "#4477dd"
-_ASK_COLOR = "#dd4444"
-
-# Order-lifecycle fate palette for the order_activity L3 Gantt (cancelled vs
-# filled/resting); identical to the plotly backend for cross-backend parity.
-_FLASHED_COLOR = "#e09f3e"  # flashed-limit: placed and pulled (cancelled)
-_RESTING_COLOR = "#2a9d8f"  # resting-limit: rested / filled
-
-# Trade-tape aggressor palette (taker side) for the L3 tape maker-bars;
-# identical to the plotly backend for cross-backend parity.
-_BUY_COLOR = "#2e9e5b"  # buyer-initiated execution (lifts the ask)
-_SELL_COLOR = "#dd4444"  # seller-initiated execution (hits the bid)
-
-# Competing-risks outcome palette for the order_outcome L3 scatter; identical to
-# the plotly backend for cross-backend parity.
-_FILLED_COLOR = "#2a9d8f"  # fully executed
-_PARTIAL_COLOR = "#8c8cd8"  # partially executed, remainder removed
-_CANCELLED_COLOR = "#e09f3e"  # removed without any execution
-
-
 def _book_bar_width(*sides: pd.DataFrame) -> float:
     """Smallest positive gap between distinct prices across *sides*."""
     arrays = [s["price"].to_numpy() for s in sides if not s.empty]
@@ -428,11 +418,8 @@ def _book_bar_width(*sides: pd.DataFrame) -> float:
     return float(np.min(diffs)) if diffs.size else 1.0
 
 
-# A per-order separator is drawn as the bar's edge, so it only reads when the
-# bar is at least a couple of pixels wide.  On the dense, full-range book the
-# bars are sub-pixel and a ~1px white edge then covers the fill entirely -- it
-# whited the L3 book out on the light matplotlib theme.  Gate the separator on
-# the rendered bar width so it appears only when it actually delineates segments.
+# Per-order separators are drawn as bar edges; below ~2 rendered pixels the
+# ~1px edge covers the fill entirely, so the separator is gated on bar width.
 _MIN_SEPARATOR_BAR_PX = 2.0
 
 
@@ -483,9 +470,6 @@ def _mpl_book_bars(
     mins = [float(s["price"].min()) for s in (bids, asks) if not s.empty]
     maxs = [float(s["price"].max()) for s in (bids, asks) if not s.empty]
     price_span = (max(maxs) - min(mins)) if mins else 0.0
-    # White per-order separators help only when each bar is wide enough to show
-    # one; on a dense, full-range book the bars are sub-pixel and a white edge
-    # swamps the fill (it whited the L3 book out on the light matplotlib theme).
     edge = _book_separator_edge(
         width,
         price_span,
@@ -538,10 +522,11 @@ def mpl_book_snapshot_per_order(
 def _mpl_depth_curve(
     data: dict, ax: Axes | None, theme: PlotTheme, *, per_order: bool
 ) -> Figure:
-    """Cumulative-depth curve: stepped per level (L2) or per order (L3)."""
-    # DEFERRED (lower priority). The L3 depth curve is visually identical to L2.
-    # FUTURE(--density): segment each riser by per-order composition (whale vs
-    # crowd) so the per-order resolution becomes legible. Left as-is for now.
+    """Cumulative-depth curve: stepped per level (L2) or per order (L3).
+
+    The L3 face currently differs from L2 only by per-order markers; making the
+    per-order resolution legible is roadmap §3.x (docs/plans/, --density).
+    """
     fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
     for side, color, label in (
         (data["bids"], _BID_COLOR, "bid"),
@@ -589,9 +574,8 @@ def mpl_cancellations_per_order(
 ) -> Figure:
     """L3 (MBO) cancellations: each cancelled order as an age x distance point."""
     fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
-    # FUTURE(--density): high-cardinality 2D cloud -> log-log hexbin (count as
-    # saturation). For now rasterize the marker layer so the vector file does
-    # not balloon (~140k points was ~839 KB) and fade overlapping points.
+    # Markers are rasterized (the cloud can exceed 100k points) and faded for
+    # overplot.  Log-log + density encoding is roadmap §3.3 (docs/plans/).
     for side, color, label in (
         (data["bids"], _BID_COLOR, "bid"),
         (data["asks"], _ASK_COLOR, "ask"),
@@ -705,9 +689,7 @@ def mpl_order_outcome_per_order(
     any_pts = False
     # Draw the dominant 'cancelled' class first (underneath) so the rarer
     # filled/partial outcomes land on top instead of being buried, and fade it.
-    # FUTURE(--density): at high cancelled cardinality, degrade this raw scatter
-    # to a distance-binned stacked composition + a common-baseline fill-rate dot
-    # plot (parts-of-whole AND a position-encoded rate).
+    # A distance-binned fate variant is roadmap §3.8 (docs/plans/).
     for frame, color, label, pt_alpha in (
         (data["cancelled"], _CANCELLED_COLOR, "cancelled", 0.18),
         (data["partial"], _PARTIAL_COLOR, "partial", 0.6),
@@ -738,12 +720,11 @@ def mpl_order_outcome_per_order(
 def mpl_trade_tape_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
-    """L3 (MBO) trade tape: executions plus each maker order's resting bar."""
-    # DEFERRED. trade_tape.L3 currently sizes execution markers by bubble AREA
-    # (rank-5) and draws full maker-rest hlines. FUTURE(--color-by) + encoding
-    # rethink: encode size by length (lollipop), keep side as hue, and reserve
-    # the long maker spans for an explicit "time resting" read. Left as-is for
-    # the simple pass.
+    """L3 (MBO) trade tape: executions plus each maker order's resting bar.
+
+    Size is encoded as marker area for now; the signed-lollipop re-encoding is
+    roadmap §3.4 (docs/plans/).
+    """
     fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
     any_pts = False
     for side, color, label in (
