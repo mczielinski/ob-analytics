@@ -128,10 +128,13 @@ class BitstampLoader:
         fill_deltas = events.groupby("id")["volume"].diff().fillna(0)
         events["fill"] = fill_deltas.abs().round(volume_digits)
 
-        ts_sorted: pd.Series = events.groupby("id")["timestamp"].transform(
-            lambda x: np.sort(np.asarray(x.values), kind="stable")
-        )
-        events["timestamp"] = ts_sorted
+        # Sort timestamps within each id.  The frame is id-ordered (primary
+        # key of the sort above; _remove_duplicates only filters rows), so a
+        # stable global (id, timestamp) lexsort gathered back positionally is
+        # equivalent to the per-group sort — without the per-group Python
+        # lambda, which dominated load time (~19s on the bundled sample).
+        order = np.lexsort((events["timestamp"].to_numpy(), events["id"].to_numpy()))
+        events["timestamp"] = events["timestamp"].to_numpy()[order]
 
         events["raw_event_type"] = pd.NA
 
