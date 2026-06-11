@@ -208,22 +208,29 @@ def mpl_price_levels(
 
     depth["timestamp_numeric"] = mdates.date2num(depth["timestamp"])
 
-    for price, group in depth.groupby("price"):
-        group = group.sort_values("timestamp", kind="stable")
-        x = group["timestamp_numeric"].values
-        y = group["price"].values
-        v = group["volume"].values
-        a = group["alpha"].values
-        if len(x) < 2:
-            continue
-        points = np.array([x, y]).T.reshape(-1, 1, 2)
-        segments = np.concatenate([points[:-1], points[1:]], axis=1)
-        seg_colors = cmap(norm(np.asarray(v[:-1])))
-        seg_colors[:, -1] = a[:-1]
-        lc = collections.LineCollection(
-            segments.tolist(), colors=seg_colors, linewidths=2
+    # All within-price segments go into one LineCollection: sort globally by
+    # (price, timestamp) — identical ordering to the per-price groupby this
+    # replaces — and mask out the segments that would bridge two prices.
+    # One collection draws an order of magnitude faster than thousands.
+    dd = depth.sort_values(["price", "timestamp"], kind="stable")
+    tn = dd["timestamp_numeric"].to_numpy()
+    pr = dd["price"].to_numpy()
+    vv = dd["volume"].to_numpy()
+    aa = dd["alpha"].to_numpy()
+    same_price = pr[:-1] == pr[1:] if len(pr) > 1 else np.empty(0, dtype=bool)
+    if same_price.any():
+        starts = np.column_stack([tn[:-1], pr[:-1]])[same_price]
+        ends = np.column_stack([tn[1:], pr[1:]])[same_price]
+        segments = np.stack([starts, ends], axis=1)
+        seg_colors = cmap(norm(vv[:-1][same_price]))
+        seg_colors[:, -1] = aa[:-1][same_price]
+        ax.add_collection(
+            collections.LineCollection(
+                segments,  # ty: ignore[invalid-argument-type] -- (N,2,2) ndarray is accepted at runtime
+                colors=seg_colors,
+                linewidths=2,
+            )
         )
-        ax.add_collection(lc)
 
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
@@ -233,12 +240,13 @@ def mpl_price_levels(
     if spread is not None:
         spread = spread.copy()
         spread.sort_values(by="timestamp", inplace=True, kind="stable")
+        spread_x = mdates.date2num(spread["timestamp"])
         if show_mp and "best_bid_price" in spread and "best_ask_price" in spread:
             spread["midprice"] = (
                 spread["best_bid_price"] + spread["best_ask_price"]
             ) / 2
             ax.plot(
-                spread["timestamp"],
+                spread_x,
                 spread["midprice"],
                 color="#ffffff",
                 linewidth=1.1,
@@ -247,7 +255,7 @@ def mpl_price_levels(
         else:
             if "best_ask_price" in spread:
                 ax.step(
-                    spread["timestamp"],
+                    spread_x,
                     spread["best_ask_price"],
                     color="#ff0000",
                     linewidth=1.5,
@@ -256,7 +264,7 @@ def mpl_price_levels(
                 )
             if "best_bid_price" in spread:
                 ax.step(
-                    spread["timestamp"],
+                    spread_x,
                     spread["best_bid_price"],
                     color="#00ff00",
                     linewidth=1.5,
@@ -270,7 +278,7 @@ def mpl_price_levels(
 
         if not sells.empty:
             ax.scatter(
-                sells["timestamp"],
+                mdates.date2num(sells["timestamp"]),
                 sells["price"],
                 s=50,
                 facecolors="none",
@@ -282,7 +290,7 @@ def mpl_price_levels(
             )
         if not buys.empty:
             ax.scatter(
-                buys["timestamp"],
+                mdates.date2num(buys["timestamp"]),
                 buys["price"],
                 s=50,
                 facecolors="none",
@@ -293,7 +301,13 @@ def mpl_price_levels(
                 label="Buy Trades",
             )
 
-    ax.xaxis_date()
+    # Date ticks via explicit locator/formatter on plain date-num floats.
+    # ax.xaxis_date() would register the date *units converter*, and an axis
+    # with units forces matplotlib's slow collection-draw path: every draw
+    # rebuilds one Path per segment (~300k Path inits per draw here).  All
+    # artists above already plot date2num floats, so only tick handling is
+    # needed.
+    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
     plt.xticks(rotation=45)
 
