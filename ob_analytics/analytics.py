@@ -454,33 +454,23 @@ def order_book(
 
     pct_range = bps_range * 0.0001
 
-    created_before = events[
-        (events["action"] == "created") & (events["timestamp"] <= tp)
-    ]["id"]
+    # Active orders at *tp* under the canonical schema: an order rests on the
+    # book iff it was submitted (has a ``created`` row), and its latest event
+    # at or before *tp* is neither a delete nor left it exhausted.  The
+    # outstanding-size check is what removes fully-executed LOBSTER orders,
+    # which never emit a ``deleted`` event and previously lingered as
+    # phantoms (89% of "active" orders on the AAPL sample, crossing the
+    # book).  Rows are chronological within each id for every loader, so the
+    # per-id tail is the latest state.
+    win = events[events["timestamp"] <= tp]
+    last_state = win.groupby("id", sort=False).tail(1)
+    created_ids = win.loc[win["action"] == "created", "id"].unique()
+    active_orders = last_state[
+        last_state["id"].isin(created_ids)
+        & (last_state["action"] != "deleted")
+        & (last_state["volume"] > 0)
+    ]
 
-    deleted_before = events[
-        (events["action"] == "deleted") & (events["timestamp"] <= tp)
-    ]["id"]
-
-    active_order_ids = set(created_before) - set(deleted_before)
-    active_orders = events[events["id"].isin(active_order_ids)]
-    active_orders = active_orders[active_orders["timestamp"] <= tp]
-
-    changed_orders_mask = active_orders["action"] == "changed"
-    changed_before = active_orders[changed_orders_mask]
-    changed_before = changed_before.sort_values(
-        by="timestamp", ascending=False, kind="stable"
-    )
-    changed_before = changed_before.drop_duplicates(subset="id", keep="first")
-
-    active_orders = active_orders[~changed_orders_mask]
-    active_orders = active_orders[~active_orders["id"].isin(changed_before["id"])]
-    active_orders = pd.concat([active_orders, changed_before], ignore_index=True)
-
-    if not all(active_orders["timestamp"] <= tp):
-        raise ConfigError(
-            f"Some active orders have timestamps after the requested time {tp}."
-        )
     if active_orders["id"].duplicated().any():
         raise ConfigError(
             "Duplicate order IDs found in active orders. "

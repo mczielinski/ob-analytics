@@ -38,8 +38,12 @@ def lobster_streams(draw) -> pd.DataFrame:
     for oid in range(1, n_orders + 1):
         t += draw(st.floats(min_value=0.001, max_value=1.0))
         size = draw(st.integers(min_value=1, max_value=500)) * 100
-        price = 5_000_000 + draw(st.integers(min_value=-50, max_value=50)) * 100
         direction = draw(st.sampled_from([1, -1]))
+        # Bids strictly below / asks strictly above 500.00, so generated
+        # books never cross (a venue would have matched crossing orders;
+        # this generator does not simulate matching).
+        offset = draw(st.integers(min_value=1, max_value=50)) * 100
+        price = 5_000_000 - offset if direction == 1 else 5_000_000 + offset
         rows.append((t, 1, oid, size, price, direction))
         outstanding = size
         n_reductions = draw(st.integers(min_value=0, max_value=4))
@@ -158,3 +162,38 @@ def test_lifecycle_invariants(stream: pd.DataFrame, tmp_path_factory) -> None:
         .isin(["filled", "partial", "cancelled"])
         .all()
     )
+
+
+@settings(max_examples=60, deadline=None)
+@given(stream=lobster_streams())
+def test_order_book_matches_surviving_outstanding(
+    stream: pd.DataFrame, tmp_path_factory
+) -> None:
+    """order_book at stream end == the generator's surviving outstanding
+    sizes: every submitted, non-exhausted, non-deleted order appears with
+    exactly its remaining size; nothing else appears; the book never
+    crosses."""
+    from ob_analytics.analytics import order_book
+
+    tmp = tmp_path_factory.mktemp("hyp_book")
+    events = _load(stream, tmp)
+    events["type"] = "resting-limit"  # order_book requires the classifier column
+
+    placed = stream[stream["event_type"] == 1].set_index("id")["volume"]
+    consumed = (
+        stream[stream["event_type"].isin([2, 3, 4, 5])].groupby("id")["volume"].sum()
+    )
+    survivors = (placed - consumed.reindex(placed.index).fillna(0)).loc[lambda s: s > 0]
+
+    book = order_book(events)
+    book_orders = pd.concat([book["bids"], book["asks"]]).set_index("id")["volume"]
+
+    assert set(book_orders.index) == set(survivors.index)
+    if len(survivors):
+        pd.testing.assert_series_equal(
+            book_orders.sort_index().astype(float),
+            survivors.sort_index().astype(float),
+            check_names=False,
+        )
+    if not book["bids"].empty and not book["asks"].empty:
+        assert book["bids"].iloc[0]["price"] <= book["asks"].iloc[-1]["price"]
