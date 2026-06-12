@@ -376,37 +376,32 @@ def prepare_order_activity_l3_data(
     directly comparable on shared time x price axes.  The price axis is clipped
     to the 1st--99th percentile (like the event map) unless *price_from* /
     *price_to* are given, keeping a few far orders from stretching the y-axis.
+
+    Spans come from :func:`~ob_analytics.analytics.order_lifecycles`, so an
+    order ends when it is deleted **or fully executed** (LOBSTER fills never
+    emit a delete); only genuinely still-resting orders extend to the window
+    end.  Lifecycles overlapping the window are clipped to it.
     """
+    from ob_analytics.analytics import order_lifecycles
+
     start_time, end_time = _default_start_end(events, start_time, end_time)
-    limit = events[
-        events["type"].isin(["flashed-limit", "resting-limit"])
-        & (events["timestamp"] >= start_time)
-        & (events["timestamp"] <= end_time)
-    ]
+
+    life = order_lifecycles(events)
+    life = life[life["type"].isin(["flashed-limit", "resting-limit"])]
+
+    # Lifecycles overlapping the window, clipped to it for display.
+    overlaps = (life["placed_ts"] <= end_time) & (
+        life["end_ts"].isna() | (life["end_ts"] >= start_time)
+    )
+    spans = life[overlaps].copy()
+    placed = spans["placed_ts"]
+    spans["start_ts"] = placed.where(placed >= start_time, start_time)
+    ended = spans["end_ts"].fillna(end_time)
+    spans["end_ts"] = ended.where(ended <= end_time, end_time)
+    spans = spans.rename(columns={"placed_vol": "volume"})
 
     if volume_scale is None:
-        volume_scale = infer_volume_scale(limit["volume"]) if not limit.empty else 1.0
-
-    # Collapse each order's events into one lifecycle span.  Price/direction/type
-    # are constant over a limit order's life, so ``first`` is unambiguous; volume
-    # only shrinks as fills consume it, so ``max`` recovers the placed size.
-    spans = (
-        limit.groupby("id", sort=False)
-        .agg(
-            start_ts=("timestamp", "min"),
-            last_ts=("timestamp", "max"),
-            price=("price", "first"),
-            direction=("direction", "first"),
-            type=("type", "first"),
-            volume=("volume", "max"),
-        )
-        .reset_index()
-    )
-
-    # A span ending in a ``deleted`` event terminated there; one without is still
-    # resting, so it runs to the window end.
-    deleted_ids = limit.loc[limit["action"] == "deleted", "id"].unique()
-    spans["end_ts"] = spans["last_ts"].where(spans["id"].isin(deleted_ids), end_time)
+        volume_scale = infer_volume_scale(spans["volume"]) if not spans.empty else 1.0
     spans["volume"] = spans["volume"] * volume_scale
 
     if not spans.empty:
@@ -467,7 +462,6 @@ def prepare_liquidity_at_touch_data(
 
 def prepare_order_outcome_l3_data(
     events: pd.DataFrame,
-    trades: pd.DataFrame,
     volume_scale: float | None = None,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
@@ -478,55 +472,33 @@ def prepare_order_outcome_l3_data(
     For every order created in the window, one point at its placement --
     ``x = aggressiveness_bps`` (signed distance from the prevailing best at
     creation; ``>0`` improved the touch) against ``y = size`` -- coloured by a
-    competing-risks *outcome*:
+    competing-risks *outcome* from
+    :func:`~ob_analytics.analytics.order_lifecycles`:
 
-    - **filled**: the whole order executed (its volume was consumed by trades).
+    - **filled**: the whole order executed.
     - **partial**: some volume executed, the remainder was removed.
     - **cancelled**: removed without any execution.
 
-    Outcome is recovered from the executions: volume filled per order is summed
-    over trades where the order was the maker or the taker, then compared with
-    the placed size.  Orders still resting at window end (no terminal event and
-    no fill) are censored and dropped.  Placement distance is heavy-tailed, so it
-    is quantile-clipped to *bps_quantiles*.
+    Orders still resting at window end are censored and dropped.  Outcomes
+    derive from the canonical ``fill`` column (the order's own executions),
+    so they reflect the *visible* book on every format.  Placement distance
+    is heavy-tailed, so it is quantile-clipped to *bps_quantiles*.
     """
+    from ob_analytics.analytics import order_lifecycles
+
     start_time, end_time = _default_start_end(events, start_time, end_time)
-    created = events[
-        (events["action"] == "created")
-        & (events["timestamp"] >= start_time)
-        & (events["timestamp"] <= end_time)
-    ][["id", "timestamp", "price", "volume", "direction", "aggressiveness_bps"]].rename(
-        columns={"aggressiveness_bps": "distance_bps", "volume": "placed"}
-    )
 
-    deleted_ids = set(events.loc[events["action"] == "deleted", "id"])
-
-    # Volume executed per order id: as maker (resting, hit) + as taker (crossed).
-    event_to_id = events[["event_id", "id"]]
-    maker = trades.merge(
-        event_to_id, left_on="maker_event_id", right_on="event_id", how="inner"
+    life = order_lifecycles(events)
+    created = life[
+        (life["placed_ts"] >= start_time) & (life["placed_ts"] <= end_time)
+    ].rename(
+        columns={
+            "aggressiveness_bps": "distance_bps",
+            "placed_vol": "placed",
+            "placed_ts": "timestamp",
+        }
     )
-    taker = trades.merge(
-        event_to_id, left_on="taker_event_id", right_on="event_id", how="inner"
-    )
-    filled = (
-        pd.concat([maker[["id", "volume"]], taker[["id", "volume"]]])
-        .groupby("id")["volume"]
-        .sum()
-    )
-    created = created.copy()
-    created["filled"] = created["id"].map(filled).fillna(0.0)
-
-    # Competing-risks outcome; censored = never filled and still open at end.
-    placed = created["placed"]
-    f = created["filled"]
-    is_deleted = created["id"].isin(deleted_ids)
-    outcome = pd.Series("censored", index=created.index)
-    outcome[f >= placed * 0.999] = "filled"
-    outcome[(f > 0) & (f < placed * 0.999)] = "partial"
-    outcome[(f <= 0) & is_deleted] = "cancelled"
-    created["outcome"] = outcome
-    created = created[created["outcome"] != "censored"].dropna(subset=["distance_bps"])
+    created = created[created["outcome"] != "resting"].dropna(subset=["distance_bps"])
 
     if volume_scale is None:
         volume_scale = (

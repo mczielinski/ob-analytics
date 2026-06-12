@@ -266,6 +266,103 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# Order lifecycles
+# ---------------------------------------------------------------------------
+
+
+def order_lifecycles(events: pd.DataFrame) -> pd.DataFrame:
+    """Collapse events into one row per order: placement → outcome.
+
+    The canonical lifecycle table (one derivation, shared by the L3 faces
+    and the order-book reconstruction).  Relies on the schemas.py volume
+    contract: ``volume`` is the outstanding size after each event and
+    ``fill`` the executed delta, so an order is *terminated* when a
+    ``deleted`` row arrives **or its outstanding size reaches zero** —
+    the latter is how fully-executed LOBSTER orders end, which never emit
+    a ``deleted`` event.
+
+    Parameters
+    ----------
+    events : pandas.DataFrame
+        Events satisfying the schemas.py contract.  Orders without a
+        ``created`` row (pre-existing book, hidden executions) are
+        excluded — their placement is unknown.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per order id:
+
+        * ``id``, ``direction``, ``price`` — placement identity.
+        * ``type`` — classifier label (when the column is present).
+        * ``placed_ts``, ``placed_vol`` — from the ``created`` row.
+        * ``filled_vol`` — total executed quantity (Σ ``fill``).
+        * ``end_ts`` — termination time (``NaT`` while still resting;
+          callers clip to their window end for display).
+        * ``outcome`` — ``filled`` / ``partial`` / ``cancelled`` /
+          ``resting``.  Flashed orders are the ``cancelled`` subset whose
+          ``type`` is ``flashed-limit``.
+        * ``aggressiveness_bps`` — placement distance (when present).
+    """
+    validate_columns(
+        events,
+        {"id", "timestamp", "price", "volume", "direction", "action", "fill"},
+        "order_lifecycles",
+    )
+    validate_non_empty(events, "order_lifecycles")
+
+    created = events[events["action"] == "created"]
+    agg: dict[str, tuple[str, str]] = {
+        "placed_ts": ("timestamp", "first"),
+        "placed_vol": ("volume", "first"),
+        "price": ("price", "first"),
+        "direction": ("direction", "first"),
+    }
+    if "type" in events.columns:
+        agg["type"] = ("type", "first")
+    if "aggressiveness_bps" in events.columns:
+        agg["aggressiveness_bps"] = ("aggressiveness_bps", "first")
+    life = created.groupby("id", sort=False).agg(**agg)  # type: ignore[call-overload]
+
+    life["filled_vol"] = (
+        events.groupby("id", sort=False)["fill"].sum().reindex(life.index).fillna(0.0)
+    )
+
+    # Termination: explicit delete, or outstanding size exhausted (the
+    # created row itself is excluded so zero-size placements don't
+    # self-terminate).
+    deleted_ts = (
+        events.loc[events["action"] == "deleted"]
+        .groupby("id", sort=False)["timestamp"]
+        .min()
+    )
+    non_created = events[events["action"] != "created"]
+    exhausted_ts = (
+        non_created.loc[non_created["volume"] <= 0]
+        .groupby("id", sort=False)["timestamp"]
+        .min()
+    )
+    end = pd.concat([deleted_ts.rename("a"), exhausted_ts.rename("b")], axis=1).min(
+        axis=1
+    )
+    life["end_ts"] = end.reindex(life.index)
+
+    terminated = life["end_ts"].notna()
+    placed = life["placed_vol"]
+    filled = life["filled_vol"]
+    # Bitstamp volumes are 8-dp floats; fills summed per order can drift by
+    # float epsilon, so "fully executed" allows a vanishing tolerance.
+    full = filled >= placed - 1e-9
+    outcome = pd.Series("resting", index=life.index)
+    outcome[terminated & full & (placed > 0)] = "filled"
+    outcome[terminated & ~full & (filled > 0)] = "partial"
+    outcome[terminated & (filled <= 0)] = "cancelled"
+    life["outcome"] = outcome
+
+    return life.reset_index()
+
+
+# ---------------------------------------------------------------------------
 # Order book reconstruction
 # ---------------------------------------------------------------------------
 
