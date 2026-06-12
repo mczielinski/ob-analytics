@@ -79,8 +79,12 @@ def test_demo_fingerprints(demo_result):
     # exactly two degenerate unknown-type rows (+0 and +1e-08 at one level),
     # so depth / depth_summary / events (via aggressiveness) shift by at most
     # 1e-08 at a single price level; trades are byte-identical (hash kept).
+    # 2026-06-12 (correctness batch, WS-8.2): the 13 sample orders with no
+    # created row are now typed "pre-existing" instead of "unknown" — only
+    # the events type column moves; trades/depth/depth_summary hashes are
+    # unchanged.
     EXPECTED: dict[str, str] = {
-        "events": "63d419af1a923172f36ef60add3942afc8f30fc56922725854c63c47a93fd37b",
+        "events": "29223021ef93928e8d7353d983ec41fada5bf8737ce7284613c45b990a2a41da",
         "trades": "e724c05b6584bfaf111f054e5066da8aec9d59e3315bb2f0a8ca38ae9696dc1a",
         "depth": "c8858b674895a3ca2cb5ea2f9a1ca6aa84f18167b57fdc4d1891bc1ee0e7a608",
         "depth_summary": "7de44b812f98b629bc573dd06dd43d1c5b02ba9c6d2ebd47807186df6d5a1db2",
