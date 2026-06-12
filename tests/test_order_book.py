@@ -222,3 +222,150 @@ class TestOrderBook:
         assert 20 not in result["bids"]["id"].values
         # Bid at 100 should survive
         assert 10 in result["bids"]["id"].values
+
+
+class TestCanonicalActiveSet:
+    """Active set under the schemas.py contract: deleted OR exhausted ends an
+    order; orders without a created row never enter the book."""
+
+    def test_fully_executed_order_without_delete_is_excluded(self):
+        # The LOBSTER phantom regression: full execution emits no delete;
+        # the exhausted order must still leave the book.
+        events = _events(
+            (
+                1,
+                10,
+                "created",
+                "bid",
+                "resting-limit",
+                "2015-01-01 00:00:01",
+                100.0,
+                5.0,
+            ),
+            (
+                2,
+                10,
+                "changed",
+                "bid",
+                "resting-limit",
+                "2015-01-01 00:00:02",
+                100.0,
+                0.0,
+            ),
+            (
+                3,
+                20,
+                "created",
+                "ask",
+                "resting-limit",
+                "2015-01-01 00:00:03",
+                110.0,
+                3.0,
+            ),
+        )
+        result = order_book(events)
+        assert 10 not in result["bids"]["id"].values
+        assert 20 in result["asks"]["id"].values
+
+    def test_partially_executed_order_keeps_outstanding_size(self):
+        events = _events(
+            (
+                1,
+                10,
+                "created",
+                "bid",
+                "resting-limit",
+                "2015-01-01 00:00:01",
+                100.0,
+                5.0,
+            ),
+            (
+                2,
+                10,
+                "changed",
+                "bid",
+                "resting-limit",
+                "2015-01-01 00:00:02",
+                100.0,
+                2.0,
+            ),
+        )
+        result = order_book(events)
+        row = result["bids"].set_index("id").loc[10]
+        assert row["volume"] == 2.0
+
+    def test_pre_existing_order_without_created_is_excluded(self):
+        events = _events(
+            (
+                1,
+                9,
+                "changed",
+                "ask",
+                "resting-limit",
+                "2015-01-01 00:00:01",
+                105.0,
+                7.0,
+            ),
+            (
+                2,
+                10,
+                "created",
+                "bid",
+                "resting-limit",
+                "2015-01-01 00:00:02",
+                100.0,
+                5.0,
+            ),
+        )
+        result = order_book(events)
+        assert 9 not in result["asks"]["id"].values
+        assert 10 in result["bids"]["id"].values
+
+    def test_book_is_not_crossed_after_exhaustions(self):
+        # An exhausted best ask must not pin the touch below newer bids.
+        events = _events(
+            (
+                1,
+                1,
+                "created",
+                "ask",
+                "resting-limit",
+                "2015-01-01 00:00:01",
+                101.0,
+                5.0,
+            ),
+            (
+                2,
+                1,
+                "changed",
+                "ask",
+                "resting-limit",
+                "2015-01-01 00:00:02",
+                101.0,
+                0.0,
+            ),
+            (
+                3,
+                2,
+                "created",
+                "ask",
+                "resting-limit",
+                "2015-01-01 00:00:03",
+                103.0,
+                5.0,
+            ),
+            (
+                4,
+                3,
+                "created",
+                "bid",
+                "resting-limit",
+                "2015-01-01 00:00:04",
+                102.0,
+                5.0,
+            ),
+        )
+        result = order_book(events)
+        best_bid = result["bids"].iloc[0]["price"]
+        best_ask = result["asks"].iloc[-1]["price"]
+        assert best_bid < best_ask
