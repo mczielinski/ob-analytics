@@ -74,11 +74,16 @@ def test_demo_fingerprints(demo_result):
         print(f"FINGERPRINT {name} = {fp}")
     # Update these ONLY when an intended output change lands (separate,
     # labeled commit with a before/after rationale).
+    # 2026-06-12 (WS-1.1 PR 1/3): price_level_volume dropped the R-inherited
+    # "changed & fill==0 adds full volume" branch.  On this sample it fired on
+    # exactly two degenerate unknown-type rows (+0 and +1e-08 at one level),
+    # so depth / depth_summary / events (via aggressiveness) shift by at most
+    # 1e-08 at a single price level; trades are byte-identical (hash kept).
     EXPECTED: dict[str, str] = {
-        "events": "8d7a5c6e30fc0761cf28121bc3b910470d76716b80dbccfa24f54f83cd89db46",
+        "events": "63d419af1a923172f36ef60add3942afc8f30fc56922725854c63c47a93fd37b",
         "trades": "e724c05b6584bfaf111f054e5066da8aec9d59e3315bb2f0a8ca38ae9696dc1a",
-        "depth": "763e6ea8f00d6f88ae9e27cb3c89c8eaf28181297d1f01c35b371aebc37c75b0",
-        "depth_summary": "453474cd31de6b6717ef71200a85c4efff6ef1f26b067002682fa8bd3bcfdf4e",
+        "depth": "c8858b674895a3ca2cb5ea2f9a1ca6aa84f18167b57fdc4d1891bc1ee0e7a608",
+        "depth_summary": "7de44b812f98b629bc573dd06dd43d1c5b02ba9c6d2ebd47807186df6d5a1db2",
     }
     if EXPECTED:
         assert fps == EXPECTED
