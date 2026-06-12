@@ -496,13 +496,29 @@ class TestPrepareVolumePercentiles:
         assert len(data["bids_cols"]) == 20
 
     def test_palette_is_sequential_luminance(self) -> None:
-        from ob_analytics.visualization._data import _VOLUME_PERCENTILE_PALETTE
+        from ob_analytics.visualization._data import _volume_percentile_palette
 
-        pal = np.array([c[:3] for c in _VOLUME_PERCENTILE_PALETTE])
-        lum = pal @ np.array([0.2126, 0.7152, 0.0722])
-        diffs = np.diff(lum)
-        # Monotonic luminance => ordered ramp, not a rainbow (jet zig-zags).
-        assert np.all(diffs < 0) or np.all(diffs > 0)
+        for n in (2, 10, 20, 40):
+            pal = np.array([c[:3] for c in _volume_percentile_palette(n)])
+            lum = pal @ np.array([0.2126, 0.7152, 0.0722])
+            diffs = np.diff(lum)
+            # Monotonic luminance => ordered ramp, not a rainbow (jet zig-zags).
+            assert np.all(diffs < 0) or np.all(diffs > 0)
+
+    def test_any_depth_bps_configuration_works(self) -> None:
+        # Regression: the prepare hardcoded 25-500bps columns and raised
+        # KeyError for any other depth_bps/depth_bins (the documented
+        # PipelineConfig(depth_bps=50) example broke the face).
+        ts = pd.date_range("2024-01-01", periods=10, freq="s")
+        cols: dict = {"timestamp": ts}
+        for b in range(50, 1001, 50):  # depth_bps=50, depth_bins=20
+            cols[f"bid_vol{b}bps"] = np.ones(10)
+            cols[f"ask_vol{b}bps"] = np.ones(10)
+        data = prepare_volume_percentiles_data(pd.DataFrame(cols))
+        assert len(data["asks_cols"]) == 20
+        assert len(data["colors_dict"]) == 40
+        assert len(data["legend_names"]) == 20
+        assert data["legend_names"][0] == "+1000bps"
 
 
 class TestPrepareEventsHistogram:

@@ -24,7 +24,16 @@ them):
   outstanding size; loaders keep the venue's raw per-event quantity for
   those rows, and depth/lifecycle consumers exclude them (no ``created``
   row).  Format loaders may carry the venue's raw per-event quantity in a
-  ``raw_size`` column for round-trip writers.
+  ``raw_size`` column for round-trip writers.  The classifier labels these
+  orders ``pre-existing`` — structurally unclassifiable, not failures.
+
+Timestamp policy: event timestamps are **tz-naive**, in each venue's native
+clock — UTC for Bitstamp captures, exchange-local (US/Eastern) for LOBSTER
+sessions.  Each frame is internally consistent, but timestamps from
+different formats are **not comparable**; do not join or concatenate events
+across venues without explicit conversion.  ``timestamp`` is the local
+receive time and ``exchange_timestamp`` the venue's matching-engine time
+(identical for LOBSTER, where only exchange time exists).
 """
 
 from __future__ import annotations

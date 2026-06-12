@@ -156,7 +156,14 @@ async def run_capturer(
             capturer.name,
             config.minutes,
         )
-        stream_task = asyncio.create_task(_stream(capturer, config, sink))
+        # _stream updates this mapping in place as it writes, so the counts
+        # survive a SIGINT/SIGTERM cancellation: meta.json previously
+        # reported only snapshot + shutdown events for interrupted runs
+        # even though every streamed row was on disk.
+        stream_counts = {"order": 0, "trade": 0, "raw": 0}
+        stream_task = asyncio.create_task(
+            _stream(capturer, config, sink, stream_counts)
+        )
         stop_task = asyncio.create_task(stop.wait())
         try:
             done, pending = await asyncio.wait(
@@ -175,13 +182,12 @@ async def run_capturer(
                     pass
 
         if stream_task in done and not stream_task.cancelled():
-            try:
-                n_stream_order, n_stream_trade, n_stream_raw = stream_task.result()
-                n_order += n_stream_order
-                n_trade += n_stream_trade
-                n_raw += n_stream_raw
-            except Exception as exc:  # noqa: BLE001
+            exc = stream_task.exception()
+            if exc is not None:
                 logger.error("Capturer '{}' stream raised: {!r}", capturer.name, exc)
+        n_order += stream_counts["order"]
+        n_trade += stream_counts["trade"]
+        n_raw += stream_counts["raw"]
 
         logger.info("Capturer '{}': emitting shutdown synthetic events", capturer.name)
         async for ev in capturer.shutdown_synthetic_events():
@@ -230,19 +236,25 @@ async def run_capturer(
 
 
 async def _stream(
-    capturer: LiveCapturer, config: CaptureConfig, sink: CaptureSink
-) -> tuple[int, int, int]:
-    n_order = n_trade = n_raw = 0
+    capturer: LiveCapturer,
+    config: CaptureConfig,
+    sink: CaptureSink,
+    counts: dict[str, int],
+) -> None:
+    """Pump the capturer's stream into *sink*, updating *counts* in place.
+
+    Counts are incremented per write (not returned) so they remain accurate
+    when the task is cancelled mid-stream by a signal.
+    """
     async for kind, event, frame in capturer.stream(config):
         if kind == "order":
             sink.write_order(event)
-            n_order += 1
+            counts["order"] += 1
         elif kind == "trade":
             sink.write_trade(event)
-            n_trade += 1
+            counts["trade"] += 1
         # ``raw`` (heartbeats / subscription_succeeded) bypasses CSV writers
         # but still goes to raw.jsonl below for forensic completeness.
         if frame is not None:
             sink.write_raw(frame)
-            n_raw += 1
-    return n_order, n_trade, n_raw
+            counts["raw"] += 1

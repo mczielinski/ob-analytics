@@ -96,6 +96,9 @@ def order_aggressiveness(
 
     bid_diff = _event_diff_bps(events, depth_summary, 1)
     ask_diff = _event_diff_bps(events, depth_summary, -1)
+    # Work on a copy: the caller's frame must not grow columns as a side
+    # effect (the merges below already produce new frames).
+    events = events.copy()
     events["aggressiveness_bps"] = np.nan
 
     if not bid_diff.empty:
@@ -209,10 +212,14 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
     )
     validate_non_empty(events, "set_order_types")
 
+    # Work on a copy: the caller's frame must not gain the 'type' column as
+    # a side effect.
+    events = events.copy()
     events["type"] = pd.Categorical(
         np.repeat("unknown", len(events)),
         categories=[
             "unknown",
+            "pre-existing",
             "flashed-limit",
             "resting-limit",
             "market-limit",
@@ -257,6 +264,15 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
     )
     events.loc[events["id"].isin(ml_ids), "type"] = "market-limit"
     events.loc[events["id"].isin(mo_ids), "type"] = "market"
+
+    # Orders first seen mid-stream (no created row): the pre-existing opening
+    # book and hidden executions.  An explicit class instead of "unknown" —
+    # they are structurally unclassifiable, not classification failures.
+    # Trade-derived labels above take precedence.
+    pre_ids = set(events["id"]) - set(created["id"])
+    events.loc[events["id"].isin(pre_ids) & (events["type"] == "unknown"), "type"] = (
+        "pre-existing"
+    )
 
     unidentified = (events["type"] == "unknown").sum()
     if unidentified > 0:
