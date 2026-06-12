@@ -159,11 +159,38 @@ class LobsterLoader:
             ordered=True,
         )
 
-        # Fill column: partial cancellations (2) and executions (4, 5)
-        # carry a volume delta that price_level_volume subtracts.
+        # Canonical volume semantics (see schemas.py): ``volume`` is the
+        # order's outstanding size after the event (created/changed) or the
+        # size removed (deleted); ``fill`` is the *executed* delta (visible
+        # and hidden executions only).  LOBSTER's raw Size column is a
+        # per-event delta for cancels/executions, so outstanding size is
+        # derived per order; the raw delta is preserved in ``raw_size``.
+        events["raw_size"] = events["volume"]
+        sizes = events["volume"].to_numpy()
+        etypes = events["event_type"].to_numpy()
+
+        # Signed deltas: submissions add, reductions/executions subtract.
+        rem_after = (
+            pd.Series(np.where(etypes == 1, sizes, -sizes))
+            .groupby(events["id"].to_numpy())
+            .cumsum()
+            .to_numpy()
+        )
+        # Deleted rows report the size removed (= outstanding immediately
+        # before the delete), matching the Bitstamp convention.
+        derived = np.where(etypes == 3, rem_after + sizes, rem_after)
+
+        # Orders first seen mid-stream — the pre-existing opening book and
+        # hidden executions (which all share LOBSTER's native id=0) — have no
+        # submission to anchor the cumsum; their rows keep the raw delta.
+        derivable = (
+            events.groupby("id")["event_type"].transform("first").to_numpy() == 1
+        )
+        events["volume"] = np.where(derivable, derived, sizes)
+
         events["fill"] = np.where(
-            events["event_type"].isin([2, 4, 5]),
-            events["volume"],
+            events["event_type"].isin([4, 5]),
+            events["raw_size"],
             0.0,
         )
 
@@ -189,6 +216,7 @@ class LobsterLoader:
                 "event_id",
                 "original_number",
                 "raw_event_type",
+                "raw_size",
             ]
         ]
 
@@ -303,7 +331,9 @@ class LobsterTradeReader:
             {
                 "timestamp": execs["timestamp"].values,
                 "price": execs["price"].values,
-                "volume": execs["volume"].values,
+                # Executed quantity: `fill` carries the raw executed delta
+                # (`volume` is the order's outstanding size after the event).
+                "volume": execs["fill"].values,
                 "direction": pd.Categorical(
                     trade_direction, categories=["buy", "sell"], ordered=True
                 ),
@@ -481,12 +511,22 @@ class LobsterWriter:
         price_int = (events["price"] * self._price_divisor).round(0).astype(int)
         direction_int = events["direction"].astype(str).map(_DIRECTION_REVERSE)
 
+        # LOBSTER's Size column is the per-event delta; loader-produced frames
+        # carry it as ``raw_size`` (``volume`` holds outstanding size under
+        # the canonical schema).  Frames built without it fall back to
+        # ``volume``, which equals the delta for created/deleted rows.
+        size = (
+            events["raw_size"]
+            if "raw_size" in events.columns and events["raw_size"].notna().any()
+            else events["volume"]
+        )
+
         return pd.DataFrame(
             {
                 "time": time_seconds,
                 "event_type": event_type,
                 "id": events["id"],
-                "volume": events["volume"],
+                "volume": size,
                 "price": price_int,
                 "direction": direction_int,
             }
@@ -514,7 +554,13 @@ class LobsterWriter:
         actions = events["action"].astype(str).to_numpy()
         directions = events["direction"].astype(str).to_numpy()
         prices = events["price"].to_numpy(dtype=np.float64)
-        volumes = events["volume"].to_numpy(dtype=np.float64)
+        # Book replay needs per-event deltas: ``raw_size`` on loader-produced
+        # frames (``volume`` is outstanding size there); ``volume`` equals the
+        # delta on legacy/synthetic frames without it.
+        if "raw_size" in events.columns and events["raw_size"].notna().any():
+            volumes = events["raw_size"].to_numpy(dtype=np.float64)
+        else:
+            volumes = events["volume"].to_numpy(dtype=np.float64)
         if "raw_event_type" in events.columns:
             raw_types = events["raw_event_type"].to_numpy(dtype=np.float64)
         else:

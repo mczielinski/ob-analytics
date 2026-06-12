@@ -7,6 +7,24 @@ contract is a set of required column names plus validators that raise on
 violation — not a row model the pipeline never instantiated.
 
 Validators check for REQUIRED columns only; extra columns are allowed.
+
+Canonical per-order volume semantics (every loader must satisfy these;
+consumers — ``price_level_volume``, ``order_book``, the L3 faces — assume
+them):
+
+* ``volume`` — the order's **outstanding size after the event** for
+  ``created``/``changed`` rows, and the **size removed** (outstanding
+  immediately before the delete) for ``deleted`` rows.
+* ``fill`` — the **executed** delta at this event (0 when nothing traded).
+  A ``changed`` row is either an execution (``fill > 0``, outstanding drops
+  by exactly ``fill``) or a non-executed reduction (``fill == 0``, e.g. a
+  LOBSTER partial cancel) — never both in one event.
+* Orders first seen mid-stream (a pre-existing opening book, LOBSTER hidden
+  executions sharing the native ``id=0``) have no submission to anchor the
+  outstanding size; loaders keep the venue's raw per-event quantity for
+  those rows, and depth/lifecycle consumers exclude them (no ``created``
+  row).  Format loaders may carry the venue's raw per-event quantity in a
+  ``raw_size`` column for round-trip writers.
 """
 
 from __future__ import annotations
@@ -16,6 +34,7 @@ import pandas as pd
 from ob_analytics.exceptions import ConfigError
 
 # Required by price_level_volume / set_order_types (see depth.py).
+# `volume`/`fill` semantics: see the module docstring.
 EVENT_COLUMNS: tuple[str, ...] = (
     "event_id",
     "id",
