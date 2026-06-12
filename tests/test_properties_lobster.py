@@ -126,3 +126,35 @@ def test_writer_loader_roundtrip_preserves_messages(
     np.testing.assert_allclose(
         msg["time"].to_numpy(), stream["time"].to_numpy(), rtol=0, atol=1e-6
     )
+
+
+@settings(max_examples=60, deadline=None)
+@given(stream=lobster_streams())
+def test_lifecycle_invariants(stream: pd.DataFrame, tmp_path_factory) -> None:
+    """order_lifecycles over generated streams: outcomes partition the
+    submitted orders; fills never exceed placement; ends never precede
+    placements; exhausted-or-deleted orders are terminal."""
+    from ob_analytics.analytics import order_lifecycles
+
+    tmp = tmp_path_factory.mktemp("hyp_life")
+    events = _load(stream, tmp)
+    life = order_lifecycles(events)
+
+    submitted = set(stream.loc[stream["event_type"] == 1, "id"])
+    assert set(life["id"]) == submitted
+    assert life["outcome"].isin(["filled", "partial", "cancelled", "resting"]).all()
+    assert (life["filled_vol"] <= life["placed_vol"] + 1e-9).all()
+    ended = life["end_ts"].notna()
+    assert (life.loc[ended, "end_ts"] >= life.loc[ended, "placed_ts"]).all()
+    # Orders the generator deleted or fully consumed must be terminal.
+    consumed = (
+        stream[stream["event_type"].isin([2, 3, 4, 5])].groupby("id")["volume"].sum()
+    )
+    placed = stream[stream["event_type"] == 1].set_index("id")["volume"]
+    gone = placed.index[(consumed.reindex(placed.index).fillna(0) >= placed)]
+    assert (
+        life.set_index("id")
+        .loc[list(gone), "outcome"]
+        .isin(["filled", "partial", "cancelled"])
+        .all()
+    )

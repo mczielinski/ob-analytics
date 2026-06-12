@@ -362,27 +362,21 @@ class TestPlotLiquidityAtTouch:
 class TestPlotOrderOutcomeL3:
     def test_returns_figure(self, sample_executed_orders):
         events, trades = sample_executed_orders
-        data = _data.prepare_order_outcome_l3_data(
-            events, trades, bps_quantiles=(0.0, 1.0)
-        )
+        data = _data.prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
         fig = plot("order_outcome", Level.L3, **data)
         assert isinstance(fig, Figure)
 
     def test_accepts_ax(self, sample_executed_orders):
         events, trades = sample_executed_orders
         fig_orig, ax_orig = plt.subplots()
-        data = _data.prepare_order_outcome_l3_data(
-            events, trades, bps_quantiles=(0.0, 1.0)
-        )
+        data = _data.prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
         fig = plot("order_outcome", Level.L3, ax=ax_orig, **data)
         assert fig is fig_orig
 
     def test_resolves_single_level(self, sample_executed_orders):
         # L3-only: registered at exactly one level, so it resolves without level=.
         events, trades = sample_executed_orders
-        data = _data.prepare_order_outcome_l3_data(
-            events, trades, bps_quantiles=(0.0, 1.0)
-        )
+        data = _data.prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
         fig = plot("order_outcome", **data)
         assert isinstance(fig, Figure)
 
@@ -392,9 +386,7 @@ class TestPlotOrderOutcomeL3:
         from ob_analytics.visualization._matplotlib import _CANCELLED_COLOR
 
         events, trades = sample_executed_orders
-        data = _data.prepare_order_outcome_l3_data(
-            events, trades, bps_quantiles=(0.0, 1.0)
-        )
+        data = _data.prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
         fig = plot("order_outcome", Level.L3, **data)
         ax = fig.axes[0]
         # The dominant cancelled class must be drawn first (underneath) so the

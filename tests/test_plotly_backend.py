@@ -239,7 +239,7 @@ class TestPlotlyLiquidityAtTouch:
 class TestPlotlyOrderOutcomeL3:
     def test_returns_plotly_figure(self, sample_executed_orders) -> None:
         events, trades = sample_executed_orders
-        data = prepare_order_outcome_l3_data(events, trades, bps_quantiles=(0.0, 1.0))
+        data = prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
         fig = plotly_order_outcome_per_order(data)
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 1
@@ -248,7 +248,7 @@ class TestPlotlyOrderOutcomeL3:
         # One marker per order -> the WebGL Scattergl path, like the other
         # per-order faces.
         events, trades = sample_executed_orders
-        data = prepare_order_outcome_l3_data(events, trades, bps_quantiles=(0.0, 1.0))
+        data = prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
         fig = plotly_order_outcome_per_order(data)
         assert all(trace.type == "scattergl" for trace in fig.data)
 

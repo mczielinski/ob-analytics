@@ -381,6 +381,7 @@ def sample_order_lifecycle_events() -> pd.DataFrame:
                 volume=300.0,
                 direction="bid",
                 action="created",
+                fill=0.0,
                 type="flashed-limit",
             )
         )
@@ -392,6 +393,7 @@ def sample_order_lifecycle_events() -> pd.DataFrame:
                 volume=300.0,
                 direction="bid",
                 action="deleted",
+                fill=0.0,
                 type="flashed-limit",
             )
         )
@@ -406,6 +408,7 @@ def sample_order_lifecycle_events() -> pd.DataFrame:
                 volume=500.0,
                 direction="ask",
                 action="created",
+                fill=0.0,
                 type="resting-limit",
             )
         )
@@ -417,6 +420,7 @@ def sample_order_lifecycle_events() -> pd.DataFrame:
                 volume=300.0,
                 direction="ask",
                 action="changed",
+                fill=200.0,
                 type="resting-limit",
             )
         )
@@ -428,6 +432,7 @@ def sample_order_lifecycle_events() -> pd.DataFrame:
                 volume=0.0,
                 direction="ask",
                 action="deleted",
+                fill=300.0,
                 type="resting-limit",
             )
         )
@@ -441,6 +446,7 @@ def sample_order_lifecycle_events() -> pd.DataFrame:
             volume=400.0,
             direction="bid",
             action="created",
+            fill=0.0,
             type="resting-limit",
         )
     )
@@ -468,19 +474,20 @@ def sample_order_lifecycle_events() -> pd.DataFrame:
 def sample_executed_orders() -> tuple[pd.DataFrame, pd.DataFrame]:
     """Created limit orders + executing trades for the L3 execution faces.
 
-    Returns ``(events, trades)`` wired so each competing-risks outcome and both
-    fill roles are exercised by :func:`prepare_order_outcome_l3_data` and
-    :func:`prepare_trade_tape_l3_data`:
+    Returns ``(events, trades)``.  Event lifecycles follow the canonical
+    schema (outcomes derive from ``order_lifecycles`` via the ``fill``
+    column); the trades frame feeds :func:`prepare_trade_tape_l3_data`'s
+    maker-bar merge:
 
-    - **id 1** (bid): fully filled as the *maker* of trade T1  -> ``filled``.
-    - **id 2** (ask): half filled (maker of T2) then deleted   -> ``partial``.
+    - **id 1** (bid): fully filled (maker of trade T1)        -> ``filled``.
+    - **id 2** (ask): half filled (maker of T2) then deleted  -> ``partial``.
     - **id 3** (bid): deleted with no execution               -> ``cancelled``.
-    - **id 4** (ask): never filled, never deleted             -> ``censored`` (dropped).
+    - **id 4** (ask): never filled, never deleted             -> ``resting`` (dropped).
     - **id 5** (bid): fully filled as the *taker* of trade T3 -> ``filled``.
     - **id 6** (ask): fully filled as the maker of trade T4   -> ``filled``.
 
     Takers that are not measured orders (and the one un-tracked maker in T3) use
-    sentinel event ids absent from ``events``; the prep's inner merges drop them.
+    sentinel event ids absent from ``events``; the tape's inner merges drop them.
     """
     ts = pd.Timestamp("2015-05-01 01:00:00", tz="UTC")
     created = [
@@ -502,23 +509,33 @@ def sample_executed_orders() -> tuple[pd.DataFrame, pd.DataFrame]:
                 volume=o["volume"],
                 direction=o["direction"],
                 action="created",
+                fill=0.0,
                 aggressiveness_bps=o["bps"],
             )
         )
-    # Terminal deletes: id 2 (after partial fill) and id 3 (cancelled, no fill).
-    for event_id, oid, price, direction in (
-        (12, 2, 100.2, "ask"),
-        (13, 3, 100.0, "bid"),
-    ):
+    # Lifecycle rows under the canonical schema: `volume` = outstanding after
+    # the event (deleted rows = size removed), `fill` = executed delta.
+    # id 1/5/6 fully fill; id 2 half-fills then cancels the rest; id 3 cancels.
+    lifecycle_rows = (
+        # event_id, id, secs, price, volume, action, fill, direction
+        (11, 1, 10, 100.0, 0.0, "deleted", 10.0, "bid"),
+        (12, 2, 11, 100.2, 5.0, "changed", 5.0, "ask"),
+        (13, 2, 30, 100.2, 5.0, "deleted", 0.0, "ask"),
+        (14, 3, 30, 100.0, 8.0, "deleted", 0.0, "bid"),
+        (15, 5, 12, 100.1, 0.0, "deleted", 12.0, "bid"),
+        (16, 6, 13, 100.1, 0.0, "deleted", 9.0, "ask"),
+    )
+    for event_id, oid, secs, price, volume, action, fill, direction in lifecycle_rows:
         rows.append(
             dict(
                 event_id=event_id,
                 id=oid,
-                timestamp=ts + pd.Timedelta(seconds=30),
+                timestamp=ts + pd.Timedelta(seconds=secs),
                 price=price,
-                volume=0.0,
+                volume=volume,
                 direction=direction,
-                action="deleted",
+                action=action,
+                fill=fill,
                 aggressiveness_bps=np.nan,
             )
         )

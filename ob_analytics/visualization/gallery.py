@@ -357,7 +357,7 @@ def build_gallery_model(
                 "Order Outcome",
                 "order_outcome",
                 _viz_data.prepare_order_outcome_l3_data,
-                {"events": events, "trades": trades, "volume_scale": volume_scale},
+                {"events": events, "volume_scale": volume_scale},
             )
         )
 
