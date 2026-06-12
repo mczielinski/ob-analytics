@@ -384,11 +384,7 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
         ]
 
         added_volume = dir_events[
-            (
-                (dir_events["action"] == "created")
-                | ((dir_events["action"] == "changed") & (dir_events["fill"] == 0))
-            )
-            & (dir_events["type"] != "market")
+            (dir_events["action"] == "created") & (dir_events["type"] != "market")
         ][cols]
 
         cancelled_volume = dir_events[
@@ -419,7 +415,29 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
         filled_volume = filled_volume[filled_volume["id"].isin(added_volume["id"])]
         filled_volume.columns = pd.Index(cols)
 
-        volume_deltas = pd.concat([added_volume, cancelled_volume, filled_volume])
+        # Cancel-reductions: changed rows that shrink the order's outstanding
+        # size without an execution (LOBSTER partial cancels).  Bitstamp has
+        # none by construction — `fill` covers every Bitstamp volume drop —
+        # so this frame is empty there.  The drop is read off the canonical
+        # outstanding-size column (schemas.py).
+        outstanding_drop = (
+            dir_events.groupby("id")["volume"].shift() - dir_events["volume"]
+        )
+        reduced_volume = dir_events[
+            (dir_events["action"] == "changed")
+            & (dir_events["fill"] == 0)
+            & (outstanding_drop > 0)
+            & (dir_events["type"] != "market")
+        ][cols].copy()
+        if not reduced_volume.empty:
+            reduced_volume["volume"] = -outstanding_drop[reduced_volume.index]
+            reduced_volume = reduced_volume[
+                reduced_volume["id"].isin(added_volume["id"])
+            ]
+
+        volume_deltas = pd.concat(
+            [added_volume, cancelled_volume, filled_volume, reduced_volume]
+        )
         volume_deltas = volume_deltas.sort_values(
             by=["price", "timestamp"], kind="stable"
         )
