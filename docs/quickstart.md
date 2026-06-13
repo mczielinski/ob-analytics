@@ -63,7 +63,7 @@ spread = get_spread(result.depth_summary)
 fig = plot(
     "depth_heatmap",
     **_data.prepare_price_levels_data(
-        result.depth, spread, volume_scale=1e-8, col_bias=0.1
+        result.depth, spread, volume_scale=1e-8
     ),
 )
 save_figure(fig, "price_levels.png")
@@ -499,6 +499,9 @@ spread = get_spread(result.depth_summary)
 fig = plot(
     "depth_heatmap",
     backend="plotly",
+    # col_bias is a power-law gamma: 1.0 (default) is linear so high-volume
+    # walls stand out; 0.1 brightens thin levels to expose near-touch
+    # structure in heavy-tailed books; <= 0 selects a log scale.
     **_data.prepare_price_levels_data(
         result.depth, spread, volume_scale=1e-8, col_bias=0.1, price_from=232
     ),

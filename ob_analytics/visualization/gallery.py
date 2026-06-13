@@ -269,15 +269,17 @@ def build_gallery_model(
             {
                 "depth": depth,
                 "spread": spread,
+                "trades": trades,
                 "volume_scale": volume_scale,
-                "col_bias": 0.1,
                 "price_from": price_from,
                 "price_to": price_to,
             },
             note=(
                 "Resting liquidity through time: one horizontal line per "
                 "price level, colored by available volume; the pale line is "
-                "the midprice. Gaps mean the level emptied."
+                "the midprice. Triangles mark executions (aggressor side). "
+                "Gaps mean the level emptied. Pass col_bias<1 to brighten "
+                "thin levels and reveal near-touch structure."
             ),
         ),
         _paired(

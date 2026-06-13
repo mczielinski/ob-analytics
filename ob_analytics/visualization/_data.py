@@ -258,7 +258,7 @@ def prepare_price_levels_data(
     trades: pd.DataFrame | None = None,
     show_mp: bool = True,
     show_all_depth: bool = False,
-    col_bias: float = 0.1,
+    col_bias: float = 1.0,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
     price_from: float | None = None,
@@ -269,6 +269,14 @@ def prepare_price_levels_data(
     price_by: float | None = None,
 ) -> dict[str, Any]:
     """Prepare data for the price-level depth heatmap.
+
+    ``col_bias`` is the gamma of a power-law color normalization
+    (``volume ** col_bias`` mapped onto the colormap). ``1.0`` (the
+    default) is linear: high-volume walls stand out against a dark
+    field. Values in ``(0, 1)`` progressively brighten low-volume
+    levels, revealing near-touch structure in heavy-tailed books
+    (``0.1`` matches the R package's palette bias). Values ``<= 0``
+    select a log10 scale.
 
     When ``volume_scale`` is ``None`` (the default), an order-of-magnitude
     scale is auto-inferred from the input depth via
