@@ -32,6 +32,7 @@ from ob_analytics.visualization._data import (  # noqa: E402
     prepare_vpin_data,
 )
 from ob_analytics.visualization._plotly import (  # noqa: E402
+    _biased_color_norm,
     plotly_book_snapshot_aggregate,
     plotly_book_snapshot_per_order,
     plotly_cancellations_per_order,
@@ -155,6 +156,40 @@ class TestPlotlyTrades:
         assert fig.layout.yaxis.title.text == "Price"
 
 
+class TestBiasedColorNorm:
+    """col_bias maps volumes to [0, 1] color positions, mirroring matplotlib."""
+
+    def test_linear_is_proportional(self) -> None:
+        t, bar = _biased_color_norm(np.array([1.0, 50.5, 100.0]), col_bias=1.0)
+        assert t[0] == pytest.approx(0.0)
+        assert t[-1] == pytest.approx(1.0)
+        assert t[1] == pytest.approx(0.5, abs=1e-6)
+        # Colorbar ticks live in [0,1] but are labeled in real volume units.
+        assert bar["title"] == "Volume"
+        assert len(bar["tickvals"]) == len(bar["ticktext"])
+
+    def test_fractional_bias_brightens_low_volume(self) -> None:
+        vol = np.array([1.0, 10.0, 100.0])
+        linear, _ = _biased_color_norm(vol, col_bias=1.0)
+        biased, _ = _biased_color_norm(vol, col_bias=0.1)
+        assert biased[1] > linear[1]
+
+    def test_outputs_within_unit_range(self) -> None:
+        vol = np.array([np.nan, 1.0, 10.0, 100.0])
+        for bias in (1.0, 0.5, 0.1, 0.0, -1.0):
+            t, _ = _biased_color_norm(vol, col_bias=bias)
+            assert np.all((t >= 0.0) & (t <= 1.0))
+
+    def test_log_is_monotonic(self) -> None:
+        t, _ = _biased_color_norm(np.array([1.0, 10.0, 100.0]), col_bias=0.0)
+        assert t[0] < t[1] < t[2]
+
+    def test_empty_finite_is_safe(self) -> None:
+        t, bar = _biased_color_norm(np.array([np.nan, np.nan]), col_bias=0.1)
+        assert np.all(t == 0.0)
+        assert bar["title"] == "Volume"
+
+
 class TestPlotlyPriceLevels:
     def test_returns_plotly_figure(self, sample_events: pd.DataFrame) -> None:
         # Use a minimal depth-like DataFrame
@@ -163,6 +198,18 @@ class TestPlotlyPriceLevels:
         data = prepare_price_levels_data(depth)
         fig = plotly_price_levels(data)
         assert isinstance(fig, go.Figure)
+
+    def test_real_volume_rides_along_as_customdata(
+        self, sample_events: pd.DataFrame
+    ) -> None:
+        depth = sample_events[["timestamp", "price", "volume"]].copy()
+        depth["direction"] = "bid"
+        data = prepare_price_levels_data(depth, col_bias=0.1)
+        fig = plotly_price_levels(data)
+        depth_trace = next(tr for tr in fig.data if tr.name == "Depth")
+        # Color is the normalized ramp (cmax == 1); hover reads true volume.
+        assert depth_trace.marker.cmax == 1
+        assert depth_trace.customdata is not None
 
 
 class TestPlotlyEventMap:

@@ -200,6 +200,26 @@ def mpl_trades(
     return fig
 
 
+def _volume_norm(volume: pd.Series, col_bias: float) -> mcolors.Normalize:
+    """Color normalization for the depth heatmap.
+
+    ``col_bias`` is the gamma of a power-law norm: ``1.0`` is linear so
+    high-volume walls stand out against a dark field, ``0 < col_bias < 1``
+    brightens low-volume levels to reveal near-touch structure (``0.1``
+    matches the R package's palette bias), and ``col_bias <= 0`` selects a
+    log10 scale.
+    """
+    vmin = volume.min()
+    vmax = volume.max()
+    if col_bias <= 0:
+        if vmin <= 0:
+            vmin = volume[volume > 0].min()
+        return mcolors.LogNorm(vmin=vmin, vmax=vmax)
+    if col_bias != 1:
+        return mcolors.PowerNorm(gamma=col_bias, vmin=vmin, vmax=vmax)
+    return mcolors.Normalize(vmin=vmin, vmax=vmax)
+
+
 def mpl_price_levels(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -222,21 +242,8 @@ def mpl_price_levels(
         depth["volume"].isna(), 0, np.where(depth["volume"] < 1, 0.1, 1)
     )
 
-    log_10 = False
-    if col_bias <= 0:
-        col_bias = 1
-        log_10 = True
-
     cmap = plt.get_cmap("viridis")
-
-    vmin = depth["volume"].min()
-    vmax = depth["volume"].max()
-    if log_10:
-        if vmin <= 0:
-            vmin = depth["volume"][depth["volume"] > 0].min()
-        norm: mcolors.Normalize = mcolors.LogNorm(vmin=vmin, vmax=vmax)
-    else:
-        norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
+    norm = _volume_norm(depth["volume"], col_bias)
 
     fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
 

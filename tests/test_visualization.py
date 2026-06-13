@@ -517,6 +517,72 @@ class TestPlotEventsHistogram:
         assert fig is fig_orig
 
 
+class TestVolumeNorm:
+    """col_bias selects the depth-heatmap color normalization."""
+
+    def test_unit_bias_is_linear(self):
+        import matplotlib.colors as mcolors
+
+        from ob_analytics.visualization._matplotlib import _volume_norm
+
+        norm = _volume_norm(pd.Series([1.0, 10.0, 100.0]), col_bias=1.0)
+        # Exactly linear, not a PowerNorm/LogNorm subclass.
+        assert type(norm) is mcolors.Normalize
+
+    def test_fractional_bias_is_powernorm(self):
+        import matplotlib.colors as mcolors
+
+        from ob_analytics.visualization._matplotlib import _volume_norm
+
+        norm = _volume_norm(pd.Series([1.0, 10.0, 100.0]), col_bias=0.1)
+        assert isinstance(norm, mcolors.PowerNorm)
+        assert norm.gamma == 0.1
+
+    def test_fractional_bias_brightens_low_volume(self):
+        from ob_analytics.visualization._matplotlib import _volume_norm
+
+        vol = pd.Series([1.0, 10.0, 100.0])
+        linear = _volume_norm(vol, col_bias=1.0)
+        biased = _volume_norm(vol, col_bias=0.1)
+        # A low-volume level lands higher on the ramp under the bias.
+        assert biased(10.0) > linear(10.0)
+
+    def test_nonpositive_bias_is_log(self):
+        import matplotlib.colors as mcolors
+
+        from ob_analytics.visualization._matplotlib import _volume_norm
+
+        # Zeros (which become NaN upstream) must not poison the log vmin.
+        norm = _volume_norm(pd.Series([0.0, 1.0, 100.0]), col_bias=0.0)
+        assert isinstance(norm, mcolors.LogNorm)
+        assert norm.vmin == 1.0
+
+
+class TestPriceLevelsColBias:
+    """The depth heatmap renders under every col_bias regime."""
+
+    def _depth(self, sample_events):
+        depth = sample_events[["timestamp", "price", "volume"]].copy()
+        depth["direction"] = "bid"
+        return depth
+
+    @pytest.mark.parametrize("col_bias", [1.0, 0.5, 0.1, 0.0, -1.0])
+    def test_renders_for_each_bias(self, sample_events, col_bias):
+        depth = self._depth(sample_events)
+        fig = plot(
+            "depth_heatmap",
+            **_data.prepare_price_levels_data(depth, col_bias=col_bias),
+        )
+        assert isinstance(fig, Figure)
+
+    def test_default_bias_is_linear(self):
+        # The library default is the hero linear look (col_bias=1.0).
+        import inspect
+
+        sig = inspect.signature(_data.prepare_price_levels_data)
+        assert sig.parameters["col_bias"].default == 1.0
+
+
 # ---------------------------------------------------------------------------
 # Subplot composition (key use-case for ax parameter)
 # ---------------------------------------------------------------------------
