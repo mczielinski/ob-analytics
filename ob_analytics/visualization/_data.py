@@ -8,6 +8,7 @@ DataFrames into plain dicts consumable by **any** rendering backend
 from __future__ import annotations
 
 import math
+import re
 from datetime import timedelta
 from typing import Any
 
@@ -82,19 +83,25 @@ def mpl_marker_area_to_plotly_size(area: np.ndarray) -> np.ndarray:
     return np.sqrt(np.maximum(area, 0.0)) * 0.8
 
 
-# Volume-percentile gradient, shared by every rendering backend.  Percentile
-# rank is ordered data, so the 20 steps walk monotonically in luminance
-# (pale → saturated blue) — hue carries no order.  Ramp direction and per-side
-# hue split are revisited in roadmap §3.7 (docs/plans/).
-_VOLUME_PERCENTILE_PALETTE: tuple[tuple[float, float, float, float], ...] = tuple(
-    (
-        0.88 + (0.03 - 0.88) * (i / 19),
-        0.92 + (0.19 - 0.92) * (i / 19),
-        0.98 + (0.42 - 0.98) * (i / 19),
-        1.0,
+def _volume_percentile_palette(
+    n: int,
+) -> tuple[tuple[float, float, float, float], ...]:
+    """Volume-percentile gradient, shared by every rendering backend.
+
+    Percentile rank is ordered data, so the *n* steps walk monotonically in
+    luminance (pale → saturated blue) — hue carries no order.  Ramp direction
+    and per-side hue split are revisited in roadmap §3.7 (docs/plans/).
+    """
+    span = max(n - 1, 1)
+    return tuple(
+        (
+            0.88 + (0.03 - 0.88) * (i / span),
+            0.92 + (0.19 - 0.92) * (i / span),
+            0.98 + (0.42 - 0.98) * (i / span),
+            1.0,
+        )
+        for i in range(n)
     )
-    for i in range(20)
-)
 
 
 # ---------------------------------------------------------------------------
@@ -819,7 +826,10 @@ def prepare_volume_percentiles_data(
 ) -> dict[str, Any]:
     """Prepare data for volume-percentile stacked area chart.
 
-    ``volume_scale=None`` auto-infers a power-of-10 scale from the
+    The BPS bins are discovered from the ``(bid|ask)_vol<N>bps`` columns of
+    *depth_summary*, so any ``depth_bps`` / ``depth_bins`` configuration works
+    (the previous hardcoded 25–500 bps range raised ``KeyError`` for anything
+    else).  ``volume_scale=None`` auto-infers a power-of-10 scale from the
     aggregated bin volumes (after the time-window filter is applied).
     """
     if start_time is None:
@@ -827,8 +837,18 @@ def prepare_volume_percentiles_data(
     if end_time is None:
         end_time = depth_summary["timestamp"].iloc[-1]
 
-    bid_names = [f"bid_vol{i}bps" for i in range(25, 501, 25)]
-    ask_names = [f"ask_vol{i}bps" for i in range(25, 501, 25)]
+    bps_levels = sorted(
+        int(m.group(1))
+        for c in depth_summary.columns
+        if (m := re.fullmatch(r"bid_vol(\d+)bps", str(c)))
+    )
+    if not bps_levels:
+        raise ValueError(
+            "prepare_volume_percentiles_data: no 'bid_vol<N>bps' columns in "
+            f"depth_summary. Columns: {list(depth_summary.columns)}"
+        )
+    bid_names = [f"bid_vol{b}bps" for b in bps_levels]
+    ask_names = [f"ask_vol{b}bps" for b in bps_levels]
 
     td = round((end_time - start_time).total_seconds())
     frequency = "mins" if td > 900 else "secs"
@@ -852,8 +872,9 @@ def prepare_volume_percentiles_data(
     aggregated.rename(columns={"index": "timestamp"}, inplace=True)
     ob = aggregated
 
-    bid_names_fmt = [f"bid_vol{int(i):03d}bps" for i in range(25, 501, 25)]
-    ask_names_fmt = [f"ask_vol{int(i):03d}bps" for i in range(25, 501, 25)]
+    pad = max(3, len(str(bps_levels[-1])))
+    bid_names_fmt = [f"bid_vol{b:0{pad}d}bps" for b in bps_levels]
+    ask_names_fmt = [f"ask_vol{b:0{pad}d}bps" for b in bps_levels]
     ob.columns = pd.Index(["timestamp"] + bid_names_fmt + ask_names_fmt)
 
     max_ask = ob[ask_names_fmt].sum(axis=1).max()
@@ -891,11 +912,14 @@ def prepare_volume_percentiles_data(
     melted_bids["liquidity"] *= volume_scale
 
     # Two copies of the shared palette: one for the ask columns, one for
-    # the bid columns (40 entries total, matching all_cols below).
-    col_pal = list(_VOLUME_PERCENTILE_PALETTE) * 2
+    # the bid columns (2N entries total, matching all_cols below).
+    col_pal = list(_volume_percentile_palette(len(bps_levels))) * 2
 
-    legend_names = [f"+{int(i):03d}bps" for i in range(500, 49, -50)] + [
-        f"-{int(i):03d}bps" for i in range(50, 501, 50)
+    # Every other bin, outermost first per side (matches the legacy fixed
+    # labels at the default 25x20 configuration).
+    desc = bps_levels[::-1]
+    legend_names = [f"+{b:0{pad}d}bps" for b in desc[::2]] + [
+        f"-{b:0{pad}d}bps" for b in desc[::2][::-1]
     ]
 
     asks_pivot = melted_asks.pivot(

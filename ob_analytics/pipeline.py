@@ -142,6 +142,13 @@ class Pipeline:
             defaults = format.config_defaults()
             if config is None:
                 config = PipelineConfig(**defaults)
+            else:
+                # Merge: the format's defaults underlie the fields the caller
+                # explicitly set.  Without this, Pipeline(config=..., format=
+                # LobsterFormat()) silently dropped price_divisor=10_000 and
+                # produced prices wrong by four orders of magnitude.
+                explicit = {k: getattr(config, k) for k in config.model_fields_set}
+                config = PipelineConfig(**{**defaults, **explicit})
             self.config = config
             self.loader = loader or format.create_loader(config, self._ctx)
             self.trade_source = trade_source or format.create_trade_source(
