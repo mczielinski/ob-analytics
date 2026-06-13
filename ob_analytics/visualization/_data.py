@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import re
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
@@ -16,6 +17,47 @@ import numpy as np
 import pandas as pd
 
 from ob_analytics.depth import filter_depth
+
+
+@dataclass(frozen=True)
+class FocusWindow:
+    """A shared display window for gallery faces.
+
+    One clipping decision, made once per gallery build, instead of every
+    face inventing its own (raw-price percentiles here, ±kσ there): faces
+    that receive the same bounds stay comparable on shared axes.  ``None``
+    on either axis means no clipping there.
+    """
+
+    start_time: pd.Timestamp | None = None
+    end_time: pd.Timestamp | None = None
+    price_from: float | None = None
+    price_to: float | None = None
+
+
+def focus_window(
+    trades: pd.DataFrame,
+    *,
+    k_sigma: float = 3.0,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+) -> FocusWindow:
+    """Mid-anchored :class:`FocusWindow`: trades-median ± *k_sigma*·σ.
+
+    Trades happen at the touch, so their median anchors the window where
+    the action is; the σ band keeps far-from-touch flashed orders from
+    stretching the price axis.  Degenerate tapes (empty, or zero/NaN price
+    dispersion) yield an unclipped price axis.
+    """
+    if trades.empty:
+        return FocusWindow(start_time, end_time, None, None)
+    mid = float(trades["price"].median())
+    std = float(trades["price"].std())
+    if not math.isfinite(std) or std <= 0:
+        return FocusWindow(start_time, end_time, None, None)
+    return FocusWindow(
+        start_time, end_time, max(0.0, mid - k_sigma * std), mid + k_sigma * std
+    )
 
 
 def _sanitize_spread(spread: pd.DataFrame) -> pd.DataFrame:

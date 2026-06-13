@@ -53,10 +53,10 @@ def _import_plotly() -> Any:
 # Shared layout helpers
 # ---------------------------------------------------------------------------
 
-_DARK_LAYOUT = dict(
-    template="plotly_dark",
-    paper_bgcolor="#2d2d2d",
-    plot_bgcolor="#1e1e1e",
+# Light theme, matching the matplotlib default (one polarity across the
+# gallery; the reference bundle is light).
+_BASE_LAYOUT = dict(
+    template="plotly_white",
     font=dict(family="Inter, sans-serif", size=13),
     margin=dict(l=60, r=30, t=50, b=50),
     hovermode="x unified",
@@ -65,7 +65,7 @@ _DARK_LAYOUT = dict(
 
 def _base_figure(go: Any, title: str = "", **kwargs: Any) -> Any:
     """Create a Plotly figure with the dark ob-analytics theme."""
-    layout = {**_DARK_LAYOUT, "title": dict(text=title, x=0.5)}
+    layout = {**_BASE_LAYOUT, "title": dict(text=title, x=0.5)}
     layout.update(kwargs)
     return go.Figure(layout=layout)
 
@@ -160,7 +160,7 @@ def plotly_price_levels(data: dict) -> Any:
                     x=spread["timestamp"],
                     y=mp,
                     mode="lines",
-                    line=dict(color="white", width=1.5, shape="hv"),
+                    line=dict(color="#222222", width=1.5, shape="hv"),
                     name="Midprice",
                 )
             )
@@ -171,7 +171,7 @@ def plotly_price_levels(data: dict) -> Any:
                     x=spread["timestamp"],
                     y=spread["best_ask_price"],
                     mode="lines",
-                    line=dict(color="#ff4444", width=1.2, dash="dot"),
+                    line=dict(color=_ASK_COLOR, width=1.2, dash="dot"),
                     name="Best Ask",
                 )
             )
@@ -181,7 +181,7 @@ def plotly_price_levels(data: dict) -> Any:
                     x=spread["timestamp"],
                     y=spread["best_bid_price"],
                     mode="lines",
-                    line=dict(color="#44ff44", width=1.2, dash="dot"),
+                    line=dict(color=_BID_COLOR, width=1.2, dash="dot"),
                     name="Best Bid",
                 )
             )
@@ -198,7 +198,7 @@ def plotly_price_levels(data: dict) -> Any:
                     marker=dict(
                         symbol="triangle-down",
                         size=8,
-                        color="#ff4444",
+                        color=_SELL_COLOR,
                         line=dict(width=1, color="white"),
                     ),
                     name="Sell Trades",
@@ -213,7 +213,7 @@ def plotly_price_levels(data: dict) -> Any:
                     marker=dict(
                         symbol="triangle-up",
                         size=8,
-                        color="#44ff44",
+                        color=_BUY_COLOR,
                         line=dict(width=1, color="white"),
                     ),
                     name="Buy Trades",
@@ -236,7 +236,7 @@ def plotly_event_map(data: dict) -> Any:
 
     fig = _base_figure(go, title="Limit Order Event Map")
 
-    col_map = {"bid": "#4444ff", "ask": "#ff4444"}
+    col_map = {"bid": _BID_COLOR, "ask": _ASK_COLOR}
 
     if not created.empty:
         for direction in ["bid", "ask"]:
@@ -297,7 +297,7 @@ def plotly_volume_map(data: dict) -> Any:
     go = _import_plotly()
     events = data["events"]
     log_scale = data["log_scale"]
-    col_map = {"bid": "#4444ff", "ask": "#ff4444"}
+    col_map = {"bid": _BID_COLOR, "ask": _ASK_COLOR}
 
     fig = _base_figure(go, title="Volume Map of Flashed Limit Orders")
 
@@ -682,7 +682,7 @@ def plotly_volume_percentiles(data: dict) -> Any:
         )
 
     if side_line:
-        fig.add_hline(y=0, line_color="white", line_width=0.5)
+        fig.add_hline(y=0, line_color="#444444", line_width=0.5)
 
     y_range = volume_scale * max(max_ask, max_bid)
     fig.update_yaxes(range=[-y_range, y_range], title_text="Liquidity")
@@ -709,7 +709,7 @@ def plotly_events_histogram(data: dict) -> Any:
 
     fig = _base_figure(go, title=f"Events {val} distribution")
 
-    for direction, color in [("bid", "#4444ff"), ("ask", "#ff4444")]:
+    for direction, color in [("bid", _BID_COLOR), ("ask", _ASK_COLOR)]:
         subset = events[events["direction"] == direction]
         if subset.empty:
             continue
@@ -793,7 +793,7 @@ def plotly_order_flow_imbalance(data: dict) -> Any:
         )
     )
 
-    fig.add_hline(y=0, line_color="white", line_width=0.5, opacity=0.5)
+    fig.add_hline(y=0, line_color="#444444", line_width=0.5, opacity=0.6)
     fig.update_yaxes(range=[-1.05, 1.05], title_text="OFI")
     fig.update_xaxes(title_text="Time")
 
@@ -871,8 +871,8 @@ def plotly_kyle_lambda(data: dict) -> Any:
             )
         )
 
-    fig.add_hline(y=0, line_color="white", line_width=0.3, opacity=0.3)
-    fig.add_vline(x=0, line_color="white", line_width=0.3, opacity=0.3)
+    fig.add_hline(y=0, line_color="#444444", line_width=0.3, opacity=0.5)
+    fig.add_vline(x=0, line_color="#444444", line_width=0.3, opacity=0.5)
     fig.update_xaxes(title_text="Signed Order Flow (net volume)")
     fig.update_yaxes(title_text="ΔPrice")
     return fig

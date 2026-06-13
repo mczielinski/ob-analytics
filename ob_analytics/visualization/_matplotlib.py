@@ -61,11 +61,24 @@ class PlotTheme:
         Matplotlib rc overrides applied on top of the seaborn theme.
     """
 
-    style: str = "darkgrid"
+    style: str = "white"
     context: str = "notebook"
-    font_scale: float = 1.5
+    font_scale: float = 1.05
     rc: dict[str, object] = field(
-        default_factory=lambda: {"lines.linewidth": 2.5, "axes.facecolor": "darkgray"}
+        # The reference style (Cleveland–McGill bundle): white background,
+        # dotted light grid, no top/right spines, bold left-aligned titles.
+        # Built on top of seaborn (style + context still apply).
+        default_factory=lambda: {
+            "axes.grid": True,
+            "grid.linestyle": ":",
+            "grid.alpha": 0.35,
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+            "axes.edgecolor": "#444444",
+            "axes.titlelocation": "left",
+            "axes.titleweight": "bold",
+            "lines.linewidth": 2.0,
+        }
     )
 
 
@@ -98,6 +111,21 @@ def _create_axes(
     _apply_theme(theme)
     fig, new_ax = plt.subplots(figsize=figsize)
     return fig, new_ax
+
+
+def format_time_axis(ax: Axes) -> None:
+    """Consistent intraday ticks for a date-valued x-axis.
+
+    Sets an explicit ``AutoDateLocator`` + ``ConciseDateFormatter`` pair.
+    Renderers that plot ``date2num`` floats stay off matplotlib's date
+    *units converter*, whose registration forces the slow collection-draw
+    path (one ``Path`` rebuilt per segment on every draw — the WS-2.4
+    profile); for unit-converted axes only the tick style changes (the
+    default formatter rendered "02 02:45"-style day prefixes).
+    """
+    locator = mdates.AutoDateLocator()
+    ax.xaxis.set_major_locator(locator)
+    ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
 
 
 def save_figure(
@@ -143,6 +171,7 @@ def mpl_time_series(
     ax.set_title(data["title"])
     ax.set_xlabel("time")
     ax.set_ylabel(data["y_label"])
+    format_time_axis(ax)
     ax.grid(True)
     fig.tight_layout()
     return fig
@@ -165,6 +194,7 @@ def mpl_trades(
     ax.set_xlabel("Time")
     ax.set_ylabel("Price")
     ax.set_yticks(y_breaks)
+    format_time_axis(ax)
     ax.grid(True)
     fig.tight_layout()
     return fig
@@ -252,7 +282,7 @@ def mpl_price_levels(
             ax.plot(
                 spread_x,
                 spread["midprice"],
-                color="#ffffff",
+                color="#222222",
                 linewidth=1.1,
                 label="Midprice",
             )
@@ -261,7 +291,7 @@ def mpl_price_levels(
                 ax.step(
                     spread_x,
                     spread["best_ask_price"],
-                    color="#ff0000",
+                    color=_ASK_COLOR,
                     linewidth=1.5,
                     where="post",
                     label="Best Ask",
@@ -270,7 +300,7 @@ def mpl_price_levels(
                 ax.step(
                     spread_x,
                     spread["best_bid_price"],
-                    color="#00ff00",
+                    color=_BID_COLOR,
                     linewidth=1.5,
                     where="post",
                     label="Best Bid",
@@ -286,7 +316,7 @@ def mpl_price_levels(
                 sells["price"],
                 s=50,
                 facecolors="none",
-                edgecolors="#ff0000",
+                edgecolors=_SELL_COLOR,
                 linewidths=1.5,
                 zorder=5,
                 marker="v",
@@ -298,22 +328,16 @@ def mpl_price_levels(
                 buys["price"],
                 s=50,
                 facecolors="none",
-                edgecolors="#00ff00",
+                edgecolors=_BUY_COLOR,
                 linewidths=1.5,
                 zorder=5,
                 marker="^",
                 label="Buy Trades",
             )
 
-    # Date ticks via explicit locator/formatter on plain date-num floats.
-    # ax.xaxis_date() would register the date *units converter*, and an axis
-    # with units forces matplotlib's slow collection-draw path: every draw
-    # rebuilds one Path per segment (~300k Path inits per draw here).  All
-    # artists above already plot date2num floats, so only tick handling is
-    # needed.
-    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
-    plt.xticks(rotation=45)
+    # All artists above plot date2num floats; format_time_axis keeps the
+    # axis off the date units converter (see its docstring).
+    format_time_axis(ax)
 
     ax.set_xlabel("Time")
     ax.set_ylabel("Limit Price")
@@ -349,7 +373,7 @@ def mpl_event_map(
     deleted = data["deleted"]
     price_by = data["price_by"]
 
-    col_pal = {"bid": "#0000ff", "ask": "#ff0000"}
+    col_pal = {"bid": _BID_COLOR, "ask": _ASK_COLOR}
 
     fig, ax = _create_axes(ax, figsize=(10, 6), theme=theme)
 
@@ -393,6 +417,7 @@ def mpl_event_map(
     ax.set_yticks(
         _rounded_price_ticks(events["price"].min(), events["price"].max(), price_by)
     )
+    format_time_axis(ax)
     fig.tight_layout()
     return fig
 
@@ -403,7 +428,7 @@ def mpl_volume_map(
     """Render a volume map of flashed limit orders."""
     events = data["events"]
     log_scale = data["log_scale"]
-    col_pal = {"bid": "#0000ff", "ask": "#ff0000"}
+    col_pal = {"bid": _BID_COLOR, "ask": _ASK_COLOR}
 
     fig, ax = _create_axes(ax, figsize=(10, 6), theme=theme)
     if log_scale:
@@ -421,6 +446,7 @@ def mpl_volume_map(
     ax.set_xlabel("Time")
     ax.set_ylabel("Volume")
     ax.set_title("Volume Map of Flashed Limit Orders")
+    format_time_axis(ax)
     fig.tight_layout()
     return fig
 
@@ -642,9 +668,7 @@ def mpl_order_activity_per_order(
             label=label,
         )
 
-    ax.xaxis_date()
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
-    plt.xticks(rotation=45)
+    format_time_axis(ax)
 
     y_range = data.get("y_range")
     price_by = data["price_by"]
@@ -687,13 +711,13 @@ def mpl_liquidity_at_touch(
         drawstyle="steps-post",
         label="Best ask size",
     )
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
-    plt.xticks(rotation=45)
+    format_time_axis(ax)
     ax.set_xlabel("Time")
     ax.set_ylabel("Size at touch")
     ax.set_title("Liquidity at the touch")
     if len(ts) > 0:
         ax.legend(loc="upper right")
+    format_time_axis(ax)
     ax.grid(True)
     fig.tight_layout()
     return fig
@@ -769,9 +793,7 @@ def mpl_trade_tape_per_order(
             edgecolors="none",
             label=label,
         )
-    ax.xaxis_date()
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
-    plt.xticks(rotation=45)
+    format_time_axis(ax)
     y_range = data.get("y_range")
     if y_range is not None:
         ax.set_ylim(y_range)
@@ -839,7 +861,7 @@ def mpl_volume_percentiles(
     y_range = volume_scale * max(max_ask, max_bid)
     ax.set_ylim(-y_range, y_range)
     ax.set_xlabel("time")
-    fig.autofmt_xdate()
+    format_time_axis(ax)
 
     legend_elements = []
     for col, label in zip(all_cols, legend_names):
@@ -877,7 +899,7 @@ def mpl_events_histogram(
         hue="direction",
         multiple="dodge",
         binwidth=bw,
-        palette={"bid": "#0000ff", "ask": "#ff0000"},
+        palette={"bid": _BID_COLOR, "ask": _ASK_COLOR},
         edgecolor="white",
         linewidth=0.5,
         ax=ax,
@@ -940,6 +962,7 @@ def mpl_vpin(
     ax.set_xlabel("Time")
     ax.set_ylabel("VPIN")
     ax.set_title("Volume-Synchronized Probability of Informed Trading")
+    format_time_axis(ax)
     ax.legend(loc="upper left", fontsize=9)
     fig.tight_layout()
     return fig
@@ -976,11 +999,12 @@ def mpl_order_flow_imbalance(
         linewidth=0.3,
     )
 
-    ax.axhline(y=0, color="white", linewidth=0.8, alpha=0.5)
+    ax.axhline(y=0, color="#444444", linewidth=0.8, alpha=0.6)
     ax.set_ylim(-1.05, 1.05)
     ax.set_xlabel("Time")
     ax.set_ylabel("OFI")
     ax.set_title("Order Flow Imbalance")
+    format_time_axis(ax)
 
     if trades is not None and "price" in trades.columns:
         ax2 = ax.twinx()
@@ -1039,8 +1063,8 @@ def mpl_kyle_lambda(
             zorder=4,
         )
 
-    ax.axhline(y=0, color="white", linewidth=0.5, alpha=0.3)
-    ax.axvline(x=0, color="white", linewidth=0.5, alpha=0.3)
+    ax.axhline(y=0, color="#444444", linewidth=0.5, alpha=0.5)
+    ax.axvline(x=0, color="#444444", linewidth=0.5, alpha=0.5)
 
     ax.set_xlabel("Signed Order Flow (net volume)")
     ax.set_ylabel("ΔPrice")
@@ -1112,6 +1136,7 @@ def mpl_hidden_executions(
 
     ax.set_xlabel("Time")
     ax.set_ylabel("Price")
+    format_time_axis(ax)
     y_range = data.get("y_range")
     if y_range is not None:
         ax.set_ylim(y_range)
@@ -1166,6 +1191,7 @@ def mpl_trading_halts(
 
     ax.set_xlabel("Time")
     ax.set_ylabel("Price")
+    format_time_axis(ax)
     ax.legend(loc="upper left")
     fig.tight_layout()
     return fig

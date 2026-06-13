@@ -183,6 +183,11 @@ def plot(
     return renderer(data)
 
 
+# Shared display-window primitive (roadmap §3.0): one mid-anchored clipping
+# decision per gallery build instead of per-face ad-hoc clips.
+FocusWindow = _viz_data.FocusWindow
+focus_window = _viz_data.focus_window
+
 # matplotlib theme + save exports.  Imported *after* RENDERERS is defined: the
 # self-registration block at the bottom of _matplotlib imports RENDERERS from
 # this (partially initialized) package, so RENDERERS must already exist to
@@ -190,6 +195,7 @@ def plot(
 from ob_analytics.visualization._matplotlib import (  # noqa: E402
     DEFAULT_THEME,
     PlotTheme,
+    format_time_axis,
     save_figure,
 )
 
@@ -206,4 +212,7 @@ __all__ = [
     "save_figure",
     # Helpers users actually call
     "infer_volume_scale",
+    "FocusWindow",
+    "focus_window",
+    "format_time_axis",
 ]

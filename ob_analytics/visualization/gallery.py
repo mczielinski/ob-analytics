@@ -228,10 +228,11 @@ def build_gallery_model(
     spread = get_spread(depth_summary)
     zoom_start, zoom_end = _auto_zoom_window(events)
 
-    price_mid = trades["price"].median()
-    price_std = trades["price"].std()
-    price_from = max(0, price_mid - 3 * price_std) if price_std > 0 else None
-    price_to = price_mid + 3 * price_std if price_std > 0 else None
+    # One shared mid-anchored window feeds every clipped face (roadmap §3.0);
+    # faces receiving the same bounds stay comparable on shared axes.
+    focus = _viz_data.focus_window(trades)
+    price_from = focus.price_from
+    price_to = focus.price_to
 
     offset = events["timestamp"].min() + pd.Timedelta(minutes=1)
     depth_summary_offset = depth_summary[depth_summary["timestamp"] >= offset]
@@ -254,6 +255,11 @@ def build_gallery_model(
                 _viz_data.prepare_trade_tape_l3_data,
                 {"events": events, "trades": trades, "volume_scale": volume_scale},
             ),
+            note=(
+                "Executions over time. L2: price as a step line. L3: each "
+                "execution dot sits at the end of a bar tracing how long the "
+                "consumed maker order had rested; color = aggressor side."
+            ),
         ),
         _l2(
             "depth_heatmap",
@@ -268,6 +274,11 @@ def build_gallery_model(
                 "price_from": price_from,
                 "price_to": price_to,
             },
+            note=(
+                "Resting liquidity through time: one horizontal line per "
+                "price level, colored by available volume; the pale line is "
+                "the midprice. Gaps mean the level emptied."
+            ),
         ),
         _paired(
             "order_activity",
@@ -302,6 +313,12 @@ def build_gallery_model(
                     "price_to": price_to,
                 },
             ),
+            note=(
+                "Order placement and removal. L2: created/deleted events "
+                "scattered at their price. L3: each order is one lifespan "
+                "from placement to outcome - orange = pulled (flashed), "
+                "green = rested/filled."
+            ),
         ),
         _paired(
             "cancellations",
@@ -320,6 +337,11 @@ def build_gallery_model(
                 _viz_data.prepare_cancellations_l3_data,
                 {"events": events, "volume_scale": volume_scale},
             ),
+            note=(
+                "Pulled orders. L2: cancelled volume over time (log scale). "
+                "L3: every cancellation as how-long-it-rested vs "
+                "how-far-from-the-touch-it-sat, sized by volume."
+            ),
         ),
     ]
 
@@ -336,6 +358,12 @@ def build_gallery_model(
                 f"Book Snapshot ({snap_label})",
                 _viz_data.prepare_book_snapshot_data,
                 {"order_book": snap_book, "volume_scale": volume_scale},
+                note=(
+                    "The resting book at one instant. L2: total size per "
+                    "price level. L3: the same bars segmented per order - "
+                    "one whale and a crowd of small orders look identical "
+                    "on L2 and completely different here."
+                ),
             )
         )
         concepts.append(
@@ -344,6 +372,11 @@ def build_gallery_model(
                 f"Depth Chart ({snap_label})",
                 _viz_data.prepare_book_snapshot_data,
                 {"order_book": snap_book, "volume_scale": volume_scale},
+                note=(
+                    "Cumulative liquidity walking away from the touch: the "
+                    "cost to sweep X units. L3 marks each individual order "
+                    "along the curve."
+                ),
             )
         )
 
@@ -358,6 +391,13 @@ def build_gallery_model(
                 "order_outcome",
                 _viz_data.prepare_order_outcome_l3_data,
                 {"events": events, "volume_scale": volume_scale},
+                note=(
+                    "Where orders were placed vs how they ended. x = signed "
+                    "distance from the best price at placement (right of 0 "
+                    "improved the touch), y = size; green filled, purple "
+                    "partial, orange cancelled. Still-resting orders are "
+                    "not shown."
+                ),
             )
         )
 
@@ -377,6 +417,11 @@ def build_gallery_model(
                     "end_time": zoom_end,
                     "volume_scale": volume_scale,
                 },
+                note=(
+                    "Resting size at the best bid and best ask over a "
+                    "zoomed window - the liquidity a marketable order "
+                    "meets first."
+                ),
             )
         )
         concepts.append(
@@ -391,6 +436,11 @@ def build_gallery_model(
                     "end_time": zoom_end,
                     "volume_scale": volume_scale,
                 },
+                note=(
+                    "Book depth through time, stacked by distance from the "
+                    "touch in bps bands: asks above zero, bids below; band "
+                    "thickness = resting volume in that bps ring."
+                ),
             )
         )
 
@@ -420,6 +470,10 @@ def build_gallery_model(
                 "price_from": price_from,
                 "price_to": price_to,
             },
+            note=(
+                "Where order activity concentrated: event counts binned by "
+                "price within the focus window, split by side."
+            ),
         )
     )
 
@@ -434,6 +488,11 @@ def build_gallery_model(
                     "hidden_executions",
                     _viz_data.prepare_hidden_executions_data,
                     {"events": events, "trades": trades},
+                    note=(
+                        "LOBSTER-only: executions against hidden orders "
+                        "(type 5) scattered over the trade price line - "
+                        "liquidity that never showed in the visible book."
+                    ),
                 )
             )
 
@@ -518,10 +577,11 @@ class _Panel:
 
 @dataclass
 class _Card:
-    """A gallery card: a title and one panel per column."""
+    """A gallery card: a title, one panel per column, and a how-to-read note."""
 
     title: str
     panels: list[_Panel]
+    note: str = ""
 
 
 _LEVEL_LABEL: dict[Level, str] = {
@@ -605,7 +665,7 @@ def _project(
                         role="equal",
                     )
                 )
-            cards.append(_Card(concept.title, panels))
+            cards.append(_Card(concept.title, panels, note=concept.note))
         return cards
 
     levels_for_view = {
@@ -623,17 +683,21 @@ def _project(
             stem = f"{concept.key}.{level}"
             title = f"{concept.title} -- {level}"
             cards.append(
-                _Card(title, _backend_panels(concept.key, level, spec, stem, backends))
-            )
-
-    if view in ("l2", "both"):
-        for spec in model.analytics:
-            cards.append(
                 _Card(
-                    spec.title,
-                    _backend_panels(spec.plot_name, None, spec, spec.name, backends),
+                    title,
+                    _backend_panels(concept.key, level, spec, stem, backends),
+                    note=concept.note,
                 )
             )
+
+    # Analytics are level-less: every leveled view includes them.
+    for spec in model.analytics:
+        cards.append(
+            _Card(
+                spec.title,
+                _backend_panels(spec.plot_name, None, spec, spec.name, backends),
+            )
+        )
     return cards
 
 
@@ -793,9 +857,15 @@ def _write_gallery_html(
     for card in cards:
         escaped_title = html_mod.escape(card.title)
         panels = "".join(_render_panel(p, escaped_title) for p in card.panels)
+        note_html = (
+            f'<div class="card-note">{html_mod.escape(card.note)}</div>'
+            if card.note
+            else ""
+        )
         rendered_cards.append(
             '<div class="card">'
             f'<div class="card-title">{escaped_title}</div>'
+            f"{note_html}"
             f'<div class="card-body">{panels}</div></div>'
         )
 
@@ -821,6 +891,8 @@ h1{{text-align:center;margin-bottom:24px;color:#e94560}}
   overflow:hidden;background:#16213e}}
 .card-title{{background:#0f3460;padding:12px 20px;font-size:1.1em;
   font-weight:600;color:#e94560}}
+.card-note{{padding:8px 20px;font-size:.9em;color:#9fb3c8;background:#10182e;
+  border-bottom:1px solid #333;font-style:italic}}
 .card-body{{display:flex;gap:0}}
 .panel{{text-align:center;padding:10px;min-width:0}}
 .panel-primary{{flex:2}}
