@@ -695,22 +695,28 @@ def prepare_cancellations_l3_data(
     volume_scale: float | None = None,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
-    age_quantile: float = 0.95,
-    bps_quantiles: tuple[float, float] = (0.05, 0.95),
+    age_floor_s: float = 1e-3,
+    distance_floor_bps: float = 0.05,
+    distance_cap_bps: float = 1_000.0,
 ) -> dict[str, Any]:
     """Per-order cancellations: each cancelled order as one age x distance point.
 
     The L3 (MBO) counterpart to the ``cancellations`` volume map.  Where the L2
     map aggregates cancelled *volume* over price and time, this keeps each
     cancelled order as a distinct point: ``age_s`` (seconds it rested between
-    creation and deletion) against ``distance_bps`` (placement aggressiveness --
-    signed bps from the prevailing best at creation; ``>0`` improved the touch,
-    ``<0`` sat deeper), sized by volume and split by side.
+    creation and deletion) against ``distance_from_touch`` (absolute bps from
+    the prevailing best at creation), split by side.
 
     Cancellations are deleted *flashed-limit* orders, matching the L2 face.
-    Both axes are heavy-tailed (a large instant-cancel spike at age 0; a few
-    degenerate aggressiveness values), so robust quantile clips bound them:
-    age to *age_quantile*, distance to *bps_quantiles*.
+    Both axes are heavy-tailed and span several orders of magnitude -- the
+    latent populations (fleeting sub-100ms fishing at the touch, patient
+    human-scale orders, deep orders pulled later) only separate on **log-log**
+    axes, so the face is a per-side density (hexbin), not a linear scatter.
+    Instead of clipping the tails (which also clips the structure) the floors
+    *age_floor_s* / *distance_floor_bps* keep instant cancels and at-touch
+    placements on-scale (log cannot show zero).  *distance_cap_bps* drops only
+    the degenerate aggressiveness values (orders priced against a near-empty
+    opposite best, which blow up to absurd bps) -- not real resting depth.
     """
     start_time, end_time = _default_start_end(events, start_time, end_time)
     deleted = events[
@@ -727,27 +733,23 @@ def prepare_cancellations_l3_data(
         subset=["distance_bps"]
     )
     cancels["age_s"] = (cancels["timestamp"] - cancels["created_ts"]).dt.total_seconds()
-    cancels = cancels[cancels["age_s"] >= 0]
+    cancels = cancels[cancels["age_s"] >= 0].copy()
 
     if volume_scale is None:
         volume_scale = (
             infer_volume_scale(cancels["volume"]) if not cancels.empty else 1.0
         )
-    cancels = cancels.copy()
     cancels["volume"] = cancels["volume"] * volume_scale
 
-    if not cancels.empty:
-        lo_q, hi_q = bps_quantiles
-        age_hi = cancels["age_s"].quantile(age_quantile)
-        bps_lo = cancels["distance_bps"].quantile(lo_q)
-        bps_hi = cancels["distance_bps"].quantile(hi_q)
-        cancels = cancels[
-            (cancels["age_s"] <= age_hi)
-            & (cancels["distance_bps"] >= bps_lo)
-            & (cancels["distance_bps"] <= bps_hi)
-        ]
+    # Floor onto the log scale instead of quantile-clipping the tails: instant
+    # cancels land in a thin "age floor" band, at-touch placements in a
+    # "distance floor" band, and the deep/patient structure is preserved.
+    cancels["age_s"] = cancels["age_s"].clip(lower=age_floor_s)
+    cancels["distance_from_touch"] = (
+        cancels["distance_bps"].abs().clip(lower=distance_floor_bps)
+    )
+    cancels = cancels[cancels["distance_from_touch"] <= distance_cap_bps]
 
-    cancels["marker_area"] = normalized_marker_areas(cancels["volume"])
     bids = cancels[cancels["direction"] == "bid"]
     asks = cancels[cancels["direction"] == "ask"]
     return {"bids": bids, "asks": asks, "volume_scale": volume_scale}

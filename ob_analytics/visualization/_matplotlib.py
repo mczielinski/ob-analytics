@@ -615,35 +615,89 @@ def mpl_depth_chart_per_order(
     return _mpl_depth_curve(data, ax, theme, per_order=True)
 
 
+def _annotate_cancel_populations(ax: Axes) -> None:
+    """Faint hints for the three latent populations on a log-log cancel panel."""
+
+    def label(x: float, y: float, text: str) -> None:
+        ax.text(
+            x,
+            y,
+            text,
+            transform=ax.transAxes,
+            color="#555555",
+            fontstyle="italic",
+            fontsize=9,
+            zorder=5,
+        )
+
+    label(0.03, 0.06, "fleeting / fishing\n(<100ms, at touch)")
+    label(0.40, 0.45, "patient / human\n(seconds, few bps)")
+    label(0.62, 0.88, "deep resting\n(pulled later)")
+
+
 def mpl_cancellations_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
-    """L3 (MBO) cancellations: each cancelled order as an age x distance point."""
-    fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
-    # Markers are rasterized (the cloud can exceed 100k points) and faded for
-    # overplot.  Log-log + density encoding is roadmap §3.3 (docs/plans/).
-    for side, color, label in (
-        (data["bids"], _BID_COLOR, "bid"),
-        (data["asks"], _ASK_COLOR, "ask"),
-    ):
-        if side.empty:
-            continue
-        ax.scatter(
-            side["age_s"],
-            side["distance_bps"],
-            s=side["marker_area"],
-            color=color,
-            alpha=0.25,
-            edgecolors="none",
-            rasterized=True,
-            label=label,
+    """L3 (MBO) cancellations: per-side log-log *density* of age x distance.
+
+    The latent populations span orders of magnitude, so a linear scatter
+    crushes everything against the origin.  Each side gets its own log-log
+    hexbin (small multiples, bid | ask) where saturation encodes cancelled
+    orders per bin -- density, not magnitude.
+    """
+    cmap = plt.get_cmap("Blues")
+
+    if ax is None:
+        _apply_theme(theme)
+        # constrained layout: tight_layout cannot place a colorbar spanning two
+        # axes (it warns and mis-sizes), so let the constrained engine do it.
+        fig, axes = plt.subplots(
+            1, 2, figsize=(14, 6), sharex=True, sharey=True, layout="constrained"
         )
-    ax.axhline(y=0, color="#888888", linestyle="--", linewidth=1)
-    ax.set_title("Cancelled orders by age and distance from touch")
-    ax.set_xlabel("Order age (s)")
-    ax.set_ylabel("Placement distance from touch (bps)")
-    ax.legend(loc="upper right")
-    fig.tight_layout()
+        panels: list[tuple[Axes, pd.DataFrame, str]] = [
+            (axes[0], data["bids"], "bid"),
+            (axes[1], data["asks"], "ask"),
+        ]
+    else:
+        fig = ax.get_figure()
+        assert isinstance(fig, Figure)
+        # Composition into a caller's single ax: both sides as one density.
+        combined = pd.concat([data["bids"], data["asks"]], ignore_index=True)
+        panels = [(ax, combined, "orders")]
+
+    last_hb = None
+    for panel_ax, side, label in panels:
+        if not side.empty:
+            hb = panel_ax.hexbin(
+                side["age_s"],
+                side["distance_from_touch"],
+                gridsize=25,
+                xscale="log",
+                yscale="log",
+                cmap=cmap,
+                # Log color: the instant-cancel spike is orders of magnitude
+                # denser than the patient/deep populations, which a linear ramp
+                # washes out entirely.
+                norm=mcolors.LogNorm(),
+                mincnt=1,
+                edgecolors="white",
+                linewidths=0.2,
+            )
+            hb.set_rasterized(True)
+            last_hb = hb
+            _annotate_cancel_populations(panel_ax)
+        else:
+            panel_ax.set_xscale("log")
+            panel_ax.set_yscale("log")
+        panel_ax.set_title(f"Cancelled {label}")
+        panel_ax.set_xlabel("Age at cancel (s, log)")
+        panel_ax.set_ylabel("Distance from touch (bps, log)")
+
+    if last_hb is not None:
+        cbar = fig.colorbar(last_hb, ax=[p[0] for p in panels])
+        cbar.set_label("Cancelled orders per bin")
+    # Layout is managed by the constrained engine (ax is None) or the caller
+    # (ax provided); tight_layout cannot handle the multi-axes colorbar.
     return fig
 
 

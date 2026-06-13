@@ -310,12 +310,29 @@ class TestPlotCancellationsL3:
         with pytest.raises(ValueError, match="comparable"):
             plot("cancellations", **data)
 
-    def test_scatter_is_rasterized(self, sample_cancellation_events):
+    def test_hexbin_is_rasterized(self, sample_cancellation_events):
+        # The density hexbin is a vector PolyCollection; rasterize it so a dense
+        # book does not bloat the saved figure.
         data = _data.prepare_cancellations_l3_data(sample_cancellation_events)
         fig = plot("cancellations", Level.L3, **data)
         ax = fig.axes[0]
         assert ax.collections
         assert all(c.get_rasterized() for c in ax.collections)
+
+    def test_axes_are_log_log(self, sample_cancellation_events):
+        # §3.3: the latent populations only separate on log-log axes.
+        data = _data.prepare_cancellations_l3_data(sample_cancellation_events)
+        fig = plot("cancellations", Level.L3, **data)
+        ax = fig.axes[0]
+        assert ax.get_xscale() == "log"
+        assert ax.get_yscale() == "log"
+
+    def test_distance_is_positive_and_floored(self, sample_cancellation_events):
+        # Distance becomes |bps| floored at 0.05 so log axes can show it.
+        data = _data.prepare_cancellations_l3_data(sample_cancellation_events)
+        for side in (data["bids"], data["asks"]):
+            assert (side["distance_from_touch"] >= 0.05).all()
+            assert (side["age_s"] >= 1e-3).all()
 
 
 class TestPlotTradeTapeL3:

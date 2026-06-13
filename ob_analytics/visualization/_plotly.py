@@ -488,41 +488,100 @@ def plotly_depth_chart_per_order(data: dict) -> Any:
     return _plotly_depth_curve(data, per_order=True)
 
 
-def plotly_cancellations_per_order(data: dict) -> Any:
-    """L3 (MBO) cancellations: each cancelled order as an age x distance point.
+# Log-decade ticks shared by both cancel panels (axes carry log10 values, so
+# ticks sit at integer positions and are relabeled into human units).
+_AGE_TICKVALS = list(range(-3, 3))
+_AGE_TICKTEXT = ["1ms", "10ms", "100ms", "1s", "10s", "100s"]
+_DIST_TICKVALS = list(range(-2, 3))
+_DIST_TICKTEXT = ["0.01", "0.1", "1", "10", "100"]
 
-    Uses ``Scattergl`` (WebGL) like the L2 ``plotly_volume_map`` it pairs with:
-    a per-order face draws one marker per cancelled order, so the point cloud is
-    large and the SVG ``Scatter`` path does not scale.
+
+def _log_density_grid(side: Any, xedges: np.ndarray, yedges: np.ndarray) -> np.ndarray:
+    """Counts per (log10 age, log10 distance) bin, zeros masked to NaN.
+
+    Binning server-side and shipping only the grid keeps the exported HTML
+    small -- a raw ``Histogram2d``/``Scattergl`` would carry every cancelled
+    order (megabytes); this carries one number per cell.
+    """
+    counts, _, _ = np.histogram2d(
+        np.log10(side["age_s"]),
+        np.log10(side["distance_from_touch"]),
+        bins=[xedges, yedges],
+    )
+    return np.where(counts == 0, np.nan, counts).T  # (y, x) for Heatmap z
+
+
+def plotly_cancellations_per_order(data: dict) -> Any:
+    """L3 (MBO) cancellations: per-side log-log *density* of age x distance.
+
+    A pre-binned ``go.Heatmap`` per side (small multiples, bid | ask) replaces
+    the old raw ``Scattergl`` point cloud: it reveals the latent populations on
+    log-log axes and keeps the exported HTML small (one grid of counts, not one
+    marker per cancelled order).
     """
     go = _import_plotly()
-    fig = _base_figure(go, title="Cancelled orders by age and distance from touch")
-    for side, color, label in (
-        (data["bids"], _BID_COLOR, "Bid"),
-        (data["asks"], _ASK_COLOR, "Ask"),
-    ):
-        if side.empty:
-            continue
-        fig.add_trace(
-            go.Scattergl(
-                x=side["age_s"],
-                y=side["distance_bps"],
-                mode="markers",
-                marker=dict(
-                    size=mpl_marker_area_to_plotly_size(side["marker_area"].to_numpy()),
-                    color=color,
-                    opacity=0.4,
-                ),
-                name=label,
-                hovertemplate=(
-                    "Age: %{x:.2f}s<br>Distance: %{y:.2f} bps<extra></extra>"
-                ),
-            )
+    from plotly.subplots import make_subplots
+
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        shared_yaxes=True,
+        horizontal_spacing=0.06,
+        subplot_titles=("Cancelled bid", "Cancelled ask"),
+    )
+    fig.update_layout(**_BASE_LAYOUT)
+    fig.update_layout(
+        title=dict(text="Cancelled orders by age and distance from touch", x=0.5),
+        coloraxis=dict(colorscale="Blues", colorbar=dict(title="Orders<br>per bin")),
+        hovermode="closest",
+    )
+
+    sides = [(1, data["bids"]), (2, data["asks"])]
+    populated = [s for _, s in sides if not s.empty]
+    if populated:
+        # Shared log-space bin edges so the two panels are directly comparable.
+        all_x = np.log10(np.concatenate([s["age_s"].to_numpy() for s in populated]))
+        all_y = np.log10(
+            np.concatenate([s["distance_from_touch"].to_numpy() for s in populated])
         )
-    fig.add_hline(y=0, line_dash="dash", line_color="#888888", line_width=1)
-    fig.update_layout(hovermode="closest")
-    fig.update_xaxes(title_text="Order age (s)")
-    fig.update_yaxes(title_text="Placement distance from touch (bps)")
+        xedges = np.linspace(all_x.min(), all_x.max(), 31)
+        yedges = np.linspace(all_y.min(), all_y.max(), 31)
+        xcent = (xedges[:-1] + xedges[1:]) / 2
+        ycent = (yedges[:-1] + yedges[1:]) / 2
+
+        for col, side in sides:
+            if side.empty:
+                continue
+            fig.add_trace(
+                go.Heatmap(
+                    z=_log_density_grid(side, xedges, yedges),
+                    x=xcent,
+                    y=ycent,
+                    coloraxis="coloraxis",
+                    hovertemplate=(
+                        "log10 age: %{x:.1f}<br>log10 dist: %{y:.1f}"
+                        "<br>orders: %{z}<extra></extra>"
+                    ),
+                ),
+                row=1,
+                col=col,
+            )
+
+    for col in (1, 2):
+        fig.update_xaxes(
+            title_text="Age at cancel",
+            tickvals=_AGE_TICKVALS,
+            ticktext=_AGE_TICKTEXT,
+            row=1,
+            col=col,
+        )
+    fig.update_yaxes(
+        title_text="Distance from touch (bps)",
+        tickvals=_DIST_TICKVALS,
+        ticktext=_DIST_TICKTEXT,
+        row=1,
+        col=1,
+    )
     return fig
 
 

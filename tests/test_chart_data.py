@@ -269,17 +269,17 @@ class TestPrepareCancellationsL3:
         assert set(data) == {"bids", "asks", "volume_scale"}
         for side in (data["bids"], data["asks"]):
             assert isinstance(side, pd.DataFrame)
-            assert {"age_s", "distance_bps", "marker_area"} <= set(side.columns)
+            assert {"age_s", "distance_from_touch"} <= set(side.columns)
 
-    def test_age_nonnegative_and_bounded_markers(
+    def test_age_and_distance_floored_for_log(
         self, sample_cancellation_events: pd.DataFrame
     ) -> None:
         data = prepare_cancellations_l3_data(sample_cancellation_events)
         both = pd.concat([data["bids"], data["asks"]])
         assert not both.empty
-        assert (both["age_s"] >= 0).all()
-        # normalized_marker_areas keeps every marker within its bounded range.
-        assert both["marker_area"].between(10.0, 120.0).all()
+        # §3.3: floored onto the log scale (no zeros), distance is positive bps.
+        assert (both["age_s"] >= 1e-3).all()
+        assert (both["distance_from_touch"] >= 0.05).all()
 
     def test_drops_unmatched_and_uncreated(
         self, sample_cancellation_events: pd.DataFrame
