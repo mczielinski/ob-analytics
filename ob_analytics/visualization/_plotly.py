@@ -23,9 +23,7 @@ from ob_analytics.visualization._palette import (
     _BUY_COLOR,
     _CANCELLED_COLOR,
     _FILLED_COLOR,
-    _FLASHED_COLOR,
     _PARTIAL_COLOR,
-    _RESTING_COLOR,
     _SELL_COLOR,
 )
 
@@ -614,8 +612,9 @@ def plotly_order_activity_per_order(data: dict) -> Any:
     go = _import_plotly()
     fig = _base_figure(go, title="Order lifecycles (place → outcome)")
     for side, color, label in (
-        (data["flashed"], _FLASHED_COLOR, "flashed-limit (cancelled)"),
-        (data["resting"], _RESTING_COLOR, "resting-limit (filled)"),
+        (data["filled"], _FILLED_COLOR, "filled"),
+        (data["cancelled"], _CANCELLED_COLOR, "cancelled"),
+        (data["resting"], _PARTIAL_COLOR, "still resting"),
     ):
         if side.empty:
             continue
@@ -626,10 +625,21 @@ def plotly_order_activity_per_order(data: dict) -> Any:
                 y=ys,
                 mode="lines",
                 line=dict(color=color, width=1.5),
-                opacity=0.5,
+                opacity=0.6,
                 name=label,
                 hoverinfo="skip",
             )
+        )
+    shown_of = data.get("shown_of")
+    if shown_of is not None:
+        fig.add_annotation(
+            xref="paper",
+            yref="paper",
+            x=0.99,
+            y=0.01,
+            text=f"showing {shown_of[0]:,} of {shown_of[1]:,} orders",
+            showarrow=False,
+            font=dict(size=10, color="#555555"),
         )
     fig.update_xaxes(title_text="Time")
     fig.update_yaxes(title_text="Limit Price")

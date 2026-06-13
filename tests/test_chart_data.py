@@ -302,38 +302,44 @@ class TestPrepareOrderActivityL3:
     ) -> None:
         data = prepare_order_activity_l3_data(sample_order_lifecycle_events)
         assert set(data) == {
-            "flashed",
+            "filled",
+            "cancelled",
             "resting",
             "volume_scale",
             "price_by",
             "y_range",
+            "shown_of",
+            "show_markers",
         }
-        for fate in (data["flashed"], data["resting"]):
+        for fate in (data["filled"], data["cancelled"], data["resting"]):
             assert isinstance(fate, pd.DataFrame)
-            assert {"start_ts", "end_ts", "price"} <= set(fate.columns)
-        assert not data["flashed"].empty
+            assert {"start_ts", "end_ts", "price", "linewidth"} <= set(fate.columns)
+        # Fixture exercises all three outcomes.
+        assert not data["filled"].empty
+        assert not data["cancelled"].empty
         assert not data["resting"].empty
 
-    def test_spans_split_by_fate(
+    def test_spans_split_by_outcome(
         self, sample_order_lifecycle_events: pd.DataFrame
     ) -> None:
         data = prepare_order_activity_l3_data(sample_order_lifecycle_events)
-        assert (data["flashed"]["type"] == "flashed-limit").all()
-        assert (data["resting"]["type"] == "resting-limit").all()
+        assert (data["cancelled"]["outcome"] == "cancelled").all()
+        assert data["filled"]["outcome"].isin(["filled", "partial"]).all()
+        assert (data["resting"]["outcome"] == "resting").all()
         # One span per surviving order id, never per raw event.
-        assert data["flashed"]["id"].is_unique
-        assert data["resting"]["id"].is_unique
+        for fate in (data["filled"], data["cancelled"], data["resting"]):
+            assert fate["id"].is_unique
 
     def test_cancelled_span_ends_at_delete(
         self, sample_order_lifecycle_events: pd.DataFrame
     ) -> None:
         data = prepare_order_activity_l3_data(sample_order_lifecycle_events)
-        flashed = data["flashed"]
-        # Each flashed order ran 3s from create to delete (< the 11s window),
-        # so its span must terminate before the window end.
-        assert (flashed["end_ts"] > flashed["start_ts"]).all()
+        cancelled = data["cancelled"]
+        # Each cancelled order ran 3s from create to delete (< the window), so
+        # its span must terminate before the window end.
+        assert (cancelled["end_ts"] > cancelled["start_ts"]).all()
         assert (
-            flashed["end_ts"] < sample_order_lifecycle_events["timestamp"].max()
+            cancelled["end_ts"] < sample_order_lifecycle_events["timestamp"].max()
         ).all()
 
     def test_forever_resting_span_extends_to_end(
@@ -346,6 +352,36 @@ class TestPrepareOrderActivityL3:
         forever = data["resting"].set_index("id").loc[300]
         assert forever["end_ts"] == end_time
         assert forever["end_ts"] > forever["start_ts"]
+
+    def test_density_degradation_keeps_fills_samples_flood(
+        self, sample_order_lifecycle_events: pd.DataFrame
+    ) -> None:
+        # Every fill survives; the cancelled/resting flood is sampled down to
+        # the remaining budget, with the ratio reported.  A wide price window
+        # disables the percentile clip so the counts are exact.
+        data = prepare_order_activity_l3_data(
+            sample_order_lifecycle_events, max_spans=5, price_from=0.0, price_to=1e9
+        )
+        assert data["shown_of"] is not None
+        shown, total = data["shown_of"]
+        assert total == 7  # 3 cancelled + 3 filled + 1 resting
+        assert len(data["filled"]) == 3  # fills never sampled away
+        # flood (cancelled + resting) sampled to fill the remaining budget (2)
+        assert len(data["cancelled"]) + len(data["resting"]) == 2
+        assert shown == 5
+
+    def test_linewidth_encodes_size(
+        self, sample_order_lifecycle_events: pd.DataFrame
+    ) -> None:
+        data = prepare_order_activity_l3_data(sample_order_lifecycle_events)
+        allspans = pd.concat(
+            [data["filled"], data["cancelled"], data["resting"]], ignore_index=True
+        )
+        assert allspans["linewidth"].min() >= 0.5
+        assert allspans["linewidth"].max() <= 4.5 + 1e-9
+        # The largest order draws the widest line.
+        widest = allspans.loc[allspans["volume"].idxmax(), "linewidth"]
+        assert widest == allspans["linewidth"].max()
 
 
 class TestPrepareLiquidityAtTouch:

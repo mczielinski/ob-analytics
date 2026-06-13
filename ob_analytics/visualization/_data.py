@@ -415,24 +415,31 @@ def prepare_order_activity_l3_data(
     end_time: pd.Timestamp | None = None,
     price_from: float | None = None,
     price_to: float | None = None,
+    max_spans: int = 2000,
+    marker_threshold: int = 300,
 ) -> dict[str, Any]:
     """Per-order lifecycle Gantt: each order one span place -> outcome, by fate.
 
     The L3 (MBO) counterpart to the ``order_activity`` event map.  Where the L2
     map scatters *decoupled* created/deleted events, this links each order's
     events by ``id`` into a single horizontal span -- from creation to removal --
-    placed at the order's price and split by *fate*:
+    placed at the order's price and split by terminal **outcome**:
 
-    - ``flashed-limit`` orders were created and deleted with unchanged volume:
-      placed and pulled, never filled (**cancelled**).
-    - ``resting-limit`` orders rested and provided liquidity, or are still on the
-      book at window end (**filled / resting**); a span with no ``deleted`` event
-      extends to *end_time* to show it had not yet terminated.
+    - **filled** (``filled``/``partial``): the order executed; the span ends at
+      the fill-exhaustion time.
+    - **cancelled**: placed and pulled without executing; ends at the delete.
+    - **resting**: still on the book at window end; the span extends to
+      *end_time* to show it had not yet terminated.
 
-    Same population as the L2 face (flashed/resting limit orders), so the two are
-    directly comparable on shared time x price axes.  The price axis is clipped
-    to the 1st--99th percentile (like the event map) unless *price_from* /
-    *price_to* are given, keeping a few far orders from stretching the y-axis.
+    The price axis is clipped to the 1st--99th percentile (like the event map)
+    unless *price_from* / *price_to* are given.  Line **width encodes size** and
+    the terminal **marker** (x filled, o cancelled) is drawn only when few
+    enough spans survive (``marker_threshold``).
+
+    Dense books (LOBSTER emits 10^4--10^5 lifelines) are degraded by density:
+    above *max_spans* total spans, every fill/partial/resting span is kept and
+    only the cancellation flood is sampled, with a ``shown_of`` ratio the
+    renderer annotates.
 
     Spans come from :func:`~ob_analytics.analytics.order_lifecycles`, so an
     order ends when it is deleted **or fully executed** (LOBSTER fills never
@@ -468,20 +475,55 @@ def prepare_order_activity_l3_data(
             price_to = spans["price"].quantile(0.99)
         spans = spans[(spans["price"] >= price_from) & (spans["price"] <= price_to)]
 
+    # Three terminal fates; filled/partial collapse to "filled".  Colour and the
+    # end-marker encode fate; line width encodes size.
+    spans = spans.assign(
+        fate=spans["outcome"].map(
+            {
+                "filled": "filled",
+                "partial": "filled",
+                "cancelled": "cancelled",
+                "resting": "resting",
+            }
+        )
+    )
+
+    # Degrade by density: keep every fill (the rare, telling outcome) and
+    # sample the cancelled/resting flood down to the remaining budget so all
+    # three fates stay represented; report the ratio for an annotation.
+    n_total = len(spans)
+    shown_of = None
+    if n_total > max_spans:
+        keep = spans[spans["fate"] == "filled"]
+        flood = spans[spans["fate"] != "filled"]
+        budget = max(0, max_spans - len(keep))
+        if len(flood) > budget:
+            flood = flood.sample(n=budget, random_state=0)
+        spans = pd.concat([keep, flood]).sort_index()
+        shown_of = (len(spans), n_total)
+
     if spans.empty:
         price_by, y_range = 1.0, None
     else:
         price_by, _ = _price_axis_breaks(spans["price"].min(), spans["price"].max())
         y_range = (float(spans["price"].min()), float(spans["price"].max()))
 
-    flashed = spans[spans["type"] == "flashed-limit"]
-    resting = spans[spans["type"] == "resting-limit"]
+    # Line width encodes size: lw = 0.5 + 4*(size / max size).
+    vmax = spans["volume"].max() if not spans.empty else 0.0
+    if vmax > 0:
+        spans = spans.assign(linewidth=0.5 + 4.0 * (spans["volume"] / vmax))
+    else:
+        spans = spans.assign(linewidth=1.0)
+
     return {
-        "flashed": flashed,
-        "resting": resting,
+        "filled": spans[spans["fate"] == "filled"],
+        "cancelled": spans[spans["fate"] == "cancelled"],
+        "resting": spans[spans["fate"] == "resting"],
         "volume_scale": volume_scale,
         "price_by": price_by,
         "y_range": y_range,
+        "shown_of": shown_of,
+        "show_markers": n_total <= marker_threshold,
     }
 
 
