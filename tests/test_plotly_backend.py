@@ -236,15 +236,16 @@ class TestPlotlyCancellationsL3:
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 1
 
-    def test_uses_webgl_scattergl(
+    def test_uses_prebinned_heatmap(
         self, sample_cancellation_events: pd.DataFrame
     ) -> None:
-        # The per-order point cloud must use the WebGL Scattergl path (like the
-        # L2 volume map it pairs with), not the SVG Scatter path that fails to
-        # scale to one marker per cancelled order.
+        # §3.3: a server-side-binned density grid per side (not one Scattergl
+        # marker per cancelled order) -- reveals the latent populations on
+        # log-log axes and keeps the exported HTML small.
         data = prepare_cancellations_l3_data(sample_cancellation_events)
         fig = plotly_cancellations_per_order(data)
-        assert all(trace.type == "scattergl" for trace in fig.data)
+        assert fig.data  # at least one populated side
+        assert all(trace.type == "heatmap" for trace in fig.data)
 
 
 class TestPlotlyOrderActivityL3:
