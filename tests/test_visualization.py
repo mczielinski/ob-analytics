@@ -422,10 +422,17 @@ class TestPlotBookSnapshot:
         with pytest.raises(ValueError, match="comparable"):
             plot("book_snapshot", **data)
 
-    def test_per_order_uses_white_separators_when_bars_are_wide(self) -> None:
-        # Dark (#1e1e1e) per-order edges blacked out a dense L3 book; when the
-        # bars are wide enough to show one, the separator must be white so
-        # segments show and bid/ask hue survives.
+    def test_horizontal_ladder_orientation(self) -> None:
+        # §3.1: price on y, size on x (was the reverse).
+        data = _data.prepare_book_snapshot_data(self._order_book(), per_order=True)
+        fig = plot("book_snapshot", Level.L3, **data)
+        ax = fig.axes[0]
+        assert ax.get_ylabel() == "Price"
+        assert "Size" in ax.get_xlabel()
+
+    def test_per_order_uses_white_separators(self) -> None:
+        # Windowing keeps bars tall, so L3 separators are always on: white edges
+        # segment each level into its orders and bid/ask hue survives.
         data = _data.prepare_book_snapshot_data(self._order_book(), per_order=True)
         fig = plot("book_snapshot", Level.L3, **data)
         ax = fig.axes[0]
@@ -434,60 +441,104 @@ class TestPlotBookSnapshot:
         for rgba in edges:
             assert np.allclose(rgba[:3], 1.0, atol=0.01)
 
-    def test_separator_edge_hidden_for_subpixel_bars(self) -> None:
-        # A bar far narrower than a pixel must get no edge: a ~1px white edge
-        # would otherwise swamp the fill entirely (the dense full-range L3 book
-        # whited out on the light matplotlib theme).
-        from ob_analytics.visualization._matplotlib import _book_separator_edge
+    def test_aggregate_has_no_separators(self) -> None:
+        # L2 bars never get a per-order edge (edgecolor "none" -> alpha 0).
+        data = _data.prepare_book_snapshot_data(self._order_book(), per_order=False)
+        fig = plot("book_snapshot", Level.L2, **data)
+        ax = fig.axes[0]
+        for container in ax.containers:
+            if len(container.patches):
+                assert container.patches[0].get_edgecolor()[3] == 0.0
 
-        # width 0.9 over a 2000-wide span at a 1200px figure -> ~0.5px bar.
-        edge = _book_separator_edge(0.9, 2000.0, per_order=True, fig_width_px=1200.0)
-        assert edge == "none"
-
-    def test_separator_edge_white_for_wide_bars(self) -> None:
-        from ob_analytics.visualization._matplotlib import _book_separator_edge
-
-        # width 0.45 over a 1.5-wide span at 1200px -> hundreds of px per bar.
-        edge = _book_separator_edge(0.45, 1.5, per_order=True, fig_width_px=1200.0)
-        assert edge == "white"
-
-    def test_separator_edge_none_for_aggregate(self) -> None:
-        from ob_analytics.visualization._matplotlib import _book_separator_edge
-
-        # L2 (aggregate) bars never get a per-order separator regardless of width.
-        edge = _book_separator_edge(0.45, 1.5, per_order=False, fig_width_px=1200.0)
-        assert edge == "none"
-
-    def test_per_order_dense_book_keeps_fill(self) -> None:
-        # Regression: a dense, wide-span book has sub-pixel bars, so white
-        # separators must NOT be drawn or the L3 book whites out (measured
-        # 0.09% coloured px vs the L2 book's 0.33%).
-        bid_prices = np.arange(77000.0, 78000.0, 1.0)
-        ask_prices = np.arange(78000.0, 79000.0, 1.0)
-        order_book = {
+    def test_l2_and_l3_render_differently(self) -> None:
+        # The flagship acceptance: equal-total levels with different
+        # composition must not render identically (they were md5-identical
+        # before §3.1). One level holds three orders; L3 segments it, L2 does
+        # not.
+        book = {
             "bids": pd.DataFrame(
                 {
-                    "price": bid_prices,
-                    "volume": np.ones_like(bid_prices),
-                    "liquidity": np.arange(1.0, len(bid_prices) + 1.0),
+                    "price": [236.5, 236.5, 236.5, 236.0],
+                    "volume": [40.0, 30.0, 30.0, 100.0],
+                    "liquidity": [40.0, 70.0, 100.0, 200.0],
                 }
             ),
             "asks": pd.DataFrame(
                 {
-                    "price": ask_prices,
-                    "volume": np.ones_like(ask_prices),
-                    "liquidity": np.arange(1.0, len(ask_prices) + 1.0),
+                    "price": [237.0, 237.5],
+                    "volume": [100.0, 100.0],
+                    "liquidity": [100.0, 200.0],
                 }
             ),
             "timestamp": 1430438400,
         }
-        data = _data.prepare_book_snapshot_data(order_book, per_order=True)
-        fig = plot("book_snapshot", Level.L3, **data)
-        ax = fig.axes[0]
-        edges = [c.patches[0].get_edgecolor() for c in ax.containers if len(c.patches)]
-        assert edges  # at least one side drawn
-        for rgba in edges:
-            assert not np.allclose(rgba[:3], 1.0, atol=0.01)  # not white
+        buffers = {}
+        for level, per_order in ((Level.L2, False), (Level.L3, True)):
+            data = _data.prepare_book_snapshot_data(book, per_order=per_order)
+            fig = plot("book_snapshot", level, **data)
+            fig.canvas.draw()
+            buffers[level] = np.asarray(fig.canvas.buffer_rgba()).copy()
+            plt.close(fig)
+        assert not np.array_equal(buffers[Level.L2], buffers[Level.L3])
+
+    def test_windowing_keeps_top_n_levels(self) -> None:
+        prices = np.arange(100.0, 80.0, -1.0)  # 20 levels per side
+        book = {
+            "bids": pd.DataFrame(
+                {
+                    "price": prices,
+                    "volume": np.ones_like(prices),
+                    "liquidity": np.arange(1.0, len(prices) + 1.0),
+                }
+            ),
+            "asks": pd.DataFrame(
+                {
+                    "price": prices + 25.0,
+                    "volume": np.ones_like(prices),
+                    "liquidity": np.arange(1.0, len(prices) + 1.0),
+                }
+            ),
+            "timestamp": 1430438400,
+        }
+        data = _data.prepare_book_snapshot_data(book, top_n=5)
+        assert data["bids"]["price"].nunique() == 5
+        assert data["asks"]["price"].nunique() == 5
+        # Best-first: bids keep the five highest prices, asks the five lowest.
+        assert data["bids"]["price"].min() == 96.0
+        assert data["asks"]["price"].max() == 110.0
+
+    def test_quantiles_off_by_default(self) -> None:
+        import inspect
+
+        sig = inspect.signature(_data.prepare_book_snapshot_data)
+        assert sig.parameters["show_quantiles"].default is False
+        data = _data.prepare_book_snapshot_data(self._order_book())
+        assert len(data["bid_quantiles"]) == 0
+        assert len(data["ask_quantiles"]) == 0
+
+    def test_quantiles_capped_at_three_per_side(self) -> None:
+        # Many heavy levels (per-order rows) must still yield <= 3 guides/side.
+        prices = np.arange(100.0, 80.0, -1.0)
+        book = {
+            "bids": pd.DataFrame(
+                {
+                    "price": prices,
+                    "volume": np.arange(1.0, len(prices) + 1.0),
+                    "liquidity": np.arange(1.0, len(prices) + 1.0),
+                }
+            ),
+            "asks": pd.DataFrame(
+                {
+                    "price": prices + 25.0,
+                    "volume": np.arange(1.0, len(prices) + 1.0),
+                    "liquidity": np.arange(1.0, len(prices) + 1.0),
+                }
+            ),
+            "timestamp": 1430438400,
+        }
+        data = _data.prepare_book_snapshot_data(book, show_quantiles=True, top_n=None)
+        assert len(data["bid_quantiles"]) <= 3
+        assert len(data["ask_quantiles"]) <= 3
 
 
 class TestPlotVolumePercentiles:
