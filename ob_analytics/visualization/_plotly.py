@@ -16,7 +16,7 @@ from typing import Any
 import numpy as np
 
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.visualization._data import mpl_marker_area_to_plotly_size
+from ob_analytics.visualization._data import book_mid, mpl_marker_area_to_plotly_size
 from ob_analytics.visualization._palette import (
     _ASK_COLOR,
     _BID_COLOR,
@@ -392,13 +392,17 @@ def _rgba(hex_color: str, alpha: float) -> str:
 
 
 def _plotly_book_bars(data: dict, *, per_order: bool) -> Any:
-    """Book-snapshot bars: one bar per level (L2) or stacked per order (L3)."""
+    """Horizontal book ladder: price on y, size on x, bids below / asks above.
+
+    L2 draws one bar per price level; L3 segments each level into its individual
+    orders with white separators, so equal-total levels with different
+    composition read differently.
+    """
     go = _import_plotly()
     fig = _base_figure(go, title=data["timestamp"].strftime("%Y-%m-%d %H:%M:%S UTC"))
 
-    # Match the matplotlib backend: white per-order separators (dark ones were
-    # invisible against the dark plot background).
-    line = dict(color="white", width=0.6) if per_order else dict(width=0)
+    # White per-order separators (dark ones vanished against the fill).
+    line = dict(color="white", width=1.0) if per_order else dict(width=0)
     for side, color, label in (
         (data["bids"], _BID_COLOR, "Bid"),
         (data["asks"], _ASK_COLOR, "Ask"),
@@ -407,24 +411,29 @@ def _plotly_book_bars(data: dict, *, per_order: bool) -> Any:
             continue
         fig.add_trace(
             go.Bar(
-                x=side["price"],
-                y=side["seg_hi"] - side["seg_lo"],
+                y=side["price"],
+                x=side["seg_hi"] - side["seg_lo"],
                 base=side["seg_lo"],
+                orientation="h",
                 marker=dict(color=color, line=line),
                 name=label,
-                hovertemplate="Price: %{x:.2f}<br>Size: %{y:.4f}<extra></extra>",
+                hovertemplate="Price: %{y:.2f}<br>Size: %{x:.4f}<extra></extra>",
             )
         )
 
+    mid = book_mid(data["bids"], data["asks"])
+    if mid is not None:
+        fig.add_hline(y=mid, line_dash="dash", line_color="#444444", line_width=1)
+
     if data["show_quantiles"]:
-        for x_val in data["bid_quantiles"]:
-            fig.add_vline(x=x_val, line_dash="dash", line_color="#888888", line_width=1)
-        for x_val in data["ask_quantiles"]:
-            fig.add_vline(x=x_val, line_dash="dash", line_color="#888888", line_width=1)
+        for y_val in (*data["bid_quantiles"], *data["ask_quantiles"]):
+            fig.add_hline(y=y_val, line_dash="dot", line_color="#888888", line_width=1)
 
     fig.update_layout(barmode="overlay")
-    fig.update_xaxes(title_text="Price")
-    fig.update_yaxes(title_text="Size")
+    fig.update_xaxes(
+        title_text="Size (per order)" if per_order else "Size", rangemode="tozero"
+    )
+    fig.update_yaxes(title_text="Price")
     return fig
 
 

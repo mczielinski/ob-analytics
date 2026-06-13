@@ -340,6 +340,14 @@ class TestPlotlyBookSnapshot:
             for tr in fig.data
         )
 
+    def test_horizontal_orientation(self, sample_order_book: dict) -> None:
+        # §3.1: ladder is horizontal (price on y, size on x).
+        data = prepare_book_snapshot_data(sample_order_book, per_order=False)
+        fig = plotly_book_snapshot_aggregate(data)
+        bars = [tr for tr in fig.data if tr.type == "bar"]
+        assert bars and all(tr.orientation == "h" for tr in bars)
+        assert fig.layout.yaxis.title.text == "Price"
+
 
 class TestPlotlyDepthChart:
     def test_aggregate_returns_figure(self, sample_order_book: dict) -> None:

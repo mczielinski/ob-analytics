@@ -27,6 +27,7 @@ from matplotlib.patches import Patch
 
 from loguru import logger
 
+from ob_analytics.visualization._data import book_mid
 from ob_analytics.visualization._palette import (
     _ASK_COLOR,
     _BID_COLOR,
@@ -458,8 +459,12 @@ def mpl_volume_map(
     return fig
 
 
-def _book_bar_width(*sides: pd.DataFrame) -> float:
-    """Smallest positive gap between distinct prices across *sides*."""
+def _book_bar_thickness(*sides: pd.DataFrame) -> float:
+    """Smallest positive gap between distinct prices across *sides*.
+
+    Used as the ladder bar thickness (price units); windowing to the touch
+    keeps this gap roughly the tick size, so bars stay tall and contiguous.
+    """
     arrays = [s["price"].to_numpy() for s in sides if not s.empty]
     if not arrays:
         return 1.0
@@ -467,27 +472,6 @@ def _book_bar_width(*sides: pd.DataFrame) -> float:
     diffs = np.diff(uniq)
     diffs = diffs[diffs > 0]
     return float(np.min(diffs)) if diffs.size else 1.0
-
-
-# Per-order separators are drawn as bar edges; below ~2 rendered pixels the
-# ~1px edge covers the fill entirely, so the separator is gated on bar width.
-_MIN_SEPARATOR_BAR_PX = 2.0
-
-
-def _book_separator_edge(
-    width: float, price_span: float, *, per_order: bool, fig_width_px: float
-) -> str:
-    """Edge colour for book-snapshot bars.
-
-    Returns ``"white"`` for per-order (L3) bars wide enough to show a separator,
-    otherwise ``"none"``.  Aggregate (L2) bars never get a per-order separator.
-    """
-    if not per_order:
-        return "none"
-    if price_span <= 0:
-        return "white"  # a single price level fills the axis -> always wide
-    bar_px = (width / price_span) * fig_width_px
-    return "white" if bar_px >= _MIN_SEPARATOR_BAR_PX else "none"
 
 
 def _rounded_price_ticks(
@@ -512,46 +496,57 @@ def _rounded_price_ticks(
 def _mpl_book_bars(
     data: dict, ax: Axes | None, theme: PlotTheme, *, per_order: bool
 ) -> Figure:
-    """Book-snapshot bars: one bar per level (L2) or stacked per order (L3)."""
+    """Horizontal book ladder: price on y, size on x, bids below / asks above.
+
+    L2 draws one bar per price level; L3 segments each level into its individual
+    orders (biggest-first from the axis) with white separators, so a whale and a
+    crowd of small orders that look identical on L2 read differently here.
+    """
     bids = data["bids"]
     asks = data["asks"]
-    fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(11, 8), theme=theme)
 
-    width = _book_bar_width(bids, asks) * 0.9
-    mins = [float(s["price"].min()) for s in (bids, asks) if not s.empty]
-    maxs = [float(s["price"].max()) for s in (bids, asks) if not s.empty]
-    price_span = (max(maxs) - min(mins)) if mins else 0.0
-    edge = _book_separator_edge(
-        width,
-        price_span,
-        per_order=per_order,
-        fig_width_px=fig.get_figwidth() * fig.dpi,
+    thickness = _book_bar_thickness(bids, asks) * 0.9
+    # Windowing to the touch keeps bars tall, so L3 separators are always on.
+    sep = (
+        dict(edgecolor="white", linewidth=1.3)
+        if per_order
+        else dict(edgecolor="none", linewidth=0.0)
     )
     for side, color, label in ((bids, _BID_COLOR, "bid"), (asks, _ASK_COLOR, "ask")):
         if side.empty:
             continue
-        ax.bar(
+        ax.barh(
             side["price"],
             side["seg_hi"] - side["seg_lo"],
-            bottom=side["seg_lo"],
-            width=width,
+            left=side["seg_lo"],
+            height=thickness,
             color=color,
-            edgecolor=edge,
-            linewidth=0.6,
             align="center",
             label=label,
+            **sep,
         )
 
+    mid = book_mid(bids, asks)
+    if mid is not None:
+        ax.axhline(mid, color="#444444", linestyle="--", linewidth=1, zorder=1)
+
     if data["show_quantiles"]:
-        for x_value in data["bid_quantiles"]:
-            ax.axvline(x=x_value, color="#222222", linestyle="--", linewidth=1)
-        for x_value in data["ask_quantiles"]:
-            ax.axvline(x=x_value, color="#222222", linestyle="--", linewidth=1)
+        for y_value in (*data["bid_quantiles"], *data["ask_quantiles"]):
+            ax.axhline(
+                y=y_value,
+                color="#888888",
+                linestyle=":",
+                linewidth=0.8,
+                alpha=0.5,
+                zorder=1,
+            )
 
     ax.set_title(data["timestamp"].strftime("%Y-%m-%d %H:%M:%S UTC"))
-    ax.set_xlabel("Price")
-    ax.set_ylabel("Size")
-    ax.legend(loc="upper center")
+    ax.set_xlabel("Size (per order)" if per_order else "Size (aggregate per level)")
+    ax.set_ylabel("Price")
+    ax.set_xlim(left=0)
+    ax.legend(loc="best")
     fig.tight_layout()
     return fig
 

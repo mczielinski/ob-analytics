@@ -782,6 +782,12 @@ def _book_side(
 
     s = side.sort_values("price", ascending=ascending, kind="stable")
     if per_order:
+        # Biggest order first within each level: the largest order anchors at
+        # the axis (seg_lo=0), so a whale level reads as one long segment and a
+        # crowd of small orders reads as a dashed run of short ones.
+        s = s.sort_values(
+            ["price", "volume"], ascending=[ascending, False], kind="stable"
+        )
         seg_hi = s.groupby("price", sort=False)["volume"].cumsum()
         out = pd.DataFrame(
             {
@@ -807,26 +813,65 @@ def _book_side(
     return out
 
 
-def _high_volume_prices(side: pd.DataFrame, q: float = 0.99) -> pd.Series:
-    """Prices whose per-row volume is at or above the *q* quantile."""
+def _high_volume_prices(
+    side: pd.DataFrame, q: float = 0.99, max_n: int = 3
+) -> pd.Series:
+    """Up to *max_n* prices whose *level* volume is at or above the *q* quantile.
+
+    Volume is aggregated per price first, so a per-order (L3) side does not emit
+    one guide line per order row -- only the genuinely heavy levels, capped at
+    *max_n* so the snapshot never drowns under full-height guides.
+    """
     if side.empty:
         return pd.Series(dtype=float)
-    return side.loc[side["volume"] >= side["volume"].quantile(q), "price"]
+    agg = side.groupby("price", as_index=False)["volume"].sum()
+    hot = agg[agg["volume"] >= agg["volume"].quantile(q)]
+    return hot.sort_values("volume", ascending=False)["price"].head(max_n)
+
+
+def _window_levels(side: pd.DataFrame, top_n: int | None) -> pd.DataFrame:
+    """Keep the rows of a best-first side at its *top_n* nearest price levels.
+
+    Counts distinct price *levels*, not order rows, so an L3 side keeps every
+    order resting at the kept levels.  Windowing to the touch is what keeps the
+    ladder's bars tall enough that per-order separators stay legible.
+    """
+    if top_n is None or side.empty:
+        return side
+    keep = side["price"].drop_duplicates().head(top_n)
+    return side[side["price"].isin(keep)]
+
+
+def book_mid(bids: pd.DataFrame, asks: pd.DataFrame) -> float | None:
+    """Midprice between the best bid and best ask, or ``None`` if one-sided.
+
+    Both sides arrive best-first; the touch is the highest bid and the lowest
+    ask.  Used by both backends to draw the ladder's mid reference line.
+    """
+    if bids.empty or asks.empty:
+        return None
+    return (float(bids["price"].max()) + float(asks["price"].min())) / 2
 
 
 def prepare_book_snapshot_data(
     order_book: dict,
     per_order: bool = False,
     volume_scale: float | None = None,
-    show_quantiles: bool = True,
+    show_quantiles: bool = False,
+    top_n: int | None = 40,
 ) -> dict[str, Any]:
     """Prepare an order-book snapshot at one resolution.
 
-    Feeds both the ``book_snapshot`` bars and the ``depth_chart`` curve.
+    Feeds both the ``book_snapshot`` ladder and the ``depth_chart`` curve.
     ``per_order=False`` collapses each price level to one row (L2 /
     Market-By-Price); ``per_order=True`` keeps every order as its own row with
     within-level stacking bounds (L3 / Market-By-Order).  ``volume_scale=None``
     auto-infers a power-of-10 scale from the combined bid/ask volumes.
+
+    ``top_n`` windows each side to its *N* nearest price levels (``None`` =
+    whole book); the default keeps the touch region where bars stay tall enough
+    that per-order separators read.  ``show_quantiles`` overlays up to three
+    heavy-level guide lines per side and is off by default.
 
     Returns ``bids``/``asks`` frames ordered best-first with columns ``price,
     volume, liquidity, seg_lo, seg_hi`` (volumes already scaled), plus
@@ -841,10 +886,14 @@ def prepare_book_snapshot_data(
             np.concatenate([bids["volume"].to_numpy(), asks["volume"].to_numpy()])
         )
 
-    bid_side = _book_side(
-        bids, ascending=False, per_order=per_order, scale=volume_scale
+    bid_side = _window_levels(
+        _book_side(bids, ascending=False, per_order=per_order, scale=volume_scale),
+        top_n,
     )
-    ask_side = _book_side(asks, ascending=True, per_order=per_order, scale=volume_scale)
+    ask_side = _window_levels(
+        _book_side(asks, ascending=True, per_order=per_order, scale=volume_scale),
+        top_n,
+    )
 
     bid_quantiles = pd.Series(dtype=float)
     ask_quantiles = pd.Series(dtype=float)
