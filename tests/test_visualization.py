@@ -94,9 +94,12 @@ def sample_depth_summary() -> pd.DataFrame:
 
 class TestPlotTheme:
     def test_default_theme(self):
+        # The reference (bundle) style: light, despined, dotted grid.
         theme = PlotTheme()
-        assert theme.style == "darkgrid"
-        assert theme.font_scale == 1.5
+        assert theme.style == "white"
+        assert theme.font_scale == 1.05
+        assert theme.rc["axes.grid"] is True
+        assert theme.rc["axes.spines.top"] is False
 
     def test_custom_theme(self):
         theme = PlotTheme(style="whitegrid", font_scale=1.0)

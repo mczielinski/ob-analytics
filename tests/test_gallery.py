@@ -172,16 +172,18 @@ class TestProject:
         assert metric_card.panels[0].level is None
         assert metric_card.panels[0].stem == "stubmetric"
 
-    def test_l3_skips_l2_only_concepts_and_analytics(self) -> None:
+    def test_l3_skips_l2_only_concepts_but_keeps_analytics(self) -> None:
+        # Analytics are level-less; every leveled view includes them.
         model = GalleryModel(concepts=[_l2_concept()], analytics=[_metric_spec()])
-        assert _project(model, "l3", ["matplotlib"]) == []
+        cards = _project(model, "l3", ["matplotlib"])
+        assert [c.title for c in cards] == ["Stub Metric"]
 
-    def test_l3_renders_l3_face_only(self) -> None:
+    def test_l3_renders_l3_face_plus_analytics(self) -> None:
         model = GalleryModel(
             concepts=[_comparable_concept()], analytics=[_metric_spec()]
         )
         cards = _project(model, "l3", ["matplotlib"])
-        assert [c.title for c in cards] == ["Stub -- L3"]
+        assert [c.title for c in cards] == ["Stub -- L3", "Stub Metric"]
         assert cards[0].panels[0].stem == "stub.L3"
 
     def test_both_renders_each_face_plus_analytics(self) -> None:
