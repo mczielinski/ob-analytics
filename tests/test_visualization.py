@@ -254,19 +254,25 @@ class TestPlotOrderActivityL3:
     def test_gantt_thins_y_ticks_on_wide_book(self) -> None:
         # 260-wide window at a 5-unit grid would place 52 ticks; the renderer
         # must thin them to a legible count.
-        empty = pd.DataFrame({"price": [], "start_ts": [], "end_ts": []})
+        empty = pd.DataFrame(
+            {"price": [], "start_ts": [], "end_ts": [], "linewidth": []}
+        )
         one = pd.DataFrame(
             {
                 "price": [78300.0],
                 "start_ts": pd.to_datetime(["2026-01-01T00:00:00"]),
                 "end_ts": pd.to_datetime(["2026-01-01T00:00:10"]),
+                "linewidth": [1.5],
             }
         )
         data = {
-            "flashed": one,
+            "filled": one,
+            "cancelled": empty,
             "resting": empty,
             "y_range": (78250.0, 78510.0),
             "price_by": 5.0,
+            "shown_of": None,
+            "show_markers": False,
         }
         fig = plot("order_activity", Level.L3, **data)
         ax = fig.axes[0]

@@ -34,9 +34,7 @@ from ob_analytics.visualization._palette import (
     _BUY_COLOR,
     _CANCELLED_COLOR,
     _FILLED_COLOR,
-    _FLASHED_COLOR,
     _PARTIAL_COLOR,
-    _RESTING_COLOR,
     _SELL_COLOR,
 )
 
@@ -650,25 +648,49 @@ def mpl_cancellations_per_order(
 def mpl_order_activity_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
-    """L3 (MBO) order activity: each order one lifecycle bar, coloured by fate."""
-    fig, ax = _create_axes(ax, figsize=(10, 6), theme=theme)
-    flashed = data["flashed"]
-    resting = data["resting"]
-    for side, color, label in (
-        (flashed, _FLASHED_COLOR, "flashed-limit (cancelled)"),
-        (resting, _RESTING_COLOR, "resting-limit (filled)"),
+    """L3 (MBO) order activity: each order one lifeline, coloured by outcome.
+
+    Width encodes order size; the terminal marker (x filled, o cancelled) is
+    drawn when few enough spans survive.  Dense books are degraded upstream
+    (see :func:`prepare_order_activity_l3_data`) and annotated "showing n of N".
+    """
+    fig, ax = _create_axes(ax, figsize=(11, 7), theme=theme)
+    show_markers = data.get("show_markers", False)
+    drew_any = False
+    for side, color, label, marker in (
+        (data["filled"], _FILLED_COLOR, "filled", "x"),
+        (data["cancelled"], _CANCELLED_COLOR, "cancelled", "o"),
+        (data["resting"], _PARTIAL_COLOR, "still resting", None),
     ):
         if side.empty:
             continue
+        drew_any = True
         ax.hlines(
             side["price"],
             mdates.date2num(side["start_ts"]),
             mdates.date2num(side["end_ts"]),
             colors=color,
-            linewidth=1.2,
-            alpha=0.5,
+            linewidth=side["linewidth"].to_numpy(),
+            alpha=0.6,
             label=label,
         )
+        if show_markers and marker is not None:
+            ends = mdates.date2num(side["end_ts"])
+            if marker == "o":  # cancelled: open circle
+                ax.scatter(
+                    ends,
+                    side["price"],
+                    marker="o",
+                    s=22,
+                    facecolors="none",
+                    edgecolors=color,
+                    linewidths=0.8,
+                    zorder=4,
+                )
+            else:  # filled: cross
+                ax.scatter(
+                    ends, side["price"], marker=marker, s=22, color=color, zorder=4
+                )
 
     format_time_axis(ax)
 
@@ -681,7 +703,21 @@ def mpl_order_activity_per_order(
     ax.set_xlabel("Time")
     ax.set_ylabel("Limit Price")
     ax.set_title("Order lifecycles (place → outcome)")
-    if not (flashed.empty and resting.empty):
+
+    shown_of = data.get("shown_of")
+    if shown_of is not None:
+        ax.text(
+            0.99,
+            0.01,
+            f"showing {shown_of[0]:,} of {shown_of[1]:,} orders",
+            transform=ax.transAxes,
+            ha="right",
+            va="bottom",
+            fontsize=8,
+            color="#555555",
+            fontstyle="italic",
+        )
+    if drew_any:
         ax.legend(loc="upper right")
     fig.tight_layout()
     return fig
