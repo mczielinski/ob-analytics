@@ -94,22 +94,39 @@ def plotly_time_series(data: dict) -> Any:
 
 
 def plotly_trades(data: dict) -> Any:
-    """Render a trade-price step plot."""
+    """Render the L2 signed-lollipop trade tape.
+
+    Each trade is a stem from the mid line to its execution price, tipped by a
+    volume-sized marker and coloured by aggressor side.  The price axis spans
+    the full data extent (no quantile clip), so spike prints stay visible.
+    """
     go = _import_plotly()
-    filtered = data["filtered_trades"]
     fig = _base_figure(go, title="Trade Prices")
-    fig.add_trace(
-        go.Scatter(
-            x=filtered["timestamp"],
-            y=filtered["price"],
-            mode="lines",
-            line=dict(shape="hv", width=2, color="#5dade2"),
-            name="Price",
-            hovertemplate="Time: %{x}<br>Price: %{y:.2f}<extra></extra>",
+
+    mid_line = data.get("mid_line")
+    if mid_line is not None and not mid_line.empty:
+        fig.add_trace(
+            go.Scattergl(
+                x=mid_line["timestamp"],
+                y=mid_line["mid"],
+                mode="lines",
+                line=dict(color="#888888", width=1),
+                opacity=0.8,
+                name="mid",
+                hoverinfo="skip",
+            )
         )
-    )
+    for side, color, label in (
+        (data["buys"], _BUY_COLOR, "buy (lifts ask)"),
+        (data["sells"], _SELL_COLOR, "sell (hits bid)"),
+    ):
+        if side.empty:
+            continue
+        _plotly_lollipops(fig, go, side, color, label)
+
     fig.update_xaxes(title_text="Time")
     fig.update_yaxes(title_text="Price")
+    _apply_padded_y_range(fig, data.get("y_range"))
     return fig
 
 
@@ -602,6 +619,66 @@ def _segments_xy(start: Any, end: Any, y: Any) -> tuple[Any, Any]:
     return xs, ys
 
 
+def _vstem_xy(x: Any, y0: Any, y1: Any) -> tuple[Any, Any]:
+    """Interleave vertical lollipop stems into one ``None``-gapped Scattergl line.
+
+    Each trade draws a stem ``(x, y0) -> (x, y1)`` (mid -> price); a ``None`` gap
+    separates consecutive stems so a whole side renders as a single WebGL trace.
+    """
+    n = len(x)
+    xv = np.asarray(x)
+    xs = np.empty(n * 3, dtype=object)
+    xs[0::3] = xv
+    xs[1::3] = xv
+    xs[2::3] = None
+    ys = np.empty(n * 3, dtype=object)
+    ys[0::3] = np.asarray(y0)
+    ys[1::3] = np.asarray(y1)
+    ys[2::3] = None
+    return xs, ys
+
+
+def _plotly_lollipops(fig: Any, go: Any, side: Any, color: str, label: str) -> None:
+    """Stems (mid -> price) plus volume-sized markers for one tape side."""
+    xs, ys = _vstem_xy(side["timestamp"], side["mid"], side["price"])
+    fig.add_trace(
+        go.Scattergl(
+            x=xs,
+            y=ys,
+            mode="lines",
+            line=dict(color=color, width=1),
+            opacity=0.5,
+            name=label,
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+    fig.add_trace(
+        go.Scattergl(
+            x=side["timestamp"],
+            y=side["price"],
+            mode="markers",
+            marker=dict(
+                size=mpl_marker_area_to_plotly_size(side["marker_area"].to_numpy()),
+                color=color,
+                opacity=0.9,
+                line=dict(width=0),
+            ),
+            name=label,
+            hovertemplate="Time: %{x}<br>Price: %{y:.2f}<extra></extra>",
+        )
+    )
+
+
+def _apply_padded_y_range(fig: Any, y_range: tuple[float, float] | None) -> None:
+    """Set a 4%-padded y-range so spike prints are never cut at the axis edge."""
+    if y_range is None:
+        return
+    lo, hi = y_range
+    pad = (hi - lo) * 0.04 or 1.0
+    fig.update_yaxes(range=[lo - pad, hi + pad])
+
+
 def plotly_order_activity_per_order(data: dict) -> Any:
     """L3 (MBO) order activity: each order one lifecycle bar, coloured by fate.
 
@@ -712,20 +789,23 @@ def plotly_order_outcome_per_order(data: dict) -> Any:
 
 
 def plotly_trade_tape_per_order(data: dict) -> Any:
-    """L3 (MBO) trade tape: executions plus each maker order's resting bar.
+    """L3 (MBO) signed-lollipop trade tape with maker resting spans.
 
-    Uses ``Scattergl`` (WebGL) like the L3 order-activity face it pairs with: the
-    maker-bar segment cloud and the execution-marker cloud are both large, so the
-    SVG ``Scatter`` path does not scale.
-
-    Size is encoded as marker area for now; the signed-lollipop re-encoding is
-    roadmap §3.4 (docs/plans/).
+    Same signed lollipops as the L2 tape (stem mid -> price, marker sized by
+    volume, coloured by aggressor side), plus the L3 differentiator: a faint
+    span from each consumed maker order's creation to its fill.  Trade prices
+    are never clipped; above the density threshold the lollipops are per-second
+    VWAPs (roadmap §3.4).  All clouds use ``Scattergl`` (WebGL) so they scale.
     """
     go = _import_plotly()
     fig = _base_figure(go, title="Trade tape with maker order lifecycles")
-    for side, color, label in (
-        (data["buys"], _BUY_COLOR, "buy (lifts ask)"),
-        (data["sells"], _SELL_COLOR, "sell (hits bid)"),
+
+    dense = data.get("dense", False)
+    span_opacity = 0.12 if dense else 0.35
+    # Maker resting spans (horizontal), faint underneath the lollipops.
+    for side, color in (
+        (data["buys"], _BUY_COLOR),
+        (data["sells"], _SELL_COLOR),
     ):
         if side.empty:
             continue
@@ -736,31 +816,39 @@ def plotly_trade_tape_per_order(data: dict) -> Any:
                 y=ys,
                 mode="lines",
                 line=dict(color=color, width=1.0),
-                opacity=0.35,
-                name=label,
+                opacity=span_opacity,
                 hoverinfo="skip",
                 showlegend=False,
             )
         )
+
+    mid_line = data.get("mid_line")
+    if mid_line is not None and not mid_line.empty:
         fig.add_trace(
             go.Scattergl(
-                x=side["timestamp"],
-                y=side["price"],
-                mode="markers",
-                marker=dict(
-                    size=mpl_marker_area_to_plotly_size(side["marker_area"].to_numpy()),
-                    color=color,
-                    opacity=0.7,
-                    line=dict(width=0),
-                ),
-                name=label,
+                x=mid_line["timestamp"],
+                y=mid_line["mid"],
+                mode="lines",
+                line=dict(color="#888888", width=1),
+                opacity=0.8,
+                name="mid",
+                hoverinfo="skip",
+                showlegend=False,
             )
         )
+
+    suffix = ", per-s VWAP" if dense else ""
+    for side, color, label in (
+        (data["lolli_buys"], _BUY_COLOR, f"buy (lifts ask){suffix}"),
+        (data["lolli_sells"], _SELL_COLOR, f"sell (hits bid){suffix}"),
+    ):
+        if side.empty:
+            continue
+        _plotly_lollipops(fig, go, side, color, label)
+
     fig.update_xaxes(title_text="Time")
     fig.update_yaxes(title_text="Execution Price")
-    y_range = data.get("y_range")
-    if y_range is not None:
-        fig.update_yaxes(range=list(y_range))
+    _apply_padded_y_range(fig, data.get("y_range"))
     return fig
 
 

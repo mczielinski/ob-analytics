@@ -176,25 +176,84 @@ def mpl_time_series(
     return fig
 
 
+def _draw_lollipops(
+    ax: Axes,
+    side: pd.DataFrame,
+    color: str,
+    label: str,
+    *,
+    stem_alpha: float = 0.55,
+    marker_alpha: float = 0.9,
+) -> None:
+    """Stems from the mid line to each trade price, tipped by sized markers.
+
+    The stem carries direction (buys reach up above the mid, sells down below)
+    and the price excursion; the marker area carries the trade size.
+    """
+    x = mdates.date2num(side["timestamp"])
+    ax.vlines(
+        x,
+        side["mid"].to_numpy(),
+        side["price"].to_numpy(),
+        colors=color,
+        linewidth=0.9,
+        alpha=stem_alpha,
+    )
+    ax.scatter(
+        x,
+        side["price"],
+        s=side["marker_area"],
+        color=color,
+        alpha=marker_alpha,
+        edgecolors="none",
+        label=label,
+        zorder=3,
+    )
+
+
 def mpl_trades(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
-    """Render a trade-price step plot."""
-    filtered = data["filtered_trades"]
-    y_breaks = data["y_breaks"]
+    """Render the L2 signed-lollipop trade tape.
+
+    Each trade is a stem from the mid line to its execution price, tipped by a
+    volume-sized marker and coloured by aggressor side.  The price axis spans
+    the full data extent (no quantile clip), so spike prints stay visible.
+    """
     fig, ax = _create_axes(ax, figsize=(10, 6), theme=theme)
-    sns.lineplot(
-        data=filtered,
-        x="timestamp",
-        y="price",
-        drawstyle="steps-post",
-        ax=ax,
-    )
+
+    mid_line = data.get("mid_line")
+    if mid_line is not None and not mid_line.empty:
+        ax.plot(
+            mdates.date2num(mid_line["timestamp"]),
+            mid_line["mid"].to_numpy(),
+            color="#888888",
+            linewidth=1.0,
+            alpha=0.8,
+            zorder=1,
+        )
+
+    any_pts = False
+    for side, color, label in (
+        (data["buys"], _BUY_COLOR, "buy (lifts ask)"),
+        (data["sells"], _SELL_COLOR, "sell (hits bid)"),
+    ):
+        if side.empty:
+            continue
+        any_pts = True
+        _draw_lollipops(ax, side, color, label)
+
     ax.set_xlabel("Time")
     ax.set_ylabel("Price")
-    ax.set_yticks(y_breaks)
+    y_range = data.get("y_range")
+    if y_range is not None:
+        lo, hi = y_range
+        pad = (hi - lo) * 0.04 or 1.0
+        ax.set_ylim(lo - pad, hi + pad)
     format_time_axis(ax)
     ax.grid(True)
+    if any_pts:
+        ax.legend(loc="upper right")
     fig.tight_layout()
     return fig
 
@@ -854,41 +913,63 @@ def mpl_order_outcome_per_order(
 def mpl_trade_tape_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
-    """L3 (MBO) trade tape: executions plus each maker order's resting bar.
+    """L3 (MBO) signed-lollipop trade tape with maker resting spans.
 
-    Size is encoded as marker area for now; the signed-lollipop re-encoding is
-    roadmap §3.4 (docs/plans/).
+    Same signed lollipops as the L2 tape, plus the L3 differentiator: a thin
+    span from each consumed maker order's creation to its fill.  Trade prices
+    are never clipped, so spike prints stay visible.  Above the density
+    threshold the lollipops are per-second VWAPs (roadmap §3.4).
     """
     fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
-    any_pts = False
-    for side, color, label in (
-        (data["buys"], _BUY_COLOR, "buy (lifts ask)"),
-        (data["sells"], _SELL_COLOR, "sell (hits bid)"),
+    dense = data.get("dense", False)
+    # Maker resting spans: faint underneath the lollipops.  Thinner/fainter when
+    # dense so the span cloud reads as texture rather than a solid block.
+    span_alpha = 0.12 if dense else 0.35
+    span_lw = 0.5 if dense else 1.0
+    for side, color in (
+        (data["buys"], _BUY_COLOR),
+        (data["sells"], _SELL_COLOR),
     ):
         if side.empty:
             continue
-        any_pts = True
         ax.hlines(
             side["price"],
             mdates.date2num(side["created_ts"]),
             mdates.date2num(side["timestamp"]),
             colors=color,
+            linewidth=span_lw,
+            alpha=span_alpha,
+            zorder=1,
+        )
+
+    mid_line = data.get("mid_line")
+    if mid_line is not None and not mid_line.empty:
+        ax.plot(
+            mdates.date2num(mid_line["timestamp"]),
+            mid_line["mid"].to_numpy(),
+            color="#888888",
             linewidth=1.0,
-            alpha=0.35,
+            alpha=0.8,
+            zorder=2,
         )
-        ax.scatter(
-            mdates.date2num(side["timestamp"]),
-            side["price"],
-            s=side["marker_area"],
-            color=color,
-            alpha=0.7,
-            edgecolors="none",
-            label=label,
-        )
+
+    any_pts = False
+    suffix = ", per-s VWAP" if dense else ""
+    for side, color, label in (
+        (data["lolli_buys"], _BUY_COLOR, f"buy (lifts ask){suffix}"),
+        (data["lolli_sells"], _SELL_COLOR, f"sell (hits bid){suffix}"),
+    ):
+        if side.empty:
+            continue
+        any_pts = True
+        _draw_lollipops(ax, side, color, label, marker_alpha=0.85)
+
     format_time_axis(ax)
     y_range = data.get("y_range")
     if y_range is not None:
-        ax.set_ylim(y_range)
+        lo, hi = y_range
+        pad = (hi - lo) * 0.04 or 1.0
+        ax.set_ylim(lo - pad, hi + pad)
     ax.set_xlabel("Time")
     ax.set_ylabel("Execution Price")
     ax.set_title("Trade tape with maker order lifecycles")
