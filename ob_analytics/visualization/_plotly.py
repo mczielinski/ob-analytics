@@ -771,9 +771,8 @@ def plotly_volume_percentiles(data: dict) -> Any:
     bids_cumsum_neg = data["bids_cumsum_neg"]
     asks_cols = data["asks_cols"]
     bids_cols = data["bids_cols"]
-    all_cols = data["all_cols"]
     colors_dict = data["colors_dict"]
-    legend_names = data["legend_names"]
+    legend_entries = data["legend_entries"]
     max_ask = data["max_ask"]
     max_bid = data["max_bid"]
     volume_scale = data["volume_scale"]
@@ -787,39 +786,37 @@ def plotly_volume_percentiles(data: dict) -> Any:
             return f"rgba({int(c[0] * 255)},{int(c[1] * 255)},{int(c[2] * 255)},{c[3]:.2f})"
         return str(c)
 
-    label_map = dict(zip(all_cols, legend_names))
-
-    # Asks (positive side) — draw from outermost to innermost for stacking
-    for col in asks_cols:
-        current = asks_cumsum[col].values
-        fig.add_trace(
-            go.Scatter(
-                x=asks_cumsum.index,
-                y=current,
-                mode="lines",
-                line=dict(width=0.5, color="black"),
-                fill="tonexty" if col != asks_cols[0] else "tozeroy",
-                fillcolor=_to_rgb(colors_dict[col]),
-                name=label_map.get(col, col),
-                showlegend=True,
-                hovertemplate=f"{label_map.get(col, col)}: %{{y:.4f}}<extra></extra>",
+    # Fill traces carry no legend entries (2N would swamp the legend); the
+    # collapsed per-side legend is drawn from legend_entries below.  Columns
+    # are touch-first, so fill from the near-touch band (tozeroy) outward.
+    for cols, cumsum in ((asks_cols, asks_cumsum), (bids_cols, bids_cumsum_neg)):
+        for col in cols:
+            fig.add_trace(
+                go.Scatter(
+                    x=cumsum.index,
+                    y=cumsum[col].values,
+                    mode="lines",
+                    line=dict(width=0.5, color="black"),
+                    fill="tozeroy" if col == cols[0] else "tonexty",
+                    fillcolor=_to_rgb(colors_dict[col]),
+                    name=str(col),
+                    showlegend=False,
+                    hovertemplate=f"{col}: %{{y:.4f}}<extra></extra>",
+                )
             )
-        )
 
-    # Bids (negative side)
-    for col in bids_cols:
-        current = bids_cumsum_neg[col].values
+    # Collapsed legend: representative depths per side (touch -> far).  Hue =
+    # side, luminance = distance to touch.  Marker-only, no data on the axes.
+    for label, color in legend_entries:
         fig.add_trace(
             go.Scatter(
-                x=bids_cumsum_neg.index,
-                y=current,
-                mode="lines",
-                line=dict(width=0.5, color="black"),
-                fill="tonexty" if col != bids_cols[0] else "tozeroy",
-                fillcolor=_to_rgb(colors_dict[col]),
-                name=label_map.get(col, col),
+                x=[None],
+                y=[None],
+                mode="markers",
+                marker=dict(size=10, color=_to_rgb(color), symbol="square"),
+                name=label,
                 showlegend=True,
-                hovertemplate=f"{label_map.get(col, col)}: %{{y:.4f}}<extra></extra>",
+                hoverinfo="skip",
             )
         )
 
@@ -827,10 +824,14 @@ def plotly_volume_percentiles(data: dict) -> Any:
         fig.add_hline(y=0, line_color="#444444", line_width=0.5)
 
     y_range = volume_scale * max(max_ask, max_bid)
-    fig.update_yaxes(range=[-y_range, y_range], title_text="Liquidity")
+    fig.update_yaxes(
+        range=[-y_range, y_range],
+        title_text="Cumulative volume (bid -/ ask +)",
+    )
     fig.update_xaxes(title_text="Time")
     fig.update_layout(
         legend=dict(
+            title_text="depth from touch",
             orientation="v",
             yanchor="middle",
             y=0.5,
