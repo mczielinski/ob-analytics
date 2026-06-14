@@ -23,6 +23,7 @@ import pandas as pd
 import seaborn as sns
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
 from loguru import logger
@@ -466,12 +467,15 @@ def mpl_event_map(
         edgecolor="black",
         alpha=0.5,
     )
+    # Direction-coloured dots: a fixed small marker (explicit ``s=``; the old
+    # ``size=0.1`` mis-fed seaborn's size *semantic*, which adds a spurious
+    # size legend and shrinks every dot to a speck).
     sns.scatterplot(
         data=events,
         x="timestamp",
         y="price",
         hue="direction",
-        size=0.1,
+        s=14,
         palette=col_pal,
         ax=ax,
         legend=False,
@@ -482,6 +486,52 @@ def mpl_event_map(
     ax.set_yticks(
         _rounded_price_ticks(events["price"].min(), events["price"].max(), price_by)
     )
+    # The map overlays two unlabelled mark families; a legend disambiguates the
+    # gray volume-sized create/delete circles from the bid/ask direction dots.
+    legend_handles = [
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            linestyle="none",
+            markerfacecolor=_BID_COLOR,
+            markeredgecolor="none",
+            markersize=7,
+            label="bid",
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            linestyle="none",
+            markerfacecolor=_ASK_COLOR,
+            markeredgecolor="none",
+            markersize=7,
+            label="ask",
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            linestyle="none",
+            markerfacecolor="#333333",
+            markeredgecolor="none",
+            markersize=8,
+            label="created",
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            linestyle="none",
+            markerfacecolor="#333333",
+            markeredgecolor="black",
+            alpha=0.5,
+            markersize=8,
+            label="deleted",
+        ),
+    ]
+    ax.legend(handles=legend_handles, loc="upper right", framealpha=0.9)
     format_time_axis(ax)
     fig.tight_layout()
     return fig
@@ -504,7 +554,7 @@ def mpl_volume_map(
         y="volume",
         hue="direction",
         palette=col_pal,
-        size=0.5,
+        s=14,  # fixed marker size (was size=0.5, a misuse of the size semantic)
         marker="o",
         ax=ax,
     )
@@ -1071,15 +1121,20 @@ def mpl_events_histogram(
     bw = data["bw"]
 
     fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
+    # Overlaid step outlines instead of dodged bars: dodging splits each bin
+    # into side-by-side combs that misread as a finer x-resolution; layered
+    # steps compare the bid and ask distributions bin-for-bin.
     sns.histplot(
         data=events,
         x=val,
         hue="direction",
-        multiple="dodge",
+        element="step",
+        multiple="layer",
+        fill=True,
+        alpha=0.35,
         binwidth=bw,
         palette={"bid": _BID_COLOR, "ask": _ASK_COLOR},
-        edgecolor="white",
-        linewidth=0.5,
+        linewidth=1.2,
         ax=ax,
     )
     ax.set_title(f"Events {val} distribution")

@@ -397,6 +397,17 @@ class TestPlotlyVpin:
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 2  # bar + rolling avg line
 
+    def test_bar_honours_computed_width(self) -> None:
+        # §3.9: the Bar ignored the computed bucket width and auto-sized,
+        # overlapping at sub-second cadence.  width is set in ms (60s bucket).
+        ts = pd.date_range("2015-01-01", periods=5, freq="min")
+        vpin_df = pd.DataFrame({"timestamp_end": ts, "vpin": [0.3, 0.5, 0.7, 0.4, 0.6]})
+        data = prepare_vpin_data(vpin_df)
+        fig = plotly_vpin(data)
+        bar = next(tr for tr in fig.data if tr.type == "bar")
+        # 0.6 * 60s bucket = 36s = 36_000 ms.
+        assert bar.width == pytest.approx(36_000.0)
+
 
 class TestPlotlyOfi:
     def test_returns_plotly_figure(self) -> None:

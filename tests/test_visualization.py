@@ -213,6 +213,19 @@ class TestPlotEventMap:
         )
         assert isinstance(fig, Figure)
 
+    def test_has_legend_disambiguating_marks(self, sample_events):
+        # §3.9: the gray create/delete circles and the bid/ask direction dots
+        # were unexplained; a legend must label all four.
+        fig = plot(
+            "order_activity",
+            Level.L2,
+            **_data.prepare_event_map_data(sample_events),
+        )
+        legend = fig.axes[0].get_legend()
+        assert legend is not None
+        labels = {t.get_text() for t in legend.get_texts()}
+        assert {"bid", "ask", "created", "deleted"} <= labels
+
     def test_accepts_ax(self, sample_events):
         fig_orig, ax_orig = plt.subplots()
         fig = plot(
