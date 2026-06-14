@@ -448,9 +448,18 @@ class TestPrepareTradeTapeL3:
     ) -> None:
         events, trades = sample_executed_orders
         data = prepare_trade_tape_l3_data(events, trades, price_from=0.0, price_to=1e9)
-        assert set(data) == {"buys", "sells", "volume_scale", "y_range"}
+        assert set(data) == {
+            "buys",
+            "sells",
+            "lolli_buys",
+            "lolli_sells",
+            "mid_line",
+            "dense",
+            "volume_scale",
+            "y_range",
+        }
         for side in (data["buys"], data["sells"]):
-            assert {"created_ts", "timestamp", "price", "marker_area"} <= set(
+            assert {"created_ts", "timestamp", "price", "marker_area", "mid"} <= set(
                 side.columns
             )
 
