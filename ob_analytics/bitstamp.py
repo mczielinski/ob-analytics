@@ -459,6 +459,10 @@ class BitstampFormat:
             "timestamp_unit": "ms",
         }
 
+    def required_context(self) -> list[str]:
+        # Bitstamp captures are self-describing (timestamps carry the date).
+        return []
+
 
 # ── Register this format and its writer ───────────────────────────────
 # Imports sit at the bottom (deferred from the top of the module) to avoid a

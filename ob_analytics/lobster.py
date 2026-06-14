@@ -906,6 +906,11 @@ class LobsterFormat:
             "volume_decimals": 0,
         }
 
+    def required_context(self) -> list[str]:
+        # LOBSTER message/orderbook filenames carry no date, so the trading
+        # date must be supplied explicitly.
+        return ["trading_date"]
+
 
 # ── Register this format and its writer ───────────────────────────────
 # Imports sit at the bottom (deferred from the top of the module) to avoid a

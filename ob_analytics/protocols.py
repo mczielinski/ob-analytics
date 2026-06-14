@@ -175,3 +175,13 @@ class Format(Protocol):
     def config_defaults(self) -> dict[str, Any]:
         """Return default :class:`PipelineConfig` overrides for this format."""
         ...
+
+    def required_context(self) -> list[str]:
+        """:class:`RunContext` field names this format requires.
+
+        E.g. LOBSTER returns ``["trading_date"]`` because its filenames carry
+        no date; Bitstamp returns ``[]``.  Lets the CLI/pipeline validate
+        required context generically instead of special-casing format names.
+        Callers should treat a missing method as ``[]`` (structural default).
+        """
+        ...
