@@ -103,6 +103,34 @@ class PipelineResult:
     depth_summary: pd.DataFrame
     config: PipelineConfig
 
+    def plot(
+        self,
+        concept: str,
+        level: Any = None,
+        *,
+        backend: str = "matplotlib",
+        volume_scale: float | None = None,
+        **overrides: Any,
+    ) -> Any:
+        """Render one plot *concept* from this result in a single call.
+
+        Thin convenience wrapper over
+        :func:`ob_analytics.visualization.plot_result`, e.g.
+        ``result.plot("depth_heatmap", col_bias=0.1)``.  See
+        :func:`~ob_analytics.visualization.available_concepts` for what a given
+        result can plot (it varies by format).
+        """
+        from ob_analytics.visualization import plot_result
+
+        return plot_result(
+            self,
+            concept,
+            level,
+            backend=backend,
+            volume_scale=volume_scale,
+            **overrides,
+        )
+
 
 class Pipeline:
     """Configurable, composable order book analytics pipeline.

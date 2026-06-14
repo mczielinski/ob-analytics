@@ -4,17 +4,27 @@ title: Visualization
 
 # Visualization
 
-The unified `plot()` dispatcher renders a plot *concept* at a resolution
-*level* on a chosen backend from already-prepared data. Prepare the data with
-the matching `prepare_<concept>_data` helper in
-`ob_analytics.visualization._data` (or a gallery panel builder) and spread it
-as keyword arguments:
+To plot straight from a pipeline result, the one-liner `plot_result` (or
+`result.plot`) names a concept and wires up the prepare function and context
+for you; `available_concepts(result)` lists what a given result can render:
 
 ```python
-from ob_analytics.visualization import plot
-from ob_analytics.visualization import _data
+from ob_analytics.visualization import plot_result
 
-fig = plot("trade_tape", backend="matplotlib", **_data.prepare_trades_data(trades))
+fig = plot_result(result, "depth_heatmap")          # level defaults to L2
+fig = result.plot("trade_tape", "L3", backend="plotly")
+```
+
+For full control, the unified `plot()` dispatcher renders a *concept* at a
+resolution *level* on a chosen backend from already-prepared data. Prepare the
+payload with the matching helper in the public `prepare` namespace (thin
+re-exports of `ob_analytics.visualization._data`) and spread it as keyword
+arguments:
+
+```python
+from ob_analytics.visualization import plot, prepare
+
+fig = plot("trade_tape", level="L2", **prepare.trades(trades))
 ```
 
 `backend="matplotlib"` (default) returns a Matplotlib figure;
@@ -27,10 +37,12 @@ a single level resolves it automatically, so you pass only the concept name;
 *comparable* concepts (both `L2` and `L3` registered) take an explicit
 `level=`.
 
-Available concepts, all currently **L2**: `time_series`, `trade_tape`,
-`depth_heatmap`, `order_activity`, `cancellations`, `book_snapshot`,
-`volume_percentiles`, `events_histogram`, `hidden_executions`. Level-less
-analytics: `vpin`, `order_flow_imbalance`, `kyle_lambda`, `trading_halts`.
+Concepts with both L2 and L3 faces: `trade_tape`, `order_activity`,
+`cancellations`, `book_snapshot`, `depth_chart`. L2-only: `time_series`,
+`depth_heatmap`, `volume_percentiles`, `events_histogram`,
+`liquidity_at_touch`, `hidden_executions`. L3-only: `order_outcome`.
+Level-less analytics: `vpin`, `order_flow_imbalance`, `kyle_lambda`,
+`trading_halts`.
 
 ## Dispatcher
 

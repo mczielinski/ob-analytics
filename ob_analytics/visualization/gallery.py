@@ -501,6 +501,88 @@ def build_gallery_model(
     return GalleryModel(concepts=concepts, analytics=[])
 
 
+def plot_result(
+    result: PipelineResult,
+    concept: str,
+    level: Level | str | None = None,
+    *,
+    backend: str = "matplotlib",
+    volume_scale: float | None = None,
+    **overrides: Any,
+) -> Any:
+    """Render one plot *concept* straight from a :class:`PipelineResult`.
+
+    The one-liner the gallery is built on, without the gallery: it derives the
+    same per-face context (spread, focus window, snapshot, volume scale) via
+    :func:`build_gallery_model` -- the single source of truth for how each
+    concept binds to its prepare function -- then prepares and renders the face.
+    So ``plot_result(result, "depth_heatmap")`` replaces having to know the
+    private ``prepare_price_levels_data`` name and its argument shape.
+
+    Parameters
+    ----------
+    result : PipelineResult
+        Pipeline output (``events`` / ``trades`` / ``depth`` / ``depth_summary``).
+    concept : str
+        Concept key, e.g. ``"trade_tape"`` (see :data:`available_concepts`).
+    level : Level or str or None
+        ``"L2"`` / ``"L3"`` (or a :class:`Level`).  ``None`` picks the concept's
+        only level, preferring L2 when both exist.
+    backend : str
+        ``"matplotlib"`` (default) or ``"plotly"``.
+    volume_scale : float or None
+        Display volume scale; ``None`` auto-infers (as the gallery does).
+    **overrides
+        Extra keyword arguments merged over the prepare call (e.g.
+        ``col_bias=0.1`` for the depth heatmap).
+
+    Returns
+    -------
+    A Matplotlib ``Figure`` or a Plotly ``Figure``, per *backend*.
+
+    Raises
+    ------
+    KeyError
+        If *concept* is not built for this result, or has no variant at *level*.
+        The message lists what is available.
+    """
+    model = build_gallery_model(result, volume_scale=volume_scale)
+    concept_map = {c.key: c for c in model.concepts}
+    pc = concept_map.get(concept)
+    if pc is None:
+        raise KeyError(
+            f"Unknown concept {concept!r} for this result. "
+            f"Available: {sorted(concept_map)}"
+        )
+
+    if level is None:
+        resolved = Level.L2 if Level.L2 in pc.variants else next(iter(pc.variants))
+    else:
+        resolved = level if isinstance(level, Level) else Level(level)
+
+    spec = pc.at(resolved)
+    if spec is None:
+        have = sorted(lvl.value for lvl in pc.variants)
+        raise KeyError(
+            f"Concept {concept!r} has no {resolved.value} variant "
+            f"(available levels: {have})."
+        )
+
+    data = spec.prepare(**{**spec.prep_kwargs, **overrides})
+    return plot(concept, resolved, backend=backend, **data)
+
+
+def available_concepts(result: PipelineResult) -> dict[str, list[str]]:
+    """Concept keys built for *result*, mapped to their available level names.
+
+    A discoverability companion to :func:`plot_result`: shows what
+    ``plot_result(result, concept, level=...)`` can render for this dataset
+    (which varies by format -- e.g. ``hidden_executions`` is LOBSTER-only).
+    """
+    model = build_gallery_model(result)
+    return {c.key: sorted(lvl.value for lvl in c.variants) for c in model.concepts}
+
+
 def vpin_panel(vpin_df: pd.DataFrame, *, threshold: float = 0.7) -> PlotSpec:
     """Build a VPIN analytic panel for :attr:`GalleryModel.analytics`."""
     return PlotSpec(

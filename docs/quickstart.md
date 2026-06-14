@@ -50,35 +50,35 @@ Depth summary: (…, 46)
 
 ### Visualise
 
-All plots go through one `plot()` dispatcher: prepare the data with the
-matching `prepare_<name>_data` helper, then render it on a backend.
+The fastest path is `plot_result` (or `result.plot`): name a concept and it
+wires up the right prepare function and context for you.
 
 ```python
-from ob_analytics.depth import get_spread
-from ob_analytics.visualization import plot, save_figure
-from ob_analytics.visualization import _data
+from ob_analytics.visualization import plot_result, available_concepts, save_figure
 
-spread = get_spread(result.depth_summary)
+# What can this result plot? (varies by format)
+available_concepts(result)
+# {'trade_tape': ['L2', 'L3'], 'depth_heatmap': ['L2'], 'order_outcome': ['L3'], ...}
 
-fig = plot(
-    "depth_heatmap",
-    **_data.prepare_price_levels_data(
-        result.depth, spread, volume_scale=1e-8
-    ),
-)
+fig = plot_result(result, "depth_heatmap")       # level defaults to L2
 save_figure(fig, "price_levels.png")
 
-fig = plot("trade_tape", **_data.prepare_trades_data(result.trades))
+fig = result.plot("trade_tape", "L3")            # equivalent method form
 save_figure(fig, "trades.png")
+
+# overrides flow through to the prepare function:
+fig = result.plot("depth_heatmap", col_bias=0.1, backend="plotly")
 ```
 
-`plot()` accepts an `ax` parameter for multi-panel figures:
+For full control, call the `plot()` dispatcher directly: prepare the payload
+with the matching helper in the `prepare` namespace, then render it. `plot()`
+also takes an `ax=` for multi-panel figures. Note that **comparable** concepts
+(those with both an L2 and L3 face, e.g. `trade_tape`) require a `level=`.
 
 ```python
 import matplotlib.pyplot as plt
 import pandas as pd
-from ob_analytics.visualization import plot
-from ob_analytics.visualization import _data
+from ob_analytics.visualization import plot, prepare
 
 # Pick a 10-minute window inside the sample (it spans 30 minutes).
 t_start = result.trades["timestamp"].min()
@@ -87,7 +87,12 @@ t4 = t3 + pd.Timedelta(minutes=10)
 
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 6))
 
-plot("trade_tape", ax=ax1, **_data.prepare_trades_data(result.trades, start_time=t3, end_time=t4))
+plot(
+    "trade_tape",
+    level="L2",
+    ax=ax1,
+    **prepare.trades(result.trades, start_time=t3, end_time=t4),
+)
 ax1.set_title(f"Trades {t3:%H:%M}–{t4:%H:%M}")
 
 hist_data = result.events[["timestamp", "direction", "price", "volume"]].copy()
@@ -95,7 +100,7 @@ hist_data = result.events[["timestamp", "direction", "price", "volume"]].copy()
 q01, q99 = hist_data["price"].quantile([0.01, 0.99])
 hist_data = hist_data[hist_data["price"].between(q01, q99)]
 bw = max(0.01, round((q99 - q01) / 100, 2))
-plot("events_histogram", ax=ax2, **_data.prepare_events_histogram_data(hist_data, val="price", bw=bw))
+plot("events_histogram", ax=ax2, **prepare.events_histogram(hist_data, val="price", bw=bw))
 ax2.set_title("Price distribution")
 
 fig.tight_layout()
@@ -429,8 +434,7 @@ There is no global theme to set. Pass a `PlotTheme` to `plot()` and it
 applies only to that call (matplotlib backend only):
 
 ```python
-from ob_analytics.visualization import plot, save_figure, PlotTheme
-from ob_analytics.visualization import _data
+from ob_analytics.visualization import plot, save_figure, prepare, PlotTheme, prepare
 
 theme = PlotTheme(
     style="whitegrid",
@@ -439,7 +443,7 @@ theme = PlotTheme(
     rc={"axes.facecolor": "#f8f9fa", "figure.facecolor": "#ffffff"},
 )
 
-fig = plot("trade_tape", theme=theme, **_data.prepare_trades_data(result.trades))
+fig = plot("trade_tape", level="L2", theme=theme, **prepare.trades(result.trades))
 save_figure(fig, "trades_hires.png", dpi=300)
 ```
 
@@ -489,23 +493,13 @@ pip install -e ".[interactive]"
 
 ```python
 from ob_analytics import Pipeline, sample_csv_path
-from ob_analytics.depth import get_spread
-from ob_analytics.visualization import plot
-from ob_analytics.visualization import _data
 
 result = Pipeline().run(sample_csv_path())
-spread = get_spread(result.depth_summary)
 
-fig = plot(
-    "depth_heatmap",
-    backend="plotly",
-    # col_bias is a power-law gamma: 1.0 (default) is linear so high-volume
-    # walls stand out; 0.1 brightens thin levels to expose near-touch
-    # structure in heavy-tailed books; <= 0 selects a log scale.
-    **_data.prepare_price_levels_data(
-        result.depth, spread, volume_scale=1e-8, col_bias=0.1, price_from=232
-    ),
-)
+# col_bias is a power-law gamma: 1.0 (default) is linear so high-volume walls
+# stand out; 0.1 brightens thin levels to expose near-touch structure in
+# heavy-tailed books; <= 0 selects a log scale.
+fig = result.plot("depth_heatmap", backend="plotly", col_bias=0.1)
 fig.show()
 fig.write_html("depth.html")
 ```
@@ -528,11 +522,10 @@ DataFrame.
 
 ```python
 from ob_analytics import compute_vpin
-from ob_analytics.visualization import plot, save_figure
-from ob_analytics.visualization import _data
+from ob_analytics.visualization import plot, save_figure, prepare
 
 vpin = compute_vpin(result.trades, bucket_volume=5.0)
-fig = plot("vpin", **_data.prepare_vpin_data(vpin, threshold=0.7))
+fig = plot("vpin", **prepare.vpin(vpin, threshold=0.7))
 save_figure(fig, "vpin.png")
 ```
 
@@ -540,13 +533,12 @@ save_figure(fig, "vpin.png")
 
 ```python
 from ob_analytics import compute_kyle_lambda
-from ob_analytics.visualization import plot, save_figure
-from ob_analytics.visualization import _data
+from ob_analytics.visualization import plot, save_figure, prepare
 
 kyle = compute_kyle_lambda(result.trades, window="5min")
 print(f"λ={kyle.lambda_:.6f}, t={kyle.t_stat:.2f}, R²={kyle.r_squared:.3f}")
 
-fig = plot("kyle_lambda", **_data.prepare_kyle_lambda_data(kyle))
+fig = plot("kyle_lambda", **prepare.kyle_lambda(kyle))
 save_figure(fig, "kyle_lambda.png")
 ```
 
@@ -554,11 +546,10 @@ save_figure(fig, "kyle_lambda.png")
 
 ```python
 from ob_analytics import order_flow_imbalance
-from ob_analytics.visualization import plot, save_figure
-from ob_analytics.visualization import _data
+from ob_analytics.visualization import plot, save_figure, prepare
 
 ofi = order_flow_imbalance(result.trades, window="1min")
-fig = plot("order_flow_imbalance", **_data.prepare_ofi_data(ofi, trades=result.trades))
+fig = plot("order_flow_imbalance", **prepare.ofi(ofi, trades=result.trades))
 save_figure(fig, "ofi.png")
 ```
 
