@@ -553,8 +553,34 @@ class TestPrepareVolumePercentiles:
         data = prepare_volume_percentiles_data(pd.DataFrame(cols))
         assert len(data["asks_cols"]) == 20
         assert len(data["colors_dict"]) == 40
-        assert len(data["legend_names"]) == 20
-        assert data["legend_names"][0] == "+1000bps"
+        # §3.7: legend collapsed to 3 representative depths per side
+        # (touch / mid / far), ordered touch-first.
+        assert len(data["legend_entries"]) == 6
+        assert len(data["legend_names"]) == 6
+        assert data["legend_names"][0] == "+0050bps"
+
+    def test_ramp_is_dark_at_touch(self) -> None:
+        # §3.7 importance ↦ salience: the near-touch band (index 0) is the
+        # darkest and fades outward to the far-depth band.
+        from ob_analytics.visualization._data import _volume_percentile_palette
+
+        w = np.array([0.2126, 0.7152, 0.0722])
+        lum = np.array([c[:3] for c in _volume_percentile_palette(10, hue="blue")]) @ w
+        assert lum[0] < lum[-1]
+
+    def test_two_hue_families_share_luminance(self) -> None:
+        # §3.7: asks (blue) and bids (orange) share a luminance ramp so they
+        # stay distinguishable in grayscale, but differ in hue in colour.
+        from ob_analytics.visualization._data import _volume_percentile_palette
+
+        w = np.array([0.2126, 0.7152, 0.0722])
+        blue = np.array([c[:3] for c in _volume_percentile_palette(10, "blue")]) @ w
+        orange = np.array([c[:3] for c in _volume_percentile_palette(10, "orange")]) @ w
+        assert np.allclose(blue, orange, atol=0.08)  # grayscale-equivalent
+        b0 = _volume_percentile_palette(2, "blue")[0]
+        o0 = _volume_percentile_palette(2, "orange")[0]
+        assert b0[2] > o0[2]  # blue family is bluer
+        assert o0[0] > b0[0]  # orange family is redder
 
 
 class TestPrepareEventsHistogram:
