@@ -53,13 +53,16 @@ def _cmd_process(args: argparse.Namespace) -> None:
         logger.error(str(exc))
         sys.exit(1)
 
-    if fmt_name == "lobster":
-        if args.trading_date is None:
-            logger.error("--trading-date is required for LOBSTER format")
-            sys.exit(1)
-        ctx = RunContext(trading_date=args.trading_date)
-    else:
-        ctx = RunContext()
+    # Ask the format what RunContext it needs rather than hard-coding "lobster".
+    required = getattr(fmt, "required_context", lambda: [])()
+    if "trading_date" in required and args.trading_date is None:
+        logger.error("--trading-date is required for the %s format", fmt_name)
+        sys.exit(1)
+    ctx = (
+        RunContext(trading_date=args.trading_date)
+        if args.trading_date is not None
+        else RunContext()
+    )
 
     config = PipelineConfig(**fmt.config_defaults())
     pipeline = Pipeline(config=config, format=fmt, ctx=ctx)
@@ -126,7 +129,17 @@ def _cmd_bitstamp_demo(args: argparse.Namespace) -> None:
     _setup_logging(args.verbose)
     from ob_analytics._demos import run_bitstamp_demo
 
-    run_bitstamp_demo(args.input, args.output, view=args.view)
+    run_bitstamp_demo(args.input, args.output, view=args.view, roundtrip=args.roundtrip)
+
+
+def _cmd_formats(args: argparse.Namespace) -> None:
+    """List the registered data formats and the context each requires."""
+    from ob_analytics.pipeline import FORMATS, list_formats
+
+    for name in list_formats():
+        required = getattr(FORMATS.get(name)(), "required_context", lambda: [])()
+        suffix = f"  (requires: {', '.join(required)})" if required else ""
+        print(f"{name}{suffix}")
 
 
 def _cmd_lobster_demo(args: argparse.Namespace) -> None:
@@ -210,8 +223,25 @@ def _generate_gallery_from_result(
     logger.info("Open in browser: file://{}", gallery_path.resolve())
 
 
+def _add_view_arg(parser: argparse.ArgumentParser) -> None:
+    """Add the shared ``--view`` gallery-resolution argument."""
+    parser.add_argument(
+        "--view",
+        default="both",
+        choices=["l2", "l3", "both", "comparison"],
+        help=(
+            "Gallery view: resolution level(s) to render "
+            "(l2|l3|both|comparison; default: both)"
+        ),
+    )
+
+
 def main() -> None:
     """Entry point for the ``ob-analytics`` CLI."""
+    from ob_analytics.pipeline import list_formats
+
+    formats = list_formats()
+
     parser = argparse.ArgumentParser(
         prog="ob-analytics",
         description="Limit order book analytics and visualization",
@@ -235,8 +265,8 @@ def main() -> None:
         "-f",
         "--format",
         default="bitstamp",
-        choices=["bitstamp", "lobster"],
-        help="Data format (default: bitstamp)",
+        choices=formats,
+        help=f"Data format (default: bitstamp; registered: {', '.join(formats)})",
     )
     p_process.add_argument(
         "-o",
@@ -255,15 +285,7 @@ def main() -> None:
         default=False,
         help="Also generate an HTML plot gallery",
     )
-    p_process.add_argument(
-        "--view",
-        default="both",
-        choices=["l2", "l3", "both", "comparison"],
-        help=(
-            "Gallery view: resolution level(s) to render "
-            "(l2|l3|both|comparison; default: both)"
-        ),
-    )
+    _add_view_arg(p_process)
     p_process.set_defaults(func=_cmd_process)
 
     # -- gallery --
@@ -295,15 +317,7 @@ def main() -> None:
         default=None,
         help="Gallery page title",
     )
-    p_gallery.add_argument(
-        "--view",
-        default="both",
-        choices=["l2", "l3", "both", "comparison"],
-        help=(
-            "Gallery view: resolution level(s) to render "
-            "(l2|l3|both|comparison; default: both)"
-        ),
-    )
+    _add_view_arg(p_gallery)
     p_gallery.set_defaults(func=_cmd_gallery)
 
     # -- bitstamp-demo --
@@ -323,14 +337,12 @@ def main() -> None:
         help="Output directory (default: ./bitstamp_output)",
     )
     p_bs.add_argument(
-        "--view",
-        default="both",
-        choices=["l2", "l3", "both", "comparison"],
-        help=(
-            "Gallery view: resolution level(s) to render "
-            "(l2|l3|both|comparison; default: both)"
-        ),
+        "--roundtrip",
+        action="store_true",
+        default=False,
+        help="Write then re-read the result to verify the round-trip (slower)",
     )
+    _add_view_arg(p_bs)
     p_bs.set_defaults(func=_cmd_bitstamp_demo)
 
     # -- lobster-demo --
@@ -353,15 +365,7 @@ def main() -> None:
         default=None,
         help="Output directory (default: ./lobster_output)",
     )
-    p_lob.add_argument(
-        "--view",
-        default="both",
-        choices=["l2", "l3", "both", "comparison"],
-        help=(
-            "Gallery view: resolution level(s) to render "
-            "(l2|l3|both|comparison; default: both)"
-        ),
-    )
+    _add_view_arg(p_lob)
     p_lob.set_defaults(func=_cmd_lobster_demo)
 
     # -- capture --
@@ -406,6 +410,13 @@ def main() -> None:
         help="List registered capturers and exit (ignores other flags)",
     )
     p_cap.set_defaults(func=_cmd_capture)
+
+    # -- formats --
+    p_fmt = subparsers.add_parser(
+        "formats",
+        help="List registered data formats (mirror of 'capture --list')",
+    )
+    p_fmt.set_defaults(func=_cmd_formats)
 
     args = parser.parse_args()
     args.func(args)

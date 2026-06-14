@@ -84,7 +84,7 @@ def run_bitstamp_demo(
     input_path: Path | str | None,
     output_dir: Path | str | None,
     *,
-    roundtrip: bool = True,
+    roundtrip: bool = False,
     view: str = "both",
 ) -> Path:
     """Run the Bitstamp demo pipeline.
@@ -97,7 +97,8 @@ def run_bitstamp_demo(
     output_dir
         Where to write parquet + gallery. Defaults to ./bitstamp_output.
     roundtrip
-        If True, perform a write/re-read verification step.
+        If True, perform a write/re-read verification step (runs the pipeline a
+        second time).  Off by default -- it only logs a ``match: True`` line.
     view
         Gallery view: ``l2``, ``l3``, ``both``, or ``comparison``. The
         ``comparison`` view renders L2-vs-L3 counterpart plots side by side.

@@ -207,3 +207,39 @@ class TestLobsterDemoSubcommand:
         assert r.returncode != 0
         combined = (r.stderr + r.stdout).lower()
         assert "trading-date" in combined or "required" in combined
+
+
+# ---------------------------------------------------------------------------
+# formats (WS-5.3)
+# ---------------------------------------------------------------------------
+
+
+class TestFormatsSubcommand:
+    def test_lists_registered_formats(self, cli_runner):
+        r = cli_runner("formats")
+        assert r.returncode == 0, r.stderr
+        assert "bitstamp" in r.stdout
+        assert "lobster" in r.stdout
+
+    def test_shows_required_context(self, cli_runner):
+        # LOBSTER advertises its trading_date requirement; bitstamp has none.
+        r = cli_runner("formats")
+        lobster_line = next(ln for ln in r.stdout.splitlines() if "lobster" in ln)
+        assert "trading_date" in lobster_line
+        bitstamp_line = next(ln for ln in r.stdout.splitlines() if "bitstamp" in ln)
+        assert "requires" not in bitstamp_line
+
+    def test_process_format_choices_are_dynamic(self, cli_runner):
+        # --format choices come from list_formats(), shown in --help.
+        r = cli_runner("process", "--help")
+        assert r.returncode == 0
+        assert "bitstamp" in r.stdout and "lobster" in r.stdout
+
+
+class TestRequiredContext:
+    def test_format_required_context(self) -> None:
+        from ob_analytics.bitstamp import BitstampFormat
+        from ob_analytics.lobster import LobsterFormat
+
+        assert BitstampFormat().required_context() == []
+        assert LobsterFormat().required_context() == ["trading_date"]
