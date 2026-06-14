@@ -1039,45 +1039,73 @@ def plotly_hidden_executions(data: dict) -> Any:
     )
     fig = _base_figure(go, title=title)
 
+    if has_hidden and not hidden.empty:
+        # Hue by aggressor side instead of a Reds-by-volume ramp: size already
+        # encodes volume (bounded via ``normalized_marker_areas``), so colouring
+        # by volume too washed typical prints out to near-white (roadmap §3.6).
+        sizes = mpl_marker_area_to_plotly_size(data["marker_area"])
+        direction = data.get("direction")
+        col_map = {"bid": _BID_COLOR, "ask": _ASK_COLOR}
+        if direction is not None:
+            for d in ("bid", "ask"):
+                mask = np.asarray(direction == d)
+                if not mask.any():
+                    continue
+                subset = hidden[mask]
+                fig.add_trace(
+                    go.Scatter(
+                        x=subset["timestamp"],
+                        y=subset["price"],
+                        mode="markers",
+                        customdata=subset["volume"],
+                        marker=dict(
+                            size=sizes[mask],
+                            color=col_map[d],
+                            opacity=0.55,
+                            line=dict(width=0.4, color="white"),
+                        ),
+                        name=f"Hidden ({d})",
+                        hovertemplate=(
+                            "Time: %{x}<br>Price: %{y:.2f}<br>"
+                            "Volume: %{customdata}<extra></extra>"
+                        ),
+                    )
+                )
+        else:
+            fig.add_trace(
+                go.Scatter(
+                    x=hidden["timestamp"],
+                    y=hidden["price"],
+                    mode="markers",
+                    customdata=hidden["volume"],
+                    marker=dict(
+                        size=sizes,
+                        color="#7f8c8d",
+                        opacity=0.55,
+                        line=dict(width=0.4, color="white"),
+                    ),
+                    name="Hidden executions",
+                    hovertemplate=(
+                        "Time: %{x}<br>Price: %{y:.2f}<br>"
+                        "Volume: %{customdata}<extra></extra>"
+                    ),
+                )
+            )
+
+    # Trade price drawn after the markers so it renders on top and stays legible.
     if not trades.empty:
         fig.add_trace(
             go.Scatter(
                 x=trades["timestamp"],
                 y=trades["price"],
                 mode="lines",
-                line=dict(color="#5dade2", width=1, shape="hv"),
+                line=dict(color="#222222", width=1, shape="hv"),
                 name="Trade price",
-                opacity=0.7,
+                opacity=0.9,
             )
         )
 
-    if has_hidden and not hidden.empty:
-        vol = hidden["volume"]
-        vol_max = float(vol.max()) if vol.max() > 0 else 1.0
-        marker_area = data["marker_area"]
-        fig.add_trace(
-            go.Scatter(
-                x=hidden["timestamp"],
-                y=hidden["price"],
-                mode="markers",
-                customdata=vol,
-                marker=dict(
-                    size=mpl_marker_area_to_plotly_size(marker_area),
-                    color=vol,
-                    colorscale="Reds",
-                    cmin=0,
-                    cmax=vol_max,
-                    opacity=0.6,
-                    line=dict(width=0.3, color="white"),
-                ),
-                name="Hidden executions",
-                hovertemplate=(
-                    "Time: %{x}<br>Price: %{y:.2f}<br>"
-                    "Volume: %{customdata}<extra></extra>"
-                ),
-            )
-        )
-    elif not has_hidden:
+    if not has_hidden:
         fig.add_annotation(
             text="No hidden execution events (raw_event_type == 5)",
             xref="paper",
