@@ -8,6 +8,12 @@ This page covers everyday usage. Skim the [Walkthrough](#walkthrough) to get
 something running on the bundled sample data, then jump to the recipe you
 need.
 
+Prefer a notebook? Two runnable tutorials live under
+[`docs/notebooks/`](https://github.com/mczielinski/ob-analytics/tree/main/docs/notebooks):
+`01_crypto_session.ipynb` (load → plot → flow toxicity) and
+`02_l3_microstructure.ipynb` (L2-vs-L3 faces). Both run on the bundled sample
+and are executed in CI, so they never drift from the API.
+
 | If you want to… | Go to |
 |-----------------|-------|
 | Run the pipeline on bundled data and plot it | [Walkthrough](#walkthrough) |
