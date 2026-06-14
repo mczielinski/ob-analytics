@@ -41,6 +41,8 @@ dev = [
     "types-seaborn>=0.13.2.20260518",
     "plotly>=6.8.0",
     "hypothesis>=6.100",
+    "nbmake>=1.5",
+    "ipykernel>=6.29",
 ]
 
 [tool.hatch.build.targets.sdist]

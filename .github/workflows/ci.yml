@@ -73,3 +73,15 @@ jobs:
       - run: uv python install 3.12
       - run: uv sync --group dev --extra interactive --extra live --python 3.12
       - run: uv run --group dev --extra interactive --extra live --python 3.12 pytest tests/ -q
+
+  # Execute the tutorial notebooks as living integration tests of the public
+  # API. Kept off the test matrix (own job) so notebook latency doesn't 3x.
+  notebooks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+      - run: uv sync --group dev --extra interactive
+      - run: uv run --group dev --extra interactive pytest --nbmake docs/notebooks/ --nbmake-timeout=180 -q
