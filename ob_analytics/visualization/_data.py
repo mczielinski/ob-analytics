@@ -683,7 +683,8 @@ def prepare_order_outcome_l3_data(
     volume_scale: float | None = None,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
-    bps_quantiles: tuple[float, float] = (0.05, 0.95),
+    bps_quantiles: tuple[float, float] = (0.05, 0.99),
+    min_positive_bps: float = 5.0,
 ) -> dict[str, Any]:
     """L3 (MBO) order outcome: each limit order as outcome vs placement.
 
@@ -699,8 +700,19 @@ def prepare_order_outcome_l3_data(
 
     Orders still resting at window end are censored and dropped.  Outcomes
     derive from the canonical ``fill`` column (the order's own executions),
-    so they reflect the *visible* book on every format.  Placement distance
-    is heavy-tailed, so it is quantile-clipped to *bps_quantiles*.
+    so they reflect the *visible* book on every format.
+
+    Placement distance is heavy-tailed on *both* tails, but the two tails are
+    not equally interesting: the deep (negative) tail is plentiful noise, while
+    the touch-improving (positive) tail is the rare, most-aggressive,
+    most-informative liquidity (roadmap §3.8).  A *symmetric* clip would land
+    the upper bound at roughly the median and erase that positive tail, so the
+    clip is **asymmetric**: ``lo = quantile(bps_quantiles[0])`` trims the deep
+    noise, while ``hi = max(quantile(bps_quantiles[1]), min_positive_bps)`` keeps
+    the touch-improving placements visible even when they sit far above the bulk.
+    Non-finite distances (an occasional ``inf`` from a near-zero touch reference)
+    are dropped before clipping so they neither distort the quantiles nor the
+    axis.
     """
     from ob_analytics.analytics import order_lifecycles
 
@@ -717,6 +729,7 @@ def prepare_order_outcome_l3_data(
         }
     )
     created = created[created["outcome"] != "resting"].dropna(subset=["distance_bps"])
+    created = created[np.isfinite(created["distance_bps"])]
 
     if volume_scale is None:
         volume_scale = (
@@ -728,7 +741,7 @@ def prepare_order_outcome_l3_data(
     if not created.empty:
         lo_q, hi_q = bps_quantiles
         bps_lo = created["distance_bps"].quantile(lo_q)
-        bps_hi = created["distance_bps"].quantile(hi_q)
+        bps_hi = max(created["distance_bps"].quantile(hi_q), min_positive_bps)
         created = created[
             (created["distance_bps"] >= bps_lo) & (created["distance_bps"] <= bps_hi)
         ]

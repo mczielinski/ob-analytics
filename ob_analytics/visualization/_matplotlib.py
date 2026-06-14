@@ -900,9 +900,11 @@ def mpl_order_outcome_per_order(
             edgecolors="none",
             label=label,
         )
-    ax.axvline(x=0, color="#888888", linestyle="--", linewidth=1)
+    # The touch: points right of it improved the best quote (the aggressive
+    # tail the asymmetric clip in the prepare fn keeps visible — roadmap §3.8).
+    ax.axvline(x=0, color="#888888", linestyle="--", linewidth=1, label="touch")
     ax.set_title("Order outcome by placement distance and size")
-    ax.set_xlabel("Placement distance from touch (bps)")
+    ax.set_xlabel("Placement distance from touch (bps)  -  >0 improved the touch")
     ax.set_ylabel("Order size")
     if any_pts:
         ax.legend(loc="upper right")

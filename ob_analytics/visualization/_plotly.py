@@ -782,8 +782,19 @@ def plotly_order_outcome_per_order(data: dict) -> Any:
                 name=label,
             )
         )
-    fig.add_vline(x=0, line_dash="dash", line_color="#888888", line_width=1)
-    fig.update_xaxes(title_text="Placement distance from touch (bps)")
+    # The touch: points right of it improved the best quote (the aggressive
+    # tail the asymmetric clip in the prepare fn keeps visible — roadmap §3.8).
+    fig.add_vline(
+        x=0,
+        line_dash="dash",
+        line_color="#888888",
+        line_width=1,
+        annotation_text="touch",
+        annotation_position="top",
+    )
+    fig.update_xaxes(
+        title_text="Placement distance from touch (bps)  -  >0 improved the touch"
+    )
     fig.update_yaxes(title_text="Order size")
     return fig
 

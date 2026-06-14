@@ -442,6 +442,50 @@ class TestPrepareOrderOutcomeL3:
         both = pd.concat([data["filled"], data["partial"], data["cancelled"]])
         assert both["marker_area"].between(10.0, 120.0).all()
 
+    def test_asymmetric_clip_keeps_touch_improving_tail(
+        self, sample_executed_orders: tuple[pd.DataFrame, pd.DataFrame]
+    ) -> None:
+        # §3.8: the upper bound is max(quantile, min_positive_bps), so the rare
+        # touch-improving placements survive even when they sit above the bulk.
+        # The fixture's most aggressive order (id 5, +3 bps) is above the q95 a
+        # symmetric clip would land at but below the positive-bps floor.
+        events, _ = sample_executed_orders
+        data = prepare_order_outcome_l3_data(
+            events, bps_quantiles=(0.05, 0.95), min_positive_bps=5.0
+        )
+        both = pd.concat([data["filled"], data["partial"], data["cancelled"]])
+        assert (both["distance_bps"] > 0).any()
+        assert 5 in both["id"].to_numpy()
+        assert both["distance_bps"].max() >= 3.0
+
+    def test_drops_non_finite_distance(
+        self, sample_executed_orders: tuple[pd.DataFrame, pd.DataFrame]
+    ) -> None:
+        # A near-zero touch reference can yield an inf placement distance; it
+        # must not reach the axis or distort the clip quantiles.
+        events, _ = sample_executed_orders
+        events = events.copy()
+        events.loc[events["id"] == 1, "aggressiveness_bps"] = np.inf
+        data = prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
+        both = pd.concat([data["filled"], data["partial"], data["cancelled"]])
+        assert np.isfinite(both["distance_bps"]).all()
+        assert 1 not in both["id"].to_numpy()
+
+    def test_clip_trims_deep_negative_tail(
+        self, sample_executed_orders: tuple[pd.DataFrame, pd.DataFrame]
+    ) -> None:
+        # The lower bound still trims the deep (negative) noise tail: a far-below
+        # placement is dropped while the touch-improving orders are retained.
+        events, _ = sample_executed_orders
+        events = events.copy()
+        events.loc[events["id"] == 6, "aggressiveness_bps"] = -1000.0
+        data = prepare_order_outcome_l3_data(
+            events, bps_quantiles=(0.05, 0.99), min_positive_bps=5.0
+        )
+        both = pd.concat([data["filled"], data["partial"], data["cancelled"]])
+        assert 6 not in both["id"].to_numpy()
+        assert (both["distance_bps"] > 0).any()
+
 
 class TestPrepareTradeTapeL3:
     def test_returns_sided_frames(
