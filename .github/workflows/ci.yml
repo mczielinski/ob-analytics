@@ -60,3 +60,16 @@ jobs:
           fail_ci_if_error: false
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  # macOS smoke: one Python, no coverage — catches platform-specific breakage
+  # (paths, matplotlib backend, wheels) that the ubuntu matrix can't.
+  macos-smoke:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --group dev --extra interactive --extra live --python 3.12
+      - run: uv run --group dev --extra interactive --extra live --python 3.12 pytest tests/ -q

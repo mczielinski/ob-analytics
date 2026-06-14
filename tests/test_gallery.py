@@ -199,15 +199,27 @@ class TestProject:
             analytics=[_metric_spec()],
         )
         cards = _project(model, "comparison", ["plotly", "matplotlib"])
-        # Only the comparable concept appears; analytics + L2-only are excluded.
-        assert len(cards) == 1
-        card = cards[0]
-        assert card.title == "Stub"
+        # The comparable concept + the single-variant concept both appear;
+        # only the level-less analytics are excluded from the comparison view.
+        assert len(cards) == 2
+        card = next(c for c in cards if c.title == "Stub")
         assert [p.level for p in card.panels] == [Level.L2, Level.L3]
         assert [p.stem for p in card.panels] == ["stub.L2", "stub.L3"]
         assert all(p.role == "equal" for p in card.panels)
         # Single backend axis -> plotly when available.
         assert {p.backend for p in card.panels} == {"plotly"}
+
+    def test_comparison_keeps_single_variant_as_one_column(self) -> None:
+        # §8.6: non-comparable concepts were silently dropped from the
+        # comparison view; now they render as a one-column "L2-only" card.
+        model = GalleryModel(
+            concepts=[_comparable_concept(), _l2_concept("only", "OnlyL2")]
+        )
+        cards = _project(model, "comparison", ["matplotlib"])
+        only = next(c for c in cards if c.title == "OnlyL2")
+        assert len(only.panels) == 1
+        assert only.panels[0].level == Level.L2
+        assert "L2-only" in only.panels[0].label
 
     def test_comparison_falls_back_to_matplotlib(self) -> None:
         model = GalleryModel(concepts=[_comparable_concept()])
