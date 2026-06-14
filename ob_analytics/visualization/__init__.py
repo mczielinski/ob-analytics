@@ -36,7 +36,8 @@ from ob_analytics.visualization._model import Level
 
 # `infer_volume_scale` is a stable, user-facing helper that gallery callers
 # import from this namespace; keep it as a public re-export. The `prepare_*`
-# helpers are strictly internal — access them via `_viz_data.prepare_*`.
+# implementations live in `_data`; their public, friendly-named re-exports are
+# the `prepare` namespace (lazily exposed via __getattr__ below).
 infer_volume_scale = _viz_data.infer_volume_scale
 
 
@@ -206,6 +207,10 @@ __all__ = [
     "Level",
     "RENDERERS",
     "register_plot_backend",
+    # One-line plotting from a PipelineResult
+    "plot_result",
+    "available_concepts",
+    "prepare",
     # Themes / persistence
     "PlotTheme",
     "DEFAULT_THEME",
@@ -216,3 +221,21 @@ __all__ = [
     "focus_window",
     "format_time_axis",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    """Lazily expose the result-level plotting API (PEP 562).
+
+    ``plot_result`` / ``available_concepts`` live in :mod:`.gallery`, which
+    imports :func:`plot` from this package; importing them eagerly here would
+    create a cycle.  ``prepare`` is re-exported lazily for symmetry.
+    """
+    if name in ("plot_result", "available_concepts"):
+        from ob_analytics.visualization import gallery
+
+        return getattr(gallery, name)
+    if name == "prepare":
+        # importlib (not ``from . import prepare``) so the submodule import does
+        # not re-enter this __getattr__ and recurse.
+        return importlib.import_module("ob_analytics.visualization.prepare")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
