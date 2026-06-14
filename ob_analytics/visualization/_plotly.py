@@ -965,7 +965,10 @@ def plotly_events_histogram(data: dict) -> Any:
             )
         )
 
-    fig.update_layout(barmode="group")
+    # Overlay (not "group"): grouped bars split each bin into side-by-side
+    # combs that misread as finer x-resolution; overlaid translucent bars
+    # compare the two distributions bin-for-bin (mirrors the mpl step face).
+    fig.update_layout(barmode="overlay")
     fig.update_xaxes(title_text=val.capitalize())
     fig.update_yaxes(title_text="Count")
     return fig
@@ -979,10 +982,17 @@ def plotly_vpin(data: dict) -> Any:
 
     fig = _base_figure(go, title="VPIN — Probability of Informed Trading")
 
+    # Honour the computed bucket width (was ignored, so plotly auto-sized bars
+    # and overlapped at sub-second cadence).  bar_width is a Timedelta on a date
+    # axis; go.Bar.width wants milliseconds.
+    bw = data.get("bar_width")
+    width_ms = bw.total_seconds() * 1000.0 if hasattr(bw, "total_seconds") else None
+
     fig.add_trace(
         go.Bar(
             x=vpin_df["timestamp_end"],
             y=vpin_df["vpin"],
+            width=width_ms,
             marker_color="#5dade2",
             opacity=0.4,
             name="Per-bucket VPIN",
