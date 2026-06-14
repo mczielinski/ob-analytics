@@ -506,11 +506,8 @@ def _mpl_book_bars(
 
     thickness = _book_bar_thickness(bids, asks) * 0.9
     # Windowing to the touch keeps bars tall, so L3 separators are always on.
-    sep = (
-        dict(edgecolor="white", linewidth=1.3)
-        if per_order
-        else dict(edgecolor="none", linewidth=0.0)
-    )
+    edgecolor = "white" if per_order else "none"
+    linewidth = 1.3 if per_order else 0.0
     for side, color, label in ((bids, _BID_COLOR, "bid"), (asks, _ASK_COLOR, "ask")):
         if side.empty:
             continue
@@ -522,7 +519,8 @@ def _mpl_book_bars(
             color=color,
             align="center",
             label=label,
-            **sep,
+            edgecolor=edgecolor,
+            linewidth=linewidth,
         )
 
     mid = book_mid(bids, asks)
