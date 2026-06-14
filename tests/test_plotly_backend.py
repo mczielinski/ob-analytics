@@ -145,10 +145,13 @@ class TestPlotlyTrades:
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 1
 
-    def test_has_price_trace(self, sample_trades: pd.DataFrame) -> None:
+    def test_has_lollipop_traces(self, sample_trades: pd.DataFrame) -> None:
+        # §3.4: signed lollipops by aggressor side, not one "Price" step line.
         data = prepare_trades_data(sample_trades)
         fig = plotly_trades(data)
-        assert fig.data[0].name == "Price"
+        names = {tr.name for tr in fig.data}
+        assert "buy (lifts ask)" in names
+        assert "sell (hits bid)" in names
 
     def test_l2_ylabel_is_price(self, sample_trades: pd.DataFrame) -> None:
         data = prepare_trades_data(sample_trades)

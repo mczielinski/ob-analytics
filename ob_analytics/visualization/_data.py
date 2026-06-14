@@ -120,6 +120,34 @@ def normalized_marker_areas(
     return lo + frac * (hi - lo)
 
 
+def lollipop_marker_areas(
+    volume: pd.Series | np.ndarray,
+    *,
+    lo: float = 14.0,
+    hi: float = 90.0,
+    ref_quantile: float = 0.95,
+) -> np.ndarray:
+    """Rank-3 (cube-root) matplotlib scatter ``s`` values for the trade tape.
+
+    The trade tape's whole point is that one whale print should *pop* without
+    drowning the small ones.  :func:`normalized_marker_areas` is linear, so a
+    median print and a 10x print look nearly identical at the bottom of the
+    ``[lo, hi]`` band; raw area (rank-5) goes the other way and visually
+    compresses everything large.  This sits between them: the marker *diameter*
+    scales as the cube root of volume (a "rank-3" encoding in the bundle's
+    taxonomy), i.e. area as ``volume**(2/3)``, mapped into ``[lo, hi]`` against
+    *ref_quantile* so the tail saturates rather than blowing up the axis.
+    """
+    arr = np.asarray(volume, dtype=float)
+    if arr.size == 0:
+        return np.empty(0, dtype=float)
+    ref = float(np.nanquantile(arr, ref_quantile))
+    if not np.isfinite(ref) or ref <= 0:
+        return np.full(arr.shape, lo, dtype=float)
+    frac = np.clip(np.cbrt(np.clip(arr, 0.0, None) / ref), 0.0, 1.0)
+    return lo + frac * (hi - lo)
+
+
 def mpl_marker_area_to_plotly_size(area: np.ndarray) -> np.ndarray:
     """Convert matplotlib scatter areas (pt²) to plotly marker diameters (px)."""
     return np.sqrt(np.maximum(area, 0.0)) * 0.8
@@ -235,21 +263,90 @@ def prepare_time_series_data(
     return {"df": df, "title": title, "y_label": y_label}
 
 
+def _trade_tape_mid(
+    trades: pd.DataFrame,
+    spread: pd.DataFrame | None,
+) -> pd.DataFrame:
+    """Reference mid line for the trade tape, one row per trade timestamp.
+
+    Lollipop stems hang off a mid/microprice line.  When a *spread* frame is
+    available (``best_bid_price`` / ``best_ask_price``), the anchor is the true
+    ``(bid + ask) / 2`` sampled as-of each trade.  Otherwise the tape is
+    self-contained and the anchor is a rolling-median proxy of the trade price
+    itself -- a smooth spine that still lets buys sit above and sells below
+    without pretending to be the book mid.
+    """
+    out = trades[["timestamp"]].copy()
+    if spread is not None and not spread.empty:
+        sp = spread[["timestamp", "best_bid_price", "best_ask_price"]].dropna()
+        if not sp.empty:
+            sp = sp.sort_values("timestamp", kind="stable")
+            sp["mid"] = (sp["best_bid_price"] + sp["best_ask_price"]) / 2.0
+            merged = pd.merge_asof(
+                out.sort_values("timestamp", kind="stable"),
+                sp[["timestamp", "mid"]],
+                on="timestamp",
+                direction="nearest",
+            )
+            out["mid"] = merged.set_index(out.sort_values("timestamp").index)["mid"]
+            if out["mid"].notna().any():
+                return out
+    # Fallback: rolling median of trade price (centered, robust to the spike).
+    n = len(out)
+    window = max(3, min(21, n // 5 or 1))
+    out["mid"] = (
+        trades["price"]
+        .rolling(window=window, center=True, min_periods=1)
+        .median()
+        .to_numpy()
+    )
+    return out
+
+
 def prepare_trades_data(
     trades: pd.DataFrame,
+    spread: pd.DataFrame | None = None,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
 ) -> dict[str, Any]:
-    """Prepare data for a trade-price step plot."""
+    """Prepare data for the L2 signed-lollipop trade tape.
+
+    Each trade is one lollipop: a stem from the mid/microprice line up to the
+    execution price (buys lift the ask, so they sit above; sells hit the bid,
+    below), tipped by a marker whose size encodes the trade volume on a
+    rank-3 (cube-root) scale.  The price axis is padded to the *data extent*
+    within the time window -- trade prices are **never** quantile-clipped, so a
+    rare spike print stays fully visible (roadmap §3.4).
+
+    Pass *spread* (e.g. :func:`ob_analytics.depth.get_spread`) to anchor stems
+    on the true book mid; without it, a rolling-median price proxy is used.
+    """
     start_time, end_time = _default_start_end(trades, start_time, end_time)
     filtered = trades[
         (trades["timestamp"] >= start_time) & (trades["timestamp"] <= end_time)
     ]
     _, y_breaks = _price_axis_breaks(
-        filtered["price"].min(),
-        filtered["price"].max(),
+        filtered["price"].min() if not filtered.empty else 0.0,
+        filtered["price"].max() if not filtered.empty else 1.0,
     )
-    return {"filtered_trades": filtered, "y_breaks": y_breaks}
+
+    mid_line = _trade_tape_mid(filtered, spread)
+    tape = filtered[["timestamp", "price", "volume", "direction"]].copy()
+    tape["mid"] = mid_line["mid"].to_numpy()
+    tape["marker_area"] = lollipop_marker_areas(tape["volume"])
+
+    # No clipping: the y-range is the full price extent within the window, so
+    # the prints a tape exists to show (spikes) are never cut mid-marker.
+    y_range = price_y_range(filtered["price"]) if not filtered.empty else None
+
+    return {
+        "filtered_trades": filtered,
+        "y_breaks": y_breaks,
+        "buys": tape[tape["direction"] == "buy"],
+        "sells": tape[tape["direction"] == "sell"],
+        "mid_line": mid_line.sort_values("timestamp", kind="stable"),
+        "y_range": y_range,
+    }
 
 
 def prepare_price_levels_data(
@@ -623,23 +720,57 @@ def prepare_order_outcome_l3_data(
     }
 
 
+def _per_second_vwap(tr: pd.DataFrame) -> pd.DataFrame:
+    """Collapse a tape to one volume-weighted lollipop per (second, side).
+
+    Dense tapes (LOBSTER: tens of thousands of prints) saturate into an
+    unreadable smear of overlapping markers.  Bucketing to one-second VWAPs
+    keeps the shape of the tape -- when and on which side size traded -- while
+    cutting the marker count by one to two orders of magnitude.  ``mid`` and
+    ``marker_area`` are recomputed downstream against the aggregated rows.
+    """
+    if tr.empty:
+        return tr.iloc[0:0][["timestamp", "price", "volume", "direction"]]
+    g = tr.assign(_sec=tr["timestamp"].dt.floor("1s"))
+    g = g.assign(_pv=g["price"] * g["volume"])
+    agg = (
+        g.groupby(["_sec", "direction"], observed=True)
+        .agg(volume=("volume", "sum"), pv=("_pv", "sum"))
+        .reset_index()
+    )
+    agg = agg[agg["volume"] > 0]
+    agg["price"] = agg["pv"] / agg["volume"]
+    agg = agg.rename(columns={"_sec": "timestamp"}).drop(columns="pv")
+    return agg[["timestamp", "price", "volume", "direction"]]
+
+
 def prepare_trade_tape_l3_data(
     events: pd.DataFrame,
     trades: pd.DataFrame,
+    spread: pd.DataFrame | None = None,
     volume_scale: float | None = None,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
     price_from: float | None = None,
     price_to: float | None = None,
+    density_threshold: int = 1500,
 ) -> dict[str, Any]:
-    """L3 (MBO) trade tape: executions plus each maker order's resting bar.
+    """L3 (MBO) signed-lollipop trade tape with maker resting spans.
 
-    The L2 tape shows executions over time (price, volume).  The L3 face adds,
-    for every execution, the life of the *maker* order it consumed: a horizontal
-    bar from that order's creation to the fill, drawn at the maker's price and
-    coloured by the taker's aggressing side (buy/sell).  This reveals how long
-    the resting liquidity behind each trade had waited -- invisible in the
-    aggregate tape.
+    The L2 tape shows each execution as a signed lollipop (stem from the mid to
+    the price, marker sized by volume, coloured by aggressor side).  The L3 face
+    keeps those lollipops and adds, for every execution, the life of the *maker*
+    order it consumed: a thin horizontal span from that order's creation to the
+    fill, drawn at the maker's price -- the L3 differentiator, revealing how long
+    the resting liquidity behind each trade had waited.
+
+    Trade prices are **never** quantile-clipped (roadmap §3.4): the y-axis is
+    padded to the data extent within the time window, so spike prints stay fully
+    visible.  Pass explicit *price_from*/*price_to* only to crop deliberately.
+
+    When the window holds more than *density_threshold* executions the lollipops
+    are aggregated to one-second VWAPs (``dense=True``); the per-trade maker
+    spans are still returned so the renderer can draw them thin underneath.
     """
     start_time, end_time = _default_start_end(trades, start_time, end_time)
     tr = trades[
@@ -658,23 +789,44 @@ def prepare_trade_tape_l3_data(
         event_to_id, left_on="maker_event_id", right_on="event_id", how="inner"
     ).merge(created_ts, on="id", how="inner")
 
+    # Optional deliberate price crop only; default keeps every print on-axis.
     if not tr.empty:
-        if price_from is None:
-            price_from = tr["price"].quantile(0.01)
-        if price_to is None:
-            price_to = tr["price"].quantile(0.99)
-        tr = tr[(tr["price"] >= price_from) & (tr["price"] <= price_to)]
+        if price_from is not None:
+            tr = tr[tr["price"] >= price_from]
+        if price_to is not None:
+            tr = tr[tr["price"] <= price_to]
 
     if volume_scale is None:
         volume_scale = infer_volume_scale(tr["volume"]) if not tr.empty else 1.0
     tr = tr.copy()
     tr["volume"] = tr["volume"] * volume_scale
-    tr["marker_area"] = normalized_marker_areas(tr["volume"])
 
-    y_range = None if tr.empty else (float(tr["price"].min()), float(tr["price"].max()))
+    mid_line = _trade_tape_mid(tr, spread)
+    tr["mid"] = mid_line["mid"].to_numpy()
+    tr["marker_area"] = lollipop_marker_areas(tr["volume"])
+
+    dense = len(tr) > density_threshold
+    if dense:
+        agg = _per_second_vwap(tr)
+        agg_mid = _trade_tape_mid(agg, spread)
+        agg["mid"] = agg_mid["mid"].to_numpy()
+        agg["marker_area"] = lollipop_marker_areas(agg["volume"])
+        lolli_buys = agg[agg["direction"] == "buy"]
+        lolli_sells = agg[agg["direction"] == "sell"]
+    else:
+        lolli_buys = tr[tr["direction"] == "buy"]
+        lolli_sells = tr[tr["direction"] == "sell"]
+
+    # y-range spans every print (and its mid), never a quantile clip.
+    y_range = price_y_range(tr["price"], mid_line["mid"]) if not tr.empty else None
+
     return {
         "buys": tr[tr["direction"] == "buy"],
         "sells": tr[tr["direction"] == "sell"],
+        "lolli_buys": lolli_buys,
+        "lolli_sells": lolli_sells,
+        "mid_line": mid_line.sort_values("timestamp", kind="stable"),
+        "dense": dense,
         "volume_scale": volume_scale,
         "y_range": y_range,
     }
