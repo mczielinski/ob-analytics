@@ -1228,9 +1228,18 @@ def prepare_hidden_executions_data(
         "hidden": hidden,
         "has_hidden": has_hidden and not hidden.empty,
         "y_range": price_y_range(*price_series),
-        "marker_area": volume_marker_areas(hidden["volume"])
+        # Bounded, outlier-robust sizes: hidden share volumes are heavy-tailed
+        # (one whale print dwarfs the median), so raw ``volume * scale`` blew up
+        # into page-filling blobs.  ``normalized_marker_areas`` caps the spread
+        # so every print reads as a discrete marker (roadmap §3.6).
+        "marker_area": normalized_marker_areas(hidden["volume"])
         if not hidden.empty
         else np.array([]),
+        # Aggressor side of the resting hidden order, so renderers can hue by
+        # side (bid/ask) instead of double-encoding volume in colour.
+        "direction": hidden["direction"]
+        if not hidden.empty and "direction" in hidden.columns
+        else None,
     }
 
 

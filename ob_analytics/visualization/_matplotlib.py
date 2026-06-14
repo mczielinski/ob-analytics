@@ -1184,34 +1184,45 @@ def mpl_hidden_executions(
 
     fig, ax = _create_axes(ax, figsize=(12, 6), theme=theme)
 
+    if has_hidden and not hidden.empty:
+        # Hue by aggressor side (bid/ask) -- size already encodes volume, so a
+        # Reds-by-volume ramp double-encoded it and washed typical prints out to
+        # near-white (roadmap §3.6).  Fall back to a single neutral hue when no
+        # direction is available.  A thin contrasting edge keeps overlapping
+        # prints readable as discrete events.
+        neutral = "#7f8c8d"
+        direction = data.get("direction")
+        if direction is not None:
+            colors = direction.map({"bid": _BID_COLOR, "ask": _ASK_COLOR})
+            colors = colors.where(colors.notna(), neutral).to_numpy()
+        else:
+            colors = neutral
+        ax.scatter(
+            mdates.date2num(hidden["timestamp"]),
+            hidden["price"],
+            s=data["marker_area"],
+            c=colors,
+            alpha=0.55,
+            edgecolors="white",
+            linewidths=0.4,
+            zorder=2,
+        )
+
+    # Price line drawn above the markers so it stays legible against dense
+    # overlapping prints.
     if not trades.empty:
         ax.step(
-            trades["timestamp"],
+            mdates.date2num(trades["timestamp"]),
             trades["price"],
             where="post",
-            color="#5dade2",
-            linewidth=1,
-            alpha=0.7,
+            color="#222222",
+            linewidth=1.0,
+            alpha=0.9,
             label="Trade price",
+            zorder=3,
         )
 
     if has_hidden and not hidden.empty:
-        vol = hidden["volume"]
-        vol_max = float(vol.max()) if vol.max() > 0 else 1.0
-        ax.scatter(
-            hidden["timestamp"],
-            hidden["price"],
-            s=data["marker_area"],
-            c=vol,
-            cmap="Reds",
-            vmin=0,
-            vmax=vol_max,
-            alpha=0.6,
-            edgecolors="white",
-            linewidths=0.3,
-            label="Hidden executions",
-            zorder=3,
-        )
         ax.set_title("Hidden Order Executions")
     else:
         ax.set_title("Hidden Order Executions (no hidden execution data)")
@@ -1232,7 +1243,20 @@ def mpl_hidden_executions(
     y_range = data.get("y_range")
     if y_range is not None:
         ax.set_ylim(y_range)
-    ax.legend(loc="upper left")
+
+    handles, labels = ax.get_legend_handles_labels()
+    if has_hidden and not hidden.empty:
+        if data.get("direction") is not None:
+            handles += [
+                Patch(facecolor=_BID_COLOR, edgecolor="white", label="Hidden (bid)"),
+                Patch(facecolor=_ASK_COLOR, edgecolor="white", label="Hidden (ask)"),
+            ]
+        else:
+            handles.append(
+                Patch(facecolor="#7f8c8d", edgecolor="white", label="Hidden executions")
+            )
+    if handles:
+        ax.legend(handles=handles, loc="upper left")
     fig.tight_layout()
     return fig
 

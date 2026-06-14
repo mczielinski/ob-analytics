@@ -13,6 +13,7 @@ from ob_analytics.visualization._data import (
     prepare_cancellations_l3_data,
     prepare_event_map_data,
     prepare_events_histogram_data,
+    prepare_hidden_executions_data,
     prepare_kyle_lambda_data,
     prepare_liquidity_at_touch_data,
     prepare_ofi_data,
@@ -629,3 +630,60 @@ class TestPrepareKyleLambda:
         assert data["lambda_"] == 0.01
         assert data["r_squared"] == 0.5
         assert len(data["reg_df"]) == 3
+
+
+class TestPrepareHiddenExecutions:
+    @staticmethod
+    def _frames(with_hidden: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
+        ts = pd.Timestamp("2015-05-01 01:00:00")
+        trades = pd.DataFrame(
+            {
+                "timestamp": [ts + pd.Timedelta(seconds=i) for i in range(4)],
+                "price": [100.0, 100.1, 100.0, 99.9],
+                "volume": [10.0, 20.0, 15.0, 25.0],
+                "direction": ["buy", "sell", "buy", "sell"],
+            }
+        )
+        cols = ["timestamp", "price", "volume", "direction", "raw_event_type"]
+        if with_hidden:
+            # Heavy-tailed volume: one whale print dwarfs the rest.
+            events = pd.DataFrame(
+                {
+                    "timestamp": [ts + pd.Timedelta(seconds=i) for i in range(4)],
+                    "price": [100.05, 100.0, 99.95, 100.02],
+                    "volume": [5.0, 50.0, 100.0, 5000.0],
+                    "direction": ["ask", "bid", "ask", "bid"],
+                    "raw_event_type": [5, 5, 5, 5],
+                }
+            )
+        else:
+            events = pd.DataFrame({c: [] for c in cols})
+        return events, trades
+
+    def test_marker_area_is_bounded(self) -> None:
+        # The whole point of §3.6: heavy-tailed volume must map to bounded
+        # marker areas (not raw ``volume * 2`` blobs).
+        events, trades = self._frames(with_hidden=True)
+        data = prepare_hidden_executions_data(events, trades)
+        assert data["has_hidden"]
+        areas = data["marker_area"]
+        assert areas.size == 4
+        assert areas.min() >= 10.0
+        assert areas.max() <= 120.0
+        # The 5000-volume whale must not produce a >120 pt² blob.
+        assert float(areas.max()) <= 120.0
+
+    def test_exposes_direction(self) -> None:
+        events, trades = self._frames(with_hidden=True)
+        data = prepare_hidden_executions_data(events, trades)
+        assert data["direction"] is not None
+        assert set(data["direction"].unique()) <= {"bid", "ask"}
+        # Aligned 1:1 with the hidden rows so renderers can hue per marker.
+        assert len(data["direction"]) == len(data["hidden"])
+
+    def test_no_hidden_returns_empty_markers(self) -> None:
+        events, trades = self._frames(with_hidden=False)
+        data = prepare_hidden_executions_data(events, trades)
+        assert not data["has_hidden"]
+        assert data["marker_area"].size == 0
+        assert data["direction"] is None
