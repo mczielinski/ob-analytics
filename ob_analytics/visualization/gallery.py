@@ -728,14 +728,18 @@ def _project(
 
     if view == "comparison":
         backend = _comparison_backend(backends)
-        cards: list[_Card] = []
+        cards = []
         for concept in model.concepts:
-            if not concept.comparable:
-                continue
+            # Comparable concepts get an L2|L3 column pair; single-variant
+            # concepts get a one-column card labeled "L2-only" / "L3-only"
+            # rather than being dropped from the view silently.
             panels = []
-            for level in (Level.L2, Level.L3):
-                spec = concept.at(level)
-                assert spec is not None  # comparable => both variants exist
+            for level, spec in sorted(
+                concept.variants.items(), key=lambda kv: kv[0].value
+            ):
+                label = _LEVEL_LABEL[level]
+                if not concept.comparable:
+                    label = f"{label}  ·  {level.value}-only"
                 panels.append(
                     _Panel(
                         concept=concept.key,
@@ -744,7 +748,7 @@ def _project(
                         prep_kwargs=spec.prep_kwargs,
                         backend=backend,
                         stem=f"{concept.key}.{level}",
-                        label=_LEVEL_LABEL[level],
+                        label=label,
                         panel_cls=_panel_cls(backend),
                         role="equal",
                     )
