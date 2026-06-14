@@ -987,9 +987,8 @@ def mpl_volume_percentiles(
     bids_cumsum_neg = data["bids_cumsum_neg"]
     asks_cols = data["asks_cols"]
     bids_cols = data["bids_cols"]
-    all_cols = data["all_cols"]
     colors_dict = data["colors_dict"]
-    legend_names = data["legend_names"]
+    legend_entries = data["legend_entries"]
     max_ask = data["max_ask"]
     max_bid = data["max_bid"]
     volume_scale = data["volume_scale"]
@@ -1000,8 +999,10 @@ def mpl_volume_percentiles(
 
     fig, ax = _create_axes(ax, figsize=(12, 8), theme=theme)
 
+    # Plot date2num floats (not the DatetimeIndex) so the axis stays off
+    # matplotlib's slow date unit-converter; format_time_axis sets the ticks.
+    x = mdates.date2num(asks_cumsum.index)
     prev = np.zeros(len(asks_cumsum))
-    x = asks_cumsum.index
     for percentile in asks_cols:
         current = asks_cumsum[percentile].values
         ax.fill_between(
@@ -1014,8 +1015,8 @@ def mpl_volume_percentiles(
         )
         prev = current
 
+    x = mdates.date2num(bids_cumsum_neg.index)
     prev = np.zeros(len(bids_cumsum_neg))
-    x = bids_cumsum_neg.index
     for percentile in bids_cols:
         current = bids_cumsum_neg[percentile].values
         ax.fill_between(
@@ -1029,25 +1030,27 @@ def mpl_volume_percentiles(
         prev = current
 
     if side_line:
-        ax.axhline(y=0, color="#000000", linewidth=0.1)
+        ax.axhline(y=0, color="#000000", linewidth=0.6)
 
     y_range = volume_scale * max(max_ask, max_bid)
     ax.set_ylim(-y_range, y_range)
     ax.set_xlabel("time")
+    ax.set_ylabel("cumulative volume  (bid ↓ / ask ↑)")
     format_time_axis(ax)
 
-    legend_elements = []
-    for col, label in zip(all_cols, legend_names):
-        patch = Patch(
-            facecolor=colors_dict[col],
+    # Collapsed legend: a handful of representative depths per side (touch ->
+    # far) instead of 2N swatches.  Hue = side, luminance = distance to touch.
+    legend_elements = [
+        Patch(
+            facecolor=color,
             edgecolor="black" if perc_line else None,
             label=label,
         )
-        legend_elements.append(patch)
-
+        for label, color in legend_entries
+    ]
     ax.legend(
         handles=legend_elements,
-        title="depth         \n",
+        title="depth from touch",
         loc="center left",
         bbox_to_anchor=(1.01, 0.5),
         ncol=1,

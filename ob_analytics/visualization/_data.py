@@ -153,21 +153,43 @@ def mpl_marker_area_to_plotly_size(area: np.ndarray) -> np.ndarray:
     return np.sqrt(np.maximum(area, 0.0)) * 0.8
 
 
-def _volume_percentile_palette(
-    n: int,
-) -> tuple[tuple[float, float, float, float], ...]:
-    """Volume-percentile gradient, shared by every rendering backend.
+# Per-side (dark touch anchor, pale far anchor) for the depth ramp.  The two
+# anchors of each family sit at near-identical luminance to their counterpart
+# in the other family (Δlum ≤ 0.02 across the whole ramp), so the *luminance*
+# ramp is shared — both sides read dark→light from touch outward in grayscale —
+# while the *hue* (Okabe–Ito blue vs vermillion, CVD-safe) tells asks from bids.
+_VP_HUE_ANCHORS: dict[
+    str, tuple[tuple[float, float, float], tuple[float, float, float]]
+] = {
+    # asks — blue family (#08519C → #DEEBF7)
+    "blue": ((0.031, 0.318, 0.612), (0.871, 0.921, 0.969)),
+    # bids — vermillion/orange family (#A63603 → #FDE7CE)
+    "orange": ((0.651, 0.212, 0.012), (0.992, 0.906, 0.808)),
+}
 
-    Percentile rank is ordered data, so the *n* steps walk monotonically in
-    luminance (pale → saturated blue) — hue carries no order.  Ramp direction
-    and per-side hue split are revisited in roadmap §3.7 (docs/plans/).
+
+def _volume_percentile_palette(
+    n: int, hue: str = "blue"
+) -> tuple[tuple[float, float, float, float], ...]:
+    """Depth-from-touch gradient for one book side, shared by every backend.
+
+    Distance-from-touch is ordered, so the *n* steps walk monotonically in
+    luminance — but **importance ↦ salience**: index ``0`` is the near-touch
+    band (most actionable liquidity) and is the *darkest*/most saturated,
+    fading outward to a pale tint at the far-depth band (index ``n - 1``).
+    This inverts the legacy pale-at-touch ramp (roadmap §3.7).
+
+    *hue* selects the colour family (``"blue"`` for asks, ``"orange"`` for
+    bids).  Both families share a luminance ramp so the two sides stay
+    distinguishable in grayscale print while remaining CVD-safe in colour.
     """
+    dark, pale = _VP_HUE_ANCHORS.get(hue, _VP_HUE_ANCHORS["blue"])
     span = max(n - 1, 1)
     return tuple(
         (
-            0.88 + (0.03 - 0.88) * (i / span),
-            0.92 + (0.19 - 0.92) * (i / span),
-            0.98 + (0.42 - 0.98) * (i / span),
+            dark[0] + (pale[0] - dark[0]) * (i / span),
+            dark[1] + (pale[1] - dark[1]) * (i / span),
+            dark[2] + (pale[2] - dark[2]) * (i / span),
             1.0,
         )
         for i in range(n)
@@ -1188,7 +1210,7 @@ def prepare_volume_percentiles_data(
     )
     melted_asks["percentile"] = pd.Categorical(
         melted_asks["percentile"],
-        categories=ask_names_fmt[::-1],
+        categories=ask_names_fmt,
         ordered=True,
     )
     melted_asks["liquidity"] *= volume_scale
@@ -1201,21 +1223,17 @@ def prepare_volume_percentiles_data(
     )
     melted_bids["percentile"] = pd.Categorical(
         melted_bids["percentile"],
-        categories=bid_names_fmt[::-1],
+        categories=bid_names_fmt,
         ordered=True,
     )
     melted_bids["liquidity"] *= volume_scale
 
-    # Two copies of the shared palette: one for the ask columns, one for
-    # the bid columns (2N entries total, matching all_cols below).
-    col_pal = list(_volume_percentile_palette(len(bps_levels))) * 2
-
-    # Every other bin, outermost first per side (matches the legacy fixed
-    # labels at the default 25x20 configuration).
-    desc = bps_levels[::-1]
-    legend_names = [f"+{b:0{pad}d}bps" for b in desc[::2]] + [
-        f"-{b:0{pad}d}bps" for b in desc[::2][::-1]
-    ]
+    # One ramp per side, both indexed touch (0, darkest) -> far (light).  The
+    # ask/bid columns below are ordered touch-first to match, so the near-touch
+    # band sits against the zero line and is the most salient (roadmap §3.7).
+    n_bps = len(bps_levels)
+    ask_pal = list(_volume_percentile_palette(n_bps, hue="blue"))
+    bid_pal = list(_volume_percentile_palette(n_bps, hue="orange"))
 
     asks_pivot = melted_asks.pivot(
         index="timestamp",
@@ -1227,8 +1245,10 @@ def prepare_volume_percentiles_data(
         columns="percentile",
         values="liquidity",
     )
-    asks_pivot = asks_pivot[ask_names_fmt[::-1]]
-    bids_pivot = bids_pivot[bid_names_fmt[::-1]]
+    # Touch -> far ordering: cumsum then stacks the near-touch bin first
+    # (adjacent to y=0) and accumulates outward.
+    asks_pivot = asks_pivot[ask_names_fmt]
+    bids_pivot = bids_pivot[bid_names_fmt]
 
     asks_cumsum = asks_pivot.cumsum(axis=1)
     bids_cumsum = bids_pivot.cumsum(axis=1)
@@ -1237,7 +1257,18 @@ def prepare_volume_percentiles_data(
     asks_cols = asks_cumsum.columns.tolist()
     bids_cols = bids_cumsum.columns.tolist()
     all_cols = asks_cols + bids_cols
-    colors_dict = dict(zip(all_cols, col_pal))
+    colors_dict = dict(zip(asks_cols, ask_pal))
+    colors_dict.update(zip(bids_cols, bid_pal))
+
+    # Collapsed legend: instead of 2N entries, three representative depths per
+    # side (touch / mid / far) -> 6 swatches that show both the per-side hue
+    # and the touch->far luminance fade.  Each entry is (label, rgba).
+    rep_idx = sorted({0, n_bps // 2, n_bps - 1})
+    legend_entries = [(f"+{bps_levels[i]:0{pad}d}bps", ask_pal[i]) for i in rep_idx] + [
+        (f"-{bps_levels[i]:0{pad}d}bps", bid_pal[i]) for i in rep_idx
+    ]
+    # Back-compat: the flat label list (renderers prefer ``legend_entries``).
+    legend_names = [label for label, _ in legend_entries]
 
     return {
         "asks_cumsum": asks_cumsum,
@@ -1246,6 +1277,7 @@ def prepare_volume_percentiles_data(
         "bids_cols": bids_cols,
         "all_cols": all_cols,
         "colors_dict": colors_dict,
+        "legend_entries": legend_entries,
         "legend_names": legend_names,
         "max_ask": max_ask,
         "max_bid": max_bid,
