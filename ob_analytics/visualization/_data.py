@@ -179,9 +179,10 @@ def _volume_percentile_palette(
     fading outward to a pale tint at the far-depth band (index ``n - 1``).
     This inverts the legacy pale-at-touch ramp (roadmap §3.7).
 
-    *hue* selects the colour family (``"blue"`` for asks, ``"orange"`` for
-    bids).  Both families share a luminance ramp so the two sides stay
-    distinguishable in grayscale print while remaining CVD-safe in colour.
+    *hue* selects the colour family (``"blue"`` for bids, ``"orange"`` for
+    asks -- the package-wide CVD convention).  Both families share a luminance
+    ramp so the two sides stay distinguishable in grayscale print while
+    remaining CVD-safe in colour.
     """
     dark, pale = _VP_HUE_ANCHORS.get(hue, _VP_HUE_ANCHORS["blue"])
     span = max(n - 1, 1)
@@ -1426,8 +1427,10 @@ def prepare_volume_percentiles_data(
     # ask/bid columns below are ordered touch-first to match, so the near-touch
     # band sits against the zero line and is the most salient (roadmap §3.7).
     n_bps = len(bps_levels)
-    ask_pal = list(_volume_percentile_palette(n_bps, hue="blue"))
-    bid_pal = list(_volume_percentile_palette(n_bps, hue="orange"))
+    # Match the package CVD palette used by every other face: bid = blue,
+    # ask = orange (was inverted here, the lone exception).
+    ask_pal = list(_volume_percentile_palette(n_bps, hue="orange"))
+    bid_pal = list(_volume_percentile_palette(n_bps, hue="blue"))
 
     asks_pivot = melted_asks.pivot(
         index="timestamp",
