@@ -478,6 +478,26 @@ def build_gallery_model(
                 ),
             )
         )
+        concepts.append(
+            _l2(
+                "price_view",
+                "Price View",
+                "price_view",
+                _viz_data.prepare_price_view_data,
+                {
+                    "depth_summary": depth_summary_offset,
+                    "trades": trades,
+                    "start_time": zoom_start,
+                    "end_time": zoom_end,
+                },
+                note=(
+                    "The spread as a ribbon (best bid to best ask) with the "
+                    "volume-weighted microprice through it - it leans toward "
+                    "the side with the heavier opposite book (where price is "
+                    "likely to go). Dots are executions by aggressor side."
+                ),
+            )
+        )
 
     # Events histogram (price). Clip to the shared mid-anchored focus window so
     # the near-touch distribution stays legible: even q01-q99 of a heavy-tailed

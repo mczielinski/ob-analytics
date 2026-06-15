@@ -1024,6 +1024,70 @@ def mpl_liquidity_at_touch_per_order(
     return fig
 
 
+def mpl_price_view(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """L2 price view: spread ribbon + volume-weighted microprice over time."""
+    fig, ax = _create_axes(ax, figsize=(11, 6), theme=theme)
+    x = mdates.date2num(data["timestamp"])
+    bid = data["best_bid_price"]
+    ask = data["best_ask_price"]
+
+    ax.fill_between(
+        x, bid, ask, step="post", color="#9aa0a6", alpha=0.25, label="spread"
+    )
+    ax.step(x, bid, where="post", color=_BID_COLOR, linewidth=0.8, alpha=0.8)
+    ax.step(x, ask, where="post", color=_ASK_COLOR, linewidth=0.8, alpha=0.8)
+    ax.step(
+        x,
+        data["mid"],
+        where="post",
+        color="#888888",
+        linewidth=0.8,
+        alpha=0.6,
+        linestyle=":",
+        label="mid",
+    )
+    ax.step(
+        x,
+        data["microprice"],
+        where="post",
+        color="#222222",
+        linewidth=1.4,
+        label="microprice",
+    )
+
+    trades = data.get("trades")
+    if trades is not None and not trades.empty:
+        for side, color, label in (
+            (trades[trades["direction"] == "buy"], _BUY_COLOR, "buy"),
+            (trades[trades["direction"] == "sell"], _SELL_COLOR, "sell"),
+        ):
+            if side.empty:
+                continue
+            ax.scatter(
+                mdates.date2num(side["timestamp"]),
+                side["price"],
+                s=12,
+                color=color,
+                alpha=0.7,
+                edgecolors="none",
+                zorder=4,
+                label=label,
+            )
+
+    format_time_axis(ax)
+    y_range = data.get("y_range")
+    if y_range is not None:
+        ax.set_ylim(y_range)
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Price")
+    ax.set_title("Price view — spread ribbon + microprice")
+    ax.legend(loc="upper right")
+    fig.tight_layout()
+    return fig
+
+
 def mpl_order_outcome_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -1577,6 +1641,7 @@ for _concept, _level, _fn in [
     ("queue_position", _L3, mpl_queue_position_per_order),
     ("liquidity_at_touch", _L2, mpl_liquidity_at_touch),
     ("liquidity_at_touch", _L3, mpl_liquidity_at_touch_per_order),
+    ("price_view", _L2, mpl_price_view),
     ("cancellations", _L2, mpl_volume_map),
     ("cancellations", _L3, mpl_cancellations_per_order),
     ("book_snapshot", _L2, mpl_book_snapshot_aggregate),

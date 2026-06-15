@@ -802,3 +802,17 @@ class TestRegisterBackend:
             # Registry has no public removal; the inert (trade_tape, L2, dummy)
             # entry is dropped here so the dummy module's renderer doesn't linger.
             RENDERERS._items.pop(("trade_tape", Level.L2, "dummy"), None)
+
+
+class TestPlotPriceView:
+    """§4.2 spread ribbon + microprice (L2)."""
+
+    def test_returns_figure_with_ribbon(self, sample_depth_summary):
+        data = _data.prepare_price_view_data(sample_depth_summary)
+        fig = plot("price_view", Level.L2, **data)
+        ax = fig.axes[0]
+        assert isinstance(fig, Figure)
+        assert ax.collections  # the fill_between ribbon (PolyCollection)
+        labels = {ln.get_label() for ln in ax.get_lines()}
+        assert "microprice" in labels
+        assert ax.get_ylabel() == "Price"

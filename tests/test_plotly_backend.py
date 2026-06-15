@@ -481,3 +481,15 @@ class TestBackendDispatch:
                 backend="nonexistent",
                 **_data.prepare_trades_data(sample_trades),
             )
+
+
+class TestPlotlyPriceView:
+    def test_returns_figure_with_microprice(
+        self, sample_depth_summary: pd.DataFrame
+    ) -> None:
+        from ob_analytics.visualization._data import prepare_price_view_data
+        from ob_analytics.visualization._plotly import plotly_price_view
+
+        fig = plotly_price_view(prepare_price_view_data(sample_depth_summary))
+        assert isinstance(fig, go.Figure)
+        assert "microprice" in {tr.name for tr in fig.data}
