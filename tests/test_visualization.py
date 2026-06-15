@@ -398,6 +398,18 @@ class TestPlotLiquidityAtTouch:
             alpha = ln.get_alpha()
             assert alpha is not None and alpha < 1.0
 
+    def test_event_rug_drawn_from_events(self, sample_depth_summary, sample_events):
+        # Passing events adds a rug (created/cancelled vlines) below the series;
+        # without events there is no rug.
+        bare = _data.prepare_liquidity_at_touch_data(sample_depth_summary)
+        with_rug = _data.prepare_liquidity_at_touch_data(
+            sample_depth_summary, events=sample_events
+        )
+        assert bare["rug"] is None
+        n_bare = len(plot("liquidity_at_touch", Level.L2, **bare).axes[0].collections)
+        rugged = plot("liquidity_at_touch", Level.L2, **with_rug).axes[0]
+        assert len(rugged.collections) > n_bare  # vlines LineCollections added
+
 
 class TestPlotLiquidityAtTouchL3:
     """§4.1c queue-composition strip (age x rank pcolormesh)."""
@@ -423,6 +435,44 @@ class TestPlotLiquidityAtTouchL3:
             "side": "bid",
         }
         assert isinstance(plot("liquidity_at_touch", Level.L3, **data), Figure)
+
+
+class TestPlotOfiHorizon:
+    """OFI horizon graph (level-less analytic): stacked banded rows."""
+
+    @staticmethod
+    def _trades() -> pd.DataFrame:
+        ts = pd.Timestamp("2015-05-01 01:00:00")
+        n = 120
+        rng = np.random.default_rng(1)
+        return pd.DataFrame(
+            {
+                "timestamp": [ts + pd.Timedelta(seconds=5 * i) for i in range(n)],
+                "price": 236.0 + rng.normal(0, 0.05, n),
+                "volume": rng.uniform(100, 1000, n),
+                "direction": pd.Categorical(
+                    rng.choice(["buy", "sell"], n), categories=["buy", "sell"]
+                ),
+            }
+        )
+
+    def test_returns_banded_figure(self) -> None:
+        data = _data.prepare_ofi_horizon_data(self._trades())
+        fig = plot("ofi_horizon", **data)
+        ax = fig.axes[0]
+        assert isinstance(fig, Figure)
+        assert ax.collections  # fill_between PolyCollections (the bands)
+        # Each lookback is labelled as a text artist beside its row.
+        labels = {t.get_text().strip() for t in ax.texts}
+        assert set(data["horizons"]) <= labels
+
+    def test_empty_is_safe(self) -> None:
+        data = {
+            "ofi": np.empty((0, 0)),
+            "times": np.array([], dtype="datetime64[ns]"),
+            "horizons": ["5s", "60s"],
+        }
+        assert isinstance(plot("ofi_horizon", **data), Figure)
 
 
 class TestPlotOrderOutcomeL3:

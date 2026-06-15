@@ -439,6 +439,7 @@ def build_gallery_model(
                     _viz_data.prepare_liquidity_at_touch_data,
                     {
                         "depth_summary": depth_summary_offset,
+                        "events": events,
                         "start_time": zoom_start,
                         "end_time": zoom_end,
                         "volume_scale": volume_scale,
@@ -453,9 +454,11 @@ def build_gallery_model(
                 ),
                 note=(
                     "Liquidity a marketable order meets first. L2: resting size "
-                    "at the best bid/ask. L3: the touch queue's composition - "
-                    "each cell is the age of the order at that rank; pale = "
-                    "recent churn, dark = sticky liquidity."
+                    "at the best bid/ask, with an event rug beneath (gray = "
+                    "created, amber = cancelled, green = filled) marking when the "
+                    "book churned. L3: the touch queue's composition - each cell "
+                    "is the age of the order at that rank; pale = recent churn, "
+                    "dark = sticky liquidity."
                 ),
             )
         )
@@ -670,6 +673,30 @@ def ofi_panel(ofi_df: pd.DataFrame, trades: pd.DataFrame | None = None) -> PlotS
         "order_flow_imbalance",
         _viz_data.prepare_ofi_data,
         {"ofi_df": ofi_df, "trades": trades},
+    )
+
+
+def ofi_horizon_panel(
+    trades: pd.DataFrame,
+    *,
+    horizons: tuple[str, ...] = ("5s", "15s", "60s", "300s"),
+    grid: str = "5s",
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+) -> PlotSpec:
+    """Build an OFI-vs-horizon analytic panel (diverging band per horizon)."""
+    return PlotSpec(
+        "ofi_horizon",
+        "Order Flow Imbalance vs Horizon",
+        "ofi_horizon",
+        _viz_data.prepare_ofi_horizon_data,
+        {
+            "trades": trades,
+            "horizons": horizons,
+            "grid": grid,
+            "start_time": start_time,
+            "end_time": end_time,
+        },
     )
 
 

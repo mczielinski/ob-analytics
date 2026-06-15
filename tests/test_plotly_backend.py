@@ -21,6 +21,7 @@ from ob_analytics.visualization._data import (  # noqa: E402
     prepare_kyle_lambda_data,
     prepare_liquidity_at_touch_data,
     prepare_ofi_data,
+    prepare_ofi_horizon_data,
     prepare_order_activity_l3_data,
     prepare_order_outcome_l3_data,
     prepare_price_levels_data,
@@ -43,6 +44,7 @@ from ob_analytics.visualization._plotly import (  # noqa: E402
     plotly_kyle_lambda,
     plotly_liquidity_at_touch,
     plotly_liquidity_at_touch_per_order,
+    plotly_ofi_horizon,
     plotly_order_activity_per_order,
     plotly_order_flow_imbalance,
     plotly_order_outcome_per_order,
@@ -287,6 +289,17 @@ class TestPlotlyLiquidityAtTouch:
         fig = plotly_liquidity_at_touch(data)
         assert all(trace.type == "scatter" for trace in fig.data)
 
+    def test_event_rug_adds_scattergl_ticks(
+        self, sample_depth_summary: pd.DataFrame, sample_events: pd.DataFrame
+    ) -> None:
+        data = prepare_liquidity_at_touch_data(
+            sample_depth_summary, events=sample_events
+        )
+        fig = plotly_liquidity_at_touch(data)
+        # Two SVG series plus the WebGL rug ticks (created/cancelled).
+        assert len(fig.data) > 2
+        assert any(trace.type == "scattergl" for trace in fig.data)
+
 
 class TestPlotlyLiquidityAtTouchL3:
     def test_returns_heatmap(self) -> None:
@@ -301,6 +314,42 @@ class TestPlotlyLiquidityAtTouchL3:
         fig = plotly_liquidity_at_touch_per_order(data)
         assert isinstance(fig, go.Figure)
         assert [tr.type for tr in fig.data] == ["heatmap"]
+
+
+class TestPlotlyOfiHorizon:
+    @staticmethod
+    def _trades() -> pd.DataFrame:
+        ts = pd.Timestamp("2015-05-01 01:00:00")
+        n = 120
+        rng = np.random.default_rng(2)
+        return pd.DataFrame(
+            {
+                "timestamp": [ts + pd.Timedelta(seconds=5 * i) for i in range(n)],
+                "price": 236.0 + rng.normal(0, 0.05, n),
+                "volume": rng.uniform(100, 1000, n),
+                "direction": pd.Categorical(
+                    rng.choice(["buy", "sell"], n), categories=["buy", "sell"]
+                ),
+            }
+        )
+
+    def test_returns_banded_subplots(self) -> None:
+        data = prepare_ofi_horizon_data(self._trades())
+        fig = plotly_ofi_horizon(data)
+        assert isinstance(fig, go.Figure)
+        # Horizon graph = stacked filled scatter bands (one subplot per row),
+        # not a single heatmap.
+        assert fig.data  # bands drawn
+        assert all(tr.type == "scatter" for tr in fig.data)
+        assert all(tr.fill == "tozeroy" for tr in fig.data)
+
+    def test_empty_is_safe(self) -> None:
+        data = {
+            "ofi": np.empty((0, 0)),
+            "times": np.array([], dtype="datetime64[ns]"),
+            "horizons": ["5s", "60s"],
+        }
+        assert isinstance(plotly_ofi_horizon(data), go.Figure)
 
 
 class TestPlotlyOrderOutcomeL3:

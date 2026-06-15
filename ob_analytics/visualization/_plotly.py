@@ -790,6 +790,37 @@ def plotly_liquidity_at_touch(data: dict) -> Any:
                 name=label,
             )
         )
+
+    rug = data.get("rug")
+    if rug is not None:
+        # Event rug below the series (created / cancelled / filled ticks).
+        vmax = max(
+            float(data["bid_vol"].max()) if len(data["bid_vol"]) else 0.0,
+            float(data["ask_vol"].max()) if len(data["ask_vol"]) else 0.0,
+            1.0,
+        )
+        step = vmax * 0.04
+        for cat, color, level in (
+            ("created", "#888888", -step),
+            ("cancelled", _CANCELLED_COLOR, -2 * step),
+            ("filled", _FILLED_COLOR, -3 * step),
+        ):
+            t = rug.get(cat)
+            if t is not None and len(t):
+                fig.add_trace(
+                    go.Scattergl(
+                        x=t,
+                        y=[level] * len(t),
+                        mode="markers",
+                        marker=dict(
+                            symbol="line-ns-open", size=6, color=color, opacity=0.4
+                        ),
+                        name=cat,
+                        hoverinfo="skip",
+                        showlegend=False,
+                    )
+                )
+
     fig.update_xaxes(title_text="Time")
     fig.update_yaxes(title_text="Size at touch")
     return fig
@@ -1247,6 +1278,65 @@ def plotly_order_flow_imbalance(data: dict) -> Any:
     return fig
 
 
+def _hex_to_rgba(hexc: str, alpha: float) -> str:
+    """``"#0072B2"`` + alpha -> ``"rgba(0,114,178,0.5)"`` for plotly fills."""
+    h = hexc.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def plotly_ofi_horizon(data: dict) -> Any:
+    """Order-flow-imbalance horizon graph across multiple look-back horizons.
+
+    One stacked subplot per horizon (sharing the time axis); each fills from
+    its baseline with blue (net buy) / orange (net sell), height and colour
+    saturation (three overlaid bands) both growing with the imbalance.  Short
+    rows are jumpy, long rows smooth -- fleeting vs persistent pressure.
+    """
+    go = _import_plotly()
+    ofi = data["ofi"]
+    horizons = data["horizons"]
+    if getattr(ofi, "size", 0) == 0:
+        return _base_figure(go, title="Order flow imbalance — horizon graph")
+
+    from plotly.subplots import make_subplots
+
+    n = len(horizons)
+    n_bands, band_h = 3, 1.0
+    fig = make_subplots(
+        rows=n,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.03,
+        row_titles=[str(h) for h in horizons],
+    )
+    x = data["times"]
+    for i in range(n):
+        sn = np.clip(np.nan_to_num(ofi[i]), -1.0, 1.0)
+        for b in range(n_bands):
+            lo, hi = b / n_bands, (b + 1) / n_bands
+            alpha = 0.25 + 0.25 * b
+            for signed, color in ((sn, _BID_COLOR), (-sn, _SELL_COLOR)):
+                height = (np.clip(signed, lo, hi) - lo) * band_h * n_bands
+                fig.add_trace(
+                    go.Scatter(
+                        x=x,
+                        y=height,
+                        fill="tozeroy",
+                        mode="none",
+                        fillcolor=_hex_to_rgba(color, alpha),
+                        hoverinfo="skip",
+                        showlegend=False,
+                    ),
+                    row=i + 1,
+                    col=1,
+                )
+        fig.update_yaxes(range=[0, band_h], showticklabels=False, row=i + 1, col=1)
+    fig.update_layout(title="Order flow imbalance — horizon graph (buy / sell)")
+    fig.update_xaxes(title_text="Time", row=n, col=1)
+    return fig
+
+
 def plotly_kyle_lambda(data: dict) -> Any:
     """Render Kyle's Lambda regression scatter."""
     go = _import_plotly()
@@ -1493,6 +1583,7 @@ for _concept, _level, _fn in [
     ("hidden_executions", _L2, plotly_hidden_executions),
     ("vpin", None, plotly_vpin),
     ("order_flow_imbalance", None, plotly_order_flow_imbalance),
+    ("ofi_horizon", None, plotly_ofi_horizon),
     ("kyle_lambda", None, plotly_kyle_lambda),
     ("trading_halts", None, plotly_trading_halts),
 ]:

@@ -17,6 +17,7 @@ from ob_analytics.visualization._data import (
     prepare_kyle_lambda_data,
     prepare_liquidity_at_touch_data,
     prepare_ofi_data,
+    prepare_ofi_horizon_data,
     prepare_order_activity_l3_data,
     prepare_order_outcome_l3_data,
     prepare_time_series_data,
@@ -390,9 +391,27 @@ class TestPrepareOrderActivityL3:
 class TestPrepareLiquidityAtTouch:
     def test_returns_paired_series(self, sample_depth_summary: pd.DataFrame) -> None:
         data = prepare_liquidity_at_touch_data(sample_depth_summary)
-        assert set(data) == {"timestamp", "bid_vol", "ask_vol", "volume_scale"}
+        assert set(data) == {"rug", "timestamp", "bid_vol", "ask_vol", "volume_scale"}
         assert len(data["timestamp"]) == len(sample_depth_summary)
         assert len(data["bid_vol"]) == len(data["ask_vol"]) == len(data["timestamp"])
+
+    def test_rug_none_without_events(self, sample_depth_summary: pd.DataFrame) -> None:
+        data = prepare_liquidity_at_touch_data(sample_depth_summary)
+        assert data["rug"] is None
+
+    def test_rug_classes_from_events(
+        self, sample_depth_summary: pd.DataFrame, sample_events: pd.DataFrame
+    ) -> None:
+        data = prepare_liquidity_at_touch_data(
+            sample_depth_summary, events=sample_events
+        )
+        rug = data["rug"]
+        assert set(rug) == {"created", "cancelled", "filled"}
+        # The fixture alternates created/deleted, so both rows are populated.
+        assert len(rug["created"]) > 0
+        assert len(rug["cancelled"]) > 0
+        # No fill column in the fixture -> nothing in the filled row.
+        assert len(rug["filled"]) == 0
 
     def test_scales_volume(self, sample_depth_summary: pd.DataFrame) -> None:
         raw = prepare_liquidity_at_touch_data(sample_depth_summary, volume_scale=1.0)
@@ -692,6 +711,48 @@ class TestPrepareOfi:
         assert len(data["colors"]) == 5
         assert data["colors"][0] == "#27ae60"  # positive → green
         assert data["colors"][1] == "#e74c3c"  # negative → red
+
+
+class TestPrepareOfiHorizon:
+    @staticmethod
+    def _trades() -> pd.DataFrame:
+        ts = pd.Timestamp("2015-05-01 01:00:00")
+        n = 120  # 10 minutes at 5s spacing
+        rng = np.random.default_rng(0)
+        return pd.DataFrame(
+            {
+                "timestamp": [ts + pd.Timedelta(seconds=5 * i) for i in range(n)],
+                "price": 236.0 + rng.normal(0, 0.05, n),
+                "volume": rng.uniform(100, 1000, n),
+                "direction": pd.Categorical(
+                    rng.choice(["buy", "sell"], n), categories=["buy", "sell"]
+                ),
+            }
+        )
+
+    def test_grid_shape(self) -> None:
+        horizons = ("5s", "15s", "60s", "300s")
+        data = prepare_ofi_horizon_data(self._trades(), horizons=horizons, grid="5s")
+        assert set(data) == {"ofi", "times", "horizons"}
+        assert list(data["horizons"]) == list(horizons)
+        # One row per horizon; one column per grid step.
+        assert data["ofi"].shape[0] == len(horizons)
+        assert data["ofi"].shape[1] == len(data["times"])
+
+    def test_values_bounded(self) -> None:
+        data = prepare_ofi_horizon_data(self._trades())
+        finite = data["ofi"][np.isfinite(data["ofi"])]
+        assert finite.size > 0
+        assert finite.min() >= -1.0 - 1e-9
+        assert finite.max() <= 1.0 + 1e-9
+
+    def test_empty_window_returns_empty(self) -> None:
+        trades = self._trades()
+        after = trades["timestamp"].max() + pd.Timedelta(hours=1)
+        data = prepare_ofi_horizon_data(trades, start_time=after)
+        assert data["ofi"].size == 0
+        assert len(data["times"]) == 0
+        assert data["horizons"]  # horizons still reported
 
 
 class TestPrepareKyleLambda:

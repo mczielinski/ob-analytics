@@ -974,13 +974,34 @@ def mpl_liquidity_at_touch(
         drawstyle="steps-post",
         label="Best ask size",
     )
+    rug = data.get("rug")
+    if rug is not None:
+        # Event rug at the bottom (x = data, y = axes fraction): when the book
+        # churned -- created / cancelled / filled bursts the size line hides.
+        trans = ax.get_xaxis_transform()
+        for cat, color, y0 in (
+            ("created", "#888888", 0.0),
+            ("cancelled", _CANCELLED_COLOR, 0.020),
+            ("filled", _FILLED_COLOR, 0.040),
+        ):
+            t = rug.get(cat)
+            if t is not None and len(t):
+                ax.vlines(
+                    t,
+                    y0,
+                    y0 + 0.016,
+                    transform=trans,
+                    colors=color,
+                    linewidth=0.5,
+                    alpha=0.4,
+                )
+
     format_time_axis(ax)
     ax.set_xlabel("Time")
     ax.set_ylabel("Size at touch")
     ax.set_title("Liquidity at the touch")
     if len(ts) > 0:
         ax.legend(loc="upper right")
-    format_time_axis(ax)
     ax.grid(True)
     fig.tight_layout()
     return fig
@@ -1456,6 +1477,78 @@ def mpl_order_flow_imbalance(
     return fig
 
 
+#: Horizon-graph banding: split each side into this many saturating colour bands.
+_OFI_N_BANDS = 3
+
+
+def mpl_ofi_horizon(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """Order-flow-imbalance horizon graph: OFI at several lookbacks, stacked.
+
+    A *horizon graph* -- each lookback is a row that fills from its own
+    baseline; blue = net buy, orange = net sell, with both fill height and
+    colour saturation (three overlaid bands) growing with the size of the
+    imbalance.  OFI is already bounded to ``[-1, +1]``, so every row shares
+    one scale: short rows are jumpy (fleeting pressure), long rows smooth
+    (persistent pressure), readable in a single compact panel.
+    """
+    fig, ax = _create_axes(ax, figsize=(11, 4.2), theme=theme)
+    ofi = data["ofi"]
+    horizons = data["horizons"]
+    if ofi.size == 0:
+        ax.set_title("Order flow imbalance — horizon graph (no data)")
+        return fig
+
+    x = mdates.date2num(pd.to_datetime(data["times"]))
+    band_h, gap = 1.0, 0.15
+    for i, horizon in enumerate(horizons):
+        y0 = i * (band_h + gap)
+        sn = np.clip(np.nan_to_num(ofi[i]), -1.0, 1.0)
+        for b in range(_OFI_N_BANDS):
+            lo, hi = b / _OFI_N_BANDS, (b + 1) / _OFI_N_BANDS
+            alpha = 0.25 + 0.25 * b
+            pos = (np.clip(sn, lo, hi) - lo) * band_h * _OFI_N_BANDS
+            ax.fill_between(
+                x,
+                y0,
+                y0 + pos,
+                where=sn > lo,
+                color=_BID_COLOR,
+                alpha=alpha,
+                linewidth=0,
+            )
+            neg = (np.clip(-sn, lo, hi) - lo) * band_h * _OFI_N_BANDS
+            ax.fill_between(
+                x,
+                y0,
+                y0 + neg,
+                where=sn < -lo,
+                color=_SELL_COLOR,
+                alpha=alpha,
+                linewidth=0,
+            )
+        ax.axhline(y0, color="white", linewidth=0.8)
+        ax.text(
+            x[0],
+            y0 + band_h / 2,
+            f"{horizon} ",
+            va="center",
+            ha="right",
+            fontsize=9,
+            color="#555555",
+        )
+
+    ax.set_ylim(-0.2, len(horizons) * (band_h + gap))
+    ax.set_yticks([])
+    ax.margins(x=0)
+    format_time_axis(ax)
+    ax.set_xlabel("Time")
+    ax.set_title("Order flow imbalance — horizon graph (buy + / sell −)")
+    fig.tight_layout()
+    return fig
+
+
 def mpl_kyle_lambda(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -1690,6 +1783,7 @@ for _concept, _level, _fn in [
     ("hidden_executions", _L2, mpl_hidden_executions),
     ("vpin", None, mpl_vpin),
     ("order_flow_imbalance", None, mpl_order_flow_imbalance),
+    ("ofi_horizon", None, mpl_ofi_horizon),
     ("kyle_lambda", None, mpl_kyle_lambda),
     ("trading_halts", None, mpl_trading_halts),
 ]:
