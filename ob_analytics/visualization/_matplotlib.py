@@ -1088,6 +1088,42 @@ def mpl_price_view(
     return fig
 
 
+def mpl_trade_size(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """Trade-size strip: jittered execution dots on a log size axis, by side."""
+    fig, ax = _create_axes(ax, figsize=(11, 4.5), theme=theme)
+    drew = False
+    for side, color, base, label in (
+        (data["sells"], _SELL_COLOR, 0.0, "sell"),
+        (data["buys"], _BUY_COLOR, 1.0, "buy"),
+    ):
+        if side.empty:
+            continue
+        drew = True
+        ax.scatter(
+            side["size"],
+            base + side["jitter"],
+            s=10,
+            color=color,
+            alpha=0.4,
+            edgecolors="none",
+            label=label,
+        )
+    if drew:
+        ax.set_xscale("log")
+    ax.set_yticks([0.0, 1.0])
+    ax.set_yticklabels(["sell", "buy"])
+    ax.set_ylim(-0.6, 1.6)
+    ax.set_xlabel("Trade size (log)")
+    ax.set_title("Trade-size distribution")
+    ax.grid(True, axis="x", which="both", alpha=0.3)  # round-number decades
+    if drew:
+        ax.legend(loc="upper right")
+    fig.tight_layout()
+    return fig
+
+
 def mpl_order_outcome_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -1642,6 +1678,7 @@ for _concept, _level, _fn in [
     ("liquidity_at_touch", _L2, mpl_liquidity_at_touch),
     ("liquidity_at_touch", _L3, mpl_liquidity_at_touch_per_order),
     ("price_view", _L2, mpl_price_view),
+    ("trade_size", _L2, mpl_trade_size),
     ("cancellations", _L2, mpl_volume_map),
     ("cancellations", _L3, mpl_cancellations_per_order),
     ("book_snapshot", _L2, mpl_book_snapshot_aggregate),

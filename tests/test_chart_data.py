@@ -22,6 +22,7 @@ from ob_analytics.visualization._data import (
     prepare_time_series_data,
     prepare_trade_tape_l3_data,
     prepare_price_view_data,
+    prepare_trade_size_data,
     prepare_trades_data,
     prepare_volume_map_data,
     prepare_volume_percentiles_data,
@@ -813,3 +814,27 @@ class TestPreparePriceView:
             }
         )
         assert len(prepare_price_view_data(self._ds(), trades)["trades"]) == 1
+
+
+class TestPrepareTradeSize:
+    @staticmethod
+    def _trades() -> pd.DataFrame:
+        ts = pd.date_range("2015-05-01", periods=4, freq="s")
+        return pd.DataFrame(
+            {
+                "timestamp": ts,
+                "price": [100.0, 100.1, 99.9, 100.0],
+                "volume": [10.0, 0.0, 5.0, 20.0],  # one zero -> dropped (log axis)
+                "direction": ["buy", "sell", "sell", "buy"],
+            }
+        )
+
+    def test_splits_by_side_and_drops_nonpositive(self) -> None:
+        data = prepare_trade_size_data(self._trades())
+        assert set(data) >= {"buys", "sells", "volume_scale"}
+        # buys: the two positive-size buys; the zero-volume sell is dropped.
+        assert len(data["buys"]) == 2
+        assert len(data["sells"]) == 1
+        for side in (data["buys"], data["sells"]):
+            assert (side["size"] > 0).all()
+            assert side["jitter"].between(-0.4, 0.4).all()

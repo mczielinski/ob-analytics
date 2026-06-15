@@ -493,3 +493,13 @@ class TestPlotlyPriceView:
         fig = plotly_price_view(prepare_price_view_data(sample_depth_summary))
         assert isinstance(fig, go.Figure)
         assert "microprice" in {tr.name for tr in fig.data}
+
+
+class TestPlotlyTradeSize:
+    def test_returns_figure_log_x(self, sample_trades: pd.DataFrame) -> None:
+        from ob_analytics.visualization._data import prepare_trade_size_data
+        from ob_analytics.visualization._plotly import plotly_trade_size
+
+        fig = plotly_trade_size(prepare_trade_size_data(sample_trades))
+        assert isinstance(fig, go.Figure)
+        assert fig.layout.xaxis.type == "log"
