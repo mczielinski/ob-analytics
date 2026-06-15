@@ -753,6 +753,53 @@ def prepare_liquidity_at_touch_l3_data(
     return {"ages": ages, "times": times, "max_rank": max_rank, "side": side}
 
 
+def prepare_price_view_data(
+    depth_summary: pd.DataFrame,
+    trades: pd.DataFrame | None = None,
+    *,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+) -> dict[str, Any]:
+    """L2 price view: the spread ribbon plus the volume-weighted microprice.
+
+    Reads ``best_bid_price`` / ``best_ask_price`` / ``best_bid_vol`` /
+    ``best_ask_vol`` from the depth summary and derives the **microprice**
+    ``(bid * ask_vol + ask * bid_vol) / (bid_vol + ask_vol)`` -- which leans
+    toward the side with the heavier *opposite* book, i.e. the direction price
+    is likely to move -- and the plain mid.  Optionally overlays executions
+    (buy/sell dots at trade price) when *trades* is given.
+    """
+    start_time, end_time = _default_start_end(depth_summary, start_time, end_time)
+    win = depth_summary[
+        (depth_summary["timestamp"] >= start_time)
+        & (depth_summary["timestamp"] <= end_time)
+    ]
+    bid = win["best_bid_price"].to_numpy(dtype=float)
+    ask = win["best_ask_price"].to_numpy(dtype=float)
+    bvol = win["best_bid_vol"].to_numpy(dtype=float)
+    avol = win["best_ask_vol"].to_numpy(dtype=float)
+    mid = (bid + ask) / 2.0
+    denom = bvol + avol
+    with np.errstate(invalid="ignore", divide="ignore"):
+        micro = np.where(denom > 0, (bid * avol + ask * bvol) / denom, mid)
+
+    out_trades = None
+    if trades is not None and not trades.empty:
+        out_trades = trades[
+            (trades["timestamp"] >= start_time) & (trades["timestamp"] <= end_time)
+        ][["timestamp", "price", "direction"]]
+
+    return {
+        "timestamp": win["timestamp"].reset_index(drop=True),
+        "best_bid_price": bid,
+        "best_ask_price": ask,
+        "mid": mid,
+        "microprice": micro,
+        "trades": out_trades,
+        "y_range": price_y_range(win["best_bid_price"], win["best_ask_price"]),
+    }
+
+
 def prepare_order_outcome_l3_data(
     events: pd.DataFrame,
     volume_scale: float | None = None,

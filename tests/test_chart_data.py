@@ -21,6 +21,7 @@ from ob_analytics.visualization._data import (
     prepare_order_outcome_l3_data,
     prepare_time_series_data,
     prepare_trade_tape_l3_data,
+    prepare_price_view_data,
     prepare_trades_data,
     prepare_volume_map_data,
     prepare_volume_percentiles_data,
@@ -766,3 +767,49 @@ class TestPrepareHiddenExecutions:
         assert not data["has_hidden"]
         assert data["marker_area"].size == 0
         assert data["direction"] is None
+
+
+class TestPreparePriceView:
+    @staticmethod
+    def _ds() -> pd.DataFrame:
+        ts = pd.date_range("2015-05-01", periods=3, freq="s")
+        return pd.DataFrame(
+            {
+                "timestamp": ts,
+                "best_bid_price": [100.0, 100.0, 100.0],
+                "best_ask_price": [102.0, 102.0, 102.0],
+                "best_bid_vol": [10.0, 0.0, 5.0],
+                "best_ask_vol": [30.0, 0.0, 5.0],
+            }
+        )
+
+    def test_microprice_formula(self) -> None:
+        data = prepare_price_view_data(self._ds())
+        # (bid*ask_vol + ask*bid_vol)/(bid_vol+ask_vol) = (100*30+102*10)/40 = 100.5
+        assert data["microprice"][0] == pytest.approx(100.5)
+        # balanced book (5/5) -> microprice == mid (101.0)
+        assert data["microprice"][2] == pytest.approx(101.0)
+
+    def test_zero_volume_falls_back_to_mid(self) -> None:
+        data = prepare_price_view_data(self._ds())
+        assert data["microprice"][1] == pytest.approx(101.0)  # mid, not NaN/inf
+
+    def test_keys_and_optional_trades(self) -> None:
+        data = prepare_price_view_data(self._ds())
+        assert {
+            "timestamp",
+            "best_bid_price",
+            "best_ask_price",
+            "mid",
+            "microprice",
+            "trades",
+        } <= set(data)
+        assert data["trades"] is None  # none passed
+        trades = pd.DataFrame(
+            {
+                "timestamp": [pd.Timestamp("2015-05-01 00:00:01")],
+                "price": [101.0],
+                "direction": ["buy"],
+            }
+        )
+        assert len(prepare_price_view_data(self._ds(), trades)["trades"]) == 1
