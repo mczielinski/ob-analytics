@@ -531,6 +531,21 @@ def build_gallery_model(
             ),
         )
     )
+    concepts.append(
+        _l2(
+            "trade_size",
+            "Trade Size",
+            "trade_size",
+            _viz_data.prepare_trade_size_data,
+            {"trades": trades, "volume_scale": volume_scale},
+            note=(
+                "How big trades are: each execution a jittered dot on a log "
+                "size axis, buys and sells in separate bands. Trade size is "
+                "heavy-tailed, so the log axis spreads the bulk while keeping "
+                "the rare block trades on-scale."
+            ),
+        )
+    )
 
     # Hidden executions are LOBSTER-only (raw_event_type == 5).
     if "raw_event_type" in events.columns:

@@ -816,3 +816,15 @@ class TestPlotPriceView:
         labels = {ln.get_label() for ln in ax.get_lines()}
         assert "microprice" in labels
         assert ax.get_ylabel() == "Price"
+
+
+class TestPlotTradeSize:
+    """§4.3 trade-size strip (log-x jittered dots by side)."""
+
+    def test_returns_figure_log_x(self, sample_trades):
+        data = _data.prepare_trade_size_data(sample_trades)
+        fig = plot("trade_size", Level.L2, **data)
+        ax = fig.axes[0]
+        assert isinstance(fig, Figure)
+        assert ax.get_xscale() == "log"
+        assert [t.get_text() for t in ax.get_yticklabels()] == ["sell", "buy"]

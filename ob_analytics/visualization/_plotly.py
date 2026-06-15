@@ -898,6 +898,32 @@ def plotly_price_view(data: dict) -> Any:
     return fig
 
 
+def plotly_trade_size(data: dict) -> Any:
+    """Trade-size strip: jittered execution dots on a log size axis, by side."""
+    go = _import_plotly()
+    fig = _base_figure(go, title="Trade-size distribution")
+    for side, color, base, label in (
+        (data["sells"], _SELL_COLOR, 0.0, "sell"),
+        (data["buys"], _BUY_COLOR, 1.0, "buy"),
+    ):
+        if side.empty:
+            continue
+        fig.add_trace(
+            go.Scattergl(
+                x=side["size"],
+                y=base + side["jitter"],
+                mode="markers",
+                marker=dict(size=5, color=color, opacity=0.4),
+                name=label,
+                hovertemplate="Size: %{x}<extra></extra>",
+            )
+        )
+    fig.update_xaxes(title_text="Trade size (log)", type="log")
+    fig.update_yaxes(tickvals=[0.0, 1.0], ticktext=["sell", "buy"], range=[-0.6, 1.6])
+    fig.update_layout(hovermode="closest")
+    return fig
+
+
 def plotly_order_outcome_per_order(data: dict) -> Any:
     """L3 (MBO) order outcome: each order as placement distance x size, by fate.
 
@@ -1455,6 +1481,7 @@ for _concept, _level, _fn in [
     ("liquidity_at_touch", _L2, plotly_liquidity_at_touch),
     ("liquidity_at_touch", _L3, plotly_liquidity_at_touch_per_order),
     ("price_view", _L2, plotly_price_view),
+    ("trade_size", _L2, plotly_trade_size),
     ("cancellations", _L2, plotly_volume_map),
     ("cancellations", _L3, plotly_cancellations_per_order),
     ("book_snapshot", _L2, plotly_book_snapshot_aggregate),

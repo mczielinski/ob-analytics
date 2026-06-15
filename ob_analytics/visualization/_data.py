@@ -800,6 +800,36 @@ def prepare_price_view_data(
     }
 
 
+def prepare_trade_size_data(
+    trades: pd.DataFrame,
+    *,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+    volume_scale: float | None = None,
+) -> dict[str, Any]:
+    """Trade-size strip: each execution as a jittered dot on a log size axis.
+
+    A distribution view of *how big* trades are -- heavy-tailed, so the x-axis
+    is logarithmic; buys and sells sit in two jittered bands so their size
+    profiles are directly comparable.
+    """
+    start_time, end_time = _default_start_end(trades, start_time, end_time)
+    win = trades[
+        (trades["timestamp"] >= start_time) & (trades["timestamp"] <= end_time)
+    ].copy()
+    if volume_scale is None:
+        volume_scale = infer_volume_scale(win["volume"]) if not win.empty else 1.0
+    win["size"] = win["volume"] * volume_scale
+    win = win[win["size"] > 0]  # log axis can't show zero/negative sizes
+    rng = np.random.default_rng(0)
+    win["jitter"] = rng.uniform(-0.4, 0.4, len(win))
+    return {
+        "buys": win[win["direction"] == "buy"],
+        "sells": win[win["direction"] == "sell"],
+        "volume_scale": volume_scale,
+    }
+
+
 def prepare_order_outcome_l3_data(
     events: pd.DataFrame,
     volume_scale: float | None = None,
