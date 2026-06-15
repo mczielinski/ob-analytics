@@ -703,8 +703,8 @@ def prepare_liquidity_at_touch_data(
     Two aggregate time series read straight from the depth summary -- the volume
     resting at the best bid (``best_bid_vol``) and at the best ask
     (``best_ask_vol``).  Size at a price level carries no order identity, so this
-    is an L2 quantity by construction; the per-order L3 counterpart (queue
-    composition at the touch) needs FIFO reconstruction and is deferred.
+    is an L2 quantity by construction; the per-order L3 counterpart is the
+    queue-composition strip (:func:`prepare_liquidity_at_touch_l3_data`).
     """
     start_time, end_time = _default_start_end(depth_summary, start_time, end_time)
     win = depth_summary[
@@ -722,6 +722,35 @@ def prepare_liquidity_at_touch_data(
         "ask_vol": (ask_vol * volume_scale).reset_index(drop=True),
         "volume_scale": volume_scale,
     }
+
+
+def prepare_liquidity_at_touch_l3_data(
+    events: pd.DataFrame,
+    *,
+    side: str = "bid",
+    n_time: int = 200,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+) -> dict[str, Any]:
+    """L3 (MBO) queue composition at the touch: order age by FIFO rank over time.
+
+    The per-order counterpart to the L2 best-size step line: the FIFO queue
+    engine (:func:`ob_analytics.queue.queue_age_grid`) snapshots the touch
+    queue at *n_time* instants, and each cell is the age of the order at that
+    rank -- pale columns are recent churn, dark are sticky liquidity, the front
+    (rank 1) is the HFT queue-position frontier.  Visible-only.
+
+    Returns ``ages`` (a ``max_rank`` x ``n_time`` array, NaN where the queue is
+    short), ``times`` (column timestamps), ``max_rank`` and ``side``.
+    """
+    from ob_analytics.queue import queue_age_grid
+
+    start_time, end_time = _default_start_end(events, start_time, end_time)
+    win = events[
+        (events["timestamp"] >= start_time) & (events["timestamp"] <= end_time)
+    ]
+    ages, times, max_rank = queue_age_grid(win, side=side, n_time=n_time)
+    return {"ages": ages, "times": times, "max_rank": max_rank, "side": side}
 
 
 def prepare_order_outcome_l3_data(

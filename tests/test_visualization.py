@@ -374,28 +374,55 @@ class TestPlotTradeTapeL3:
 
 
 class TestPlotLiquidityAtTouch:
+    # Now a comparable concept (L2 step + L3 composition), so level is explicit.
     def test_returns_figure(self, sample_depth_summary):
         data = _data.prepare_liquidity_at_touch_data(sample_depth_summary)
-        fig = plot("liquidity_at_touch", **data)
+        fig = plot("liquidity_at_touch", Level.L2, **data)
         assert isinstance(fig, Figure)
 
     def test_accepts_ax(self, sample_depth_summary):
         fig_orig, ax_orig = plt.subplots()
         data = _data.prepare_liquidity_at_touch_data(sample_depth_summary)
-        fig = plot("liquidity_at_touch", ax=ax_orig, **data)
+        fig = plot("liquidity_at_touch", Level.L2, ax=ax_orig, **data)
         assert fig is fig_orig
 
     def test_lines_drawn_with_transparency(self, sample_depth_summary):
         # The bid/ask step series overplot heavily in the dense band; drawing
         # them with alpha < 1 keeps both legible where they overlap.
         data = _data.prepare_liquidity_at_touch_data(sample_depth_summary)
-        fig = plot("liquidity_at_touch", **data)
+        fig = plot("liquidity_at_touch", Level.L2, **data)
         ax = fig.axes[0]
         lines = ax.get_lines()
         assert lines  # both series drawn
         for ln in lines:
             alpha = ln.get_alpha()
             assert alpha is not None and alpha < 1.0
+
+
+class TestPlotLiquidityAtTouchL3:
+    """§4.1c queue-composition strip (age x rank pcolormesh)."""
+
+    @staticmethod
+    def _grid_data() -> dict:
+        ages = np.array([[1.0, 2.0, np.nan], [np.nan, 5.0, 6.0]])  # 2 ranks x 3 cols
+        times = pd.date_range("2015-05-01", periods=3, freq="s").to_numpy()
+        return {"ages": ages, "times": times, "max_rank": 2, "side": "bid"}
+
+    def test_returns_figure_with_mesh(self) -> None:
+        fig = plot("liquidity_at_touch", Level.L3, **self._grid_data())
+        ax = fig.axes[0]
+        assert isinstance(fig, Figure)
+        assert ax.collections  # the pcolormesh QuadMesh
+        assert "rank" in ax.get_ylabel().lower()
+
+    def test_empty_grid_is_safe(self) -> None:
+        data = {
+            "ages": np.empty((0, 0)),
+            "times": np.array([], dtype="datetime64[ns]"),
+            "max_rank": 0,
+            "side": "bid",
+        }
+        assert isinstance(plot("liquidity_at_touch", Level.L3, **data), Figure)
 
 
 class TestPlotOrderOutcomeL3:

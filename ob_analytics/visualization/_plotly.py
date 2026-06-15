@@ -795,6 +795,37 @@ def plotly_liquidity_at_touch(data: dict) -> Any:
     return fig
 
 
+def plotly_liquidity_at_touch_per_order(data: dict) -> Any:
+    """L3 (MBO) queue composition at the touch: order age by rank over time.
+
+    A ``go.Heatmap`` of order age over time x FIFO rank (rank 1 = front, at the
+    bottom); pale = recent churn, dark = sticky liquidity.
+    """
+    go = _import_plotly()
+    side = data.get("side", "bid")
+    fig = _base_figure(go, title=f"Queue composition at the touch ({side})")
+    ages = data["ages"]
+    max_rank = data["max_rank"]
+    if max_rank and ages.size:
+        import pandas as pd
+
+        fig.add_trace(
+            go.Heatmap(
+                z=ages,
+                x=pd.to_datetime(data["times"]),
+                y=list(range(1, max_rank + 1)),
+                colorscale="Blues",
+                colorbar=dict(title="Age (s)"),
+                hovertemplate=(
+                    "Time: %{x}<br>Rank: %{y}<br>Age: %{z:.1f}s<extra></extra>"
+                ),
+            )
+        )
+    fig.update_xaxes(title_text="Time")
+    fig.update_yaxes(title_text=f"Queue rank (1 = front, {side})")
+    return fig
+
+
 def plotly_order_outcome_per_order(data: dict) -> Any:
     """L3 (MBO) order outcome: each order as placement distance x size, by fate.
 
@@ -1350,6 +1381,7 @@ for _concept, _level, _fn in [
     ("order_outcome", _L3, plotly_order_outcome_per_order),
     ("queue_position", _L3, plotly_queue_position_per_order),
     ("liquidity_at_touch", _L2, plotly_liquidity_at_touch),
+    ("liquidity_at_touch", _L3, plotly_liquidity_at_touch_per_order),
     ("cancellations", _L2, plotly_volume_map),
     ("cancellations", _L3, plotly_cancellations_per_order),
     ("book_snapshot", _L2, plotly_book_snapshot_aggregate),

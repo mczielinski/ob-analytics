@@ -425,25 +425,37 @@ def build_gallery_model(
     )
 
     if not depth_summary_offset.empty:
-        # Liquidity at the touch is L2 (MBP): best bid/ask resting size over time.
-        # The L3 counterpart needs FIFO queue reconstruction and is deferred, so
-        # this concept ships single-variant (not comparable) for now.
+        # Liquidity at the touch is now a comparable pair: L2 = best bid/ask
+        # resting size (MBP); L3 = the FIFO queue-composition strip (MBO,
+        # order age by rank), reconstructed by the queue engine.
         concepts.append(
-            _l2(
+            _paired(
                 "liquidity_at_touch",
                 "Liquidity at the Touch",
-                "liquidity_at_touch",
-                _viz_data.prepare_liquidity_at_touch_data,
-                {
-                    "depth_summary": depth_summary_offset,
-                    "start_time": zoom_start,
-                    "end_time": zoom_end,
-                    "volume_scale": volume_scale,
-                },
+                PlotSpec(
+                    "liquidity_at_touch",
+                    "Liquidity at the touch (best size)",
+                    "liquidity_at_touch",
+                    _viz_data.prepare_liquidity_at_touch_data,
+                    {
+                        "depth_summary": depth_summary_offset,
+                        "start_time": zoom_start,
+                        "end_time": zoom_end,
+                        "volume_scale": volume_scale,
+                    },
+                ),
+                PlotSpec(
+                    "liquidity_at_touch",
+                    "Queue composition at the touch (age x rank)",
+                    "liquidity_at_touch",
+                    _viz_data.prepare_liquidity_at_touch_l3_data,
+                    {"events": events, "start_time": zoom_start, "end_time": zoom_end},
+                ),
                 note=(
-                    "Resting size at the best bid and best ask over a "
-                    "zoomed window - the liquidity a marketable order "
-                    "meets first."
+                    "Liquidity a marketable order meets first. L2: resting size "
+                    "at the best bid/ask. L3: the touch queue's composition - "
+                    "each cell is the age of the order at that rank; pale = "
+                    "recent churn, dark = sticky liquidity."
                 ),
             )
         )
