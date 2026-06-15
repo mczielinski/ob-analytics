@@ -403,6 +403,7 @@ class TestBuildGalleryModel:
             "cancellations",
             "events_histogram",
             "order_outcome",
+            "queue_position",
         } <= keys
         # The five concepts that ship both an aggregate (L2/MBP) and a per-order
         # (L3/MBO) face are the comparable ones: book_snapshot + depth_chart

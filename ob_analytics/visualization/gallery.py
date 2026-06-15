@@ -403,6 +403,27 @@ def build_gallery_model(
             )
         )
 
+    # Queue position is L3-only: the FIFO queue engine reconstructs each
+    # touch order's rank over time.  No aggregate counterpart (rank is an
+    # MBO notion).  Visible-only (hidden orders absent).
+    concepts.append(
+        _l3(
+            "queue_position",
+            "Queue Position",
+            "queue_position",
+            _viz_data.prepare_queue_position_l3_data,
+            # Clip to the zoom window: a whole session of touch orders smears
+            # into a band at the front; a minutes-wide slice shows individual
+            # orders climbing the queue.
+            {"events": events, "start_time": zoom_start, "end_time": zoom_end},
+            note=(
+                "Each line is a resting order's FIFO rank at the touch over "
+                "time, marching toward the front (rank 1, at the top) as the "
+                "orders ahead fill or cancel; colour = how it ended."
+            ),
+        )
+    )
+
     if not depth_summary_offset.empty:
         # Liquidity at the touch is L2 (MBP): best bid/ask resting size over time.
         # The L3 counterpart needs FIFO queue reconstruction and is deferred, so
