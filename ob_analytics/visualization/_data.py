@@ -646,6 +646,52 @@ def prepare_order_activity_l3_data(
     }
 
 
+def prepare_queue_position_l3_data(
+    events: pd.DataFrame,
+    *,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+    marker_threshold: int = 400,
+) -> dict[str, Any]:
+    """L3 (MBO) queue position: each touch order's FIFO rank over time, by fate.
+
+    Consumes the queue engine (:func:`ob_analytics.queue.queue_positions` at the
+    touch) and joins each order's terminal outcome
+    (:func:`~ob_analytics.analytics.order_lifecycles`), so a trajectory traces an
+    order marching toward the front (rank 1) as the orders ahead fill or cancel,
+    coloured by how it ended.  Visible-only (hidden orders absent).
+
+    Returns one frame per fate (``filled`` / ``cancelled`` / ``resting``) with
+    ``timestamp``, ``id``, ``rank``, ``age_s``; ``max_rank`` for the (inverted)
+    y-axis; and ``show_markers`` (terminal × / ○ only when few enough orders).
+    """
+    from ob_analytics.analytics import order_lifecycles
+    from ob_analytics.queue import queue_positions
+
+    start_time, end_time = _default_start_end(events, start_time, end_time)
+    q = queue_positions(events, levels="touch")
+    q = q[(q["timestamp"] >= start_time) & (q["timestamp"] <= end_time)]
+
+    fate_map = {
+        "filled": "filled",
+        "partial": "filled",
+        "cancelled": "cancelled",
+        "resting": "resting",
+    }
+    life = order_lifecycles(events)[["id", "outcome"]]
+    q = q.merge(life, on="id", how="left")
+    q["fate"] = q["outcome"].map(fate_map).fillna("resting")
+
+    max_rank = int(q["rank"].max()) if not q.empty else 1
+    return {
+        "filled": q[q["fate"] == "filled"],
+        "cancelled": q[q["fate"] == "cancelled"],
+        "resting": q[q["fate"] == "resting"],
+        "max_rank": max_rank,
+        "show_markers": q["id"].nunique() <= marker_threshold,
+    }
+
+
 def prepare_liquidity_at_touch_data(
     depth_summary: pd.DataFrame,
     volume_scale: float | None = None,

@@ -68,6 +68,41 @@ class TestPipelineResultPlot:
         assert isinstance(result.plot("trade_tape", "L3", volume_scale=1.0), Figure)
 
 
+class TestQueuePositionFace:
+    """The §4.1b queue_position.L3 face (FIFO rank-vs-time at the touch)."""
+
+    def test_renders_both_backends(self, result: PipelineResult) -> None:
+        pytest.importorskip("plotly.graph_objects")
+        import plotly.graph_objects as go
+
+        assert isinstance(plot_result(result, "queue_position"), Figure)
+        assert isinstance(
+            plot_result(result, "queue_position", "L3", backend="plotly"), go.Figure
+        )
+
+    def test_l3_only(self, result: PipelineResult) -> None:
+        assert available_concepts(result)["queue_position"] == ["L3"]
+
+    def test_rank_axis_inverted_front_at_top(self, result: PipelineResult) -> None:
+        # rank 1 (front of queue) must sit at the TOP -> inverted y-axis.
+        ax = plot_result(result, "queue_position").axes[0]
+        lo, hi = ax.get_ylim()
+        assert lo > hi  # inverted
+        assert "rank" in ax.get_ylabel().lower()
+
+    def test_prepare_schema(self, result: PipelineResult) -> None:
+        data = prepare.queue_position_l3(result.events)
+        assert set(data) >= {
+            "filled",
+            "cancelled",
+            "resting",
+            "max_rank",
+            "show_markers",
+        }
+        for fate in (data["filled"], data["cancelled"], data["resting"]):
+            assert {"timestamp", "id", "rank", "age_s"} <= set(fate.columns)
+
+
 class TestAvailableConcepts:
     def test_lists_concepts_and_levels(self, result: PipelineResult) -> None:
         ac = available_concepts(result)
@@ -76,6 +111,7 @@ class TestAvailableConcepts:
         assert "depth_heatmap" in ac
         assert ac["trade_tape"] == ["L2", "L3"]  # comparable
         assert ac["order_outcome"] == ["L3"]  # L3-only
+        assert ac["queue_position"] == ["L3"]  # L3-only (FIFO queue engine)
 
 
 class TestPrepareNamespace:

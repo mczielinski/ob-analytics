@@ -726,6 +726,52 @@ def plotly_order_activity_per_order(data: dict) -> Any:
     return fig
 
 
+def _queue_traj_xy(side: Any) -> tuple[list, list]:
+    """One ``None``-gapped polyline per order: (timestamps, ranks) over time."""
+    xs: list = []
+    ys: list = []
+    for _, g in side.groupby("id", sort=False):
+        g = g.sort_values("timestamp")
+        xs.extend(g["timestamp"].tolist())
+        xs.append(None)
+        ys.extend(g["rank"].tolist())
+        ys.append(None)
+    return xs, ys
+
+
+def plotly_queue_position_per_order(data: dict) -> Any:
+    """L3 (MBO) queue position: each touch order's FIFO rank over time, by fate.
+
+    One ``Scattergl`` trace per fate (all that fate's order trajectories as a
+    single ``None``-gapped polyline) so the line cloud scales; the y-axis is
+    reversed so rank 1 (front of queue) sits at the top.
+    """
+    go = _import_plotly()
+    fig = _base_figure(go, title="Queue position at the touch")
+    for side, color, label in (
+        (data["filled"], _FILLED_COLOR, "filled"),
+        (data["cancelled"], _CANCELLED_COLOR, "cancelled"),
+        (data["resting"], _PARTIAL_COLOR, "still resting"),
+    ):
+        if side.empty:
+            continue
+        xs, ys = _queue_traj_xy(side)
+        fig.add_trace(
+            go.Scattergl(
+                x=xs,
+                y=ys,
+                mode="lines",
+                line=dict(color=color, width=1.2, shape="hv"),
+                opacity=0.6,
+                name=label,
+                hoverinfo="skip",
+            )
+        )
+    fig.update_xaxes(title_text="Time")
+    fig.update_yaxes(title_text="Queue rank (1 = front)", autorange="reversed")
+    return fig
+
+
 def plotly_liquidity_at_touch(data: dict) -> Any:
     """L2 (MBP) liquidity at the touch: best bid/ask resting size over time."""
     go = _import_plotly()
@@ -1302,6 +1348,7 @@ for _concept, _level, _fn in [
     ("order_activity", _L2, plotly_event_map),
     ("order_activity", _L3, plotly_order_activity_per_order),
     ("order_outcome", _L3, plotly_order_outcome_per_order),
+    ("queue_position", _L3, plotly_queue_position_per_order),
     ("liquidity_at_touch", _L2, plotly_liquidity_at_touch),
     ("cancellations", _L2, plotly_volume_map),
     ("cancellations", _L3, plotly_cancellations_per_order),

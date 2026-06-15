@@ -884,6 +884,70 @@ def mpl_order_activity_per_order(
     return fig
 
 
+def mpl_queue_position_per_order(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """L3 (MBO) queue position: each touch order's FIFO rank over time, by fate.
+
+    Each line is one order's march toward the front (rank 1, at the top of the
+    inverted y-axis) as orders ahead leave; colour = terminal outcome, with a
+    × (filled) / ○ (cancelled) at the order's last seen rank when sparse.
+    """
+    fig, ax = _create_axes(ax, figsize=(11, 7), theme=theme)
+    show_markers = data.get("show_markers", False)
+    drew_any = False
+    for side, color, label, marker in (
+        (data["filled"], _FILLED_COLOR, "filled", "x"),
+        (data["cancelled"], _CANCELLED_COLOR, "cancelled", "o"),
+        (data["resting"], _PARTIAL_COLOR, "still resting", None),
+    ):
+        if side.empty:
+            continue
+        drew_any = True
+        for _, g in side.groupby("id", sort=False):
+            g = g.sort_values("timestamp")
+            ax.plot(
+                mdates.date2num(g["timestamp"]),
+                g["rank"].to_numpy(),
+                color=color,
+                alpha=0.5,
+                linewidth=1.0,
+                drawstyle="steps-post",
+            )
+        if show_markers and marker is not None:
+            ends = side.sort_values("timestamp").groupby("id", sort=False).tail(1)
+            x = mdates.date2num(ends["timestamp"])
+            if marker == "o":  # cancelled: open circle
+                ax.scatter(
+                    x,
+                    ends["rank"],
+                    marker="o",
+                    s=22,
+                    facecolors="none",
+                    edgecolors=color,
+                    linewidths=0.8,
+                    zorder=4,
+                )
+            else:  # filled: cross
+                ax.scatter(x, ends["rank"], marker=marker, s=22, color=color, zorder=4)
+
+    format_time_axis(ax)
+    ax.set_ylim(bottom=0.5, top=data.get("max_rank", 1) + 0.5)
+    ax.invert_yaxis()  # rank 1 (front of queue) at the top
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Queue rank (1 = front)")
+    ax.set_title("Queue position at the touch")
+    if drew_any:
+        handles = [
+            Line2D([0], [0], color=_FILLED_COLOR, label="filled"),
+            Line2D([0], [0], color=_CANCELLED_COLOR, label="cancelled"),
+            Line2D([0], [0], color=_PARTIAL_COLOR, label="still resting"),
+        ]
+        ax.legend(handles=handles, loc="upper right")
+    fig.tight_layout()
+    return fig
+
+
 def mpl_liquidity_at_touch(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -1472,6 +1536,7 @@ for _concept, _level, _fn in [
     ("order_activity", _L2, mpl_event_map),
     ("order_activity", _L3, mpl_order_activity_per_order),
     ("order_outcome", _L3, mpl_order_outcome_per_order),
+    ("queue_position", _L3, mpl_queue_position_per_order),
     ("liquidity_at_touch", _L2, mpl_liquidity_at_touch),
     ("cancellations", _L2, mpl_volume_map),
     ("cancellations", _L3, mpl_cancellations_per_order),
