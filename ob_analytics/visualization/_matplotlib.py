@@ -986,6 +986,44 @@ def mpl_liquidity_at_touch(
     return fig
 
 
+def mpl_liquidity_at_touch_per_order(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """L3 (MBO) queue composition at the touch: order age by rank over time.
+
+    A ``pcolormesh`` of order age over time (x) x FIFO rank (y, 1 = front at the
+    bottom); pale = recent churn, dark = sticky liquidity.
+    """
+    fig, ax = _create_axes(ax, figsize=(12, 6), theme=theme)
+    ages = data["ages"]
+    times = data["times"]
+    max_rank = data["max_rank"]
+    side = data.get("side", "bid")
+
+    if max_rank == 0 or ages.size == 0:
+        ax.set_title("Queue composition at the touch (no data)")
+        return fig
+
+    xc = mdates.date2num(pd.to_datetime(times))
+    if len(xc) > 1:
+        mids = (xc[:-1] + xc[1:]) / 2
+        xedges = np.concatenate([[2 * xc[0] - mids[0]], mids, [2 * xc[-1] - mids[-1]]])
+    else:
+        xedges = np.array([xc[0] - 0.5, xc[0] + 0.5])
+    yedges = np.arange(0.5, max_rank + 1.5)
+
+    pcm = ax.pcolormesh(xedges, yedges, ages, cmap="Blues", shading="flat")
+    cbar = fig.colorbar(pcm, ax=ax)
+    cbar.set_label("Order age (s)")
+
+    format_time_axis(ax)
+    ax.set_xlabel("Time")
+    ax.set_ylabel(f"Queue rank (1 = front, {side})")
+    ax.set_title(f"Queue composition at the touch ({side})")
+    fig.tight_layout()
+    return fig
+
+
 def mpl_order_outcome_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -1538,6 +1576,7 @@ for _concept, _level, _fn in [
     ("order_outcome", _L3, mpl_order_outcome_per_order),
     ("queue_position", _L3, mpl_queue_position_per_order),
     ("liquidity_at_touch", _L2, mpl_liquidity_at_touch),
+    ("liquidity_at_touch", _L3, mpl_liquidity_at_touch_per_order),
     ("cancellations", _L2, mpl_volume_map),
     ("cancellations", _L3, mpl_cancellations_per_order),
     ("book_snapshot", _L2, mpl_book_snapshot_aggregate),

@@ -13,6 +13,7 @@ matches the *visible* book, not the full book.
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 QUEUE_COLUMNS: tuple[str, ...] = (
@@ -134,3 +135,94 @@ def queue_positions(
         emit(ts, oid, level, q, "changed")
 
     return pd.DataFrame(rows, columns=QUEUE_COLUMNS)
+
+
+def queue_age_grid(
+    events: pd.DataFrame,
+    *,
+    side: str = "bid",
+    n_time: int = 200,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Touch-queue composition over time: the age of the order at each rank.
+
+    Replays one side's events and snapshots its touch (best) level at *n_time*
+    evenly spaced instants, recording each resting order's age by FIFO rank.
+    The grid feeds the ``liquidity_at_touch`` L3 composition strip (a
+    ``pcolormesh``/``Heatmap`` of age over time x rank).
+
+    Parameters
+    ----------
+    events : pandas.DataFrame
+        Canonical events (``event_id``/``id``/``timestamp``/``price``/
+        ``volume``/``direction``/``action``).
+    side : {"bid", "ask"}
+        Which touch to compose (default ``"bid"`` -- the front HFT queue-position
+        research lives in).
+    n_time : int
+        Number of time columns.
+
+    Returns
+    -------
+    (ages, times, max_rank)
+        ``ages`` is a ``(max_rank, n_time)`` float array: ``ages[r, t]`` is the
+        age in **seconds** of the order at rank ``r + 1`` (front = row 0) at
+        sample ``t``, or ``NaN`` where the queue is shorter than ``r + 1``.
+        ``times`` is the length-``n_time`` array of sample timestamps
+        (``datetime64[ns]``).  Visible-only (hidden orders absent).
+    """
+    if side not in ("bid", "ask"):
+        raise ValueError(f"side must be 'bid' or 'ask', got {side!r}")
+
+    cols = ["event_id", "id", "timestamp", "price", "volume", "direction", "action"]
+    ev = events.loc[(events["id"] != 0) & (events["direction"] == side), cols]
+    ev = ev.sort_values(["timestamp", "event_id"], kind="stable")
+    if ev.empty or n_time < 1:
+        return np.empty((0, 0)), np.array([], dtype="datetime64[ns]"), 0
+
+    t0 = ev["timestamp"].iloc[0]
+    t1 = ev["timestamp"].iloc[-1]
+    samples = pd.date_range(t0, t1, periods=n_time)
+
+    queues: dict[float, dict[int, float]] = {}  # price -> {id: remaining}
+    created_ts: dict[int, pd.Timestamp] = {}
+    live: set[float] = set()
+
+    def best() -> float | None:
+        if not live:
+            return None
+        return max(live) if side == "bid" else min(live)
+
+    recs = ev[["id", "timestamp", "price", "volume", "action"]].itertuples(
+        index=False, name=None
+    )
+    snaps: list[list[float]] = []
+    pending = next(recs, None)
+    for s in samples:
+        # Apply every event at or before this sample instant.
+        while pending is not None and pending[1] <= s:
+            oid, _ts, price, volume, action = pending
+            if action == "created":
+                created_ts[oid] = _ts
+                queues.setdefault(price, {})[oid] = float(volume)
+                live.add(price)
+            elif price in queues and oid in queues[price]:
+                if action == "deleted" or volume <= 0:
+                    del queues[price][oid]
+                    if not queues[price]:
+                        live.discard(price)
+                else:
+                    queues[price][oid] = float(volume)
+            pending = next(recs, None)
+
+        bp = best()
+        if bp is None:
+            snaps.append([])
+            continue
+        snaps.append([(s - created_ts[oid]).total_seconds() for oid in queues[bp]])
+
+    max_rank = max((len(c) for c in snaps), default=0)
+    ages = np.full((max_rank, n_time), np.nan, dtype=float)
+    for t, col in enumerate(snaps):
+        if col:
+            ages[: len(col), t] = col
+    return ages, samples.to_numpy(), max_rank

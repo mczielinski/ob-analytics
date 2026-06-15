@@ -42,6 +42,7 @@ from ob_analytics.visualization._plotly import (  # noqa: E402
     plotly_events_histogram,
     plotly_kyle_lambda,
     plotly_liquidity_at_touch,
+    plotly_liquidity_at_touch_per_order,
     plotly_order_activity_per_order,
     plotly_order_flow_imbalance,
     plotly_order_outcome_per_order,
@@ -285,6 +286,21 @@ class TestPlotlyLiquidityAtTouch:
         data = prepare_liquidity_at_touch_data(sample_depth_summary)
         fig = plotly_liquidity_at_touch(data)
         assert all(trace.type == "scatter" for trace in fig.data)
+
+
+class TestPlotlyLiquidityAtTouchL3:
+    def test_returns_heatmap(self) -> None:
+        # §4.1c queue-composition strip -> a single binned Heatmap.
+        ages = np.array([[1.0, 2.0, np.nan], [np.nan, 5.0, 6.0]])
+        data = {
+            "ages": ages,
+            "times": pd.date_range("2015-05-01", periods=3, freq="s").to_numpy(),
+            "max_rank": 2,
+            "side": "bid",
+        }
+        fig = plotly_liquidity_at_touch_per_order(data)
+        assert isinstance(fig, go.Figure)
+        assert [tr.type for tr in fig.data] == ["heatmap"]
 
 
 class TestPlotlyOrderOutcomeL3:

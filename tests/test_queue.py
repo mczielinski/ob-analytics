@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 
-from ob_analytics.queue import QUEUE_COLUMNS, queue_positions
+from ob_analytics.queue import QUEUE_COLUMNS, queue_age_grid, queue_positions
 
 TS = pd.Timestamp("2015-05-01 00:00:00")
 
@@ -169,3 +170,56 @@ class TestEdgeCases:
     def test_invalid_levels_raises(self) -> None:
         with pytest.raises(ValueError, match="levels must be"):
             queue_positions(_events(SCENARIO), levels="nope")
+
+
+class TestQueueAgeGrid:
+    # A at t0, B joins at t10, A leaves at t20 (bid level 100).
+    GRID_EVENTS = [
+        {"id": 1, "t": 0, "price": 100.0, "vol": 10.0, "action": "created"},
+        {"id": 2, "t": 10, "price": 100.0, "vol": 5.0, "action": "created"},
+        {"id": 1, "t": 20, "price": 100.0, "vol": 10.0, "action": "deleted"},
+    ]
+
+    def test_shape_and_per_rank_age(self) -> None:
+        ages, times, mr = queue_age_grid(
+            _events(self.GRID_EVENTS), side="bid", n_time=5
+        )
+        assert mr == 2  # deepest the bid queue gets is 2
+        assert ages.shape == (2, 5)
+        assert len(times) == 5
+        # samples at t=0,5,10,15,20. At t=10 both rest: front(A)=10s, back(B)=0s.
+        assert ages[0, 2] == 10.0
+        assert ages[1, 2] == 0.0
+        # front order is always older than the one behind it.
+        assert ages[0, 3] > ages[1, 3]
+
+    def test_front_is_row_zero_nan_when_short(self) -> None:
+        ages, _, _ = queue_age_grid(_events(self.GRID_EVENTS), side="bid", n_time=5)
+        # at t=0 only A rests -> rank 2 (row 1) is empty.
+        assert np.isfinite(ages[0, 0])
+        assert np.isnan(ages[1, 0])
+
+    def test_side_filter(self) -> None:
+        # All-ask events -> the bid grid is empty.
+        ev = _events(
+            [
+                {
+                    "id": 1,
+                    "t": 0,
+                    "price": 100.0,
+                    "vol": 5.0,
+                    "dir": "ask",
+                    "action": "created",
+                }
+            ]
+        )
+        ages, _, mr = queue_age_grid(ev, side="bid", n_time=5)
+        assert mr == 0 and ages.size == 0
+
+    def test_empty_events(self) -> None:
+        ages, times, mr = queue_age_grid(_events([]), side="bid", n_time=5)
+        assert mr == 0 and ages.size == 0 and len(times) == 0
+
+    def test_invalid_side_raises(self) -> None:
+        with pytest.raises(ValueError, match="side must be"):
+            queue_age_grid(_events(self.GRID_EVENTS), side="nope")
