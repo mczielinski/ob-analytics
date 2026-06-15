@@ -644,7 +644,7 @@ class TestPrepareVolumePercentiles:
         assert lum[0] < lum[-1]
 
     def test_two_hue_families_share_luminance(self) -> None:
-        # §3.7: asks (blue) and bids (orange) share a luminance ramp so they
+        # §3.7: bids (blue) and asks (orange) share a luminance ramp so they
         # stay distinguishable in grayscale, but differ in hue in colour.
         from ob_analytics.visualization._data import _volume_percentile_palette
 
