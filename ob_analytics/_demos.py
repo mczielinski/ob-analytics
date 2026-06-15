@@ -21,6 +21,7 @@ from ob_analytics.visualization.gallery import (
     PlotSpec,
     build_gallery_model,
     generate_gallery,
+    ofi_horizon_panel,
     trading_halts_panel,
 )
 
@@ -200,6 +201,8 @@ def run_lobster_demo(
     analytics: list[PlotSpec] = []
     if halts is not None and not halts.empty:
         analytics.append(trading_halts_panel(result.trades, halts))
+    if not result.trades.empty:
+        analytics.append(ofi_horizon_panel(result.trades))
 
     return _save_and_gallery(
         result,

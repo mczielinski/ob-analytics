@@ -692,11 +692,35 @@ def prepare_queue_position_l3_data(
     }
 
 
+def _event_rug(
+    events: pd.DataFrame | None,
+    start_time: pd.Timestamp,
+    end_time: pd.Timestamp,
+) -> dict[str, np.ndarray] | None:
+    """Tick times per event class (created / cancelled / filled) in the window.
+
+    The rug under the liquidity series shows *when* the book churned -- bursts
+    of adds, cancels, and fills the aggregate best-size line alone hides.
+    """
+    if events is None or events.empty:
+        return None
+    win = events[
+        (events["timestamp"] >= start_time) & (events["timestamp"] <= end_time)
+    ]
+    fill = win["fill"] if "fill" in win.columns else pd.Series(0.0, index=win.index)
+    return {
+        "created": win.loc[win["action"] == "created", "timestamp"].to_numpy(),
+        "cancelled": win.loc[win["action"] == "deleted", "timestamp"].to_numpy(),
+        "filled": win.loc[fill > 0, "timestamp"].to_numpy(),
+    }
+
+
 def prepare_liquidity_at_touch_data(
     depth_summary: pd.DataFrame,
     volume_scale: float | None = None,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
+    events: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """L2 (MBP) liquidity at the touch: best bid/ask resting size over time.
 
@@ -705,6 +729,9 @@ def prepare_liquidity_at_touch_data(
     (``best_ask_vol``).  Size at a price level carries no order identity, so this
     is an L2 quantity by construction; the per-order L3 counterpart is the
     queue-composition strip (:func:`prepare_liquidity_at_touch_l3_data`).
+
+    Pass *events* to add an **event rug** beneath the series -- created /
+    cancelled / filled tick marks showing when the book churned.
     """
     start_time, end_time = _default_start_end(depth_summary, start_time, end_time)
     win = depth_summary[
@@ -716,7 +743,9 @@ def prepare_liquidity_at_touch_data(
     if volume_scale is None:
         combined = pd.concat([bid_vol, ask_vol])
         volume_scale = infer_volume_scale(combined) if not combined.empty else 1.0
+    rug = _event_rug(events, start_time, end_time)
     return {
+        "rug": rug,
         "timestamp": win["timestamp"].reset_index(drop=True),
         "bid_vol": (bid_vol * volume_scale).reset_index(drop=True),
         "ask_vol": (ask_vol * volume_scale).reset_index(drop=True),
@@ -1512,6 +1541,74 @@ def prepare_ofi_data(
         "ofi_df": ofi_df,
         "trades": trades,
         "colors": colors,
+    }
+
+
+def prepare_ofi_horizon_data(
+    trades: pd.DataFrame,
+    *,
+    horizons: tuple[str, ...] = ("5s", "15s", "60s", "300s"),
+    grid: str = "5s",
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+) -> dict[str, Any]:
+    """Multi-horizon order-flow-imbalance grid for the OFI horizon graph.
+
+    A single OFI line shows one lookback; this computes OFI at several
+    *horizons* and aligns them onto one *grid* so short- vs long-horizon
+    pressure can be compared at a glance.  Each row is a horizon; the value is
+    OFI in ``[-1, +1]`` (buy pressure positive), rendered as a stacked
+    horizon-graph band per row.
+
+    Each horizon is a *trailing rolling window* evaluated at every grid step
+    (not a coarse non-overlapping resample), so long horizons read as smooth
+    curves and short ones as jumpy -- the persistent-vs-fleeting contrast --
+    rather than wide forward-filled blocks.
+
+    Returns ``ofi`` (a ``len(horizons)`` x ``n_grid`` array, longest horizon
+    last so it plots at the top), ``times`` (grid timestamps) and ``horizons``.
+    """
+    start_time, end_time = _default_start_end(trades, start_time, end_time)
+    tr = trades[(trades["timestamp"] >= start_time) & (trades["timestamp"] <= end_time)]
+    if tr.empty:
+        return {
+            "ofi": np.empty((0, 0)),
+            "times": np.array([], dtype="datetime64[ns]"),
+            "horizons": list(horizons),
+        }
+
+    step = pd.Timedelta(grid)
+    gidx = pd.date_range(
+        tr["timestamp"].min().floor(grid), tr["timestamp"].max().ceil(grid), freq=grid
+    )
+    # Signed volume binned onto the fine grid, then trailing-summed per horizon.
+    floored = tr["timestamp"].dt.floor(grid)
+    is_buy = tr["direction"] == "buy"
+    buy = (
+        tr["volume"]
+        .where(is_buy, 0.0)
+        .groupby(floored)
+        .sum()
+        .reindex(gidx, fill_value=0.0)
+    )
+    sell = (
+        tr["volume"]
+        .where(~is_buy, 0.0)
+        .groupby(floored)
+        .sum()
+        .reindex(gidx, fill_value=0.0)
+    )
+    rows = []
+    for h in horizons:
+        k = max(round(pd.Timedelta(h).total_seconds() / step.total_seconds()), 1)
+        b = buy.rolling(k, min_periods=1).sum()
+        s = sell.rolling(k, min_periods=1).sum()
+        total = (b + s).replace(0.0, np.nan)
+        rows.append(((b - s) / total).to_numpy())
+    return {
+        "ofi": np.vstack(rows),
+        "times": gidx.to_numpy(),
+        "horizons": list(horizons),
     }
 
 
