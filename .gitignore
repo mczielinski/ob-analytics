@@ -168,3 +168,6 @@ bitstamp_output_live/
 lobster_output/
 gallery_output/
 output/
+
+# Planning docs — kept locally, never tracked
+docs/plans/

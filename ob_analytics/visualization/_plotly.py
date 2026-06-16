@@ -964,7 +964,7 @@ def plotly_order_outcome_per_order(data: dict) -> Any:
     go = _import_plotly()
     fig = _base_figure(go, title="Order outcome by placement distance and size")
     # Cancelled first (underneath) and faded; see the matplotlib backend.
-    # A distance-binned fate variant is roadmap §3.8 (docs/plans/).
+    # A distance-binned fate variant is a possible future enhancement.
     for frame, color, label, pt_opacity in (
         (data["cancelled"], _CANCELLED_COLOR, "cancelled", 0.18),
         (data["partial"], _PARTIAL_COLOR, "partial", 0.6),
@@ -989,7 +989,7 @@ def plotly_order_outcome_per_order(data: dict) -> Any:
             )
         )
     # The touch: points right of it improved the best quote (the aggressive
-    # tail the asymmetric clip in the prepare fn keeps visible — roadmap §3.8).
+    # tail the asymmetric clip in the prepare fn keeps visible).
     fig.add_vline(
         x=0,
         line_dash="dash",
@@ -1012,7 +1012,7 @@ def plotly_trade_tape_per_order(data: dict) -> Any:
     volume, coloured by aggressor side), plus the L3 differentiator: a faint
     span from each consumed maker order's creation to its fill.  Trade prices
     are never clipped; above the density threshold the lollipops are per-second
-    VWAPs (roadmap §3.4).  All clouds use ``Scattergl`` (WebGL) so they scale.
+    VWAPs.  All clouds use ``Scattergl`` (WebGL) so they scale.
     """
     go = _import_plotly()
     fig = _base_figure(go, title="Trade tape with maker order lifecycles")
@@ -1417,7 +1417,7 @@ def plotly_hidden_executions(data: dict) -> Any:
     if has_hidden and not hidden.empty:
         # Hue by aggressor side instead of a Reds-by-volume ramp: size already
         # encodes volume (bounded via ``normalized_marker_areas``), so colouring
-        # by volume too washed typical prints out to near-white (roadmap §3.6).
+        # by volume too washed typical prints out to near-white.
         sizes = mpl_marker_area_to_plotly_size(data["marker_area"])
         direction = data.get("direction")
         col_map = {"bid": _BID_COLOR, "ask": _ASK_COLOR}

@@ -676,7 +676,7 @@ def _mpl_depth_curve(
     """Cumulative-depth curve: stepped per level (L2) or per order (L3).
 
     The L3 face currently differs from L2 only by per-order markers; making the
-    per-order resolution legible is roadmap §3.x (docs/plans/, --density).
+    per-order resolution legible is a possible future enhancement (a density toggle).
     """
     fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
     for side, color, label in (
@@ -1153,7 +1153,7 @@ def mpl_order_outcome_per_order(
     any_pts = False
     # Draw the dominant 'cancelled' class first (underneath) so the rarer
     # filled/partial outcomes land on top instead of being buried, and fade it.
-    # A distance-binned fate variant is roadmap §3.8 (docs/plans/).
+    # A distance-binned fate variant is a possible future enhancement.
     for frame, color, label, pt_alpha in (
         (data["cancelled"], _CANCELLED_COLOR, "cancelled", 0.18),
         (data["partial"], _PARTIAL_COLOR, "partial", 0.6),
@@ -1172,7 +1172,7 @@ def mpl_order_outcome_per_order(
             label=label,
         )
     # The touch: points right of it improved the best quote (the aggressive
-    # tail the asymmetric clip in the prepare fn keeps visible — roadmap §3.8).
+    # tail the asymmetric clip in the prepare fn keeps visible).
     ax.axvline(x=0, color="#888888", linestyle="--", linewidth=1, label="touch")
     ax.set_title("Order outcome by placement distance and size")
     ax.set_xlabel("Placement distance from touch (bps)  -  >0 improved the touch")
@@ -1191,7 +1191,7 @@ def mpl_trade_tape_per_order(
     Same signed lollipops as the L2 tape, plus the L3 differentiator: a thin
     span from each consumed maker order's creation to its fill.  Trade prices
     are never clipped, so spike prints stay visible.  Above the density
-    threshold the lollipops are per-second VWAPs (roadmap §3.4).
+    threshold the lollipops are per-second VWAPs.
     """
     fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
     dense = data.get("dense", False)
@@ -1621,7 +1621,7 @@ def mpl_hidden_executions(
     if has_hidden and not hidden.empty:
         # Hue by aggressor side (bid/ask) -- size already encodes volume, so a
         # Reds-by-volume ramp double-encoded it and washed typical prints out to
-        # near-white (roadmap §3.6).  Fall back to a single neutral hue when no
+        # near-white.  Fall back to a single neutral hue when no
         # direction is available.  A thin contrasting edge keeps overlapping
         # prints readable as discrete events.
         neutral = "#7f8c8d"

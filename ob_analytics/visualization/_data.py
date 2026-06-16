@@ -177,7 +177,7 @@ def _volume_percentile_palette(
     luminance — but **importance ↦ salience**: index ``0`` is the near-touch
     band (most actionable liquidity) and is the *darkest*/most saturated,
     fading outward to a pale tint at the far-depth band (index ``n - 1``).
-    This inverts the legacy pale-at-touch ramp (roadmap §3.7).
+    This inverts the legacy pale-at-touch ramp.
 
     *hue* selects the colour family (``"blue"`` for bids, ``"orange"`` for
     asks -- the package-wide CVD convention).  Both families share a luminance
@@ -339,7 +339,7 @@ def prepare_trades_data(
     below), tipped by a marker whose size encodes the trade volume on a
     rank-3 (cube-root) scale.  The price axis is padded to the *data extent*
     within the time window -- trade prices are **never** quantile-clipped, so a
-    rare spike print stays fully visible (roadmap §3.4).
+    rare spike print stays fully visible.
 
     Pass *spread* (e.g. :func:`ob_analytics.depth.get_spread`) to anchor stems
     on the true book mid; without it, a rolling-median price proxy is used.
@@ -887,7 +887,7 @@ def prepare_order_outcome_l3_data(
     Placement distance is heavy-tailed on *both* tails, but the two tails are
     not equally interesting: the deep (negative) tail is plentiful noise, while
     the touch-improving (positive) tail is the rare, most-aggressive,
-    most-informative liquidity (roadmap §3.8).  A *symmetric* clip would land
+    most-informative liquidity.  A *symmetric* clip would land
     the upper bound at roughly the median and erase that positive tail, so the
     clip is **asymmetric**: ``lo = quantile(bps_quantiles[0])`` trims the deep
     noise, while ``hi = max(quantile(bps_quantiles[1]), min_positive_bps)`` keeps
@@ -981,7 +981,7 @@ def prepare_trade_tape_l3_data(
     fill, drawn at the maker's price -- the L3 differentiator, revealing how long
     the resting liquidity behind each trade had waited.
 
-    Trade prices are **never** quantile-clipped (roadmap §3.4): the y-axis is
+    Trade prices are **never** quantile-clipped: the y-axis is
     padded to the data extent within the time window, so spike prints stay fully
     visible.  Pass explicit *price_from*/*price_to* only to crop deliberately.
 
@@ -1425,7 +1425,7 @@ def prepare_volume_percentiles_data(
 
     # One ramp per side, both indexed touch (0, darkest) -> far (light).  The
     # ask/bid columns below are ordered touch-first to match, so the near-touch
-    # band sits against the zero line and is the most salient (roadmap §3.7).
+    # band sits against the zero line and is the most salient.
     n_bps = len(bps_levels)
     # Match the package CVD palette used by every other face: bid = blue,
     # ask = orange (was inverted here, the lone exception).
@@ -1680,7 +1680,7 @@ def prepare_hidden_executions_data(
         # Bounded, outlier-robust sizes: hidden share volumes are heavy-tailed
         # (one whale print dwarfs the median), so raw ``volume * scale`` blew up
         # into page-filling blobs.  ``normalized_marker_areas`` caps the spread
-        # so every print reads as a discrete marker (roadmap §3.6).
+        # so every print reads as a discrete marker.
         "marker_area": normalized_marker_areas(hidden["volume"])
         if not hidden.empty
         else np.array([]),

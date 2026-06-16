@@ -228,7 +228,7 @@ def build_gallery_model(
     spread = get_spread(depth_summary)
     zoom_start, zoom_end = _auto_zoom_window(events)
 
-    # One shared mid-anchored window feeds every clipped face (roadmap §3.0);
+    # One shared mid-anchored window feeds every clipped face;
     # faces receiving the same bounds stay comparable on shared axes.
     focus = _viz_data.focus_window(trades)
     price_from = focus.price_from
@@ -307,7 +307,7 @@ def build_gallery_model(
                 _viz_data.prepare_order_activity_l3_data,
                 # Reuses the depth heatmap's trades-median ±3σ window so the
                 # Gantt clips around the touch.  A shared FocusWindow primitive
-                # replaces these per-face clips in roadmap §3.0 (docs/plans/).
+                # would replace these per-face clips.
                 {
                     "events": events,
                     "volume_scale": volume_scale,
