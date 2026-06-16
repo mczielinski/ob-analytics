@@ -6,7 +6,7 @@ outside the installed CLI. Run via:
 
     uv run python scripts/bitstamp_demo.py
     uv run python scripts/bitstamp_demo.py --input path/to/orders.csv
-    uv run python scripts/bitstamp_demo.py --output ~/Desktop/bitstamp_gallery
+    uv run python scripts/bitstamp_demo.py --output ./bitstamp_gallery
 """
 
 from __future__ import annotations

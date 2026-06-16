@@ -52,8 +52,8 @@ def main() -> int:
     p.add_argument(
         "--out",
         type=Path,
-        default=Path.home() / "Desktop",
-        help="Parent directory for the run folder (default: ~/Desktop).",
+        default=Path.cwd(),
+        help="Parent directory for the run folder (default: current directory).",
     )
     p.add_argument(
         "--no-raw",

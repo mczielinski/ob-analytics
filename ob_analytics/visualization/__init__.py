@@ -184,7 +184,7 @@ def plot(
     return renderer(data)
 
 
-# Shared display-window primitive (roadmap §3.0): one mid-anchored clipping
+# Shared display-window primitive: one mid-anchored clipping
 # decision per gallery build instead of per-face ad-hoc clips.
 FocusWindow = _viz_data.FocusWindow
 focus_window = _viz_data.focus_window
