@@ -128,8 +128,10 @@ class TestBitstampLoader:
 
 class TestBitstampTradeReader:
     def test_loads_companion_trades(self, bitstamp_sample_dir):
-        events = BitstampLoader().load(bitstamp_sample_dir / "orders.csv")
-        trades = BitstampTradeReader().load(events, bitstamp_sample_dir / "orders.csv")
+        events = BitstampLoader().load(bitstamp_sample_dir / "orders.csv.gz")
+        trades = BitstampTradeReader().load(
+            events, bitstamp_sample_dir / "orders.csv.gz"
+        )
         assert len(trades) > 0
         for col in (
             "timestamp",

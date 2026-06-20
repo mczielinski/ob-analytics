@@ -57,7 +57,7 @@ def _frames(result: PipelineResult) -> dict[str, pd.DataFrame]:
 @pytest.fixture(scope="module")
 def demo_result(bitstamp_sample_dir) -> PipelineResult:
     return Pipeline(format=BitstampFormat()).run(
-        str(bitstamp_sample_dir / "orders.csv")
+        str(bitstamp_sample_dir / "orders.csv.gz")
     )
 
 

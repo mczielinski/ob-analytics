@@ -108,13 +108,18 @@ def run_bitstamp_demo(
     -------
     Path to the generated gallery HTML.
     """
-    default_csv = Path(__file__).resolve().parent / "_sample_data" / "orders.csv"
-    raw_input = Path(input_path) if input_path else default_csv
+    if input_path:
+        raw_input = Path(input_path)
+    else:
+        # The bundled sample (orders.csv.gz; pandas reads the gzip transparently).
+        from ob_analytics import sample_csv_path
+
+        raw_input = sample_csv_path()
     orders_path = _resolve_orders_path(raw_input)
     if not orders_path.exists():
         raise FileNotFoundError(
             f"orders.csv not found: {orders_path}. "
-            f"Provide --input or place one at {default_csv}"
+            f"Provide --input pointing at a Bitstamp orders.csv."
         )
     trades_path = orders_path.parent / "trades.csv"
     if not trades_path.exists():

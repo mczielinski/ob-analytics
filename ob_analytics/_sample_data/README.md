@@ -5,7 +5,7 @@ shipped alongside the package so `Pipeline()` runs out of the box.
 
 | File | What it is |
 |------|-----------|
-| `orders.csv` | Order events (`order_created` / `order_changed` / `order_deleted`), one row per WebSocket message. Includes a synthetic snapshot at `t=0` (REST `order_book/btcusd?group=2`) and synthetic deletes at `t=end` for everything still resting, so every order has a complete lifecycle. |
+| `orders.csv.gz` | Order events (gzip-compressed; `order_created` / `order_changed` / `order_deleted`), one row per WebSocket message. Includes a synthetic snapshot at `t=0` (REST `order_book/btcusd?group=2`) and synthetic deletes at `t=end` for everything still resting, so every order has a complete lifecycle. |
 | `trades.csv` | Live trades (`live_trades_btcusd`), one row per match. Read by `BitstampTradeReader` to produce the canonical trades DataFrame. |
 | `meta.json` | Capture metadata (start/end, channel list, snapshot microtimestamp, counters, reconnects). |
 
@@ -20,12 +20,12 @@ Headline numbers (see `meta.json` for the full set):
 ```python
 from ob_analytics import Pipeline, sample_csv_path, sample_data_dir
 
-# orders.csv path; the pipeline auto-resolves the sibling trades.csv:
+# orders.csv.gz path; the pipeline auto-resolves the sibling trades.csv:
 result = Pipeline().run(sample_csv_path())
 
 # Or hand the directory directly to the reader:
 from ob_analytics.bitstamp import BitstampLoader, BitstampTradeReader
-events = BitstampLoader().load(sample_data_dir() / "orders.csv")
+events = BitstampLoader().load(sample_data_dir() / "orders.csv.gz")
 trades = BitstampTradeReader().load(events, sample_data_dir())
 ```
 
@@ -40,8 +40,8 @@ no extra value for pipeline users).
 ./scripts/collect_bitstamp_btcusd.py --minutes 30 --out /tmp/sample-capture
 
 RUN=$(ls -dt /tmp/sample-capture/bitstamp_btcusd_* | head -1)
-cp "$RUN/orders.csv" "$RUN/trades.csv" "$RUN/meta.json" \
-   ob_analytics/_sample_data/
+gzip -9 -c "$RUN/orders.csv" > ob_analytics/_sample_data/orders.csv.gz
+cp "$RUN/trades.csv" "$RUN/meta.json" ob_analytics/_sample_data/
 ```
 
 Run the demo to confirm the bundled capture flows through end-to-end:
@@ -50,3 +50,10 @@ Run the demo to confirm the bundled capture flows through end-to-end:
 uv run python scripts/bitstamp_demo.py --output /tmp/bitstamp_demo
 open /tmp/bitstamp_demo/gallery/gallery.html
 ```
+
+## Packaging note
+
+`orders.csv.gz` is gzip-compressed (~23 MB → ~2.9 MB), so it ships in the wheel
+without bloating installs; pandas reads `.csv.gz` transparently. `trades.csv`
+(~27 KB) and `meta.json` stay uncompressed. Both the sdist and the wheel bundle
+all three.
