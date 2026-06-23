@@ -3,6 +3,7 @@ site_name = "ob-analytics"
 site_description = "Limit order book analytics and visualization for Python"
 repo_url = "https://github.com/mczielinski/ob-analytics"
 repo_name = "mczielinski/ob-analytics"
+site_url = "https://mczielinski.github.io/ob-analytics/"
 
 nav = [
   { "Home" = "index.md" },
