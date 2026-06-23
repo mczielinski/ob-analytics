@@ -1,0 +1,50 @@
+name: Docs
+
+# Build the Zensical site and deploy it to GitHub Pages on every push to main.
+# Pull requests build the site (to catch doc breakage) but do not deploy.
+#
+# One-time setup (repo admin): Settings -> Pages -> Source = "GitHub Actions".
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; never cancel an in-progress publish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+      - run: uv sync --group dev --extra interactive
+      # Pass --extra to `uv run` too so its implicit sync keeps plotly installed
+      # (mkdocstrings imports ob_analytics.visualization to read its docstrings).
+      - run: uv run --group dev --extra interactive zensical build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    # Deploy only from main; PRs stop after the build job above.
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
