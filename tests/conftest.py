@@ -12,13 +12,13 @@ SAMPLE_CSV = (
     Path(__file__).resolve().parent.parent
     / "ob_analytics"
     / "_sample_data"
-    / "orders.csv"
+    / "orders.csv.gz"
 )
 
 
 @pytest.fixture(scope="module")
 def sample_csv_path() -> Path:
-    """Path to the bundled sample orders.csv."""
+    """Path to the bundled sample orders.csv.gz."""
     if not SAMPLE_CSV.exists():
         pytest.skip(f"Sample data not found: {SAMPLE_CSV}")
     return SAMPLE_CSV
@@ -252,16 +252,16 @@ def tiny_bitstamp_orders_csv(
 
 @pytest.fixture(scope="module")
 def bitstamp_sample_dir() -> Path:
-    """Path to the bundled Bitstamp sample directory (orders.csv + trades.csv).
+    """Path to the bundled Bitstamp sample directory (orders.csv.gz + trades.csv).
 
     Use when a test needs the directory itself (e.g. to feed
     ``BitstampTradeReader.load(events, source=...)``) rather than just
-    the orders.csv path.
+    the orders.csv.gz path.
     """
     from ob_analytics import sample_data_dir
 
     d = sample_data_dir()
-    if not (d / "orders.csv").exists() or not (d / "trades.csv").exists():
+    if not (d / "orders.csv.gz").exists() or not (d / "trades.csv").exists():
         pytest.skip(f"Bitstamp sample data not found in: {d}")
     return d
 
@@ -610,14 +610,14 @@ def cli_runner():
 
 @pytest.fixture
 def bitstamp_sample_orders_only(tmp_path, sample_csv_path) -> Path:
-    """Copy just orders.csv into a temp dir (no trades.csv).
+    """Copy just the bundled orders.csv.gz into a temp dir (no trades.csv).
 
     Use to test the error path when BitstampTradeReader can't find its
     companion file.
     """
     import shutil
 
-    dest = tmp_path / "orders.csv"
+    dest = tmp_path / "orders.csv.gz"
     shutil.copy(sample_csv_path, dest)
     return dest
 

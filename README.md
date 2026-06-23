@@ -61,7 +61,7 @@ seaborn, pydantic, pyarrow, loguru.
 ### Bitstamp (bundled sample)
 
 A 30-minute Bitstamp BTC/USD live capture (~314k events, ~280 trades) is
-bundled with the package as paired `orders.csv` + `trades.csv`. Point the
+bundled with the package as paired `orders.csv.gz` + `trades.csv`. Point the
 pipeline at the orders path; the companion trades file is auto-resolved:
 
 ```python

@@ -65,21 +65,24 @@ logger.disable("ob_analytics")
 def sample_data_dir() -> Path:
     """Return the directory holding the bundled Bitstamp sample.
 
-    The directory contains ``orders.csv``, ``trades.csv``, and a
-    ``meta.json`` describing the live capture.  Pass this directory to
-    :class:`Pipeline` (or to :class:`BitstampTradeReader.load`) so the
-    companion ``trades.csv`` is auto-located.
+    The directory contains ``orders.csv.gz`` (gzip-compressed; pandas reads it
+    transparently), ``trades.csv``, and a ``meta.json`` describing the live
+    capture.  Pass it to :class:`Pipeline` (or to
+    :class:`BitstampTradeReader.load`) so the companion ``trades.csv`` is
+    auto-located.
     """
     return Path(__file__).parent / "_sample_data"
 
 
 def sample_csv_path() -> Path:
-    """Return the path to the bundled Bitstamp sample ``orders.csv``.
+    """Return the path to the bundled Bitstamp sample ``orders.csv.gz``.
 
-    The companion ``trades.csv`` in the same directory is produced by
-    the live capture script and is required for :class:`Pipeline` runs.
+    The orders capture ships gzip-compressed (~23 MB -> ~2.9 MB) so it does not
+    bloat installs; :func:`pandas.read_csv` decompresses it transparently.  The
+    companion ``trades.csv`` in the same directory is required for
+    :class:`Pipeline` runs.
     """
-    return sample_data_dir() / "orders.csv"
+    return sample_data_dir() / "orders.csv.gz"
 
 
 __all__ = [
