@@ -306,6 +306,14 @@ def mpl_price_levels(
 
     fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
 
+    # The depth heatmap reads best on a neutral background: a gray facecolor so
+    # the bright cells and the white midprice line pop, with a white y-grid
+    # (price guides) behind the cells. Other faces keep the default white theme.
+    ax.set_facecolor("#a9a9a9")
+    ax.set_axisbelow(True)
+    ax.grid(False)
+    ax.grid(True, axis="y", color="white", linewidth=0.8, alpha=0.7)
+
     depth["timestamp_numeric"] = mdates.date2num(depth["timestamp"])
 
     # All within-price segments go into one LineCollection: sort globally by
@@ -348,8 +356,9 @@ def mpl_price_levels(
             ax.plot(
                 spread_x,
                 spread["midprice"],
-                color="#222222",
-                linewidth=1.1,
+                color="white",
+                linewidth=1.8,
+                zorder=6,
                 label="Midprice",
             )
         else:
