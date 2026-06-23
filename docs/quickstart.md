@@ -29,10 +29,10 @@ and are executed in CI, so they never drift from the API.
 
 ## Walkthrough
 
-The package ships with a bundled Bitstamp BTC/USD capture: `orders.csv` and
-sibling `trades.csv` under `ob_analytics/_sample_data/`. Access the orders
-path via `sample_csv_path()` (the pipeline loads `trades.csv` from the same
-directory).
+The package ships with a bundled Bitstamp BTC/USD capture: `orders.csv.gz`
+(gzip-compressed) and sibling `trades.csv` under `ob_analytics/_sample_data/`.
+Access the orders path via `sample_csv_path()` (the pipeline loads `trades.csv`
+from the same directory).
 
 ### One-line pipeline
 
@@ -119,15 +119,10 @@ Use individual classes when you need access to intermediate results:
 
 ```python
 from pathlib import Path
-from ob_analytics import (
-    BitstampLoader,
-    BitstampTradeReader,
-    set_order_types,
-    price_level_volume,
-    depth_metrics,
-    order_aggressiveness,
-    sample_csv_path,
-)
+from ob_analytics import sample_csv_path
+from ob_analytics.analytics import order_aggressiveness, set_order_types
+from ob_analytics.bitstamp import BitstampLoader, BitstampTradeReader
+from ob_analytics.depth import depth_metrics, price_level_volume
 
 orders_path = sample_csv_path()
 run_dir = Path(orders_path).parent
@@ -151,7 +146,7 @@ timestamp:
 
 ```python
 import pandas as pd
-from ob_analytics import order_book
+from ob_analytics.analytics import order_book
 
 # Snapshot ten minutes into the run (events.timestamp is timezone-naive UTC).
 tp = events["timestamp"].iloc[0] + pd.Timedelta(minutes=10)
@@ -264,8 +259,9 @@ if halts is not None:
 ```
 
 Bitstamp runs have no such tables (`loader.trading_halts is None`). Hidden
-executions are detected automatically by the gallery's `default_specs` when
-the events frame contains LOBSTER hidden-execution rows.
+executions are detected automatically by the gallery builder
+(`build_gallery_model`) when the events frame contains LOBSTER
+hidden-execution rows.
 
 !!! note
     When message files contain cross trades (event type 6) or trading halts
@@ -440,7 +436,7 @@ There is no global theme to set. Pass a `PlotTheme` to `plot()` and it
 applies only to that call (matplotlib backend only):
 
 ```python
-from ob_analytics.visualization import plot, save_figure, prepare, PlotTheme, prepare
+from ob_analytics.visualization import plot, save_figure, prepare, PlotTheme
 
 theme = PlotTheme(
     style="whitegrid",

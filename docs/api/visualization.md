@@ -17,8 +17,8 @@ fig = result.plot("trade_tape", "L3", backend="plotly")
 
 For full control, the unified `plot()` dispatcher renders a *concept* at a
 resolution *level* on a chosen backend from already-prepared data. Prepare the
-payload with the matching helper in the public `prepare` namespace (thin
-re-exports of `ob_analytics.visualization._data`) and spread it as keyword
+payload with the matching helper in the public `prepare` namespace (friendly
+wrappers over the internal prepare-data functions) and spread it as keyword
 arguments:
 
 ```python
@@ -38,11 +38,11 @@ a single level resolves it automatically, so you pass only the concept name;
 `level=`.
 
 Concepts with both L2 and L3 faces: `trade_tape`, `order_activity`,
-`cancellations`, `book_snapshot`, `depth_chart`. L2-only: `time_series`,
-`depth_heatmap`, `volume_percentiles`, `events_histogram`,
-`liquidity_at_touch`, `hidden_executions`. L3-only: `order_outcome`.
-Level-less analytics: `vpin`, `order_flow_imbalance`, `kyle_lambda`,
-`trading_halts`.
+`cancellations`, `book_snapshot`, `depth_chart`, `liquidity_at_touch`. L2-only:
+`time_series`, `depth_heatmap`, `volume_percentiles`, `events_histogram`,
+`hidden_executions`, `price_view`, `trade_size`. L3-only: `order_outcome`,
+`queue_position`. Level-less analytics: `vpin`, `order_flow_imbalance`,
+`kyle_lambda`, `ofi_horizon`, `trading_halts`.
 
 ## Dispatcher
 
