@@ -1,0 +1,34 @@
+cff-version: 1.2.0
+message: "If you use ob-analytics in your research, please cite it as below."
+title: ob-analytics
+abstract: >-
+  Limit order book analytics and visualization for Python: reconstruct trades
+  from raw exchange events, classify order types, compute depth and
+  flow-toxicity metrics, and visualize market microstructure.
+type: software
+authors:
+  - family-names: Zielinski
+    given-names: Mark
+    email: mczielinski@gmail.com
+repository-code: "https://github.com/mczielinski/ob-analytics"
+url: "https://mczielinski.github.io/ob-analytics/"
+license: GPL-2.0-or-later
+version: 1.0.0
+keywords:
+  - limit order book
+  - market microstructure
+  - high-frequency trading
+  - order flow
+  - VPIN
+references:
+  - type: software
+    title: "obAnalytics: Limit Order Book Analytics"
+    abstract: "Original R implementation, which ob-analytics is a Python port of."
+    authors:
+      - family-names: Stubbings
+        given-names: Philip
+        email: phil@parasec.net
+    year: 2016
+    url: "https://cran.r-project.org/package=obAnalytics"
+    repository-code: "https://github.com/cran/obAnalytics"
+    license: GPL-2.0-or-later
