@@ -178,4 +178,16 @@ and conventions for adding new formats.
 
 ## License
 
-GPL (>= 2)
+ob-analytics is licensed under the **GNU General Public License v2.0 or later
+(GPL-2.0-or-later)** — see [LICENSE.md](LICENSE.md).
+
+It is a Python port of the R
+[obAnalytics](https://cran.r-project.org/package=obAnalytics) package
+(© 2015–2016 Philip Stubbings), which is GPL-2.0-or-later; that copyleft is
+inherited here.
+
+## Citation
+
+If you use ob-analytics in published work, please cite it — GitHub's **Cite this
+repository** button reads [CITATION.cff](CITATION.cff), which also credits the
+original R obAnalytics lineage.
