@@ -33,6 +33,35 @@ into structured analytics:
 
 ---
 
+## Scale envelope
+
+ob-analytics keeps the full event, depth, and trade tables in memory (pandas), so
+the working set scales with the event count. Peak RSS grows roughly **linearly at
+~1 GiB per 1M events**, with the depth stages (`price_level_volume` →
+`depth_metrics`) dominating both memory and time:
+
+| events  | peak RSS  | depth stages |
+|---------|----------:|-------------:|
+| 314 k   | ~0.43 GiB | ~14 s |
+| 628 k   | ~0.73 GiB | ~25 s |
+| 942 k   | ~1.02 GiB | ~38 s |
+| 1.26 M  | ~1.32 GiB | ~51 s |
+
+*(Measured with [`scripts/bench_scale.py`](scripts/bench_scale.py): the bundled
+~314k-event sample tiled to each size, each size run in its own process, peak RSS
+via `getrusage`. Slightly conservative — tiling adds some transient overhead.)*
+
+**Comfortable ceiling ≈ 5M events (~5 GiB)** on a typical 16 GB machine — i.e.
+session-scale data, a few hours of a single liquid instrument. For larger inputs
+(a full NASDAQ MBO day is **10–100M events**, well past this), the recommended
+pattern is to **pre-slice by time window** and process each slice independently,
+concatenating the per-slice outputs. ob-analytics deliberately ships no
+streaming / out-of-core machinery; pre-slicing keeps the in-memory model simple
+and predictable (a chunked-run helper could automate it later if real workloads
+demand it).
+
+---
+
 ## Class diagram
 
 The package combines **protocol-based** components with **format descriptors**
