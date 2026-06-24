@@ -54,6 +54,10 @@ pip install -e ".[live]"          # live exchange capture (websockets)
 **Requires** Python 3.11+. Core dependencies: NumPy, pandas, matplotlib,
 seaborn, pydantic, pyarrow, loguru.
 
+**Scale:** in-memory (pandas) — comfortable to ~5M events (~5 GiB, session-scale
+data); for larger inputs, pre-slice by time window. See
+[Scale envelope](ARCHITECTURE.md#scale-envelope).
+
 ---
 
 ## Quickstart
