@@ -131,6 +131,30 @@ User-visible changes go under `## [Unreleased]` in `CHANGELOG.md` in the
 appropriate section (`Added` / `Changed` / `Removed` / `Fixed`). Keep
 entries short.
 
+## Releasing
+
+Versioning follows [semantic versioning](https://semver.org). The version is
+single-sourced in `pyproject.toml` (`[project].version`) and exposed at runtime
+as `ob_analytics.__version__`.
+
+To cut a release:
+
+1. Move the `## [Unreleased]` entries in `CHANGELOG.md` under a new
+   `## [X.Y.Z] - YYYY-MM-DD` heading.
+2. Bump `version` in `pyproject.toml` to `X.Y.Z`.
+3. Commit, then tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+
+`.github/workflows/release.yml` then builds the sdist + wheel, checks the tag
+matches the package version, publishes to **PyPI via trusted publishing** (OIDC —
+no stored token), and creates a GitHub Release from the changelog section. A
+manual **workflow_dispatch** run publishes to **TestPyPI** as a dry run.
+
+**One-time setup (repo owner):** register trusted publishers at
+<https://pypi.org/manage/account/publishing/> and
+<https://test.pypi.org/manage/account/publishing/> — project `ob-analytics`,
+owner `mczielinski`, repo `ob-analytics`, workflow `release.yml`, environments
+`pypi` / `testpypi`.
+
 ## Documentation
 
 API pages are auto-generated from docstrings; keep docstrings accurate.
