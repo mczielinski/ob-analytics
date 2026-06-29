@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- The bundled Bitstamp sample now ships gzip-compressed (`orders.csv.gz`,
+  ~23 MB → ~2.9 MB installed); `sample_csv_path()` returns the `.gz` path and
+  pandas reads it transparently. No API change.
+
+### Added
+
+- Published documentation site (GitHub Pages), `CITATION.cff`, an explicit
+  GPL-2.0-or-later license section, and a "Scale envelope" doc.
+- PyPI release workflow (`release.yml`, trusted publishing), package
+  classifiers and project URLs, and `ob_analytics.__version__`.
+
+### Fixed
+
+- Quickstart and API-reference documentation drift (broken imports, stale
+  concept lists).
+
 ## [1.0.0] - 2026-06-04
 
 First stable release: a deliberate **breaking** cut that de-bloats the package

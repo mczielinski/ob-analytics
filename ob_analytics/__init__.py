@@ -27,6 +27,7 @@ The package exposes two layers:
 All processing stages are pluggable via :mod:`~ob_analytics.protocols`.
 """
 
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from loguru import logger
@@ -61,6 +62,11 @@ from ob_analytics.protocols import (
 
 logger.disable("ob_analytics")
 
+try:
+    __version__ = version("ob-analytics")
+except PackageNotFoundError:  # running from a source tree without an install
+    __version__ = "0.0.0+unknown"
+
 
 def sample_data_dir() -> Path:
     """Return the directory holding the bundled Bitstamp sample.
@@ -86,6 +92,7 @@ def sample_csv_path() -> Path:
 
 
 __all__ = [
+    "__version__",
     # ── Sample data ──────────────────────────────────────────────────
     "sample_csv_path",
     "sample_data_dir",
