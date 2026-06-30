@@ -17,38 +17,41 @@ or [LOBSTER](https://lobsterdata.com/) message and orderbook files.
 > flow-toxicity metrics, and Matplotlib/Plotly backends.
 
 <p align="center">
-  <img src="./assets/ob-analytics-price-levels.png" alt="Price levels depth heatmap (Bitstamp sample)" width="700">
+  <img src="https://raw.githubusercontent.com/mczielinski/ob-analytics/main/assets/ob-analytics-price-levels.png" alt="Price levels depth heatmap (Bitstamp sample)" width="700">
 </p>
 
 ---
 
 ## Installation
 
-The package is not yet published on PyPI. Install directly from GitHub:
-
 ```bash
-pip install git+https://github.com/mczielinski/ob-analytics.git
+pip install ob-analytics
 ```
 
 With [uv](https://github.com/astral-sh/uv):
 
 ```bash
-uv add git+https://github.com/mczielinski/ob-analytics.git
+uv add ob-analytics
 ```
 
-From a local clone:
+Optional extras:
 
 ```bash
+pip install "ob-analytics[interactive]"   # Plotly figures
+pip install "ob-analytics[live]"          # live exchange capture (websockets)
+```
+
+### From source
+
+Latest `main`, or a local clone for development:
+
+```bash
+pip install git+https://github.com/mczielinski/ob-analytics.git
+
+# or
 git clone https://github.com/mczielinski/ob-analytics.git
 cd ob-analytics
-pip install -e .
-```
-
-Optional extras (from a local clone):
-
-```bash
-pip install -e ".[interactive]"   # Plotly figures
-pip install -e ".[live]"          # live exchange capture (websockets)
+pip install -e ".[interactive,live]"
 ```
 
 **Requires** Python 3.11+. Core dependencies: NumPy, pandas, matplotlib,

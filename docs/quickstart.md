@@ -490,7 +490,7 @@ save_data(
 zoom, pan, and hover tooltips. Plotly is an optional dependency:
 
 ```bash
-pip install -e ".[interactive]"
+pip install "ob-analytics[interactive]"
 ```
 
 ```python
