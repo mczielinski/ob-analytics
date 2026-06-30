@@ -13,7 +13,7 @@ authors:
 repository-code: "https://github.com/mczielinski/ob-analytics"
 url: "https://mczielinski.github.io/ob-analytics/"
 license: GPL-2.0-or-later
-version: 1.0.0
+version: 0.1.0
 keywords:
   - limit order book
   - market microstructure

@@ -6,33 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
+## [0.1.0] - 2026-06-26
 
-### Changed
+First public release (PyPI). The Python port of the R
+[obAnalytics](https://cran.r-project.org/package=obAnalytics) package, reworked
+into a pipeline API with pluggable formats, flow-toxicity metrics, L2/L3
+visualization, and Matplotlib/Plotly backends — plus the packaging,
+documentation, and distribution that make it installable. The sections below also
+record how the API was deliberately de-bloated and unified during the port (the
+pipeline's numeric output is unchanged — the regression fingerprints pass; only
+the *shape* of the public API moved). See
+[Extending ob-analytics](docs/extending.md).
 
-- The bundled Bitstamp sample now ships gzip-compressed (`orders.csv.gz`,
-  ~23 MB → ~2.9 MB installed); `sample_csv_path()` returns the `.gz` path and
-  pandas reads it transparently. No API change.
+### Packaging & distribution
 
-### Added
-
+- The bundled Bitstamp sample ships gzip-compressed (`orders.csv.gz`,
+  ~23 MB → ~2.9 MB installed); `sample_csv_path()` returns the `.gz` path, read
+  transparently by pandas. No API change.
 - Published documentation site (GitHub Pages), `CITATION.cff`, an explicit
   GPL-2.0-or-later license section, and a "Scale envelope" doc.
-- PyPI release workflow (`release.yml`, trusted publishing), package
-  classifiers and project URLs, and `ob_analytics.__version__`.
-
-### Fixed
-
-- Quickstart and API-reference documentation drift (broken imports, stale
-  concept lists).
-
-## [1.0.0] - 2026-06-04
-
-First stable release: a deliberate **breaking** cut that de-bloats the package
-and unifies its extension surfaces behind one registry primitive and one data
-contract. The **numeric output of the pipeline is unchanged** from 0.1.x — the
-regression fingerprints still pass; only the *shape of the public API* moved.
-See [Extending ob-analytics](docs/extending.md) for the extension walkthrough.
+- PyPI release workflow (`release.yml`, trusted publishing), package classifiers
+  and project URLs, and `ob_analytics.__version__`.
+- Fixed quickstart and API-reference documentation drift.
 
 ### Breaking
 
@@ -162,17 +157,3 @@ See [Extending ob-analytics](docs/extending.md) for the extension walkthrough.
 - All `print()` replaced with `loguru` logging; all bare `assert` statements
   replaced with raised exceptions; `plt.show()` removed from plot functions
   (callers control display).
-
----
-
-## [0.1.0] — 2024-09-03
-
-Initial Python port from the R [obAnalytics](https://cran.r-project.org/package=obAnalytics) CRAN package.
-
-- Line-for-line translation of R functions to Python/pandas
-- Bitstamp CSV loading and processing
-- Needleman-Wunsch event matching
-- Trade inference and order type classification
-- Depth metrics computation
-- Matplotlib/seaborn visualization suite
-- Sample data: Bitstamp BTC/USD limit order events, 2015-05-01 00:00–05:00 UTC
