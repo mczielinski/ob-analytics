@@ -1,13 +1,13 @@
 [project]
 name = "ob-analytics"
-version = "1.0.0"
+version = "0.1.0"
 description = "Limit order book analytics and visualization — reconstruct trades, classify orders, and visualize market microstructure from raw exchange events."
 authors = [{ name = "Mark Zielinski", email = "mczielinski@gmail.com" }]
 license = { text = "GPL-2.0-or-later" }
 requires-python = ">=3.11"
 readme = "README.md"
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Financial and Insurance Industry",
     "Intended Audience :: Science/Research",
     "Operating System :: OS Independent",
