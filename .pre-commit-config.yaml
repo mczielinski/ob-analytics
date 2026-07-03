@@ -5,8 +5,13 @@
 # pin to the exact versions resolved in uv.lock.
 #
 # Setup:
-#   uv sync --group dev --extra interactive
+#   uv sync --group dev --extra interactive --extra live
 #   uv run pre-commit install
+#
+# Hook entries pass --frozen so an out-of-date uv.lock can never be rewritten
+# mid-hook (which would dirty the tree and fail the run), and pass the same
+# groups/extras as CI so `uv run`'s implicit sync doesn't uninstall the extras
+# (see the ty comment in .github/workflows/ci.yml).
 
 exclude: ^ob_analytics/_sample_data/
 
@@ -26,21 +31,21 @@ repos:
     hooks:
       - id: ruff-check
         name: ruff check
-        entry: uv run ruff check --fix
+        entry: uv run --frozen --group dev --extra interactive --extra live ruff check --fix
         language: system
         types_or: [python, pyi]
         require_serial: true
 
       - id: ruff-format
         name: ruff format
-        entry: uv run ruff format
+        entry: uv run --frozen --group dev --extra interactive --extra live ruff format
         language: system
         types_or: [python, pyi]
         require_serial: true
 
       - id: ty
         name: ty check
-        entry: uv run ty check ob_analytics/
+        entry: uv run --frozen --group dev --extra interactive --extra live ty check ob_analytics/
         language: system
         types: [python]
         pass_filenames: false
