@@ -7,11 +7,25 @@ site_url = "https://mczielinski.github.io/ob-analytics/"
 
 nav = [
   { "Home" = "index.md" },
-  { "Quickstart" = "quickstart.md" },
-  { "Architecture" = "architecture.md" },
-  { "Extending" = "extending.md" },
-  { "Glossary" = "glossary.md" },
-  { "API Reference" = [
+  { "Getting started" = "quickstart.md" },
+  { "Tutorial" = [
+    { "Overview" = "tutorial/index.md" },
+  ] },
+  { "How-to guides" = [
+    { "Step-by-step control" = "howto/full-control.md" },
+    { "Use your own data" = "howto/your-own-data.md" },
+    { "Process LOBSTER files" = "howto/lobster.md" },
+    { "Plug in custom components" = "howto/custom-components.md" },
+    { "Save, load, and export" = "howto/output.md" },
+    { "Compute flow toxicity" = "howto/flow-toxicity.md" },
+    { "Capture live data" = "howto/live-capture.md" },
+    { "Run from the command line" = "howto/cli.md" },
+    { "Extending ob-analytics" = "extending.md" },
+  ] },
+  { "Explanation" = [
+    { "Architecture" = "architecture.md" },
+  ] },
+  { "Reference" = [
     { "Pipeline" = "api/pipeline.md" },
     { "Configuration" = "api/config.md" },
     { "Protocols" = "api/protocols.md" },
@@ -26,8 +40,9 @@ nav = [
     { "Gallery" = "api/gallery.md" },
     { "Exceptions" = "api/exceptions.md" },
     { "CLI" = "api/cli.md" },
+    { "Glossary" = "glossary.md" },
+    { "Changelog" = "changelog.md" },
   ] },
-  { "Changelog" = "changelog.md" },
 ]
 
 [project.theme]
