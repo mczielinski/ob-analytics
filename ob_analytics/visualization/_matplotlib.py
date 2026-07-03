@@ -225,6 +225,8 @@ def mpl_trades(
 
     mid_line = data.get("mid_line")
     if mid_line is not None and not mid_line.empty:
+        # The mid holds until the book changes; steps-post avoids painting a
+        # diagonal ramp between sparse samples that never existed.
         ax.plot(
             mdates.date2num(mid_line["timestamp"]),
             mid_line["mid"].to_numpy(),
@@ -232,6 +234,7 @@ def mpl_trades(
             linewidth=1.0,
             alpha=0.8,
             zorder=1,
+            drawstyle="steps-post",
         )
 
     any_pts = False
@@ -360,6 +363,7 @@ def mpl_price_levels(
                 linewidth=1.8,
                 zorder=6,
                 label="Midprice",
+                drawstyle="steps-post",
             )
         else:
             if "best_ask_price" in spread:
@@ -1226,6 +1230,7 @@ def mpl_trade_tape_per_order(
 
     mid_line = data.get("mid_line")
     if mid_line is not None and not mid_line.empty:
+        # steps-post: the mid holds between samples (see mpl_trades).
         ax.plot(
             mdates.date2num(mid_line["timestamp"]),
             mid_line["mid"].to_numpy(),
@@ -1233,6 +1238,7 @@ def mpl_trade_tape_per_order(
             linewidth=1.0,
             alpha=0.8,
             zorder=2,
+            drawstyle="steps-post",
         )
 
     any_pts = False
