@@ -6,9 +6,14 @@ title: Tutorial
 
 A guided tour of market microstructure through ob-analytics — starting from
 absolute basics (what a price *is*, what an exchange does) and building up to
-depth analysis, flow toxicity, and per-order (L3) reconstruction. Chapters
-are being written; today, two runnable notebook tutorials cover the core
-workflow.
+depth analysis, flow toxicity, and per-order (L3) reconstruction.
+
+Every chapter is **executed at docs build time**: the code you read produced
+the figures you see, on this exact version of the library. Start with
+**[The toy session](00_toy_session.md)** — the 24-event order-book stream
+every chapter builds its concepts on before showing real data.
+
+Two runnable notebook tutorials cover the core workflow today.
 
 Both notebooks run on the bundled sample data and are executed in CI, so
 they never drift from the API:

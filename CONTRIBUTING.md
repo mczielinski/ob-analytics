@@ -160,9 +160,16 @@ owner `mczielinski`, repo `ob-analytics`, workflow `release.yml`, environments
 API pages are auto-generated from docstrings; keep docstrings accurate.
 
 ```bash
-uv run zensical serve   # local preview
-uv run zensical build   # static site in site/
+uv run python scripts/build_tutorial.py   # execute tutorial chapters -> docs/tutorial/*.md
+uv run zensical serve                     # local preview
+uv run zensical build                     # static site in site/
 ```
+
+Tutorial chapters are jupytext py:percent scripts in `docs/tutorial/src/`;
+`scripts/build_tutorial.py` executes them and renders markdown + figures
+into `docs/tutorial/` (gitignored — CI rebuilds them on every docs build,
+so a chapter that stops running fails the build). Run it before `zensical`
+locally or the Tutorial nav entries will point at missing pages.
 
 If you change the public API surface, update:
 

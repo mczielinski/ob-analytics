@@ -67,6 +67,11 @@ dev = [
     "nbconvert>=7.16",
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# Tutorial chapters are notebook-style (jupytext py:percent): imports appear
+# in the cell that introduces them, by design.
+"docs/tutorial/src/*.py" = ["E402"]
+
 [tool.hatch.build.targets.sdist]
 include = ["ob_analytics", "tests"]
 
