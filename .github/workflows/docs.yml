@@ -44,7 +44,16 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deployment.outputs.page_url || steps.retry.outputs.page_url }}
     steps:
       - id: deployment
+        uses: actions/deploy-pages@v5
+        continue-on-error: true
+      # The Pages backend intermittently rejects fresh deployments with
+      # "Deployment failed, try again later" (seen twice on 2026-07-03).
+      # Wait out the transient and deploy once more before giving up.
+      - if: steps.deployment.outcome == 'failure'
+        run: sleep 30
+      - id: retry
+        if: steps.deployment.outcome == 'failure'
         uses: actions/deploy-pages@v5
