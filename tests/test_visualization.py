@@ -535,6 +535,21 @@ class TestPlotBookSnapshot:
         with pytest.raises(ValueError, match="comparable"):
             plot("book_snapshot", **data)
 
+    @pytest.mark.parametrize("level", [Level.L2, Level.L3])
+    @pytest.mark.parametrize("concept", ["book_snapshot", "depth_chart"])
+    def test_payload_level_mismatch_raises(self, concept: str, level: Level) -> None:
+        # An L2 payload rendered at L3 previously drew aggregate bars dressed
+        # as per-order (and vice versa); the payload's per_order stamp must
+        # match the requested level.
+        from ob_analytics.exceptions import ConfigError
+
+        wrong_per_order = level is Level.L2  # contradict the requested level
+        data = _data.prepare_book_snapshot_data(
+            self._order_book(), per_order=wrong_per_order
+        )
+        with pytest.raises(ConfigError, match="prepare.book_snapshot"):
+            plot(concept, level, **data)
+
     def test_horizontal_ladder_orientation(self) -> None:
         # §3.1: price on y, size on x (was the reverse).
         data = _data.prepare_book_snapshot_data(self._order_book(), per_order=True)

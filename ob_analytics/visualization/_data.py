@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from ob_analytics.depth import filter_depth
+from ob_analytics.exceptions import ConfigError
 
 
 @dataclass(frozen=True)
@@ -1264,6 +1265,27 @@ def book_mid(bids: pd.DataFrame, asks: pd.DataFrame) -> float | None:
     if bids.empty or asks.empty:
         return None
     return (float(bids["price"].max()) + float(asks["price"].min())) / 2
+
+
+def check_book_payload_level(data: dict[str, Any], *, per_order: bool) -> None:
+    """Reject a book payload whose resolution contradicts the renderer's level.
+
+    :func:`prepare_book_snapshot_data` stamps its payload with the
+    ``per_order`` flag it was built at.  An L3 renderer fed an aggregated L2
+    payload (or vice versa) would otherwise silently draw the wrong
+    resolution -- e.g. L2 bars dressed with L3's white separators.  Both
+    backends call this from their ``book_snapshot`` / ``depth_chart``
+    renderers; payloads without the flag are left unchecked.
+    """
+    payload_per_order = data.get("per_order")
+    if payload_per_order is None or bool(payload_per_order) is per_order:
+        return
+    want, got = ("L3", "L2") if per_order else ("L2", "L3")
+    raise ConfigError(
+        f"{want} renderer received an {got} book payload "
+        f"(per_order={payload_per_order}); pass per_order={per_order} to "
+        f"prepare.book_snapshot, or render at level={got}."
+    )
 
 
 def prepare_book_snapshot_data(

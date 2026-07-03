@@ -417,6 +417,23 @@ class TestPlotlyBookSnapshot:
         assert bars and all(tr.orientation == "h" for tr in bars)
         assert fig.layout.yaxis.title.text == "Price"
 
+    @pytest.mark.parametrize(
+        ("renderer", "wrong_per_order"),
+        [
+            (plotly_book_snapshot_aggregate, True),
+            (plotly_book_snapshot_per_order, False),
+        ],
+    )
+    def test_payload_level_mismatch_raises(
+        self, sample_order_book: dict, renderer, wrong_per_order: bool
+    ) -> None:
+        # The payload's per_order stamp must match the renderer's level.
+        from ob_analytics.exceptions import ConfigError
+
+        data = prepare_book_snapshot_data(sample_order_book, per_order=wrong_per_order)
+        with pytest.raises(ConfigError, match="prepare.book_snapshot"):
+            renderer(data)
+
 
 class TestPlotlyDepthChart:
     def test_aggregate_returns_figure(self, sample_order_book: dict) -> None:
@@ -430,6 +447,23 @@ class TestPlotlyDepthChart:
         fig = plotly_depth_chart_per_order(data)
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 2
+
+    @pytest.mark.parametrize(
+        ("renderer", "wrong_per_order"),
+        [
+            (plotly_depth_chart_aggregate, True),
+            (plotly_depth_chart_per_order, False),
+        ],
+    )
+    def test_payload_level_mismatch_raises(
+        self, sample_order_book: dict, renderer, wrong_per_order: bool
+    ) -> None:
+        # The payload's per_order stamp must match the renderer's level.
+        from ob_analytics.exceptions import ConfigError
+
+        data = prepare_book_snapshot_data(sample_order_book, per_order=wrong_per_order)
+        with pytest.raises(ConfigError, match="prepare.book_snapshot"):
+            renderer(data)
 
 
 class TestPlotlyVolumePercentiles:
