@@ -38,6 +38,7 @@ from loguru import logger
 from ob_analytics.bitstamp import BitstampFormat
 from ob_analytics.config import PipelineConfig
 from ob_analytics.data import load_data, save_data
+from ob_analytics.datasets import toy_events, toy_trades
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
 from ob_analytics.flow_toxicity import (
     KyleLambdaResult,
@@ -96,6 +97,8 @@ __all__ = [
     # ── Sample data ──────────────────────────────────────────────────
     "sample_csv_path",
     "sample_data_dir",
+    "toy_events",
+    "toy_trades",
     # ── Pipeline orchestration ───────────────────────────────────────
     "Pipeline",
     "PipelineResult",
