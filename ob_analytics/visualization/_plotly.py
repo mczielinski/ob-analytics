@@ -16,7 +16,11 @@ from typing import Any
 import numpy as np
 
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.visualization._data import book_mid, mpl_marker_area_to_plotly_size
+from ob_analytics.visualization._data import (
+    book_mid,
+    check_book_payload_level,
+    mpl_marker_area_to_plotly_size,
+)
 from ob_analytics.visualization._palette import (
     _ASK_COLOR,
     _BID_COLOR,
@@ -413,6 +417,7 @@ def _plotly_book_bars(data: dict, *, per_order: bool) -> Any:
     orders with white separators, so equal-total levels with different
     composition read differently.
     """
+    check_book_payload_level(data, per_order=per_order)
     go = _import_plotly()
     fig = _base_figure(go, title=data["timestamp"].strftime("%Y-%m-%d %H:%M:%S UTC"))
 
@@ -454,6 +459,7 @@ def _plotly_book_bars(data: dict, *, per_order: bool) -> Any:
 
 def _plotly_depth_curve(data: dict, *, per_order: bool) -> Any:
     """Cumulative-depth curve: stepped per level (L2) or per order (L3)."""
+    check_book_payload_level(data, per_order=per_order)
     go = _import_plotly()
     fig = _base_figure(go, title=data["timestamp"].strftime("%Y-%m-%d %H:%M:%S UTC"))
 

@@ -28,7 +28,7 @@ from matplotlib.patches import Patch
 
 from loguru import logger
 
-from ob_analytics.visualization._data import book_mid
+from ob_analytics.visualization._data import book_mid, check_book_payload_level
 from ob_analytics.visualization._palette import (
     _ASK_COLOR,
     _BID_COLOR,
@@ -618,6 +618,7 @@ def _mpl_book_bars(
     orders (biggest-first from the axis) with white separators, so a whale and a
     crowd of small orders that look identical on L2 read differently here.
     """
+    check_book_payload_level(data, per_order=per_order)
     bids = data["bids"]
     asks = data["asks"]
     fig, ax = _create_axes(ax, figsize=(11, 8), theme=theme)
@@ -687,6 +688,7 @@ def _mpl_depth_curve(
     The L3 face currently differs from L2 only by per-order markers; making the
     per-order resolution legible is a possible future enhancement (a density toggle).
     """
+    check_book_payload_level(data, per_order=per_order)
     fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
     for side, color, label in (
         (data["bids"], _BID_COLOR, "bid"),
