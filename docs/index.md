@@ -90,13 +90,13 @@ ob-analytics bitstamp-demo --input orders.csv
 ob-analytics lobster-demo /path/to/lobster_data --trading-date 2012-06-21
 ```
 
-See the [Quickstart CLI section](quickstart.md#cli) for full details.
+See [Run from the command line](howto/cli.md) for full details.
 
 ## Next steps
 
-- **[Quickstart](quickstart.md)** — full walkthrough with visualization, configuration, custom loaders, and CLI
+- **[Getting started](quickstart.md)** — install, run the pipeline, make your first plot
+- **[Tutorial](tutorial/index.md)** — guided tour from order-book basics to L3 microstructure
+- **How-to guides** — task-focused recipes: [your own data](howto/your-own-data.md), [LOBSTER](howto/lobster.md), [custom components](howto/custom-components.md), [output & export](howto/output.md), [flow toxicity](howto/flow-toxicity.md), [live capture](howto/live-capture.md), [CLI](howto/cli.md)
 - **[Architecture](architecture.md)** — pipeline stages, design decisions, class diagram, module map
-- **[Glossary](glossary.md)** — market-microstructure terms used throughout
-- **[API Reference](api/pipeline.md)** — detailed documentation for every module
-- **[CLI Reference](api/cli.md)** — command-line interface API docs
+- **[API Reference](api/pipeline.md)** — detailed documentation for every module; [Glossary](glossary.md) for the jargon
 - **[Changelog](changelog.md)** — recent changes
