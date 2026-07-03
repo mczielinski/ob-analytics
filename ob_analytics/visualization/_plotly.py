@@ -109,12 +109,14 @@ def plotly_trades(data: dict) -> Any:
 
     mid_line = data.get("mid_line")
     if mid_line is not None and not mid_line.empty:
+        # "hv" steps: the mid holds until the book changes; linear
+        # interpolation would paint a ramp between sparse samples.
         fig.add_trace(
             go.Scattergl(
                 x=mid_line["timestamp"],
                 y=mid_line["mid"],
                 mode="lines",
-                line=dict(color="#888888", width=1),
+                line=dict(color="#888888", width=1, shape="hv"),
                 opacity=0.8,
                 name="mid",
                 hoverinfo="skip",
@@ -254,7 +256,7 @@ def plotly_price_levels(data: dict) -> Any:
                     x=spread["timestamp"],
                     y=spread["best_ask_price"],
                     mode="lines",
-                    line=dict(color=_ASK_COLOR, width=1.2, dash="dot"),
+                    line=dict(color=_ASK_COLOR, width=1.2, dash="dot", shape="hv"),
                     name="Best Ask",
                 )
             )
@@ -264,7 +266,7 @@ def plotly_price_levels(data: dict) -> Any:
                     x=spread["timestamp"],
                     y=spread["best_bid_price"],
                     mode="lines",
-                    line=dict(color=_BID_COLOR, width=1.2, dash="dot"),
+                    line=dict(color=_BID_COLOR, width=1.2, dash="dot", shape="hv"),
                     name="Best Bid",
                 )
             )
@@ -1047,12 +1049,13 @@ def plotly_trade_tape_per_order(data: dict) -> Any:
 
     mid_line = data.get("mid_line")
     if mid_line is not None and not mid_line.empty:
+        # "hv" steps: the mid holds between samples (see plotly_trades).
         fig.add_trace(
             go.Scattergl(
                 x=mid_line["timestamp"],
                 y=mid_line["mid"],
                 mode="lines",
-                line=dict(color="#888888", width=1),
+                line=dict(color="#888888", width=1, shape="hv"),
                 opacity=0.8,
                 name="mid",
                 hoverinfo="skip",

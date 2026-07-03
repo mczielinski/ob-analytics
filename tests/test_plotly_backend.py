@@ -161,6 +161,14 @@ class TestPlotlyTrades:
         fig = plotly_trades(data)
         assert fig.layout.yaxis.title.text == "Price"
 
+    def test_mid_line_is_step(self, sample_trades: pd.DataFrame) -> None:
+        # The mid holds until the book changes; linear interpolation would
+        # paint a diagonal ramp between sparse samples that never existed.
+        data = prepare_trades_data(sample_trades)
+        fig = plotly_trades(data)
+        mid = next(tr for tr in fig.data if tr.name == "mid")
+        assert mid.line.shape == "hv"
+
 
 class TestBiasedColorNorm:
     """col_bias maps volumes to [0, 1] color positions, mirroring matplotlib."""
@@ -216,6 +224,31 @@ class TestPlotlyPriceLevels:
         # Color is the normalized ramp (cmax == 1); hover reads true volume.
         assert depth_trace.marker.cmax == 1
         assert depth_trace.customdata is not None
+
+    def test_spread_overlays_are_step(self, sample_events: pd.DataFrame) -> None:
+        # Midprice and best bid/ask hold until the book changes; no ramps
+        # between sparse samples.
+        depth = sample_events[["timestamp", "price", "volume"]].copy()
+        depth["direction"] = "bid"
+        spread = pd.DataFrame(
+            {
+                "timestamp": depth["timestamp"],
+                "best_bid_price": depth["price"] - 0.05,
+                "best_ask_price": depth["price"] + 0.05,
+            }
+        )
+        fig = plotly_price_levels(
+            prepare_price_levels_data(depth, spread=spread, show_mp=True)
+        )
+        mp = next(tr for tr in fig.data if tr.name == "Midprice")
+        assert mp.line.shape == "hv"
+
+        fig = plotly_price_levels(
+            prepare_price_levels_data(depth, spread=spread, show_mp=False)
+        )
+        for name in ("Best Ask", "Best Bid"):
+            trace = next(tr for tr in fig.data if tr.name == name)
+            assert trace.line.shape == "hv"
 
 
 class TestPlotlyEventMap:
@@ -384,6 +417,14 @@ class TestPlotlyTradeTapeL3:
         data = prepare_trade_tape_l3_data(events, trades, price_from=0.0, price_to=1e9)
         fig = plotly_trade_tape_per_order(data)
         assert all(trace.type == "scattergl" for trace in fig.data)
+
+    def test_mid_line_is_step(self, sample_executed_orders) -> None:
+        # Same step semantics as the L2 tape: the mid holds between samples.
+        events, trades = sample_executed_orders
+        data = prepare_trade_tape_l3_data(events, trades, price_from=0.0, price_to=1e9)
+        fig = plotly_trade_tape_per_order(data)
+        mid = next(tr for tr in fig.data if tr.name == "mid")
+        assert mid.line.shape == "hv"
 
 
 class TestPlotlyBookSnapshot:

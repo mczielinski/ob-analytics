@@ -203,6 +203,13 @@ class TestPlotTrades:
         fig = plot("trade_tape", Level.L2, **_data.prepare_trades_data(sample_trades))
         assert fig.axes[0].get_ylabel() == "Price"
 
+    def test_mid_line_is_step(self, sample_trades):
+        # The mid holds until the book changes; linear interpolation would
+        # paint a diagonal ramp between sparse samples that never existed.
+        fig = plot("trade_tape", Level.L2, **_data.prepare_trades_data(sample_trades))
+        (mid,) = fig.axes[0].get_lines()
+        assert mid.get_drawstyle() == "steps-post"
+
 
 class TestPlotEventMap:
     def test_returns_figure(self, sample_events):
@@ -371,6 +378,16 @@ class TestPlotTradeTapeL3:
         )
         fig = plot("trade_tape", Level.L3, ax=ax_orig, **data)
         assert fig is fig_orig
+
+    def test_mid_line_is_step(self, sample_executed_orders):
+        # Same step semantics as the L2 tape: the mid holds between samples.
+        events, trades = sample_executed_orders
+        data = _data.prepare_trade_tape_l3_data(
+            events, trades, price_from=0.0, price_to=1e9
+        )
+        fig = plot("trade_tape", Level.L3, **data)
+        (mid,) = fig.axes[0].get_lines()
+        assert mid.get_drawstyle() == "steps-post"
 
 
 class TestPlotLiquidityAtTouch:
@@ -760,6 +777,24 @@ class TestPriceLevelsColBias:
 
         sig = inspect.signature(_data.prepare_price_levels_data)
         assert sig.parameters["col_bias"].default == 1.0
+
+    def test_midprice_overlay_is_step(self, sample_events):
+        # The midprice holds until the book changes, like the best bid/ask
+        # step lines it replaces under show_mp; no ramps between samples.
+        depth = self._depth(sample_events)
+        spread = pd.DataFrame(
+            {
+                "timestamp": depth["timestamp"],
+                "best_bid_price": depth["price"] - 0.05,
+                "best_ask_price": depth["price"] + 0.05,
+            }
+        )
+        fig = plot(
+            "depth_heatmap",
+            **_data.prepare_price_levels_data(depth, spread=spread, show_mp=True),
+        )
+        mid = next(ln for ln in fig.axes[0].get_lines() if ln.get_label() == "Midprice")
+        assert mid.get_drawstyle() == "steps-post"
 
 
 # ---------------------------------------------------------------------------
