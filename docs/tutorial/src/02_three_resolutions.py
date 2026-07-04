@@ -46,16 +46,22 @@ ax3.set_title("L3 — market by order", fontsize=10)
 fig.tight_layout()
 
 # %% [markdown]
-# Read it right to left, summarizing as you go:
+# Read it left to right, adding detail as you go:
 #
-# - **L3 (market by order)** keeps every order as its own segment —
-#   at 99 there are *two* bids (Alice's 2 and Ivy's 2), at 98 two more.
-#   Identity and queue position survive.
-# - **L2 (market by price)** sums each level: 4 at 99, 4 at 98. The
-#   bars are the same total length — but who owns them, and who is
-#   first in line, is gone.
-# - **L1** keeps one row of L2: best bid 99, best ask 101, last 101.
-#   Everything else is gone.
+# - **L1** is the quote: best bid 99, best ask 101, last 101. Three
+#   numbers, nothing else.
+# - **L2 (market by price)** unfolds the quote into the full ladder —
+#   *every* price level with its total size: 4 at 99, 4 at 98, not just
+#   the best. L1 was this picture's top row.
+# - **L3 (market by order)** splits each bar into its owners: at 99
+#   those 4 units are *two* bids (Alice's 2 and Ivy's 2), at 98 two
+#   more. Identity and queue position appear.
+#
+# Now run it backwards: each panel is a **lossy summary** of the one to
+# its right. Summing L3's segments gives you L2 exactly; keeping L2's
+# top row gives you L1 exactly. The reverse is impossible — who owns
+# the 4 at 99, and who is first in line, cannot be recovered from the
+# bar's length.
 #
 # ## Same L2, different markets
 #
