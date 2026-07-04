@@ -32,13 +32,18 @@ def plot_l1_ticker(
     ask: float,
     last: float | None = None,
     symbol: str = "TOY",
+    ax: plt.Axes | None = None,
 ) -> plt.Figure:
     """Draw a brokerage-app-style Level-1 quote card: best bid / best ask / last.
 
     The tutorial's scene-2 prop — the familiar 'price widget' decomposed into
-    the three numbers it actually contains.
+    the three numbers it actually contains. Pass *ax* to compose the card
+    into a multi-panel figure.
     """
-    fig, ax = plt.subplots(figsize=(4.6, 1.9))
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(4.6, 1.9))
+    else:
+        fig = ax.figure
     ax.set_axis_off()
     card = plt.Rectangle(
         (0.02, 0.06),
