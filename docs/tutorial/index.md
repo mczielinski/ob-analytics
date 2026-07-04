@@ -36,19 +36,20 @@ uv sync --group dev --extra interactive
 uv run jupyter lab docs/notebooks/
 ```
 
-## Planned chapters
+## Chapters
 
 The tutorial is growing into a full guide (executed at build time, figures
 rendered from the bundled data):
 
-1. **From a price to an order book** — markets, bourses, and L1 from first
-   principles
-2. **L1 → L2 → L3** — three resolutions of the same market
-3. **Loading order data** — Bitstamp, LOBSTER, and your own
-4. **Order lifecycles & classification**
-5. **Depth, spread & liquidity**
-6. **Trades & flow toxicity**
-7. **The visualization system**
+1. **[From a price to an order book](01_from_price_to_book.md)** — no
+   finance knowledge assumed: markets, bourses, the L1 ticker, and the
+   book built two orders at a time
+2. **L1 → L2 → L3** — three resolutions of the same market *(planned)*
+3. **Loading order data** — Bitstamp, LOBSTER, and your own *(planned)*
+4. **Order lifecycles & classification** *(planned)*
+5. **Depth, spread & liquidity** *(planned)*
+6. **Trades & flow toxicity** *(planned)*
+7. **The visualization system** *(planned)*
 
 Until a chapter lands, the [Getting started](../quickstart.md) page and the
 how-to guides cover the same ground recipe-style.
