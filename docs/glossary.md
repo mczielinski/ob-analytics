@@ -5,7 +5,57 @@ title: Glossary
 # Glossary
 
 Brief definitions of the market-microstructure jargon used throughout
-ob-analytics. Each entry links to the relevant API or concept.
+ob-analytics. Each entry links to the relevant API or concept. For a
+from-scratch introduction, start with the tutorial chapter
+[From a price to an order book](tutorial/01_from_price_to_book.md).
+
+## Exchange mechanics
+
+**Exchange / bourse**
+: A venue where strangers trade a standardized instrument by posting
+firm, standing offers instead of haggling pairwise. The public list of
+those offers is the order book.
+
+**Matching engine**
+: The exchange's neutral component that pairs compatible buy and sell
+orders under fixed, published rules and reports the resulting trades.
+
+**Continuous double auction**
+: The market design run by modern exchanges: both sides post offers
+("double"), and matching happens the moment offers become compatible,
+all session long ("continuous") — rather than at a scheduled auction
+time.
+
+**Price–time priority**
+: The standard matching rule: better-priced orders trade first, and at
+the same price, earlier arrivals trade first. The within-price queue it
+creates is what Level 3 data (and the
+[queue engine](api/analytics.md)) lets you reconstruct.
+
+## Market data levels
+
+**Level 1 (L1)**
+: The top-of-book summary: best bid, best ask, and last trade. What
+brokerage apps and tickers show as "the price".
+
+**Level 2 (L2) — market by price**
+: The full ladder of price levels with *aggregate* size at each level.
+Individual orders are summed away.
+
+**Level 3 (L3) — market by order**
+: Every individual order with its own identity and queue position —
+enough to replay arrivals, cancellations, and fills exactly. Also
+called market-by-order (MBO) data. This is the resolution ob-analytics
+reconstructs from Bitstamp and LOBSTER feeds.
+
+**Best bid / best ask**
+: The highest standing buy price and lowest standing sell price. The
+ask minus the bid is the spread; their average is the mid-price.
+
+**Last trade**
+: The most recent execution's price — the number headlines call "the
+price", which can move without any trade (see the flash example in the
+[tutorial](tutorial/01_from_price_to_book.md)).
 
 ## Order book mechanics
 
