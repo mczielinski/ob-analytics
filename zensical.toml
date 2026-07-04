@@ -10,6 +10,7 @@ nav = [
   { "Getting started" = "quickstart.md" },
   { "Tutorial" = [
     { "Overview" = "tutorial/index.md" },
+    { "The toy session" = "tutorial/00_toy_session.md" },
   ] },
   { "How-to guides" = [
     { "Step-by-step control" = "howto/full-control.md" },

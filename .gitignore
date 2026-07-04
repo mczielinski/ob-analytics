@@ -171,3 +171,7 @@ output/
 
 # Planning docs — kept locally, never tracked
 docs/plans/
+
+# Generated tutorial chapters (scripts/build_tutorial.py renders these from docs/tutorial/src/)
+docs/tutorial/[0-9]*.md
+docs/tutorial/[0-9]*_files/
