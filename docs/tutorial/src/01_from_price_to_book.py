@@ -278,10 +278,8 @@ fig = result.plot("depth_heatmap")
 # around the mid — the same dashed line as in our toy frames. You can
 # already read it.
 #
-# **Next:** [L1 → L2 → L3](00_toy_session.md) — three resolutions of the
-# same market, and what each one can and cannot answer. *(Chapter in
-# progress; meanwhile the [toy session](00_toy_session.md) page and the
-# [Getting started](../quickstart.md) guide cover the workflow.)*
+# **Next:** [L1 → L2 → L3](02_three_resolutions.md) — three resolutions
+# of the same market, and what each one can and cannot answer.
 #
 # ---
 #
