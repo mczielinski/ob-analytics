@@ -96,6 +96,73 @@ def plot_l1_ticker(
     return fig
 
 
+def plot_queue_story(
+    events: pd.DataFrame,
+    trades: pd.DataFrame | None = None,
+    *,
+    at_s: list[float],
+    actor_col: str = "actor",
+) -> plt.Figure:
+    """The queue_position face, actor-labeled, anchored to book keyframes.
+
+    Top: the ``queue_position`` L3 face with each trajectory's terminal
+    marker labeled by actor (from *actor_col*), so 'walk the lines' is
+    literal. Bottom: mini book ladders at the *at_s* storyboard instants.
+    Toy-scale teaching figure — real data has too many trajectories to
+    label.
+    """
+    from ob_analytics.visualization import plot, prepare
+
+    payload = prepare.queue_position_l3(events)
+    actor_of = dict(zip(events["id"], events[actor_col].astype(str)))
+
+    fig = plt.figure(figsize=(13, 7.2))
+    gs = fig.add_gridspec(
+        2, len(at_s), height_ratios=[1.7, 1.0], hspace=0.34, wspace=0.16
+    )
+    ax_q = fig.add_subplot(gs[0, :])
+    plot("queue_position", level="L3", ax=ax_q, theme=DOCS_THEME, **payload)
+    ax_q.set_title("")  # clear the face's centered title; we set our own
+    ax_q.margins(x=0.07)  # room for terminal labels at the session's end
+    legend = ax_q.get_legend()
+    if legend is not None:  # move the face's legend out of the label zone
+        legend.set_loc("lower left")
+
+    # Label each trajectory at its terminal point; stagger ends that land
+    # within a few seconds of each other so late-session labels stay apart.
+    seen: dict[pd.Timestamp, int] = {}
+    for fate in ("filled", "cancelled", "resting"):
+        frame = payload[fate]
+        if frame is None or frame.empty:
+            continue
+        for _, last in frame.groupby("id").tail(1).iterrows():
+            bucket = last["timestamp"].floor("5s")
+            bump = seen.get(bucket, 0)
+            seen[bucket] = bump + 1
+            ax_q.annotate(
+                actor_of.get(last["id"], str(last["id"])),
+                (last["timestamp"], last["rank"]),
+                textcoords="offset points",
+                xytext=(6, 10 + 13 * bump),
+                fontsize=8.5,
+                fontweight="bold",
+                color="#333333",
+            )
+    ax_q.set_title(
+        "Queue rank at the touch — every trajectory labeled by its owner",
+        fontsize=10,
+        loc="left",
+    )
+
+    key_axes = [fig.add_subplot(gs[1, i]) for i in range(len(at_s))]
+    for axk in key_axes[1:]:
+        axk.sharey(key_axes[0])
+    plot_book_keyframes(events, trades, at_s=at_s, ax_row=key_axes)
+    for axk in key_axes[1:]:
+        axk.tick_params(labelleft=False)
+    return fig
+
+
 def plot_book_keyframes(
     events: pd.DataFrame,
     trades: pd.DataFrame | None = None,

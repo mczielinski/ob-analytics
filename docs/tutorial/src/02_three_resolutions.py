@@ -114,31 +114,41 @@ fig.tight_layout()
 # package's queue engine turns that picture into a quantitative face:
 # each resting order's **FIFO rank at the touch** over time — rank 1 is
 # the front of the line — coloured by how the order's story ended.
+# Every trajectory below is labeled with its owner, and the book
+# ladders underneath show the decisive instants:
 
 # %%
-fig = plot("queue_position", level="L3", **prepare.queue_position_l3(events))
+from _docs_theme import plot_queue_story
+
+fig = plot_queue_story(events, toy_trades(), at_s=[6, 45, 56, 57])
 
 # %% [markdown]
-# Walk the lines with the cast list in hand:
+# Now the walk is literal:
 #
-# - The **pink trajectory is Ivy**: she joins the 99 queue at t=6 at
-#   rank 2 — behind Alice — and waits there for fifty seconds. When
-#   Sam's sweep fills Alice at t=56, Ivy steps to rank 1... and is
-#   promptly half-filled herself. Still resting at the end: pink.
-# - The **green rank-1 traces** are the orders that reached the front
-#   and were filled (× marks the fill): Alice from t=0, Bob on the ask
-#   side, Hana's remnant.
-# - The **yellow ○ is Eve's flash**: she jumped straight to rank 1 at a
-#   brand-new best price of 100 — front of a queue of one — and
-#   cancelled 800 ms later.
+# - **Ivy** (pink) is the story: she joins the 99 queue at t=6 at
+#   rank 2 — the ladder below shows her stacked behind Alice — and
+#   waits there for *fifty seconds*. When Sam's sweep fills **Alice**
+#   at t=56 (×), Ivy steps to rank 1... and is promptly half-filled
+#   herself (t=57 ladder: only `Iv 1` remains). Still resting at the
+#   end: pink.
+# - **Bob** holds rank 1 on the ask side for 46 seconds and fills in
+#   two bites. **Frank, Iris, and Sam** blink through rank 1 for a
+#   single instant each — market orders technically join the queue
+#   too, for the moment it takes to match.
+# - **Eve** (yellow ○) jumps straight to rank 1 at a brand-new best
+#   price of 100 — front of a queue of one. The t=45 ladder catches
+#   her mid-flash; 800 ms later she cancels.
+# - **Dana and Chen never appear at all.** This face tracks the queue
+#   *at the touch*; their bids at 98 sat one level below it the whole
+#   session. A quiet lesson in reading any plot: know what it excludes.
 #
 # Ivy's fifty seconds at rank 2 and Hana's story are two answers to the
 # same question — *how do I get to the front?* Ivy waited. **Hana paid**:
 # her order crossed the spread (a taker for 2 units), and the unfilled
 # remainder rested at 101, a fresh best bid — instant rank 1, filled
-# four seconds later. That trade-off — queue time versus crossing cost —
-# is the daily arithmetic of market making, and it is *invisible* below
-# L3.
+# four seconds later (her × at t=52). That trade-off — queue time
+# versus crossing cost — is the daily arithmetic of market making, and
+# it is *invisible* below L3.
 #
 # ## Which level do you need?
 #
