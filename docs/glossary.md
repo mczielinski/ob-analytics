@@ -127,6 +127,19 @@ A short-horizon proxy for directional pressure.
 
 ## Data formats
 
+**Matched book**
+: An L3 feed produced by the venue's own matching engine (LOBSTER,
+exchange MBO feeds): bids can never rest above asks, so an uncrossed
+book is a guaranteed invariant of the data.
+
+**Diff feed**
+: An L3 feed reconstructed from a public placement/cancellation
+stream (the Bitstamp feed used here). It can contain genuinely crossed
+*resting* orders; `order_book()` replays such feeds faithfully — a
+crossed book in the output is a property of the feed, not a
+reconstruction bug. See the pitfall note in
+[L1 → L2 → L3](tutorial/02_three_resolutions.md).
+
 **Bitstamp CSV**
 : One row per order event with columns `id, timestamp, exchange_timestamp,
 price, volume, action, direction`. The pipeline also expects a sibling
