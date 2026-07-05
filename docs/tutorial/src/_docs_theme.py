@@ -268,3 +268,53 @@ def plot_book_keyframes(
 
     axes[0].set_ylabel("Price", fontsize=8)
     return fig
+
+
+def plot_toy_depth_heatmap(
+    depth: pd.DataFrame,
+    spread: pd.DataFrame | None = None,
+    trades: pd.DataFrame | None = None,
+    *,
+    ax: plt.Axes | None = None,
+    col_bias: float = 1.0,
+    band_pt: float = 22.0,
+    **prepare_kwargs,
+) -> plt.Figure:
+    """The depth_heatmap face with fat price bands for toy-scale reading.
+
+    The face draws each price level as a 2-pt line — right for thousands
+    of levels, hairline-thin for five. This boosts the LineCollection
+    width so every level reads as a solid band whose colour changes are
+    checkable against the keyframe strip, and pins the y-range to the
+    toy's full price grid.
+    """
+    from matplotlib.collections import LineCollection
+
+    from ob_analytics.visualization import plot, prepare
+
+    lo, hi = depth["price"].min(), depth["price"].max()
+    fig_or_ax = ax
+    if fig_or_ax is None:
+        fig, ax = plt.subplots(figsize=(12, 5))
+    else:
+        fig = fig_or_ax.figure
+    plot(
+        "depth_heatmap",
+        level="L2",
+        ax=ax,
+        theme=DOCS_THEME,
+        **prepare.price_levels(
+            depth,
+            spread=spread,
+            trades=trades,
+            col_bias=col_bias,
+            price_from=lo - 0.4,
+            price_to=hi + 0.4,
+            **prepare_kwargs,
+        ),
+    )
+    for coll in ax.collections:
+        if isinstance(coll, LineCollection):
+            coll.set_linewidth(band_pt)
+    ax.set_yticks(sorted(depth["price"].unique()))
+    return fig
