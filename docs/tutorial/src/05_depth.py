@@ -125,10 +125,11 @@ row
 #
 # Before touching real data, one constructed example — because the
 # heatmap's default colour scale has a failure mode you should meet on
-# data you control. Build a book with two **500-lot whale walls** far
-# from the mid, and a working region at the touch whose levels hold
-# between 1 and 5 units — thin, but *structured*: sizes step up and
-# down over the minute, the way real near-touch liquidity breathes:
+# data you control. Build a book with two **500-lot whale walls** a
+# percent either side of the mid, and a working region at the touch
+# whose levels hold between 1 and 5 units — thin, but *structured*:
+# sizes step up and down over the minute, the way real near-touch
+# liquidity breathes:
 
 # %%
 import pandas as pd
@@ -138,8 +139,8 @@ rows = []
 for i, s in enumerate(range(0, 61, 5)):
     t = t0 + pd.Timedelta(seconds=s)
     rows += [
-        {"timestamp": t, "price": 96.0, "volume": 500.0, "direction": "bid"},
-        {"timestamp": t, "price": 104.0, "volume": 500.0, "direction": "ask"},
+        {"timestamp": t, "price": 99.0, "volume": 500.0, "direction": "bid"},
+        {"timestamp": t, "price": 101.0, "volume": 500.0, "direction": "ask"},
         # near-touch levels, sizes 1-5, drifting over time:
         {"timestamp": t, "price": 99.9, "volume": 1.0 + i % 5, "direction": "bid"},
         {
@@ -239,9 +240,9 @@ fig.tight_layout()
 # %% [markdown]
 # Top panel, default scale: the bright horizontal bands are persistent
 # resting walls — the whales of the constructed example, in the wild.
-# Note how they sit *away* from the wandering white mid, and how bands
-# sometimes vanish in an instant (a wall cancelled whole: Dana's move,
-# at a thousand times her size).
+# They sit away from the wandering white mid, and when one disappears it
+# disappears all at once: a single cancellation removing the entire
+# level, Dana's exit at a thousand times her size.
 #
 # Bottom panel, bent scale: the region around the mid fills in — the
 # thin, fast-changing liquidity where trades (the markers) actually

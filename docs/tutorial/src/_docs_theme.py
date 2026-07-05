@@ -317,4 +317,7 @@ def plot_toy_depth_heatmap(
         if isinstance(coll, LineCollection):
             coll.set_linewidth(band_pt)
     ax.set_yticks(sorted(depth["price"].unique()))
+    # widen the frame so the fat edge bands render whole, not half-clipped
+    span = (hi - lo) or 1.0
+    ax.set_ylim(lo - 0.12 * span, hi + 0.12 * span)
     return fig
