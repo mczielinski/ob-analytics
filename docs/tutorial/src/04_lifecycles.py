@@ -200,6 +200,32 @@ ax.set_title("Order classes in the sample capture")
 # flashed-limit column — nearly 400× everything else combined — would be
 # the only visible bar.
 #
+# **Why would anyone behave like this?** Because a resting quote at a
+# stale price is a free option for everyone else. Modern liquidity
+# provision is algorithmic quote management: as the fair price drifts,
+# market-making systems cancel and repost their quotes to follow it —
+# and on a venue where order ids are not reusable, *every one of those
+# updates is a fresh order that lives briefly and dies unfilled*. The
+# lifetimes carry the signature:
+
+# %%
+lc_real = order_lifecycles(result.events)
+fl = lc_real[lc_real["type"].astype(str) == "flashed-limit"].copy()
+end = result.events["timestamp"].max()
+fl = fl[
+    fl["end_ts"] <= end - pd.Timedelta(seconds=2)
+]  # drop the shutdown burst (next section)
+life = (fl["end_ts"] - fl["placed_ts"]).dt.total_seconds()
+{f"under {t}s": f"{(life < t).mean():.1%}" for t in (1, 10, 60)}
+
+# %% [markdown]
+# Roughly nine in ten flashed orders live under a *second*; nineteen in
+# twenty are gone within ten. At ~90 order placements per second against
+# a few hundred trades in the whole half hour, this book is not a queue
+# of patient humans — it is a handful of algorithms continuously
+# retyping their prices. Eve is the norm because **Eve is what a quote
+# update looks like in per-order data.**
+#
 # Fates tell the same story from the other axis:
 
 # %%
@@ -221,14 +247,25 @@ deletes = result.events[result.events["action"] == "deleted"]
 deletes[deletes["timestamp"] > end - pd.Timedelta(seconds=2)]["id"].nunique()
 
 # %% [markdown]
-# They were closed *by the recorder*: at shutdown, the collector emits a
-# synthetic `deleted` for every order still resting — about 6,600
-# deletions in the final two seconds, against a baseline of one or two
-# hundred per second. Each of those orders was genuinely resting; each
-# now carries a created-then-cancelled-unfilled event shape, so the
-# classifier — correctly, on the evidence it has — calls them
-# `flashed-limit`. Both edges of the window leave fingerprints on the
-# class counts. Hold that thought for the pitfall at the end of the
+# They were closed *by the recorder*. This capture was made with the
+# package's own live collector, which — by its documented convention —
+# closes every lifecycle at shutdown, emitting a synthetic `deleted`
+# for each order still standing so that no id is left dangling. The
+# receipts ship with the sample: its `meta.json` records
+# `synthetic_deleted: 6518`, and that is the ~6,600-deletion burst we
+# just measured in the final two seconds, against a baseline of one or
+# two hundred per second.
+#
+# **This is a property of the collector, not of order books.** A
+# capture made by a recorder without that convention would end with
+# thousands of orders whose fate is `resting` — and a correspondingly
+# smaller flashed-limit count, since each synthetically closed order
+# now carries a created-then-cancelled-unfilled shape that the
+# classifier — correctly, on the evidence it has — calls
+# `flashed-limit`. (In this capture that accounts for about 6,500 of
+# the 156,000 flashed orders — the repricing churn above, not the
+# shutdown, is the real story.) The recorder's conventions are part of
+# the window. Hold that thought for the pitfall at the end of the
 # chapter.
 #
 # One picture of all those endings at once — each order plotted at the
