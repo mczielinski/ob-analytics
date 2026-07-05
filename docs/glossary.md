@@ -125,6 +125,22 @@ with the regression DataFrame attached.
 : Per-window net buy-minus-sell volume normalised by total traded volume.
 A short-horizon proxy for directional pressure.
 
+## Pipeline concepts
+
+**Canonical events / trades frames**
+: The venue-independent DataFrames every pipeline stage consumes,
+defined by the column contracts in [Data Contracts](api/schemas.md).
+Once frames pass the validators, downstream code cannot tell which
+venue they came from.
+
+**Loader**
+: Any object whose `load()` returns a validator-passing events frame —
+the [`EventLoader`](api/protocols.md) protocol. One per venue dialect.
+
+**Trade source**
+: The companion protocol for executions: `load(events, source)` returns
+the canonical trades frame with maker/taker attribution.
+
 ## Data formats
 
 **Matched book**
