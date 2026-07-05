@@ -12,6 +12,7 @@ nav = [
     { "Overview" = "tutorial/index.md" },
     { "The toy session" = "tutorial/00_toy_session.md" },
     { "1 · From a price to an order book" = "tutorial/01_from_price_to_book.md" },
+    { "2 · L1 → L2 → L3" = "tutorial/02_three_resolutions.md" },
   ] },
   { "How-to guides" = [
     { "Step-by-step control" = "howto/full-control.md" },

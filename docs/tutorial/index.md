@@ -44,7 +44,9 @@ rendered from the bundled data):
 1. **[From a price to an order book](01_from_price_to_book.md)** — no
    finance knowledge assumed: markets, bourses, the L1 ticker, and the
    book built two orders at a time
-2. **L1 → L2 → L3** — three resolutions of the same market *(planned)*
+2. **[L1 → L2 → L3](02_three_resolutions.md)** — three resolutions of the
+   same market: what each level can answer, the whale-vs-crowd contrast,
+   and the queue engine at toy and industrial scale
 3. **Loading order data** — Bitstamp, LOBSTER, and your own *(planned)*
 4. **Order lifecycles & classification** *(planned)*
 5. **Depth, spread & liquidity** *(planned)*
