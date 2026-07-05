@@ -163,6 +163,50 @@ def plot_queue_story(
     return fig
 
 
+def plot_lifecycle_story(
+    events: pd.DataFrame,
+    *,
+    actor_col: str = "actor",
+    pad_end_s: float = 3.0,
+) -> plt.Figure:
+    """The order_activity L3 face (lifespan Gantt), actor-labeled.
+
+    Renders each passive order's place → outcome span with explicit price
+    bounds (so no toy price falls to the face's percentile clip), pads the
+    window end by *pad_end_s* seconds so still-resting lifelines visibly
+    outlive the last fill, widens the y-limits so edge-price spans don't
+    sit on the frame, and labels each span's start with its owner from
+    *actor_col*. Toy-scale teaching figure — real data has too many
+    lifelines to label (the face itself scales; the labels don't).
+    """
+    from ob_analytics.visualization import plot, prepare
+
+    prices = events.loc[events["price"] > 0, "price"]
+    payload = prepare.order_activity_l3(
+        events,
+        price_from=prices.min() - 0.5,
+        price_to=prices.max() + 0.5,
+        end_time=events["timestamp"].max() + pd.Timedelta(seconds=pad_end_s),
+    )
+    fig, ax = plt.subplots(figsize=(11, 5.2))
+    plot("order_activity", level="L3", ax=ax, theme=DOCS_THEME, **payload)
+    ax.set_ylim(prices.min() - 0.6, prices.max() + 0.6)
+    ax.set_yticks(sorted(prices.unique()))
+    actor_of = dict(zip(events["id"], events[actor_col].astype(str)))
+    for frame in (payload["filled"], payload["cancelled"], payload["resting"]):
+        for row in frame.itertuples():
+            ax.annotate(
+                actor_of.get(row.id, str(row.id)),
+                (row.start_ts, row.price),
+                textcoords="offset points",
+                xytext=(2, 7),
+                fontsize=9,
+                fontweight="bold",
+                color="#333333",
+            )
+    return fig
+
+
 def plot_book_keyframes(
     events: pd.DataFrame,
     trades: pd.DataFrame | None = None,
