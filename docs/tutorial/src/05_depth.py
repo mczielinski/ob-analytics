@@ -49,18 +49,33 @@ depth
 # ## The heatmap, finally earned
 #
 # Chapter 1 promised that a depth heatmap is "the keyframe strip
-# compressed into pixels." Now we can cash that promise on data where
-# you can check *every pixel*: time runs right, each price level is a
-# horizontal band, and colour is the standing volume from the ledger
-# above.
+# compressed into pixels." Now we can cash that promise literally: the
+# heatmap on top, and below it the thirteen book ladders it compresses,
+# column for column. Time runs right, each price level is a horizontal
+# band, and colour is the standing volume from the ledger above.
 
 # %%
-from _docs_theme import plot_toy_depth_heatmap
+import matplotlib.pyplot as plt
+
+from _docs_theme import plot_book_keyframes, plot_toy_depth_heatmap
 from ob_analytics.depth import depth_metrics, get_spread
 
 summary = depth_metrics(depth)
 spread = get_spread(summary)
-fig = plot_toy_depth_heatmap(depth, spread, toy_trades())
+
+fig = plt.figure(figsize=(15, 8))
+gs = fig.add_gridspec(2, 13, height_ratios=[1.6, 1.0], hspace=0.32, wspace=0.15)
+ax_hm = fig.add_subplot(gs[0, :])
+plot_toy_depth_heatmap(depth, spread, toy_trades(), ax=ax_hm)
+ax_hm.set_title("")  # replace the face's centered title with our own
+ax_hm.set_title("the heatmap…", fontsize=10, loc="left")
+key_axes = [fig.add_subplot(gs[1, i]) for i in range(13)]
+for axk in key_axes[1:]:
+    axk.sharey(key_axes[0])
+plot_book_keyframes(events, toy_trades(), ax_row=key_axes)
+for axk in key_axes[1:]:
+    axk.tick_params(labelleft=False)
+key_axes[0].set_title("…and the thirteen books it compresses", fontsize=10, loc="left")
 
 # %% [markdown]
 # Audit it band by band against the ledger:
@@ -168,8 +183,6 @@ wall["direction"] = pd.Categorical(wall["direction"], categories=["bid", "ask"])
 # %%
 import matplotlib.pyplot as plt
 
-from _docs_theme import DOCS_THEME
-from ob_analytics.visualization import plot, prepare
 
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 4.6), sharey=True)
 for ax, bias, title in (
@@ -179,11 +192,17 @@ for ax, bias, title in (
     plot_toy_depth_heatmap(wall, col_bias=bias, ax=ax, band_pt=14, volume_scale=1)
     if (legend := ax.get_legend()) is not None:
         legend.remove()  # no mid/trades in the constructed book
+    # regular ticks across the whole range: gray rows are real prices
+    # with nothing resting at them, not missing data
+    ax.set_yticks([99.0 + 0.2 * k for k in range(11)])
     ax.set_title(title, fontsize=10)
 fig.tight_layout()
 
 # %% [markdown]
-# Same book twice. On the left, the linear scale spends its whole
+# Same book twice — the y-axis now ticks every 0.2 so you can see the
+# gray for what it is: price levels where nothing rests (an order book
+# is sparse; most prices are empty most of the time). On the left, the
+# linear scale spends its whole
 # colour range separating 500 from 496 — the near-touch levels, whose
 # sizes range over a full factor of five, are compressed into
 # indistinguishable darkness. **The only liquidity your next order will
@@ -210,31 +229,22 @@ fig.tight_layout()
 #
 # ## Real depth, read with new eyes
 #
-# The bundled capture, both ways:
+# The bundled capture — zoomed to its busiest ten minutes and to the
+# price levels active there, so the structure the prose points at is
+# actually visible (a full-session render averages it away). Both
+# colour scales:
 
 # %%
+from _docs_theme import plot_sample_heatmap
 from ob_analytics import Pipeline, sample_csv_path
 
 result = Pipeline().run(sample_csv_path())
 
 fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 9), sharex=True)
-for ax, bias, title in (
-    (ax1, 1.0, "default: the walls"),
-    (ax2, 0.1, "col_bias=0.1: the touch"),
-):
-    plot(
-        "depth_heatmap",
-        level="L2",
-        ax=ax,
-        theme=DOCS_THEME,
-        **prepare.price_levels(
-            result.depth,
-            spread=get_spread(result.depth_summary),
-            trades=result.trades,
-            col_bias=bias,
-        ),
-    )
-    ax.set_title(title, fontsize=10)
+plot_sample_heatmap(result, col_bias=1.0, ax=ax1)
+ax1.set_title("default: the walls", fontsize=10)
+plot_sample_heatmap(result, col_bias=0.1, ax=ax2)
+ax2.set_title("col_bias=0.1: the touch", fontsize=10)
 fig.tight_layout()
 
 # %% [markdown]

@@ -127,12 +127,14 @@ lc[
 # The lifecycle table has a natural picture, the `order_activity` face
 # at L3: each order one horizontal bar at its price, from placement to
 # fate — green filled, orange cancelled, pink still resting, line width
-# proportional to size:
+# proportional to size. The ladders below anchor it: the book as it
+# stood at four decisive instants, so every lifeline's start and end
+# can be checked against a state you can read directly:
 
 # %%
 from _docs_theme import plot_lifecycle_story
 
-fig = plot_lifecycle_story(events)
+fig = plot_lifecycle_story(events, toy_trades(), at_s=[6, 40, 46, 57])
 
 # %% [markdown]
 # Eight lifelines, three endings — walking it top to bottom:

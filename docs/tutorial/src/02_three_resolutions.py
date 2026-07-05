@@ -192,19 +192,26 @@ available_concepts(result)
 
 # %%
 t_start = result.events["timestamp"].min()
-fig = plot(
-    "queue_position",
-    level="L3",
-    **prepare.queue_position_l3(
-        result.events,
-        start_time=t_start,
-        end_time=t_start + pd.Timedelta(minutes=10),
-    ),
+payload = prepare.queue_position_l3(
+    result.events,
+    start_time=t_start,
+    end_time=t_start + pd.Timedelta(minutes=10),
 )
+# Show the front of the queue only: trajectories that ever reached the
+# top five ranks. The full plot has hundreds of lanes; the story —
+# marching to rank 1 — happens here.
+for fate in ("filled", "cancelled", "resting"):
+    front_ids = payload[fate].loc[payload[fate]["rank"] <= 5, "id"].unique()
+    payload[fate] = payload[fate][payload[fate]["id"].isin(front_ids)]
+payload["max_rank"] = 8
+fig = plot("queue_position", level="L3", **payload)
 
 # %% [markdown]
-# Hundreds of orders marching toward rank 1 as the queue ahead of them
-# fills or gives up — Ivy's fifty seconds, at industrial scale.
+# Filtered to the orders that ever reached the top five ranks — the
+# front of the line, where fills happen — this is Ivy's fifty seconds
+# at industrial scale: trajectories stepping downward as the queue
+# ahead of them fills or gives up, then ending in a fill (×), a
+# cancellation (○), or the window's edge.
 #
 # !!! warning "Pitfall: not every L3 feed is a matched book"
 #     LOBSTER and exchange MBO feeds are *matched books*: the venue's

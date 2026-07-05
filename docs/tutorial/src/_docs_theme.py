@@ -165,19 +165,22 @@ def plot_queue_story(
 
 def plot_lifecycle_story(
     events: pd.DataFrame,
+    trades: pd.DataFrame | None = None,
     *,
     actor_col: str = "actor",
     pad_end_s: float = 3.0,
+    at_s: list[float] | None = None,
 ) -> plt.Figure:
-    """The order_activity L3 face (lifespan Gantt), actor-labeled.
+    """The order_activity L3 face (lifespan Gantt), actor-labeled and anchored.
 
     Renders each passive order's place → outcome span with explicit price
     bounds (so no toy price falls to the face's percentile clip), pads the
     window end by *pad_end_s* seconds so still-resting lifelines visibly
     outlive the last fill, widens the y-limits so edge-price spans don't
     sit on the frame, and labels each span's start with its owner from
-    *actor_col*. Toy-scale teaching figure — real data has too many
-    lifelines to label (the face itself scales; the labels don't).
+    *actor_col*. Pass *at_s* to anchor the Gantt with a row of book
+    ladders at those instants (the anchor rule). Toy-scale teaching
+    figure — real data has too many lifelines to label.
     """
     from ob_analytics.visualization import plot, prepare
 
@@ -188,7 +191,14 @@ def plot_lifecycle_story(
         price_to=prices.max() + 0.5,
         end_time=events["timestamp"].max() + pd.Timedelta(seconds=pad_end_s),
     )
-    fig, ax = plt.subplots(figsize=(11, 5.2))
+    if at_s is None:
+        fig, ax = plt.subplots(figsize=(11, 5.2))
+    else:
+        fig = plt.figure(figsize=(11, 7.6))
+        gs = fig.add_gridspec(
+            2, len(at_s), height_ratios=[1.7, 1.0], hspace=0.34, wspace=0.16
+        )
+        ax = fig.add_subplot(gs[0, :])
     plot("order_activity", level="L3", ax=ax, theme=DOCS_THEME, **payload)
     ax.set_ylim(prices.min() - 0.6, prices.max() + 0.6)
     ax.set_yticks(sorted(prices.unique()))
@@ -204,6 +214,13 @@ def plot_lifecycle_story(
                 fontweight="bold",
                 color="#333333",
             )
+    if at_s is not None:
+        key_axes = [fig.add_subplot(gs[1, i]) for i in range(len(at_s))]
+        for axk in key_axes[1:]:
+            axk.sharey(key_axes[0])
+        plot_book_keyframes(events, trades, at_s=at_s, ax_row=key_axes)
+        for axk in key_axes[1:]:
+            axk.tick_params(labelleft=False)
     return fig
 
 
@@ -364,4 +381,61 @@ def plot_toy_depth_heatmap(
     # widen the frame so the fat edge bands render whole, not half-clipped
     span = (hi - lo) or 1.0
     ax.set_ylim(lo - 0.12 * span, hi + 0.12 * span)
+    return fig
+
+
+def busiest_window(
+    trades: pd.DataFrame, minutes: int = 10
+) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """Start/end of the *minutes*-long window containing the most trades."""
+    ts = trades["timestamp"].sort_values().reset_index(drop=True)
+    width = pd.Timedelta(minutes=minutes)
+    counts = ts.searchsorted(ts + width) - pd.RangeIndex(len(ts))
+    start = ts.iloc[int(counts.argmax())]
+    return start, start + width
+
+
+def plot_sample_heatmap(
+    result,
+    *,
+    col_bias: float = 1.0,
+    minutes: int = 10,
+    ax: plt.Axes | None = None,
+) -> plt.Figure:
+    """The real-data depth heatmap, zoomed to its busiest window.
+
+    A full-session render compresses half an hour into a texture shot;
+    when the prose wants to *discuss* structure, zoom to the ten busiest
+    minutes and clip the price axis to the levels active there (1st-99th
+    percentile of in-window depth) — the anchor rule's 'show the
+    walkable region'.
+    """
+    from ob_analytics.depth import get_spread
+    from ob_analytics.visualization import plot, prepare
+
+    start, end = busiest_window(result.trades, minutes=minutes)
+    win = result.depth[
+        (result.depth["timestamp"] >= start) & (result.depth["timestamp"] <= end)
+    ]
+    lo, hi = win["price"].quantile([0.01, 0.99])
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(12, 5.5))
+    else:
+        fig = ax.figure
+    plot(
+        "depth_heatmap",
+        level="L2",
+        ax=ax,
+        theme=DOCS_THEME,
+        **prepare.price_levels(
+            result.depth,
+            spread=get_spread(result.depth_summary),
+            trades=result.trades,
+            col_bias=col_bias,
+            start_time=start,
+            end_time=end,
+            price_from=lo,
+            price_to=hi,
+        ),
+    )
     return fig
