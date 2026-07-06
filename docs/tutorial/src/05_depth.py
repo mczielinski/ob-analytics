@@ -50,9 +50,9 @@ depth
 #
 # Chapter 1 promised that a depth heatmap is "the keyframe strip
 # compressed into pixels." Now we can cash that promise literally: the
-# heatmap on top, and below it the thirteen book ladders it compresses,
-# column for column. Time runs right, each price level is a horizontal
-# band, and colour is the standing volume from the ledger above.
+# heatmap on top, and below it the book it compresses, sampled every
+# ten seconds. Time runs right, each price level is a horizontal band,
+# and colour is the standing volume from the ledger above.
 
 # %%
 import matplotlib.pyplot as plt
@@ -64,18 +64,17 @@ summary = depth_metrics(depth)
 spread = get_spread(summary)
 
 fig = plt.figure(figsize=(15, 7))
-gs = fig.add_gridspec(2, 13, height_ratios=[2.4, 0.75], hspace=0.3, wspace=0.15)
+gs = fig.add_gridspec(2, 7, height_ratios=[2.2, 0.9], hspace=0.3, wspace=0.14)
 ax_hm = fig.add_subplot(gs[0, :])
 plot_toy_depth_heatmap(depth, spread, toy_trades(), ax=ax_hm)
 ax_hm.set_title("")  # replace the face's centered title with our own
 ax_hm.set_title("The toy minute, compressed", fontsize=10, loc="left")
-key_axes = [fig.add_subplot(gs[1, i]) for i in range(13)]
+key_axes = [fig.add_subplot(gs[1, i]) for i in range(7)]
 for axk in key_axes[1:]:
     axk.sharey(key_axes[0])
-plot_book_keyframes(events, toy_trades(), ax_row=key_axes)
+plot_book_keyframes(events, toy_trades(), every_s=10, ax_row=key_axes)
 for axk in key_axes[1:]:
     axk.tick_params(labelleft=False)
-key_axes[0].set_title("…and the thirteen books it compresses", fontsize=10, loc="left")
 
 # %% [markdown]
 # Audit it band by band against the ledger:
