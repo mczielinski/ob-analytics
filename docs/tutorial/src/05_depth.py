@@ -63,12 +63,12 @@ from ob_analytics.depth import depth_metrics, get_spread
 summary = depth_metrics(depth)
 spread = get_spread(summary)
 
-fig = plt.figure(figsize=(15, 8))
-gs = fig.add_gridspec(2, 13, height_ratios=[1.6, 1.0], hspace=0.32, wspace=0.15)
+fig = plt.figure(figsize=(15, 7))
+gs = fig.add_gridspec(2, 13, height_ratios=[2.4, 0.75], hspace=0.3, wspace=0.15)
 ax_hm = fig.add_subplot(gs[0, :])
 plot_toy_depth_heatmap(depth, spread, toy_trades(), ax=ax_hm)
 ax_hm.set_title("")  # replace the face's centered title with our own
-ax_hm.set_title("the heatmap…", fontsize=10, loc="left")
+ax_hm.set_title("The toy minute, compressed", fontsize=10, loc="left")
 key_axes = [fig.add_subplot(gs[1, i]) for i in range(13)]
 for axk in key_axes[1:]:
     axk.sharey(key_axes[0])
@@ -231,33 +231,26 @@ fig.tight_layout()
 #
 # The bundled capture — zoomed to its busiest ten minutes and to the
 # price levels active there, so the structure the prose points at is
-# actually visible (a full-session render averages it away). Both
-# colour scales:
+# actually visible (a full-session render averages it away). One
+# render, with the scale bent to `col_bias=0.4` — the middle row of
+# the table above, walls *and* touch both readable:
 
 # %%
 from _docs_theme import plot_sample_heatmap
 from ob_analytics import Pipeline, sample_csv_path
 
 result = Pipeline().run(sample_csv_path())
-
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 9), sharex=True)
-plot_sample_heatmap(result, col_bias=1.0, ax=ax1)
-ax1.set_title("default: the walls", fontsize=10)
-plot_sample_heatmap(result, col_bias=0.1, ax=ax2)
-ax2.set_title("col_bias=0.1: the touch", fontsize=10)
-fig.tight_layout()
+fig = plot_sample_heatmap(result, col_bias=0.4)
 
 # %% [markdown]
-# Top panel, default scale: the bright horizontal bands are persistent
-# resting walls — the whales of the constructed example, in the wild.
-# They sit away from the wandering white mid, and when one disappears it
-# disappears all at once: a single cancellation removing the entire
-# level, Dana's exit at a thousand times her size.
-#
-# Bottom panel, bent scale: the region around the mid fills in — the
-# thin, fast-changing liquidity where trades (the markers) actually
-# print. Same data, same minute-by-minute story as the toy: arrivals
-# thicken a band, cancellations thin it, trades eat the touch.
+# Everything from this chapter is on one canvas. The bright horizontal
+# bands are persistent resting walls — the whales of the constructed
+# example, in the wild; when one disappears it disappears all at once,
+# a single cancellation removing the entire level (Dana's exit at a
+# thousand times her size). Around the wandering white mid, the bent
+# scale keeps the thin, fast-changing liquidity readable — the region
+# where the trade markers actually print. Same story as the toy:
+# arrivals thicken a band, cancellations thin it, trades eat the touch.
 #
 # **Next:** trades and flow toxicity — from the book's standing supply
 # to the tape's aggression, and the metrics that price it.

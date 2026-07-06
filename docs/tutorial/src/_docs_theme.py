@@ -96,6 +96,33 @@ def plot_l1_ticker(
     return fig
 
 
+def _link_keyframes(fig, ax_top, key_axes, t0, at_s) -> None:
+    """Draw a dotted vertical marker at each storyboard instant on *ax_top*
+    and an arrow linking it to its book ladder below (the anchor rule made
+    literal)."""
+    from matplotlib.patches import ConnectionPatch
+
+    y_bottom = ax_top.get_ylim()[0]
+    for axk, k in zip(key_axes, at_s):
+        t = t0 + pd.Timedelta(seconds=k)
+        ax_top.axvline(t, color="#aaaaaa", ls=":", lw=1.1, zorder=1)
+        fig.add_artist(
+            ConnectionPatch(
+                xyA=(t, y_bottom),
+                coordsA="data",
+                axesA=ax_top,
+                xyB=(0.5, 1.04),
+                coordsB="axes fraction",
+                axesB=axk,
+                arrowstyle="-|>",
+                color="#aaaaaa",
+                lw=1.1,
+                shrinkA=2,
+                shrinkB=2,
+            )
+        )
+
+
 def plot_queue_story(
     events: pd.DataFrame,
     trades: pd.DataFrame | None = None,
@@ -160,6 +187,7 @@ def plot_queue_story(
     plot_book_keyframes(events, trades, at_s=at_s, ax_row=key_axes)
     for axk in key_axes[1:]:
         axk.tick_params(labelleft=False)
+    _link_keyframes(fig, ax_q, key_axes, events["timestamp"].iloc[0], at_s)
     return fig
 
 
@@ -221,6 +249,7 @@ def plot_lifecycle_story(
         plot_book_keyframes(events, trades, at_s=at_s, ax_row=key_axes)
         for axk in key_axes[1:]:
             axk.tick_params(labelleft=False)
+        _link_keyframes(fig, ax, key_axes, events["timestamp"].iloc[0], at_s)
     return fig
 
 
