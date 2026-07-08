@@ -225,9 +225,8 @@ fig = plot("queue_position", level="L3", **payload)
 #     Know which kind of feed you're holding before you trust an
 #     uncrossed-book invariant.
 #
-# **Next:** loading data — Bitstamp, LOBSTER, and your own — where
-# these feed differences become practical. *(Chapter in progress; the
-# [how-to guides](../howto/your-own-data.md) cover the recipes today.)*
+# **Next:** [Loading order data](03_loading_data.md) — where these feed
+# differences become practical.
 #
 # ---
 #
