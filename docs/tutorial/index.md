@@ -58,7 +58,10 @@ rendered from the bundled data):
 6. **[Trades & flow toxicity](06_flow_toxicity.md)** — VPIN, Kyle's λ and
    OFI as formula → meaning → citation → code, on a tape you can check
    by hand, then real data
-7. **The visualization system** *(planned)*
+7. **[The visualization system](07_visualization_system.md)** — the
+   concepts × levels × backends model behind every figure, and how to
+   compose your own
 
-Until a chapter lands, the [Getting started](../quickstart.md) page and the
-how-to guides cover the same ground recipe-style.
+The whole tutorial is complete. For task-focused recipes, see the
+[how-to guides](../howto/full-control.md); to look up a term, the
+[glossary](../glossary.md).

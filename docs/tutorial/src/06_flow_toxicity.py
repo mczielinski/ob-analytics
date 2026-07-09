@@ -298,8 +298,9 @@ amihud(tape).dropna().round(5)
 # chapter in one line: **the tape is a confession, if you know how to
 # read it** — and reading it is arithmetic you can now do by hand.
 #
-# **Next:** the visualization system — the concepts, levels and backends
-# behind every figure in this tutorial, and how to compose your own.
+# **Next:** [The visualization system](07_visualization_system.md) — the
+# concepts, levels and backends behind every figure in this tutorial, and
+# how to compose your own.
 #
 # ---
 #
