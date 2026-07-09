@@ -47,7 +47,9 @@ rendered from the bundled data):
 2. **[L1 → L2 → L3](02_three_resolutions.md)** — three resolutions of the
    same market: what each level can answer, the whale-vs-crowd contrast,
    and the queue engine at toy and industrial scale
-3. **Loading order data** — Bitstamp, LOBSTER, and your own *(planned)*
+3. **[Loading order data](03_loading_data.md)** — the canonical contract,
+   the pipeline, and a LOBSTER round trip on the toy session — no external
+   data needed
 4. **Order lifecycles & classification** *(planned)*
 5. **Depth, spread & liquidity** *(planned)*
 6. **Trades & flow toxicity** *(planned)*
