@@ -251,8 +251,9 @@ fig = plot_sample_heatmap(result, col_bias=0.4)
 # where the trade markers actually print. Same story as the toy:
 # arrivals thicken a band, cancellations thin it, trades eat the touch.
 #
-# **Next:** trades and flow toxicity — from the book's standing supply
-# to the tape's aggression, and the metrics that price it.
+# **Next:** [Trades and flow toxicity](06_flow_toxicity.md) — from the
+# book's standing supply to the tape's aggression, and the metrics that
+# price it.
 #
 # ---
 #
