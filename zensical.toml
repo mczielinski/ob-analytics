@@ -17,6 +17,7 @@ nav = [
     { "4 · Order lifecycles and classification" = "tutorial/04_lifecycles.md" },
     { "5 · Depth, spread and liquidity" = "tutorial/05_depth.md" },
     { "6 · Trades and flow toxicity" = "tutorial/06_flow_toxicity.md" },
+    { "7 · The visualization system" = "tutorial/07_visualization_system.md" },
   ] },
   { "How-to guides" = [
     { "Step-by-step control" = "howto/full-control.md" },
