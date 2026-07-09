@@ -53,7 +53,8 @@ rendered from the bundled data):
 4. **[Order lifecycles & classification](04_lifecycles.md)** — fate vs
    type, the classifier's evidence, and why ~99.7% of a real book's
    orders never trade
-5. **Depth, spread & liquidity** *(planned)*
+5. **[Depth, spread & liquidity](05_depth.md)** — the depth ledger, the
+   heatmap finally earned, and the colour scale as a modelling choice
 6. **Trades & flow toxicity** *(planned)*
 7. **The visualization system** *(planned)*
 
