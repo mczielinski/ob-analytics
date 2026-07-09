@@ -313,8 +313,8 @@ fig.tight_layout()
 #     and the [glossary entry](../glossary.md#data-formats) before you
 #     trust an uncrossed-book invariant on reconstructed data.
 #
-# **Next:** order lifecycles & classification — every order's biography,
-# from submission to one of four fates. *(Chapter in progress.)*
+# **Next:** [Order lifecycles and classification](04_lifecycles.md) —
+# every order's biography, from submission to one of four fates.
 #
 # ---
 #
