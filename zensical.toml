@@ -19,6 +19,7 @@ nav = [
     { "6 · Trades and flow toxicity" = "tutorial/06_flow_toxicity.md" },
     { "7 · The visualization system" = "tutorial/07_visualization_system.md" },
   ] },
+  { "Examples" = "gallery/index.md" },
   { "How-to guides" = [
     { "Step-by-step control" = "howto/full-control.md" },
     { "Use your own data" = "howto/your-own-data.md" },
