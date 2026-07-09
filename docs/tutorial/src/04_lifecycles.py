@@ -378,7 +378,8 @@ pd.DataFrame(
 #     `pre-existing` nor `unknown` is a bug; both are the classifier
 #     refusing to invent evidence it does not have.
 #
-# **Next:** Depth, spread and liquidity. *(Chapter in progress.)*
+# **Next:** [Depth, spread and liquidity](05_depth.md) — from individual
+# orders to the standing crowd.
 #
 # ---
 #
