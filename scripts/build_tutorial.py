@@ -39,6 +39,23 @@ def build_chapter(path: Path) -> str:
     stem = path.stem
     nb = jupytext.read(path)
 
+    # Execute with the kernel cwd set to a throwaway scratch dir, so any
+    # example that writes a relative file (save_figure, write_html, …) drops
+    # it there instead of polluting docs/tutorial/src/. The chdir moves the
+    # kernel off SRC, so pin SRC on sys.path first (chapters import the shared
+    # `_docs_theme` from there). The bootstrap cell is removed before the
+    # notebook reaches the renderer, so it never shows in the docs.
+    import nbformat
+
+    nb.cells.insert(
+        0,
+        nbformat.v4.new_code_cell(
+            "import os as _os, sys as _sys, tempfile as _tf\n"
+            f"_sys.path.insert(0, {str(SRC)!r})\n"
+            "_os.chdir(_tf.mkdtemp())"
+        ),
+    )
+
     t0 = time.perf_counter()
     client = NotebookClient(
         nb,
@@ -47,6 +64,7 @@ def build_chapter(path: Path) -> str:
         resources={"metadata": {"path": str(SRC)}},
     )
     client.execute()
+    nb.cells.pop(0)  # drop the bootstrap cell before rendering
 
     exporter = MarkdownExporter()
     body, resources = exporter.from_notebook_node(
