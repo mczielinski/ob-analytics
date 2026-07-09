@@ -44,7 +44,7 @@ def _window(result: Any, minutes: int = 10) -> tuple[pd.Timestamp, pd.Timestamp]
 
 
 def depth_heatmap(result):
-    """Standing volume at every price over time — the book's whole history."""
+    """Resting volume at each price level over time."""
     start, end = _window(result)
     return plot(
         "depth_heatmap",
@@ -61,7 +61,7 @@ def depth_heatmap(result):
 
 
 def book_snapshot(result):
-    """The bid/ask ladder at one instant, per resting order (L3)."""
+    """The bid/ask book at a single timestamp, one bar per resting order (L3)."""
     tp = result.events["timestamp"].iloc[0] + pd.Timedelta(minutes=10)
     snap = order_book(result.events, tp=tp)
     return plot(
@@ -70,7 +70,7 @@ def book_snapshot(result):
 
 
 def depth_chart(result):
-    """The classic cumulative depth curve, bids left, asks right."""
+    """Cumulative resting volume by price, bids left, asks right."""
     tp = result.events["timestamp"].iloc[0] + pd.Timedelta(minutes=10)
     snap = order_book(result.events, tp=tp)
     return plot("depth_chart", level="L2", **prepare.book_snapshot(snap))
@@ -80,7 +80,7 @@ def depth_chart(result):
 
 
 def trade_tape(result):
-    """Every execution as a signed lollipop against the mid price."""
+    """Executions plotted against the mid price, marked by aggressor side."""
     start, end = _window(result)
     return plot(
         "trade_tape",
@@ -95,7 +95,7 @@ def trade_tape(result):
 
 
 def trade_size(result):
-    """Trade sizes over time — spotting the large prints."""
+    """Trade size over time."""
     start, end = _window(result)
     return plot(
         "trade_size",
@@ -108,7 +108,7 @@ def trade_size(result):
 
 
 def volume_percentiles(result):
-    """Cumulative resting liquidity in basis-point rings around the mid."""
+    """Cumulative resting volume in basis-point bands around the mid."""
     start, end = _window(result)
     return plot(
         "volume_percentiles",
@@ -120,7 +120,7 @@ def volume_percentiles(result):
 
 
 def liquidity_at_touch(result):
-    """How much size sits right at the best bid and ask, over time."""
+    """Resting volume at the best bid and ask over time."""
     start, end = _window(result)
     return plot(
         "liquidity_at_touch",
@@ -135,12 +135,12 @@ def liquidity_at_touch(result):
 
 
 def order_outcome(result):
-    """Every order by placement distance and size, coloured by its fate."""
+    """Orders by placement distance and size, coloured by outcome."""
     return plot("order_outcome", level="L3", **prepare.order_outcome_l3(result.events))
 
 
 def queue_position(result):
-    """FIFO rank at the touch over time — the race to the front of the line."""
+    """Each order's FIFO rank at the touch over time, coloured by outcome."""
     start, end = _window(result)
     return plot(
         "queue_position",
@@ -150,7 +150,7 @@ def queue_position(result):
 
 
 def cancellations(result):
-    """Where and how fast orders are cancelled — age vs distance from touch."""
+    """Cancellations by age and distance from the touch."""
     return plot("cancellations", level="L3", **prepare.cancellations_l3(result.events))
 
 
@@ -164,7 +164,7 @@ def vpin(result):
 
 
 def kyle_lambda(result):
-    """Price impact per unit of signed order flow — Kyle's λ regression."""
+    """Price impact per unit of signed order flow."""
     return plot(
         "kyle_lambda",
         **prepare.kyle_lambda(compute_kyle_lambda(result.trades, window="5min")),
@@ -172,7 +172,7 @@ def kyle_lambda(result):
 
 
 def flow_imbalance(result):
-    """Net buy/sell pressure per minute, tape above, imbalance below."""
+    """Net buy-minus-sell volume per minute, with the trade tape above."""
     ofi = order_flow_imbalance(result.trades, window="1min")
     return plot("order_flow_imbalance", **prepare.ofi(ofi, trades=result.trades))
 
@@ -182,70 +182,70 @@ GALLERY: list[Example] = [
         "depth_heatmap",
         "Depth heatmap",
         "The book",
-        "Standing volume at every price over time.",
+        "Resting volume at each price level over time.",
         depth_heatmap,
     ),
     Example(
         "book_snapshot",
         "Book snapshot (L3)",
         "The book",
-        "The ladder at one instant, per resting order.",
+        "The bid/ask book at a single timestamp, one bar per resting order.",
         book_snapshot,
     ),
     Example(
         "depth_chart",
         "Depth chart",
         "The book",
-        "Cumulative depth, bids left, asks right.",
+        "Cumulative resting volume by price, bids left, asks right.",
         depth_chart,
     ),
     Example(
         "trade_tape",
         "Trade tape",
         "Trades",
-        "Each execution as a signed lollipop against the mid.",
+        "Executions against the mid price, marked by aggressor side.",
         trade_tape,
     ),
     Example(
         "trade_size",
         "Trade sizes",
         "Trades",
-        "Trade sizes over time — spotting the large prints.",
+        "Trade size over time.",
         trade_size,
     ),
     Example(
         "volume_percentiles",
         "Volume percentiles",
         "Liquidity",
-        "Resting liquidity in basis-point rings around the mid.",
+        "Cumulative resting volume in basis-point bands around the mid.",
         volume_percentiles,
     ),
     Example(
         "liquidity_at_touch",
         "Liquidity at touch",
         "Liquidity",
-        "Size at the best bid and ask over time.",
+        "Resting volume at the best bid and ask over time.",
         liquidity_at_touch,
     ),
     Example(
         "order_outcome",
         "Order outcomes (L3)",
         "Order lifecycles",
-        "Orders by placement and size, coloured by fate.",
+        "Orders by placement distance and size, coloured by outcome.",
         order_outcome,
     ),
     Example(
         "queue_position",
         "Queue position (L3)",
         "Order lifecycles",
-        "FIFO rank at the touch — the race to the front.",
+        "Each order's FIFO rank at the touch over time.",
         queue_position,
     ),
     Example(
         "cancellations",
         "Cancellations (L3)",
         "Order lifecycles",
-        "Where and how fast orders are cancelled.",
+        "Cancellations by age and distance from the touch.",
         cancellations,
     ),
     Example(
@@ -266,7 +266,7 @@ GALLERY: list[Example] = [
         "flow_imbalance",
         "Order flow imbalance",
         "Flow toxicity",
-        "Net buy/sell pressure per minute.",
+        "Net buy-minus-sell volume per minute.",
         flow_imbalance,
     ),
 ]
