@@ -55,7 +55,9 @@ rendered from the bundled data):
    orders never trade
 5. **[Depth, spread & liquidity](05_depth.md)** — the depth ledger, the
    heatmap finally earned, and the colour scale as a modelling choice
-6. **Trades & flow toxicity** *(planned)*
+6. **[Trades & flow toxicity](06_flow_toxicity.md)** — VPIN, Kyle's λ and
+   OFI as formula → meaning → citation → code, on a tape you can check
+   by hand, then real data
 7. **The visualization system** *(planned)*
 
 Until a chapter lands, the [Getting started](../quickstart.md) page and the
