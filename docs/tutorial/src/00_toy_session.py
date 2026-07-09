@@ -113,14 +113,17 @@ classified.groupby("actor", observed=True)["type"].first().sort_values()
 # Everything above transfers unchanged to real data. The bundled sample
 # is a ~30-minute Bitstamp BTC/USD capture — ~314,000 events instead of
 # 24, thousands of price levels instead of five. The depth heatmap below
-# is nothing but the keyframe strip compressed into pixels: one column
-# per instant, one row per price, brightness = resting volume.
+# (zoomed to the capture's busiest ten minutes) is nothing but the
+# keyframe strip compressed into pixels: one column per instant, one row
+# per price, brightness = resting volume.
 
 # %%
 from ob_analytics import Pipeline, sample_csv_path
 
+from _docs_theme import plot_sample_heatmap
+
 result = Pipeline().run(sample_csv_path())
-fig = result.plot("depth_heatmap")
+fig = plot_sample_heatmap(result, col_bias=0.4)
 
 # %% [markdown]
 # **Next:** chapter 1 starts from zero — what a price actually is, what

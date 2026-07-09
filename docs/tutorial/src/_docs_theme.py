@@ -96,6 +96,33 @@ def plot_l1_ticker(
     return fig
 
 
+def _link_keyframes(fig, ax_top, key_axes, t0, at_s) -> None:
+    """Draw a dotted vertical marker at each storyboard instant on *ax_top*
+    and an arrow linking it to its book ladder below (the anchor rule made
+    literal)."""
+    from matplotlib.patches import ConnectionPatch
+
+    y_bottom = ax_top.get_ylim()[0]
+    for axk, k in zip(key_axes, at_s):
+        t = t0 + pd.Timedelta(seconds=k)
+        ax_top.axvline(t, color="#aaaaaa", ls=":", lw=1.1, zorder=1)
+        fig.add_artist(
+            ConnectionPatch(
+                xyA=(t, y_bottom),
+                coordsA="data",
+                axesA=ax_top,
+                xyB=(0.5, 1.04),
+                coordsB="axes fraction",
+                axesB=axk,
+                arrowstyle="-|>",
+                color="#aaaaaa",
+                lw=1.1,
+                shrinkA=2,
+                shrinkB=2,
+            )
+        )
+
+
 def plot_queue_story(
     events: pd.DataFrame,
     trades: pd.DataFrame | None = None,
@@ -160,6 +187,69 @@ def plot_queue_story(
     plot_book_keyframes(events, trades, at_s=at_s, ax_row=key_axes)
     for axk in key_axes[1:]:
         axk.tick_params(labelleft=False)
+    _link_keyframes(fig, ax_q, key_axes, events["timestamp"].iloc[0], at_s)
+    return fig
+
+
+def plot_lifecycle_story(
+    events: pd.DataFrame,
+    trades: pd.DataFrame | None = None,
+    *,
+    actor_col: str = "actor",
+    pad_end_s: float = 3.0,
+    at_s: list[float] | None = None,
+) -> plt.Figure:
+    """The order_activity L3 face (lifespan Gantt), actor-labeled and anchored.
+
+    Renders each passive order's place → outcome span with explicit price
+    bounds (so no toy price falls to the face's percentile clip), pads the
+    window end by *pad_end_s* seconds so still-resting lifelines visibly
+    outlive the last fill, widens the y-limits so edge-price spans don't
+    sit on the frame, and labels each span's start with its owner from
+    *actor_col*. Pass *at_s* to anchor the Gantt with a row of book
+    ladders at those instants (the anchor rule). Toy-scale teaching
+    figure — real data has too many lifelines to label.
+    """
+    from ob_analytics.visualization import plot, prepare
+
+    prices = events.loc[events["price"] > 0, "price"]
+    payload = prepare.order_activity_l3(
+        events,
+        price_from=prices.min() - 0.5,
+        price_to=prices.max() + 0.5,
+        end_time=events["timestamp"].max() + pd.Timedelta(seconds=pad_end_s),
+    )
+    if at_s is None:
+        fig, ax = plt.subplots(figsize=(11, 5.2))
+    else:
+        fig = plt.figure(figsize=(11, 7.6))
+        gs = fig.add_gridspec(
+            2, len(at_s), height_ratios=[1.7, 1.0], hspace=0.34, wspace=0.16
+        )
+        ax = fig.add_subplot(gs[0, :])
+    plot("order_activity", level="L3", ax=ax, theme=DOCS_THEME, **payload)
+    ax.set_ylim(prices.min() - 0.6, prices.max() + 0.6)
+    ax.set_yticks(sorted(prices.unique()))
+    actor_of = dict(zip(events["id"], events[actor_col].astype(str)))
+    for frame in (payload["filled"], payload["cancelled"], payload["resting"]):
+        for row in frame.itertuples():
+            ax.annotate(
+                actor_of.get(row.id, str(row.id)),
+                (row.start_ts, row.price),
+                textcoords="offset points",
+                xytext=(2, 7),
+                fontsize=9,
+                fontweight="bold",
+                color="#333333",
+            )
+    if at_s is not None:
+        key_axes = [fig.add_subplot(gs[1, i]) for i in range(len(at_s))]
+        for axk in key_axes[1:]:
+            axk.sharey(key_axes[0])
+        plot_book_keyframes(events, trades, at_s=at_s, ax_row=key_axes)
+        for axk in key_axes[1:]:
+            axk.tick_params(labelleft=False)
+        _link_keyframes(fig, ax, key_axes, events["timestamp"].iloc[0], at_s)
     return fig
 
 
@@ -267,4 +357,114 @@ def plot_book_keyframes(
             spine.set_color("#dddddd")
 
     axes[0].set_ylabel("Price", fontsize=8)
+    return fig
+
+
+def plot_toy_depth_heatmap(
+    depth: pd.DataFrame,
+    spread: pd.DataFrame | None = None,
+    trades: pd.DataFrame | None = None,
+    *,
+    ax: plt.Axes | None = None,
+    col_bias: float = 1.0,
+    band_pt: float = 22.0,
+    **prepare_kwargs,
+) -> plt.Figure:
+    """The depth_heatmap face with fat price bands for toy-scale reading.
+
+    The face draws each price level as a 2-pt line — right for thousands
+    of levels, hairline-thin for five. This boosts the LineCollection
+    width so every level reads as a solid band whose colour changes are
+    checkable against the keyframe strip, and pins the y-range to the
+    toy's full price grid.
+    """
+    from matplotlib.collections import LineCollection
+
+    from ob_analytics.visualization import plot, prepare
+
+    lo, hi = depth["price"].min(), depth["price"].max()
+    fig_or_ax = ax
+    if fig_or_ax is None:
+        fig, ax = plt.subplots(figsize=(12, 5))
+    else:
+        fig = fig_or_ax.figure
+    plot(
+        "depth_heatmap",
+        level="L2",
+        ax=ax,
+        theme=DOCS_THEME,
+        **prepare.price_levels(
+            depth,
+            spread=spread,
+            trades=trades,
+            col_bias=col_bias,
+            price_from=lo - 0.4,
+            price_to=hi + 0.4,
+            **prepare_kwargs,
+        ),
+    )
+    for coll in ax.collections:
+        if isinstance(coll, LineCollection):
+            coll.set_linewidth(band_pt)
+    ax.set_yticks(sorted(depth["price"].unique()))
+    # widen the frame so the fat edge bands render whole, not half-clipped
+    span = (hi - lo) or 1.0
+    ax.set_ylim(lo - 0.12 * span, hi + 0.12 * span)
+    return fig
+
+
+def busiest_window(
+    trades: pd.DataFrame, minutes: int = 10
+) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """Start/end of the *minutes*-long window containing the most trades."""
+    ts = trades["timestamp"].sort_values().reset_index(drop=True)
+    width = pd.Timedelta(minutes=minutes)
+    counts = ts.searchsorted(ts + width) - pd.RangeIndex(len(ts))
+    start = ts.iloc[int(counts.argmax())]
+    return start, start + width
+
+
+def plot_sample_heatmap(
+    result,
+    *,
+    col_bias: float = 1.0,
+    minutes: int = 10,
+    ax: plt.Axes | None = None,
+) -> plt.Figure:
+    """The real-data depth heatmap, zoomed to its busiest window.
+
+    A full-session render compresses half an hour into a texture shot;
+    when the prose wants to *discuss* structure, zoom to the ten busiest
+    minutes and clip the price axis to the levels active there (1st-99th
+    percentile of in-window depth) — the anchor rule's 'show the
+    walkable region'.
+    """
+    from ob_analytics.depth import get_spread
+    from ob_analytics.visualization import plot, prepare
+
+    start, end = busiest_window(result.trades, minutes=minutes)
+    win = result.depth[
+        (result.depth["timestamp"] >= start) & (result.depth["timestamp"] <= end)
+    ]
+    lo, hi = win["price"].quantile([0.01, 0.99])
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(12, 5.5))
+    else:
+        fig = ax.figure
+    plot(
+        "depth_heatmap",
+        level="L2",
+        ax=ax,
+        theme=DOCS_THEME,
+        **prepare.price_levels(
+            result.depth,
+            spread=get_spread(result.depth_summary),
+            trades=result.trades,
+            col_bias=col_bias,
+            start_time=start,
+            end_time=end,
+            price_from=lo,
+            price_to=hi,
+        ),
+    )
     return fig

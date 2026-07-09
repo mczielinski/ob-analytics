@@ -262,15 +262,16 @@ for axk in key_axes[1:]:
 # does hundreds of events per second — so we compress: one *column* per
 # instant, one *row* per price, and **brightness for resting volume**.
 # That is all a depth heatmap is: the keyframe strip above, squeezed
-# into pixels. Below, the bundled ~30-minute Bitstamp BTC/USD capture —
-# 314,000 events of exactly the mechanics you just watched one at a
-# time:
+# into pixels. Below, the busiest ten minutes of the bundled ~30-minute
+# Bitstamp BTC/USD capture — the mechanics you just watched one at a
+# time, hundreds of times per second:
 
 # %%
+from _docs_theme import plot_sample_heatmap
 from ob_analytics import Pipeline, sample_csv_path
 
 result = Pipeline().run(sample_csv_path())
-fig = result.plot("depth_heatmap")
+fig = plot_sample_heatmap(result, col_bias=0.4)
 
 # %% [markdown]
 # Bright bands are heavy standing offers (the crowd's version of Dana's
