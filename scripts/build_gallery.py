@@ -62,8 +62,40 @@ def main() -> int:
         rendered = []
         for ex in GALLERY:
             fig = ex.render(result)
-            dest = IMAGES / f"{ex.name}.png"
-            fig.savefig(dest, dpi=110, bbox_inches="tight")
+            # Full figure: enlarge ~40% (preserving aspect) so the per-example
+            # render on the page is big and legible, saved at a crisp dpi.
+            w, h = fig.get_size_inches()
+            fig.set_size_inches(w * 1.4, h * 1.4)
+            fig.savefig(IMAGES / f"{ex.name}.png", dpi=130, bbox_inches="tight")
+            # Thumbnail: reduce to just the primary graphic — a visual
+            # impression, like the seaborn example gallery. Drop colorbars,
+            # keep only the largest panel (so small-multiple faces like
+            # cancellations show one panel, not two), and strip all chrome.
+            for ax in list(fig.axes):
+                if ax.get_label() == "<colorbar>":
+                    ax.remove()
+            data_axes = list(fig.axes)
+            if len(data_axes) > 1:
+                largest = max(
+                    data_axes,
+                    key=lambda a: a.get_position().width * a.get_position().height,
+                )
+                for ax in data_axes:
+                    if ax is not largest:
+                        ax.remove()
+            for ax in fig.axes:
+                ax.set_title("")
+                ax.set_xlabel("")
+                ax.set_ylabel("")
+                ax.axis("off")
+                if (leg := ax.get_legend()) is not None:
+                    leg.remove()
+            fig.savefig(
+                IMAGES / f"{ex.name}_thumb.png",
+                dpi=90,
+                bbox_inches="tight",
+                pad_inches=0,
+            )
             plt.close(fig)
             rendered.append(ex)
             print(f"  {ex.name}: {ex.title}")
@@ -89,11 +121,11 @@ def main() -> int:
     for ex in rendered:
         out.append(
             f'<a href="#{ex.name}" title="{ex.title}" '
-            'style="flex:0 0 auto;width:180px;text-align:center;'
-            'text-decoration:none;font-size:0.8rem;">'
-            f'<img src="images/{ex.name}.png" alt="{ex.title}" '
-            'style="width:180px;height:120px;object-fit:cover;'
-            'border:1px solid #ccc;border-radius:4px;"><br>'
+            'style="flex:0 0 auto;width:300px;text-align:center;'
+            'text-decoration:none;font-size:0.85rem;">'
+            f'<img src="images/{ex.name}_thumb.png" alt="{ex.title}" '
+            'style="width:300px;height:200px;object-fit:contain;'
+            'border:1px solid #ccc;border-radius:4px;background:#fff;padding:6px;"><br>'
             f"{ex.title}</a>"
         )
     out.append("</div>")
