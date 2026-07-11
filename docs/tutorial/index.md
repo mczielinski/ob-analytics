@@ -50,11 +50,11 @@ rendered from the bundled data):
 3. **[Loading order data](03_loading_data.md)** — the canonical contract,
    the pipeline, and a LOBSTER round trip on the toy session — no external
    data needed
-4. **[Order lifecycles & classification](04_lifecycles.md)** — fate vs
+4. **[Order lifecycles & classification](04_lifecycles.md)** — outcome vs
    type, the classifier's evidence, and why ~99.7% of a real book's
    orders never trade
 5. **[Depth, spread & liquidity](05_depth.md)** — the depth ledger, the
-   heatmap finally earned, and the colour scale as a modelling choice
+   heatmap read against it, and the colour scale as a modelling choice
 6. **[Trades & flow toxicity](06_flow_toxicity.md)** — VPIN, Kyle's λ and
    OFI as formula → meaning → citation → code, on a tape you can check
    by hand, then real data

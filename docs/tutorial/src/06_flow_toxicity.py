@@ -27,14 +27,14 @@
 # sentence, its source, then the code — on a tape small enough to check
 # by hand.
 #
-# ## A tape with a story
+# ## A constructed tape
 #
 # The [toy order book](00_toy_session.md) had only five trades — flow
 # metrics are built for thousands, so we construct a busier tape with a
 # deliberate arc: a calm, balanced open; then an **informed buyer
 # accumulates**, lifting the price from 100 to 103; then calm again at
-# the new level. Every metric below should light up in the middle and
-# stay quiet at the edges.
+# the new level. Every metric below should rise in the middle and stay
+# low at the edges.
 
 # %%
 # %matplotlib inline
@@ -113,11 +113,11 @@ ax.set_title("The reference tape — informed accumulation shaded")
 
 # %% [markdown]
 # Thirteen trades: four calm, five in the shaded accumulation, four calm
-# again. Three buckets, three lenses — all reading the same tape.
+# again. Three buckets, three metrics, one tape.
 #
-# ## Order flow imbalance: the directness of the flow
+# ## Order flow imbalance: the direction of the flow
 #
-# The simplest lens. Over a time window, net the buy and sell volume and
+# The simplest measure. Over a time window, net the buy and sell volume and
 # normalise:
 #
 # ```
@@ -128,8 +128,8 @@ ax.set_title("The reference tape — informed accumulation shaded")
 #
 # **In one sentence:** OFI is which way the flow leaned, on a scale from
 # −1 (everyone sold) through 0 (balanced) to +1 (everyone bought). It is
-# the short-horizon pressure on price, and it is the lightweight cousin
-# of the order-book event imbalance studied by Cont, Kukanov and Stoikov
+# the short-horizon pressure on price, and it is a simpler relative of
+# the order-book event imbalance studied by Cont, Kukanov and Stoikov
 # (2014). On the tape, in 30-second windows:
 
 # %%
@@ -156,8 +156,8 @@ fig = plot("order_flow_imbalance", **prepare.ofi(ofi, trades=tape))
 #
 # OFI slices time into equal *minutes*. VPIN — Volume-Synchronised
 # Probability of Informed Trading — slices into equal *volume* instead,
-# which is the whole trick. Markets do their business in bursts; a
-# **volume clock** ticks fast when trading is frenzied and slow when it
+# which is the key idea. Markets trade in bursts; a **volume clock**
+# ticks fast when trading is frenzied and slow when it
 # is quiet, so each bucket carries the same economic weight. Within each
 # bucket of `V` units, VPIN measures the same imbalance:
 #
@@ -185,7 +185,7 @@ vpin[["bucket", "buy_volume", "sell_volume", "vpin", "vpin_avg"]].round(3)
 # `|4−4|/8 = 0`. The accumulation buckets are 8 units of pure buying:
 # `|8−0|/8 = 1`. The headline number is `vpin_avg`, the trailing mean —
 # it climbs from 0 through the accumulation and decays afterward, a
-# smoothed toxicity alarm. The face plots that climb, with a threshold
+# smoothed toxicity measure. The face plots that climb, with a threshold
 # line above which flow is "toxic":
 
 # %%
@@ -229,7 +229,7 @@ kyle.regression_df.round(2)
 fig = plot("kyle_lambda", **prepare.kyle_lambda(kyle))
 
 # %% [markdown]
-# ## The same three lenses on real data
+# ## The same three metrics on real data
 #
 # Now the running Bitstamp capture — the tape we have been building on
 # since chapter 3, all 284 of its trades:
@@ -250,16 +250,16 @@ print(
 # %% [markdown]
 # Look at the t-statistic before the λ: **1.45**. As a rule of thumb a
 # coefficient needs |t| ≳ 2 to be distinguishable from zero, so this λ
-# — positive, suggestively so — is *not statistically significant*. And
+# — positive, but weak — is *not statistically significant*. And
 # that is the honest headline for this dataset: a quiet thirty-minute
 # capture with 284 trades and fifteen units of total volume is far below
 # the regime these metrics were designed for. They compute; they just
 # cannot conclude.
 #
-# !!! warning "Pitfall: these are hungry metrics, and their knobs are not neutral"
+# !!! warning "Pitfall: these metrics need volume, and their knobs are not neutral"
 #     Flow-toxicity measures were built for high-frequency equity and
 #     futures data — thousands of trades per minute, not a handful per
-#     minute. On a thin tape three things bite. **(1) Significance:** as
+#     minute. On a thin tape, three problems arise. **(1) Significance:** as
 #     above, λ's t-statistic collapses; VPIN's trailing average is taken
 #     over too few buckets to mean much. **(2) The knobs move the
 #     answer:** `bucket_volume` for VPIN and `window` for Kyle and OFI
@@ -294,9 +294,9 @@ amihud(tape).dropna().round(5)
 # It rises in the accumulation windows for the same reason λ does —
 # price moving on volume — and it plugs into the same plotting and
 # gallery machinery as the built-ins (wrap it in a panel builder; see
-# [Extending ob-analytics](../extending.md)). The lesson of the whole
-# chapter in one line: **the tape is a confession, if you know how to
-# read it** — and reading it is arithmetic you can now do by hand.
+# [Extending ob-analytics](../extending.md)). The point of the whole
+# chapter: these are ordinary functions over a trades table, and on a
+# small tape you can check every number by hand.
 #
 # **Next:** [The visualization system](07_visualization_system.md) — the
 # concepts, levels and backends behind every figure in this tutorial, and

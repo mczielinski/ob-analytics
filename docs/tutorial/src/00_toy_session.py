@@ -17,9 +17,9 @@
 # the layout every real loader produces, so everything you do with them
 # works unchanged on a 300,000-event capture.
 #
-# The cast, and what happens to each order:
+# The orders, and what happens to each:
 #
-# | Actor | Order | Fate | Classified as |
+# | Actor | Order | Outcome | Classified as |
 # |---|---|---|---|
 # | Alice | bid 2 @ 99 (t=0) | filled fully by Sam's sweep (t=56) | `resting-limit` |
 # | Bob | ask 3 @ 101 (t=2) | filled by Frank (1) then Hana (2) | `resting-limit` |
@@ -100,15 +100,15 @@ for axk in key_axes[1:]:
     axk.tick_params(labelleft=False)
 
 # %% [markdown]
-# Twelve orders, four fates. `set_order_types` recovers each order's
-# story from the raw events — with this cast, every classification is
+# Twelve orders, four classes. `set_order_types` assigns each order its
+# type from the raw events — with these twelve, every classification is
 # checkable by eye against the table above:
 
 # %%
 classified.groupby("actor", observed=True)["type"].first().sort_values()
 
 # %% [markdown]
-# ## The same physics at full scale
+# ## The same mechanics at full scale
 #
 # Everything above transfers unchanged to real data. The bundled sample
 # is a ~30-minute Bitstamp BTC/USD capture — ~314,000 events instead of

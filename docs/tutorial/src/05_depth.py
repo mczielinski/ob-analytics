@@ -12,7 +12,8 @@
 # Chapter 4 followed individual orders through their lives. This chapter
 # zooms out: stop asking *whose* order is standing and ask **how much is
 # standing, at every price, at every moment**. That aggregate — the
-# crowd, not the people — is called **depth**, and it is what traders
+# total at each price, not the individual orders — is called **depth**,
+# and it is what traders
 # mean by *liquidity*: how much you could trade right now without moving
 # the price.
 #
@@ -46,10 +47,10 @@ depth
 # at t=45.0, **0** at t=45.8. Chapter 1's keyframes, rewritten as a
 # ledger.
 #
-# ## The heatmap, finally earned
+# ## The depth heatmap, checked against the ledger
 #
-# Chapter 1 promised that a depth heatmap is "the keyframe strip
-# compressed into pixels." Now we can cash that promise literally: the
+# Chapter 1 described a depth heatmap as "the keyframe strip compressed
+# into pixels." Now we can show that directly: the
 # heatmap on top, and below it the book it compresses, sampled every
 # ten seconds. Time runs right, each price level is a horizontal band,
 # and colour is the standing volume from the ledger above.
@@ -86,16 +87,16 @@ for axk in key_axes[1:]:
 #   no trade anywhere.
 # - **100** holds a single purple fleck at t=45: Eve's 800 ms, one pixel
 #   wide, with the white mid line stepping around it.
-# - **101** is Bob's story: green (3) until Frank's △ bite (2, blue),
-#   consumed entirely when Hana crosses at t=48 — then briefly *reborn
+# - **101** follows Bob: green (3) until Frank's △ fill (2, blue),
+#   consumed entirely when Hana crosses at t=48 — then briefly *appearing
 #   as a bid* (her resting remainder) before Iris's ▽ removes it.
 # - **102** and **103** appear when Erin and Gus arrive and never
-#   change: the patient outer book.
+#   change: the outer levels, unchanged.
 #
 # The white line is the mid price; the markers are the five trades.
 # Everything chapter 1 taught in thirteen hand-drawn frames is here in
-# one image — that is the compression a heatmap buys, and on real data
-# it will be the only way to see half an hour at once.
+# one image — that is the compression a heatmap gives you, and on real
+# data it is the only way to see half an hour at once.
 #
 # ## The summary: best quotes and binned liquidity
 #
@@ -143,7 +144,7 @@ row
 # percent either side of the mid, and a working region at the touch
 # whose levels hold between 1 and 5 units — thin, but *structured*:
 # sizes step up and down over the minute, the way real near-touch
-# liquidity breathes:
+# liquidity changes:
 
 # %%
 import pandas as pd
@@ -204,8 +205,9 @@ fig.tight_layout()
 # linear scale spends its whole
 # colour range separating 500 from 496 — the near-touch levels, whose
 # sizes range over a full factor of five, are compressed into
-# indistinguishable darkness. **The only liquidity your next order will
-# actually meet is the part you cannot read.** On the right,
+# indistinguishable darkness. Those near-touch levels are exactly the
+# liquidity your next order would meet, and they are the part you cannot
+# read. On the right,
 # `col_bias=0.1` applies a power-law bend: the 1-vs-5 structure at the
 # touch becomes visible colour steps, while the walls stay unmistakably
 # the brightest thing on the plot.
@@ -226,7 +228,7 @@ fig.tight_layout()
 #     will happen. If you are studying fills, microstructure, or anything
 #     within a few bps of the mid, bend the scale.
 #
-# ## Real depth, read with new eyes
+# ## Real depth
 #
 # The bundled capture — zoomed to its busiest ten minutes and to the
 # price levels active there, so the structure the prose points at is
@@ -242,18 +244,18 @@ result = Pipeline().run(sample_csv_path())
 fig = plot_sample_heatmap(result, col_bias=0.4)
 
 # %% [markdown]
-# Everything from this chapter is on one canvas. The bright horizontal
-# bands are persistent resting walls — the whales of the constructed
-# example, in the wild; when one disappears it disappears all at once,
-# a single cancellation removing the entire level (Dana's exit at a
-# thousand times her size). Around the wandering white mid, the bent
+# Everything from this chapter is in one figure. The bright horizontal
+# bands are persistent resting walls — the same walls as the constructed
+# example, on real data; when one disappears it disappears all at once, a
+# single cancellation removing the entire level (the same move as Dana's,
+# at a thousand times the size). Around the moving white mid, the bent
 # scale keeps the thin, fast-changing liquidity readable — the region
-# where the trade markers actually print. Same story as the toy:
-# arrivals thicken a band, cancellations thin it, trades eat the touch.
+# where the trade markers print. Same behaviour as the toy: arrivals
+# thicken a band, cancellations thin it, trades consume the touch.
 #
 # **Next:** [Trades and flow toxicity](06_flow_toxicity.md) — from the
-# book's standing supply to the tape's aggression, and the metrics that
-# price it.
+# book's standing liquidity to the aggression in the trade tape, and the
+# metrics that measure it.
 #
 # ---
 #
