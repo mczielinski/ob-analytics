@@ -9,9 +9,8 @@
 # %% [markdown]
 # # L1 → L2 → L3: three resolutions of the same market
 #
-# [Chapter 1](01_from_price_to_book.md) ended with a thesis: everything
-# past the ticker is just *refusing to summarize*. This chapter makes
-# that precise. Market data comes in three standard resolutions, and
+# [Chapter 1](01_from_price_to_book.md) ended with an idea: each finer
+# level of market data summarizes less. This chapter makes it precise. Market data comes in three standard resolutions, and
 # they nest like map zoom levels — city, street, building. Same
 # territory, three levels of detail, and each level is a **lossy
 # summary of the next**: you can always compute L1 from L2, and L2 from
@@ -101,8 +100,8 @@ fig.tight_layout()
 
 # %% [markdown]
 # The top row is indistinguishable. The bottom row is two different
-# markets: a single 4-lot (one trader's conviction — or one trader who
-# can vanish in one cancellation) versus four independent 1-lots. If
+# markets: a single 4-lot (one order, which can be cancelled all at
+# once) versus four independent 1-lots. If
 # you trade against it, the difference matters: the whale cancelling
 # removes *all* the liquidity at once; the crowd thins out one order at
 # a time. L2 cannot tell you which market you're in. **That is the
@@ -110,10 +109,10 @@ fig.tight_layout()
 #
 # ## Why L3 exists: the queue
 #
-# Chapter 1 showed the 99-bid queue paying off geometrically. The
-# package's queue engine turns that picture into a quantitative face:
-# each resting order's **FIFO rank at the touch** over time — rank 1 is
-# the front of the line — coloured by how the order's story ended.
+# Chapter 1 showed the 99-bid queue as stacked bars. The package's queue
+# engine turns that into a quantitative face: each resting order's **FIFO
+# rank at the touch** over time — rank 1 is the front of the line —
+# coloured by its outcome.
 # Every trajectory below is labeled with its owner, and the book
 # ladders underneath show the decisive instants:
 
@@ -125,30 +124,30 @@ fig = plot_queue_story(events, toy_trades(), at_s=[6, 45, 56, 57])
 # %% [markdown]
 # Now the walk is literal:
 #
-# - **Ivy** (pink) is the story: she joins the 99 queue at t=6 at
+# - **Ivy** (pink) is the clearest case: she joins the 99 queue at t=6 at
 #   rank 2 — the ladder below shows her stacked behind Alice — and
 #   waits there for *fifty seconds*. When Sam's sweep fills **Alice**
 #   at t=56 (×), Ivy steps to rank 1... and is promptly half-filled
 #   herself (t=57 ladder: only `Iv 1` remains). Still resting at the
 #   end: pink.
 # - **Bob** holds rank 1 on the ask side for 46 seconds and fills in
-#   two bites. **Frank, Iris, and Sam** blink through rank 1 for a
-#   single instant each — market orders technically join the queue
-#   too, for the moment it takes to match.
+#   two bites. **Frank, Iris, and Sam** pass through rank 1 for a single
+#   instant each — market orders technically join the queue too, for the
+#   moment it takes to match.
 # - **Eve** (yellow ○) jumps straight to rank 1 at a brand-new best
 #   price of 100 — front of a queue of one. The t=45 ladder catches
 #   her mid-flash; 800 ms later she cancels.
 # - **Dana and Chen never appear at all.** This face tracks the queue
 #   *at the touch*; their bids at 98 sat one level below it the whole
-#   session. A quiet lesson in reading any plot: know what it excludes.
+#   session. A general point about reading any plot: know what it excludes.
 #
 # Ivy's fifty seconds at rank 2 and Hana's story are two answers to the
 # same question — *how do I get to the front?* Ivy waited. **Hana paid**:
 # her order crossed the spread (a taker for 2 units), and the unfilled
 # remainder rested at 101, a fresh best bid — instant rank 1, filled
-# four seconds later (her × at t=52). That trade-off — queue time
-# versus crossing cost — is the daily arithmetic of market making, and
-# it is *invisible* below L3.
+# four seconds later (her × at t=52). That trade-off — queue time versus
+# crossing cost — is a central one in market making, and it is
+# *invisible* below L3.
 #
 # ## Which level do you need?
 #
@@ -208,9 +207,9 @@ fig = plot("queue_position", level="L3", **payload)
 
 # %% [markdown]
 # Filtered to the orders that ever reached the top five ranks — the
-# front of the line, where fills happen — this is Ivy's fifty seconds
-# at industrial scale: trajectories stepping downward as the queue
-# ahead of them fills or gives up, then ending in a fill (×), a
+# front of the line, where fills happen — this is the same pattern as
+# Ivy's fifty seconds, on real data: trajectories stepping downward as
+# the queue ahead of them fills or cancels, then ending in a fill (×), a
 # cancellation (○), or the window's edge.
 #
 # !!! warning "Pitfall: not every L3 feed is a matched book"

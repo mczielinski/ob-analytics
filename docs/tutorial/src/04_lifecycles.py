@@ -12,9 +12,9 @@
 # [Chapter 1](01_from_price_to_book.md) introduced the four order types
 # as name-tags on the toy cast, and [chapter 2](02_three_resolutions.md)
 # put "full order lifetimes" at the top of the list of things only L3
-# can answer. This chapter makes them the subject: every order tells a
-# story from placement to fate, and the package recovers those stories
-# from the raw events — then classifies them.
+# can answer. This chapter makes them the subject: every order has a
+# history from placement to outcome, which the package recovers from the
+# raw events — then classifies.
 #
 # ## A lifecycle is two questions
 #
@@ -29,16 +29,16 @@
 # Everything we can say about an order answers one of two questions
 # about that arc — and the two are easy to conflate:
 #
-# - **Fate: how did the story end?** `filled`, `cancelled`, or still
+# - **Outcome: how did it end?** `filled`, `cancelled`, or still
 #   `resting` when the data ran out.
 # - **Type: how did it meet the spread along the way?** Wait passively,
 #   cross immediately, cross and then rest, or vanish untouched. This is
 #   what `set_order_types` classifies.
 #
 # The axes are genuinely different. Alice and Chen have the same type
-# (`resting-limit`) but opposite fates (filled vs. still resting); Alice
-# and Hana share a fate across different types. Keeping fate and type
-# separate is half of reading any L3 analysis correctly.
+# (`resting-limit`) but opposite outcomes (filled vs. still resting);
+# Alice and Hana share an outcome across different types. Keeping outcome
+# and type separate is half of reading any L3 analysis correctly.
 #
 # ## Twelve orders, one table
 #
@@ -78,17 +78,17 @@ lc[
 # This is the chapter's anchor — every claim below traces back to a row
 # here:
 #
-# - **Hana**'s whole chapter-1 drama is one row: placed 3 at 101,
+# - **Hana**'s whole chapter-1 sequence is one row: placed 3 at 101,
 #   `filled_vol` 3, type `market-limit`. She crossed for 2, rested 1,
 #   and the remainder was hit four seconds later; the row compresses all
-#   three acts.
-# - **Dana** placed 3 and filled 0 — fate `cancelled`, and the
+#   three steps.
+# - **Dana** placed 3 and filled 0 — outcome `cancelled`, and the
 #   classifier calls her `flashed-limit`, for reasons the next section
 #   makes precise.
-# - **Ivy** filled 1 of her 2 and has an empty `end_s`: her story has no
-#   ending. She is still open when the minute runs out, so her fate is
-#   `resting` — half done is not done.
-# - **Frank and Iris** are born and finished within a single second, and
+# - **Ivy** filled 1 of her 2 and has an empty `end_s`: its record has
+#   no end time. It is still open when the minute runs out, so its
+#   outcome is `resting` — a partial fill is not a complete one.
+# - **Frank and Iris** appear and complete within a single second, and
 #   **Sam**'s row spans just one (his sweep needed two prints): market
 #   orders leave lifecycle rows too, just very short ones.
 #
@@ -96,7 +96,7 @@ lc[
 #
 # `set_order_types` assigns the `type` column from two kinds of
 # evidence: the *shape* of the order's own events (created? deleted with
-# its size intact?) and the *tape's testimony* — every trade names the
+# its size intact?) and what the *trade tape records* — every trade names the
 # event rows of its **maker** and **taker** (chapter 1's two roles) via
 # `maker_event_id` / `taker_event_id`.
 #
@@ -111,22 +111,21 @@ lc[
 #
 # Recall chapter 1's pitfall: *flashed means unfilled, not fast*. The
 # rule compares the created and deleted sizes and never consults the
-# clock, so Dana's leisurely 32 seconds and Eve's 800 ms flash earn the
-# same label.
+# clock, so Dana's 32 seconds and Eve's 800 ms flash earn the same
+# label.
 #
 # The last two rows are empty on the toy, and that is the point: a
 # hand-written session has no edges. `pre-existing` is not a
 # classification failure — an order already resting when the recording
 # begins is *structurally* unclassifiable, and the classifier says so
-# rather than guessing. `unknown` is its honest shrug for the rare event
-# shapes that fit no rule. Real captures have both, as we will see
-# shortly.
+# rather than guessing. `unknown` is the label for the rare event shapes
+# that fit no rule. Real captures have both, as we will see shortly.
 #
 # ## Lifespans as a picture
 #
 # The lifecycle table has a natural picture, the `order_activity` face
 # at L3: each order one horizontal bar at its price, from placement to
-# fate — green filled, orange cancelled, pink still resting, line width
+# outcome — green filled, orange cancelled, pink still resting, line width
 # proportional to size. The ladders below anchor it: the book as it
 # stood at four decisive instants, so every lifeline's start and end
 # can be checked against a state you can read directly:
@@ -140,7 +139,7 @@ fig = plot_lifecycle_story(events, toy_trades(), at_s=[6, 40, 46, 57])
 # Eight lifelines, three endings — walking it top to bottom:
 #
 # - **Gus** (103) and **Erin** (102) run pink to the right edge: placed,
-#   never touched, stories without endings.
+#   never touched, still resting at the end.
 # - **Bob** (101) is green: his 46-second bar ends in a × when Hana's
 #   crossing consumes his last 2 units.
 # - **Eve** (100) is the shortest bar on the plot — an 800 ms fleck that
@@ -148,9 +147,9 @@ fig = plot_lifecycle_story(events, toy_trades(), at_s=[6, 40, 46, 57])
 # - At **99 the face overprints**: Alice and Ivy queued at the same
 #   price, so their lifelines share a lane. The clean green stub before
 #   t=6 is Alice alone; from Ivy's arrival the two blend; the × at t=56
-#   is Alice's fill, and the pink that outlives it is Ivy. Identity for
-#   scale is exactly the trade this face makes — chapter 1's keyframes
-#   showed the queue; this face shows the *durations*.
+#   is Alice's fill, and the pink that outlives it is Ivy. This face
+#   trades legibility for per-order identity — chapter 1's keyframes
+#   showed the queue; this shows the *durations*.
 # - At **98**, Dana's thick orange bar (3 lots) ends in a ○ at t=40,
 #   while Chen's thin pink line — overprinted on top of it from t=5 —
 #   carries on to the edge alone.
@@ -163,9 +162,8 @@ fig = plot_lifecycle_story(events, toy_trades(), at_s=[6, 40, 46, 57])
 #
 # ## The running thread, at scale
 #
-# Time to ask the ~30-minute Bitstamp BTC/USD capture the same
-# questions — ~314,000 events, one pipeline run, and one `type` per
-# order:
+# Now put the same questions to the ~30-minute Bitstamp BTC/USD capture
+# — ~314,000 events, one pipeline run, and one `type` per order:
 
 # %%
 from ob_analytics import Pipeline, sample_csv_path
@@ -225,10 +223,10 @@ life = (fl["end_ts"] - fl["placed_ts"]).dt.total_seconds()
 # twenty are gone within ten. At ~90 order placements per second against
 # a few hundred trades in the whole half hour, this book is not a queue
 # of patient humans — it is a handful of algorithms continuously
-# retyping their prices. Eve is the norm because **Eve is what a quote
-# update looks like in per-order data.**
+# retyping their prices. Eve is the norm because in per-order data, a
+# quote update **is** a brief, unfilled order.
 #
-# Fates tell the same story from the other axis:
+# Outcomes show the same pattern from the other axis:
 
 # %%
 order_lifecycles(result.events)["outcome"].value_counts()
@@ -266,9 +264,8 @@ deletes[deletes["timestamp"] > end - pd.Timedelta(seconds=2)]["id"].nunique()
 # classifier — correctly, on the evidence it has — calls
 # `flashed-limit`. (In this capture that accounts for about 6,500 of
 # the 156,000 flashed orders — the repricing churn above, not the
-# shutdown, is the real story.) The recorder's conventions are part of
-# the window. Hold that thought for the pitfall at the end of the
-# chapter.
+# shutdown, dominates.) The recorder's conventions are part of the
+# window. We return to this in the pitfall at the end of the chapter.
 #
 # One picture of all those endings at once — each order plotted at the
 # size it was placed and *where* it was placed relative to the best
@@ -281,9 +278,9 @@ from ob_analytics.visualization import plot, prepare
 fig = plot("order_outcome", level="L3", **prepare.order_outcome_l3(result.events))
 
 # %% [markdown]
-# The green fills crowd the dashed touch line while the orange
-# cancellation sea stretches away from it, at every size: **where you
-# stand, not how big you are, decides whether you trade.**
+# The green fills cluster at the dashed touch line while the orange
+# cancellations spread away from it, at every size: **where you stand,
+# not how big you are, decides whether you trade.**
 #
 # ## Aggressiveness: the continuous version of the classes
 #
@@ -379,7 +376,7 @@ pd.DataFrame(
 #     refusing to invent evidence it does not have.
 #
 # **Next:** [Depth, spread and liquidity](05_depth.md) — from individual
-# orders to the standing crowd.
+# orders to aggregate depth.
 #
 # ---
 #
@@ -387,5 +384,5 @@ pd.DataFrame(
 # flashed-limit](../glossary.md#order-classifications),
 # [maker / taker](../glossary.md#order-book-mechanics),
 # [basis point](../glossary.md#order-book-mechanics), order lifecycle,
-# fate (filled / cancelled / resting), pre-existing, unknown, placement
+# outcome (filled / cancelled / resting), pre-existing, unknown, placement
 # aggressiveness — lives in the [Glossary](../glossary.md).*

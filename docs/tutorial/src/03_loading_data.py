@@ -10,10 +10,10 @@
 # # Loading order data
 #
 # Chapters [1](01_from_price_to_book.md) and
-# [2](02_three_resolutions.md) lived on frames that appeared by magic:
-# `toy_events()` handed us a tidy table, `Pipeline().run(...)` produced
-# 314,000 more rows of exactly the same shape. This chapter is about the
-# magic — how raw venue files, in whatever dialect a venue speaks,
+# [2](02_three_resolutions.md) used frames that arrived ready-made:
+# `toy_events()` returned a tidy table, `Pipeline().run(...)` produced
+# 314,000 more rows of the same shape. This chapter is about where they
+# come from — how raw venue files, in whatever format a venue uses,
 # become the **canonical events and trades frames** every later chapter
 # consumes.
 #
@@ -42,7 +42,7 @@
 # So what exactly must a loader produce? The columns you have been
 # reading since chapter 1 (`id`, `timestamp`, `price`, `volume`,
 # `action`, `direction`, `fill`, …) plus two semantic rules, easiest to
-# see on a single order. Here is Bob's whole biography — he posted 3 at
+# see on a single order. Here is every event for Bob — he posted 3 at
 # 101, sold 1 to Frank at t=20, and sold his last 2 to Hana at t=48:
 
 # %%
@@ -58,14 +58,14 @@ events[events["actor"] == "Bob"][
 # Read the last two columns as *what remains* and *what just traded*:
 #
 # - **`volume` is the order's outstanding size *after* the event** — 3
-#   on arrival, 2 after Frank's bite, 0 when Hana finishes him. It is
-#   running state, not the event's size.
+#   on arrival, 2 after Frank's fill, 0 after Hana's fill. It is running
+#   state, not the event's size.
 # - **`fill` is the executed delta *at* the event** — 0, then 1, then 2;
 #   summing `fill` gives Bob's traded total of 3.
 #
 # So a fully filled order ends its life in a `deleted` row with
 # `volume == 0` and `fill > 0`. A cancellation ends differently. Here is
-# Dana, who posted 3 at 98 and pulled the whole order at t=40:
+# Dana, who posted 3 at 98 and cancelled the whole order at t=40:
 
 # %%
 events[events["actor"] == "Dana"][
@@ -76,7 +76,7 @@ events[events["actor"] == "Dana"][
 # Her final row carries the *removed size* in `volume` and `fill == 0`:
 # nothing traded; three units left the book. Same `deleted` action,
 # opposite ending — the two numbers, not the action word, tell you which
-# story you are reading.
+# case you are reading.
 #
 # These rules are a contract, and the package enforces it:
 # [`ob_analytics.schemas`](../api/schemas.md) is the single source of
@@ -134,9 +134,9 @@ result.events.shape, result.trades.shape
 # file** (the top of the book after every message). There is no separate
 # trades file — executions are message rows like everything else.
 #
-# You may not have a session on disk. No matter: the package's writers
-# are its loaders run in reverse, so we can dress the toy session in
-# LOBSTER clothes and study the format on data we already know by heart.
+# You may not have a session on disk. The package's writers are its
+# loaders run in reverse, so we can write the toy session out as LOBSTER
+# files and study the format on data we already know.
 #
 # One translation first. LOBSTER does not say `created` / `changed` /
 # `deleted`; it numbers its event types — 1 = submission, 2 = partial
@@ -237,16 +237,16 @@ print("executed units, after round trip:", rt.events["fill"].sum())
 # %% [markdown]
 # (`Pipeline(format=LobsterFormat(), ctx=...)` is the explicit spelling
 # of the same thing.) The toy's five trades total 7 units; counted from
-# both chairs — maker fills plus taker fills — that is 14 units of
+# both sides — maker fills plus taker fills — that is 14 units of
 # executions, and all 14 survive the round trip.
 #
 # One honest wrinkle: the message file we wrote contains *ten* type-4
 # rows for those five trades, because our canonical stream records
 # **both sides** of every fill, while a venue's own LOBSTER file logs
 # each execution once, against the resting order — so the round-tripped
-# trades frame dutifully reports ten trades. Executed volume is
-# side-agnostic, which is why we verified on it. The book state does not
-# care either:
+# trades frame reports ten trades. Executed volume is side-agnostic,
+# which is why we verified on it. The reconstructed book is identical
+# either way:
 
 # %%
 import matplotlib.pyplot as plt
@@ -283,7 +283,8 @@ fig.tight_layout()
 #
 # ## Which loader path do you take?
 #
-# Three roads into the canonical frames, in decreasing order of luck:
+# Three routes into the canonical frames, in decreasing order of
+# convenience:
 #
 # | Your raw data | What you write | Recipe |
 # |---|---|---|
@@ -291,7 +292,7 @@ fig.tight_layout()
 # | LOBSTER message + orderbook files | `Pipeline.from_format("lobster", ctx=RunContext(trading_date=...)).run(folder)` | [Process LOBSTER files](../howto/lobster.md) |
 # | Any other venue, API, or log | a small loader class whose `load()` returns validator-passing frames | [Custom components](../howto/custom-components.md) |
 #
-# Whichever road you take, two warnings travel with you.
+# Whichever route you take, two warnings apply.
 #
 # !!! warning "Pitfall: every venue keeps its own clock"
 #     Timestamps in canonical frames are **tz-naive, in each venue's
@@ -314,7 +315,7 @@ fig.tight_layout()
 #     trust an uncrossed-book invariant on reconstructed data.
 #
 # **Next:** [Order lifecycles and classification](04_lifecycles.md) —
-# every order's biography, from submission to one of four fates.
+# every order's history, from submission to one of four outcomes.
 #
 # ---
 #

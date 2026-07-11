@@ -13,7 +13,7 @@
 # heatmaps, the queue trajectories, the toxicity faces — came from one
 # small system with three moving parts. This closing chapter names them,
 # so that when you want a figure this tutorial did not draw, you know
-# exactly which lever to pull.
+# which of the three to change.
 #
 # The three parts are:
 #
@@ -175,7 +175,7 @@ fig = plot("vpin", **prepare.vpin(vpin, threshold=0.7))
 # ladder: `result.plot(...)` when you want a figure now, `plot` +
 # `prepare` when you want control, and — for data past the in-memory
 # envelope — the pre-slicing you met in chapter 3. Convenience, control,
-# scale; the same three rungs seaborn and its kin offer.
+# scale — the same three levels seaborn and similar libraries offer.
 #
 # ## Two backends
 #
@@ -228,10 +228,10 @@ save_figure(fig, "trades_talk.png", dpi=200)
 # Matplotlib `rc` overrides; `save_figure` writes at the DPI you ask for.
 # Theming is Matplotlib-only — Plotly figures carry their own styling.
 #
-# ## The end of the tour
+# ## Wrapping up
 #
-# You started with a single number on a screen and a claim that it was
-# an order book in disguise. Eight chapters later you can load one from
+# You started with a single number on a screen and the claim that it was
+# the top of an order book. Eight chapters later you can load one from
 # any of three feeds, reconstruct it to the individual order, read its
 # depth and its queue, score the toxicity of its flow, and render any of
 # it two ways — all from frames small enough, at the toy scale, to check
