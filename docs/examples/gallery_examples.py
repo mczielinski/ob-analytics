@@ -36,8 +36,13 @@ class Example:
 
 
 def _window(result: Any, minutes: int = 10) -> tuple[pd.Timestamp, pd.Timestamp]:
-    t0 = result.trades["timestamp"].min()
-    return t0, t0 + pd.Timedelta(minutes=minutes)
+    """The busiest *minutes*-long window (most trades) — the same selection
+    the tutorial walkthrough uses, so sparse faces have data to show."""
+    ts = result.trades["timestamp"].sort_values().reset_index(drop=True)
+    width = pd.Timedelta(minutes=minutes)
+    counts = ts.searchsorted(ts + width) - pd.RangeIndex(len(ts))
+    start = ts.iloc[int(counts.to_numpy().argmax())]
+    return start, start + width
 
 
 # ── Book structure ───────────────────────────────────────────────────
@@ -91,16 +96,6 @@ def trade_tape(result):
             start_time=start,
             end_time=end,
         ),
-    )
-
-
-def trade_size(result):
-    """Trade size over time."""
-    start, end = _window(result)
-    return plot(
-        "trade_size",
-        level="L2",
-        **prepare.trade_size(result.trades, start_time=start, end_time=end),
     )
 
 
@@ -165,9 +160,11 @@ def vpin(result):
 
 def kyle_lambda(result):
     """Price impact per unit of signed order flow."""
+    # A short regression window gives more points, so the scatter reads as a
+    # cloud around the fit rather than a bare line.
     return plot(
         "kyle_lambda",
-        **prepare.kyle_lambda(compute_kyle_lambda(result.trades, window="5min")),
+        **prepare.kyle_lambda(compute_kyle_lambda(result.trades, window="1min")),
     )
 
 
@@ -205,13 +202,6 @@ GALLERY: list[Example] = [
         "Trades",
         "Executions against the mid price, marked by aggressor side.",
         trade_tape,
-    ),
-    Example(
-        "trade_size",
-        "Trade sizes",
-        "Trades",
-        "Trade size over time.",
-        trade_size,
     ),
     Example(
         "volume_percentiles",
