@@ -11,6 +11,63 @@ LOBSTER executions), classify order types, compute depth metrics, and
 visualize market microstructure — from Bitstamp-style CSVs or
 [LOBSTER](https://lobsterdata.com/) message and orderbook files.
 
+![A depth heatmap of the bundled Bitstamp BTC/USD sample](assets/hero-depth-heatmap.png)
+
+*Standing volume at every price over ten minutes of the bundled Bitstamp
+BTC/USD capture — one of a [dozen figures](gallery/index.md) the package draws.
+The [tutorial](tutorial/index.md) builds this one up from first principles.*
+
+Three lines get you there:
+
+```python
+from ob_analytics import Pipeline, sample_csv_path
+
+result = Pipeline().run(sample_csv_path())         # load + classify + depth
+result.plot("depth_heatmap")                       # the figure above
+```
+
+## Explore the docs
+
+<div style="display:flex;flex-wrap:wrap;gap:1rem;margin:1.5rem 0;" markdown>
+
+<div style="flex:1 1 260px;border:1px solid #ccc;border-radius:6px;padding:1rem;" markdown>
+### [Getting started](quickstart.md)
+Install, run the pipeline on the bundled sample, and render your first plot —
+about ten minutes.
+</div>
+
+<div style="flex:1 1 260px;border:1px solid #ccc;border-radius:6px;padding:1rem;" markdown>
+### [Tutorial](tutorial/index.md)
+A guided tour from what a price *is* through L3 order-book reconstruction,
+depth, and flow toxicity — every figure built up on toy data first.
+</div>
+
+<div style="flex:1 1 260px;border:1px solid #ccc;border-radius:6px;padding:1rem;" markdown>
+### [Examples](gallery/index.md)
+A gallery of every figure the package draws, each with the exact code that
+produced it.
+</div>
+
+<div style="flex:1 1 260px;border:1px solid #ccc;border-radius:6px;padding:1rem;" markdown>
+### [How-to guides](howto/full-control.md)
+Task-focused recipes: your own data, LOBSTER, custom loaders, theming and
+export, live capture, the CLI.
+</div>
+
+<div style="flex:1 1 260px;border:1px solid #ccc;border-radius:6px;padding:1rem;" markdown>
+### [Reference](api/pipeline.md)
+Module-by-module API docs, the [data contracts](api/schemas.md), and a
+[glossary](glossary.md) of the microstructure terms.
+</div>
+
+<div style="flex:1 1 260px;border:1px solid #ccc;border-radius:6px;padding:1rem;" markdown>
+### [Architecture](architecture.md)
+Pipeline stages, design decisions, the class diagram, the module map, and the
+scale envelope.
+</div>
+
+</div>
+
 ## What it does
 
 | Stage | Description |
@@ -57,46 +114,31 @@ All processing stages are pluggable via [Protocol interfaces](api/protocols.md).
 See the [Architecture](architecture.md) page for the full class diagram, design
 decisions, and module map.
 
-## Quick example
+## Other data sources
 
-### Bitstamp (bundled sample)
+=== "LOBSTER"
 
-```python
-from ob_analytics import Pipeline, sample_csv_path
+    ```python
+    from ob_analytics import LobsterFormat, Pipeline, RunContext
 
-result = Pipeline().run(sample_csv_path())
-print(result.events.shape, result.trades.shape)
-```
+    result = Pipeline(
+        format=LobsterFormat(),
+        ctx=RunContext(trading_date="2012-06-21"),
+    ).run("/path/to/lobster_data")
+    ```
 
-### LOBSTER
+=== "Command line"
 
-```python
-from ob_analytics import LobsterFormat, Pipeline, RunContext
+    ```bash
+    ob-analytics process orders.csv -o results/
+    ob-analytics gallery results/parquet/ -o my_gallery/
+    ob-analytics bitstamp-demo --input orders.csv
+    ```
 
-result = Pipeline(
-    format=LobsterFormat(),
-    ctx=RunContext(trading_date="2012-06-21"),
-).run("/path/to/lobster_data")
-```
+    See [Run from the command line](howto/cli.md) for every subcommand.
 
-## CLI
+=== "Your own venue"
 
-A command-line interface is included for common workflows:
-
-```bash
-ob-analytics process orders.csv -o results/
-ob-analytics gallery results/parquet/ -o my_gallery/
-ob-analytics bitstamp-demo --input orders.csv
-ob-analytics lobster-demo /path/to/lobster_data --trading-date 2012-06-21
-```
-
-See [Run from the command line](howto/cli.md) for full details.
-
-## Next steps
-
-- **[Getting started](quickstart.md)** — install, run the pipeline, make your first plot
-- **[Tutorial](tutorial/index.md)** — guided tour from order-book basics to L3 microstructure
-- **How-to guides** — task-focused recipes: [your own data](howto/your-own-data.md), [LOBSTER](howto/lobster.md), [custom components](howto/custom-components.md), [output & export](howto/output.md), [flow toxicity](howto/flow-toxicity.md), [live capture](howto/live-capture.md), [CLI](howto/cli.md)
-- **[Architecture](architecture.md)** — pipeline stages, design decisions, class diagram, module map
-- **[API Reference](api/pipeline.md)** — detailed documentation for every module; [Glossary](glossary.md) for the jargon
-- **[Changelog](changelog.md)** — recent changes
+    Implement the [`EventLoader`](api/protocols.md) protocol — any object whose
+    `load()` returns validator-passing frames is a loader. See
+    [Plug in custom components](howto/custom-components.md).

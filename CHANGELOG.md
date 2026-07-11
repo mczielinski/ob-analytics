@@ -16,7 +16,7 @@ documentation, and distribution that make it installable. The sections below als
 record how the API was deliberately de-bloated and unified during the port (the
 pipeline's numeric output is unchanged — the regression fingerprints pass; only
 the *shape* of the public API moved). See
-[Extending ob-analytics](docs/extending.md).
+[Extending ob-analytics](https://github.com/mczielinski/ob-analytics/blob/main/docs/extending.md).
 
 ### Packaging & distribution
 

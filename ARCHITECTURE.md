@@ -47,7 +47,7 @@ the working set scales with the event count. Peak RSS grows roughly **linearly a
 | 942 k   | ~1.02 GiB | ~38 s |
 | 1.26 M  | ~1.32 GiB | ~51 s |
 
-*(Measured with [`scripts/bench_scale.py`](scripts/bench_scale.py): the bundled
+*(Measured with [`scripts/bench_scale.py`](https://github.com/mczielinski/ob-analytics/blob/main/scripts/bench_scale.py): the bundled
 ~314k-event sample tiled to each size, each size run in its own process, peak RSS
 via `getrusage`. Slightly conservative — tiling adds some transient overhead.)*
 

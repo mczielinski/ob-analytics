@@ -167,13 +167,23 @@ See [CHANGELOG.md](CHANGELOG.md) for the release history.
 
 ## Documentation
 
-API reference generated from docstrings using
-[Zensical](https://github.com/zensicalHQ/zensical) (installed as a dev
-dependency):
+Full docs at **<https://mczielinski.github.io/ob-analytics/>**:
+
+- **[Getting started](https://mczielinski.github.io/ob-analytics/quickstart/)** — install, run the pipeline, first plot.
+- **[Tutorial](https://mczielinski.github.io/ob-analytics/tutorial/)** — a guided tour from what a price *is* through L3 reconstruction, depth, and flow toxicity, every figure built up on toy data first.
+- **[Example gallery](https://mczielinski.github.io/ob-analytics/gallery/)** — every figure the package draws, each with its code.
+- **[How-to guides](https://mczielinski.github.io/ob-analytics/howto/full-control/)** — task-focused recipes (your own data, LOBSTER, custom loaders, live capture, CLI).
+- **[API reference](https://mczielinski.github.io/ob-analytics/api/pipeline/)** and **[glossary](https://mczielinski.github.io/ob-analytics/glossary/)**.
+
+The site is built with [Zensical](https://github.com/zensicalHQ/zensical);
+the tutorial chapters and gallery are executed at build time, so their code
+and figures never drift from the API. Build it locally with:
 
 ```bash
-uv run zensical serve      # local preview at http://localhost:8000
-uv run zensical build      # static site in site/
+uv run python scripts/build_tutorial.py   # execute tutorial chapters
+uv run python scripts/build_gallery.py    # render the example gallery
+uv run zensical serve                     # local preview at http://localhost:8000
+uv run zensical build                     # static site in site/
 ```
 
 ---
