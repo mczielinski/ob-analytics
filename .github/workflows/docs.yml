@@ -39,6 +39,10 @@ jobs:
       # Pass --extra to `uv run` too so its implicit sync keeps plotly installed
       # (mkdocstrings imports ob_analytics.visualization to read its docstrings).
       - run: uv run --group dev --extra interactive zensical build
+      # Fail the build on broken internal links or anchors in the rendered
+      # site (relative cross-links and #fragments between pages). External
+      # URLs are not fetched, so there is no network flakiness.
+      - run: uv run python scripts/check_links.py site
       - uses: actions/upload-pages-artifact@v5
         with:
           path: site
