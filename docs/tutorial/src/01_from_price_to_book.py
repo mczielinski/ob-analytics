@@ -11,10 +11,9 @@
 #
 # This chapter assumes no finance knowledge — only things you already
 # know: buying, selling, and a number on a screen. By the end, that
-# number will have unfolded into a live data structure you can query,
-# replay, and plot.
+# number will be a live data structure you can query, replay, and plot.
 #
-# ## "The price" is a story we tell
+# ## What a price actually is
 #
 # Look up bitcoin, or a share of Apple, and you get *one number*. It
 # feels like a fact about the world, the way a temperature is.
@@ -41,8 +40,8 @@
 # This arrangement is called a **continuous double auction** — "double"
 # because both buyers and sellers post offers, "continuous" because it
 # runs all day, not at a scheduled hour. And the public list of standing
-# offers, sorted by price, **is the order book**. That's the whole
-# secret; everything else in this tutorial is learning to read it.
+# offers, sorted by price, **is the order book**. The rest of this
+# tutorial is about reading it.
 #
 # ```mermaid
 # flowchart LR
@@ -78,13 +77,13 @@ fig = plot_l1_ticker(bid=99, ask=101, last=None)
 # single price in it: buying costs you 101, selling gets you 99, and the
 # quoted "price" is usually just the midpoint or the last print.
 #
-# The thesis of this whole tutorial: **everything that follows is just
-# refusing to summarize.** L1 keeps the top of the book; the book keeps
-# everything.
+# This is the theme of the whole tutorial: each finer level of market
+# data simply summarizes less. L1 keeps the top of the book; the book
+# keeps everything.
 #
-# ## Two orders: the book, finally
+# ## Two orders: the book
 #
-# Time to build that quote card from raw material. We'll use the
+# Now build that quote card from orders. We'll use the
 # package's [toy session](00_toy_session.md) — a hand-written minute of
 # trading small enough to check by mental arithmetic. At t=0, **Alice**
 # posts a bid: *buy 2 at 99 or better*. Two seconds later, **Bob** posts
@@ -137,8 +136,8 @@ fig = plot_book_keyframes(events, at_s=[3, 15])
 # arrived first trades first*. In the ladder, each order is its own
 # segment, stacked in arrival order from the axis outward — Alice (t=0)
 # sits ahead of Ivy (t=6) at 99, Chen (t=5) ahead of Dana (t=8) at 98.
-# The queue is not a metaphor; it is literally a line, and we will watch
-# it pay off at the end of the minute.
+# The queue is an ordered list, and its order decides who trades first;
+# we return to it at the end of the minute.
 #
 # ## A trade
 #
@@ -171,10 +170,10 @@ fig = plot_l1_ticker(bid=99, ask=101, last=101)
 # %% [markdown]
 # ## A cancellation, and a flash
 #
-# Standing offers are commitments, but not prison sentences — you can
-# cancel. At t=40 Dana pulls her entire bid at 98. And at t=45.0 **Eve**
-# posts a bid at 100 — *inside* the spread, briefly making the market
-# tighter — then yanks it 800 milliseconds later:
+# Standing offers are commitments, but you can cancel them. At t=40 Dana
+# cancels her entire bid at 98. And at t=45.0 **Eve** posts a bid at 100
+# — *inside* the spread, briefly narrowing it — then cancels it 800
+# milliseconds later:
 
 # %%
 fig = plot_book_keyframes(events, at_s=[39, 41, 45, 46])
@@ -193,7 +192,7 @@ fig = plot_book_keyframes(events, at_s=[39, 41, 45, 46])
 events.groupby("actor", observed=True)["type"].first().sort_values()
 
 # %% [markdown]
-# Four fates: **resting-limit** (posted, waited — filled or still
+# The four classes: **resting-limit** (posted, waited — filled or still
 # standing), **market** (crossed immediately: Frank, Iris, Sam),
 # **market-limit** (crossed, then the remainder rested: Hana — chapter 2
 # tells her story), and **flashed-limit** (posted and cancelled unfilled:
@@ -202,7 +201,7 @@ events.groupby("actor", observed=True)["type"].first().sort_values()
 # !!! warning "Pitfall: 'flashed' means *unfilled*, not *fast*"
 #     The classifier labels **any** order that was created and fully
 #     cancelled without trading as `flashed-limit` — Dana rested for 32
-#     leisurely seconds and gets the same label as Eve's 800 ms blink.
+#     seconds and gets the same label as Eve's 800 ms.
 #     If your analysis needs true sub-second flashes (quote-stuffing
 #     detection, for instance), filter on lifetime as well as type.
 #
@@ -213,7 +212,7 @@ events.groupby("actor", observed=True)["type"].first().sort_values()
 # and below it the book (the *causes*) every five seconds. Watch the 99
 # queue: Sam's market sell of 3 at t=56 fills Alice completely and Ivy
 # only half, **purely because Alice arrived six seconds earlier**.
-# That's price–time priority paying real money.
+# That is the consequence of price–time priority.
 
 # %%
 import matplotlib.pyplot as plt
@@ -256,7 +255,7 @@ for axk in key_axes[1:]:
     axk.tick_params(labelleft=False)
 
 # %% [markdown]
-# ## The same physics at full scale
+# ## The same mechanics at full scale
 #
 # Twenty-four events fit in thirteen hand-drawn frames. A real market
 # does hundreds of events per second — so we compress: one *column* per
@@ -275,9 +274,8 @@ fig = plot_sample_heatmap(result, col_bias=0.4)
 
 # %% [markdown]
 # Bright bands are heavy standing offers (the crowd's version of Dana's
-# 3-lot); the dark seam wandering through the middle is the spread
-# around the mid — the same dashed line as in our toy frames. You can
-# already read it.
+# 3-lot); the dark band through the middle is the spread around the mid
+# — the same dashed line as in the toy frames.
 #
 # **Next:** [L1 → L2 → L3](02_three_resolutions.md) — three resolutions
 # of the same market, and what each one can and cannot answer.
