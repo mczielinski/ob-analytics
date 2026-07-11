@@ -34,6 +34,8 @@ jobs:
       # them to markdown + PNGs. Any failing snippet fails the build — the
       # published tutorial can never drift from the API.
       - run: uv run --group dev --extra interactive python scripts/build_tutorial.py
+      # Render the example gallery (figures + thumbnail page) too.
+      - run: uv run --group dev --extra interactive python scripts/build_gallery.py
       # Pass --extra to `uv run` too so its implicit sync keeps plotly installed
       # (mkdocstrings imports ob_analytics.visualization to read its docstrings).
       - run: uv run --group dev --extra interactive zensical build
