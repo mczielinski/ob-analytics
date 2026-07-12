@@ -33,6 +33,7 @@ nav = [
   ] },
   { "Explanation" = [
     { "Architecture" = "architecture.md" },
+    { "Scale and chunking" = "scale-and-chunking.md" },
   ] },
   { "Reference" = [
     { "Pipeline" = "api/pipeline.md" },
