@@ -88,6 +88,53 @@ def _cmd_process(args: argparse.Namespace) -> None:
         _generate_gallery_from_result(result, output, fmt_name, source, view=args.view)
 
 
+def _cmd_validate(args: argparse.Namespace) -> None:
+    """Run the pipeline and print a per-run data-quality summary."""
+    _setup_logging(args.verbose)
+    from loguru import logger
+
+    from ob_analytics.analytics import data_quality_summary
+    from ob_analytics.config import PipelineConfig
+    from ob_analytics.pipeline import FORMATS, Pipeline
+    from ob_analytics.protocols import FeedType, RunContext
+
+    try:
+        fmt = FORMATS.get(args.format)()
+    except KeyError as exc:
+        logger.error(str(exc))
+        sys.exit(1)
+
+    required = getattr(fmt, "required_context", lambda: [])()
+    if "trading_date" in required and args.trading_date is None:
+        logger.error("--trading-date is required for the {} format", args.format)
+        sys.exit(1)
+    ctx = (
+        RunContext(trading_date=args.trading_date)
+        if args.trading_date is not None
+        else RunContext()
+    )
+
+    config = PipelineConfig(**fmt.config_defaults())
+    pipeline = Pipeline(config=config, format=fmt, ctx=ctx)
+
+    logger.info("Validating {} (format={})...", args.source, args.format)
+    result = pipeline.run(args.source)
+
+    summary = data_quality_summary(
+        result.events,
+        result.trades,
+        feed_type=getattr(fmt, "feed_type", FeedType.UNKNOWN),
+        depth=result.depth,
+    )
+
+    if args.json:
+        import json
+
+        print(json.dumps(summary.to_dict(), indent=2))
+    else:
+        print(summary.render())
+
+
 def _cmd_gallery(args: argparse.Namespace) -> None:
     """Generate an HTML plot gallery from saved Parquet results."""
     _setup_logging(args.verbose)
@@ -287,6 +334,32 @@ def main() -> None:
     )
     _add_view_arg(p_process)
     p_process.set_defaults(func=_cmd_process)
+
+    # -- validate --
+    p_validate = subparsers.add_parser(
+        "validate",
+        help="Report per-run data-quality metrics for a data source",
+    )
+    p_validate.add_argument("source", help="Path to data file or directory")
+    p_validate.add_argument(
+        "-f",
+        "--format",
+        default="bitstamp",
+        choices=formats,
+        help=f"Data format (default: bitstamp; registered: {', '.join(formats)})",
+    )
+    p_validate.add_argument(
+        "--trading-date",
+        default=None,
+        help="Trading date for LOBSTER format (YYYY-MM-DD)",
+    )
+    p_validate.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        help="Emit the summary as JSON instead of text",
+    )
+    p_validate.set_defaults(func=_cmd_validate)
 
     # -- gallery --
     p_gallery = subparsers.add_parser(

@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Feed classification.** Every format declares a `FeedType`
+  (`matched_book` vs `diff_feed`) through a `feed_type` attribute —
+  `BitstampFormat` → `diff_feed`, `LobsterFormat` → `matched_book` — so
+  downstream code reasons about crossed books by coordinate, not by format
+  name. Exposed as `ob_analytics.FeedType`.
+- **`order_book(..., uncross=True)`** evicts crossed resting orders *for
+  display*, mirroring the depth engine's crossed-level eviction. The default
+  stays faithful, so a diff feed's genuinely crossed resting orders are
+  replayed as-is. Threaded through `prepare.book_snapshot(..., uncross=True)`
+  (also drives `depth_chart`) and available frame-level as
+  `analytics.uncross_book_sides`.
+- **Per-run data-quality summary.** `data_quality_summary()` and the new
+  `ob-analytics validate <source>` CLI verb report the crossed-resting %,
+  unmatched-trades %, duplicate ids, and pre-existing-order count. A new
+  "Data quality: matched book vs diff feed" explanation page and a `validate`
+  how-to document the distinction.
+
+---
+
 ## [0.1.0] - 2026-06-26
 
 First public release (PyPI). The Python port of the R

@@ -222,7 +222,9 @@ fig = plot("queue_position", level="L3", **payload)
 #     faithfully rather than silently "fixing" them: a crossed book in
 #     your output is a property of the feed, not a reconstruction bug.
 #     Know which kind of feed you're holding before you trust an
-#     uncrossed-book invariant.
+#     uncrossed-book invariant. The
+#     [Data quality explainer](../data-quality.md) shows how to measure
+#     the crossing (`validate`) and, if you must, uncross it for display.
 #
 # **Next:** [Loading order data](03_loading_data.md) — where these feed
 # differences become practical.

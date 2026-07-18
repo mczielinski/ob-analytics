@@ -94,6 +94,48 @@ class TestProcessSubcommand:
 
 
 # ---------------------------------------------------------------------------
+# validate
+# ---------------------------------------------------------------------------
+
+
+class TestValidateSubcommand:
+    def test_validate_reports_summary(self, cli_runner, tiny_bitstamp_orders_csv):
+        r = cli_runner("validate", str(tiny_bitstamp_orders_csv))
+        assert r.returncode == 0, r.stderr
+        assert "Data quality summary" in r.stdout
+        assert "feed type" in r.stdout
+        # Bitstamp classifies as a diff feed regardless of this micro-book's
+        # crossing.
+        assert "diff_feed" in r.stdout
+
+    def test_validate_json(self, cli_runner, tiny_bitstamp_orders_csv):
+        import json
+
+        r = cli_runner("validate", str(tiny_bitstamp_orders_csv), "--json")
+        assert r.returncode == 0, r.stderr
+        payload = json.loads(r.stdout)
+        assert payload["feed_type"] == "diff_feed"
+        assert 0.0 <= payload["crossed_pct"] <= 100.0
+        assert set(payload) >= {
+            "crossed_pct",
+            "unmatched_trades_pct",
+            "duplicate_event_ids",
+            "pre_existing_orders",
+        }
+
+    def test_validate_lobster_requires_trading_date(
+        self, cli_runner, tiny_bitstamp_orders_csv
+    ):
+        r = cli_runner("validate", str(tiny_bitstamp_orders_csv), "--format", "lobster")
+        assert r.returncode != 0
+        assert "trading" in (r.stderr + r.stdout).lower()
+
+    def test_validate_listed_in_help(self, cli_runner):
+        r = cli_runner("--help")
+        assert "validate" in r.stdout
+
+
+# ---------------------------------------------------------------------------
 # gallery
 # ---------------------------------------------------------------------------
 

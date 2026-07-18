@@ -312,7 +312,9 @@ fig.tight_layout()
 #     are **diff feeds** that can genuinely contain crossed resting
 #     orders — reread [chapter 2's pitfall](02_three_resolutions.md)
 #     and the [glossary entry](../glossary.md#data-formats) before you
-#     trust an uncrossed-book invariant on reconstructed data.
+#     trust an uncrossed-book invariant on reconstructed data. The
+#     [Data quality explainer](../data-quality.md) shows how to measure
+#     it with `ob-analytics validate` and clean it up with `uncross=`.
 #
 # **Next:** [Order lifecycles and classification](04_lifecycles.md) —
 # every order's history, from submission to one of four outcomes.

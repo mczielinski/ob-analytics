@@ -32,6 +32,8 @@ from pathlib import Path
 
 from loguru import logger
 
+from ob_analytics.analytics import DataQualitySummary, data_quality_summary
+
 # Importing the bitstamp and lobster modules fires their format/writer
 # self-registration at import time; the Format classes are also the public
 # symmetric-pair entry points.
@@ -56,6 +58,7 @@ from ob_analytics.pipeline import (
 from ob_analytics.protocols import (
     DataWriter,
     EventLoader,
+    FeedType,
     Format,
     RunContext,
     TradeSource,
@@ -110,10 +113,14 @@ __all__ = [
     "LobsterFormat",
     # ── Protocols / extension points ─────────────────────────────────
     "Format",
+    "FeedType",
     "EventLoader",
     "TradeSource",
     "DataWriter",
     "RunContext",
+    # ── Data quality ─────────────────────────────────────────────────
+    "data_quality_summary",
+    "DataQualitySummary",
     # ── Data I/O ─────────────────────────────────────────────────────
     "save_data",
     "load_data",

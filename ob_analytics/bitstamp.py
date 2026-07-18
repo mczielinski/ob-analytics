@@ -34,6 +34,7 @@ from ob_analytics.config import PipelineConfig
 from ob_analytics.protocols import (
     DataWriter,
     EventLoader,
+    FeedType,
     RunContext,
     TradeSource,
 )
@@ -430,6 +431,9 @@ class BitstampFormat:
     """
 
     name: str = "bitstamp"
+    # The Bitstamp public feed is a placement/cancellation diff stream, not a
+    # matched-engine view, so it can carry genuinely crossed resting orders.
+    feed_type: FeedType = FeedType.DIFF_FEED
 
     def create_loader(self, config: PipelineConfig, ctx: RunContext) -> EventLoader:
         return BitstampLoader(config)
