@@ -20,10 +20,40 @@ protocol to :class:`~ob_analytics.pipeline.Pipeline`.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 import pandas as pd
+
+
+class FeedType(str, Enum):
+    """How a data feed represents the order book — its crossing invariant.
+
+    A format declares its feed type so downstream code can reason about
+    crossed books *by coordinate, not by format name*.  The distinction is
+    a property of the source, not of the reconstruction:
+
+    * :attr:`MATCHED_BOOK` — an L3 feed emitted by the venue's own matching
+      engine (LOBSTER, exchange MBO such as Databento).  Bids can never rest
+      above asks, so an uncrossed book is a guaranteed invariant of the data.
+    * :attr:`DIFF_FEED` — an L3 feed reconstructed from a public
+      placement/cancellation *diff stream* (the Bitstamp public feed).  It
+      can contain genuinely crossed *resting* orders (a bid resting above an
+      ask, neither filling); :func:`~ob_analytics.analytics.order_book`
+      replays this faithfully — a crossed book in the output is a property of
+      the feed, not a reconstruction bug.
+    * :attr:`UNKNOWN` — a format that does not declare its feed type (the
+      structural default for third-party formats predating this attribute).
+
+    Mixes in ``str`` so members compare and serialise as their value
+    (``FeedType.DIFF_FEED == "diff_feed"``), which keeps CLI/JSON output and
+    equality checks ergonomic.
+    """
+
+    MATCHED_BOOK = "matched_book"
+    DIFF_FEED = "diff_feed"
+    UNKNOWN = "unknown"
 
 
 @dataclass(frozen=True)
@@ -144,10 +174,14 @@ class Format(Protocol):
 
     There is **no base class to inherit** — any object providing these
     members satisfies the contract (structural typing). ``name`` is a
-    short lowercase identifier (e.g. ``"bitstamp"``).
+    short lowercase identifier (e.g. ``"bitstamp"``).  ``feed_type``
+    declares the source's crossing invariant (:class:`FeedType`); callers
+    should treat a missing attribute as :attr:`FeedType.UNKNOWN` (structural
+    default) rather than special-casing format names.
     """
 
     name: str
+    feed_type: FeedType
 
     def create_loader(self, config: Any, ctx: RunContext) -> EventLoader:
         """Return a loader for this format."""

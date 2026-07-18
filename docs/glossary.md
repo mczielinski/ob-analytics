@@ -154,7 +154,9 @@ stream (the Bitstamp feed used here). It can contain genuinely crossed
 *resting* orders; `order_book()` replays such feeds faithfully — a
 crossed book in the output is a property of the feed, not a
 reconstruction bug. See the pitfall note in
-[L1 → L2 → L3](tutorial/02_three_resolutions.md).
+[L1 → L2 → L3](tutorial/02_three_resolutions.md) and the
+[Data quality explainer](data-quality.md), which shows how to measure the
+crossing (`validate`) and uncross it for display (`uncross=`).
 
 **Bitstamp CSV**
 : One row per order event with columns `id, timestamp, exchange_timestamp,

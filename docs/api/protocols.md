@@ -15,6 +15,11 @@ inheritance required.
 | `DataWriter` | `write(data, dest)` | Serialize pipeline outputs |
 | `Format` | factory methods | Bundle loader, trade source, and writer for a venue |
 
+A `Format` also declares a `FeedType` (`matched_book` vs `diff_feed`); see
+[Data quality: matched book vs diff feed](../data-quality.md).
+
+::: ob_analytics.protocols.FeedType
+
 ::: ob_analytics.protocols.EventLoader
 
 ::: ob_analytics.protocols.TradeSource
