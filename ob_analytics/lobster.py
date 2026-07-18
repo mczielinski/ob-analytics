@@ -41,6 +41,7 @@ from ob_analytics.config import PipelineConfig
 from ob_analytics.protocols import (
     DataWriter,
     EventLoader,
+    FeedType,
     RunContext,
     TradeSource,
 )
@@ -865,6 +866,9 @@ class LobsterFormat:
     """
 
     name: str = field(default="lobster", init=False, repr=False)
+    # LOBSTER is a venue matched book (exchange matching engine): bids can
+    # never rest above asks, so the reconstructed book is never crossed.
+    feed_type: FeedType = field(default=FeedType.MATCHED_BOOK, init=False, repr=False)
 
     _loader: LobsterLoader | None = field(default=None, repr=False, init=False)
 

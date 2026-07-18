@@ -1294,6 +1294,7 @@ def prepare_book_snapshot_data(
     volume_scale: float | None = None,
     show_quantiles: bool = False,
     top_n: int | None = 40,
+    uncross: bool = False,
 ) -> dict[str, Any]:
     """Prepare an order-book snapshot at one resolution.
 
@@ -1308,6 +1309,14 @@ def prepare_book_snapshot_data(
     that per-order separators read.  ``show_quantiles`` overlays up to three
     heavy-level guide lines per side and is off by default.
 
+    ``uncross`` (default ``False``, i.e. faithful) evicts crossed resting
+    orders *for display* via
+    :func:`~ob_analytics.analytics.uncross_book_sides`, mirroring
+    ``order_book(uncross=True)`` — use it to draw a clean ``best_bid <
+    best_ask`` ladder from a diff feed without re-reconstructing.  It needs the
+    per-order ``timestamp`` column that :func:`~ob_analytics.analytics.order_book`
+    provides; a synthetic/ndarray book without it is left unchanged.
+
     Returns ``bids``/``asks`` frames ordered best-first with columns ``price,
     volume, liquidity, seg_lo, seg_hi`` (volumes already scaled), plus
     high-volume ``*_quantiles`` price marks, ``timestamp``, ``volume_scale``,
@@ -1315,6 +1324,11 @@ def prepare_book_snapshot_data(
     """
     bids = _as_book_side_frame(order_book["bids"])
     asks = _as_book_side_frame(order_book["asks"])
+
+    if uncross and "timestamp" in bids.columns and "timestamp" in asks.columns:
+        from ob_analytics.analytics import uncross_book_sides
+
+        bids, asks = uncross_book_sides(bids, asks)
 
     if volume_scale is None:
         volume_scale = infer_volume_scale(

@@ -10,6 +10,7 @@ subcommands accept `-v` / `--verbose` for debug-level logging.
 | Subcommand | Description |
 |------------|-------------|
 | `process` | Run the pipeline on a data source, save Parquet (optional `--gallery`) |
+| `validate` | Report per-run data-quality metrics for a data source |
 | `gallery` | Generate an HTML plot gallery from saved Parquet data |
 | `bitstamp-demo` | Run the Bitstamp demo (pipeline + gallery) |
 | `lobster-demo` | Run the LOBSTER demo on local data (pipeline + gallery) |
@@ -20,6 +21,10 @@ subcommands accept `-v` / `--verbose` for debug-level logging.
 ob-analytics process orders.csv -o results/
 ob-analytics process data/ --format lobster --trading-date 2012-06-21
 ob-analytics process orders.csv -o results/ --gallery
+
+# Check data quality (crossed book, unmatched trades, duplicates, ...)
+ob-analytics validate orders.csv
+ob-analytics validate orders.csv --json
 
 # Build a gallery from saved Parquet
 ob-analytics gallery results/parquet/ -o my_gallery/
@@ -38,4 +43,5 @@ build an HTML plot gallery.
 ## Related
 
 - [CLI Reference](../api/cli.md) — argparse-level docs for every flag
+- [Check data quality with `validate`](validate.md) — the `validate` verb in depth
 - [Capture live data](live-capture.md) — the `capture` verb in depth

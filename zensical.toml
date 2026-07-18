@@ -29,10 +29,12 @@ nav = [
     { "Compute flow toxicity" = "howto/flow-toxicity.md" },
     { "Capture live data" = "howto/live-capture.md" },
     { "Run from the command line" = "howto/cli.md" },
+    { "Check data quality" = "howto/validate.md" },
     { "Extending ob-analytics" = "extending.md" },
   ] },
   { "Explanation" = [
     { "Architecture" = "architecture.md" },
+    { "Data quality: matched book vs diff feed" = "data-quality.md" },
     { "Scale and chunking" = "scale-and-chunking.md" },
   ] },
   { "Reference" = [

@@ -20,3 +20,14 @@ output of any format's pipeline run (Bitstamp, LOBSTER, or custom).
 ## Order Book Reconstruction
 
 ::: ob_analytics.analytics.order_book
+
+::: ob_analytics.analytics.uncross_book_sides
+
+## Data Quality
+
+See [Data quality: matched book vs diff feed](../data-quality.md) for the
+concepts and the [`validate` how-to](../howto/validate.md) for the CLI.
+
+::: ob_analytics.analytics.data_quality_summary
+
+::: ob_analytics.analytics.DataQualitySummary
