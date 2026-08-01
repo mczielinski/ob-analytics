@@ -37,7 +37,6 @@ from websockets.exceptions import ConnectionClosed
 
 from ob_analytics.live._base import CaptureConfig, EventDict, LiveCapturer
 
-
 WS_URL = "wss://ws.bitstamp.net"
 REST_BOOK_URL = "https://www.bitstamp.net/api/v2/order_book/{pair}/?group=2"
 
@@ -63,7 +62,7 @@ def _fetch_book_snapshot(pair: str) -> dict[str, Any]:
     req = urllib.request.Request(
         url, headers={"User-Agent": "ob-analytics-collector/1"}
     )
-    with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310
+    with urllib.request.urlopen(req, timeout=15) as resp:
         return json.loads(resp.read())
 
 
@@ -128,7 +127,7 @@ class BitstampCapturer(LiveCapturer):
         while not snap_task.done():
             try:
                 raw = await asyncio.wait_for(self._ws.recv(), timeout=0.5)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
             recv_ms = int(time.time() * 1000)
             try:
@@ -216,7 +215,7 @@ class BitstampCapturer(LiveCapturer):
                     raw = await asyncio.wait_for(
                         self._ws.recv(), timeout=min(remaining, 5.0)
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     continue
                 except ConnectionClosed as exc:
                     if time.monotonic() >= deadline:

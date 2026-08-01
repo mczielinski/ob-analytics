@@ -25,6 +25,7 @@ result = Pipeline().run(sample_csv_path())
 
 # Or hand the directory directly to the reader:
 from ob_analytics.bitstamp import BitstampLoader, BitstampTradeReader
+
 events = BitstampLoader().load(sample_data_dir() / "orders.csv.gz")
 trades = BitstampTradeReader().load(events, sample_data_dir())
 ```

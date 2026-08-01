@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import ClassVar
 
 import pandas as pd
 import pytest
@@ -15,7 +16,6 @@ from ob_analytics.data import (
     save_data,
 )
 
-
 # ---------------------------------------------------------------------------
 # A stub writer for tests
 # ---------------------------------------------------------------------------
@@ -24,7 +24,7 @@ from ob_analytics.data import (
 class _StubWriter:
     """Minimal DataWriter — records what it was asked to write."""
 
-    written: list[tuple[Path, list[str]]] = []
+    written: ClassVar[list[tuple[Path, list[str]]]] = []
 
     def write(self, data: dict, dest: str | Path, **kwargs) -> Path:
         p = Path(dest)

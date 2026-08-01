@@ -8,9 +8,9 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from ob_analytics.bitstamp import BitstampLoader
 from ob_analytics.config import PipelineConfig
 from ob_analytics.depth import DepthMetricsEngine
-from ob_analytics.bitstamp import BitstampLoader
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
 from ob_analytics.protocols import EventLoader
 

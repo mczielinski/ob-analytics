@@ -35,14 +35,12 @@ from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
-
-from ob_analytics.config import PipelineConfig
-from ob_analytics.depth import depth_metrics, price_level_volume
-from ob_analytics.analytics import order_aggressiveness, set_order_types
-from ob_analytics.schemas import validate_events_df, validate_trades_df
-from ob_analytics._registry import Registry
 from loguru import logger
 
+from ob_analytics._registry import Registry
+from ob_analytics.analytics import order_aggressiveness, set_order_types
+from ob_analytics.config import PipelineConfig
+from ob_analytics.depth import depth_metrics, price_level_volume
 from ob_analytics.protocols import (
     DataWriter,
     EventLoader,
@@ -50,7 +48,7 @@ from ob_analytics.protocols import (
     RunContext,
     TradeSource,
 )
-
+from ob_analytics.schemas import validate_events_df, validate_trades_df
 
 # ── Format registry ───────────────────────────────────────────────────
 #
@@ -78,7 +76,7 @@ def list_formats() -> list[str]:
 # Imported here (not with the other top-of-module imports) so the registry
 # above already exists when the format modules self-register. See the note
 # above the registry definition.
-from ob_analytics.bitstamp import BitstampLoader, BitstampTradeReader  # noqa: E402
+from ob_analytics.bitstamp import BitstampLoader, BitstampTradeReader
 
 
 @dataclass(frozen=True)

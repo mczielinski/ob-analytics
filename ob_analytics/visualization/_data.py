@@ -1741,13 +1741,16 @@ def prepare_trading_halts_data(
     periods.  Accepts either a halts DataFrame directly or extracts
     halt events (``raw_event_type == 7``) from the events DataFrame.
     """
-    if halts is None and events is not None:
-        if (
+    if (
+        halts is None
+        and events is not None
+        and (
             "raw_event_type" in events.columns
             and events["raw_event_type"].notna().any()
             and (events["raw_event_type"] == 7).any()
-        ):
-            halts = events[events["raw_event_type"] == 7].copy()
+        )
+    ):
+        halts = events[events["raw_event_type"] == 7].copy()
 
     has_halts = halts is not None and not halts.empty
 

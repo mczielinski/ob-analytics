@@ -12,7 +12,6 @@ from ob_analytics.flow_toxicity import (
     order_flow_imbalance,
 )
 
-
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
@@ -266,12 +265,12 @@ class TestOrderFlowImbalance:
 
 # ── Visualization ────────────────────────────────────────────────────
 
-import matplotlib  # noqa: E402
+import matplotlib
 
 matplotlib.use("Agg")
-from matplotlib.figure import Figure  # noqa: E402
+from matplotlib.figure import Figure
 
-from ob_analytics.visualization import _data, plot  # noqa: E402
+from ob_analytics.visualization import _data, plot
 
 
 class TestFlowToxicityPlots:

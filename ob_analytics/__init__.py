@@ -96,40 +96,40 @@ def sample_csv_path() -> Path:
 
 
 __all__ = [
+    # ── Formats (symmetric-pair entry points) ────────────────────────
+    "BitstampFormat",
+    "ConfigError",
+    "DataQualitySummary",
+    "DataWriter",
+    "EventLoader",
+    "FeedType",
+    # ── Protocols / extension points ─────────────────────────────────
+    "Format",
+    "KyleLambdaResult",
+    "LobsterFormat",
+    # ── Exceptions ───────────────────────────────────────────────────
+    "ObAnalyticsError",
+    # ── Pipeline orchestration ───────────────────────────────────────
+    "Pipeline",
+    "PipelineConfig",
+    "PipelineResult",
+    "RunContext",
+    "TradeSource",
     "__version__",
+    "compute_kyle_lambda",
+    # ── Flow toxicity ────────────────────────────────────────────────
+    "compute_vpin",
+    # ── Data quality ─────────────────────────────────────────────────
+    "data_quality_summary",
+    "list_formats",
+    "load_data",
+    "order_flow_imbalance",
+    "register_format",
     # ── Sample data ──────────────────────────────────────────────────
     "sample_csv_path",
     "sample_data_dir",
-    "toy_events",
-    "toy_trades",
-    # ── Pipeline orchestration ───────────────────────────────────────
-    "Pipeline",
-    "PipelineResult",
-    "PipelineConfig",
-    "register_format",
-    "list_formats",
-    # ── Formats (symmetric-pair entry points) ────────────────────────
-    "BitstampFormat",
-    "LobsterFormat",
-    # ── Protocols / extension points ─────────────────────────────────
-    "Format",
-    "FeedType",
-    "EventLoader",
-    "TradeSource",
-    "DataWriter",
-    "RunContext",
-    # ── Data quality ─────────────────────────────────────────────────
-    "data_quality_summary",
-    "DataQualitySummary",
     # ── Data I/O ─────────────────────────────────────────────────────
     "save_data",
-    "load_data",
-    # ── Flow toxicity ────────────────────────────────────────────────
-    "compute_vpin",
-    "compute_kyle_lambda",
-    "order_flow_imbalance",
-    "KyleLambdaResult",
-    # ── Exceptions ───────────────────────────────────────────────────
-    "ObAnalyticsError",
-    "ConfigError",
+    "toy_events",
+    "toy_trades",
 ]

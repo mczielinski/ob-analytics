@@ -26,5 +26,5 @@ class Level(str, Enum):
     L2 = "L2"
     L3 = "L3"
 
-    def __str__(self) -> str:  # noqa: D105 -- bare token for file stems / f-strings
+    def __str__(self) -> str:
         return self.value

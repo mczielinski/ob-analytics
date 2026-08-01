@@ -7,11 +7,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
-
 from loguru import logger
 
-from ob_analytics.protocols import DataWriter
 from ob_analytics._registry import Registry
+from ob_analytics.protocols import DataWriter
 
 if TYPE_CHECKING:
     from ob_analytics.protocols import RunContext

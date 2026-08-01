@@ -146,42 +146,42 @@ class TestPipelineFlow:
 
         orders = pd.DataFrame(
             [
-                dict(
-                    id=10,
-                    timestamp=100,
-                    exchange_timestamp=100,
-                    price=100.0,
-                    volume=1.0,
-                    action="created",
-                    direction="ask",
-                ),
-                dict(
-                    id=10,
-                    timestamp=200,
-                    exchange_timestamp=200,
-                    price=100.0,
-                    volume=0.0,
-                    action="deleted",
-                    direction="ask",
-                ),
-                dict(
-                    id=11,
-                    timestamp=200,
-                    exchange_timestamp=200,
-                    price=99.0,
-                    volume=0.5,
-                    action="created",
-                    direction="bid",
-                ),
-                dict(
-                    id=11,
-                    timestamp=300,
-                    exchange_timestamp=300,
-                    price=99.0,
-                    volume=0.0,
-                    action="deleted",
-                    direction="bid",
-                ),
+                {
+                    "id": 10,
+                    "timestamp": 100,
+                    "exchange_timestamp": 100,
+                    "price": 100.0,
+                    "volume": 1.0,
+                    "action": "created",
+                    "direction": "ask",
+                },
+                {
+                    "id": 10,
+                    "timestamp": 200,
+                    "exchange_timestamp": 200,
+                    "price": 100.0,
+                    "volume": 0.0,
+                    "action": "deleted",
+                    "direction": "ask",
+                },
+                {
+                    "id": 11,
+                    "timestamp": 200,
+                    "exchange_timestamp": 200,
+                    "price": 99.0,
+                    "volume": 0.5,
+                    "action": "created",
+                    "direction": "bid",
+                },
+                {
+                    "id": 11,
+                    "timestamp": 300,
+                    "exchange_timestamp": 300,
+                    "price": 99.0,
+                    "volume": 0.0,
+                    "action": "deleted",
+                    "direction": "bid",
+                },
             ]
         )
         orders.to_csv(tmp_path / "orders.csv", index=False)
@@ -218,6 +218,7 @@ class TestPipelineFlow:
 
     def test_pipeline_no_longer_accepts_matcher_or_inferrer(self):
         import pytest
+
         from ob_analytics import Pipeline
 
         with pytest.raises(TypeError):
@@ -231,57 +232,57 @@ class TestPipelineEndToEnd:
         """Fast smoke: real loader + trade reader on a minimal directory."""
         orders = pd.DataFrame(
             [
-                dict(
-                    id=10,
-                    timestamp=100,
-                    exchange_timestamp=100,
-                    price=100.0,
-                    volume=1.0,
-                    action="created",
-                    direction="ask",
-                ),
-                dict(
-                    id=10,
-                    timestamp=200,
-                    exchange_timestamp=200,
-                    price=100.0,
-                    volume=0.5,
-                    action="changed",
-                    direction="ask",
-                ),
-                dict(
-                    id=11,
-                    timestamp=200,
-                    exchange_timestamp=200,
-                    price=200.0,
-                    volume=0.5,
-                    action="created",
-                    direction="bid",
-                ),
-                dict(
-                    id=11,
-                    timestamp=200,
-                    exchange_timestamp=200,
-                    price=100.0,
-                    volume=0.0,
-                    action="deleted",
-                    direction="bid",
-                ),
+                {
+                    "id": 10,
+                    "timestamp": 100,
+                    "exchange_timestamp": 100,
+                    "price": 100.0,
+                    "volume": 1.0,
+                    "action": "created",
+                    "direction": "ask",
+                },
+                {
+                    "id": 10,
+                    "timestamp": 200,
+                    "exchange_timestamp": 200,
+                    "price": 100.0,
+                    "volume": 0.5,
+                    "action": "changed",
+                    "direction": "ask",
+                },
+                {
+                    "id": 11,
+                    "timestamp": 200,
+                    "exchange_timestamp": 200,
+                    "price": 200.0,
+                    "volume": 0.5,
+                    "action": "created",
+                    "direction": "bid",
+                },
+                {
+                    "id": 11,
+                    "timestamp": 200,
+                    "exchange_timestamp": 200,
+                    "price": 100.0,
+                    "volume": 0.0,
+                    "action": "deleted",
+                    "direction": "bid",
+                },
             ]
         )
         orders.to_csv(tmp_path / "orders.csv", index=False)
         trades = pd.DataFrame(
             [
-                dict(
-                    trade_id=999,
-                    timestamp=200,
-                    exchange_timestamp=200,
-                    price=100.0,
-                    amount=0.5,
-                    buy_order_id=11,
-                    sell_order_id=10,
-                    side="buy",
-                ),
+                {
+                    "trade_id": 999,
+                    "timestamp": 200,
+                    "exchange_timestamp": 200,
+                    "price": 100.0,
+                    "amount": 0.5,
+                    "buy_order_id": 11,
+                    "sell_order_id": 10,
+                    "side": "buy",
+                },
             ]
         )
         trades.to_csv(tmp_path / "trades.csv", index=False)
@@ -308,42 +309,42 @@ def test_pipeline_result_is_slim(tmp_path: Path):
 
     orders = pd.DataFrame(
         [
-            dict(
-                id=10,
-                timestamp=100,
-                exchange_timestamp=100,
-                price=100.0,
-                volume=1.0,
-                action="created",
-                direction="ask",
-            ),
-            dict(
-                id=10,
-                timestamp=200,
-                exchange_timestamp=200,
-                price=100.0,
-                volume=0.0,
-                action="deleted",
-                direction="ask",
-            ),
-            dict(
-                id=11,
-                timestamp=200,
-                exchange_timestamp=200,
-                price=99.0,
-                volume=0.5,
-                action="created",
-                direction="bid",
-            ),
-            dict(
-                id=11,
-                timestamp=300,
-                exchange_timestamp=300,
-                price=99.0,
-                volume=0.0,
-                action="deleted",
-                direction="bid",
-            ),
+            {
+                "id": 10,
+                "timestamp": 100,
+                "exchange_timestamp": 100,
+                "price": 100.0,
+                "volume": 1.0,
+                "action": "created",
+                "direction": "ask",
+            },
+            {
+                "id": 10,
+                "timestamp": 200,
+                "exchange_timestamp": 200,
+                "price": 100.0,
+                "volume": 0.0,
+                "action": "deleted",
+                "direction": "ask",
+            },
+            {
+                "id": 11,
+                "timestamp": 200,
+                "exchange_timestamp": 200,
+                "price": 99.0,
+                "volume": 0.5,
+                "action": "created",
+                "direction": "bid",
+            },
+            {
+                "id": 11,
+                "timestamp": 300,
+                "exchange_timestamp": 300,
+                "price": 99.0,
+                "volume": 0.0,
+                "action": "deleted",
+                "direction": "bid",
+            },
         ]
     )
     orders.to_csv(tmp_path / "orders.csv", index=False)

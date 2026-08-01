@@ -14,10 +14,10 @@ from matplotlib.figure import Figure
 from ob_analytics.visualization import (
     Level,
     PlotTheme,
+    _data,
     plot,
     save_figure,
 )
-from ob_analytics.visualization import _data
 from ob_analytics.visualization._matplotlib import _create_axes
 
 
@@ -494,13 +494,13 @@ class TestPlotOfiHorizon:
 
 class TestPlotOrderOutcomeL3:
     def test_returns_figure(self, sample_executed_orders):
-        events, trades = sample_executed_orders
+        events, _trades = sample_executed_orders
         data = _data.prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
         fig = plot("order_outcome", Level.L3, **data)
         assert isinstance(fig, Figure)
 
     def test_accepts_ax(self, sample_executed_orders):
-        events, trades = sample_executed_orders
+        events, _trades = sample_executed_orders
         fig_orig, ax_orig = plt.subplots()
         data = _data.prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
         fig = plot("order_outcome", Level.L3, ax=ax_orig, **data)
@@ -508,7 +508,7 @@ class TestPlotOrderOutcomeL3:
 
     def test_resolves_single_level(self, sample_executed_orders):
         # L3-only: registered at exactly one level, so it resolves without level=.
-        events, trades = sample_executed_orders
+        events, _trades = sample_executed_orders
         data = _data.prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
         fig = plot("order_outcome", **data)
         assert isinstance(fig, Figure)
@@ -518,7 +518,7 @@ class TestPlotOrderOutcomeL3:
 
         from ob_analytics.visualization._matplotlib import _CANCELLED_COLOR
 
-        events, trades = sample_executed_orders
+        events, _trades = sample_executed_orders
         data = _data.prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
         fig = plot("order_outcome", Level.L3, **data)
         ax = fig.axes[0]
@@ -866,9 +866,9 @@ class TestRegisterBackend:
     def test_register_and_dispatch(self, sample_trades, tmp_path):
         """A backend module self-registers its renderers; plot() dispatches."""
         from ob_analytics.visualization import (
+            _BACKEND_MODULES,
             RENDERERS,
             Level,
-            _BACKEND_MODULES,
             plot,
             register_plot_backend,
         )
