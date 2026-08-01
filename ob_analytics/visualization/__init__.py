@@ -193,33 +193,32 @@ focus_window = _viz_data.focus_window
 # self-registration block at the bottom of _matplotlib imports RENDERERS from
 # this (partially initialized) package, so RENDERERS must already exist to
 # avoid a circular-import deadlock.
-from ob_analytics.visualization._matplotlib import (  # noqa: E402
+from ob_analytics.visualization._matplotlib import (
     DEFAULT_THEME,
     PlotTheme,
     format_time_axis,
     save_figure,
 )
 
-
 __all__ = [
-    # Dispatcher + registry
-    "plot",
-    "Level",
+    "DEFAULT_THEME",
     "RENDERERS",
-    "register_plot_backend",
-    # One-line plotting from a PipelineResult
-    "plot_result",
-    "available_concepts",
-    "prepare",
+    "FocusWindow",
+    "Level",
     # Themes / persistence
     "PlotTheme",
-    "DEFAULT_THEME",
-    "save_figure",
-    # Helpers users actually call
-    "infer_volume_scale",
-    "FocusWindow",
+    "available_concepts",
     "focus_window",
     "format_time_axis",
+    # Helpers users actually call
+    "infer_volume_scale",
+    # Dispatcher + registry
+    "plot",
+    # One-line plotting from a PipelineResult
+    "plot_result",
+    "prepare",
+    "register_plot_backend",
+    "save_figure",
 ]
 
 

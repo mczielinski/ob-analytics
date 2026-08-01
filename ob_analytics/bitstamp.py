@@ -20,7 +20,6 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-
 from loguru import logger
 
 from ob_analytics._utils import (
@@ -38,7 +37,6 @@ from ob_analytics.protocols import (
     RunContext,
     TradeSource,
 )
-
 
 # ── BitstampLoader ────────────────────────────────────────────────────
 
@@ -472,8 +470,8 @@ class BitstampFormat:
 # Imports sit at the bottom (deferred from the top of the module) to avoid a
 # circular import: ``pipeline`` imports ``BitstampLoader``/``BitstampTradeReader``
 # from here.
-from ob_analytics.data import register_writer  # noqa: E402
-from ob_analytics.pipeline import register_format  # noqa: E402
+from ob_analytics.data import register_writer
+from ob_analytics.pipeline import register_format
 
 register_format("bitstamp", BitstampFormat)
 register_writer("bitstamp", lambda config, ctx: BitstampWriter(config))

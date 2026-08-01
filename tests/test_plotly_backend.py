@@ -13,7 +13,7 @@ import pytest
 
 go = pytest.importorskip("plotly.graph_objects", reason="plotly not installed")
 
-from ob_analytics.visualization._data import (  # noqa: E402
+from ob_analytics.visualization._data import (
     prepare_book_snapshot_data,
     prepare_cancellations_l3_data,
     prepare_event_map_data,
@@ -32,7 +32,7 @@ from ob_analytics.visualization._data import (  # noqa: E402
     prepare_volume_percentiles_data,
     prepare_vpin_data,
 )
-from ob_analytics.visualization._plotly import (  # noqa: E402
+from ob_analytics.visualization._plotly import (
     _biased_color_norm,
     plotly_book_snapshot_aggregate,
     plotly_book_snapshot_per_order,
@@ -56,7 +56,6 @@ from ob_analytics.visualization._plotly import (  # noqa: E402
     plotly_volume_percentiles,
     plotly_vpin,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -387,7 +386,7 @@ class TestPlotlyOfiHorizon:
 
 class TestPlotlyOrderOutcomeL3:
     def test_returns_plotly_figure(self, sample_executed_orders) -> None:
-        events, trades = sample_executed_orders
+        events, _trades = sample_executed_orders
         data = prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
         fig = plotly_order_outcome_per_order(data)
         assert isinstance(fig, go.Figure)
@@ -396,7 +395,7 @@ class TestPlotlyOrderOutcomeL3:
     def test_uses_webgl_scattergl(self, sample_executed_orders) -> None:
         # One marker per order -> the WebGL Scattergl path, like the other
         # per-order faces.
-        events, trades = sample_executed_orders
+        events, _trades = sample_executed_orders
         data = prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
         fig = plotly_order_outcome_per_order(data)
         assert all(trace.type == "scattergl" for trace in fig.data)

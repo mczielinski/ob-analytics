@@ -14,19 +14,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
-import matplotlib.collections as collections
 import matplotlib.colors as mcolors
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from loguru import logger
+from matplotlib import collections
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
-
-from loguru import logger
 
 from ob_analytics.visualization._data import book_mid, check_book_payload_level
 from ob_analytics.visualization._palette import (
@@ -38,7 +37,6 @@ from ob_analytics.visualization._palette import (
     _PARTIAL_COLOR,
     _SELL_COLOR,
 )
-
 
 # ---------------------------------------------------------------------------
 # Theme system
@@ -1695,7 +1693,7 @@ def mpl_hidden_executions(
     if y_range is not None:
         ax.set_ylim(y_range)
 
-    handles, labels = ax.get_legend_handles_labels()
+    handles, _labels = ax.get_legend_handles_labels()
     if has_hidden and not hidden.empty:
         if data.get("direction") is not None:
             handles += [
@@ -1769,7 +1767,7 @@ def mpl_trading_halts(
 # ---------------------------------------------------------------------------
 # Imported here (not at module top) so RENDERERS -- defined in the package
 # __init__ -- already exists when this module is imported during package init.
-from ob_analytics.visualization import RENDERERS, Level  # noqa: E402
+from ob_analytics.visualization import RENDERERS, Level
 
 # (concept, level, renderer).  L2 = aggregate per price level; analytics carry
 # no level and register at ``None``.  The level is a registry *coordinate*, not

@@ -21,7 +21,6 @@ from ob_analytics.live._base import (
     SupportsDiagnostics,
 )
 
-
 _ORDER_COLS = [
     "id",
     "timestamp",
@@ -43,7 +42,7 @@ _TRADE_COLS = [
 ]
 
 
-def _ts_ms(ts: pd.Timestamp | int | float) -> int:
+def _ts_ms(ts: pd.Timestamp | float) -> int:
     if isinstance(ts, pd.Timestamp):
         return int(ts.value // 1_000_000)
     return int(ts)
@@ -166,7 +165,7 @@ async def run_capturer(
         )
         stop_task = asyncio.create_task(stop.wait())
         try:
-            done, pending = await asyncio.wait(
+            done, _pending = await asyncio.wait(
                 {stream_task, stop_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
@@ -178,7 +177,7 @@ async def run_capturer(
             for t in (stream_task, stop_task):
                 try:
                     await t
-                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110 - draining cancelled tasks; any error here is irrelevant during shutdown
                     pass
 
         if stream_task in done and not stream_task.cancelled():

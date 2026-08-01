@@ -20,16 +20,15 @@ from ob_analytics.visualization._data import (
     prepare_ofi_horizon_data,
     prepare_order_activity_l3_data,
     prepare_order_outcome_l3_data,
-    prepare_time_series_data,
-    prepare_trade_tape_l3_data,
     prepare_price_view_data,
+    prepare_time_series_data,
     prepare_trade_size_data,
+    prepare_trade_tape_l3_data,
     prepare_trades_data,
     prepare_volume_map_data,
     prepare_volume_percentiles_data,
     prepare_vpin_data,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -430,7 +429,7 @@ class TestPrepareOrderOutcomeL3:
     def test_returns_outcome_frames(
         self, sample_executed_orders: tuple[pd.DataFrame, pd.DataFrame]
     ) -> None:
-        events, trades = sample_executed_orders
+        events, _trades = sample_executed_orders
         data = prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
         assert set(data) == {"filled", "partial", "cancelled", "volume_scale"}
         for frame in (data["filled"], data["partial"], data["cancelled"]):
@@ -439,7 +438,7 @@ class TestPrepareOrderOutcomeL3:
     def test_competing_risks_classification(
         self, sample_executed_orders: tuple[pd.DataFrame, pd.DataFrame]
     ) -> None:
-        events, trades = sample_executed_orders
+        events, _trades = sample_executed_orders
         data = prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
         # filled via maker (1, 6) + via taker (5); partial=2; cancelled=3.
         assert set(data["filled"]["id"]) == {1, 5, 6}
@@ -449,7 +448,7 @@ class TestPrepareOrderOutcomeL3:
     def test_censored_orders_dropped(
         self, sample_executed_orders: tuple[pd.DataFrame, pd.DataFrame]
     ) -> None:
-        events, trades = sample_executed_orders
+        events, _trades = sample_executed_orders
         data = prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
         all_ids = pd.concat([data["filled"], data["partial"], data["cancelled"]])["id"]
         # id 4 never filled and never deleted -> censored -> absent.
@@ -458,7 +457,7 @@ class TestPrepareOrderOutcomeL3:
     def test_bounded_markers(
         self, sample_executed_orders: tuple[pd.DataFrame, pd.DataFrame]
     ) -> None:
-        events, trades = sample_executed_orders
+        events, _trades = sample_executed_orders
         data = prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
         both = pd.concat([data["filled"], data["partial"], data["cancelled"]])
         assert both["marker_area"].between(10.0, 120.0).all()

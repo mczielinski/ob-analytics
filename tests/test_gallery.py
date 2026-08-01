@@ -17,7 +17,6 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-
 import pytest
 
 from ob_analytics.visualization import RENDERERS, Level
@@ -33,7 +32,6 @@ from ob_analytics.visualization.gallery import (
     build_gallery_model,
     generate_gallery,
 )
-
 
 # ---------------------------------------------------------------------------
 # Stub renderers
@@ -101,7 +99,7 @@ def _close_figures():
 
 
 def _spec(name="stub", title="Stub", plot_name="stub", **kw) -> PlotSpec:
-    return PlotSpec(name, title, plot_name, lambda: {}, kw)
+    return PlotSpec(name, title, plot_name, dict, kw)
 
 
 def _l2_concept(key="stub", title="Stub") -> PlotConcept:
@@ -117,7 +115,7 @@ def _comparable_concept(key="stub", title="Stub") -> PlotConcept:
 
 
 def _metric_spec() -> PlotSpec:
-    return PlotSpec("stubmetric", "Stub Metric", "stubmetric", lambda: {}, {})
+    return PlotSpec("stubmetric", "Stub Metric", "stubmetric", dict, {})
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +136,7 @@ class TestPlotConcept:
     def test_frozen(self) -> None:
         c = _l2_concept()
         with pytest.raises(dataclasses.FrozenInstanceError):
-            setattr(c, "key", "other")
+            c.key = "other"
 
 
 class TestGalleryModel:
@@ -240,7 +238,7 @@ def _panel(backend="plotly", stem="stub.L2", rendered=True, role="primary") -> _
     return _Panel(
         concept="stub",
         level=Level.L2,
-        prepare=lambda: {},
+        prepare=dict,
         prep_kwargs={},
         backend=backend,
         stem=stem,

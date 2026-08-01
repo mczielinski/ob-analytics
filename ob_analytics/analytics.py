@@ -821,8 +821,10 @@ class DataQualitySummary:
             f"  feed type             : {self.feed_type.value}",
             f"  events / orders       : {self.n_events:,} / {self.n_orders:,}",
             f"  trades                : {self.n_trades:,}",
-            f"  crossed resting book  : {self.crossed_pct:.2f}% of session "
-            f"({self.crossed_episodes} episode(s)) [{self._crossed_note()}]",
+            (
+                f"  crossed resting book  : {self.crossed_pct:.2f}% of session "
+                f"({self.crossed_episodes} episode(s)) [{self._crossed_note()}]"
+            ),
             f"  unmatched trades      : {self.unmatched_trades_pct:.2f}%",
             f"  duplicate event ids   : {self.duplicate_event_ids}",
             f"  duplicate created ids : {self.duplicate_created_ids}",

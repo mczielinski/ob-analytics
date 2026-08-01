@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -174,7 +176,7 @@ class TestEdgeCases:
 
 class TestQueueAgeGrid:
     # A at t0, B joins at t10, A leaves at t20 (bid level 100).
-    GRID_EVENTS = [
+    GRID_EVENTS: ClassVar[list[dict]] = [
         {"id": 1, "t": 0, "price": 100.0, "vol": 10.0, "action": "created"},
         {"id": 2, "t": 10, "price": 100.0, "vol": 5.0, "action": "created"},
         {"id": 1, "t": 20, "price": 100.0, "vol": 10.0, "action": "deleted"},

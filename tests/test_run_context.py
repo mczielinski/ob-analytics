@@ -1,5 +1,7 @@
 """RunContext: per-run parameter container."""
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 
 from ob_analytics import LobsterFormat, Pipeline
@@ -13,7 +15,7 @@ def test_run_context_defaults_are_empty():
 
 def test_run_context_is_frozen():
     ctx = RunContext(trading_date="2012-06-21")
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         ctx.trading_date = "2013-01-01"  # type: ignore[misc]
 
 

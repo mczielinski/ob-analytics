@@ -65,116 +65,116 @@ def tiny_bitstamp_orders_csv(
     orders = pd.DataFrame(
         [
             # Resting book at t=base.
-            dict(
-                id=1,
-                timestamp=base,
-                exchange_timestamp=base,
-                price=99.0,
-                volume=2.0,
-                action="created",
-                direction="bid",
-            ),  # noqa: E501
-            dict(
-                id=2,
-                timestamp=base,
-                exchange_timestamp=base,
-                price=99.5,
-                volume=2.0,
-                action="created",
-                direction="bid",
-            ),  # noqa: E501
-            dict(
-                id=3,
-                timestamp=base,
-                exchange_timestamp=base,
-                price=99.9,
-                volume=2.0,
-                action="created",
-                direction="bid",
-            ),  # noqa: E501
-            dict(
-                id=10,
-                timestamp=base,
-                exchange_timestamp=base,
-                price=100.1,
-                volume=2.0,
-                action="created",
-                direction="ask",
-            ),  # noqa: E501
-            dict(
-                id=11,
-                timestamp=base,
-                exchange_timestamp=base,
-                price=100.5,
-                volume=2.0,
-                action="created",
-                direction="ask",
-            ),  # noqa: E501
-            dict(
-                id=12,
-                timestamp=base,
-                exchange_timestamp=base,
-                price=101.0,
-                volume=2.0,
-                action="created",
-                direction="ask",
-            ),  # noqa: E501
+            {
+                "id": 1,
+                "timestamp": base,
+                "exchange_timestamp": base,
+                "price": 99.0,
+                "volume": 2.0,
+                "action": "created",
+                "direction": "bid",
+            },
+            {
+                "id": 2,
+                "timestamp": base,
+                "exchange_timestamp": base,
+                "price": 99.5,
+                "volume": 2.0,
+                "action": "created",
+                "direction": "bid",
+            },
+            {
+                "id": 3,
+                "timestamp": base,
+                "exchange_timestamp": base,
+                "price": 99.9,
+                "volume": 2.0,
+                "action": "created",
+                "direction": "bid",
+            },
+            {
+                "id": 10,
+                "timestamp": base,
+                "exchange_timestamp": base,
+                "price": 100.1,
+                "volume": 2.0,
+                "action": "created",
+                "direction": "ask",
+            },
+            {
+                "id": 11,
+                "timestamp": base,
+                "exchange_timestamp": base,
+                "price": 100.5,
+                "volume": 2.0,
+                "action": "created",
+                "direction": "ask",
+            },
+            {
+                "id": 12,
+                "timestamp": base,
+                "exchange_timestamp": base,
+                "price": 101.0,
+                "volume": 2.0,
+                "action": "created",
+                "direction": "ask",
+            },
             # Trades over the next 30s: each is one resting order being
             # partially filled (changed) or fully consumed (deleted).
-            dict(
-                id=10,
-                timestamp=base + 5_000,
-                exchange_timestamp=base + 5_000,
-                price=100.1,
-                volume=1.5,
-                action="changed",
-                direction="ask",
-            ),  # noqa: E501
-            dict(
-                id=10,
-                timestamp=base + 10_000,
-                exchange_timestamp=base + 10_000,
-                price=100.1,
-                volume=0.0,
-                action="deleted",
-                direction="ask",
-            ),  # noqa: E501
-            dict(
-                id=3,
-                timestamp=base + 15_000,
-                exchange_timestamp=base + 15_000,
-                price=99.9,
-                volume=1.0,
-                action="changed",
-                direction="bid",
-            ),  # noqa: E501
-            dict(
-                id=11,
-                timestamp=base + 20_000,
-                exchange_timestamp=base + 20_000,
-                price=100.5,
-                volume=1.5,
-                action="changed",
-                direction="ask",
-            ),  # noqa: E501
-            dict(
-                id=3,
-                timestamp=base + 25_000,
-                exchange_timestamp=base + 25_000,
-                price=99.9,
-                volume=0.0,
-                action="deleted",
-                direction="bid",
-            ),  # noqa: E501
-            dict(
-                id=2,
-                timestamp=base + 30_000,
-                exchange_timestamp=base + 30_000,
-                price=99.5,
-                volume=1.5,
-                action="changed",
-                direction="bid",
-            ),  # noqa: E501
+            {
+                "id": 10,
+                "timestamp": base + 5_000,
+                "exchange_timestamp": base + 5_000,
+                "price": 100.1,
+                "volume": 1.5,
+                "action": "changed",
+                "direction": "ask",
+            },
+            {
+                "id": 10,
+                "timestamp": base + 10_000,
+                "exchange_timestamp": base + 10_000,
+                "price": 100.1,
+                "volume": 0.0,
+                "action": "deleted",
+                "direction": "ask",
+            },
+            {
+                "id": 3,
+                "timestamp": base + 15_000,
+                "exchange_timestamp": base + 15_000,
+                "price": 99.9,
+                "volume": 1.0,
+                "action": "changed",
+                "direction": "bid",
+            },
+            {
+                "id": 11,
+                "timestamp": base + 20_000,
+                "exchange_timestamp": base + 20_000,
+                "price": 100.5,
+                "volume": 1.5,
+                "action": "changed",
+                "direction": "ask",
+            },
+            {
+                "id": 3,
+                "timestamp": base + 25_000,
+                "exchange_timestamp": base + 25_000,
+                "price": 99.9,
+                "volume": 0.0,
+                "action": "deleted",
+                "direction": "bid",
+            },
+            {
+                "id": 2,
+                "timestamp": base + 30_000,
+                "exchange_timestamp": base + 30_000,
+                "price": 99.5,
+                "volume": 1.5,
+                "action": "changed",
+                "direction": "bid",
+            },
         ]
     )
     orders.to_csv(d / "orders.csv", index=False)
@@ -183,66 +183,66 @@ def tiny_bitstamp_orders_csv(
     # OFI/Kyle Lambda see meaningful signed flow.
     trades = pd.DataFrame(
         [
-            dict(
-                trade_id=1,
-                timestamp=base + 5_000,
-                exchange_timestamp=base + 5_000,
-                price=100.1,
-                amount=0.5,
-                buy_order_id=100,
-                sell_order_id=10,
-                side="buy",
-            ),  # noqa: E501
-            dict(
-                trade_id=2,
-                timestamp=base + 10_000,
-                exchange_timestamp=base + 10_000,
-                price=100.1,
-                amount=1.5,
-                buy_order_id=101,
-                sell_order_id=10,
-                side="buy",
-            ),  # noqa: E501
-            dict(
-                trade_id=3,
-                timestamp=base + 15_000,
-                exchange_timestamp=base + 15_000,
-                price=99.9,
-                amount=1.0,
-                buy_order_id=3,
-                sell_order_id=102,
-                side="sell",
-            ),  # noqa: E501
-            dict(
-                trade_id=4,
-                timestamp=base + 20_000,
-                exchange_timestamp=base + 20_000,
-                price=100.5,
-                amount=0.5,
-                buy_order_id=103,
-                sell_order_id=11,
-                side="buy",
-            ),  # noqa: E501
-            dict(
-                trade_id=5,
-                timestamp=base + 25_000,
-                exchange_timestamp=base + 25_000,
-                price=99.9,
-                amount=1.0,
-                buy_order_id=3,
-                sell_order_id=104,
-                side="sell",
-            ),  # noqa: E501
-            dict(
-                trade_id=6,
-                timestamp=base + 30_000,
-                exchange_timestamp=base + 30_000,
-                price=99.5,
-                amount=0.5,
-                buy_order_id=2,
-                sell_order_id=105,
-                side="sell",
-            ),  # noqa: E501
+            {
+                "trade_id": 1,
+                "timestamp": base + 5_000,
+                "exchange_timestamp": base + 5_000,
+                "price": 100.1,
+                "amount": 0.5,
+                "buy_order_id": 100,
+                "sell_order_id": 10,
+                "side": "buy",
+            },
+            {
+                "trade_id": 2,
+                "timestamp": base + 10_000,
+                "exchange_timestamp": base + 10_000,
+                "price": 100.1,
+                "amount": 1.5,
+                "buy_order_id": 101,
+                "sell_order_id": 10,
+                "side": "buy",
+            },
+            {
+                "trade_id": 3,
+                "timestamp": base + 15_000,
+                "exchange_timestamp": base + 15_000,
+                "price": 99.9,
+                "amount": 1.0,
+                "buy_order_id": 3,
+                "sell_order_id": 102,
+                "side": "sell",
+            },
+            {
+                "trade_id": 4,
+                "timestamp": base + 20_000,
+                "exchange_timestamp": base + 20_000,
+                "price": 100.5,
+                "amount": 0.5,
+                "buy_order_id": 103,
+                "sell_order_id": 11,
+                "side": "buy",
+            },
+            {
+                "trade_id": 5,
+                "timestamp": base + 25_000,
+                "exchange_timestamp": base + 25_000,
+                "price": 99.9,
+                "amount": 1.0,
+                "buy_order_id": 3,
+                "sell_order_id": 104,
+                "side": "sell",
+            },
+            {
+                "trade_id": 6,
+                "timestamp": base + 30_000,
+                "exchange_timestamp": base + 30_000,
+                "price": 99.5,
+                "amount": 0.5,
+                "buy_order_id": 2,
+                "sell_order_id": 105,
+                "side": "sell",
+            },
         ]
     )
     trades.to_csv(d / "trades.csv", index=False)
@@ -374,81 +374,81 @@ def sample_order_lifecycle_events() -> pd.DataFrame:
     flashed = {100: 236.40, 101: 236.45, 102: 236.50}
     for offset, (oid, price) in enumerate(flashed.items()):
         rows.append(
-            dict(
-                id=oid,
-                timestamp=ts + pd.Timedelta(seconds=offset),
-                price=price,
-                volume=300.0,
-                direction="bid",
-                action="created",
-                fill=0.0,
-                type="flashed-limit",
-            )
+            {
+                "id": oid,
+                "timestamp": ts + pd.Timedelta(seconds=offset),
+                "price": price,
+                "volume": 300.0,
+                "direction": "bid",
+                "action": "created",
+                "fill": 0.0,
+                "type": "flashed-limit",
+            }
         )
         rows.append(
-            dict(
-                id=oid,
-                timestamp=ts + pd.Timedelta(seconds=offset + 3),
-                price=price,
-                volume=300.0,
-                direction="bid",
-                action="deleted",
-                fill=0.0,
-                type="flashed-limit",
-            )
+            {
+                "id": oid,
+                "timestamp": ts + pd.Timedelta(seconds=offset + 3),
+                "price": price,
+                "volume": 300.0,
+                "direction": "bid",
+                "action": "deleted",
+                "fill": 0.0,
+                "type": "flashed-limit",
+            }
         )
 
     resting = {200: 236.80, 201: 236.90, 202: 237.00}
     for offset, (oid, price) in enumerate(resting.items()):
         rows.append(
-            dict(
-                id=oid,
-                timestamp=ts + pd.Timedelta(seconds=offset),
-                price=price,
-                volume=500.0,
-                direction="ask",
-                action="created",
-                fill=0.0,
-                type="resting-limit",
-            )
+            {
+                "id": oid,
+                "timestamp": ts + pd.Timedelta(seconds=offset),
+                "price": price,
+                "volume": 500.0,
+                "direction": "ask",
+                "action": "created",
+                "fill": 0.0,
+                "type": "resting-limit",
+            }
         )
         rows.append(
-            dict(
-                id=oid,
-                timestamp=ts + pd.Timedelta(seconds=offset + 5),
-                price=price,
-                volume=300.0,
-                direction="ask",
-                action="changed",
-                fill=200.0,
-                type="resting-limit",
-            )
+            {
+                "id": oid,
+                "timestamp": ts + pd.Timedelta(seconds=offset + 5),
+                "price": price,
+                "volume": 300.0,
+                "direction": "ask",
+                "action": "changed",
+                "fill": 200.0,
+                "type": "resting-limit",
+            }
         )
         rows.append(
-            dict(
-                id=oid,
-                timestamp=ts + pd.Timedelta(seconds=offset + 9),
-                price=price,
-                volume=0.0,
-                direction="ask",
-                action="deleted",
-                fill=300.0,
-                type="resting-limit",
-            )
+            {
+                "id": oid,
+                "timestamp": ts + pd.Timedelta(seconds=offset + 9),
+                "price": price,
+                "volume": 0.0,
+                "direction": "ask",
+                "action": "deleted",
+                "fill": 300.0,
+                "type": "resting-limit",
+            }
         )
 
     # Forever-resting bid: created once, never removed -> still on the book.
     rows.append(
-        dict(
-            id=300,
-            timestamp=ts,
-            price=236.60,
-            volume=400.0,
-            direction="bid",
-            action="created",
-            fill=0.0,
-            type="resting-limit",
-        )
+        {
+            "id": 300,
+            "timestamp": ts,
+            "price": 236.60,
+            "volume": 400.0,
+            "direction": "bid",
+            "action": "created",
+            "fill": 0.0,
+            "type": "resting-limit",
+        }
     )
 
     df = pd.DataFrame(rows)
@@ -491,27 +491,69 @@ def sample_executed_orders() -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     ts = pd.Timestamp("2015-05-01 01:00:00", tz="UTC")
     created = [
-        dict(event_id=1, id=1, price=100.0, volume=10.0, direction="bid", bps=2.0),
-        dict(event_id=2, id=2, price=100.2, volume=10.0, direction="ask", bps=-1.0),
-        dict(event_id=3, id=3, price=100.0, volume=8.0, direction="bid", bps=1.0),
-        dict(event_id=4, id=4, price=100.2, volume=6.0, direction="ask", bps=-2.0),
-        dict(event_id=5, id=5, price=100.1, volume=12.0, direction="bid", bps=3.0),
-        dict(event_id=6, id=6, price=100.1, volume=9.0, direction="ask", bps=-3.0),
+        {
+            "event_id": 1,
+            "id": 1,
+            "price": 100.0,
+            "volume": 10.0,
+            "direction": "bid",
+            "bps": 2.0,
+        },
+        {
+            "event_id": 2,
+            "id": 2,
+            "price": 100.2,
+            "volume": 10.0,
+            "direction": "ask",
+            "bps": -1.0,
+        },
+        {
+            "event_id": 3,
+            "id": 3,
+            "price": 100.0,
+            "volume": 8.0,
+            "direction": "bid",
+            "bps": 1.0,
+        },
+        {
+            "event_id": 4,
+            "id": 4,
+            "price": 100.2,
+            "volume": 6.0,
+            "direction": "ask",
+            "bps": -2.0,
+        },
+        {
+            "event_id": 5,
+            "id": 5,
+            "price": 100.1,
+            "volume": 12.0,
+            "direction": "bid",
+            "bps": 3.0,
+        },
+        {
+            "event_id": 6,
+            "id": 6,
+            "price": 100.1,
+            "volume": 9.0,
+            "direction": "ask",
+            "bps": -3.0,
+        },
     ]
     rows: list[dict] = []
     for offset, o in enumerate(created):
         rows.append(
-            dict(
-                event_id=o["event_id"],
-                id=o["id"],
-                timestamp=ts + pd.Timedelta(seconds=offset),
-                price=o["price"],
-                volume=o["volume"],
-                direction=o["direction"],
-                action="created",
-                fill=0.0,
-                aggressiveness_bps=o["bps"],
-            )
+            {
+                "event_id": o["event_id"],
+                "id": o["id"],
+                "timestamp": ts + pd.Timedelta(seconds=offset),
+                "price": o["price"],
+                "volume": o["volume"],
+                "direction": o["direction"],
+                "action": "created",
+                "fill": 0.0,
+                "aggressiveness_bps": o["bps"],
+            }
         )
     # Lifecycle rows under the canonical schema: `volume` = outstanding after
     # the event (deleted rows = size removed), `fill` = executed delta.
@@ -527,17 +569,17 @@ def sample_executed_orders() -> tuple[pd.DataFrame, pd.DataFrame]:
     )
     for event_id, oid, secs, price, volume, action, fill, direction in lifecycle_rows:
         rows.append(
-            dict(
-                event_id=event_id,
-                id=oid,
-                timestamp=ts + pd.Timedelta(seconds=secs),
-                price=price,
-                volume=volume,
-                direction=direction,
-                action=action,
-                fill=fill,
-                aggressiveness_bps=np.nan,
-            )
+            {
+                "event_id": event_id,
+                "id": oid,
+                "timestamp": ts + pd.Timedelta(seconds=secs),
+                "price": price,
+                "volume": volume,
+                "direction": direction,
+                "action": action,
+                "fill": fill,
+                "aggressiveness_bps": np.nan,
+            }
         )
     events = pd.DataFrame(rows)
     events["direction"] = pd.Categorical(events["direction"], categories=["bid", "ask"])
@@ -548,34 +590,34 @@ def sample_executed_orders() -> tuple[pd.DataFrame, pd.DataFrame]:
     trades = pd.DataFrame(
         [
             # maker, taker, price, volume, aggressor direction
-            dict(
-                maker_event_id=1,
-                taker_event_id=9001,
-                price=100.0,
-                volume=10.0,
-                direction="sell",
-            ),
-            dict(
-                maker_event_id=2,
-                taker_event_id=9002,
-                price=100.2,
-                volume=5.0,
-                direction="buy",
-            ),
-            dict(
-                maker_event_id=9003,
-                taker_event_id=5,
-                price=100.1,
-                volume=12.0,
-                direction="buy",
-            ),
-            dict(
-                maker_event_id=6,
-                taker_event_id=9004,
-                price=100.1,
-                volume=9.0,
-                direction="sell",
-            ),
+            {
+                "maker_event_id": 1,
+                "taker_event_id": 9001,
+                "price": 100.0,
+                "volume": 10.0,
+                "direction": "sell",
+            },
+            {
+                "maker_event_id": 2,
+                "taker_event_id": 9002,
+                "price": 100.2,
+                "volume": 5.0,
+                "direction": "buy",
+            },
+            {
+                "maker_event_id": 9003,
+                "taker_event_id": 5,
+                "price": 100.1,
+                "volume": 12.0,
+                "direction": "buy",
+            },
+            {
+                "maker_event_id": 6,
+                "taker_event_id": 9004,
+                "price": 100.1,
+                "volume": 9.0,
+                "direction": "sell",
+            },
         ]
     )
     trades["timestamp"] = [

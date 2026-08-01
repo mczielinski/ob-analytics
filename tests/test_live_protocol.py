@@ -20,7 +20,6 @@ from ob_analytics.live import (
 from ob_analytics.live._base import EventDict
 from ob_analytics.live._runner import run_capturer
 
-
 # ---------------------------------------------------------------------------
 # A deterministic, no-network capturer
 # ---------------------------------------------------------------------------

@@ -58,17 +58,17 @@ def _import_plotly() -> Any:
 
 # Light theme, matching the matplotlib default (one polarity across the
 # gallery; the reference bundle is light).
-_BASE_LAYOUT = dict(
-    template="plotly_white",
-    font=dict(family="Inter, sans-serif", size=13),
-    margin=dict(l=60, r=30, t=50, b=50),
-    hovermode="x unified",
-)
+_BASE_LAYOUT = {
+    "template": "plotly_white",
+    "font": {"family": "Inter, sans-serif", "size": 13},
+    "margin": {"l": 60, "r": 30, "t": 50, "b": 50},
+    "hovermode": "x unified",
+}
 
 
 def _base_figure(go: Any, title: str = "", **kwargs: Any) -> Any:
     """Create a Plotly figure with the dark ob-analytics theme."""
-    layout = {**_BASE_LAYOUT, "title": dict(text=title, x=0.5)}
+    layout = {**_BASE_LAYOUT, "title": {"text": title, "x": 0.5}}
     layout.update(kwargs)
     return go.Figure(layout=layout)
 
@@ -88,7 +88,7 @@ def plotly_time_series(data: dict) -> Any:
             x=df["ts"],
             y=df["val"],
             mode="lines",
-            line=dict(shape="hv", width=2, color="#5dade2"),
+            line={"shape": "hv", "width": 2, "color": "#5dade2"},
             name=data["y_label"],
         )
     )
@@ -116,7 +116,7 @@ def plotly_trades(data: dict) -> Any:
                 x=mid_line["timestamp"],
                 y=mid_line["mid"],
                 mode="lines",
-                line=dict(color="#888888", width=1, shape="hv"),
+                line={"color": "#888888", "width": 1, "shape": "hv"},
                 opacity=0.8,
                 name="mid",
                 hoverinfo="skip",
@@ -166,7 +166,7 @@ def _biased_color_norm(
         finite = v[np.isfinite(v) & (v > 0)]
     else:
         finite = v[np.isfinite(v)]
-    base_bar = dict(title="Volume", x=1.02, len=0.75)
+    base_bar = {"title": "Volume", "x": 1.02, "len": 0.75}
     if finite.size == 0:
         return np.zeros_like(v), base_bar
     vmin = float(finite.min())
@@ -219,15 +219,15 @@ def plotly_price_levels(data: dict) -> Any:
                 y=depth["price"],
                 mode="markers",
                 customdata=vol,
-                marker=dict(
-                    size=3,
-                    color=color_t,
-                    colorscale="Viridis",
-                    cmin=0,
-                    cmax=1,
-                    colorbar=colorbar,
-                    opacity=np.where(vol > 0, 0.8, 0.1),
-                ),
+                marker={
+                    "size": 3,
+                    "color": color_t,
+                    "colorscale": "Viridis",
+                    "cmin": 0,
+                    "cmax": 1,
+                    "colorbar": colorbar,
+                    "opacity": np.where(vol > 0, 0.8, 0.1),
+                },
                 hovertemplate=(
                     "Time: %{x}<br>Price: %{y:.2f}<br>"
                     "Volume: %{customdata:.4f}<extra></extra>"
@@ -235,7 +235,7 @@ def plotly_price_levels(data: dict) -> Any:
                 name="Depth",
             )
         )
-        fig.update_layout(margin=dict(l=60, r=90, t=50, b=50))
+        fig.update_layout(margin={"l": 60, "r": 90, "t": 50, "b": 50})
 
     if spread is not None and show_mp:
         if "best_bid_price" in spread and "best_ask_price" in spread:
@@ -245,7 +245,7 @@ def plotly_price_levels(data: dict) -> Any:
                     x=spread["timestamp"],
                     y=mp,
                     mode="lines",
-                    line=dict(color="#222222", width=1.5, shape="hv"),
+                    line={"color": "#222222", "width": 1.5, "shape": "hv"},
                     name="Midprice",
                 )
             )
@@ -256,7 +256,12 @@ def plotly_price_levels(data: dict) -> Any:
                     x=spread["timestamp"],
                     y=spread["best_ask_price"],
                     mode="lines",
-                    line=dict(color=_ASK_COLOR, width=1.2, dash="dot", shape="hv"),
+                    line={
+                        "color": _ASK_COLOR,
+                        "width": 1.2,
+                        "dash": "dot",
+                        "shape": "hv",
+                    },
                     name="Best Ask",
                 )
             )
@@ -266,7 +271,12 @@ def plotly_price_levels(data: dict) -> Any:
                     x=spread["timestamp"],
                     y=spread["best_bid_price"],
                     mode="lines",
-                    line=dict(color=_BID_COLOR, width=1.2, dash="dot", shape="hv"),
+                    line={
+                        "color": _BID_COLOR,
+                        "width": 1.2,
+                        "dash": "dot",
+                        "shape": "hv",
+                    },
                     name="Best Bid",
                 )
             )
@@ -280,12 +290,12 @@ def plotly_price_levels(data: dict) -> Any:
                     x=sells["timestamp"],
                     y=sells["price"],
                     mode="markers",
-                    marker=dict(
-                        symbol="triangle-down",
-                        size=8,
-                        color=_SELL_COLOR,
-                        line=dict(width=1, color="white"),
-                    ),
+                    marker={
+                        "symbol": "triangle-down",
+                        "size": 8,
+                        "color": _SELL_COLOR,
+                        "line": {"width": 1, "color": "white"},
+                    },
                     name="Sell Trades",
                 )
             )
@@ -295,12 +305,12 @@ def plotly_price_levels(data: dict) -> Any:
                     x=buys["timestamp"],
                     y=buys["price"],
                     mode="markers",
-                    marker=dict(
-                        symbol="triangle-up",
-                        size=8,
-                        color=_BUY_COLOR,
-                        line=dict(width=1, color="white"),
-                    ),
+                    marker={
+                        "symbol": "triangle-up",
+                        "size": 8,
+                        "color": _BUY_COLOR,
+                        "line": {"width": 1, "color": "white"},
+                    },
                     name="Buy Trades",
                 )
             )
@@ -333,11 +343,11 @@ def plotly_event_map(data: dict) -> Any:
                     x=subset["timestamp"],
                     y=subset["price"],
                     mode="markers",
-                    marker=dict(
-                        size=np.clip(subset["volume"] * 20, 3, 15),
-                        color=col_map[direction],
-                        opacity=0.6,
-                    ),
+                    marker={
+                        "size": np.clip(subset["volume"] * 20, 3, 15),
+                        "color": col_map[direction],
+                        "opacity": 0.6,
+                    },
                     name=f"Created ({direction})",
                     hovertemplate=(
                         "Time: %{x}<br>Price: %{y:.2f}<br>"
@@ -357,12 +367,12 @@ def plotly_event_map(data: dict) -> Any:
                     x=subset["timestamp"],
                     y=subset["price"],
                     mode="markers",
-                    marker=dict(
-                        size=np.clip(subset["volume"] * 20, 3, 15),
-                        color=col_map[direction],
-                        opacity=0.3,
-                        symbol="x",
-                    ),
+                    marker={
+                        "size": np.clip(subset["volume"] * 20, 3, 15),
+                        "color": col_map[direction],
+                        "opacity": 0.3,
+                        "symbol": "x",
+                    },
                     name=f"Deleted ({direction})",
                     hovertemplate=(
                         "Time: %{x}<br>Price: %{y:.2f}<br>"
@@ -395,7 +405,7 @@ def plotly_volume_map(data: dict) -> Any:
                 x=subset["timestamp"],
                 y=subset["volume"],
                 mode="markers",
-                marker=dict(size=4, color=col_map[direction], opacity=0.6),
+                marker={"size": 4, "color": col_map[direction], "opacity": 0.6},
                 name=direction.capitalize(),
                 hovertemplate="Time: %{x}<br>Volume: %{y:.4f}<extra></extra>",
             )
@@ -424,7 +434,7 @@ def _plotly_book_bars(data: dict, *, per_order: bool) -> Any:
     fig = _base_figure(go, title=data["timestamp"].strftime("%Y-%m-%d %H:%M:%S UTC"))
 
     # White per-order separators (dark ones vanished against the fill).
-    line = dict(color="white", width=1.0) if per_order else dict(width=0)
+    line = {"color": "white", "width": 1.0} if per_order else {"width": 0}
     for side, color, label in (
         (data["bids"], _BID_COLOR, "Bid"),
         (data["asks"], _ASK_COLOR, "Ask"),
@@ -437,7 +447,7 @@ def _plotly_book_bars(data: dict, *, per_order: bool) -> Any:
                 x=side["seg_hi"] - side["seg_lo"],
                 base=side["seg_lo"],
                 orientation="h",
-                marker=dict(color=color, line=line),
+                marker={"color": color, "line": line},
                 name=label,
                 hovertemplate="Price: %{y:.2f}<br>Size: %{x:.4f}<extra></extra>",
             )
@@ -478,8 +488,8 @@ def _plotly_depth_curve(data: dict, *, per_order: bool) -> Any:
                 x=s["price"],
                 y=s["liquidity"],
                 mode=mode,
-                line=dict(shape="vh", color=color, width=2),
-                marker=dict(size=6, color=color),
+                line={"shape": "vh", "color": color, "width": 2},
+                marker={"size": 6, "color": color},
                 name=label,
                 fill="tozeroy",
                 fillcolor=_rgba(color, 0.15),
@@ -554,8 +564,8 @@ def plotly_cancellations_per_order(data: dict) -> Any:
     )
     fig.update_layout(**_BASE_LAYOUT)
     fig.update_layout(
-        title=dict(text="Cancelled orders by age and distance from touch", x=0.5),
-        coloraxis=dict(colorscale="Blues", colorbar=dict(title="Orders<br>per bin")),
+        title={"text": "Cancelled orders by age and distance from touch", "x": 0.5},
+        coloraxis={"colorscale": "Blues", "colorbar": {"title": "Orders<br>per bin"}},
         hovermode="closest",
     )
 
@@ -654,7 +664,7 @@ def _plotly_lollipops(fig: Any, go: Any, side: Any, color: str, label: str) -> N
             x=xs,
             y=ys,
             mode="lines",
-            line=dict(color=color, width=1),
+            line={"color": color, "width": 1},
             opacity=0.5,
             name=label,
             hoverinfo="skip",
@@ -666,12 +676,12 @@ def _plotly_lollipops(fig: Any, go: Any, side: Any, color: str, label: str) -> N
             x=side["timestamp"],
             y=side["price"],
             mode="markers",
-            marker=dict(
-                size=mpl_marker_area_to_plotly_size(side["marker_area"].to_numpy()),
-                color=color,
-                opacity=0.9,
-                line=dict(width=0),
-            ),
+            marker={
+                "size": mpl_marker_area_to_plotly_size(side["marker_area"].to_numpy()),
+                "color": color,
+                "opacity": 0.9,
+                "line": {"width": 0},
+            },
             name=label,
             hovertemplate="Time: %{x}<br>Price: %{y:.2f}<extra></extra>",
         )
@@ -709,7 +719,7 @@ def plotly_order_activity_per_order(data: dict) -> Any:
                 x=xs,
                 y=ys,
                 mode="lines",
-                line=dict(color=color, width=1.5),
+                line={"color": color, "width": 1.5},
                 opacity=0.6,
                 name=label,
                 hoverinfo="skip",
@@ -724,7 +734,7 @@ def plotly_order_activity_per_order(data: dict) -> Any:
             y=0.01,
             text=f"showing {shown_of[0]:,} of {shown_of[1]:,} orders",
             showarrow=False,
-            font=dict(size=10, color="#555555"),
+            font={"size": 10, "color": "#555555"},
         )
     fig.update_xaxes(title_text="Time")
     fig.update_yaxes(title_text="Limit Price")
@@ -769,7 +779,7 @@ def plotly_queue_position_per_order(data: dict) -> Any:
                 x=xs,
                 y=ys,
                 mode="lines",
-                line=dict(color=color, width=1.2, shape="hv"),
+                line={"color": color, "width": 1.2, "shape": "hv"},
                 opacity=0.6,
                 name=label,
                 hoverinfo="skip",
@@ -794,7 +804,7 @@ def plotly_liquidity_at_touch(data: dict) -> Any:
                 x=ts,
                 y=vol,
                 mode="lines",
-                line=dict(color=color, width=1.2, shape="hv"),
+                line={"color": color, "width": 1.2, "shape": "hv"},
                 name=label,
             )
         )
@@ -820,9 +830,12 @@ def plotly_liquidity_at_touch(data: dict) -> Any:
                         x=t,
                         y=[level] * len(t),
                         mode="markers",
-                        marker=dict(
-                            symbol="line-ns-open", size=6, color=color, opacity=0.4
-                        ),
+                        marker={
+                            "symbol": "line-ns-open",
+                            "size": 6,
+                            "color": color,
+                            "opacity": 0.4,
+                        },
                         name=cat,
                         hoverinfo="skip",
                         showlegend=False,
@@ -854,7 +867,7 @@ def plotly_liquidity_at_touch_per_order(data: dict) -> Any:
                 x=pd.to_datetime(data["times"]),
                 y=list(range(1, max_rank + 1)),
                 colorscale="Blues",
-                colorbar=dict(title="Age (s)"),
+                colorbar={"title": "Age (s)"},
                 hovertemplate=(
                     "Time: %{x}<br>Rank: %{y}<br>Age: %{z:.1f}s<extra></extra>"
                 ),
@@ -877,7 +890,7 @@ def plotly_price_view(data: dict) -> Any:
             x=ts,
             y=data["best_bid_price"],
             mode="lines",
-            line=dict(color=_BID_COLOR, width=1, shape="hv"),
+            line={"color": _BID_COLOR, "width": 1, "shape": "hv"},
             name="best bid",
         )
     )
@@ -886,7 +899,7 @@ def plotly_price_view(data: dict) -> Any:
             x=ts,
             y=data["best_ask_price"],
             mode="lines",
-            line=dict(color=_ASK_COLOR, width=1, shape="hv"),
+            line={"color": _ASK_COLOR, "width": 1, "shape": "hv"},
             fill="tonexty",
             fillcolor="rgba(154,160,166,0.25)",
             name="best ask",
@@ -897,7 +910,7 @@ def plotly_price_view(data: dict) -> Any:
             x=ts,
             y=data["mid"],
             mode="lines",
-            line=dict(color="#888888", width=1, shape="hv", dash="dot"),
+            line={"color": "#888888", "width": 1, "shape": "hv", "dash": "dot"},
             name="mid",
         )
     )
@@ -906,7 +919,7 @@ def plotly_price_view(data: dict) -> Any:
             x=ts,
             y=data["microprice"],
             mode="lines",
-            line=dict(color="#222222", width=2, shape="hv"),
+            line={"color": "#222222", "width": 2, "shape": "hv"},
             name="microprice",
         )
     )
@@ -924,7 +937,7 @@ def plotly_price_view(data: dict) -> Any:
                     x=side["timestamp"],
                     y=side["price"],
                     mode="markers",
-                    marker=dict(size=5, color=color, opacity=0.7),
+                    marker={"size": 5, "color": color, "opacity": 0.7},
                     name=label,
                 )
             )
@@ -952,7 +965,7 @@ def plotly_trade_size(data: dict) -> Any:
                 x=side["size"],
                 y=base + side["jitter"],
                 mode="markers",
-                marker=dict(size=5, color=color, opacity=0.4),
+                marker={"size": 5, "color": color, "opacity": 0.4},
                 name=label,
                 hovertemplate="Size: %{x}<extra></extra>",
             )
@@ -985,14 +998,14 @@ def plotly_order_outcome_per_order(data: dict) -> Any:
                 x=frame["distance_bps"],
                 y=frame["placed"],
                 mode="markers",
-                marker=dict(
-                    size=mpl_marker_area_to_plotly_size(
+                marker={
+                    "size": mpl_marker_area_to_plotly_size(
                         frame["marker_area"].to_numpy()
                     ),
-                    color=color,
-                    opacity=pt_opacity,
-                    line=dict(width=0),
-                ),
+                    "color": color,
+                    "opacity": pt_opacity,
+                    "line": {"width": 0},
+                },
                 name=label,
             )
         )
@@ -1040,7 +1053,7 @@ def plotly_trade_tape_per_order(data: dict) -> Any:
                 x=xs,
                 y=ys,
                 mode="lines",
-                line=dict(color=color, width=1.0),
+                line={"color": color, "width": 1.0},
                 opacity=span_opacity,
                 hoverinfo="skip",
                 showlegend=False,
@@ -1055,7 +1068,7 @@ def plotly_trade_tape_per_order(data: dict) -> Any:
                 x=mid_line["timestamp"],
                 y=mid_line["mid"],
                 mode="lines",
-                line=dict(color="#888888", width=1, shape="hv"),
+                line={"color": "#888888", "width": 1, "shape": "hv"},
                 opacity=0.8,
                 name="mid",
                 hoverinfo="skip",
@@ -1110,7 +1123,7 @@ def plotly_volume_percentiles(data: dict) -> Any:
                     x=cumsum.index,
                     y=cumsum[col].values,
                     mode="lines",
-                    line=dict(width=0.5, color="black"),
+                    line={"width": 0.5, "color": "black"},
                     fill="tozeroy" if col == cols[0] else "tonexty",
                     fillcolor=_to_rgb(colors_dict[col]),
                     name=str(col),
@@ -1127,7 +1140,7 @@ def plotly_volume_percentiles(data: dict) -> Any:
                 x=[None],
                 y=[None],
                 mode="markers",
-                marker=dict(size=10, color=_to_rgb(color), symbol="square"),
+                marker={"size": 10, "color": _to_rgb(color), "symbol": "square"},
                 name=label,
                 showlegend=True,
                 hoverinfo="skip",
@@ -1144,15 +1157,15 @@ def plotly_volume_percentiles(data: dict) -> Any:
     )
     fig.update_xaxes(title_text="Time")
     fig.update_layout(
-        legend=dict(
-            title_text="depth from touch",
-            orientation="v",
-            yanchor="middle",
-            y=0.5,
-            xanchor="left",
-            x=1.02,
-            font_size=10,
-        )
+        legend={
+            "title_text": "depth from touch",
+            "orientation": "v",
+            "yanchor": "middle",
+            "y": 0.5,
+            "xanchor": "left",
+            "x": 1.02,
+            "font_size": 10,
+        }
     )
     return fig
 
@@ -1176,7 +1189,7 @@ def plotly_events_histogram(data: dict) -> Any:
                 name=direction.capitalize(),
                 marker_color=color,
                 opacity=0.7,
-                xbins=dict(size=bw) if bw is not None else None,
+                xbins={"size": bw} if bw is not None else None,
             )
         )
 
@@ -1221,7 +1234,7 @@ def plotly_vpin(data: dict) -> Any:
                 x=vpin_df["timestamp_end"],
                 y=vpin_df["vpin_avg"],
                 mode="lines",
-                line=dict(color="#e74c3c", width=2.5),
+                line={"color": "#e74c3c", "width": 2.5},
                 name="VPIN (rolling avg)",
             )
         )
@@ -1270,18 +1283,18 @@ def plotly_order_flow_imbalance(data: dict) -> Any:
                 x=trades["timestamp"],
                 y=trades["price"],
                 mode="lines",
-                line=dict(color="#f1c40f", width=1.5),
+                line={"color": "#f1c40f", "width": 1.5},
                 name="Price",
                 yaxis="y2",
             )
         )
         fig.update_layout(
-            yaxis2=dict(
-                title=dict(text="Price", font=dict(color="#f1c40f")),
-                overlaying="y",
-                side="right",
-                tickfont=dict(color="#f1c40f"),
-            ),
+            yaxis2={
+                "title": {"text": "Price", "font": {"color": "#f1c40f"}},
+                "overlaying": "y",
+                "side": "right",
+                "tickfont": {"color": "#f1c40f"},
+            },
         )
 
     return fig
@@ -1365,12 +1378,12 @@ def plotly_kyle_lambda(data: dict) -> Any:
             x=reg_df["signed_volume"],
             y=reg_df["delta_price"],
             mode="markers",
-            marker=dict(
-                size=7,
-                color="#5dade2",
-                opacity=0.6,
-                line=dict(width=0.5, color="white"),
-            ),
+            marker={
+                "size": 7,
+                "color": "#5dade2",
+                "opacity": 0.6,
+                "line": {"width": 0.5, "color": "white"},
+            },
             name="Observations",
             hovertemplate=(
                 "Signed Volume: %{x:.4f}<br>ΔPrice: %{y:.6f}<extra></extra>"
@@ -1392,7 +1405,7 @@ def plotly_kyle_lambda(data: dict) -> Any:
                 x=x_range,
                 y=intercept + lambda_ * x_range,
                 mode="lines",
-                line=dict(color="#e74c3c", width=2.5),
+                line={"color": "#e74c3c", "width": 2.5},
                 name=f"λ = {lambda_:.6f}",
             )
         )
@@ -1442,12 +1455,12 @@ def plotly_hidden_executions(data: dict) -> Any:
                         y=subset["price"],
                         mode="markers",
                         customdata=subset["volume"],
-                        marker=dict(
-                            size=sizes[mask],
-                            color=col_map[d],
-                            opacity=0.55,
-                            line=dict(width=0.4, color="white"),
-                        ),
+                        marker={
+                            "size": sizes[mask],
+                            "color": col_map[d],
+                            "opacity": 0.55,
+                            "line": {"width": 0.4, "color": "white"},
+                        },
                         name=f"Hidden ({d})",
                         hovertemplate=(
                             "Time: %{x}<br>Price: %{y:.2f}<br>"
@@ -1462,12 +1475,12 @@ def plotly_hidden_executions(data: dict) -> Any:
                     y=hidden["price"],
                     mode="markers",
                     customdata=hidden["volume"],
-                    marker=dict(
-                        size=sizes,
-                        color="#7f8c8d",
-                        opacity=0.55,
-                        line=dict(width=0.4, color="white"),
-                    ),
+                    marker={
+                        "size": sizes,
+                        "color": "#7f8c8d",
+                        "opacity": 0.55,
+                        "line": {"width": 0.4, "color": "white"},
+                    },
                     name="Hidden executions",
                     hovertemplate=(
                         "Time: %{x}<br>Price: %{y:.2f}<br>"
@@ -1483,7 +1496,7 @@ def plotly_hidden_executions(data: dict) -> Any:
                 x=trades["timestamp"],
                 y=trades["price"],
                 mode="lines",
-                line=dict(color="#222222", width=1, shape="hv"),
+                line={"color": "#222222", "width": 1, "shape": "hv"},
                 name="Trade price",
                 opacity=0.9,
             )
@@ -1497,7 +1510,7 @@ def plotly_hidden_executions(data: dict) -> Any:
             x=0.5,
             y=0.5,
             showarrow=False,
-            font=dict(size=16, color="#888"),
+            font={"size": 16, "color": "#888"},
         )
 
     fig.update_xaxes(title_text="Time")
@@ -1524,7 +1537,7 @@ def plotly_trading_halts(data: dict) -> Any:
                 x=trades["timestamp"],
                 y=trades["price"],
                 mode="lines",
-                line=dict(color="#5dade2", width=1, shape="hv"),
+                line={"color": "#5dade2", "width": 1, "shape": "hv"},
                 name="Trade price",
                 opacity=0.8,
             )
@@ -1549,7 +1562,7 @@ def plotly_trading_halts(data: dict) -> Any:
             x=0.5,
             y=0.5,
             showarrow=False,
-            font=dict(size=16, color="#888"),
+            font={"size": 16, "color": "#888"},
         )
 
     fig.update_xaxes(title_text="Time")
@@ -1562,7 +1575,7 @@ def plotly_trading_halts(data: dict) -> Any:
 # ---------------------------------------------------------------------------
 # Imported here (not at module top) so RENDERERS -- defined in the package
 # __init__ -- already exists when this (lazily imported) module is loaded.
-from ob_analytics.visualization import RENDERERS, Level  # noqa: E402
+from ob_analytics.visualization import RENDERERS, Level
 
 # (concept, level, renderer); mirrors the matplotlib backend's coordinates so
 # every concept has both faces.  Analytics are level-less (``None``).

@@ -67,6 +67,11 @@ dev = [
     "nbconvert>=7.16",
 ]
 
+[tool.ruff.lint.isort]
+# Keep aliased re-exports in a single grouped ``from x import (a as b, ...)``
+# block rather than exploding each alias onto its own import statement.
+combine-as-imports = true
+
 [tool.ruff.lint.per-file-ignores]
 # Tutorial chapters are notebook-style (jupytext py:percent): imports appear
 # in the cell that introduces them, by design.

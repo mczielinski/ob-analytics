@@ -41,7 +41,6 @@ def _cmd_process(args: argparse.Namespace) -> None:
     from ob_analytics.config import PipelineConfig
     from ob_analytics.data import save_data
     from ob_analytics.pipeline import FORMATS, Pipeline
-
     from ob_analytics.protocols import RunContext
 
     source = args.source
@@ -54,7 +53,7 @@ def _cmd_process(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     # Ask the format what RunContext it needs rather than hard-coding "lobster".
-    required = getattr(fmt, "required_context", lambda: [])()
+    required = getattr(fmt, "required_context", list)()
     if "trading_date" in required and args.trading_date is None:
         logger.error("--trading-date is required for the %s format", fmt_name)
         sys.exit(1)
@@ -104,7 +103,7 @@ def _cmd_validate(args: argparse.Namespace) -> None:
         logger.error(str(exc))
         sys.exit(1)
 
-    required = getattr(fmt, "required_context", lambda: [])()
+    required = getattr(fmt, "required_context", list)()
     if "trading_date" in required and args.trading_date is None:
         logger.error("--trading-date is required for the {} format", args.format)
         sys.exit(1)
@@ -142,8 +141,8 @@ def _cmd_gallery(args: argparse.Namespace) -> None:
 
     from ob_analytics.config import PipelineConfig
     from ob_analytics.data import load_data
-    from ob_analytics.visualization.gallery import generate_gallery
     from ob_analytics.pipeline import PipelineResult
+    from ob_analytics.visualization.gallery import generate_gallery
 
     data_path = Path(args.data)
     output = Path(args.output)
@@ -184,7 +183,7 @@ def _cmd_formats(args: argparse.Namespace) -> None:
     from ob_analytics.pipeline import FORMATS, list_formats
 
     for name in list_formats():
-        required = getattr(FORMATS.get(name)(), "required_context", lambda: [])()
+        required = getattr(FORMATS.get(name)(), "required_context", list)()
         suffix = f"  (requires: {', '.join(required)})" if required else ""
         print(f"{name}{suffix}")
 

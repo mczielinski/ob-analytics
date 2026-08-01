@@ -29,7 +29,6 @@ from ob_analytics.exceptions import ConfigError
 from ob_analytics.pipeline import Pipeline
 from ob_analytics.protocols import RunContext
 
-
 # ---------------------------------------------------------------------------
 # Shared Pipeline result for the writer tests
 # ---------------------------------------------------------------------------

@@ -18,19 +18,20 @@ Usage::
 from __future__ import annotations
 
 import html as html_mod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import pandas as pd
 from loguru import logger
 
-from ob_analytics.depth import get_spread
 from ob_analytics.analytics import order_book
+from ob_analytics.depth import get_spread
 from ob_analytics.pipeline import PipelineResult
-from ob_analytics.visualization import _data as _viz_data
 from ob_analytics.visualization import (
     Level,
+    _data as _viz_data,
     infer_volume_scale,
     plot,
     save_figure,

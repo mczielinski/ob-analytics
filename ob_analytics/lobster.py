@@ -46,7 +46,6 @@ from ob_analytics.protocols import (
     TradeSource,
 )
 
-
 # ── Constants ─────────────────────────────────────────────────────────
 
 _LOBSTER_COLS = ["time", "event_type", "id", "volume", "price", "direction"]
@@ -919,8 +918,8 @@ class LobsterFormat:
 # ── Register this format and its writer ───────────────────────────────
 # Imports sit at the bottom (deferred from the top of the module) to avoid a
 # circular import: ``pipeline`` imports loaders/readers from the format modules.
-from ob_analytics.data import register_writer  # noqa: E402
-from ob_analytics.pipeline import register_format  # noqa: E402
+from ob_analytics.data import register_writer
+from ob_analytics.pipeline import register_format
 
 
 def _make_lobster_writer(config, ctx):
