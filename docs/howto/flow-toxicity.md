@@ -42,6 +42,38 @@ fig = plot("order_flow_imbalance", **prepare.ofi(ofi, trades=result.trades))
 save_figure(fig, "ofi.png")
 ```
 
+## Feeds without a native aggressor side
+
+L3 crypto (Bitstamp) labels each trade's taker side, so `result.trades` has a
+real `direction` and the metrics above just work. L2 / aggregated feeds (and
+many CCXT sources) don't — so VPIN and OFI infer the buy/sell split with a
+[trade-sign classifier](../api/trade_sign.md) when `direction` is absent:
+
+```python
+from ob_analytics import compute_vpin, order_flow_imbalance
+
+# No `direction` column → tick rule by default.
+vpin = compute_vpin(l2_trades, bucket_volume=5.0)
+
+# Lee–Ready: pass quotes (e.g. the pipeline's depth_summary — it carries
+# best_bid_price / best_ask_price).
+vpin = compute_vpin(
+    l2_trades, bucket_volume=5.0,
+    sign_method="lee_ready", quotes=result.depth_summary,
+)
+
+# BVC (bulk volume classification) — the VPIN-native estimator; needs no
+# per-trade sign at all.
+vpin = compute_vpin(l2_trades, bucket_volume=5.0, sign_method="bvc")
+
+ofi = order_flow_imbalance(l2_trades, window="1min", sign_method="tick")
+```
+
+A native `direction` is always honored as-is (`sign_method=None`, the
+default). You can also call
+[`classify_trade_sign`](../api/trade_sign.md#ob_analytics.trade_sign.classify_trade_sign)
+directly to attach a `direction` column yourself.
+
 ## Adding your own metric
 
 There is no metrics plugin registry — a flow-toxicity metric is just a
