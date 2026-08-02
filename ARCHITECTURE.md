@@ -162,8 +162,9 @@ its `FeedType` crossing invariant:
   the pipeline **skips the per-order stages**: `PipelineResult.events` comes
   back empty (schema-valid) and `PipelineResult.resolution is Level.L2`.
   `DepthMetricsEngine` already consumes an absolute price-level book, so depth /
-  spread / trade analytics run unchanged. See
-  [docs/howto/l2-depth.md](docs/howto/l2-depth.md).
+  spread / trade analytics run unchanged. See the
+  [Process L2 feeds](https://github.com/mczielinski/ob-analytics/blob/main/docs/howto/l2-depth.md)
+  how-to.
 
 ---
 
