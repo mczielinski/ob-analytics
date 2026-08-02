@@ -88,7 +88,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-__all__ = ["toy_events", "toy_trades"]
+__all__ = ["toy_events", "toy_l2_depth", "toy_l2_trades", "toy_trades"]
 
 _BASE = pd.Timestamp("2026-01-05 10:00:00")
 
@@ -247,5 +247,147 @@ def toy_trades() -> pd.DataFrame:
             "taker_og": np.array([eid_to_og[e] for e in taker_eid], dtype=np.int64),
             "maker_actor": [oid_to_actor[o] for o in maker],
             "taker_actor": [oid_to_actor[o] for o in taker],
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# L2 (price-level) counterpart
+# ---------------------------------------------------------------------------
+
+# A tiny price-level (L2 / market-by-price) session — the aggregate counterpart
+# to the per-order stream above.  No order identity: each row is one price
+# level's **new absolute** resting size (0 removes the level), the shape
+# :class:`~ob_analytics.depth.DepthMetricsEngine` consumes directly.  The first
+# four rows (t=0) are the opening *snapshot*; the rest are price-level deltas.
+#
+#   time  side  price  volume   best bid / best ask / mid   note
+#   ----  ----  -----  ------   -------------------------   ----------------
+#   0     bid   99      5       99 / 101 / 100  (spread 2)  snapshot
+#   0     bid   98      8
+#   0     ask   101     4
+#   0     ask   102     7
+#   5     ask   101     2       99 / 101 / 100              ask 101 shrinks
+#   10    bid   100     3      100 / 101 / 100.5 (spread 1) new best bid
+#   15    ask   101     0      100 / 102 / 101   (spread 2) best ask cleared
+#   20    bid   100     0       99 / 102 / 100.5 (spread 3) best bid cleared
+#   25    ask   100     4       99 / 100 / 99.5  (spread 1) new best ask
+#   30    bid   99      7       99 / 100 / 99.5             best bid grows
+#
+# (seconds, side, price, new_absolute_volume)
+_L2_DEPTH: tuple[tuple[float, str, float, float], ...] = (
+    (0.0, "bid", 99.0, 5.0),
+    (0.0, "bid", 98.0, 8.0),
+    (0.0, "ask", 101.0, 4.0),
+    (0.0, "ask", 102.0, 7.0),
+    (5.0, "ask", 101.0, 2.0),
+    (10.0, "bid", 100.0, 3.0),
+    (15.0, "ask", 101.0, 0.0),
+    (20.0, "bid", 100.0, 0.0),
+    (25.0, "ask", 100.0, 4.0),
+    (30.0, "bid", 99.0, 7.0),
+)
+
+# Trade prints, on a separate channel from the book (as on a real aggregated
+# feed).  ``direction`` is the taker's aggressor side, and equals what
+# Lee–Ready recovers from the prevailing mid above — so a test can null it out
+# and check the classifier round-trips it (buy, sell, buy, buy).
+#
+#   time  price  volume  prevailing mid   side
+#   ----  -----  ------  --------------   ----
+#   7     101      1     100  (bid99/ask101)  buy   (print above mid)
+#   12    100      2     100.5 (bid100/ask101) sell (print below mid)
+#   22    102      1     100.5 (bid99/ask102)  buy  (print above mid)
+#   27    100      3      99.5 (bid99/ask100)  buy  (print above mid)
+#
+# (seconds, price, volume, taker side)
+_L2_TRADES: tuple[tuple[float, float, float, str], ...] = (
+    (7.0, 101.0, 1.0, "buy"),
+    (12.0, 100.0, 2.0, "sell"),
+    (22.0, 102.0, 1.0, "buy"),
+    (27.0, 100.0, 3.0, "buy"),
+)
+
+
+def toy_l2_depth() -> pd.DataFrame:
+    """Return the toy session's canonical **L2 depth** DataFrame.
+
+    Ten price-level updates over 30 synthetic seconds (a four-level opening
+    snapshot at ``t=0`` followed by six deltas), in the exact column layout
+    :class:`~ob_analytics.depth.DepthMetricsEngine` /
+    :func:`~ob_analytics.depth.depth_metrics` consume — the L2 counterpart to
+    :func:`toy_events`.  ``volume`` is each level's **new absolute** resting
+    size (``0`` removes it), *not* a signed delta.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns ``timestamp``, ``price``, ``volume``, ``direction``
+        (categorical ``bid``/``ask``), in timestamp order — a
+        :func:`~ob_analytics.schemas.validate_depth_df` frame.
+
+    Examples
+    --------
+    >>> from ob_analytics.datasets import toy_l2_depth
+    >>> from ob_analytics.depth import depth_metrics, get_spread
+    >>> summary = depth_metrics(toy_l2_depth())
+    >>> summary[["best_bid_price", "best_ask_price"]].iloc[-1].tolist()
+    [99.0, 100.0]
+    """
+    ts = pd.Series(
+        [_BASE + pd.Timedelta(milliseconds=round(r[0] * 1000)) for r in _L2_DEPTH]
+    ).astype("datetime64[ms]")
+    return pd.DataFrame(
+        {
+            "timestamp": ts,
+            "price": np.array([r[2] for r in _L2_DEPTH], dtype=np.float64),
+            "volume": np.array([r[3] for r in _L2_DEPTH], dtype=np.float64),
+            "direction": pd.Categorical(
+                [r[1] for r in _L2_DEPTH],
+                categories=["bid", "ask"],
+                ordered=True,
+            ),
+        }
+    )
+
+
+def toy_l2_trades() -> pd.DataFrame:
+    """Return the toy L2 session's canonical **trades** DataFrame.
+
+    Four prints consistent with :func:`toy_l2_depth`, in the canonical trades
+    layout.  A price-level feed carries no order identity, so
+    ``maker_event_id`` / ``taker_event_id`` / ``maker`` / ``taker`` (and the
+    ``*_og`` columns) are ``<NA>``.  ``direction`` is the true taker side,
+    equal to what Lee–Ready recovers from :func:`toy_l2_depth`'s prevailing
+    mid — null it to exercise
+    :func:`~ob_analytics.trade_sign.classify_trade_sign`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns ``timestamp``, ``price``, ``volume``, ``direction``
+        (categorical ``buy``/``sell``), and the ``<NA>`` maker/taker
+        attribution columns — a
+        :func:`~ob_analytics.schemas.validate_trades_df` frame.
+    """
+    ts = pd.Series(
+        [_BASE + pd.Timedelta(milliseconds=round(t[0] * 1000)) for t in _L2_TRADES]
+    ).astype("datetime64[ms]")
+    n = len(_L2_TRADES)
+    na = pd.array([pd.NA] * n, dtype="object")
+    return pd.DataFrame(
+        {
+            "timestamp": ts,
+            "price": np.array([t[1] for t in _L2_TRADES], dtype=np.float64),
+            "volume": np.array([t[2] for t in _L2_TRADES], dtype=np.float64),
+            "direction": pd.Categorical(
+                [t[3] for t in _L2_TRADES], categories=["buy", "sell"], ordered=True
+            ),
+            "maker_event_id": na,
+            "taker_event_id": na.copy(),
+            "maker": na.copy(),
+            "taker": na.copy(),
+            "maker_og": na.copy(),
+            "taker_og": na.copy(),
         }
     )

@@ -27,6 +27,37 @@ from typing import Any, Protocol, runtime_checkable
 import pandas as pd
 
 
+class Level(str, Enum):
+    """Order-book resolution a feed (or a plot) works at — MBP vs MBO.
+
+    The granularity axis, orthogonal to :class:`FeedType`'s crossing
+    invariant.  A format declares its :attr:`Format.resolution` so the
+    pipeline knows which stages apply:
+
+    * :attr:`L2` — Market-By-Price (MBP): aggregate volume per price level,
+      with **no persistent order identity**.  Price-level feeds (Binance,
+      Kalshi, Polymarket, most CCXT sources) are L2.  The per-order stages
+      (:func:`~ob_analytics.analytics.set_order_types`,
+      :func:`~ob_analytics.analytics.order_aggressiveness`, queue
+      reconstruction) have nothing to key on and are skipped; depth / spread
+      / trade analytics run directly on the price-level book.
+    * :attr:`L3` — Market-By-Order (MBO): one primitive per resting order,
+      with stable identity (queue position recoverable).  The reconstruction
+      model ob-analytics was built for (Bitstamp, LOBSTER, Databento).
+
+    The ``str`` mixin lets members slot directly into the visualization
+    renderer-registry tuple keys and, via the :meth:`__str__` override, render
+    as the bare token (``"L2"``) in file stems and f-strings rather than
+    ``"Level.L2"``.
+    """
+
+    L2 = "L2"
+    L3 = "L3"
+
+    def __str__(self) -> str:
+        return self.value
+
+
 class FeedType(str, Enum):
     """How a data feed represents the order book — its crossing invariant.
 
@@ -141,6 +172,51 @@ class TradeSource(Protocol):
 
 
 @runtime_checkable
+class DepthSource(Protocol):
+    """Loads a **price-level (L2) depth stream** into the canonical depth frame.
+
+    The L2 counterpart to :class:`EventLoader`.  Where an ``EventLoader``
+    returns per-order events that the pipeline later folds into depth via
+    :func:`~ob_analytics.depth.price_level_volume`, a ``DepthSource`` returns
+    the depth frame **directly** — a price-level feed *is* a depth stream, so
+    there is nothing to reconstruct.
+
+    An :attr:`Format.resolution` of :attr:`Level.L2` format's
+    :meth:`Format.create_loader` returns a ``DepthSource``; the pipeline
+    validates its output with
+    :func:`~ob_analytics.schemas.validate_depth_df` and feeds it straight to
+    :class:`~ob_analytics.depth.DepthMetricsEngine`.
+
+    Returned DataFrame columns (see
+    :data:`~ob_analytics.schemas.DEPTH_COLUMNS`):
+
+    * ``timestamp``  — pandas datetime64[ns]
+    * ``price``      — float, the price level
+    * ``volume``     — float, the level's **new absolute** resting size after
+      the update (``0`` removes the level); *not* a signed delta
+    * ``direction``  — categorical ``bid``/``ask``
+    """
+
+    def load(self, source: Any) -> pd.DataFrame:
+        """Load a price-level depth stream from *source* and return the frame.
+
+        Parameters
+        ----------
+        source
+            Data source identifier — canonically a ``str | Path`` (a snapshot
+            + price-level-delta file), but implementations may accept richer
+            descriptors.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Depth with at least the columns required by
+            :func:`~ob_analytics.schemas.validate_depth_df`.
+        """
+        ...
+
+
+@runtime_checkable
 class DataWriter(Protocol):
     """Writes pipeline results to a format-specific output."""
 
@@ -177,14 +253,23 @@ class Format(Protocol):
     short lowercase identifier (e.g. ``"bitstamp"``).  ``feed_type``
     declares the source's crossing invariant (:class:`FeedType`); callers
     should treat a missing attribute as :attr:`FeedType.UNKNOWN` (structural
-    default) rather than special-casing format names.
+    default) rather than special-casing format names.  ``resolution``
+    declares the granularity (:class:`Level`): :attr:`Level.L3` (default) for
+    per-order feeds, :attr:`Level.L2` for price-level feeds — callers should
+    treat a missing attribute as :attr:`Level.L3` (structural default).
     """
 
     name: str
     feed_type: FeedType
+    resolution: Level
 
-    def create_loader(self, config: Any, ctx: RunContext) -> EventLoader:
-        """Return a loader for this format."""
+    def create_loader(self, config: Any, ctx: RunContext) -> EventLoader | DepthSource:
+        """Return the loader for this format.
+
+        An :attr:`Level.L3` format returns an :class:`EventLoader` (per-order
+        events); an :attr:`Level.L2` format returns a :class:`DepthSource`
+        (the price-level depth frame directly).
+        """
         ...
 
     def create_trade_source(self, config: Any, ctx: RunContext) -> TradeSource:

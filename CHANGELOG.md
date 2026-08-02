@@ -10,6 +10,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **L2 (price-level) depth-native ingestion path.** Price-level feeds
+  (Binance, Kalshi, Polymarket, most CCXT sources) publish `[price, quantity]`
+  levels and diffs with no order IDs; ob-analytics now ingests them as a
+  first-class **L2** resolution instead of faking per-order state. A format
+  declares its `resolution` (`Level.L2` / `Level.L3`, exposed as
+  `ob_analytics.Level`); an L2 format's loader is a `DepthSource` that yields
+  the depth frame directly, and `Pipeline.run` takes the price-level path —
+  depth metrics / spread and trade-sign classification run, while the per-order
+  stages (`set_order_types`, `order_aggressiveness`, queue reconstruction) are
+  skipped. `PipelineResult` gains a `resolution` field and, on an L2 run,
+  returns an empty (schema-valid) `events` frame. Ships the `depth_csv` format
+  (`L2DepthLoader`, `L2TradeReader`, `DepthCsvWriter`, `DepthCsvFormat`) for the
+  canonical L2 CSV schema, a `toy_l2_depth()` / `toy_l2_trades()` synthetic
+  snapshot+delta fixture, and `data_quality_summary` + the gallery degrade
+  gracefully (L3-only faces skipped, not errored). `ob-analytics
+  process|validate --format depth_csv` works from the CLI. Unblocks the
+  aggregated venue connectors. Documented in a new "Process L2 feeds" how-to.
 - **Trade-sign classification** (`ob_analytics.trade_sign`) for feeds that
   don't label the aggressor side. `tick_rule` (last-price-change sign),
   `lee_ready` (quote-midpoint test with a tick-rule fallback), and

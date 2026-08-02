@@ -140,13 +140,30 @@ classDiagram
 
 ## Data formats
 
-| Format | Entry point | Trades |
-|--------|-------------|--------|
-| **Bitstamp CSV** | `Pipeline()` (default) | Companion `trades.csv` next to `orders.csv` (e.g. `scripts/collect_bitstamp_btcusd.py`) |
-| **LOBSTER** | `Pipeline(format=LobsterFormat(), ctx=RunContext(trading_date=...))` | Embedded execution rows (types 4/5) in the message file |
+| Format | Resolution | Entry point | Trades |
+|--------|-----------|-------------|--------|
+| **Bitstamp CSV** | L3 | `Pipeline()` (default) | Companion `trades.csv` next to `orders.csv` (e.g. `scripts/collect_bitstamp_btcusd.py`) |
+| **LOBSTER** | L3 | `Pipeline(format=LobsterFormat(), ctx=RunContext(trading_date=...))` | Embedded execution rows (types 4/5) in the message file |
+| **L2 depth CSV** | L2 | `Pipeline.from_format("depth_csv").run(...)` | Optional companion `trades.csv` (signed via trade-sign classification) |
 
 The bundled sample under `ob_analytics/_sample_data/` is a modern BTC/USD
 capture (`orders.csv` + `trades.csv`).
+
+### L2 vs L3: the resolution axis
+
+A format declares a **`resolution`** (`Level.L2` / `Level.L3`), orthogonal to
+its `FeedType` crossing invariant:
+
+- **L3 (market-by-order)** — the per-order model above. Events carry order IDs,
+  so `set_order_types`, `order_aggressiveness`, and queue reconstruction run.
+- **L2 (market-by-price)** — price-level feeds (Binance, Kalshi, Polymarket,
+  most CCXT sources) publish `[price, quantity]` levels and diffs with **no
+  order IDs**. The loader (a `DepthSource`) yields the depth frame directly and
+  the pipeline **skips the per-order stages**: `PipelineResult.events` comes
+  back empty (schema-valid) and `PipelineResult.resolution is Level.L2`.
+  `DepthMetricsEngine` already consumes an absolute price-level book, so depth /
+  spread / trade analytics run unchanged. See
+  [docs/howto/l2-depth.md](docs/howto/l2-depth.md).
 
 ---
 
@@ -165,6 +182,7 @@ ob_analytics/
 │
 ├── bitstamp.py           # BitstampLoader, BitstampTradeReader, BitstampWriter, BitstampFormat
 ├── lobster.py            # LobsterLoader, LobsterTradeReader, LobsterWriter, LobsterFormat
+├── depth_l2.py           # L2DepthLoader, L2TradeReader, DepthCsvWriter, DepthCsvFormat (price-level)
 ├── analytics.py          # order_aggressiveness, trade_impacts, set_order_types, order_book
 ├── depth.py              # DepthMetricsEngine, price_level_volume, depth_metrics, get_spread
 ├── data.py               # save_data, load_data, writer registry

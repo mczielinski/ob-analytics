@@ -193,6 +193,135 @@ def _paired(
     return PlotConcept(key, title, {Level.L2: l2, Level.L3: l3}, note=note)
 
 
+def _build_l2_gallery_model(
+    result: PipelineResult,
+    *,
+    volume_scale: float | None = None,
+) -> GalleryModel:
+    """Gallery model for a price-level (L2) result — the depth/trades faces only.
+
+    An L2 run has no per-order events (``result.events`` is empty), so every
+    face that needs order identity — the L3 lifecycles, queue position, order
+    outcome, the event/cancellation maps, the events histogram — is **skipped
+    by construction**.  What remains is the aggregate book: the depth heatmap,
+    the price/spread view, depth percentiles, and the trade faces — exactly the
+    analytics a price-level feed supports (see
+    :class:`~ob_analytics.protocols.Level`).
+    """
+    trades = result.trades
+    depth = result.depth
+    depth_summary = result.depth_summary
+
+    if volume_scale is None:
+        basis = depth["volume"] if not depth.empty else trades.get("volume")
+        volume_scale = (
+            infer_volume_scale(basis) if basis is not None and len(basis) else 1.0
+        )
+
+    spread = get_spread(depth_summary)
+    # Windows come from the depth clock (there are no events); trades still
+    # anchor the mid-focused price band.
+    zoom_start, zoom_end = _auto_zoom_window(depth)
+    focus = _viz_data.focus_window(trades)
+    price_from = focus.price_from
+    price_to = focus.price_to
+
+    offset = depth["timestamp"].min() + pd.Timedelta(minutes=1)
+    depth_summary_offset = depth_summary[depth_summary["timestamp"] >= offset]
+
+    concepts: list[PlotConcept] = [
+        _l2(
+            "depth_heatmap",
+            "Depth Heatmap",
+            "depth_heatmap",
+            _viz_data.prepare_price_levels_data,
+            {
+                "depth": depth,
+                "spread": spread,
+                "trades": trades,
+                "volume_scale": volume_scale,
+                "price_from": price_from,
+                "price_to": price_to,
+            },
+            note=(
+                "Resting liquidity through time: one horizontal line per price "
+                "level, colored by available volume; the pale line is the "
+                "midprice. Triangles mark executions (aggressor side). The "
+                "native L2 view — aggregate size per price, no order identity."
+            ),
+        ),
+    ]
+
+    if not trades.empty:
+        concepts.append(
+            _l2(
+                "trade_tape",
+                "Trade Tape",
+                "trade_tape",
+                _viz_data.prepare_trades_data,
+                {"trades": trades},
+                note="Executions over time as a price tape; color = aggressor side.",
+            )
+        )
+
+    if not depth_summary_offset.empty:
+        concepts.append(
+            _l2(
+                "price_view",
+                "Price View",
+                "price_view",
+                _viz_data.prepare_price_view_data,
+                {
+                    "depth_summary": depth_summary_offset,
+                    "trades": trades,
+                    "start_time": zoom_start,
+                    "end_time": zoom_end,
+                },
+                note=(
+                    "The spread as a ribbon (best bid to best ask) with the "
+                    "volume-weighted microprice through it. Dots are executions "
+                    "by aggressor side."
+                ),
+            )
+        )
+        concepts.append(
+            _l2(
+                "volume_percentiles",
+                "Volume Percentiles",
+                "volume_percentiles",
+                _viz_data.prepare_volume_percentiles_data,
+                {
+                    "depth_summary": depth_summary_offset,
+                    "start_time": zoom_start,
+                    "end_time": zoom_end,
+                    "volume_scale": volume_scale,
+                },
+                note=(
+                    "Book depth through time, stacked by distance from the touch "
+                    "in bps bands: asks above zero, bids below; band thickness = "
+                    "resting volume in that bps ring."
+                ),
+            )
+        )
+
+    if not trades.empty:
+        concepts.append(
+            _l2(
+                "trade_size",
+                "Trade Size",
+                "trade_size",
+                _viz_data.prepare_trade_size_data,
+                {"trades": trades, "volume_scale": volume_scale},
+                note=(
+                    "How big trades are: each execution a jittered dot on a log "
+                    "size axis, buys and sells in separate bands."
+                ),
+            )
+        )
+
+    return GalleryModel(concepts=concepts, analytics=[])
+
+
 def build_gallery_model(
     result: PipelineResult,
     *,
@@ -218,6 +347,12 @@ def build_gallery_model(
     -------
     GalleryModel
     """
+    # A price-level (L2) result has no per-order events: build the reduced
+    # depth/trades model and skip every L3-only face rather than erroring on
+    # the empty events frame.
+    if result.resolution is Level.L2:
+        return _build_l2_gallery_model(result, volume_scale=volume_scale)
+
     events = result.events
     trades = result.trades
     depth = result.depth
