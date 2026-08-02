@@ -10,6 +10,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Trade-sign classification** (`ob_analytics.trade_sign`) for feeds that
+  don't label the aggressor side. `tick_rule` (last-price-change sign),
+  `lee_ready` (quote-midpoint test with a tick-rule fallback), and
+  `bulk_volume_classification` (BVC — the buy fraction of a volume bar via the
+  standardized-price-change normal CDF). `classify_trade_sign(trades,
+  method=..., quotes=...)` is the per-trade entry point. `compute_vpin` and
+  `order_flow_imbalance` gain `sign_method` / `quotes` arguments and now
+  synthesize `direction` automatically when the trades frame has none — so
+  VPIN and OFI run on L2 / aggregated captures, not just L3. A native
+  `direction` is still honored unchanged (`sign_method=None`). On the bundled
+  Bitstamp L3 sample the classifiers agree with the true maker/taker side
+  ~0.83 (tick) / ~0.79 (Lee–Ready) — validated by a test harness.
 - **Feed classification.** Every format declares a `FeedType`
   (`matched_book` vs `diff_feed`) through a `feed_type` attribute —
   `BitstampFormat` → `diff_feed`, `LobsterFormat` → `matched_book` — so

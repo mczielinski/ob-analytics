@@ -46,6 +46,7 @@ nav = [
     { "LOBSTER" = "api/lobster.md" },
     { "Analytics" = "api/analytics.md" },
     { "Flow Toxicity" = "api/flow_toxicity.md" },
+    { "Trade Signs" = "api/trade_sign.md" },
     { "Depth Metrics" = "api/depth.md" },
     { "Data I/O" = "api/data.md" },
     { "Visualization" = "api/visualization.md" },

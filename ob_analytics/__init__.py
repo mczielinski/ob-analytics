@@ -63,6 +63,12 @@ from ob_analytics.protocols import (
     RunContext,
     TradeSource,
 )
+from ob_analytics.trade_sign import (
+    bulk_volume_classification,
+    classify_trade_sign,
+    lee_ready,
+    tick_rule,
+)
 
 logger.disable("ob_analytics")
 
@@ -116,11 +122,15 @@ __all__ = [
     "RunContext",
     "TradeSource",
     "__version__",
+    # ── Trade-sign classification ────────────────────────────────────
+    "bulk_volume_classification",
+    "classify_trade_sign",
     "compute_kyle_lambda",
     # ── Flow toxicity ────────────────────────────────────────────────
     "compute_vpin",
     # ── Data quality ─────────────────────────────────────────────────
     "data_quality_summary",
+    "lee_ready",
     "list_formats",
     "load_data",
     "order_flow_imbalance",
@@ -130,6 +140,7 @@ __all__ = [
     "sample_data_dir",
     # ── Data I/O ─────────────────────────────────────────────────────
     "save_data",
+    "tick_rule",
     "toy_events",
     "toy_trades",
 ]

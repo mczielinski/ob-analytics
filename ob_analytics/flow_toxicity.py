@@ -22,6 +22,47 @@ import numpy as np
 import pandas as pd
 
 from ob_analytics._utils import validate_columns, validate_non_empty
+from ob_analytics.exceptions import ConfigError
+from ob_analytics.trade_sign import (
+    bulk_volume_classification,
+    classify_trade_sign,
+)
+
+
+def _resolve_direction(
+    trades: pd.DataFrame,
+    sign_method: str | None,
+    quotes: pd.DataFrame | None,
+    context: str,
+) -> pd.DataFrame:
+    """Return *trades* guaranteed to carry a ``buy``/``sell`` ``direction``.
+
+    Signed-flow metrics need the taker's aggressor side.  L3 feeds provide
+    it natively; L2 / aggregated feeds don't, so synthesize it with a
+    trade-sign classifier (:func:`~ob_analytics.trade_sign.classify_trade_sign`).
+
+    * ``sign_method=None`` — keep a native ``direction`` if present;
+      otherwise classify with Lee–Ready when *quotes* are supplied, else the
+      tick rule.
+    * ``sign_method="tick"`` / ``"lee_ready"`` — always (re)classify with
+      that method, overriding any existing ``direction``.
+
+    The frame is only copied when a ``direction`` column is written.
+    """
+    if sign_method is None:
+        if "direction" in trades.columns:
+            return trades
+        method = "lee_ready" if quotes is not None else "tick"
+    elif sign_method == "bvc":
+        raise ConfigError(
+            f"{context}: sign_method='bvc' labels volume bars and is only "
+            "supported by compute_vpin."
+        )
+    else:
+        method = sign_method
+    out = trades.copy()
+    out["direction"] = classify_trade_sign(trades, method=method, quotes=quotes)
+    return out
 
 
 @dataclass(frozen=True)
@@ -56,6 +97,8 @@ def compute_vpin(
     trades: pd.DataFrame,
     bucket_volume: float,
     n_buckets: int = 50,
+    sign_method: str | None = None,
+    quotes: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Compute the Volume-Synchronized Probability of Informed Trading.
 
@@ -64,18 +107,38 @@ def compute_vpin(
     trailing average of ``vpin`` over *n_buckets* is the headline VPIN
     metric.
 
+    Works on feeds without a native aggressor side.  When the trades frame
+    has no ``direction``, the buy/sell split is inferred with a trade-sign
+    classifier (see *sign_method*), so VPIN runs on L2 / aggregated captures
+    too.
+
     Parameters
     ----------
     trades : pandas.DataFrame
-        Trades with at least ``timestamp``, ``price``, ``volume``, and
-        ``direction`` columns.  ``direction`` must contain ``"buy"`` or
-        ``"sell"`` values.
+        Trades with at least ``timestamp``, ``price``, and ``volume``.  A
+        ``direction`` column (``"buy"`` / ``"sell"``, the taker side) is used
+        when present; otherwise it is inferred — see *sign_method*.
     bucket_volume : float
         Total volume per bucket.  This is highly instrument-specific —
         a reasonable starting point is average daily volume / 50.
     n_buckets : int, optional
         Window length (in buckets) for the trailing VPIN average.
         Default is 50, following the original paper.
+    sign_method : str, optional
+        How to obtain the buy/sell split when there is no native
+        ``direction``.  ``None`` (default) uses an existing ``direction`` if
+        present, else falls back to a per-trade classifier (Lee–Ready when
+        *quotes* are given, otherwise the tick rule).  ``"tick"`` /
+        ``"lee_ready"`` force a per-trade classifier
+        (:func:`~ob_analytics.trade_sign.classify_trade_sign`), overriding
+        any native ``direction``.  ``"bvc"`` splits each *volume bar* with
+        bulk volume classification
+        (:func:`~ob_analytics.trade_sign.bulk_volume_classification`) — the
+        VPIN-native estimator, which needs no per-trade sign at all.
+    quotes : pandas.DataFrame, optional
+        Quote frame for ``sign_method="lee_ready"`` (or the ``None`` fallback
+        when quotes are available) — passed through to
+        :func:`~ob_analytics.trade_sign.classify_trade_sign`.
 
     Returns
     -------
@@ -99,15 +162,15 @@ def compute_vpin(
     ValueError
         If *bucket_volume* is not positive.
     """
-    validate_columns(
-        trades,
-        {"timestamp", "price", "volume", "direction"},
-        "compute_vpin",
-    )
+    validate_columns(trades, {"timestamp", "price", "volume"}, "compute_vpin")
     validate_non_empty(trades, "compute_vpin")
     if bucket_volume <= 0:
         raise ValueError(f"bucket_volume must be positive, got {bucket_volume}")
 
+    if sign_method == "bvc":
+        return _vpin_from_bvc(trades, bucket_volume, n_buckets)
+
+    trades = _resolve_direction(trades, sign_method, quotes, "compute_vpin")
     df = trades.sort_values("timestamp").reset_index(drop=True)
 
     # Assign signed volume
@@ -163,6 +226,41 @@ def compute_vpin(
     result = pd.DataFrame(buckets)
     if not result.empty:
         result["vpin_avg"] = result["vpin"].rolling(n_buckets, min_periods=1).mean()
+    return result
+
+
+def _vpin_from_bvc(
+    trades: pd.DataFrame,
+    bucket_volume: float,
+    n_buckets: int,
+) -> pd.DataFrame:
+    """VPIN from bulk volume classification (``sign_method="bvc"``).
+
+    Splits each volume bar with
+    :func:`~ob_analytics.trade_sign.bulk_volume_classification` instead of a
+    per-trade sign, then measures the same normalised bucket imbalance.
+    Returns the standard :func:`compute_vpin` schema.
+    """
+    bvc = bulk_volume_classification(trades, bucket_volume)
+    if bvc.empty:
+        return pd.DataFrame(
+            columns=[
+                "bucket",
+                "timestamp_start",
+                "timestamp_end",
+                "buy_volume",
+                "sell_volume",
+                "vpin",
+                "vpin_avg",
+            ]
+        )
+    result = bvc[
+        ["bucket", "timestamp_start", "timestamp_end", "buy_volume", "sell_volume"]
+    ].copy()
+    result["vpin"] = (
+        result["buy_volume"] - result["sell_volume"]
+    ).abs() / bucket_volume
+    result["vpin_avg"] = result["vpin"].rolling(n_buckets, min_periods=1).mean()
     return result
 
 
@@ -279,6 +377,8 @@ def compute_kyle_lambda(
 def order_flow_imbalance(
     trades: pd.DataFrame,
     window: str = "1min",
+    sign_method: str | None = None,
+    quotes: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Compute normalised order flow imbalance per time window.
 
@@ -289,12 +389,30 @@ def order_flow_imbalance(
     Values range from −1 (all sells) to +1 (all buys).  Zero indicates
     balanced flow.
 
+    Works on feeds without a native aggressor side: when the trades frame
+    has no ``direction``, it is inferred with a per-trade trade-sign
+    classifier (see *sign_method*).
+
     Parameters
     ----------
     trades : pandas.DataFrame
-        Trades with ``timestamp``, ``volume``, ``direction``.
+        Trades with ``timestamp`` and ``volume``.  A ``direction`` column
+        (``"buy"`` / ``"sell"``) is used when present; otherwise it is
+        inferred — see *sign_method* (which additionally requires
+        ``price``).
     window : str, optional
         Pandas frequency string.  Default ``"1min"``.
+    sign_method : str, optional
+        How to obtain the buy/sell split when there is no native
+        ``direction``.  ``None`` (default) uses an existing ``direction`` if
+        present, else falls back to a per-trade classifier (Lee–Ready when
+        *quotes* are given, otherwise the tick rule).  ``"tick"`` /
+        ``"lee_ready"`` force a per-trade classifier, overriding any native
+        ``direction``.  (``"bvc"`` is VPIN-native; use
+        :func:`compute_vpin`.)
+    quotes : pandas.DataFrame, optional
+        Quote frame for ``sign_method="lee_ready"`` — passed through to
+        :func:`~ob_analytics.trade_sign.classify_trade_sign`.
 
     Returns
     -------
@@ -309,13 +427,10 @@ def order_flow_imbalance(
     ObAnalyticsError
         If *trades* is empty.
     """
-    validate_columns(
-        trades,
-        {"timestamp", "volume", "direction"},
-        "order_flow_imbalance",
-    )
+    validate_columns(trades, {"timestamp", "volume"}, "order_flow_imbalance")
     validate_non_empty(trades, "order_flow_imbalance")
 
+    trades = _resolve_direction(trades, sign_method, quotes, "order_flow_imbalance")
     df = trades.sort_values("timestamp").copy()
     df["buy_vol"] = df["volume"].where(df["direction"] == "buy", 0.0)
     df["sell_vol"] = df["volume"].where(df["direction"] != "buy", 0.0)
