@@ -70,6 +70,47 @@ def empty_trades() -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# Events schema
+# ---------------------------------------------------------------------------
+
+# The canonical per-order event columns (schemas.EVENT_COLUMNS) plus the
+# provenance columns every loader carries. Typed so a zero-row frame still
+# satisfies ``validate_events_df`` and dtype-sensitive consumers.
+_EMPTY_EVENT_DTYPES: dict[str, str] = {
+    "event_id": "int64",
+    "id": "int64",
+    "timestamp": "datetime64[ns]",
+    "exchange_timestamp": "datetime64[ns]",
+    "price": "float64",
+    "volume": "float64",
+    "direction": "object",
+    "action": "object",
+    "fill": "float64",
+    "type": "object",
+    "original_number": "int64",
+    "raw_event_type": "object",
+}
+
+
+def empty_events() -> pd.DataFrame:
+    """Return a schema-valid, zero-row events DataFrame.
+
+    The L2 (price-level) pipeline path has no per-order events, but the rest
+    of the system still expects a :func:`~ob_analytics.schemas.validate_events_df`-valid
+    ``events`` frame on the :class:`~ob_analytics.pipeline.PipelineResult`.
+    This is that frame: every canonical event column present, correctly typed,
+    with no rows — the explicit "the per-order stages did not apply here"
+    marker (see :class:`~ob_analytics.protocols.Level`).
+    """
+    return pd.DataFrame(
+        {
+            name: pd.Series([], dtype=dtype)
+            for name, dtype in _EMPTY_EVENT_DTYPES.items()
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
 # Timestamp conversions
 # ---------------------------------------------------------------------------
 

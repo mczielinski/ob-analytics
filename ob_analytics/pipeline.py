@@ -38,6 +38,7 @@ import pandas as pd
 from loguru import logger
 
 from ob_analytics._registry import Registry
+from ob_analytics._utils import empty_events
 from ob_analytics.analytics import order_aggressiveness, set_order_types
 from ob_analytics.config import PipelineConfig
 from ob_analytics.depth import depth_metrics, price_level_volume
@@ -45,10 +46,16 @@ from ob_analytics.protocols import (
     DataWriter,
     EventLoader,
     Format,
+    Level,
     RunContext,
     TradeSource,
 )
-from ob_analytics.schemas import validate_events_df, validate_trades_df
+from ob_analytics.schemas import (
+    validate_depth_df,
+    validate_events_df,
+    validate_trades_df,
+)
+from ob_analytics.trade_sign import classify_trade_sign
 
 # ── Format registry ───────────────────────────────────────────────────
 #
@@ -90,9 +97,18 @@ class PipelineResult:
     Attributes
     ----------
     events, trades, depth, depth_summary : pandas.DataFrame
-        Core pipeline tables.
+        Core pipeline tables.  For an :attr:`~ob_analytics.protocols.Level.L2`
+        run ``events`` is **empty** (a schema-valid zero-row frame): a
+        price-level feed has no per-order identity, so the per-order stages do
+        not run — read ``depth`` / ``depth_summary`` / ``trades`` instead.
     config : PipelineConfig
         The configuration used for the run.
+    resolution : Level
+        The order-book resolution the run was produced at
+        (:attr:`~ob_analytics.protocols.Level.L3` by default,
+        :attr:`~ob_analytics.protocols.Level.L2` for price-level feeds).
+        Downstream code (the gallery, data-quality) reads it to decide which
+        per-order faces / metrics apply.
     """
 
     events: pd.DataFrame
@@ -100,6 +116,7 @@ class PipelineResult:
     depth: pd.DataFrame
     depth_summary: pd.DataFrame
     config: PipelineConfig
+    resolution: Level = Level.L3
 
     def plot(
         self,
@@ -237,18 +254,31 @@ class Pipeline:
         -------
         PipelineResult
             Frozen dataclass with ``events``, ``trades``, ``depth``,
-            ``depth_summary``, and ``config``.
+            ``depth_summary``, ``config``, and ``resolution``.
 
-        Steps
-        -----
+        Steps (L3 / per-order feeds)
+        ----------------------------
         1. Load events (``EventLoader.load``)
         2. Build trades (``TradeSource.load``)
         3. Classify order types
         4. Compute price-level depth
         5. Compute depth metrics
         6. Compute order aggressiveness
+
+        For an :attr:`~ob_analytics.protocols.Level.L2` format the run takes
+        the price-level path instead (see :meth:`_run_l2`): the loader yields
+        the depth frame directly, depth metrics and trade signs are computed
+        on it, and the per-order stages (3, 6) are skipped.
         """
         run_ctx = ctx if ctx is not None else self._ctx
+
+        resolution = (
+            getattr(self._format, "resolution", Level.L3)
+            if self._format is not None
+            else Level.L3
+        )
+        if resolution is Level.L2:
+            return self._run_l2(source, run_ctx)
 
         logger.info("Pipeline: loading events from {}", source)
         events = self.loader.load(source)
@@ -295,4 +325,76 @@ class Pipeline:
             depth=depth,
             depth_summary=depth_summary,
             config=self.config,
+            resolution=Level.L3,
         )
+
+    def _run_l2(self, source: Any, run_ctx: RunContext) -> PipelineResult:
+        """Run the price-level (L2) path: depth in, per-order stages skipped.
+
+        A price-level feed carries ``(price, side, new absolute size)``
+        updates and no order IDs, so the reconstruction stages have nothing
+        to key on.  The loader (a :class:`~ob_analytics.protocols.DepthSource`)
+        yields the canonical depth frame directly; from there depth metrics
+        and — for feeds whose trades don't label the aggressor — trade signs
+        are computed, while ``set_order_types`` / ``order_aggressiveness`` /
+        queue reconstruction are **skipped by construction** (no per-order
+        identity to classify).  ``events`` comes back empty but schema-valid.
+        """
+        logger.info(
+            "Pipeline: L2 resolution — loading price-level depth from {}", source
+        )
+        depth = self.loader.load(source)
+        validate_depth_df(depth)  # data contract (schemas.py)
+
+        logger.info("Pipeline: computing depth metrics ({} depth rows)", len(depth))
+        depth_summary = depth_metrics(
+            depth,
+            bps=self.config.depth_bps,
+            bins=self.config.depth_bins,
+        )
+
+        logger.info("Pipeline: building trades")
+        # The trade source ignores the (empty) events frame for L2 — trades come
+        # from the venue's own prints, not from reconstructed order lifecycles.
+        events = empty_events()
+        trades = self.trade_source.load(events, source)
+        trades = self._ensure_trade_signs(trades, depth_summary)
+        validate_trades_df(trades)  # data contract (schemas.py)
+
+        logger.info(
+            "Pipeline: L2 complete — per-order stages (set_order_types, "
+            "order_aggressiveness, queue) skipped: price-level feed has no "
+            "order identity"
+        )
+        return PipelineResult(
+            events=events,
+            trades=trades,
+            depth=depth,
+            depth_summary=depth_summary,
+            config=self.config,
+            resolution=Level.L2,
+        )
+
+    @staticmethod
+    def _ensure_trade_signs(
+        trades: pd.DataFrame, depth_summary: pd.DataFrame
+    ) -> pd.DataFrame:
+        """Fill an unlabelled L2 trades ``direction`` via Lee–Ready.
+
+        L3 crypto ships the taker side for free; many price-level venues (and
+        CCXT sources) don't.  When the trade reader leaves ``direction``
+        entirely unset, classify the aggressor with Lee–Ready against the
+        reconstructed BBO (``depth_summary``), falling back to the tick rule
+        at the mid — the trade-sign classifiers added for exactly this case
+        (see :mod:`ob_analytics.trade_sign`).  A reader that *does* label the
+        side (native ``side`` column) is left untouched.
+        """
+        if trades.empty or "direction" not in trades.columns:
+            return trades
+        if not trades["direction"].isna().all():
+            return trades  # venue already labelled the aggressor side
+        logger.info("Pipeline: classifying {} trade signs (Lee–Ready)", len(trades))
+        direction = classify_trade_sign(
+            trades, method="lee_ready", quotes=depth_summary
+        )
+        return trades.assign(direction=direction)

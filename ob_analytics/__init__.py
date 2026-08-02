@@ -40,7 +40,8 @@ from ob_analytics.analytics import DataQualitySummary, data_quality_summary
 from ob_analytics.bitstamp import BitstampFormat
 from ob_analytics.config import PipelineConfig
 from ob_analytics.data import load_data, save_data
-from ob_analytics.datasets import toy_events, toy_trades
+from ob_analytics.datasets import toy_events, toy_l2_depth, toy_l2_trades, toy_trades
+from ob_analytics.depth_l2 import DepthCsvFormat
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
 from ob_analytics.flow_toxicity import (
     KyleLambdaResult,
@@ -57,9 +58,11 @@ from ob_analytics.pipeline import (
 )
 from ob_analytics.protocols import (
     DataWriter,
+    DepthSource,
     EventLoader,
     FeedType,
     Format,
+    Level,
     RunContext,
     TradeSource,
 )
@@ -107,11 +110,14 @@ __all__ = [
     "ConfigError",
     "DataQualitySummary",
     "DataWriter",
+    "DepthCsvFormat",
+    "DepthSource",
     "EventLoader",
     "FeedType",
     # ── Protocols / extension points ─────────────────────────────────
     "Format",
     "KyleLambdaResult",
+    "Level",
     "LobsterFormat",
     # ── Exceptions ───────────────────────────────────────────────────
     "ObAnalyticsError",
@@ -142,5 +148,7 @@ __all__ = [
     "save_data",
     "tick_rule",
     "toy_events",
+    "toy_l2_depth",
+    "toy_l2_trades",
     "toy_trades",
 ]

@@ -42,6 +42,7 @@ from ob_analytics.protocols import (
     DataWriter,
     EventLoader,
     FeedType,
+    Level,
     RunContext,
     TradeSource,
 )
@@ -868,6 +869,8 @@ class LobsterFormat:
     # LOBSTER is a venue matched book (exchange matching engine): bids can
     # never rest above asks, so the reconstructed book is never crossed.
     feed_type: FeedType = field(default=FeedType.MATCHED_BOOK, init=False, repr=False)
+    # Per-order (market-by-order) feed — the full reconstruction model.
+    resolution: Level = field(default=Level.L3, init=False, repr=False)
 
     _loader: LobsterLoader | None = field(default=None, repr=False, init=False)
 

@@ -34,6 +34,7 @@ from ob_analytics.protocols import (
     DataWriter,
     EventLoader,
     FeedType,
+    Level,
     RunContext,
     TradeSource,
 )
@@ -432,6 +433,8 @@ class BitstampFormat:
     # The Bitstamp public feed is a placement/cancellation diff stream, not a
     # matched-engine view, so it can carry genuinely crossed resting orders.
     feed_type: FeedType = FeedType.DIFF_FEED
+    # Per-order (market-by-order) feed — the full reconstruction model.
+    resolution: Level = Level.L3
 
     def create_loader(self, config: PipelineConfig, ctx: RunContext) -> EventLoader:
         return BitstampLoader(config)

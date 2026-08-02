@@ -850,7 +850,11 @@ def data_quality_summary(
     ----------
     events : pandas.DataFrame
         Classified events (must carry the canonical columns **and** the
-        ``type`` column from :func:`set_order_types`).
+        ``type`` column from :func:`set_order_types`).  For a price-level
+        (L2) run this is the empty, schema-valid frame from
+        :func:`~ob_analytics._utils.empty_events`: the per-order metrics then
+        report zero and crossing is read from *depth* (pass
+        ``PipelineResult.depth``).
     trades : pandas.DataFrame
         The trades frame, with ``maker_event_id`` / ``taker_event_id``.
     feed_type : FeedType, optional
@@ -872,15 +876,20 @@ def data_quality_summary(
         {"event_id", "id", "action", "direction", "price", "type"},
         "data_quality_summary(events)",
     )
-    validate_non_empty(events, "data_quality_summary")
     validate_columns(
         trades,
         {"maker_event_id", "taker_event_id"},
         "data_quality_summary(trades)",
     )
 
+    # A price-level (L2) run has no per-order events: ``events`` is empty (but
+    # schema-valid, see :func:`~ob_analytics._utils.empty_events`).  The
+    # per-order metrics then report zero and the crossed book is read from the
+    # supplied depth frame (the price-level book) rather than reconstructed
+    # from events.
+    l2 = events.empty
     if depth is None:
-        depth = price_level_volume(events)
+        depth = events if l2 else price_level_volume(events)
 
     if depth.empty:
         crossed_pct, crossed_episodes = 0.0, 0
@@ -891,12 +900,14 @@ def data_quality_summary(
         crossed_pct = 100.0 * crossed_frac
 
     n_trades = len(trades)
-    if n_trades:
+    if n_trades and not l2:
         unmatched = (
             trades["maker_event_id"].isna() | trades["taker_event_id"].isna()
         ).sum()
         unmatched_pct = 100.0 * float(unmatched) / n_trades
     else:
+        # L2 trades carry no maker/taker attribution — there is nothing to
+        # resolve, so a missing id is not a "match failure".
         unmatched_pct = 0.0
 
     event_id_counts = events["event_id"].value_counts()
