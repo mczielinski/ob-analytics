@@ -10,6 +10,8 @@ Public API:
 
 from __future__ import annotations
 
+import importlib.util
+
 from ob_analytics._registry import Registry
 from ob_analytics.live._base import (
     CaptureConfig,
@@ -56,6 +58,14 @@ except ImportError:
     # websockets not installed; the registry stays empty until the user
     # registers their own capturer or installs ob-analytics[live].
     pass
+
+# CCXT source (optional ``[ccxt]`` extra). Registered only when ``ccxt`` is
+# installed; the capturer imports ccxt lazily, so gate on a cheap find_spec
+# rather than importing (heavy) ccxt at package import time.
+if importlib.util.find_spec("ccxt") is not None:
+    from ob_analytics.live.ccxt_source import CcxtCapturer
+
+    register_capturer("ccxt", CcxtCapturer)
 
 
 __all__ = [
