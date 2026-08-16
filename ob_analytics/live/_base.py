@@ -16,6 +16,8 @@ from typing import Any, Protocol, runtime_checkable
 
 import pandas as pd
 
+from ob_analytics.protocols import Level
+
 # ---------------------------------------------------------------------------
 # Data shapes
 # ---------------------------------------------------------------------------
@@ -43,13 +45,17 @@ class CaptureResult:
     started: pd.Timestamp
     ended: pd.Timestamp
     extras: dict[str, Any] = field(default_factory=dict)
+    n_depth_events: int = 0
 
 
 # Single canonical event dict shape, mirroring BitstampLoader's CSV columns.
 # Capturers yield these one at a time; the runner buffers/writes.
 EventDict = dict[str, Any]
-# Required keys for an order event:  id, timestamp, exchange_timestamp,
+# Required keys for an order event (L3):  id, timestamp, exchange_timestamp,
 #                                    price, volume, action, direction
+# Required keys for a depth event (L2):   timestamp, exchange_timestamp,
+#                                    side, price, volume  (volume = the new
+#                                    absolute size at that price; 0 removes it)
 # Required keys for a trade event:   trade_id, timestamp, exchange_timestamp,
 #                                    price, amount, buy_order_id,
 #                                    sell_order_id, side
@@ -64,14 +70,17 @@ EventDict = dict[str, Any]
 class CaptureSink(Protocol):
     """Write target for a capture run.
 
-    The default implementation (in ``_runner.py``) writes:
-    - orders.csv  -- append-only, BitstampLoader-compatible schema
-    - trades.csv  -- append-only
+    The default implementation (in ``_runner.py``) writes, keyed on the
+    capturer's :attr:`~LiveCapturer.resolution`:
+    - orders.csv  -- L3 only: append-only, BitstampLoader-compatible schema
+    - depth.csv   -- L2 only: append-only, L2DepthLoader-compatible schema
+    - trades.csv  -- append-only (both resolutions)
     - raw.jsonl   -- every raw frame, one JSON object per line (if keep_raw)
     - meta.json   -- finalised at shutdown
     """
 
     def write_order(self, event: EventDict) -> None: ...
+    def write_depth(self, event: EventDict) -> None: ...
     def write_trade(self, event: EventDict) -> None: ...
     def write_raw(self, frame: Any) -> None: ...
     def finalize(self, result: CaptureResult) -> None: ...
@@ -101,12 +110,25 @@ class LiveCapturer(Protocol):
     name: str
     """Stable lowercase venue identifier, e.g. ``"bitstamp"``."""
 
-    def snapshot(self, config: CaptureConfig) -> AsyncIterator[EventDict]:
-        """Yield synthetic ``created`` events reconstructing the initial book.
+    resolution: Level
+    """Order-book granularity this capturer emits (a coordinate, not a name).
 
-        Called once at startup before :meth:`stream`. Each yielded event MUST
-        have ``action="created"``. The runner writes these to orders.csv so
-        subsequent ``changed`` / ``deleted`` events have matching creates.
+    :attr:`~ob_analytics.protocols.Level.L3` means per-order events written to
+    ``orders.csv``; :attr:`~ob_analytics.protocols.Level.L2` means price-level
+    depth updates written to ``depth.csv``. Mirrors
+    :attr:`ob_analytics.protocols.Format.resolution` so a source and its replay
+    format agree on granularity. The runner falls back to ``L3`` if a capturer
+    predates this attribute.
+    """
+
+    def snapshot(self, config: CaptureConfig) -> AsyncIterator[EventDict]:
+        """Yield the opening book: one event per resting order (L3) or level (L2).
+
+        Called once at startup before :meth:`stream`. **L3:** each event MUST
+        have ``action="created"``; the runner writes them to ``orders.csv`` so
+        later ``changed`` / ``deleted`` events have matching creates. **L2:**
+        each event is an absolute-size depth row (``side`` / ``price`` /
+        ``volume``) written to ``depth.csv``.
         """
         ...
 
@@ -115,9 +137,9 @@ class LiveCapturer(Protocol):
     ) -> AsyncIterator[tuple[str, EventDict, Any]]:
         """Yield ``(kind, event, raw_frame)`` for every live event.
 
-        ``kind`` is ``"order"`` or ``"trade"``. ``raw_frame`` is the original
-        JSON-decoded WebSocket payload (or ``None``); the runner writes it
-        to raw.jsonl iff ``config.keep_raw``.
+        ``kind`` is ``"order"`` (L3), ``"depth"`` (L2), or ``"trade"``.
+        ``raw_frame`` is the original JSON-decoded WebSocket payload (or
+        ``None``); the runner writes it to raw.jsonl iff ``config.keep_raw``.
 
         Implementations should self-terminate after ``config.minutes`` of
         wall-clock time. The runner *also* enforces this externally, so
@@ -126,11 +148,12 @@ class LiveCapturer(Protocol):
         ...
 
     def shutdown_synthetic_events(self) -> AsyncIterator[EventDict]:
-        """Yield synthetic ``deleted`` events for everything still on the book.
+        """Yield synthetic close-out events for everything still on the book.
 
-        Called once at shutdown. Each yielded event MUST have
-        ``action="deleted"``. Gives every ``id`` in orders.csv a complete
-        ``created -> ... -> deleted`` lifecycle.
+        Called once at shutdown. **L3:** each event MUST have
+        ``action="deleted"``, giving every ``id`` in ``orders.csv`` a complete
+        ``created -> ... -> deleted`` lifecycle. **L2:** price levels have no
+        lifecycle to close, so an L2 capturer typically yields nothing here.
         """
         ...
 

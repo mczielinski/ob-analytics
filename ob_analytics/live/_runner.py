@@ -20,6 +20,7 @@ from ob_analytics.live._base import (
     LiveCapturer,
     SupportsDiagnostics,
 )
+from ob_analytics.protocols import Level
 
 _ORDER_COLS = [
     "id",
@@ -40,6 +41,14 @@ _TRADE_COLS = [
     "sell_order_id",
     "side",
 ]
+# L2 (price-level) depth rows -- the L2DepthLoader schema. ``volume`` is the
+# new absolute size at ``price`` (0 removes the level).
+_DEPTH_COLS = [
+    "timestamp",
+    "side",
+    "price",
+    "volume",
+]
 
 
 def _ts_ms(ts: pd.Timestamp | float) -> int:
@@ -49,18 +58,40 @@ def _ts_ms(ts: pd.Timestamp | float) -> int:
 
 
 class FileCaptureSink(CaptureSink):
-    """Default sink: writes orders.csv, trades.csv, raw.jsonl, meta.json."""
+    """Default sink: writes the book file, trades.csv, raw.jsonl, meta.json.
 
-    def __init__(self, out_dir: Path, *, keep_raw: bool) -> None:
+    The book file tracks the capturer's :class:`~ob_analytics.protocols.Level`:
+    **L3** -> ``orders.csv`` (per-order lifecycle, BitstampLoader schema);
+    **L2** -> ``depth.csv`` (price-level updates, L2DepthLoader schema).
+    ``trades.csv`` is written for both.
+    """
+
+    def __init__(
+        self, out_dir: Path, *, keep_raw: bool, resolution: Level = Level.L3
+    ) -> None:
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self._keep_raw = keep_raw
+        self._resolution = resolution
 
-        self._orders_fp = (self.out_dir / "orders.csv").open("w", newline="")
-        self._orders = csv.DictWriter(
-            self._orders_fp, fieldnames=_ORDER_COLS, extrasaction="ignore"
-        )
-        self._orders.writeheader()
+        # Exactly one book writer is opened, per resolution. The other stays
+        # None so write_order / write_depth are safe no-ops on the wrong side.
+        self._orders_fp: Any = None
+        self._orders: csv.DictWriter[str] | None = None
+        self._depth_fp: Any = None
+        self._depth: csv.DictWriter[str] | None = None
+        if resolution is Level.L2:
+            self._depth_fp = (self.out_dir / "depth.csv").open("w", newline="")
+            self._depth = csv.DictWriter(
+                self._depth_fp, fieldnames=_DEPTH_COLS, extrasaction="ignore"
+            )
+            self._depth.writeheader()
+        else:
+            self._orders_fp = (self.out_dir / "orders.csv").open("w", newline="")
+            self._orders = csv.DictWriter(
+                self._orders_fp, fieldnames=_ORDER_COLS, extrasaction="ignore"
+            )
+            self._orders.writeheader()
 
         self._trades_fp = (self.out_dir / "trades.csv").open("w", newline="")
         self._trades = csv.DictWriter(
@@ -71,12 +102,21 @@ class FileCaptureSink(CaptureSink):
         self._raw_fp = (self.out_dir / "raw.jsonl").open("w") if keep_raw else None
 
     def write_order(self, event: EventDict) -> None:
+        if self._orders is None:
+            return
         row = {
             **event,
             "timestamp": _ts_ms(event["timestamp"]),
             "exchange_timestamp": _ts_ms(event["exchange_timestamp"]),
         }
         self._orders.writerow(row)
+
+    def write_depth(self, event: EventDict) -> None:
+        if self._depth is None:
+            return
+        # Only timestamp/side/price/volume are persisted (extras ignored).
+        row = {**event, "timestamp": _ts_ms(event["timestamp"])}
+        self._depth.writerow(row)
 
     def write_trade(self, event: EventDict) -> None:
         row = {
@@ -93,13 +133,14 @@ class FileCaptureSink(CaptureSink):
 
     def finalize(self, result: CaptureResult) -> None:
         # Flush + close everything.
-        for fp in (self._orders_fp, self._trades_fp, self._raw_fp):
+        for fp in (self._orders_fp, self._depth_fp, self._trades_fp, self._raw_fp):
             if fp is not None:
                 try:
                     fp.flush()
                 finally:
                     fp.close()
-        self._orders_fp = None  # type: ignore[assignment]
+        self._orders_fp = None
+        self._depth_fp = None
         self._trades_fp = None  # type: ignore[assignment]
         self._raw_fp = None
 
@@ -109,6 +150,7 @@ class FileCaptureSink(CaptureSink):
             "ended": str(result.ended),
             "duration_seconds": (result.ended - result.started).total_seconds(),
             "n_order_events": result.n_order_events,
+            "n_depth_events": result.n_depth_events,
             "n_trade_events": result.n_trade_events,
             "n_raw_frames": result.n_raw_frames,
             **result.extras,
@@ -126,10 +168,15 @@ async def run_capturer(
     Handles SIGINT/SIGTERM by cancelling the streaming task; the shutdown
     synthetic events still run so every order id keeps a full lifecycle.
     """
+    # The capturer declares its granularity; the runner routes book events to
+    # the matching writer. Fall back to L3 for capturers predating the attr.
+    resolution = getattr(capturer, "resolution", Level.L3)
     if sink is None:
-        sink = FileCaptureSink(config.out_dir, keep_raw=config.keep_raw)
+        sink = FileCaptureSink(
+            config.out_dir, keep_raw=config.keep_raw, resolution=resolution
+        )
     started = pd.Timestamp.now(tz="UTC")
-    n_order = n_trade = n_raw = 0
+    n_order = n_trade = n_depth = n_raw = 0
 
     stop = asyncio.Event()
     loop = asyncio.get_event_loop()
@@ -146,9 +193,17 @@ async def run_capturer(
     try:
         logger.info("Capturer '{}': snapshot starting", capturer.name)
         async for ev in capturer.snapshot(config):
-            sink.write_order(ev)
-            n_order += 1
-        logger.info("Capturer '{}': snapshot wrote {} orders", capturer.name, n_order)
+            if resolution is Level.L2:
+                sink.write_depth(ev)
+                n_depth += 1
+            else:
+                sink.write_order(ev)
+                n_order += 1
+        logger.info(
+            "Capturer '{}': snapshot wrote {} book events",
+            capturer.name,
+            n_depth if resolution is Level.L2 else n_order,
+        )
 
         logger.info(
             "Capturer '{}': streaming for {:.1f} min",
@@ -159,7 +214,7 @@ async def run_capturer(
         # survive a SIGINT/SIGTERM cancellation: meta.json previously
         # reported only snapshot + shutdown events for interrupted runs
         # even though every streamed row was on disk.
-        stream_counts = {"order": 0, "trade": 0, "raw": 0}
+        stream_counts = {"order": 0, "trade": 0, "depth": 0, "raw": 0}
         stream_task = asyncio.create_task(
             _stream(capturer, config, sink, stream_counts)
         )
@@ -186,12 +241,17 @@ async def run_capturer(
                 logger.error("Capturer '{}' stream raised: {!r}", capturer.name, exc)
         n_order += stream_counts["order"]
         n_trade += stream_counts["trade"]
+        n_depth += stream_counts["depth"]
         n_raw += stream_counts["raw"]
 
         logger.info("Capturer '{}': emitting shutdown synthetic events", capturer.name)
         async for ev in capturer.shutdown_synthetic_events():
-            sink.write_order(ev)
-            n_order += 1
+            if resolution is Level.L2:
+                sink.write_depth(ev)
+                n_depth += 1
+            else:
+                sink.write_order(ev)
+                n_order += 1
     finally:
         # Remove signal handlers we installed.
         for sig in installed_signals:
@@ -221,12 +281,15 @@ async def run_capturer(
             started=started,
             ended=ended,
             extras=extras,
+            n_depth_events=n_depth,
         )
         sink.finalize(result)
         logger.info(
-            "Capturer '{}': finished. orders={}, trades={}, raw={}, dur={:.1f}s",
+            "Capturer '{}': finished. orders={}, depth={}, trades={}, raw={}, "
+            "dur={:.1f}s",
             capturer.name,
             n_order,
+            n_depth,
             n_trade,
             n_raw,
             (ended - started).total_seconds(),
@@ -249,6 +312,9 @@ async def _stream(
         if kind == "order":
             sink.write_order(event)
             counts["order"] += 1
+        elif kind == "depth":
+            sink.write_depth(event)
+            counts["depth"] += 1
         elif kind == "trade":
             sink.write_trade(event)
             counts["trade"] += 1
