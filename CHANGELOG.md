@@ -10,6 +10,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **CCXT source for live L2 capture** (`ob-analytics capture ccxt --exchange
+  <venue> --pair <symbol>`). One adapter wraps CCXT / CCXT Pro so any
+  CCXT-supported venue — ~100 crypto CEXes plus the Kalshi / Polymarket
+  prediction markets — becomes an ob-analytics source with no per-venue code.
+  CCXT books are price-level, so the capturer declares `Level.L2` and records
+  `depth.csv` (not `orders.csv`), replaying through the L2 path — no faked
+  per-order state. Transport is chosen per venue: CCXT Pro websockets where
+  available (`watch_order_book` / `watch_trades`), else REST polling
+  (`--poll-interval`) for the REST-only prediction markets. Book updates become
+  depth rows by diffing the maintained book (changed level → new absolute size,
+  vanished level → `0`); the trade tape carries the CCXT taker side. Ships as
+  the optional `[ccxt]` extra (imported lazily — the capturer registers only
+  when `ccxt` is installed). The capture runner is now **resolution-aware**: a
+  `LiveCapturer` declares its `resolution` and the runner writes `orders.csv`
+  (L3) or `depth.csv` (L2) accordingly, with `write_depth` on the sink and a
+  `"depth"` stream kind. Documented in a new "Capture CCXT venues" how-to.
 - **L2 (price-level) depth-native ingestion path.** Price-level feeds
   (Binance, Kalshi, Polymarket, most CCXT sources) publish `[price, quantity]`
   levels and diffs with no order IDs; ob-analytics now ingests them as a

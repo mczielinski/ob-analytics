@@ -19,6 +19,7 @@ from ob_analytics.live import (
 )
 from ob_analytics.live._base import EventDict
 from ob_analytics.live._runner import run_capturer
+from ob_analytics.protocols import Level
 
 # ---------------------------------------------------------------------------
 # A deterministic, no-network capturer
@@ -27,6 +28,7 @@ from ob_analytics.live._runner import run_capturer
 
 class _FakeCapturer:
     name = "fake"
+    resolution = Level.L3
 
     def __init__(self) -> None:
         self._open: dict[int, dict[str, Any]] = {}
@@ -100,6 +102,72 @@ class _DiagCapturer(_FakeCapturer):
 
     def diagnostics(self) -> dict[str, Any]:
         return {"dropped": 7, "reconnects": 2}
+
+
+class _FakeL2Capturer:
+    """A deterministic L2 (price-level) capturer -- no network, no order IDs."""
+
+    name = "fake-l2"
+    resolution = Level.L2
+
+    async def snapshot(self, config: CaptureConfig) -> AsyncIterator[EventDict]:
+        ts = pd.Timestamp("2025-01-01", tz="UTC")
+        for price, side, volume in [(100.0, "bid", 5.0), (101.0, "ask", 3.0)]:
+            yield {
+                "timestamp": ts,
+                "exchange_timestamp": ts,
+                "side": side,
+                "price": price,
+                "volume": volume,
+            }
+
+    async def stream(
+        self, config: CaptureConfig
+    ) -> AsyncIterator[tuple[str, EventDict, Any]]:
+        ts = pd.Timestamp("2025-01-01 00:00:01", tz="UTC")
+        # bid 100.0 grows 5 -> 7 (absolute size)
+        yield (
+            "depth",
+            {
+                "timestamp": ts,
+                "exchange_timestamp": ts,
+                "side": "bid",
+                "price": 100.0,
+                "volume": 7.0,
+            },
+            {"raw": "d1"},
+        )
+        yield (
+            "trade",
+            {
+                "trade_id": 1,
+                "timestamp": ts,
+                "exchange_timestamp": ts,
+                "price": 101.0,
+                "amount": 1.0,
+                "buy_order_id": 0,
+                "sell_order_id": 0,
+                "side": "buy",
+            },
+            {"raw": "t1"},
+        )
+        # ask 101.0 emptied -> 0 (level removed)
+        yield (
+            "depth",
+            {
+                "timestamp": ts,
+                "exchange_timestamp": ts,
+                "side": "ask",
+                "price": 101.0,
+                "volume": 0.0,
+            },
+            {"raw": "d2"},
+        )
+
+    async def shutdown_synthetic_events(self) -> AsyncIterator[EventDict]:
+        # L2 price levels have no lifecycle to close: emit nothing.
+        for _ in ():
+            yield {}
 
 
 # ---------------------------------------------------------------------------
@@ -192,3 +260,51 @@ class TestRunner:
         assert len(events) > 0
         assert "direction" in events.columns
         assert "action" in events.columns
+
+
+class TestL2Runner:
+    """An L2 capturer writes depth.csv (not orders.csv) and replays through
+    the L2 depth path -- no faked per-order IDs."""
+
+    def test_l2_capturer_conforms(self):
+        cap = _FakeL2Capturer()
+        assert isinstance(cap, LiveCapturer)
+        assert cap.resolution is Level.L2
+
+    def test_l2_writes_depth_not_orders(self, tmp_path):
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="x", out_dir=out, minutes=0.001, keep_raw=True)
+        result = asyncio.run(run_capturer(_FakeL2Capturer(), cfg))
+
+        assert (out / "depth.csv").exists()
+        assert (out / "trades.csv").exists()
+        assert not (out / "orders.csv").exists()
+
+        # snapshot (2) + stream depth (2) = 4 depth events; 1 trade; 0 orders
+        assert result.n_depth_events == 4
+        assert result.n_trade_events == 1
+        assert result.n_order_events == 0
+
+    def test_l2_meta_reports_depth(self, tmp_path):
+        import json
+
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="x", out_dir=out, minutes=0.001)
+        asyncio.run(run_capturer(_FakeL2Capturer(), cfg))
+
+        meta = json.loads((out / "meta.json").read_text())
+        assert meta["n_depth_events"] == 4
+        assert meta["n_order_events"] == 0
+
+    def test_l2_output_replays_through_depth_path(self, tmp_path):
+        """The captured depth.csv must load via the L2 depth path."""
+        from ob_analytics.depth_l2 import L2DepthLoader
+
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="x", out_dir=out, minutes=0.001)
+        asyncio.run(run_capturer(_FakeL2Capturer(), cfg))
+
+        depth = L2DepthLoader().load(out / "depth.csv")
+        # 4 absolute-size price-level rows (the 0-size removal is kept)
+        assert len(depth) == 4
+        assert set(depth["direction"].dropna().unique()) <= {"bid", "ask"}

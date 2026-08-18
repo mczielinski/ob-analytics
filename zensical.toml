@@ -29,6 +29,7 @@ nav = [
     { "Save, load, and export" = "howto/output.md" },
     { "Compute flow toxicity" = "howto/flow-toxicity.md" },
     { "Capture live data" = "howto/live-capture.md" },
+    { "Capture CCXT venues (crypto + prediction markets)" = "howto/ccxt.md" },
     { "Run from the command line" = "howto/cli.md" },
     { "Check data quality" = "howto/validate.md" },
     { "Extending ob-analytics" = "extending.md" },

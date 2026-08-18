@@ -36,6 +36,7 @@ from loguru import logger
 from websockets.exceptions import ConnectionClosed
 
 from ob_analytics.live._base import CaptureConfig, EventDict, LiveCapturer
+from ob_analytics.protocols import Level
 
 WS_URL = "wss://ws.bitstamp.net"
 REST_BOOK_URL = "https://www.bitstamp.net/api/v2/order_book/{pair}/?group=2"
@@ -74,6 +75,7 @@ class BitstampCapturer(LiveCapturer):
     """
 
     name = "bitstamp"
+    resolution = Level.L3
 
     def __init__(self) -> None:
         # order_id -> (last_price, direction, last_volume). Tracks resting
