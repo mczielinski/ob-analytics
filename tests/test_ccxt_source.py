@@ -51,7 +51,7 @@ class _FakeCcxtExchange:
         }
         self.closed = False
 
-    async def fetch_order_book(self, symbol, limit=None):  # noqa: ARG002
+    async def fetch_order_book(self, symbol, limit=None):
         # First call is the snapshot seed; later calls (the REST poll loop)
         # serve subsequent books, then signal a closed feed.
         if not self._snapshot_served:
@@ -61,17 +61,17 @@ class _FakeCcxtExchange:
             raise StopAsyncIteration
         return self._books.pop(0)
 
-    async def watch_order_book(self, symbol, limit=None):  # noqa: ARG002
+    async def watch_order_book(self, symbol, limit=None):
         if not self._books:
             raise StopAsyncIteration
         return self._books.pop(0)
 
-    async def watch_trades(self, symbol):  # noqa: ARG002
+    async def watch_trades(self, symbol):
         if not self._trades:
             raise StopAsyncIteration
         return self._trades.pop(0)
 
-    async def fetch_trades(self, symbol, since=None):  # noqa: ARG002
+    async def fetch_trades(self, symbol, since=None):
         if not self._trades:
             raise StopAsyncIteration
         return self._trades.pop(0)
