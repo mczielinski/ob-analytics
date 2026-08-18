@@ -13,6 +13,12 @@ test_pipeline.py.
 
 from __future__ import annotations
 
+import importlib.util
+
+import pytest
+
+_CCXT_INSTALLED = importlib.util.find_spec("ccxt") is not None
+
 # ---------------------------------------------------------------------------
 # --help / unknown subcommands
 # ---------------------------------------------------------------------------
@@ -284,3 +290,72 @@ class TestRequiredContext:
 
         assert BitstampFormat().required_context() == []
         assert LobsterFormat().required_context() == ["trading_date"]
+
+
+# ---------------------------------------------------------------------------
+# capture (CCXT wiring, #106)
+# ---------------------------------------------------------------------------
+
+
+class TestCaptureSubcommand:
+    def test_ccxt_flags_in_help(self, cli_runner):
+        r = cli_runner("capture", "--help")
+        assert r.returncode == 0
+        for flag in ("--exchange", "--depth-limit", "--poll-interval"):
+            assert flag in r.stdout
+        assert "depth.csv" in r.stdout  # L2 output documented
+
+    @pytest.mark.skipif(not _CCXT_INSTALLED, reason="ccxt extra not installed")
+    def test_list_includes_ccxt(self, cli_runner):
+        r = cli_runner("capture", "--list")
+        assert r.returncode == 0, r.stderr
+        assert "bitstamp" in r.stdout
+        assert "ccxt" in r.stdout
+
+    def test_exchange_flag_populates_extras(self, monkeypatch, tmp_path):
+        """--exchange / --depth-limit flow into CaptureConfig.extras (no network)."""
+        import argparse
+
+        import pandas as pd
+
+        from ob_analytics import cli
+        from ob_analytics.live._base import CaptureConfig, CaptureResult
+
+        captured: dict = {}
+
+        class _Cap:
+            name = "ccxt"
+
+        async def _fake_run(capturer, config, sink=None):
+            captured["config"] = config
+            now = pd.Timestamp.now(tz="UTC")
+            return CaptureResult(
+                out_dir=config.out_dir,
+                n_order_events=0,
+                n_trade_events=0,
+                n_raw_frames=0,
+                started=now,
+                ended=now,
+            )
+
+        monkeypatch.setattr("ob_analytics.live.get_capturer", lambda name: _Cap)
+        monkeypatch.setattr("ob_analytics.live._runner.run_capturer", _fake_run)
+
+        args = argparse.Namespace(
+            verbose=False,
+            list=False,
+            venue="ccxt",
+            pair="BTC/USDT",
+            exchange="binance",
+            depth_limit=50,
+            poll_interval=None,
+            minutes=0.001,
+            out=str(tmp_path / "o"),
+            no_raw=True,
+        )
+        cli._cmd_capture(args)
+
+        cfg = captured["config"]
+        assert isinstance(cfg, CaptureConfig)
+        assert cfg.pair == "BTC/USDT"
+        assert cfg.extras == {"exchange": "binance", "depth_limit": 50}

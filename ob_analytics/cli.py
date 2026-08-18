@@ -235,11 +235,19 @@ def _cmd_capture(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     capturer = capturer_cls()
+    extras: dict[str, Any] = {}
+    if getattr(args, "exchange", None):
+        extras["exchange"] = args.exchange
+    if getattr(args, "depth_limit", None) is not None:
+        extras["depth_limit"] = args.depth_limit
+    if getattr(args, "poll_interval", None) is not None:
+        extras["poll_interval"] = args.poll_interval
     config = CaptureConfig(
         pair=args.pair,
         out_dir=Path(args.out),
         minutes=args.minutes,
         keep_raw=not args.no_raw,
+        extras=extras,
     )
     result = asyncio.run(run_capturer(capturer, config))
     logger.info("Capture complete: {}", result.out_dir)
@@ -456,6 +464,26 @@ def main() -> None:
         help="Venue-specific pair symbol (default: btcusd)",
     )
     p_cap.add_argument(
+        "--exchange",
+        default=None,
+        help=(
+            "For the 'ccxt' venue: the CCXT exchange id (e.g. 'binance', "
+            "'kraken', 'coinbase'). Use CCXT pair notation, e.g. 'BTC/USDT'."
+        ),
+    )
+    p_cap.add_argument(
+        "--depth-limit",
+        type=int,
+        default=None,
+        help="ccxt: order-book depth (levels per side) to request",
+    )
+    p_cap.add_argument(
+        "--poll-interval",
+        type=float,
+        default=None,
+        help="ccxt: seconds between REST polls (REST-only venues)",
+    )
+    p_cap.add_argument(
         "--minutes",
         type=float,
         default=10.0,
@@ -465,8 +493,8 @@ def main() -> None:
         "--out",
         default=None,
         help=(
-            "Output directory (will contain orders.csv, trades.csv, "
-            "raw.jsonl, meta.json). Required unless --list."
+            "Output directory (orders.csv for L3 or depth.csv for L2, plus "
+            "trades.csv, raw.jsonl, meta.json). Required unless --list."
         ),
     )
     p_cap.add_argument(
