@@ -23,6 +23,7 @@ nav = [
   { "How-to guides" = [
     { "Step-by-step control" = "howto/full-control.md" },
     { "Use your own data" = "howto/your-own-data.md" },
+    { "Generate synthetic L3 data" = "howto/synthetic-data.md" },
     { "Process LOBSTER files" = "howto/lobster.md" },
     { "Process L2 (price-level) feeds" = "howto/l2-depth.md" },
     { "Plug in custom components" = "howto/custom-components.md" },
