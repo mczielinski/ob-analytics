@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -268,7 +268,7 @@ css = [
 
 [[package]]
 name = "ccxt"
-version = "4.5.73"
+version = "4.5.74"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohappyeyeballs" },
@@ -295,9 +295,9 @@ dependencies = [
     { name = "yarl" },
     { name = "zlib-ng" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d2/80/497cb51c72fd68c628e30fa8cd0a4b198d5f2dad5d84f795dd3c73250b83/ccxt-4.5.73.tar.gz", hash = "sha256:0698f915201f5c18f0c0b24cc5d062e06fab4d5f68109bd9899ea8f049c5cb61", size = 6059819, upload-time = "2026-08-11T11:39:24.984Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/63/49/77f03eb95c1f375d4eeb09fad37126c91360843400d2be0b11eec0f2c652/ccxt-4.5.74.tar.gz", hash = "sha256:3e4e4e878fce4457ffb37ed6e41942391e454d36bdf2b74edb40a7620a400d78", size = 6106169, upload-time = "2026-08-17T17:37:26.181Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fd/87/59a3c56008353e245493b14a7069fc227dce8d6c9aa660ac852ae3f1c00e/ccxt-4.5.73-py3-none-any.whl", hash = "sha256:a644b81adca7fdb49ee5a765002ea4371df3ba599877775d4dae369e00101b6f", size = 6507460, upload-time = "2026-08-11T11:39:20.871Z" },
+    { url = "https://files.pythonhosted.org/packages/4f/ae/25f9ed7559775853427d4200b94778d219f61808afaaf0d1ed89141a9c08/ccxt-4.5.74-py3-none-any.whl", hash = "sha256:5de0f1abeaefa452200813124cf4ccd5b65b4b8d818f6921857a1ff6b373eeb8", size = 6551458, upload-time = "2026-08-17T17:37:22.839Z" },
 ]
 
 [[package]]
@@ -2185,7 +2185,7 @@ name = "pexpect"
 version = "4.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "ptyprocess", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "ptyprocess" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/42/92/cc564bf6381ff43ce1f4d06852fc19a2f11d180f23dc32d9588bee2f149d/pexpect-4.9.0.tar.gz", hash = "sha256:ee7d41123f3c9911050ea2c2dac107568dc43b2d3b0c7557a33212c398ead30f", size = 166450, upload-time = "2023-11-25T09:07:26.339Z" }
 wheels = [
