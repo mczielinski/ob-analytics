@@ -99,9 +99,20 @@ class RunContext:
     trading_date : str or pd.Timestamp, optional
         Calendar date anchor (LOBSTER needs this; venues with continuous
         trading do not).
+    symbol : str, optional
+        The instrument this run covers (e.g. ``"BTC/USD"``).  When supplied,
+        loaders tag each row with an optional ``symbol`` column so cross-venue
+        frames can be told apart (issue #147).  ``None`` leaves it untagged.
+    venue : str, optional
+        The source venue this run covers (e.g. ``"bitstamp"``).  When supplied,
+        it overrides the loader's own source name in the optional ``venue``
+        column; ``None`` falls back to that source name.  Supplying either
+        *symbol* or *venue* is what turns identity tagging on.
     """
 
     trading_date: object | None = None
+    symbol: str | None = None
+    venue: str | None = None
 
 
 @runtime_checkable

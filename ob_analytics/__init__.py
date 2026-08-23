@@ -71,6 +71,11 @@ from ob_analytics.protocols import (
     RunContext,
     TradeSource,
 )
+from ob_analytics.schemas import (
+    SYMBOL_COLUMN,
+    VENUE_COLUMN,
+    group_by_instrument,
+)
 from ob_analytics.trade_sign import (
     bulk_volume_classification,
     classify_trade_sign,
@@ -110,6 +115,9 @@ def sample_csv_path() -> Path:
 
 
 __all__ = [
+    # ── Instrument identity (issue #147) ─────────────────────────────
+    "SYMBOL_COLUMN",
+    "VENUE_COLUMN",
     # ── Formats (symmetric-pair entry points) ────────────────────────
     "BitstampFormat",
     "ConfigError",
@@ -143,6 +151,7 @@ __all__ = [
     # ── Data quality ─────────────────────────────────────────────────
     "data_quality_summary",
     "detect_sequence_gaps",
+    "group_by_instrument",
     "lee_ready",
     "list_formats",
     "load_data",

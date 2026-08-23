@@ -165,6 +165,7 @@ class CcxtCapturer(LiveCapturer):
                         "price": price,
                         "volume": size,
                         "sequence": nonce,
+                        **self._identity(),
                     }
             self._last[side] = levels
         logger.info(
@@ -296,6 +297,15 @@ class CcxtCapturer(LiveCapturer):
 
     # -- translation (pure) -------------------------------------------------
 
+    def _identity(self) -> dict[str, str]:
+        """Instrument identity stamped onto every emitted event (issue #147).
+
+        ``venue`` is the CCXT exchange id and ``symbol`` the traded pair, both
+        resolved in :meth:`_configure`.  Carrying them per row lets a combined
+        multi-venue frame be split back by ``(venue, symbol)`` downstream.
+        """
+        return {"venue": self.exchange_id, "symbol": self._symbol}
+
     def _diff_book(
         self, book: dict[str, Any], ts: pd.Timestamp
     ) -> Iterator[tuple[EventDict, Any]]:
@@ -328,6 +338,7 @@ class CcxtCapturer(LiveCapturer):
                             "price": price,
                             "volume": size,
                             "sequence": nonce,
+                            **self._identity(),
                         },
                         raw,
                     )
@@ -343,6 +354,7 @@ class CcxtCapturer(LiveCapturer):
                             "price": price,
                             "volume": 0.0,
                             "sequence": nonce,
+                            **self._identity(),
                         },
                         raw,
                     )
@@ -363,6 +375,7 @@ class CcxtCapturer(LiveCapturer):
             "buy_order_id": "",
             "sell_order_id": "",
             "side": t.get("side") or "",
+            **self._identity(),
         }
 
     # -- internals ----------------------------------------------------------

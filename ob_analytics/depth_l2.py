@@ -70,7 +70,7 @@ from ob_analytics.protocols import (
     RunContext,
     TradeSource,
 )
-from ob_analytics.schemas import SEQUENCE_COLUMN
+from ob_analytics.schemas import SEQUENCE_COLUMN, attach_instrument_identity
 
 # ── Column-spelling tolerance ─────────────────────────────────────────
 
@@ -129,13 +129,27 @@ class L2DepthLoader:
         Pipeline configuration.  ``price_decimals`` / ``price_divisor`` /
         ``volume_decimals`` control price scaling and rounding;
         ``timestamp_unit`` interprets integer-epoch timestamps.
+    venue, symbol : str, optional
+        Optional instrument identity (issue #147).  When either is supplied,
+        the loaded depth frame gains per-row ``venue`` / ``symbol`` columns.
+        A generic price-level CSV carries no venue of its own, so ``venue`` is
+        left NA unless supplied.  Both ``None`` (the default) leaves the frame
+        untagged.
     """
 
     #: Depth-file basenames tried when *source* is a directory (in order).
     _DEPTH_NAMES: tuple[str, ...] = ("depth.csv", "depth_updates.csv", "l2.csv")
 
-    def __init__(self, config: PipelineConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: PipelineConfig | None = None,
+        *,
+        venue: str | None = None,
+        symbol: str | None = None,
+    ) -> None:
         self._config = config or PipelineConfig()
+        self._venue = venue
+        self._symbol = symbol
 
     def load(self, source: str | Path) -> pd.DataFrame:
         """Read *source* and return a canonical depth DataFrame.
@@ -229,6 +243,13 @@ class L2DepthLoader:
             len(depth),
             int((depth["direction"] == "bid").sum()),
             int((depth["direction"] == "ask").sum()),
+        )
+
+        # Optional per-row instrument identity (issue #147); a no-op unless a
+        # venue/symbol was supplied for the run.  A generic price-level CSV has
+        # no venue of its own, so there is no source-name default.
+        depth = attach_instrument_identity(
+            depth, venue=self._venue, symbol=self._symbol
         )
         return depth
 
@@ -461,7 +482,7 @@ class DepthCsvFormat:
     feed_type: FeedType = FeedType.MATCHED_BOOK
 
     def create_loader(self, config: PipelineConfig, ctx: RunContext) -> DepthSource:
-        return L2DepthLoader(config)
+        return L2DepthLoader(config, venue=ctx.venue, symbol=ctx.symbol)
 
     def create_trade_source(
         self, config: PipelineConfig, ctx: RunContext

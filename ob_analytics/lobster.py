@@ -47,6 +47,7 @@ from ob_analytics.protocols import (
     RunContext,
     TradeSource,
 )
+from ob_analytics.schemas import attach_instrument_identity
 
 # ── Constants ─────────────────────────────────────────────────────────
 
@@ -87,16 +88,31 @@ class LobsterLoader:
     trading_date : str or pd.Timestamp
         The calendar date of the trading session (LOBSTER timestamps are
         seconds after midnight and need a date anchor).
+    venue, symbol : str, optional
+        Optional instrument identity (issue #147).  When either is supplied,
+        the loaded frame gains per-row ``venue`` / ``symbol`` columns; ``venue``
+        falls back to ``"lobster"`` when only ``symbol`` is given.  Both
+        ``None`` (the default) leaves the frame untagged.  The instrument ticker
+        lives in the LOBSTER filename, so pass it as ``symbol`` when you want it
+        on the rows.
     """
+
+    #: The source venue used to fill the ``venue`` column when identity tagging
+    #: is on but no explicit venue was supplied.
+    _VENUE = "lobster"
 
     def __init__(
         self,
         config: PipelineConfig | None = None,
         *,
         trading_date: str | pd.Timestamp,
+        venue: str | None = None,
+        symbol: str | None = None,
     ) -> None:
         self._config = config or PipelineConfig()
         self._trading_date = pd.Timestamp(trading_date).normalize()
+        self._venue = venue
+        self._symbol = symbol
         #: Trading-halt (event_type 7) and cross-trade (event_type 6) rows,
         #: split out during :meth:`load`. Public so callers can append them to
         #: the gallery model's ``analytics`` (LOBSTER-only; ``None`` if absent).
@@ -238,6 +254,15 @@ class LobsterLoader:
 
         # Discover and store the orderbook file path for depth computation
         self.orderbook_path = self._resolve_orderbook_file(source)
+
+        # Optional per-row instrument identity (issue #147); a no-op unless a
+        # venue/symbol was supplied for the run.
+        events = attach_instrument_identity(
+            events,
+            venue=self._venue,
+            symbol=self._symbol,
+            default_venue=self._VENUE,
+        )
 
         return events
 
@@ -883,7 +908,9 @@ class LobsterFormat:
 
     def create_loader(self, config: PipelineConfig, ctx: RunContext) -> EventLoader:
         td = _require_trading_date(ctx.trading_date, "create_loader")
-        self._loader = LobsterLoader(config, trading_date=td)
+        self._loader = LobsterLoader(
+            config, trading_date=td, venue=ctx.venue, symbol=ctx.symbol
+        )
         return self._loader
 
     def create_trade_source(

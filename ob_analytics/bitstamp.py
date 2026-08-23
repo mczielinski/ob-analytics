@@ -39,7 +39,7 @@ from ob_analytics.protocols import (
     RunContext,
     TradeSource,
 )
-from ob_analytics.schemas import SEQUENCE_COLUMN
+from ob_analytics.schemas import SEQUENCE_COLUMN, attach_instrument_identity
 
 # ── BitstampLoader ────────────────────────────────────────────────────
 
@@ -54,10 +54,27 @@ class BitstampLoader:
     config : PipelineConfig, optional
         Pipeline configuration.  ``price_decimals`` and ``volume_decimals``
         control rounding precision.
+    venue, symbol : str, optional
+        Optional instrument identity (issue #147).  When either is supplied,
+        the loaded frame gains per-row ``venue`` / ``symbol`` columns; ``venue``
+        falls back to ``"bitstamp"`` when only ``symbol`` is given.  Both
+        ``None`` (the default) leaves the frame untagged.
     """
 
-    def __init__(self, config: PipelineConfig | None = None) -> None:
+    #: The source venue used to fill the ``venue`` column when identity tagging
+    #: is on but no explicit venue was supplied.
+    _VENUE = "bitstamp"
+
+    def __init__(
+        self,
+        config: PipelineConfig | None = None,
+        *,
+        venue: str | None = None,
+        symbol: str | None = None,
+    ) -> None:
         self._config = config or PipelineConfig()
+        self._venue = venue
+        self._symbol = symbol
 
     def load(self, source: str | Path) -> pd.DataFrame:
         """Read *source* CSV and return a cleaned events DataFrame.
@@ -150,6 +167,15 @@ class BitstampLoader:
         events["timestamp"] = events["timestamp"].to_numpy()[order]
 
         events["raw_event_type"] = pd.NA
+
+        # Optional per-row instrument identity (issue #147); a no-op unless a
+        # venue/symbol was supplied for the run.
+        events = attach_instrument_identity(
+            events,
+            venue=self._venue,
+            symbol=self._symbol,
+            default_venue=self._VENUE,
+        )
 
         return events
 
@@ -450,7 +476,7 @@ class BitstampFormat:
     resolution: Level = Level.L3
 
     def create_loader(self, config: PipelineConfig, ctx: RunContext) -> EventLoader:
-        return BitstampLoader(config)
+        return BitstampLoader(config, venue=ctx.venue, symbol=ctx.symbol)
 
     def create_trade_source(
         self, config: PipelineConfig, ctx: RunContext
