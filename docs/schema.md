@@ -99,7 +99,7 @@ holding Python ints or `NA`. On write, pyarrow infers the Arrow type from the
 values: a column with no nulls becomes `int64`; a column that contains nulls may
 become `int64` with a null mask or `double`. The tables below name the **logical**
 type (`int64`) and mark the column nullable. Cleaning this up is one of the
-[open decisions](#open-decisions) below.
+[data-model decisions](#data-model-decisions) below.
 
 ## events
 
@@ -289,68 +289,69 @@ bids = duckdb.sql(
 ).df()
 ```
 
-## Open decisions
+## Data-model decisions
 
-The issue that defined this schema lists four cross-cutting changes to the data
-model. Each one **reverses a documented current choice** and touches every
-loader, so it is not made here. This section states each precisely — current
-state, proposed change, and blast radius — so the maintainer can decide.
+The four cross-cutting choices the schema left open now have a decided direction
+(2026-08-23): **follow the Databento / Nautilus conventions where they are the
+standard, expressed in Arrow / Parquet, not the DBN binary format.** Sequence
+numbers (#146) and instrument identity (#147) are implemented here as additive,
+opt-in columns. The time model (#154) and integer-tick prices (#155) change
+existing numbers, so they land later, one at a time, behind the correctness gate
+(#143). See the roadmap (#124).
 
-### 1. Time model: tz-aware UTC nanoseconds and event order
+### 1. Time model: tz-aware UTC nanoseconds and event order — decided, not yet built (#154)
 
+- **Decision.** Keep both clocks — `timestamp` (receive) and `exchange_timestamp`
+  (matching engine) — as int64 nanoseconds, tz-aware UTC. A timestamp alone cannot
+  order same-instant events, so order by the venue sequence, then the local ingest
+  counter (both from #146).
 - **Current.** Timestamps are `timestamp[ns]`, tz-naive, in each venue's native
   clock (UTC for Bitstamp, US/Eastern for LOBSTER). Frames from different venues
-  are declared not comparable. `timestamp` is receive time, `exchange_timestamp`
-  is matching-engine time. Events that share a timestamp have no defined
-  tie-break beyond the loaders' stable sort by arrival.
-- **Proposed.** Store tz-aware UTC (`timestamp[ns, tz=UTC]`) so frames from
-  different venues sit on one clock, and define a total order for events that
-  share a timestamp (for example by `event_id` or a source sequence number).
-- **Blast radius.** Every loader's timestamp construction
-  (`_utils.epoch_to_datetime`, `seconds_after_midnight_to_datetime`, the
-  Bitstamp trade reader's `tz_convert(None)`, the LOBSTER loader), the timestamp
-  policy in `schemas.py`, the depth engine's stable-sort assumption, every
-  downstream comparison and join, the cross-venue "not comparable" rule, and
-  every test that asserts a tz-naive dtype.
+  are declared not comparable.
+- **Why later.** This changes the dtype of every timestamp column and touches
+  every loader's time construction, the depth engine's sort, the cross-venue
+  rule, and every tz-naive test. It re-baselines golden output, so it waits for
+  the correctness gate (#143) and is done on its own.
 
-### 2. Source sequence numbers
+### 2. Source sequence numbers — implemented (#146)
 
-- **Current.** No per-event source sequence number. Order relies on arrival plus
-  timestamp, so a dropped or out-of-order message in a diff feed cannot be
-  detected. Tracked as issue #146.
-- **Proposed.** Carry the venue's sequence number on each event as a new column,
-  and compare consecutive numbers to find gaps.
-- **Blast radius.** `EVENT_COLUMNS` and its validator, every loader (each must
-  parse and emit a sequence number, and many sources do not provide one, which
-  raises a nullability question), the `empty_events` template, the writers, and
-  the tests. Making the column required ripples to every loader at once.
+- **Decision, built here.** Two optional columns: **`sequence`** (nullable
+  `Int64`, the venue's per-event sequence number, populated where a source
+  provides one — the CCXT `nonce`, or an optional column in a Bitstamp / L2
+  capture CSV) and **`ingest_seq`** (`int64`, a local monotonic counter in arrival
+  order, the stable replay key). `detect_sequence_gaps()` reports dropped and
+  out-of-order messages, surfaced in `DataQualitySummary` and the `validate`
+  command.
+- **Non-breaking.** The loader-attached columns are gated behind a default-off
+  `PipelineConfig.track_sequence` flag, so existing frames are byte-for-byte
+  unchanged.
+- **Later.** Live re-sync on a detected gap (refetch a snapshot) is the
+  non-additive half and is not built yet.
 
-### 3. Integer-tick prices instead of floats
+### 3. Integer-tick prices instead of floats — decided, not yet built (#155)
 
-- **Current.** Price is a `double` in the quote currency. LOBSTER carries a
-  `price_divisor` (10 000) to recover its integer ticks, and the depth engine
-  multiplies by `price_multiplier` and rounds to an integer internally before
-  binning. Float rounding can produce crossed levels and wrong sums for
-  small-tick or 0–1 instruments.
-- **Proposed.** Store price as an integer tick count (`int64`) plus a `tick_size`
-  per instrument, generalizing LOBSTER's `price_divisor`. Convert to float only
-  for display.
-- **Blast radius.** The `price` column in every table (events, trades, depth,
-  depth_summary, book snapshot), all price arithmetic (spread, mid, bps bins,
-  VWAP), the depth engine's multiply-and-round path, every loader, the plots, and
-  the schema itself (a new `tick_size` field or file metadata). This reverses the
-  float choice and touches nearly every module.
+- **Decision.** Store price as an integer tick count (`int64`) plus a
+  **per-instrument `tick_size`** — not float, and not one global scale. Convert to
+  a float only for display. This matches the depth engine's internal integer
+  binning and the backtester-export targets (#113).
+- **Current.** Price is a `double`. LOBSTER carries a `price_divisor` (10000); the
+  depth engine multiplies by `price_multiplier` and rounds to an integer
+  internally before binning.
+- **Why later.** This is the deepest change — the `price` column in every table,
+  all price arithmetic, the engine's multiply-and-round path, every loader, and
+  the plots. It changes numbers on purpose, so it re-baselines golden output and
+  waits for the correctness gate (#143).
 
-### 4. Instrument identity
+### 4. Instrument identity — implemented, first stage (#147)
 
-- **Current.** No instrument or venue id column. One frame holds one instrument
-  by convention, and cross-venue frames are declared not comparable. Tracked as
-  issue #147.
-- **Proposed.** Add a stable instrument id (and possibly a venue id) column so
-  events from different venues can be told apart and matched. Needed before
-  multi-symbol and cross-venue work.
-- **Blast radius.** Every table gains an id column (required, or carried in file
-  metadata), every loader must populate it, analytics and the engine must group
-  by it, the "not comparable across venues" rule is lifted, join keys change, and
-  the file layout question opens (one file per instrument, or one column that
-  partitions the data).
+- **Decision, built here.** Readable per-row **`symbol`** and **`venue`** columns
+  (nullable `string`, dictionary-encoded) — not Databento's numeric id plus a
+  definitions join, which is built for a far larger feed than this project has.
+  Each loader tags its frame when identity is supplied; `venue` defaults to the
+  source name (`bitstamp`, `lobster`, the CCXT exchange id).
+  `group_by_instrument()` splits a frame by whichever of `(venue, symbol)` are
+  present.
+- **Non-breaking.** Identity is opt-in, so a default single-instrument run adds no
+  columns and existing output is unchanged.
+- **Later.** The full multi-symbol, cross-venue pipeline (one run over several
+  instruments) is the larger part of #147 and is not built yet.

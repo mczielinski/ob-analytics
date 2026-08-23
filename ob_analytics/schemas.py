@@ -35,6 +35,31 @@ across venues without explicit conversion.  ``timestamp`` is the local
 receive time and ``exchange_timestamp`` the venue's matching-engine time
 (identical for LOBSTER, where only exchange time exists).
 
+Ordering keys (both **optional**, so neither is in :data:`EVENT_COLUMNS`;
+consumers read them when present):
+
+* ``sequence`` (:data:`SEQUENCE_COLUMN`) — the venue's own per-event sequence
+  number, a nullable ``Int64``.  Carried only by sources that publish one (the
+  CCXT ``nonce`` on the price-level path; a ``sequence`` column in a Bitstamp or
+  L2 capture when the file recorded one).  It is **absent** for sources that do
+  not number their events (LOBSTER, and the public Bitstamp diff feed, which
+  publishes a microtimestamp rather than a sequence).  Consecutive values on one
+  channel should rise by exactly one; a skip means a dropped message and a step
+  that does not rise means a reordered one — see
+  :func:`ob_analytics.analytics.detect_sequence_gaps`.
+* ``ingest_seq`` (:data:`INGEST_SEQ_COLUMN`) — a local monotonic ingest counter,
+  a 0-based ``int64`` index in the order the rows were read from the source
+  (arrival order).  It is captured before any reordering, so it stays monotonic
+  in arrival order even when the frame is later sorted for other reasons (e.g.
+  the id-ordered Bitstamp events); rows dropped as duplicates leave it monotonic
+  but not necessarily contiguous.  This is the deterministic ordering / replay
+  key that never depends on a venue-supplied number, so it is defined even when
+  ``sequence`` is missing (the common case on L2 diff feeds), and it is the
+  order :func:`~ob_analytics.analytics.detect_sequence_gaps` scans ``sequence``
+  along.  The loaders attach it only when ``track_sequence`` is enabled on
+  :class:`~ob_analytics.config.PipelineConfig`, so the default pipeline output is
+  byte-for-byte unchanged.
+
 On-disk schema version: the canonical Parquet output is versioned.
 :data:`SCHEMA_VERSION` is written into every Parquet file's key-value
 metadata by :func:`ob_analytics.data.save_data`, and checked on load by
@@ -44,10 +69,15 @@ type, unit, nullability, and meaning for every table — is in ``docs/schema.md`
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pandas as pd
 from loguru import logger
 
 from ob_analytics.exceptions import ConfigError
+
+if TYPE_CHECKING:
+    from pandas.api.typing import DataFrameGroupBy
 
 # ── Schema version ────────────────────────────────────────────────────
 #
@@ -114,6 +144,16 @@ def check_schema_version(version: str | None, *, source: str = "<parquet>") -> N
         )
 
 
+# Optional ordering-key columns (never in EVENT_COLUMNS — see the module
+# docstring). `sequence` is the venue's per-event number (nullable Int64) and
+# `ingest_seq` the local monotonic ingest counter (int64).
+SEQUENCE_COLUMN: str = "sequence"
+"""Name of the optional venue per-event sequence column (nullable ``Int64``)."""
+
+INGEST_SEQ_COLUMN: str = "ingest_seq"
+"""Name of the optional local monotonic ingest-counter column (``int64``)."""
+
+
 # Required by price_level_volume / set_order_types (see depth.py).
 # `volume`/`fill` semantics: see the module docstring.
 EVENT_COLUMNS: tuple[str, ...] = (
@@ -146,6 +186,99 @@ DEPTH_COLUMNS: tuple[str, ...] = (
     "volume",
     "direction",
 )
+
+
+# ── Instrument identity (optional, additive) ──────────────────────────
+#
+# Two optional per-row columns identify the instrument and the source venue,
+# so one frame can hold rows from more than one instrument or venue and still
+# be told apart (issue #147, additive stage).  They are deliberately NOT part
+# of the required column sets above: loaders add them only when a symbol or
+# venue is supplied for the run, so an existing single-instrument frame keeps
+# its schema and consumers read the columns only when present.
+#
+# * ``venue``  — the source venue as a short string (e.g. "bitstamp",
+#   "lobster", or a CCXT exchange id).  NA when unknown.
+# * ``symbol`` — the instrument as a readable string (e.g. "BTC/USD").  NA when
+#   unknown.
+#
+# Both are held as the pandas nullable ``string`` dtype: it carries NA cleanly
+# and concatenates across venues without dtype surprises.  A Parquet writer may
+# dictionary-encode either column for near-zero storage.
+
+VENUE_COLUMN: str = "venue"
+"""Name of the optional per-row source-venue column."""
+
+SYMBOL_COLUMN: str = "symbol"
+"""Name of the optional per-row instrument-symbol column."""
+
+INSTRUMENT_ID_COLUMNS: tuple[str, str] = (VENUE_COLUMN, SYMBOL_COLUMN)
+"""The optional instrument-identity columns, in ``(venue, symbol)`` order."""
+
+
+def attach_instrument_identity(
+    df: pd.DataFrame,
+    *,
+    venue: str | None,
+    symbol: str | None,
+    default_venue: str | None = None,
+) -> pd.DataFrame:
+    """Add the optional ``venue`` / ``symbol`` identity columns to *df*.
+
+    Identity is opt-in.  When neither *venue* nor *symbol* is supplied the
+    frame is returned unchanged, so a default single-instrument run keeps the
+    existing schema.  When either is supplied, both columns are added in place:
+
+    * ``venue`` takes *venue* if given, else *default_venue* (the loader's own
+      source name), else NA;
+    * ``symbol`` takes *symbol* if given, else NA.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The frame to tag (the loader's freshly built output).
+    venue, symbol : str or None
+        The run's venue / instrument, or ``None`` when not supplied.
+    default_venue : str or None
+        The loader's own source name, used as the ``venue`` value when *venue*
+        is ``None`` but *symbol* is given.  ``None`` for a generic loader that
+        does not know its venue.
+
+    Returns
+    -------
+    pandas.DataFrame
+        *df*, with the two identity columns added when identity was supplied.
+    """
+    if venue is None and symbol is None:
+        return df
+    resolved_venue = venue if venue is not None else default_venue
+    df[VENUE_COLUMN] = pd.array([resolved_venue] * len(df), dtype="string")
+    df[SYMBOL_COLUMN] = pd.array([symbol] * len(df), dtype="string")
+    return df
+
+
+def group_by_instrument(df: pd.DataFrame) -> DataFrameGroupBy:
+    """Group *df* by whichever identity columns (``venue``, ``symbol``) it has.
+
+    A convenience for splitting a combined, multi-venue frame back into its
+    per-instrument pieces.  ``dropna=False`` keeps rows whose identity is NA as
+    their own group.
+
+    Raises
+    ------
+    ConfigError
+        If *df* carries neither identity column — a single-instrument frame
+        that was never tagged.  Load it with a symbol/venue (for example
+        ``RunContext(symbol=..., venue=...)``) to tag identity first.
+    """
+    keys = [c for c in INSTRUMENT_ID_COLUMNS if c in df.columns]
+    if not keys:
+        raise ConfigError(
+            "group_by_instrument: frame carries no instrument-identity columns "
+            f"{INSTRUMENT_ID_COLUMNS}. Load it with a symbol/venue "
+            "(RunContext(symbol=..., venue=...)) to tag identity first."
+        )
+    return df.groupby(keys, dropna=False, observed=True)
 
 
 def _require(df: pd.DataFrame, cols: tuple[str, ...], who: str) -> None:

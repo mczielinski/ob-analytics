@@ -148,6 +148,9 @@ class CcxtCapturer(LiveCapturer):
         self._configure(config)
         book = await self._exchange.fetch_order_book(self._symbol, self._depth_limit)
         ts = _epoch_ms_to_ts(book.get("timestamp"))
+        # CCXT's per-book monotonic sequence (``None`` when the venue omits it);
+        # carried as the venue ``sequence`` for gap detection on the L2 path.
+        nonce = book.get("nonce")
         for side, key in (("bid", "bids"), ("ask", "asks")):
             levels: dict[float, float] = {}
             for row in book.get(key) or ():
@@ -161,6 +164,8 @@ class CcxtCapturer(LiveCapturer):
                         "side": side,
                         "price": price,
                         "volume": size,
+                        "sequence": nonce,
+                        **self._identity(),
                     }
             self._last[side] = levels
         logger.info(
@@ -292,6 +297,15 @@ class CcxtCapturer(LiveCapturer):
 
     # -- translation (pure) -------------------------------------------------
 
+    def _identity(self) -> dict[str, str]:
+        """Instrument identity stamped onto every emitted event (issue #147).
+
+        ``venue`` is the CCXT exchange id and ``symbol`` the traded pair, both
+        resolved in :meth:`_configure`.  Carrying them per row lets a combined
+        multi-venue frame be split back by ``(venue, symbol)`` downstream.
+        """
+        return {"venue": self.exchange_id, "symbol": self._symbol}
+
     def _diff_book(
         self, book: dict[str, Any], ts: pd.Timestamp
     ) -> Iterator[tuple[EventDict, Any]]:
@@ -304,6 +318,9 @@ class CcxtCapturer(LiveCapturer):
         Updates the stored per-side book.
         """
         raw_attached = False
+        # CCXT's per-book monotonic sequence (``None`` when the venue omits it);
+        # every row from this book update carries it as the venue ``sequence``.
+        nonce = book.get("nonce")
         for side, key in (("bid", "bids"), ("ask", "asks")):
             current: dict[float, float] = {}
             for row in book.get(key) or ():
@@ -320,6 +337,8 @@ class CcxtCapturer(LiveCapturer):
                             "side": side,
                             "price": price,
                             "volume": size,
+                            "sequence": nonce,
+                            **self._identity(),
                         },
                         raw,
                     )
@@ -334,6 +353,8 @@ class CcxtCapturer(LiveCapturer):
                             "side": side,
                             "price": price,
                             "volume": 0.0,
+                            "sequence": nonce,
+                            **self._identity(),
                         },
                         raw,
                     )
@@ -354,6 +375,7 @@ class CcxtCapturer(LiveCapturer):
             "buy_order_id": "",
             "sell_order_id": "",
             "side": t.get("side") or "",
+            **self._identity(),
         }
 
     # -- internals ----------------------------------------------------------

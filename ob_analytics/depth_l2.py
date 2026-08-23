@@ -53,6 +53,7 @@ import pandas as pd
 from loguru import logger
 
 from ob_analytics._utils import (
+    attach_ingest_seq,
     datetime_to_epoch,
     empty_trades,
     epoch_to_datetime,
@@ -69,12 +70,16 @@ from ob_analytics.protocols import (
     RunContext,
     TradeSource,
 )
+from ob_analytics.schemas import SEQUENCE_COLUMN, attach_instrument_identity
 
 # ── Column-spelling tolerance ─────────────────────────────────────────
 
 _TIMESTAMP_COLUMNS: tuple[str, ...] = ("timestamp", "time", "ts")
 _SIDE_COLUMNS: tuple[str, ...] = ("side", "direction")
 _VOLUME_COLUMNS: tuple[str, ...] = ("volume", "size", "amount", "quantity")
+# Venue per-event sequence, when the capture recorded one (CCXT persists its
+# `nonce` here). Absent from most price-level captures.
+_SEQUENCE_COLUMNS: tuple[str, ...] = ("sequence", "seq", "nonce")
 _SIDE_TO_DIRECTION: dict[str, str] = {
     "bid": "bid",
     "ask": "ask",
@@ -124,13 +129,27 @@ class L2DepthLoader:
         Pipeline configuration.  ``price_decimals`` / ``price_divisor`` /
         ``volume_decimals`` control price scaling and rounding;
         ``timestamp_unit`` interprets integer-epoch timestamps.
+    venue, symbol : str, optional
+        Optional instrument identity (issue #147).  When either is supplied,
+        the loaded depth frame gains per-row ``venue`` / ``symbol`` columns.
+        A generic price-level CSV carries no venue of its own, so ``venue`` is
+        left NA unless supplied.  Both ``None`` (the default) leaves the frame
+        untagged.
     """
 
     #: Depth-file basenames tried when *source* is a directory (in order).
     _DEPTH_NAMES: tuple[str, ...] = ("depth.csv", "depth_updates.csv", "l2.csv")
 
-    def __init__(self, config: PipelineConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: PipelineConfig | None = None,
+        *,
+        venue: str | None = None,
+        symbol: str | None = None,
+    ) -> None:
         self._config = config or PipelineConfig()
+        self._venue = venue
+        self._symbol = symbol
 
     def load(self, source: str | Path) -> pd.DataFrame:
         """Read *source* and return a canonical depth DataFrame.
@@ -190,6 +209,13 @@ class L2DepthLoader:
                 "direction": direction.to_numpy(),
             }
         )
+        # Carry the venue sequence (nullable Int64) when the capture recorded
+        # one and tracking is on; ``raw`` shares ``depth``'s row index, so the
+        # column stays aligned through the filter/sort below.
+        if cfg.track_sequence:
+            seq_col = _first_present(raw.columns, _SEQUENCE_COLUMNS)
+            if seq_col is not None:
+                depth[SEQUENCE_COLUMN] = raw[seq_col].astype("Int64")
 
         unknown = depth["direction"].isna()
         if unknown.any():
@@ -206,11 +232,24 @@ class L2DepthLoader:
         )
         depth = depth.sort_values("timestamp", kind="stable").reset_index(drop=True)
 
+        # Local monotonic ingest counter over the returned (timestamp-sorted)
+        # rows — a deterministic order key (opt-in, so the default frame is
+        # unchanged).
+        if cfg.track_sequence:
+            depth = attach_ingest_seq(depth)
+
         logger.info(
             "L2DepthLoader: {} price-level updates ({} bid, {} ask)",
             len(depth),
             int((depth["direction"] == "bid").sum()),
             int((depth["direction"] == "ask").sum()),
+        )
+
+        # Optional per-row instrument identity (issue #147); a no-op unless a
+        # venue/symbol was supplied for the run.  A generic price-level CSV has
+        # no venue of its own, so there is no source-name default.
+        depth = attach_instrument_identity(
+            depth, venue=self._venue, symbol=self._symbol
         )
         return depth
 
@@ -443,7 +482,7 @@ class DepthCsvFormat:
     feed_type: FeedType = FeedType.MATCHED_BOOK
 
     def create_loader(self, config: PipelineConfig, ctx: RunContext) -> DepthSource:
-        return L2DepthLoader(config)
+        return L2DepthLoader(config, venue=ctx.venue, symbol=ctx.symbol)
 
     def create_trade_source(
         self, config: PipelineConfig, ctx: RunContext

@@ -32,7 +32,12 @@ from pathlib import Path
 
 from loguru import logger
 
-from ob_analytics.analytics import DataQualitySummary, data_quality_summary
+from ob_analytics.analytics import (
+    DataQualitySummary,
+    SequenceGapReport,
+    data_quality_summary,
+    detect_sequence_gaps,
+)
 
 # Importing the bitstamp and lobster modules fires their format/writer
 # self-registration at import time; the Format classes are also the public
@@ -65,6 +70,11 @@ from ob_analytics.protocols import (
     Level,
     RunContext,
     TradeSource,
+)
+from ob_analytics.schemas import (
+    SYMBOL_COLUMN,
+    VENUE_COLUMN,
+    group_by_instrument,
 )
 from ob_analytics.trade_sign import (
     bulk_volume_classification,
@@ -105,6 +115,9 @@ def sample_csv_path() -> Path:
 
 
 __all__ = [
+    # ── Instrument identity (issue #147) ─────────────────────────────
+    "SYMBOL_COLUMN",
+    "VENUE_COLUMN",
     # ── Formats (symmetric-pair entry points) ────────────────────────
     "BitstampFormat",
     "ConfigError",
@@ -126,6 +139,7 @@ __all__ = [
     "PipelineConfig",
     "PipelineResult",
     "RunContext",
+    "SequenceGapReport",
     "TradeSource",
     "__version__",
     # ── Trade-sign classification ────────────────────────────────────
@@ -136,6 +150,8 @@ __all__ = [
     "compute_vpin",
     # ── Data quality ─────────────────────────────────────────────────
     "data_quality_summary",
+    "detect_sequence_gaps",
+    "group_by_instrument",
     "lee_ready",
     "list_formats",
     "load_data",

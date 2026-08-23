@@ -42,12 +42,15 @@ _TRADE_COLS = [
     "side",
 ]
 # L2 (price-level) depth rows -- the L2DepthLoader schema. ``volume`` is the
-# new absolute size at ``price`` (0 removes the level).
+# new absolute size at ``price`` (0 removes the level). ``sequence`` is the
+# venue's per-book number when the capturer supplies one (blank otherwise);
+# L2DepthLoader reads it back for gap detection.
 _DEPTH_COLS = [
     "timestamp",
     "side",
     "price",
     "volume",
+    "sequence",
 ]
 
 
