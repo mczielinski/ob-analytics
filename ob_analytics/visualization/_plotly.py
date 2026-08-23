@@ -950,6 +950,98 @@ def plotly_price_view(data: dict) -> Any:
     return fig
 
 
+def plotly_book_signals(data: dict) -> Any:
+    """Predictive touch signals: micro-price vs mid, with an OBI strip.
+
+    Micro-price vs mid (over the spread ribbon) on the price axis; the
+    order-book-imbalance strip -- touch OBI as green/red bars, cumulative-depth
+    OBI as a line -- on a twin ``[-1, +1]`` axis behind them.
+    """
+    go = _import_plotly()
+    fig = _base_figure(go, title="Book signals — micro-price vs mid, with OBI strip")
+    ts = data["timestamp"]
+
+    obi = np.asarray(data["obi"], dtype=float)
+    colors = [_BUY_COLOR if v >= 0 else _SELL_COLOR for v in np.nan_to_num(obi)]
+    fig.add_trace(
+        go.Bar(
+            x=ts,
+            y=obi,
+            marker_color=colors,
+            opacity=0.3,
+            name="OBI (touch)",
+            yaxis="y2",
+            hovertemplate="OBI: %{y:.3f}<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=ts,
+            y=data["obi_depth"],
+            mode="lines",
+            line={"color": "#6d28d9", "width": 1.4},
+            name=f"OBI (depth x{data['levels']})",
+            yaxis="y2",
+        )
+    )
+
+    # Ribbon: best bid (no fill) then best ask filled down to it.
+    fig.add_trace(
+        go.Scatter(
+            x=ts,
+            y=data["best_bid_price"],
+            mode="lines",
+            line={"color": _BID_COLOR, "width": 1, "shape": "hv"},
+            name="best bid",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=ts,
+            y=data["best_ask_price"],
+            mode="lines",
+            line={"color": _ASK_COLOR, "width": 1, "shape": "hv"},
+            fill="tonexty",
+            fillcolor="rgba(154,160,166,0.2)",
+            name="best ask",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=ts,
+            y=data["mid"],
+            mode="lines",
+            line={"color": "#888888", "width": 1, "shape": "hv", "dash": "dot"},
+            name="mid",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=ts,
+            y=data["microprice"],
+            mode="lines",
+            line={"color": "#222222", "width": 2, "shape": "hv"},
+            name="micro-price",
+        )
+    )
+
+    fig.update_xaxes(title_text="Time")
+    fig.update_yaxes(title_text="Price")
+    y_range = data.get("y_range")
+    if y_range is not None:
+        fig.update_yaxes(range=list(y_range))
+    fig.update_layout(
+        yaxis2={
+            "title": {"text": "OBI"},
+            "overlaying": "y",
+            "side": "right",
+            "range": [-1.05, 1.05],
+            "showgrid": False,
+        },
+    )
+    return fig
+
+
 def plotly_trade_size(data: dict) -> Any:
     """Trade-size strip: jittered execution dots on a log size axis, by side."""
     go = _import_plotly()
@@ -1593,6 +1685,7 @@ for _concept, _level, _fn in [
     ("liquidity_at_touch", _L2, plotly_liquidity_at_touch),
     ("liquidity_at_touch", _L3, plotly_liquidity_at_touch_per_order),
     ("price_view", _L2, plotly_price_view),
+    ("book_signals", None, plotly_book_signals),
     ("trade_size", _L2, plotly_trade_size),
     ("cancellations", _L2, plotly_volume_map),
     ("cancellations", _L3, plotly_cancellations_per_order),

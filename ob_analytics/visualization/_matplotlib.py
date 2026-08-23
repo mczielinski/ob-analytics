@@ -1122,6 +1122,83 @@ def mpl_price_view(
     return fig
 
 
+def mpl_book_signals(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """Predictive touch signals: micro-price vs mid, with an OBI strip.
+
+    Price lines (micro-price vs mid, over the spread ribbon) sit on the primary
+    axis; the order-book-imbalance strip -- touch OBI as green/red bars, the
+    cumulative-depth OBI as a line -- sits on a twin ``[-1, +1]`` axis behind
+    them.
+    """
+    fig, ax = _create_axes(ax, figsize=(11, 6), theme=theme)
+    x = mdates.date2num(data["timestamp"])
+
+    # OBI strip on a twin axis, drawn first so the price lines sit above it.
+    ax2 = ax.twinx()
+    obi = np.asarray(data["obi"], dtype=float)
+    colors = [_BUY_COLOR if v >= 0 else _SELL_COLOR for v in np.nan_to_num(obi)]
+    bar_width = float(np.median(np.diff(x))) * 0.8 if len(x) > 1 else 0.001
+    ax2.bar(x, obi, width=bar_width, color=colors, alpha=0.3, linewidth=0)
+    ax2.plot(
+        x,
+        data["obi_depth"],
+        color="#6d28d9",
+        linewidth=1.2,
+        alpha=0.9,
+        label=f"OBI (depth x{data['levels']})",
+    )
+    ax2.axhline(y=0, color="#444444", linewidth=0.6, alpha=0.5)
+    ax2.set_ylim(-1.05, 1.05)
+    ax2.set_ylabel("OBI")
+
+    # Lift the price axis above the strip so its lines are not hidden.
+    ax.set_zorder(ax2.get_zorder() + 1)
+    ax.patch.set_visible(False)
+    ax.fill_between(
+        x,
+        data["best_bid_price"],
+        data["best_ask_price"],
+        step="post",
+        color="#9aa0a6",
+        alpha=0.20,
+        label="spread",
+    )
+    ax.step(
+        x,
+        data["mid"],
+        where="post",
+        color="#888888",
+        linewidth=0.8,
+        alpha=0.7,
+        linestyle=":",
+        label="mid",
+    )
+    ax.step(
+        x,
+        data["microprice"],
+        where="post",
+        color="#222222",
+        linewidth=1.4,
+        label="micro-price",
+    )
+
+    format_time_axis(ax)
+    y_range = data.get("y_range")
+    if y_range is not None:
+        ax.set_ylim(y_range)
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Price")
+    ax.set_title("Book signals — micro-price vs mid, with OBI strip")
+
+    handles_l, labels_l = ax.get_legend_handles_labels()
+    handles_r, labels_r = ax2.get_legend_handles_labels()
+    ax.legend(handles_l + handles_r, labels_l + labels_r, loc="upper right", fontsize=9)
+    fig.tight_layout()
+    return fig
+
+
 def mpl_trade_size(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -1786,6 +1863,7 @@ for _concept, _level, _fn in [
     ("liquidity_at_touch", _L2, mpl_liquidity_at_touch),
     ("liquidity_at_touch", _L3, mpl_liquidity_at_touch_per_order),
     ("price_view", _L2, mpl_price_view),
+    ("book_signals", None, mpl_book_signals),
     ("trade_size", _L2, mpl_trade_size),
     ("cancellations", _L2, mpl_volume_map),
     ("cancellations", _L3, mpl_cancellations_per_order),

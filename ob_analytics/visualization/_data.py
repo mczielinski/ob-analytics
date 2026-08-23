@@ -16,7 +16,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from ob_analytics.depth import filter_depth
+from ob_analytics.depth import book_imbalance, filter_depth, micro_price
 from ob_analytics.exceptions import ConfigError
 
 
@@ -827,6 +827,52 @@ def prepare_price_view_data(
         "mid": mid,
         "microprice": micro,
         "trades": out_trades,
+        "y_range": price_y_range(win["best_bid_price"], win["best_ask_price"]),
+    }
+
+
+def prepare_book_signals_data(
+    depth_summary: pd.DataFrame,
+    *,
+    levels: int = 5,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+) -> dict[str, Any]:
+    """Predictive touch signals: micro-price vs mid, plus order-book imbalance.
+
+    Reads the touch (best bid/ask price and size) and the bps depth-bin volume
+    columns from *depth_summary* and derives, per timestamp, the plain mid, the
+    size-weighted micro-price (:func:`~ob_analytics.depth.micro_price`), the
+    touch OBI and the cumulative-depth OBI over *levels*
+    (:func:`~ob_analytics.depth.book_imbalance`).  *levels* is clamped to the
+    depth bins actually present so a summary with fewer bins does not raise.
+    """
+    start_time, end_time = _default_start_end(depth_summary, start_time, end_time)
+    win = depth_summary[
+        (depth_summary["timestamp"] >= start_time)
+        & (depth_summary["timestamp"] <= end_time)
+    ]
+
+    bid = win["best_bid_price"].to_numpy(dtype=float)
+    ask = win["best_ask_price"].to_numpy(dtype=float)
+    mid = (bid + ask) / 2.0
+
+    n_bins = sum(1 for c in win.columns if re.fullmatch(r"bid_vol\d+bps", c))
+    levels = max(1, min(levels, n_bins + 1))
+
+    micro = micro_price(win).to_numpy(dtype=float)
+    obi = book_imbalance(win, levels=1).to_numpy(dtype=float)
+    obi_depth = book_imbalance(win, levels=levels).to_numpy(dtype=float)
+
+    return {
+        "timestamp": win["timestamp"].reset_index(drop=True),
+        "best_bid_price": bid,
+        "best_ask_price": ask,
+        "mid": mid,
+        "microprice": micro,
+        "obi": obi,
+        "obi_depth": obi_depth,
+        "levels": levels,
         "y_range": price_y_range(win["best_bid_price"], win["best_ask_price"]),
     }
 
