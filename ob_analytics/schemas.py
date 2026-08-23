@@ -34,13 +34,85 @@ different formats are **not comparable**; do not join or concatenate events
 across venues without explicit conversion.  ``timestamp`` is the local
 receive time and ``exchange_timestamp`` the venue's matching-engine time
 (identical for LOBSTER, where only exchange time exists).
+
+On-disk schema version: the canonical Parquet output is versioned.
+:data:`SCHEMA_VERSION` is written into every Parquet file's key-value
+metadata by :func:`ob_analytics.data.save_data`, and checked on load by
+:func:`ob_analytics.data.load_data`.  The full column-by-column spec — Arrow
+type, unit, nullability, and meaning for every table — is in ``docs/schema.md``.
 """
 
 from __future__ import annotations
 
 import pandas as pd
+from loguru import logger
 
 from ob_analytics.exceptions import ConfigError
+
+# ── Schema version ────────────────────────────────────────────────────
+#
+# The canonical Parquet/Arrow output is versioned so the on-disk format is a
+# contract, not an implementation detail.  ``save_data`` writes SCHEMA_VERSION
+# into each Parquet file's key-value metadata under SCHEMA_VERSION_KEY;
+# ``load_data`` reads it back and calls ``check_schema_version`` before
+# returning the frame.  The written spec is in ``docs/schema.md``.
+#
+# Bump SCHEMA_VERSION when a change would make an older reader misread a newer
+# file: a renamed or removed column, a changed unit or dtype, or a new required
+# column.  List every version this build can still read in
+# ``_SUPPORTED_SCHEMA_VERSIONS``.
+
+SCHEMA_VERSION: str = "1.0"
+"""Version of the canonical Parquet/Arrow schema written to file metadata."""
+
+SCHEMA_VERSION_KEY: bytes = b"ob_analytics_schema_version"
+"""Parquet metadata key under which :data:`SCHEMA_VERSION` is stored.
+
+Bytes, because Arrow file-metadata keys and values are raw bytes."""
+
+_SUPPORTED_SCHEMA_VERSIONS: frozenset[str] = frozenset({"1.0"})
+"""Schema versions this build can read.  A file tagged with anything else
+raises; an untagged (legacy) file loads with a warning."""
+
+
+def check_schema_version(version: str | None, *, source: str = "<parquet>") -> None:
+    """Validate an on-disk schema *version* against what this build reads.
+
+    Parameters
+    ----------
+    version : str or None
+        The value stored under :data:`SCHEMA_VERSION_KEY` in a Parquet file's
+        metadata, or ``None`` when the file carries no such key.
+    source : str
+        Short identifier for the file, used only in messages.
+
+    Raises
+    ------
+    ConfigError
+        If *version* is a string this build does not support.
+
+    Notes
+    -----
+    ``version is None`` is a **legacy/unversioned** file — data written before
+    the schema carried a version, and the bundled sample.  Such files still
+    load, with a warning, so existing captures and pre-existing outputs keep
+    working.
+    """
+    if version is None:
+        logger.warning(
+            "{}: no schema version in Parquet metadata; treating as legacy "
+            "(pre-{}) data. Re-save with save_data() to tag it.",
+            source,
+            SCHEMA_VERSION,
+        )
+        return
+    if version not in _SUPPORTED_SCHEMA_VERSIONS:
+        raise ConfigError(
+            f"{source}: unsupported schema version {version!r}. This build "
+            f"reads {sorted(_SUPPORTED_SCHEMA_VERSIONS)} (current "
+            f"{SCHEMA_VERSION!r}). Upgrade ob-analytics or re-export the data."
+        )
+
 
 # Required by price_level_volume / set_order_types (see depth.py).
 # `volume`/`fill` semantics: see the module docstring.
