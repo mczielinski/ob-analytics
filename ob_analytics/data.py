@@ -7,10 +7,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 from loguru import logger
 
 from ob_analytics._registry import Registry
 from ob_analytics.protocols import DataWriter
+from ob_analytics.schemas import (
+    SCHEMA_VERSION,
+    SCHEMA_VERSION_KEY,
+    check_schema_version,
+)
 
 if TYPE_CHECKING:
     from ob_analytics.protocols import RunContext
@@ -41,6 +48,39 @@ def list_writers() -> list[str]:
     return WRITERS.list()
 
 
+# ── Canonical Parquet I/O (versioned) ─────────────────────────────────
+
+
+def _write_versioned_parquet(df: pd.DataFrame, path: Path) -> None:
+    """Write *df* to *path* as Parquet, tagging the schema version.
+
+    Goes through pyarrow so the file carries :data:`SCHEMA_VERSION` under
+    :data:`SCHEMA_VERSION_KEY` in its key-value metadata, alongside the pandas
+    metadata that preserves dtypes on read.  The index is dropped, matching the
+    previous ``df.to_parquet(..., index=False)`` behaviour.
+    """
+    table = pa.Table.from_pandas(df, preserve_index=False)
+    metadata = dict(table.schema.metadata or {})
+    metadata[SCHEMA_VERSION_KEY] = SCHEMA_VERSION.encode()
+    table = table.replace_schema_metadata(metadata)
+    pq.write_table(table, path)
+
+
+def _read_versioned_parquet(path: Path) -> pd.DataFrame:
+    """Read a canonical Parquet *path*, checking its schema version first.
+
+    Raises :class:`~ob_analytics.exceptions.ConfigError` on an unsupported
+    version; a file with no version key loads as legacy data with a warning
+    (see :func:`ob_analytics.schemas.check_schema_version`).
+    """
+    table = pq.read_table(path)
+    metadata = table.schema.metadata or {}
+    raw = metadata.get(SCHEMA_VERSION_KEY)
+    version = raw.decode() if raw is not None else None
+    check_schema_version(version, source=path.name)
+    return table.to_pandas()
+
+
 def load_data(path: str | Path) -> dict[str, pd.DataFrame]:
     """Load pre-processed pipeline data from a Parquet directory or pickle file.
 
@@ -56,12 +96,20 @@ def load_data(path: str | Path) -> dict[str, pd.DataFrame]:
     Returns
     -------
     dict of str to pandas.DataFrame
+
+    Raises
+    ------
+    ConfigError
+        If a Parquet file declares a schema version this build does not
+        support.  A file written with no version key (legacy data, or the
+        bundled sample) loads with a warning — see
+        :func:`ob_analytics.schemas.check_schema_version`.
     """
     p = Path(path)
     if p.is_dir():
         result = {}
-        for pq in sorted(p.glob("*.parquet")):
-            result[pq.stem] = pd.read_parquet(pq)
+        for parquet_path in sorted(p.glob("*.parquet")):
+            result[parquet_path.stem] = _read_versioned_parquet(parquet_path)
         if not result:
             raise FileNotFoundError(f"No .parquet files found in {p}")
         return result
@@ -97,7 +145,9 @@ def save_data(
         Destination directory (Parquet) or file (pickle).
     fmt : str
         Serialisation format.  Built-in values are ``"parquet"``
-        (default) and ``"pickle"``.  Additional formats (e.g.
+        (default) and ``"pickle"``.  The ``"parquet"`` path writes one
+        file per key and tags each with :data:`SCHEMA_VERSION` in its
+        metadata (checked by :func:`load_data`).  Additional formats (e.g.
         ``"bitstamp"``, ``"lobster"``) are available when the
         corresponding writer factory has been registered via
         :func:`register_writer`.
@@ -132,7 +182,7 @@ def save_data(
     if fmt == "parquet":
         p.mkdir(parents=True, exist_ok=True)
         for name, df in lob_data.items():
-            df.to_parquet(p / f"{name}.parquet", index=False)
+            _write_versioned_parquet(df, p / f"{name}.parquet")
     elif fmt == "pickle":
         logger.warning(
             "Saving as pickle. Consider using fmt='parquet' for "
