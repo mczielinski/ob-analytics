@@ -148,6 +148,9 @@ class CcxtCapturer(LiveCapturer):
         self._configure(config)
         book = await self._exchange.fetch_order_book(self._symbol, self._depth_limit)
         ts = _epoch_ms_to_ts(book.get("timestamp"))
+        # CCXT's per-book monotonic sequence (``None`` when the venue omits it);
+        # carried as the venue ``sequence`` for gap detection on the L2 path.
+        nonce = book.get("nonce")
         for side, key in (("bid", "bids"), ("ask", "asks")):
             levels: dict[float, float] = {}
             for row in book.get(key) or ():
@@ -161,6 +164,7 @@ class CcxtCapturer(LiveCapturer):
                         "side": side,
                         "price": price,
                         "volume": size,
+                        "sequence": nonce,
                     }
             self._last[side] = levels
         logger.info(
@@ -304,6 +308,9 @@ class CcxtCapturer(LiveCapturer):
         Updates the stored per-side book.
         """
         raw_attached = False
+        # CCXT's per-book monotonic sequence (``None`` when the venue omits it);
+        # every row from this book update carries it as the venue ``sequence``.
+        nonce = book.get("nonce")
         for side, key in (("bid", "bids"), ("ask", "asks")):
             current: dict[float, float] = {}
             for row in book.get(key) or ():
@@ -320,6 +327,7 @@ class CcxtCapturer(LiveCapturer):
                             "side": side,
                             "price": price,
                             "volume": size,
+                            "sequence": nonce,
                         },
                         raw,
                     )
@@ -334,6 +342,7 @@ class CcxtCapturer(LiveCapturer):
                             "side": side,
                             "price": price,
                             "volume": 0.0,
+                            "sequence": nonce,
                         },
                         raw,
                     )

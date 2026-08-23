@@ -35,6 +35,31 @@ across venues without explicit conversion.  ``timestamp`` is the local
 receive time and ``exchange_timestamp`` the venue's matching-engine time
 (identical for LOBSTER, where only exchange time exists).
 
+Ordering keys (both **optional**, so neither is in :data:`EVENT_COLUMNS`;
+consumers read them when present):
+
+* ``sequence`` (:data:`SEQUENCE_COLUMN`) — the venue's own per-event sequence
+  number, a nullable ``Int64``.  Carried only by sources that publish one (the
+  CCXT ``nonce`` on the price-level path; a ``sequence`` column in a Bitstamp or
+  L2 capture when the file recorded one).  It is **absent** for sources that do
+  not number their events (LOBSTER, and the public Bitstamp diff feed, which
+  publishes a microtimestamp rather than a sequence).  Consecutive values on one
+  channel should rise by exactly one; a skip means a dropped message and a step
+  that does not rise means a reordered one — see
+  :func:`ob_analytics.analytics.detect_sequence_gaps`.
+* ``ingest_seq`` (:data:`INGEST_SEQ_COLUMN`) — a local monotonic ingest counter,
+  a 0-based ``int64`` index in the order the rows were read from the source
+  (arrival order).  It is captured before any reordering, so it stays monotonic
+  in arrival order even when the frame is later sorted for other reasons (e.g.
+  the id-ordered Bitstamp events); rows dropped as duplicates leave it monotonic
+  but not necessarily contiguous.  This is the deterministic ordering / replay
+  key that never depends on a venue-supplied number, so it is defined even when
+  ``sequence`` is missing (the common case on L2 diff feeds), and it is the
+  order :func:`~ob_analytics.analytics.detect_sequence_gaps` scans ``sequence``
+  along.  The loaders attach it only when ``track_sequence`` is enabled on
+  :class:`~ob_analytics.config.PipelineConfig`, so the default pipeline output is
+  byte-for-byte unchanged.
+
 On-disk schema version: the canonical Parquet output is versioned.
 :data:`SCHEMA_VERSION` is written into every Parquet file's key-value
 metadata by :func:`ob_analytics.data.save_data`, and checked on load by
@@ -112,6 +137,16 @@ def check_schema_version(version: str | None, *, source: str = "<parquet>") -> N
             f"reads {sorted(_SUPPORTED_SCHEMA_VERSIONS)} (current "
             f"{SCHEMA_VERSION!r}). Upgrade ob-analytics or re-export the data."
         )
+
+
+# Optional ordering-key columns (never in EVENT_COLUMNS — see the module
+# docstring). `sequence` is the venue's per-event number (nullable Int64) and
+# `ingest_seq` the local monotonic ingest counter (int64).
+SEQUENCE_COLUMN: str = "sequence"
+"""Name of the optional venue per-event sequence column (nullable ``Int64``)."""
+
+INGEST_SEQ_COLUMN: str = "ingest_seq"
+"""Name of the optional local monotonic ingest-counter column (``int64``)."""
 
 
 # Required by price_level_volume / set_order_types (see depth.py).

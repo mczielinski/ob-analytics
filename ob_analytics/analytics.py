@@ -9,6 +9,7 @@ point-in-time order book reconstruction.
 from __future__ import annotations
 
 import heapq
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -21,6 +22,7 @@ from ob_analytics._utils import validate_columns, validate_non_empty
 from ob_analytics.depth import price_level_volume
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import FeedType
+from ob_analytics.schemas import INGEST_SEQ_COLUMN, SEQUENCE_COLUMN
 
 
 def _event_diff_bps(
@@ -647,6 +649,162 @@ def order_book(
 
 
 # ---------------------------------------------------------------------------
+# Venue sequence gap detection
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SequenceGapReport:
+    """Result of scanning a frame's venue ``sequence`` column for breaks.
+
+    Built by :func:`detect_sequence_gaps`.  A feed numbers each message on a
+    channel with a sequence that should rise by exactly one; a skip is a
+    dropped message and a step that does not rise is a reordered (or repeated)
+    one.  Rows are read in ingest order (``ingest_seq`` when present, else the
+    frame's row order) and grouped per instrument / venue when those columns
+    exist, so interleaved channels are scored independently.
+
+    Attributes
+    ----------
+    n_sequenced : int
+        Rows carrying a non-null venue ``sequence``.  ``0`` means the frame has
+        nothing to check (the report is then trivially clean).
+    n_updates : int
+        Distinct consecutive sequence values seen — one per venue message (a
+        book update that emits several rows shares one sequence, counted once).
+    n_missing : int
+        Total count of skipped sequence numbers: the dropped-message count.
+    n_out_of_order : int
+        Steps where the sequence did not advance (a repeat or a decrease) — a
+        reordered or duplicated message.
+    max_gap : int
+        Largest single run of consecutive missing numbers (``0`` when none).
+    first_break_seq : int or None
+        The last in-order sequence value before the first break, a hint for
+        where to resync; ``None`` when the frame is clean.
+    """
+
+    n_sequenced: int
+    n_updates: int
+    n_missing: int
+    n_out_of_order: int
+    max_gap: int
+    first_break_seq: int | None
+
+    @property
+    def has_sequence(self) -> bool:
+        """Whether any row carried a venue sequence to check."""
+        return self.n_sequenced > 0
+
+    @property
+    def clean(self) -> bool:
+        """True when no missing and no out-of-order sequence values were found."""
+        return self.n_missing == 0 and self.n_out_of_order == 0
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the report as a plain, JSON-serialisable dict."""
+        return {
+            "n_sequenced": self.n_sequenced,
+            "n_updates": self.n_updates,
+            "n_missing": self.n_missing,
+            "n_out_of_order": self.n_out_of_order,
+            "max_gap": self.max_gap,
+            "first_break_seq": self.first_break_seq,
+        }
+
+
+_SEQUENCE_GROUP_COLUMNS: tuple[str, ...] = ("venue", "symbol")
+
+
+def detect_sequence_gaps(
+    frame: pd.DataFrame,
+    *,
+    sequence_col: str = SEQUENCE_COLUMN,
+    order_col: str = INGEST_SEQ_COLUMN,
+    group_cols: Sequence[str] = _SEQUENCE_GROUP_COLUMNS,
+) -> SequenceGapReport:
+    """Report missing or out-of-order venue sequence numbers in *frame*.
+
+    Parameters
+    ----------
+    frame : pandas.DataFrame
+        Events or depth rows.  A missing *sequence_col* (a source with no venue
+        sequence) yields an empty, clean report — the column is optional.
+    sequence_col : str
+        Column holding the venue's per-event sequence (nullable integer).
+    order_col : str
+        Column defining ingest order; when absent, the frame's current row
+        order is used instead.
+    group_cols : sequence of str
+        Columns that identify one channel (instrument / venue).  Only those
+        present in *frame* are used; with none present the whole frame is one
+        channel.  Sequences from different channels are not comparable, so each
+        group is scored on its own.
+
+    Returns
+    -------
+    SequenceGapReport
+
+    Notes
+    -----
+    Consecutive equal sequence values are collapsed before comparison, so a
+    single venue update that emits several rows (e.g. every changed level of one
+    book diff) counts once.  A non-consecutive repeat still shows as
+    out-of-order.
+    """
+    if sequence_col not in frame.columns or frame.empty:
+        return SequenceGapReport(0, 0, 0, 0, 0, None)
+
+    groups = [c for c in group_cols if c in frame.columns]
+    work = frame
+    if order_col in frame.columns:
+        work = frame.sort_values(order_col, kind="stable")
+
+    if groups:
+        parts: Iterable[pd.DataFrame] = (
+            part for _, part in work.groupby(groups, sort=False, dropna=False)
+        )
+    else:
+        parts = (work,)
+
+    n_sequenced = n_updates = n_missing = n_out_of_order = max_gap = 0
+    first_break: int | None = None
+
+    for part in parts:
+        seq = part[sequence_col]
+        seq = seq[seq.notna()]
+        if seq.empty:
+            continue
+        vals = seq.to_numpy(dtype="int64")
+        n_sequenced += int(vals.size)
+
+        # Collapse consecutive repeats: one venue message can emit several rows
+        # (every changed level of a book diff shares that update's sequence).
+        keep = np.ones(vals.size, dtype=bool)
+        keep[1:] = vals[1:] != vals[:-1]
+        uniq = vals[keep]
+        n_updates += int(uniq.size)
+        if uniq.size < 2:
+            continue
+
+        diffs = np.diff(uniq)
+        gap_steps = diffs[diffs > 1] - 1
+        if gap_steps.size:
+            n_missing += int(gap_steps.sum())
+            max_gap = max(max_gap, int(gap_steps.max()))
+        n_out_of_order += int(np.count_nonzero(diffs <= 0))
+
+        if first_break is None:
+            broken = np.nonzero((diffs > 1) | (diffs <= 0))[0]
+            if broken.size:
+                first_break = int(uniq[broken[0]])
+
+    return SequenceGapReport(
+        n_sequenced, n_updates, n_missing, n_out_of_order, max_gap, first_break
+    )
+
+
+# ---------------------------------------------------------------------------
 # Per-run data-quality summary
 # ---------------------------------------------------------------------------
 
@@ -774,6 +932,15 @@ class DataQualitySummary:
     pre_existing_orders : int
         Distinct orders resting before the capture window (classifier label
         ``pre-existing`` — structurally unclassifiable, not failures).
+    events_with_sequence : int
+        Rows carrying a non-null venue ``sequence`` (see
+        :func:`detect_sequence_gaps`).  ``0`` when the source has no sequence or
+        ``track_sequence`` was off at load — the sequence metrics below are then
+        trivially zero.
+    sequence_gaps : int
+        Dropped-message count: skipped venue sequence numbers.
+    sequence_out_of_order : int
+        Reordered or duplicated messages: sequence steps that did not advance.
     """
 
     feed_type: FeedType
@@ -786,6 +953,9 @@ class DataQualitySummary:
     duplicate_event_ids: int
     duplicate_created_ids: int
     pre_existing_orders: int
+    events_with_sequence: int = 0
+    sequence_gaps: int = 0
+    sequence_out_of_order: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         """Return the summary as a plain, JSON-serialisable dict."""
@@ -800,6 +970,9 @@ class DataQualitySummary:
             "duplicate_event_ids": self.duplicate_event_ids,
             "duplicate_created_ids": self.duplicate_created_ids,
             "pre_existing_orders": self.pre_existing_orders,
+            "events_with_sequence": self.events_with_sequence,
+            "sequence_gaps": self.sequence_gaps,
+            "sequence_out_of_order": self.sequence_out_of_order,
         }
 
     def _crossed_note(self) -> str:
@@ -829,6 +1002,11 @@ class DataQualitySummary:
             f"  duplicate event ids   : {self.duplicate_event_ids}",
             f"  duplicate created ids : {self.duplicate_created_ids}",
             f"  pre-existing orders   : {self.pre_existing_orders}",
+            (
+                f"  venue sequence        : {self.sequence_gaps} missing / "
+                f"{self.sequence_out_of_order} out-of-order "
+                f"({self.events_with_sequence} row(s) numbered)"
+            ),
         ]
         return "\n".join(lines)
 
@@ -921,6 +1099,11 @@ def data_quality_summary(
         events.loc[events["type"] == "pre-existing", "id"].nunique()
     )
 
+    # Venue sequence gaps: read from events on the L3 path, or from the
+    # price-level depth on the L2 path (where sequence, when present, rides on
+    # depth rather than the empty events frame).  Absent columns score zero.
+    gaps = detect_sequence_gaps(depth if l2 else events)
+
     return DataQualitySummary(
         feed_type=feed_type,
         n_events=len(events),
@@ -932,4 +1115,7 @@ def data_quality_summary(
         duplicate_event_ids=duplicate_event_ids,
         duplicate_created_ids=duplicate_created_ids,
         pre_existing_orders=pre_existing_orders,
+        events_with_sequence=gaps.n_sequenced,
+        sequence_gaps=gaps.n_missing,
+        sequence_out_of_order=gaps.n_out_of_order,
     )

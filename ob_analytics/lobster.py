@@ -33,6 +33,7 @@ from loguru import logger
 from sortedcontainers import SortedDict
 
 from ob_analytics._utils import (
+    attach_ingest_seq,
     datetime_to_seconds_after_midnight,
     empty_trades,
     seconds_after_midnight_to_datetime,
@@ -228,6 +229,12 @@ class LobsterLoader:
             len(halts),
             len(cross),
         )
+
+        # Local monotonic ingest counter (opt-in, so the default frame is
+        # unchanged).  LOBSTER message files carry no venue sequence, so only
+        # ``ingest_seq`` is attached; ``sequence`` stays absent.
+        if self._config.track_sequence:
+            events = attach_ingest_seq(events)
 
         # Discover and store the orderbook file path for depth computation
         self.orderbook_path = self._resolve_orderbook_file(source)

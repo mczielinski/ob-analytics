@@ -32,7 +32,12 @@ from pathlib import Path
 
 from loguru import logger
 
-from ob_analytics.analytics import DataQualitySummary, data_quality_summary
+from ob_analytics.analytics import (
+    DataQualitySummary,
+    SequenceGapReport,
+    data_quality_summary,
+    detect_sequence_gaps,
+)
 
 # Importing the bitstamp and lobster modules fires their format/writer
 # self-registration at import time; the Format classes are also the public
@@ -126,6 +131,7 @@ __all__ = [
     "PipelineConfig",
     "PipelineResult",
     "RunContext",
+    "SequenceGapReport",
     "TradeSource",
     "__version__",
     # ── Trade-sign classification ────────────────────────────────────
@@ -136,6 +142,7 @@ __all__ = [
     "compute_vpin",
     # ── Data quality ─────────────────────────────────────────────────
     "data_quality_summary",
+    "detect_sequence_gaps",
     "lee_ready",
     "list_formats",
     "load_data",

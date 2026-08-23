@@ -55,6 +55,19 @@ class PipelineConfig(BaseModel):
         ),
     )
 
+    # ── Sequence / ordering keys ──────────────────────────────────────────
+    track_sequence: bool = Field(
+        default=False,
+        description=(
+            "Attach the ordering-key columns to loaded frames (see "
+            "ob_analytics.schemas): the local monotonic 'ingest_seq' counter, "
+            "and the venue 'sequence' number when the source carries one.  Off "
+            "by default so the standard pipeline output is unchanged; turn it "
+            "on to detect dropped or reordered messages via "
+            "ob_analytics.analytics.detect_sequence_gaps."
+        ),
+    )
+
     # ── Depth metrics ─────────────────────────────────────────────────────
     depth_bps: int = Field(
         default=25,

@@ -23,6 +23,7 @@ import pandas as pd
 from loguru import logger
 
 from ob_analytics._utils import (
+    attach_ingest_seq,
     datetime_to_epoch,
     empty_trades,
     epoch_to_datetime,
@@ -38,6 +39,7 @@ from ob_analytics.protocols import (
     RunContext,
     TradeSource,
 )
+from ob_analytics.schemas import SEQUENCE_COLUMN
 
 # ── BitstampLoader ────────────────────────────────────────────────────
 
@@ -94,6 +96,17 @@ class BitstampLoader:
         validate_non_empty(events, "BitstampLoader.load")
 
         events = events[events["volume"] >= 0]
+
+        # Ordering keys, captured in source (arrival) order before the id-sort
+        # below reorders the rows (opt-in, so the default frame is unchanged;
+        # see ob_analytics.schemas).  The public Bitstamp diff feed publishes a
+        # microtimestamp, not a sequence, so ``sequence`` is normally absent and
+        # only carried (as nullable Int64) when a capture recorded one.
+        if self._config.track_sequence:
+            if SEQUENCE_COLUMN in events.columns:
+                events[SEQUENCE_COLUMN] = events[SEQUENCE_COLUMN].astype("Int64")
+            events = attach_ingest_seq(events)
+
         events = events.reset_index().rename(columns={"index": "original_number"})
         events["original_number"] = events["original_number"] + 1
         events["volume"] = events["volume"].round(volume_digits)
