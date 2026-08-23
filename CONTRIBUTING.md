@@ -51,6 +51,27 @@ uv run pytest tests/ --cov=ob_analytics --cov-report=term-missing
 Pre-commit (`ruff-check --fix`, `ruff-format`, `ty check`) runs automatically
 on `git commit` once `pre-commit install` has been run.
 
+### Correctness gates
+
+Three kinds of test hold the numbers steady while the engine, the dataframe
+library, and the schema change underneath them (issue #143). All run under
+`pytest tests/` in CI, so a mismatch blocks the merge.
+
+- **Golden output.** `tests/test_golden_synth.py` and
+  `tests/test_regression_snapshot.py` hash fixed pipeline runs — a seeded
+  synthetic L3 session and the bundled Bitstamp sample — and compare against a
+  recorded baseline. `order_book`, `queue_positions`, and depth are covered. A
+  changed number fails the test; re-record the baseline only when the change is
+  intended, in its own labelled commit.
+- **Property.** `tests/test_properties_schema.py` and
+  `tests/test_properties_lobster.py` use Hypothesis to hold the schema rules
+  over many generated inputs: time goes forward, the book does not cross after
+  an uncross, and volume adds up.
+- **Backend compare.** `tests/test_compare_backends.py` checks a rewritten
+  backend against the current one (pandas vs Polars, Python vs compiled). These
+  skip until those backends exist; the module docstring records the activation
+  contract.
+
 ## Code style
 
 - **Ruff** for both lint and format — no black, no isort.

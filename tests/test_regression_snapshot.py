@@ -12,8 +12,6 @@ duplicate run — so this stays as cheap as a single pipeline pass.
 
 from __future__ import annotations
 
-import hashlib
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -21,28 +19,7 @@ import pytest
 from ob_analytics.bitstamp import BitstampFormat
 from ob_analytics.flow_toxicity import compute_kyle_lambda
 from ob_analytics.pipeline import Pipeline, PipelineResult
-
-
-def _df_fingerprint(df: pd.DataFrame) -> str:
-    """Stable content hash of a DataFrame (column names + dtypes + values).
-
-    Numeric and datetime columns hash their raw value buffers (IEEE-754 /
-    int64 bytes, native order — stable across pandas/pyarrow versions, unlike
-    CSV float formatting, and ~200x faster than a to_csv dump on the sample);
-    object-like columns (categoricals, mixed id columns) hash a string join.
-    """
-    if df is None:
-        return "None"
-    h = hashlib.sha256()
-    h.update("|".join(map(str, df.columns)).encode())
-    h.update("|".join(map(str, df.dtypes)).encode())
-    for col in df.columns:
-        arr = df[col].to_numpy()
-        if arr.dtype == object:
-            h.update("\x1f".join(map(str, arr.tolist())).encode())
-        else:
-            h.update(np.ascontiguousarray(arr).tobytes())
-    return h.hexdigest()
+from tests._golden import df_fingerprint
 
 
 def _frames(result: PipelineResult) -> dict[str, pd.DataFrame]:
@@ -69,7 +46,7 @@ def test_demo_outputs_present(demo_result):
 def test_demo_fingerprints(demo_result):
     # First run prints fingerprints; paste them into EXPECTED below, then
     # the equality assertion locks the numeric baseline.
-    fps = {name: _df_fingerprint(df) for name, df in _frames(demo_result).items()}
+    fps = {name: df_fingerprint(df) for name, df in _frames(demo_result).items()}
     for name, fp in fps.items():
         print(f"FINGERPRINT {name} = {fp}")
     # Update these ONLY when an intended output change lands (separate,
