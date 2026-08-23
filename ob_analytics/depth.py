@@ -5,6 +5,7 @@ metrics, along with :func:`price_level_volume`, :func:`filter_depth`,
 :func:`depth_metrics` (backward-compatible wrapper), and :func:`get_spread`.
 """
 
+import re
 from functools import lru_cache
 
 import numpy as np
@@ -567,3 +568,233 @@ def get_spread(depth_summary: pd.DataFrame) -> pd.DataFrame:
         != 0
     ).any(axis=1)
     return spread[changes]
+
+
+# ── Fair-value / pressure signals ─────────────────────────────────────
+#
+# Two standard microstructure signals derived from the depth summary the
+# engine already produces: the size-weighted mid (micro-price) and the
+# order-book imbalance (OBI).  Both read the best bid/ask price and volume,
+# and OBI can also cumulate the per-bps depth-bin volume columns.
+
+
+def _bin_volume_columns(depth_summary: pd.DataFrame, side: str) -> list[str]:
+    """Return the per-bps depth-bin volume columns for *side*, touch outward.
+
+    These are the ``{side}_vol{N}bps`` aggregates written by
+    :class:`DepthMetricsEngine` -- each the resting volume in one bps ring out
+    from the touch.  They are discovered from the frame and ordered by their
+    bps distance rather than assumed, so a summary built with a non-default
+    ``bps``/``bins`` configuration is handled correctly.
+
+    Parameters
+    ----------
+    depth_summary : pandas.DataFrame
+        Depth summary produced by :func:`depth_metrics`.
+    side : str
+        ``"bid"`` or ``"ask"``.
+
+    Returns
+    -------
+    list of str
+        Matching column names, ordered from the touch outward.
+    """
+    pattern = re.compile(rf"^{side}_vol(\d+)bps$")
+    matched: list[tuple[int, str]] = []
+    for column in depth_summary.columns:
+        found = pattern.match(column)
+        if found is not None:
+            matched.append((int(found.group(1)), column))
+    return [column for _, column in sorted(matched)]
+
+
+def micro_price(
+    depth_summary: pd.DataFrame,
+    *,
+    stoikov_adjustment: pd.Series | np.ndarray | float | None = None,
+) -> pd.Series:
+    """Size-weighted mid price (the micro-price) at the touch.
+
+    The micro-price weights each best quote by the size resting on the
+    *opposite* side::
+
+        micro = (best_bid_price * best_ask_vol + best_ask_price * best_bid_vol)
+                / (best_bid_vol + best_ask_vol)
+
+    so it leans toward the side carrying the heavier opposite book -- the
+    direction price is more likely to move.  It is equivalent to the plain mid
+    plus a spread-scaled touch imbalance::
+
+        micro = mid + (spread / 2) * (best_bid_vol - best_ask_vol)
+                                     / (best_bid_vol + best_ask_vol)
+
+    Stoikov (2018), "The micro-price: A high frequency estimator of future
+    prices", refines this by replacing the linear imbalance term with a
+    correction ``g(imbalance, spread)`` fitted from data.  Fitting that
+    correction is outside this function: pass a fitted per-row correction as
+    *stoikov_adjustment* to add it to the weighted mid and obtain the refined
+    estimator.  The default (``None``) returns the plain weighted mid, which is
+    the zeroth-order Stoikov estimator.
+
+    Parameters
+    ----------
+    depth_summary : pandas.DataFrame
+        Depth summary with ``best_bid_price``, ``best_bid_vol``,
+        ``best_ask_price`` and ``best_ask_vol`` columns.
+    stoikov_adjustment : pandas.Series, numpy.ndarray, float or None, optional
+        Optional additive Stoikov correction (see above).  Default ``None``.
+
+    Returns
+    -------
+    pandas.Series
+        The micro-price per row, indexed like *depth_summary*.  Rows where
+        ``best_bid_vol + best_ask_vol == 0`` are ``NaN`` rather than a
+        divide-by-zero error.
+    """
+    validate_columns(
+        depth_summary,
+        {"best_bid_price", "best_bid_vol", "best_ask_price", "best_ask_vol"},
+        "micro_price",
+    )
+
+    bid_price = depth_summary["best_bid_price"].to_numpy(dtype=float)
+    ask_price = depth_summary["best_ask_price"].to_numpy(dtype=float)
+    bid_vol = depth_summary["best_bid_vol"].to_numpy(dtype=float)
+    ask_vol = depth_summary["best_ask_vol"].to_numpy(dtype=float)
+
+    denominator = bid_vol + ask_vol
+    with np.errstate(invalid="ignore", divide="ignore"):
+        weighted = np.where(
+            denominator > 0,
+            (bid_price * ask_vol + ask_price * bid_vol) / denominator,
+            np.nan,
+        )
+
+    if stoikov_adjustment is not None:
+        weighted = weighted + np.asarray(stoikov_adjustment, dtype=float)
+
+    return pd.Series(weighted, index=depth_summary.index, name="micro_price")
+
+
+def book_imbalance(depth_summary: pd.DataFrame, levels: int = 1) -> pd.Series:
+    """Order-book imbalance (OBI) from resting volume.
+
+    OBI is the signed share of resting volume on the bid side::
+
+        obi = (bid_vol - ask_vol) / (bid_vol + ask_vol)
+
+    ranging from ``-1`` (all volume on the ask) to ``+1`` (all on the bid);
+    ``0`` is a balanced book.
+
+    Parameters
+    ----------
+    depth_summary : pandas.DataFrame
+        Depth summary produced by :func:`depth_metrics`.
+    levels : int, optional
+        Depth over which to measure the imbalance.  ``1`` (default) uses the
+        touch only -- ``best_bid_vol`` and ``best_ask_vol``.  ``levels > 1``
+        cumulates resting volume over the first ``levels - 1`` bps depth bins
+        (the ``{side}_vol{N}bps`` columns, which already include the touch), so
+        the measured window grows monotonically with *levels*.
+
+    Returns
+    -------
+    pandas.Series
+        OBI per row, indexed like *depth_summary*.  Rows whose total volume is
+        zero are ``NaN`` rather than a divide-by-zero error.
+
+    Raises
+    ------
+    ValueError
+        If *levels* is below ``1`` or exceeds the available depth bins.
+    """
+    if levels < 1:
+        raise ValueError(f"levels must be >= 1, got {levels}")
+
+    if levels == 1:
+        validate_columns(
+            depth_summary, {"best_bid_vol", "best_ask_vol"}, "book_imbalance"
+        )
+        bid_vol = depth_summary["best_bid_vol"].to_numpy(dtype=float)
+        ask_vol = depth_summary["best_ask_vol"].to_numpy(dtype=float)
+    else:
+        bid_cols = _bin_volume_columns(depth_summary, "bid")
+        ask_cols = _bin_volume_columns(depth_summary, "ask")
+        take = levels - 1
+        available = min(len(bid_cols), len(ask_cols))
+        if take > available:
+            raise ValueError(
+                f"levels={levels} needs {take} depth bins, but the summary has "
+                f"{available}"
+            )
+        bid_vol = depth_summary[bid_cols[:take]].to_numpy(dtype=float).sum(axis=1)
+        ask_vol = depth_summary[ask_cols[:take]].to_numpy(dtype=float).sum(axis=1)
+
+    denominator = bid_vol + ask_vol
+    with np.errstate(invalid="ignore", divide="ignore"):
+        imbalance = np.where(denominator > 0, (bid_vol - ask_vol) / denominator, np.nan)
+
+    return pd.Series(imbalance, index=depth_summary.index, name="book_imbalance")
+
+
+def depth_signals(
+    depth_summary: pd.DataFrame,
+    *,
+    depth_levels: int = 5,
+    stoikov_adjustment: pd.Series | np.ndarray | float | None = None,
+) -> pd.DataFrame:
+    """Append fair-value and pressure signal columns to a depth summary.
+
+    Returns a *copy* of *depth_summary* with four columns added; existing
+    columns are left untouched, so current consumers keep working.
+
+    ``mid_price``
+        Plain mid ``(best_bid_price + best_ask_price) / 2``.
+    ``micro_price``
+        Size-weighted mid from :func:`micro_price`.
+    ``obi``
+        Touch order-book imbalance -- :func:`book_imbalance` with ``levels=1``.
+    ``obi_depth``
+        Cumulative-depth order-book imbalance over *depth_levels* --
+        :func:`book_imbalance` with ``levels=depth_levels``.
+
+    Parameters
+    ----------
+    depth_summary : pandas.DataFrame
+        Depth summary produced by :func:`depth_metrics`.
+    depth_levels : int, optional
+        Depth for the cumulative ``obi_depth`` column.  Default ``5`` (the
+        touch plus the first four bps depth bins).  Clamped to the number of
+        depth bins actually present, so a summary with fewer bins does not
+        raise.
+    stoikov_adjustment : pandas.Series, numpy.ndarray, float or None, optional
+        Forwarded to :func:`micro_price`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        A copy of *depth_summary* with the signal columns appended.
+    """
+    validate_columns(
+        depth_summary,
+        {"best_bid_price", "best_bid_vol", "best_ask_price", "best_ask_vol"},
+        "depth_signals",
+    )
+
+    available = min(
+        len(_bin_volume_columns(depth_summary, "bid")),
+        len(_bin_volume_columns(depth_summary, "ask")),
+    )
+    effective_levels = max(1, min(depth_levels, available + 1))
+
+    result = depth_summary.copy()
+    result["mid_price"] = (
+        depth_summary["best_bid_price"].to_numpy(dtype=float)
+        + depth_summary["best_ask_price"].to_numpy(dtype=float)
+    ) / 2.0
+    result["micro_price"] = micro_price(
+        depth_summary, stoikov_adjustment=stoikov_adjustment
+    )
+    result["obi"] = book_imbalance(depth_summary, levels=1)
+    result["obi_depth"] = book_imbalance(depth_summary, levels=effective_levels)
+    return result

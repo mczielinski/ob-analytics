@@ -801,6 +801,22 @@ def vpin_panel(vpin_df: pd.DataFrame, *, threshold: float = 0.7) -> PlotSpec:
     )
 
 
+def book_signals_panel(depth_summary: pd.DataFrame, *, levels: int = 5) -> PlotSpec:
+    """Build a predictive touch-signals panel (micro-price vs mid + OBI strip).
+
+    *levels* sets the depth of the cumulative order-book-imbalance line (see
+    :func:`~ob_analytics.depth.book_imbalance`); it is clamped to the depth bins
+    present on *depth_summary*.
+    """
+    return PlotSpec(
+        "book_signals",
+        "Book Signals (micro-price & OBI)",
+        "book_signals",
+        _viz_data.prepare_book_signals_data,
+        {"depth_summary": depth_summary, "levels": levels},
+    )
+
+
 def ofi_panel(ofi_df: pd.DataFrame, trades: pd.DataFrame | None = None) -> PlotSpec:
     """Build an order-flow-imbalance analytic panel."""
     return PlotSpec(
