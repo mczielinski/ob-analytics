@@ -78,9 +78,9 @@ therefore ends in a ``deleted`` row with ``volume == 0`` and the executed
 quantity in ``fill``, while a cancellation's ``deleted`` row carries the
 cancelled size with ``fill == 0``.
 
-Timestamps are tz-naive at millisecond resolution starting from an
-arbitrary Monday morning; ``exchange_timestamp`` equals ``timestamp``
-(as in LOBSTER sessions, where only exchange time exists).
+Timestamps are tz-aware UTC nanoseconds (the schema's canonical time model,
+issue #154) starting from an arbitrary Monday morning; ``exchange_timestamp``
+equals ``timestamp`` (as in LOBSTER sessions, where only exchange time exists).
 """
 
 from __future__ import annotations
@@ -172,9 +172,11 @@ def toy_events() -> pd.DataFrame:
     event_id = np.array([e[0] for e in _EVENTS], dtype=np.int64)
     seconds = [e[1] for e in _EVENTS]
     actors = [e[2] for e in _EVENTS]
-    ts = pd.Series(
-        [_BASE + pd.Timedelta(milliseconds=round(s * 1000)) for s in seconds]
-    ).astype("datetime64[ms]")
+    ts = (
+        pd.Series([_BASE + pd.Timedelta(milliseconds=round(s * 1000)) for s in seconds])
+        .astype("datetime64[ns]")
+        .dt.tz_localize("UTC")
+    )
 
     return pd.DataFrame(
         {
@@ -233,7 +235,9 @@ def toy_trades() -> pd.DataFrame:
         {
             "timestamp": pd.Series(
                 [_BASE + pd.Timedelta(milliseconds=round(t[0] * 1000)) for t in _TRADES]
-            ).astype("datetime64[ms]"),
+            )
+            .astype("datetime64[ns]")
+            .dt.tz_localize("UTC"),
             "price": np.array([t[1] for t in _TRADES], dtype=np.float64),
             "volume": np.array([t[2] for t in _TRADES], dtype=np.float64),
             "direction": pd.Categorical(
@@ -334,9 +338,13 @@ def toy_l2_depth() -> pd.DataFrame:
     >>> summary[["best_bid_price", "best_ask_price"]].iloc[-1].tolist()
     [99.0, 100.0]
     """
-    ts = pd.Series(
-        [_BASE + pd.Timedelta(milliseconds=round(r[0] * 1000)) for r in _L2_DEPTH]
-    ).astype("datetime64[ms]")
+    ts = (
+        pd.Series(
+            [_BASE + pd.Timedelta(milliseconds=round(r[0] * 1000)) for r in _L2_DEPTH]
+        )
+        .astype("datetime64[ns]")
+        .dt.tz_localize("UTC")
+    )
     return pd.DataFrame(
         {
             "timestamp": ts,
@@ -370,9 +378,13 @@ def toy_l2_trades() -> pd.DataFrame:
         attribution columns — a
         :func:`~ob_analytics.schemas.validate_trades_df` frame.
     """
-    ts = pd.Series(
-        [_BASE + pd.Timedelta(milliseconds=round(t[0] * 1000)) for t in _L2_TRADES]
-    ).astype("datetime64[ms]")
+    ts = (
+        pd.Series(
+            [_BASE + pd.Timedelta(milliseconds=round(t[0] * 1000)) for t in _L2_TRADES]
+        )
+        .astype("datetime64[ns]")
+        .dt.tz_localize("UTC")
+    )
     n = len(_L2_TRADES)
     na = pd.array([pd.NA] * n, dtype="object")
     return pd.DataFrame(

@@ -53,6 +53,7 @@ import pandas as pd
 from loguru import logger
 
 from ob_analytics._utils import (
+    UTC_NS_DTYPE,
     attach_ingest_seq,
     datetime_to_epoch,
     empty_trades,
@@ -109,10 +110,15 @@ def _first_present(columns: pd.Index, candidates: tuple[str, ...]) -> str | None
 
 
 def _to_datetime(series: pd.Series, unit: str) -> pd.Series:
-    """Parse a timestamp column: integer epoch (*unit*) or parseable strings."""
+    """Parse a timestamp column onto the shared tz-aware UTC nanosecond clock.
+
+    Integer-epoch columns go through :func:`epoch_to_datetime`; string columns
+    are parsed with ``utc=True``, so a zone-carrying string is converted to UTC
+    and a zone-less one is read as UTC (issue #154).
+    """
     if pd.api.types.is_numeric_dtype(series):
         return epoch_to_datetime(series, unit)
-    return pd.to_datetime(series).astype("datetime64[ns]")
+    return pd.to_datetime(series, utc=True).astype(UTC_NS_DTYPE)
 
 
 # ── L2DepthLoader ─────────────────────────────────────────────────────
@@ -203,7 +209,7 @@ class L2DepthLoader:
 
         depth = pd.DataFrame(
             {
-                "timestamp": timestamp.to_numpy(),
+                "timestamp": timestamp.array,
                 "price": price.to_numpy(),
                 "volume": volume.to_numpy(),
                 "direction": direction.to_numpy(),
@@ -323,7 +329,7 @@ class L2TradeReader:
         na = pd.array([pd.NA] * n, dtype="object")
         trades = pd.DataFrame(
             {
-                "timestamp": timestamp.to_numpy(),
+                "timestamp": timestamp.array,
                 "price": price.to_numpy(),
                 "volume": volume.to_numpy(),
                 "direction": direction,
@@ -420,12 +426,11 @@ class DepthCsvWriter:
         validate_columns(
             depth, {"timestamp", "price", "volume", "direction"}, "DepthCsvWriter.write"
         )
-        # datetime_to_epoch reads an int64 ns count; normalise the resolution
-        # so a datetime64[ms] frame (e.g. the toy fixture) round-trips exactly.
-        ts_ns = depth["timestamp"].astype("datetime64[ns]")
+        # datetime_to_epoch accepts the canonical tz-aware UTC column directly
+        # (and reads a tz-naive one as UTC), so the round-trip is exact.
         depth_out = pd.DataFrame(
             {
-                "timestamp": datetime_to_epoch(ts_ns, cfg.timestamp_unit),
+                "timestamp": datetime_to_epoch(depth["timestamp"], cfg.timestamp_unit),
                 "side": depth["direction"].astype(str),
                 "price": (depth["price"] * cfg.price_divisor).round(cfg.price_decimals),
                 "volume": depth["volume"],
@@ -442,10 +447,9 @@ class DepthCsvWriter:
 
     def _write_trades(self, trades: pd.DataFrame, dest: Path) -> None:
         cfg = self._config
-        ts_ns = trades["timestamp"].astype("datetime64[ns]")
         out = pd.DataFrame(
             {
-                "timestamp": datetime_to_epoch(ts_ns, cfg.timestamp_unit),
+                "timestamp": datetime_to_epoch(trades["timestamp"], cfg.timestamp_unit),
                 "price": (trades["price"] * cfg.price_divisor).round(
                     cfg.price_decimals
                 ),

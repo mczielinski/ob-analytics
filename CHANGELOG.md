@@ -72,6 +72,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   "Data quality: matched book vs diff feed" explanation page and a `validate`
   how-to document the distinction.
 
+### Changed
+
+- **Timestamps are now tz-aware UTC nanoseconds** (`timestamp[ns, tz=UTC]`) on
+  both clocks — `timestamp` (receive) and `exchange_timestamp` (matching
+  engine) — across every table, loader, the synthetic generator, and the toy
+  datasets (issue #154). Before, they were tz-naive and in each venue's native
+  clock (millisecond-resolution UTC for Bitstamp, US/Eastern for LOBSTER), and
+  frames from different venues were declared not comparable. Now every frame sits
+  on one UTC clock, so cross-venue frames can be joined or concatenated directly.
+  LOBSTER's seconds-after-midnight are converted to UTC from the session date and
+  a venue time zone (`RunContext(session_tz=...)`, default `America/New_York`);
+  Bitstamp / CCXT keep their wall-clock instants and only gain the zone and the
+  nanosecond unit, so their values do not move. The schema also documents a
+  same-instant **total order** — `timestamp`, then `sequence`, then `event_id`,
+  then `ingest_seq` (`ob_analytics.schemas.time_order_keys`), which the per-order
+  reconstructions sort by. **Breaking:** the dtype of every timestamp column
+  changed, so the canonical Parquet **schema version is now `2.0`** (a `1.0` file
+  still reads — Parquet is self-describing — as the tz-naive frame it stored;
+  re-save it to move it onto the UTC clock). Consumers that compared pipeline
+  timestamps against tz-naive `pandas.Timestamp`s must now use tz-aware (UTC)
+  ones.
+
 ---
 
 ## [0.1.0] - 2026-06-26

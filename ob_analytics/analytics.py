@@ -882,7 +882,10 @@ def _crossed_time_fraction(best: pd.DataFrame) -> tuple[float, int]:
     reading) rather than row-weighted.  Episodes count contiguous crossed
     intervals (rising edges).
     """
-    ts = best["timestamp"].to_numpy()
+    # Raw UTC nanoseconds: ``astype("int64")`` yields the int64 ns buffer on
+    # the tz-aware clock, where ``to_numpy()`` would give an object array of
+    # Timestamps (issue #154).
+    ts = best["timestamp"].astype("int64").to_numpy()
     bid = best["best_bid"].to_numpy()
     ask = best["best_ask"].to_numpy()
     crossed = (~np.isnan(bid)) & (~np.isnan(ask)) & (bid > ask)
@@ -893,7 +896,7 @@ def _crossed_time_fraction(best: pd.DataFrame) -> tuple[float, int]:
     if crossed.size < 2:
         return (1.0 if crossed[0] else 0.0), episodes
 
-    dt = np.diff(ts) / np.timedelta64(1, "ns")  # interval lengths in ns
+    dt = np.diff(ts).astype(np.float64)  # interval lengths in ns
     total = float(dt.sum())
     if total <= 0:  # all events share a timestamp -> fall back to row share
         return float(crossed.mean()), episodes

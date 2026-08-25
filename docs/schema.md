@@ -12,8 +12,12 @@ change without notice.
 
 ## Schema version
 
-The current version is **`1.0`** (the constant
-[`ob_analytics.schemas.SCHEMA_VERSION`](api/schemas.md)).
+The current version is **`2.0`** (the constant
+[`ob_analytics.schemas.SCHEMA_VERSION`](api/schemas.md)). Version `2.0`
+(issue #154) makes both timestamp clocks tz-aware UTC nanoseconds; `1.0` wrote
+them tz-naive in each venue's native clock. Both still read — Parquet is
+self-describing, so a `1.0` file loads as the tz-naive frame it stored; re-save
+it with this build to move it onto the UTC clock.
 
 `save_data(..., fmt="parquet")` writes the version into each file's Arrow
 key-value metadata under the key `ob_analytics_schema_version` (bytes, because
@@ -35,7 +39,7 @@ Read the version from another tool through pyarrow:
 import pyarrow.parquet as pq
 
 metadata = pq.read_schema("out/events.parquet").metadata
-version = metadata[b"ob_analytics_schema_version"].decode()  # "1.0"
+version = metadata[b"ob_analytics_schema_version"].decode()  # "2.0"
 ```
 
 ## The tables
@@ -67,15 +71,34 @@ an empty but schema-valid frame and the derived records do not apply. Read
 
 ## Timestamp policy
 
-All timestamps are `timestamp[ns]` and **tz-naive** (no time zone attached).
-Each frame is in its venue's native clock: UTC for Bitstamp captures,
-exchange-local (US/Eastern) for LOBSTER sessions. A single frame is internally
-consistent, but timestamps from different formats are **not comparable**. Do not
-join or concatenate events across venues without converting first.
+All timestamps are `timestamp[ns, tz=UTC]` — **tz-aware UTC nanoseconds** (int64
+nanoseconds since the Unix epoch, with the UTC zone attached). Both clocks use
+this one type, so frames from different venues sit on the same clock and **are**
+comparable: you can join or concatenate them directly. A source in a
+venue-local clock (LOBSTER, US/Eastern) is converted to UTC on load, using the
+session date and the venue time zone; a source already in epoch-UTC (Bitstamp,
+CCXT) keeps its wall-clock instants and only gains the zone and the nanosecond
+unit.
 
 `timestamp` is the local receive time. `exchange_timestamp` is the venue's
 matching-engine time. For LOBSTER the two are equal, because only exchange time
 exists there.
+
+### Same-instant order
+
+A timestamp alone cannot order two events that share an instant, so the schema
+defines a **total order**: `timestamp`, then — as tie-breaks, when the frame
+carries them — the venue `sequence`, then `event_id` (the dense per-order key on
+the L3 path), then the local `ingest_seq`.
+[`ob_analytics.schemas.time_order_keys`](api/schemas.md) returns this key list
+for a frame; the per-order reconstructions (`queue_positions`) sort by it, and
+every loader builds its frame with fixed, stable sorts, so a rebuild is
+deterministic run-to-run. On a price-level (L2) feed there is no `event_id`;
+ties there fall to `sequence` / `ingest_seq` when tracked, otherwise to the
+loader's stable arrival order. Enforcing the full key inside the price-level
+depth engine — so an alternate engine reproduces it bit-for-bit — lands with the
+engine separation and rewrite (#136 / #104 / #138), when it can be checked
+against that second backend.
 
 ## Volume and fill
 
@@ -110,8 +133,8 @@ provenance columns every loader carries.
 |---|---|---|---|---|
 | `event_id` | `int64` | — | no | Unique id for this event (1-based). Join key for a trade's `maker_event_id` / `taker_event_id`. |
 | `id` | `int64` | — | no | Order id. Groups the events of one order over its life. |
-| `timestamp` | `timestamp[ns]` | ns, tz-naive | no | Local receive time. |
-| `exchange_timestamp` | `timestamp[ns]` | ns, tz-naive | no | Venue matching-engine time (equals `timestamp` for LOBSTER). |
+| `timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Local receive time. |
+| `exchange_timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Venue matching-engine time (equals `timestamp` for LOBSTER). |
 | `price` | `double` | quote currency | no | Limit price of the order. |
 | `volume` | `double` | base asset / shares | no | Outstanding size after the event, or size removed on a delete (see [Volume and fill](#volume-and-fill)). |
 | `direction` | `dictionary<string>` | — | no | Order side: `bid` or `ask` (ordered categorical). |
@@ -134,7 +157,7 @@ taker provenance.
 
 | Column | Arrow type | Unit | Null? | Meaning |
 |---|---|---|---|---|
-| `timestamp` | `timestamp[ns]` | ns, tz-naive | no | Trade print time (receive clock). |
+| `timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Trade print time (receive clock). |
 | `price` | `double` | quote currency | no | Execution price. |
 | `volume` | `double` | base asset / shares | no | Executed size. |
 | `direction` | `dictionary<string>` | — | yes | Taker's aggressor side: `buy` or `sell`. Null on an L2 feed until Lee–Ready fills it, then set. |
@@ -156,7 +179,7 @@ Output of `price_level_volume`. Required columns are the
 | Column | Arrow type | Unit | Null? | Meaning |
 |---|---|---|---|---|
 | `event_id` | `int64` | — | no | The event that produced this level change. Present on the L3 path; absent on an L2 feed. |
-| `timestamp` | `timestamp[ns]` | ns, tz-naive | no | Time of the level change. |
+| `timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Time of the level change. |
 | `price` | `double` | quote currency | no | Price level. |
 | `volume` | `double` | base asset / shares | no | Resting size at this price level after the change (`0` empties the level). Never negative. |
 | `direction` | `dictionary<string>` | — | no | Side of the level: `bid` or `ask` (ordered categorical). |
@@ -172,7 +195,7 @@ side. This is the reconstructed book state over time.
 
 | Column | Arrow type | Unit | Null? | Meaning |
 |---|---|---|---|---|
-| `timestamp` | `timestamp[ns]` | ns, tz-naive | no | Time of this book state. |
+| `timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Time of this book state. |
 | `event_id` | `int64` | — | no* | The event this state follows. Present when the input `depth` carried `event_id` (L3). |
 | `best_bid_price` | `double` | quote currency | no | Best bid price (`0.0` when the bid side is empty). |
 | `best_bid_vol` | `double` | base asset / shares | no | Resting size at the best bid. |
@@ -199,14 +222,14 @@ book, hidden executions) are excluded.
 | Column | Arrow type | Unit | Null? | Meaning |
 |---|---|---|---|---|
 | `id` | `int64` | — | no | Order id. |
-| `placed_ts` | `timestamp[ns]` | ns, tz-naive | no | Time of the `created` event. |
+| `placed_ts` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Time of the `created` event. |
 | `placed_vol` | `double` | base asset / shares | no | Size at placement. |
 | `price` | `double` | quote currency | no | Placement price. |
 | `direction` | `dictionary<string>` | — | no | Order side: `bid` or `ask`. |
 | `type` | `dictionary<string>` | — | yes | Classifier label. Present when `events` carried a `type` column. |
 | `aggressiveness_bps` | `double` | basis points | yes | Placement distance. Present when `events` carried it. |
 | `filled_vol` | `double` | base asset / shares | no | Total executed size (sum of `fill`). |
-| `end_ts` | `timestamp[ns]` | ns, tz-naive | yes | Termination time. Null (`NaT`) while the order still rests. |
+| `end_ts` | `timestamp[ns, tz=UTC]` | ns, UTC | yes | Termination time. Null (`NaT`) while the order still rests. |
 | `outcome` | `string` | — | no | `filled`, `partial`, `cancelled`, or `resting` (see [Categorical values](#categorical-value-domains)). |
 
 ## Book snapshot
@@ -217,8 +240,8 @@ returned as two frames (`bids` and `asks`), each with these columns.
 | Column | Arrow type | Unit | Null? | Meaning |
 |---|---|---|---|---|
 | `id` | `int64` | — | no | Order id of the resting order. |
-| `timestamp` | `timestamp[ns]` | ns, tz-naive | no | Receive time of the order's last event. |
-| `exchange_timestamp` | `timestamp[ns]` | ns, tz-naive | no | Exchange time of the order's last event. |
+| `timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Receive time of the order's last event. |
+| `exchange_timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Exchange time of the order's last event. |
 | `price` | `double` | quote currency | no | Resting price. |
 | `volume` | `double` | base asset / shares | no | Outstanding resting size. |
 | `liquidity` | `double` | base asset / shares | no | Cumulative size from the best price down to this order. |
@@ -294,24 +317,30 @@ bids = duckdb.sql(
 The four cross-cutting choices the schema left open now have a decided direction
 (2026-08-23): **follow the Databento / Nautilus conventions where they are the
 standard, expressed in Arrow / Parquet, not the DBN binary format.** Sequence
-numbers (#146) and instrument identity (#147) are implemented here as additive,
-opt-in columns. The time model (#154) and integer-tick prices (#155) change
-existing numbers, so they land later, one at a time, behind the correctness gate
-(#143). See the roadmap (#124).
+numbers (#146), instrument identity (#147), and the time model (#154) are
+implemented. Integer-tick prices (#155) change existing numbers, so they land
+next, on their own, behind the correctness gate (#143). See the roadmap (#124).
 
-### 1. Time model: tz-aware UTC nanoseconds and event order — decided, not yet built (#154)
+### 1. Time model: tz-aware UTC nanoseconds and event order — implemented (#154)
 
-- **Decision.** Keep both clocks — `timestamp` (receive) and `exchange_timestamp`
-  (matching engine) — as int64 nanoseconds, tz-aware UTC. A timestamp alone cannot
-  order same-instant events, so order by the venue sequence, then the local ingest
-  counter (both from #146).
-- **Current.** Timestamps are `timestamp[ns]`, tz-naive, in each venue's native
-  clock (UTC for Bitstamp, US/Eastern for LOBSTER). Frames from different venues
-  are declared not comparable.
-- **Why later.** This changes the dtype of every timestamp column and touches
-  every loader's time construction, the depth engine's sort, the cross-venue
-  rule, and every tz-naive test. It re-baselines golden output, so it waits for
-  the correctness gate (#143) and is done on its own.
+- **Decision, built here.** Both clocks — `timestamp` (receive) and
+  `exchange_timestamp` (matching engine) — are `timestamp[ns, tz=UTC]`: int64
+  nanoseconds since the Unix epoch, with the UTC zone attached (see
+  [Timestamp policy](#timestamp-policy)). A venue-local source (LOBSTER,
+  US/Eastern) is converted to UTC on load from the session date and venue time
+  zone; an epoch-UTC source (Bitstamp, CCXT) keeps its wall-clock instants and
+  only gains the zone and the nanosecond unit. The same-instant total order is
+  `timestamp`, then the venue `sequence`, then `event_id`, then `ingest_seq`
+  (`ob_analytics.schemas.time_order_keys`).
+- **Comparable across venues.** Because every frame is on one UTC clock, frames
+  from different venues can be joined or concatenated directly — the earlier
+  "not comparable across venues" rule is gone.
+- **Deferred.** Enforcing the full same-instant key inside the price-level depth
+  engine (so an alternate backend reproduces the rebuild bit-for-bit) lands with
+  the engine separation and rewrite (#136 / #104 / #138), validated against that
+  second backend. Today the per-order reconstructions sort by the total order and
+  the engine plays events back in a stable receive-clock order, deterministic
+  run-to-run.
 
 ### 2. Source sequence numbers — implemented (#146)
 

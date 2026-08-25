@@ -16,6 +16,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from ob_analytics.schemas import time_order_keys
+
 QUEUE_COLUMNS: tuple[str, ...] = (
     "timestamp",
     "id",
@@ -67,8 +69,9 @@ def queue_positions(
 
     cols = ["event_id", "id", "timestamp", "price", "volume", "direction", "action"]
     ev = events.loc[events["id"] != 0, cols]
-    # Deterministic price-time order: timestamp, then arrival (event_id).
-    ev = ev.sort_values(["timestamp", "event_id"], kind="stable")
+    # The canonical same-instant total order (issue #154): timestamp, then the
+    # tie-breaks present (here, arrival via event_id).
+    ev = ev.sort_values(time_order_keys(ev), kind="stable")
 
     # Per level: insertion-ordered {id: remaining}.  Dicts preserve insertion
     # order, which *is* price-time priority here.
@@ -175,7 +178,7 @@ def queue_age_grid(
 
     cols = ["event_id", "id", "timestamp", "price", "volume", "direction", "action"]
     ev = events.loc[(events["id"] != 0) & (events["direction"] == side), cols]
-    ev = ev.sort_values(["timestamp", "event_id"], kind="stable")
+    ev = ev.sort_values(time_order_keys(ev), kind="stable")  # issue #154 order
     if ev.empty or n_time < 1:
         return np.empty((0, 0)), np.array([], dtype="datetime64[ns]"), 0
 

@@ -52,17 +52,25 @@ _GOLDEN_CONFIG = SynthConfig(seed=143, duration=60.0)
 # Recorded baseline. Update ONLY when an intended output change lands, in a
 # separate labelled commit with a before/after rationale. Verified identical on
 # CPython 3.11 / 3.12 / 3.13 with the pinned numpy / pandas.
+#
+# 2026-08-25 (#154, tz-aware UTC nanosecond time model): both clocks are now
+# ``datetime64[ns, UTC]`` instead of tz-naive. The synthetic anchor
+# (2020-01-01) is now labelled UTC, which is the same int64 nanosecond instant,
+# so every value — including the timestamps — is unchanged; only the timestamp
+# DTYPE moved. The fingerprint hashes dtype + values (and a tz-aware datetime
+# column hashes through its string form), so all six digests changed even
+# though no number did.
 EXPECTED: dict[str, str] = {
-    "events": "4e9c94b6f4db79f0db62eba4907ef4387b7b594b9d78cfebd193ddd43a91c2d3",
-    "trades": "c1d71ced8f7d833fb4e4aa08254534548639c3adf2a43a8ff0e7d809e0b608e0",
-    "depth": "3d7051dd205fb9923f6b4f89e6ce576719445a92ad0e2581fc1ec2f1d3868629",
-    "depth_summary": "9d34f0752fd3932611201bfe43a84ed78eae9415a74b3a158ef313a76c58895b",
+    "events": "ca3a477a2b6767ffd06e1535f75f8ffadd48745843cd232bd4b13b08b92d92f6",
+    "trades": "d2343b9e9245de7684218379d8d63b8d3ebbfed4ef5f931af47db44514add13a",
+    "depth": "244ed099147b29519c0131442968a0be64c141ff52926c7eed135af4f52d45aa",
+    "depth_summary": "4d01b99c0675e4a0b2c75e918a5e1f23fcea0407ba0a177030f3e70a2fd988a9",
     "order_book": (
-        "14d7fbc508d5e74440608f277e57e611079954fd220731a8c231cef597cd6a9e:"
-        "21566e282378953977fd4ee7e61c086e915dfae733a59a3e847eea1db4e7b1ff"
+        "0d21fa4b99d2035163b6c2a0c8c554df10af066b43fae05bed63d3bac1b68c24:"
+        "55471e7232e0e48e67588de731b485459c1e0fa00b0ada263d924c6866eed831"
     ),
     "queue_positions": (
-        "37914a3e88186a96e6735cee3e09209e8652c70f9261e7ae7db7f18ce298f1de"
+        "150f254da8e74369b053fa37e2878763dc023d598b21726d68b7cd337778fb82"
     ),
 }
 

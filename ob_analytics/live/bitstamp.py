@@ -460,4 +460,5 @@ class BitstampCapturer(LiveCapturer):
 
 
 def _epoch_ms_to_ts(ms: int) -> pd.Timestamp:
-    return pd.Timestamp(ms, unit="ms", tz="UTC")
+    # Canonical clock: tz-aware UTC nanoseconds (issue #154).
+    return pd.Timestamp(ms, unit="ms", tz="UTC").as_unit("ns")

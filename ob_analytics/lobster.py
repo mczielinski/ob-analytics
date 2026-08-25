@@ -53,6 +53,13 @@ from ob_analytics.schemas import attach_instrument_identity
 
 _LOBSTER_COLS = ["time", "event_type", "id", "volume", "price", "direction"]
 
+#: Default venue time zone for a LOBSTER session.  LOBSTER distributes US
+#: equity data (NASDAQ), whose trading day is US/Eastern; its timestamps are
+#: seconds after *local* midnight with no zone, so converting them to the
+#: shared UTC clock (issue #154) needs this.  Override per run via
+#: ``RunContext(session_tz=...)`` for a non-US-Eastern capture.
+LOBSTER_DEFAULT_TZ = "America/New_York"
+
 _EVENT_TYPE_TO_ACTION: dict[int, str] = {
     1: "created",
     2: "changed",
@@ -88,6 +95,11 @@ class LobsterLoader:
     trading_date : str or pd.Timestamp
         The calendar date of the trading session (LOBSTER timestamps are
         seconds after midnight and need a date anchor).
+    session_tz : str, optional
+        The venue's local time zone, used to place the session's seconds after
+        midnight on the shared UTC clock (issue #154).  Defaults to
+        :data:`LOBSTER_DEFAULT_TZ` (``"America/New_York"``), correct for
+        LOBSTER's US equity data.
     venue, symbol : str, optional
         Optional instrument identity (issue #147).  When either is supplied,
         the loaded frame gains per-row ``venue`` / ``symbol`` columns; ``venue``
@@ -106,11 +118,13 @@ class LobsterLoader:
         config: PipelineConfig | None = None,
         *,
         trading_date: str | pd.Timestamp,
+        session_tz: str = LOBSTER_DEFAULT_TZ,
         venue: str | None = None,
         symbol: str | None = None,
     ) -> None:
         self._config = config or PipelineConfig()
         self._trading_date = pd.Timestamp(trading_date).normalize()
+        self._session_tz = session_tz
         self._venue = venue
         self._symbol = symbol
         #: Trading-halt (event_type 7) and cross-trade (event_type 6) rows,
@@ -150,7 +164,7 @@ class LobsterLoader:
         raw["volume"] = raw["volume"].astype(float).round(cfg.volume_decimals)
 
         raw["timestamp"] = seconds_after_midnight_to_datetime(
-            raw["time"], self._trading_date
+            raw["time"], self._trading_date, self._session_tz
         )
         raw["exchange_timestamp"] = raw["timestamp"]
 
@@ -362,7 +376,9 @@ class LobsterTradeReader:
 
         trades = pd.DataFrame(
             {
-                "timestamp": execs["timestamp"].values,
+                # ``.array`` keeps the tz-aware UTC dtype (``.values`` would
+                # drop the zone to a naive numpy datetime64).
+                "timestamp": execs["timestamp"].array,
                 "price": execs["price"].values,
                 # Executed quantity: `fill` carries the raw executed delta
                 # (`volume` is the order's outstanding size after the event).
@@ -458,6 +474,10 @@ class LobsterWriter:
     ----------
     trading_date : str or pd.Timestamp
         Calendar date of the session.
+    session_tz : str, optional
+        The venue's local time zone, used to convert the shared UTC clock back
+        to LOBSTER's seconds after local midnight (issue #154).  Defaults to
+        :data:`LOBSTER_DEFAULT_TZ`; must match the value used on load.
     price_divisor : int
         Multiplier to convert decimal prices back to LOBSTER integers.
     """
@@ -467,10 +487,12 @@ class LobsterWriter:
         config: PipelineConfig | None = None,
         *,
         trading_date: str | pd.Timestamp,
+        session_tz: str = LOBSTER_DEFAULT_TZ,
         price_divisor: int | None = None,
     ) -> None:
         self._config = config or PipelineConfig()
         self._trading_date = pd.Timestamp(trading_date).normalize()
+        self._session_tz = session_tz
         # Explicit price_divisor overrides config (for manual construction)
         self._price_divisor = (
             price_divisor if price_divisor is not None else self._config.price_divisor
@@ -539,7 +561,9 @@ class LobsterWriter:
             )
 
         midnight = self._trading_date
-        time_seconds = datetime_to_seconds_after_midnight(events["timestamp"], midnight)
+        time_seconds = datetime_to_seconds_after_midnight(
+            events["timestamp"], midnight, self._session_tz
+        )
 
         price_int = (events["price"] * self._price_divisor).round(0).astype(int)
         direction_int = events["direction"].astype(str).map(_DIRECTION_REVERSE)
@@ -807,7 +831,9 @@ def lobster_depth_from_orderbook(
         )
     n = min(n_ob, n_ev)
 
-    timestamps = book_events["timestamp"].values[:n]
+    # ``.array`` keeps the tz-aware UTC dtype through the fancy indexing below
+    # (``.values`` would drop the zone to a naive numpy datetime64).
+    timestamps = book_events["timestamp"].array[:n]
     event_ids = book_events["event_id"].values[:n]
 
     # Diff consecutive book states per side.  LOBSTER columns repeat
@@ -909,7 +935,11 @@ class LobsterFormat:
     def create_loader(self, config: PipelineConfig, ctx: RunContext) -> EventLoader:
         td = _require_trading_date(ctx.trading_date, "create_loader")
         self._loader = LobsterLoader(
-            config, trading_date=td, venue=ctx.venue, symbol=ctx.symbol
+            config,
+            trading_date=td,
+            session_tz=ctx.session_tz or LOBSTER_DEFAULT_TZ,
+            venue=ctx.venue,
+            symbol=ctx.symbol,
         )
         return self._loader
 
@@ -961,7 +991,9 @@ from ob_analytics.pipeline import register_format
 
 def _make_lobster_writer(config, ctx):
     td = _require_trading_date(ctx.trading_date, "create_writer")
-    return LobsterWriter(config, trading_date=td)
+    return LobsterWriter(
+        config, trading_date=td, session_tz=ctx.session_tz or LOBSTER_DEFAULT_TZ
+    )
 
 
 register_format("lobster", LobsterFormat)

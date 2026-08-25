@@ -181,6 +181,12 @@ class DepthMetricsEngine:
         validate_non_empty(depth, "DepthMetricsEngine.compute")
 
         multiplier = self._config.price_multiplier
+        # Deterministic playback order (issue #154): a stable sort on the
+        # receive clock.  The documented same-instant total order
+        # (``schemas.time_order_keys``: timestamp, then sequence / event_id) is
+        # applied by the per-order reconstructions today; the price-level engine
+        # will adopt the full key when it is separated and re-implemented
+        # (#136 / #104 / #138), validated against the alternate backend.
         ordered = depth.sort_values(by="timestamp", kind="stable")
 
         prices_int = (multiplier * ordered["price"]).round().astype(int).values

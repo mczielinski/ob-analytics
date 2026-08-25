@@ -27,13 +27,29 @@ them):
   ``raw_size`` column for round-trip writers.  The classifier labels these
   orders ``pre-existing`` — structurally unclassifiable, not failures.
 
-Timestamp policy: event timestamps are **tz-naive**, in each venue's native
-clock — UTC for Bitstamp captures, exchange-local (US/Eastern) for LOBSTER
-sessions.  Each frame is internally consistent, but timestamps from
-different formats are **not comparable**; do not join or concatenate events
-across venues without explicit conversion.  ``timestamp`` is the local
-receive time and ``exchange_timestamp`` the venue's matching-engine time
-(identical for LOBSTER, where only exchange time exists).
+Timestamp policy (issue #154): both clocks are **tz-aware UTC nanoseconds**
+(``datetime64[ns, UTC]``, Arrow ``timestamp[ns, tz=UTC]``).  ``timestamp`` is
+the local receive time and ``exchange_timestamp`` the venue's matching-engine
+time (identical for LOBSTER, where only exchange time exists).  Because every
+frame sits on one UTC clock, frames from different venues **are** comparable:
+they can be joined or concatenated directly.  A source in a venue-local clock
+(LOBSTER, US/Eastern) is converted to UTC on load; a source already in epoch-UTC
+(Bitstamp) keeps its wall-clock instants and only gains the zone and the
+nanosecond unit.
+
+Same-instant order: a timestamp alone cannot order events that share an
+instant, so the deterministic **total order** is ``timestamp``, then — as
+tie-breaks when present — the venue ``sequence`` (:data:`SEQUENCE_COLUMN`), then
+``event_id`` (the dense per-order key on the L3 path), then the local
+``ingest_seq`` (:data:`INGEST_SEQ_COLUMN`).  :func:`time_order_keys` returns that
+key list for a frame, and the per-order reconstructions (``queue_positions``)
+sort by it.  Every loader-built frame is produced by fixed, stable sorts, so the
+rebuild is deterministic run-to-run.  On a price-level (L2) feed there is no
+``event_id``; ties there fall to ``sequence`` / ``ingest_seq`` when tracked,
+otherwise to the loader's stable arrival order.  Enforcing the full key inside
+the price-level depth engine — so an alternate engine reproduces it bit-for-bit
+— lands with the engine separation and rewrite (#136 / #104 / #138), when it can
+be checked against that second backend.
 
 Ordering keys (both **optional**, so neither is in :data:`EVENT_COLUMNS`;
 consumers read them when present):
@@ -92,17 +108,24 @@ if TYPE_CHECKING:
 # column.  List every version this build can still read in
 # ``_SUPPORTED_SCHEMA_VERSIONS``.
 
-SCHEMA_VERSION: str = "1.0"
-"""Version of the canonical Parquet/Arrow schema written to file metadata."""
+SCHEMA_VERSION: str = "2.0"
+"""Version of the canonical Parquet/Arrow schema written to file metadata.
+
+``2.0`` (issue #154) makes both timestamp clocks tz-aware UTC nanoseconds
+(``timestamp[ns, tz=UTC]``); ``1.0`` wrote them tz-naive in each venue's native
+clock.  Both are still read (a ``1.0`` file is self-describing and loads as the
+tz-naive frame it stored)."""
 
 SCHEMA_VERSION_KEY: bytes = b"ob_analytics_schema_version"
 """Parquet metadata key under which :data:`SCHEMA_VERSION` is stored.
 
 Bytes, because Arrow file-metadata keys and values are raw bytes."""
 
-_SUPPORTED_SCHEMA_VERSIONS: frozenset[str] = frozenset({"1.0"})
+_SUPPORTED_SCHEMA_VERSIONS: frozenset[str] = frozenset({"1.0", "2.0"})
 """Schema versions this build can read.  A file tagged with anything else
-raises; an untagged (legacy) file loads with a warning."""
+raises; an untagged (legacy) file loads with a warning.  ``1.0`` (pre-#154,
+tz-naive timestamps) still reads: Parquet is self-describing, so pyarrow returns
+the exact dtype the file stored."""
 
 
 def check_schema_version(version: str | None, *, source: str = "<parquet>") -> None:
@@ -152,6 +175,43 @@ SEQUENCE_COLUMN: str = "sequence"
 
 INGEST_SEQ_COLUMN: str = "ingest_seq"
 """Name of the optional local monotonic ingest-counter column (``int64``)."""
+
+TIMESTAMP_COLUMN: str = "timestamp"
+"""Name of the primary (receive-clock) timestamp column."""
+
+# Tie-break keys applied after ``timestamp``, in priority order, to totally
+# order events that share an instant (issue #154).  The venue ``sequence`` is
+# the authoritative order when a source publishes one; ``event_id`` is the dense
+# per-order key always present on the L3 path; ``ingest_seq`` is the local
+# arrival counter that backs the price-level (L2) path when tracking is on.
+_TIME_ORDER_TIEBREAKS: tuple[str, ...] = (
+    SEQUENCE_COLUMN,
+    "event_id",
+    INGEST_SEQ_COLUMN,
+)
+
+
+def time_order_keys(df: pd.DataFrame) -> list[str]:
+    """Return the canonical same-instant sort keys present in *df* (issue #154).
+
+    The deterministic total order is ``timestamp`` followed by whichever of the
+    tie-break keys (:data:`SEQUENCE_COLUMN`, ``event_id``,
+    :data:`INGEST_SEQ_COLUMN`) *df* carries, in that priority order.  Sorting a
+    frame by these keys reproduces the same event order on every run and in
+    every engine implementation, so the rebuilt book does not depend on
+    incidental input order at a shared instant.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        A frame carrying at least a ``timestamp`` column.
+
+    Returns
+    -------
+    list of str
+        ``["timestamp", ...]`` with the tie-break columns that are present.
+    """
+    return [TIMESTAMP_COLUMN, *(k for k in _TIME_ORDER_TIEBREAKS if k in df.columns)]
 
 
 # Required by price_level_volume / set_order_types (see depth.py).
