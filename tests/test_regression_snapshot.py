@@ -60,11 +60,18 @@ def test_demo_fingerprints(demo_result):
     # created row are now typed "pre-existing" instead of "unknown" — only
     # the events type column moves; trades/depth/depth_summary hashes are
     # unchanged.
+    # 2026-08-25 (#154, tz-aware UTC nanosecond time model): both clocks are
+    # now datetime64[ns, UTC] instead of tz-naive datetime64[ms]. Bitstamp
+    # epoch-milliseconds already count from the UTC epoch, so the reconstructed
+    # instants are unchanged and depth / depth_summary values and row order are
+    # byte-identical to before — only the timestamp DTYPE moved. The fingerprint
+    # hashes dtype + values (tz-aware datetime hashes via its string form), so
+    # all four digests changed even though no number did.
     EXPECTED: dict[str, str] = {
-        "events": "29223021ef93928e8d7353d983ec41fada5bf8737ce7284613c45b990a2a41da",
-        "trades": "e724c05b6584bfaf111f054e5066da8aec9d59e3315bb2f0a8ca38ae9696dc1a",
-        "depth": "c8858b674895a3ca2cb5ea2f9a1ca6aa84f18167b57fdc4d1891bc1ee0e7a608",
-        "depth_summary": "7de44b812f98b629bc573dd06dd43d1c5b02ba9c6d2ebd47807186df6d5a1db2",
+        "events": "d2d637dd45d4b61e3cd63d1321ceb5a1d9e5fe32998cdb79ae2a766d73262853",
+        "trades": "24483443747e7cd1c21ef700733b90f9c17c9e54d1aa80cddf5fb1ede1df16d8",
+        "depth": "15c2c34c57783af0ab3aeeb1c156e0a6dcd5a42ab456e9c25cece120be04cd0c",
+        "depth_summary": "dc58f1c0838dcc6141910d5c9888cb0f1ce0b136b9d62d1daae7078f0ceb5fe2",
     }
     if EXPECTED:
         assert fps == EXPECTED
