@@ -70,10 +70,14 @@ def _make_exchange(exchange_id: str) -> Any:
 
 
 def _epoch_ms_to_ts(ms: Any) -> pd.Timestamp:
-    """CCXT timestamps are epoch-ms; ``None`` falls back to receive time."""
+    """CCXT timestamps are epoch-ms; ``None`` falls back to receive time.
+
+    Both branches land on the canonical tz-aware UTC nanosecond clock
+    (issue #154).
+    """
     if ms is None:
-        return pd.Timestamp.now(tz="UTC")
-    return pd.Timestamp(int(ms), unit="ms", tz="UTC")
+        return pd.Timestamp.now(tz="UTC").as_unit("ns")
+    return pd.Timestamp(int(ms), unit="ms", tz="UTC").as_unit("ns")
 
 
 class CcxtCapturer(LiveCapturer):
@@ -368,7 +372,7 @@ class CcxtCapturer(LiveCapturer):
         """
         return {
             "trade_id": t.get("id") or "",
-            "timestamp": pd.Timestamp.now(tz="UTC"),
+            "timestamp": pd.Timestamp.now(tz="UTC").as_unit("ns"),
             "exchange_timestamp": _epoch_ms_to_ts(t.get("timestamp")),
             "price": float(t["price"]),
             "amount": float(t["amount"]),

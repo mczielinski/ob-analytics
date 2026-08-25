@@ -81,8 +81,8 @@ def empty_trades() -> pd.DataFrame:
 _EMPTY_EVENT_DTYPES: dict[str, str] = {
     "event_id": "int64",
     "id": "int64",
-    "timestamp": "datetime64[ns]",
-    "exchange_timestamp": "datetime64[ns]",
+    "timestamp": "datetime64[ns, UTC]",
+    "exchange_timestamp": "datetime64[ns, UTC]",
     "price": "float64",
     "volume": "float64",
     "direction": "object",
@@ -131,6 +131,17 @@ def attach_ingest_seq(frame: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Timestamp conversions
 # ---------------------------------------------------------------------------
+#
+# The canonical time model (issue #154) is tz-aware UTC nanoseconds:
+# ``datetime64[ns, UTC]`` (Arrow ``timestamp[ns, tz=UTC]``).  Every loader
+# builds its clocks through these helpers, so frames from different venues sit
+# on one clock.  The conversion functions below take a source's native
+# representation (integer epoch, or session-relative seconds after midnight)
+# and land it on that shared clock; the inverses reverse the process for the
+# round-trip writers.
+
+# The canonical timestamp dtype for every schema timestamp column.
+UTC_NS_DTYPE = "datetime64[ns, UTC]"
 
 # Nanoseconds per unit: ``datetime_to_epoch`` takes a Timedelta's int64 ns
 # count and divides by this to land in the requested unit.
@@ -143,30 +154,40 @@ _EPOCH_DIVISORS: dict[str, int] = {
 
 
 def epoch_to_datetime(series: pd.Series, unit: str) -> pd.Series:
-    """Convert numeric epoch timestamps to :class:`pandas.Timestamp`.
+    """Convert numeric epoch timestamps to tz-aware UTC nanosecond datetimes.
+
+    Epoch integers count from the Unix epoch in UTC, so the values are already
+    on the shared clock; this attaches the UTC zone and fixes the unit at
+    nanoseconds (see the canonical time model, issue #154).
 
     Parameters
     ----------
     series : pandas.Series
         Numeric timestamps (integers or floats).
     unit : str
-        Epoch unit — one of ``"s"``, ``"ms"``, ``"us"``, or ``"ns"``.
+        Epoch unit of the input — one of ``"s"``, ``"ms"``, ``"us"``, or
+        ``"ns"``.
 
     Returns
     -------
     pandas.Series
-        Datetime series (dtype ``datetime64[ns]``).
+        Datetime series (dtype ``datetime64[ns, UTC]``).
     """
-    return pd.to_datetime(series, unit=unit)  # ty: ignore[no-matching-overload]
+    return pd.to_datetime(series, unit=unit, utc=True).astype(  # ty: ignore[no-matching-overload]
+        UTC_NS_DTYPE
+    )
 
 
 def datetime_to_epoch(series: pd.Series, unit: str) -> pd.Series:
     """Convert a datetime :class:`pandas.Series` back to numeric epoch values.
 
+    Accepts the canonical tz-aware UTC series and, for robustness, a tz-naive
+    series (read as UTC); the returned integers are epoch counts in *unit*.
+
     Parameters
     ----------
     series : pandas.Series
-        Datetime series (dtype ``datetime64[ns]``).
+        Datetime series (canonically ``datetime64[ns, UTC]``).
     unit : str
         Target epoch unit — one of ``"s"``, ``"ms"``, ``"us"``, or ``"ns"``.
 
@@ -175,51 +196,66 @@ def datetime_to_epoch(series: pd.Series, unit: str) -> pd.Series:
     pandas.Series
         Integer epoch values in the requested unit.
     """
-    epoch = pd.Timestamp("1970-01-01")
-    delta = series - epoch
+    utc = pd.to_datetime(series, utc=True).astype(UTC_NS_DTYPE)
+    epoch = pd.Timestamp("1970-01-01", tz="UTC")
+    delta = (utc - epoch).astype("timedelta64[ns]")
     divisor = _EPOCH_DIVISORS[unit]
     return (delta.astype("int64") // divisor).astype("int64")
 
 
 def seconds_after_midnight_to_datetime(
-    series: pd.Series, date: pd.Timestamp
+    series: pd.Series, date: pd.Timestamp, tz: str
 ) -> pd.Series:
-    """Convert seconds-after-midnight floats to :class:`pandas.Timestamp`.
+    """Convert session-relative seconds-after-midnight to tz-aware UTC datetimes.
 
-    LOBSTER message files record timestamps as fractional seconds elapsed
-    since the start of the trading day (midnight local time).
+    LOBSTER message files record timestamps as fractional seconds elapsed since
+    the start of the trading day (midnight *local* time), with no receive clock
+    and no time zone.  Placing them on the shared UTC clock therefore needs both
+    the session date and the venue's time zone: the seconds are anchored to
+    *date* in *tz*, then converted to UTC (see issue #154).
 
     Parameters
     ----------
     series : pandas.Series
         Seconds after midnight (float).
     date : pandas.Timestamp
-        Calendar date of the trading session.  Must be normalised to
+        Calendar date of the trading session, tz-naive and normalised to
         midnight (``date.normalize()``).
+    tz : str
+        The venue's local time zone (e.g. ``"America/New_York"``), used to place
+        the session's midnight on the UTC clock.
 
     Returns
     -------
     pandas.Series
-        Absolute datetime series anchored to *date*.
+        Absolute datetime series (dtype ``datetime64[ns, UTC]``).
     """
-    return date + pd.to_timedelta(series, unit="s")
+    local = date + pd.to_timedelta(series, unit="s")
+    return local.dt.tz_localize(tz).dt.tz_convert("UTC").astype(UTC_NS_DTYPE)
 
 
 def datetime_to_seconds_after_midnight(
-    series: pd.Series, date: pd.Timestamp
+    series: pd.Series, date: pd.Timestamp, tz: str
 ) -> pd.Series:
-    """Convert absolute datetimes to seconds elapsed since midnight.
+    """Convert absolute tz-aware datetimes back to session-relative seconds.
+
+    The inverse of :func:`seconds_after_midnight_to_datetime`: the UTC series is
+    converted to the venue's local time *tz* and measured from local midnight
+    *date*.
 
     Parameters
     ----------
     series : pandas.Series
-        Absolute datetime series.
+        Absolute datetime series (canonically ``datetime64[ns, UTC]``).
     date : pandas.Timestamp
-        Calendar date of the trading session (midnight anchor).
+        Calendar date of the trading session (tz-naive local midnight anchor).
+    tz : str
+        The venue's local time zone (e.g. ``"America/New_York"``).
 
     Returns
     -------
     pandas.Series
         Float seconds after midnight.
     """
-    return (series - date).dt.total_seconds()
+    local = pd.to_datetime(series, utc=True).dt.tz_convert(tz).dt.tz_localize(None)
+    return (local - date).dt.total_seconds()

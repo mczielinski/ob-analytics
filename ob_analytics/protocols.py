@@ -99,6 +99,12 @@ class RunContext:
     trading_date : str or pd.Timestamp, optional
         Calendar date anchor (LOBSTER needs this; venues with continuous
         trading do not).
+    session_tz : str, optional
+        The venue's local time zone for a session-relative feed (LOBSTER),
+        used to place its seconds-after-midnight on the shared UTC clock
+        (issue #154).  ``None`` lets the loader use its own default
+        (``ob_analytics.lobster.LOBSTER_DEFAULT_TZ``).  Ignored by venues that
+        already carry an absolute clock (Bitstamp, CCXT).
     symbol : str, optional
         The instrument this run covers (e.g. ``"BTC/USD"``).  When supplied,
         loaders tag each row with an optional ``symbol`` column so cross-venue
@@ -111,6 +117,7 @@ class RunContext:
     """
 
     trading_date: object | None = None
+    session_tz: str | None = None
     symbol: str | None = None
     venue: str | None = None
 

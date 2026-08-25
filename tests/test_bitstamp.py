@@ -71,10 +71,12 @@ class TestBitstampLoader:
 
     def test_timestamps_are_datetime(self, sample_events: pd.DataFrame):
         events = sample_events
-        # BitstampLoader converts epoch -> tz-naive datetime64 (the loader uses
-        # pd.to_datetime without utc=True). Pin that contract.
-        assert pd.api.types.is_datetime64_any_dtype(events["timestamp"])
-        assert pd.api.types.is_datetime64_any_dtype(events["exchange_timestamp"])
+        # BitstampLoader lands both clocks on the canonical tz-aware UTC
+        # nanosecond model (issue #154): epoch-ms already counts from the UTC
+        # epoch, so the instants keep their wall clock and only gain the zone
+        # and the ns unit. Pin that contract.
+        assert events["timestamp"].dtype == "datetime64[ns, UTC]"
+        assert events["exchange_timestamp"].dtype == "datetime64[ns, UTC]"
 
     def test_direction_is_ordered_categorical(self, sample_events: pd.DataFrame):
         events = sample_events

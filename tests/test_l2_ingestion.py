@@ -294,10 +294,10 @@ class TestDepthCsvWriter:
         DepthCsvWriter().write({"depth": depth_in}, tmp_path)
         assert (tmp_path / "depth.csv").exists()
         depth_out = L2DepthLoader().load(tmp_path)
-        # The loader canonicalises timestamps to datetime64[ns]; compare the
-        # instants at a common resolution.
+        # Both the toy fixture and the loader output carry the canonical
+        # tz-aware UTC nanosecond clock (issue #154), so the instants compare
+        # directly.
         expected = depth_in.copy()
-        expected["timestamp"] = expected["timestamp"].astype("datetime64[ns]")
         pd.testing.assert_frame_equal(
             expected.reset_index(drop=True),
             depth_out.reset_index(drop=True),

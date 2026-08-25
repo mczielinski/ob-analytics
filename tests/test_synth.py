@@ -97,10 +97,11 @@ def test_events_conform_to_schema():
     # event_id is a dense, sorted, unique 1..N key.
     assert events["event_id"].tolist() == list(range(1, len(events) + 1))
     assert events["event_id"].is_unique
-    # Timestamps are tz-naive (schema policy) and datetime typed.
-    assert events["timestamp"].dt.tz is None
-    assert pd.api.types.is_datetime64_ns_dtype(events["timestamp"])
-    assert pd.api.types.is_datetime64_ns_dtype(events["exchange_timestamp"])
+    # Timestamps are tz-aware UTC nanoseconds (schema policy, issue #154).
+    assert str(events["timestamp"].dt.tz) == "UTC"
+    assert str(events["exchange_timestamp"].dt.tz) == "UTC"
+    assert events["timestamp"].dtype == "datetime64[ns, UTC]"
+    assert events["exchange_timestamp"].dtype == "datetime64[ns, UTC]"
     assert set(events["action"].unique()) <= {"created", "changed", "deleted"}
     assert set(events["direction"].unique()) <= {"bid", "ask"}
 

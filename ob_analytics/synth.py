@@ -72,6 +72,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
+from ob_analytics._utils import UTC_NS_DTYPE
 from ob_analytics.analytics import set_order_types
 from ob_analytics.exceptions import ConfigError
 
@@ -91,7 +92,8 @@ _TradeRow = tuple[float, int, float, str, int, int, int, int]
 
 # Module-level default so the frozen dataclass field is a name, not a call
 # evaluated in the class body (Timestamp is immutable, so sharing it is safe).
-_DEFAULT_START_TIME = pd.Timestamp("2020-01-01 00:00:00")
+# Tz-aware UTC, matching the schema's timestamp policy (issue #154).
+_DEFAULT_START_TIME = pd.Timestamp("2020-01-01 00:00:00", tz="UTC")
 
 
 @dataclass(frozen=True)
@@ -110,8 +112,9 @@ class SynthConfig:
     duration : float
         Length of the simulated session in seconds.
     start_time : pandas.Timestamp
-        Wall-clock anchor for the first possible event; timestamps are
-        tz-naive, matching the schema's timestamp policy.
+        Wall-clock anchor for the first possible event.  Emitted timestamps are
+        tz-aware UTC nanoseconds, matching the schema's timestamp policy
+        (issue #154); a tz-naive anchor is read as UTC.
     arrival_process : {"poisson", "hawkes"}
         Arrival model for all three streams. ``"poisson"`` is the constant-rate
         baseline; ``"hawkes"`` is self-exciting (each event briefly raises the
@@ -628,10 +631,13 @@ class _Simulator:
 
     # ── Frame construction ───────────────────────────────────────────
 
-    def _timestamps(self, seconds: np.ndarray) -> np.ndarray:
+    def _timestamps(self, seconds: np.ndarray) -> pd.DatetimeIndex:
+        # ``Timestamp.value`` is UTC nanoseconds since the epoch (a tz-naive
+        # anchor is read as UTC), so adding the per-event offsets and parsing
+        # back with ``utc=True`` yields the canonical tz-aware UTC ns clock.
         start_ns = self.cfg.start_time.value
         offsets = np.round(seconds * 1_000_000_000).astype(np.int64)
-        return (start_ns + offsets).astype("datetime64[ns]")
+        return pd.to_datetime(start_ns + offsets, utc=True).astype(UTC_NS_DTYPE)
 
     def _build_events_frame(self) -> pd.DataFrame:
         rows = self.events

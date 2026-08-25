@@ -162,9 +162,12 @@ class BitstampLoader:
         # key of the sort above; _remove_duplicates only filters rows), so a
         # stable global (id, timestamp) lexsort gathered back positionally is
         # equivalent to the per-group sort — without the per-group Python
-        # lambda, which dominated load time (~19s on the bundled sample).
-        order = np.lexsort((events["timestamp"].to_numpy(), events["id"].to_numpy()))
-        events["timestamp"] = events["timestamp"].to_numpy()[order]
+        # lambda, which dominated load time (~19s on the bundled sample).  The
+        # lexsort key is the raw UTC-ns int64; the tz-aware column is reordered
+        # through its ExtensionArray so the zone and unit survive (issue #154).
+        ts_i8 = events["timestamp"].astype("int64").to_numpy()
+        order = np.lexsort((ts_i8, events["id"].to_numpy()))
+        events["timestamp"] = events["timestamp"].array[order]
 
         events["raw_event_type"] = pd.NA
 
@@ -256,9 +259,9 @@ class BitstampTradeReader:
 
         ev_lookup = self._build_lookup(events)
 
-        recv_ms = pd.to_datetime(raw["timestamp"], unit="ms", utc=True).dt.tz_convert(
-            None
-        )
+        # Capture timestamps are epoch milliseconds; keep them on the shared
+        # tz-aware UTC nanosecond clock (issue #154).
+        recv_ms = epoch_to_datetime(raw["timestamp"], "ms")
         amounts = raw["amount"].astype(float).round(self._config.volume_decimals)
 
         maker_event_id = self._resolve_event_ids(maker_id, amounts, ev_lookup)
@@ -270,7 +273,9 @@ class BitstampTradeReader:
 
         trades = pd.DataFrame(
             {
-                "timestamp": recv_ms.values,
+                # ``.array`` keeps the tz-aware UTC dtype (``.values`` would
+                # drop the zone to a naive numpy datetime64).
+                "timestamp": recv_ms.array,
                 "price": raw["price"].astype(float).values,
                 "volume": amounts.values,
                 "direction": pd.Categorical(
@@ -440,8 +445,9 @@ class BitstampWriter:
         side = trades["direction"].astype(str)
         buy_order_id = np.where(side == "buy", trades["taker"], trades["maker"])
         sell_order_id = np.where(side == "buy", trades["maker"], trades["taker"])
-        ts_ns = trades["timestamp"].astype("datetime64[ns]").astype(np.int64)
-        ts_ms = ts_ns // 1_000_000
+        # The capture format records epoch-millisecond timestamps; go through the
+        # canonical inverse so a tz-aware UTC column round-trips cleanly.
+        ts_ms = datetime_to_epoch(trades["timestamp"], "ms")
         out = pd.DataFrame(
             {
                 "trade_id": np.arange(1, len(trades) + 1, dtype=np.int64),
