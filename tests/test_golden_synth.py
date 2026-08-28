@@ -60,17 +60,26 @@ _GOLDEN_CONFIG = SynthConfig(seed=143, duration=60.0)
 # DTYPE moved. The fingerprint hashes dtype + values (and a tz-aware datetime
 # column hashes through its string form), so all six digests changed even
 # though no number did.
+# 2026-08-26 (#155, integer-tick prices): every ``price`` column is now
+# ``int64`` ticks instead of a ``double`` in the quote currency. The simulator
+# already carried prices as integer ticks, so the values are the same book,
+# re-expressed: a former ``100.00`` float is now ``10000`` ticks (tick_size
+# 0.01). The DTYPE moved (double -> int64) and the stored numbers moved (× 100),
+# so every price-bearing frame's digest changed. Scale-free columns (bps depth,
+# order-book ``bps`` / ``liquidity``, volumes) are unchanged in value; the
+# reconstructed book is identical to the pre-tick one (verified element-wise
+# against the float pipeline: ticks × tick_size reproduces it exactly).
 EXPECTED: dict[str, str] = {
-    "events": "ca3a477a2b6767ffd06e1535f75f8ffadd48745843cd232bd4b13b08b92d92f6",
-    "trades": "d2343b9e9245de7684218379d8d63b8d3ebbfed4ef5f931af47db44514add13a",
-    "depth": "244ed099147b29519c0131442968a0be64c141ff52926c7eed135af4f52d45aa",
-    "depth_summary": "4d01b99c0675e4a0b2c75e918a5e1f23fcea0407ba0a177030f3e70a2fd988a9",
+    "events": "6e88626676163bb92c67953720467f7ef31c63b18a13b6c9cb5ccc89d4b3c8b2",
+    "trades": "aaba2cc755bfcf91f980b0f0f4d2141a36fbca1a446a755ff7161b661c74c0d8",
+    "depth": "1c9df9cbf685c8e125706a1687d04a81384fdb6e45b557e93c9fb9561d70576e",
+    "depth_summary": "6781a478fd59b6d3176a86306f60f3df5f5345f2ec7bbb4ac0759f1d40efdb16",
     "order_book": (
-        "0d21fa4b99d2035163b6c2a0c8c554df10af066b43fae05bed63d3bac1b68c24:"
-        "55471e7232e0e48e67588de731b485459c1e0fa00b0ada263d924c6866eed831"
+        "c21d053a23abe1e879972308de6398930912929a04c7efb47add18a99d24fe69:"
+        "e2828c08dd91fc4236c96cbd5b22813d18cd497401c8de6828be62820d2652ad"
     ),
     "queue_positions": (
-        "150f254da8e74369b053fa37e2878763dc023d598b21726d68b7cd337778fb82"
+        "841eadc3982b32aed360f51fc6fd3d5096226f9c84ccf3c290c34b9f9d3a6cf0"
     ),
 }
 
