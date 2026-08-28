@@ -21,13 +21,27 @@ class PipelineConfig(BaseModel):
     model_config = {"frozen": True}
 
     # ── Price / volume precision ──────────────────────────────────────────
+    tick_size: float = Field(
+        default=0.01,
+        gt=0,
+        description=(
+            "The instrument's minimum price increment, in the quote currency "
+            "(issue #155).  Prices are stored as a whole number of ticks "
+            "(``int64``); the quote-currency price is ``ticks * tick_size``.  "
+            "0.01 (default) is a cent grid (USD equities, BTC-USD); use the "
+            "venue's real tick for small-tick crypto or 0-1 prediction markets. "
+            "By default it matches ``price_decimals`` (``10 ** -price_decimals``)."
+        ),
+    )
     price_decimals: int = Field(
         default=2,
         ge=0,
         le=18,
         description=(
-            "Number of decimal places in price.  2 for USD equities / "
-            "BTC-USD; 8 for satoshi-denominated pairs; 4-5 for FX."
+            "Display precision: decimal places to show when a tick price is "
+            "rendered back to the quote currency for a plot or CSV.  2 for USD "
+            "equities / BTC-USD; 8 for satoshi-denominated pairs; 4-5 for FX.  "
+            "The stored price grid is ``tick_size``, not this — see issue #155."
         ),
     )
     volume_decimals: int = Field(
@@ -49,9 +63,12 @@ class PipelineConfig(BaseModel):
         default=1,
         ge=1,
         description=(
-            "Divisor applied to raw prices before rounding.  1 (default) "
-            "means no scaling.  LOBSTER uses 10 000 (prices are in "
-            "ten-thousandths of a dollar)."
+            "Raw-feed encoding scale: the divisor that turns a source's raw "
+            "integer price into the quote currency, before it is converted to "
+            "ticks.  1 (default) means the raw price is already in the quote "
+            "currency (Bitstamp).  LOBSTER uses 10 000 (prices are in "
+            "ten-thousandths of a dollar).  This is the feed's encoding, "
+            "separate from the instrument's ``tick_size``."
         ),
     )
 
@@ -83,8 +100,28 @@ class PipelineConfig(BaseModel):
     # ── Derived helpers ───────────────────────────────────────────────────
     @property
     def price_multiplier(self) -> int:
-        """Multiplier to convert float prices to integer price units."""
-        return 10**self.price_decimals
+        """Integer inverse of :attr:`tick_size` (``round(1 / tick_size)``).
+
+        The multiplier that turns a quote-currency price into an integer tick
+        count, defined only when the tick is a reciprocal integer (the usual
+        case: a cent, nickel, or quarter grid).  With the default ``tick_size``
+        of ``0.01`` this is ``100``, matching the former ``10 ** price_decimals``.
+
+        Raises
+        ------
+        ValueError
+            If :attr:`tick_size` has no integer inverse; convert prices with
+            ``ob_analytics._utils.price_to_ticks`` (which divides) instead.
+        """
+        from ob_analytics._utils import tick_multiplier
+
+        multiplier = tick_multiplier(self.tick_size)
+        if multiplier is None:
+            raise ValueError(
+                f"tick_size={self.tick_size!r} has no integer inverse; use "
+                "ob_analytics._utils.price_to_ticks to convert prices to ticks."
+            )
+        return multiplier
 
     @property
     def bps_labels(self) -> list[str]:

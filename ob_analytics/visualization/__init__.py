@@ -208,6 +208,8 @@ __all__ = [
     # Themes / persistence
     "PlotTheme",
     "available_concepts",
+    # Ticks -> quote-currency for low-level plotting (issue #155)
+    "display_result",
     "focus_window",
     "format_time_axis",
     # Helpers users actually call
@@ -229,7 +231,7 @@ def __getattr__(name: str) -> Any:
     imports :func:`plot` from this package; importing them eagerly here would
     create a cycle.  ``prepare`` is re-exported lazily for symmetry.
     """
-    if name in ("plot_result", "available_concepts"):
+    if name in ("plot_result", "available_concepts", "display_result"):
         from ob_analytics.visualization import gallery
 
         return getattr(gallery, name)

@@ -152,8 +152,10 @@ class SynthConfig:
         Probability that a new limit order is a bid, and that a market order is
         a buy. 0.5 each gives a balanced book.
     price_decimals, volume_decimals : int
-        Rounding precision for emitted prices and volumes, matching
-        :class:`~ob_analytics.config.PipelineConfig`.
+        Display precision, matching :class:`~ob_analytics.config.PipelineConfig`.
+        Emitted prices are integer ticks (issue #155), so ``price_decimals`` only
+        describes how many places to show when a tick is rendered back to the
+        quote currency (``tick * tick_size``); ``volume_decimals`` rounds sizes.
     iceberg_fraction : float
         Probability that a new limit order is an iceberg (off at 0.0).
     iceberg_size_multiple : float
@@ -651,7 +653,10 @@ class _Simulator:
         directions = [r[7] for r in rows]
 
         timestamp = self._timestamps(seconds)
-        price = np.round(ticks * self.cfg.tick_size, self.cfg.price_decimals)
+        # The simulator already carries prices as integer tick counts, which is
+        # exactly the canonical storage (issue #155), so emit them directly
+        # instead of scaling to a quote-currency float.
+        price = ticks
 
         return pd.DataFrame(
             {
@@ -687,7 +692,8 @@ class _Simulator:
         maker = np.fromiter((r[6] for r in rows), dtype=np.int64, count=n)
         taker = np.fromiter((r[7] for r in rows), dtype=np.int64, count=n)
 
-        price = np.round(ticks * self.cfg.tick_size, self.cfg.price_decimals)
+        # Integer tick counts are the canonical price storage (issue #155).
+        price = ticks
 
         return pd.DataFrame(
             {

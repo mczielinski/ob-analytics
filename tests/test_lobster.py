@@ -11,11 +11,17 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from ob_analytics._utils import price_to_ticks
 from ob_analytics.lobster import (
     LobsterLoader,
     LobsterTradeReader,
     LobsterWriter,
 )
+
+# The reconstruction/depth tests below build canonical events by hand; canonical
+# prices are integer ticks (issue #155), so the fixtures quantise their
+# quote-currency prices at the default cent grid before feeding the writer.
+_TEST_TICK_SIZE = 0.01
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -302,6 +308,9 @@ class TestReconstructOrderbook:
     def _book_events(self, rows: list[dict]) -> pd.DataFrame:
         df = pd.DataFrame(rows)
         df["timestamp"] = pd.to_datetime(df["timestamp"])
+        # Canonical events carry integer-tick prices (issue #155); the rows give
+        # quote-currency dollars, so quantise them at the cent grid.
+        df["price"] = price_to_ticks(df["price"].to_numpy(dtype=float), _TEST_TICK_SIZE)
         if "id" not in df.columns:
             df["id"] = np.arange(1, len(df) + 1)
         df["action"] = pd.Categorical(
@@ -579,10 +588,11 @@ class TestLobsterDepthFromOrderbook:
                 b = j * 4
                 ap, av, bp, bv = arr[i, b], arr[i, b + 1], arr[i, b + 2], arr[i, b + 3]
                 if ap != _DUMMY_ASK_PRICE and av > 0:
-                    pr = round(ap / divisor, dec)
+                    # Canonical depth prices are integer ticks (issue #155).
+                    pr = int(price_to_ticks(np.array([ap / divisor]), cfg.tick_size)[0])
                     curr[("ask", pr)] = curr.get(("ask", pr), 0) + av
                 if bp != _DUMMY_BID_PRICE and bv > 0:
-                    pr = round(bp / divisor, dec)
+                    pr = int(price_to_ticks(np.array([bp / divisor]), cfg.tick_size)[0])
                     curr[("bid", pr)] = curr.get(("bid", pr), 0) + bv
             for key in set(prev) | set(curr):
                 pv, cv = prev.get(key, 0.0), curr.get(key, 0.0)
@@ -628,4 +638,5 @@ class TestLobsterDepthFromOrderbook:
         cfg = PipelineConfig(price_decimals=2, price_divisor=10_000)
         depth, _ = lobster_depth_from_orderbook(events, ob_path, cfg)
         assert list(depth["direction"].astype(str)) == ["ask", "ask", "bid", "bid"]
-        assert list(depth["price"]) == [500.1, 500.2, 499.8, 499.9]
+        # Integer ticks at the cent grid (issue #155): 500.1 -> 50010, etc.
+        assert list(depth["price"]) == [50010, 50020, 49980, 49990]

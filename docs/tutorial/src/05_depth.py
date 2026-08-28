@@ -57,8 +57,8 @@ depth
 
 # %%
 import matplotlib.pyplot as plt
-
 from _docs_theme import plot_book_keyframes, plot_toy_depth_heatmap
+
 from ob_analytics.depth import depth_metrics, get_spread
 
 summary = depth_metrics(depth)
@@ -183,7 +183,6 @@ wall["direction"] = pd.Categorical(wall["direction"], categories=["bid", "ask"])
 # %%
 import matplotlib.pyplot as plt
 
-
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 4.6), sharey=True)
 for ax, bias, title in (
     (ax1, 1.0, "col_bias=1.0 (default, linear)"),
@@ -238,9 +237,13 @@ fig.tight_layout()
 
 # %%
 from _docs_theme import plot_sample_heatmap
+
 from ob_analytics import Pipeline, sample_csv_path
+from ob_analytics.visualization import display_result
 
 result = Pipeline().run(sample_csv_path())
+# Canonical prices are integer ticks (issue #155); show quote currency.
+result = display_result(result)
 fig = plot_sample_heatmap(result, col_bias=0.4)
 
 # %% [markdown]

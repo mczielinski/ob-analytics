@@ -80,7 +80,9 @@ def _cmd_process(args: argparse.Namespace) -> None:
         "depth": result.depth,
         "depth_summary": result.depth_summary,
     }
-    save_data(result_dict, output)
+    # Pass the config so each Parquet file is tagged with its tick size
+    # (issue #155), letting a reader recover the quote-currency price.
+    save_data(result_dict, output, config=result.config)
     logger.info("Saved to: {}", output.resolve())
 
     if args.gallery:
@@ -150,12 +152,21 @@ def _cmd_gallery(args: argparse.Namespace) -> None:
     logger.info("Loading data from {}...", data_path)
     data = load_data(data_path)
 
+    # Recover the tick size the data was written with (issue #155), surfaced by
+    # load_data on each frame's ``attrs``, so the gallery renders quote-currency
+    # prices.  A legacy (pre-#155) file has no tick size and already stores float
+    # prices, so fall back to 1.0 (prices shown as-is).
+    tick_size = next(
+        (df.attrs["tick_size"] for df in data.values() if "tick_size" in df.attrs),
+        1.0,
+    )
+
     result = PipelineResult(
         events=data["events"],
         trades=data["trades"],
         depth=data["depth"],
         depth_summary=data["depth_summary"],
-        config=PipelineConfig(),
+        config=PipelineConfig(tick_size=tick_size),
     )
 
     gallery_path = generate_gallery(

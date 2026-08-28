@@ -12,17 +12,22 @@ change without notice.
 
 ## Schema version
 
-The current version is **`2.0`** (the constant
-[`ob_analytics.schemas.SCHEMA_VERSION`](api/schemas.md)). Version `2.0`
-(issue #154) makes both timestamp clocks tz-aware UTC nanoseconds; `1.0` wrote
-them tz-naive in each venue's native clock. Both still read — Parquet is
-self-describing, so a `1.0` file loads as the tz-naive frame it stored; re-save
-it with this build to move it onto the UTC clock.
+The current version is **`3.0`** (the constant
+[`ob_analytics.schemas.SCHEMA_VERSION`](api/schemas.md)). Version `3.0`
+(issue #155) stores every `price` column as `int64` ticks (see
+[Price policy](#price-policy)); `2.0` and `1.0` stored `price` as a `double` in
+the quote currency. Version `2.0` (issue #154) also makes both timestamp clocks
+tz-aware UTC nanoseconds; `1.0` wrote them tz-naive in each venue's native clock.
+All three still read — Parquet is self-describing, so a `1.0` / `2.0` file loads
+as the float-price frame it stored (a pre-tick file, whose prices are not
+directly comparable to a `3.0` file's ticks); re-save it with this build to move
+it onto the tick model.
 
 `save_data(..., fmt="parquet")` writes the version into each file's Arrow
 key-value metadata under the key `ob_analytics_schema_version` (bytes, because
-Arrow metadata keys and values are raw bytes). `load_data` reads the key back
-and checks it before returning the frame:
+Arrow metadata keys and values are raw bytes), alongside the tick size under
+`ob_analytics_tick_size` (see [Price policy](#price-policy)). `load_data` reads
+the version back and checks it before returning the frame:
 
 - A supported version loads normally.
 - An unsupported version raises `ConfigError`.
@@ -100,6 +105,39 @@ depth engine — so an alternate engine reproduces it bit-for-bit — lands with
 engine separation and rewrite (#136 / #104 / #138), when it can be checked
 against that second backend.
 
+## Price policy
+
+Every `price` column is a whole number of ticks (`int64`), not a float in the
+quote currency. The quote-currency price is `ticks * tick_size`, where
+`tick_size` is the instrument's minimum price increment
+([`PipelineConfig.tick_size`](api/config.md), default `0.01`). Storing the exact
+integer removes the float rounding that made small-tick and 0-1 instruments show
+crossed levels that were not real, and lets the depth engine bin and compare
+levels on exact integers. A loader converts a raw price to ticks on the way in;
+the plots and the round-trip writers convert back for display.
+
+`tick_size` is a property of the instrument, not of any one row, so it is stored
+**once per file** in Arrow key-value metadata under the key
+`ob_analytics_tick_size` — a JSON object mapping an instrument key to its tick
+size. The single-instrument pipeline writes one entry, `{"default": 0.01}`; a
+multi-instrument file (issue #147) adds entries keyed by `"venue|symbol"`. Read
+it back from another tool through pyarrow:
+
+```python
+import json
+import pyarrow.parquet as pq
+
+metadata = pq.read_schema("out/events.parquet").metadata
+tick_sizes = json.loads(metadata[b"ob_analytics_tick_size"])  # {"default": 0.01}
+tick_size = tick_sizes["default"]
+# quote-currency price = price_column * tick_size
+```
+
+`load_data` surfaces it on each returned frame's `attrs`:
+`df.attrs["tick_size"]` is the resolved default and `df.attrs["tick_sizes"]` the
+full map. A legacy (pre-`3.0`) file carries neither and stores float prices
+already in the quote currency.
+
 ## Volume and fill
 
 Per-order size follows one convention across every loader:
@@ -111,8 +149,9 @@ Per-order size follows one convention across every loader:
   `changed` row is either an execution (`fill > 0`, outstanding drops by exactly
   `fill`) or a non-executed reduction (`fill == 0`), never both.
 
-Volume units are the base asset (Bitstamp) or shares (LOBSTER). Price units are
-the quote currency.
+Volume units are the base asset (Bitstamp) or shares (LOBSTER). Prices are
+integer ticks — multiply by `tick_size` for the quote currency (see
+[Price policy](#price-policy)).
 
 ## Nullable integer columns
 
@@ -135,7 +174,7 @@ provenance columns every loader carries.
 | `id` | `int64` | — | no | Order id. Groups the events of one order over its life. |
 | `timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Local receive time. |
 | `exchange_timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Venue matching-engine time (equals `timestamp` for LOBSTER). |
-| `price` | `double` | quote currency | no | Limit price of the order. |
+| `price` | `int64` | ticks | no | Limit price as a whole number of ticks (× `tick_size` for the quote currency — see [Price policy](#price-policy)). |
 | `volume` | `double` | base asset / shares | no | Outstanding size after the event, or size removed on a delete (see [Volume and fill](#volume-and-fill)). |
 | `direction` | `dictionary<string>` | — | no | Order side: `bid` or `ask` (ordered categorical). |
 | `action` | `dictionary<string>` | — | no | Event kind: `created`, `changed`, or `deleted` (ordered categorical). |
@@ -158,7 +197,7 @@ taker provenance.
 | Column | Arrow type | Unit | Null? | Meaning |
 |---|---|---|---|---|
 | `timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Trade print time (receive clock). |
-| `price` | `double` | quote currency | no | Execution price. |
+| `price` | `int64` | ticks | no | Execution price in ticks (× `tick_size` for the quote currency). |
 | `volume` | `double` | base asset / shares | no | Executed size. |
 | `direction` | `dictionary<string>` | — | yes | Taker's aggressor side: `buy` or `sell`. Null on an L2 feed until Lee–Ready fills it, then set. |
 | `maker_event_id` | `int64` | — | yes | `event_id` of the maker (resting) order's event. Null when the trade is not attributed (L2 feeds have no order identity). |
@@ -180,7 +219,7 @@ Output of `price_level_volume`. Required columns are the
 |---|---|---|---|---|
 | `event_id` | `int64` | — | no | The event that produced this level change. Present on the L3 path; absent on an L2 feed. |
 | `timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Time of the level change. |
-| `price` | `double` | quote currency | no | Price level. |
+| `price` | `int64` | ticks | no | Price level in ticks (× `tick_size` for the quote currency). |
 | `volume` | `double` | base asset / shares | no | Resting size at this price level after the change (`0` empties the level). Never negative. |
 | `direction` | `dictionary<string>` | — | no | Side of the level: `bid` or `ask` (ordered categorical). |
 
@@ -197,10 +236,10 @@ side. This is the reconstructed book state over time.
 |---|---|---|---|---|
 | `timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Time of this book state. |
 | `event_id` | `int64` | — | no* | The event this state follows. Present when the input `depth` carried `event_id` (L3). |
-| `best_bid_price` | `double` | quote currency | no | Best bid price (`0.0` when the bid side is empty). |
+| `best_bid_price` | `int64` | ticks | no | Best bid price in ticks (`0` when the bid side is empty). |
 | `best_bid_vol` | `double` | base asset / shares | no | Resting size at the best bid. |
 | `bid_vol{N}bps` | `double` | base asset / shares | no | Resting bid volume within `N` bps of the best bid. |
-| `best_ask_price` | `double` | quote currency | no | Best ask price (`0.0` when the ask side is empty). |
+| `best_ask_price` | `int64` | ticks | no | Best ask price in ticks (`0` when the ask side is empty). |
 | `best_ask_vol` | `double` | base asset / shares | no | Resting size at the best ask. |
 | `ask_vol{N}bps` | `double` | base asset / shares | no | Resting ask volume within `N` bps of the best ask. |
 
@@ -224,7 +263,7 @@ book, hidden executions) are excluded.
 | `id` | `int64` | — | no | Order id. |
 | `placed_ts` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Time of the `created` event. |
 | `placed_vol` | `double` | base asset / shares | no | Size at placement. |
-| `price` | `double` | quote currency | no | Placement price. |
+| `price` | `int64` | ticks | no | Placement price in ticks (× `tick_size` for the quote currency). |
 | `direction` | `dictionary<string>` | — | no | Order side: `bid` or `ask`. |
 | `type` | `dictionary<string>` | — | yes | Classifier label. Present when `events` carried a `type` column. |
 | `aggressiveness_bps` | `double` | basis points | yes | Placement distance. Present when `events` carried it. |
@@ -242,7 +281,7 @@ returned as two frames (`bids` and `asks`), each with these columns.
 | `id` | `int64` | — | no | Order id of the resting order. |
 | `timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Receive time of the order's last event. |
 | `exchange_timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Exchange time of the order's last event. |
-| `price` | `double` | quote currency | no | Resting price. |
+| `price` | `int64` | ticks | no | Resting price in ticks (× `tick_size` for the quote currency). |
 | `volume` | `double` | base asset / shares | no | Outstanding resting size. |
 | `liquidity` | `double` | base asset / shares | no | Cumulative size from the best price down to this order. |
 | `bps` | `double` | basis points | no | Distance from the best price on this side, in bps. |
@@ -297,10 +336,12 @@ touch = (
 import duckdb
 
 # Query the Parquet files in place; DuckDB reads them through Arrow.
+# Prices are integer ticks, so the spread here is in ticks; read the file's
+# `ob_analytics_tick_size` metadata and multiply for the quote currency.
 spread = duckdb.sql(
     """
     SELECT timestamp,
-           best_ask_price - best_bid_price AS spread
+           best_ask_price - best_bid_price AS spread_ticks
     FROM 'out/depth_summary.parquet'
     WHERE best_bid_price > 0
     """
@@ -316,10 +357,9 @@ bids = duckdb.sql(
 
 The four cross-cutting choices the schema left open now have a decided direction
 (2026-08-23): **follow the Databento / Nautilus conventions where they are the
-standard, expressed in Arrow / Parquet, not the DBN binary format.** Sequence
-numbers (#146), instrument identity (#147), and the time model (#154) are
-implemented. Integer-tick prices (#155) change existing numbers, so they land
-next, on their own, behind the correctness gate (#143). See the roadmap (#124).
+standard, expressed in Arrow / Parquet, not the DBN binary format.** All four are
+implemented: sequence numbers (#146), instrument identity (#147), the time model
+(#154), and integer-tick prices (#155). See the roadmap (#124).
 
 ### 1. Time model: tz-aware UTC nanoseconds and event order — implemented (#154)
 
@@ -357,19 +397,26 @@ next, on their own, behind the correctness gate (#143). See the roadmap (#124).
 - **Later.** Live re-sync on a detected gap (refetch a snapshot) is the
   non-additive half and is not built yet.
 
-### 3. Integer-tick prices instead of floats — decided, not yet built (#155)
+### 3. Integer-tick prices instead of floats — implemented (#155)
 
-- **Decision.** Store price as an integer tick count (`int64`) plus a
-  **per-instrument `tick_size`** — not float, and not one global scale. Convert to
-  a float only for display. This matches the depth engine's internal integer
-  binning and the backtester-export targets (#113).
-- **Current.** Price is a `double`. LOBSTER carries a `price_divisor` (10000); the
-  depth engine multiplies by `price_multiplier` and rounds to an integer
-  internally before binning.
-- **Why later.** This is the deepest change — the `price` column in every table,
-  all price arithmetic, the engine's multiply-and-round path, every loader, and
-  the plots. It changes numbers on purpose, so it re-baselines golden output and
-  waits for the correctness gate (#143).
+- **Decision, built here.** Every `price` column is an integer tick count
+  (`int64`) plus a **per-instrument `tick_size`** — not float, and not one global
+  scale (see [Price policy](#price-policy)). The quote-currency price is
+  `ticks * tick_size`; the plots and the round-trip writers convert back for
+  display only. `tick_size` lives on
+  [`PipelineConfig`](api/config.md) at run time and in each Parquet file's
+  `ob_analytics_tick_size` metadata on disk. This matches the depth engine's
+  internal integer binning and the backtester-export targets (#113).
+- **Simpler engine, exact comparisons.** LOBSTER's `price_divisor` is now just the
+  raw-feed encoding scale; the loaders quantise to ticks once, so the depth engine
+  bins and compares levels on exact integers instead of multiplying and rounding
+  each event. Crossed-level detection is exact, removing false crosses from float
+  rounding.
+- **Breaking, by design.** This is the deepest of the four changes — the `price`
+  column in every table, all price arithmetic, every loader, and the plots. It
+  changes numbers on purpose (prices are re-expressed as ticks, and price-valued
+  analytics such as VWAP and Kyle's λ are now in tick units), so the golden
+  outputs were re-baselined behind the correctness gate (#143).
 
 ### 4. Instrument identity — implemented, first stage (#147)
 

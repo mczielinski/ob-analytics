@@ -81,6 +81,11 @@ cancelled size with ``fill == 0``.
 Timestamps are tz-aware UTC nanoseconds (the schema's canonical time model,
 issue #154) starting from an arbitrary Monday morning; ``exchange_timestamp``
 equals ``timestamp`` (as in LOBSTER sessions, where only exchange time exists).
+
+Prices are stored as integer ticks (the schema's canonical price model, issue
+#155).  The toy book has a tick size of ``1.0`` — the prices 98-103 are already
+whole ticks — so the stored integers read as the same numbers the script above
+lists; multiply by ``TICK_SIZE`` (``1.0``) for the quote currency.
 """
 
 from __future__ import annotations
@@ -88,7 +93,12 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-__all__ = ["toy_events", "toy_l2_depth", "toy_l2_trades", "toy_trades"]
+__all__ = ["TICK_SIZE", "toy_events", "toy_l2_depth", "toy_l2_trades", "toy_trades"]
+
+#: Tick size of the toy book (issue #155).  ``1.0`` so the integer-tick prices
+#: equal the whole-number prices in the script; the display price is
+#: ``ticks * TICK_SIZE``.
+TICK_SIZE = 1.0
 
 _BASE = pd.Timestamp("2026-01-05 10:00:00")
 
@@ -184,7 +194,8 @@ def toy_events() -> pd.DataFrame:
             "id": np.array([_ACTOR_IDS[a] for a in actors], dtype=np.int64),
             "timestamp": ts,
             "exchange_timestamp": ts.copy(),
-            "price": np.array([e[5] for e in _EVENTS], dtype=np.float64),
+            # Integer ticks (issue #155); TICK_SIZE is 1.0, so ticks == price.
+            "price": np.array([e[5] for e in _EVENTS], dtype=np.int64),
             "volume": np.array([e[6] for e in _EVENTS], dtype=np.float64),
             "action": pd.Categorical(
                 [e[3] for e in _EVENTS],
@@ -238,7 +249,7 @@ def toy_trades() -> pd.DataFrame:
             )
             .astype("datetime64[ns]")
             .dt.tz_localize("UTC"),
-            "price": np.array([t[1] for t in _TRADES], dtype=np.float64),
+            "price": np.array([t[1] for t in _TRADES], dtype=np.int64),
             "volume": np.array([t[2] for t in _TRADES], dtype=np.float64),
             "direction": pd.Categorical(
                 [t[3] for t in _TRADES], categories=["buy", "sell"], ordered=True
@@ -336,7 +347,7 @@ def toy_l2_depth() -> pd.DataFrame:
     >>> from ob_analytics.depth import depth_metrics, get_spread
     >>> summary = depth_metrics(toy_l2_depth())
     >>> summary[["best_bid_price", "best_ask_price"]].iloc[-1].tolist()
-    [99.0, 100.0]
+    [99, 100]
     """
     ts = (
         pd.Series(
@@ -348,7 +359,7 @@ def toy_l2_depth() -> pd.DataFrame:
     return pd.DataFrame(
         {
             "timestamp": ts,
-            "price": np.array([r[2] for r in _L2_DEPTH], dtype=np.float64),
+            "price": np.array([r[2] for r in _L2_DEPTH], dtype=np.int64),
             "volume": np.array([r[3] for r in _L2_DEPTH], dtype=np.float64),
             "direction": pd.Categorical(
                 [r[1] for r in _L2_DEPTH],
@@ -390,7 +401,7 @@ def toy_l2_trades() -> pd.DataFrame:
     return pd.DataFrame(
         {
             "timestamp": ts,
-            "price": np.array([t[1] for t in _L2_TRADES], dtype=np.float64),
+            "price": np.array([t[1] for t in _L2_TRADES], dtype=np.int64),
             "volume": np.array([t[2] for t in _L2_TRADES], dtype=np.float64),
             "direction": pd.Categorical(
                 [t[3] for t in _L2_TRADES], categories=["buy", "sell"], ordered=True

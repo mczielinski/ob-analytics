@@ -19,13 +19,14 @@ from __future__ import annotations
 
 import html as html_mod
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 from loguru import logger
 
+from ob_analytics._utils import ticks_to_price
 from ob_analytics.analytics import order_book
 from ob_analytics.depth import get_spread
 from ob_analytics.pipeline import PipelineResult
@@ -322,6 +323,61 @@ def _build_l2_gallery_model(
     return GalleryModel(concepts=concepts, analytics=[])
 
 
+#: Price-valued columns per frame, converted from integer ticks to a
+#: quote-currency float for display (issue #155).  Bps and volume columns are
+#: scale-free or size-valued, so they are left as ticks-agnostic numbers.
+_DISPLAY_PRICE_COLUMNS: dict[str, tuple[str, ...]] = {
+    "events": ("price",),
+    "trades": ("price",),
+    "depth": ("price",),
+    "depth_summary": ("best_bid_price", "best_ask_price"),
+}
+
+
+def display_result(result: PipelineResult) -> PipelineResult:
+    """Return *result* with price columns converted from ticks to quote currency.
+
+    Canonical prices are integer ticks (:mod:`ob_analytics.schemas`, issue #155);
+    the plots show the quote currency, so this converts each price column to the
+    ``ticks * tick_size`` float the faces render, reading ``tick_size`` from
+    ``result.config``.  :func:`build_gallery_model` calls it once so every face —
+    the ``prepare`` helpers, ``order_book`` / ``queue_positions`` called inside
+    them, the axes — works in display units; call it yourself before the
+    low-level ``prepare.*`` builders when you plot straight from a result.
+
+    Idempotent and legacy-safe: only integer price columns are scaled, so a
+    result whose prices are already floats (a pre-tick file, or a result already
+    passed through here) is returned unchanged.
+    """
+    tick_size = getattr(result.config, "tick_size", 1.0)
+    decimals = getattr(result.config, "price_decimals", None)
+
+    def to_display(df: pd.DataFrame, columns: tuple[str, ...]) -> pd.DataFrame:
+        present = [
+            c
+            for c in columns
+            if c in df.columns and pd.api.types.is_integer_dtype(df[c])
+        ]
+        if df.empty or not present:
+            return df
+        out = df.copy()
+        for column in present:
+            out[column] = ticks_to_price(
+                out[column].to_numpy(), tick_size, decimals=decimals
+            )
+        return out
+
+    return replace(
+        result,
+        events=to_display(result.events, _DISPLAY_PRICE_COLUMNS["events"]),
+        trades=to_display(result.trades, _DISPLAY_PRICE_COLUMNS["trades"]),
+        depth=to_display(result.depth, _DISPLAY_PRICE_COLUMNS["depth"]),
+        depth_summary=to_display(
+            result.depth_summary, _DISPLAY_PRICE_COLUMNS["depth_summary"]
+        ),
+    )
+
+
 def build_gallery_model(
     result: PipelineResult,
     *,
@@ -347,6 +403,10 @@ def build_gallery_model(
     -------
     GalleryModel
     """
+    # Convert integer-tick prices to the quote currency once, here, so every
+    # face renders display prices (issue #155).
+    result = display_result(result)
+
     # A price-level (L2) result has no per-order events: build the reduced
     # depth/trades model and skip every L3-only face rather than erroring on
     # the empty events frame.

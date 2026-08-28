@@ -165,7 +165,9 @@ lob[["actor", "action", "volume", "fill", "raw_event_type", "raw_size"]].iloc[6:
 # in the call: prices become **integers in ten-thousandths of a dollar**
 # (`price_divisor=10_000`), and timestamps become **seconds after
 # midnight**, so the writer must be told *which* midnight
-# (`trading_date`):
+# (`trading_date`). The toy book's canonical prices are integer ticks with
+# a `tick_size` of $1 (its levels are whole dollars), so we pass that too —
+# the writer scales ticks back through the tick size and the divisor:
 
 # %%
 import tempfile
@@ -178,7 +180,7 @@ save_data(
     {"events": lob, "trades": toy_trades()},
     outdir,
     fmt="lobster",
-    config=PipelineConfig(price_divisor=10_000),
+    config=PipelineConfig(price_divisor=10_000, tick_size=1.0),
     ctx=RunContext(trading_date="2026-01-05"),
     ticker="TOY",
     num_levels=2,

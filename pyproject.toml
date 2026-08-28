@@ -77,8 +77,10 @@ combine-as-imports = true
 
 [tool.ruff.lint.per-file-ignores]
 # Tutorial chapters are notebook-style (jupytext py:percent): imports appear
-# in the cell that introduces them, by design.
-"docs/tutorial/src/*.py" = ["E402"]
+# in the cell that introduces them (E402), and a bare expression on a cell's
+# last line is the idiomatic way to render its value as the cell output, not
+# dead code (B018) -- both by design.
+"docs/tutorial/src/*.py" = ["E402", "B018"]
 
 [tool.hatch.build.targets.sdist]
 include = ["ob_analytics", "tests"]

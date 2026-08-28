@@ -24,7 +24,7 @@ stages consume:
 | `original_number` | int | Original input row number (stable event order) |
 | `timestamp` | datetime64 | Local receive time |
 | `exchange_timestamp` | datetime64 | Server time stamp |
-| `price` | float | Order price |
+| `price` | int64 | Order price in integer ticks (× `tick_size` for the quote currency — issue #155) |
 | `volume` | float | Remaining size |
 | `action` | category | `created` / `changed` / `deleted` |
 | `direction` | category | `bid` / `ask` |

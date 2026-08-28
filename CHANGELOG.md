@@ -74,6 +74,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Prices are now integer ticks, not floats** (issue #155). Every `price`
+  column — events, trades, depth, depth_summary, book snapshot, and order
+  lifecycles — is a whole number of ticks (`int64`); the quote-currency price is
+  `ticks * tick_size`, where `tick_size` is the instrument's minimum price
+  increment (`PipelineConfig.tick_size`, default `0.01`). Loaders convert a raw
+  price to ticks on load; the plots and the round-trip writers convert back for
+  display, so figures and CSV output are unchanged. Storing the exact integer
+  removes the float rounding that made small-tick and 0-1 instruments show
+  crossed levels that were not real, and the depth engine now bins and compares
+  levels on exact integers instead of multiplying and rounding each event —
+  LOBSTER's `price_divisor` is now just the raw-feed encoding scale.
+  `tick_size` is written to each Parquet file's `ob_analytics_tick_size`
+  key-value metadata (a JSON map keyed by instrument, ready for per-`(venue,
+  symbol)` ticks in #147) and surfaced on `load_data` frames' `attrs`.
+  **Breaking:** the dtype of every `price` column changed from `double` to
+  `int64` and the stored numbers changed (prices re-expressed as ticks;
+  price-valued analytics such as `trade_impacts` VWAP and Kyle's λ are now in
+  tick units — multiply by `tick_size` for the quote currency; scale-free
+  metrics such as bps depth and order-book imbalance are unchanged). The
+  canonical Parquet **schema version is now `3.0`** (a `1.0` / `2.0` file still
+  reads — Parquet is self-describing — as the float-price frame it stored, whose
+  prices are not directly comparable to a `3.0` file's ticks; re-save it to move
+  it onto the tick model). Golden-output baselines were re-recorded behind the
+  correctness gate (#143).
 - **Timestamps are now tz-aware UTC nanoseconds** (`timestamp[ns, tz=UTC]`) on
   both clocks — `timestamp` (receive) and `exchange_timestamp` (matching
   engine) — across every table, loader, the synthetic generator, and the toy

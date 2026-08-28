@@ -143,7 +143,10 @@ def trade_impacts(trades: pd.DataFrame) -> pd.DataFrame:
     pandas.DataFrame
         A DataFrame summarising market order impacts with columns:
         ``id``, ``min_price``, ``max_price``, ``vwap``, ``hits``, ``vol``,
-        ``start_time``, ``end_time``, ``dir``.
+        ``start_time``, ``end_time``, ``dir``.  The price-valued columns
+        (``min_price``, ``max_price``, ``vwap``) are in the same integer-tick
+        units as ``trades["price"]`` (issue #155); multiply by ``tick_size`` for
+        the quote currency.
     """
     validate_columns(
         trades,

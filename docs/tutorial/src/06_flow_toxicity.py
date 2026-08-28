@@ -40,7 +40,6 @@
 # %matplotlib inline
 import matplotlib.pyplot as plt
 import pandas as pd
-
 from _docs_theme import ASK_COLOR, BID_COLOR
 
 base = pd.Timestamp("2026-01-05 10:00:00")
@@ -236,8 +235,11 @@ fig = plot("kyle_lambda", **prepare.kyle_lambda(kyle))
 
 # %%
 from ob_analytics import Pipeline, sample_csv_path
+from ob_analytics.visualization import display_result
 
 result = Pipeline().run(sample_csv_path())
+# Canonical prices are integer ticks (issue #155); show quote currency.
+result = display_result(result)
 kyle_real = compute_kyle_lambda(result.trades, window="5min")
 print(
     f"trades: {len(result.trades)}   total volume: {result.trades['volume'].sum():.1f}"

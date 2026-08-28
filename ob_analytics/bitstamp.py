@@ -27,6 +27,8 @@ from ob_analytics._utils import (
     datetime_to_epoch,
     empty_trades,
     epoch_to_datetime,
+    price_to_ticks,
+    ticks_to_price,
     validate_columns,
     validate_non_empty,
 )
@@ -93,7 +95,6 @@ class BitstampLoader:
             ``exchange_timestamp``, ``price``, ``volume``, ``action``,
             ``direction``, ``event_id``, ``fill``, ``original_number``.
         """
-        price_digits = self._config.price_decimals
         volume_digits = self._config.volume_decimals
 
         events = pd.read_csv(source)
@@ -127,7 +128,9 @@ class BitstampLoader:
         events = events.reset_index().rename(columns={"index": "original_number"})
         events["original_number"] = events["original_number"] + 1
         events["volume"] = events["volume"].round(volume_digits)
-        events["price"] = events["price"].round(price_digits)
+        # Canonical price is integer ticks (issue #155); the raw CSV carries a
+        # quote-currency float, so convert on the way in.
+        events["price"] = price_to_ticks(events["price"], self._config.tick_size)
 
         ts_unit = self._config.timestamp_unit
         events["timestamp"] = epoch_to_datetime(events["timestamp"], ts_unit)
@@ -276,7 +279,8 @@ class BitstampTradeReader:
                 # ``.array`` keeps the tz-aware UTC dtype (``.values`` would
                 # drop the zone to a naive numpy datetime64).
                 "timestamp": recv_ms.array,
-                "price": raw["price"].astype(float).values,
+                # Trade prints share the events' integer-tick price grid (#155).
+                "price": price_to_ticks(raw["price"], self._config.tick_size),
                 "volume": amounts.values,
                 "direction": pd.Categorical(
                     raw["side"].astype(str), categories=["buy", "sell"], ordered=True
@@ -407,7 +411,12 @@ class BitstampWriter:
                 "exchange_timestamp": datetime_to_epoch(
                     events["exchange_timestamp"], ts_unit
                 ),
-                "price": events["price"],
+                # Restore the quote-currency float from integer ticks (#155).
+                "price": ticks_to_price(
+                    events["price"],
+                    self._config.tick_size,
+                    decimals=self._config.price_decimals,
+                ),
                 "volume": events["volume"],
                 "action": events["action"].astype(str),
                 "direction": events["direction"].astype(str),
@@ -421,8 +430,7 @@ class BitstampWriter:
             self._write_companion_trades(trades, p.parent / "trades.csv")
         return p
 
-    @staticmethod
-    def _write_companion_trades(trades: pd.DataFrame, dest: Path) -> None:
+    def _write_companion_trades(self, trades: pd.DataFrame, dest: Path) -> None:
         """Write a capture-style ``trades.csv`` next to the events CSV.
 
         Reconstructs the live-capture trade schema from the pipeline's
@@ -453,7 +461,11 @@ class BitstampWriter:
                 "trade_id": np.arange(1, len(trades) + 1, dtype=np.int64),
                 "timestamp": ts_ms,
                 "exchange_timestamp": ts_ms,
-                "price": trades["price"].to_numpy(),
+                "price": ticks_to_price(
+                    trades["price"],
+                    self._config.tick_size,
+                    decimals=self._config.price_decimals,
+                ),
                 "amount": trades["volume"].to_numpy(),
                 "buy_order_id": buy_order_id,
                 "sell_order_id": sell_order_id,
@@ -504,6 +516,7 @@ class BitstampFormat:
 
     def config_defaults(self) -> dict[str, Any]:
         return {
+            "tick_size": 0.01,
             "price_decimals": 2,
             "volume_decimals": 8,
             "timestamp_unit": "ms",

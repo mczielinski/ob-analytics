@@ -42,6 +42,68 @@ def validate_non_empty(df: pd.DataFrame, context: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Price / tick conversions (issue #155)
+# ---------------------------------------------------------------------------
+#
+# Canonical prices are stored as a whole number of ticks (``int64``) plus a
+# per-instrument ``tick_size`` (see ``ob_analytics.config.PipelineConfig`` and
+# ``docs/schema.md``).  Loaders convert a raw quote-currency price to ticks on
+# the way in; writers and the display layer convert back.  Keeping the exact
+# integer here — rather than a float in the quote currency — is what removes the
+# float rounding that made small-tick and 0-1 instruments show crossed levels
+# that were not real (issue #155).
+
+
+def tick_multiplier(tick_size: float) -> int | None:
+    """Return ``round(1 / tick_size)`` when the tick is a reciprocal integer.
+
+    A tick such as ``0.01`` (``1/100``), ``0.05`` (``1/20``) or ``0.25``
+    (``1/4``) has an exact integer inverse, so a price is converted to ticks by
+    an integer multiply-and-round — the same operation
+    :class:`~ob_analytics.depth.DepthMetricsEngine` used internally before this
+    change, so the tick integers reproduce it bit-for-bit.  A tick with no
+    integer inverse returns ``None``; :func:`price_to_ticks` then divides.
+    """
+    inv = 1.0 / tick_size
+    nearest = round(inv)
+    if nearest > 0 and abs(inv - nearest) <= 1e-9 * nearest:
+        return int(nearest)
+    return None
+
+
+def price_to_ticks(price: object, tick_size: float) -> np.ndarray:
+    """Convert quote-currency *price* to an ``int64`` whole number of ticks.
+
+    ``ticks = round(price / tick_size)``, computed through an exact integer
+    multiplier when the tick has one (:func:`tick_multiplier`) so the default
+    grid reproduces the engine's former internal integers exactly.  *price* is
+    any array-like of finite floats (a price column is non-null by contract).
+    """
+    arr = np.asarray(price, dtype=np.float64)
+    multiplier = tick_multiplier(tick_size)
+    ticks = (
+        np.round(arr * multiplier)
+        if multiplier is not None
+        else np.round(arr / tick_size)
+    )
+    return ticks.astype(np.int64)
+
+
+def ticks_to_price(
+    ticks: object, tick_size: float, *, decimals: int | None = None
+) -> np.ndarray:
+    """Convert integer *ticks* back to a quote-currency ``float64`` price.
+
+    ``price = ticks * tick_size``.  Pass *decimals* to round the result to that
+    many places — the display layer does this so a reconstructed float matches
+    the quote-currency value exactly (e.g. ``25001 * 0.01`` rounds to
+    ``250.01`` rather than ``250.01000000000002``).
+    """
+    price = np.asarray(ticks, dtype=np.float64) * tick_size
+    return price if decimals is None else np.round(price, decimals)
+
+
+# ---------------------------------------------------------------------------
 # Trades schema
 # ---------------------------------------------------------------------------
 
@@ -83,7 +145,7 @@ _EMPTY_EVENT_DTYPES: dict[str, str] = {
     "id": "int64",
     "timestamp": "datetime64[ns, UTC]",
     "exchange_timestamp": "datetime64[ns, UTC]",
-    "price": "float64",
+    "price": "int64",
     "volume": "float64",
     "direction": "object",
     "action": "object",

@@ -27,6 +27,19 @@ them):
   ``raw_size`` column for round-trip writers.  The classifier labels these
   orders ``pre-existing`` — structurally unclassifiable, not failures.
 
+Price policy (issue #155): every ``price`` column is a whole number of ticks
+(``int64``), not a float in the quote currency.  The quote-currency price is
+``ticks * tick_size``, where ``tick_size`` is the instrument's minimum price
+increment (:class:`~ob_analytics.config.PipelineConfig.tick_size`, default
+``0.01``).  Loaders convert a raw price to ticks on load; the display layer and
+the round-trip writers convert back.  Storing the exact integer removes the
+float rounding that made small-tick and 0-1 instruments show crossed levels that
+were not real, and lets the depth engine bin and compare levels on exact
+integers.  ``tick_size`` is written to each Parquet file's key-value metadata
+(:data:`TICK_SIZE_KEY`) so an external reader can recover the float price without
+this library; it is per-instrument, so a multi-instrument file (issue #147)
+carries a map keyed by ``venue|symbol``.
+
 Timestamp policy (issue #154): both clocks are **tz-aware UTC nanoseconds**
 (``datetime64[ns, UTC]``, Arrow ``timestamp[ns, tz=UTC]``).  ``timestamp`` is
 the local receive time and ``exchange_timestamp`` the venue's matching-engine
@@ -85,6 +98,7 @@ type, unit, nullability, and meaning for every table — is in ``docs/schema.md`
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -108,24 +122,42 @@ if TYPE_CHECKING:
 # column.  List every version this build can still read in
 # ``_SUPPORTED_SCHEMA_VERSIONS``.
 
-SCHEMA_VERSION: str = "2.0"
+SCHEMA_VERSION: str = "3.0"
 """Version of the canonical Parquet/Arrow schema written to file metadata.
 
-``2.0`` (issue #154) makes both timestamp clocks tz-aware UTC nanoseconds
-(``timestamp[ns, tz=UTC]``); ``1.0`` wrote them tz-naive in each venue's native
-clock.  Both are still read (a ``1.0`` file is self-describing and loads as the
-tz-naive frame it stored)."""
+``3.0`` (issue #155) stores every ``price`` column as ``int64`` ticks (the
+quote-currency price is ``ticks * tick_size``; see :data:`TICK_SIZE_KEY`); ``2.0``
+and ``1.0`` stored ``price`` as a ``double`` in the quote currency.  ``2.0``
+(issue #154) also makes both timestamp clocks tz-aware UTC nanoseconds
+(``timestamp[ns, tz=UTC]``); ``1.0`` wrote them tz-naive.  All three still read
+(Parquet is self-describing, so a ``1.0`` / ``2.0`` file loads as the float-price
+frame it stored — a pre-tick file, not directly comparable to a ``3.0`` one)."""
 
 SCHEMA_VERSION_KEY: bytes = b"ob_analytics_schema_version"
 """Parquet metadata key under which :data:`SCHEMA_VERSION` is stored.
 
 Bytes, because Arrow file-metadata keys and values are raw bytes."""
 
-_SUPPORTED_SCHEMA_VERSIONS: frozenset[str] = frozenset({"1.0", "2.0"})
+TICK_SIZE_KEY: bytes = b"ob_analytics_tick_size"
+"""Parquet metadata key under which the per-instrument tick size is stored.
+
+The value is a JSON object mapping an instrument key to its ``tick_size`` (a
+float in the quote currency), so an external reader can recover the float price
+as ``ticks * tick_size`` without this library (issue #155).  The single-instrument
+pipeline writes one entry under :data:`_DEFAULT_TICK_KEY` (``{"default": 0.01}``);
+a multi-instrument file (issue #147) adds entries keyed by ``"venue|symbol"``.
+Bytes, because Arrow file-metadata keys and values are raw bytes."""
+
+_DEFAULT_TICK_KEY: str = "default"
+"""Key for the tick size that applies to rows with no ``(venue, symbol)`` match
+in the :data:`TICK_SIZE_KEY` metadata map."""
+
+_SUPPORTED_SCHEMA_VERSIONS: frozenset[str] = frozenset({"1.0", "2.0", "3.0"})
 """Schema versions this build can read.  A file tagged with anything else
-raises; an untagged (legacy) file loads with a warning.  ``1.0`` (pre-#154,
-tz-naive timestamps) still reads: Parquet is self-describing, so pyarrow returns
-the exact dtype the file stored."""
+raises; an untagged (legacy) file loads with a warning.  ``1.0`` / ``2.0``
+(pre-#155, float quote-currency prices) still read: Parquet is self-describing,
+so pyarrow returns the exact dtype the file stored — the caller sees float
+prices, not ticks, and must scale them itself."""
 
 
 def check_schema_version(version: str | None, *, source: str = "<parquet>") -> None:
@@ -165,6 +197,59 @@ def check_schema_version(version: str | None, *, source: str = "<parquet>") -> N
             f"reads {sorted(_SUPPORTED_SCHEMA_VERSIONS)} (current "
             f"{SCHEMA_VERSION!r}). Upgrade ob-analytics or re-export the data."
         )
+
+
+# ── Tick-size metadata (issue #155) ───────────────────────────────────
+#
+# ``price`` columns are integer ticks; the tick size that scales them back to
+# the quote currency travels in Parquet key-value metadata under
+# :data:`TICK_SIZE_KEY`, as a JSON map from an instrument key to its tick size.
+# These helpers encode and decode that map and resolve the tick size for a
+# given instrument, keyed so the per-``(venue, symbol)`` case (issue #147) is a
+# clean extension of the single-instrument default written today.
+
+
+def encode_tick_sizes(tick_sizes: dict[str, float]) -> bytes:
+    """Serialise a ``{instrument_key: tick_size}`` map for Parquet metadata."""
+    return json.dumps(tick_sizes).encode()
+
+
+def decode_tick_sizes(raw: bytes | None) -> dict[str, float] | None:
+    """Parse the :data:`TICK_SIZE_KEY` metadata value, or ``None`` when absent.
+
+    ``None`` marks a legacy (pre-#155) file that stored float quote-currency
+    prices and carries no tick size.
+    """
+    if raw is None:
+        return None
+    return {key: float(value) for key, value in json.loads(raw.decode()).items()}
+
+
+def resolve_tick_size(
+    tick_sizes: dict[str, float] | None,
+    *,
+    venue: str | None = None,
+    symbol: str | None = None,
+    default: float | None = None,
+) -> float | None:
+    """Look up the tick size for one instrument in a decoded metadata map.
+
+    Tries the per-instrument key ``"venue|symbol"`` first, then the shared
+    :data:`_DEFAULT_TICK_KEY` entry, then — for a one-entry map whose sole key is
+    neither — that lone value.  Returns *default* when *tick_sizes* is empty or
+    ``None`` (a legacy file), so a caller can fall back to ``1.0`` (ticks shown
+    as-is) or a configured value.
+    """
+    if not tick_sizes:
+        return default
+    key = f"{venue}|{symbol}"
+    if key in tick_sizes:
+        return tick_sizes[key]
+    if _DEFAULT_TICK_KEY in tick_sizes:
+        return tick_sizes[_DEFAULT_TICK_KEY]
+    if len(tick_sizes) == 1:
+        return next(iter(tick_sizes.values()))
+    return default
 
 
 # Optional ordering-key columns (never in EVENT_COLUMNS — see the module
