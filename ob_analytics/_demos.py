@@ -53,7 +53,8 @@ def _save_and_gallery(
     appended to the model's :attr:`~...gallery.GalleryModel.analytics`.
     """
     parquet_dir = output_dir / "parquet"
-    save_data(_result_dict(result), parquet_dir)
+    # Tag each Parquet file with the run's tick size (issue #155).
+    save_data(_result_dict(result), parquet_dir, config=result.config)
     logger.info("Parquet saved to: {}", parquet_dir)
 
     model = None
@@ -146,8 +147,9 @@ def run_bitstamp_demo(
         rt_dir.mkdir(parents=True, exist_ok=True)
         rt_csv = rt_dir / "orders.csv"
         # BitstampWriter emits the companion trades.csv from the "trades"
-        # frame in _result_dict, so no separate shim is needed here.
-        save_data(_result_dict(result), rt_csv, writer=BitstampWriter())
+        # frame in _result_dict, so no separate shim is needed here.  Pass the
+        # run's config so ticks convert back on the run's grid (issue #155).
+        save_data(_result_dict(result), rt_csv, writer=BitstampWriter(result.config))
         rt = Pipeline(format=BitstampFormat()).run(str(rt_csv))
         logger.info(
             "Round-trip events: {} (match: {})",

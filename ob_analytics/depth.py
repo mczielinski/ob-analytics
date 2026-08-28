@@ -180,7 +180,6 @@ class DepthMetricsEngine:
         )
         validate_non_empty(depth, "DepthMetricsEngine.compute")
 
-        multiplier = self._config.price_multiplier
         # Deterministic playback order (issue #154): a stable sort on the
         # receive clock.  The documented same-instant total order
         # (``schemas.time_order_keys``: timestamp, then sequence / event_id) is
@@ -189,7 +188,15 @@ class DepthMetricsEngine:
         # (#136 / #104 / #138), validated against the alternate backend.
         ordered = depth.sort_values(by="timestamp", kind="stable")
 
-        prices_int = (multiplier * ordered["price"]).round().astype(int).values
+        # Price is already an integer tick count (issue #155), so the engine
+        # bins and compares levels on exact integers — no multiply-and-round.
+        # A float column (a legacy or hand-built frame) is read as tick-valued
+        # and rounded to the nearest integer tick.
+        price_values = ordered["price"].to_numpy()
+        if np.issubdtype(price_values.dtype, np.floating):
+            prices_int = np.rint(price_values).astype(np.int64)
+        else:
+            prices_int = price_values.astype(np.int64)
         volumes = ordered["volume"].values
         sides = np.where(ordered["direction"].values == "bid", 0, 1)
 
@@ -210,10 +217,12 @@ class DepthMetricsEngine:
             timestamps = ordered.reset_index(drop=True)["timestamp"]
         res = pd.concat([timestamps, metrics], axis=1)
 
+        # Best prices stay integer ticks (issue #155); the pre-allocated metrics
+        # buffer is float64 (it also holds volumes), so cast the two price
+        # columns back to int64.  A best price is a resting level, always an
+        # exact integer tick, so the cast is lossless.
         price_cols = ["best_bid_price", "best_ask_price"]
-        res[price_cols] = round(
-            res[price_cols] / multiplier, self._config.price_decimals
-        )
+        res[price_cols] = res[price_cols].astype(np.int64)
 
         return res
 
@@ -225,7 +234,7 @@ class DepthMetricsEngine:
         Parameters
         ----------
         price : int
-            Price in integer units (e.g. cents).
+            Price as an integer tick count (issue #155).
         volume : float
             Volume at this price level (0 means deletion).
         side : int

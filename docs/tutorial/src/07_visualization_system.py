@@ -35,8 +35,11 @@
 # %%
 # %matplotlib inline
 from ob_analytics import Pipeline, sample_csv_path
+from ob_analytics.visualization import display_result
 
 result = Pipeline().run(sample_csv_path())
+# Canonical prices are integer ticks (issue #155); show quote currency.
+result = display_result(result)
 fig = result.plot("depth_heatmap")  # level defaults sensibly per concept
 
 # %% [markdown]
@@ -70,8 +73,8 @@ available_concepts(result)
 # %%
 import matplotlib.pyplot as plt
 import pandas as pd
-
 from _docs_theme import DOCS_THEME
+
 from ob_analytics.depth import get_spread
 from ob_analytics.visualization import plot, prepare
 

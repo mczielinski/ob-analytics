@@ -36,7 +36,9 @@ from ob_analytics._utils import (
     attach_ingest_seq,
     datetime_to_seconds_after_midnight,
     empty_trades,
+    price_to_ticks,
     seconds_after_midnight_to_datetime,
+    ticks_to_price,
 )
 from ob_analytics.config import PipelineConfig
 from ob_analytics.protocols import (
@@ -160,7 +162,10 @@ class LobsterLoader:
         cfg = self._config
         divisor = cfg.price_divisor
 
-        raw["price"] = (raw["price"] / divisor).round(cfg.price_decimals)
+        # Canonical price is integer ticks (issue #155).  LOBSTER stores a raw
+        # integer in ten-thousandths of a dollar, so divide by the feed's
+        # encoding scale to reach the quote currency, then quantise to ticks.
+        raw["price"] = price_to_ticks(raw["price"] / divisor, cfg.tick_size)
         raw["volume"] = raw["volume"].astype(float).round(cfg.volume_decimals)
 
         raw["timestamp"] = seconds_after_midnight_to_datetime(
@@ -565,7 +570,14 @@ class LobsterWriter:
             events["timestamp"], midnight, self._session_tz
         )
 
-        price_int = (events["price"] * self._price_divisor).round(0).astype(int)
+        # events["price"] is integer ticks (issue #155); restore the quote
+        # currency, then re-encode to LOBSTER's raw ten-thousandths integer.
+        quote_price = ticks_to_price(
+            events["price"],
+            self._config.tick_size,
+            decimals=self._config.price_decimals,
+        )
+        price_int = np.round(quote_price * self._price_divisor).astype(int)
         direction_int = events["direction"].astype(str).map(_DIRECTION_REVERSE)
 
         # LOBSTER's Size column is the per-event delta; loader-produced frames
@@ -610,7 +622,14 @@ class LobsterWriter:
         n = len(events)
         actions = events["action"].astype(str).to_numpy()
         directions = events["direction"].astype(str).to_numpy()
-        prices = events["price"].to_numpy(dtype=np.float64)
+        # Replay the book in the quote currency (issue #155): convert the
+        # integer-tick price back so the sentinel handling and the raw
+        # re-encoding below are unchanged from the float-price writer.
+        prices = ticks_to_price(
+            events["price"],
+            self._config.tick_size,
+            decimals=self._config.price_decimals,
+        )
         # Book replay needs per-event deltas: ``raw_size`` on loader-produced
         # frames (``volume`` is outstanding size there); ``volume`` equals the
         # delta on legacy/synthetic frames without it.
@@ -707,20 +726,21 @@ def _side_level_changes(
     v: np.ndarray,
     dummy: float,
     divisor: int,
-    decimals: int,
+    tick_size: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Volume changes of one book side across consecutive orderbook rows.
 
     *p*/*v* are the side's ``(n_rows, n_levels)`` price/size arrays.  A level
     is active when its price is not the *dummy* sentinel and its size is
-    positive.  Prices are rounded (``round(price / divisor, decimals)``,
-    Python semantics, applied once per unique raw price) before keying, and
-    duplicate rounded prices within a row are summed in level order — both
-    matching the dict-diff this replaces bit-for-bit.
+    positive.  Each unique raw price is converted to an integer tick count
+    (``round((price / divisor) / tick_size)``, issue #155) before keying, and
+    duplicate tick prices within a row are summed in level order — both matching
+    the dict-diff this replaces bit-for-bit.
 
     Returns ``(row_indices, prices, volumes_after)`` for every (row, price)
-    whose volume differs from the previous row (missing level = 0.0), prices
-    ascending within each row.
+    whose volume differs from the previous row (missing level = 0.0), the
+    ``prices`` being integer tick counts (held as float here, cast to ``int64``
+    by the caller), ascending within each row.
     """
     n = p.shape[0]
     valid = (p != dummy) & (v > 0)
@@ -728,7 +748,7 @@ def _side_level_changes(
     rp = np.full(p.shape, np.inf)
     if valid.any():
         uniq = np.unique(p[valid])
-        rounded = np.array([round(x / divisor, decimals) for x in uniq.tolist()])
+        rounded = price_to_ticks(uniq / divisor, tick_size).astype(np.float64)
         idx = np.clip(np.searchsorted(uniq, p), 0, uniq.size - 1)
         ok = valid & (uniq[idx] == p)
         rp[ok] = rounded[idx[ok]]
@@ -843,15 +863,15 @@ def lobster_depth_from_orderbook(
     # changes are emitted asks first, then bids, each ascending in price
     # (the previous dict-diff emitted them in unspecified set order).
     price_divisor = config.price_divisor
-    price_dec = config.price_decimals
+    tick_size = config.tick_size
 
     lv = ob_raw[:n].astype(np.float64).reshape(n, num_levels, 4)
 
     ask_idx, ask_p, ask_v = _side_level_changes(
-        lv[:, :, 0], lv[:, :, 1], _DUMMY_ASK_PRICE, price_divisor, price_dec
+        lv[:, :, 0], lv[:, :, 1], _DUMMY_ASK_PRICE, price_divisor, tick_size
     )
     bid_idx, bid_p, bid_v = _side_level_changes(
-        lv[:, :, 2], lv[:, :, 3], _DUMMY_BID_PRICE, price_divisor, price_dec
+        lv[:, :, 2], lv[:, :, 3], _DUMMY_BID_PRICE, price_divisor, tick_size
     )
 
     row_idx = np.concatenate([ask_idx, bid_idx])
@@ -867,7 +887,9 @@ def lobster_depth_from_orderbook(
             {
                 "event_id": event_ids[row_idx[order]],
                 "timestamp": timestamps[row_idx[order]],
-                "price": prices[order],
+                # Prices are integer tick counts (issue #155); _side_level_changes
+                # holds them as float, so restore the int64 tick dtype here.
+                "price": prices[order].astype(np.int64),
                 "volume": vols[order],
                 "direction": np.where(side_code[order] == 0, "ask", "bid"),
             }
@@ -971,6 +993,7 @@ class LobsterFormat:
 
     def config_defaults(self) -> dict[str, Any]:
         return {
+            "tick_size": 0.01,
             "price_decimals": 2,
             "price_divisor": 10_000,
             "volume_decimals": 0,

@@ -167,8 +167,11 @@ fig = plot_lifecycle_story(events, toy_trades(), at_s=[6, 40, 46, 57])
 
 # %%
 from ob_analytics import Pipeline, sample_csv_path
+from ob_analytics.visualization import display_result
 
 result = Pipeline().run(sample_csv_path())
+# Canonical prices are integer ticks (issue #155); show quote currency.
+result = display_result(result)
 per_order = result.events.groupby("id")["type"].first()
 summary = per_order.value_counts().to_frame("orders")
 summary["share"] = (summary["orders"] / summary["orders"].sum()).map("{:.2%}".format)

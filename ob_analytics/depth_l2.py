@@ -34,7 +34,8 @@ column  meaning
 timestamp   receive time — integer epoch (``config.timestamp_unit``) or any
             string :func:`pandas.to_datetime` understands
 side        ``bid`` / ``ask`` (``buy`` / ``sell`` and ``b`` / ``a`` accepted)
-price       price level (scaled by ``config.price_divisor``, rounded)
+price       price level (divided by ``config.price_divisor`` to the quote
+            currency, then stored as integer ``tick_size`` counts — issue #155)
 volume      new absolute resting size at that level (``0`` = level removed)
 ======  ==================================================================
 
@@ -58,6 +59,8 @@ from ob_analytics._utils import (
     datetime_to_epoch,
     empty_trades,
     epoch_to_datetime,
+    price_to_ticks,
+    ticks_to_price,
     validate_columns,
     validate_non_empty,
 )
@@ -132,9 +135,10 @@ class L2DepthLoader:
     Parameters
     ----------
     config : PipelineConfig, optional
-        Pipeline configuration.  ``price_decimals`` / ``price_divisor`` /
-        ``volume_decimals`` control price scaling and rounding;
-        ``timestamp_unit`` interprets integer-epoch timestamps.
+        Pipeline configuration.  ``price_divisor`` scales the raw feed price to
+        the quote currency and ``tick_size`` quantises it to integer ticks
+        (issue #155); ``volume_decimals`` rounds size; ``timestamp_unit``
+        interprets integer-epoch timestamps.
     venue, symbol : str, optional
         Optional instrument identity (issue #147).  When either is supplied,
         the loaded depth frame gains per-row ``venue`` / ``symbol`` columns.
@@ -199,8 +203,10 @@ class L2DepthLoader:
 
         cfg = self._config
         timestamp = _to_datetime(raw[ts_col], cfg.timestamp_unit)
-        price = (raw[price_col].astype(float) / cfg.price_divisor).round(
-            cfg.price_decimals
+        # Canonical price is integer ticks (issue #155): scale the raw feed
+        # price to the quote currency, then quantise to ticks.
+        price = price_to_ticks(
+            raw[price_col].astype(float) / cfg.price_divisor, cfg.tick_size
         )
         volume = raw[vol_col].astype(float).round(cfg.volume_decimals)
         direction = (
@@ -210,7 +216,7 @@ class L2DepthLoader:
         depth = pd.DataFrame(
             {
                 "timestamp": timestamp.array,
-                "price": price.to_numpy(),
+                "price": price,
                 "volume": volume.to_numpy(),
                 "direction": direction.to_numpy(),
             }
@@ -319,8 +325,9 @@ class L2TradeReader:
 
         cfg = self._config
         timestamp = _to_datetime(raw[ts_col], cfg.timestamp_unit)
-        price = (raw[price_col].astype(float) / cfg.price_divisor).round(
-            cfg.price_decimals
+        # Trade prints share the depth grid: integer ticks (issue #155).
+        price = price_to_ticks(
+            raw[price_col].astype(float) / cfg.price_divisor, cfg.tick_size
         )
         volume = raw[vol_col].astype(float).round(cfg.volume_decimals)
         direction = self._read_direction(raw)
@@ -330,7 +337,7 @@ class L2TradeReader:
         trades = pd.DataFrame(
             {
                 "timestamp": timestamp.array,
-                "price": price.to_numpy(),
+                "price": price,
                 "volume": volume.to_numpy(),
                 "direction": direction,
                 # No order identity on a price-level feed.
@@ -432,7 +439,10 @@ class DepthCsvWriter:
             {
                 "timestamp": datetime_to_epoch(depth["timestamp"], cfg.timestamp_unit),
                 "side": depth["direction"].astype(str),
-                "price": (depth["price"] * cfg.price_divisor).round(cfg.price_decimals),
+                # Restore the raw feed price from integer ticks (issue #155).
+                "price": (
+                    ticks_to_price(depth["price"], cfg.tick_size) * cfg.price_divisor
+                ).round(cfg.price_decimals),
                 "volume": depth["volume"],
             }
         )
@@ -450,9 +460,10 @@ class DepthCsvWriter:
         out = pd.DataFrame(
             {
                 "timestamp": datetime_to_epoch(trades["timestamp"], cfg.timestamp_unit),
-                "price": (trades["price"] * cfg.price_divisor).round(
-                    cfg.price_decimals
-                ),
+                # Restore the raw feed price from integer ticks (issue #155).
+                "price": (
+                    ticks_to_price(trades["price"], cfg.tick_size) * cfg.price_divisor
+                ).round(cfg.price_decimals),
                 "amount": trades["volume"],
                 "side": trades["direction"]
                 .astype("object")
@@ -511,6 +522,7 @@ class DepthCsvFormat:
 
     def config_defaults(self) -> dict[str, Any]:
         return {
+            "tick_size": 0.01,
             "price_decimals": 2,
             "volume_decimals": 8,
             "timestamp_unit": "ms",

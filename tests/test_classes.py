@@ -67,9 +67,12 @@ class TestBitstampLoader:
             BitstampLoader().load(csv)
 
     def test_config_precision(self, sample_csv: Path):
-        config = PipelineConfig(price_decimals=4, volume_decimals=4)
-        events = BitstampLoader(config).load(sample_csv)
-        assert events["price"].iloc[0] == 236.5
+        # tick_size sets the stored price grid (issue #155): the first order's
+        # $236.50 becomes 23650 ticks at a cent grid, and 2_365_000 at 0.0001.
+        cents = BitstampLoader(PipelineConfig(tick_size=0.01)).load(sample_csv)
+        assert cents["price"].iloc[0] == 23650
+        fine = BitstampLoader(PipelineConfig(tick_size=0.0001)).load(sample_csv)
+        assert fine["price"].iloc[0] == 2_365_000
 
 
 class TestDepthMetricsEngine:

@@ -54,8 +54,8 @@ events.head(6)[["event_id", "actor", "action", "direction", "price", "volume", "
 # %%
 import matplotlib.pyplot as plt
 import pandas as pd
-
 from _docs_theme import DOCS_THEME, plot_book_keyframes
+
 from ob_analytics.analytics import set_order_types
 from ob_analytics.depth import depth_metrics, get_spread, price_level_volume
 from ob_analytics.visualization import plot, prepare
@@ -118,11 +118,14 @@ classified.groupby("actor", observed=True)["type"].first().sort_values()
 # per price, brightness = resting volume.
 
 # %%
-from ob_analytics import Pipeline, sample_csv_path
-
 from _docs_theme import plot_sample_heatmap
 
+from ob_analytics import Pipeline, sample_csv_path
+from ob_analytics.visualization import display_result
+
 result = Pipeline().run(sample_csv_path())
+# Canonical prices are integer ticks (issue #155); show quote currency.
+result = display_result(result)
 fig = plot_sample_heatmap(result, col_bias=0.4)
 
 # %% [markdown]

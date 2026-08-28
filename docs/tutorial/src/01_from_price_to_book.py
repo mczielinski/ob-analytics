@@ -216,8 +216,8 @@ events.groupby("actor", observed=True)["type"].first().sort_values()
 
 # %%
 import matplotlib.pyplot as plt
-
 from _docs_theme import DOCS_THEME
+
 from ob_analytics.depth import depth_metrics, get_spread, price_level_volume
 from ob_analytics.visualization import plot, prepare
 
@@ -267,9 +267,13 @@ for axk in key_axes[1:]:
 
 # %%
 from _docs_theme import plot_sample_heatmap
+
 from ob_analytics import Pipeline, sample_csv_path
+from ob_analytics.visualization import display_result
 
 result = Pipeline().run(sample_csv_path())
+# Canonical prices are integer ticks (issue #155); show quote currency.
+result = display_result(result)
 fig = plot_sample_heatmap(result, col_bias=0.4)
 
 # %% [markdown]

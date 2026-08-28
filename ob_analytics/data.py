@@ -14,9 +14,14 @@ from loguru import logger
 from ob_analytics._registry import Registry
 from ob_analytics.protocols import DataWriter
 from ob_analytics.schemas import (
+    _DEFAULT_TICK_KEY,
     SCHEMA_VERSION,
     SCHEMA_VERSION_KEY,
+    TICK_SIZE_KEY,
     check_schema_version,
+    decode_tick_sizes,
+    encode_tick_sizes,
+    resolve_tick_size,
 )
 
 if TYPE_CHECKING:
@@ -51,17 +56,44 @@ def list_writers() -> list[str]:
 # ── Canonical Parquet I/O (versioned) ─────────────────────────────────
 
 
-def _write_versioned_parquet(df: pd.DataFrame, path: Path) -> None:
-    """Write *df* to *path* as Parquet, tagging the schema version.
+def _tick_sizes_from_config(config: Any) -> dict[str, float] | None:
+    """Build the tick-size metadata map from a run's *config* (issue #155).
+
+    Returns ``{"default": config.tick_size}`` when *config* carries a
+    ``tick_size``, so ``save_data(config=...)`` tags each Parquet file with the
+    tick that scales its integer prices back to the quote currency.  ``None``
+    when no config is supplied — the file is then written without tick metadata,
+    and a reader falls back to showing ticks as-is.
+    """
+    if config is None:
+        return None
+    tick_size = getattr(config, "tick_size", None)
+    if tick_size is None:
+        return None
+    return {_DEFAULT_TICK_KEY: float(tick_size)}
+
+
+def _write_versioned_parquet(
+    df: pd.DataFrame,
+    path: Path,
+    *,
+    tick_sizes: dict[str, float] | None = None,
+) -> None:
+    """Write *df* to *path* as Parquet, tagging the schema version and tick size.
 
     Goes through pyarrow so the file carries :data:`SCHEMA_VERSION` under
     :data:`SCHEMA_VERSION_KEY` in its key-value metadata, alongside the pandas
-    metadata that preserves dtypes on read.  The index is dropped, matching the
-    previous ``df.to_parquet(..., index=False)`` behaviour.
+    metadata that preserves dtypes on read.  When *tick_sizes* is given (a
+    ``{instrument_key: tick_size}`` map) it is written under
+    :data:`TICK_SIZE_KEY` so a reader can recover the float price from the
+    integer ticks (issue #155).  The index is dropped, matching the previous
+    ``df.to_parquet(..., index=False)`` behaviour.
     """
     table = pa.Table.from_pandas(df, preserve_index=False)
     metadata = dict(table.schema.metadata or {})
     metadata[SCHEMA_VERSION_KEY] = SCHEMA_VERSION.encode()
+    if tick_sizes is not None:
+        metadata[TICK_SIZE_KEY] = encode_tick_sizes(tick_sizes)
     table = table.replace_schema_metadata(metadata)
     pq.write_table(table, path)
 
@@ -71,14 +103,25 @@ def _read_versioned_parquet(path: Path) -> pd.DataFrame:
 
     Raises :class:`~ob_analytics.exceptions.ConfigError` on an unsupported
     version; a file with no version key loads as legacy data with a warning
-    (see :func:`ob_analytics.schemas.check_schema_version`).
+    (see :func:`ob_analytics.schemas.check_schema_version`).  The tick size
+    stored under :data:`TICK_SIZE_KEY` (issue #155) is surfaced on the returned
+    frame's ``attrs``: ``df.attrs["tick_sizes"]`` holds the full instrument map
+    and ``df.attrs["tick_size"]`` the resolved default, so ``price * tick_size``
+    recovers the quote currency.  A legacy (pre-#155) file has neither.
     """
     table = pq.read_table(path)
     metadata = table.schema.metadata or {}
     raw = metadata.get(SCHEMA_VERSION_KEY)
     version = raw.decode() if raw is not None else None
     check_schema_version(version, source=path.name)
-    return table.to_pandas()
+    df = table.to_pandas()
+    tick_sizes = decode_tick_sizes(metadata.get(TICK_SIZE_KEY))
+    if tick_sizes is not None:
+        df.attrs["tick_sizes"] = tick_sizes
+        resolved = resolve_tick_size(tick_sizes)
+        if resolved is not None:
+            df.attrs["tick_size"] = resolved
+    return df
 
 
 def load_data(path: str | Path) -> dict[str, pd.DataFrame]:
@@ -180,9 +223,10 @@ def save_data(
         return
 
     if fmt == "parquet":
+        tick_sizes = _tick_sizes_from_config(config)
         p.mkdir(parents=True, exist_ok=True)
         for name, df in lob_data.items():
-            _write_versioned_parquet(df, p / f"{name}.parquet")
+            _write_versioned_parquet(df, p / f"{name}.parquet", tick_sizes=tick_sizes)
     elif fmt == "pickle":
         logger.warning(
             "Saving as pickle. Consider using fmt='parquet' for "

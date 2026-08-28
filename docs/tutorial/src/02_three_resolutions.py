@@ -25,8 +25,8 @@
 # %matplotlib inline
 import matplotlib.pyplot as plt
 import pandas as pd
-
 from _docs_theme import plot_l1_ticker
+
 from ob_analytics import toy_events, toy_trades
 from ob_analytics.analytics import order_book, set_order_types
 from ob_analytics.visualization import plot, prepare
@@ -176,9 +176,11 @@ fig = plot_queue_story(events, toy_trades(), at_s=[6, 45, 56, 57])
 
 # %%
 from ob_analytics import Pipeline, sample_csv_path
-from ob_analytics.visualization import available_concepts
+from ob_analytics.visualization import available_concepts, display_result
 
 result = Pipeline().run(sample_csv_path())
+# Canonical prices are integer ticks (issue #155); show quote currency.
+result = display_result(result)
 available_concepts(result)
 
 # %% [markdown]

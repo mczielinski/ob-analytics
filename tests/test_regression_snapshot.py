@@ -67,11 +67,20 @@ def test_demo_fingerprints(demo_result):
     # byte-identical to before — only the timestamp DTYPE moved. The fingerprint
     # hashes dtype + values (tz-aware datetime hashes via its string form), so
     # all four digests changed even though no number did.
+    # 2026-08-26 (#155, integer-tick prices): every price column is now int64
+    # ticks instead of a double in the quote currency. The loader quantises the
+    # raw cent-priced feed at tick_size 0.01, which is exactly the integer the
+    # depth engine already computed internally, so the reconstruction is the
+    # same book re-expressed: a former 133.30 float is now 13330 ticks. Verified
+    # element-wise against the pre-tick float pipeline — ticks × 0.01 reproduces
+    # the old events / depth / depth_summary prices to 0.0, and every volume /
+    # direction / row is identical. DTYPE moved (double -> int64) and the numbers
+    # moved (× 100), so all four digests changed.
     EXPECTED: dict[str, str] = {
-        "events": "d2d637dd45d4b61e3cd63d1321ceb5a1d9e5fe32998cdb79ae2a766d73262853",
-        "trades": "24483443747e7cd1c21ef700733b90f9c17c9e54d1aa80cddf5fb1ede1df16d8",
-        "depth": "15c2c34c57783af0ab3aeeb1c156e0a6dcd5a42ab456e9c25cece120be04cd0c",
-        "depth_summary": "dc58f1c0838dcc6141910d5c9888cb0f1ce0b136b9d62d1daae7078f0ceb5fe2",
+        "events": "71f686a64b44fc215c092fcead1b960b80da6668a15919ff0be7f45c4e5c7d03",
+        "trades": "54ec916a24c642cde2c6914561f7148057da30141b1974f422a8b63980a8cc7d",
+        "depth": "b3fd876ed853b6f8df9d98c67c0ca374ddc34f335866e04762d4d7c4a3ebd764",
+        "depth_summary": "6280117765ecedf6ed1a07399d75d609767a713f669788425c47beffdb24bf7c",
     }
     if EXPECTED:
         assert fps == EXPECTED
@@ -82,6 +91,11 @@ def test_kyle_lambda_baseline(demo_result):
     # Record the baseline scalar; C4 (lstsq rewrite) must stay within rtol.
     print(f"KYLE_LAMBDA_BASELINE = {res.lambda_!r}")
     print(f"KYLE_RSQ_BASELINE = {res.r_squared!r}")
-    BASELINE_LAMBDA: float | None = 8.651849748125398
+    # 2026-08-26 (#155, integer-tick prices): lambda is ΔPrice per unit signed
+    # volume, and ΔPrice is now in ticks (int64) rather than dollars, so lambda
+    # is exactly 100× the old 8.651849748125398 (tick_size 0.01). The regression
+    # r_squared is scale-free and unchanged. Multiply by tick_size for the
+    # quote-currency value.
+    BASELINE_LAMBDA: float | None = 865.184974812539
     if BASELINE_LAMBDA is not None and not np.isnan(BASELINE_LAMBDA):
         assert np.isclose(res.lambda_, BASELINE_LAMBDA, rtol=1e-10, equal_nan=True)

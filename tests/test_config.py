@@ -16,8 +16,11 @@ class TestPipelineConfig:
         assert cfg.depth_bins == 20
 
     def test_price_multiplier(self):
-        assert PipelineConfig(price_decimals=2).price_multiplier == 100
-        assert PipelineConfig(price_decimals=8).price_multiplier == 100_000_000
+        # price_multiplier is the integer inverse of tick_size (issue #155),
+        # no longer tied to price_decimals.
+        assert PipelineConfig(tick_size=0.01).price_multiplier == 100
+        assert PipelineConfig(tick_size=1e-8).price_multiplier == 100_000_000
+        assert PipelineConfig(tick_size=0.25).price_multiplier == 4
 
     def test_bps_labels(self):
         cfg = PipelineConfig(depth_bps=25, depth_bins=3)

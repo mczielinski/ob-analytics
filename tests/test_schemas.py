@@ -136,4 +136,4 @@ def test_check_schema_version_none_is_legacy():
 
 def test_check_schema_version_unknown_raises():
     with pytest.raises(ConfigError, match="unsupported schema version"):
-        check_schema_version("3.0", source="test")
+        check_schema_version("99.0", source="test")

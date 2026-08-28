@@ -282,6 +282,11 @@ def compute_kyle_lambda(
     slope (λ) measures how much the price moves per unit of net order
     flow — a proxy for market illiquidity and adverse selection.
 
+    ΔPrice is read directly from ``trades["price"]``, which is an integer tick
+    count (issue #155), so λ is in **ticks** per unit volume.  It scales with the
+    price unit — a run at a finer ``tick_size`` reports a proportionally larger
+    λ; multiply by ``tick_size`` to express it in the quote currency.
+
     Parameters
     ----------
     trades : pandas.DataFrame
