@@ -18,8 +18,8 @@ paths.
 
 ## L2 vs L3, in one line
 
-A [`Format`](../api/protocols.md) declares its
-[`resolution`](../api/protocols.md) — a `Level`:
+A [`Source`](../api/protocols.md) declares its
+[`level`](../api/protocols.md) — a `Level`:
 
 | `Level` | Feed | What each row is | Per-order stages |
 |---------|------|------------------|------------------|
@@ -63,9 +63,9 @@ companion `trades.csv` next to it is picked up automatically.
 ```python
 from ob_analytics import Pipeline
 
-result = Pipeline.from_format("depth_csv").run("my_l2_run/")
+result = Pipeline.from_source("depth_csv").run("my_l2_run/")
 
-result.resolution        # Level.L2
+result.level             # Level.L2
 result.depth             # the price-level book (timestamp, price, volume, direction)
 result.depth_summary     # best bid/ask + BPS-bin depth over time
 result.events            # empty — the per-order stages did not run
@@ -83,7 +83,7 @@ get_spread(result.depth_summary)      # best bid/ask through time
 ```
 
 The per-order stages are **skipped with a clear reason** — `result.events` is
-an empty (but schema-valid) frame, and `result.resolution is Level.L2` records
+an empty (but schema-valid) frame, and `result.level is Level.L2` records
 why. Anything that needs order identity — order-type classification, order
 aggressiveness, order lifecycles, queue position — has nothing to work with on
 an aggregated feed and is not attempted.
@@ -118,7 +118,7 @@ sorted(available_concepts(result))    # only the L2-supported concepts
 
 ## Checking data quality
 
-`ob-analytics validate --format depth_csv <source>` (and
+`ob-analytics validate <source> --source depth_csv` (and
 `data_quality_summary`) work on an L2 result: the crossed-book % is read from
 the price-level book, and the per-order metrics report zero.
 
@@ -140,10 +140,10 @@ get_spread(summary)
 - [Trade signs](../api/trade_sign.md) — Lee–Ready / tick / BVC for unlabelled feeds
 - [Custom components](custom-components.md) — write a loader for any other format
 - [Data quality](../data-quality.md) — matched book vs diff feed
-- [L2 API reference](../api/depth_l2.md) — `L2DepthLoader`, `DepthCsvFormat`, …
+- [L2 API reference](../api/depth_l2.md) — `L2DepthLoader`, `DepthCsvSource`, …
 
 !!! note "Live L2 capture"
     This path is for **offline** L2 files. A live depth-update event kind for
-    the [capture runner](live-capture.md) — so `LiveCapturer`s for L2 venues
+    the [capture runner](live-capture.md) — so `LiveSource`s for L2 venues
     (Binance, Kalshi, Polymarket) can stream straight into this schema — is a
     planned follow-up.

@@ -2,19 +2,19 @@
 title: LOBSTER
 ---
 
-# LOBSTER Format
+# LOBSTER
 
 Support for [LOBSTER](https://lobsterdata.com/) message files (event types
 1–7), orderbook-backed depth, and round-trip writers.
 
-Use via `Pipeline(format=LobsterFormat(...))` or
-`Pipeline.from_format("lobster", ...)`.
+Use via `Pipeline(source=LobsterSource(...))` or
+`Pipeline.from_source("lobster", ...)`.
 
 Key differences from Bitstamp:
 
 - **Executions in the message file** — `LobsterTradeReader` builds trades
   directly from type 4/5 rows in the events DataFrame (no separate trades file).
-- **Orderbook-backed depth** — `LobsterFormat.compute_depth` reads the official
+- **Orderbook-backed depth** — `LobsterSource.compute_depth` reads the official
   orderbook file for ground-truth depth instead of reconstructing from events
 - **Integer prices** — raw prices are in ten-thousandths of a dollar
   (`price_divisor=10000`)
@@ -25,6 +25,6 @@ Key differences from Bitstamp:
 
 ::: ob_analytics.lobster.LobsterWriter
 
-::: ob_analytics.lobster.LobsterFormat
+::: ob_analytics.lobster.LobsterSource
 
 ::: ob_analytics.lobster.lobster_depth_from_orderbook

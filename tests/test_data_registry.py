@@ -52,11 +52,19 @@ def _cleanup_registry():
 
 
 class TestWriterRegistry:
-    def test_builtin_writers_present(self):
+    def test_venue_writers_come_from_the_source_not_the_generic_registry(self):
+        # Issue #137 folds venue writers onto their source's create_writer, so
+        # the generic writer registry no longer double-lists them.
         names = list_writers()
-        # Plan 2 registers both bitstamp and lobster as writer factories.
-        assert "bitstamp" in names
-        assert "lobster" in names
+        assert "bitstamp" not in names
+        assert "lobster" not in names
+
+    def test_source_name_resolves_to_its_writer(self):
+        # save_data(fmt="<venue>") reaches the writer through the source.
+        from ob_analytics.bitstamp import BitstampWriter
+        from ob_analytics.data import _named_writer
+
+        assert isinstance(_named_writer("bitstamp", None, None), BitstampWriter)
 
     def test_register_new_writer(self, tmp_path):
         register_writer("stub", lambda config, ctx: _StubWriter())

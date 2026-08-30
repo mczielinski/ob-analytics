@@ -1,18 +1,26 @@
-"""Tests for the protocol contracts in ob_analytics.protocols."""
+"""Tests for the source protocol contracts in ob_analytics.protocols."""
 
 from __future__ import annotations
 
-from ob_analytics.protocols import Format
+from ob_analytics.protocols import OfflineSource, Source
 
 
-def test_formats_are_structural_without_inheritance():
-    from ob_analytics.bitstamp import BitstampFormat
-    from ob_analytics.lobster import LobsterFormat
+def test_sources_are_structural_without_inheritance():
+    from ob_analytics.bitstamp import BitstampSource
+    from ob_analytics.live import LiveSource
+    from ob_analytics.lobster import LobsterSource
 
-    # The concrete formats do NOT inherit from Format ...
-    assert Format not in BitstampFormat.__mro__
-    assert Format not in LobsterFormat.__mro__
+    # The concrete sources do NOT inherit from the protocols ...
+    assert Source not in BitstampSource.__mro__
+    assert OfflineSource not in BitstampSource.__mro__
+    assert OfflineSource not in LobsterSource.__mro__
 
-    # ... yet both satisfy the runtime-checkable Protocol structurally.
-    assert isinstance(BitstampFormat(), Format)
-    assert isinstance(LobsterFormat(), Format)
+    # ... yet they satisfy the runtime-checkable protocols structurally.
+    assert isinstance(BitstampSource(), Source)
+    assert isinstance(BitstampSource(), OfflineSource)
+    # Bitstamp is one source with both capabilities (offline replay + live).
+    assert isinstance(BitstampSource(), LiveSource)
+
+    # LOBSTER ships as files: offline-capable, not live.
+    assert isinstance(LobsterSource(), OfflineSource)
+    assert not isinstance(LobsterSource(), LiveSource)

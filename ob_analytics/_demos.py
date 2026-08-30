@@ -12,9 +12,9 @@ from pathlib import Path
 import pandas as pd
 from loguru import logger
 
-from ob_analytics.bitstamp import BitstampFormat, BitstampWriter
+from ob_analytics.bitstamp import BitstampSource, BitstampWriter
 from ob_analytics.data import save_data
-from ob_analytics.lobster import LobsterFormat
+from ob_analytics.lobster import LobsterSource
 from ob_analytics.pipeline import Pipeline, PipelineResult
 from ob_analytics.protocols import RunContext
 from ob_analytics.visualization.gallery import (
@@ -135,7 +135,7 @@ def run_bitstamp_demo(
     logger.info("Bitstamp Demo: {}", orders_path.name)
     logger.info("=" * 60)
 
-    pipeline = Pipeline(format=BitstampFormat())
+    pipeline = Pipeline(source=BitstampSource())
     result = pipeline.run(str(orders_path))
 
     logger.info("Events: {:,}", len(result.events))
@@ -150,7 +150,7 @@ def run_bitstamp_demo(
         # frame in _result_dict, so no separate shim is needed here.  Pass the
         # run's config so ticks convert back on the run's grid (issue #155).
         save_data(_result_dict(result), rt_csv, writer=BitstampWriter(result.config))
-        rt = Pipeline(format=BitstampFormat()).run(str(rt_csv))
+        rt = Pipeline(source=BitstampSource()).run(str(rt_csv))
         logger.info(
             "Round-trip events: {} (match: {})",
             len(rt.events),
@@ -192,9 +192,9 @@ def run_lobster_demo(
     logger.info("LOBSTER Demo: {} ({})", src, trading_date)
     logger.info("=" * 60)
 
-    fmt = LobsterFormat()
+    source_desc = LobsterSource()
     ctx = RunContext(trading_date=trading_date)
-    pipeline = Pipeline(format=fmt, ctx=ctx)
+    pipeline = Pipeline(source=source_desc, ctx=ctx)
     result = pipeline.run(str(src))
 
     logger.info("Events: {:,}", len(result.events))

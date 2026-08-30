@@ -24,10 +24,10 @@ import pytest
 from hypothesis import given, settings, strategies as st
 
 from ob_analytics import (
-    BitstampFormat,
+    BitstampSource,
     DataQualitySummary,
     FeedType,
-    LobsterFormat,
+    LobsterSource,
     data_quality_summary,
 )
 from ob_analytics.analytics import (
@@ -112,10 +112,10 @@ def crossed_events() -> pd.DataFrame:
 
 class TestClassification:
     def test_bitstamp_is_diff_feed(self):
-        assert BitstampFormat().feed_type is FeedType.DIFF_FEED
+        assert BitstampSource().feed_type is FeedType.DIFF_FEED
 
     def test_lobster_is_matched_book(self):
-        assert LobsterFormat().feed_type is FeedType.MATCHED_BOOK
+        assert LobsterSource().feed_type is FeedType.MATCHED_BOOK
 
     def test_feed_type_is_str_comparable(self):
         # The str mixin keeps CLI/JSON output and equality checks ergonomic.

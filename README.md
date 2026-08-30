@@ -84,13 +84,13 @@ result.depth_summary  # best bid/ask, BPS bins, spread
 
 ### LOBSTER
 
-`trading_date` lives on `RunContext`, not on `LobsterFormat`:
+`trading_date` lives on `RunContext`, not on `LobsterSource`:
 
 ```python
-from ob_analytics import Pipeline, LobsterFormat, RunContext
+from ob_analytics import Pipeline, LobsterSource, RunContext
 
 result = Pipeline(
-    format=LobsterFormat(),
+    source=LobsterSource(),
     ctx=RunContext(trading_date="2012-06-21"),
 ).run("/path/to/lobster_data")
 ```
@@ -120,8 +120,9 @@ With the `[live]` extra installed, capture a live order book straight to
 ob-analytics capture bitstamp --pair btcusd --out ./capture --minutes 30
 ```
 
-`ob-analytics capture --list` shows registered venues. Add new ones by
-implementing the `LiveCapturer` protocol in `ob_analytics.live`.
+`ob-analytics capture --list` shows live-capable sources. Add new ones by
+giving a `Source` the `LiveSource` capability and registering it with
+`register_source`.
 
 See the [full quickstart](https://mczielinski.github.io/ob-analytics/quickstart/)
 for step-by-step usage, configuration, custom loaders, flow-toxicity metrics,

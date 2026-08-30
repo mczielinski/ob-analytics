@@ -45,6 +45,7 @@ nav = [
     { "Pipeline" = "api/pipeline.md" },
     { "Configuration" = "api/config.md" },
     { "Protocols" = "api/protocols.md" },
+    { "Sources" = "api/sources.md" },
     { "Data Contracts" = "api/schemas.md" },
     { "Bitstamp" = "api/bitstamp.md" },
     { "LOBSTER" = "api/lobster.md" },

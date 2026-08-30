@@ -15,11 +15,11 @@ import pytest
 matplotlib.use("Agg")
 
 from ob_analytics import (
-    DepthCsvFormat,
+    DepthCsvSource,
     Level,
     Pipeline,
     data_quality_summary,
-    list_formats,
+    list_sources,
 )
 from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
 from ob_analytics.depth import depth_metrics, get_spread
@@ -63,33 +63,33 @@ def toy_l2_dir(tmp_path):
 @pytest.fixture
 def toy_l2_result(toy_l2_dir):
     """A price-level ``PipelineResult`` from the toy fixture."""
-    return Pipeline.from_format("depth_csv").run(toy_l2_dir)
+    return Pipeline.from_source("depth_csv").run(toy_l2_dir)
 
 
 # ---------------------------------------------------------------------------
-# Format descriptor + registration
+# Source descriptor + registration
 # ---------------------------------------------------------------------------
 
 
-class TestDepthCsvFormat:
-    def test_declares_l2_resolution(self):
-        fmt = DepthCsvFormat()
-        assert fmt.resolution is Level.L2
-        assert fmt.name == "depth_csv"
+class TestDepthCsvSource:
+    def test_declares_l2_level(self):
+        source = DepthCsvSource()
+        assert source.level is Level.L2
+        assert source.name == "depth_csv"
         # A price-level feed is the venue's own aggregated (matched) view.
-        assert fmt.feed_type is FeedType.MATCHED_BOOK
+        assert source.feed_type is FeedType.MATCHED_BOOK
 
     def test_registered(self):
-        assert "depth_csv" in list_formats()
+        assert "depth_csv" in list_sources()
 
     def test_self_describing_no_required_context(self):
-        assert DepthCsvFormat().required_context() == []
+        assert DepthCsvSource().required_context() == []
 
     def test_loader_is_a_depth_source(self):
         from ob_analytics import PipelineConfig
         from ob_analytics.protocols import RunContext
 
-        loader = DepthCsvFormat().create_loader(PipelineConfig(), RunContext())
+        loader = DepthCsvSource().create_loader(PipelineConfig(), RunContext())
         assert isinstance(loader, DepthSource)
 
 
@@ -205,7 +205,7 @@ class TestToyL2Fixture:
 class TestL2Pipeline:
     def test_run_produces_l2_result(self, toy_l2_result):
         r = toy_l2_result
-        assert r.resolution is Level.L2
+        assert r.level is Level.L2
 
     def test_depth_and_summary_valid(self, toy_l2_result):
         r = toy_l2_result
@@ -244,7 +244,7 @@ class TestL2Pipeline:
                 {"timestamp": _BASE_MS + 7000, "price": 100.0, "amount": 1.0},  # <mid
             ],
         )
-        r = Pipeline.from_format("depth_csv").run(tmp_path)
+        r = Pipeline.from_source("depth_csv").run(tmp_path)
         assert list(r.trades["direction"]) == ["buy", "sell"]
 
     def test_native_side_is_respected(self, tmp_path):
@@ -262,7 +262,7 @@ class TestL2Pipeline:
                 }
             ],
         )
-        r = Pipeline.from_format("depth_csv").run(tmp_path)
+        r = Pipeline.from_source("depth_csv").run(tmp_path)
         assert list(r.trades["direction"]) == ["buy"]
 
     def test_depth_only_feed_runs_without_trades(self, tmp_path):
@@ -271,15 +271,15 @@ class TestL2Pipeline:
             tmp_path,
             [(_BASE_MS, "bid", 99.0, 5.0), (_BASE_MS, "ask", 101.0, 5.0)],
         )
-        r = Pipeline.from_format("depth_csv").run(tmp_path)
-        assert r.resolution is Level.L2
+        r = Pipeline.from_source("depth_csv").run(tmp_path)
+        assert r.level is Level.L2
         assert r.trades.empty
         validate_depth_df(r.depth)
 
     def test_l3_default_unchanged(self, tiny_bitstamp_orders_csv):
         """The default (Bitstamp/L3) path still reports L3 with populated events."""
         r = Pipeline().run(tiny_bitstamp_orders_csv)
-        assert r.resolution is Level.L3
+        assert r.level is Level.L3
         assert not r.events.empty
 
 
@@ -383,8 +383,8 @@ class TestL2CLI:
             {"depth": toy_l2_depth(), "trades": toy_l2_trades()}, directory
         )
 
-    def test_formats_lists_depth_csv(self, cli_runner):
-        r = cli_runner("formats")
+    def test_sources_lists_depth_csv(self, cli_runner):
+        r = cli_runner("sources")
         assert r.returncode == 0
         assert "depth_csv" in r.stdout
 
@@ -394,7 +394,7 @@ class TestL2CLI:
         self._write_cli_fixture(src)
         out = tmp_path / "out"
         r = cli_runner(
-            "process", str(src), "--format", "depth_csv", "--output", str(out)
+            "process", str(src), "--source", "depth_csv", "--output", str(out)
         )
         assert r.returncode == 0, r.stderr
         assert (out / "depth.parquet").exists()
@@ -405,7 +405,7 @@ class TestL2CLI:
         src = tmp_path / "src"
         src.mkdir()
         self._write_cli_fixture(src)
-        r = cli_runner("validate", str(src), "--format", "depth_csv")
+        r = cli_runner("validate", str(src), "--source", "depth_csv")
         assert r.returncode == 0, r.stderr
         assert "matched_book" in r.stdout
 
@@ -423,9 +423,9 @@ class TestLevel:
         assert CoreLevel is VizLevel
         assert list(CoreLevel) == [CoreLevel.L2, CoreLevel.L3]
 
-    def test_l3_formats_default_resolution(self):
-        """Bitstamp / LOBSTER declare (or structurally default to) L3."""
-        from ob_analytics import BitstampFormat, LobsterFormat
+    def test_l3_sources_declare_l3_level(self):
+        """Bitstamp / LOBSTER declare L3."""
+        from ob_analytics import BitstampSource, LobsterSource
 
-        assert getattr(BitstampFormat(), "resolution", Level.L3) is Level.L3
-        assert getattr(LobsterFormat(), "resolution", Level.L3) is Level.L3
+        assert BitstampSource().level is Level.L3
+        assert LobsterSource().level is Level.L3

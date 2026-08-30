@@ -159,7 +159,8 @@ result = Pipeline(
 ).run(sample_csv_path())
 ```
 
-Bundle defaults in a `Format` subclass — see [Protocols](../api/protocols.md).
+Bundle defaults in a `Source` — see [Protocols](../api/protocols.md) and
+[Extending](../extending.md).
 
 ## Related
 

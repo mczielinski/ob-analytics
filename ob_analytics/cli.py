@@ -5,7 +5,7 @@ Entry point registered as ``ob-analytics`` in pyproject.toml.
 Usage::
 
     ob-analytics process orders.csv --output results/
-    ob-analytics process data/ --format lobster --trading-date 2012-06-21
+    ob-analytics process data/ --source lobster --trading-date 2012-06-21
     ob-analytics gallery results/parquet/ --output my_gallery/
     ob-analytics bitstamp-demo --input /path/to/dir_with_orders_and_trades/ --output demo_out/
     ob-analytics bitstamp-demo --view comparison   # L2-vs-L3 counterparts side by side
@@ -38,24 +38,24 @@ def _cmd_process(args: argparse.Namespace) -> None:
     _setup_logging(args.verbose)
     from loguru import logger
 
-    from ob_analytics.config import PipelineConfig
     from ob_analytics.data import save_data
-    from ob_analytics.pipeline import FORMATS, Pipeline
+    from ob_analytics.pipeline import Pipeline
     from ob_analytics.protocols import RunContext
+    from ob_analytics.sources import get_source
 
-    source = args.source
-    fmt_name = args.format
+    data_path = args.path
+    source_name = args.source
 
     try:
-        fmt = FORMATS.get(fmt_name)()
+        source = get_source(source_name)()
     except KeyError as exc:
         logger.error(str(exc))
         sys.exit(1)
 
-    # Ask the format what RunContext it needs rather than hard-coding "lobster".
-    required = getattr(fmt, "required_context", list)()
+    # Ask the source what RunContext it needs rather than hard-coding "lobster".
+    required = getattr(source, "required_context", list)()
     if "trading_date" in required and args.trading_date is None:
-        logger.error("--trading-date is required for the %s format", fmt_name)
+        logger.error("--trading-date is required for the %s source", source_name)
         sys.exit(1)
     ctx = (
         RunContext(trading_date=args.trading_date)
@@ -63,11 +63,14 @@ def _cmd_process(args: argparse.Namespace) -> None:
         else RunContext()
     )
 
-    config = PipelineConfig(**fmt.config_defaults())
-    pipeline = Pipeline(config=config, format=fmt, ctx=ctx)
+    try:
+        pipeline = Pipeline(source=source, ctx=ctx)
+    except TypeError as exc:  # e.g. a live-only source cannot replay files
+        logger.error(str(exc))
+        sys.exit(1)
 
-    logger.info("Processing {} (format={})...", source, fmt_name)
-    result = pipeline.run(source)
+    logger.info("Processing {} (source={})...", data_path, source_name)
+    result = pipeline.run(data_path)
 
     logger.info("Events: {:,}", len(result.events))
     logger.info("Trades: {:,}", len(result.trades))
@@ -86,7 +89,9 @@ def _cmd_process(args: argparse.Namespace) -> None:
     logger.info("Saved to: {}", output.resolve())
 
     if args.gallery:
-        _generate_gallery_from_result(result, output, fmt_name, source, view=args.view)
+        _generate_gallery_from_result(
+            result, output, source_name, data_path, view=args.view
+        )
 
 
 def _cmd_validate(args: argparse.Namespace) -> None:
@@ -95,19 +100,19 @@ def _cmd_validate(args: argparse.Namespace) -> None:
     from loguru import logger
 
     from ob_analytics.analytics import data_quality_summary
-    from ob_analytics.config import PipelineConfig
-    from ob_analytics.pipeline import FORMATS, Pipeline
+    from ob_analytics.pipeline import Pipeline
     from ob_analytics.protocols import FeedType, RunContext
+    from ob_analytics.sources import get_source
 
     try:
-        fmt = FORMATS.get(args.format)()
+        source = get_source(args.source)()
     except KeyError as exc:
         logger.error(str(exc))
         sys.exit(1)
 
-    required = getattr(fmt, "required_context", list)()
+    required = getattr(source, "required_context", list)()
     if "trading_date" in required and args.trading_date is None:
-        logger.error("--trading-date is required for the {} format", args.format)
+        logger.error("--trading-date is required for the {} source", args.source)
         sys.exit(1)
     ctx = (
         RunContext(trading_date=args.trading_date)
@@ -115,16 +120,19 @@ def _cmd_validate(args: argparse.Namespace) -> None:
         else RunContext()
     )
 
-    config = PipelineConfig(**fmt.config_defaults())
-    pipeline = Pipeline(config=config, format=fmt, ctx=ctx)
+    try:
+        pipeline = Pipeline(source=source, ctx=ctx)
+    except TypeError as exc:  # e.g. a live-only source cannot replay files
+        logger.error(str(exc))
+        sys.exit(1)
 
-    logger.info("Validating {} (format={})...", args.source, args.format)
-    result = pipeline.run(args.source)
+    logger.info("Validating {} (source={})...", args.path, args.source)
+    result = pipeline.run(args.path)
 
     summary = data_quality_summary(
         result.events,
         result.trades,
-        feed_type=getattr(fmt, "feed_type", FeedType.UNKNOWN),
+        feed_type=getattr(source, "feed_type", FeedType.UNKNOWN),
         depth=result.depth,
     )
 
@@ -189,14 +197,21 @@ def _cmd_bitstamp_demo(args: argparse.Namespace) -> None:
     run_bitstamp_demo(args.input, args.output, view=args.view, roundtrip=args.roundtrip)
 
 
-def _cmd_formats(args: argparse.Namespace) -> None:
-    """List the registered data formats and the context each requires."""
-    from ob_analytics.pipeline import FORMATS, list_formats
+def _cmd_sources(args: argparse.Namespace) -> None:
+    """List the registered sources: capability (offline/live) and required context."""
+    from ob_analytics.sources import SOURCES, list_sources
 
-    for name in list_formats():
-        required = getattr(FORMATS.get(name)(), "required_context", list)()
-        suffix = f"  (requires: {', '.join(required)})" if required else ""
-        print(f"{name}{suffix}")
+    for name in list_sources():
+        source = SOURCES.get(name)()
+        caps = []
+        if hasattr(source, "create_loader"):
+            caps.append("offline")
+        if hasattr(source, "stream"):
+            caps.append("live")
+        cap_str = "/".join(caps) if caps else "?"
+        required = getattr(source, "required_context", list)()
+        req_str = f", requires: {', '.join(required)}" if required else ""
+        print(f"{name}  [{cap_str}{req_str}]")
 
 
 def _cmd_lobster_demo(args: argparse.Namespace) -> None:
@@ -214,25 +229,23 @@ def _cmd_capture(args: argparse.Namespace) -> None:
 
     from loguru import logger
 
-    from ob_analytics.live import get_capturer, list_capturers
-    from ob_analytics.live._base import CaptureConfig
+    from ob_analytics.live import CaptureConfig, LiveSource
     from ob_analytics.live._runner import run_capturer
+    from ob_analytics.live.ccxt_source import CcxtSettings
+    from ob_analytics.sources import SOURCES, get_source, list_sources
+
+    def _is_live(name: str) -> bool:
+        return hasattr(SOURCES.get(name), "stream")
 
     if getattr(args, "list", False):
-        registered = list_capturers()
-        if not registered:
-            logger.error(
-                "No capturers registered. Install with: "
-                'pip install "ob-analytics[live]"'
-            )
-            sys.exit(1)
-        for name in registered:
-            print(name)
+        for name in list_sources():
+            if _is_live(name):
+                print(name)
         return
 
     if not args.venue:
         logger.error(
-            "venue is required (e.g. 'bitstamp'). Use --list to see registered capturers."
+            "venue is required (e.g. 'bitstamp'). Use --list to see live sources."
         )
         sys.exit(2)
     if not args.out:
@@ -240,27 +253,39 @@ def _cmd_capture(args: argparse.Namespace) -> None:
         sys.exit(2)
 
     try:
-        capturer_cls = get_capturer(args.venue)
-    except ValueError as exc:
+        source_cls = get_source(args.venue)
+    except KeyError as exc:
         logger.error(str(exc))
         sys.exit(1)
 
-    capturer = capturer_cls()
-    extras: dict[str, Any] = {}
-    if getattr(args, "exchange", None):
-        extras["exchange"] = args.exchange
-    if getattr(args, "depth_limit", None) is not None:
-        extras["depth_limit"] = args.depth_limit
-    if getattr(args, "poll_interval", None) is not None:
-        extras["poll_interval"] = args.poll_interval
+    # Build typed per-source settings. Only ccxt takes venue knobs today; a
+    # source with no knobs is constructed with its empty default settings.
+    if args.venue.lower() == "ccxt":
+        ccxt_kwargs: dict[str, Any] = {}
+        if getattr(args, "exchange", None):
+            ccxt_kwargs["exchange"] = args.exchange
+        if getattr(args, "depth_limit", None) is not None:
+            ccxt_kwargs["depth_limit"] = args.depth_limit
+        if getattr(args, "poll_interval", None) is not None:
+            ccxt_kwargs["poll_interval"] = args.poll_interval
+        # The registry is typed as `type[Source]`; the core protocol declares
+        # no constructor, so passing settings is a checked-at-runtime dynamic
+        # call (every built-in source accepts an optional `settings`).
+        source = source_cls(settings=CcxtSettings(**ccxt_kwargs))  # ty: ignore[unknown-argument]
+    else:
+        source = source_cls()
+
+    if not isinstance(source, LiveSource):
+        logger.error("Source %r has no live capture; it is offline-only.", args.venue)
+        sys.exit(1)
+
     config = CaptureConfig(
         pair=args.pair,
         out_dir=Path(args.out),
         minutes=args.minutes,
         keep_raw=not args.no_raw,
-        extras=extras,
     )
-    result = asyncio.run(run_capturer(capturer, config))
+    result = asyncio.run(run_capturer(source, config))
     logger.info("Capture complete: {}", result.out_dir)
 
 
@@ -303,9 +328,9 @@ def _add_view_arg(parser: argparse.ArgumentParser) -> None:
 
 def main() -> None:
     """Entry point for the ``ob-analytics`` CLI."""
-    from ob_analytics.pipeline import list_formats
+    from ob_analytics.sources import list_sources
 
-    formats = list_formats()
+    sources = list_sources()
 
     parser = argparse.ArgumentParser(
         prog="ob-analytics",
@@ -325,13 +350,13 @@ def main() -> None:
         "process",
         help="Run the pipeline on a data source and save results",
     )
-    p_process.add_argument("source", help="Path to data file or directory")
+    p_process.add_argument("path", help="Path to data file or directory")
     p_process.add_argument(
-        "-f",
-        "--format",
+        "-s",
+        "--source",
         default="bitstamp",
-        choices=formats,
-        help=f"Data format (default: bitstamp; registered: {', '.join(formats)})",
+        choices=sources,
+        help=f"Data source (default: bitstamp; registered: {', '.join(sources)})",
     )
     p_process.add_argument(
         "-o",
@@ -342,7 +367,7 @@ def main() -> None:
     p_process.add_argument(
         "--trading-date",
         default=None,
-        help="Trading date for LOBSTER format (YYYY-MM-DD)",
+        help="Trading date for the LOBSTER source (YYYY-MM-DD)",
     )
     p_process.add_argument(
         "--gallery",
@@ -358,18 +383,18 @@ def main() -> None:
         "validate",
         help="Report per-run data-quality metrics for a data source",
     )
-    p_validate.add_argument("source", help="Path to data file or directory")
+    p_validate.add_argument("path", help="Path to data file or directory")
     p_validate.add_argument(
-        "-f",
-        "--format",
+        "-s",
+        "--source",
         default="bitstamp",
-        choices=formats,
-        help=f"Data format (default: bitstamp; registered: {', '.join(formats)})",
+        choices=sources,
+        help=f"Data source (default: bitstamp; registered: {', '.join(sources)})",
     )
     p_validate.add_argument(
         "--trading-date",
         default=None,
-        help="Trading date for LOBSTER format (YYYY-MM-DD)",
+        help="Trading date for the LOBSTER source (YYYY-MM-DD)",
     )
     p_validate.add_argument(
         "--json",
@@ -467,7 +492,7 @@ def main() -> None:
     p_cap.add_argument(
         "venue",
         nargs="?",
-        help=("Venue name (e.g. 'bitstamp'). Use --list to see registered capturers."),
+        help=("Venue name (e.g. 'bitstamp'). Use --list to see live sources."),
     )
     p_cap.add_argument(
         "--pair",
@@ -518,16 +543,16 @@ def main() -> None:
         "--list",
         action="store_true",
         default=False,
-        help="List registered capturers and exit (ignores other flags)",
+        help="List live-capable sources and exit (ignores other flags)",
     )
     p_cap.set_defaults(func=_cmd_capture)
 
-    # -- formats --
-    p_fmt = subparsers.add_parser(
-        "formats",
-        help="List registered data formats (mirror of 'capture --list')",
+    # -- sources --
+    p_src = subparsers.add_parser(
+        "sources",
+        help="List registered sources, their capability (offline/live), and required context",
     )
-    p_fmt.set_defaults(func=_cmd_formats)
+    p_src.set_defaults(func=_cmd_sources)
 
     args = parser.parse_args()
     args.func(args)

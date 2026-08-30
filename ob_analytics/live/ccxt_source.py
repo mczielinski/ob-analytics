@@ -23,9 +23,10 @@ size; a level that vanished emits ``0`` (a removal).
 Pro ships inside ``ccxt``).  It is imported lazily, so importing this module --
 and listing capturers -- never requires ccxt to be installed.
 
-The venue id and per-run knobs travel in :attr:`CaptureConfig.extras`::
+The venue id and per-run knobs are typed :class:`CcxtSettings` carried by the
+source::
 
-    extras = {"exchange": "binance", "depth_limit": 100, "poll_interval": 1.0}
+    CcxtSource(settings=CcxtSettings(exchange="binance", depth_limit=100))
 
 and the symbol is :attr:`CaptureConfig.pair` (e.g. ``"BTC/USDT"``).
 """
@@ -40,12 +41,35 @@ from typing import Any
 import pandas as pd
 from loguru import logger
 
-from ob_analytics.live._base import CaptureConfig, EventDict, LiveCapturer
-from ob_analytics.protocols import Level
+from ob_analytics.config import SourceSettings
+from ob_analytics.live._base import CaptureConfig, EventDict
+from ob_analytics.protocols import FeedType, Level
 
-# Per-venue defaults, overridable via CaptureConfig.extras.
+# Per-venue defaults, overridable via CcxtSettings.
 _DEFAULT_DEPTH_LIMIT = 100
 _DEFAULT_POLL_INTERVAL = 1.0  # seconds; REST-poll venues only
+
+
+class CcxtSettings(SourceSettings):
+    """Typed settings for :class:`CcxtSource` (replaces the former extras dict).
+
+    Attributes
+    ----------
+    exchange : str or object
+        The CCXT venue id (e.g. ``"binance"``, ``"kraken"``), or a pre-built
+        exchange object for tests / advanced callers.  Empty by default so a
+        source can be constructed before the venue is known; the value is
+        required by the time a capture starts (:meth:`CcxtSource._configure`
+        raises otherwise).
+    depth_limit : int
+        Order-book depth (levels per side) to request.
+    poll_interval : float
+        Seconds between REST polls, for REST-only venues.
+    """
+
+    exchange: Any = ""
+    depth_limit: int = _DEFAULT_DEPTH_LIMIT
+    poll_interval: float = _DEFAULT_POLL_INTERVAL
 
 
 def _make_exchange(exchange_id: str) -> Any:
@@ -80,17 +104,26 @@ def _epoch_ms_to_ts(ms: Any) -> pd.Timestamp:
     return pd.Timestamp(int(ms), unit="ms", tz="UTC").as_unit("ns")
 
 
-class CcxtCapturer(LiveCapturer):
+class CcxtSource:
     """Live-capture any CCXT venue as an L2 depth + trade stream.
 
-    Conforms to :class:`~ob_analytics.live.LiveCapturer`.  Instances are not
+    Satisfies :class:`~ob_analytics.live._base.LiveSource` (live only — a CCXT
+    capture's ``depth.csv`` replays offline through the generic
+    :class:`~ob_analytics.depth_l2.DepthCsvSource`).  Instances are not
     reusable across runs -- construct a fresh one per capture.
     """
 
     name = "ccxt"
-    resolution = Level.L2
+    level = Level.L2
+    # CCXT's unified book is the venue's own aggregated view: bids never rest
+    # above asks, so the reconstructed book is not crossed.
+    feed_type = FeedType.MATCHED_BOOK
 
-    def __init__(self) -> None:
+    def __init__(self, settings: SourceSettings | None = None) -> None:
+        # The venue id and per-run knobs are typed CcxtSettings (the empty
+        # default lets the source be constructed before the venue is known;
+        # ``_configure`` requires ``exchange`` by the time a capture starts).
+        self.settings: SourceSettings = settings or CcxtSettings()
         self._exchange: Any = None
         self._symbol: str = ""
         self._depth_limit: int = _DEFAULT_DEPTH_LIMIT
@@ -111,15 +144,22 @@ class CcxtCapturer(LiveCapturer):
 
     def _configure(self, config: CaptureConfig) -> None:
         """Resolve the exchange, symbol, and per-transport capabilities."""
-        extras = config.extras or {}
-        exchange = extras.get("exchange")
+        settings = self.settings
+        if not isinstance(settings, CcxtSettings):
+            raise TypeError(
+                "CcxtSource needs CcxtSettings; got "
+                f"{type(settings).__name__}. Construct it as "
+                "CcxtSource(settings=CcxtSettings(exchange='<venue id>'))."
+            )
+        exchange = settings.exchange
         if not exchange:
             raise ValueError(
-                "ccxt source needs extras={'exchange': '<venue id>'} (e.g. 'binance')."
+                "ccxt source needs CcxtSettings(exchange='<venue id>') "
+                "(e.g. 'binance')."
             )
         self._symbol = config.pair
-        self._depth_limit = int(extras.get("depth_limit", _DEFAULT_DEPTH_LIMIT))
-        self._poll_interval = float(extras.get("poll_interval", _DEFAULT_POLL_INTERVAL))
+        self._depth_limit = int(settings.depth_limit)
+        self._poll_interval = float(settings.poll_interval)
 
         # A string is a venue id (built via ccxt); anything else is treated as
         # a pre-built exchange object (tests / advanced callers).
@@ -410,3 +450,12 @@ class CcxtCapturer(LiveCapturer):
             "trade_events": self.trade_events,
             "errors": self.errors,
         }
+
+
+# ── Register this source ──────────────────────────────────────────────
+# Registered unconditionally (importing this module never imports ccxt — it is
+# imported lazily in ``_make_exchange``); a capture without the ``[ccxt]`` extra
+# raises a clear install hint at that point.
+from ob_analytics.sources import register_source
+
+register_source("ccxt", CcxtSource)

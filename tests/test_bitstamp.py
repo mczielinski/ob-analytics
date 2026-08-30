@@ -19,8 +19,8 @@ import pandas as pd
 import pytest
 
 from ob_analytics.bitstamp import (
-    BitstampFormat,
     BitstampLoader,
+    BitstampSource,
     BitstampTradeReader,
     BitstampWriter,
 )
@@ -41,7 +41,7 @@ def tiny_pipeline_result(tiny_bitstamp_orders_csv: Path):
     Uses the tiny programmatic fixture (not the bundled sample data) so
     the run finishes in well under a second.
     """
-    return Pipeline(format=BitstampFormat()).run(tiny_bitstamp_orders_csv)
+    return Pipeline(source=BitstampSource()).run(tiny_bitstamp_orders_csv)
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +182,7 @@ class TestBitstampWriter:
         # without any demo-side shim.
         assert (rt_csv.parent / "trades.csv").exists()
 
-        rt = Pipeline(format=BitstampFormat()).run(str(rt_csv))
+        rt = Pipeline(source=BitstampSource()).run(str(rt_csv))
         assert len(rt.events) == len(result.events)
 
     def test_writer_creates_file(self, tmp_path, tiny_pipeline_result):
@@ -195,27 +195,27 @@ class TestBitstampWriter:
 
 
 # ---------------------------------------------------------------------------
-# BitstampFormat
+# BitstampSource
 # ---------------------------------------------------------------------------
 
 
-class TestBitstampFormat:
+class TestBitstampSource:
     def test_name(self):
-        assert BitstampFormat().name == "bitstamp"
+        assert BitstampSource().name == "bitstamp"
 
     def test_config_defaults_present(self):
-        defaults = BitstampFormat().config_defaults()
+        defaults = BitstampSource().config_defaults()
         assert "price_decimals" in defaults
         assert "timestamp_unit" in defaults
         assert defaults["timestamp_unit"] == "ms"
 
     def test_constructs_loader_and_trade_source(self):
-        fmt = BitstampFormat()
-        cfg = PipelineConfig(**fmt.config_defaults())
+        source = BitstampSource()
+        cfg = PipelineConfig(**source.config_defaults())
         ctx = RunContext()
-        loader = fmt.create_loader(cfg, ctx)
-        ts = fmt.create_trade_source(cfg, ctx)
-        writer = fmt.create_writer(cfg, ctx)
+        loader = source.create_loader(cfg, ctx)
+        ts = source.create_trade_source(cfg, ctx)
+        writer = source.create_writer(cfg, ctx)
         assert isinstance(loader, BitstampLoader)
         assert isinstance(ts, BitstampTradeReader)
         assert isinstance(writer, BitstampWriter)

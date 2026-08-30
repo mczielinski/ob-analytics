@@ -224,20 +224,20 @@ print((outdir / "TOY_2026-01-05_2_orderbook.csv").read_text().splitlines()[5])
 # this file is used as ground-truth depth instead of replaying it from
 # the messages.
 #
-# Now the trip home. `LobsterFormat` bundles the matching loader, trade
+# Now the trip home. `LobsterSource` bundles the matching loader, trade
 # reader, and config defaults (that `price_divisor`, among others), and
 # needs the same date anchor to turn seconds-after-midnight back into
 # timestamps:
 
 # %%
-rt = Pipeline.from_format("lobster", ctx=RunContext(trading_date="2026-01-05")).run(
+rt = Pipeline.from_source("lobster", ctx=RunContext(trading_date="2026-01-05")).run(
     outdir
 )
 print("executed units, original frames :", events["fill"].sum())
 print("executed units, after round trip:", rt.events["fill"].sum())
 
 # %% [markdown]
-# (`Pipeline(format=LobsterFormat(), ctx=...)` is the explicit spelling
+# (`Pipeline(source=LobsterSource(), ctx=...)` is the explicit spelling
 # of the same thing.) The toy's five trades total 7 units; counted from
 # both sides — maker fills plus taker fills — that is 14 units of
 # executions, and all 14 survive the round trip.
@@ -291,7 +291,7 @@ fig.tight_layout()
 # | Your raw data | What you write | Recipe |
 # |---|---|---|
 # | Bitstamp-format CSV capture (`orders.csv` + sibling `trades.csv`) | `Pipeline().run("run/orders.csv")` | [Use your own data](../howto/your-own-data.md) |
-# | LOBSTER message + orderbook files | `Pipeline.from_format("lobster", ctx=RunContext(trading_date=...)).run(folder)` | [Process LOBSTER files](../howto/lobster.md) |
+# | LOBSTER message + orderbook files | `Pipeline.from_source("lobster", ctx=RunContext(trading_date=...)).run(folder)` | [Process LOBSTER files](../howto/lobster.md) |
 # | Any other venue, API, or log | a small loader class whose `load()` returns validator-passing frames | [Custom components](../howto/custom-components.md) |
 #
 # Whichever route you take, two warnings apply.

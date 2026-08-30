@@ -16,7 +16,7 @@ Install the optional `[ccxt]` extra (CCXT Pro ships inside `ccxt`) and use the
 pip install "ob-analytics[ccxt]"
 
 ob-analytics capture ccxt --exchange binance --pair BTC/USDT --minutes 10 --out /tmp/cap
-ob-analytics process /tmp/cap --format depth_csv --gallery --output /tmp/cap_out
+ob-analytics process /tmp/cap --source depth_csv --gallery --output /tmp/cap_out
 ```
 
 ## It is an L2 (price-level) source

@@ -1,4 +1,4 @@
-"""Generic asyncio driver that turns any :class:`LiveCapturer` into files."""
+"""Generic asyncio driver that turns any :class:`LiveSource` into files."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from ob_analytics.live._base import (
     CaptureResult,
     CaptureSink,
     EventDict,
-    LiveCapturer,
+    LiveSource,
     SupportsDiagnostics,
 )
 from ob_analytics.protocols import Level
@@ -162,18 +162,18 @@ class FileCaptureSink(CaptureSink):
 
 
 async def run_capturer(
-    capturer: LiveCapturer,
+    capturer: LiveSource,
     config: CaptureConfig,
     sink: CaptureSink | None = None,
 ) -> CaptureResult:
-    """Drive a capturer: snapshot, stream, shutdown -- writing through *sink*.
+    """Drive a live source: snapshot, stream, shutdown -- writing through *sink*.
 
     Handles SIGINT/SIGTERM by cancelling the streaming task; the shutdown
     synthetic events still run so every order id keeps a full lifecycle.
     """
-    # The capturer declares its granularity; the runner routes book events to
-    # the matching writer. Fall back to L3 for capturers predating the attr.
-    resolution = getattr(capturer, "resolution", Level.L3)
+    # The source declares its granularity; the runner routes book events to
+    # the matching writer. Fall back to L3 for sources predating the attr.
+    resolution = getattr(capturer, "level", Level.L3)
     if sink is None:
         sink = FileCaptureSink(
             config.out_dir, keep_raw=config.keep_raw, resolution=resolution
@@ -301,7 +301,7 @@ async def run_capturer(
 
 
 async def _stream(
-    capturer: LiveCapturer,
+    capturer: LiveSource,
     config: CaptureConfig,
     sink: CaptureSink,
     counts: dict[str, int],

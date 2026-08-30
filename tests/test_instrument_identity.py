@@ -29,7 +29,7 @@ import pytest
 from ob_analytics import (
     SYMBOL_COLUMN,
     VENUE_COLUMN,
-    BitstampFormat,
+    BitstampSource,
     ConfigError,
     Pipeline,
     RunContext,
@@ -38,8 +38,8 @@ from ob_analytics import (
 from ob_analytics.bitstamp import BitstampLoader
 from ob_analytics.depth_l2 import L2DepthLoader
 from ob_analytics.live._base import CaptureConfig
-from ob_analytics.live.ccxt_source import CcxtCapturer
-from ob_analytics.lobster import LobsterFormat, LobsterLoader
+from ob_analytics.live.ccxt_source import CcxtSettings, CcxtSource
+from ob_analytics.lobster import LobsterLoader, LobsterSource
 
 _BASE_MS = 1_700_000_000_000  # arbitrary epoch-ms anchor
 
@@ -154,12 +154,12 @@ class TestBitstampIdentity:
     def test_identity_survives_full_pipeline(self, tiny_bitstamp_orders_csv: Path):
         # End-to-end: the tags must survive set_order_types + order_aggressiveness.
         result = Pipeline(
-            format=BitstampFormat(), ctx=RunContext(symbol="BTC/USD")
+            source=BitstampSource(), ctx=RunContext(symbol="BTC/USD")
         ).run(tiny_bitstamp_orders_csv)
         _assert_identity(result.events, venue="bitstamp", symbol="BTC/USD")
 
     def test_default_pipeline_events_untagged(self, tiny_bitstamp_orders_csv: Path):
-        result = Pipeline(format=BitstampFormat()).run(tiny_bitstamp_orders_csv)
+        result = Pipeline(source=BitstampSource()).run(tiny_bitstamp_orders_csv)
         assert VENUE_COLUMN not in result.events.columns
         assert SYMBOL_COLUMN not in result.events.columns
 
@@ -187,13 +187,13 @@ class TestLobsterIdentity:
         assert VENUE_COLUMN not in events.columns
         assert SYMBOL_COLUMN not in events.columns
 
-    def test_format_forwards_ctx_identity(self, lobster_message_file: Path):
-        # The format's create_loader must pass ctx.symbol / ctx.venue through.
+    def test_source_forwards_ctx_identity(self, lobster_message_file: Path):
+        # The source's create_loader must pass ctx.symbol / ctx.venue through.
         from ob_analytics import PipelineConfig
 
-        fmt = LobsterFormat()
+        source = LobsterSource()
         ctx = RunContext(trading_date="2012-06-21", symbol="AMZN", venue="nasdaq")
-        loader = fmt.create_loader(PipelineConfig(**fmt.config_defaults()), ctx)
+        loader = source.create_loader(PipelineConfig(**source.config_defaults()), ctx)
         events = loader.load(lobster_message_file)
         _assert_identity(events, venue="nasdaq", symbol="AMZN")
 
@@ -219,7 +219,7 @@ class TestL2DepthIdentity:
         assert SYMBOL_COLUMN not in depth.columns
 
     def test_identity_survives_l2_pipeline(self, l2_depth_dir: Path):
-        result = Pipeline.from_format(
+        result = Pipeline.from_source(
             "depth_csv", ctx=RunContext(venue="binance", symbol="BTC/USDT")
         ).run(l2_depth_dir)
         _assert_identity(result.depth, venue="binance", symbol="BTC/USDT")
@@ -244,7 +244,7 @@ class _FakeExchange:
 
 class TestCcxtIdentity:
     def test_map_trade_stamps_identity(self):
-        cap = CcxtCapturer()
+        cap = CcxtSource()
         cap.exchange_id = "binance"
         cap._symbol = "BTC/USDT"
         ev = cap._map_trade(
@@ -260,7 +260,7 @@ class TestCcxtIdentity:
         assert ev["symbol"] == "BTC/USDT"
 
     def test_diff_book_stamps_identity_on_every_row(self):
-        cap = CcxtCapturer()
+        cap = CcxtSource()
         cap.exchange_id = "kraken"
         cap._symbol = "ETH/USD"
         cap._last = {"bid": {100.0: 5.0}, "ask": {}}
@@ -270,13 +270,8 @@ class TestCcxtIdentity:
         assert all(r["venue"] == "kraken" and r["symbol"] == "ETH/USD" for r in rows)
 
     def test_snapshot_stamps_identity(self, tmp_path):
-        cap = CcxtCapturer()
-        cfg = CaptureConfig(
-            pair="BTC/USDT",
-            out_dir=tmp_path,
-            minutes=0.01,
-            extras={"exchange": _FakeExchange()},
-        )
+        cap = CcxtSource(settings=CcxtSettings(exchange=_FakeExchange()))
+        cfg = CaptureConfig(pair="BTC/USDT", out_dir=tmp_path, minutes=0.01)
 
         async def _collect():
             return [ev async for ev in cap.snapshot(cfg)]

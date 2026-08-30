@@ -54,7 +54,7 @@ class TestProcessSubcommand:
         r = cli_runner(
             "process",
             str(tiny_bitstamp_orders_csv),
-            "--format",
+            "--source",
             "bitstamp",
             "--output",
             str(out),
@@ -72,7 +72,7 @@ class TestProcessSubcommand:
         r = cli_runner(
             "process",
             str(tiny_bitstamp_orders_csv),
-            "--format",
+            "--source",
             "lobster",
             "--output",
             str(tmp_path / "out"),
@@ -88,7 +88,7 @@ class TestProcessSubcommand:
         r = cli_runner(
             "process",
             str(tiny_bitstamp_orders_csv),
-            "--format",
+            "--source",
             "bitstamp",
             "--output",
             str(out),
@@ -131,7 +131,7 @@ class TestValidateSubcommand:
     def test_validate_lobster_requires_trading_date(
         self, cli_runner, tiny_bitstamp_orders_csv
     ):
-        r = cli_runner("validate", str(tiny_bitstamp_orders_csv), "--format", "lobster")
+        r = cli_runner("validate", str(tiny_bitstamp_orders_csv), "--source", "lobster")
         assert r.returncode != 0
         assert "trading" in (r.stderr + r.stdout).lower()
 
@@ -154,7 +154,7 @@ class TestGallerySubcommand:
         r1 = cli_runner(
             "process",
             str(tiny_bitstamp_orders_csv),
-            "--format",
+            "--source",
             "bitstamp",
             "--output",
             str(parq),
@@ -257,39 +257,42 @@ class TestLobsterDemoSubcommand:
 
 
 # ---------------------------------------------------------------------------
-# formats (WS-5.3)
+# sources (WS-5.3)
 # ---------------------------------------------------------------------------
 
 
-class TestFormatsSubcommand:
-    def test_lists_registered_formats(self, cli_runner):
-        r = cli_runner("formats")
+class TestSourcesSubcommand:
+    def test_lists_registered_sources(self, cli_runner):
+        r = cli_runner("sources")
         assert r.returncode == 0, r.stderr
         assert "bitstamp" in r.stdout
         assert "lobster" in r.stdout
 
-    def test_shows_required_context(self, cli_runner):
+    def test_shows_capability_and_required_context(self, cli_runner):
         # LOBSTER advertises its trading_date requirement; bitstamp has none.
-        r = cli_runner("formats")
+        r = cli_runner("sources")
         lobster_line = next(ln for ln in r.stdout.splitlines() if "lobster" in ln)
         assert "trading_date" in lobster_line
+        assert "offline" in lobster_line
+        # Bitstamp is both offline and live, with no required context.
         bitstamp_line = next(ln for ln in r.stdout.splitlines() if "bitstamp" in ln)
         assert "requires" not in bitstamp_line
+        assert "offline" in bitstamp_line and "live" in bitstamp_line
 
-    def test_process_format_choices_are_dynamic(self, cli_runner):
-        # --format choices come from list_formats(), shown in --help.
+    def test_process_source_choices_are_dynamic(self, cli_runner):
+        # --source choices come from list_sources(), shown in --help.
         r = cli_runner("process", "--help")
         assert r.returncode == 0
         assert "bitstamp" in r.stdout and "lobster" in r.stdout
 
 
 class TestRequiredContext:
-    def test_format_required_context(self) -> None:
-        from ob_analytics.bitstamp import BitstampFormat
-        from ob_analytics.lobster import LobsterFormat
+    def test_source_required_context(self) -> None:
+        from ob_analytics.bitstamp import BitstampSource
+        from ob_analytics.lobster import LobsterSource
 
-        assert BitstampFormat().required_context() == []
-        assert LobsterFormat().required_context() == ["trading_date"]
+        assert BitstampSource().required_context() == []
+        assert LobsterSource().required_context() == ["trading_date"]
 
 
 # ---------------------------------------------------------------------------
@@ -312,21 +315,20 @@ class TestCaptureSubcommand:
         assert "bitstamp" in r.stdout
         assert "ccxt" in r.stdout
 
-    def test_exchange_flag_populates_extras(self, monkeypatch, tmp_path):
-        """--exchange / --depth-limit flow into CaptureConfig.extras (no network)."""
+    def test_exchange_flag_flows_into_typed_settings(self, monkeypatch, tmp_path):
+        """--exchange / --depth-limit flow into typed CcxtSettings (no network)."""
         import argparse
 
         import pandas as pd
 
         from ob_analytics import cli
         from ob_analytics.live._base import CaptureConfig, CaptureResult
+        from ob_analytics.live.ccxt_source import CcxtSettings, CcxtSource
 
         captured: dict = {}
 
-        class _Cap:
-            name = "ccxt"
-
-        async def _fake_run(capturer, config, sink=None):
+        async def _fake_run(source, config, sink=None):
+            captured["source"] = source
             captured["config"] = config
             now = pd.Timestamp.now(tz="UTC")
             return CaptureResult(
@@ -338,7 +340,6 @@ class TestCaptureSubcommand:
                 ended=now,
             )
 
-        monkeypatch.setattr("ob_analytics.live.get_capturer", lambda name: _Cap)
         monkeypatch.setattr("ob_analytics.live._runner.run_capturer", _fake_run)
 
         args = argparse.Namespace(
@@ -355,7 +356,15 @@ class TestCaptureSubcommand:
         )
         cli._cmd_capture(args)
 
+        # The venue knobs land as typed settings on the source, not on the config.
+        source = captured["source"]
+        assert isinstance(source, CcxtSource)
+        assert isinstance(source.settings, CcxtSettings)
+        assert source.settings.exchange == "binance"
+        assert source.settings.depth_limit == 50
+        assert source.settings.poll_interval == 1.0  # not passed -> default
+
         cfg = captured["config"]
         assert isinstance(cfg, CaptureConfig)
         assert cfg.pair == "BTC/USDT"
-        assert cfg.extras == {"exchange": "binance", "depth_limit": 50}
+        assert not hasattr(cfg, "extras")  # the untyped dict is gone

@@ -24,11 +24,17 @@ into structured analytics:
   (`BitstampLoader`, `BitstampTradeReader`, etc.) for step-by-step control.
 - **Pluggable everything** — any object with the right method signature works;
   no inheritance required (structural typing via `Protocol`).
-- **Per-run parameters live on `RunContext`, not `Format`.** Construction-time
-  parameters (schema choice, fixed venue config) belong on the `Format` ctor;
+- **One `Source` shape, file or live.** Every data source states its `level`
+  (L2/L3) and `feed_type`, carries typed `settings`, and implements one or both
+  capabilities — `OfflineSource` (replay stored files) and `LiveSource`
+  (capture a venue). Both register in the one `SOURCES` registry
+  (`register_source`), and third-party sources load through the
+  `ob_analytics.sources` entry-point group.
+- **Per-run parameters live on `RunContext`, not `Source`.** Construction-time
+  parameters (typed `settings`, fixed venue config) belong on the source;
   per-session parameters (trading date, write-time level cap) live on
-  `RunContext` and are passed to `Pipeline(format=..., ctx=...)`. This keeps
-  formats reusable across multiple runs without re-instantiation and avoids
+  `RunContext` and are passed to `Pipeline(source=..., ctx=...)`. This keeps
+  sources reusable across multiple runs without re-instantiation and avoids
   baking session state into long-lived objects.
 
 ---
@@ -64,8 +70,8 @@ demand it).
 
 ## Class diagram
 
-The package combines **protocol-based** components with **format descriptors**
-that bundle venue-specific defaults.
+The package combines **protocol-based** components with **source descriptors**
+that bundle venue-specific defaults and capabilities.
 
 ```mermaid
 classDiagram
@@ -75,7 +81,7 @@ classDiagram
         +trade_source: TradeSource
         +writer: DataWriter | None
         +run(source) PipelineResult
-        +from_format(name, **kwargs)$ Pipeline
+        +from_source(name, **kwargs)$ Pipeline
     }
 
     class PipelineConfig {
@@ -87,22 +93,34 @@ classDiagram
         +depth_bins: int
     }
 
-    class Format {
+    class Source {
         <<Protocol>>
         +name: str
+        +level: Level
+        +feed_type: FeedType
+        +settings: SourceSettings
+    }
+    class OfflineSource {
+        <<Protocol>>
         +create_loader(config, ctx) EventLoader
         +create_trade_source(config, ctx) TradeSource
         +create_writer(config, ctx) DataWriter | None
         +compute_depth(events, config, source, ctx) tuple | None
         +config_defaults() dict
     }
+    class LiveSource {
+        <<Protocol>>
+        +snapshot(config) AsyncIterator
+        +stream(config) AsyncIterator
+        +shutdown_synthetic_events() AsyncIterator
+    }
 
     class RunContext {
         +trading_date: object | None
     }
 
-    class BitstampFormat
-    class LobsterFormat
+    class BitstampSource
+    class LobsterSource
 
     class EventLoader {
         <<Protocol>>
@@ -123,6 +141,7 @@ classDiagram
         +depth: DataFrame
         +depth_summary: DataFrame
         +config: PipelineConfig
+        +level: Level
     }
 
     Pipeline --> PipelineConfig
@@ -130,28 +149,32 @@ classDiagram
     Pipeline --> TradeSource
     Pipeline --> DataWriter
     Pipeline --> PipelineResult
-    Pipeline ..> Format : optional
+    Pipeline ..> OfflineSource : source=
     Pipeline ..> RunContext : per-run params
-    Format <|.. BitstampFormat
-    Format <|.. LobsterFormat
+    Source <|-- OfflineSource
+    Source <|-- LiveSource
+    OfflineSource <|.. BitstampSource
+    LiveSource <|.. BitstampSource
+    OfflineSource <|.. LobsterSource
 ```
 
 ---
 
 ## Data formats
 
-| Format | Resolution | Entry point | Trades |
-|--------|-----------|-------------|--------|
-| **Bitstamp CSV** | L3 | `Pipeline()` (default) | Companion `trades.csv` next to `orders.csv` (e.g. `scripts/collect_bitstamp_btcusd.py`) |
-| **LOBSTER** | L3 | `Pipeline(format=LobsterFormat(), ctx=RunContext(trading_date=...))` | Embedded execution rows (types 4/5) in the message file |
-| **L2 depth CSV** | L2 | `Pipeline.from_format("depth_csv").run(...)` | Optional companion `trades.csv` (signed via trade-sign classification) |
+| Source | Level | Entry point | Trades |
+|--------|-------|-------------|--------|
+| **Bitstamp** (CSV replay + live capture) | L3 | `Pipeline()` (default) · `capture bitstamp` | Companion `trades.csv` next to `orders.csv` (e.g. `scripts/collect_bitstamp_btcusd.py`) |
+| **LOBSTER** | L3 | `Pipeline(source=LobsterSource(), ctx=RunContext(trading_date=...))` | Embedded execution rows (types 4/5) in the message file |
+| **L2 depth CSV** | L2 | `Pipeline.from_source("depth_csv").run(...)` | Optional companion `trades.csv` (signed via trade-sign classification) |
+| **CCXT** (live L2 capture) | L2 | `capture ccxt --exchange <venue>` | Public trade tape (taker side) |
 
 The bundled sample under `ob_analytics/_sample_data/` is a modern BTC/USD
 capture (`orders.csv` + `trades.csv`).
 
 ### L2 vs L3: the resolution axis
 
-A format declares a **`resolution`** (`Level.L2` / `Level.L3`), orthogonal to
+A source declares a **`level`** (`Level.L2` / `Level.L3`), orthogonal to
 its `FeedType` crossing invariant:
 
 - **L3 (market-by-order)** — the per-order model above. Events carry order IDs,
@@ -160,7 +183,7 @@ its `FeedType` crossing invariant:
   most CCXT sources) publish `[price, quantity]` levels and diffs with **no
   order IDs**. The loader (a `DepthSource`) yields the depth frame directly and
   the pipeline **skips the per-order stages**: `PipelineResult.events` comes
-  back empty (schema-valid) and `PipelineResult.resolution is Level.L2`.
+  back empty (schema-valid) and `PipelineResult.level is Level.L2`.
   `DepthMetricsEngine` already consumes an absolute price-level book, so depth /
   spread / trade analytics run unchanged. See the
   [Process L2 feeds](https://github.com/mczielinski/ob-analytics/blob/main/docs/howto/l2-depth.md)
@@ -172,29 +195,31 @@ its `FeedType` crossing invariant:
 
 ```
 ob_analytics/
-├── __init__.py           # Public API surface + format registration + sample_csv_path()
+├── __init__.py           # Public API surface + source registration + sample_csv_path()
 ├── _sample_data/         # Bundled Bitstamp sample (orders.csv + trades.csv)
-├── pipeline.py           # Pipeline, PipelineResult, register_format
-├── config.py             # PipelineConfig (frozen Pydantic model)
-├── protocols.py          # EventLoader, TradeSource, DataWriter, Format
+├── pipeline.py           # Pipeline, PipelineResult
+├── sources.py            # SOURCES registry: register_source, list_sources, get_source, entry-point discovery
+├── config.py             # PipelineConfig, SourceSettings (frozen Pydantic models)
+├── protocols.py          # EventLoader, TradeSource, DataWriter, Source, OfflineSource
 ├── schemas.py            # column constants + validators (validate_events_df, …)
 ├── exceptions.py         # ObAnalyticsError hierarchy
-├── cli.py                # CLI entry point (process, gallery, bitstamp-demo, lobster-demo, capture)
+├── cli.py                # CLI entry point (process, gallery, bitstamp-demo, lobster-demo, capture, sources)
 │
-├── bitstamp.py           # BitstampLoader, BitstampTradeReader, BitstampWriter, BitstampFormat
-├── lobster.py            # LobsterLoader, LobsterTradeReader, LobsterWriter, LobsterFormat
-├── depth_l2.py           # L2DepthLoader, L2TradeReader, DepthCsvWriter, DepthCsvFormat (price-level)
+├── bitstamp.py           # BitstampLoader, BitstampTradeReader, BitstampWriter, BitstampSource (offline + live)
+├── lobster.py            # LobsterLoader, LobsterTradeReader, LobsterWriter, LobsterSource
+├── depth_l2.py           # L2DepthLoader, L2TradeReader, DepthCsvWriter, DepthCsvSource (price-level)
 ├── analytics.py          # order_aggressiveness, trade_impacts, set_order_types, order_book
 ├── depth.py              # DepthMetricsEngine, price_level_volume, depth_metrics, get_spread
 ├── data.py               # save_data, load_data, writer registry
 ├── flow_toxicity.py      # compute_vpin, compute_kyle_lambda, order_flow_imbalance, KyleLambdaResult
 ├── _utils.py             # Validation, numerics, timestamp conversion helpers
 │
-├── live/                 # Optional live order-book capture ([live] extra)
-│   ├── __init__.py       # registry: register_capturer, list_capturers, get_capturer
-│   ├── _base.py          # LiveCapturer protocol, CaptureConfig, CaptureResult, CaptureSink
+├── live/                 # Optional live-capture machinery ([live] / [ccxt] extras)
+│   ├── __init__.py       # live-source registration (ccxt) + re-exports
+│   ├── _base.py          # LiveSource protocol, CaptureConfig, CaptureResult, CaptureSink
 │   ├── _runner.py        # Generic asyncio driver + FileCaptureSink
-│   └── bitstamp.py       # BitstampCapturer (built-in)
+│   ├── bitstamp.py       # Bitstamp WebSocket engine (driven by BitstampSource)
+│   └── ccxt_source.py    # CcxtSource, CcxtSettings (any CCXT venue, L2)
 │
 └── visualization/        # Plotting subsystem
     ├── __init__.py       # plot() dispatcher + RENDERERS registry, PlotTheme, save_figure
@@ -204,12 +229,10 @@ ob_analytics/
     └── _plotly.py        # Plotly renderers
 ```
 
-**`ob_analytics.live`** is an optional async sub-package (install with
-`pip install "ob-analytics[live]"`) that captures live exchange data into
-the same CSV schema the pipeline reads. Implement the `LiveCapturer`
-protocol -- three async-iterator methods (`snapshot`, `stream`,
-`shutdown_synthetic_events`) -- and call `register_capturer` to add a
-new venue; the registry pattern mirrors `Format` and `register_writer`.
-The runner (`run_capturer`) handles persistence, raw-frame archival,
-signal handling, and `meta.json` finalisation so capturer authors only
-write the per-venue parser.
+**Live capture** is optional (install with `pip install "ob-analytics[live]"`
+or `[ccxt]`) and writes into the same CSV schema the pipeline reads. Give your
+`Source` the live capability -- the three `LiveSource` async-iterator methods
+(`snapshot`, `stream`, `shutdown_synthetic_events`) -- and `register_source`
+it; a source can add the offline factories too and do both. The runner
+(`run_capturer`) handles persistence, raw-frame archival, signal handling, and
+`meta.json` finalisation so source authors only write the per-venue parser.

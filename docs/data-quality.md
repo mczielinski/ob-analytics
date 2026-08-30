@@ -30,10 +30,10 @@ Each format **declares** its family, so downstream code reasons about crossing
 *by coordinate, not by format name*:
 
 ```python
-from ob_analytics import BitstampFormat, LobsterFormat, FeedType
+from ob_analytics import BitstampSource, LobsterSource, FeedType
 
-BitstampFormat().feed_type   # FeedType.DIFF_FEED
-LobsterFormat().feed_type    # FeedType.MATCHED_BOOK
+BitstampSource().feed_type   # FeedType.DIFF_FEED
+LobsterSource().feed_type    # FeedType.MATCHED_BOOK
 FeedType.DIFF_FEED == "diff_feed"   # True — the enum mixes in str
 ```
 

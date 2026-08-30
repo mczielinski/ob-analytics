@@ -1,81 +1,39 @@
 """Live order-book capture.
 
+Live sources register into the one unified registry with every other source
+(:mod:`ob_analytics.sources`) — look them up there with ``get_source`` /
+``list_sources``, and drive one with :func:`ob_analytics.live._runner.run_capturer`.
+
 Public API:
-    register_capturer(name, capturer_cls)
-    list_capturers() -> list[str]
-    get_capturer(name) -> type[LiveCapturer]
-    LiveCapturer, CaptureConfig, CaptureResult
-    SupportsDiagnostics (optional capturer capability)
+    CaptureConfig, CaptureResult, CaptureSink, EventDict
+    LiveSource, SupportsDiagnostics
+
+Importing this package registers the built-in ccxt live source.  The bitstamp
+live capability rides on :class:`ob_analytics.bitstamp.BitstampSource`, so it is
+registered when that module is imported (at ``import ob_analytics``).
 """
 
 from __future__ import annotations
 
-import importlib.util
-
-from ob_analytics._registry import Registry
+# Register the ccxt live source.  Importing the module is cheap — ccxt itself is
+# imported lazily only when a capture starts — so it registers unconditionally;
+# a capture without the ``[ccxt]`` extra raises a clear install hint at that
+# point.
+from ob_analytics.live import ccxt_source  # noqa: F401 - fires register_source
 from ob_analytics.live._base import (
     CaptureConfig,
     CaptureResult,
     CaptureSink,
     EventDict,
-    LiveCapturer,
+    LiveSource,
     SupportsDiagnostics,
 )
-
-CAPTURERS: Registry[str, type[LiveCapturer]] = Registry("capturer")
-
-
-def register_capturer(name: str, capturer_cls: type[LiveCapturer]) -> None:
-    """Register a :class:`LiveCapturer` under *name* (case-insensitive).
-
-    Idempotent: overwriting an existing registration is allowed (useful for
-    monkey-patching in tests).
-    """
-    CAPTURERS.register(name, capturer_cls)
-
-
-def list_capturers() -> list[str]:
-    """Return the sorted list of registered capturer names."""
-    return CAPTURERS.list()
-
-
-def get_capturer(name: str) -> type[LiveCapturer]:
-    """Return the capturer class registered under *name* (case-insensitive)."""
-    try:
-        return CAPTURERS.get(name)
-    except KeyError as exc:
-        raise ValueError(str(exc)) from exc
-
-
-# -- Register built-ins -----------------------------------------------------
-# Done at import time. Import is local so the absence of ``websockets`` (an
-# optional ``[live]`` extra) does not break ``import ob_analytics.live``.
-try:
-    from ob_analytics.live.bitstamp import BitstampCapturer
-
-    register_capturer("bitstamp", BitstampCapturer)
-except ImportError:
-    # websockets not installed; the registry stays empty until the user
-    # registers their own capturer or installs ob-analytics[live].
-    pass
-
-# CCXT source (optional ``[ccxt]`` extra). Registered only when ``ccxt`` is
-# installed; the capturer imports ccxt lazily, so gate on a cheap find_spec
-# rather than importing (heavy) ccxt at package import time.
-if importlib.util.find_spec("ccxt") is not None:
-    from ob_analytics.live.ccxt_source import CcxtCapturer
-
-    register_capturer("ccxt", CcxtCapturer)
-
 
 __all__ = [
     "CaptureConfig",
     "CaptureResult",
     "CaptureSink",
     "EventDict",
-    "LiveCapturer",
+    "LiveSource",
     "SupportsDiagnostics",
-    "get_capturer",
-    "list_capturers",
-    "register_capturer",
 ]

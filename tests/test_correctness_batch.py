@@ -14,30 +14,30 @@ from ob_analytics.pipeline import Pipeline
 from ob_analytics.protocols import RunContext
 
 
-class TestConfigFormatMerge:
-    """WS-1.2: explicit config fields overlay format defaults, never erase them."""
+class TestConfigSourceMerge:
+    """WS-1.2: explicit config fields overlay source defaults, never erase them."""
 
     def test_lobster_price_divisor_survives_explicit_config(self):
-        from ob_analytics.lobster import LobsterFormat
+        from ob_analytics.lobster import LobsterSource
 
         p = Pipeline(
             config=PipelineConfig(depth_bps=50),
-            format=LobsterFormat(),
+            source=LobsterSource(),
             ctx=RunContext(trading_date="2012-06-21"),
         )
         assert p.config.price_divisor == 10_000  # was silently reset to 1
         assert p.config.depth_bps == 50  # the explicit field wins
         assert p.config.volume_decimals == 0  # other defaults intact
 
-    def test_explicit_field_overrides_format_default(self):
-        from ob_analytics.lobster import LobsterFormat
+    def test_explicit_field_overrides_source_default(self):
+        from ob_analytics.lobster import LobsterSource
 
         p = Pipeline(
             config=PipelineConfig(price_decimals=4),
-            format=LobsterFormat(),
+            source=LobsterSource(),
             ctx=RunContext(trading_date="2012-06-21"),
         )
-        assert p.config.price_decimals == 4  # explicit beats the format's 2
+        assert p.config.price_decimals == 4  # explicit beats the source's 2
 
 
 class TestMutationHygiene:
