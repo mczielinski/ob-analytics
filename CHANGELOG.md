@@ -74,6 +74,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **One `Source` shape for every data source, file or live** (issue #137;
+  settled #145 as "optional extras plus entry-point plug-ins"). File loaders
+  and live capturers were two separate designs with two registries; they are
+  now one `Source` protocol with two capability refinements — `OfflineSource`
+  (replay stored files: the loader / trade-source / writer / depth factories)
+  and `LiveSource` (capture a venue: `snapshot` / `stream` /
+  `shutdown_synthetic_events`). A source states its `level` (L2/L3) and
+  `feed_type`, carries typed `settings`, and registers in the single `SOURCES`
+  registry via `register_source`. A source can be both: `BitstampSource` now
+  covers offline replay and live capture in one descriptor. This is a breaking
+  API change with no back-compat shims:
+    - `Format` → `OfflineSource`; `LiveCapturer` → `LiveSource`;
+      `BitstampFormat` / `LobsterFormat` / `DepthCsvFormat` →
+      `BitstampSource` / `LobsterSource` / `DepthCsvSource`;
+      `CcxtCapturer` → `CcxtSource`.
+    - `Pipeline(format=...)` → `Pipeline(source=...)`; `Pipeline.from_format`
+      → `Pipeline.from_source`.
+    - The `FORMATS` / `CAPTURERS` registries and their `register_format` /
+      `register_capturer` / `list_formats` / `list_capturers` /
+      `get_capturer` helpers are replaced by `SOURCES` / `register_source` /
+      `list_sources` / `get_source` (in `ob_analytics.sources`).
+    - `PipelineResult.resolution` → `PipelineResult.level` (one coordinate
+      name across the codebase; `Source.level`, matching the visualization
+      layer).
+    - `CaptureConfig.extras` (the untyped settings dict) is removed. Per-source
+      settings are now typed `SourceSettings` on the source itself, e.g.
+      `CcxtSource(settings=CcxtSettings(exchange="binance", depth_limit=100))`.
+    - CLI: `process` / `validate` take `--source` (was `--format`), and the
+      `formats` verb is now `sources` (it also shows each source's capability
+      and required context).
+- **Third-party sources load through entry points.** A source can ship in its
+  own package and advertise itself under the `ob_analytics.sources`
+  entry-point group; `ob_analytics.sources.load_source_plugins()` discovers and
+  registers it at import time, with no edit to ob-analytics. The built-in
+  sources (bitstamp, lobster, depth_csv, ccxt) self-register on import and stay
+  behind today's `[live]` / `[ccxt]` extras.
 - **Prices are now integer ticks, not floats** (issue #155). Every `price`
   column — events, trades, depth, depth_summary, book snapshot, and order
   lifecycles — is a whole number of ticks (`int64`); the quote-currency price is

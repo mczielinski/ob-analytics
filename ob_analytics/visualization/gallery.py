@@ -410,7 +410,7 @@ def build_gallery_model(
     # A price-level (L2) result has no per-order events: build the reduced
     # depth/trades model and skip every L3-only face rather than erroring on
     # the empty events frame.
-    if result.resolution is Level.L2:
+    if result.level is Level.L2:
         return _build_l2_gallery_model(result, volume_scale=volume_scale)
 
     events = result.events

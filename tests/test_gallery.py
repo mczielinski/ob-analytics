@@ -384,10 +384,10 @@ class TestGenerateGallery:
 
 class TestBuildGalleryModel:
     def test_inventory_levels(self, tiny_bitstamp_orders_csv) -> None:
-        from ob_analytics.bitstamp import BitstampFormat
+        from ob_analytics.bitstamp import BitstampSource
         from ob_analytics.pipeline import Pipeline
 
-        result = Pipeline(format=BitstampFormat()).run(str(tiny_bitstamp_orders_csv))
+        result = Pipeline(source=BitstampSource()).run(str(tiny_bitstamp_orders_csv))
         model = build_gallery_model(result)
 
         keys = {c.key for c in model.concepts}
@@ -434,10 +434,10 @@ class TestBuildGalleryModel:
     def test_order_activity_l3_shares_depth_heatmap_window(
         self, tiny_bitstamp_orders_csv
     ) -> None:
-        from ob_analytics.bitstamp import BitstampFormat
+        from ob_analytics.bitstamp import BitstampSource
         from ob_analytics.pipeline import Pipeline
 
-        result = Pipeline(format=BitstampFormat()).run(str(tiny_bitstamp_orders_csv))
+        result = Pipeline(source=BitstampSource()).run(str(tiny_bitstamp_orders_csv))
         model = build_gallery_model(result)
 
         heatmap = next(c for c in model.concepts if c.key == "depth_heatmap").at(
@@ -458,10 +458,10 @@ class TestBuildGalleryModel:
     def test_events_histogram_shares_depth_heatmap_window(
         self, tiny_bitstamp_orders_csv
     ) -> None:
-        from ob_analytics.bitstamp import BitstampFormat
+        from ob_analytics.bitstamp import BitstampSource
         from ob_analytics.pipeline import Pipeline
 
-        result = Pipeline(format=BitstampFormat()).run(str(tiny_bitstamp_orders_csv))
+        result = Pipeline(source=BitstampSource()).run(str(tiny_bitstamp_orders_csv))
         model = build_gallery_model(result)
 
         heatmap = next(c for c in model.concepts if c.key == "depth_heatmap").at(
@@ -480,10 +480,10 @@ class TestBuildGalleryModel:
     def test_order_activity_l2_shares_depth_heatmap_window(
         self, tiny_bitstamp_orders_csv
     ) -> None:
-        from ob_analytics.bitstamp import BitstampFormat
+        from ob_analytics.bitstamp import BitstampSource
         from ob_analytics.pipeline import Pipeline
 
-        result = Pipeline(format=BitstampFormat()).run(str(tiny_bitstamp_orders_csv))
+        result = Pipeline(source=BitstampSource()).run(str(tiny_bitstamp_orders_csv))
         model = build_gallery_model(result)
 
         heatmap = next(c for c in model.concepts if c.key == "depth_heatmap").at(

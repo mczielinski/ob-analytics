@@ -15,7 +15,7 @@ import pytest
 
 from ob_analytics.live._base import CaptureConfig
 from ob_analytics.live._runner import run_capturer
-from ob_analytics.live.ccxt_source import CcxtCapturer, _epoch_ms_to_ts
+from ob_analytics.live.ccxt_source import CcxtSettings, CcxtSource, _epoch_ms_to_ts
 from ob_analytics.protocols import Level
 
 _CCXT_INSTALLED = importlib.util.find_spec("ccxt") is not None
@@ -80,13 +80,13 @@ class _FakeCcxtExchange:
         self.closed = True
 
 
-def _cfg(tmp_path, exchange, **extra) -> CaptureConfig:
-    return CaptureConfig(
-        pair="BTC/USDT",
-        out_dir=tmp_path / "cap",
-        minutes=0.05,
-        extras={"exchange": exchange, **extra},
-    )
+def _cfg(tmp_path) -> CaptureConfig:
+    return CaptureConfig(pair="BTC/USDT", out_dir=tmp_path / "cap", minutes=0.05)
+
+
+def _source(exchange, **knobs) -> CcxtSource:
+    """A CcxtSource with the venue + knobs as typed settings (was extras dict)."""
+    return CcxtSource(settings=CcxtSettings(exchange=exchange, **knobs))
 
 
 async def _collect_snapshot(cap, cfg):
@@ -99,30 +99,30 @@ async def _collect_snapshot(cap, cfg):
 
 
 class TestConformance:
-    def test_is_l2_livecapturer(self):
-        from ob_analytics.live import LiveCapturer
+    def test_is_l2_livesource(self):
+        from ob_analytics.live import LiveSource
 
-        cap = CcxtCapturer()
-        assert isinstance(cap, LiveCapturer)
-        assert cap.resolution is Level.L2
+        cap = CcxtSource()
+        assert isinstance(cap, LiveSource)
+        assert cap.level is Level.L2
 
     def test_missing_exchange_errors(self, tmp_path):
-        cap = CcxtCapturer()
-        cfg = CaptureConfig(pair="X", out_dir=tmp_path, extras={})
+        cap = CcxtSource()  # empty settings -> no exchange
+        cfg = CaptureConfig(pair="X", out_dir=tmp_path)
         with pytest.raises(ValueError, match="exchange"):
             asyncio.run(_collect_snapshot(cap, cfg))
 
     def test_rest_only_venue_selects_poll(self, tmp_path):
         ex = _FakeCcxtExchange({"bids": [], "asks": [], "timestamp": 0}, ws=False)
-        cap = CcxtCapturer()
-        asyncio.run(_collect_snapshot(cap, _cfg(tmp_path, ex)))
+        cap = _source(ex)
+        asyncio.run(_collect_snapshot(cap, _cfg(tmp_path)))
         assert cap._use_ws_book is False
         assert cap._use_ws_trades is False
 
     def test_ws_venue_selects_websocket(self, tmp_path):
         ex = _FakeCcxtExchange({"bids": [], "asks": [], "timestamp": 0}, ws=True)
-        cap = CcxtCapturer()
-        asyncio.run(_collect_snapshot(cap, _cfg(tmp_path, ex)))
+        cap = _source(ex)
+        asyncio.run(_collect_snapshot(cap, _cfg(tmp_path)))
         assert cap._use_ws_book is True
         assert cap._use_ws_trades is True
 
@@ -134,7 +134,7 @@ class TestConformance:
 
 class TestDiffBook:
     def test_changes_additions_and_removals(self):
-        cap = CcxtCapturer()
+        cap = CcxtSource()
         cap._last = {"bid": {100.0: 5.0, 99.0: 3.0}, "ask": {101.0: 4.0}}
         book = {
             "bids": [[100.0, 7.0], [98.0, 2.0]],  # 100 changed, 98 new, 99 gone
@@ -154,14 +154,14 @@ class TestDiffBook:
         assert cap._last["ask"] == {101.0: 4.0}
 
     def test_unchanged_book_emits_nothing(self):
-        cap = CcxtCapturer()
+        cap = CcxtSource()
         cap._last = {"bid": {100.0: 5.0}, "ask": {101.0: 4.0}}
         book = {"bids": [[100.0, 5.0]], "asks": [[101.0, 4.0]], "timestamp": 0}
         rows = list(cap._diff_book(book, pd.Timestamp("2025-01-01", tz="UTC")))
         assert rows == []
 
     def test_raw_frame_attached_once(self):
-        cap = CcxtCapturer()
+        cap = CcxtSource()
         cap._last = {"bid": {}, "ask": {}}
         book = {"bids": [[100.0, 1.0], [99.0, 1.0]], "asks": [[101.0, 1.0]], "ts": 0}
         raws = [raw for _r, raw in cap._diff_book(book, pd.Timestamp.now(tz="UTC"))]
@@ -171,7 +171,7 @@ class TestDiffBook:
 
 class TestMapTrade:
     def test_maps_ccxt_trade(self):
-        cap = CcxtCapturer()
+        cap = CcxtSource()
         ev = cap._map_trade(
             {
                 "id": "abc",
@@ -202,8 +202,8 @@ class TestSnapshot:
             "timestamp": 1_700_000_000_000,
         }
         ex = _FakeCcxtExchange(snap)
-        cap = CcxtCapturer()
-        rows = asyncio.run(_collect_snapshot(cap, _cfg(tmp_path, ex)))
+        cap = _source(ex)
+        rows = asyncio.run(_collect_snapshot(cap, _cfg(tmp_path)))
         assert len(rows) == 3
         assert cap._last["bid"] == {100.0: 5.0, 99.0: 3.0}
         assert cap._last["ask"] == {101.0: 4.0}
@@ -230,11 +230,9 @@ class TestFullCapture:
             ]
         ]
         ex = _FakeCcxtExchange(snap, ws_books, ws_trades)
-        cap = CcxtCapturer()
+        cap = _source(ex)
         out = tmp_path / "cap"
-        cfg = CaptureConfig(
-            pair="BTC/USDT", out_dir=out, minutes=0.05, extras={"exchange": ex}
-        )
+        cfg = CaptureConfig(pair="BTC/USDT", out_dir=out, minutes=0.05)
         result = asyncio.run(run_capturer(cap, cfg))
 
         assert (out / "depth.csv").exists()
@@ -255,11 +253,9 @@ class TestFullCapture:
 
         snap = {"bids": [[100.0, 5.0]], "asks": [[101.0, 4.0]], "timestamp": 1_000}
         ex = _FakeCcxtExchange(snap, [], [])
-        cap = CcxtCapturer()
+        cap = _source(ex)
         out = tmp_path / "cap"
-        cfg = CaptureConfig(
-            pair="BTC/USDT", out_dir=out, minutes=0.05, extras={"exchange": ex}
-        )
+        cfg = CaptureConfig(pair="BTC/USDT", out_dir=out, minutes=0.05)
         asyncio.run(run_capturer(cap, cfg))
         meta = json.loads((out / "meta.json").read_text())
         assert meta["exchange"] == "fake"
@@ -290,14 +286,9 @@ class TestRestPoll:
             ]
         ]
         ex = _FakeCcxtExchange(snap, poll_books, poll_trades, ws=False)
-        cap = CcxtCapturer()
+        cap = _source(ex, poll_interval=0.0)
         out = tmp_path / "cap"
-        cfg = CaptureConfig(
-            pair="BTC/USDT",
-            out_dir=out,
-            minutes=0.05,
-            extras={"exchange": ex, "poll_interval": 0.0},
-        )
+        cfg = CaptureConfig(pair="BTC/USDT", out_dir=out, minutes=0.05)
         result = asyncio.run(run_capturer(cap, cfg))
 
         assert cap._use_ws_book is False  # the REST poll path was exercised
@@ -328,14 +319,9 @@ class TestRestPoll:
             "side": "buy",
         }
         ex = _FakeCcxtExchange(snap, [], [[t1], [t1, t2]], ws=False)
-        cap = CcxtCapturer()
+        cap = _source(ex, poll_interval=0.0)
         out = tmp_path / "cap"
-        cfg = CaptureConfig(
-            pair="X",
-            out_dir=out,
-            minutes=0.05,
-            extras={"exchange": ex, "poll_interval": 0.0},
-        )
+        cfg = CaptureConfig(pair="X", out_dir=out, minutes=0.05)
         result = asyncio.run(run_capturer(cap, cfg))
         # t1 counted once (not re-emitted on the second poll) + t2 = 2.
         assert result.n_trade_events == 2
@@ -355,6 +341,6 @@ class TestCcxtInstalled:
             _make_exchange("not_a_real_exchange_xyz")
 
     def test_registered_when_ccxt_present(self):
-        from ob_analytics.live import list_capturers
+        from ob_analytics.sources import list_sources
 
-        assert "ccxt" in list_capturers()
+        assert "ccxt" in list_sources()

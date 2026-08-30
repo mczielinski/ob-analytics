@@ -15,11 +15,10 @@ functions and values you call directly.
 
 | Want to add… | Implement | Register with | Use via |
 |---|---|---|---|
-| **A data source** (new venue) | `EventLoader` + `TradeSource` + `Format` | `register_format(name, cls)` | `Pipeline.from_format(name)` · CLI `process --format name` |
+| **A data source** (new venue, file and/or live) | `Source` + `OfflineSource` and/or `LiveSource` | `register_source(name, cls)` (or an entry point) | `Pipeline.from_source(name)` · CLI `process --source name` / `capture name` |
 | **An export format** | `DataWriter` | `register_writer(name, factory)` | `save_data(data, path, fmt=name)` |
 | **A plot** | a `prepare_*` function + a renderer | `RENDERERS.register((name, backend), fn)` | `plot(name, backend=...)` |
 | **A metric** | a plain function | — *(no registry)* | `my_metric(result.trades, ...)` |
-| **A live capturer** | `LiveCapturer` | `register_capturer(name, cls)` | CLI `capture name` · `get_capturer(name)` |
 
 Registration is an import side-effect: the module that calls
 `register_*` must be imported before the name is looked up. Built-ins register
@@ -32,18 +31,25 @@ The Protocol contracts referenced below are documented on the
 
 ---
 
-## 1. A new data source
+## 1. A new source
 
-A **Format** bundles the per-venue factories the pipeline needs: a loader
-(`EventLoader`), a trade source (`TradeSource`), and — optionally — a writer
-(`DataWriter`). It also declares `config_defaults()` (per-venue
-`PipelineConfig` overrides) and `compute_depth(...)`.
+Every data source — file or live — has the same shape. A **`Source`** states
+two coordinates, `level` (`Level.L2` / `Level.L3`) and `feed_type`
+(`FeedType`), and carries typed `settings` (a `SourceSettings`). It then
+implements one or both **capabilities**:
 
-None of these require a base class. Any object whose attributes match the
-Protocol satisfies it. The built-in
-[`BitstampLoader`](api/bitstamp.md) / [`LobsterLoader`](api/lobster.md) are the
-reference implementations for the actual parsing work; the skeleton below shows
-the contracts.
+- **`OfflineSource`** — replay stored files. The per-venue factories the
+  pipeline needs: a loader (`EventLoader` for L3, `DepthSource` for L2), a trade
+  source (`TradeSource`), and — optionally — a writer (`DataWriter`), plus
+  `config_defaults()` and `compute_depth(...)`.
+- **`LiveSource`** — capture a venue's live feed: `snapshot` / `stream` /
+  `shutdown_synthetic_events` (see [the live capability](#the-live-capability)).
+
+A venue can do both — `BitstampSource` replays CSV *and* captures live. None of
+this requires a base class: any object whose attributes match the Protocol
+satisfies it. The built-in [`BitstampLoader`](api/bitstamp.md) /
+[`LobsterLoader`](api/lobster.md) are the reference implementations for the
+parsing work; the skeleton below shows the contracts for an offline source.
 
 ```python
 from __future__ import annotations
@@ -52,7 +58,14 @@ from typing import Any
 
 import pandas as pd
 
-from ob_analytics import PipelineConfig, RunContext, register_format
+from ob_analytics import (
+    FeedType,
+    Level,
+    PipelineConfig,
+    RunContext,
+    SourceSettings,
+    register_source,
+)
 
 
 class CoinbaseLoader:
@@ -84,10 +97,13 @@ class CoinbaseTradeReader:
         return trades
 
 
-class CoinbaseFormat:
-    """Satisfies the Format Protocol — no base class needed."""
+class CoinbaseSource:
+    """An offline OfflineSource — no base class needed."""
 
     name = "coinbase"
+    level = Level.L3  # per-order (Coinbase `full` channel)
+    feed_type = FeedType.MATCHED_BOOK  # exchange matching engine: never crossed
+    settings = SourceSettings()  # empty: no per-source knobs
 
     def create_loader(self, config: PipelineConfig, ctx: RunContext) -> CoinbaseLoader:
         return CoinbaseLoader(config)
@@ -106,12 +122,15 @@ class CoinbaseFormat:
     def config_defaults(self) -> dict:
         return {}  # e.g. {"price_decimals": 2, "timestamp_unit": "ms"}
 
+    def required_context(self) -> list[str]:
+        return []  # e.g. ["trading_date"] if filenames carry no date
 
-register_format("coinbase", CoinbaseFormat)
+
+register_source("coinbase", CoinbaseSource)
 ```
 
 !!! warning "`compute_depth` must be defined"
-    The pipeline calls `format.compute_depth(...)` unconditionally. **Return
+    The pipeline calls `source.compute_depth(...)` unconditionally. **Return
     `None`** to use the standard price-level depth pipeline (what almost every
     venue wants). Only return a `(depth, depth_summary)` tuple if your venue
     ships ground-truth depth — as LOBSTER does from its orderbook file.
@@ -119,20 +138,119 @@ register_format("coinbase", CoinbaseFormat)
 Using it — programmatically and from the CLI:
 
 ```python
-from ob_analytics import Pipeline, list_formats
+from ob_analytics import Pipeline, list_sources
 
-result = Pipeline.from_format("coinbase").run("coinbase_book.json")
-print(list_formats())  # [..., "coinbase", ...]
+result = Pipeline.from_source("coinbase").run("coinbase_book.json")
+print(list_sources())  # [..., "coinbase", ...]
 ```
 
 ```bash
-ob-analytics process coinbase_book.json --format coinbase
+ob-analytics process coinbase_book.json --source coinbase
 ```
 
-Per-run parameters that vary across runs of the *same* `Format` (LOBSTER's
+Per-run parameters that vary across runs of the *same* source (LOBSTER's
 `trading_date` is the canonical example) belong on
 [`RunContext`](api/protocols.md), not the constructor:
-`Pipeline.from_format("coinbase", ctx=RunContext(trading_date="2024-01-02"))`.
+`Pipeline.from_source("coinbase", ctx=RunContext(trading_date="2024-01-02"))`.
+
+### Typed settings
+
+Fixed per-source configuration — an exchange id, a depth limit — is a typed
+`SourceSettings` (a frozen pydantic model), not an untyped dict. Subclass it and
+declare the fields; the source carries an instance as its `settings`:
+
+```python
+from ob_analytics import SourceSettings
+
+
+class CoinbaseSettings(SourceSettings):
+    channel: str = "full"
+    depth_limit: int = 100
+
+
+source = CoinbaseSource(settings=CoinbaseSettings(depth_limit=50))
+```
+
+The built-in `CcxtSource` is the worked example
+(`CcxtSettings(exchange=..., depth_limit=..., poll_interval=...)`).
+
+### The live capability
+
+A `LiveSource` translates a venue's WebSocket (or REST-poll) feed into the same
+event dicts the pipeline reads. It only **parses**: persistence, raw-frame
+archival, reconnect/rate-limiting, signal handling, and `meta.json`
+finalisation are all handled generically by the runner
+(`ob_analytics.live._runner.run_capturer`). Add the three async methods to your
+source (alongside the offline factories, if it does both):
+
+```python
+from collections.abc import AsyncIterator
+
+from ob_analytics.live import CaptureConfig, EventDict
+
+
+class CoinbaseSource:  # ... plus the offline members above
+    async def snapshot(self, config: CaptureConfig) -> AsyncIterator[EventDict]:
+        # Yield the opening book. L3: one action="created" per resting order;
+        # L2: one absolute-size depth row per level.
+        book = await self._fetch_rest_snapshot(config.pair)
+        for level in book:
+            yield {
+                "id": level["order_id"],
+                "timestamp": level["ts"],
+                "exchange_timestamp": level["ts"],
+                "price": level["price"],
+                "volume": level["size"],
+                "action": "created",
+                "direction": level["side"],
+            }
+
+    async def stream(
+        self, config: CaptureConfig
+    ) -> AsyncIterator[tuple[str, EventDict, Any]]:
+        # Yield (kind, event, raw_frame) until config.minutes elapse. kind is
+        # "order" (L3) / "depth" (L2) / "trade"; raw_frame archives to raw.jsonl.
+        async for raw in self._ws_messages(config):
+            kind, event = self._parse(raw)
+            yield (kind, event, raw)
+
+    async def shutdown_synthetic_events(self) -> AsyncIterator[EventDict]:
+        # L3: one action="deleted" per still-resting order, so every id gets a
+        # complete created -> ... -> deleted lifecycle. L2: usually nothing.
+        for level in self._open_orders.values():
+            yield {**level, "action": "deleted"}
+
+    # Optional — satisfies SupportsDiagnostics; merged into meta.json.
+    def diagnostics(self) -> dict[str, Any]:
+        return {"reconnects": self._reconnects}
+```
+
+Capturing from the CLI (requires the `[live]` extra):
+
+```bash
+ob-analytics capture coinbase --pair btcusd --minutes 10 --out capture/
+ob-analytics capture --list   # show live-capable sources
+```
+
+The runner writes `orders.csv` (L3) or `depth.csv` (L2) plus `trades.csv`, in
+the same schema the pipeline reads, so a capture feeds straight back in:
+`Pipeline.from_source("coinbase").run("capture/")`.
+
+### Shipping a source as its own package
+
+A source can live entirely outside ob-analytics and load through the
+`ob_analytics.sources` **entry-point group** — no edit to the core. In your
+package's `pyproject.toml`:
+
+```toml
+[project.entry-points."ob_analytics.sources"]
+coinbase = "my_package.coinbase:CoinbaseSource"
+```
+
+`ob_analytics.sources.load_source_plugins()` (run at `import ob_analytics`)
+discovers and registers every advertised source, so
+`Pipeline.from_source("coinbase")` and `ob-analytics process --source coinbase`
+resolve it with nothing else installed.
 
 ---
 
@@ -325,96 +443,26 @@ panel to the gallery via `extra_panels=`.
 
 ---
 
-## 5. A new live capturer
-
-A capturer satisfies the `LiveCapturer` Protocol: a `name` plus three async
-methods that translate a venue's WebSocket feed into the universal event dict
-shape. The capturer only **parses** — persistence, raw-frame archival,
-reconnect/rate-limiting, signal handling, and `meta.json` finalisation are all
-handled generically by the runner. The built-in
-[`BitstampCapturer`](api/cli.md) is the reference implementation.
-
-```python
-from __future__ import annotations
-
-from collections.abc import AsyncIterator
-from typing import Any
-
-from ob_analytics.live import CaptureConfig, EventDict, register_capturer, list_capturers
-
-
-class CoinbaseCapturer:
-    """Satisfies the LiveCapturer Protocol."""
-
-    name = "coinbase"
-
-    async def snapshot(self, config: CaptureConfig) -> AsyncIterator[EventDict]:
-        # Yield synthetic action="created" events reconstructing the book at
-        # start. Required keys: id, timestamp, exchange_timestamp, price,
-        # volume, action, direction.
-        book = await self._fetch_rest_snapshot(config.pair)
-        for level in book:
-            yield {
-                "id": level["order_id"],
-                "timestamp": level["ts"],
-                "exchange_timestamp": level["ts"],
-                "price": level["price"],
-                "volume": level["size"],
-                "action": "created",
-                "direction": level["side"],
-            }
-
-    async def stream(
-        self, config: CaptureConfig
-    ) -> AsyncIterator[tuple[str, EventDict, Any]]:
-        # Yield (kind, event, raw_frame) for every live message until
-        # config.minutes elapse. kind is "order" or "trade"; raw_frame is the
-        # decoded payload (or None) and is archived to raw.jsonl if keep_raw.
-        async for raw in self._ws_messages(config):
-            kind, event = self._parse(raw)
-            yield (kind, event, raw)
-
-    async def shutdown_synthetic_events(self) -> AsyncIterator[EventDict]:
-        # Yield synthetic action="deleted" events for everything left on the
-        # book, so every id gets a complete created -> ... -> deleted lifecycle.
-        for level in self._open_orders.values():
-            yield {**level, "action": "deleted"}
-
-    # Optional — satisfies SupportsDiagnostics; merged into meta.json.
-    def diagnostics(self) -> dict[str, Any]:
-        return {"reconnects": self._reconnects}
-
-
-register_capturer("coinbase", CoinbaseCapturer)
-print(list_capturers())  # [..., "coinbase", ...]
-```
-
-Using it from the CLI (requires the `[live]` extra):
-
-```bash
-ob-analytics capture coinbase --pair btcusd --minutes 10 --out capture/
-ob-analytics capture --list   # show registered capturers
-```
-
-The capture run writes `orders.csv` + `trades.csv` in the same schema the
-pipeline reads, so you can feed the output straight back in:
-`Pipeline().run("capture/orders.csv")`.
-
----
-
 ## Making registration fire
 
 `register_*` runs as an import side-effect, so the registering module must be
 imported before the name is used. Built-ins register themselves when
 `ob_analytics` (and `ob_analytics.live`) are imported. For your own
-extensions, import the module once at startup — most cleanly from your
-package's `__init__.py`:
+extensions you have two options:
 
-```python
-# my_pkg/__init__.py
-from my_pkg import coinbase  # noqa: F401  — fires register_format / register_capturer
-```
+- **Ship as a package** with an entry point (§1, [Shipping a source as its own
+  package](#shipping-a-source-as-its-own-package)). This is the cleanest path
+  for a source: `load_source_plugins()` finds it at `import ob_analytics`, no
+  wiring needed.
+- **Import the module once at startup** — most cleanly from your package's
+  `__init__.py` — for a plot, a writer, or a source you do not package
+  separately:
 
-After that, `Pipeline.from_format("coinbase")`, `plot("cumvol", ...)`,
+  ```python
+  # my_pkg/__init__.py
+  from my_pkg import coinbase  # noqa: F401  — fires register_source / register_writer
+  ```
+
+After that, `Pipeline.from_source("coinbase")`, `plot("cumvol", ...)`,
 `save_data(..., fmt="duckdb")`, and `ob-analytics capture coinbase` all resolve
 your registrations with no further wiring.

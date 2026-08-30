@@ -10,7 +10,7 @@ feed. Point it at the same source you would pass to `process`:
 
 ```bash
 ob-analytics validate orders.csv
-ob-analytics validate data/ --format lobster --trading-date 2012-06-21
+ob-analytics validate data/ --source lobster --trading-date 2012-06-21
 ob-analytics validate orders.csv --json      # machine-readable, for CI
 ```
 
@@ -46,12 +46,12 @@ the data you analyse. On a `matched_book`, a non-zero figure is a red flag.
 ## From Python
 
 ```python
-from ob_analytics import Pipeline, BitstampFormat, FeedType, data_quality_summary
+from ob_analytics import Pipeline, BitstampSource, FeedType, data_quality_summary
 
 result = Pipeline().run("orders.csv")
 summary = data_quality_summary(
     result.events, result.trades,
-    feed_type=BitstampFormat().feed_type,   # or getattr(fmt, "feed_type", FeedType.UNKNOWN)
+    feed_type=BitstampSource().feed_type,   # or getattr(source, "feed_type", FeedType.UNKNOWN)
     depth=result.depth,                      # faithful depth; not depth_summary
 )
 print(summary.render())

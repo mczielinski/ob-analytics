@@ -40,6 +40,15 @@ ccxt = [
 [project.scripts]
 ob-analytics = "ob_analytics.cli:main"
 
+# Third-party data sources advertise themselves here so they load without any
+# edit to ob-analytics; ob_analytics.sources.load_source_plugins() discovers
+# this group at import time. Each value points to a Source class, e.g.:
+#   [project.entry-points."ob_analytics.sources"]
+#   coinbase = "my_package.coinbase:CoinbaseSource"
+# The built-in sources (bitstamp, lobster, depth_csv, ccxt) self-register on
+# import and are intentionally not listed here.
+[project.entry-points."ob_analytics.sources"]
+
 [project.urls]
 Homepage = "https://github.com/mczielinski/ob-analytics"
 Documentation = "https://mczielinski.github.io/ob-analytics/"
@@ -76,7 +85,6 @@ dev = [
 combine-as-imports = true
 
 [tool.ruff.lint.per-file-ignores]
-# Tutorial chapters are notebook-style (jupytext py:percent): imports appear
 # in the cell that introduces them (E402), and a bare expression on a cell's
 # last line is the idiomatic way to render its value as the cell output, not
 # dead code (B018) -- both by design.

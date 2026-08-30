@@ -19,7 +19,7 @@ subcommands accept `-v` / `--verbose` for debug-level logging.
 ```bash
 # Process a data source
 ob-analytics process orders.csv -o results/
-ob-analytics process data/ --format lobster --trading-date 2012-06-21
+ob-analytics process data/ --source lobster --trading-date 2012-06-21
 ob-analytics process orders.csv -o results/ --gallery
 
 # Check data quality (crossed book, unmatched trades, duplicates, ...)

@@ -190,10 +190,12 @@ def save_data(
         Serialisation format.  Built-in values are ``"parquet"``
         (default) and ``"pickle"``.  The ``"parquet"`` path writes one
         file per key and tags each with :data:`SCHEMA_VERSION` in its
-        metadata (checked by :func:`load_data`).  Additional formats (e.g.
-        ``"bitstamp"``, ``"lobster"``) are available when the
-        corresponding writer factory has been registered via
-        :func:`register_writer`.
+        metadata (checked by :func:`load_data`).  A **source name** (e.g.
+        ``"bitstamp"``, ``"lobster"``) round-trips through that source's own
+        writer (its ``create_writer`` capability, so no separate writer
+        registration is needed); a source that needs run state — LOBSTER's
+        ``trading_date`` — reads it from *ctx*.  A generic, source-independent
+        writer registered via :func:`register_writer` is also resolved by name.
     writer : DataWriter, optional
         A pre-constructed writer instance.  When provided, *fmt* is
         ignored and the writer is used directly.  This is the preferred
@@ -212,29 +214,50 @@ def save_data(
         writer.write(lob_data, p, **write_kwargs)
         return
 
-    if fmt in WRITERS:
-        from ob_analytics.config import PipelineConfig
-        from ob_analytics.protocols import RunContext
-
-        cfg = config if config is not None else PipelineConfig()
-        rctx = ctx if ctx is not None else RunContext()
-        w = WRITERS.get(fmt)(cfg, rctx)
-        w.write(lob_data, p, **write_kwargs)
-        return
-
     if fmt == "parquet":
         tick_sizes = _tick_sizes_from_config(config)
         p.mkdir(parents=True, exist_ok=True)
         for name, df in lob_data.items():
             _write_versioned_parquet(df, p / f"{name}.parquet", tick_sizes=tick_sizes)
-    elif fmt == "pickle":
+        return
+    if fmt == "pickle":
         logger.warning(
             "Saving as pickle. Consider using fmt='parquet' for "
             "portability and security."
         )
         pd.to_pickle(lob_data, p)  # type: ignore
-    else:
-        available = ["parquet", "pickle"] + WRITERS.list()
-        raise ValueError(
-            f"Unsupported format: {fmt!r}. Available: {', '.join(available)}"
-        )
+        return
+
+    resolved = _named_writer(fmt, config, ctx)
+    if resolved is not None:
+        resolved.write(lob_data, p, **write_kwargs)
+        return
+
+    from ob_analytics.sources import SOURCES
+
+    available = ["parquet", "pickle", *WRITERS.list(), *SOURCES.list()]
+    raise ValueError(f"Unsupported format: {fmt!r}. Available: {', '.join(available)}")
+
+
+def _named_writer(fmt: str, config: Any, ctx: Any) -> DataWriter | None:
+    """Resolve *fmt* to a writer: a registered generic writer, or a source's own.
+
+    A generic writer registered via :func:`register_writer` wins; otherwise a
+    source name resolves to that source's ``create_writer`` (so a venue writer
+    lives on the source, not in a parallel registry).  Returns ``None`` when
+    *fmt* names neither.
+    """
+    from ob_analytics.config import PipelineConfig
+    from ob_analytics.protocols import RunContext
+    from ob_analytics.sources import SOURCES
+
+    cfg = config if config is not None else PipelineConfig()
+    rctx = ctx if ctx is not None else RunContext()
+
+    if fmt in WRITERS:
+        return WRITERS.get(fmt)(cfg, rctx)
+    if fmt in SOURCES:
+        make_writer = getattr(SOURCES.get(fmt)(), "create_writer", None)
+        if make_writer is not None:
+            return make_writer(cfg, rctx)
+    return None

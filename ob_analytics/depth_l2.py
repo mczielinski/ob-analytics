@@ -16,7 +16,7 @@ The symmetric set, mirroring the other formats:
   Satisfies :class:`~ob_analytics.protocols.TradeSource`.
 * :class:`DepthCsvWriter` — round-trips the depth frame (and trades) back to
   the L2 CSV schema.  Satisfies :class:`~ob_analytics.protocols.DataWriter`.
-* :class:`DepthCsvFormat` — the ``depth_csv`` format descriptor, declaring
+* :class:`DepthCsvSource` — the ``depth_csv`` source descriptor, declaring
   :attr:`~ob_analytics.protocols.Level.L2`.
 
 The L2 CSV schema
@@ -45,7 +45,7 @@ Column names are flexible: ``side`` / ``direction`` and ``volume`` / ``size``
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -64,7 +64,7 @@ from ob_analytics._utils import (
     validate_columns,
     validate_non_empty,
 )
-from ob_analytics.config import PipelineConfig
+from ob_analytics.config import PipelineConfig, SourceSettings
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import (
     DataWriter,
@@ -473,28 +473,31 @@ class DepthCsvWriter:
         out.to_csv(dest, index=False)
 
 
-# ── DepthCsvFormat descriptor ─────────────────────────────────────────
+# ── DepthCsvSource descriptor ─────────────────────────────────────────
 
 
 @dataclass
-class DepthCsvFormat:
-    """Format descriptor for the canonical L2 (price-level) CSV schema.
+class DepthCsvSource:
+    """The canonical L2 (price-level) CSV source — offline depth replay.
 
     Declares :attr:`~ob_analytics.protocols.Level.L2`, so
     :class:`~ob_analytics.pipeline.Pipeline` takes the price-level path:
     depth in, per-order stages skipped.  The shared entry point the aggregated
     venue connectors (Binance, Kalshi, Polymarket) narrow to domain modelling
-    on top of.
+    on top of, and the offline replay target for a live L2 capture (e.g. the
+    ``depth.csv`` a :class:`~ob_analytics.live.ccxt_source.CcxtSource` writes).
 
-    Conforms structurally to the :class:`~ob_analytics.protocols.Format`
-    Protocol — no inheritance required.
+    Conforms structurally to :class:`~ob_analytics.protocols.OfflineSource` —
+    no inheritance required.
     """
 
     name: str = "depth_csv"
-    resolution: Level = Level.L2
+    level: Level = Level.L2
     # A price-level feed is the venue's own aggregated view: bids never rest
     # above asks, so the reconstructed book is not crossed.
     feed_type: FeedType = FeedType.MATCHED_BOOK
+    # No per-source knobs; empty typed settings keep construction uniform.
+    settings: SourceSettings = field(default_factory=SourceSettings)
 
     def create_loader(self, config: PipelineConfig, ctx: RunContext) -> DepthSource:
         return L2DepthLoader(config, venue=ctx.venue, symbol=ctx.symbol)
@@ -516,8 +519,8 @@ class DepthCsvFormat:
     ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
         # Unused on the L2 path: the loader *is* the depth source, so the
         # pipeline never folds events into depth (there are no events). Present
-        # only to satisfy the Format protocol; returns None like the L3 formats
-        # that use the standard depth stages.
+        # only to satisfy the OfflineSource protocol; returns None like the L3
+        # sources that use the standard depth stages.
         return None
 
     def config_defaults(self) -> dict[str, Any]:
@@ -533,11 +536,8 @@ class DepthCsvFormat:
         return []
 
 
-# ── Register this format and its writer ───────────────────────────────
-# Imports sit at the bottom (deferred from the top of the module) to avoid a
-# circular import: ``pipeline`` imports the format modules to self-register.
-from ob_analytics.data import register_writer
-from ob_analytics.pipeline import register_format
+# ── Register this source ──────────────────────────────────────────────
+# Registration runs at the bottom, after ``DepthCsvSource`` is defined.
+from ob_analytics.sources import register_source
 
-register_format("depth_csv", DepthCsvFormat)
-register_writer("depth_csv", lambda config, ctx: DepthCsvWriter(config))
+register_source("depth_csv", DepthCsvSource)

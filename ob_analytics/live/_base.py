@@ -1,7 +1,7 @@
 """Protocol, data shapes, and sink contract for live order-book capture.
 
-A :class:`LiveCapturer` implementation translates a venue's native message
-stream into the universal ob-analytics events schema. Each capturer is
+A :class:`LiveSource` implementation translates a venue's native message
+stream into the universal ob-analytics events schema. Each source is
 responsible only for *parsing*; persistence, raw-frame archival, and
 shutdown sequencing are handled generically by the runner so every venue
 benefits.
@@ -16,7 +16,7 @@ from typing import Any, Protocol, runtime_checkable
 
 import pandas as pd
 
-from ob_analytics.protocols import Level
+from ob_analytics.protocols import Source
 
 # ---------------------------------------------------------------------------
 # Data shapes
@@ -25,13 +25,19 @@ from ob_analytics.protocols import Level
 
 @dataclass(frozen=True)
 class CaptureConfig:
-    """User-facing capture parameters."""
+    """User-facing capture-run parameters.
+
+    Run-level knobs shared by every venue — *what* symbol, *where* to write,
+    for *how long*.  Per-venue settings (e.g. the CCXT exchange id) are **not**
+    here; they are typed :class:`~ob_analytics.config.SourceSettings` carried by
+    the source itself (``CcxtSource(settings=CcxtSettings(...))``), which is
+    what replaced the former untyped ``extras`` dict.
+    """
 
     pair: str  # venue-specific symbol, e.g. "btcusd"
     out_dir: Path
     minutes: float = 10.0
     keep_raw: bool = True  # write raw.jsonl alongside parsed CSVs
-    extras: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -71,7 +77,7 @@ class CaptureSink(Protocol):
     """Write target for a capture run.
 
     The default implementation (in ``_runner.py``) writes, keyed on the
-    capturer's :attr:`~LiveCapturer.resolution`:
+    source's :attr:`~ob_analytics.protocols.Source.level`:
     - orders.csv  -- L3 only: append-only, BitstampLoader-compatible schema
     - depth.csv   -- L2 only: append-only, L2DepthLoader-compatible schema
     - trades.csv  -- append-only (both resolutions)
@@ -92,33 +98,27 @@ class CaptureSink(Protocol):
 
 
 @runtime_checkable
-class LiveCapturer(Protocol):
-    """Translate a venue's live feed into universal-schema events.
+class LiveSource(Source, Protocol):
+    """The live-capture capability of a :class:`~ob_analytics.protocols.Source`.
 
-    Implementations are async iterators of order/trade events, plus two
-    bookend methods for snapshot + shutdown synthesis.
+    A live source is an async iterator of order/trade (or depth) events, plus
+    two bookend methods for snapshot + shutdown synthesis.  It inherits the
+    source coordinates from :class:`~ob_analytics.protocols.Source` — ``name``,
+    ``level``, ``feed_type``, and typed ``settings`` — so a venue that both
+    replays files and captures live agrees with itself on those.
+
+    :attr:`~ob_analytics.protocols.Source.level` routes the book events the
+    runner writes: :attr:`~ob_analytics.protocols.Level.L3` → per-order events
+    to ``orders.csv``; :attr:`~ob_analytics.protocols.Level.L2` → price-level
+    depth updates to ``depth.csv``.
 
     Implementors only worry about parsing. Persistence, raw-frame archival,
     rate-limiting reconnects, and signal handling all live in
     ``ob_analytics.live._runner``.
 
-    A capturer MAY additionally implement :class:`SupportsDiagnostics` to
+    A live source MAY additionally implement :class:`SupportsDiagnostics` to
     surface per-run counters in ``meta.json``; that hook is a separate,
     optional protocol so it is never required to conform to this one.
-    """
-
-    name: str
-    """Stable lowercase venue identifier, e.g. ``"bitstamp"``."""
-
-    resolution: Level
-    """Order-book granularity this capturer emits (a coordinate, not a name).
-
-    :attr:`~ob_analytics.protocols.Level.L3` means per-order events written to
-    ``orders.csv``; :attr:`~ob_analytics.protocols.Level.L2` means price-level
-    depth updates written to ``depth.csv``. Mirrors
-    :attr:`ob_analytics.protocols.Format.resolution` so a source and its replay
-    format agree on granularity. The runner falls back to ``L3`` if a capturer
-    predates this attribute.
     """
 
     def snapshot(self, config: CaptureConfig) -> AsyncIterator[EventDict]:
@@ -160,13 +160,13 @@ class LiveCapturer(Protocol):
 
 @runtime_checkable
 class SupportsDiagnostics(Protocol):
-    """Optional capturer capability: per-run counters for ``meta.json``.
+    """Optional source capability: per-run counters for ``meta.json``.
 
-    Kept deliberately separate from :class:`LiveCapturer` so that writing a
-    capturer never forces a ``diagnostics()`` method onto it. A capturer that
+    Kept deliberately separate from :class:`LiveSource` so that writing a live
+    source never forces a ``diagnostics()`` method onto it. A source that
     wants to expose counters (dropped frames, reconnects, synthetic-event
     tallies, ...) just defines this method; the runner detects it structurally
-    (``isinstance(capturer, SupportsDiagnostics)``) and merges the returned
+    (``isinstance(source, SupportsDiagnostics)``) and merges the returned
     mapping into :attr:`CaptureResult.extras` (and thus ``meta.json``).
     """
 

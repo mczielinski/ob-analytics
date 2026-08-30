@@ -9,6 +9,24 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+class SourceSettings(BaseModel):
+    """Base class for a data source's typed, immutable settings.
+
+    The typed replacement for the untyped per-source settings dict that live
+    capturers used to carry (``CaptureConfig.extras``).  Every
+    :class:`~ob_analytics.protocols.Source` declares a ``settings`` value of
+    this type; a source that needs no configuration uses the empty base, and a
+    source with venue knobs subclasses it with typed, validated fields — e.g.
+    :class:`~ob_analytics.live.ccxt_source.CcxtSettings` (``exchange`` /
+    ``depth_limit`` / ``poll_interval``).
+
+    Frozen so a source's settings are fixed for the run, matching
+    :class:`PipelineConfig`.
+    """
+
+    model_config = {"frozen": True}
+
+
 class PipelineConfig(BaseModel):
     """Validated, immutable configuration for the ob-analytics pipeline.
 

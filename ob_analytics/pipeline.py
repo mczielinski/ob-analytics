@@ -22,11 +22,11 @@ Usage with a custom loader (any object satisfying EventLoader)::
 
     Pipeline(loader=my_custom_loader, trade_source=my_trade_source).run("data/")
 
-Usage with a Format descriptor::
+Usage with a Source descriptor::
 
-    from ob_analytics import Pipeline, BitstampFormat
+    from ob_analytics import Pipeline, BitstampSource
 
-    result = Pipeline(format=BitstampFormat()).run("my_data/orders.csv")
+    result = Pipeline(source=BitstampSource()).run("my_data/orders.csv")
 """
 
 from __future__ import annotations
@@ -37,7 +37,6 @@ from typing import Any
 import pandas as pd
 from loguru import logger
 
-from ob_analytics._registry import Registry
 from ob_analytics._utils import empty_events
 from ob_analytics.analytics import order_aggressiveness, set_order_types
 from ob_analytics.config import PipelineConfig
@@ -45,9 +44,10 @@ from ob_analytics.depth import depth_metrics, price_level_volume
 from ob_analytics.protocols import (
     DataWriter,
     EventLoader,
-    Format,
     Level,
+    OfflineSource,
     RunContext,
+    Source,
     TradeSource,
 )
 from ob_analytics.schemas import (
@@ -55,35 +55,8 @@ from ob_analytics.schemas import (
     validate_events_df,
     validate_trades_df,
 )
+from ob_analytics.sources import get_source
 from ob_analytics.trade_sign import classify_trade_sign
-
-# ── Format registry ───────────────────────────────────────────────────
-#
-# Defined *before* the ``bitstamp`` import below so format modules can
-# self-register at import time. ``bitstamp`` and ``lobster`` end with
-# ``from ob_analytics.pipeline import register_format``; that runs while this
-# module is still partially initialised, so ``register_format`` must already
-# exist at that point.
-
-FORMATS: Registry[str, type[Format]] = Registry("format")
-
-
-def register_format(name: str, format_cls: type[Format]) -> None:
-    """Register a :class:`Format` implementation under *name* for lookup via
-    :meth:`Pipeline.from_format`.
-    """
-    FORMATS.register(name, format_cls)
-
-
-def list_formats() -> list[str]:
-    """Return a sorted list of registered format names."""
-    return FORMATS.list()
-
-
-# Imported here (not with the other top-of-module imports) so the registry
-# above already exists when the format modules self-register. See the note
-# above the registry definition.
-from ob_analytics.bitstamp import BitstampLoader, BitstampTradeReader
 
 
 @dataclass(frozen=True)
@@ -103,7 +76,7 @@ class PipelineResult:
         not run — read ``depth`` / ``depth_summary`` / ``trades`` instead.
     config : PipelineConfig
         The configuration used for the run.
-    resolution : Level
+    level : Level
         The order-book resolution the run was produced at
         (:attr:`~ob_analytics.protocols.Level.L3` by default,
         :attr:`~ob_analytics.protocols.Level.L2` for price-level feeds).
@@ -116,7 +89,7 @@ class PipelineResult:
     depth: pd.DataFrame
     depth_summary: pd.DataFrame
     config: PipelineConfig
-    resolution: Level = Level.L3
+    level: Level = Level.L3
 
     def plot(
         self,
@@ -159,84 +132,86 @@ class Pipeline:
     config : PipelineConfig, optional
         Central configuration.  Passed to default components when they
         are not explicitly provided.
-    format : Format, optional
-        A format descriptor that provides default loader, trade source,
-        writer, and config overrides.  Explicit component arguments take
-        precedence over format defaults.
+    source : OfflineSource, optional
+        A source descriptor that provides the default loader, trade source,
+        writer, and config overrides.  Defaults to
+        :class:`~ob_analytics.bitstamp.BitstampSource`.  Explicit component
+        arguments take precedence over the source's factories.
     loader : EventLoader, optional
-        Loads raw events from a data source.  Defaults to
-        :class:`BitstampLoader`.
+        Loads raw events from a data source.  Overrides the source's loader.
     trade_source : TradeSource, optional
-        Builds the trades DataFrame.  Defaults to
-        :class:`BitstampTradeReader`.
+        Builds the trades DataFrame.  Overrides the source's trade source.
     """
 
     def __init__(
         self,
         config: PipelineConfig | None = None,
         *,
-        format: Format | None = None,
+        source: Source | None = None,
         loader: EventLoader | None = None,
         trade_source: TradeSource | None = None,
         ctx: RunContext | None = None,
     ) -> None:
         self._ctx = ctx or RunContext()
-        if format is not None:
-            defaults = format.config_defaults()
-            if config is None:
-                config = PipelineConfig(**defaults)
-            else:
-                # Merge: the format's defaults underlie the fields the caller
-                # explicitly set.  Without this, Pipeline(config=..., format=
-                # LobsterFormat()) silently dropped price_divisor=10_000 and
-                # produced prices wrong by four orders of magnitude.
-                explicit = {k: getattr(config, k) for k in config.model_fields_set}
-                config = PipelineConfig(**{**defaults, **explicit})
-            self.config = config
-            self.loader = loader or format.create_loader(config, self._ctx)
-            self.trade_source = trade_source or format.create_trade_source(
-                config, self._ctx
-            )
-            self._writer: DataWriter | None = format.create_writer(config, self._ctx)
-        else:
-            self.config = config or PipelineConfig()
-            self.loader = loader or BitstampLoader(self.config)
-            if trade_source is not None:
-                self.trade_source = trade_source
-            else:
-                self.trade_source = BitstampTradeReader(self.config)
-            self._writer = None
+        if source is None:
+            # Deferred import (not at module top) so the bitstamp source module
+            # can import from pipeline without a cycle; this is the default
+            # offline source when none is supplied.
+            from ob_analytics.bitstamp import BitstampSource
 
-        self._format = format
+            source = BitstampSource()
+        if not isinstance(source, OfflineSource):
+            raise TypeError(
+                f"Pipeline needs an offline-capable source; {source.name!r} "
+                "cannot replay stored files (it has no create_loader)."
+            )
+
+        # The source's config defaults underlie the fields the caller
+        # explicitly set.  Without this, Pipeline(config=..., source=
+        # LobsterSource()) silently dropped price_divisor=10_000 and produced
+        # prices wrong by four orders of magnitude.
+        defaults = source.config_defaults()
+        if config is None:
+            config = PipelineConfig(**defaults)
+        else:
+            explicit = {k: getattr(config, k) for k in config.model_fields_set}
+            config = PipelineConfig(**{**defaults, **explicit})
+        self.config = config
+        self.loader = loader or source.create_loader(config, self._ctx)
+        self.trade_source = trade_source or source.create_trade_source(
+            config, self._ctx
+        )
+        self._writer: DataWriter | None = source.create_writer(config, self._ctx)
+        self._source = source
 
     @property
     def writer(self) -> DataWriter | None:
-        """The format-provided writer, if any."""
+        """The source-provided writer, if any."""
         return self._writer
 
     @classmethod
-    def from_format(
+    def from_source(
         cls, name: str, *, ctx: RunContext | None = None, **kwargs: Any
     ) -> Pipeline:
-        """Create a pipeline from a registered format name.
+        """Create a pipeline from a registered source name.
 
         Parameters
         ----------
         name : str
-            Registered format name (case-insensitive), e.g. ``"bitstamp"``
+            Registered source name (case-insensitive), e.g. ``"bitstamp"``
             or ``"lobster"``.
         ctx : RunContext, optional
             Per-run parameters (e.g. ``trading_date``) forwarded to
-            ``Format.create_*`` factories.
+            ``OfflineSource.create_*`` factories.
         **kwargs
-            Passed to the :class:`Format` constructor.
+            Passed to the :class:`~ob_analytics.protocols.Source` constructor.
         """
         try:
-            fmt_cls = FORMATS.get(name)
+            source_cls = get_source(name)
         except KeyError as exc:
             raise ValueError(str(exc)) from exc
-        fmt = fmt_cls(**kwargs)
-        return cls(format=fmt, ctx=ctx)
+        source = source_cls(**kwargs)
+        return cls(source=source, ctx=ctx)
 
     def run(self, source: Any, *, ctx: RunContext | None = None) -> PipelineResult:
         """Execute the full pipeline on *source* and return results.
@@ -254,7 +229,7 @@ class Pipeline:
         -------
         PipelineResult
             Frozen dataclass with ``events``, ``trades``, ``depth``,
-            ``depth_summary``, ``config``, and ``resolution``.
+            ``depth_summary``, ``config``, and ``level``.
 
         Steps (L3 / per-order feeds)
         ----------------------------
@@ -265,19 +240,14 @@ class Pipeline:
         5. Compute depth metrics
         6. Compute order aggressiveness
 
-        For an :attr:`~ob_analytics.protocols.Level.L2` format the run takes
+        For an :attr:`~ob_analytics.protocols.Level.L2` source the run takes
         the price-level path instead (see :meth:`_run_l2`): the loader yields
         the depth frame directly, depth metrics and trade signs are computed
         on it, and the per-order stages (3, 6) are skipped.
         """
         run_ctx = ctx if ctx is not None else self._ctx
 
-        resolution = (
-            getattr(self._format, "resolution", Level.L3)
-            if self._format is not None
-            else Level.L3
-        )
-        if resolution is Level.L2:
+        if self._source.level is Level.L2:
             return self._run_l2(source, run_ctx)
 
         logger.info("Pipeline: loading events from {}", source)
@@ -291,16 +261,14 @@ class Pipeline:
         events = set_order_types(events, trades)
         validate_events_df(events)  # data contract (schemas.py)
 
-        depth_override = None
-        if self._format is not None:
-            depth_override = self._format.compute_depth(
-                events, self.config, source, run_ctx
-            )
+        depth_override = self._source.compute_depth(
+            events, self.config, source, run_ctx
+        )
 
         if depth_override is not None:
             depth, depth_summary = depth_override
             logger.info(
-                "Pipeline: using format-provided depth ({} rows, {} summary rows)",
+                "Pipeline: using source-provided depth ({} rows, {} summary rows)",
                 len(depth),
                 len(depth_summary),
             )
@@ -325,7 +293,7 @@ class Pipeline:
             depth=depth,
             depth_summary=depth_summary,
             config=self.config,
-            resolution=Level.L3,
+            level=Level.L3,
         )
 
     def _run_l2(self, source: Any, run_ctx: RunContext) -> PipelineResult:
@@ -372,7 +340,7 @@ class Pipeline:
             depth=depth,
             depth_summary=depth_summary,
             config=self.config,
-            resolution=Level.L2,
+            level=Level.L2,
         )
 
     @staticmethod

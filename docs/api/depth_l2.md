@@ -5,7 +5,7 @@ title: L2 depth
 # L2 (price-level) depth
 
 Price-level (L2 / market-by-price) components: the depth loader, trade reader,
-CSV writer, and `DepthCsvFormat`. For the guide, see
+CSV writer, and `DepthCsvSource`. For the guide, see
 [Process L2 feeds](../howto/l2-depth.md).
 
 A price-level feed carries `[price, quantity]` levels and diffs with no order
@@ -18,4 +18,4 @@ per-order stages (see [`Level`](protocols.md)).
 
 ::: ob_analytics.depth_l2.DepthCsvWriter
 
-::: ob_analytics.depth_l2.DepthCsvFormat
+::: ob_analytics.depth_l2.DepthCsvSource

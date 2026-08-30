@@ -9,17 +9,12 @@ from typing import Any
 import pandas as pd
 import pytest
 
-from ob_analytics.live import (
-    CaptureConfig,
-    LiveCapturer,
-    SupportsDiagnostics,
-    get_capturer,
-    list_capturers,
-    register_capturer,
-)
+from ob_analytics.config import SourceSettings
+from ob_analytics.live import CaptureConfig, LiveSource, SupportsDiagnostics
 from ob_analytics.live._base import EventDict
 from ob_analytics.live._runner import run_capturer
-from ob_analytics.protocols import Level
+from ob_analytics.protocols import FeedType, Level
+from ob_analytics.sources import get_source, list_sources, register_source
 
 # ---------------------------------------------------------------------------
 # A deterministic, no-network capturer
@@ -28,7 +23,9 @@ from ob_analytics.protocols import Level
 
 class _FakeCapturer:
     name = "fake"
-    resolution = Level.L3
+    level = Level.L3
+    feed_type = FeedType.DIFF_FEED
+    settings = SourceSettings()
 
     def __init__(self) -> None:
         self._open: dict[int, dict[str, Any]] = {}
@@ -108,7 +105,9 @@ class _FakeL2Capturer:
     """A deterministic L2 (price-level) capturer -- no network, no order IDs."""
 
     name = "fake-l2"
-    resolution = Level.L2
+    level = Level.L2
+    feed_type = FeedType.MATCHED_BOOK
+    settings = SourceSettings()
 
     async def snapshot(self, config: CaptureConfig) -> AsyncIterator[EventDict]:
         ts = pd.Timestamp("2025-01-01", tz="UTC")
@@ -177,39 +176,39 @@ class _FakeL2Capturer:
 
 class TestRegistry:
     def test_register_and_get(self):
-        register_capturer("fake", _FakeCapturer)
-        assert "fake" in list_capturers()
-        assert get_capturer("fake") is _FakeCapturer
+        register_source("fake", _FakeCapturer)
+        assert "fake" in list_sources()
+        assert get_source("fake") is _FakeCapturer
 
     def test_case_insensitive_lookup(self):
-        register_capturer("Fake2", _FakeCapturer)
-        assert get_capturer("fake2") is _FakeCapturer
-        assert get_capturer("FAKE2") is _FakeCapturer
+        register_source("Fake2", _FakeCapturer)
+        assert get_source("fake2") is _FakeCapturer
+        assert get_source("FAKE2") is _FakeCapturer
 
     def test_unknown_raises(self):
-        with pytest.raises(ValueError, match="Unknown capturer"):
-            get_capturer("nonexistent-venue")
+        with pytest.raises(KeyError, match="Unknown source"):
+            get_source("nonexistent-venue")
 
 
 class TestProtocolConformance:
-    def test_fake_is_a_livecapturer(self):
+    def test_fake_is_a_livesource(self):
         # runtime_checkable Protocol check
-        assert isinstance(_FakeCapturer(), LiveCapturer)
+        assert isinstance(_FakeCapturer(), LiveSource)
 
 
 class TestDiagnosticsProtocol:
-    """diagnostics() is an *optional* capability, not part of LiveCapturer."""
+    """diagnostics() is an *optional* capability, not part of LiveSource."""
 
-    def test_diagnostics_is_optional_for_livecapturer(self):
-        # A plain capturer with no diagnostics() still conforms to
-        # LiveCapturer but is NOT a SupportsDiagnostics.
+    def test_diagnostics_is_optional_for_livesource(self):
+        # A plain live source with no diagnostics() still conforms to
+        # LiveSource but is NOT a SupportsDiagnostics.
         cap = _FakeCapturer()
-        assert isinstance(cap, LiveCapturer)
+        assert isinstance(cap, LiveSource)
         assert not isinstance(cap, SupportsDiagnostics)
 
-    def test_capturer_with_diagnostics_conforms(self):
+    def test_source_with_diagnostics_conforms(self):
         cap = _DiagCapturer()
-        assert isinstance(cap, LiveCapturer)
+        assert isinstance(cap, LiveSource)
         assert isinstance(cap, SupportsDiagnostics)
 
     def test_runner_merges_diagnostics_into_extras(self, tmp_path):
@@ -268,8 +267,8 @@ class TestL2Runner:
 
     def test_l2_capturer_conforms(self):
         cap = _FakeL2Capturer()
-        assert isinstance(cap, LiveCapturer)
-        assert cap.resolution is Level.L2
+        assert isinstance(cap, LiveSource)
+        assert cap.level is Level.L2
 
     def test_l2_writes_depth_not_orders(self, tmp_path):
         out = tmp_path / "cap"

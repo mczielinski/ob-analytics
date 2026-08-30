@@ -4,7 +4,7 @@ These define the contracts that pluggable components must satisfy.
 Implementations are discovered by structural (duck) typing -- there is
 no need to inherit from these classes.
 
-Built-in implementations ship with the package (one symmetric set per format):
+Built-in implementations ship with the package (one symmetric set per source):
 
 * Bitstamp: :class:`~ob_analytics.bitstamp.BitstampLoader`,
   :class:`~ob_analytics.bitstamp.BitstampTradeReader`,
@@ -14,7 +14,8 @@ Built-in implementations ship with the package (one symmetric set per format):
   :class:`~ob_analytics.lobster.LobsterWriter`
 
 Users can substitute their own by passing any object that satisfies the
-protocol to :class:`~ob_analytics.pipeline.Pipeline`.
+protocol to :class:`~ob_analytics.pipeline.Pipeline`, or register a whole new
+:class:`Source` (see :mod:`ob_analytics.sources`).
 """
 
 from __future__ import annotations
@@ -26,12 +27,14 @@ from typing import Any, Protocol, runtime_checkable
 
 import pandas as pd
 
+from ob_analytics.config import SourceSettings
+
 
 class Level(str, Enum):
     """Order-book resolution a feed (or a plot) works at — MBP vs MBO.
 
     The granularity axis, orthogonal to :class:`FeedType`'s crossing
-    invariant.  A format declares its :attr:`Format.resolution` so the
+    invariant.  A source declares its :attr:`Source.level` so the
     pipeline knows which stages apply:
 
     * :attr:`L2` — Market-By-Price (MBP): aggregate volume per price level,
@@ -61,8 +64,8 @@ class Level(str, Enum):
 class FeedType(str, Enum):
     """How a data feed represents the order book — its crossing invariant.
 
-    A format declares its feed type so downstream code can reason about
-    crossed books *by coordinate, not by format name*.  The distinction is
+    A source declares its feed type so downstream code can reason about
+    crossed books *by coordinate, not by source name*.  The distinction is
     a property of the source, not of the reconstruction:
 
     * :attr:`MATCHED_BOOK` — an L3 feed emitted by the venue's own matching
@@ -74,8 +77,8 @@ class FeedType(str, Enum):
       ask, neither filling); :func:`~ob_analytics.analytics.order_book`
       replays this faithfully — a crossed book in the output is a property of
       the feed, not a reconstruction bug.
-    * :attr:`UNKNOWN` — a format that does not declare its feed type (the
-      structural default for third-party formats predating this attribute).
+    * :attr:`UNKNOWN` — a source that does not declare its feed type (the
+      structural default for third-party sources predating this attribute).
 
     Mixes in ``str`` so members compare and serialise as their value
     (``FeedType.DIFF_FEED == "diff_feed"``), which keeps CLI/JSON output and
@@ -89,10 +92,10 @@ class FeedType(str, Enum):
 
 @dataclass(frozen=True)
 class RunContext:
-    """Per-run parameters that don't belong on the Format constructor.
+    """Per-run parameters that don't belong on the Source constructor.
 
     Passed to ``Pipeline.run(source, ctx=...)`` and forwarded to
-    ``Format.create_loader/create_trade_source/create_writer``.
+    ``OfflineSource.create_loader/create_trade_source/create_writer``.
 
     Attributes
     ----------
@@ -200,9 +203,8 @@ class DepthSource(Protocol):
     the depth frame **directly** — a price-level feed *is* a depth stream, so
     there is nothing to reconstruct.
 
-    An :attr:`Format.resolution` of :attr:`Level.L2` format's
-    :meth:`Format.create_loader` returns a ``DepthSource``; the pipeline
-    validates its output with
+    An :attr:`Level.L2` source's :meth:`OfflineSource.create_loader` returns a
+    ``DepthSource``; the pipeline validates its output with
     :func:`~ob_analytics.schemas.validate_depth_df` and feeds it straight to
     :class:`~ob_analytics.depth.DepthMetricsEngine`.
 
@@ -260,44 +262,68 @@ class DataWriter(Protocol):
 
 
 @runtime_checkable
-class Format(Protocol):
-    """Structural contract for a data-format descriptor.
+class Source(Protocol):
+    """Structural contract shared by every data source, file or live.
 
-    A Format bundles the per-format factories the pipeline needs: how to
-    load events, how to acquire trades, and (optionally) how to write
-    results or compute depth directly. Pass instances to
-    ``Pipeline(format=...)``.
+    One shape covers both a file loader and a live capturer: a source states
+    the two coordinates downstream code reasons by — :attr:`level` (L2 vs L3)
+    and :attr:`feed_type` (the crossing invariant) — and carries its typed,
+    validated :attr:`settings` (a :class:`~ob_analytics.config.SourceSettings`)
+    in place of an untyped dict.  There is **no base class to inherit**: any
+    object providing these members satisfies the contract (structural typing).
 
-    There is **no base class to inherit** — any object providing these
-    members satisfies the contract (structural typing). ``name`` is a
-    short lowercase identifier (e.g. ``"bitstamp"``).  ``feed_type``
-    declares the source's crossing invariant (:class:`FeedType`); callers
-    should treat a missing attribute as :attr:`FeedType.UNKNOWN` (structural
-    default) rather than special-casing format names.  ``resolution``
-    declares the granularity (:class:`Level`): :attr:`Level.L3` (default) for
-    per-order feeds, :attr:`Level.L2` for price-level feeds — callers should
-    treat a missing attribute as :attr:`Level.L3` (structural default).
+    A source declares *how* it produces the shared schema by also satisfying a
+    capability protocol — :class:`OfflineSource` (replay stored files) and/or
+    :class:`LiveSource` (capture a live venue).  A venue that supports both
+    (e.g. Bitstamp) satisfies both.
+
+    Attributes
+    ----------
+    name : str
+        Short lowercase identifier registered in
+        :data:`~ob_analytics.sources.SOURCES`, e.g. ``"bitstamp"``.
+    level : Level
+        Order-book resolution this source produces: :attr:`Level.L3` (per-order
+        events) or :attr:`Level.L2` (price-level depth).
+    feed_type : FeedType
+        The source's crossing invariant (:class:`FeedType`), so downstream code
+        reasons about crossed books by coordinate, not by source name.
+    settings : SourceSettings
+        Typed per-source configuration.  The empty base for a source that needs
+        none; a typed subclass (e.g. ``CcxtSettings``) for one with venue knobs.
     """
 
     name: str
+    level: Level
     feed_type: FeedType
-    resolution: Level
+    settings: SourceSettings
+
+
+@runtime_checkable
+class OfflineSource(Source, Protocol):
+    """A :class:`Source` that replays stored files into the shared schema.
+
+    Bundles the per-source factories the pipeline needs to read from a path:
+    how to load events (or depth), how to acquire trades, and (optionally) how
+    to write results or compute depth directly.  Pass instances to
+    ``Pipeline(source=...)``.
+    """
 
     def create_loader(self, config: Any, ctx: RunContext) -> EventLoader | DepthSource:
-        """Return the loader for this format.
+        """Return the loader for this source.
 
-        An :attr:`Level.L3` format returns an :class:`EventLoader` (per-order
-        events); an :attr:`Level.L2` format returns a :class:`DepthSource`
+        An :attr:`Level.L3` source returns an :class:`EventLoader` (per-order
+        events); an :attr:`Level.L2` source returns a :class:`DepthSource`
         (the price-level depth frame directly).
         """
         ...
 
     def create_trade_source(self, config: Any, ctx: RunContext) -> TradeSource:
-        """Return a trade source for this format."""
+        """Return a trade source for this source."""
         ...
 
     def create_writer(self, config: Any, ctx: RunContext) -> DataWriter | None:
-        """Return a writer for this format, or ``None`` if unsupported."""
+        """Return a writer for this source, or ``None`` if unsupported."""
         ...
 
     def compute_depth(
@@ -312,15 +338,15 @@ class Format(Protocol):
         ...
 
     def config_defaults(self) -> dict[str, Any]:
-        """Return default :class:`PipelineConfig` overrides for this format."""
+        """Return default :class:`PipelineConfig` overrides for this source."""
         ...
 
     def required_context(self) -> list[str]:
-        """:class:`RunContext` field names this format requires.
+        """:class:`RunContext` field names this source requires.
 
         E.g. LOBSTER returns ``["trading_date"]`` because its filenames carry
         no date; Bitstamp returns ``[]``.  Lets the CLI/pipeline validate
-        required context generically instead of special-casing format names.
+        required context generically instead of special-casing source names.
         Callers should treat a missing method as ``[]`` (structural default).
         """
         ...

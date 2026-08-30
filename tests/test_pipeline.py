@@ -294,12 +294,11 @@ class TestPipelineEndToEnd:
 
 
 def test_pipeline_result_is_slim(tmp_path: Path):
-    """PipelineResult carries only the core tables plus config and resolution.
+    """PipelineResult carries only the core tables plus config and level.
 
     Analytic outputs (VPIN/OFI/Kyle's λ) and the old metadata/extras/metrics
     bags are gone — compute them post-pipeline from ``result.trades``.
-    ``resolution`` records which order-book level the run was produced at
-    (L2 vs L3).
+    ``level`` records which order-book level the run was produced at (L2 vs L3).
     """
     assert set(PipelineResult.__dataclass_fields__) == {
         "events",
@@ -307,7 +306,7 @@ def test_pipeline_result_is_slim(tmp_path: Path):
         "depth",
         "depth_summary",
         "config",
-        "resolution",
+        "level",
     }
 
     orders = pd.DataFrame(

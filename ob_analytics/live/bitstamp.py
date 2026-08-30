@@ -35,8 +35,7 @@ import websockets
 from loguru import logger
 from websockets.exceptions import ConnectionClosed
 
-from ob_analytics.live._base import CaptureConfig, EventDict, LiveCapturer
-from ob_analytics.protocols import Level
+from ob_analytics.live._base import CaptureConfig, EventDict
 
 WS_URL = "wss://ws.bitstamp.net"
 REST_BOOK_URL = "https://www.bitstamp.net/api/v2/order_book/{pair}/?group=2"
@@ -67,15 +66,16 @@ def _fetch_book_snapshot(pair: str) -> dict[str, Any]:
         return json.loads(resp.read())
 
 
-class BitstampCapturer(LiveCapturer):
-    """Live-capture Bitstamp BTC/USD (or any spot pair).
+class BitstampCapturer:
+    """The Bitstamp WebSocket capture engine, driven by
+    :class:`~ob_analytics.bitstamp.BitstampSource`.
 
-    Conforms to :class:`~ob_analytics.live.LiveCapturer`. Instances are
-    not reusable across runs -- construct a fresh one per capture.
+    Holds the live connection and resting-order state across
+    ``snapshot`` → ``stream`` → ``shutdown_synthetic_events``; the public
+    ``bitstamp`` live source delegates those three calls (and
+    ``diagnostics``) here.  Instances are not reusable across runs --
+    ``BitstampSource`` builds a fresh one per capture.
     """
-
-    name = "bitstamp"
-    resolution = Level.L3
 
     def __init__(self) -> None:
         # order_id -> (last_price, direction, last_volume). Tracks resting

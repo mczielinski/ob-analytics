@@ -6,28 +6,28 @@ title: Process LOBSTER files
 
 [LOBSTER](https://lobsterdata.com/) message and orderbook files are
 supported out of the box via `LobsterLoader`, `LobsterTradeReader`,
-`LobsterWriter`, and `LobsterFormat`. Depth is read from the official
+`LobsterWriter`, and `LobsterSource`. Depth is read from the official
 orderbook file (ground-truth) when present.
 
 ```python
-from ob_analytics import LobsterFormat, Pipeline
+from ob_analytics import LobsterSource, Pipeline
 from ob_analytics.protocols import RunContext
 
-fmt = LobsterFormat()
+source = LobsterSource()
 ctx = RunContext(trading_date="2012-06-21")
-result = Pipeline(format=fmt, ctx=ctx).run(
+result = Pipeline(source=source, ctx=ctx).run(
     "/path/to/extracted_lobster_folder"
 )
 
-# equivalent shorthand via the format registry:
-result = Pipeline.from_format(
+# equivalent shorthand via the source registry:
+result = Pipeline.from_source(
     "lobster", ctx=RunContext(trading_date="2012-06-21"),
 ).run("/path/to/extracted_lobster_folder")
 ```
 
-## Per-format extras
+## Per-source extras
 
-Some formats expose auxiliary event tables that don't fit the universal
+Some sources expose auxiliary event tables that don't fit the universal
 events schema — LOBSTER trading halts, cross trades, and hidden
 executions, for example. These no longer ride on `PipelineResult`; a
 `LobsterLoader` splits them out during `load()` and exposes them as a public
@@ -35,11 +35,11 @@ attribute (`None` when absent):
 
 ```python
 from ob_analytics import Pipeline, RunContext
-from ob_analytics.lobster import LobsterFormat, LobsterLoader
+from ob_analytics.lobster import LobsterLoader, LobsterSource
 from ob_analytics.visualization.gallery import generate_gallery, trading_halts_panel
 
 ctx = RunContext(trading_date="2015-05-01")
-result = Pipeline(format=LobsterFormat()).run(path, ctx=ctx)
+result = Pipeline(source=LobsterSource()).run(path, ctx=ctx)
 
 loader = LobsterLoader(trading_date="2015-05-01")
 loader.load(path)             # populates loader.trading_halts

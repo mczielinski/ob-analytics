@@ -40,7 +40,7 @@ from ob_analytics._utils import (
     seconds_after_midnight_to_datetime,
     ticks_to_price,
 )
-from ob_analytics.config import PipelineConfig
+from ob_analytics.config import PipelineConfig, SourceSettings
 from ob_analytics.protocols import (
     DataWriter,
     EventLoader,
@@ -135,7 +135,7 @@ class LobsterLoader:
         self.trading_halts: pd.DataFrame | None = None
         self.cross_trades: pd.DataFrame | None = None
         #: Path to the companion LOBSTER orderbook file, discovered during
-        #: :meth:`load`. Public so :class:`LobsterFormat` can read it for depth
+        #: :meth:`load`. Public so :class:`LobsterSource` can read it for depth
         #: computation without reaching into a private attribute.
         self.orderbook_path: Path | None = None
 
@@ -912,7 +912,7 @@ def lobster_depth_from_orderbook(
     return depth, depth_summary
 
 
-# ── LobsterFormat descriptor ─────────────────────────────────────────
+# ── LobsterSource descriptor ─────────────────────────────────────────
 
 
 def _require_trading_date(td: object, where: str) -> str | pd.Timestamp:
@@ -924,25 +924,27 @@ def _require_trading_date(td: object, where: str) -> str | pd.Timestamp:
     """
     if td is None:
         raise ValueError(
-            f"LobsterFormat.{where}: trading_date is required. "
+            f"LobsterSource.{where}: trading_date is required. "
             f"Pass it via ctx=RunContext(trading_date=...)."
         )
     if not isinstance(td, (str, pd.Timestamp)):
         raise TypeError(
-            f"LobsterFormat.{where}: trading_date must be str or "
+            f"LobsterSource.{where}: trading_date must be str or "
             f"pandas.Timestamp, got {type(td).__name__}"
         )
     return td
 
 
 @dataclass
-class LobsterFormat:
-    """Format descriptor for LOBSTER limit-order-book data.
+class LobsterSource:
+    """The LOBSTER source: offline replay of message/orderbook files (L3).
 
     ``trading_date`` is taken from the per-run
-    :class:`~ob_analytics.protocols.RunContext`, not the format
-    constructor — so the same ``LobsterFormat()`` instance can be reused
-    across runs with different sessions.
+    :class:`~ob_analytics.protocols.RunContext`, not the source
+    constructor — so the same ``LobsterSource()`` instance can be reused
+    across runs with different sessions.  Offline only: LOBSTER ships as data
+    files, so it satisfies :class:`~ob_analytics.protocols.OfflineSource` and
+    has no live capability.
     """
 
     name: str = field(default="lobster", init=False, repr=False)
@@ -950,7 +952,10 @@ class LobsterFormat:
     # never rest above asks, so the reconstructed book is never crossed.
     feed_type: FeedType = field(default=FeedType.MATCHED_BOOK, init=False, repr=False)
     # Per-order (market-by-order) feed — the full reconstruction model.
-    resolution: Level = field(default=Level.L3, init=False, repr=False)
+    level: Level = field(default=Level.L3, init=False, repr=False)
+    # LOBSTER needs no per-source knobs; empty typed settings keep the
+    # construction signature uniform with sources that do.
+    settings: SourceSettings = field(default_factory=SourceSettings)
 
     _loader: LobsterLoader | None = field(default=None, repr=False, init=False)
 
@@ -985,7 +990,7 @@ class LobsterFormat:
             ob_path = LobsterLoader._resolve_orderbook_file(Path(source))
         if ob_path is None:
             logger.warning(
-                "LobsterFormat: no orderbook file found; "
+                "LobsterSource: no orderbook file found; "
                 "falling back to event-based depth"
             )
             return None
@@ -1005,11 +1010,9 @@ class LobsterFormat:
         return ["trading_date"]
 
 
-# ── Register this format and its writer ───────────────────────────────
-# Imports sit at the bottom (deferred from the top of the module) to avoid a
-# circular import: ``pipeline`` imports loaders/readers from the format modules.
-from ob_analytics.data import register_writer
-from ob_analytics.pipeline import register_format
+# ── Register this source ──────────────────────────────────────────────
+# Registration runs at the bottom, after ``LobsterSource`` is defined.
+from ob_analytics.sources import register_source
 
 
 def _make_lobster_writer(config, ctx):
@@ -1019,5 +1022,4 @@ def _make_lobster_writer(config, ctx):
     )
 
 
-register_format("lobster", LobsterFormat)
-register_writer("lobster", _make_lobster_writer)
+register_source("lobster", LobsterSource)

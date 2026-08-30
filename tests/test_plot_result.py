@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import pytest
 from matplotlib.figure import Figure
 
-from ob_analytics.bitstamp import BitstampFormat
+from ob_analytics.bitstamp import BitstampSource
 from ob_analytics.pipeline import Pipeline, PipelineResult
 from ob_analytics.visualization import available_concepts, plot_result, prepare
 
@@ -16,7 +16,7 @@ from ob_analytics.visualization import available_concepts, plot_result, prepare
 @pytest.fixture(scope="module")
 def result(tiny_bitstamp_orders_csv) -> PipelineResult:
     """One tiny pipeline run shared across the module."""
-    return Pipeline(format=BitstampFormat()).run(str(tiny_bitstamp_orders_csv))
+    return Pipeline(source=BitstampSource()).run(str(tiny_bitstamp_orders_csv))
 
 
 @pytest.fixture(autouse=True)

@@ -171,20 +171,20 @@ class TestBitstampTradeReader:
             BitstampTradeReader().load(events, tmp_path)
 
 
-class TestFormatCreateTradeSource:
-    def test_bitstamp_format_creates_trade_reader(self):
-        from ob_analytics import BitstampFormat, PipelineConfig
+class TestSourceCreateTradeSource:
+    def test_bitstamp_source_creates_trade_reader(self):
+        from ob_analytics import BitstampSource, PipelineConfig
         from ob_analytics.bitstamp import BitstampTradeReader
         from ob_analytics.protocols import RunContext
 
-        ts = BitstampFormat().create_trade_source(PipelineConfig(), RunContext())
+        ts = BitstampSource().create_trade_source(PipelineConfig(), RunContext())
         assert isinstance(ts, BitstampTradeReader)
 
-    def test_lobster_format_creates_trade_source(self):
-        from ob_analytics import LobsterFormat, PipelineConfig
+    def test_lobster_source_creates_trade_source(self):
+        from ob_analytics import LobsterSource, PipelineConfig
         from ob_analytics.protocols import RunContext
 
-        ts = LobsterFormat().create_trade_source(
+        ts = LobsterSource().create_trade_source(
             PipelineConfig(), RunContext(trading_date="2025-01-01")
         )
         assert isinstance(ts, TradeSource)

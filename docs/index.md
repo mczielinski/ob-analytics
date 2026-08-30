@@ -119,10 +119,10 @@ decisions, and module map.
 === "LOBSTER"
 
     ```python
-    from ob_analytics import LobsterFormat, Pipeline, RunContext
+    from ob_analytics import LobsterSource, Pipeline, RunContext
 
     result = Pipeline(
-        format=LobsterFormat(),
+        source=LobsterSource(),
         ctx=RunContext(trading_date="2012-06-21"),
     ).run("/path/to/lobster_data")
     ```

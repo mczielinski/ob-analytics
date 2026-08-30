@@ -5,7 +5,7 @@ Contains the symmetric set of Bitstamp-specific components:
 * :class:`BitstampLoader` — loads Bitstamp CSV event data
 * :class:`BitstampTradeReader` — reads companion ``trades.csv`` (live capture)
 * :class:`BitstampWriter` — writes events back to Bitstamp CSV
-* :class:`BitstampFormat` — format descriptor bundling all of the above
+* :class:`BitstampSource` — the source descriptor (offline replay + live capture)
 
 Format-agnostic analytics (e.g. :func:`~ob_analytics.analytics.order_aggressiveness`)
 live in :mod:`ob_analytics.analytics`.
@@ -14,9 +14,8 @@ live in :mod:`ob_analytics.analytics`.
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -32,7 +31,7 @@ from ob_analytics._utils import (
     validate_columns,
     validate_non_empty,
 )
-from ob_analytics.config import PipelineConfig
+from ob_analytics.config import PipelineConfig, SourceSettings
 from ob_analytics.protocols import (
     DataWriter,
     EventLoader,
@@ -42,6 +41,11 @@ from ob_analytics.protocols import (
     TradeSource,
 )
 from ob_analytics.schemas import SEQUENCE_COLUMN, attach_instrument_identity
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+    from ob_analytics.live._base import CaptureConfig, EventDict
 
 # ── BitstampLoader ────────────────────────────────────────────────────
 
@@ -475,23 +479,40 @@ class BitstampWriter:
         out.to_csv(dest, index=False)
 
 
-# ── BitstampFormat descriptor ─────────────────────────────────────────
+# ── BitstampSource descriptor ─────────────────────────────────────────
 
 
-@dataclass
-class BitstampFormat:
-    """Format descriptor for Bitstamp-style CSV data.
+class BitstampSource:
+    """The Bitstamp source: offline CSV replay **and** live WebSocket capture.
 
-    Conforms structurally to the :class:`~ob_analytics.protocols.Format`
-    Protocol — no inheritance required.
+    One descriptor for both ways to get Bitstamp data.  It satisfies
+    :class:`~ob_analytics.protocols.OfflineSource` (the CSV loader / trade
+    reader / writer, inline and dependency-light) and
+    :class:`~ob_analytics.live._base.LiveSource` (snapshot / stream / shutdown,
+    delegated to a WebSocket engine imported lazily from
+    :mod:`ob_analytics.live.bitstamp`).  The lazy import is what keeps the
+    offline path free of the ``[live]`` extra: importing this module never
+    imports ``websockets``; only starting a live capture does.
+
+    Conforms structurally to the source protocols — no inheritance required.
     """
 
-    name: str = "bitstamp"
+    name = "bitstamp"
+    # Per-order (market-by-order) feed — the full reconstruction model.
+    level = Level.L3
     # The Bitstamp public feed is a placement/cancellation diff stream, not a
     # matched-engine view, so it can carry genuinely crossed resting orders.
-    feed_type: FeedType = FeedType.DIFF_FEED
-    # Per-order (market-by-order) feed — the full reconstruction model.
-    resolution: Level = Level.L3
+    feed_type = FeedType.DIFF_FEED
+
+    def __init__(self, settings: SourceSettings | None = None) -> None:
+        # Bitstamp needs no per-source knobs; the empty typed settings keep the
+        # construction signature uniform with sources that do (e.g. ccxt).
+        self.settings = settings or SourceSettings()
+        # The live WebSocket engine, built on first live use so snapshot →
+        # stream → shutdown share one connection and order-book state.
+        self._engine: Any = None
+
+    # -- offline capability -------------------------------------------------
 
     def create_loader(self, config: PipelineConfig, ctx: RunContext) -> EventLoader:
         return BitstampLoader(config, venue=ctx.venue, symbol=ctx.symbol)
@@ -526,13 +547,43 @@ class BitstampFormat:
         # Bitstamp captures are self-describing (timestamps carry the date).
         return []
 
+    # -- live capability (delegated to the WebSocket engine, lazily) --------
 
-# ── Register this format and its writer ───────────────────────────────
-# Imports sit at the bottom (deferred from the top of the module) to avoid a
-# circular import: ``pipeline`` imports ``BitstampLoader``/``BitstampTradeReader``
-# from here.
-from ob_analytics.data import register_writer
-from ob_analytics.pipeline import register_format
+    def _live_engine(self) -> Any:
+        """Return the cached WebSocket engine, importing it on first use.
 
-register_format("bitstamp", BitstampFormat)
-register_writer("bitstamp", lambda config, ctx: BitstampWriter(config))
+        Raises :class:`ImportError` with an install hint when the ``[live]``
+        extra (``websockets``) is not installed.
+        """
+        if self._engine is None:
+            try:
+                from ob_analytics.live.bitstamp import BitstampCapturer
+            except ImportError as exc:  # pragma: no cover - only without [live]
+                raise ImportError(
+                    'The bitstamp live source requires the "live" extra: '
+                    'pip install "ob-analytics[live]"'
+                ) from exc
+            self._engine = BitstampCapturer()
+        return self._engine
+
+    def snapshot(self, config: CaptureConfig) -> AsyncIterator[EventDict]:
+        return self._live_engine().snapshot(config)
+
+    def stream(
+        self, config: CaptureConfig
+    ) -> AsyncIterator[tuple[str, EventDict, Any]]:
+        return self._live_engine().stream(config)
+
+    def shutdown_synthetic_events(self) -> AsyncIterator[EventDict]:
+        return self._live_engine().shutdown_synthetic_events()
+
+    def diagnostics(self) -> dict[str, Any]:
+        """Per-run counters from the live engine (SupportsDiagnostics)."""
+        return self._live_engine().diagnostics()
+
+
+# ── Register this source ──────────────────────────────────────────────
+# Registration runs at the bottom, after ``BitstampSource`` is defined.
+from ob_analytics.sources import register_source
+
+register_source("bitstamp", BitstampSource)

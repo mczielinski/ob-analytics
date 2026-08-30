@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ob_analytics.bitstamp import BitstampFormat
+from ob_analytics.bitstamp import BitstampSource
 from ob_analytics.flow_toxicity import compute_kyle_lambda
 from ob_analytics.pipeline import Pipeline, PipelineResult
 from tests._golden import df_fingerprint
@@ -33,7 +33,7 @@ def _frames(result: PipelineResult) -> dict[str, pd.DataFrame]:
 
 @pytest.fixture(scope="module")
 def demo_result(bitstamp_sample_dir) -> PipelineResult:
-    return Pipeline(format=BitstampFormat()).run(
+    return Pipeline(source=BitstampSource()).run(
         str(bitstamp_sample_dir / "orders.csv.gz")
     )
 

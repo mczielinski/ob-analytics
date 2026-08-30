@@ -17,14 +17,15 @@ The package exposes two layers:
   with sensible defaults.  When called without arguments it defaults
   to the Bitstamp format (orders + companion ``trades.csv``).
 * **Low-level**: Individual classes and functions for step-by-step control.
-  Two symmetric format implementations are provided:
+  Two symmetric source implementations are provided:
 
   - Bitstamp: :class:`BitstampLoader`, :class:`BitstampTradeReader`,
-    :class:`BitstampWriter`, :class:`BitstampFormat`
+    :class:`BitstampWriter`, :class:`BitstampSource`
   - LOBSTER: :class:`LobsterLoader`, :class:`LobsterTradeReader`,
-    :class:`LobsterWriter`, :class:`LobsterFormat`
+    :class:`LobsterWriter`, :class:`LobsterSource`
 
-All processing stages are pluggable via :mod:`~ob_analytics.protocols`.
+All processing stages are pluggable via :mod:`~ob_analytics.protocols`; a whole
+new data source registers via :func:`~ob_analytics.sources.register_source`.
 """
 
 from importlib.metadata import PackageNotFoundError, version
@@ -39,14 +40,13 @@ from ob_analytics.analytics import (
     detect_sequence_gaps,
 )
 
-# Importing the bitstamp and lobster modules fires their format/writer
-# self-registration at import time; the Format classes are also the public
-# symmetric-pair entry points.
-from ob_analytics.bitstamp import BitstampFormat
-from ob_analytics.config import PipelineConfig
+# Importing the source modules fires their register_source(...) self-registration
+# at import time; the Source classes are also the public per-venue entry points.
+from ob_analytics.bitstamp import BitstampSource
+from ob_analytics.config import PipelineConfig, SourceSettings
 from ob_analytics.data import load_data, save_data
 from ob_analytics.datasets import toy_events, toy_l2_depth, toy_l2_trades, toy_trades
-from ob_analytics.depth_l2 import DepthCsvFormat
+from ob_analytics.depth_l2 import DepthCsvSource
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
 from ob_analytics.flow_toxicity import (
     KyleLambdaResult,
@@ -54,21 +54,22 @@ from ob_analytics.flow_toxicity import (
     compute_vpin,
     order_flow_imbalance,
 )
-from ob_analytics.lobster import LobsterFormat
-from ob_analytics.pipeline import (
-    Pipeline,
-    PipelineResult,
-    list_formats,
-    register_format,
-)
+
+# Importing the live package registers the ccxt live source (the bitstamp live
+# capability rides on BitstampSource, already registered above); then discover
+# any third-party sources advertised through the entry-point group.
+from ob_analytics.live import LiveSource
+from ob_analytics.lobster import LobsterSource
+from ob_analytics.pipeline import Pipeline, PipelineResult
 from ob_analytics.protocols import (
     DataWriter,
     DepthSource,
     EventLoader,
     FeedType,
-    Format,
     Level,
+    OfflineSource,
     RunContext,
+    Source,
     TradeSource,
 )
 from ob_analytics.schemas import (
@@ -76,12 +77,20 @@ from ob_analytics.schemas import (
     VENUE_COLUMN,
     group_by_instrument,
 )
+from ob_analytics.sources import (
+    get_source,
+    list_sources,
+    load_source_plugins,
+    register_source,
+)
 from ob_analytics.trade_sign import (
     bulk_volume_classification,
     classify_trade_sign,
     lee_ready,
     tick_rule,
 )
+
+load_source_plugins()
 
 logger.disable("ob_analytics")
 
@@ -118,28 +127,31 @@ __all__ = [
     # ── Instrument identity (issue #147) ─────────────────────────────
     "SYMBOL_COLUMN",
     "VENUE_COLUMN",
-    # ── Formats (symmetric-pair entry points) ────────────────────────
-    "BitstampFormat",
+    # ── Sources (per-venue entry points) ─────────────────────────────
+    "BitstampSource",
     "ConfigError",
     "DataQualitySummary",
     "DataWriter",
-    "DepthCsvFormat",
+    "DepthCsvSource",
     "DepthSource",
     "EventLoader",
     "FeedType",
-    # ── Protocols / extension points ─────────────────────────────────
-    "Format",
     "KyleLambdaResult",
     "Level",
-    "LobsterFormat",
+    "LiveSource",
+    "LobsterSource",
     # ── Exceptions ───────────────────────────────────────────────────
     "ObAnalyticsError",
+    # ── Protocols / extension points ─────────────────────────────────
+    "OfflineSource",
     # ── Pipeline orchestration ───────────────────────────────────────
     "Pipeline",
     "PipelineConfig",
     "PipelineResult",
     "RunContext",
     "SequenceGapReport",
+    "Source",
+    "SourceSettings",
     "TradeSource",
     "__version__",
     # ── Trade-sign classification ────────────────────────────────────
@@ -151,12 +163,14 @@ __all__ = [
     # ── Data quality ─────────────────────────────────────────────────
     "data_quality_summary",
     "detect_sequence_gaps",
+    "get_source",
     "group_by_instrument",
     "lee_ready",
-    "list_formats",
+    "list_sources",
     "load_data",
+    "load_source_plugins",
     "order_flow_imbalance",
-    "register_format",
+    "register_source",
     # ── Sample data ──────────────────────────────────────────────────
     "sample_csv_path",
     "sample_data_dir",

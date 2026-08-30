@@ -31,14 +31,19 @@ has a complete `created -> ... -> deleted` lifecycle.
 
 ## Adding a new venue
 
-Implement the `LiveCapturer` protocol -- three async-iterator methods --
-and register your class:
+Give your source the live capability -- the three async-iterator methods of a
+`LiveSource` -- alongside its `level` / `feed_type` / `settings`, and register
+it:
 
 ```python
-from ob_analytics.live import LiveCapturer, register_capturer
+from ob_analytics import FeedType, Level, SourceSettings, register_source
 
-class CoinbaseCapturer(LiveCapturer):
+
+class CoinbaseSource:
     name = "coinbase"
+    level = Level.L3
+    feed_type = FeedType.MATCHED_BOOK
+    settings = SourceSettings()
 
     async def snapshot(self, config):
         # yield synthetic "created" events from a REST snapshot
@@ -52,14 +57,16 @@ class CoinbaseCapturer(LiveCapturer):
         # yield "deleted" events for everything still resting
         ...
 
-register_capturer("coinbase", CoinbaseCapturer)
+
+register_source("coinbase", CoinbaseSource)
 ```
 
 That's enough to make `ob-analytics capture coinbase` work. Persistence,
 raw-frame archival, signal handling, and `meta.json` all live in the
-generic runner -- you only write the per-venue parser.
+generic runner -- you only write the per-venue parser. A source can also add
+the offline-replay factories and be both.
 
 ## Related
 
 - [Command-line interface](cli.md) — all `capture` flags
-- [Extending ob-analytics](../extending.md) — the `LiveCapturer` protocol in depth
+- [Extending ob-analytics](../extending.md) — the `Source` / `LiveSource` protocols in depth

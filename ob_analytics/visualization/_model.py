@@ -6,9 +6,9 @@ The level is a *coordinate* in the renderer-registry key
 symmetric variants of one concept rather than separately-named plots.
 
 :class:`Level` is defined in :mod:`ob_analytics.protocols` (it is also the
-axis a :class:`~ob_analytics.protocols.Format` declares its ingestion
-resolution on) and re-exported here so the visualization layer keeps a local
-name.
+axis a :class:`~ob_analytics.protocols.Source` declares its ingestion
+level on, via ``Source.level``) and re-exported here so the visualization
+layer keeps a local name.
 """
 
 from __future__ import annotations
