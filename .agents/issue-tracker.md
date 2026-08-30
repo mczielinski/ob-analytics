@@ -37,6 +37,7 @@ rather than inventing new terms:
 - `effort:` — `S` (hours to ~1 day), `M` (a few days), `L` (~1-2 weeks), `XL` (multi-PR)
 - `foundational` — a dependency root that unblocks several other issues
 - `epic` — a tracking / roadmap issue
+- `goal` — a user-facing capability the roadmap works toward (see below)
 
 Run `gh label list` before adding a label that is not in this list.
 
@@ -47,6 +48,27 @@ sub-issues**, with **native issue dependencies** (`blocked_by`) recording the
 order they must be built in. Both are the real, UI-visible structures, not a
 task list in the body. Read the epic before proposing where a new issue fits,
 and attach new roadmap work to it the same way.
+
+### Goals
+
+Issues labelled `goal` are **user-facing capabilities**, not work to do: "Users
+can see live data on screen", "Users can export to backtesting engines". They sit
+alongside work issues as sub-issues of #124 and are wired by `blocked_by` to the
+work that delivers them, so the same graph answers both "what do I build next"
+and "why does this issue exist". Every roadmap issue reaches at least one goal.
+
+- **Titles** read `Users can …`. Each body opens with one user-story line, then
+  says why the capability matters, then lists what it needs.
+- **Nothing depends on a goal.** A goal is blocked by work issues only; ordering
+  between goals is prioritisation, which the graph does not hold.
+- **A person closes a goal**, with a comment saying what a user can now do and
+  where it is documented. Every prerequisite being closed is a prompt to check,
+  not the close itself.
+- **Queries exclude them.** Triage and what-to-work-on listings should pass
+  `--search "-label:goal"`, or goals will pad the open count and appear as work
+  that needs doing.
+
+Decided in #170.
 
 ## Pull requests as a triage surface
 
