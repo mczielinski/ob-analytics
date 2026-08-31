@@ -1,0 +1,49 @@
+# Keep the roadmap views in #124 and the goal issues in step with the graph.
+#
+# The graph is GitHub's own: the sub-issues of #124 and their blocked_by links.
+# Closing an issue, adding a dependency or editing a title changes what the
+# views should say, so the generator re-runs and rewrites them.
+#
+# The weekly run is not a backstop for the event triggers. It is the only thing
+# that sees a whole class of change: GitHub raises no issues event when a
+# dependency link is added or removed, and a drifted dependency edge is the
+# exact problem this work exists to fix. Nothing else would notice.
+#
+# The default GITHUB_TOKEN is deliberate. GitHub does not re-trigger workflows
+# from events raised by that token, so the generator editing seventeen issue
+# bodies cannot start another run. A PAT or an App token would remove that
+# protection and the job would need a loop guard.
+#
+# The issues and push triggers land once the first dispatched run has been read
+# through (#193). Until then this runs only when asked and once a week.
+
+name: roadmap
+
+on:
+  schedule:
+    # Mondays, 06:00 UTC.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+concurrency:
+  group: roadmap
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Write the roadmap views
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/roadmap.py --repo "$GITHUB_REPOSITORY"
