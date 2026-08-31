@@ -47,14 +47,16 @@ and is met as soon as any member closes.
 
 **Writing.** Each body is compared before it is written, so a run triggered by
 every issue event does not churn seventeen edit histories. A body whose markers
-are missing or malformed is skipped and logged rather than guessed at.
+are missing or malformed is skipped and logged rather than guessed at, and a run
+that skipped anything exits non-zero, because a skipped issue is a stale view.
 
 Running it
 ----------
     uv run --no-project python scripts/roadmap.py --dry-run
 
-Drop ``--dry-run`` to write. Running it on a schedule is #193; the default
-``GITHUB_TOKEN`` with ``issues: write`` is enough for every call it makes.
+Drop ``--dry-run`` to write. ``.github/workflows/roadmap.yml`` runs it on issue
+events, once a week and on demand; the default ``GITHUB_TOKEN`` with
+``issues: write`` is enough for every call it makes.
 """
 
 from __future__ import annotations
@@ -726,6 +728,20 @@ class ReadOnly:
         LOG.info("would update #%s (%s lines)", number, len(body.splitlines()))
 
 
+def exit_code(report: Report) -> int:
+    """Fail the run if it skipped an issue.
+
+    A skip is never harmless. The generator carries on past a body whose
+    markers are missing or malformed, so that one broken body cannot stop the
+    other sixteen, but that issue now shows whatever the graph said the last
+    time anyone could write to it. Returning success there would report a
+    healthy roadmap while a view had quietly stopped updating, which is the
+    drift this exists to end. Writing nothing because nothing changed is the
+    steady state and succeeds.
+    """
+    return 1 if report.skipped else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--repo", default="mczielinski/ob-analytics")
@@ -752,7 +768,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     for number in report.written:
         LOG.info("  updated #%s", number)
-    return 0
+    for number in report.skipped:
+        LOG.error("  #%s has no usable markers, so its view is stale", number)
+    return exit_code(report)
 
 
 if __name__ == "__main__":

@@ -19,6 +19,7 @@ import pytest
 
 from scripts.roadmap import (
     MarkerError,
+    exit_code,
     load_config,
     load_graph,
     render_epic_body,
@@ -557,6 +558,40 @@ def test_run_skips_an_issue_whose_markers_are_missing(client, config):
     assert report.skipped == [180]
     assert client.bodies[180] == "someone deleted the markers"
     assert 124 in report.written
+
+
+def test_a_skipped_issue_fails_the_run(client, config):
+    """A skip means a view nobody is maintaining is now stale, so the run fails.
+
+    The generator carries on past a broken body, because one bad marker pair
+    must not stop the other sixteen.  But the run as a whole has not done its
+    job: the skipped issue still shows whatever the graph said the last time
+    anyone could write to it.  A green run there would report success for a
+    roadmap that had quietly stopped updating, which is the drift this whole
+    thing exists to end.
+    """
+    client.bodies[180] = "someone deleted the markers"
+
+    report = run(client, config, epic=124)
+
+    assert exit_code(report) == 1
+
+
+def test_a_run_that_writes_every_issue_succeeds(client, config):
+    report = run(client, config, epic=124)
+
+    assert report.skipped == []
+    assert exit_code(report) == 0
+
+
+def test_a_run_that_changes_nothing_succeeds(client, config):
+    """Nothing to write is the steady state, not a failure."""
+    run(client, config, epic=124)
+
+    report = run(client, config, epic=124)
+
+    assert report.written == []
+    assert exit_code(report) == 0
 
 
 def test_epic_sections_run_in_the_order_the_spec_gives(graph, config):
