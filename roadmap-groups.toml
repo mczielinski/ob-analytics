@@ -1,0 +1,164 @@
+# Which issues each roadmap diagram draws, and what to call them.
+#
+# Read by scripts/roadmap.py, which writes the generated blocks in epic #124
+# and in the sixteen goal issues. See that file's docstring for how the whole
+# thing works.
+#
+# Edges are NEVER listed here. A group is a set of nodes; the generator draws
+# whatever blocked_by edges GitHub holds between them. GitHub's graph is the
+# only store of the dependencies, and this file only says which nodes appear
+# together and what to call them.
+#
+# An issue may appear in several groups. Issues in no group are still listed
+# under "Ungrouped" in #124, and they still appear in the diagram of any goal
+# that depends on them, so leaving one out is untidy rather than broken.
+#
+# Goals are not listed here at all. Each goal issue draws its own diagram from
+# its own prerequisites.
+
+[[group]]
+id = "foundation"
+title = "Part 1 - the foundation"
+prose = """
+The shared schema is the one thing the rest of the work needs. It unblocks four
+pieces of work; the separated engine then also feeds the metric hook.
+"""
+issues = [112, 136, 137, 104, 113, 140]
+
+[[group]]
+id = "data-model"
+title = "Part 1b - the four data-model decisions"
+prose = """
+The shared schema shipped with four choices left open. Each one would quietly
+corrupt the data if it were wrong. All four are now settled, so this diagram
+records completed work rather than work to do.
+"""
+issues = [112, 146, 147, 154, 155]
+# Keep the closed issues. Pruning would show two of the four, because two of
+# them have nothing open left behind them, and the point of this diagram is
+# that all four are done.
+keep_closed = true
+
+[[group]]
+id = "sources"
+title = "Part 2 - data sources"
+prose = """
+One plug-in shape feeds every new source, so each source is a small piece of
+work once the shape is in place.
+"""
+issues = [112, 137, 106, 134, 99, 100, 101, 102, 103, 98]
+
+[[group]]
+id = "engine"
+title = "Part 3 - a faster engine and a streaming core"
+prose = """
+These two are built last. The diagram shows what each one waits on.
+"""
+issues = [112, 136, 100, 114, 143, 144, 105, 116, 138, 139]
+
+[[group]]
+id = "analytics"
+title = "Part 4 - metrics, signals and model inputs"
+prose = """
+Measurements taken from a rebuilt book. Trade signs and the first signals are
+done. The rest are separate pieces of work that read the same input.
+"""
+issues = [104, 107, 109, 110, 111, 119, 148, 149]
+
+[[group]]
+id = "quality"
+title = "Part 5 - data quality checks"
+prose = """
+Ways to find out whether loaded data is sound. Three are done: data with known
+answers, a test that the engine gives the same numbers, and gap detection from
+sequence numbers.
+"""
+issues = [108, 114, 143, 146, 150]
+
+[[group]]
+id = "viz"
+title = "Part 6 - plots and interactive views"
+prose = """
+The full plot catalogue, one theme across backends, and a second backend. The
+live view and the replay scrubber show a book as it changes.
+"""
+issues = [105, 117, 118, 122, 123]
+
+[[group]]
+id = "release"
+title = "Part 7 - packaging, docs and release decisions"
+prose = """
+What is left before a version other projects can depend on: four decisions,
+conda-forge distribution, and the documentation work.
+"""
+issues = [115, 120, 121, 141, 142, 145]
+
+# Either/or prerequisites.
+#
+# GitHub's blocked_by has no OR, so both members are wired as hard blockers.
+# Without these declarations the goal looks like it needs both, and its blocker
+# count is one too high, which can show a goal as blocked when it is ready to
+# check. The generator draws each group as one node and treats it as satisfied
+# as soon as any member closes.
+
+[[alternative]]
+goal = 173
+any_of = [134, 99]
+label = "a live source"
+
+[[alternative]]
+goal = 179
+any_of = [102, 103]
+label = "a prediction market"
+
+# Short names for diagram boxes.
+#
+# Issue titles are far too long for a mermaid box. An issue with no entry here
+# gets a name cut from its title, so opening an issue never breaks a run; add
+# an entry whenever the cut-down title reads badly.
+
+[labels]
+98 = "L2 loader"
+99 = "Coinbase"
+100 = "Databento"
+101 = "Binance"
+102 = "Kalshi"
+103 = "Polymarket"
+104 = "Polars + Narwhals"
+105 = "live view"
+106 = "CCXT"
+107 = "trade signs"
+108 = "audit command"
+109 = "micro-price"
+110 = "spread + impact"
+111 = "iceberg detection"
+112 = "shared schema"
+113 = "export writer"
+114 = "fake L3 data"
+115 = "conda-forge"
+116 = "chunked run"
+117 = "replay scrubber"
+118 = "plot catalogue"
+119 = "flow toxicity"
+120 = "docs warnings"
+121 = "tutorial"
+122 = "Plotly theme"
+123 = "Bokeh backend"
+134 = "cryptofeed"
+136 = "separate engine"
+137 = "source plug-in"
+138 = "faster engine"
+139 = "streaming core"
+140 = "metric hook"
+141 = "public API"
+142 = "license check"
+143 = "correctness tests"
+144 = "speed test"
+145 = "source packaging"
+146 = "sequence numbers"
+147 = "multi-symbol"
+148 = "bars"
+149 = "feature table"
+150 = "robust capture"
+154 = "UTC time model"
+155 = "integer ticks"

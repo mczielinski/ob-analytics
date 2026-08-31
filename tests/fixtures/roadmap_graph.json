@@ -1,0 +1,1134 @@
+{
+  "epic": 124,
+  "nodes": {
+    "136": {
+      "number": 136,
+      "title": "Separate the order-book engine from the rest of the code",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:perf",
+        "effort:L",
+        "foundational"
+      ],
+      "open_blockers": 0,
+      "blocked_by": [
+        {
+          "number": 112,
+          "state": "closed"
+        }
+      ]
+    },
+    "137": {
+      "number": 137,
+      "title": "One plug-in shape for all data sources, files and live",
+      "state": "closed",
+      "labels": [
+        "enhancement",
+        "area:ingestion",
+        "effort:M",
+        "foundational"
+      ],
+      "open_blockers": 0,
+      "blocked_by": [
+        {
+          "number": 112,
+          "state": "closed"
+        }
+      ]
+    },
+    "138": {
+      "number": 138,
+      "title": "Make the order-book engine faster (numba, then maybe Rust)",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:perf",
+        "effort:XL"
+      ],
+      "open_blockers": 3,
+      "blocked_by": [
+        {
+          "number": 136,
+          "state": "open"
+        },
+        {
+          "number": 100,
+          "state": "open"
+        },
+        {
+          "number": 143,
+          "state": "closed"
+        },
+        {
+          "number": 144,
+          "state": "open"
+        }
+      ]
+    },
+    "139": {
+      "number": 139,
+      "title": "Streaming core so live and file replay share one path",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:ingestion",
+        "effort:XL"
+      ],
+      "open_blockers": 2,
+      "blocked_by": [
+        {
+          "number": 136,
+          "state": "open"
+        },
+        {
+          "number": 105,
+          "state": "open"
+        }
+      ]
+    },
+    "140": {
+      "number": 140,
+      "title": "Let users add their own metric and plot it",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:analytics",
+        "effort:M"
+      ],
+      "open_blockers": 1,
+      "blocked_by": [
+        {
+          "number": 112,
+          "state": "closed"
+        },
+        {
+          "number": 136,
+          "state": "open"
+        }
+      ]
+    },
+    "141": {
+      "number": 141,
+      "title": "Decide what counts as stable public API, and when to call it 1.0",
+      "state": "open",
+      "labels": [
+        "documentation",
+        "area:interop",
+        "effort:M"
+      ],
+      "open_blockers": 0,
+      "blocked_by": []
+    },
+    "142": {
+      "number": 142,
+      "title": "Check whether the GPL-2.0+ license limits who can use this",
+      "state": "open",
+      "labels": [
+        "documentation",
+        "area:interop",
+        "effort:S"
+      ],
+      "open_blockers": 0,
+      "blocked_by": []
+    },
+    "143": {
+      "number": 143,
+      "title": "Tests that prove a rewritten engine gives the same numbers",
+      "state": "closed",
+      "labels": [
+        "enhancement",
+        "area:analytics",
+        "effort:M"
+      ],
+      "open_blockers": 0,
+      "blocked_by": []
+    },
+    "144": {
+      "number": 144,
+      "title": "Add a speed test in CI to catch slow-downs",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:perf",
+        "effort:M"
+      ],
+      "open_blockers": 0,
+      "blocked_by": [
+        {
+          "number": 114,
+          "state": "closed"
+        }
+      ]
+    },
+    "145": {
+      "number": 145,
+      "title": "Decide if data sources are core, optional, or separate plug-ins",
+      "state": "open",
+      "labels": [
+        "documentation",
+        "area:ingestion",
+        "effort:S"
+      ],
+      "open_blockers": 0,
+      "blocked_by": []
+    },
+    "146": {
+      "number": 146,
+      "title": "Detect gaps and out-of-order messages from sequence numbers",
+      "state": "closed",
+      "labels": [
+        "enhancement",
+        "area:ingestion",
+        "effort:M",
+        "foundational"
+      ],
+      "open_blockers": 0,
+      "blocked_by": [
+        {
+          "number": 112,
+          "state": "closed"
+        }
+      ]
+    },
+    "147": {
+      "number": 147,
+      "title": "Analyze several instruments or venues together (multi-symbol, cross-venue)",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:analytics",
+        "effort:XL"
+      ],
+      "open_blockers": 0,
+      "blocked_by": [
+        {
+          "number": 112,
+          "state": "closed"
+        }
+      ]
+    },
+    "148": {
+      "number": 148,
+      "title": "Build bars from ticks (OHLCV, and volume/dollar/imbalance bars)",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:analytics",
+        "effort:M"
+      ],
+      "open_blockers": 0,
+      "blocked_by": []
+    },
+    "149": {
+      "number": 149,
+      "title": "Assemble a per-timestep feature table for models",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:analytics",
+        "effort:M"
+      ],
+      "open_blockers": 1,
+      "blocked_by": [
+        {
+          "number": 148,
+          "state": "open"
+        }
+      ]
+    },
+    "150": {
+      "number": 150,
+      "title": "Make live capture survive for days without losing data",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:ingestion",
+        "effort:L"
+      ],
+      "open_blockers": 0,
+      "blocked_by": [
+        {
+          "number": 146,
+          "state": "closed"
+        },
+        {
+          "number": 137,
+          "state": "closed"
+        }
+      ]
+    },
+    "98": {
+      "number": 98,
+      "title": "Foundational: L2 depth-native ingestion path (price-level feeds without order IDs)",
+      "state": "closed",
+      "labels": [
+        "enhancement",
+        "area:ingestion",
+        "level:L2",
+        "effort:L",
+        "foundational"
+      ],
+      "open_blockers": 0,
+      "blocked_by": []
+    },
+    "99": {
+      "number": 99,
+      "title": "Add Coinbase (Exchange `full` L3 channel) \u2014 live capturer + optional format",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:venues",
+        "level:L3",
+        "effort:M"
+      ],
+      "open_blockers": 0,
+      "blocked_by": [
+        {
+          "number": 137,
+          "state": "closed"
+        }
+      ]
+    },
+    "100": {
+      "number": 100,
+      "title": "Databento adapter: MBO \u2192 L3 format (+ optional live)",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:venues",
+        "level:L3",
+        "effort:L"
+      ],
+      "open_blockers": 0,
+      "blocked_by": [
+        {
+          "number": 137,
+          "state": "closed"
+        }
+      ]
+    },
+    "101": {
+      "number": 101,
+      "title": "Binance spot \u2014 validation + venue notes (acquisition via CCXT #106)",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:venues",
+        "level:L2",
+        "effort:S"
+      ],
+      "open_blockers": 0,
+      "blocked_by": [
+        {
+          "number": 137,
+          "state": "closed"
+        }
+      ]
+    },
+    "102": {
+      "number": 102,
+      "title": "Add Kalshi prediction markets \u2014 L2 book deltas, cents pricing, Yes/No duality",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:venues",
+        "level:L2",
+        "effort:L"
+      ],
+      "open_blockers": 0,
+      "blocked_by": [
+        {
+          "number": 137,
+          "state": "closed"
+        },
+        {
+          "number": 106,
+          "state": "closed"
+        }
+      ]
+    },
+    "103": {
+      "number": 103,
+      "title": "Add Polymarket \u2014 CLOB L2 market channel, 0\u20131 pricing, binary token pairs",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:venues",
+        "level:L2",
+        "effort:L"
+      ],
+      "open_blockers": 0,
+      "blocked_by": [
+        {
+          "number": 137,
+          "state": "closed"
+        },
+        {
+          "number": 106,
+          "state": "closed"
+        }
+      ]
+    },
+    "104": {
+      "number": 104,
+      "title": "RFC: migrate the DataFrame core off pandas (Polars/DuckDB/Arrow)",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:perf",
+        "effort:XL",
+        "foundational"
+      ],
+      "open_blockers": 0,
+      "blocked_by": [
+        {
+          "number": 112,
+          "state": "closed"
+        }
+      ]
+    },
+    "105": {
+      "number": 105,
+      "title": "Live order-book render: real-time depth/ladder over the live capturer",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:viz",
+        "effort:L"
+      ],
+      "open_blockers": 0,
+      "blocked_by": []
+    },
+    "106": {
+      "number": 106,
+      "title": "CCXT source: one connector for L2 crypto CEX + prediction markets (Kalshi/Polymarket)",
+      "state": "closed",
+      "labels": [
+        "enhancement",
+        "area:venues",
+        "level:L2",
+        "effort:M",
+        "foundational"
+      ],
+      "open_blockers": 0,
+      "blocked_by": []
+    },
+    "107": {
+      "number": 107,
+      "title": "Trade-sign classification for feeds without native maker/taker (Lee-Ready, tick rule, BVC)",
+      "state": "closed",
+      "labels": [
+        "enhancement",
+        "area:analytics",
+        "effort:M",
+        "foundational"
+      ],
+      "open_blockers": 0,
+      "blocked_by": []
+    },
+    "108": {
+      "number": 108,
+      "title": "audit CLI command: surface + extend the existing data-quality checks",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:analytics",
+        "effort:M"
+      ],
+      "open_blockers": 0,
+      "blocked_by": []
+    },
+    "109": {
+      "number": 109,
+      "title": "Micro-price, weighted-mid (Stoikov) & order-book imbalance (OBI) signals",
+      "state": "closed",
+      "labels": [
+        "enhancement",
+        "good first issue",
+        "area:analytics",
+        "effort:S"
+      ],
+      "open_blockers": 0,
+      "blocked_by": []
+    },
+    "110": {
+      "number": 110,
+      "title": "Effective / realized spread & price-impact metrics",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:analytics",
+        "effort:M"
+      ],
+      "open_blockers": 0,
+      "blocked_by": []
+    },
+    "111": {
+      "number": 111,
+      "title": "Iceberg / hidden-order detection from L3 refill patterns",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:analytics",
+        "level:L3",
+        "effort:L"
+      ],
+      "open_blockers": 0,
+      "blocked_by": []
+    },
+    "112": {
+      "number": 112,
+      "title": "Stabilize + document a canonical Parquet microstructure schema (Arrow interop)",
+      "state": "closed",
+      "labels": [
+        "enhancement",
+        "area:interop",
+        "effort:M",
+        "foundational"
+      ],
+      "open_blockers": 0,
+      "blocked_by": []
+    },
+    "113": {
+      "number": 113,
+      "title": "Backtest-engine interop: export/validate against Nautilus Trader & hftbacktest",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:interop",
+        "effort:M"
+      ],
+      "open_blockers": 0,
+      "blocked_by": [
+        {
+          "number": 112,
+          "state": "closed"
+        }
+      ]
+    },
+    "114": {
+      "number": 114,
+      "title": "Synthetic L3 order-book generator (tests, teaching, benchmarks)",
+      "state": "closed",
+      "labels": [
+        "enhancement",
+        "area:ingestion",
+        "level:L3",
+        "effort:M"
+      ],
+      "open_blockers": 0,
+      "blocked_by": []
+    },
+    "115": {
+      "number": 115,
+      "title": "Distribute on conda-forge",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "good first issue",
+        "area:interop",
+        "effort:S"
+      ],
+      "open_blockers": 0,
+      "blocked_by": []
+    },
+    "116": {
+      "number": 116,
+      "title": "chunked_run helper: slice \u2192 run each window \u2192 concatenate",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:perf",
+        "effort:M"
+      ],
+      "open_blockers": 1,
+      "blocked_by": [
+        {
+          "number": 100,
+          "state": "open"
+        }
+      ]
+    },
+    "117": {
+      "number": 117,
+      "title": "Interactive book replay / scrubber (Jupyter/Plotly)",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:viz",
+        "effort:M"
+      ],
+      "open_blockers": 0,
+      "blocked_by": []
+    },
+    "118": {
+      "number": 118,
+      "title": "Complete the plot concept-catalogue: computed-metric faces + L1 ticker in available_concepts",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:viz",
+        "effort:M"
+      ],
+      "open_blockers": 0,
+      "blocked_by": []
+    },
+    "119": {
+      "number": 119,
+      "title": "Flow-toxicity robustness: significance guards, VPIN bucket auto-calibration, \u03bb bootstrap CI",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:analytics",
+        "effort:M"
+      ],
+      "open_blockers": 0,
+      "blocked_by": []
+    },
+    "120": {
+      "number": 120,
+      "title": "Clean up warnings emitted by executed docs (tight_layout, round-on-datetime)",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "good first issue",
+        "area:viz",
+        "effort:S"
+      ],
+      "open_blockers": 0,
+      "blocked_by": []
+    },
+    "121": {
+      "number": 121,
+      "title": "Interactive tutorial layer: exercises + a toy-book widget",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:docs",
+        "effort:M"
+      ],
+      "open_blockers": 0,
+      "blocked_by": []
+    },
+    "122": {
+      "number": 122,
+      "title": "Apply PlotTheme across backends (Plotly, not just Matplotlib)",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:viz",
+        "effort:M"
+      ],
+      "open_blockers": 0,
+      "blocked_by": []
+    },
+    "123": {
+      "number": 123,
+      "title": "Ship a Bokeh plot backend",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:viz",
+        "effort:M"
+      ],
+      "open_blockers": 0,
+      "blocked_by": []
+    },
+    "134": {
+      "number": 134,
+      "title": "cryptofeed source: streaming L2 + L3 crypto acquisition (native per-order books)",
+      "state": "open",
+      "labels": [
+        "enhancement",
+        "area:venues",
+        "level:L2",
+        "level:L3",
+        "effort:L",
+        "foundational"
+      ],
+      "open_blockers": 0,
+      "blocked_by": [
+        {
+          "number": 137,
+          "state": "closed"
+        }
+      ]
+    },
+    "154": {
+      "number": 154,
+      "title": "Data-model decision: store timestamps as tz-aware UTC nanoseconds with a defined event order",
+      "state": "closed",
+      "labels": [
+        "enhancement",
+        "area:ingestion",
+        "effort:M",
+        "foundational"
+      ],
+      "open_blockers": 0,
+      "blocked_by": [
+        {
+          "number": 112,
+          "state": "closed"
+        }
+      ]
+    },
+    "155": {
+      "number": 155,
+      "title": "Data-model decision: store prices as integer ticks plus tick size, not float",
+      "state": "closed",
+      "labels": [
+        "enhancement",
+        "area:ingestion",
+        "effort:L",
+        "foundational"
+      ],
+      "open_blockers": 0,
+      "blocked_by": [
+        {
+          "number": 112,
+          "state": "closed"
+        }
+      ]
+    },
+    "173": {
+      "number": 173,
+      "title": "Users can see live data on screen",
+      "state": "open",
+      "labels": [
+        "goal"
+      ],
+      "open_blockers": 4,
+      "blocked_by": [
+        {
+          "number": 134,
+          "state": "open"
+        },
+        {
+          "number": 99,
+          "state": "open"
+        },
+        {
+          "number": 105,
+          "state": "open"
+        },
+        {
+          "number": 139,
+          "state": "open"
+        },
+        {
+          "number": 137,
+          "state": "closed"
+        },
+        {
+          "number": 112,
+          "state": "closed"
+        },
+        {
+          "number": 154,
+          "state": "closed"
+        },
+        {
+          "number": 155,
+          "state": "closed"
+        }
+      ]
+    },
+    "174": {
+      "number": 174,
+      "title": "Users can add their own metric and plot it",
+      "state": "open",
+      "labels": [
+        "goal"
+      ],
+      "open_blockers": 3,
+      "blocked_by": [
+        {
+          "number": 136,
+          "state": "open"
+        },
+        {
+          "number": 140,
+          "state": "open"
+        },
+        {
+          "number": 104,
+          "state": "open"
+        },
+        {
+          "number": 112,
+          "state": "closed"
+        },
+        {
+          "number": 154,
+          "state": "closed"
+        },
+        {
+          "number": 155,
+          "state": "closed"
+        }
+      ]
+    },
+    "175": {
+      "number": 175,
+      "title": "Users can add their own data source",
+      "state": "closed",
+      "labels": [
+        "goal"
+      ],
+      "open_blockers": 0,
+      "blocked_by": [
+        {
+          "number": 137,
+          "state": "closed"
+        },
+        {
+          "number": 112,
+          "state": "closed"
+        },
+        {
+          "number": 98,
+          "state": "closed"
+        },
+        {
+          "number": 154,
+          "state": "closed"
+        },
+        {
+          "number": 155,
+          "state": "closed"
+        }
+      ]
+    },
+    "176": {
+      "number": 176,
+      "title": "Users can add their own plot",
+      "state": "closed",
+      "labels": [
+        "goal"
+      ],
+      "open_blockers": 0,
+      "blocked_by": []
+    },
+    "177": {
+      "number": 177,
+      "title": "Users can export to backtesting engines",
+      "state": "open",
+      "labels": [
+        "goal"
+      ],
+      "open_blockers": 1,
+      "blocked_by": [
+        {
+          "number": 113,
+          "state": "open"
+        },
+        {
+          "number": 112,
+          "state": "closed"
+        },
+        {
+          "number": 154,
+          "state": "closed"
+        },
+        {
+          "number": 155,
+          "state": "closed"
+        }
+      ]
+    },
+    "178": {
+      "number": 178,
+      "title": "Users can work with data too big for memory",
+      "state": "open",
+      "labels": [
+        "goal"
+      ],
+      "open_blockers": 3,
+      "blocked_by": [
+        {
+          "number": 116,
+          "state": "open"
+        },
+        {
+          "number": 104,
+          "state": "open"
+        },
+        {
+          "number": 138,
+          "state": "open"
+        }
+      ]
+    },
+    "179": {
+      "number": 179,
+      "title": "Users can analyze prediction markets",
+      "state": "open",
+      "labels": [
+        "goal"
+      ],
+      "open_blockers": 2,
+      "blocked_by": [
+        {
+          "number": 102,
+          "state": "open"
+        },
+        {
+          "number": 103,
+          "state": "open"
+        },
+        {
+          "number": 106,
+          "state": "closed"
+        }
+      ]
+    },
+    "180": {
+      "number": 180,
+      "title": "Users can analyze several venues or symbols together",
+      "state": "open",
+      "labels": [
+        "goal"
+      ],
+      "open_blockers": 3,
+      "blocked_by": [
+        {
+          "number": 147,
+          "state": "open"
+        },
+        {
+          "number": 116,
+          "state": "open"
+        },
+        {
+          "number": 139,
+          "state": "open"
+        },
+        {
+          "number": 112,
+          "state": "closed"
+        },
+        {
+          "number": 154,
+          "state": "closed"
+        },
+        {
+          "number": 155,
+          "state": "closed"
+        }
+      ]
+    },
+    "181": {
+      "number": 181,
+      "title": "Users can build bars and a model feature table",
+      "state": "open",
+      "labels": [
+        "goal"
+      ],
+      "open_blockers": 3,
+      "blocked_by": [
+        {
+          "number": 148,
+          "state": "open"
+        },
+        {
+          "number": 149,
+          "state": "open"
+        },
+        {
+          "number": 104,
+          "state": "open"
+        },
+        {
+          "number": 107,
+          "state": "closed"
+        }
+      ]
+    },
+    "182": {
+      "number": 182,
+      "title": "Users can capture live data unattended for days",
+      "state": "open",
+      "labels": [
+        "goal"
+      ],
+      "open_blockers": 1,
+      "blocked_by": [
+        {
+          "number": 150,
+          "state": "open"
+        },
+        {
+          "number": 146,
+          "state": "closed"
+        },
+        {
+          "number": 137,
+          "state": "closed"
+        }
+      ]
+    },
+    "183": {
+      "number": 183,
+      "title": "Users can measure liquidity, spread and toxicity",
+      "state": "open",
+      "labels": [
+        "goal"
+      ],
+      "open_blockers": 3,
+      "blocked_by": [
+        {
+          "number": 109,
+          "state": "closed"
+        },
+        {
+          "number": 110,
+          "state": "open"
+        },
+        {
+          "number": 111,
+          "state": "open"
+        },
+        {
+          "number": 119,
+          "state": "open"
+        }
+      ]
+    },
+    "184": {
+      "number": 184,
+      "title": "Users can check that the data they loaded is sound",
+      "state": "open",
+      "labels": [
+        "goal"
+      ],
+      "open_blockers": 1,
+      "blocked_by": [
+        {
+          "number": 108,
+          "state": "open"
+        },
+        {
+          "number": 146,
+          "state": "closed"
+        },
+        {
+          "number": 143,
+          "state": "closed"
+        },
+        {
+          "number": 114,
+          "state": "closed"
+        }
+      ]
+    },
+    "185": {
+      "number": 185,
+      "title": "Users can explore a book interactively",
+      "state": "open",
+      "labels": [
+        "goal"
+      ],
+      "open_blockers": 4,
+      "blocked_by": [
+        {
+          "number": 117,
+          "state": "open"
+        },
+        {
+          "number": 118,
+          "state": "open"
+        },
+        {
+          "number": 122,
+          "state": "open"
+        },
+        {
+          "number": 123,
+          "state": "open"
+        }
+      ]
+    },
+    "186": {
+      "number": 186,
+      "title": "Users can learn the library from its documentation",
+      "state": "open",
+      "labels": [
+        "goal"
+      ],
+      "open_blockers": 2,
+      "blocked_by": [
+        {
+          "number": 120,
+          "state": "open"
+        },
+        {
+          "number": 121,
+          "state": "open"
+        }
+      ]
+    },
+    "187": {
+      "number": 187,
+      "title": "Users can install and depend on a stable release",
+      "state": "open",
+      "labels": [
+        "goal"
+      ],
+      "open_blockers": 4,
+      "blocked_by": [
+        {
+          "number": 115,
+          "state": "open"
+        },
+        {
+          "number": 141,
+          "state": "open"
+        },
+        {
+          "number": 142,
+          "state": "open"
+        },
+        {
+          "number": 145,
+          "state": "open"
+        }
+      ]
+    },
+    "188": {
+      "number": 188,
+      "title": "Users can load data from the venue they use",
+      "state": "open",
+      "labels": [
+        "goal"
+      ],
+      "open_blockers": 4,
+      "blocked_by": [
+        {
+          "number": 101,
+          "state": "open"
+        },
+        {
+          "number": 100,
+          "state": "open"
+        },
+        {
+          "number": 99,
+          "state": "open"
+        },
+        {
+          "number": 134,
+          "state": "open"
+        },
+        {
+          "number": 106,
+          "state": "closed"
+        },
+        {
+          "number": 98,
+          "state": "closed"
+        }
+      ]
+    }
+  }
+}
