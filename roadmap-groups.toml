@@ -52,9 +52,11 @@ issues = [112, 137, 106, 134, 99, 100, 101, 102, 103, 98]
 id = "engine"
 title = "Part 3 - a faster engine and a streaming core"
 prose = """
-These two are built last. The diagram shows what each one waits on.
+Speed and size. The faster engine and the streaming core are built last, and the
+work on data larger than memory sits here too. The diagram shows what each one
+waits on.
 """
-issues = [112, 136, 100, 114, 143, 144, 105, 116, 138, 139]
+issues = [112, 136, 100, 114, 143, 144, 105, 116, 138, 139, 206]
 
 [[group]]
 id = "analytics"
@@ -63,7 +65,7 @@ prose = """
 Measurements taken from a rebuilt book. Trade signs and the first signals are
 done. The rest are separate pieces of work that read the same input.
 """
-issues = [104, 107, 109, 110, 111, 119, 148, 149]
+issues = [104, 107, 109, 110, 111, 119, 148, 149, 203]
 
 [[group]]
 id = "quality"
@@ -124,7 +126,7 @@ label = "a prediction market"
 101 = "Binance"
 102 = "Kalshi"
 103 = "Polymarket"
-104 = "Polars + Narwhals"
+104 = "frame type"
 105 = "live view"
 106 = "CCXT"
 107 = "trade signs"
@@ -162,3 +164,5 @@ label = "a prediction market"
 150 = "robust capture"
 154 = "UTC time model"
 155 = "integer ticks"
+203 = "Polars port"
+206 = "out-of-core reads"
