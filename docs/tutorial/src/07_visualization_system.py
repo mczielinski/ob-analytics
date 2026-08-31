@@ -71,6 +71,8 @@ available_concepts(result)
 # the chapter that introduced it:
 
 # %%
+import warnings
+
 import matplotlib.pyplot as plt
 import pandas as pd
 from _docs_theme import DOCS_THEME
@@ -122,7 +124,16 @@ fig, axes = plt.subplots(2, 3, figsize=(16, 8))
 for ax, (concept, level, make_payload) in zip(axes.ravel(), catalogue):
     plot(concept, level=level, ax=ax, theme=DOCS_THEME, **make_payload())
     ax.set_title(f"{concept}  ·  {level}", fontsize=10)
-fig.tight_layout()
+# One of the faces above (the depth heatmap) carries its own colorbar axes,
+# which trips tight_layout's compatibility check even though the layout it
+# produces here is fine; only the warning is silenced.
+with warnings.catch_warnings():
+    warnings.filterwarnings(
+        "ignore",
+        message="This figure includes Axes that are not compatible with tight_layout",
+        category=UserWarning,
+    )
+    fig.tight_layout()
 
 # %% [markdown]
 # Six of the fourteen concepts, one capture, one loop. The full set,
