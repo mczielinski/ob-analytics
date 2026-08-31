@@ -51,6 +51,7 @@ nav = [
     { "Bitstamp" = "api/bitstamp.md" },
     { "LOBSTER" = "api/lobster.md" },
     { "L2 depth" = "api/depth_l2.md" },
+    { "Order-book engine" = "api/engine.md" },
     { "Analytics" = "api/analytics.md" },
     { "Flow Toxicity" = "api/flow_toxicity.md" },
     { "Trade Signs" = "api/trade_sign.md" },

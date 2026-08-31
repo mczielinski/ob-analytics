@@ -2,7 +2,8 @@
 
 This locks the exact numbers a fixed synthetic L3 session produces through the
 pipeline and the two per-order reconstructions the issue names —
-:func:`~ob_analytics.analytics.order_book` and
+:func:`~ob_analytics.analytics.order_book`,
+:func:`~ob_analytics.analytics.order_lifecycles`, and
 :func:`~ob_analytics.queue.queue_positions` — alongside price-level ``depth``.
 A change that shifts any value fails here.
 
@@ -32,7 +33,7 @@ from __future__ import annotations
 
 import pytest
 
-from ob_analytics.analytics import order_book
+from ob_analytics.analytics import order_book, order_lifecycles
 from ob_analytics.pipeline import Pipeline, PipelineResult
 from ob_analytics.queue import queue_positions
 from ob_analytics.synth import (
@@ -81,6 +82,14 @@ EXPECTED: dict[str, str] = {
     "queue_positions": (
         "841eadc3982b32aed360f51fc6fd3d5096226f9c84ccf3c290c34b9f9d3a6cf0"
     ),
+    # 2026-08-31 (#136, engine separation): added, not re-baselined. Recorded
+    # from the pre-#136 implementation and verified to still hold after the
+    # move, so it pins the numbers the old code produced. The lifecycle table
+    # had no fingerprint before, which is how a first pass at the engine lost
+    # the compensated summation behind ``filled_vol`` without any gate noticing.
+    "order_lifecycles": (
+        "93c5ba8be542af424cb27369e2de8245bf58cc158d0cdb823bd33a0068ae9794"
+    ),
 }
 
 
@@ -98,7 +107,8 @@ def golden_result(golden_session: SynthSession) -> PipelineResult:
 
 
 def _fingerprints(result: PipelineResult) -> dict[str, str]:
-    """The six golden fingerprints for one run: pipeline frames + book + queue."""
+    """The golden fingerprints for one run: pipeline frames, book, lifecycles,
+    and queue."""
     events = result.events
     return {
         "events": df_fingerprint(result.events),
@@ -106,6 +116,7 @@ def _fingerprints(result: PipelineResult) -> dict[str, str]:
         "depth": df_fingerprint(result.depth),
         "depth_summary": df_fingerprint(result.depth_summary),
         "order_book": book_fingerprint(order_book(events)),
+        "order_lifecycles": df_fingerprint(order_lifecycles(events)),
         "queue_positions": df_fingerprint(queue_positions(events, levels="all")),
     }
 

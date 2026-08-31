@@ -2,8 +2,14 @@
 
 Contains functions that operate on the outputs of any pipeline run,
 regardless of the originating data format (Bitstamp, LOBSTER, etc.):
-aggressiveness, trade impacts, order type classification, and
-point-in-time order book reconstruction.
+aggressiveness, trade impacts, order type classification, sequence-gap and
+data-quality reporting, and the frame-level face of the order-book engine.
+
+The reconstructions themselves — the book at an instant, the per-order
+lifecycles — live in :mod:`ob_analytics.engine`, which holds no pandas.
+:func:`order_book` and :func:`order_lifecycles` here are its frame adapters:
+they validate the column contract, hand the engine arrays, and dress the result
+back up as DataFrames.
 """
 
 from __future__ import annotations
@@ -18,9 +24,9 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from ob_analytics import _engine_frames, engine
 from ob_analytics._utils import validate_columns, validate_non_empty
 from ob_analytics.depth import price_level_volume
-from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import FeedType
 from ob_analytics.schemas import INGEST_SEQ_COLUMN, SEQUENCE_COLUMN
 
@@ -300,12 +306,13 @@ def order_lifecycles(events: pd.DataFrame) -> pd.DataFrame:
     """Collapse events into one row per order: placement → outcome.
 
     The canonical lifecycle table (one derivation, shared by the L3 faces
-    and the order-book reconstruction).  Relies on the schemas.py volume
-    contract: ``volume`` is the outstanding size after each event and
-    ``fill`` the executed delta, so an order is *terminated* when a
-    ``deleted`` row arrives **or its outstanding size reaches zero** —
-    the latter is how fully-executed LOBSTER orders end, which never emit
-    a ``deleted`` event.
+    and the order-book reconstruction).  A thin frame wrapper over
+    :func:`ob_analytics.engine.order_lifecycles`, which relies on the
+    schemas.py volume contract: ``volume`` is the outstanding size after each
+    event and ``fill`` the executed delta, so an order is *terminated* when a
+    ``deleted`` row arrives **or its outstanding size reaches zero** — the
+    latter is how fully-executed LOBSTER orders end, which never emit a
+    ``deleted`` event.
 
     Parameters
     ----------
@@ -337,153 +344,15 @@ def order_lifecycles(events: pd.DataFrame) -> pd.DataFrame:
     )
     validate_non_empty(events, "order_lifecycles")
 
-    created = events[events["action"] == "created"]
-    agg: dict[str, tuple[str, str]] = {
-        "placed_ts": ("timestamp", "first"),
-        "placed_vol": ("volume", "first"),
-        "price": ("price", "first"),
-        "direction": ("direction", "first"),
-    }
-    if "type" in events.columns:
-        agg["type"] = ("type", "first")
-    if "aggressiveness_bps" in events.columns:
-        agg["aggressiveness_bps"] = ("aggressiveness_bps", "first")
-    life = created.groupby("id", sort=False).agg(**agg)  # type: ignore[call-overload]
-
-    life["filled_vol"] = (
-        events.groupby("id", sort=False)["fill"].sum().reindex(life.index).fillna(0.0)
+    lifecycles = engine.order_lifecycles(
+        _engine_frames.to_order_events(events, fill=True)
     )
-
-    # Termination: explicit delete, or outstanding size exhausted (the
-    # created row itself is excluded so zero-size placements don't
-    # self-terminate).
-    deleted_ts = (
-        events.loc[events["action"] == "deleted"]
-        .groupby("id", sort=False)["timestamp"]
-        .min()
-    )
-    non_created = events[events["action"] != "created"]
-    exhausted_ts = (
-        non_created.loc[non_created["volume"] <= 0]
-        .groupby("id", sort=False)["timestamp"]
-        .min()
-    )
-    end = pd.concat([deleted_ts.rename("a"), exhausted_ts.rename("b")], axis=1).min(
-        axis=1
-    )
-    life["end_ts"] = end.reindex(life.index)
-
-    terminated = life["end_ts"].notna()
-    placed = life["placed_vol"]
-    filled = life["filled_vol"]
-    # Bitstamp volumes are 8-dp floats; fills summed per order can drift by
-    # float epsilon, so "fully executed" allows a vanishing tolerance.
-    full = filled >= placed - 1e-9
-    outcome = pd.Series("resting", index=life.index)
-    outcome[terminated & full & (placed > 0)] = "filled"
-    outcome[terminated & ~full & (filled > 0)] = "partial"
-    outcome[terminated & (filled <= 0)] = "cancelled"
-    life["outcome"] = outcome
-
-    return life.reset_index()
+    return _engine_frames.lifecycles_frame(events, lifecycles)
 
 
 # ---------------------------------------------------------------------------
 # Order book reconstruction
 # ---------------------------------------------------------------------------
-
-
-def _active_bids(active_orders: pd.DataFrame) -> pd.DataFrame:
-    """Bid side of *active_orders*: best-first, with bps + cumulative liquidity."""
-    bids = active_orders[
-        (active_orders["direction"] == "bid") & (active_orders["type"] != "market")
-    ]
-    bids = bids.sort_values(by=["price", "id"], ascending=[False, True], kind="stable")
-    first_price = bids.iloc[0]["price"] if not bids.empty else np.nan
-    bids["bps"] = (
-        ((first_price - bids["price"]) / first_price) * 10000
-        if not bids.empty
-        else np.nan
-    )
-    bids["liquidity"] = bids["volume"].cumsum()
-    return bids
-
-
-def _active_asks(active_orders: pd.DataFrame) -> pd.DataFrame:
-    """Ask side of *active_orders*: best-first, with bps + cumulative liquidity."""
-    asks = active_orders[
-        (active_orders["direction"] == "ask") & (active_orders["type"] != "market")
-    ]
-    asks = asks.sort_values(by=["price", "id"], ascending=[True, True], kind="stable")
-    first_price = asks.iloc[0]["price"] if not asks.empty else np.nan
-    asks["bps"] = (
-        ((asks["price"] - first_price) / first_price) * 10000
-        if not asks.empty
-        else np.nan
-    )
-    asks["liquidity"] = asks["volume"].cumsum()
-    return asks
-
-
-def _crossed_prefix_counts(
-    bid_prices: np.ndarray,
-    bid_ts: np.ndarray,
-    ask_prices: np.ndarray,
-    ask_ts: np.ndarray,
-) -> tuple[int, int]:
-    """How many best-end bids / asks to evict to uncross two book sides.
-
-    *bid_prices* descend from the best bid, *ask_prices* ascend from the best
-    ask, each paired with its order ``timestamp``.  Walks the touch: while the
-    top bid is priced at or above the top ask (crossed, or locked when equal),
-    evict the older of the two touching orders — the static-snapshot analogue
-    of :class:`~ob_analytics.depth.DepthMetricsEngine` trusting the fresher
-    quote.  The evicted orders are exactly the contiguous best-end prefixes, so
-    the two returned counts describe the eviction completely.
-    """
-    bi = 0
-    ai = 0
-    n_bid = bid_prices.size
-    n_ask = ask_prices.size
-    while bi < n_bid and ai < n_ask and bid_prices[bi] >= ask_prices[ai]:
-        if bid_ts[bi] <= ask_ts[ai]:
-            bi += 1
-        else:
-            ai += 1
-    return bi, ai
-
-
-def _uncross_active_orders(active_orders: pd.DataFrame) -> pd.DataFrame:
-    """Drop crossed resting orders so a reconstructed snapshot is uncrossed.
-
-    Static-snapshot mirror of the depth engine's crossed-level eviction (see
-    :meth:`~ob_analytics.depth.DepthMetricsEngine.update_side`): at the crossed
-    or locked touch, keep the fresher quote and evict the older opposing order,
-    repeating until ``best_bid < best_ask``.  Recency uses ``timestamp`` (the
-    receive clock the depth engine also processes in).  Market-type rows never
-    rest on the book, so they are excluded from the crossing test and always
-    retained.  The evicted rows are removed from *active_orders* with the index
-    and every column preserved, so the caller's ``_active_bids`` /
-    ``_active_asks`` recompute ``bps`` and ``liquidity`` against the surviving
-    touch.
-    """
-    resting = active_orders[active_orders["type"] != "market"]
-    bids = resting[resting["direction"] == "bid"].sort_values(
-        by=["price", "timestamp"], ascending=[False, True], kind="stable"
-    )
-    asks = resting[resting["direction"] == "ask"].sort_values(
-        by=["price", "timestamp"], ascending=[True, True], kind="stable"
-    )
-    n_bid, n_ask = _crossed_prefix_counts(
-        bids["price"].to_numpy(),
-        bids["timestamp"].to_numpy(),
-        asks["price"].to_numpy(),
-        asks["timestamp"].to_numpy(),
-    )
-    if n_bid == 0 and n_ask == 0:
-        return active_orders
-    evicted = bids.index[:n_bid].union(asks.index[:n_ask])
-    return active_orders.drop(index=evicted)
 
 
 def uncross_book_sides(
@@ -516,7 +385,7 @@ def uncross_book_sides(
     if bids.empty or asks.empty:
         return bids, asks
 
-    n_bid, n_ask = _crossed_prefix_counts(
+    n_bid, n_ask = engine.crossed_prefix_counts(
         bids["price"].to_numpy(),
         bids["timestamp"].to_numpy(),
         asks["price"].to_numpy(),
@@ -542,6 +411,10 @@ def order_book(
 ) -> dict[str, datetime | pd.Timestamp | pd.DataFrame]:
     """Reconstruct the order book at a specific point in time.
 
+    The reconstruction itself is :func:`ob_analytics.engine.book_state`; this
+    function is its frame adapter, and owns the display window (*max_levels*,
+    *bps_range*) the engine has no opinion about.
+
     Parameters
     ----------
     events : pandas.DataFrame
@@ -560,9 +433,9 @@ def order_book(
     uncross : bool, optional
         When ``True``, evict crossed resting orders so the snapshot satisfies
         ``best_bid < best_ask`` — a *display* convenience mirroring the depth
-        engine's crossed-level eviction (see :func:`_uncross_active_orders`).
-        The default is ``False``: the reconstruction stays **faithful** to the
-        feed, so a diff feed's genuinely crossed resting orders (see
+        engine's crossed-level eviction. The default is ``False``: the
+        reconstruction stays **faithful** to the feed, so a diff feed's
+        genuinely crossed resting orders (see
         :class:`~ob_analytics.protocols.FeedType`) are replayed as-is rather
         than silently uncrossed. Has no effect on a matched-book feed, which is
         never crossed.
@@ -596,45 +469,17 @@ def order_book(
 
     pct_range = bps_range * 0.0001
 
-    # Active orders at *tp* under the canonical schema: an order rests on the
-    # book iff it was submitted (has a ``created`` row), and its latest event
-    # at or before *tp* is neither a delete nor left it exhausted.  The
-    # outstanding-size check is what removes fully-executed LOBSTER orders,
-    # which never emit a ``deleted`` event and previously lingered as
-    # phantoms (89% of "active" orders on the AAPL sample, crossing the
-    # book).  Rows are chronological within each id for every loader, so the
-    # per-id tail is the latest state.
-    win = events[events["timestamp"] <= tp]
-    last_state = win.groupby("id", sort=False).tail(1)
-    created_ids = win.loc[win["action"] == "created", "id"].unique()
-    active_orders = last_state[
-        last_state["id"].isin(created_ids)
-        & (last_state["action"] != "deleted")
-        & (last_state["volume"] > 0)
-    ]
+    book = engine.book_state(
+        _engine_frames.to_order_events(events, market=True),
+        at=_engine_frames.instant_ns(tp, like=events["timestamp"]),
+        uncross=uncross,
+    )
 
-    if active_orders["id"].duplicated().any():
-        raise ConfigError(
-            "Duplicate order IDs found in active orders. "
-            "This indicates a data integrity issue."
-        )
-
-    # Opt-in display uncrossing: evict crossed resting orders before deriving
-    # the per-side frames, so bps/liquidity below anchor on the surviving
-    # touch.  The default leaves the faithful (possibly crossed) book intact.
-    if uncross:
-        active_orders = _uncross_active_orders(active_orders)
-
-    asks = _active_asks(active_orders)
-    asks = asks[
-        ["id", "timestamp", "exchange_timestamp", "price", "volume", "liquidity", "bps"]
-    ]
+    # The engine hands both sides back best-first; asks are presented the other
+    # way round, so the touch sits at the end of the frame.
+    asks = _engine_frames.book_side_frame(events, book.asks)
     asks = asks.iloc[::-1].reset_index(drop=True)
-
-    bids = _active_bids(active_orders)
-    bids = bids[
-        ["id", "timestamp", "exchange_timestamp", "price", "volume", "liquidity", "bps"]
-    ]
+    bids = _engine_frames.book_side_frame(events, book.bids)
 
     if pct_range > 0:
         if not asks.empty:

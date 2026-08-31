@@ -53,16 +53,16 @@ on `git commit` once `pre-commit install` has been run.
 
 ### Correctness gates
 
-Three kinds of test hold the numbers steady while the engine, the dataframe
+Four kinds of test hold the numbers steady while the engine, the dataframe
 library, and the schema change underneath them (issue #143). All run under
 `pytest tests/` in CI, so a mismatch blocks the merge.
 
 - **Golden output.** `tests/test_golden_synth.py` and
   `tests/test_regression_snapshot.py` hash fixed pipeline runs — a seeded
   synthetic L3 session and the bundled Bitstamp sample — and compare against a
-  recorded baseline. `order_book`, `queue_positions`, and depth are covered. A
-  changed number fails the test; re-record the baseline only when the change is
-  intended, in its own labelled commit.
+  recorded baseline. `order_book`, `order_lifecycles`, `queue_positions`, and
+  depth are covered. A changed number fails the test; re-record the baseline
+  only when the change is intended, in its own labelled commit.
 - **Property.** `tests/test_properties_schema.py` and
   `tests/test_properties_lobster.py` use Hypothesis to hold the schema rules
   over many generated inputs: time goes forward, the book does not cross after
@@ -71,6 +71,9 @@ library, and the schema change underneath them (issue #143). All run under
   backend against the current one (pandas vs Polars, Python vs compiled). These
   skip until those backends exist; the module docstring records the activation
   contract.
+- **Boundary.** `tests/test_engine_boundary.py` parses the engine's own sources
+  to prove it imports no pandas and nothing from the layers above it, and that
+  only `_engine_frames.py` converts frames to engine arrays (issue #136).
 
 ## Code style
 
@@ -86,9 +89,15 @@ library, and the schema change underneath them (issue #143). All run under
 
 ## Architectural conventions
 
-- **DataFrames end to end.** New stages should accept and return DataFrames;
-  the column-list constants + validators in `schemas.py` document the column
-  contract.
+- **DataFrames end to end — except inside the engine.** New stages should
+  accept and return DataFrames; the column-list constants + validators in
+  `schemas.py` document the column contract. The one exception is
+  `ob_analytics/engine/`, the order-book rebuild: it takes and returns NumPy
+  arrays and imports no pandas, so it can be replaced with a faster
+  implementation without the rest moving (issue #136, `adr/0001`).
+  `_engine_frames.py` converts between the two; put nothing else there and add
+  no pandas import under `engine/` — `tests/test_engine_boundary.py` enforces
+  both.
 - **Protocols, not inheritance.** New extension points should be declared as
   `typing.Protocol` in `protocols.py`. Format-specific bundles go in a
   `Format` subclass (`bitstamp.py`, `lobster.py`).
@@ -96,7 +105,10 @@ library, and the schema change underneath them (issue #143). All run under
   side has a counterpart on the other (`BitstampLoader` ↔ `LobsterLoader`,
   etc.). New formats should follow the same pattern.
 - **`PipelineConfig` is the single source of tuning.** New numeric thresholds
-  go on `PipelineConfig`, not as bare module-level literals.
+  go on `PipelineConfig`, not as bare module-level literals. The engine cannot
+  import `config.py`, so its thresholds are keyword arguments on the engine
+  function instead, with the default named and documented next to it (see
+  `order_lifecycles`'s `fill_tolerance`).
 - **No `print`, no `plt.show`, no `assert`.** Use `loguru` for logging,
   return figures from plot functions, and raise from `exceptions.py`.
 
