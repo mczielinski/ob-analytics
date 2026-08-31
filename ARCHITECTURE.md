@@ -20,6 +20,14 @@ into structured analytics:
 
 - **DataFrames end to end.** Pandas for speed; the column-list constants and
   `validate_*` functions in `schemas.py` document the column contracts.
+- **The rebuild engine is separate, and holds no pandas.** `engine/` takes order
+  events as numpy columns and returns book states, order lifecycles, and queue
+  positions -- nothing else. It knows nothing about analytics, plots, sources,
+  or files, and its results carry a *row index* back into the caller's event
+  table instead of copying columns out, so adding a column to the schema never
+  widens the interface. `_engine_frames.py` is the one place pandas and the
+  engine meet. This is what lets the inside be replaced with a faster
+  implementation, or fed one event at a time, without anything above it moving.
 - **Two API levels** — `Pipeline` for one-line runs; individual classes
   (`BitstampLoader`, `BitstampTradeReader`, etc.) for step-by-step control.
 - **Pluggable everything** — any object with the right method signature works;
@@ -209,7 +217,15 @@ ob_analytics/
 ├── bitstamp.py           # BitstampLoader, BitstampTradeReader, BitstampWriter, BitstampSource (offline + live)
 ├── lobster.py            # LobsterLoader, LobsterTradeReader, LobsterWriter, LobsterSource
 ├── depth_l2.py           # L2DepthLoader, L2TradeReader, DepthCsvWriter, DepthCsvSource (price-level)
+├── engine/               # Order-book engine: events in, book states + lifecycles out
+│   ├── __init__.py       # the interface: book_state, order_lifecycles, queue_positions, queue_age_grid
+│   ├── _events.py        # OrderEvents -- the shared schema as numpy columns
+│   ├── _book.py          # point-in-time rebuild + crossed-book eviction
+│   ├── _lifecycles.py    # placement -> outcome, one row per order
+│   └── _queue.py         # FIFO queue position and touch composition
+├── _engine_frames.py     # pandas <-> engine arrays (the only place the two meet)
 ├── analytics.py          # order_aggressiveness, trade_impacts, set_order_types, order_book
+├── queue.py              # frame faces for the engine's queue reconstruction
 ├── depth.py              # DepthMetricsEngine, price_level_volume, depth_metrics, get_spread
 ├── data.py               # save_data, load_data, writer registry
 ├── flow_toxicity.py      # compute_vpin, compute_kyle_lambda, order_flow_imbalance, KyleLambdaResult

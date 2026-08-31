@@ -31,7 +31,6 @@ from ob_analytics import (
     data_quality_summary,
 )
 from ob_analytics.analytics import (
-    _crossed_prefix_counts,
     _faithful_best_series,
     order_book,
     set_order_types,
@@ -39,6 +38,7 @@ from ob_analytics.analytics import (
 )
 from ob_analytics.datasets import toy_events, toy_trades
 from ob_analytics.depth import price_level_volume
+from ob_analytics.engine import crossed_prefix_counts
 
 # ---------------------------------------------------------------------------
 # Builders
@@ -202,14 +202,14 @@ class TestUncrossOrderBook:
 
 
 # ---------------------------------------------------------------------------
-# _crossed_prefix_counts + _faithful_best_series (correctness contract)
+# crossed_prefix_counts + _faithful_best_series (correctness contract)
 # ---------------------------------------------------------------------------
 
 
 class TestCrossedPrefixCounts:
     def test_no_cross(self):
         # best bid 99 < best ask 101 -> nothing evicted.
-        nb, na = _crossed_prefix_counts(
+        nb, na = crossed_prefix_counts(
             np.array([99.0]),
             np.array([_BASE.to_datetime64()]),
             np.array([101.0]),
@@ -221,7 +221,7 @@ class TestCrossedPrefixCounts:
         older = _BASE.to_datetime64()
         newer = (_BASE + pd.Timedelta(seconds=5)).to_datetime64()
         # Fresh ask, stale bid -> evict the bid.
-        nb, na = _crossed_prefix_counts(
+        nb, na = crossed_prefix_counts(
             np.array([100.0]),
             np.array([older]),
             np.array([99.0]),
@@ -229,7 +229,7 @@ class TestCrossedPrefixCounts:
         )
         assert (nb, na) == (1, 0)
         # Fresh bid, stale ask -> evict the ask.
-        nb, na = _crossed_prefix_counts(
+        nb, na = crossed_prefix_counts(
             np.array([100.0]),
             np.array([newer]),
             np.array([99.0]),

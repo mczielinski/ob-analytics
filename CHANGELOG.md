@@ -72,6 +72,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **The order-book engine is its own module** (issue #136). The rebuild
+  (`order_book`), the per-order lifecycles, and the FIFO queue reconstruction
+  moved out of `analytics.py` / `queue.py` into `ob_analytics/engine/`, behind
+  one input and one output: order events in, book states and order lifecycles
+  out, and nothing else. The engine **imports no pandas** — everything crosses
+  its interface as NumPy arrays, with the shared schema (issue #112) as the
+  input, timestamps as int64 UTC nanoseconds (issue #154) and prices as integer
+  ticks (issue #155). Results carry a *row index* back into the caller's event
+  arrays instead of copying columns out, so adding a column to the schema does
+  not widen the interface and the engine never learns a vocabulary — order
+  types, venue names — belonging to the layer above.
+  `ob_analytics/_engine_frames.py` is the one place pandas and the engine meet;
+  `analytics.order_book`, `analytics.order_lifecycles`, and the
+  `ob_analytics.queue` functions are now its frame adapters and keep their exact
+  signatures, dtypes, column order, and index behaviour. Output is **unchanged
+  byte for byte** — the golden-output gates from issue #143 pass on their
+  recorded fingerprints. Two things did move: the display window (`max_levels`,
+  `bps_range`) and the queue sampling window are set by the frame adapters
+  rather than the engine, which reconstructs the whole book and replays to the
+  instants it is given. A new import test (`tests/test_engine_boundary.py`)
+  keeps the engine free of pandas and of every layer above it. This is what lets
+  the inside be replaced with a faster implementation (#138) or fed one event at
+  a time (#139) without touching anything else. `Direction`, `Action`, and
+  `Outcome` are `IntEnum` code vocabularies that derive their schema strings
+  from their own member names, so a code and its label cannot drift apart.
+  Two details of the frame code are reproduced deliberately rather than
+  rewritten: an order's executed total is accumulated with compensated (Kahan)
+  summation, as the pandas aggregation it replaced did, and placement values are
+  taken per column as the first non-null among an order's `created` rows. The
+  lifecycle table is now covered by `tests/test_golden_synth.py`, which it was
+  not before.
+
 - **`BitstampTradeReader` no longer requires integer order ids.** It keyed its
   maker/taker lookup on `int(order_id)`, which crashed on a public trade tape
   carrying no ids (`int(NaN)`) and on venues publishing UUIDs. Integer ids
