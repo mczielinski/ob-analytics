@@ -12,12 +12,13 @@ issue took four correct edits and the copies drifted apart.
 What it writes
 --------------
 Into #124: a status count, one diagram per group in ``roadmap-groups.toml``, a
-list of the work issues no group names, and one line per goal with its
-readiness. Into each goal issue: the list of what that goal waits on and a
-diagram of just that goal. Everything lands between ``<!-- ROADMAP:BEGIN -->``
-and ``<!-- ROADMAP:END -->``; the prose above the opening marker is written by
-people and is never touched. Which issue belongs in which diagram is editorial
-judgement and lives in the config; the edges never do.
+list of the work issues no group names, one line per goal with its readiness,
+and any blocker that points outside the epic. Into each goal issue: the list of
+what that goal waits on and a diagram of just that goal. Everything lands
+between ``<!-- ROADMAP:BEGIN -->`` and ``<!-- ROADMAP:END -->``; the prose above
+the opening marker is written by people and is never touched. Which issue
+belongs in which diagram is editorial judgement and lives in the config; the
+edges never do.
 
 The rules it applies
 --------------------
@@ -47,6 +48,11 @@ has both wired as hard blockers, and the view would overstate what it needs and
 count its blockers one too high — which can show a goal as blocked when it is
 ready to check. The config declares those choices; each is drawn as one node
 and is met as soon as any member closes.
+
+**Edges off the roadmap.** A ``blocked_by`` link whose blocker is not a child
+of #124 cannot be drawn, so it is left out. It is named in the run log and in
+#124 rather than dropped in silence, and the blocker is never pulled into the
+node set to save it: what belongs on the roadmap stays a deliberate choice.
 
 **Writing.** Each body is compared before it is written, so a run triggered by
 every issue event does not churn seventeen edit histories. A body whose markers
@@ -109,9 +115,16 @@ class Node:
 
 @dataclass(frozen=True)
 class Graph:
-    """Every child of the epic, keyed by issue number."""
+    """Every child of the epic, keyed by issue number.
+
+    ``dropped_edges`` holds the ``blocked_by`` links the graph could not keep,
+    as (issue, missing blocker) pairs: the blocker is not a child of the epic,
+    so no view can draw it or say what state it is in.  They are kept here so
+    a run can name them instead of losing them.
+    """
 
     nodes: dict[int, Node]
+    dropped_edges: tuple[tuple[int, int], ...] = ()
 
     @property
     def work(self) -> list[Node]:
@@ -171,6 +184,22 @@ class Config:
     labels: dict[int, str]
 
 
+def _split_edges(
+    number: int, blockers: list[int], nodes: dict[int, Node]
+) -> tuple[tuple[int, ...], list[tuple[int, int]]]:
+    """Split one issue's blockers into the ones in the node set and the rest.
+
+    A blocker that is not a child of the epic cannot go in the graph: nothing
+    here knows its title or its state, so no list and no diagram can show it.
+    It is returned rather than thrown away, because a real blocker leaving a
+    goal's list without a word makes that goal look easier than it is, while
+    GitHub's own dependency panel still names it on the same page.
+    """
+    kept = tuple(b for b in blockers if b in nodes)
+    dropped = [(number, b) for b in blockers if b not in nodes]
+    return kept, dropped
+
+
 def load_graph(path: Path) -> Graph:
     """Read a graph snapshot written by :func:`fetch_graph`."""
     raw = json.loads(Path(path).read_text())["nodes"]
@@ -182,9 +211,17 @@ def load_graph(path: Path) -> Graph:
             state=value["state"],
             labels=tuple(value["labels"]),
             open_blockers=value["open_blockers"],
-            blocked_by=tuple(b["number"] for b in value["blocked_by"]),
+            blocked_by=(),
         )
-    return Graph(nodes=nodes)
+    dropped: list[tuple[int, int]] = []
+    for value in raw.values():
+        number = value["number"]
+        kept, missing = _split_edges(
+            number, [b["number"] for b in value["blocked_by"]], nodes
+        )
+        nodes[number] = replace(nodes[number], blocked_by=kept)
+        dropped += missing
+    return Graph(nodes=nodes, dropped_edges=tuple(sorted(dropped)))
 
 
 def load_config(path: Path) -> Config:
@@ -479,6 +516,24 @@ def render_epic_body(graph: Graph, config: Config) -> str:
         ]
         out.append("")
 
+    if graph.dropped_edges:
+        out += [
+            "## Blockers outside the roadmap",
+            "",
+            (
+                "These issues wait on issues that are not in this epic, so "
+                "the link is missing from the lists and diagrams above. To "
+                "fix one, add the blocker to this epic, or remove the "
+                "dependency."
+            ),
+            "",
+        ]
+        out += [
+            f"- #{number} is blocked by #{blocker}"
+            for number, blocker in graph.dropped_edges
+        ]
+        out.append("")
+
     return "\n".join(out)
 
 
@@ -585,6 +640,7 @@ class Report:
     written: list[int] = field(default_factory=list)
     unchanged: list[int] = field(default_factory=list)
     skipped: list[int] = field(default_factory=list)
+    dropped_edges: list[tuple[int, int]] = field(default_factory=list)
 
 
 def build_graph(client: Issues, epic: int) -> Graph:
@@ -594,6 +650,12 @@ def build_graph(client: Issues, epic: int) -> Graph:
     the payload's ``issue_dependencies_summary.blocked_by`` counts open
     blockers only, which is what readiness needs and useless for drawing, since
     a diagram has to show the closed ones too.
+
+    An edge whose blocker is not a child of the epic is left out and recorded
+    in :attr:`Graph.dropped_edges`, for the run to report.  Nothing is added to
+    the node set to save such an edge: membership of #124 is a deliberate act,
+    and it is what keeps one-off issues and dependabot pull requests out of the
+    roadmap.
     """
     nodes = {}
     for payload in client.sub_issues(epic):
@@ -603,17 +665,23 @@ def build_graph(client: Issues, epic: int) -> Graph:
             title=payload["title"],
             state=payload["state"],
             labels=tuple(label["name"] for label in payload["labels"]),
+            # This count is unfiltered: it includes open blockers whose edges
+            # are dropped below, so an issue can draw as blocked with no
+            # incoming arrow. Whether readiness should use the filtered count
+            # instead is a separate decision.
             open_blockers=payload.get("issue_dependencies_summary", {}).get(
                 "blocked_by", 0
             ),
             blocked_by=(),
         )
+    dropped: list[tuple[int, int]] = []
     for number, node in nodes.items():
-        edges = tuple(
-            b["number"] for b in client.blocked_by(number) if b["number"] in nodes
+        kept, missing = _split_edges(
+            number, [b["number"] for b in client.blocked_by(number)], nodes
         )
-        nodes[number] = replace(node, blocked_by=edges)
-    return Graph(nodes=nodes)
+        nodes[number] = replace(node, blocked_by=kept)
+        dropped += missing
+    return Graph(nodes=nodes, dropped_edges=tuple(sorted(dropped)))
 
 
 def _write(client: Issues, number: int, block: str, report: Report) -> None:
@@ -641,7 +709,15 @@ def _write(client: Issues, number: int, block: str, report: Report) -> None:
 def run(client: Issues, config: Config, epic: int = EPIC) -> Report:
     """Read the graph and write the generated block into the epic and goals."""
     graph = build_graph(client, epic)
-    report = Report()
+    report = Report(dropped_edges=list(graph.dropped_edges))
+    for number, blocker in report.dropped_edges:
+        LOG.warning(
+            "#%s is blocked by #%s, which is not a child of #%s, "
+            "so the link is left out of every view",
+            number,
+            blocker,
+            epic,
+        )
     _write(client, epic, render_epic_body(graph, config), report)
     for goal in graph.goals:
         _write(

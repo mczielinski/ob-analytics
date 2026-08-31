@@ -12,6 +12,7 @@ re-running the generator's own arithmetic.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from pathlib import Path
 
@@ -558,6 +559,43 @@ def test_run_skips_an_issue_whose_markers_are_missing(client, config):
     assert report.skipped == [180]
     assert client.bodies[180] == "someone deleted the markers"
     assert 124 in report.written
+
+
+def test_a_blocker_outside_the_roadmap_is_reported_not_dropped(config, caplog):
+    """An edge the graph cannot keep is named, in the log and in the epic.
+
+    A blocker that is not a child of #124 has no title and no state here, so
+    the edge cannot be drawn and is left out.  Losing it in silence makes a
+    goal look easier than it is, while GitHub's own dependency panel still
+    names the blocker a few lines above the generated block.  The snapshot has
+    no such edge, so one is added: #206 blocking goal #178, which is the case
+    that found this.
+    """
+    raw = json.loads(GRAPH_FIXTURE.read_text())["nodes"]
+    raw["178"]["blocked_by"] = [
+        *raw["178"]["blocked_by"],
+        {"number": 206, "state": "open"},
+    ]
+    goals = [int(k) for k, v in raw.items() if "goal" in v["labels"]]
+    client = FakeGitHub(raw, {n: EMPTY_BLOCK for n in [124, *goals]})
+
+    with caplog.at_level(logging.WARNING, logger="roadmap"):
+        report = run(client, config, epic=124)
+
+    assert report.dropped_edges == [(178, 206)]
+    assert "#178 is blocked by #206" in caplog.text
+    assert "## Blockers outside the roadmap" in client.bodies[124]
+    assert "- #178 is blocked by #206" in client.bodies[124]
+    # and #206 is not made a node to save its edge
+    assert "#206" not in client.bodies[178]
+
+
+def test_the_snapshot_has_no_blocker_outside_the_roadmap(client, config):
+    """Nothing is reported for the real graph, so its views are unchanged."""
+    report = run(client, config, epic=124)
+
+    assert report.dropped_edges == []
+    assert "## Blockers outside the roadmap" not in client.bodies[124]
 
 
 def test_a_skipped_issue_fails_the_run(client, config):
