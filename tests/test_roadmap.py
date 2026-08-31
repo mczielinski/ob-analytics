@@ -599,3 +599,21 @@ def test_every_generated_diagram_stays_small(graph, config):
                 flags=re.MULTILINE,
             )
             assert len(drawn) <= 12
+
+
+def test_epic_explains_what_the_colours_mean(graph, config):
+    """The key is generated too.
+
+    #124's key is hand-written today and describes the older scheme.  It sits
+    with the diagrams it explains, so it goes when they do, and the fills mean
+    nothing without it.
+    """
+    body = render_epic_body(graph, config)
+    key = body.split("```mermaid")[0]
+
+    assert "green = done" in key
+    assert "purple = ready to start" in key
+    assert "grey = waiting on something" in key
+    assert "blue = a goal" in key
+    assert "heavy outline" in key
+    assert "arrow points from a task to the work it unblocks" in key

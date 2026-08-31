@@ -53,8 +53,8 @@ Running it
 ----------
     uv run --no-project python scripts/roadmap.py --dry-run
 
-Drop ``--dry-run`` to write. In CI the default ``GITHUB_TOKEN`` with
-``issues: write`` is enough; see ``.github/workflows/roadmap.yml``.
+Drop ``--dry-run`` to write. Running it on a schedule is #193; the default
+``GITHUB_TOKEN`` with ``issues: write`` is enough for every call it makes.
 """
 
 from __future__ import annotations
@@ -211,6 +211,15 @@ def load_config(path: Path) -> Config:
 # Readiness fill, plus a heavy stroke for a foundational issue.  Mermaid's
 # ":::" applies exactly one class, so "foundational" cannot be a second class
 # on the node; each combined class repeats the fill and adds the stroke.
+# The key to those fills. It is generated with the diagrams because it belongs
+# to them: a hand-written key drifts from the colours the moment they change.
+COLOUR_KEY = (
+    "Colour: green = done, purple = ready to start, "
+    "grey = waiting on something, blue = a goal whose prerequisites are all "
+    "closed and which nobody has confirmed yet. A heavy outline marks a "
+    "foundational issue. An arrow points from a task to the work it unblocks."
+)
+
 CLASSDEFS = """  classDef done fill:#1a7f37,color:#fff,stroke:#166534;
   classDef ready fill:#8250df,color:#fff,stroke:#6b21a8;
   classDef blocked fill:#57606a,color:#fff,stroke:#424a53;
@@ -422,6 +431,8 @@ def render_epic_body(graph: Graph, config: Config) -> str:
             f"{len(ready)} are ready to start now; "
             f"{len(blocked)} are waiting on something."
         ),
+        "",
+        COLOUR_KEY,
         "",
     ]
 
