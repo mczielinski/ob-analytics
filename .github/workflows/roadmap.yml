@@ -14,16 +14,21 @@
 # bodies cannot start another run. A PAT or an App token would remove that
 # protection and the job would need a loop guard.
 #
-# The issues and push triggers land once the first dispatched run has been read
-# through (#193). Until then this runs only when asked and once a week.
-
 name: roadmap
 
 on:
+  issues:
+    types: [opened, closed, reopened, edited, labeled, unlabeled]
   schedule:
     # Mondays, 06:00 UTC.
     - cron: "0 6 * * 1"
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - roadmap-groups.toml
+      - scripts/roadmap.py
+      - .github/workflows/roadmap.yml
 
 permissions:
   issues: write
