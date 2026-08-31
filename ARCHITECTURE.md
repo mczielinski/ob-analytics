@@ -168,6 +168,7 @@ classDiagram
 | **LOBSTER** | L3 | `Pipeline(source=LobsterSource(), ctx=RunContext(trading_date=...))` | Embedded execution rows (types 4/5) in the message file |
 | **L2 depth CSV** | L2 | `Pipeline.from_source("depth_csv").run(...)` | Optional companion `trades.csv` (signed via trade-sign classification) |
 | **CCXT** (live L2 capture) | L2 | `capture ccxt --exchange <venue>` | Public trade tape (taker side) |
+| **cryptofeed** (live capture) | L2 or L3, discovered from the venue | `capture cryptofeed --exchange <venue>` | Public trade tape (taker side) |
 
 The bundled sample under `ob_analytics/_sample_data/` is a modern BTC/USD
 capture (`orders.csv` + `trades.csv`).
@@ -214,12 +215,13 @@ ob_analytics/
 ├── flow_toxicity.py      # compute_vpin, compute_kyle_lambda, order_flow_imbalance, KyleLambdaResult
 ├── _utils.py             # Validation, numerics, timestamp conversion helpers
 │
-├── live/                 # Optional live-capture machinery ([live] / [ccxt] extras)
-│   ├── __init__.py       # live-source registration (ccxt) + re-exports
+├── live/                 # Optional live-capture machinery ([live] / [ccxt] / [cryptofeed] extras)
+│   ├── __init__.py       # live-source registration (ccxt, cryptofeed) + re-exports
 │   ├── _base.py          # LiveSource protocol, CaptureConfig, CaptureResult, CaptureSink
 │   ├── _runner.py        # Generic asyncio driver + FileCaptureSink
 │   ├── bitstamp.py       # Bitstamp WebSocket engine (driven by BitstampSource)
-│   └── ccxt_source.py    # CcxtSource, CcxtSettings (any CCXT venue, L2)
+│   ├── ccxt_source.py    # CcxtSource, CcxtSettings (any CCXT venue, L2)
+│   └── cryptofeed_source.py  # CryptofeedSource, CryptofeedSettings (L2 or native L3)
 │
 └── visualization/        # Plotting subsystem
     ├── __init__.py       # plot() dispatcher + RENDERERS registry, PlotTheme, save_figure
@@ -229,8 +231,8 @@ ob_analytics/
     └── _plotly.py        # Plotly renderers
 ```
 
-**Live capture** is optional (install with `pip install "ob-analytics[live]"`
-or `[ccxt]`) and writes into the same CSV schema the pipeline reads. Give your
+**Live capture** is optional (install with `pip install "ob-analytics[live]"`,
+`[ccxt]`, or `[cryptofeed]`) and writes into the same CSV schema the pipeline reads. Give your
 `Source` the live capability -- the three `LiveSource` async-iterator methods
 (`snapshot`, `stream`, `shutdown_synthetic_events`) -- and `register_source`
 it; a source can add the offline factories too and do both. The runner

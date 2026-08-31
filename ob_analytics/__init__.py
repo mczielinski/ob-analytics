@@ -55,9 +55,10 @@ from ob_analytics.flow_toxicity import (
     order_flow_imbalance,
 )
 
-# Importing the live package registers the ccxt live source (the bitstamp live
-# capability rides on BitstampSource, already registered above); then discover
-# any third-party sources advertised through the entry-point group.
+# Importing the live package registers the ccxt and cryptofeed live sources
+# (the bitstamp live capability rides on BitstampSource, already registered
+# above); then discover any third-party sources advertised through the
+# entry-point group.
 from ob_analytics.live import LiveSource
 from ob_analytics.lobster import LobsterSource
 from ob_analytics.pipeline import Pipeline, PipelineResult

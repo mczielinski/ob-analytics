@@ -28,6 +28,9 @@ spread, and trade-sign classification run; the per-order stages (queue
 reconstruction, order-type classification) do not apply. Nothing is faked into
 per-order state.
 
+For per-order (L3) capture on the crypto venues that publish it, use the
+[cryptofeed source](cryptofeed.md) instead.
+
 Each run produces a self-contained directory:
 
 | File | Contents |
@@ -74,6 +77,7 @@ ob-analytics capture ccxt --exchange polymarket --pair <token> --poll-interval 2
 
 ## See also
 
+- [Capture cryptofeed venues](cryptofeed.md) — the per-order (L3) complement, for venues that publish order-by-order data
 - [Process L2 (price-level) feeds](l2-depth.md) — what the captured `depth.csv` flows through
 - [Capture live data](live-capture.md) — the capture framework and writing a bespoke venue
 - [Check data quality](validate.md) — run `validate` on the captured output

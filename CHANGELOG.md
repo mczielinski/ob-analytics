@@ -10,22 +10,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- **CCXT source for live L2 capture** (`ob-analytics capture ccxt --exchange
-  <venue> --pair <symbol>`). One adapter wraps CCXT / CCXT Pro so any
-  CCXT-supported venue — ~100 crypto CEXes plus the Kalshi / Polymarket
-  prediction markets — becomes an ob-analytics source with no per-venue code.
-  CCXT books are price-level, so the capturer declares `Level.L2` and records
-  `depth.csv` (not `orders.csv`), replaying through the L2 path — no faked
-  per-order state. Transport is chosen per venue: CCXT Pro websockets where
-  available (`watch_order_book` / `watch_trades`), else REST polling
-  (`--poll-interval`) for the REST-only prediction markets. Book updates become
-  depth rows by diffing the maintained book (changed level → new absolute size,
-  vanished level → `0`); the trade tape carries the CCXT taker side. Ships as
-  the optional `[ccxt]` extra (imported lazily — the capturer registers only
-  when `ccxt` is installed). The capture runner is now **resolution-aware**: a
-  `LiveCapturer` declares its `resolution` and the runner writes `orders.csv`
-  (L3) or `depth.csv` (L2) accordingly, with `write_depth` on the sink and a
-  `"depth"` stream kind. Documented in a new "Capture CCXT venues" how-to.
+- **cryptofeed source for live L2 *and* L3 capture** (`ob-analytics capture
+  cryptofeed --exchange <venue> --pair <symbol>`). The per-order complement to
+  the CCXT source: venues publishing an order-by-order book record `orders.csv`
+  with the venue's own ids and replay through the full reconstruction pipeline;
+  the rest record `depth.csv` for the L2 path. The level is discovered from the
+  venue's declared channels rather than a hardcoded list, and `--level` forces
+  it — except L3 on a venue that publishes none, which raises. Ships as the
+  optional `[cryptofeed]` extra, imported lazily. See the new
+  "Capture cryptofeed venues" how-to.
+- **`sequence` is now written to `orders.csv`.** The capture sink dropped the
+  venue sequence on the L3 path, so `detect_sequence_gaps` had nothing to read;
+  L2 already kept it. cryptofeed captures also report `sequence_gaps` /
+  `sequence_missing` in `meta.json`.
+
 - **L2 (price-level) depth-native ingestion path.** Price-level feeds
   (Binance, Kalshi, Polymarket, most CCXT sources) publish `[price, quantity]`
   levels and diffs with no order IDs; ob-analytics now ingests them as a
@@ -73,6 +71,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   how-to document the distinction.
 
 ### Changed
+
+- **`BitstampTradeReader` no longer requires integer order ids.** It keyed its
+  maker/taker lookup on `int(order_id)`, which crashed on a public trade tape
+  carrying no ids (`int(NaN)`) and on venues publishing UUIDs. Integer ids
+  behave exactly as before; other ids match on their string form, and a missing
+  id resolves to `NaN` instead of raising.
 
 - **One `Source` shape for every data source, file or live** (issue #137;
   settled #145 as "optional extras plus entry-point plug-ins"). File loaders
