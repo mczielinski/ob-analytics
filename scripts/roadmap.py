@@ -34,10 +34,13 @@ diagram instead of sharing a large one. Keep any generated diagram under about
 12 nodes.
 
 **Colour.** The fill is readiness — closed, open and ready, open and blocked,
-or a goal with everything closed and nobody having confirmed it yet. A
-foundational issue keeps its readiness fill and gains a heavy stroke. Mermaid's
-``:::`` applies exactly one class, so that heavier form is emitted as its own
-combined class rather than as a second class on the node.
+or a goal with everything closed and nobody having confirmed it yet. Closed is
+purple and ready is green, which is what those two colours mean on GitHub
+itself; the diagrams sit a few lines under GitHub's own state chips, so
+reversing them made the roadmap contradict the page around it. A foundational
+issue keeps its readiness fill and gains a heavy stroke. Mermaid's ``:::``
+applies exactly one class, so that heavier form is emitted as its own combined
+class rather than as a second class on the node.
 
 **Either/or.** ``blocked_by`` has no OR, so a goal that needs one of two issues
 has both wired as hard blockers, and the view would overstate what it needs and
@@ -216,18 +219,22 @@ def load_config(path: Path) -> Config:
 # The key to those fills. It is generated with the diagrams because it belongs
 # to them: a hand-written key drifts from the colours the moment they change.
 COLOUR_KEY = (
-    "Colour: green = done, purple = ready to start, "
+    "Colour: purple = done, green = ready to start, "
     "grey = waiting on something, blue = a goal whose prerequisites are all "
     "closed and which nobody has confirmed yet. A heavy outline marks a "
     "foundational issue. An arrow points from a task to the work it unblocks."
 )
 
-CLASSDEFS = """  classDef done fill:#1a7f37,color:#fff,stroke:#166534;
-  classDef ready fill:#8250df,color:#fff,stroke:#6b21a8;
+# Green and purple are GitHub's own state colours, and these diagrams render
+# inside issue bodies a few lines under GitHub's own chips: green on an open
+# issue, purple on one closed as completed. So they have to carry the meanings
+# GitHub gives them. Do not swap them back.
+CLASSDEFS = """  classDef done fill:#8250df,color:#fff,stroke:#6b21a8;
+  classDef ready fill:#1a7f37,color:#fff,stroke:#166534;
   classDef blocked fill:#57606a,color:#fff,stroke:#424a53;
   classDef checkable fill:#0969da,color:#fff,stroke:#0a3d91;
-  classDef doneF fill:#1a7f37,color:#fff,stroke:#0b1f10,stroke-width:4px;
-  classDef readyF fill:#8250df,color:#fff,stroke:#2b0b45,stroke-width:4px;
+  classDef doneF fill:#8250df,color:#fff,stroke:#2b0b45,stroke-width:4px;
+  classDef readyF fill:#1a7f37,color:#fff,stroke:#0b1f10,stroke-width:4px;
   classDef blockedF fill:#57606a,color:#fff,stroke:#1c2128,stroke-width:4px;"""
 
 

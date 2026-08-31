@@ -626,6 +626,23 @@ def test_every_generated_diagram_stays_small(graph, config):
             assert len(drawn) <= 12
 
 
+def test_green_and_purple_mean_what_they_mean_on_github(graph, config):
+    """These are GitHub's own two state colours, so they must agree with it.
+
+    The diagrams render inside issue bodies, directly under GitHub's own state
+    chips: green on an open issue, purple on one closed as completed. Assigning
+    the same two colours to the opposite states made the roadmap contradict the
+    page it was sitting on. The class names are the readiness, so only the
+    fills move.
+    """
+    body = render_epic_body(graph, config)
+
+    assert "classDef done fill:#8250df" in body
+    assert "classDef doneF fill:#8250df" in body
+    assert "classDef ready fill:#1a7f37" in body
+    assert "classDef readyF fill:#1a7f37" in body
+
+
 def test_epic_explains_what_the_colours_mean(graph, config):
     """The key is generated too.
 
@@ -636,8 +653,8 @@ def test_epic_explains_what_the_colours_mean(graph, config):
     body = render_epic_body(graph, config)
     key = body.split("```mermaid")[0]
 
-    assert "green = done" in key
-    assert "purple = ready to start" in key
+    assert "purple = done" in key
+    assert "green = ready to start" in key
     assert "grey = waiting on something" in key
     assert "blue = a goal" in key
     assert "heavy outline" in key
