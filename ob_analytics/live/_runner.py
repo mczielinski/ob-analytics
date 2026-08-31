@@ -22,6 +22,9 @@ from ob_analytics.live._base import (
 )
 from ob_analytics.protocols import Level
 
+# L3 (per-order) rows -- the BitstampLoader schema.  ``sequence`` is the
+# venue's own per-event number when the source supplies one (blank otherwise);
+# BitstampLoader reads it back under ``track_sequence`` for gap detection.
 _ORDER_COLS = [
     "id",
     "timestamp",
@@ -30,6 +33,7 @@ _ORDER_COLS = [
     "volume",
     "action",
     "direction",
+    "sequence",
 ]
 _TRADE_COLS = [
     "trade_id",
