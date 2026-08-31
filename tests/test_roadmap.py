@@ -313,47 +313,34 @@ def test_goal_diagram_stays_small(graph, config):
         assert len(drawn) <= 12, f"#{goal.number} draws {len(drawn)} nodes"
 
 
-# The 20 work issues no group in roadmap-groups.toml names, worked out from
-# the four groups there: 44 work issues less the 24 the groups name.
-UNGROUPED = [
-    98,
-    107,
-    108,
-    109,
-    110,
-    111,
-    115,
-    117,
-    118,
-    119,
-    120,
-    121,
-    122,
-    123,
-    141,
-    142,
-    145,
-    148,
-    149,
-    150,
-]
-
-
-def test_ungrouped_means_in_no_work_group(graph, config):
+def test_ungrouped_means_in_no_work_group(graph, tmp_path):
     """An issue in no work diagram is listed, and the run stays green.
 
     "Ungrouped" has to mean "in no **work** group".  Every work issue is a
-    prerequisite of some goal — #98 feeds #175 and #188 — so counting goals as
-    groups would empty this section and hide the issues it exists to surface.
+    prerequisite of some goal — #109 feeds #183 — so counting goals as groups
+    would empty this section and hide the issues it exists to surface.  The
+    config here names #110 and not #109, and #109 is what gets reported.
     """
+    config = write_config(
+        tmp_path,
+        """
+[[group]]
+id = "analytics"
+title = "Measuring the book"
+prose = "Part of it."
+issues = [110]
+""",
+    )
+
     body = render_epic_body(graph, config)
     listed = [
         int(m) for m in re.findall(r"^- \[[ x]\] #(\d+) ", body, flags=re.MULTILINE)
     ]
-    ungrouped = [n for n in listed if n < 173]
 
-    assert ungrouped == UNGROUPED
-    assert 112 not in ungrouped
+    assert 109 in listed
+    assert 110 not in listed
+    # and the section comes last, after the goal summaries
+    assert body.index("## What each capability waits on") < body.index("## Ungrouped")
 
 
 def test_pruned_closed_issue_is_not_reported_as_ungrouped(graph, tmp_path):
@@ -573,13 +560,16 @@ def test_run_skips_an_issue_whose_markers_are_missing(client, config):
 
 
 def test_epic_sections_run_in_the_order_the_spec_gives(graph, config):
-    """Status count, then the work diagrams, then the goals, then Ungrouped."""
+    """Status count, then the work diagrams, then the goals.
+
+    Every work issue is in a diagram today, so there is no Ungrouped section to
+    order; where that section falls is checked where it is made to appear.
+    """
     body = render_epic_body(graph, config)
 
     assert [line for line in body.splitlines() if line.startswith("## ")] == [
         "## Where the work stands",
         "## What each capability waits on",
-        "## Ungrouped",
     ]
     assert body.index("### Part 1 - the foundation") < body.index(
         "## What each capability waits on"

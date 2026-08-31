@@ -46,7 +46,7 @@ prose = """
 One plug-in shape feeds every new source, so each source is a small piece of
 work once the shape is in place.
 """
-issues = [112, 137, 106, 134, 99, 100, 101, 102, 103]
+issues = [112, 137, 106, 134, 99, 100, 101, 102, 103, 98]
 
 [[group]]
 id = "engine"
@@ -55,6 +55,44 @@ prose = """
 These two are built last. The diagram shows what each one waits on.
 """
 issues = [112, 136, 100, 114, 143, 144, 105, 116, 138, 139]
+
+[[group]]
+id = "analytics"
+title = "Part 4 - measuring the book"
+prose = """
+What the library says about the book once it is rebuilt. Trade signs and the
+first signals are done; the rest are separate pieces of work that share the
+same input.
+"""
+issues = [104, 107, 109, 110, 111, 119, 148, 149]
+
+[[group]]
+id = "quality"
+title = "Part 5 - knowing the data is right"
+prose = """
+Reconstruction is only worth as much as the data behind it. Three of these are
+done: data with known answers, a test that the engine gives the same numbers,
+and gap detection from sequence numbers.
+"""
+issues = [108, 114, 143, 146, 150]
+
+[[group]]
+id = "viz"
+title = "Part 6 - plots and the interactive view"
+prose = """
+The plot catalogue, one theme across backends, a second backend, and the two
+ways of watching a book move rather than reading it after the fact.
+"""
+issues = [105, 117, 118, 122, 123]
+
+[[group]]
+id = "release"
+title = "Part 7 - what a release needs"
+prose = """
+Four decisions and two pieces of work stand between the current state and a
+version someone can depend on.
+"""
+issues = [115, 120, 121, 141, 142, 145]
 
 # Either/or prerequisites.
 #
