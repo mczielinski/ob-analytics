@@ -75,12 +75,20 @@ spread to consume it. See the `maker_event_id` / `taker_event_id` columns
 documented in [Data Contracts](api/schemas.md).
 
 **Spread**
-: Best ask price minus best bid price. Extracted from the depth summary
-via [`get_spread`](api/depth.md#ob_analytics.depth.get_spread).
+: Best ask price minus best bid price, in ticks — see *Tick size* below.
+Extracted from the depth summary via
+[`get_spread`](api/depth.md#ob_analytics.depth.get_spread).
 
 **Mid-price**
-: `(best_bid + best_ask) / 2`. Reference price for measuring order
-aggressiveness in basis points.
+: `(best_bid + best_ask) / 2`, in ticks — see *Tick size* below. Reference
+price for measuring order aggressiveness in basis points.
+
+**Tick size**
+: The instrument's minimum price increment, in quote currency. Every
+`price` column is stored as a whole number of ticks (`int64`), not a float
+in the quote currency; multiply by
+[`PipelineConfig.tick_size`](api/config.md#ob_analytics.config.PipelineConfig)
+to recover the quote-currency price.
 
 **Basis point (BPS)**
 : 1/100 of a percent. The depth summary bins liquidity into rings of
@@ -89,7 +97,20 @@ aggressiveness in basis points.
 
 ## Order classifications
 
-Produced by [`set_order_types`](api/analytics.md#ob_analytics.analytics.set_order_types).
+Produced by [`set_order_types`](api/analytics.md#ob_analytics.analytics.set_order_types),
+which assigns one of six categories.
+
+**Unknown**
+: The initial, unclassified state. Remains on any order that fits none of
+the other categories once classification finishes; `set_order_types` logs a
+warning when this happens, since it signals a classification gap rather
+than a normal outcome.
+
+**Pre-existing**
+: An order first seen part-way through the stream, with no `created` row —
+the opening book at capture start, or a hidden execution. Structurally
+unclassifiable rather than a classification failure, so it gets its own
+category instead of falling back to *unknown*.
 
 **Resting limit**
 : A passive limit order that sits in the book and is eventually filled or
@@ -134,8 +155,12 @@ Once frames pass the validators, downstream code cannot tell which
 venue they came from.
 
 **Loader**
-: Any object whose `load()` returns a validator-passing events frame —
-the [`EventLoader`](api/protocols.md) protocol. One per venue dialect.
+: Produces the canonical frame for a source, via `create_loader`. An L3
+source's `create_loader` returns an [`EventLoader`](api/protocols.md),
+whose `load()` returns a validator-passing events frame; an L2 source
+returns a [`DepthSource`](api/protocols.md), whose `load()` returns the
+depth frame directly, since a price-level feed has no per-order events to
+fold. One per venue dialect.
 
 **Trade source**
 : The companion protocol for executions: `load(events, source)` returns
