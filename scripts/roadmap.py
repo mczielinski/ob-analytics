@@ -25,8 +25,8 @@ The rules it applies
 issue still depends on it, so a diagram shows the work ahead rather than the
 whole history. Goal edges must not count: sixteen goals depend on nearly
 everything, so counting them keeps every closed issue and the rule does
-nothing. A group marked ``keep_closed`` opts out, for a diagram that records a
-finished chapter.
+nothing. A group marked ``keep_closed`` opts out, for a diagram that records
+completed work.
 
 **Size.** A diagram runs about 79 px per node and hardly varies with the number
 of edges, so node count is the only lever and each goal gets its own small

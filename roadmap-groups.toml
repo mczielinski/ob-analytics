@@ -31,7 +31,7 @@ title = "Part 1b - the four data-model decisions"
 prose = """
 The shared schema shipped with four choices left open. Each one would quietly
 corrupt the data if it were wrong. All four are now settled, so this diagram
-records a finished chapter rather than work to do.
+records completed work rather than work to do.
 """
 issues = [112, 146, 147, 154, 155]
 # Keep the closed issues. Pruning would show two of the four, because two of
@@ -50,7 +50,7 @@ issues = [112, 137, 106, 134, 99, 100, 101, 102, 103, 98]
 
 [[group]]
 id = "engine"
-title = "Part 3 - a faster engine and a streaming one"
+title = "Part 3 - a faster engine and a streaming core"
 prose = """
 These two are built last. The diagram shows what each one waits on.
 """
@@ -58,39 +58,38 @@ issues = [112, 136, 100, 114, 143, 144, 105, 116, 138, 139]
 
 [[group]]
 id = "analytics"
-title = "Part 4 - measuring the book"
+title = "Part 4 - metrics, signals and model inputs"
 prose = """
-What the library says about the book once it is rebuilt. Trade signs and the
-first signals are done; the rest are separate pieces of work that share the
-same input.
+Measurements taken from a rebuilt book. Trade signs and the first signals are
+done. The rest are separate pieces of work that read the same input.
 """
 issues = [104, 107, 109, 110, 111, 119, 148, 149]
 
 [[group]]
 id = "quality"
-title = "Part 5 - knowing the data is right"
+title = "Part 5 - data quality checks"
 prose = """
-Reconstruction is only worth as much as the data behind it. Three of these are
-done: data with known answers, a test that the engine gives the same numbers,
-and gap detection from sequence numbers.
+Ways to find out whether loaded data is sound. Three are done: data with known
+answers, a test that the engine gives the same numbers, and gap detection from
+sequence numbers.
 """
 issues = [108, 114, 143, 146, 150]
 
 [[group]]
 id = "viz"
-title = "Part 6 - plots and the interactive view"
+title = "Part 6 - plots and interactive views"
 prose = """
-The plot catalogue, one theme across backends, a second backend, and the two
-ways of watching a book move rather than reading it after the fact.
+The full plot catalogue, one theme across backends, and a second backend. The
+live view and the replay scrubber show a book as it changes.
 """
 issues = [105, 117, 118, 122, 123]
 
 [[group]]
 id = "release"
-title = "Part 7 - what a release needs"
+title = "Part 7 - packaging, docs and release decisions"
 prose = """
-Four decisions and two pieces of work stand between the current state and a
-version someone can depend on.
+What is left before a version other projects can depend on: four decisions,
+conda-forge distribution, and the documentation work.
 """
 issues = [115, 120, 121, 141, 142, 145]
 
