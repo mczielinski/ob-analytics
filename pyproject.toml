@@ -36,6 +36,9 @@ live = ["websockets>=12"]
 ccxt = [
     "ccxt>=4",
 ]
+cryptofeed = [
+    "cryptofeed>=2",
+]
 
 [project.scripts]
 ob-analytics = "ob_analytics.cli:main"
@@ -45,8 +48,8 @@ ob-analytics = "ob_analytics.cli:main"
 # this group at import time. Each value points to a Source class, e.g.:
 #   [project.entry-points."ob_analytics.sources"]
 #   coinbase = "my_package.coinbase:CoinbaseSource"
-# The built-in sources (bitstamp, lobster, depth_csv, ccxt) self-register on
-# import and are intentionally not listed here.
+# The built-in sources (bitstamp, lobster, depth_csv, ccxt, cryptofeed)
+# self-register on import and are intentionally not listed here.
 [project.entry-points."ob_analytics.sources"]
 
 [project.urls]

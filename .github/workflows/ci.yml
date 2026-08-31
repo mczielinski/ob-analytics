@@ -32,8 +32,9 @@ jobs:
       # Pass --extra to `uv run` too: its implicit sync would otherwise
       # re-resolve to the project default (no extras) and uninstall plotly /
       # websockets / ccxt, leaving imports in visualization/ and live/
-      # (incl. live/ccxt_source.py's `import ccxt.pro`) unresolvable.
-      - run: uv run --group dev --extra interactive --extra live --extra ccxt ty check ob_analytics/
+      # (incl. live/ccxt_source.py's `import ccxt.pro` and
+      # live/cryptofeed_source.py's `import cryptofeed`) unresolvable.
+      - run: uv run --group dev --extra interactive --extra live --extra ccxt --extra cryptofeed ty check ob_analytics/
 
   test:
     runs-on: ubuntu-latest
@@ -47,12 +48,13 @@ jobs:
         with:
           enable-cache: true
       - run: uv python install ${{ matrix.python-version }}
-      - run: uv sync --group dev --extra interactive --extra live --extra ccxt --python ${{ matrix.python-version }}
+      - run: uv sync --group dev --extra interactive --extra live --extra ccxt --extra cryptofeed --python ${{ matrix.python-version }}
       # Pass --extra to `uv run` too: its implicit sync would otherwise
       # re-resolve to the project default (no extras) and uninstall plotly /
-      # websockets / ccxt, which causes test_plotly_backend.py to skip and any
-      # test_live_protocol / test_ccxt_source tests that need those to break.
-      - run: uv run --group dev --extra interactive --extra live --extra ccxt --python ${{ matrix.python-version }} pytest tests/ --cov=ob_analytics --cov-report=xml -q --durations=15
+      # websockets / ccxt / cryptofeed, which causes test_plotly_backend.py to
+      # skip and any test_live_protocol / test_ccxt_source /
+      # test_cryptofeed_source tests that need those to break.
+      - run: uv run --group dev --extra interactive --extra live --extra ccxt --extra cryptofeed --python ${{ matrix.python-version }} pytest tests/ --cov=ob_analytics --cov-report=xml -q --durations=15
       - name: Upload coverage
         if: matrix.python-version == '3.11' && github.event_name == 'push'
         uses: codecov/codecov-action@v7

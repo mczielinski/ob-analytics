@@ -232,6 +232,8 @@ def _cmd_capture(args: argparse.Namespace) -> None:
     from ob_analytics.live import CaptureConfig, LiveSource
     from ob_analytics.live._runner import run_capturer
     from ob_analytics.live.ccxt_source import CcxtSettings
+    from ob_analytics.live.cryptofeed_source import CryptofeedSettings
+    from ob_analytics.protocols import Level
     from ob_analytics.sources import SOURCES, get_source, list_sources
 
     def _is_live(name: str) -> bool:
@@ -258,7 +260,7 @@ def _cmd_capture(args: argparse.Namespace) -> None:
         logger.error(str(exc))
         sys.exit(1)
 
-    # Build typed per-source settings. Only ccxt takes venue knobs today; a
+    # Build typed per-source settings. ccxt and cryptofeed take venue knobs; a
     # source with no knobs is constructed with its empty default settings.
     if args.venue.lower() == "ccxt":
         ccxt_kwargs: dict[str, Any] = {}
@@ -272,8 +274,25 @@ def _cmd_capture(args: argparse.Namespace) -> None:
         # no constructor, so passing settings is a checked-at-runtime dynamic
         # call (every built-in source accepts an optional `settings`).
         source = source_cls(settings=CcxtSettings(**ccxt_kwargs))  # ty: ignore[unknown-argument]
+    elif args.venue.lower() == "cryptofeed":
+        cf_kwargs: dict[str, Any] = {}
+        if getattr(args, "exchange", None):
+            cf_kwargs["exchange"] = args.exchange
+        if getattr(args, "level", None):
+            cf_kwargs["level"] = Level(args.level.upper())
+        source = source_cls(settings=CryptofeedSettings(**cf_kwargs))  # ty: ignore[unknown-argument]
     else:
         source = source_cls()
+
+    # A venue that cannot supply the requested resolution is user error, not a
+    # crash: report the explanation and stop.  (Reading ``level`` is what
+    # resolves it, and the isinstance check below is the first read.)
+    try:
+        source_level = getattr(source, "level", None)
+    except ValueError as exc:
+        logger.error(str(exc))
+        sys.exit(1)
+    logger.debug("Source {!r} captures at {}", args.venue, source_level)
 
     if not isinstance(source, LiveSource):
         logger.error("Source %r has no live capture; it is offline-only.", args.venue)
@@ -504,7 +523,19 @@ def main() -> None:
         default=None,
         help=(
             "For the 'ccxt' venue: the CCXT exchange id (e.g. 'binance', "
-            "'kraken', 'coinbase'). Use CCXT pair notation, e.g. 'BTC/USDT'."
+            "'kraken', 'coinbase'); use CCXT pair notation, e.g. 'BTC/USDT'. "
+            "For 'cryptofeed': the cryptofeed venue id (e.g. 'bitstamp', "
+            "'binance'); use cryptofeed notation, e.g. 'BTC-USD'."
+        ),
+    )
+    p_cap.add_argument(
+        "--level",
+        default=None,
+        choices=["L2", "L3", "l2", "l3"],
+        help=(
+            "For the 'cryptofeed' venue: force the capture resolution. Omit to "
+            "discover it from the venue (L3 where the venue publishes a "
+            "per-order book, L2 otherwise)."
         ),
     )
     p_cap.add_argument(

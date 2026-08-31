@@ -8,18 +8,21 @@ Public API:
     CaptureConfig, CaptureResult, CaptureSink, EventDict
     LiveSource, SupportsDiagnostics
 
-Importing this package registers the built-in ccxt live source.  The bitstamp
+Importing this package registers the built-in ccxt and cryptofeed live sources.  The bitstamp
 live capability rides on :class:`ob_analytics.bitstamp.BitstampSource`, so it is
 registered when that module is imported (at ``import ob_analytics``).
 """
 
 from __future__ import annotations
 
-# Register the ccxt live source.  Importing the module is cheap — ccxt itself is
-# imported lazily only when a capture starts — so it registers unconditionally;
-# a capture without the ``[ccxt]`` extra raises a clear install hint at that
-# point.
-from ob_analytics.live import ccxt_source  # noqa: F401 - fires register_source
+# Register the ccxt and cryptofeed live sources.  Importing either module is
+# cheap — the venue library itself is imported lazily only when a capture
+# starts — so they register unconditionally; a capture without the matching
+# extra raises a clear install hint at that point.
+from ob_analytics.live import (
+    ccxt_source,  # noqa: F401 - fires register_source
+    cryptofeed_source,  # noqa: F401 - fires register_source
+)
 from ob_analytics.live._base import (
     CaptureConfig,
     CaptureResult,

@@ -159,6 +159,84 @@ class TestBitstampTradeReader:
             pass
 
 
+class TestTradeReaderOrderIdTypes:
+    """The reader keys maker/taker attribution on the order id. Bitstamp
+    publishes integers, but the same schema carries captures from venues that
+    publish UUIDs, and a public trade tape carries no maker/taker id at all --
+    neither may crash the reader."""
+
+    @staticmethod
+    def _capture(tmp_path, order_ids, *, buy_id, sell_id):
+        ts = 1_700_000_000_000
+        rows = []
+        for i, oid in enumerate(order_ids):
+            rows.append(
+                {
+                    "id": oid,
+                    "timestamp": ts + i,
+                    "exchange_timestamp": ts + i,
+                    "price": 100.0 + i,
+                    "volume": 2.0,
+                    "action": "created",
+                    "direction": "bid" if i % 2 == 0 else "ask",
+                }
+            )
+        for i, oid in enumerate(order_ids):
+            rows.append(
+                {
+                    "id": oid,
+                    "timestamp": ts + 50 + i,
+                    "exchange_timestamp": ts + 50 + i,
+                    "price": 100.0 + i,
+                    "volume": 2.0,
+                    "action": "deleted",
+                    "direction": "bid" if i % 2 == 0 else "ask",
+                }
+            )
+        orders = tmp_path / "orders.csv"
+        pd.DataFrame(rows).to_csv(orders, index=False)
+        pd.DataFrame(
+            [
+                {
+                    "trade_id": "t1",
+                    "timestamp": ts + 10,
+                    "exchange_timestamp": ts + 10,
+                    "price": 100.0,
+                    "amount": 0.5,
+                    "buy_order_id": buy_id,
+                    "sell_order_id": sell_id,
+                    "side": "buy",
+                }
+            ]
+        ).to_csv(tmp_path / "trades.csv", index=False)
+        return orders
+
+    def test_a_tape_without_order_ids_resolves_to_no_attribution(self, tmp_path):
+        """cryptofeed and CCXT publish a public tape with no maker/taker ids."""
+        orders = self._capture(tmp_path, [11, 21], buy_id="", sell_id="")
+        events = BitstampLoader().load(orders)
+        trades = BitstampTradeReader().load(events, orders)
+        assert len(trades) == 1
+        assert pd.isna(trades["maker_event_id"].iloc[0])
+        assert pd.isna(trades["taker_event_id"].iloc[0])
+
+    def test_uuid_order_ids_do_not_raise(self, tmp_path):
+        orders = self._capture(tmp_path, ["3f2b-aa", "9c1d-bb"], buy_id="", sell_id="")
+        events = BitstampLoader().load(orders)
+        trades = BitstampTradeReader().load(events, orders)
+        assert len(trades) == 1
+        assert set(events["id"].astype(str)) == {"3f2b-aa", "9c1d-bb"}
+
+    def test_integer_attribution_still_resolves(self, tmp_path):
+        """The integer path must behave exactly as it did before."""
+        orders = self._capture(tmp_path, [11, 21], buy_id=11, sell_id=21)
+        events = BitstampLoader().load(orders)
+        trades = BitstampTradeReader().load(events, orders)
+        assert len(trades) == 1
+        assert trades["maker"].iloc[0] == 21
+        assert trades["taker"].iloc[0] == 11
+
+
 # ---------------------------------------------------------------------------
 # BitstampWriter (round-trip)
 # ---------------------------------------------------------------------------

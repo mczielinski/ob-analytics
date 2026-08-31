@@ -13,6 +13,7 @@ live in :mod:`ob_analytics.analytics`.
 
 from __future__ import annotations
 
+import math
 from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -324,22 +325,48 @@ class BitstampTradeReader:
         return candidate
 
     @staticmethod
+    def _order_key(oid: Any) -> Any | None:
+        """Hashable lookup key for an order id, or ``None`` when there is none.
+
+        Bitstamp publishes integer order ids, but this reader also serves
+        captures from other venues replayed through the same schema: some
+        publish opaque ids (cryptofeed's independent_reserve UUIDs), and a
+        public trade tape carries no maker/taker id at all.  Integers keep
+        their exact previous behaviour; anything else falls back to its string
+        form, and a missing id returns ``None`` so the trade resolves to NaN
+        rather than raising.
+        """
+        if oid is None:
+            return None
+        if isinstance(oid, float) and math.isnan(oid):
+            return None
+        try:
+            return int(oid)
+        except (TypeError, ValueError):
+            text = str(oid).strip()
+            return text or None
+
+    @classmethod
     def _build_lookup(
+        cls,
         events: pd.DataFrame,
-    ) -> dict[int, list[tuple[float, int]]]:
-        out: dict[int, list[tuple[float, int]]] = {}
+    ) -> dict[Any, list[tuple[float, int]]]:
+        out: dict[Any, list[tuple[float, int]]] = {}
         non_zero = events[events["fill"] > 0]
         for oid, fill, eid in zip(
             non_zero["id"], non_zero["fill"], non_zero["event_id"]
         ):
-            out.setdefault(int(oid), []).append((float(fill), int(eid)))
+            key = cls._order_key(oid)
+            if key is None:
+                continue
+            out.setdefault(key, []).append((float(fill), int(eid)))
         return out
 
     def _resolve_event_ids(
         self,
         order_ids: np.ndarray,
         amounts: pd.Series,
-        ev_lookup: dict[int, list[tuple[float, int]]],
+        ev_lookup: dict[Any, list[tuple[float, int]]],
     ) -> np.ndarray:
         digits = self._config.volume_decimals
 
@@ -347,7 +374,7 @@ class BitstampTradeReader:
         # candidate order within each bucket: the earliest unconsumed match
         # wins, at O(1) per trade.  The index is built fresh per call so the
         # maker and taker passes consume independently.
-        index: dict[int, dict[float, deque[int]]] = {}
+        index: dict[Any, dict[float, deque[int]]] = {}
         for oid, cand in ev_lookup.items():
             by_fill: dict[float, deque[int]] = {}
             for fill, eid in cand:
@@ -357,7 +384,8 @@ class BitstampTradeReader:
         result: list[int | float] = []
         for oid, amt in zip(order_ids, amounts):
             picked: int | float = float("nan")
-            bucket = index.get(int(oid))
+            key = self._order_key(oid)
+            bucket = None if key is None else index.get(key)
             if bucket is not None:
                 matches = bucket.get(round(float(amt), digits))
                 if matches:
