@@ -607,3 +607,50 @@ def test_epic_explains_what_the_colours_mean(graph, config):
     assert "blue = a goal" in key
     assert "heavy outline" in key
     assert "arrow points from a task to the work it unblocks" in key
+
+
+class EditedMidRun(FakeGitHub):
+    """A GitHub where a person edits one body while the run is reading it.
+
+    ``bodies`` holds the truth, including the edit.  The first read of the
+    target returns what was there beforehand, so a generator that reads a body
+    twice sees one version and writes another.
+    """
+
+    def __init__(self, raw: dict, bodies: dict[int, str], target: int, stale: str):
+        super().__init__(raw, bodies)
+        self.target = target
+        self.stale = stale
+        self.reads: dict[int, int] = {}
+
+    def get_body(self, number: int) -> str:
+        self.reads[number] = self.reads.get(number, 0) + 1
+        if number == self.target and self.reads[number] == 1:
+            return self.stale
+        return self.bodies[number]
+
+
+def test_a_body_edited_during_a_run_keeps_the_edit(client, config):
+    """Each body is read once, so a run cannot write back what it did not read.
+
+    Reading twice means splicing one version and comparing against another: a
+    prose edit landing between the two reads makes the comparison differ, and
+    the write then carries the prose from before the edit.  The edit is lost
+    with nothing logged.
+    """
+    run(client, config, epic=124)
+    stale = client.bodies[180]
+    edited = stale.replace("Hand-written prose.", "Hand-written prose, revised.")
+    assert edited != stale
+
+    flaky = EditedMidRun(
+        json.loads(GRAPH_FIXTURE.read_text())["nodes"],
+        {**client.bodies, 180: edited},
+        target=180,
+        stale=stale,
+    )
+    report = run(flaky, config, epic=124)
+
+    assert flaky.reads[180] == 1
+    assert "revised" in flaky.bodies[180]
+    assert report.written == []
