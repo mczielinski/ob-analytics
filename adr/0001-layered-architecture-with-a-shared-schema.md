@@ -51,6 +51,10 @@ Sources        files and live feeds, one plug-in  (#137)
    sources.
 4. **Take pandas or Polars — #104.** Use Polars inside for speed. Let the public
    API accept and return either, through Narwhals. The engine does not change.
+   *Superseded by [0002](0002-dataframe-library.md) on 2026-08-31: the public API
+   stays pandas, Arrow is the interop promise, and Narwhals, Polars and DuckDB do
+   not become dependencies. The last sentence — the engine does not change —
+   still stands. The tool list at the end of this record is corrected there too.*
 5. **Streaming core — #139.** Process events one at a time, so live capture and
    file replay share one path. Build alongside the live view (#105).
 6. **Faster engine — #138.** Use numba first, then possibly Rust. Build only
