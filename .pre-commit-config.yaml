@@ -5,7 +5,7 @@
 # pin to the exact versions resolved in uv.lock.
 #
 # Setup:
-#   uv sync --group dev --extra interactive --extra live
+#   uv sync --group dev --extra interactive --extra live --extra ccxt --extra cryptofeed
 #   uv run pre-commit install
 #
 # Hook entries pass --frozen so an out-of-date uv.lock can never be rewritten
@@ -45,7 +45,7 @@ repos:
 
       - id: ty
         name: ty check
-        entry: uv run --frozen --group dev --extra interactive --extra live ty check ob_analytics/
+        entry: uv run --frozen --group dev --extra interactive --extra live --extra ccxt --extra cryptofeed ty check ob_analytics/
         language: system
         types: [python]
         pass_filenames: false
