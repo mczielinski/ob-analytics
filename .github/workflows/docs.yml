@@ -5,10 +5,46 @@ name: Docs
 #
 # One-time setup (repo admin): Settings -> Pages -> Source = "GitHub Actions".
 
+# Only the inputs the site is actually built from. Everything else -- tests,
+# the roadmap generator, the other workflows, the ADRs -- cannot change a
+# rendered page, and the build costs 7-13 minutes. `workflow_dispatch` has no
+# filter, so a deploy can always be forced by hand.
+#
+# Keep this list in step with what the build reads: docs/ and its tutorial
+# sources, the package (mkdocstrings renders its docstrings and the tutorial
+# chapters execute against it), the three build scripts, the site and
+# dependency config, and the two root files that docs/ pulls in via snippets
+# (docs/changelog.md includes CHANGELOG.md, docs/architecture.md includes
+# ARCHITECTURE.md).
 on:
   push:
     branches: [main]
+    paths:
+      - 'docs/**'
+      - 'ob_analytics/**'
+      - 'scripts/build_tutorial.py'
+      - 'scripts/build_gallery.py'
+      - 'scripts/check_links.py'
+      - 'zensical.toml'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'CHANGELOG.md'
+      - 'ARCHITECTURE.md'
+      - '.github/workflows/docs.yml'
   pull_request:
+    # Repeated verbatim: the workflow parser does not support YAML anchors.
+    paths:
+      - 'docs/**'
+      - 'ob_analytics/**'
+      - 'scripts/build_tutorial.py'
+      - 'scripts/build_gallery.py'
+      - 'scripts/check_links.py'
+      - 'zensical.toml'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'CHANGELOG.md'
+      - 'ARCHITECTURE.md'
+      - '.github/workflows/docs.yml'
   workflow_dispatch:
 
 permissions:
@@ -16,14 +52,20 @@ permissions:
   pages: write
   id-token: write
 
-# One deployment at a time; never cancel an in-progress publish.
-concurrency:
-  group: pages
-  cancel-in-progress: false
-
 jobs:
   build:
     runs-on: ubuntu-latest
+    # One build at a time per branch or pull request. The group is keyed by ref
+    # so that builds on different refs never queue behind (or cancel) each
+    # other -- a shared group made every PR opened in the same minute fight
+    # over one slot, and the losers were cancelled with no jobs run.
+    #
+    # Within one pull request a new push supersedes the running build, so stale
+    # builds stop instead of running out their 10 minutes. On main nothing is
+    # cancelled: every merged commit builds and publishes in turn.
+    concurrency:
+      group: docs-build-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.0.1
@@ -52,6 +94,11 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
+    # One deployment at a time; never cancel an in-progress publish. This is
+    # the only job that touches Pages, so it keeps the shared `pages` group.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url || steps.retry.outputs.page_url }}
