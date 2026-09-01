@@ -74,12 +74,12 @@ class FileCaptureSink(CaptureSink):
     """
 
     def __init__(
-        self, out_dir: Path, *, keep_raw: bool, resolution: Level = Level.L3
+        self, out_dir: Path, *, keep_raw: bool, level: Level = Level.L3
     ) -> None:
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self._keep_raw = keep_raw
-        self._resolution = resolution
+        self._level = level
 
         # Exactly one book writer is opened, per resolution. The other stays
         # None so write_order / write_depth are safe no-ops on the wrong side.
@@ -87,7 +87,7 @@ class FileCaptureSink(CaptureSink):
         self._orders: csv.DictWriter[str] | None = None
         self._depth_fp: Any = None
         self._depth: csv.DictWriter[str] | None = None
-        if resolution is Level.L2:
+        if level is Level.L2:
             self._depth_fp = (self.out_dir / "depth.csv").open("w", newline="")
             self._depth = csv.DictWriter(
                 self._depth_fp, fieldnames=_DEPTH_COLS, extrasaction="ignore"
@@ -177,11 +177,9 @@ async def run_capturer(
     """
     # The source declares its granularity; the runner routes book events to
     # the matching writer. Fall back to L3 for sources predating the attr.
-    resolution = getattr(capturer, "level", Level.L3)
+    level = getattr(capturer, "level", Level.L3)
     if sink is None:
-        sink = FileCaptureSink(
-            config.out_dir, keep_raw=config.keep_raw, resolution=resolution
-        )
+        sink = FileCaptureSink(config.out_dir, keep_raw=config.keep_raw, level=level)
     started = pd.Timestamp.now(tz="UTC")
     n_order = n_trade = n_depth = n_raw = 0
 
@@ -200,7 +198,7 @@ async def run_capturer(
     try:
         logger.info("Capturer '{}': snapshot starting", capturer.name)
         async for ev in capturer.snapshot(config):
-            if resolution is Level.L2:
+            if level is Level.L2:
                 sink.write_depth(ev)
                 n_depth += 1
             else:
@@ -209,7 +207,7 @@ async def run_capturer(
         logger.info(
             "Capturer '{}': snapshot wrote {} book events",
             capturer.name,
-            n_depth if resolution is Level.L2 else n_order,
+            n_depth if level is Level.L2 else n_order,
         )
 
         logger.info(
@@ -253,7 +251,7 @@ async def run_capturer(
 
         logger.info("Capturer '{}': emitting shutdown synthetic events", capturer.name)
         async for ev in capturer.shutdown_synthetic_events():
-            if resolution is Level.L2:
+            if level is Level.L2:
                 sink.write_depth(ev)
                 n_depth += 1
             else:
