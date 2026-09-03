@@ -1,0 +1,89 @@
+{
+  "machine": "Linux x86_64 python3.11",
+  "measurements": [
+    {
+      "run": "sample",
+      "stage": "load",
+      "events": 314057,
+      "seconds": 0.795823152999219,
+      "peak_rss_mib": 225.48046875
+    },
+    {
+      "run": "sample",
+      "stage": "set_order_types",
+      "events": 314057,
+      "seconds": 0.3255574139984674,
+      "peak_rss_mib": 270.44140625
+    },
+    {
+      "run": "sample",
+      "stage": "price_level_volume",
+      "events": 314057,
+      "seconds": 0.15168931800144492,
+      "peak_rss_mib": 270.44140625
+    },
+    {
+      "run": "sample",
+      "stage": "depth_metrics",
+      "events": 314057,
+      "seconds": 9.361631794999994,
+      "peak_rss_mib": 454.1640625
+    },
+    {
+      "run": "sample",
+      "stage": "order_aggressiveness",
+      "events": 314057,
+      "seconds": 0.3368740000005346,
+      "peak_rss_mib": 469.98828125
+    },
+    {
+      "run": "sample",
+      "stage": "queue_positions",
+      "events": 314057,
+      "seconds": 0.8621788140007993,
+      "peak_rss_mib": 469.98828125
+    },
+    {
+      "run": "synth",
+      "stage": "load",
+      "events": 316634,
+      "seconds": 1.9582052490004571,
+      "peak_rss_mib": 371.015625
+    },
+    {
+      "run": "synth",
+      "stage": "set_order_types",
+      "events": 316634,
+      "seconds": 0.2655593070012401,
+      "peak_rss_mib": 371.015625
+    },
+    {
+      "run": "synth",
+      "stage": "price_level_volume",
+      "events": 316634,
+      "seconds": 0.13531786399835255,
+      "peak_rss_mib": 371.015625
+    },
+    {
+      "run": "synth",
+      "stage": "depth_metrics",
+      "events": 316634,
+      "seconds": 4.762051620004058,
+      "peak_rss_mib": 409.375
+    },
+    {
+      "run": "synth",
+      "stage": "order_aggressiveness",
+      "events": 316634,
+      "seconds": 0.24407782400521683,
+      "peak_rss_mib": 409.375
+    },
+    {
+      "run": "synth",
+      "stage": "queue_positions",
+      "events": 316634,
+      "seconds": 2.829483772002277,
+      "peak_rss_mib": 409.375
+    }
+  ]
+}
