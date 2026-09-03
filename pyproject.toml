@@ -76,6 +76,10 @@ dev = [
     "types-seaborn>=0.13.2.20260518",
     "plotly>=6.8.0",
     "hypothesis>=6.155.7",
+    # Dev-only, and deliberately not a runtime dependency or an extra: it is
+    # here so the tests for PipelineResult.to_polars() can run. See
+    # adr/0002-dataframe-library.md.
+    "polars>=1.20",
     "nbmake>=1.5",
     "ipykernel>=6.29",
     "jupytext>=1.16",

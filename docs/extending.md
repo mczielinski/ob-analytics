@@ -29,6 +29,10 @@ The Protocol contracts referenced below are documented on the
 [Protocols](api/protocols.md) page; the DataFrame column contracts are on
 [Data Contracts](api/schemas.md).
 
+Every protocol here takes and returns `pandas.DataFrame` — see
+[Frame types: pandas in, pandas out](schema.md#frame-types-pandas-in-pandas-out)
+for the contract and what to use when you want Arrow or Polars.
+
 ---
 
 ## 1. A new source

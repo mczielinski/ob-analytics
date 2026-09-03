@@ -47,6 +47,18 @@ save_data(
 data = load_data("output/my_analysis")
 ```
 
+To hand the tables to another tool without writing files first, convert the
+result in memory:
+
+```python
+tables = result.to_arrow()    # dict[str, pyarrow.Table]
+frames = result.to_polars()   # dict[str, polars.DataFrame], needs polars
+```
+
+Both give the same four keys as the dict above. The Arrow tables carry the
+schema version and tick size in their metadata, the same as the Parquet files.
+See [Frame types: pandas in, pandas out](../schema.md#frame-types-pandas-in-pandas-out).
+
 For LOBSTER round-trip output (back to message + orderbook CSVs), pass
 `fmt="lobster"` and a `RunContext` so the registered writer factory can
 pick up `trading_date`:
