@@ -89,13 +89,41 @@ def _write_versioned_parquet(
     integer ticks (issue #155).  The index is dropped, matching the previous
     ``df.to_parquet(..., index=False)`` behaviour.
     """
+    pq.write_table(_to_arrow_table(df, tick_sizes=tick_sizes), path)
+
+
+def _to_arrow_table(
+    df: pd.DataFrame,
+    *,
+    tick_sizes: dict[str, float] | None = None,
+) -> pa.Table:
+    """Convert *df* to an Arrow table tagged with the canonical metadata.
+
+    The table carries :data:`SCHEMA_VERSION` under :data:`SCHEMA_VERSION_KEY`
+    and, when *tick_sizes* is given, the ``{instrument_key: tick_size}`` map
+    under :data:`TICK_SIZE_KEY` — the same key-value metadata a canonical
+    Parquet file carries, so a reader handed a table from memory is no worse off
+    than one reading a file.  The pandas index is dropped.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        A canonical pipeline frame.
+    tick_sizes : dict of str to float, optional
+        Tick sizes to record, keyed by instrument (issue #155).  Omitted
+        metadata means a reader sees the integer prices as-is.
+
+    Returns
+    -------
+    pyarrow.Table
+        *df* as Arrow, with the metadata attached.
+    """
     table = pa.Table.from_pandas(df, preserve_index=False)
     metadata = dict(table.schema.metadata or {})
     metadata[SCHEMA_VERSION_KEY] = SCHEMA_VERSION.encode()
     if tick_sizes is not None:
         metadata[TICK_SIZE_KEY] = encode_tick_sizes(tick_sizes)
-    table = table.replace_schema_metadata(metadata)
-    pq.write_table(table, path)
+    return table.replace_schema_metadata(metadata)
 
 
 def _read_versioned_parquet(path: Path) -> pd.DataFrame:

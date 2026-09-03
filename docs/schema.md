@@ -303,6 +303,54 @@ An ordered categorical is stored as an Arrow `dictionary<string>` (the categorie
 plus small integer indices). A reader that does not want dictionary encoding can
 cast the column to plain strings.
 
+## Frame types: pandas in, pandas out
+
+The frame type is part of the contract, so it is written down here:
+
+- **Every public function takes and returns pandas.** `Pipeline.run`, the
+  metrics, the plot helpers, `load_data` and `save_data` all speak
+  `pandas.DataFrame`.
+- **Plug-ins are handed pandas.** The protocols you implement to add a source or
+  an export format — `EventLoader`, `TradeSource`, `DepthSource`,
+  `OfflineSource.compute_depth`, `DataWriter` — take and return
+  `pandas.DataFrame`. See [Extending](extending.md).
+- **The file format is how other tools read the output.** The versioned Parquet
+  described on this page is the interop surface, not the Python type. Polars,
+  DuckDB and anything else Arrow-aware read the files directly, as shown below.
+
+ob-analytics does not depend on Narwhals, Polars or DuckDB, and its public
+functions never return one of their types. The reasoning is recorded in
+[ADR 0002](https://github.com/mczielinski/ob-analytics/blob/main/adr/0002-dataframe-library.md).
+
+### From a result in memory
+
+You do not have to write files first. A `PipelineResult` converts itself:
+
+```python
+result = Pipeline().run("data/orders.csv")
+
+tables = result.to_arrow()    # dict[str, pyarrow.Table]
+frames = result.to_polars()   # dict[str, polars.DataFrame]
+
+tables["depth_summary"].num_rows
+```
+
+Both return the same four keys — `events`, `trades`, `depth` and
+`depth_summary` — for every run. On a price-level (L2) run `events` is an empty
+table rather than a missing key, so the keys do not change with the level of the
+data.
+
+The Arrow tables carry the same key-value metadata the Parquet files carry: the
+schema version under `ob_analytics_schema_version` and the tick size under
+`ob_analytics_tick_size`. A reader handed a table in memory is no worse off than
+one reading a file.
+
+`to_polars()` needs polars, which ob-analytics does not install. Without it the
+call raises `ImportError` telling you to `pip install polars`. Polars keeps no
+schema-level metadata, so the schema version and tick size do not survive that
+conversion — read the tick size from `result.config.tick_size`, or use
+`to_arrow()` when the metadata has to travel with the tables.
+
 ## Zero-copy reads in Polars and DuckDB
 
 The files are plain Parquet, so any Arrow-aware tool reads them directly, with no

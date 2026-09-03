@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
+import pyarrow as pa
 from loguru import logger
 
 from ob_analytics._utils import empty_events
@@ -90,6 +91,88 @@ class PipelineResult:
     depth_summary: pd.DataFrame
     config: PipelineConfig
     level: Level = Level.L3
+
+    def _frames(self) -> dict[str, pd.DataFrame]:
+        """Return the run's four core tables keyed by name.
+
+        Returns
+        -------
+        dict of str to pandas.DataFrame
+            ``events``, ``trades``, ``depth`` and ``depth_summary``.  The keys
+            are the same for every run: on an
+            :attr:`~ob_analytics.protocols.Level.L2` run ``events`` is a
+            schema-valid zero-row frame rather than a missing key.
+        """
+        return {
+            "events": self.events,
+            "trades": self.trades,
+            "depth": self.depth,
+            "depth_summary": self.depth_summary,
+        }
+
+    def to_arrow(self) -> dict[str, pa.Table]:
+        """Return the run's four core tables as Arrow tables.
+
+        Each table carries the same key-value metadata a canonical Parquet file
+        carries — the schema version and the run's tick size (see
+        :mod:`ob_analytics.schemas`) — so a reader handed these tables in memory
+        is no worse off than one reading the files.
+
+        Returns
+        -------
+        dict of str to pyarrow.Table
+            ``events``, ``trades``, ``depth`` and ``depth_summary``.
+
+        Examples
+        --------
+        >>> from ob_analytics import Pipeline, sample_csv_path
+        >>> tables = Pipeline().run(sample_csv_path()).to_arrow()  # doctest: +SKIP
+        >>> sorted(tables)  # doctest: +SKIP
+        ['depth', 'depth_summary', 'events', 'trades']
+        """
+        from ob_analytics.data import _tick_sizes_from_config, _to_arrow_table
+
+        tick_sizes = _tick_sizes_from_config(self.config)
+        return {
+            name: _to_arrow_table(df, tick_sizes=tick_sizes)
+            for name, df in self._frames().items()
+        }
+
+    def to_polars(self) -> dict[str, Any]:
+        """Return the run's four core tables as Polars DataFrames.
+
+        Polars is **not** a dependency of ob-analytics (see
+        ``adr/0002-dataframe-library.md``): the public API takes and returns
+        pandas, and this accessor is a convenience for users who already have
+        Polars installed.  Install it yourself with ``pip install polars``.
+
+        Returns
+        -------
+        dict of str to polars.DataFrame
+            The same keys as :meth:`to_arrow`.
+
+        Raises
+        ------
+        ImportError
+            When polars is not installed.
+
+        Notes
+        -----
+        Polars keeps no schema-level key-value metadata, so the schema version
+        and tick size that :meth:`to_arrow` attaches do not survive this
+        conversion.  Read the tick size from ``result.config.tick_size``, or use
+        :meth:`to_arrow` when the metadata has to travel with the tables.
+        """
+        try:
+            import polars as pl
+        except ImportError as exc:
+            raise ImportError(
+                "PipelineResult.to_polars() requires polars, which is not a "
+                "dependency of ob-analytics: pip install polars. "
+                "Use to_arrow() for a pyarrow table instead."
+            ) from exc
+
+        return {name: pl.from_arrow(table) for name, table in self.to_arrow().items()}
 
     def plot(
         self,

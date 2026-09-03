@@ -10,6 +10,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`PipelineResult.to_arrow()` and `PipelineResult.to_polars()`** (#104). Both
+  return the run's four tables — `events`, `trades`, `depth`, `depth_summary` —
+  keyed by name, with the same keys on every run: on an L2 run `events` is an
+  empty table, not a missing key. The Arrow tables carry the schema version and
+  tick size in their metadata, the same key-value metadata the Parquet files
+  carry, so a reader handed tables in memory is no worse off than one reading
+  files. Polars is not a dependency and is not installed; `to_polars()` raises
+  `ImportError` with an install hint when it is missing, and Polars keeps no
+  schema metadata, so the version and tick size do not survive that conversion.
+- **The frame-type contract is written down** in
+  [Frame types: pandas in, pandas out](https://mczielinski.github.io/ob-analytics/schema/#frame-types-pandas-in-pandas-out):
+  public functions take and return pandas, plug-ins are handed pandas, and the
+  versioned Parquet is how other tools read the output. The reasoning is in
+  `adr/0002-dataframe-library.md`.
 - **cryptofeed source for live L2 *and* L3 capture** (`ob-analytics capture
   cryptofeed --exchange <venue> --pair <symbol>`). The per-order complement to
   the CCXT source: venues publishing an order-by-order book record `orders.csv`
