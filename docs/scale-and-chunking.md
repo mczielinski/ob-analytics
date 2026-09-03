@@ -40,7 +40,7 @@ smaller, and a session-length window is a fraction of that instrument's day.
 ### What fits — the supply side
 
 From the measured [scale envelope](architecture.md#scale-envelope) (WS-8.4a,
-`scripts/bench_scale.py`): peak RSS grows roughly linearly at **~1 GiB per 1M
+`scripts/bench_scale.py --envelope`): peak RSS grows roughly linearly at **~1 GiB per 1M
 events**, dominated by the depth stages.
 
 | events | peak RSS | depth stages |
@@ -52,7 +52,7 @@ events**, dominated by the depth stages.
 
 The **comfortable ceiling ≈ 5M events / ~5 GiB** on a typical 16 GB machine.
 (That 5M point is a linear *extrapolation* from the measured rows above, not a
-direct measurement — see `bench_scale.py`. It is conservative: tiling adds
+direct measurement — see `bench_scale.py --envelope`. It is conservative: tiling adds
 transient overhead the extrapolation carries forward.)
 
 ### What a job needs — the demand side
@@ -180,7 +180,9 @@ simpler.
 
 ## References
 
-- Scale envelope and benchmark: [Architecture → Scale envelope](architecture.md#scale-envelope); `scripts/bench_scale.py`.
+- Scale envelope and benchmark: [Architecture → Scale envelope](architecture.md#scale-envelope);
+  `scripts/bench_scale.py --envelope`. The per-stage speed test that CI runs is
+  the same script with no arguments.
 - [LOBSTER sample files][lobster] — per-symbol daily event counts.
 - [Nasdaq TotalView-ITCH on Databento][xnas] — whole-feed daily message volume.
 - [Databento Python API demo][apidemo] — a concrete single-instrument record count.

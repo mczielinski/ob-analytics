@@ -1,0 +1,55 @@
+# Time each stage of a run, and fail when a change makes one slower.
+#
+# The numbers live in bench-baseline.json: one record per stage, with the
+# seconds and the peak memory that stage took when the baseline was recorded.
+# scripts/bench_scale.py measures the same stages again and compares.
+#
+# Wall-clock seconds belong to the machine that measured them, so the baseline
+# has to be recorded on this runner, not on a laptop. Run this workflow by hand
+# with `record` set, download the bench-baseline artifact, and commit it. The
+# script prints which machine a baseline came from whenever it is not this one.
+#
+# Its own job rather than a step in the test matrix: a timed run should not
+# share a runner with anything else, and it takes a couple of minutes.
+#
+name: bench
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      record:
+        description: "Measure and upload a new baseline instead of checking one"
+        type: boolean
+        default: false
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  speed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+      - run: uv sync --group dev
+
+      - name: Check the baseline
+        if: ${{ !inputs.record }}
+        run: uv run --group dev python scripts/bench_scale.py
+
+      - name: Record a new baseline
+        if: ${{ inputs.record }}
+        run: uv run --group dev python scripts/bench_scale.py --update-baseline
+
+      - name: Upload the recorded baseline
+        if: ${{ inputs.record }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-baseline
+          path: bench-baseline.json

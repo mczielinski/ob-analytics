@@ -75,6 +75,33 @@ library, and the schema change underneath them (issue #143). All run under
   to prove it imports no pandas and nothing from the layers above it, and that
   only `_engine_frames.py` converts frames to engine arrays (issue #136).
 
+### The speed gate
+
+`scripts/bench_scale.py` times each stage of a run — load, order types, price
+level volume, depth metrics, aggressiveness, queue positions — over the bundled
+sample and a seeded synthetic session of about the same size, and compares the
+result with `bench-baseline.json`. CI runs it on every pull request and fails
+when a stage is more than half again slower, or a tenth larger in peak memory,
+than the baseline (issue #144).
+
+A stage that runs for under a second is not judged on time: at that length the
+spread between two runs of identical code is wider than any slow-down worth
+finding. Each run is measured in its own process, because peak RSS only rises,
+so two runs in one process would report the larger one's peak for both.
+
+```bash
+uv run python scripts/bench_scale.py                    # check the baseline
+uv run python scripts/bench_scale.py --runs synth       # one workload only
+uv run python scripts/bench_scale.py --envelope         # the scale table
+```
+
+Seconds belong to the machine that measured them, so the committed baseline is
+recorded on the CI runner, not on a laptop: run the `bench` workflow by hand
+with `record` set, download the `bench-baseline` artifact, and commit it in its
+own labelled commit. Locally the script says which machine the baseline came
+from when it is not the one in front of you, so a failure there is a hint, not a
+verdict.
+
 ## Code style
 
 - **Ruff** for both lint and format — no black, no isort.

@@ -61,9 +61,30 @@ the working set scales with the event count. Peak RSS grows roughly **linearly a
 | 942 k   | ~1.02 GiB | ~38 s |
 | 1.26 M  | ~1.32 GiB | ~51 s |
 
-*(Measured with [`scripts/bench_scale.py`](https://github.com/mczielinski/ob-analytics/blob/main/scripts/bench_scale.py): the bundled
+*(Measured with [`scripts/bench_scale.py --envelope`](https://github.com/mczielinski/ob-analytics/blob/main/scripts/bench_scale.py): the bundled
 ~314k-event sample tiled to each size, each size run in its own process, peak RSS
 via `getrusage`. Slightly conservative — tiling adds some transient overhead.)*
+
+### Where the time goes
+
+Per stage, on the bundled 314k-event sample (`scripts/bench_scale.py`, one
+Linux x86_64 machine — the shape holds, the seconds do not travel):
+
+| stage | seconds | share |
+|-------|--------:|------:|
+| `load` | 0.80 | 7% |
+| `set_order_types` | 0.33 | 3% |
+| `price_level_volume` | 0.15 | 1% |
+| `depth_metrics` | 9.36 | 79% |
+| `order_aggressiveness` | 0.34 | 3% |
+| `queue_positions` | 0.86 | 7% |
+
+One numpy kernel is four fifths of the run. The stateful FIFO loop is 7%, and
+everything the loader and the frames do together is under 15% — which is the
+number [ADR 0002](https://github.com/mczielinski/ob-analytics/blob/main/adr/0002-dataframe-library.md)
+asks for before a second
+dataframe library could pay for itself, and it falls well short of the 30% gate
+that record sets. CI checks these numbers on every pull request (issue #144).
 
 **Comfortable ceiling ≈ 5M events (~5 GiB)** on a typical 16 GB machine — i.e.
 session-scale data, a few hours of a single liquid instrument. For larger inputs
