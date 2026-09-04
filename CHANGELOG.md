@@ -10,6 +10,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`ob-analytics audit`, a data-quality gate** (#108). The old `validate` verb
+  is now `audit` (the old name still works), it scores the run against named
+  checks, and it **exits non-zero when one fails** — so a script can stop before
+  trusting a feed. Five checks are new: orphan orders (changed or deleted with
+  no `created` row), non-positive prices, negative volumes or fills, and the two
+  clock-order defects — a venue timestamp later than the receive timestamp, and
+  messages that arrived out of venue order. `audit` also loads with
+  `track_sequence` on, so the dropped-message check (#146) reads a venue
+  sequence whenever the feed carries one.
+
+  Each check carries a `Severity`: an **error** fails the run, a **warning**
+  fails it only under `--strict`, and **info** never does. A crossed resting
+  book is scored by feed type, not by size — an error on a matched book, a
+  faithful replay on a diff feed. `--json` emits every check plus an `ok`
+  verdict; `--from-parquet` audits a saved `process` output without re-running
+  the pipeline. New public names: `Severity`, `QualityCheck`, and
+  `DataQualitySummary.ok` / `.errors` / `.warnings` / `.checks`. See the
+  ["Check data quality with `audit`" how-to](https://mczielinski.github.io/ob-analytics/howto/audit/).
+
 - **`PipelineResult.to_arrow()` and `PipelineResult.to_polars()`** (#104). Both
   return the run's four tables — `events`, `trades`, `depth`, `depth_summary` —
   keyed by name, with the same keys on every run: on an L2 run `events` is an

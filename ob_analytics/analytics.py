@@ -18,6 +18,7 @@ import heapq
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 from typing import Any
 
 import numpy as np
@@ -28,7 +29,11 @@ from ob_analytics import _engine_frames, engine
 from ob_analytics._utils import validate_columns, validate_non_empty
 from ob_analytics.depth import price_level_volume
 from ob_analytics.protocols import FeedType
-from ob_analytics.schemas import INGEST_SEQ_COLUMN, SEQUENCE_COLUMN
+from ob_analytics.schemas import (
+    INGEST_SEQ_COLUMN,
+    SEQUENCE_COLUMN,
+    time_order_keys,
+)
 
 
 def _event_diff_bps(
@@ -752,11 +757,84 @@ def _crossed_time_fraction(best: pd.DataFrame) -> tuple[float, int]:
     return crossed_time / total, episodes
 
 
+class Severity(str, Enum):
+    """How much a failed data-quality check matters.
+
+    A check carries its severity so the policy — what fails a run — lives with
+    the measurement rather than in each caller.  The enum mixes in ``str``
+    (``Severity.ERROR == "error"``), which keeps CLI and JSON output plain.
+
+    Attributes
+    ----------
+    ERROR
+        The data contradicts something that must hold (a duplicate
+        ``event_id``, a dropped venue message, a negative volume).  Any failing
+        error check fails the run.
+    WARNING
+        A signal worth reading before trusting the feed, but one a sound
+        capture can legitimately show (orders resting before the capture
+        began, zero-priced levels, messages reordered in transit).  Fails the
+        run only under ``ob-analytics audit --strict``.
+    INFO
+        Reported for context; never fails a run.
+    """
+
+    ERROR = "error"
+    WARNING = "warning"
+    INFO = "info"
+
+
+@dataclass(frozen=True)
+class QualityCheck:
+    """One named data-quality check and how it read on this run.
+
+    Attributes
+    ----------
+    name : str
+        Stable identifier, matching the summary field it reads
+        (e.g. ``"duplicate_event_ids"``).
+    passed : bool
+        Whether the data satisfied the check.
+    severity : Severity
+        What a failure means (see :class:`Severity`).
+    detail : str
+        One line saying what was found and how to read it.
+    """
+
+    name: str
+    passed: bool
+    severity: Severity
+    detail: str
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the check as a plain, JSON-serialisable dict."""
+        return {
+            "name": self.name,
+            "passed": self.passed,
+            "severity": str(self.severity.value),
+            "detail": self.detail,
+        }
+
+
+# A matched book that is crossed for less than this share of session time is
+# treated as uncrossed: floating-point ties at the touch, not a defect.
+CROSSED_TOLERANCE_PCT: float = 0.05
+
+# Above this share, unresolved maker/taker attribution stops being incidental
+# (trades against orders that were resting before the capture began) and starts
+# suggesting the trades and events do not describe the same session.
+UNMATCHED_TRADES_WARN_PCT: float = 5.0
+
+
 @dataclass(frozen=True)
 class DataQualitySummary:
     """Per-run data-quality metrics for a reconstructed session.
 
     Built by :func:`data_quality_summary`.  All percentages are 0–100 floats.
+
+    The fields are the measurements; :attr:`checks` turns them into pass/fail
+    verdicts with a :class:`Severity` each, and :attr:`ok` is the one-line
+    answer to "is this feed trustworthy?" that ``ob-analytics audit`` exits on.
 
     Attributes
     ----------
@@ -792,6 +870,25 @@ class DataQualitySummary:
         Dropped-message count: skipped venue sequence numbers.
     sequence_out_of_order : int
         Reordered or duplicated messages: sequence steps that did not advance.
+    orphan_orders : int
+        Distinct order ids with a ``changed`` or ``deleted`` event but no
+        ``created`` one.  Every order resting before the capture began is an
+        orphan, so a capture that starts mid-stream reports a small, stable
+        count; this is also the signal a live capture's stream drifting from
+        its opening snapshot shows up as.
+    orphan_events : int
+        Rows belonging to those orphan orders.
+    nonpositive_price_rows : int
+        Rows priced at or below zero.  Legal in the schema (prices are signed
+        integer ticks) but not a tradeable level.
+    negative_volume_rows : int
+        Rows with a negative ``volume`` (or negative ``fill``): impossible size.
+    exchange_time_after_receive : int
+        Rows whose venue clock (``exchange_timestamp``) is later than the local
+        receive clock (``timestamp``) — an event received before it happened.
+    exchange_time_reordered : int
+        Steps where the venue clock goes backwards while the receive clock
+        moves forward: messages that reached the capture out of order.
     """
 
     feed_type: FeedType
@@ -807,6 +904,12 @@ class DataQualitySummary:
     events_with_sequence: int = 0
     sequence_gaps: int = 0
     sequence_out_of_order: int = 0
+    orphan_orders: int = 0
+    orphan_events: int = 0
+    nonpositive_price_rows: int = 0
+    negative_volume_rows: int = 0
+    exchange_time_after_receive: int = 0
+    exchange_time_reordered: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         """Return the summary as a plain, JSON-serialisable dict."""
@@ -824,6 +927,14 @@ class DataQualitySummary:
             "events_with_sequence": self.events_with_sequence,
             "sequence_gaps": self.sequence_gaps,
             "sequence_out_of_order": self.sequence_out_of_order,
+            "orphan_orders": self.orphan_orders,
+            "orphan_events": self.orphan_events,
+            "nonpositive_price_rows": self.nonpositive_price_rows,
+            "negative_volume_rows": self.negative_volume_rows,
+            "exchange_time_after_receive": self.exchange_time_after_receive,
+            "exchange_time_reordered": self.exchange_time_reordered,
+            "ok": self.ok,
+            "checks": [c.to_dict() for c in self.checks],
         }
 
     def _crossed_note(self) -> str:
@@ -831,12 +942,152 @@ class DataQualitySummary:
         if self.feed_type == FeedType.MATCHED_BOOK:
             return (
                 "as expected for a matched book"
-                if self.crossed_pct <= 0.05
+                if self.crossed_pct <= CROSSED_TOLERANCE_PCT
                 else "UNEXPECTED for a matched book — check reconstruction/data"
             )
         if self.feed_type == FeedType.DIFF_FEED:
             return "expected for a diff feed — faithful replay, not a bug"
         return "feed type undeclared"
+
+    @property
+    def checks(self) -> tuple[QualityCheck, ...]:
+        """Every check this run was scored against, errors first.
+
+        The crossing check reads its severity off :attr:`feed_type`: a crossed
+        resting book is a defect in a matched book and a faithful property of a
+        diff feed, so the same number means opposite things and only the
+        declared feed type can tell them apart.
+        """
+        crossed = self.crossed_pct > CROSSED_TOLERANCE_PCT
+        if self.feed_type == FeedType.MATCHED_BOOK:
+            crossed_severity = Severity.ERROR
+        elif self.feed_type == FeedType.DIFF_FEED:
+            crossed_severity = Severity.INFO
+        else:
+            crossed_severity = Severity.WARNING
+
+        checks = [
+            QualityCheck(
+                "duplicate_event_ids",
+                self.duplicate_event_ids == 0,
+                Severity.ERROR,
+                f"{self.duplicate_event_ids} event_id value(s) occur more than "
+                "once; event_id is the unique key of an event",
+            ),
+            QualityCheck(
+                "duplicate_created_ids",
+                self.duplicate_created_ids == 0,
+                Severity.ERROR,
+                f"{self.duplicate_created_ids} order id(s) have more than one "
+                "created event; an order is created once",
+            ),
+            QualityCheck(
+                "sequence_gaps",
+                self.sequence_gaps == 0,
+                Severity.ERROR,
+                f"{self.sequence_gaps} venue sequence number(s) missing: "
+                "dropped messages, so the book is rebuilt from an incomplete feed",
+            ),
+            QualityCheck(
+                "sequence_out_of_order",
+                self.sequence_out_of_order == 0,
+                Severity.ERROR,
+                f"{self.sequence_out_of_order} venue sequence step(s) did not "
+                "advance: repeated or reordered messages",
+            ),
+            QualityCheck(
+                "negative_volume",
+                self.negative_volume_rows == 0,
+                Severity.ERROR,
+                f"{self.negative_volume_rows} row(s) carry a negative volume "
+                "or fill: an impossible size",
+            ),
+            QualityCheck(
+                "exchange_time_after_receive",
+                self.exchange_time_after_receive == 0,
+                Severity.ERROR,
+                f"{self.exchange_time_after_receive} row(s) have a venue "
+                "timestamp later than the receive timestamp: an event received "
+                "before it happened (clock skew, or the two clocks swapped)",
+            ),
+            QualityCheck(
+                "crossed_book",
+                not crossed,
+                crossed_severity,
+                f"the resting book is crossed for {self.crossed_pct:.2f}% of "
+                f"session time ({self.crossed_episodes} episode(s)) "
+                f"[{self._crossed_note()}]",
+            ),
+            QualityCheck(
+                "unmatched_trades",
+                self.unmatched_trades_pct <= UNMATCHED_TRADES_WARN_PCT,
+                Severity.WARNING,
+                f"{self.unmatched_trades_pct:.2f}% of trades have no resolvable "
+                "maker or taker order; above "
+                f"{UNMATCHED_TRADES_WARN_PCT:.0f}% the trades and events may not "
+                "describe the same session",
+            ),
+            QualityCheck(
+                "orphan_orders",
+                self.orphan_orders == 0,
+                Severity.WARNING,
+                f"{self.orphan_orders} order(s) are changed or deleted with no "
+                f"created event ({self.orphan_events} row(s)); expected for the "
+                "book already resting when the capture began, but a rise "
+                "mid-session means the stream lost messages",
+            ),
+            QualityCheck(
+                "nonpositive_price",
+                self.nonpositive_price_rows == 0,
+                Severity.WARNING,
+                f"{self.nonpositive_price_rows} row(s) are priced at or below "
+                "zero: not a tradeable level",
+            ),
+            QualityCheck(
+                "exchange_time_reordered",
+                self.exchange_time_reordered == 0,
+                Severity.WARNING,
+                f"{self.exchange_time_reordered} message(s) arrived out of venue "
+                "order (the venue clock goes back while the receive clock moves "
+                "forward)",
+            ),
+            QualityCheck(
+                "pre_existing_orders",
+                True,
+                Severity.INFO,
+                f"{self.pre_existing_orders} order(s) were resting before the "
+                "capture window: structurally unclassifiable, not failures",
+            ),
+            QualityCheck(
+                "venue_sequence",
+                True,
+                Severity.INFO,
+                f"{self.events_with_sequence} row(s) carry a venue sequence"
+                if self.events_with_sequence
+                else "no venue sequence in this feed, so gaps cannot be detected",
+            ),
+        ]
+        order = {Severity.ERROR: 0, Severity.WARNING: 1, Severity.INFO: 2}
+        return tuple(sorted(checks, key=lambda c: order[c.severity]))
+
+    @property
+    def errors(self) -> tuple[QualityCheck, ...]:
+        """Failed checks whose severity is :attr:`Severity.ERROR`."""
+        return tuple(
+            c for c in self.checks if not c.passed and c.severity == Severity.ERROR
+        )
+
+    @property
+    def warnings(self) -> tuple[QualityCheck, ...]:
+        """Failed checks whose severity is :attr:`Severity.WARNING`."""
+        return tuple(
+            c for c in self.checks if not c.passed and c.severity == Severity.WARNING
+        )
+
+    @property
+    def ok(self) -> bool:
+        """True when no error-severity check failed (warnings may still stand)."""
+        return not self.errors
 
     def render(self) -> str:
         """Return a fixed-width, human-readable report block."""
@@ -854,12 +1105,75 @@ class DataQualitySummary:
             f"  duplicate created ids : {self.duplicate_created_ids}",
             f"  pre-existing orders   : {self.pre_existing_orders}",
             (
+                f"  orphan orders         : {self.orphan_orders} "
+                f"({self.orphan_events} event(s), no created row)"
+            ),
+            (
+                f"  impossible values     : {self.nonpositive_price_rows} "
+                f"non-positive price(s) / {self.negative_volume_rows} "
+                "negative volume(s)"
+            ),
+            (
+                f"  clock order           : {self.exchange_time_after_receive} "
+                f"venue-after-receive / {self.exchange_time_reordered} reordered"
+            ),
+            (
                 f"  venue sequence        : {self.sequence_gaps} missing / "
                 f"{self.sequence_out_of_order} out-of-order "
                 f"({self.events_with_sequence} row(s) numbered)"
             ),
         ]
+
+        # INFO checks never fail a run and their numbers are already in the
+        # block above, so the verdict lists only what a reader must act on.
+        failed = self.errors + self.warnings
+        if failed:
+            lines.append(
+                f"Checks: {len(self.errors)} error(s), {len(self.warnings)} warning(s)"
+            )
+            lines += [
+                f"  {c.severity.value.upper():<7} {c.name}: {c.detail}" for c in failed
+            ]
+        else:
+            lines.append("Checks: all passed")
         return "\n".join(lines)
+
+
+def _clock_order_counts(frame: pd.DataFrame) -> tuple[int, int]:
+    """Count the two clock-order defects in *frame*: ``(after_receive, reordered)``.
+
+    The schema carries two clocks (issue #154): ``exchange_timestamp``, stamped
+    by the venue, and ``timestamp``, stamped on receipt.  Two things follow from
+    that, and neither depends on how the frame happens to be sorted:
+
+    * an event cannot be received before the venue stamped it, so
+      ``exchange_timestamp > timestamp`` is impossible;
+    * read in canonical time order (:func:`~ob_analytics.schemas.time_order_keys`),
+      the venue clock should not go backwards while the receive clock moves
+      forward — where it does, those messages reached the capture out of order.
+
+    Rows sharing a receive instant are skipped for the second count: their
+    relative order is set by the tie-break key, not by arrival, so a venue-clock
+    step across them says nothing.  A frame without both columns (the L2 depth
+    path carries only ``timestamp``) scores zero on both counts.
+    """
+    if "exchange_timestamp" not in frame.columns or "timestamp" not in frame.columns:
+        return 0, 0
+    if frame.empty:
+        return 0, 0
+
+    both = frame[["timestamp", "exchange_timestamp"]].notna().all(axis=1)
+    after_receive = int(
+        (frame.loc[both, "exchange_timestamp"] > frame.loc[both, "timestamp"]).sum()
+    )
+
+    ordered = frame.loc[both].sort_values(time_order_keys(frame), kind="stable")
+    if len(ordered) < 2:
+        return after_receive, 0
+    receive = np.diff(ordered["timestamp"].astype("int64").to_numpy())
+    venue = np.diff(ordered["exchange_timestamp"].astype("int64").to_numpy())
+    reordered = int(np.count_nonzero((venue < 0) & (receive > 0)))
+    return after_receive, reordered
 
 
 def data_quality_summary(
@@ -955,6 +1269,26 @@ def data_quality_summary(
     # depth rather than the empty events frame).  Absent columns score zero.
     gaps = detect_sequence_gaps(depth if l2 else events)
 
+    # Orders changed or deleted with no created row.  On the L2 path there are
+    # no per-order events, so there is nothing to orphan.
+    if l2:
+        orphan_orders = orphan_events = 0
+    else:
+        created_ids = set(events.loc[events["action"] == "created", "id"])
+        after = events.loc[events["action"] != "created", "id"]
+        orphaned = after[~after.isin(created_ids)]
+        orphan_events = int(orphaned.size)
+        orphan_orders = int(orphaned.nunique())
+
+    # Impossible values, read from whichever frame carries the price levels.
+    levels = depth if l2 else events
+    nonpositive_price_rows = int((levels["price"] <= 0).sum())
+    negative_volume_rows = int((levels["volume"] < 0).sum())
+    if not l2 and "fill" in events.columns:
+        negative_volume_rows += int((events["fill"] < 0).sum())
+
+    after_receive, reordered = _clock_order_counts(levels)
+
     return DataQualitySummary(
         feed_type=feed_type,
         n_events=len(events),
@@ -969,4 +1303,10 @@ def data_quality_summary(
         events_with_sequence=gaps.n_sequenced,
         sequence_gaps=gaps.n_missing,
         sequence_out_of_order=gaps.n_out_of_order,
+        orphan_orders=orphan_orders,
+        orphan_events=orphan_events,
+        nonpositive_price_rows=nonpositive_price_rows,
+        negative_volume_rows=negative_volume_rows,
+        exchange_time_after_receive=after_receive,
+        exchange_time_reordered=reordered,
     )

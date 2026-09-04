@@ -163,5 +163,5 @@ session = generate_session(
 ## Related
 
 - [Custom components](custom-components.md) — write a loader for any other format
-- [Check data quality](validate.md) — the matched-book / diff-feed checks a session should pass
+- [Check data quality](audit.md) — the matched-book / diff-feed checks a session should pass
 - [Configuration API](../api/config.md) — the pipeline's `PipelineConfig`

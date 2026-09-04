@@ -28,6 +28,7 @@ from ob_analytics import (
     DataQualitySummary,
     FeedType,
     LobsterSource,
+    Severity,
     data_quality_summary,
 )
 from ob_analytics.analytics import (
@@ -358,6 +359,151 @@ class TestDataQualitySummary:
         assert "crossed resting book" in text
         assert "diff feed" in text  # the interpretation note
         assert "pre-existing orders" in text
+
+
+# ---------------------------------------------------------------------------
+# The audit checks (issue #108)
+# ---------------------------------------------------------------------------
+
+
+class TestQualityChecks:
+    """The pass/fail verdicts ``ob-analytics audit`` exits on."""
+
+    def test_clean_run_passes_every_check(self):
+        s = data_quality_summary(
+            _classified_toy(), toy_trades(), feed_type=FeedType.MATCHED_BOOK
+        )
+        assert s.ok
+        assert s.errors == ()
+        assert s.warnings == ()
+        assert "all passed" in s.render()
+
+    def test_checks_are_ordered_errors_first(self):
+        s = data_quality_summary(crossed_events(), _empty_trades())
+        severities = [c.severity for c in s.checks]
+        assert severities == sorted(
+            severities, key=[Severity.ERROR, Severity.WARNING, Severity.INFO].index
+        )
+
+    def test_orphan_orders_counted(self):
+        # Order 5 is changed and deleted with no created row.
+        ev = _classified(
+            [
+                (1, 1, 0.0, 99.0, 2.0, "bid", "created", 0.0),
+                (2, 5, 1.0, 98.0, 2.0, "bid", "changed", 0.0),
+                (3, 5, 2.0, 98.0, 0.0, "bid", "deleted", 2.0),
+            ]
+        )
+        s = data_quality_summary(ev, _empty_trades())
+        assert s.orphan_orders == 1
+        assert s.orphan_events == 2
+        # Soft: an order resting before the capture began looks the same.
+        assert s.ok
+        assert [c.name for c in s.warnings] == ["orphan_orders"]
+
+    def test_negative_volume_is_an_error(self):
+        ev = _classified(
+            [
+                (1, 1, 0.0, 99.0, 2.0, "bid", "created", 0.0),
+                (2, 2, 1.0, 101.0, -1.0, "ask", "created", 0.0),
+            ]
+        )
+        s = data_quality_summary(ev, _empty_trades())
+        assert s.negative_volume_rows == 1
+        assert not s.ok
+        assert "negative_volume" in {c.name for c in s.errors}
+
+    def test_nonpositive_price_is_a_warning(self):
+        ev = _classified(
+            [
+                (1, 1, 0.0, 99.0, 2.0, "bid", "created", 0.0),
+                (2, 2, 1.0, 0.0, 2.0, "bid", "created", 0.0),
+            ]
+        )
+        s = data_quality_summary(ev, _empty_trades())
+        assert s.nonpositive_price_rows == 1
+        assert s.ok  # reported, but not a failure
+        assert "nonpositive_price" in {c.name for c in s.warnings}
+
+    def test_venue_clock_after_receive_is_an_error(self):
+        ev = _classified(
+            [
+                (1, 1, 0.0, 99.0, 2.0, "bid", "created", 0.0),
+                (2, 2, 1.0, 101.0, 2.0, "ask", "created", 0.0),
+            ]
+        )
+        # The venue stamped the second event a second after we received it.
+        ev.loc[ev.index[1], "exchange_timestamp"] += pd.Timedelta(seconds=1)
+        s = data_quality_summary(ev, _empty_trades())
+        assert s.exchange_time_after_receive == 1
+        assert not s.ok
+        assert "exchange_time_after_receive" in {c.name for c in s.errors}
+
+    def test_reordered_venue_clock_is_a_warning(self):
+        ev = _classified(
+            [
+                (1, 1, 0.0, 99.0, 2.0, "bid", "created", 0.0),
+                (2, 2, 1.0, 101.0, 2.0, "ask", "created", 0.0),
+                (3, 3, 2.0, 98.0, 2.0, "bid", "created", 0.0),
+            ]
+        )
+        # The middle event was stamped by the venue before the first one, so
+        # the two reached the capture out of order.
+        ev.loc[ev.index[1], "exchange_timestamp"] -= pd.Timedelta(seconds=10)
+        s = data_quality_summary(ev, _empty_trades())
+        assert s.exchange_time_reordered == 1
+        assert s.exchange_time_after_receive == 0
+        assert s.ok
+        assert "exchange_time_reordered" in {c.name for c in s.warnings}
+
+    def test_sequence_gap_is_an_error(self):
+        ev = _classified(
+            [
+                (1, 1, 0.0, 99.0, 2.0, "bid", "created", 0.0),
+                (2, 2, 1.0, 101.0, 2.0, "ask", "created", 0.0),
+                (3, 3, 2.0, 98.0, 2.0, "bid", "created", 0.0),
+            ]
+        )
+        ev["sequence"] = pd.array([1, 2, 7], dtype="Int64")  # 3-6 never arrived
+        s = data_quality_summary(ev, _empty_trades())
+        assert s.sequence_gaps == 4
+        assert not s.ok
+        assert "sequence_gaps" in {c.name for c in s.errors}
+
+    @pytest.mark.parametrize(
+        ("feed_type", "severity", "ok"),
+        [
+            (FeedType.MATCHED_BOOK, Severity.ERROR, False),
+            (FeedType.DIFF_FEED, Severity.INFO, True),
+            (FeedType.UNKNOWN, Severity.WARNING, True),
+        ],
+    )
+    def test_crossing_severity_follows_the_feed_type(self, feed_type, severity, ok):
+        """The same crossed book is a defect or a faithful replay by feed type."""
+        s = data_quality_summary(crossed_events(), _empty_trades(), feed_type=feed_type)
+        crossed = next(c for c in s.checks if c.name == "crossed_book")
+        assert not crossed.passed
+        assert crossed.severity is severity
+        assert s.ok is ok
+
+    def test_to_dict_carries_the_verdict(self):
+        s = data_quality_summary(crossed_events(), _empty_trades())
+        payload = json.loads(json.dumps(s.to_dict()))
+        assert payload["ok"] is True
+        assert {"name", "passed", "severity", "detail"} == set(payload["checks"][0])
+        assert "orphan_orders" in {c["name"] for c in payload["checks"]}
+
+    def test_render_lists_failed_checks_only(self):
+        ev = _classified(
+            [
+                (1, 1, 0.0, 99.0, 2.0, "bid", "created", 0.0),
+                (2, 2, 1.0, 101.0, -1.0, "ask", "created", 0.0),
+            ]
+        )
+        text = data_quality_summary(ev, _empty_trades()).render()
+        assert "ERROR   negative_volume" in text
+        # INFO checks are context, not findings: they stay out of the verdict.
+        assert "INFO" not in text
 
 
 # ---------------------------------------------------------------------------

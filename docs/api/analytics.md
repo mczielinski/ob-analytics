@@ -31,8 +31,16 @@ The reconstructions themselves live in the
 ## Data Quality
 
 See [Data quality: matched book vs diff feed](../data-quality.md) for the
-concepts and the [`validate` how-to](../howto/validate.md) for the CLI.
+concepts and the [`audit` how-to](../howto/audit.md) for the CLI.
 
 ::: ob_analytics.analytics.data_quality_summary
 
 ::: ob_analytics.analytics.DataQualitySummary
+
+::: ob_analytics.analytics.QualityCheck
+
+::: ob_analytics.analytics.Severity
+
+::: ob_analytics.analytics.detect_sequence_gaps
+
+::: ob_analytics.analytics.SequenceGapReport

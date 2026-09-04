@@ -437,8 +437,8 @@ implemented: sequence numbers (#146), instrument identity (#147), the time model
   provides one — the CCXT `nonce`, or an optional column in a Bitstamp / L2
   capture CSV) and **`ingest_seq`** (`int64`, a local monotonic counter in arrival
   order, the stable replay key). `detect_sequence_gaps()` reports dropped and
-  out-of-order messages, surfaced in `DataQualitySummary` and the `validate`
-  command.
+  out-of-order messages, surfaced in `DataQualitySummary` and the `audit`
+  command (which loads with `track_sequence` on for exactly this reason).
 - **Non-breaking.** The loader-attached columns are gated behind a default-off
   `PipelineConfig.track_sequence` flag, so existing frames are byte-for-byte
   unchanged.
