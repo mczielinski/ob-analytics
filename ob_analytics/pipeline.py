@@ -174,6 +174,57 @@ class PipelineResult:
 
         return {name: pl.from_arrow(table) for name, table in self.to_arrow().items()}
 
+    def metric(self, name: str) -> pd.DataFrame:
+        """Compute the registered metric *name* over this result.
+
+        Metrics are computed on demand, not stored: a run pays for a metric
+        only when it is asked for, and a third-party metric that raises cannot
+        break :meth:`Pipeline.run`.
+
+        Parameters
+        ----------
+        name : str
+            Registered metric name (case-insensitive), e.g. ``"amihud"``.
+            See :func:`~ob_analytics.metrics.list_metrics`.
+
+        Returns
+        -------
+        pandas.DataFrame
+            The metric's own table, as its
+            :meth:`~ob_analytics.protocols.Metric.compute` returns it.
+
+        Raises
+        ------
+        KeyError
+            If no metric is registered under *name*; the message lists the
+            registered names.
+        """
+        from ob_analytics.metrics import get_metric
+
+        return get_metric(name).compute(self)
+
+    def metrics(self) -> dict[str, pd.DataFrame]:
+        """Compute every registered metric that applies to this run.
+
+        A metric declares the resolutions it applies to (
+        :attr:`~ob_analytics.protocols.Metric.levels`), so an L3-only metric is
+        skipped on an L2 run rather than failing on its empty ``events`` table.
+
+        Returns
+        -------
+        dict of str to pandas.DataFrame
+            Metric name → its table, for the metrics whose ``levels`` include
+            this run's :attr:`level`.
+        """
+        from ob_analytics.metrics import METRICS
+
+        applicable = (METRICS.get(name) for name in METRICS.list())
+        return {
+            metric.name: metric.compute(self)
+            for metric in applicable
+            if self.level in metric.levels
+        }
+
     def plot(
         self,
         concept: str,

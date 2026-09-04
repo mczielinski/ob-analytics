@@ -166,6 +166,12 @@ fold. One per venue dialect.
 : The companion protocol for executions: `load(events, source)` returns
 the canonical trades frame with maker/taker attribution.
 
+**Metric**
+: A measurement taken from a finished run — registered under a name in
+`METRICS`, computed on demand by `result.metric(name)`, and drawn as a
+level-less plot under that same name. See
+[Metrics](api/metrics.md) and [Extending](extending.md#4-a-new-metric).
+
 ## Data formats
 
 **Matched book**

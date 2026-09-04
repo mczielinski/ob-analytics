@@ -53,6 +53,7 @@ nav = [
     { "L2 depth" = "api/depth_l2.md" },
     { "Order-book engine" = "api/engine.md" },
     { "Analytics" = "api/analytics.md" },
+    { "Metrics" = "api/metrics.md" },
     { "Flow Toxicity" = "api/flow_toxicity.md" },
     { "Trade Signs" = "api/trade_sign.md" },
     { "Depth Metrics" = "api/depth.md" },

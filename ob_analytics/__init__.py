@@ -25,7 +25,9 @@ The package exposes two layers:
     :class:`LobsterWriter`, :class:`LobsterSource`
 
 All processing stages are pluggable via :mod:`~ob_analytics.protocols`; a whole
-new data source registers via :func:`~ob_analytics.sources.register_source`.
+new data source registers via :func:`~ob_analytics.sources.register_source`, and
+a measurement of your own via :func:`~ob_analytics.metrics.register_metric`,
+which is what makes it run from a result and draw as a plot.
 """
 
 from importlib.metadata import PackageNotFoundError, version
@@ -63,6 +65,12 @@ from ob_analytics.flow_toxicity import (
 # entry-point group.
 from ob_analytics.live import LiveSource
 from ob_analytics.lobster import LobsterSource
+from ob_analytics.metrics import (
+    get_metric,
+    list_metrics,
+    load_metric_plugins,
+    register_metric,
+)
 from ob_analytics.pipeline import Pipeline, PipelineResult
 from ob_analytics.protocols import (
     DataWriter,
@@ -70,6 +78,7 @@ from ob_analytics.protocols import (
     EventLoader,
     FeedType,
     Level,
+    Metric,
     OfflineSource,
     RunContext,
     Source,
@@ -94,6 +103,7 @@ from ob_analytics.trade_sign import (
 )
 
 load_source_plugins()
+load_metric_plugins()
 
 logger.disable("ob_analytics")
 
@@ -143,6 +153,7 @@ __all__ = [
     "Level",
     "LiveSource",
     "LobsterSource",
+    "Metric",
     # ── Exceptions ───────────────────────────────────────────────────
     "ObAnalyticsError",
     # ── Protocols / extension points ─────────────────────────────────
@@ -168,13 +179,17 @@ __all__ = [
     # ── Data quality ─────────────────────────────────────────────────
     "data_quality_summary",
     "detect_sequence_gaps",
+    "get_metric",
     "get_source",
     "group_by_instrument",
     "lee_ready",
+    "list_metrics",
     "list_sources",
     "load_data",
+    "load_metric_plugins",
     "load_source_plugins",
     "order_flow_imbalance",
+    "register_metric",
     "register_source",
     # ── Sample data ──────────────────────────────────────────────────
     "sample_csv_path",

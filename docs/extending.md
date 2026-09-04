@@ -7,9 +7,9 @@ title: Extending
 Every pluggable surface in ob-analytics follows the same shape: implement a
 small **Protocol** by structural typing (no base class to inherit), then
 **register** it under a name. Things that are genuinely swappable at runtime —
-data sources, export formats, plot backends, live capturers — live in
-name-keyed registries. Things that aren't — metrics, themes — are plain
-functions and values you call directly.
+data sources, metrics, export formats, plot backends, live capturers — live
+in name-keyed registries. Things that aren't — themes — are plain values you
+pass directly.
 
 ## How extension works
 
@@ -18,7 +18,7 @@ functions and values you call directly.
 | **A data source** (new venue, file and/or live) | `Source` + `OfflineSource` and/or `LiveSource` | `register_source(name, cls)` (or an entry point) | `Pipeline.from_source(name)` · CLI `process --source name` / `capture name` |
 | **An export format** | `DataWriter` | `register_writer(name, factory)` | `save_data(data, path, fmt=name)` |
 | **A plot** | a `prepare_*` function + a renderer | `RENDERERS.register((name, backend), fn)` | `plot(name, backend=...)` |
-| **A metric** | a plain function | — *(no registry)* | `my_metric(result.trades, ...)` |
+| **A metric** | `Metric` | `register_metric(metric)` (or an entry point) | `result.metric(name)` · `result.plot(name)` · its own gallery card |
 
 Registration is an import side-effect: the module that calls
 `register_*` must be imported before the name is looked up. Built-ins register
@@ -413,15 +413,34 @@ HTML gallery, pass it through `extra_panels=` — see the
 
 ## 4. A new metric
 
-Metrics are not swapped at runtime, so they have no registry, no Protocol, and
-no wrapper class. A metric is a plain function over a DataFrame — almost always
-`result.trades`. The built-ins
-([`compute_vpin`](api/flow_toxicity.md), [`compute_kyle_lambda`](api/flow_toxicity.md),
-[`order_flow_imbalance`](api/flow_toxicity.md)) follow exactly this convention.
+A metric measures a finished run and draws as a level-less plot. It is a plain
+object with four members — no base class to inherit, the same structural typing
+the other surfaces use:
+
+- `name` — the registry key, and the plot concept the metric draws under.
+- `title` — the title of its gallery card.
+- `levels` — the resolutions it applies to. A metric that reads per-order
+  events declares `(Level.L3,)` and is skipped on an L2 run instead of failing
+  on the empty `events` table.
+- `compute(result)` — the measurement: takes a `PipelineResult`, returns a
+  `pandas.DataFrame`.
+- `prepare(frame)` — turns that table into the payload the renderer takes,
+  exactly as a `prepare_*` function does for a plot (§3).
+
+The built-in measurements ([`compute_vpin`](api/flow_toxicity.md),
+[`compute_kyle_lambda`](api/flow_toxicity.md),
+[`order_flow_imbalance`](api/flow_toxicity.md)) are plain functions you can
+still call directly. Registering wraps one so it runs and plots from a result.
 
 ```python
+from __future__ import annotations
+
 import numpy as np
 import pandas as pd
+from matplotlib.axes import Axes
+
+from ob_analytics import Level, PipelineResult, register_metric
+from ob_analytics.visualization import DEFAULT_THEME, RENDERERS, PlotTheme
 
 
 def amihud_illiquidity(trades: pd.DataFrame, freq: str = "1min") -> pd.DataFrame:
@@ -431,19 +450,81 @@ def amihud_illiquidity(trades: pd.DataFrame, freq: str = "1min") -> pd.DataFrame
     value = (df["price"] * df["volume"]).resample(freq).sum()
     illiq = (abs_ret / value.replace(0, np.nan)).rename("amihud")
     return illiq.to_frame()
+
+
+class AmihudMetric:
+    """Satisfies the Metric Protocol."""
+
+    name = "amihud"
+    title = "Amihud Illiquidity"
+    levels = (Level.L2, Level.L3)  # trades only: both resolutions have them
+
+    def __init__(self, freq: str = "1min") -> None:
+        self.freq = freq
+
+    def compute(self, result: PipelineResult) -> pd.DataFrame:
+        return amihud_illiquidity(result.trades, freq=self.freq)
+
+    def prepare(self, frame: pd.DataFrame) -> dict:
+        return {"series": frame.reset_index()}
+
+
+def mpl_amihud(data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME):
+    import matplotlib.pyplot as plt
+
+    if ax is None:
+        _, ax = plt.subplots()
+    df = data["series"]
+    ax.plot(df["timestamp"], df["amihud"])
+    ax.set_ylabel("illiquidity")
+    return ax.figure
+
+
+register_metric(AmihudMetric(freq="5min"))
+RENDERERS.register(("amihud", None, "matplotlib"), mpl_amihud)  # None = level-less
 ```
+
+Note what is registered: an *instance*, not a class. A metric needs no per-run
+construction, so the object registered is the object called — which is also how
+it carries settings of its own, such as `freq` above.
 
 Using it:
 
 ```python
 from ob_analytics import Pipeline
+from ob_analytics.visualization import available_concepts
 
 result = Pipeline().run("orders.csv")
-illiq = amihud_illiquidity(result.trades, freq="5min")
+
+result.metric("amihud")        # the table
+result.metrics()               # every metric that applies to this run
+result.plot("amihud")          # the face, through the renderer above
+available_concepts(result)     # lists "amihud" with an empty level list
 ```
 
-To visualise a metric, prepare its data and register a renderer (§3), or pass a
-panel to the gallery via `extra_panels=`.
+Metrics run when asked for, not during `Pipeline.run`, so a run pays only for
+the metrics it uses and a metric that raises cannot break the pipeline.
+`result.metrics()` runs every registered metric whose `levels` include the
+run's resolution.
+
+**In the gallery.** A registered metric becomes a gallery card on its own —
+`generate_gallery(result, ...)` draws it beside the built-in faces with no
+`extra_panels=` needed. A metric that raises is logged and its card dropped, so
+one broken metric does not stop the gallery being built.
+
+**Shipping a metric as its own package.** Advertise it under the
+`ob_analytics.metrics` entry-point group and `load_metric_plugins()` finds it at
+`import ob_analytics`, the same as a source:
+
+```toml
+# pyproject.toml of your package
+[project.entry-points."ob_analytics.metrics"]
+amihud = "my_pkg.amihud:AmihudMetric"
+```
+
+The entry point names the metric *class*; discovery constructs it with no
+arguments and registers it under its own `name`. A metric with required
+settings should either default them or register itself on import instead.
 
 ---
 

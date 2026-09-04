@@ -317,6 +317,11 @@ duplicate ids, pre-existing orders and sequence faults.
 
 ## Plots
 
+**Metric**:
+A measurement taken from a finished run, registered under a name so it runs
+from a result and draws as a level-less plot. Its name is also its concept.
+_Avoid_: signal, indicator, statistic, analytic
+
 **Concept**:
 What a plot shows, independent of resolution — for example `depth_heatmap` or
 `trade_tape`. A concept holds up to one variant per resolution.
