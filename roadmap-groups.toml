@@ -20,10 +20,12 @@
 id = "foundation"
 title = "Part 1 - the foundation"
 prose = """
-The shared schema is the one thing the rest of the work needs. It unblocks four
-pieces of work; the separated engine then also feeds the metric hook.
+The shared schema is the one thing the rest of the work needs. It unblocks five
+pieces of work; the separated engine then also feeds the metric hook. The frame
+type is settled, apart from one question it left behind: the shape the export
+writer takes.
 """
-issues = [112, 136, 137, 104, 113, 140]
+issues = [112, 136, 137, 104, 113, 140, 216]
 
 [[group]]
 id = "data-model"
@@ -93,7 +95,7 @@ prose = """
 What is left before a version other projects can depend on: four decisions,
 conda-forge distribution, and the documentation work.
 """
-issues = [115, 120, 121, 141, 142, 145]
+issues = [115, 120, 121, 141, 142, 145, 216]
 
 # Either/or prerequisites.
 #
@@ -166,3 +168,4 @@ label = "a prediction market"
 155 = "integer ticks"
 203 = "Polars port"
 206 = "out-of-core reads"
+216 = "writer frame type"
