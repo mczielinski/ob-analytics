@@ -10,6 +10,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **A metric registry, so a user metric runs and plots with no core edit**
+  (#140). A metric is a plain object with a `name`, a `title`, the `levels` it
+  applies to, `compute(result)` and `prepare(frame)` — no base class to
+  inherit, the same structural typing sources and writers use. Register it with
+  `register_metric(metric)`, or ship it in your own package under the
+  `ob_analytics.metrics` entry-point group and `load_metric_plugins()` finds it
+  at `import ob_analytics`.
+
+  A registered metric is a level-less plot concept under its own name, so a
+  renderer at `(name, None, backend)` is its face. It then appears in
+  `available_concepts(result)`, renders through `result.plot(name)`, and gets
+  its own gallery card with no `extra_panels=`. Metrics run when asked for, not
+  during `Pipeline.run`: `result.metric(name)` computes one and
+  `result.metrics()` computes every metric whose `levels` include the run's
+  resolution — so an L3-only metric is skipped on an L2 run instead of failing
+  on its empty `events` table, and a metric that raises is logged and its card
+  dropped, so one broken metric cannot stop the gallery being built. New public
+  names: `Metric`,
+  `register_metric`, `list_metrics`, `get_metric`, `load_metric_plugins`,
+  `PipelineResult.metric` / `.metrics`. See the ["A new metric"
+  how-to](https://mczielinski.github.io/ob-analytics/extending/#4-a-new-metric).
+
 - **`ob-analytics audit`, a data-quality gate** (#108). The old `validate` verb
   is now `audit` (the old name still works), it scores the run against named
   checks, and it **exits non-zero when one fails** — so a script can stop before

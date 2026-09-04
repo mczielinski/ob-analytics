@@ -262,6 +262,46 @@ class DataWriter(Protocol):
 
 
 @runtime_checkable
+class Metric(Protocol):
+    """Structural contract for a measurement taken from a finished run.
+
+    A metric reads a run's tables and returns one table of its own, then says
+    how to turn that table into a renderer payload.  There is **no base class
+    to inherit**: any object providing these members satisfies the contract
+    (structural typing), and registering it in
+    :data:`~ob_analytics.metrics.METRICS` is what makes it run and plot.
+
+    :attr:`name` is both the registry key and the level-less plot concept the
+    metric draws under, so a renderer registered at ``(name, None, backend)``
+    is the metric's face.
+
+    Attributes
+    ----------
+    name : str
+        Short lowercase identifier registered in
+        :data:`~ob_analytics.metrics.METRICS`, e.g. ``"amihud"``.
+    title : str
+        Human-readable title for the metric's gallery card.
+    levels : tuple of Level
+        The resolutions the metric applies to.  A metric that reads per-order
+        events declares ``(Level.L3,)`` only, so it is skipped on an L2 run
+        rather than failing on an empty ``events`` table.
+    """
+
+    name: str
+    title: str
+    levels: tuple[Level, ...]
+
+    def compute(self, result: Any) -> pd.DataFrame:
+        """Return this metric's table for *result* (a ``PipelineResult``)."""
+        ...
+
+    def prepare(self, frame: pd.DataFrame) -> dict[str, Any]:
+        """Turn :meth:`compute`'s table into the payload the renderer takes."""
+        ...
+
+
+@runtime_checkable
 class Source(Protocol):
     """Structural contract shared by every data source, file or live.
 

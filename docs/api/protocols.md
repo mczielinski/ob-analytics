@@ -17,6 +17,7 @@ inheritance required.
 | `Source` | `level` · `feed_type` · `settings` | The shape shared by every data source, file or live |
 | `OfflineSource` | factory methods | A `Source` that replays stored files (loader, trade source, writer) |
 | `LiveSource` | `snapshot` · `stream` · `shutdown_synthetic_events` | A `Source` that captures a live venue feed |
+| `Metric` | `compute(result)` · `prepare(frame)` | A measurement taken from a finished run, drawn as a level-less plot |
 
 A `Source` declares two coordinates: a `FeedType` (`matched_book` vs
 `diff_feed`; see [Data quality](../data-quality.md)) and a `Level` (`L2` vs
@@ -40,3 +41,5 @@ and registers in the source registry (see [Sources](sources.md)).
 ::: ob_analytics.protocols.OfflineSource
 
 ::: ob_analytics.live.LiveSource
+
+::: ob_analytics.protocols.Metric

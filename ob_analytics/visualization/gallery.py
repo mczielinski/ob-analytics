@@ -194,6 +194,40 @@ def _paired(
     return PlotConcept(key, title, {Level.L2: l2, Level.L3: l3}, note=note)
 
 
+def _metric_panels(result: PipelineResult) -> list[PlotSpec]:
+    """Build one analytic panel per registered metric that applies to *result*.
+
+    A metric registered in :data:`~ob_analytics.metrics.METRICS` becomes a
+    gallery card without any edit here: its ``name`` is the level-less plot
+    concept the panel dispatches on, so a renderer registered at
+    ``(name, None, backend)`` draws it (issue #140).  A metric whose
+    :attr:`~ob_analytics.protocols.Metric.levels` exclude this run's level is
+    skipped, and so is one that raises: it is logged and its panel dropped, so
+    a single broken metric cannot stop the gallery being built.
+
+    The metric sees the display-unit *result* the faces render, so its numbers
+    and the axes beside them are in the same units (see :func:`display_result`).
+    """
+    from ob_analytics.metrics import METRICS
+
+    panels: list[PlotSpec] = []
+    for name in METRICS.list():
+        metric = METRICS.get(name)
+        if result.level not in metric.levels:
+            continue
+        try:
+            frame = metric.compute(result)
+        except Exception as e:  # noqa: BLE001 -- one bad metric must not sink the gallery
+            logger.warning("Gallery: metric {!r} failed: {}", name, e)
+            continue
+        panels.append(
+            PlotSpec(
+                metric.name, metric.title, metric.name, metric.prepare, {"frame": frame}
+            )
+        )
+    return panels
+
+
 def _build_l2_gallery_model(
     result: PipelineResult,
     *,
@@ -320,7 +354,7 @@ def _build_l2_gallery_model(
             )
         )
 
-    return GalleryModel(concepts=concepts, analytics=[])
+    return GalleryModel(concepts=concepts, analytics=_metric_panels(result))
 
 
 #: Price-valued columns per frame, converted from integer ticks to a
@@ -765,7 +799,7 @@ def build_gallery_model(
                 )
             )
 
-    return GalleryModel(concepts=concepts, analytics=[])
+    return GalleryModel(concepts=concepts, analytics=_metric_panels(result))
 
 
 def plot_result(
@@ -792,6 +826,8 @@ def plot_result(
         Pipeline output (``events`` / ``trades`` / ``depth`` / ``depth_summary``).
     concept : str
         Concept key, e.g. ``"trade_tape"`` (see :data:`available_concepts`).
+        The name of a registered metric works too; a metric is level-less, so
+        *level* does not apply to it.
     level : Level or str or None
         ``"L2"`` / ``"L3"`` (or a :class:`Level`).  ``None`` picks the concept's
         only level, preferring L2 when both exist.
@@ -815,11 +851,18 @@ def plot_result(
     """
     model = build_gallery_model(result, volume_scale=volume_scale)
     concept_map = {c.key: c for c in model.concepts}
+    metric_map = {spec.name: spec for spec in model.analytics}
     pc = concept_map.get(concept)
     if pc is None:
+        # A registered metric (issue #140) is a level-less concept: it has no
+        # L2/L3 variants, so it renders straight from its panel.
+        metric_spec = metric_map.get(concept)
+        if metric_spec is not None:
+            data = metric_spec.prepare(**{**metric_spec.prep_kwargs, **overrides})
+            return plot(concept, None, backend=backend, **data)
         raise KeyError(
             f"Unknown concept {concept!r} for this result. "
-            f"Available: {sorted(concept_map)}"
+            f"Available: {sorted(concept_map) + sorted(metric_map)}"
         )
 
     if level is None:
@@ -845,9 +888,14 @@ def available_concepts(result: PipelineResult) -> dict[str, list[str]]:
     A discoverability companion to :func:`plot_result`: shows what
     ``plot_result(result, concept, level=...)`` can render for this dataset
     (which varies by format -- e.g. ``hidden_executions`` is LOBSTER-only).
+
+    A registered metric (issue #140) is listed too, with an empty level list:
+    a metric is level-less, so ``plot_result(result, "amihud")`` takes no
+    ``level=``.
     """
     model = build_gallery_model(result)
-    return {c.key: sorted(lvl.value for lvl in c.variants) for c in model.concepts}
+    concepts = {c.key: sorted(lvl.value for lvl in c.variants) for c in model.concepts}
+    return {**concepts, **{spec.name: [] for spec in model.analytics}}
 
 
 def vpin_panel(vpin_df: pd.DataFrame, *, threshold: float = 0.7) -> PlotSpec:
