@@ -106,6 +106,37 @@ class TestCompare:
 
         assert [r.metric for r in regressions] == ["peak_rss_mib"]
 
+    def test_the_default_margin_covers_the_variance_between_two_runners(
+        self,
+    ) -> None:
+        """The numbers are the ones two runs of PR #219 measured (issue #220).
+
+        Same commit, no timed code changed: 14.66s on one runner and 10.17s on
+        the next, against a 9.36s baseline. Neither is a slow-down, so neither
+        may fail the job.
+        """
+        baseline = [_measurement(seconds=9.36)]
+
+        for measured_seconds in (14.66, 10.17):
+            regressions = compare(
+                [_measurement(seconds=measured_seconds)],
+                baseline,
+                margins=bench_scale.DEFAULT_MARGINS,
+            )
+
+            assert regressions == []
+
+    def test_the_default_margin_still_fails_a_real_slow_down(self) -> None:
+        """Widening the margin must not turn the check off (issue #220)."""
+        baseline = [_measurement(seconds=9.36)]
+        measured = [_measurement(seconds=23.4)]  # two and a half times
+
+        regressions = compare(measured, baseline, margins=bench_scale.DEFAULT_MARGINS)
+
+        assert [(r.stage, r.metric) for r in regressions] == [
+            ("depth_metrics", "seconds")
+        ]
+
     def test_a_stage_the_baseline_does_not_name_is_not_a_slow_down(self) -> None:
         baseline = [_measurement("depth_metrics", seconds=10.0)]
         measured = [
