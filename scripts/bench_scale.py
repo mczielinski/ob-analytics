@@ -351,13 +351,22 @@ def _synth() -> tuple[pd.DataFrame, pd.DataFrame]:
 RUNS: dict[str, Load] = {"sample": _sample, "synth": _synth}
 """The workloads measured, by name. A baseline record names one of these."""
 
-DEFAULT_MARGINS = Margins(seconds=0.5, peak_rss_mib=0.15)
+DEFAULT_MARGINS = Margins(seconds=1.0, peak_rss_mib=0.15)
 """How much worse than the baseline still passes.
 
-Wall-clock time on a shared CI runner varies by tens of percent between runs of
-identical code, so half again is the point where a slow-down is more likely than
-noise. Memory does not vary that way: the same input allocates the same arrays,
-so it is held to a tenth.
+Wall-clock time belongs to the runner that measured it, and two runners differ
+by more than the first version of this number allowed. One commit measured
+``depth_metrics`` at 14.66s and then at 10.17s against a 9.36s baseline, with no
+timed code changed between them (issue #220), so the earlier margin of half
+again reported a slow-down that was not there. Twice the baseline sits outside
+that spread.
+
+The cost is that a slow-down between 1.5x and 2x no longer fails. That is the
+price of judging one noisy sample; measuring each stage several times and
+keeping the fastest would allow a tighter number, since noise only adds time.
+
+Memory does not vary that way: the same input allocates the same arrays however
+fast the machine runs, so it is held to a tenth.
 """
 
 
