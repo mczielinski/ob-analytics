@@ -33,7 +33,7 @@ nav = [
     { "Capture CCXT venues (crypto + prediction markets)" = "howto/ccxt.md" },
     { "Capture cryptofeed venues (native L3 crypto)" = "howto/cryptofeed.md" },
     { "Run from the command line" = "howto/cli.md" },
-    { "Check data quality" = "howto/validate.md" },
+    { "Check data quality" = "howto/audit.md" },
     { "Extending ob-analytics" = "extending.md" },
   ] },
   { "Explanation" = [

@@ -80,4 +80,4 @@ ob-analytics capture ccxt --exchange polymarket --pair <token> --poll-interval 2
 - [Capture cryptofeed venues](cryptofeed.md) — the per-order (L3) complement, for venues that publish order-by-order data
 - [Process L2 (price-level) feeds](l2-depth.md) — what the captured `depth.csv` flows through
 - [Capture live data](live-capture.md) — the capture framework and writing a bespoke venue
-- [Check data quality](validate.md) — run `validate` on the captured output
+- [Check data quality](audit.md) — run `audit` on the captured output

@@ -250,6 +250,59 @@ def tiny_bitstamp_orders_csv(
     return d / "orders.csv"
 
 
+@pytest.fixture
+def corrupt_bitstamp_orders_csv(tmp_path, tiny_bitstamp_orders_csv) -> Path:
+    """The tiny Bitstamp fixture with three deliberate defects.
+
+    Used to prove ``ob-analytics audit`` refuses a corrupted feed:
+
+    * order 3's ``created`` row is dropped, so its later events are orphans;
+    * one venue ``sequence`` number is skipped — a dropped message;
+    * the last row carries a venue timestamp later than its receive timestamp.
+
+    The trades file is copied unchanged, so the events and trades still
+    describe the same session.
+    """
+    import shutil
+
+    src = tiny_bitstamp_orders_csv.parent
+    dest = tmp_path / "corrupt"
+    dest.mkdir()
+
+    orders = pd.read_csv(src / "orders.csv")
+    orders["sequence"] = range(1, len(orders) + 1)
+    orders = orders[~((orders["id"] == 3) & (orders["action"] == "created"))]
+    orders.loc[orders["sequence"] > 8, "sequence"] += 3
+    last = orders.index[-1]
+    orders.loc[last, "exchange_timestamp"] = orders.loc[last, "timestamp"] + 5_000
+    orders.to_csv(dest / "orders.csv", index=False)
+
+    shutil.copy(src / "trades.csv", dest / "trades.csv")
+    return dest / "orders.csv"
+
+
+@pytest.fixture
+def dropped_created_orders_csv(tmp_path, tiny_bitstamp_orders_csv) -> Path:
+    """The tiny Bitstamp fixture with order 3's ``created`` row dropped.
+
+    One defect only, and a soft one: an order changed and deleted with no
+    ``created`` row looks exactly like an order that was already resting when
+    the capture began, so it is a warning rather than an error.
+    """
+    import shutil
+
+    src = tiny_bitstamp_orders_csv.parent
+    dest = tmp_path / "orphan"
+    dest.mkdir()
+
+    orders = pd.read_csv(src / "orders.csv")
+    orders = orders[~((orders["id"] == 3) & (orders["action"] == "created"))]
+    orders.to_csv(dest / "orders.csv", index=False)
+
+    shutil.copy(src / "trades.csv", dest / "trades.csv")
+    return dest / "orders.csv"
+
+
 @pytest.fixture(scope="module")
 def bitstamp_sample_dir() -> Path:
     """Path to the bundled Bitstamp sample directory (orders.csv.gz + trades.csv).

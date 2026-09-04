@@ -118,7 +118,7 @@ sorted(available_concepts(result))    # only the L2-supported concepts
 
 ## Checking data quality
 
-`ob-analytics validate <source> --source depth_csv` (and
+`ob-analytics audit <source> --source depth_csv` (and
 `data_quality_summary`) work on an L2 result: the crossed-book % is read from
 the price-level book, and the per-order metrics report zero.
 

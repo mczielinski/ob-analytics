@@ -99,13 +99,13 @@ class TestProcessSubcommand:
 
 
 # ---------------------------------------------------------------------------
-# validate
+# audit
 # ---------------------------------------------------------------------------
 
 
-class TestValidateSubcommand:
-    def test_validate_reports_summary(self, cli_runner, tiny_bitstamp_orders_csv):
-        r = cli_runner("validate", str(tiny_bitstamp_orders_csv))
+class TestAuditSubcommand:
+    def test_audit_reports_summary(self, cli_runner, tiny_bitstamp_orders_csv):
+        r = cli_runner("audit", str(tiny_bitstamp_orders_csv))
         assert r.returncode == 0, r.stderr
         assert "Data quality summary" in r.stdout
         assert "feed type" in r.stdout
@@ -113,31 +113,99 @@ class TestValidateSubcommand:
         # crossing.
         assert "diff_feed" in r.stdout
 
-    def test_validate_json(self, cli_runner, tiny_bitstamp_orders_csv):
+    def test_audit_json(self, cli_runner, tiny_bitstamp_orders_csv):
         import json
 
-        r = cli_runner("validate", str(tiny_bitstamp_orders_csv), "--json")
+        r = cli_runner("audit", str(tiny_bitstamp_orders_csv), "--json")
         assert r.returncode == 0, r.stderr
         payload = json.loads(r.stdout)
         assert payload["feed_type"] == "diff_feed"
         assert 0.0 <= payload["crossed_pct"] <= 100.0
+        assert payload["ok"] is True
         assert set(payload) >= {
             "crossed_pct",
             "unmatched_trades_pct",
             "duplicate_event_ids",
             "pre_existing_orders",
+            "orphan_orders",
+            "negative_volume_rows",
+            "checks",
+        }
+        assert {c["name"] for c in payload["checks"]} >= {
+            "duplicate_event_ids",
+            "sequence_gaps",
+            "orphan_orders",
         }
 
-    def test_validate_lobster_requires_trading_date(
+    def test_audit_lobster_requires_trading_date(
         self, cli_runner, tiny_bitstamp_orders_csv
     ):
-        r = cli_runner("validate", str(tiny_bitstamp_orders_csv), "--source", "lobster")
+        r = cli_runner("audit", str(tiny_bitstamp_orders_csv), "--source", "lobster")
         assert r.returncode != 0
         assert "trading" in (r.stderr + r.stdout).lower()
 
-    def test_validate_listed_in_help(self, cli_runner):
+    def test_audit_listed_in_help(self, cli_runner):
         r = cli_runner("--help")
-        assert "validate" in r.stdout
+        assert "audit" in r.stdout
+
+    def test_validate_is_still_accepted(self, cli_runner, tiny_bitstamp_orders_csv):
+        """``validate`` is the old name for ``audit``; it must keep working."""
+        r = cli_runner("validate", str(tiny_bitstamp_orders_csv))
+        assert r.returncode == 0, r.stderr
+        assert "Data quality summary" in r.stdout
+
+    def test_audit_fails_on_corrupted_feed(
+        self, cli_runner, corrupt_bitstamp_orders_csv
+    ):
+        """A corrupted feed exits non-zero and names the checks that failed."""
+        r = cli_runner("audit", str(corrupt_bitstamp_orders_csv))
+        assert r.returncode != 0
+        assert "Data quality summary" in r.stdout
+        combined = r.stdout + r.stderr
+        assert "sequence_gaps" in combined
+        assert "exchange_time_after_receive" in combined
+
+    def test_audit_corrupted_feed_json_reports_not_ok(
+        self, cli_runner, corrupt_bitstamp_orders_csv
+    ):
+        import json
+
+        r = cli_runner("audit", str(corrupt_bitstamp_orders_csv), "--json")
+        assert r.returncode != 0
+        payload = json.loads(r.stdout)
+        assert payload["ok"] is False
+        assert payload["sequence_gaps"] > 0
+        assert payload["orphan_orders"] > 0
+        failed = {c["name"] for c in payload["checks"] if not c["passed"]}
+        assert "sequence_gaps" in failed
+
+    def test_dropped_created_is_a_warning_until_strict(
+        self, cli_runner, dropped_created_orders_csv
+    ):
+        """An order with no ``created`` row warns; --strict makes it fail."""
+        lenient = cli_runner("audit", str(dropped_created_orders_csv))
+        assert lenient.returncode == 0, lenient.stderr
+        assert "orphan_orders" in lenient.stdout
+
+        strict = cli_runner("audit", str(dropped_created_orders_csv), "--strict")
+        assert strict.returncode != 0
+        assert "orphan_orders" in (strict.stdout + strict.stderr)
+
+    def test_audit_from_parquet(self, cli_runner, tmp_path, tiny_bitstamp_orders_csv):
+        """A saved 'process' output can be audited without re-running it."""
+        out = tmp_path / "out"
+        r = cli_runner("process", str(tiny_bitstamp_orders_csv), "--output", str(out))
+        assert r.returncode == 0, r.stderr
+
+        r = cli_runner("audit", str(out), "--from-parquet")
+        assert r.returncode == 0, r.stderr
+        assert "Data quality summary" in r.stdout
+        # No --source, so the feed type stays undeclared rather than guessed.
+        assert "unknown" in r.stdout
+
+        r = cli_runner("audit", str(out), "--from-parquet", "--source", "bitstamp")
+        assert r.returncode == 0, r.stderr
+        assert "diff_feed" in r.stdout
 
 
 # ---------------------------------------------------------------------------

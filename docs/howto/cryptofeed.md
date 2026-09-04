@@ -128,4 +128,4 @@ Prefer **one source per venue** rather than two ways to capture the same thing:
 - [Capture CCXT venues](ccxt.md) — the price-level source covering the widest venue list
 - [Capture live data](live-capture.md) — the capture framework and writing a bespoke venue
 - [Process L2 (price-level) feeds](l2-depth.md) — what a captured `depth.csv` flows through
-- [Check data quality](validate.md) — run `validate` on the captured output
+- [Check data quality](audit.md) — run `audit` on the captured output

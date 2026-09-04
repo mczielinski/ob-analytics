@@ -6,6 +6,7 @@ Usage::
 
     ob-analytics process orders.csv --output results/
     ob-analytics process data/ --source lobster --trading-date 2012-06-21
+    ob-analytics audit orders.csv --strict
     ob-analytics gallery results/parquet/ --output my_gallery/
     ob-analytics bitstamp-demo --input /path/to/dir_with_orders_and_trades/ --output demo_out/
     ob-analytics bitstamp-demo --view comparison   # L2-vs-L3 counterparts side by side
@@ -94,45 +95,41 @@ def _cmd_process(args: argparse.Namespace) -> None:
         )
 
 
-def _cmd_validate(args: argparse.Namespace) -> None:
-    """Run the pipeline and print a per-run data-quality summary."""
+def _cmd_audit(args: argparse.Namespace) -> None:
+    """Audit a run's data quality and exit non-zero when a check fails."""
     _setup_logging(args.verbose)
     from loguru import logger
 
     from ob_analytics.analytics import data_quality_summary
-    from ob_analytics.pipeline import Pipeline
-    from ob_analytics.protocols import FeedType, RunContext
-    from ob_analytics.sources import get_source
+    from ob_analytics.protocols import FeedType
 
-    try:
-        source = get_source(args.source)()
-    except KeyError as exc:
-        logger.error(str(exc))
-        sys.exit(1)
+    # Running the pipeline needs a source, so it falls back to the default one.
+    # Reading a saved result does not: the feed type is a property of the
+    # *source*, not of the data, so without --source it stays undeclared rather
+    # than guessed, which keeps the crossing check honest (see FeedType).
+    source_name = args.source
+    if source_name is None and not args.from_parquet:
+        source_name = "bitstamp"
 
-    required = getattr(source, "required_context", list)()
-    if "trading_date" in required and args.trading_date is None:
-        logger.error("--trading-date is required for the {} source", args.source)
-        sys.exit(1)
-    ctx = (
-        RunContext(trading_date=args.trading_date)
-        if args.trading_date is not None
-        else RunContext()
-    )
+    feed_type = FeedType.UNKNOWN
+    if source_name is not None:
+        from ob_analytics.sources import get_source
 
-    try:
-        pipeline = Pipeline(source=source, ctx=ctx)
-    except TypeError as exc:  # e.g. a live-only source cannot replay files
-        logger.error(str(exc))
-        sys.exit(1)
+        try:
+            feed_type = getattr(get_source(source_name)(), "feed_type", feed_type)
+        except KeyError as exc:
+            logger.error(str(exc))
+            sys.exit(1)
 
-    logger.info("Validating {} (source={})...", args.path, args.source)
-    result = pipeline.run(args.path)
+    if args.from_parquet:
+        result = _load_saved_result(Path(args.path))
+    else:
+        result = _run_for_audit(args, source_name or "bitstamp")
 
     summary = data_quality_summary(
         result.events,
         result.trades,
-        feed_type=getattr(source, "feed_type", FeedType.UNKNOWN),
+        feed_type=feed_type,
         depth=result.depth,
     )
 
@@ -143,39 +140,94 @@ def _cmd_validate(args: argparse.Namespace) -> None:
     else:
         print(summary.render())
 
+    failed = summary.errors + (summary.warnings if args.strict else ())
+    if failed:
+        logger.error(
+            "Audit failed: {}",
+            "; ".join(f"{c.name} — {c.detail}" for c in failed),
+        )
+        sys.exit(1)
 
-def _cmd_gallery(args: argparse.Namespace) -> None:
-    """Generate an HTML plot gallery from saved Parquet results."""
-    _setup_logging(args.verbose)
+
+def _run_for_audit(args: argparse.Namespace, source_name: str) -> Any:
+    """Run the pipeline for ``audit`` and return the result."""
+    from loguru import logger
+
+    from ob_analytics.config import PipelineConfig
+    from ob_analytics.pipeline import Pipeline
+    from ob_analytics.protocols import RunContext
+    from ob_analytics.sources import get_source
+
+    try:
+        source = get_source(source_name)()
+    except KeyError as exc:
+        logger.error(str(exc))
+        sys.exit(1)
+
+    required = getattr(source, "required_context", list)()
+    if "trading_date" in required and args.trading_date is None:
+        logger.error("--trading-date is required for the {} source", source_name)
+        sys.exit(1)
+    ctx = (
+        RunContext(trading_date=args.trading_date)
+        if args.trading_date is not None
+        else RunContext()
+    )
+
+    # Load the ordering keys: dropped-message detection reads the venue
+    # sequence, and it is off by default elsewhere.  Only this field is set
+    # explicitly, so the source's own config defaults still apply.
+    config = PipelineConfig(track_sequence=True)
+
+    try:
+        pipeline = Pipeline(config, source=source, ctx=ctx)
+    except TypeError as exc:  # e.g. a live-only source cannot replay files
+        logger.error(str(exc))
+        sys.exit(1)
+
+    logger.info("Auditing {} (source={})...", args.path, source_name)
+    return pipeline.run(args.path)
+
+
+def _load_saved_result(data_path: Path) -> Any:
+    """Rebuild a :class:`PipelineResult` from a saved Parquet directory."""
     from loguru import logger
 
     from ob_analytics.config import PipelineConfig
     from ob_analytics.data import load_data
     from ob_analytics.pipeline import PipelineResult
-    from ob_analytics.visualization.gallery import generate_gallery
-
-    data_path = Path(args.data)
-    output = Path(args.output)
 
     logger.info("Loading data from {}...", data_path)
     data = load_data(data_path)
 
     # Recover the tick size the data was written with (issue #155), surfaced by
-    # load_data on each frame's ``attrs``, so the gallery renders quote-currency
+    # load_data on each frame's ``attrs``, so a reader gets quote-currency
     # prices.  A legacy (pre-#155) file has no tick size and already stores float
-    # prices, so fall back to 1.0 (prices shown as-is).
+    # prices, so fall back to 1.0 (prices read as-is).
     tick_size = next(
         (df.attrs["tick_size"] for df in data.values() if "tick_size" in df.attrs),
         1.0,
     )
-
-    result = PipelineResult(
+    return PipelineResult(
         events=data["events"],
         trades=data["trades"],
         depth=data["depth"],
         depth_summary=data["depth_summary"],
         config=PipelineConfig(tick_size=tick_size),
     )
+
+
+def _cmd_gallery(args: argparse.Namespace) -> None:
+    """Generate an HTML plot gallery from saved Parquet results."""
+    _setup_logging(args.verbose)
+    from loguru import logger
+
+    from ob_analytics.visualization.gallery import generate_gallery
+
+    data_path = Path(args.data)
+    output = Path(args.output)
+
+    result = _load_saved_result(data_path)
 
     gallery_path = generate_gallery(
         result,
@@ -397,31 +449,48 @@ def main() -> None:
     _add_view_arg(p_process)
     p_process.set_defaults(func=_cmd_process)
 
-    # -- validate --
-    p_validate = subparsers.add_parser(
-        "validate",
-        help="Report per-run data-quality metrics for a data source",
+    # -- audit --
+    p_audit = subparsers.add_parser(
+        "audit",
+        aliases=["validate"],
+        help="Check a run's data quality; exit non-zero when a check fails",
     )
-    p_validate.add_argument("path", help="Path to data file or directory")
-    p_validate.add_argument(
+    p_audit.add_argument("path", help="Path to data file or directory")
+    p_audit.add_argument(
         "-s",
         "--source",
-        default="bitstamp",
+        default=None,
         choices=sources,
-        help=f"Data source (default: bitstamp; registered: {', '.join(sources)})",
+        help=(
+            "Data source (default: bitstamp when running the pipeline). "
+            "With --from-parquet it only declares the feed type; omit it to "
+            f"leave the feed type undeclared. Registered: {', '.join(sources)}"
+        ),
     )
-    p_validate.add_argument(
+    p_audit.add_argument(
         "--trading-date",
         default=None,
         help="Trading date for the LOBSTER source (YYYY-MM-DD)",
     )
-    p_validate.add_argument(
+    p_audit.add_argument(
+        "--from-parquet",
+        action="store_true",
+        default=False,
+        help="Read a saved 'process' output directory instead of running the pipeline",
+    )
+    p_audit.add_argument(
+        "--strict",
+        action="store_true",
+        default=False,
+        help="Fail on warnings too, not only on errors",
+    )
+    p_audit.add_argument(
         "--json",
         action="store_true",
         default=False,
         help="Emit the summary as JSON instead of text",
     )
-    p_validate.set_defaults(func=_cmd_validate)
+    p_audit.set_defaults(func=_cmd_audit)
 
     # -- gallery --
     p_gallery = subparsers.add_parser(

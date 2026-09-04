@@ -8,7 +8,7 @@ how you read every downstream plot and metric.
 
 This page explains the distinction, why a crossed book is often *faithful*
 rather than a bug, and the two tools `ob-analytics` gives you to work with it:
-the [`validate`](howto/validate.md) command that **measures** data quality,
+the [`audit`](howto/audit.md) command that **measures** data quality,
 and the `uncross=` option that **cleans the book up for display**.
 
 ## Two kinds of L3 feed
@@ -57,13 +57,14 @@ error. The tutorial meets this pitfall twice — once in
     The crossing *is the signal* for a diff feed — it tells you the feed is
     unmatched and that spreads, mid-prices, and depth near the touch need care.
     Uncrossing (below) is a **display** convenience; never bake it into the
-    data an analysis runs on, or you erase the very property `validate` is
+    data an analysis runs on, or you erase the very property `audit` is
     there to surface.
 
-## Measuring it: `validate`
+## Measuring it: `audit`
 
-The [`ob-analytics validate`](howto/validate.md) command runs the pipeline and
-prints a per-run data-quality summary. On the bundled Bitstamp sample:
+The [`ob-analytics audit`](howto/audit.md) command runs the pipeline, prints a
+per-run data-quality summary, and exits non-zero when a check fails. On the
+bundled Bitstamp sample:
 
 ```text
 Data quality summary
@@ -75,10 +76,24 @@ Data quality summary
   duplicate event ids   : 0
   duplicate created ids : 0
   pre-existing orders   : 13
+  orphan orders         : 13 (13 event(s), no created row)
+  impossible values     : 49 non-positive price(s) / 0 negative volume(s)
+  clock order           : 0 venue-after-receive / 11 reordered
+  venue sequence        : 0 missing / 0 out-of-order (0 row(s) numbered)
+Checks: 0 error(s), 3 warning(s)
+  WARNING orphan_orders: 13 order(s) are changed or deleted with no created event ...
+  WARNING nonpositive_price: 49 row(s) are priced at or below zero: not a tradeable level
+  WARNING exchange_time_reordered: 11 message(s) arrived out of venue order ...
 ```
 
 A matched book (LOBSTER) reports **~0%** crossed on the same metric — the
 number is the cleanest single discriminator between the two families.
+
+Each metric is scored by a named check with a severity, and the exit code
+follows the severities: an **error** fails the run, a **warning** only fails it
+under `--strict`. Which severity crossing gets is decided by the feed type —
+the whole point of this page. The [`audit` how-to](howto/audit.md) lists every
+check and what trips it.
 
 The four headline metrics:
 
@@ -127,14 +142,14 @@ cumulative depth against the surviving touch.
 |---|---|
 | "What did the feed actually contain?" | **`uncross=False`** (default) — faithful |
 | "Draw me a clean ladder / depth curve for a slide" | `uncross=True` — display only |
-| "How crossed is this feed?" | [`validate`](howto/validate.md) — never uncross first |
+| "How crossed is this feed?" | [`audit`](howto/audit.md) — never uncross first |
 
 On a matched book `uncross=True` is a no-op (there is nothing to evict), so it
 is always safe to leave on in a display helper that must handle both families.
 
 ## See also
 
-- **How-to:** [Check data quality with `validate`](howto/validate.md)
+- **How-to:** [Check data quality with `audit`](howto/audit.md)
 - **Tutorial:** [Chapter 2 · L1 → L2 → L3](tutorial/02_three_resolutions.md),
   [Chapter 3 · Loading order data](tutorial/03_loading_data.md)
 - **Reference:** [`FeedType`](api/protocols.md),

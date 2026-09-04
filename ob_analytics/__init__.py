@@ -35,7 +35,9 @@ from loguru import logger
 
 from ob_analytics.analytics import (
     DataQualitySummary,
+    QualityCheck,
     SequenceGapReport,
+    Severity,
     data_quality_summary,
     detect_sequence_gaps,
 )
@@ -149,8 +151,10 @@ __all__ = [
     "Pipeline",
     "PipelineConfig",
     "PipelineResult",
+    "QualityCheck",
     "RunContext",
     "SequenceGapReport",
+    "Severity",
     "Source",
     "SourceSettings",
     "TradeSource",
