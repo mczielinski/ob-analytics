@@ -318,8 +318,40 @@ save_data(
 )
 ```
 
-The built-in `"parquet"` and `"pickle"` formats need no registration; named
-formats become available as soon as their factory is registered.
+The built-in `"parquet"` and `"pickle"` formats are registered writers too, so
+they appear in `list_writers()` and follow exactly these rules. Registering your
+own under one of those names **replaces** the built-in one — there is no special
+case in `save_data` for either.
+
+### Asking for Arrow instead of pandas
+
+`data` is a mapping of pandas frames, and every writer above treats it as one.
+It also offers `.arrow()`, for a writer whose target is columnar:
+
+```python
+class ArrowIpcWriter:
+    """Satisfies the DataWriter Protocol."""
+
+    def write(
+        self, data: dict[str, pd.DataFrame], dest: str | Path, **kwargs: Any
+    ) -> Path:
+        import pyarrow.feather as feather
+
+        dest = Path(dest)
+        dest.mkdir(parents=True, exist_ok=True)
+        for name, table in data.arrow().items():
+            feather.write_feather(table, dest / f"{name}.arrow")
+        return dest
+```
+
+Each table from `.arrow()` carries the schema version and, when the run declared
+a `tick_size`, the tick-size metadata — the same key-value metadata a canonical
+Parquet file carries. Calling `pyarrow.Table.from_pandas` yourself instead
+drops both, and a reader then treats the result as legacy data with prices left
+as raw integer ticks.
+
+The frame type is therefore not fixed in the protocol: the CSV writers want
+pandas, a Parquet or Arrow writer wants Arrow, and each asks for what it needs.
 
 ---
 

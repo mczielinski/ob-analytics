@@ -507,7 +507,9 @@ class DepthCsvSource:
     ) -> TradeSource:
         return L2TradeReader(config)
 
-    def create_writer(self, config: PipelineConfig, ctx: RunContext) -> DataWriter:
+    def create_writer(
+        self, config: PipelineConfig | None, ctx: RunContext
+    ) -> DataWriter:
         return DepthCsvWriter(config)
 
     def compute_depth(

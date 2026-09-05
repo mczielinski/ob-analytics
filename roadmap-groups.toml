@@ -210,4 +210,4 @@ loaders\
 155 = "integer ticks"
 203 = "Polars port"
 206 = "out-of-core reads"
-216 = "writer frame type"
+216 = "registered writers"

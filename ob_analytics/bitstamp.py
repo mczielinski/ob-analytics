@@ -550,7 +550,9 @@ class BitstampSource:
     ) -> TradeSource:
         return BitstampTradeReader(config)
 
-    def create_writer(self, config: PipelineConfig, ctx: RunContext) -> DataWriter:
+    def create_writer(
+        self, config: PipelineConfig | None, ctx: RunContext
+    ) -> DataWriter:
         return BitstampWriter(config)
 
     def compute_depth(

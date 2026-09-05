@@ -975,7 +975,9 @@ class LobsterSource:
     ) -> TradeSource:
         return LobsterTradeReader(config)
 
-    def create_writer(self, config: PipelineConfig, ctx: RunContext) -> DataWriter:
+    def create_writer(
+        self, config: PipelineConfig | None, ctx: RunContext
+    ) -> DataWriter:
         return _make_lobster_writer(config, ctx)
 
     def compute_depth(

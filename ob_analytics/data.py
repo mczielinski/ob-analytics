@@ -92,6 +92,118 @@ def _write_versioned_parquet(
     pq.write_table(_to_arrow_table(df, tick_sizes=tick_sizes), path)
 
 
+class OutputTables(dict[str, pd.DataFrame]):
+    """A run's output tables, as pandas, that a writer can also ask for in Arrow.
+
+    Issue #216.  ``DataWriter.write`` takes a mapping of pandas frames, and this
+    **is** that mapping — every existing writer treats it as the dict it is, and
+    the protocol's annotation stays honest.  What it adds is :meth:`arrow`, for a
+    writer whose target is columnar: Parquet here, and the Nautilus catalogue in
+    #113.
+
+    Without it such a writer would call ``pa.Table.from_pandas`` itself and
+    silently drop the schema version and tick size that make the output
+    canonical, because the function that attaches them is private.  The frame
+    type therefore stays out of the protocol: a writer asks for the shape it
+    wants rather than the pipeline guessing which one every writer needs.
+
+    Parameters
+    ----------
+    tables : mapping of str to pandas.DataFrame
+        The run's tables, keyed by name.
+    tick_sizes : dict of str to float, optional
+        Tick sizes to record in :meth:`arrow`'s metadata (issue #155).  ``None``
+        when the caller declared no config, which writes no tick metadata rather
+        than a default one.
+    """
+
+    def __init__(
+        self,
+        tables: dict[str, pd.DataFrame],
+        *,
+        tick_sizes: dict[str, float] | None = None,
+    ) -> None:
+        super().__init__(tables)
+        self._tick_sizes = tick_sizes
+
+    def arrow(self) -> dict[str, pa.Table]:
+        """Return the same tables as canonical Arrow, keyed the same way.
+
+        Each table carries the schema version and, when the run declared one,
+        the tick size — the same key-value metadata a canonical Parquet file
+        carries, so a writer building one is no worse off than
+        :class:`ParquetWriter`.
+        """
+        return {
+            name: _to_arrow_table(df, tick_sizes=self._tick_sizes)
+            for name, df in self.items()
+        }
+
+
+class ParquetWriter:
+    """Write a run's frames as one canonical Parquet file per key.
+
+    The library's default output format, and a registered writer like any
+    other (issue #216) rather than a branch inside :func:`save_data`, so a user
+    can register their own under ``"parquet"`` and replace it.
+
+    Satisfies the :class:`~ob_analytics.protocols.DataWriter` protocol.
+    """
+
+    def __init__(self, config: Any = None) -> None:
+        self._tick_sizes = _tick_sizes_from_config(config)
+
+    def write(
+        self,
+        data: dict[str, pd.DataFrame],
+        dest: str | Path,
+        **kwargs: Any,
+    ) -> Path:
+        """Write each frame in *data* to ``<dest>/<key>.parquet``.
+
+        *dest* is a directory and is created when missing.  Each file carries
+        the schema version and, when the run's config named one, the tick size
+        (issue #155), so :func:`load_data` can check the first and restore
+        prices with the second.
+        """
+        p = Path(dest)
+        p.mkdir(parents=True, exist_ok=True)
+        for name, df in data.items():
+            _write_versioned_parquet(
+                df, p / f"{name}.parquet", tick_sizes=self._tick_sizes
+            )
+        return p
+
+
+class PickleWriter:
+    """Write a run's frames as one pickle file.
+
+    Kept for backward compatibility and warned about on every call: a pickle
+    executes code on load, so it is unsafe for data you did not write.  A
+    registered writer like any other (issue #216).
+
+    Satisfies the :class:`~ob_analytics.protocols.DataWriter` protocol.
+    """
+
+    def write(
+        self,
+        data: dict[str, pd.DataFrame],
+        dest: str | Path,
+        **kwargs: Any,
+    ) -> Path:
+        """Write *data* whole to *dest* with :func:`pandas.to_pickle`."""
+        logger.warning(
+            "Saving as pickle. Consider using fmt='parquet' for "
+            "portability and security."
+        )
+        p = Path(dest)
+        # ``dict(data)``, not *data*: the payload is a dict subclass (#216) and
+        # pickling it whole would write ob-analytics' own class into the file,
+        # so the file would only load where that class exists.
+        pd.to_pickle(dict(data), p)  # type: ignore
+        return p
+
+
 def _to_arrow_table(
     df: pd.DataFrame,
     *,
@@ -237,33 +349,23 @@ def save_data(
         Extra keyword arguments forwarded to ``writer.write()``.
     """
     p = Path(path)
+    # Every writer is handed the same payload: a mapping of pandas frames that
+    # can also produce canonical Arrow (#216).  It is a dict, so a writer that
+    # ignores the extra sees exactly what it saw before.
+    tables = OutputTables(lob_data, tick_sizes=_tick_sizes_from_config(config))
 
     if writer is not None:
-        writer.write(lob_data, p, **write_kwargs)
-        return
-
-    if fmt == "parquet":
-        tick_sizes = _tick_sizes_from_config(config)
-        p.mkdir(parents=True, exist_ok=True)
-        for name, df in lob_data.items():
-            _write_versioned_parquet(df, p / f"{name}.parquet", tick_sizes=tick_sizes)
-        return
-    if fmt == "pickle":
-        logger.warning(
-            "Saving as pickle. Consider using fmt='parquet' for "
-            "portability and security."
-        )
-        pd.to_pickle(lob_data, p)  # type: ignore
+        writer.write(tables, p, **write_kwargs)
         return
 
     resolved = _named_writer(fmt, config, ctx)
     if resolved is not None:
-        resolved.write(lob_data, p, **write_kwargs)
+        resolved.write(tables, p, **write_kwargs)
         return
 
     from ob_analytics.sources import SOURCES
 
-    available = ["parquet", "pickle", *WRITERS.list(), *SOURCES.list()]
+    available = [*WRITERS.list(), *SOURCES.list()]
     raise ValueError(f"Unsupported format: {fmt!r}. Available: {', '.join(available)}")
 
 
@@ -275,11 +377,16 @@ def _named_writer(fmt: str, config: Any, ctx: Any) -> DataWriter | None:
     lives on the source, not in a parallel registry).  Returns ``None`` when
     *fmt* names neither.
     """
-    from ob_analytics.config import PipelineConfig
     from ob_analytics.protocols import RunContext
     from ob_analytics.sources import SOURCES
 
-    cfg = config if config is not None else PipelineConfig()
+    # *config* is passed through as given, ``None`` included: every writer
+    # defaults for itself, and a writer that records what the caller declared
+    # must be able to tell "no config" from a default one.  Substituting a
+    # ``PipelineConfig()`` here would tag a file with its default tick size
+    # (#155) that the caller never asked for.  *ctx* is different: an empty
+    # ``RunContext`` is an absence, not an invented value.
+    cfg = config
     rctx = ctx if ctx is not None else RunContext()
 
     if fmt in WRITERS:
@@ -289,3 +396,9 @@ def _named_writer(fmt: str, config: Any, ctx: Any) -> DataWriter | None:
         if make_writer is not None:
             return make_writer(cfg, rctx)
     return None
+
+
+# Built-in output formats self-register, the way sources and metrics do, so
+# ``save_data(fmt=...)`` has one resolution path and no special cases (#216).
+register_writer("parquet", lambda config, ctx: ParquetWriter(config))
+register_writer("pickle", lambda config, ctx: PickleWriter())
