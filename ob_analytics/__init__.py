@@ -64,6 +64,12 @@ from ob_analytics.flow_toxicity import (
     compute_vpin,
     order_flow_imbalance,
 )
+from ob_analytics.interop import (
+    HftbacktestWriter,
+    NautilusWriter,
+    to_hftbacktest_array,
+    to_nautilus_deltas,
+)
 
 # Importing the live package registers the ccxt and cryptofeed live sources
 # (the bitstamp live capability rides on BitstampSource, already registered
@@ -155,11 +161,13 @@ __all__ = [
     "DepthSource",
     "EventLoader",
     "FeedType",
+    "HftbacktestWriter",
     "KyleLambdaResult",
     "Level",
     "LiveSource",
     "LobsterSource",
     "Metric",
+    "NautilusWriter",
     # ── Exceptions ───────────────────────────────────────────────────
     "ObAnalyticsError",
     # ── Protocols / extension points ─────────────────────────────────
@@ -206,6 +214,8 @@ __all__ = [
     # ── Data I/O ─────────────────────────────────────────────────────
     "save_data",
     "tick_rule",
+    "to_hftbacktest_array",
+    "to_nautilus_deltas",
     "toy_events",
     "toy_l2_depth",
     "toy_l2_trades",
