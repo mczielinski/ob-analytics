@@ -353,6 +353,61 @@ as raw integer ticks.
 The frame type is therefore not fixed in the protocol: the CSV writers want
 pandas, a Parquet or Arrow writer wants Arrow, and each asks for what it needs.
 
+### Exporting to a backtesting engine
+
+Two formats ship for the engines next door (issue #113). Neither needs its
+engine installed:
+
+```python
+from ob_analytics import Pipeline, save_data
+from ob_analytics.config import PipelineConfig
+
+config = PipelineConfig()
+result = Pipeline(config=config).run("orders.csv")
+data = {"events": result.events, "trades": result.trades}
+
+save_data(data, "out/session.npz", fmt="hftbacktest", config=config)
+save_data(data, "out/deltas.parquet", fmt="nautilus", config=config)
+```
+
+Both scale the integer tick prices back to the quote currency using the run's
+`tick_size`, so pass the same `config` the run used.
+
+**hftbacktest** gets its feed-event array under the `data` member of the npz,
+which is what `np.load(path)["data"]` and `BacktestAsset.data([...])` read. The
+engine replays two clocks, an exchange one and a local one, and requires each to
+run forwards. Those two orders are not the same order — on the bundled Bitstamp
+sample the exchange stamp leads the receive stamp by 0.08 to 2.7 seconds, and
+they disagree about 14,966 of 314,057 events — so an event whose clocks disagree
+is written twice, once per timeline, exactly as the engine's own
+`correct_event_order` would. hftbacktest's `validate_event_order` accepts the
+result.
+
+**Nautilus** gets a Parquet file holding the frame its
+`OrderBookDeltaDataWrangler` takes: a UTC index and the columns `action`,
+`side`, `price`, `size`, `order_id`, `flags`, `sequence`.
+
+```python
+import pandas as pd
+from nautilus_trader.persistence.wranglers import OrderBookDeltaDataWrangler
+
+deltas = OrderBookDeltaDataWrangler(instrument).process(
+    pd.read_parquet("out/deltas.parquet")
+)
+```
+
+The `instrument` you pass must declare a `size_precision` fine enough for your
+data. Nautilus converts each size to a fixed-point `Quantity` and rejects one
+that rounds to zero, so a BTC feed carrying single-satoshi orders needs
+`size_precision=8`; the bundled `TestInstrumentProvider.btcusdt_binance()`, at
+6, refuses them.
+
+An order that was fully filled leaves a `deleted` event whose canonical volume
+is zero, because the volume on a delete is the size *removed* and a filled order
+had nothing left to cancel. Nautilus rejects a zero-size delta, so the export
+gives that delete the size the order last rested at. An order that never rested
+at a positive size is dropped: there is nothing truthful to say about it.
+
 ---
 
 ## 3. A new plot
