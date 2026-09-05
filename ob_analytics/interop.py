@@ -12,6 +12,14 @@ the user's business, and only the cross-check in #224 needs one present.
 
 Both engines take **float** prices, while the canonical schema stores integer
 ticks (issue #155), so both writers scale by the run's ``tick_size``.
+
+A canonical event stream also carries orders that never rest: a marketable order
+is recorded as a transient add on its **own** side at the touch, then the fill,
+then a delete (``type == "market"``).  Those rows are not book liquidity, and the
+library's own depth engine excludes them (``ob_analytics.depth``).  Writing them
+out would make the receiving engine cross its book and drop the resting level
+they traded against, so both writers exclude them too — which is what the #224
+cross-check against hftbacktest's own reconstruction showed.
 """
 
 from __future__ import annotations
@@ -76,6 +84,29 @@ def _epoch_nanos(column: pd.Series) -> np.ndarray:
     return column.dt.as_unit("ns").astype("int64").to_numpy()
 
 
+def _resting_orders_only(events: pd.DataFrame) -> pd.DataFrame:
+    """Drop the orders that never rested, which are not book liquidity.
+
+    A canonical stream records a marketable order as a transient add on its own
+    side at the touch, the fill it caused, and a delete — all within one
+    instant.  The order never joins the book, and
+    :func:`ob_analytics.depth.price_level_volume` excludes it for exactly that
+    reason (``type != "market"``).
+
+    A backtesting engine reads an add as real liquidity.  Feeding it the
+    transient add makes its book cross at the touch, and it resolves the cross
+    by removing the resting level the order traded against — so its
+    reconstruction drifts thinner than ours, permanently.  Excluding these rows
+    here is what makes the two agree (issue #224).
+
+    A frame with no ``type`` column (one built by hand, or by a loader that does
+    not classify) is returned unchanged: there is nothing to exclude on.
+    """
+    if "type" not in events.columns:
+        return events
+    return events[events["type"] != "market"]
+
+
 def _in_canonical_time_order(events: pd.DataFrame) -> pd.DataFrame:
     """Return *events* in the canonical total order (issue #154).
 
@@ -90,6 +121,7 @@ def _in_canonical_time_order(events: pd.DataFrame) -> pd.DataFrame:
 
 def _hftbacktest_rows(events: pd.DataFrame, *, tick_size: float) -> np.ndarray:
     """Return one unflagged feed record per canonical event, in canonical order."""
+    events = _resting_orders_only(events)
     out: np.ndarray = np.zeros(len(events), dtype=HFT_EVENT_DTYPE)
     if len(events) == 0:
         return out
@@ -282,7 +314,9 @@ def to_nautilus_deltas(
     sequence when the source published one (issue #146) and falls back to the
     dense ``event_id``, so the column is always a usable order.
     """
-    events = _resting_size_on_delete(_in_canonical_time_order(events))
+    events = _resting_size_on_delete(
+        _in_canonical_time_order(_resting_orders_only(events))
+    )
     sequence = (
         events["sequence"]
         if "sequence" in events.columns and events["sequence"].notna().all()

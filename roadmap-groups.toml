@@ -92,12 +92,19 @@ id = "quality"
 title = "Part 5 - data quality checks"
 prose = """
 Ways to find out whether loaded data is sound: data with known answers to check
-against, a test that the engine gives the same numbers, gap detection from
-sequence numbers, a command that reports what it finds, and a capture that does
-not drop data in the first place. Each one stays drawn after it ships, because a
-check that exists is still a way to check.
+against, a test that the engine gives the same numbers, a replay through someone
+else's engine to see whether it agrees, gap detection from sequence numbers, a
+command that reports what it finds, and a capture that does not drop data in the
+first place. Each one stays drawn after it ships, because a check that exists is
+still a way to check.
+
+The golden files and the cross-check answer different questions. A golden file
+catches a change, but it cannot catch a mistake that was there when the file was
+recorded, because the baseline and the code agree by construction. Replaying the
+same events through an engine written by someone else can: if the two books
+disagree, one of them is wrong.
 """
-issues = [108, 114, 143, 146, 150]
+issues = [108, 114, 143, 146, 150, 224]
 # Keep the closed checks, for the same reason as the sources: this diagram
 # answers "how do I know the data is sound", and a check that shipped is the
 # best answer it has.

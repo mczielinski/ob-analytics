@@ -86,6 +86,23 @@ dev = [
     "nbconvert>=7.16",
 ]
 
+# The two backtesting engines, installed only to cross-check our reconstruction
+# against theirs (issue #224).  Deliberately a group of its own rather than part
+# of ``dev``: the writers in ob_analytics.interop need neither engine present,
+# so only the parity tests pay for these, and CI can leave them out.
+backtest-engines = [
+    "hftbacktest>=2.4",
+    # hftbacktest declares numba as an optional extra but imports it
+    # unconditionally in its ``__init__``, so it has to be named here or
+    # ``import hftbacktest`` fails.  Its own ``numpy`` extra caps numpy below
+    # 2.3 and is therefore not usable here; numba 0.67 takes numpy 2.4.
+    "numba>=0.67",
+    # Nautilus publishes no build that takes both Python 3.11 and pandas 3, so
+    # on 3.11 it is left out and the Nautilus half of the cross-check skips,
+    # the same way the ccxt and cryptofeed tests skip without their extra.
+    "nautilus-trader>=1.222; python_version >= '3.12'",
+]
+
 [tool.ruff.lint.isort]
 # Keep aliased re-exports in a single grouped ``from x import (a as b, ...)``
 # block rather than exploding each alias onto its own import statement.
