@@ -62,11 +62,31 @@ class PipelineConfig(BaseModel):
             "The stored price grid is ``tick_size``, not this — see issue #155."
         ),
     )
+    lot_size: float = Field(
+        default=1e-8,
+        gt=0,
+        description=(
+            "The instrument's minimum size increment, in the base asset "
+            "(issue #224).  Sizes are stored as a whole number of lots "
+            "(``int64``); the base-asset size is ``lots * lot_size``.  1e-8 "
+            "(default) is a satoshi grid, which is the finest any supported "
+            "venue quotes; use 1 for whole shares (LOBSTER).  This is the size "
+            "counterpart of ``tick_size``, and exists for the same reason: a "
+            "float size does not sum back to exactly zero when a price level "
+            "empties, so the level lingers and is reported as the best bid or "
+            "ask.  By default it matches ``volume_decimals`` "
+            "(``10 ** -volume_decimals``)."
+        ),
+    )
     volume_decimals: int = Field(
         default=8,
         ge=0,
         le=18,
-        description="Number of decimal places in volume.",
+        description=(
+            "Display precision: decimal places to show when a lot size is "
+            "rendered back to the base asset for a plot or CSV.  The stored "
+            "size grid is ``lot_size``, not this — see issue #224."
+        ),
     )
     timestamp_unit: Literal["ms", "us", "ns"] = Field(
         default="ms",

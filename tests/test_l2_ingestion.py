@@ -112,8 +112,9 @@ class TestL2DepthLoader:
         validate_depth_df(depth)
         assert list(depth["direction"].cat.categories) == ["bid", "ask"]
         assert len(depth) == 3
-        # volumes are the absolute level sizes, not signed deltas
-        assert depth["volume"].tolist() == [2.0, 3.0, 1.0]
+        # volumes are the absolute level sizes, not signed deltas, and are
+        # stored as integer lots on the default 1e-8 grid (issue #226)
+        assert depth["volume"].tolist() == [200_000_000, 300_000_000, 100_000_000]
 
     def test_accepts_flexible_column_spellings(self, tmp_path):
         # `direction` instead of `side`, `size` instead of `volume`, `time`
@@ -134,7 +135,7 @@ class TestL2DepthLoader:
             [(_BASE_MS, "bid", 99.0, 2.0), (_BASE_MS + 1, "bid", 99.0, 0.0)],
         )
         depth = L2DepthLoader().load(tmp_path)
-        assert depth["volume"].tolist() == [2.0, 0.0]
+        assert depth["volume"].tolist() == [200_000_000, 0]
 
     def test_negative_volume_dropped(self, tmp_path):
         _write_l2_dir(

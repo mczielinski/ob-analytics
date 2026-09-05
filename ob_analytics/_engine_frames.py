@@ -98,6 +98,21 @@ def _codes(values: pd.Series, labels: tuple[str, ...]) -> np.ndarray:
     return pd.Categorical(values, categories=labels).codes
 
 
+def _sizes(values: pd.Series) -> np.ndarray:
+    """Return a size column as the engine's array, keeping it exact.
+
+    Canonical sizes are integer lots (issue #226), and the engine sums them —
+    ``liquidity`` down a book side, ``ahead_volume`` along a queue — so passing
+    the integers through keeps those totals exact.  A pre-#226 frame still
+    holding float sizes in the base asset is passed through unchanged rather
+    than rounded onto a lot grid this function does not know.
+    """
+    array = values.to_numpy()
+    if np.issubdtype(array.dtype, np.integer):
+        return array.astype(np.int64)
+    return array.astype(np.float64)
+
+
 def to_order_events(
     events: pd.DataFrame, *, fill: bool = False, market: bool = False
 ) -> OrderEvents:
@@ -121,10 +136,15 @@ def to_order_events(
         order_id=events["id"].to_numpy(),
         timestamp=nanoseconds(events["timestamp"]),
         price=events["price"].to_numpy(),
-        volume=events["volume"].to_numpy(dtype=np.float64),
+        # Sizes cross the boundary as the integer lots the schema stores
+        # (issue #226), so the cumulative sums the engine builds from them —
+        # ``liquidity`` on a book side, ``ahead_volume`` in the queue — stay
+        # exact.  A pre-#226 frame still carrying float sizes is passed through
+        # as it is rather than truncated to whole lots.
+        volume=_sizes(events["volume"]),
         direction=_codes(events["direction"], DIRECTIONS),
         action=_codes(events["action"], ACTIONS),
-        fill=events["fill"].to_numpy(dtype=np.float64) if fill else None,
+        fill=_sizes(events["fill"]) if fill else None,
         is_market=(events["type"] == "market").to_numpy() if market else None,
     )
 

@@ -36,8 +36,10 @@ from ob_analytics._utils import (
     attach_ingest_seq,
     datetime_to_seconds_after_midnight,
     empty_trades,
+    lots_to_size,
     price_to_ticks,
     seconds_after_midnight_to_datetime,
+    size_to_lots,
     ticks_to_price,
 )
 from ob_analytics.config import PipelineConfig, SourceSettings
@@ -166,7 +168,10 @@ class LobsterLoader:
         # integer in ten-thousandths of a dollar, so divide by the feed's
         # encoding scale to reach the quote currency, then quantise to ticks.
         raw["price"] = price_to_ticks(raw["price"] / divisor, cfg.tick_size)
-        raw["volume"] = raw["volume"].astype(float).round(cfg.volume_decimals)
+        # Canonical size is integer lots (issue #226).  LOBSTER's Size column is
+        # already a whole share count and its ``lot_size`` default is 1, so this
+        # keeps the venue's own integer rather than routing it through a float.
+        raw["volume"] = size_to_lots(raw["volume"], cfg.lot_size)
 
         raw["timestamp"] = seconds_after_midnight_to_datetime(
             raw["time"], self._trading_date, self._session_tz
@@ -589,6 +594,12 @@ class LobsterWriter:
             if "raw_size" in events.columns and events["raw_size"].notna().any()
             else events["volume"]
         )
+        # Restore the venue's own share count from integer lots (issue #226).
+        # LOBSTER's ``lot_size`` is 1, so this is the identity on a LOBSTER
+        # round-trip; it matters for a frame loaded from another venue's grid.
+        size = lots_to_size(
+            size, self._config.lot_size, decimals=self._config.volume_decimals
+        )
 
         return pd.DataFrame(
             {
@@ -633,10 +644,12 @@ class LobsterWriter:
         # Book replay needs per-event deltas: ``raw_size`` on loader-produced
         # frames (``volume`` is outstanding size there); ``volume`` equals the
         # delta on legacy/synthetic frames without it.
+        # Integer lots (issue #226), so a level's running total is exact and
+        # empties to precisely zero rather than to float residue.
         if "raw_size" in events.columns and events["raw_size"].notna().any():
-            volumes = events["raw_size"].to_numpy(dtype=np.float64)
+            volumes = events["raw_size"].to_numpy(dtype=np.int64)
         else:
-            volumes = events["volume"].to_numpy(dtype=np.float64)
+            volumes = events["volume"].to_numpy(dtype=np.int64)
         if "raw_event_type" in events.columns:
             raw_types = events["raw_event_type"].to_numpy(dtype=np.float64)
         else:
@@ -654,17 +667,17 @@ class LobsterWriter:
             side = book[direction]
 
             if action == "created":
-                side[price] = side.get(price, 0.0) + volume
+                side[price] = side.get(price, 0) + volume
             elif action == "deleted":
                 if price in side:
                     side[price] -= volume
-                    if side[price] <= 1e-12:
+                    if side[price] <= 0:
                         del side[price]
             elif action == "changed":
                 raw_type = raw_types[i]
                 if raw_type in decrement_raw_types and price in side:
                     side[price] -= volume
-                    if side[price] <= 1e-12:
+                    if side[price] <= 0:
                         del side[price]
 
             rows.append(self._snapshot_row(book, num_levels))
@@ -1003,6 +1016,9 @@ class LobsterSource:
             "tick_size": 0.01,
             "price_decimals": 2,
             "price_divisor": 10_000,
+            # LOBSTER quotes whole shares, so one lot is one share and the
+            # canonical integer size (issue #226) is the venue's own count.
+            "lot_size": 1.0,
             "volume_decimals": 0,
         }
 

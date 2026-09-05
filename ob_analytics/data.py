@@ -14,13 +14,18 @@ from loguru import logger
 from ob_analytics._registry import Registry
 from ob_analytics.protocols import DataWriter
 from ob_analytics.schemas import (
+    _DEFAULT_LOT_KEY,
     _DEFAULT_TICK_KEY,
+    LOT_SIZE_KEY,
     SCHEMA_VERSION,
     SCHEMA_VERSION_KEY,
     TICK_SIZE_KEY,
     check_schema_version,
+    decode_lot_sizes,
     decode_tick_sizes,
+    encode_lot_sizes,
     encode_tick_sizes,
+    resolve_lot_size,
     resolve_tick_size,
 )
 
@@ -73,23 +78,40 @@ def _tick_sizes_from_config(config: Any) -> dict[str, float] | None:
     return {_DEFAULT_TICK_KEY: float(tick_size)}
 
 
+def _lot_sizes_from_config(config: Any) -> dict[str, float] | None:
+    """Return the lot-size metadata map for *config*, or ``None``.
+
+    The size counterpart of :func:`_tick_sizes_from_config` (issue #226):
+    ``{"default": config.lot_size}`` when *config* carries a ``lot_size``, so a
+    saved Parquet file records the grid its integer sizes sit on.
+    """
+    lot_size = getattr(config, "lot_size", None)
+    if lot_size is None:
+        return None
+    return {_DEFAULT_LOT_KEY: float(lot_size)}
+
+
 def _write_versioned_parquet(
     df: pd.DataFrame,
     path: Path,
     *,
     tick_sizes: dict[str, float] | None = None,
+    lot_sizes: dict[str, float] | None = None,
 ) -> None:
-    """Write *df* to *path* as Parquet, tagging the schema version and tick size.
+    """Write *df* to *path* as Parquet, tagging the version, tick and lot size.
 
     Goes through pyarrow so the file carries :data:`SCHEMA_VERSION` under
     :data:`SCHEMA_VERSION_KEY` in its key-value metadata, alongside the pandas
     metadata that preserves dtypes on read.  When *tick_sizes* is given (a
     ``{instrument_key: tick_size}`` map) it is written under
     :data:`TICK_SIZE_KEY` so a reader can recover the float price from the
-    integer ticks (issue #155).  The index is dropped, matching the previous
-    ``df.to_parquet(..., index=False)`` behaviour.
+    integer ticks (issue #155).  *lot_sizes* does the same for the integer
+    sizes under :data:`LOT_SIZE_KEY` (issue #226).  The index is dropped,
+    matching the previous ``df.to_parquet(..., index=False)`` behaviour.
     """
-    pq.write_table(_to_arrow_table(df, tick_sizes=tick_sizes), path)
+    pq.write_table(
+        _to_arrow_table(df, tick_sizes=tick_sizes, lot_sizes=lot_sizes), path
+    )
 
 
 class OutputTables(dict[str, pd.DataFrame]):
@@ -122,9 +144,11 @@ class OutputTables(dict[str, pd.DataFrame]):
         tables: dict[str, pd.DataFrame],
         *,
         tick_sizes: dict[str, float] | None = None,
+        lot_sizes: dict[str, float] | None = None,
     ) -> None:
         super().__init__(tables)
         self._tick_sizes = tick_sizes
+        self._lot_sizes = lot_sizes
 
     def arrow(self) -> dict[str, pa.Table]:
         """Return the same tables as canonical Arrow, keyed the same way.
@@ -135,7 +159,9 @@ class OutputTables(dict[str, pd.DataFrame]):
         :class:`ParquetWriter`.
         """
         return {
-            name: _to_arrow_table(df, tick_sizes=self._tick_sizes)
+            name: _to_arrow_table(
+                df, tick_sizes=self._tick_sizes, lot_sizes=self._lot_sizes
+            )
             for name, df in self.items()
         }
 
@@ -152,6 +178,7 @@ class ParquetWriter:
 
     def __init__(self, config: Any = None) -> None:
         self._tick_sizes = _tick_sizes_from_config(config)
+        self._lot_sizes = _lot_sizes_from_config(config)
 
     def write(
         self,
@@ -170,7 +197,10 @@ class ParquetWriter:
         p.mkdir(parents=True, exist_ok=True)
         for name, df in data.items():
             _write_versioned_parquet(
-                df, p / f"{name}.parquet", tick_sizes=self._tick_sizes
+                df,
+                p / f"{name}.parquet",
+                tick_sizes=self._tick_sizes,
+                lot_sizes=self._lot_sizes,
             )
         return p
 
@@ -208,6 +238,7 @@ def _to_arrow_table(
     df: pd.DataFrame,
     *,
     tick_sizes: dict[str, float] | None = None,
+    lot_sizes: dict[str, float] | None = None,
 ) -> pa.Table:
     """Convert *df* to an Arrow table tagged with the canonical metadata.
 
@@ -224,6 +255,9 @@ def _to_arrow_table(
     tick_sizes : dict of str to float, optional
         Tick sizes to record, keyed by instrument (issue #155).  Omitted
         metadata means a reader sees the integer prices as-is.
+    lot_sizes : dict of str to float, optional
+        Lot sizes to record, keyed by instrument (issue #226).  Omitted
+        metadata means a reader sees the integer sizes as-is.
 
     Returns
     -------
@@ -235,6 +269,8 @@ def _to_arrow_table(
     metadata[SCHEMA_VERSION_KEY] = SCHEMA_VERSION.encode()
     if tick_sizes is not None:
         metadata[TICK_SIZE_KEY] = encode_tick_sizes(tick_sizes)
+    if lot_sizes is not None:
+        metadata[LOT_SIZE_KEY] = encode_lot_sizes(lot_sizes)
     return table.replace_schema_metadata(metadata)
 
 
@@ -261,6 +297,12 @@ def _read_versioned_parquet(path: Path) -> pd.DataFrame:
         resolved = resolve_tick_size(tick_sizes)
         if resolved is not None:
             df.attrs["tick_size"] = resolved
+    lot_sizes = decode_lot_sizes(metadata.get(LOT_SIZE_KEY))
+    if lot_sizes is not None:
+        df.attrs["lot_sizes"] = lot_sizes
+        resolved_lot = resolve_lot_size(lot_sizes)
+        if resolved_lot is not None:
+            df.attrs["lot_size"] = resolved_lot
     return df
 
 

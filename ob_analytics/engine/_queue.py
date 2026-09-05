@@ -60,9 +60,10 @@ class QueuePositions:
     queue_len : numpy.ndarray
         Number of orders resting at the level (``int64``).
     ahead_volume : numpy.ndarray
-        Outstanding size of the orders ahead of this one (``float64``).
+        Outstanding size of the orders ahead of this one, in the size dtype the
+        events carried — ``int64`` lots for a canonical stream (issue #226).
     remaining : numpy.ndarray
-        This order's own outstanding size after the event (``float64``).
+        This order's own outstanding size after the event, in that same dtype.
     age_s : numpy.ndarray
         Seconds since the order was placed (``float64``).
     """
@@ -212,8 +213,11 @@ def queue_positions(events: OrderEvents, *, touch_only: bool = True) -> QueuePos
         action=np.array(out_action, dtype=np.int8),
         rank=np.array(out_rank, dtype=np.int64),
         queue_len=np.array(out_len, dtype=np.int64),
-        ahead_volume=np.array(out_ahead, dtype=np.float64),
-        remaining=np.array(out_remaining, dtype=np.float64),
+        # Sizes keep the dtype they arrived in, so a canonical integer-lot
+        # stream (issue #226) gives exact queue totals: ``ahead_volume`` is a
+        # running sum down a level, which is precisely where a float drifts.
+        ahead_volume=np.asarray(out_ahead, dtype=events.volume.dtype),
+        remaining=np.asarray(out_remaining, dtype=events.volume.dtype),
         age_s=np.array(out_age, dtype=np.float64),
     )
 

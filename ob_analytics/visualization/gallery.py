@@ -26,7 +26,7 @@ from typing import Any
 import pandas as pd
 from loguru import logger
 
-from ob_analytics._utils import ticks_to_price
+from ob_analytics._utils import lots_to_size, ticks_to_price
 from ob_analytics.analytics import order_book
 from ob_analytics.depth import get_spread
 from ob_analytics.pipeline import PipelineResult
@@ -358,8 +358,9 @@ def _build_l2_gallery_model(
 
 
 #: Price-valued columns per frame, converted from integer ticks to a
-#: quote-currency float for display (issue #155).  Bps and volume columns are
-#: scale-free or size-valued, so they are left as ticks-agnostic numbers.
+#: quote-currency float for display (issue #155).  Bps columns are scale-free
+#: and are left alone; size-valued columns are handled by
+#: :data:`_DISPLAY_SIZE_COLUMNS`.
 _DISPLAY_PRICE_COLUMNS: dict[str, tuple[str, ...]] = {
     "events": ("price",),
     "trades": ("price",),
@@ -367,9 +368,28 @@ _DISPLAY_PRICE_COLUMNS: dict[str, tuple[str, ...]] = {
     "depth_summary": ("best_bid_price", "best_ask_price"),
 }
 
+#: Size-valued columns per frame, converted from integer lots to a base-asset
+#: float for display (issue #226).  ``depth_summary`` carries one volume column
+#: per bps bin and the bin count is configurable, so that frame is matched by
+#: name rather than listed.
+_DISPLAY_SIZE_COLUMNS: dict[str, tuple[str, ...]] = {
+    "events": ("volume", "fill"),
+    "trades": ("volume",),
+    "depth": ("volume",),
+}
+
+
+def _size_columns(df: pd.DataFrame) -> tuple[str, ...]:
+    """Return the size-valued ``depth_summary`` columns present in *df*.
+
+    Every one is named ``..._vol`` or ``..._volNNNbps`` — the per-bin depth
+    columns, whose count follows ``depth_bins``, plus the two at the touch.
+    """
+    return tuple(c for c in df.columns if "vol" in c)
+
 
 def display_result(result: PipelineResult) -> PipelineResult:
-    """Return *result* with price columns converted from ticks to quote currency.
+    """Return *result* with prices and sizes converted to display units.
 
     Canonical prices are integer ticks (:mod:`ob_analytics.schemas`, issue #155);
     the plots show the quote currency, so this converts each price column to the
@@ -379,14 +399,19 @@ def display_result(result: PipelineResult) -> PipelineResult:
     them, the axes — works in display units; call it yourself before the
     low-level ``prepare.*`` builders when you plot straight from a result.
 
-    Idempotent and legacy-safe: only integer price columns are scaled, so a
-    result whose prices are already floats (a pre-tick file, or a result already
-    passed through here) is returned unchanged.
+    Sizes are converted the same way, from integer lots to the base-asset
+    ``lots * lot_size`` float (issue #226).
+
+    Idempotent and legacy-safe: only integer columns are scaled, so a result
+    whose prices or sizes are already floats (a pre-tick or pre-lot file, or a
+    result already passed through here) is returned unchanged.
     """
     tick_size = getattr(result.config, "tick_size", 1.0)
     decimals = getattr(result.config, "price_decimals", None)
+    lot_size = getattr(result.config, "lot_size", 1.0)
+    size_decimals = getattr(result.config, "volume_decimals", None)
 
-    def to_display(df: pd.DataFrame, columns: tuple[str, ...]) -> pd.DataFrame:
+    def _scale(df: pd.DataFrame, columns: tuple[str, ...], convert) -> pd.DataFrame:
         present = [
             c
             for c in columns
@@ -396,18 +421,44 @@ def display_result(result: PipelineResult) -> PipelineResult:
             return df
         out = df.copy()
         for column in present:
-            out[column] = ticks_to_price(
-                out[column].to_numpy(), tick_size, decimals=decimals
-            )
+            out[column] = convert(out[column].to_numpy())
         return out
+
+    def to_display(
+        df: pd.DataFrame, price_columns: tuple[str, ...], size_columns: tuple[str, ...]
+    ) -> pd.DataFrame:
+        df = _scale(
+            df,
+            price_columns,
+            lambda a: ticks_to_price(a, tick_size, decimals=decimals),
+        )
+        return _scale(
+            df,
+            size_columns,
+            lambda a: lots_to_size(a, lot_size, decimals=size_decimals),
+        )
 
     return replace(
         result,
-        events=to_display(result.events, _DISPLAY_PRICE_COLUMNS["events"]),
-        trades=to_display(result.trades, _DISPLAY_PRICE_COLUMNS["trades"]),
-        depth=to_display(result.depth, _DISPLAY_PRICE_COLUMNS["depth"]),
+        events=to_display(
+            result.events,
+            _DISPLAY_PRICE_COLUMNS["events"],
+            _DISPLAY_SIZE_COLUMNS["events"],
+        ),
+        trades=to_display(
+            result.trades,
+            _DISPLAY_PRICE_COLUMNS["trades"],
+            _DISPLAY_SIZE_COLUMNS["trades"],
+        ),
+        depth=to_display(
+            result.depth,
+            _DISPLAY_PRICE_COLUMNS["depth"],
+            _DISPLAY_SIZE_COLUMNS["depth"],
+        ),
         depth_summary=to_display(
-            result.depth_summary, _DISPLAY_PRICE_COLUMNS["depth_summary"]
+            result.depth_summary,
+            _DISPLAY_PRICE_COLUMNS["depth_summary"],
+            _size_columns(result.depth_summary),
         ),
     )
 

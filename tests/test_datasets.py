@@ -81,8 +81,10 @@ class TestLayout:
         assert str(events["timestamp"].dtype) == "datetime64[ns, UTC]"
         assert str(events["exchange_timestamp"].dtype) == "datetime64[ns, UTC]"
         assert events["price"].dtype == "int64"
-        assert events["volume"].dtype == "float64"
-        assert events["fill"].dtype == "float64"
+        # Integer lots, the size counterpart of the integer-tick price above
+        # (issue #226).
+        assert events["volume"].dtype == "int64"
+        assert events["fill"].dtype == "int64"
         assert events["action"].dtype == "category"
         assert list(events["action"].cat.categories) == [
             "created",

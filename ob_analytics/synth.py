@@ -151,6 +151,10 @@ class SynthConfig:
     limit_bid_prob, market_buy_prob : float
         Probability that a new limit order is a bid, and that a market order is
         a buy. 0.5 each gives a balanced book.
+    lot_size : float
+        Minimum size increment.  Sizes are emitted as a whole number of lots
+        (``int64``), matching the canonical schema (issue #226); the base-asset
+        size is ``lots * lot_size``.
     price_decimals, volume_decimals : int
         Display precision, matching :class:`~ob_analytics.config.PipelineConfig`.
         Emitted prices are integer ticks (issue #155), so ``price_decimals`` only
@@ -180,6 +184,7 @@ class SynthConfig:
 
     mid_price: float = 100.0
     tick_size: float = 0.01
+    lot_size: float = 1e-8
     half_spread_ticks: int = 2
     depth_levels: int = 10
     level_decay: float = 0.5
@@ -243,10 +248,10 @@ class _Order:
     id: int
     side: str
     price_tick: int
-    outstanding: float
+    outstanding: int
     created_event_id: int
-    hidden: float = 0.0
-    peak: float = 0.0
+    hidden: int = 0
+    peak: int = 0
 
 
 def generate_session(
@@ -298,7 +303,7 @@ class _Simulator:
 
         self.mid_tick = round(config.mid_price / config.tick_size)
         self.half_spread = int(config.half_spread_ticks)
-        self._vol_eps = 10.0 ** (-(config.volume_decimals + 1))
+        self.lot_size = float(config.lot_size)
 
         self.next_event_id = 1
         self.next_order_id = 1
@@ -420,12 +425,12 @@ class _Simulator:
         else:
             price_tick = self.mid_tick + self.half_spread + offset
 
-        hidden = 0.0
-        stored_peak = 0.0
+        hidden = 0
+        stored_peak = 0
         if iceberg_r < self.cfg.iceberg_fraction:
-            total = self._round_vol(peak * self.cfg.iceberg_size_multiple)
-            hidden = self._round_vol(total - peak)
-            stored_peak = peak if hidden > self._vol_eps else 0.0
+            total = round(peak * self.cfg.iceberg_size_multiple)
+            hidden = total - peak
+            stored_peak = peak if hidden > 0 else 0
 
         self._place_order(side, price_tick, peak, hidden, stored_peak, t)
 
@@ -436,7 +441,7 @@ class _Simulator:
         order = self.orders[self.live_ids[idx]]
         # A cancellation removes the full outstanding size with no execution.
         self._emit(
-            order.id, order.side, order.price_tick, "deleted", order.outstanding, 0.0, t
+            order.id, order.side, order.price_tick, "deleted", order.outstanding, 0, t
         )
         self._remove_live(order.id)
 
@@ -454,15 +459,15 @@ class _Simulator:
 
         agg_side = "bid" if taker_side == "buy" else "ask"
         touch_tick = fills[0][0].price_tick
-        consumed = self._round_vol(sum(amount for _, amount in fills))
+        consumed = sum(amount for _, amount in fills)
         agg_id = self._new_order_id()
-        self._emit(agg_id, agg_side, touch_tick, "created", consumed, 0.0, t)
+        self._emit(agg_id, agg_side, touch_tick, "created", consumed, 0, t)
 
         agg_out = consumed
         for order, amount in fills:
-            if order.outstanding <= self._vol_eps:
+            if order.outstanding <= 0:
                 maker_eid = self._emit(
-                    order.id, order.side, order.price_tick, "deleted", 0.0, amount, t
+                    order.id, order.side, order.price_tick, "deleted", 0, amount, t
                 )
             else:
                 maker_eid = self._emit(
@@ -474,10 +479,10 @@ class _Simulator:
                     amount,
                     t,
                 )
-            agg_out = self._round_vol(agg_out - amount)
-            if agg_out <= self._vol_eps:
+            agg_out = agg_out - amount
+            if agg_out <= 0:
                 taker_eid = self._emit(
-                    agg_id, agg_side, touch_tick, "deleted", 0.0, amount, t
+                    agg_id, agg_side, touch_tick, "deleted", 0, amount, t
                 )
             else:
                 taker_eid = self._emit(
@@ -505,8 +510,8 @@ class _Simulator:
     # ── Book operations ──────────────────────────────────────────────
 
     def _sweep(
-        self, taker_side: str, desired: float
-    ) -> tuple[list[tuple[_Order, float]], list[_Order]]:
+        self, taker_side: str, desired: int
+    ) -> tuple[list[tuple[_Order, int]], list[_Order]]:
         """Consume resting liquidity best price first, oldest order first.
 
         Returns the list of ``(maker_order, amount)`` fills (with each maker's
@@ -520,31 +525,31 @@ class _Simulator:
             levels = self.bid_levels
             ticks = sorted(levels, reverse=True)
 
-        fills: list[tuple[_Order, float]] = []
+        fills: list[tuple[_Order, int]] = []
         iceberg_parents: list[_Order] = []
         remaining = desired
         for tick in ticks:
-            if remaining <= self._vol_eps:
+            if remaining <= 0:
                 break
             queue = levels[tick]
-            while queue and remaining > self._vol_eps:
+            while queue and remaining > 0:
                 oid = queue[0]
                 if oid not in self.live_pos:
                     queue.popleft()  # cancelled order, skip
                     continue
                 order = self.orders[oid]
-                take = self._round_vol(min(remaining, order.outstanding))
-                if take <= self._vol_eps:
+                take = min(remaining, order.outstanding)
+                if take <= 0:
                     queue.popleft()
                     self._remove_live(oid)
                     continue
-                order.outstanding = self._round_vol(order.outstanding - take)
-                remaining = self._round_vol(remaining - take)
+                order.outstanding = order.outstanding - take
+                remaining = remaining - take
                 fills.append((order, take))
-                if order.outstanding <= self._vol_eps:
+                if order.outstanding <= 0:
                     queue.popleft()
                     self._remove_live(oid)
-                    if order.hidden > self._vol_eps:
+                    if order.hidden > 0:
                         iceberg_parents.append(order)
                 else:
                     break  # maker partially filled; it keeps the front spot
@@ -553,11 +558,11 @@ class _Simulator:
         return fills, iceberg_parents
 
     def _replenish_iceberg(self, parent: _Order, t: float) -> None:
-        slice_size = self._round_vol(min(parent.peak, parent.hidden))
-        if slice_size <= self._vol_eps:
+        slice_size = min(parent.peak, parent.hidden)
+        if slice_size <= 0:
             return
-        hidden = self._round_vol(parent.hidden - slice_size)
-        stored_peak = parent.peak if hidden > self._vol_eps else 0.0
+        hidden = parent.hidden - slice_size
+        stored_peak = parent.peak if hidden > 0 else 0
         self._place_order(
             parent.side, parent.price_tick, slice_size, hidden, stored_peak, t
         )
@@ -566,13 +571,13 @@ class _Simulator:
         self,
         side: str,
         price_tick: int,
-        size: float,
-        hidden: float,
-        peak: float,
+        size: int,
+        hidden: int,
+        peak: int,
         t: float,
     ) -> None:
         oid = self._new_order_id()
-        eid = self._emit(oid, side, price_tick, "created", size, 0.0, t)
+        eid = self._emit(oid, side, price_tick, "created", size, 0, t)
         order = _Order(oid, side, price_tick, size, eid, hidden, peak)
         self.orders[oid] = order
         levels = self.bid_levels if side == "bid" else self.ask_levels
@@ -600,16 +605,20 @@ class _Simulator:
         k = int(self.rng.geometric(self.cfg.level_decay)) - 1
         return min(k, self.cfg.depth_levels - 1)
 
-    def _draw_size(self, mean: float) -> float:
+    def _draw_size(self, mean: float) -> int:
+        """Draw one order size, as a whole number of lots (issue #226).
+
+        The simulator carries sizes the way it already carries prices: an
+        exact integer on the instrument's grid.  Nothing downstream then needs
+        a tolerance to decide whether an order is exhausted, which is what the
+        former ``_vol_eps`` was for.
+        """
         x = float(self.rng.exponential(mean))
         x = max(x, self.cfg.min_size)
-        size = self._round_vol(x)
+        size = round(x / self.lot_size)
         if size <= 0:
-            size = self._round_vol(self.cfg.min_size)
+            size = round(self.cfg.min_size / self.lot_size)
         return size
-
-    def _round_vol(self, x: float) -> float:
-        return round(x, self.cfg.volume_decimals)
 
     def _new_order_id(self) -> int:
         oid = self.next_order_id
@@ -622,8 +631,8 @@ class _Simulator:
         side: str,
         price_tick: int,
         action: str,
-        volume: float,
-        fill: float,
+        volume: int,
+        fill: int,
         t: float,
     ) -> int:
         eid = self.next_event_id
@@ -647,15 +656,16 @@ class _Simulator:
         order_id = np.fromiter((r[1] for r in rows), dtype=np.int64, count=len(rows))
         seconds = np.fromiter((r[2] for r in rows), dtype=np.float64, count=len(rows))
         ticks = np.fromiter((r[3] for r in rows), dtype=np.int64, count=len(rows))
-        volume = np.fromiter((r[4] for r in rows), dtype=np.float64, count=len(rows))
-        fill = np.fromiter((r[5] for r in rows), dtype=np.float64, count=len(rows))
+        volume = np.fromiter((r[4] for r in rows), dtype=np.int64, count=len(rows))
+        fill = np.fromiter((r[5] for r in rows), dtype=np.int64, count=len(rows))
         actions = [r[6] for r in rows]
         directions = [r[7] for r in rows]
 
         timestamp = self._timestamps(seconds)
-        # The simulator already carries prices as integer tick counts, which is
-        # exactly the canonical storage (issue #155), so emit them directly
-        # instead of scaling to a quote-currency float.
+        # The simulator already carries prices as integer tick counts and sizes
+        # as integer lot counts, which is exactly the canonical storage
+        # (issues #155 and #226), so emit both directly instead of scaling to a
+        # quote-currency and base-asset float.
         price = ticks
 
         return pd.DataFrame(
@@ -685,7 +695,7 @@ class _Simulator:
         n = len(rows)
         seconds = np.fromiter((r[0] for r in rows), dtype=np.float64, count=n)
         ticks = np.fromiter((r[1] for r in rows), dtype=np.int64, count=n)
-        volume = np.fromiter((r[2] for r in rows), dtype=np.float64, count=n)
+        volume = np.fromiter((r[2] for r in rows), dtype=np.int64, count=n)
         sides = [r[3] for r in rows]
         maker_eid = np.fromiter((r[4] for r in rows), dtype=np.int64, count=n)
         taker_eid = np.fromiter((r[5] for r in rows), dtype=np.int64, count=n)

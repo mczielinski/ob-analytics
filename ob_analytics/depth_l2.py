@@ -59,7 +59,9 @@ from ob_analytics._utils import (
     datetime_to_epoch,
     empty_trades,
     epoch_to_datetime,
+    lots_to_size,
     price_to_ticks,
+    size_to_lots,
     ticks_to_price,
     validate_columns,
     validate_non_empty,
@@ -208,7 +210,9 @@ class L2DepthLoader:
         price = price_to_ticks(
             raw[price_col].astype(float) / cfg.price_divisor, cfg.tick_size
         )
-        volume = raw[vol_col].astype(float).round(cfg.volume_decimals)
+        # Canonical size is integer lots (issue #226); the raw feed carries a
+        # base-asset float, so convert on the way in.
+        volume = pd.Series(size_to_lots(raw[vol_col], cfg.lot_size), index=raw.index)
         direction = (
             raw[side_col].astype(str).str.strip().str.lower().map(_SIDE_TO_DIRECTION)
         )
@@ -329,7 +333,9 @@ class L2TradeReader:
         price = price_to_ticks(
             raw[price_col].astype(float) / cfg.price_divisor, cfg.tick_size
         )
-        volume = raw[vol_col].astype(float).round(cfg.volume_decimals)
+        # Canonical size is integer lots (issue #226); the raw feed carries a
+        # base-asset float, so convert on the way in.
+        volume = pd.Series(size_to_lots(raw[vol_col], cfg.lot_size), index=raw.index)
         direction = self._read_direction(raw)
 
         n = len(raw)
@@ -443,7 +449,12 @@ class DepthCsvWriter:
                 "price": (
                     ticks_to_price(depth["price"], cfg.tick_size) * cfg.price_divisor
                 ).round(cfg.price_decimals),
-                "volume": depth["volume"],
+                # Restore the base-asset float from integer lots (#226).
+                "volume": lots_to_size(
+                    depth["volume"],
+                    self._config.lot_size,
+                    decimals=self._config.volume_decimals,
+                ),
             }
         )
         depth_path = out_dir / "depth.csv"
@@ -464,7 +475,11 @@ class DepthCsvWriter:
                 "price": (
                     ticks_to_price(trades["price"], cfg.tick_size) * cfg.price_divisor
                 ).round(cfg.price_decimals),
-                "amount": trades["volume"],
+                "amount": lots_to_size(
+                    trades["volume"],
+                    self._config.lot_size,
+                    decimals=self._config.volume_decimals,
+                ),
                 "side": trades["direction"]
                 .astype("object")
                 .where(trades["direction"].notna(), other=pd.NA),
@@ -529,6 +544,7 @@ class DepthCsvSource:
         return {
             "tick_size": 0.01,
             "price_decimals": 2,
+            "lot_size": 1e-8,
             "volume_decimals": 8,
             "timestamp_unit": "ms",
         }

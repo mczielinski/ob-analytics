@@ -47,8 +47,13 @@ HFT_SELL_EVENT = 1 << 28
 WRANGLER_COLUMNS = ["action", "side", "price", "size", "order_id", "flags", "sequence"]
 
 
-def _events(rows: list[tuple[str, str, int, float, int]]) -> pd.DataFrame:
-    """A minimal canonical events frame: (action, direction, ticks, volume, id)."""
+def _events(rows: list[tuple[str, str, int, int, int]]) -> pd.DataFrame:
+    """A minimal canonical events frame: (action, direction, ticks, lots, id).
+
+    Both the price and the size are canonical integers — ticks (issue #155) and
+    lots (issue #226) — so a writer's job is to scale each back to the float the
+    engines read.
+    """
     ts = pd.Timestamp("2026-01-05 10:00:00", tz="UTC")
     return pd.DataFrame(
         {
@@ -60,7 +65,7 @@ def _events(rows: list[tuple[str, str, int, float, int]]) -> pd.DataFrame:
             "volume": [r[3] for r in rows],
             "direction": [r[1] for r in rows],
             "action": [r[0] for r in rows],
-            "fill": 0.0,
+            "fill": 0,
             "type": "flashed-limit",
         }
     )
@@ -110,22 +115,21 @@ class TestHftbacktestWriter:
         array = np.load(dest)[HFT_ARRAY_KEY]
         assert list(array["ev"]) == [3758096394, 3758096396, 3489660939]
 
-    def test_scales_integer_ticks_to_the_quote_currency(self, tmp_path):
-        events = _events(
-            [("created", "bid", 99, 2.0, 7), ("created", "ask", 101, 3.0, 8)]
-        )
+    def test_scales_integer_ticks_and_lots_to_the_engines_floats(self, tmp_path):
+        events = _events([("created", "bid", 99, 2, 7), ("created", "ask", 101, 3, 8)])
         dest = tmp_path / "session.npz"
 
         save_data(
             {"events": events},
             dest,
             fmt="hftbacktest",
-            config=PipelineConfig(tick_size=0.5),
+            config=PipelineConfig(tick_size=0.5, lot_size=0.25),
         )
 
         array = np.load(dest)[HFT_ARRAY_KEY]
         assert list(array["px"]) == [49.5, 50.5]
-        assert list(array["qty"]) == [2.0, 3.0]
+        # 2 and 3 lots on a 0.25 grid (issue #226).
+        assert list(array["qty"]) == [0.5, 0.75]
         assert list(array["order_id"]) == [7, 8]
 
     def test_emits_events_in_the_canonical_time_order(self, tmp_path):
@@ -206,18 +210,20 @@ class TestNautilusWriter:
     def test_uses_the_engines_own_action_and_side_words(self, tmp_path):
         events = _events(
             [
-                ("created", "bid", 99, 2.0, 7),
-                ("changed", "bid", 99, 1.0, 7),
-                ("deleted", "ask", 101, 3.0, 8),
+                ("created", "bid", 99, 2, 7),
+                ("changed", "bid", 99, 1, 7),
+                ("deleted", "ask", 101, 3, 8),
             ]
         )
         dest = tmp_path / "deltas.parquet"
 
+        # lot_size 1 so a lot count and the emitted size read the same; the
+        # scaling itself is covered by the hftbacktest writer's own test.
         save_data(
             {"events": events},
             dest,
             fmt="nautilus",
-            config=PipelineConfig(tick_size=0.5),
+            config=PipelineConfig(tick_size=0.5, lot_size=1.0),
         )
 
         frame = pd.read_parquet(dest)
@@ -235,9 +241,9 @@ class TestNautilusWriter:
         # size is zero, so the delete has to name the size the order last held.
         events = _events(
             [
-                ("created", "bid", 99, 2.0, 7),
-                ("changed", "bid", 99, 1.5, 7),
-                ("deleted", "bid", 99, 0.0, 7),
+                ("created", "bid", 99, 2, 7),
+                ("changed", "bid", 99, 1, 7),
+                ("deleted", "bid", 99, 0, 7),
             ]
         )
         dest = tmp_path / "deltas.parquet"
@@ -246,12 +252,12 @@ class TestNautilusWriter:
             {"events": events},
             dest,
             fmt="nautilus",
-            config=PipelineConfig(tick_size=0.5),
+            config=PipelineConfig(tick_size=0.5, lot_size=1.0),
         )
 
         frame = pd.read_parquet(dest)
         assert list(frame["action"]) == ["ADD", "UPDATE", "DELETE"]
-        assert list(frame["size"]) == [2.0, 1.5, 1.5]
+        assert list(frame["size"]) == [2.0, 1.0, 1.0]
 
     def test_drops_a_delta_that_never_had_a_size(self, tmp_path):
         # Nothing sensible to tell the engine about an order that never rested.
@@ -277,10 +283,10 @@ class TestNautilusWriter:
         # history, not from whichever event happens to sit before it.
         events = _events(
             [
-                ("created", "bid", 99, 2.0, 7),
-                ("created", "ask", 101, 5.0, 8),
-                ("deleted", "bid", 99, 0.0, 7),
-                ("deleted", "ask", 101, 0.0, 8),
+                ("created", "bid", 99, 2, 7),
+                ("created", "ask", 101, 5, 8),
+                ("deleted", "bid", 99, 0, 7),
+                ("deleted", "ask", 101, 0, 8),
             ]
         )
         dest = tmp_path / "deltas.parquet"
@@ -289,7 +295,7 @@ class TestNautilusWriter:
             {"events": events},
             dest,
             fmt="nautilus",
-            config=PipelineConfig(tick_size=0.5),
+            config=PipelineConfig(tick_size=0.5, lot_size=1.0),
         )
 
         frame = pd.read_parquet(dest)

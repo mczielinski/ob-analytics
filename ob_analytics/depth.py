@@ -217,12 +217,22 @@ class DepthMetricsEngine:
             timestamps = ordered.reset_index(drop=True)["timestamp"]
         res = pd.concat([timestamps, metrics], axis=1)
 
-        # Best prices stay integer ticks (issue #155); the pre-allocated metrics
-        # buffer is float64 (it also holds volumes), so cast the two price
-        # columns back to int64.  A best price is a resting level, always an
-        # exact integer tick, so the cast is lossless.
+        # Best prices stay integer ticks (issue #155) and every volume column
+        # integer lots (issue #226); the pre-allocated metrics buffer is float64
+        # because it holds the scale-free bps columns too, so cast the exact
+        # columns back.  Both casts are lossless: a best price is a resting
+        # level, always an exact integer tick, and a volume column is a sum of
+        # integer lot counts, which float64 carries exactly well past any real
+        # book size.
         price_cols = ["best_bid_price", "best_ask_price"]
         res[price_cols] = res[price_cols].astype(np.int64)
+        # Only when the input really was integer lots.  The engine also accepts
+        # a hand-built or pre-#226 frame carrying float sizes in the base asset,
+        # and casting one of those would truncate a sub-lot size such as 0.5 to
+        # zero — losing the level instead of reporting it.
+        if np.issubdtype(np.asarray(volumes).dtype, np.integer):
+            volume_cols = [c for c in metrics.columns if "vol" in c]
+            res[volume_cols] = res[volume_cols].astype(np.int64)
 
         return res
 
