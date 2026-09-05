@@ -15,15 +15,20 @@
 #
 # Goals are not listed here at all. Each goal issue draws its own diagram from
 # its own prerequisites.
+#
+# A caption says what a diagram is for. It never says where the work stands:
+# what is done, what is next and what waits on what are all drawn in the
+# diagram under it and recomputed on every run, and a caption that repeats them
+# is wrong as soon as an issue closes. The generator fails a run whose caption
+# names an issue its diagram no longer draws.
 
 [[group]]
 id = "foundation"
 title = "Part 1 - the foundation"
 prose = """
-The shared schema is the one thing the rest of the work needs. It unblocks five
-pieces of work; the separated engine then also feeds the metric hook. The frame
-type is settled, apart from one question it left behind: the shape the export
-writer takes.
+Everything the library does reads the same schema, so everything here waits on
+it, directly or through the frame type. This diagram is the order that
+dependency forces; where it has been satisfied, the boxes drop out.
 """
 issues = [112, 136, 137, 104, 113, 140, 216]
 
@@ -31,24 +36,36 @@ issues = [112, 136, 137, 104, 113, 140, 216]
 id = "data-model"
 title = "Part 1b - the four data-model decisions"
 prose = """
-The shared schema shipped with four choices left open. Each one would quietly
-corrupt the data if it were wrong. All four are now settled, so this diagram
-records completed work rather than work to do.
+The schema left four choices open, and each would quietly corrupt the data if
+it were wrong. They follow the Databento and Nautilus conventions, written in
+Arrow and Parquet: timestamps as tz-aware UTC nanoseconds, exchange time and
+receive time both; a nullable venue sequence plus a local counter, so that
+messages sharing an instant still have an order and a dropped one is visible;
+prices as integer ticks with a per-instrument tick size, matching the engine's
+own binning; and readable symbol and venue columns rather than a numeric id and
+a definitions join. All four stay drawn, closed or not, because together they
+are the data model.
 """
 issues = [112, 146, 147, 154, 155]
 # Keep the closed issues. Pruning would show two of the four, because two of
-# them have nothing open left behind them, and the point of this diagram is
-# that all four are done.
+# them have nothing open left behind them, and the point of this diagram is to
+# show all four decisions together.
 keep_closed = true
 
 [[group]]
 id = "sources"
 title = "Part 2 - data sources"
 prose = """
-One plug-in shape feeds every new source, so each source is a small piece of
-work once the shape is in place.
+Sources are plug-ins on one shape, so a new venue is a small piece of work.
+Every source stays drawn once it is built, which makes this diagram the venue
+list as well: purple is a source you can use today, green is one nobody has
+written yet. A venue neither CCXT nor cryptofeed covers needs its own client.
 """
 issues = [112, 137, 106, 134, 99, 100, 101, 102, 103, 98]
+# Keep the closed sources. A source that shipped is a source you can use, so
+# pruning it would delete the answer to "which venues work today" from the one
+# diagram that shows venues.
+keep_closed = true
 
 [[group]]
 id = "engine"
@@ -64,8 +81,9 @@ issues = [112, 136, 100, 114, 143, 144, 105, 116, 138, 139, 206]
 id = "analytics"
 title = "Part 4 - metrics, signals and model inputs"
 prose = """
-Measurements taken from a rebuilt book. Trade signs and the first signals are
-done. The rest are separate pieces of work that read the same input.
+Measurements taken from a rebuilt book. They read the same input and are mostly
+independent of each other, so any arrow drawn here is the exception rather than
+an order to work in.
 """
 issues = [104, 107, 109, 110, 111, 119, 148, 149, 203]
 
@@ -73,11 +91,17 @@ issues = [104, 107, 109, 110, 111, 119, 148, 149, 203]
 id = "quality"
 title = "Part 5 - data quality checks"
 prose = """
-Ways to find out whether loaded data is sound. Three are done: data with known
-answers, a test that the engine gives the same numbers, and gap detection from
-sequence numbers.
+Ways to find out whether loaded data is sound: data with known answers to check
+against, a test that the engine gives the same numbers, gap detection from
+sequence numbers, a command that reports what it finds, and a capture that does
+not drop data in the first place. Each one stays drawn after it ships, because a
+check that exists is still a way to check.
 """
 issues = [108, 114, 143, 146, 150]
+# Keep the closed checks, for the same reason as the sources: this diagram
+# answers "how do I know the data is sound", and a check that shipped is the
+# best answer it has.
+keep_closed = true
 
 [[group]]
 id = "viz"
@@ -114,6 +138,24 @@ label = "a live source"
 goal = 179
 any_of = [102, 103]
 label = "a prediction market"
+
+# Work that is ready, but should wait.
+#
+# The graph knows what blocks what; it cannot know that a piece of unblocked
+# work is a bad idea today. That judgement used to sit in the epic as prose,
+# where it outlived the issues it named. Here it is attached to the issues, so
+# the generator prints it only while they are open and drops it when they close.
+#
+# A reason says why the work waits and what would end the wait. It names no
+# issue numbers: the generator prints the numbers beside it.
+
+[[hold]]
+issues = [138, 139, 203]
+reason = """\
+build these only when a measurement asks for them. The speed test put most of \
+the run time in the depth metrics, which is an argument against porting the \
+loaders\
+"""
 
 # Short names for diagram boxes.
 #

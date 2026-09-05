@@ -11,17 +11,28 @@ issue took four correct edits and the copies drifted apart.
 
 What it writes
 --------------
-Into #124: a status count, one diagram per group in ``roadmap-groups.toml``, a
-list of the work issues no group names, one line per goal with its readiness,
-and any blocker that points outside the epic. Into each goal issue: the list of
-what that goal waits on and a diagram of just that goal. Everything lands
-between ``<!-- ROADMAP:BEGIN -->`` and ``<!-- ROADMAP:END -->``; the prose above
-the opening marker is written by people and is never touched. Which issue
-belongs in which diagram is editorial judgement and lives in the config; the
-edges never do.
+Into #124: a status count, what to pick up next, one diagram per group in
+``roadmap-groups.toml``, a list of the work issues no group names, one line per
+goal with its readiness, and any blocker that points outside the epic. Into each
+goal issue: the list of what that goal waits on and a diagram of just that goal.
+Everything lands between ``<!-- ROADMAP:BEGIN -->`` and ``<!-- ROADMAP:END -->``;
+the prose above the opening marker is written by people and is never touched.
+Which issue belongs in which diagram is editorial judgement and lives in the
+config; the edges never do.
 
 The rules it applies
 --------------------
+**Prose.** Nothing written by hand may say where the work stands, because that
+is the one thing that changes without anyone touching the words. So the epic's
+own advice on what to do next is derived here — which goal is one issue from
+done, which issue frees other work, how much is free to take in any order — and
+the hand-written half above the marker is checked for issue numbers, each of
+which is a claim about another issue that the graph can quietly outrun. A
+caption is checked the same way against its own diagram: a caption naming a node
+the pruner has dropped is the same fault. Both fail the run. The single
+judgement the graph cannot make, that ready work should still wait, is a
+``[[hold]]`` in the config, listed only while its issues are open.
+
 **Pruning.** A closed issue is dropped from a diagram unless an open non-goal
 issue still depends on it, so a diagram shows the work ahead rather than the
 whole history. Goal edges must not count: sixteen goals depend on nearly
@@ -73,6 +84,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import subprocess
 import tomllib
 from dataclasses import dataclass, field, replace
@@ -176,12 +188,28 @@ class Prerequisite:
 
 
 @dataclass(frozen=True)
+class Hold:
+    """Work that is ready but should wait, and the reason it waits.
+
+    The graph cannot hold an opinion. "Do this only once a measurement asks for
+    it" is a judgement about work nothing blocks, and it used to be written into
+    the epic by hand, where it outlived the issues it was about. Here it is
+    attached to the issues themselves, so it is listed only while they are open
+    and disappears when they close.
+    """
+
+    issues: tuple[int, ...]
+    reason: str
+
+
+@dataclass(frozen=True)
 class Config:
     """The editorial half: which issues share a diagram and what to call them."""
 
     groups: tuple[Group, ...]
     alternatives: tuple[Alternative, ...]
     labels: dict[int, str]
+    holds: tuple[Hold, ...] = ()
 
 
 def _split_edges(
@@ -243,6 +271,10 @@ def load_config(path: Path) -> Config:
             for a in raw.get("alternative", ())
         ),
         labels={int(k): v for k, v in raw.get("labels", {}).items()},
+        holds=tuple(
+            Hold(issues=tuple(h["issues"]), reason=h["reason"])
+            for h in raw.get("hold", ())
+        ),
     )
 
 
@@ -458,6 +490,173 @@ def _goal_summary(graph: Graph, config: Config, goal: Node) -> str:
 
 
 # ---------------------------------------------------------------------------
+# What to pick up next
+# ---------------------------------------------------------------------------
+
+
+def _held(config: Config, number: int) -> str | None:
+    """The reason this issue is held back, if it is."""
+    for hold in config.holds:
+        if number in hold.issues:
+            return hold.reason
+    return None
+
+
+def _name(graph: Graph, config: Config, number: int) -> str:
+    """``#123 short label``, the way every list here names an issue."""
+    return f"#{number} {_short_label(config, graph.nodes[number])}"
+
+
+def _goal_name(node: Node) -> str:
+    """A goal named as the thing a user can do, without the stock opening."""
+    return f"#{node.number} ({node.title.removeprefix('Users can ')})"
+
+
+def _prereq_name(graph: Graph, config: Config, prereq: Prerequisite) -> str:
+    """One prerequisite named: an issue, or a choice between several."""
+    if prereq.label:
+        return f"{' or '.join(f'#{m}' for m in prereq.members)} ({prereq.label})"
+    return _name(graph, config, prereq.members[0])
+
+
+def _one_away(graph: Graph, config: Config) -> list[tuple[str, tuple[int, ...]]]:
+    """Goals with a single prerequisite left, and the issue that would close it.
+
+    This is the strongest thing the graph can say about what to do next: every
+    other issue moves a goal along, and these finish one.
+    """
+    rows = []
+    for goal in graph.goals:
+        if goal.is_closed:
+            continue
+        outstanding = _outstanding(graph, config, goal)
+        if len(outstanding) != 1:
+            continue
+        prereq = outstanding[0]
+        held = any(_held(config, m) for m in prereq.members)
+        rows.append(
+            (
+                f"- {_prereq_name(graph, config, prereq)} — the last thing "
+                f"{_goal_name(goal)} waits on"
+                + (" (held back, see below)" if held else ""),
+                prereq.members,
+            )
+        )
+    return rows
+
+
+def _frees_work(graph: Graph, config: Config) -> list[tuple[str, tuple[int, ...]]]:
+    """Ready issues that something already open is waiting on.
+
+    Sorted by how much each one frees, because that is the only ordering the
+    graph justifies: an issue two others wait on unblocks more than one nobody
+    waits on.
+    """
+    rows = []
+    for node in graph.work:
+        if node.is_closed or node.open_blockers:
+            continue
+        waiting = _open_dependents(graph, node.number)
+        if not waiting:
+            continue
+        rows.append((len(waiting), node.number, waiting))
+    out = []
+    for _, number, waiting in sorted(rows, key=lambda r: (-r[0], r[1])):
+        names = " and ".join(f"#{n.number}" for n in waiting)
+        verb = "waits" if len(waiting) == 1 else "wait"
+        held = " (held back, see below)" if _held(config, number) else ""
+        out.append(
+            (
+                f"- {_name(graph, config, number)} — {names} {verb} on it{held}",
+                (number,),
+            )
+        )
+    return out
+
+
+def _holds(graph: Graph, config: Config) -> list[str]:
+    """Every hold that still has an open issue under it."""
+    lines = []
+    for hold in config.holds:
+        open_issues = [
+            i for i in hold.issues if i in graph.nodes and not graph.nodes[i].is_closed
+        ]
+        if not open_issues:
+            continue
+        names = ", ".join(_name(graph, config, i) for i in open_issues)
+        lines.append(f"- {names} — {hold.reason}")
+    return lines
+
+
+def _free_choice(graph: Graph, config: Config, named: set[int]) -> int:
+    """How many ready issues are left once the lists above have had their say.
+
+    Named issues are subtracted so the four groups partition the open work
+    instead of counting the same issue twice, which is the arithmetic a reader
+    checks first.
+    """
+    return sum(
+        1
+        for n in graph.work
+        if not n.is_closed
+        and not n.open_blockers
+        and n.number not in named
+        and not _open_dependents(graph, n.number)
+        and not _held(config, n.number)
+    )
+
+
+def render_next_up(graph: Graph, config: Config) -> list[str]:
+    """The section that says what to pick up, worked out from the graph.
+
+    #124 used to answer this in hand-written prose, which meant every close
+    re-dated a paragraph nobody remembered to edit. Everything here is derived:
+    which goal is one issue from done, which issue frees other work, and how
+    much is free to take in any order. The one thing the graph cannot know —
+    that a piece of ready work should still wait — comes from the config's
+    holds, which expire with the issues they name.
+    """
+    out = [
+        "## What to pick up next",
+        "",
+        "Worked out from the graph on each run, so none of it needs an edit.",
+        "",
+    ]
+    named: set[int] = set()
+    sections = [
+        (
+            (
+                "**One issue away from a goal.** Closing any of these finishes "
+                "something a user can do."
+            ),
+            _one_away(graph, config),
+        ),
+        ("**Frees other work.**", _frees_work(graph, config)),
+    ]
+    for heading, rows in sections:
+        if not rows:
+            continue
+        out += [heading, "", *[line for line, _ in rows], ""]
+        named |= {number for _, members in rows for number in members}
+
+    holds = _holds(graph, config)
+    if holds:
+        out += ["**Held back on purpose.**", "", *holds, ""]
+
+    free = _free_choice(graph, config, named)
+    if free:
+        out += [
+            (
+                f"**Free to take in any order.** {free} other issues are open "
+                "with nothing in their way and nothing waiting on them, so the "
+                "order is yours."
+            ),
+            "",
+        ]
+    return out
+
+
+# ---------------------------------------------------------------------------
 # The generated block for epic #124
 # ---------------------------------------------------------------------------
 
@@ -481,6 +680,8 @@ def render_epic_body(graph: Graph, config: Config) -> str:
         COLOUR_KEY,
         "",
     ]
+
+    out += render_next_up(graph, config)
 
     for group in config.groups:
         members = _members(graph, group)
@@ -592,6 +793,93 @@ def render_goal_body(graph: Graph, config: Config, number: int) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Guards against prose that goes stale
+# ---------------------------------------------------------------------------
+
+# An issue number in the hand-written half of a body. Written as a pattern
+# rather than a search for "#" so that a heading, a hex colour or a plain hash
+# is not mistaken for a reference.
+MENTION = re.compile(r"#(\d+)")
+
+
+def _hand_written(body: str) -> str:
+    """Everything in a body the generator does not write.
+
+    Both sides of the block count: #124 carries prose after the closing marker
+    as well as before it, and prose there goes stale exactly as fast.
+    """
+    head, _, rest = body.partition(BEGIN)
+    _, _, tail = rest.partition(END)
+    return head + tail
+
+
+def named_issues(body: str) -> list[int]:
+    """Every issue number in the hand-written parts of a body."""
+    return [int(m) for m in MENTION.findall(_hand_written(body))]
+
+
+def stale_mentions(body: str, tracked: set[int]) -> list[int]:
+    """Roadmap issues named in prose the generator does not rewrite.
+
+    Each is a claim about another issue — what is done, what is next, what
+    waits on what — that the graph moves under without a word. That is how the
+    epic came to carry sentences describing boxes no reader could see. The
+    generated block names every issue a reader needs, with its state as it is
+    now, so hand-written prose says why the work is shaped this way and never
+    where it stands.
+
+    Only issues the roadmap tracks can go stale this way, so only they are
+    flagged. A goal's footer says which epic it belongs to and which discussion
+    decided it: neither is a claim about progress, and neither can be
+    contradicted by a graph that does not contain it.
+    """
+    return [n for n in named_issues(body) if n in tracked]
+
+
+def stale_captions(graph: Graph, config: Config) -> list[str]:
+    """Group captions that name an issue their diagram no longer draws.
+
+    A closed issue nothing waits on is pruned from its diagram, and a caption
+    written when it was there goes on describing a box that is gone. The short
+    labels are exactly the words a caption uses for a node, so a label that
+    appears in a caption whose node is not drawn is that mistake, found without
+    anyone re-reading the epic.
+    """
+    out = []
+    for group in config.groups:
+        drawn = set(_members(graph, group))
+        for number in group.issues:
+            if number in drawn or number not in graph.nodes:
+                continue
+            label = config.labels.get(number)
+            if not label:
+                continue
+            if re.search(rf"\b{re.escape(label)}\b", group.prose, re.IGNORECASE):
+                out.append(
+                    f"{group.id}: the caption says {label!r}, but #{number} is "
+                    "not drawn in that diagram any more"
+                )
+    return out
+
+
+def unknown_holds(config: Config) -> list[str]:
+    """Holds that name an issue no group draws.
+
+    Checked against the config rather than the graph, so a mistyped number is
+    caught the same way whatever state the roadmap is in. A hold on an issue
+    the roadmap never draws would otherwise sit in the file printing nothing,
+    which is the silent kind of wrong this file exists to avoid.
+    """
+    drawn = {i for group in config.groups for i in group.issues}
+    return [
+        f"a hold names #{number}, which no diagram draws"
+        for hold in config.holds
+        for number in hold.issues
+        if number not in drawn
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Writing a block into an issue body
 # ---------------------------------------------------------------------------
 
@@ -641,6 +929,7 @@ class Report:
     unchanged: list[int] = field(default_factory=list)
     skipped: list[int] = field(default_factory=list)
     dropped_edges: list[tuple[int, int]] = field(default_factory=list)
+    stale_prose: list[str] = field(default_factory=list)
 
 
 def build_graph(client: Issues, epic: int) -> Graph:
@@ -684,15 +973,31 @@ def build_graph(client: Issues, epic: int) -> Graph:
     return Graph(nodes=nodes, dropped_edges=tuple(sorted(dropped)))
 
 
-def _write(client: Issues, number: int, block: str, report: Report) -> None:
+def _write(
+    client: Issues, number: int, block: str, report: Report, tracked: set[int]
+) -> None:
     """Write one generated block, unless the body already says the same thing.
 
-    The body is read **once**. Reading it again for the comparison would splice
-    one version and compare against another, so a prose edit landing between
-    the two reads would be overwritten by the write that follows, with nothing
-    logged. One read also halves the API calls: 17 rather than 34.
+    A run that changes nothing reads each body **once**: comparing before
+    writing is what keeps a run on every issue event from churning seventeen
+    edit histories, and one read halves the API calls, 17 rather than 34.
+
+    A run that does have something to write reads that one body again, and
+    splices into the second copy. The gap between reading a body and writing it
+    is a gap someone can edit the prose in, and the runs overlap in exactly the
+    way that makes it likely: an event arrives while a run is in flight, and
+    the write that follows carries whatever the prose was when the run started.
+    That is not theoretical — it silently reverted a rewrite of #124's prose
+    while this was being built. GitHub has no conditional write for an issue
+    body, so the gap cannot be closed altogether; splicing into the freshest
+    copy narrows it from a whole run to a single request.
     """
     current = client.get_body(number)
+    for named in stale_mentions(current, tracked):
+        report.stale_prose.append(
+            f"#{number} names #{named} outside the generated block, where "
+            "nothing keeps a claim about a roadmap issue up to date"
+        )
     try:
         updated = splice_generated_block(current, block)
     except MarkerError as exc:
@@ -700,6 +1005,16 @@ def _write(client: Issues, number: int, block: str, report: Report) -> None:
         report.skipped.append(number)
         return
     if updated == current:
+        report.unchanged.append(number)
+        return
+    fresh = client.get_body(number)
+    try:
+        updated = splice_generated_block(fresh, block)
+    except MarkerError as exc:
+        LOG.warning("skipping #%s: %s", number, exc)
+        report.skipped.append(number)
+        return
+    if updated == fresh:
         report.unchanged.append(number)
         return
     client.update_body(number, updated)
@@ -718,10 +1033,19 @@ def run(client: Issues, config: Config, epic: int = EPIC) -> Report:
             blocker,
             epic,
         )
-    _write(client, epic, render_epic_body(graph, config), report)
+    report.stale_prose += stale_captions(graph, config)
+    report.stale_prose += unknown_holds(config)
+    # The epic is the one number prose may name: a goal belongs to it whatever
+    # the graph does, and the generator would not be running without it.
+    tracked = set(graph.nodes) - {epic}
+    _write(client, epic, render_epic_body(graph, config), report, tracked)
     for goal in graph.goals:
         _write(
-            client, goal.number, render_goal_body(graph, config, goal.number), report
+            client,
+            goal.number,
+            render_goal_body(graph, config, goal.number),
+            report,
+            tracked,
         )
     return report
 
@@ -812,7 +1136,7 @@ class ReadOnly:
 
 
 def exit_code(report: Report) -> int:
-    """Fail the run if it skipped an issue.
+    """Fail the run if it skipped an issue, or found prose that will go stale.
 
     A skip is never harmless. The generator carries on past a body whose
     markers are missing or malformed, so that one broken body cannot stop the
@@ -821,8 +1145,13 @@ def exit_code(report: Report) -> int:
     healthy roadmap while a view had quietly stopped updating, which is the
     drift this exists to end. Writing nothing because nothing changed is the
     steady state and succeeds.
+
+    Prose that names an issue fails for the same reason one step earlier: the
+    view is right and the writing around it is not, which is harder to notice
+    than a view that stopped moving. The run still writes everything it can, so
+    the failure is a report, not a refusal.
     """
-    return 1 if report.skipped else 0
+    return 1 if report.skipped or report.stale_prose else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -853,6 +1182,8 @@ def main(argv: list[str] | None = None) -> int:
         LOG.info("  updated #%s", number)
     for number in report.skipped:
         LOG.error("  #%s has no usable markers, so its view is stale", number)
+    for complaint in report.stale_prose:
+        LOG.error("  %s", complaint)
     return exit_code(report)
 
 
