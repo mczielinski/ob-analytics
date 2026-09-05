@@ -27,7 +27,7 @@ id = "foundation"
 title = "Part 1 - the foundation"
 prose = """
 Everything the library does reads the same schema, so everything here waits on
-it, directly or through the frame type. This diagram is the order that
+it, directly or through a piece built on it. This diagram is the order that
 dependency forces; where it has been satisfied, the boxes drop out.
 """
 issues = [112, 136, 137, 104, 113, 140, 216]
