@@ -48,7 +48,13 @@ from ob_analytics.analytics import (
 # at import time; the Source classes are also the public per-venue entry points.
 from ob_analytics.bitstamp import BitstampSource
 from ob_analytics.config import PipelineConfig, SourceSettings
-from ob_analytics.data import load_data, save_data
+from ob_analytics.data import (
+    OutputTables,
+    ParquetWriter,
+    PickleWriter,
+    load_data,
+    save_data,
+)
 from ob_analytics.datasets import toy_events, toy_l2_depth, toy_l2_trades, toy_trades
 from ob_analytics.depth_l2 import DepthCsvSource
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
@@ -158,6 +164,9 @@ __all__ = [
     "ObAnalyticsError",
     # ── Protocols / extension points ─────────────────────────────────
     "OfflineSource",
+    "OutputTables",
+    "ParquetWriter",
+    "PickleWriter",
     # ── Pipeline orchestration ───────────────────────────────────────
     "Pipeline",
     "PipelineConfig",

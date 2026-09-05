@@ -8,12 +8,19 @@ from typing import ClassVar
 import pandas as pd
 import pytest
 
+from ob_analytics.config import PipelineConfig
 from ob_analytics.data import (
     WRITERS,
     list_writers,
     load_data,
     register_writer,
     save_data,
+)
+from ob_analytics.schemas import (
+    SCHEMA_VERSION,
+    SCHEMA_VERSION_KEY,
+    TICK_SIZE_KEY,
+    decode_tick_sizes,
 )
 
 # ---------------------------------------------------------------------------
@@ -107,3 +114,67 @@ class TestSaveDataExplicitWriter:
         )
         # stub2 got the call (the registered "stub" did not)
         assert (tmp_path / "x", ["events"]) in _StubWriter.written
+
+
+class TestBuiltInFormatsAreRegisteredWriters:
+    """Issue #216: parquet and pickle resolve through ``WRITERS`` like the rest.
+
+    They were hardcoded branches in ``save_data``, so they were the only
+    extension point in the library a user could not replace or extend.
+    """
+
+    def test_a_registered_parquet_writer_replaces_the_built_in_one(self, tmp_path):
+        register_writer("parquet", lambda config, ctx: _StubWriter())
+
+        save_data({"events": pd.DataFrame({"a": [1]})}, tmp_path / "out", fmt="parquet")
+
+        assert _StubWriter.written == [(tmp_path / "out", ["events"])]
+        assert not (tmp_path / "out" / "events.parquet").exists()
+
+    def test_a_registered_pickle_writer_replaces_the_built_in_one(self, tmp_path):
+        register_writer("pickle", lambda config, ctx: _StubWriter())
+
+        save_data(
+            {"events": pd.DataFrame({"a": [1]})}, tmp_path / "out.pkl", fmt="pickle"
+        )
+
+        assert _StubWriter.written == [(tmp_path / "out.pkl", ["events"])]
+        assert not (tmp_path / "out.pkl").exists()
+
+    def test_a_writer_can_ask_for_canonical_arrow_tables(self, tmp_path):
+        # A writer that targets Arrow (#113's Nautilus export is the first)
+        # must not have to rebuild the canonical metadata by hand.
+        seen: dict[str, object] = {}
+
+        class _ArrowWantingWriter:
+            def write(self, data, dest, **kwargs):
+                seen["frames"] = dict(data)
+                seen["tables"] = data.arrow()
+                return Path(dest)
+
+        register_writer("arrow-wanting", lambda config, ctx: _ArrowWantingWriter())
+
+        save_data(
+            {"events": pd.DataFrame({"price": [1, 2]})},
+            tmp_path / "out",
+            fmt="arrow-wanting",
+            config=PipelineConfig(tick_size=0.05),
+        )
+
+        # Still a plain mapping of pandas frames, so existing writers are unaffected.
+        assert isinstance(seen["frames"]["events"], pd.DataFrame)
+
+        tables = seen["tables"]
+        metadata = tables["events"].schema.metadata
+        assert metadata[SCHEMA_VERSION_KEY] == SCHEMA_VERSION.encode()
+        assert decode_tick_sizes(metadata[TICK_SIZE_KEY]) == {"default": 0.05}
+
+    def test_a_saved_pickle_holds_a_plain_dict(self, tmp_path):
+        # The payload handed to a writer is a dict subclass (#216).  Pickling it
+        # whole would write ob-analytics' own class into the file, so the file
+        # would only load where that class exists.
+        pkl = tmp_path / "out.pkl"
+        save_data({"events": pd.DataFrame({"a": [1]})}, pkl, fmt="pickle")
+
+        assert type(load_data(pkl)) is dict
+        assert b"OutputTables" not in pkl.read_bytes()
