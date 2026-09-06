@@ -209,54 +209,57 @@ class TestEngineInterface:
                 action=np.array([Action.CREATED], dtype=np.int8),
             )
 
-    def test_filled_volume_is_compensated(self) -> None:
-        # A large placement followed by many small fills is where a plain
-        # running total drifts in the last bits.  The engine compensates, so
-        # the executed total is the correctly accumulated one -- and the
-        # outcome derived from it does not wobble.
+    def test_filled_volume_is_exact_over_many_small_fills(self) -> None:
+        # A large placement followed by many small fills is where a float
+        # running total drifts in the last bits.  Sizes are integer lots
+        # (issue #226), so the executed total is exact and the outcome derived
+        # from it cannot wobble.  This test used to assert that the engine
+        # reproduced a Kahan-compensated float sum; there is now nothing to
+        # compensate, so it asserts the stronger property instead.
         second = 1_000_000_000
         n = 400
-        small = np.full(n, 1e-3)
+        small = np.full(n, 100_000, dtype=np.int64)  # 1e-3 on a 1e-8 lot grid
+        placed = 100_000_000_000
         events = OrderEvents(
             order_id=np.full(n + 1, 1, dtype=np.int64),
             timestamp=np.arange(n + 1, dtype=np.int64) * second,
             price=np.full(n + 1, 100, dtype=np.int64),
-            volume=np.r_[1e8, 1e8 - np.cumsum(small)],
+            volume=np.r_[placed, placed - np.cumsum(small)],
             direction=np.full(n + 1, Direction.BID, dtype=np.int8),
             action=np.array([Action.CREATED] + [Action.CHANGED] * n, dtype=np.int8),
-            fill=np.r_[0.0, small],
+            fill=np.r_[0, small],
         )
         life = engine.order_lifecycles(events)
 
-        drifting = float(np.sum(small))  # the naive running total
-        compensated = 0.0
-        carry = 0.0
-        for value in small.tolist():  # Kahan, spelled out
-            corrected = value - carry
-            stepped = compensated + corrected
-            carry = (stepped - compensated) - corrected
-            compensated = stepped
+        assert life.filled_vol[0] == n * 100_000
+        assert life.filled_vol.dtype == np.int64
 
-        assert life.filled_vol[0] == compensated
-        assert compensated != drifting  # the two really do part company here
-
-    def test_fill_tolerance_is_the_callers_to_set(self) -> None:
-        # An order left a hair short of its placed size reads as filled under
-        # the default tolerance and as partial under a stricter one.
+    def test_fill_tolerance_no_longer_changes_an_integer_outcome(self) -> None:
+        # The tolerance existed because a float fill could land a hair short of
+        # the placed size.  On integer lots (issue #226) two distinct sizes
+        # differ by at least one lot, so the default and a strict zero agree —
+        # a short fill is short, and an exact one is filled.
         second = 1_000_000_000
-        events = OrderEvents(
-            order_id=np.array([9, 9], dtype=np.int64),
-            timestamp=np.array([0, 1], dtype=np.int64) * second,
-            price=np.array([100, 100], dtype=np.int64),
-            volume=np.array([1.0, 0.0], dtype=np.float64),
-            direction=np.full(2, Direction.BID, dtype=np.int8),
-            action=np.array([Action.CREATED, Action.DELETED], dtype=np.int8),
-            fill=np.array([0.0, 1.0 - 1e-12], dtype=np.float64),
-        )
-        default = engine.order_lifecycles(events)
-        strict = engine.order_lifecycles(events, fill_tolerance=0.0)
-        assert default.outcome.tolist() == [Outcome.FILLED]
-        assert strict.outcome.tolist() == [Outcome.PARTIAL]
+
+        def lifecycle(fill_lots: int, **kwargs):
+            events = OrderEvents(
+                order_id=np.array([9, 9], dtype=np.int64),
+                timestamp=np.array([0, 1], dtype=np.int64) * second,
+                price=np.array([100, 100], dtype=np.int64),
+                volume=np.array([1000, 0], dtype=np.int64),
+                direction=np.full(2, Direction.BID, dtype=np.int8),
+                action=np.array([Action.CREATED, Action.DELETED], dtype=np.int8),
+                fill=np.array([0, fill_lots], dtype=np.int64),
+            )
+            return engine.order_lifecycles(events, **kwargs)
+
+        one_lot_short = 999
+        assert lifecycle(one_lot_short).outcome.tolist() == [Outcome.PARTIAL]
+        assert lifecycle(one_lot_short, fill_tolerance=0.0).outcome.tolist() == [
+            Outcome.PARTIAL
+        ]
+        assert lifecycle(1000).outcome.tolist() == [Outcome.FILLED]
+        assert lifecycle(1000, fill_tolerance=0.0).outcome.tolist() == [Outcome.FILLED]
 
     def test_visible_rows_skip_hidden_orders(self) -> None:
         # The hidden-order rule lives on the input type, so the engine and any

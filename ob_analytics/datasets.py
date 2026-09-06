@@ -196,7 +196,7 @@ def toy_events() -> pd.DataFrame:
             "exchange_timestamp": ts.copy(),
             # Integer ticks (issue #155); TICK_SIZE is 1.0, so ticks == price.
             "price": np.array([e[5] for e in _EVENTS], dtype=np.int64),
-            "volume": np.array([e[6] for e in _EVENTS], dtype=np.float64),
+            "volume": np.array([e[6] for e in _EVENTS], dtype=np.int64),
             "action": pd.Categorical(
                 [e[3] for e in _EVENTS],
                 categories=["created", "changed", "deleted"],
@@ -208,7 +208,7 @@ def toy_events() -> pd.DataFrame:
                 ordered=True,
             ),
             "event_id": event_id,
-            "fill": np.array([e[7] for e in _EVENTS], dtype=np.float64),
+            "fill": np.array([e[7] for e in _EVENTS], dtype=np.int64),
             "raw_event_type": pd.NA,
             "actor": actors,
         }
@@ -250,7 +250,7 @@ def toy_trades() -> pd.DataFrame:
             .astype("datetime64[ns]")
             .dt.tz_localize("UTC"),
             "price": np.array([t[1] for t in _TRADES], dtype=np.int64),
-            "volume": np.array([t[2] for t in _TRADES], dtype=np.float64),
+            "volume": np.array([t[2] for t in _TRADES], dtype=np.int64),
             "direction": pd.Categorical(
                 [t[3] for t in _TRADES], categories=["buy", "sell"], ordered=True
             ),
@@ -360,7 +360,7 @@ def toy_l2_depth() -> pd.DataFrame:
         {
             "timestamp": ts,
             "price": np.array([r[2] for r in _L2_DEPTH], dtype=np.int64),
-            "volume": np.array([r[3] for r in _L2_DEPTH], dtype=np.float64),
+            "volume": np.array([r[3] for r in _L2_DEPTH], dtype=np.int64),
             "direction": pd.Categorical(
                 [r[1] for r in _L2_DEPTH],
                 categories=["bid", "ask"],
@@ -402,7 +402,7 @@ def toy_l2_trades() -> pd.DataFrame:
         {
             "timestamp": ts,
             "price": np.array([t[1] for t in _L2_TRADES], dtype=np.int64),
-            "volume": np.array([t[2] for t in _L2_TRADES], dtype=np.float64),
+            "volume": np.array([t[2] for t in _L2_TRADES], dtype=np.int64),
             "direction": pd.Categorical(
                 [t[3] for t in _L2_TRADES], categories=["buy", "sell"], ordered=True
             ),

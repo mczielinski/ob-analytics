@@ -130,11 +130,16 @@ class PipelineResult:
         >>> sorted(tables)  # doctest: +SKIP
         ['depth', 'depth_summary', 'events', 'trades']
         """
-        from ob_analytics.data import _tick_sizes_from_config, _to_arrow_table
+        from ob_analytics.data import (
+            _lot_sizes_from_config,
+            _tick_sizes_from_config,
+            _to_arrow_table,
+        )
 
         tick_sizes = _tick_sizes_from_config(self.config)
+        lot_sizes = _lot_sizes_from_config(self.config)
         return {
-            name: _to_arrow_table(df, tick_sizes=tick_sizes)
+            name: _to_arrow_table(df, tick_sizes=tick_sizes, lot_sizes=lot_sizes)
             for name, df in self._frames().items()
         }
 

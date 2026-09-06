@@ -21,7 +21,9 @@ from hypothesis import given, settings, strategies as st
 from ob_analytics.config import PipelineConfig
 from ob_analytics.lobster import LobsterLoader, LobsterWriter
 
-_CFG = PipelineConfig(price_decimals=2, price_divisor=10_000, volume_decimals=0)
+_CFG = PipelineConfig(
+    price_decimals=2, price_divisor=10_000, lot_size=1.0, volume_decimals=0
+)
 
 
 @st.composite

@@ -70,17 +70,41 @@ _GOLDEN_CONFIG = SynthConfig(seed=143, duration=60.0)
 # order-book ``bps`` / ``liquidity``, volumes) are unchanged in value; the
 # reconstructed book is identical to the pre-tick one (verified element-wise
 # against the float pipeline: ticks × tick_size reproduces it exactly).
+# 2026-09-05 (#226, integer-lot sizes): every ``volume`` and ``fill`` column is
+# now ``int64`` lots instead of a double in the base asset. The simulator now
+# carries sizes the way it already carried prices — an exact integer on the
+# instrument's grid — so its former ``_vol_eps`` tolerance is gone and an order
+# is exhausted or it is not. Two things moved, and only one of them is a
+# re-expression. The sizes are the same book scaled by 1/lot_size. The depth
+# and the book are also *corrected*: a price level was a float running sum of
+# adds, cancels and fills, and when the last order left, that sum landed on
+# residue such as 5.55e-17 rather than 0, leaving the level live and reported
+# as the best bid or ask ahead of the real one. Verified against an independent
+# implementation rather than against ourselves: replaying the exported session
+# through hftbacktest's own L3 reconstruction (#224) now agrees with
+# depth_summary on the best bid and ask for every row across five seeds, where
+# before it disagreed on up to 78 rows per seed. The derived size columns
+# follow the same rule: every ``depth_summary`` volume column and
+# ``filled_vol`` are int64 lot counts too, so their sums are exact — which is
+# why ``filled_vol`` no longer carries the Kahan compensation it needed while
+# sizes were floats. Sizes also cross the engine boundary as integers now, so
+# the cumulative sums built from them — ``liquidity`` down a book side and
+# ``ahead_volume`` along a queue — are exact as well. Those two are a dtype
+# move only: summing the same integers in int64 rather than float64 gives the
+# same numbers, and the fingerprint hashes dtype alongside values, so
+# ``order_book`` and ``queue_positions`` changed digest without changing a
+# number.
 EXPECTED: dict[str, str] = {
-    "events": "6e88626676163bb92c67953720467f7ef31c63b18a13b6c9cb5ccc89d4b3c8b2",
-    "trades": "aaba2cc755bfcf91f980b0f0f4d2141a36fbca1a446a755ff7161b661c74c0d8",
-    "depth": "1c9df9cbf685c8e125706a1687d04a81384fdb6e45b557e93c9fb9561d70576e",
-    "depth_summary": "6781a478fd59b6d3176a86306f60f3df5f5345f2ec7bbb4ac0759f1d40efdb16",
+    "events": "7be06840a399d9796b12a7e4144e44df9615a10804d316bd0bb6f39b9c752a01",
+    "trades": "dfe87849f18a11294965564e23374563676aafadfb735df832737a33cdaba92e",
+    "depth": "14259329e7614036e5aa8f642d2a903229c184f19cf665678dab2d71d417ea05",
+    "depth_summary": "da5ff1da836e631cdf7fd985f388e5f70b35b443acf2d1ab4303f690910e39c6",
     "order_book": (
-        "c21d053a23abe1e879972308de6398930912929a04c7efb47add18a99d24fe69:"
-        "e2828c08dd91fc4236c96cbd5b22813d18cd497401c8de6828be62820d2652ad"
+        "e4552ba2ff12c89af4ec608273d564364266c13446f361da53239581e6fdbb95:"
+        "7902c4f9eabe3a88f35b989809ebf878cd092f9c24300e21a955f036142fb32e"
     ),
     "queue_positions": (
-        "841eadc3982b32aed360f51fc6fd3d5096226f9c84ccf3c290c34b9f9d3a6cf0"
+        "53ec1c0f45d83796a7ce18e7df0b64a13a682e5192b9da66d93e4a3f04000950"
     ),
     # 2026-08-31 (#136, engine separation): added, not re-baselined. Recorded
     # from the pre-#136 implementation and verified to still hold after the
@@ -88,7 +112,7 @@ EXPECTED: dict[str, str] = {
     # had no fingerprint before, which is how a first pass at the engine lost
     # the compensated summation behind ``filled_vol`` without any gate noticing.
     "order_lifecycles": (
-        "93c5ba8be542af424cb27369e2de8245bf58cc158d0cdb823bd33a0068ae9794"
+        "02dfb0836a90645d8303acc5c1d5c9eb4a714061d5d4959604f36b554b1b879d"
     ),
 }
 

@@ -127,6 +127,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Sizes are integer lots plus a `lot_size`, not floats** (issue #226).
+  **Breaking: the on-disk schema goes 3.0 → 4.0.** Every `volume` and `fill`
+  column is now a whole number of lots (`int64`) instead of a `double` in the
+  base asset. The base-asset size is `lots * lot_size`, where `lot_size` is the
+  instrument's minimum size increment (`PipelineConfig.lot_size`, default
+  `1e-8`; LOBSTER sets `1`, whole shares). This is the size half of the
+  integer-tick decision (issue #155) and it fixes a real defect rather than
+  only re-expressing the data.
+
+  A price level is a running sum of adds, cancels and fills. A float sum does
+  not return to exactly zero when the last order leaves, so a level landed on
+  residue such as `5.55e-17`, stayed live, and was reported as the best bid or
+  ask ahead of the real one. On the bundled Bitstamp sample that corrupted the
+  reported best bid on 25,611 of 313,565 rows (8.2%) and the best ask on 30,096
+  (9.6%) — the spread on about one row in eleven. Integer lots cancel exactly,
+  so a level empties or it does not, and those counts are now zero.
+
+  It was found by the new cross-check against hftbacktest (issue #224), and
+  that is what confirms the fix: replaying an exported session through
+  hftbacktest's own L3 reconstruction now agrees with `depth_summary` on the
+  best bid and ask for every row across five synthetic seeds, and Nautilus'
+  book agrees too. Before the fix the two disagreed on up to 78 rows a seed.
+
+  The change reaches every size-valued column — `depth_summary`'s per-bin
+  volumes, `placed_vol` and `filled_vol`, the book snapshot's `liquidity`, and
+  the queue's `ahead_volume` and `remaining` — so their sums are exact as well.
+  Three float-era workarounds went with it: the Kahan compensation behind
+  `filled_vol`, the simulator's `_vol_eps` exhaustion tolerance, and the
+  LOBSTER book replay's `1e-12` level cutoff. Loaders convert on the way in;
+  the plots and the round-trip and export writers convert back, so what a user
+  sees and what another tool reads are unchanged. `lot_size` travels in each
+  Parquet file's key-value metadata under `ob_analytics_lot_size`, next to
+  `ob_analytics_tick_size`, and `load_data` surfaces it as
+  `df.attrs["lot_size"]`. Files written at `1.0`–`3.0` still read, as the
+  float-size frames they are. Golden outputs were re-baselined on purpose.
+
+- **The export writers leave out orders that never rested** (issue #224). A
+  marketable order is recorded as a transient add on its own side at the touch,
+  then the fill, then a delete; `ob_analytics.depth` has always excluded these
+  from the book, but the hftbacktest and Nautilus writers were sending them.
+  A backtesting engine reads an add as real liquidity, so its book crossed at
+  the touch and dropped the resting level the order traded against — its
+  reconstruction drifted permanently thinner than ours. Both writers now
+  exclude them, which is what makes the two books agree.
+
 - **The order-book engine is its own module** (issue #136). The rebuild
   (`order_book`), the per-order lifecycles, and the FIFO queue reconstruction
   moved out of `analytics.py` / `queue.py` into `ob_analytics/engine/`, behind

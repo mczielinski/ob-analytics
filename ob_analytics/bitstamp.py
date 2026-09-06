@@ -27,7 +27,9 @@ from ob_analytics._utils import (
     datetime_to_epoch,
     empty_trades,
     epoch_to_datetime,
+    lots_to_size,
     price_to_ticks,
+    size_to_lots,
     ticks_to_price,
     validate_columns,
     validate_non_empty,
@@ -100,8 +102,6 @@ class BitstampLoader:
             ``exchange_timestamp``, ``price``, ``volume``, ``action``,
             ``direction``, ``event_id``, ``fill``, ``original_number``.
         """
-        volume_digits = self._config.volume_decimals
-
         events = pd.read_csv(source)
         validate_columns(
             events,
@@ -132,9 +132,10 @@ class BitstampLoader:
 
         events = events.reset_index().rename(columns={"index": "original_number"})
         events["original_number"] = events["original_number"] + 1
-        events["volume"] = events["volume"].round(volume_digits)
-        # Canonical price is integer ticks (issue #155); the raw CSV carries a
-        # quote-currency float, so convert on the way in.
+        # Canonical size is integer lots (issue #226) and canonical price
+        # integer ticks (issue #155); the raw CSV carries a base-asset float and
+        # a quote-currency float, so both convert on the way in.
+        events["volume"] = size_to_lots(events["volume"], self._config.lot_size)
         events["price"] = price_to_ticks(events["price"], self._config.tick_size)
 
         ts_unit = self._config.timestamp_unit
@@ -163,8 +164,11 @@ class BitstampLoader:
         # price change between events is the matching engine reporting the
         # fill price (taker orders) or the order walking the book (aggressors),
         # not an in-place modification.
+        # Integer lots, so the difference is exact and needs no rounding back
+        # onto the size grid (issue #226); ``diff`` still yields a float column
+        # because the first row per id is NaN, so cast once it is filled.
         fill_deltas = events.groupby("id")["volume"].diff().fillna(0)
-        events["fill"] = fill_deltas.abs().round(volume_digits)
+        events["fill"] = fill_deltas.abs().astype("int64")
 
         # Sort timestamps within each id.  The frame is id-ordered (primary
         # key of the sort above; _remove_duplicates only filters rows), so a
@@ -270,7 +274,12 @@ class BitstampTradeReader:
         # Capture timestamps are epoch milliseconds; keep them on the shared
         # tz-aware UTC nanosecond clock (issue #154).
         recv_ms = epoch_to_datetime(raw["timestamp"], "ms")
-        amounts = raw["amount"].astype(float).round(self._config.volume_decimals)
+        # Trade sizes share the events' integer-lot grid (issue #226), so the
+        # fill matching below compares exact integers rather than rounded
+        # floats.
+        amounts = pd.Series(
+            size_to_lots(raw["amount"], self._config.lot_size), index=raw.index
+        )
 
         maker_event_id = self._resolve_event_ids(maker_id, amounts, ev_lookup)
         taker_event_id = self._resolve_event_ids(taker_id, amounts, ev_lookup)
@@ -350,8 +359,8 @@ class BitstampTradeReader:
     def _build_lookup(
         cls,
         events: pd.DataFrame,
-    ) -> dict[Any, list[tuple[float, int]]]:
-        out: dict[Any, list[tuple[float, int]]] = {}
+    ) -> dict[Any, list[tuple[int, int]]]:
+        out: dict[Any, list[tuple[int, int]]] = {}
         non_zero = events[events["fill"] > 0]
         for oid, fill, eid in zip(
             non_zero["id"], non_zero["fill"], non_zero["event_id"]
@@ -359,26 +368,29 @@ class BitstampTradeReader:
             key = cls._order_key(oid)
             if key is None:
                 continue
-            out.setdefault(key, []).append((float(fill), int(eid)))
+            out.setdefault(key, []).append((int(fill), int(eid)))
         return out
 
     def _resolve_event_ids(
         self,
         order_ids: np.ndarray,
         amounts: pd.Series,
-        ev_lookup: dict[Any, list[tuple[float, int]]],
+        ev_lookup: dict[Any, list[tuple[int, int]]],
     ) -> np.ndarray:
-        digits = self._config.volume_decimals
-
-        # Bucket each order's candidate fills by rounded volume, preserving
-        # candidate order within each bucket: the earliest unconsumed match
-        # wins, at O(1) per trade.  The index is built fresh per call so the
-        # maker and taker passes consume independently.
-        index: dict[Any, dict[float, deque[int]]] = {}
+        # Bucket each order's candidate fills by size, preserving candidate
+        # order within each bucket: the earliest unconsumed match wins, at O(1)
+        # per trade.  The index is built fresh per call so the maker and taker
+        # passes consume independently.
+        #
+        # The bucket key is an exact lot count (issue #226).  While sizes were
+        # floats both sides had to be rounded to ``volume_decimals`` first, so
+        # that a fill and the trade print reporting it landed in the same
+        # bucket; integers match or they do not.
+        index: dict[Any, dict[int, deque[int]]] = {}
         for oid, cand in ev_lookup.items():
-            by_fill: dict[float, deque[int]] = {}
+            by_fill: dict[int, deque[int]] = {}
             for fill, eid in cand:
-                by_fill.setdefault(round(fill, digits), deque()).append(eid)
+                by_fill.setdefault(fill, deque()).append(eid)
             index[oid] = by_fill
 
         result: list[int | float] = []
@@ -387,7 +399,7 @@ class BitstampTradeReader:
             key = self._order_key(oid)
             bucket = None if key is None else index.get(key)
             if bucket is not None:
-                matches = bucket.get(round(float(amt), digits))
+                matches = bucket.get(int(amt))
                 if matches:
                     picked = matches.popleft()
             result.append(picked)
@@ -449,7 +461,12 @@ class BitstampWriter:
                     self._config.tick_size,
                     decimals=self._config.price_decimals,
                 ),
-                "volume": events["volume"],
+                # Restore the base-asset float from integer lots (#226).
+                "volume": lots_to_size(
+                    events["volume"],
+                    self._config.lot_size,
+                    decimals=self._config.volume_decimals,
+                ),
                 "action": events["action"].astype(str),
                 "direction": events["direction"].astype(str),
             }
@@ -498,7 +515,11 @@ class BitstampWriter:
                     self._config.tick_size,
                     decimals=self._config.price_decimals,
                 ),
-                "amount": trades["volume"].to_numpy(),
+                "amount": lots_to_size(
+                    trades["volume"],
+                    self._config.lot_size,
+                    decimals=self._config.volume_decimals,
+                ),
                 "buy_order_id": buy_order_id,
                 "sell_order_id": sell_order_id,
                 "side": side.to_numpy(),

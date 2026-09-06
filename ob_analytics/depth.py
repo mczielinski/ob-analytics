@@ -209,22 +209,40 @@ class DepthMetricsEngine:
             self.update_side(int(prices_int[i]), volumes[i], int(sides[i]), result[i])
 
         col_names = self._column_names()
-        metrics = pd.DataFrame(result, columns=col_names)
+
+        # Which columns are exact counts rather than measurements: the two best
+        # prices are always tick counts, and every volume column is a lot count
+        # when the input carried lot counts.  A frame still holding float sizes
+        # in the base asset -- one built by hand, or read from a file written
+        # before sizes were integers -- is left alone, because rounding it onto
+        # a lot grid would truncate a sub-lot size such as 0.5 to zero and lose
+        # the level rather than report it.
+        exact = {"best_bid_price", "best_ask_price"}
+        if np.issubdtype(np.asarray(volumes).dtype, np.integer):
+            exact |= {name for name in col_names if "vol" in name}
+
+        # Each column is converted as it is lifted out of the row buffer, which
+        # is one float64 matrix because it also holds the scale-free bps
+        # columns.  Slicing the assembled frame and casting that instead would
+        # hold a float copy and an int copy of every volume column at the same
+        # time -- about 100 MiB on a 300k-event session, and the reason the
+        # scale benchmark guards this.
+        columns: dict[str, np.ndarray] = {
+            name: (
+                result[:, index].astype(np.int64)
+                if name in exact
+                else result[:, index].copy()
+            )
+            for index, name in enumerate(col_names)
+        }
+        del result
+        metrics = pd.DataFrame(columns, copy=False)
 
         if "event_id" in ordered.columns:
             timestamps = ordered.reset_index(drop=True)[["timestamp", "event_id"]]
         else:
             timestamps = ordered.reset_index(drop=True)["timestamp"]
-        res = pd.concat([timestamps, metrics], axis=1)
-
-        # Best prices stay integer ticks (issue #155); the pre-allocated metrics
-        # buffer is float64 (it also holds volumes), so cast the two price
-        # columns back to int64.  A best price is a resting level, always an
-        # exact integer tick, so the cast is lossless.
-        price_cols = ["best_bid_price", "best_ask_price"]
-        res[price_cols] = res[price_cols].astype(np.int64)
-
-        return res
+        return pd.concat([timestamps, metrics], axis=1)
 
     def update_side(
         self, price: int, volume: float, side: int, out: np.ndarray
