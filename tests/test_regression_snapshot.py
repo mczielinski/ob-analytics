@@ -94,11 +94,29 @@ def test_demo_fingerprints(demo_result):
     # moved (double -> int64), the numbers moved (x 1e8), and the depth /
     # depth_summary books are corrected. Every depth_summary volume column is
     # an int64 lot count as well, so the per-bin sums are exact.
+    # 2026-09-06 (price-level stranding fix): the depth book is corrected.
+    # `price_level_volume` added an order's volume at its created price and
+    # subtracted it at the price on whichever row removed it, and Bitstamp
+    # reports a `deleted` carrying a price the order never rested at for 2,140
+    # rows here. The subtraction landed on a level the volume was never added
+    # to, so the created level kept it for the rest of the session. At the last
+    # event before the capture's synthetic deletes, 104 levels held 29.95 BTC
+    # that no order was resting on; now none do. The phantom was the reported
+    # touch on both sides -- best bid $78,495.00 against a real $78,350.00, and
+    # best ask $78,324.00 against a real $78,333.00 -- so `best_bid_price`
+    # moves on 35.7% of rows and `best_ask_vol` on 68.9%. `depth.price` itself
+    # moves on the 0.67% of rows being re-pointed. `events` follows through
+    # `aggressiveness_bps`, which is measured against the touch, on 28.5% of
+    # rows; it also stops being a signed infinity where the touch is a
+    # non-tradeable zero price (414 rows). `trades` is unchanged. Checked
+    # against the per-order rebuild, which tracks orders by id and never had
+    # this problem: the two now agree on how long this book is crossed, 91.61%
+    # of session time against 91.59%, where the price-level path read 92.02%.
     EXPECTED: dict[str, str] = {
-        "events": "fa257b20c64b31e2c771fb7a5b5e2375d447a8e0e401c4daea1058ea65b331b8",
+        "events": "e4b60598d811b5519492986de2700f615fc5422e10a8829ebc84ddab0e01c189",
         "trades": "c893ffed15f497a7796cb92cdde37a81b841fbfa49a89b4dc6868c59a06405b5",
-        "depth": "beaff44144997179f2c6512d4f9ca3e2f51d9e39b40fb725e44cb6c64110e971",
-        "depth_summary": "9367b5794165aa0c68b46663fa4713f3717738dbddbb997aecd81858e230bbb5",
+        "depth": "4f364130c44553239d9b7c9884190d43a744e4cdd5ce4ecf0c75f76c4224f008",
+        "depth_summary": "f89c31146e81d4bba50e0e2683686c11995edadbbe67604271f92d7f4cc88743",
     }
     if EXPECTED:
         assert fps == EXPECTED

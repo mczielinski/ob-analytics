@@ -94,8 +94,19 @@ _GOLDEN_CONFIG = SynthConfig(seed=143, duration=60.0)
 # same numbers, and the fingerprint hashes dtype alongside values, so
 # ``order_book`` and ``queue_positions`` changed digest without changing a
 # number.
+# 2026-09-06 (price-level stranding fix): only ``events`` and
+# ``order_lifecycles`` moved, and only in ``aggressiveness_bps``. ``depth`` and
+# ``depth_summary`` are unchanged, because the simulator reports one price per
+# order and so never strands volume on a level -- the fix that prompted this is
+# a no-op on a well-behaved feed, which is the point. What did move is that
+# ``_event_diff_bps`` divided by a best price of zero. The depth engine reports
+# a zero price for an empty side, which this session has on 32 bid and 54 ask
+# rows of 719, so the quotient was a signed infinity. It is now NaN: a distance
+# from a touch that is not a tradeable price has no value, and an infinity
+# poisons every mean taken over the column. ``order_lifecycles`` follows
+# because it carries the placement row's ``aggressiveness_bps``.
 EXPECTED: dict[str, str] = {
-    "events": "7be06840a399d9796b12a7e4144e44df9615a10804d316bd0bb6f39b9c752a01",
+    "events": "7d39ed81b48d7f1c0fd05b2777d5d98341cdf64bb8911e0f41e03b6f877c550c",
     "trades": "dfe87849f18a11294965564e23374563676aafadfb735df832737a33cdaba92e",
     "depth": "14259329e7614036e5aa8f642d2a903229c184f19cf665678dab2d71d417ea05",
     "depth_summary": "da5ff1da836e631cdf7fd985f388e5f70b35b443acf2d1ab4303f690910e39c6",
@@ -112,7 +123,7 @@ EXPECTED: dict[str, str] = {
     # had no fingerprint before, which is how a first pass at the engine lost
     # the compensated summation behind ``filled_vol`` without any gate noticing.
     "order_lifecycles": (
-        "02dfb0836a90645d8303acc5c1d5c9eb4a714061d5d4959604f36b554b1b879d"
+        "d36dcab5334cc1d97632fd8f4f64ec8062bfd1e185a820d0d5db7fc89e6d0f79"
     ),
 }
 
