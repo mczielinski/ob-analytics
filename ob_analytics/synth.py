@@ -113,8 +113,8 @@ class SynthConfig:
         Length of the simulated session in seconds.
     start_time : pandas.Timestamp
         Wall-clock anchor for the first possible event.  Emitted timestamps are
-        tz-aware UTC nanoseconds, matching the schema's timestamp policy
-        (issue #154); a tz-naive anchor is read as UTC.
+        tz-aware UTC nanoseconds, matching the schema's timestamp policy; a
+        tz-naive anchor is read as UTC.
     arrival_process : {"poisson", "hawkes"}
         Arrival model for all three streams. ``"poisson"`` is the constant-rate
         baseline; ``"hawkes"`` is self-exciting (each event briefly raises the
@@ -157,9 +157,9 @@ class SynthConfig:
         size is ``lots * lot_size``.
     price_decimals, volume_decimals : int
         Display precision, matching :class:`~ob_analytics.config.PipelineConfig`.
-        Emitted prices are integer ticks (issue #155), so ``price_decimals`` only
-        describes how many places to show when a tick is rendered back to the
-        quote currency (``tick * tick_size``); ``volume_decimals`` rounds sizes.
+        Emitted prices are integer ticks, so ``price_decimals`` only describes
+        how many places to show when a tick is rendered back to the quote
+        currency (``tick * tick_size``); ``volume_decimals`` rounds sizes.
     iceberg_fraction : float
         Probability that a new limit order is an iceberg (off at 0.0).
     iceberg_size_multiple : float

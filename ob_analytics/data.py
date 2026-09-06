@@ -62,7 +62,7 @@ def list_writers() -> list[str]:
 
 
 def _tick_sizes_from_config(config: Any) -> dict[str, float] | None:
-    """Build the tick-size metadata map from a run's *config* (issue #155).
+    """Build the tick-size metadata map from a run's *config*.
 
     Returns ``{"default": config.tick_size}`` when *config* carries a
     ``tick_size``, so ``save_data(config=...)`` tags each Parquet file with the
@@ -117,11 +117,10 @@ def _write_versioned_parquet(
 class OutputTables(dict[str, pd.DataFrame]):
     """A run's output tables, as pandas, that a writer can also ask for in Arrow.
 
-    Issue #216.  ``DataWriter.write`` takes a mapping of pandas frames, and this
-    **is** that mapping — every existing writer treats it as the dict it is, and
-    the protocol's annotation stays honest.  What it adds is :meth:`arrow`, for a
-    writer whose target is columnar: Parquet here, and the Nautilus catalogue in
-    #113.
+    ``DataWriter.write`` takes a mapping of pandas frames, and this **is** that
+    mapping — every existing writer treats it as the dict it is, and the
+    protocol's annotation stays honest.  What it adds is :meth:`arrow`, for a
+    writer whose target is columnar: Parquet here, and the Nautilus catalogue.
 
     Without it such a writer would call ``pa.Table.from_pandas`` itself and
     silently drop the schema version and tick size that make the output
@@ -134,9 +133,9 @@ class OutputTables(dict[str, pd.DataFrame]):
     tables : mapping of str to pandas.DataFrame
         The run's tables, keyed by name.
     tick_sizes : dict of str to float, optional
-        Tick sizes to record in :meth:`arrow`'s metadata (issue #155).  ``None``
-        when the caller declared no config, which writes no tick metadata rather
-        than a default one.
+        Tick sizes to record in :meth:`arrow`'s metadata.  ``None`` when the
+        caller declared no config, which writes no tick metadata rather than a
+        default one.
     """
 
     def __init__(
@@ -169,9 +168,9 @@ class OutputTables(dict[str, pd.DataFrame]):
 class ParquetWriter:
     """Write a run's frames as one canonical Parquet file per key.
 
-    The library's default output format, and a registered writer like any
-    other (issue #216) rather than a branch inside :func:`save_data`, so a user
-    can register their own under ``"parquet"`` and replace it.
+    The library's default output format, and a registered writer like any other
+    rather than a branch inside :func:`save_data`, so a user can register their
+    own under ``"parquet"`` and replace it.
 
     Satisfies the :class:`~ob_analytics.protocols.DataWriter` protocol.
     """
@@ -189,9 +188,9 @@ class ParquetWriter:
         """Write each frame in *data* to ``<dest>/<key>.parquet``.
 
         *dest* is a directory and is created when missing.  Each file carries
-        the schema version and, when the run's config named one, the tick size
-        (issue #155), so :func:`load_data` can check the first and restore
-        prices with the second.
+        the schema version and, when the run's config named one, the tick size,
+        so :func:`load_data` can check the first and restore prices with the
+        second.
         """
         p = Path(dest)
         p.mkdir(parents=True, exist_ok=True)
@@ -210,7 +209,7 @@ class PickleWriter:
 
     Kept for backward compatibility and warned about on every call: a pickle
     executes code on load, so it is unsafe for data you did not write.  A
-    registered writer like any other (issue #216).
+    registered writer like any other.
 
     Satisfies the :class:`~ob_analytics.protocols.DataWriter` protocol.
     """
@@ -253,7 +252,7 @@ def _to_arrow_table(
     df : pandas.DataFrame
         A canonical pipeline frame.
     tick_sizes : dict of str to float, optional
-        Tick sizes to record, keyed by instrument (issue #155).  Omitted
+        Tick sizes to record, keyed by instrument.  Omitted
         metadata means a reader sees the integer prices as-is.
     lot_sizes : dict of str to float, optional
         Lot sizes to record, keyed by instrument.  Omitted
@@ -280,10 +279,11 @@ def _read_versioned_parquet(path: Path) -> pd.DataFrame:
     Raises :class:`~ob_analytics.exceptions.ConfigError` on an unsupported
     version; a file with no version key loads as legacy data with a warning
     (see :func:`ob_analytics.schemas.check_schema_version`).  The tick size
-    stored under :data:`TICK_SIZE_KEY` (issue #155) is surfaced on the returned
-    frame's ``attrs``: ``df.attrs["tick_sizes"]`` holds the full instrument map
-    and ``df.attrs["tick_size"]`` the resolved default, so ``price * tick_size``
-    recovers the quote currency.  A legacy (pre-#155) file has neither.
+    stored under :data:`TICK_SIZE_KEY` is surfaced on the returned frame's
+    ``attrs``: ``df.attrs["tick_sizes"]`` holds the full instrument map and
+    ``df.attrs["tick_size"]`` the resolved default, so ``price * tick_size``
+    recovers the quote currency.  An older file that stored float
+    quote-currency prices has neither.
     """
     table = pq.read_table(path)
     metadata = table.schema.metadata or {}

@@ -9,12 +9,11 @@ the library can be built on.
 The boundary
 ------------
 Everything crosses this interface as **numpy arrays**: the shared event schema
-(issue #112) in column form (:class:`OrderEvents`) on the way in, and small
-result records on the way out.  The engine imports no pandas, knows nothing
-about analytics, plots, sources, or files, and never reads a column it was not
-handed.  That is what lets the inside be replaced — numba first, maybe Rust
-later (issue #138) — or fed one event at a time (issue #139) without touching
-anything above it.
+in column form (:class:`OrderEvents`) on the way in, and small result records
+on the way out.  The engine imports no pandas, knows nothing about analytics,
+plots, sources, or files, and never reads a column it was not handed.  That is
+what lets the inside be replaced — numba first, maybe Rust later — or fed one
+event at a time without touching anything above it.
 
 Row indices instead of copies
 -----------------------------
@@ -35,10 +34,10 @@ The interface
 
 Time, price, and codes
 ----------------------
-Timestamps are **int64 nanoseconds since the epoch, UTC** (issue #154): a zone
-is a presentation detail, so it is stripped on the way in and re-attached on the
-way out.  Prices are **integer ticks** (issue #155); the engine only compares
-and subtracts them, so a float column from a pre-tick frame still works.
+Timestamps are **int64 nanoseconds since the epoch, UTC**: a zone is a
+presentation detail, so it is stripped on the way in and re-attached on the way
+out.  Prices are **integer ticks**; the engine only compares and subtracts
+them, so a float column from a pre-tick frame still works.
 
 Categorical columns arrive as :class:`Direction`, :class:`Action`, and
 :class:`Outcome` codes.  Each is an ``IntEnum`` that derives the schema's string

@@ -200,7 +200,7 @@ def _metric_panels(result: PipelineResult) -> list[PlotSpec]:
     A metric registered in :data:`~ob_analytics.metrics.METRICS` becomes a
     gallery card without any edit here: its ``name`` is the level-less plot
     concept the panel dispatches on, so a renderer registered at
-    ``(name, None, backend)`` draws it (issue #140).  A metric whose
+    ``(name, None, backend)`` draws it.  A metric whose
     :attr:`~ob_analytics.protocols.Metric.levels` exclude this run's level is
     skipped, and so is one that raises: it is logged and its panel dropped, so
     a single broken metric cannot stop the gallery being built.
@@ -391,8 +391,8 @@ def _size_columns(df: pd.DataFrame) -> tuple[str, ...]:
 def display_result(result: PipelineResult) -> PipelineResult:
     """Return *result* with prices and sizes converted to display units.
 
-    Canonical prices are integer ticks (:mod:`ob_analytics.schemas`, issue #155);
-    the plots show the quote currency, so this converts each price column to the
+    Canonical prices are integer ticks (:mod:`ob_analytics.schemas`); the plots
+    show the quote currency, so this converts each price column to the
     ``ticks * tick_size`` float the faces render, reading ``tick_size`` from
     ``result.config``.  :func:`build_gallery_model` calls it once so every face —
     the ``prepare`` helpers, ``order_book`` / ``queue_positions`` called inside
@@ -940,9 +940,8 @@ def available_concepts(result: PipelineResult) -> dict[str, list[str]]:
     ``plot_result(result, concept, level=...)`` can render for this dataset
     (which varies by format -- e.g. ``hidden_executions`` is LOBSTER-only).
 
-    A registered metric (issue #140) is listed too, with an empty level list:
-    a metric is level-less, so ``plot_result(result, "amihud")`` takes no
-    ``level=``.
+    A registered metric is listed too, with an empty level list: a metric is
+    level-less, so ``plot_result(result, "amihud")`` takes no ``level=``.
     """
     model = build_gallery_model(result)
     concepts = {c.key: sorted(lvl.value for lvl in c.variants) for c in model.concepts}

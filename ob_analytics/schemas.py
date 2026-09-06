@@ -46,7 +46,7 @@ external reader can recover the float size without this library; like
 ``tick_size`` it is per-instrument, so a multi-instrument file carries a map
 keyed by ``venue|symbol``.
 
-Price policy (issue #155): every ``price`` column is a whole number of ticks
+Price policy: every ``price`` column is a whole number of ticks
 (``int64``), not a float in the quote currency.  The quote-currency price is
 ``ticks * tick_size``, where ``tick_size`` is the instrument's minimum price
 increment (:class:`~ob_analytics.config.PipelineConfig.tick_size`, default
@@ -56,10 +56,10 @@ float rounding that made small-tick and 0-1 instruments show crossed levels that
 were not real, and lets the depth engine bin and compare levels on exact
 integers.  ``tick_size`` is written to each Parquet file's key-value metadata
 (:data:`TICK_SIZE_KEY`) so an external reader can recover the float price without
-this library; it is per-instrument, so a multi-instrument file (issue #147)
-carries a map keyed by ``venue|symbol``.
+this library; it is per-instrument, so a multi-instrument file carries a map
+keyed by ``venue|symbol``.
 
-Timestamp policy (issue #154): both clocks are **tz-aware UTC nanoseconds**
+Timestamp policy: both clocks are **tz-aware UTC nanoseconds**
 (``datetime64[ns, UTC]``, Arrow ``timestamp[ns, tz=UTC]``).  ``timestamp`` is
 the local receive time and ``exchange_timestamp`` the venue's matching-engine
 time (identical for LOBSTER, where only exchange time exists).  Because every
@@ -80,8 +80,8 @@ rebuild is deterministic run-to-run.  On a price-level (L2) feed there is no
 ``event_id``; ties there fall to ``sequence`` / ``ingest_seq`` when tracked,
 otherwise to the loader's stable arrival order.  Enforcing the full key inside
 the price-level depth engine — so an alternate engine reproduces it bit-for-bit
-— lands with the engine separation and rewrite (#136 / #104 / #138), when it can
-be checked against that second backend.
+— lands with the engine separation and rewrite, when it can be checked against
+that second backend.
 
 Ordering keys (both **optional**, so neither is in :data:`EVENT_COLUMNS`;
 consumers read them when present):
@@ -165,9 +165,9 @@ TICK_SIZE_KEY: bytes = b"ob_analytics_tick_size"
 
 The value is a JSON object mapping an instrument key to its ``tick_size`` (a
 float in the quote currency), so an external reader can recover the float price
-as ``ticks * tick_size`` without this library (issue #155).  The single-instrument
-pipeline writes one entry under :data:`_DEFAULT_TICK_KEY` (``{"default": 0.01}``);
-a multi-instrument file (issue #147) adds entries keyed by ``"venue|symbol"``.
+as ``ticks * tick_size`` without this library.  The single-instrument pipeline
+writes one entry under :data:`_DEFAULT_TICK_KEY` (``{"default": 0.01}``); a
+multi-instrument file adds entries keyed by ``"venue|symbol"``.
 Bytes, because Arrow file-metadata keys and values are raw bytes."""
 
 _DEFAULT_TICK_KEY: str = "default"
@@ -254,8 +254,8 @@ def encode_tick_sizes(tick_sizes: dict[str, float]) -> bytes:
 def decode_tick_sizes(raw: bytes | None) -> dict[str, float] | None:
     """Parse the :data:`TICK_SIZE_KEY` metadata value, or ``None`` when absent.
 
-    ``None`` marks a legacy (pre-#155) file that stored float quote-currency
-    prices and carries no tick size.
+    ``None`` marks an older file that stored float quote-currency prices and
+    carries no tick size.
     """
     if raw is None:
         return None
@@ -364,7 +364,7 @@ _TIME_ORDER_TIEBREAKS: tuple[str, ...] = (
 
 
 def time_order_keys(df: pd.DataFrame) -> list[str]:
-    """Return the canonical same-instant sort keys present in *df* (issue #154).
+    """Return the canonical same-instant sort keys present in *df*.
 
     The deterministic total order is ``timestamp`` followed by whichever of the
     tie-break keys (:data:`SEQUENCE_COLUMN`, ``event_id``,

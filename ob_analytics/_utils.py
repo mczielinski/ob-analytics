@@ -287,7 +287,7 @@ def epoch_to_datetime(series: pd.Series, unit: str) -> pd.Series:
 
     Epoch integers count from the Unix epoch in UTC, so the values are already
     on the shared clock; this attaches the UTC zone and fixes the unit at
-    nanoseconds (see the canonical time model, issue #154).
+    nanoseconds, which is the canonical time model.
 
     Parameters
     ----------
@@ -341,7 +341,7 @@ def seconds_after_midnight_to_datetime(
     the start of the trading day (midnight *local* time), with no receive clock
     and no time zone.  Placing them on the shared UTC clock therefore needs both
     the session date and the venue's time zone: the seconds are anchored to
-    *date* in *tz*, then converted to UTC (see issue #154).
+    *date* in *tz*, then converted to UTC.
 
     Parameters
     ----------

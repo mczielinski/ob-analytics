@@ -1,9 +1,9 @@
 """cryptofeed L2/L3 live capturer -- the native-per-order complement to CCXT.
 
-Wraps cryptofeed (``bmoscon/cryptofeed``, issue #134): a library built to
-stream normalised market data over websockets and maintain the order book for
-you.  Where :mod:`ob_analytics.live.ccxt_source` gives the widest **L2** venue
-list plus prediction markets, cryptofeed is the source that can also deliver
+Wraps cryptofeed (``bmoscon/cryptofeed``): a library built to stream
+normalised market data over websockets and maintain the order book for you.
+Where :mod:`ob_analytics.live.ccxt_source` gives the widest **L2** venue list
+plus prediction markets, cryptofeed is the source that can also deliver
 **L3** (market-by-order) on the venues that publish per-order data -- the feed
 the reconstruction engine was built for.
 
@@ -12,9 +12,9 @@ class declares its channels in ``websocket_channels``, so a venue offering
 ``l3_book`` is captured at :attr:`~ob_analytics.protocols.Level.L3` and every
 other venue at :attr:`~ob_analytics.protocols.Level.L2`.  This tracks
 cryptofeed's own churn -- across 2.4 and 2.5 the L3 venues are bitstamp,
-bitfinex, blockchain and independent_reserve; Coinbase, which issue #134 named,
-publishes L2 only now.  ``level=`` overrides the choice, but asking for L3 on a venue
-that does not publish it raises rather than faking per-order IDs.
+bitfinex, blockchain and independent_reserve; Coinbase publishes L2 only now.
+``level=`` overrides the choice, but asking for L3 on a venue that does not
+publish it raises rather than faking per-order IDs.
 
 Order ids are written exactly as the venue publishes them -- integers on
 bitstamp, bitfinex and blockchain, UUID strings on independent_reserve.  The
@@ -53,8 +53,7 @@ _DEFAULT_QUEUE_SIZE = 10_000
 def _epoch_s_to_ts(seconds: Any) -> pd.Timestamp:
     """cryptofeed timestamps are float epoch *seconds*; ``None`` uses receive time.
 
-    Both branches land on the canonical tz-aware UTC nanosecond clock
-    (issue #154).
+    Both branches land on the canonical tz-aware UTC nanosecond clock.
     """
     if seconds is None:
         return pd.Timestamp.now(tz="UTC").as_unit("ns")
@@ -255,7 +254,7 @@ class CryptofeedSource:
         return {"venue": self._venue, "symbol": self._symbol}
 
     def _payload_identity(self, payload: Any) -> dict[str, str]:
-        """Venue + symbol read off a cryptofeed book or trade (issue #147).
+        """Venue + symbol read off a cryptofeed book or trade.
 
         Taken from the object itself rather than from settings, so a
         multi-symbol feed tags each row with the symbol it actually came from.

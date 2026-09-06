@@ -252,7 +252,7 @@ class DepthMetricsEngine:
         Parameters
         ----------
         price : int
-            Price as an integer tick count (issue #155).
+            Price as an integer tick count.
         volume : float
             Volume at this price level (0 means deletion).
         side : int

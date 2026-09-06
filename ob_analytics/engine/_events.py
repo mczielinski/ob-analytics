@@ -1,8 +1,8 @@
 """The engine's input: the canonical event schema as numpy columns.
 
-:class:`OrderEvents` is the array form of the shared event schema (issue #112)
-documented in :mod:`ob_analytics.schemas`.  It carries only the columns the
-rebuild actually reads; everything else a caller wants on an output row —
+:class:`OrderEvents` is the array form of the shared event schema documented
+in :mod:`ob_analytics.schemas`.  It carries only the columns the rebuild
+actually reads; everything else a caller wants on an output row —
 ``exchange_timestamp``, ``event_id``, the classifier ``type``, instrument
 identity — travels back as a **row index** into the same arrays, so the engine
 never has to know those columns exist.
@@ -96,13 +96,13 @@ class OrderEvents:
         The venue's per-order identifier (``int64``).  :data:`HIDDEN_ORDER_ID`
         marks an order with no public identity.
     timestamp : numpy.ndarray
-        Receive-clock time as **int64 nanoseconds since the epoch, UTC**
-        (issue #154).  The zone is dropped on the way in and re-attached on the
-        way out, so the engine compares plain integers.
+        Receive-clock time as **int64 nanoseconds since the epoch, UTC**.  The
+        zone is dropped on the way in and re-attached on the way out, so the
+        engine compares plain integers.
     price : numpy.ndarray
-        Price as a whole number of ticks (``int64``; issue #155).  A float
-        column from a pre-tick frame also works — the engine only ever compares
-        and subtracts prices.
+        Price as a whole number of ticks (``int64``).  A float column from a
+        pre-tick frame also works — the engine only ever compares and subtracts
+        prices.
     volume : numpy.ndarray
         The order's outstanding size **after** the event (``float64``), per the
         schema's volume contract.

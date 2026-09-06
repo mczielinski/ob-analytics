@@ -78,14 +78,14 @@ therefore ends in a ``deleted`` row with ``volume == 0`` and the executed
 quantity in ``fill``, while a cancellation's ``deleted`` row carries the
 cancelled size with ``fill == 0``.
 
-Timestamps are tz-aware UTC nanoseconds (the schema's canonical time model,
-issue #154) starting from an arbitrary Monday morning; ``exchange_timestamp``
-equals ``timestamp`` (as in LOBSTER sessions, where only exchange time exists).
+Timestamps are tz-aware UTC nanoseconds (the schema's canonical time model)
+starting from an arbitrary Monday morning; ``exchange_timestamp`` equals
+``timestamp`` (as in LOBSTER sessions, where only exchange time exists).
 
-Prices are stored as integer ticks (the schema's canonical price model, issue
-#155).  The toy book has a tick size of ``1.0`` — the prices 98-103 are already
-whole ticks — so the stored integers read as the same numbers the script above
-lists; multiply by ``TICK_SIZE`` (``1.0``) for the quote currency.
+Prices are stored as integer ticks (the schema's canonical price model).  The
+toy book has a tick size of ``1.0`` — the prices 98-103 are already whole
+ticks — so the stored integers read as the same numbers the script above lists;
+multiply by ``TICK_SIZE`` (``1.0``) for the quote currency.
 """
 
 from __future__ import annotations
