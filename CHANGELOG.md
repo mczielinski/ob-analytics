@@ -125,6 +125,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   "Data quality: matched book vs diff feed" explanation page and a `validate`
   how-to document the distinction.
 
+### Fixed
+
+- **A price level now empties when the order resting on it goes away.**
+  `price_level_volume` added an order's volume at the price on its `created`
+  row and subtracted it at the price on whichever later row removed it. Those
+  two prices are not always the same: Bitstamp reports a `deleted` carrying a
+  price the order never rested at for 1.3% of orders, and the subtraction then
+  landed on a level the volume was never added to, leaving the created level
+  holding it for the rest of the session. Every later row now subtracts at the
+  order's created price, so `+v` and `-v` always cancel on one level.
+
+  On the bundled Bitstamp sample this removed 104 price levels holding 29.95
+  BTC that no order was resting on. They were the reported touch on both sides
+  — best bid $78,495.00 against a real best bid of $78,350.00, and best ask
+  $78,324.00 against a real best ask of $78,333.00 — so `best_bid_price` moves
+  on 35.7% of `depth_summary` rows and `best_ask_vol` on 68.9%. The per-order
+  rebuild (`engine.book_state`) tracks orders by id and never had this problem;
+  the two rebuilds now agree on how long that book is crossed.
+
+- **`aggressiveness_bps` is NaN, not an infinity, against a zero touch.** The
+  depth engine reports a zero price for an empty side, and the Bitstamp sample
+  also carries orders priced at zero (`audit` reports these as
+  `nonpositive_price`). Dividing by that produced a signed infinity that
+  travelled through every downstream mean. A distance from a price that is not
+  tradeable has no value, so it is now NaN.
+
 ### Changed
 
 - **Sizes are integer lots plus a `lot_size`, not floats** (issue #226).
