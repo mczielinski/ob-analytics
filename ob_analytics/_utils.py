@@ -104,7 +104,7 @@ def ticks_to_price(
 
 
 # ---------------------------------------------------------------------------
-# Size / lot conversions (issue #224)
+# Size / lot conversions (issue #226)
 # ---------------------------------------------------------------------------
 #
 # Sizes follow prices: a canonical ``volume`` or ``fill`` is a whole number of

@@ -153,7 +153,7 @@ class SynthConfig:
         a buy. 0.5 each gives a balanced book.
     lot_size : float
         Minimum size increment.  Sizes are emitted as a whole number of lots
-        (``int64``), matching the canonical schema (issue #226); the base-asset
+        (``int64``), matching the canonical schema; the base-asset
         size is ``lots * lot_size``.
     price_decimals, volume_decimals : int
         Display precision, matching :class:`~ob_analytics.config.PipelineConfig`.
@@ -606,7 +606,7 @@ class _Simulator:
         return min(k, self.cfg.depth_levels - 1)
 
     def _draw_size(self, mean: float) -> int:
-        """Draw one order size, as a whole number of lots (issue #226).
+        """Draw one order size, as a whole number of lots.
 
         The simulator carries sizes the way it already carries prices: an
         exact integer on the instrument's grid.  Nothing downstream then needs

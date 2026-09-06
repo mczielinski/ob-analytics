@@ -11,15 +11,15 @@ targets are shapes this library can build on its own; installing the engine is
 the user's business, and only the cross-check in #224 needs one present.
 
 Both engines take **float** prices and sizes, while the canonical schema stores
-integer ticks (issue #155) and integer lots (issue #226), so both writers scale
-by the run's ``tick_size`` and ``lot_size``.
+integer ticks and integer lots, so both writers scale by the run's ``tick_size``
+and ``lot_size``.
 
 A canonical event stream also carries orders that never rest: a marketable order
 is recorded as a transient add on its **own** side at the touch, then the fill,
 then a delete (``type == "market"``).  Those rows are not book liquidity, and the
 library's own depth engine excludes them (``ob_analytics.depth``).  Writing them
 out would make the receiving engine cross its book and drop the resting level
-they traded against, so both writers exclude them too — which is what the #224
+they traded against, so both writers exclude them too — which is what the
 cross-check against hftbacktest's own reconstruction showed.
 """
 
@@ -98,7 +98,7 @@ def _resting_orders_only(events: pd.DataFrame) -> pd.DataFrame:
     transient add makes its book cross at the touch, and it resolves the cross
     by removing the resting level the order traded against — so its
     reconstruction drifts thinner than ours, permanently.  Excluding these rows
-    here is what makes the two agree (issue #224).
+    here is what makes the two agree.
 
     A frame with no ``type`` column (one built by hand, or by a loader that does
     not classify) is returned unchanged: there is nothing to exclude on.

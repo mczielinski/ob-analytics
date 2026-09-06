@@ -400,7 +400,7 @@ def display_result(result: PipelineResult) -> PipelineResult:
     low-level ``prepare.*`` builders when you plot straight from a result.
 
     Sizes are converted the same way, from integer lots to the base-asset
-    ``lots * lot_size`` float (issue #226).
+    ``lots * lot_size`` float.
 
     Idempotent and legacy-safe: only integer columns are scaled, so a result
     whose prices or sizes are already floats (a pre-tick or pre-lot file, or a

@@ -81,7 +81,7 @@ def _tick_sizes_from_config(config: Any) -> dict[str, float] | None:
 def _lot_sizes_from_config(config: Any) -> dict[str, float] | None:
     """Return the lot-size metadata map for *config*, or ``None``.
 
-    The size counterpart of :func:`_tick_sizes_from_config` (issue #226):
+    The size counterpart of :func:`_tick_sizes_from_config`:
     ``{"default": config.lot_size}`` when *config* carries a ``lot_size``, so a
     saved Parquet file records the grid its integer sizes sit on.
     """
@@ -105,8 +105,8 @@ def _write_versioned_parquet(
     metadata that preserves dtypes on read.  When *tick_sizes* is given (a
     ``{instrument_key: tick_size}`` map) it is written under
     :data:`TICK_SIZE_KEY` so a reader can recover the float price from the
-    integer ticks (issue #155).  *lot_sizes* does the same for the integer
-    sizes under :data:`LOT_SIZE_KEY` (issue #226).  The index is dropped,
+    integer ticks.  *lot_sizes* does the same for the integer sizes under
+    :data:`LOT_SIZE_KEY`.  The index is dropped,
     matching the previous ``df.to_parquet(..., index=False)`` behaviour.
     """
     pq.write_table(
@@ -256,7 +256,7 @@ def _to_arrow_table(
         Tick sizes to record, keyed by instrument (issue #155).  Omitted
         metadata means a reader sees the integer prices as-is.
     lot_sizes : dict of str to float, optional
-        Lot sizes to record, keyed by instrument (issue #226).  Omitted
+        Lot sizes to record, keyed by instrument.  Omitted
         metadata means a reader sees the integer sizes as-is.
 
     Returns

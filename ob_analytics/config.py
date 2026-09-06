@@ -67,7 +67,7 @@ class PipelineConfig(BaseModel):
         gt=0,
         description=(
             "The instrument's minimum size increment, in the base asset "
-            "(issue #224).  Sizes are stored as a whole number of lots "
+            "in the base asset.  Sizes are stored as a whole number of lots "
             "(``int64``); the base-asset size is ``lots * lot_size``.  1e-8 "
             "(default) is a satoshi grid, which is the finest any supported "
             "venue quotes; use 1 for whole shares (LOBSTER).  This is the size "
@@ -85,7 +85,7 @@ class PipelineConfig(BaseModel):
         description=(
             "Display precision: decimal places to show when a lot size is "
             "rendered back to the base asset for a plot or CSV.  The stored "
-            "size grid is ``lot_size``, not this — see issue #224."
+            "size grid is ``lot_size``, not this."
         ),
     )
     timestamp_unit: Literal["ms", "us", "ns"] = Field(

@@ -28,7 +28,7 @@ them):
   ``raw_size`` column for round-trip writers.  The classifier labels these
   orders ``pre-existing`` — structurally unclassifiable, not failures.
 
-Size policy (issue #226): every ``volume`` and ``fill`` column is a whole number
+Size policy: every ``volume`` and ``fill`` column is a whole number
 of lots (``int64``), not a float in the base asset.  The base-asset size is
 ``lots * lot_size``, where ``lot_size`` is the instrument's minimum size
 increment (:class:`~ob_analytics.config.PipelineConfig.lot_size`, default
@@ -43,8 +43,8 @@ on 8.2% of the bundled Bitstamp sample's rows for the bid and 9.6% for the ask.
 Integer lots cancel exactly, so a level empties or it does not.  ``lot_size`` is
 written to each Parquet file's key-value metadata (:data:`LOT_SIZE_KEY`) so an
 external reader can recover the float size without this library; like
-``tick_size`` it is per-instrument, so a multi-instrument file (issue #147)
-carries a map keyed by ``venue|symbol``.
+``tick_size`` it is per-instrument, so a multi-instrument file carries a map
+keyed by ``venue|symbol``.
 
 Price policy (issue #155): every ``price`` column is a whole number of ticks
 (``int64``), not a float in the quote currency.  The quote-currency price is
@@ -144,13 +144,13 @@ if TYPE_CHECKING:
 SCHEMA_VERSION: str = "4.0"
 """Version of the canonical Parquet/Arrow schema written to file metadata.
 
-``4.0`` (issue #226) stores every ``volume`` and ``fill`` column as ``int64``
+``4.0`` stores every ``volume`` and ``fill`` column as ``int64``
 lots (the base-asset size is ``lots * lot_size``; see :data:`LOT_SIZE_KEY`);
 ``3.0`` and earlier stored them as a ``double`` in the base asset.  ``3.0``
-(issue #155) stores every ``price`` column as ``int64`` ticks (the
+stores every ``price`` column as ``int64`` ticks (the
 quote-currency price is ``ticks * tick_size``; see :data:`TICK_SIZE_KEY`); ``2.0``
 and ``1.0`` stored ``price`` as a ``double`` in the quote currency.  ``2.0``
-(issue #154) also makes both timestamp clocks tz-aware UTC nanoseconds
+also makes both timestamp clocks tz-aware UTC nanoseconds
 (``timestamp[ns, tz=UTC]``); ``1.0`` wrote them tz-naive.  All four still read
 (Parquet is self-describing, so an older file loads as the float-price or
 float-size frame it stored — not directly comparable to a ``4.0`` one)."""
@@ -177,13 +177,13 @@ in the :data:`TICK_SIZE_KEY` metadata map."""
 LOT_SIZE_KEY: bytes = b"ob_analytics_lot_size"
 """Parquet metadata key under which the per-instrument lot size is stored.
 
-The size counterpart of :data:`TICK_SIZE_KEY` (issue #226).  The value is a JSON
+The size counterpart of :data:`TICK_SIZE_KEY`.  The value is a JSON
 object mapping an instrument key to its ``lot_size`` (a float in the base
 asset), so an external reader can recover the float size as ``lots * lot_size``
 without this library.  The single-instrument pipeline writes one entry under
 :data:`_DEFAULT_LOT_KEY` (``{"default": 1e-08}``); a multi-instrument file
-(issue #147) adds entries keyed by ``"venue|symbol"``.  Bytes, because Arrow
-file-metadata keys and values are raw bytes."""
+adds entries keyed by ``"venue|symbol"``.  Bytes, because Arrow file-metadata
+keys and values are raw bytes."""
 
 _DEFAULT_LOT_KEY: str = "default"
 """Key for the lot size that applies to rows with no ``(venue, symbol)`` match
@@ -192,8 +192,7 @@ in the :data:`LOT_SIZE_KEY` metadata map."""
 _SUPPORTED_SCHEMA_VERSIONS: frozenset[str] = frozenset({"1.0", "2.0", "3.0", "4.0"})
 """Schema versions this build can read.  A file tagged with anything else
 raises; an untagged (legacy) file loads with a warning.  ``1.0`` / ``2.0``
-(pre-#155, float quote-currency prices) and ``3.0`` (pre-#226, float base-asset
-sizes) still read: Parquet is self-describing, so pyarrow returns the exact
+(float quote-currency prices) and ``3.0`` (float base-asset sizes) still read: Parquet is self-describing, so pyarrow returns the exact
 dtype the file stored — the caller sees float prices or float sizes, not ticks
 and lots, and must scale them itself."""
 
@@ -306,7 +305,7 @@ def encode_lot_sizes(lot_sizes: dict[str, float]) -> bytes:
 def decode_lot_sizes(raw: bytes | None) -> dict[str, float] | None:
     """Parse the :data:`LOT_SIZE_KEY` metadata value, or ``None`` when absent.
 
-    ``None`` marks a pre-#226 file that stored float base-asset sizes and
+    ``None`` marks an older file that stored float base-asset sizes and
     carries no lot size.
     """
     if raw is None:
@@ -326,7 +325,7 @@ def resolve_lot_size(
     Resolves exactly as :func:`resolve_tick_size` does: the per-instrument key
     ``"venue|symbol"`` first, then the shared :data:`_DEFAULT_LOT_KEY` entry,
     then — for a one-entry map whose sole key is neither — that lone value.
-    Returns *default* when *lot_sizes* is empty or ``None`` (a pre-#226 file).
+    Returns *default* when *lot_sizes* is empty or ``None`` (an older file).
     """
     if not lot_sizes:
         return default

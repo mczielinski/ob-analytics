@@ -61,7 +61,7 @@ class QueuePositions:
         Number of orders resting at the level (``int64``).
     ahead_volume : numpy.ndarray
         Outstanding size of the orders ahead of this one, in the size dtype the
-        events carried — ``int64`` lots for a canonical stream (issue #226).
+        events carried — ``int64`` lots for a canonical stream.
     remaining : numpy.ndarray
         This order's own outstanding size after the event, in that same dtype.
     age_s : numpy.ndarray

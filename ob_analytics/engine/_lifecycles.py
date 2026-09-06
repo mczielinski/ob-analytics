@@ -58,7 +58,7 @@ class OrderLifecycles:
         ``created`` event (``int64``).
     filled_vol : numpy.ndarray
         Total quantity executed over the order's life, in integer lots
-        (``int64``, issue #226).
+        (``int64``).
     end_ts : numpy.ndarray
         Termination time in int64 nanoseconds, or :data:`~ob_analytics.engine.
         NAT_NS` while the order is still resting.
@@ -80,7 +80,7 @@ class OrderLifecycles:
 def _grouped_sum(slot: np.ndarray, values: np.ndarray, n: int) -> np.ndarray:
     """Sum *values* into *n* groups, exactly.
 
-    Sizes are integer lots (issue #226), so ordinary integer accumulation is
+    Sizes are integer lots, so ordinary integer accumulation is
     exact and this is one ``np.bincount``.
 
     It used to be Kahan summation over a per-position loop, because *values*

@@ -101,9 +101,9 @@ def _codes(values: pd.Series, labels: tuple[str, ...]) -> np.ndarray:
 def _sizes(values: pd.Series) -> np.ndarray:
     """Return a size column as the engine's array, keeping it exact.
 
-    Canonical sizes are integer lots (issue #226), and the engine sums them —
+    Canonical sizes are integer lots, and the engine sums them —
     ``liquidity`` down a book side, ``ahead_volume`` along a queue — so passing
-    the integers through keeps those totals exact.  A pre-#226 frame still
+    the integers through keeps those totals exact.  An older frame still
     holding float sizes in the base asset is passed through unchanged rather
     than rounded onto a lot grid this function does not know.
     """
