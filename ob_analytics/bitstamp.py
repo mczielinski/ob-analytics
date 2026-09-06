@@ -64,10 +64,10 @@ class BitstampLoader:
         Pipeline configuration.  ``price_decimals`` and ``volume_decimals``
         control rounding precision.
     venue, symbol : str, optional
-        Optional instrument identity (issue #147).  When either is supplied,
-        the loaded frame gains per-row ``venue`` / ``symbol`` columns; ``venue``
-        falls back to ``"bitstamp"`` when only ``symbol`` is given.  Both
-        ``None`` (the default) leaves the frame untagged.
+        Optional instrument identity.  When either is supplied, the loaded
+        frame gains per-row ``venue`` / ``symbol`` columns; ``venue`` falls
+        back to ``"bitstamp"`` when only ``symbol`` is given.  Both ``None``
+        (the default) leaves the frame untagged.
     """
 
     #: The source venue used to fill the ``venue`` column when identity tagging

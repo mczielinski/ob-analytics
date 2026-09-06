@@ -9,8 +9,8 @@ frames the analytics and plotting layers expect.
 
 Keeping the conversion here — rather than inside the engine — is what lets the
 engine stay pandas-free, so it can be replaced with a faster implementation
-(issue #138) without any of this moving.  Nothing here is public API; the
-callers are :func:`ob_analytics.analytics.order_book`,
+without any of this moving.  Nothing here is public API; the callers are
+:func:`ob_analytics.analytics.order_book`,
 :func:`ob_analytics.analytics.order_lifecycles`, and :mod:`ob_analytics.queue`.
 """
 

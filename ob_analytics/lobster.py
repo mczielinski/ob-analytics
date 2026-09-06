@@ -101,16 +101,16 @@ class LobsterLoader:
         seconds after midnight and need a date anchor).
     session_tz : str, optional
         The venue's local time zone, used to place the session's seconds after
-        midnight on the shared UTC clock (issue #154).  Defaults to
-        :data:`LOBSTER_DEFAULT_TZ` (``"America/New_York"``), correct for
-        LOBSTER's US equity data.
+        midnight on the shared UTC clock.  Defaults to
+        :data:`LOBSTER_DEFAULT_TZ` (``"America/New_York"``), correct for LOBSTER's
+        US equity data.
     venue, symbol : str, optional
-        Optional instrument identity (issue #147).  When either is supplied,
-        the loaded frame gains per-row ``venue`` / ``symbol`` columns; ``venue``
-        falls back to ``"lobster"`` when only ``symbol`` is given.  Both
-        ``None`` (the default) leaves the frame untagged.  The instrument ticker
-        lives in the LOBSTER filename, so pass it as ``symbol`` when you want it
-        on the rows.
+        Optional instrument identity.  When either is supplied, the loaded
+        frame gains per-row ``venue`` / ``symbol`` columns; ``venue`` falls
+        back to ``"lobster"`` when only ``symbol`` is given.  Both ``None``
+        (the default) leaves the frame untagged.  The instrument ticker lives
+        in the LOBSTER filename, so pass it as ``symbol`` when you want it on
+        the rows.
     """
 
     #: The source venue used to fill the ``venue`` column when identity tagging
@@ -486,7 +486,7 @@ class LobsterWriter:
         Calendar date of the session.
     session_tz : str, optional
         The venue's local time zone, used to convert the shared UTC clock back
-        to LOBSTER's seconds after local midnight (issue #154).  Defaults to
+        to LOBSTER's seconds after local midnight.  Defaults to
         :data:`LOBSTER_DEFAULT_TZ`; must match the value used on load.
     price_divisor : int
         Multiplier to convert decimal prices back to LOBSTER integers.
@@ -746,9 +746,9 @@ def _side_level_changes(
     *p*/*v* are the side's ``(n_rows, n_levels)`` price/size arrays.  A level
     is active when its price is not the *dummy* sentinel and its size is
     positive.  Each unique raw price is converted to an integer tick count
-    (``round((price / divisor) / tick_size)``, issue #155) before keying, and
-    duplicate tick prices within a row are summed in level order — both matching
-    the dict-diff this replaces bit-for-bit.
+    (``round((price / divisor) / tick_size)``) before keying, and duplicate
+    tick prices within a row are summed in level order — both matching the
+    dict-diff this replaces bit-for-bit.
 
     Returns ``(row_indices, prices, volumes_after)`` for every (row, price)
     whose volume differs from the previous row (missing level = 0.0), the

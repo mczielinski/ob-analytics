@@ -156,8 +156,8 @@ def trade_impacts(trades: pd.DataFrame) -> pd.DataFrame:
         ``id``, ``min_price``, ``max_price``, ``vwap``, ``hits``, ``vol``,
         ``start_time``, ``end_time``, ``dir``.  The price-valued columns
         (``min_price``, ``max_price``, ``vwap``) are in the same integer-tick
-        units as ``trades["price"]`` (issue #155); multiply by ``tick_size`` for
-        the quote currency.
+        units as ``trades["price"]``; multiply by ``tick_size`` for the quote
+        currency.
     """
     validate_columns(
         trades,
@@ -1142,9 +1142,9 @@ class DataQualitySummary:
 def _clock_order_counts(frame: pd.DataFrame) -> tuple[int, int]:
     """Count the two clock-order defects in *frame*: ``(after_receive, reordered)``.
 
-    The schema carries two clocks (issue #154): ``exchange_timestamp``, stamped
-    by the venue, and ``timestamp``, stamped on receipt.  Two things follow from
-    that, and neither depends on how the frame happens to be sorted:
+    The schema carries two clocks: ``exchange_timestamp``, stamped by the
+    venue, and ``timestamp``, stamped on receipt.  Two things follow from that,
+    and neither depends on how the frame happens to be sorted:
 
     * an event cannot be received before the venue stamped it, so
       ``exchange_timestamp > timestamp`` is impossible;

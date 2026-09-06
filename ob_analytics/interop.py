@@ -1,4 +1,4 @@
-"""Export a run to the backtesting engines next door (issue #113).
+"""Export a run to the backtesting engines next door.
 
 ob-analytics reconstructs, classifies, measures and draws; Nautilus Trader and
 hftbacktest backtest.  A user who has finished the analysis moves to one of
@@ -8,7 +8,8 @@ code of their own.
 Neither engine is a dependency.  Nautilus ingests a pandas frame through its
 ``OrderBookDeltaDataWrangler`` and hftbacktest a structured numpy array, so both
 targets are shapes this library can build on its own; installing the engine is
-the user's business, and only the cross-check in #224 needs one present.
+the user's business, and only the cross-check against the real engines needs
+one present.
 
 Both engines take **float** prices and sizes, while the canonical schema stores
 integer ticks and integer lots, so both writers scale by the run's ``tick_size``
@@ -79,8 +80,8 @@ def _epoch_nanos(column: pd.Series) -> np.ndarray:
     ``as_unit("ns")`` first, rather than a bare ``astype("int64")``: pandas
     carries a resolution on a datetime column and infers microseconds for some
     inputs, so casting straight to ``int64`` would silently export a timestamp a
-    thousand times too small.  The canonical schema is nanoseconds (issue #154)
-    and both engines read nanoseconds.
+    thousand times too small.  The canonical schema is nanoseconds and both
+    engines read nanoseconds.
     """
     return column.dt.as_unit("ns").astype("int64").to_numpy()
 
@@ -109,7 +110,7 @@ def _resting_orders_only(events: pd.DataFrame) -> pd.DataFrame:
 
 
 def _in_canonical_time_order(events: pd.DataFrame) -> pd.DataFrame:
-    """Return *events* in the canonical total order (issue #154).
+    """Return *events* in the canonical total order.
 
     Both engines replay a timeline and reject an input that steps backwards —
     hftbacktest's ``validate_event_order`` checks exactly this — while the
@@ -326,8 +327,8 @@ def to_nautilus_deltas(
     ``flags`` is zero throughout: it carries Nautilus' record flags, of which
     ``F_SNAPSHOT`` is the one that matters, and a canonical event stream is a
     stream of deltas rather than a snapshot.  ``sequence`` uses the venue's own
-    sequence when the source published one (issue #146) and falls back to the
-    dense ``event_id``, so the column is always a usable order.
+    sequence when the source published one and falls back to the dense
+    ``event_id``, so the column is always a usable order.
     """
     events = _resting_size_on_delete(
         _in_canonical_time_order(_resting_orders_only(events))

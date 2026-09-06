@@ -104,14 +104,14 @@ class RunContext:
         trading do not).
     session_tz : str, optional
         The venue's local time zone for a session-relative feed (LOBSTER),
-        used to place its seconds-after-midnight on the shared UTC clock
-        (issue #154).  ``None`` lets the loader use its own default
+        used to place its seconds-after-midnight on the shared UTC clock.
+        ``None`` lets the loader use its own default
         (``ob_analytics.lobster.LOBSTER_DEFAULT_TZ``).  Ignored by venues that
         already carry an absolute clock (Bitstamp, CCXT).
     symbol : str, optional
         The instrument this run covers (e.g. ``"BTC/USD"``).  When supplied,
         loaders tag each row with an optional ``symbol`` column so cross-venue
-        frames can be told apart (issue #147).  ``None`` leaves it untagged.
+        frames can be told apart.  ``None`` leaves it untagged.
     venue : str, optional
         The source venue this run covers (e.g. ``"bitstamp"``).  When supplied,
         it overrides the loader's own source name in the optional ``venue``
@@ -164,7 +164,7 @@ class TradeSource(Protocol):
 
     * ``timestamp``        — pandas datetime64[ns]
     * ``price``            — int64 (integer ticks; × ``tick_size`` for the
-      quote currency — issue #155)
+      quote currency)
     * ``volume``           — float
     * ``direction``        — categorical ``buy``/``sell`` (taker side)
     * ``maker_event_id``   — integer event id of the resting order
@@ -213,7 +213,7 @@ class DepthSource(Protocol):
 
     * ``timestamp``  — pandas datetime64[ns]
     * ``price``      — int64, the price level in integer ticks (× ``tick_size``
-      for the quote currency — issue #155)
+      for the quote currency)
     * ``volume``     — float, the level's **new absolute** resting size after
       the update (``0`` removes the level); *not* a signed delta
     * ``direction``  — categorical ``bid``/``ask``

@@ -1,8 +1,8 @@
 """CCXT L2 live capturer -- one adapter for ~all crypto CEX + prediction markets.
 
-Wraps CCXT / CCXT Pro (issue #106) so any CCXT-supported venue becomes an
-ob-analytics source through a single adapter instead of a hand-written
-connector per venue.  CCXT's unified order book is **price-level (L2)** for
+Wraps CCXT / CCXT Pro so any CCXT-supported venue becomes an ob-analytics
+source through a single adapter instead of a hand-written connector per
+venue.  CCXT's unified order book is **price-level (L2)** for
 every venue, so this capturer declares
 :attr:`~ob_analytics.protocols.Level.L2` and emits price-level *depth updates*
 that replay through the L2 path -- **no faked per-order IDs** (the exact
@@ -96,8 +96,7 @@ def _make_exchange(exchange_id: str) -> Any:
 def _epoch_ms_to_ts(ms: Any) -> pd.Timestamp:
     """CCXT timestamps are epoch-ms; ``None`` falls back to receive time.
 
-    Both branches land on the canonical tz-aware UTC nanosecond clock
-    (issue #154).
+    Both branches land on the canonical tz-aware UTC nanosecond clock.
     """
     if ms is None:
         return pd.Timestamp.now(tz="UTC").as_unit("ns")
@@ -342,7 +341,7 @@ class CcxtSource:
     # -- translation (pure) -------------------------------------------------
 
     def _identity(self) -> dict[str, str]:
-        """Instrument identity stamped onto every emitted event (issue #147).
+        """Instrument identity stamped onto every emitted event.
 
         ``venue`` is the CCXT exchange id and ``symbol`` the traded pair, both
         resolved in :meth:`_configure`.  Carrying them per row lets a combined

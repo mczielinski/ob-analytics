@@ -35,7 +35,7 @@ timestamp   receive time — integer epoch (``config.timestamp_unit``) or any
             string :func:`pandas.to_datetime` understands
 side        ``bid`` / ``ask`` (``buy`` / ``sell`` and ``b`` / ``a`` accepted)
 price       price level (divided by ``config.price_divisor`` to the quote
-            currency, then stored as integer ``tick_size`` counts — issue #155)
+            currency, then stored as integer ``tick_size`` counts)
 volume      new absolute resting size at that level (``0`` = level removed)
 ======  ==================================================================
 
@@ -119,7 +119,7 @@ def _to_datetime(series: pd.Series, unit: str) -> pd.Series:
 
     Integer-epoch columns go through :func:`epoch_to_datetime`; string columns
     are parsed with ``utc=True``, so a zone-carrying string is converted to UTC
-    and a zone-less one is read as UTC (issue #154).
+    and a zone-less one is read as UTC.
     """
     if pd.api.types.is_numeric_dtype(series):
         return epoch_to_datetime(series, unit)
@@ -138,14 +138,14 @@ class L2DepthLoader:
     ----------
     config : PipelineConfig, optional
         Pipeline configuration.  ``price_divisor`` scales the raw feed price to
-        the quote currency and ``tick_size`` quantises it to integer ticks
-        (issue #155); ``volume_decimals`` rounds size; ``timestamp_unit``
-        interprets integer-epoch timestamps.
+        the quote currency and ``tick_size`` quantises it to integer ticks;
+        ``volume_decimals`` rounds size; ``timestamp_unit`` interprets
+        integer-epoch timestamps.
     venue, symbol : str, optional
-        Optional instrument identity (issue #147).  When either is supplied,
-        the loaded depth frame gains per-row ``venue`` / ``symbol`` columns.
-        A generic price-level CSV carries no venue of its own, so ``venue`` is
-        left NA unless supplied.  Both ``None`` (the default) leaves the frame
+        Optional instrument identity.  When either is supplied, the loaded
+        depth frame gains per-row ``venue`` / ``symbol`` columns.  A generic
+        price-level CSV carries no venue of its own, so ``venue`` is left NA
+        unless supplied.  Both ``None`` (the default) leaves the frame
         untagged.
     """
 
