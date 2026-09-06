@@ -230,10 +230,13 @@ class LobsterLoader:
         )
         events["volume"] = np.where(derivable, derived, sizes)
 
+        # Integer lots, like ``volume`` and ``raw_size`` it is taken from: a
+        # ``0.0`` here would widen the whole column to float and hand every
+        # consumer base-asset-looking floats that are really lot counts.
         events["fill"] = np.where(
             events["event_type"].isin([4, 5]),
             events["raw_size"],
-            0.0,
+            0,
         )
 
         # ``original_number`` captures the 1-based row in the source message

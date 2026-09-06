@@ -250,6 +250,37 @@ def tiny_bitstamp_orders_csv(
     return d / "orders.csv"
 
 
+@pytest.fixture(scope="session")
+def fractional_bitstamp_orders_csv(
+    tmp_path_factory: pytest.TempPathFactory,
+    tiny_bitstamp_orders_csv: Path,
+) -> Path:
+    """The tiny Bitstamp fixture with every size scaled below one unit.
+
+    The tiny fixture trades in whole units (2.0, 1.5, 0.5), and so does every
+    hand-built events frame in the suite.  That is what let a bug that
+    truncated base-asset sizes to whole numbers pass: 2.0 truncates to 2 and
+    nothing looks wrong, while a real crypto size of 0.2 truncates to zero and
+    the order reads as though it never traded.
+
+    Sizes here are a tenth of the tiny fixture's, so the whole self-consistent
+    micro-book is preserved and every size is a fraction.
+    """
+    scale = 0.1
+    d = tmp_path_factory.mktemp("fractional_bitstamp")
+    src = tiny_bitstamp_orders_csv.parent
+
+    orders = pd.read_csv(src / "orders.csv")
+    orders["volume"] = orders["volume"] * scale
+    orders.to_csv(d / "orders.csv", index=False)
+
+    trades = pd.read_csv(src / "trades.csv")
+    trades["amount"] = trades["amount"] * scale
+    trades.to_csv(d / "trades.csv", index=False)
+
+    return d / "orders.csv"
+
+
 @pytest.fixture
 def corrupt_bitstamp_orders_csv(tmp_path, tiny_bitstamp_orders_csv) -> Path:
     """The tiny Bitstamp fixture with three deliberate defects.

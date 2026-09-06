@@ -290,6 +290,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   timestamps against tz-naive `pandas.Timestamp`s must now use tz-aware (UTC)
   ones.
 
+### Fixed
+
+- **Order lifecycles read every filled order as cancelled when sizes were
+  floats** (#226 regression). `order_lifecycles` summed each order's fills and
+  cast the total to `int64`. On integer lots that is exact, but the function
+  also accepts base-asset floats, and it is handed them on every gallery run:
+  `display_result` converts a whole result to display units before any face
+  builds. Base-asset sizes are mostly below 1, so a 0.121 BTC fill truncated to
+  `0`, the order read as never executed, and the three lifecycle-derived L3
+  faces — **Order Activity**, **Order Outcome** and **Queue Position** — drew a
+  book of nothing but cancellations. On the bundled Bitstamp sample the Order
+  Activity face lost 224 of its 226 filled spans. The sum now keeps the units it
+  was given, integer lots summing exactly and base-asset floats with the
+  compensation that was dropped as part of #226.
+
+  LOBSTER was never affected: its lot size is 1, so a truncated size equals the
+  size. Every LOBSTER face is pixel-identical across the change.
+
+- **LOBSTER's `fill` column was `float64`, not integer lots** (#226). A `0.0`
+  literal in the expression that built it widened the whole column, so a
+  schema-4.0 LOBSTER run wrote base-asset-looking floats that were really lot
+  counts. Nothing raised; the values only differ from the correct ones once the
+  lot size is not 1.
+
 ---
 
 ## [0.1.0] - 2026-06-26
