@@ -16,18 +16,9 @@ only these tests do.  Each half skips when its engine is absent, the way the
 ccxt and cryptofeed tests already do.  Nautilus additionally publishes no build
 that takes both Python 3.11 and pandas 3, so on 3.11 its half always skips.
 
-This is what found the writer defect fixed alongside it: the export writers were
-sending never-resting marketable orders as book liquidity, so the receiving
-engine crossed its book and dropped the resting level they traded against.
-
-It also found a second defect, in this library rather than in the writers, and
-that one is **not** fixed here: a price level is a float running sum of adds,
-cancels and fills, and it does not return to exactly zero when the last order
-leaves.  The level stays live on residue such as ``5.55e-17`` and is reported as
-the best bid or ask ahead of the real one.  The touch-parity tests below are
-marked ``xfail`` for that reason, and issue #226 is what closes them; the rest
-of the file passes today.  Leaving the check in and failing is the point — it is
-the evidence for #226, and it turns green the moment #226 lands.
+This is what found the two defects fixed alongside it: the writer was exporting
+never-resting marketable orders as book liquidity, and a price level built from
+a float running sum did not empty to exactly zero (issues #224 and #226).
 """
 
 from __future__ import annotations
@@ -62,12 +53,9 @@ needs_nautilus = pytest.mark.skipif(
     ),
 )
 
-#: The tick grid the parity runs use.  Both engines read float prices, so the
-#: writers scale the canonical integer ticks by this (issue #155).
+#: The grids the parity runs use.  Both engines read floats, so the writers
+#: scale the canonical integers by these (issues #155 and #226).
 TICK_SIZE = 0.01
-
-#: The size grid handed to hftbacktest's own builder.  It is the engine's own
-#: setting rather than ours: sizes still cross as base-asset floats until #226.
 LOT_SIZE = 1e-8
 
 #: Seeds whose sessions are replayed.  Several, because one seed's session
@@ -181,20 +169,12 @@ def _disagreements(ours: pd.DataFrame, theirs: pd.DataFrame) -> pd.DataFrame:
 class TestHftbacktestParity:
     """Our book and hftbacktest's must name the same touch, event for event."""
 
-    @pytest.mark.xfail(
-        reason=(
-            "issue #226: a price level is a float running sum and does not "
-            "empty to exactly zero, so a level left holding residue is still "
-            "reported as the best bid or ask. Passes once sizes are integer "
-            "lots. Not strict: the defect needs a crossing to show, so a seed "
-            "whose session happens not to produce one already agrees."
-        ),
-        strict=False,
-    )
     @pytest.mark.parametrize("seed", PARITY_SEEDS)
     def test_best_bid_and_ask_agree_on_every_event(self, seed: int):
         result = _session(seed)
-        array = to_hftbacktest_array(result.events, tick_size=TICK_SIZE)
+        array = to_hftbacktest_array(
+            result.events, tick_size=TICK_SIZE, lot_size=LOT_SIZE
+        )
         theirs = _hftbacktest_touch(array)
         ours = _our_touch(result)
 
@@ -213,7 +193,9 @@ class TestHftbacktestParity:
         from hftbacktest.data import validate_event_order
 
         result = _session(seed)
-        array = to_hftbacktest_array(result.events, tick_size=TICK_SIZE)
+        array = to_hftbacktest_array(
+            result.events, tick_size=TICK_SIZE, lot_size=LOT_SIZE
+        )
         validate_event_order(array)  # raises ValueError if out of order
 
     def test_the_writers_hardcoded_contract_matches_the_installed_engine(self):
@@ -243,7 +225,7 @@ class TestHftbacktestParity:
         taker_only = events.groupby("id")["type"].first() == "market"
         assert taker_only.any(), "this seed must contain some to be a real check"
 
-        array = to_hftbacktest_array(events, tick_size=TICK_SIZE)
+        array = to_hftbacktest_array(events, tick_size=TICK_SIZE, lot_size=LOT_SIZE)
         excluded_ids = set(taker_only[taker_only].index)
         assert not (set(array["order_id"].tolist()) & excluded_ids)
 
@@ -257,16 +239,14 @@ class TestNautilusParity:
         from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
         result = _session(224)
-        deltas = to_nautilus_deltas(result.events, tick_size=TICK_SIZE)
+        deltas = to_nautilus_deltas(
+            result.events, tick_size=TICK_SIZE, lot_size=LOT_SIZE
+        )
         instrument = TestInstrumentProvider.btcusdt_binance()
         wrangled = OrderBookDeltaDataWrangler(instrument).process(deltas)
 
         assert len(wrangled) == len(deltas)
 
-    @pytest.mark.xfail(
-        reason="issue #226, as above: float price levels do not empty exactly.",
-        strict=False,
-    )
     def test_replaying_the_deltas_reproduces_our_touch(self):
         # Nautilus' own book, built from the deltas the writer emits, must name
         # the same best bid and ask as depth_summary.
@@ -276,7 +256,9 @@ class TestNautilusParity:
         from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
         result = _session(224)
-        deltas = to_nautilus_deltas(result.events, tick_size=TICK_SIZE)
+        deltas = to_nautilus_deltas(
+            result.events, tick_size=TICK_SIZE, lot_size=LOT_SIZE
+        )
         instrument = TestInstrumentProvider.btcusdt_binance()
         wrangled = OrderBookDeltaDataWrangler(instrument).process(deltas)
 

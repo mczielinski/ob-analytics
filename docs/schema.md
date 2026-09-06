@@ -149,9 +149,45 @@ Per-order size follows one convention across every loader:
   `changed` row is either an execution (`fill > 0`, outstanding drops by exactly
   `fill`) or a non-executed reduction (`fill == 0`), never both.
 
-Volume units are the base asset (Bitstamp) or shares (LOBSTER). Prices are
-integer ticks — multiply by `tick_size` for the quote currency (see
+Sizes are integer lots and prices integer ticks — multiply by `lot_size` and
+`tick_size` respectively (see [Size policy](#size-policy) and
 [Price policy](#price-policy)).
+
+## Size policy
+
+Every `volume` and `fill` column is a whole number of lots (`int64`), not a
+float in the base asset. The base-asset size is `lots * lot_size`, where
+`lot_size` is the instrument's minimum size increment
+([`PipelineConfig.lot_size`](api/config.md), default `1e-8`, a satoshi grid;
+LOBSTER sets `1`, whole shares). A loader converts a raw size to lots on the
+way in; the plots and the round-trip writers convert back for display.
+
+This is the size half of the [Price policy](#price-policy), and it exists for
+the same reason. A price level is a running sum of adds, cancels and fills, and
+a float sum does not return to exactly zero when the last order leaves it. It
+lands on residue such as `5.55e-17`, the level stays live, and it is reported as
+the best bid or ask ahead of the real one. On the bundled Bitstamp sample that
+corrupted the reported best bid on 8.2% of rows and the best ask on 9.6%, and so
+the reported spread on about one row in eleven. Integer lots cancel exactly, so
+a level empties or it does not.
+
+`lot_size` is stored the same way `tick_size` is: **once per file** in Arrow
+key-value metadata under `ob_analytics_lot_size`, a JSON object mapping an
+instrument key to its lot size.
+
+```python
+import json
+import pyarrow.parquet as pq
+
+metadata = pq.read_schema("out/events.parquet").metadata
+lot_sizes = json.loads(metadata[b"ob_analytics_lot_size"])  # {"default": 1e-08}
+lot_size = lot_sizes["default"]
+# base-asset size = volume_column * lot_size
+```
+
+`load_data` surfaces it on each returned frame's `attrs`: `df.attrs["lot_size"]`
+is the resolved default and `df.attrs["lot_sizes"]` the full map. A pre-`4.0`
+file carries neither and stores float sizes already in the base asset.
 
 ## Nullable integer columns
 
@@ -175,14 +211,14 @@ provenance columns every loader carries.
 | `timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Local receive time. |
 | `exchange_timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Venue matching-engine time (equals `timestamp` for LOBSTER). |
 | `price` | `int64` | ticks | no | Limit price as a whole number of ticks (× `tick_size` for the quote currency — see [Price policy](#price-policy)). |
-| `volume` | `double` | base asset / shares | no | Outstanding size after the event, or size removed on a delete (see [Volume and fill](#volume-and-fill)). |
+| `volume` | `int64` | lots | no | Outstanding size after the event, or size removed on a delete (× `lot_size` for the base asset — see [Size policy](#size-policy)). |
 | `direction` | `dictionary<string>` | — | no | Order side: `bid` or `ask` (ordered categorical). |
 | `action` | `dictionary<string>` | — | no | Event kind: `created`, `changed`, or `deleted` (ordered categorical). |
-| `fill` | `double` | base asset / shares | no | Executed size at this event (`0` when none). |
+| `fill` | `int64` | lots | no | Executed size at this event (`0` when none). |
 | `type` | `dictionary<string>` | — | no | Order class from `set_order_types` (see [Categorical values](#categorical-value-domains)). |
 | `original_number` | `int64` | — | no | 1-based source row number. Provenance for round-trip writers. |
 | `raw_event_type` | `int64` / `string` / `null` | — | yes | Venue's native event-type code (LOBSTER `1`–`5`); null for Bitstamp. |
-| `raw_size` | `double` | base asset / shares | yes | LOBSTER only. Venue's raw per-event quantity, kept for orders with no `created` row and for round-trip writers. |
+| `raw_size` | `int64` | lots | yes | LOBSTER only. Venue's raw per-event quantity, kept for orders with no `created` row and for round-trip writers. |
 | `aggressiveness_bps` | `double` | basis points | yes | Placement distance from the best price, added by `order_aggressiveness`. Null where it does not apply. |
 
 `raw_event_type` is present but all-null on a Bitstamp frame; pyarrow writes an
@@ -198,7 +234,7 @@ taker provenance.
 |---|---|---|---|---|
 | `timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Trade print time (receive clock). |
 | `price` | `int64` | ticks | no | Execution price in ticks (× `tick_size` for the quote currency). |
-| `volume` | `double` | base asset / shares | no | Executed size. |
+| `volume` | `int64` | lots | no | Executed size. |
 | `direction` | `dictionary<string>` | — | yes | Taker's aggressor side: `buy` or `sell`. Null on an L2 feed until Lee–Ready fills it, then set. |
 | `maker_event_id` | `int64` | — | yes | `event_id` of the maker (resting) order's event. Null when the trade is not attributed (L2 feeds have no order identity). |
 | `taker_event_id` | `int64` | — | yes | `event_id` of the taker (aggressing) order's event. Null when not attributed. |
@@ -220,7 +256,7 @@ Output of `price_level_volume`. Required columns are the
 | `event_id` | `int64` | — | no | The event that produced this level change. Present on the L3 path; absent on an L2 feed. |
 | `timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Time of the level change. |
 | `price` | `int64` | ticks | no | Price level in ticks (× `tick_size` for the quote currency). |
-| `volume` | `double` | base asset / shares | no | Resting size at this price level after the change (`0` empties the level). Never negative. |
+| `volume` | `int64` | lots | no | Resting size at this price level after the change (`0` empties the level). Never negative. |
 | `direction` | `dictionary<string>` | — | no | Side of the level: `bid` or `ask` (ordered categorical). |
 
 `volume` here is the level's absolute resting size, not a signed delta. An L2
@@ -237,11 +273,11 @@ side. This is the reconstructed book state over time.
 | `timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Time of this book state. |
 | `event_id` | `int64` | — | no* | The event this state follows. Present when the input `depth` carried `event_id` (L3). |
 | `best_bid_price` | `int64` | ticks | no | Best bid price in ticks (`0` when the bid side is empty). |
-| `best_bid_vol` | `double` | base asset / shares | no | Resting size at the best bid. |
-| `bid_vol{N}bps` | `double` | base asset / shares | no | Resting bid volume within `N` bps of the best bid. |
+| `best_bid_vol` | `int64` | lots | no | Resting size at the best bid. |
+| `bid_vol{N}bps` | `int64` | lots | no | Resting bid volume within `N` bps of the best bid. |
 | `best_ask_price` | `int64` | ticks | no | Best ask price in ticks (`0` when the ask side is empty). |
-| `best_ask_vol` | `double` | base asset / shares | no | Resting size at the best ask. |
-| `ask_vol{N}bps` | `double` | base asset / shares | no | Resting ask volume within `N` bps of the best ask. |
+| `best_ask_vol` | `int64` | lots | no | Resting size at the best ask. |
+| `ask_vol{N}bps` | `int64` | lots | no | Resting ask volume within `N` bps of the best ask. |
 
 The bin columns depend on configuration. With the defaults (`depth_bps = 25`,
 `depth_bins = 20`) there are 20 bins per side at `N` = 25, 50, …, 500:
@@ -262,12 +298,12 @@ book, hidden executions) are excluded.
 |---|---|---|---|---|
 | `id` | `int64` | — | no | Order id. |
 | `placed_ts` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Time of the `created` event. |
-| `placed_vol` | `double` | base asset / shares | no | Size at placement. |
+| `placed_vol` | `int64` | lots | no | Size at placement. |
 | `price` | `int64` | ticks | no | Placement price in ticks (× `tick_size` for the quote currency). |
 | `direction` | `dictionary<string>` | — | no | Order side: `bid` or `ask`. |
 | `type` | `dictionary<string>` | — | yes | Classifier label. Present when `events` carried a `type` column. |
 | `aggressiveness_bps` | `double` | basis points | yes | Placement distance. Present when `events` carried it. |
-| `filled_vol` | `double` | base asset / shares | no | Total executed size (sum of `fill`). |
+| `filled_vol` | `int64` | lots | no | Total executed size (sum of `fill`). |
 | `end_ts` | `timestamp[ns, tz=UTC]` | ns, UTC | yes | Termination time. Null (`NaT`) while the order still rests. |
 | `outcome` | `string` | — | no | `filled`, `partial`, `cancelled`, or `resting` (see [Categorical values](#categorical-value-domains)). |
 
@@ -282,8 +318,8 @@ returned as two frames (`bids` and `asks`), each with these columns.
 | `timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Receive time of the order's last event. |
 | `exchange_timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Exchange time of the order's last event. |
 | `price` | `int64` | ticks | no | Resting price in ticks (× `tick_size` for the quote currency). |
-| `volume` | `double` | base asset / shares | no | Outstanding resting size. |
-| `liquidity` | `double` | base asset / shares | no | Cumulative size from the best price down to this order. |
+| `volume` | `int64` | lots | no | Outstanding resting size. |
+| `liquidity` | `int64` | lots | no | Cumulative size from the best price down to this order. |
 | `bps` | `double` | basis points | no | Distance from the best price on this side, in bps. |
 
 ## Categorical value domains

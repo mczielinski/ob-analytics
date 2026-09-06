@@ -10,15 +10,16 @@ Neither engine is a dependency.  Nautilus ingests a pandas frame through its
 targets are shapes this library can build on its own; installing the engine is
 the user's business, and only the cross-check in #224 needs one present.
 
-Both engines take **float** prices, while the canonical schema stores integer
-ticks (issue #155), so both writers scale by the run's ``tick_size``.
+Both engines take **float** prices and sizes, while the canonical schema stores
+integer ticks and integer lots, so both writers scale by the run's ``tick_size``
+and ``lot_size``.
 
 A canonical event stream also carries orders that never rest: a marketable order
 is recorded as a transient add on its **own** side at the touch, then the fill,
 then a delete (``type == "market"``).  Those rows are not book liquidity, and the
 library's own depth engine excludes them (``ob_analytics.depth``).  Writing them
 out would make the receiving engine cross its book and drop the resting level
-they traded against, so both writers exclude them too — which is what the #224
+they traded against, so both writers exclude them too — which is what the
 cross-check against hftbacktest's own reconstruction showed.
 """
 
@@ -97,7 +98,7 @@ def _resting_orders_only(events: pd.DataFrame) -> pd.DataFrame:
     transient add makes its book cross at the touch, and it resolves the cross
     by removing the resting level the order traded against — so its
     reconstruction drifts thinner than ours, permanently.  Excluding these rows
-    here is what makes the two agree (issue #224).
+    here is what makes the two agree.
 
     A frame with no ``type`` column (one built by hand, or by a loader that does
     not classify) is returned unchanged: there is nothing to exclude on.
@@ -119,7 +120,9 @@ def _in_canonical_time_order(events: pd.DataFrame) -> pd.DataFrame:
     return events.sort_values(time_order_keys(events), kind="stable")
 
 
-def _hftbacktest_rows(events: pd.DataFrame, *, tick_size: float) -> np.ndarray:
+def _hftbacktest_rows(
+    events: pd.DataFrame, *, tick_size: float, lot_size: float
+) -> np.ndarray:
     """Return one unflagged feed record per canonical event, in canonical order."""
     events = _resting_orders_only(events)
     out: np.ndarray = np.zeros(len(events), dtype=HFT_EVENT_DTYPE)
@@ -136,7 +139,7 @@ def _hftbacktest_rows(events: pd.DataFrame, *, tick_size: float) -> np.ndarray:
     out["exch_ts"] = _epoch_nanos(events["exchange_timestamp"])
     out["local_ts"] = _epoch_nanos(events["timestamp"])
     out["px"] = events["price"].to_numpy(dtype=np.float64) * tick_size
-    out["qty"] = events["volume"].to_numpy(dtype=np.float64)
+    out["qty"] = events["volume"].to_numpy(dtype=np.float64) * lot_size
     out["order_id"] = events["id"].to_numpy(dtype=np.uint64)
     return out
 
@@ -145,6 +148,7 @@ def to_hftbacktest_array(
     events: pd.DataFrame,
     *,
     tick_size: float,
+    lot_size: float,
 ) -> np.ndarray:
     """Return *events* as an hftbacktest feed array, on two timelines.
 
@@ -155,6 +159,9 @@ def to_hftbacktest_array(
     tick_size : float
         The run's tick size, used to scale the integer ``price`` back to the
         quote currency, which is what the engine reads.
+    lot_size : float
+        The run's lot size, used to scale the integer ``volume`` back to the
+        base asset, which is what the engine reads.
 
     Returns
     -------
@@ -179,7 +186,7 @@ def to_hftbacktest_array(
     the engine's own ``correct_event_order`` produces.  An event whose clocks
     agree stays one record carrying both flags.
     """
-    base = _hftbacktest_rows(events, tick_size=tick_size)
+    base = _hftbacktest_rows(events, tick_size=tick_size, lot_size=lot_size)
     if len(base) == 0:
         return base
 
@@ -230,7 +237,11 @@ class HftbacktestWriter:
         """
         p = Path(dest)
         p.parent.mkdir(parents=True, exist_ok=True)
-        array = to_hftbacktest_array(data["events"], tick_size=self._config.tick_size)
+        array = to_hftbacktest_array(
+            data["events"],
+            tick_size=self._config.tick_size,
+            lot_size=self._config.lot_size,
+        )
         np.savez_compressed(p, **{HFT_ARRAY_KEY: array})  # type: ignore
         return p
 
@@ -288,6 +299,7 @@ def to_nautilus_deltas(
     events: pd.DataFrame,
     *,
     tick_size: float,
+    lot_size: float,
 ) -> pd.DataFrame:
     """Return *events* in the frame shape Nautilus' delta wrangler takes.
 
@@ -298,6 +310,9 @@ def to_nautilus_deltas(
     tick_size : float
         The run's tick size, used to scale the integer ``price`` back to the
         quote currency.
+    lot_size : float
+        The run's lot size, used to scale the integer ``volume`` back to the
+        base asset.
 
     Returns
     -------
@@ -332,7 +347,7 @@ def to_nautilus_deltas(
                 events["direction"].astype(str).map(_DIRECTION_TO_NAUTILUS).to_numpy()
             ),
             "price": events["price"].to_numpy(dtype=np.float64) * tick_size,
-            "size": events["volume"].to_numpy(dtype=np.float64),
+            "size": events["volume"].to_numpy(dtype=np.float64) * lot_size,
             "order_id": events["id"].to_numpy(dtype=np.uint64),
             "flags": np.zeros(len(events), dtype=np.uint8),
             "sequence": sequence.to_numpy(dtype=np.uint64),
@@ -365,7 +380,11 @@ class NautilusWriter:
         """Write ``data["events"]`` to *dest* as one Parquet file of deltas."""
         p = Path(dest)
         p.parent.mkdir(parents=True, exist_ok=True)
-        deltas = to_nautilus_deltas(data["events"], tick_size=self._config.tick_size)
+        deltas = to_nautilus_deltas(
+            data["events"],
+            tick_size=self._config.tick_size,
+            lot_size=self._config.lot_size,
+        )
         deltas.to_parquet(p, index=True)
         return p
 

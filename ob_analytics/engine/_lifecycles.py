@@ -57,7 +57,8 @@ class OrderLifecycles:
         Index in the :class:`OrderEvents` arrays of the order's first
         ``created`` event (``int64``).
     filled_vol : numpy.ndarray
-        Total quantity executed over the order's life (``float64``).
+        Total quantity executed over the order's life, in integer lots
+        (``int64``).
     end_ts : numpy.ndarray
         Termination time in int64 nanoseconds, or :data:`~ob_analytics.engine.
         NAT_NS` while the order is still resting.
@@ -77,39 +78,22 @@ class OrderLifecycles:
 
 
 def _grouped_sum(slot: np.ndarray, values: np.ndarray, n: int) -> np.ndarray:
-    """Sum *values* into *n* groups, compensating for floating-point error.
+    """Sum *values* into *n* groups, exactly.
 
-    Kahan summation, and deliberately so: a plain accumulation (``np.bincount``)
-    drifts in the last bits once an order collects many small fills against a
-    large running total, which moves ``filled_vol`` and, at the margin, the
-    outcome that is derived from it.
+    Sizes are integer lots, so ordinary integer accumulation is
+    exact and this is one ``np.bincount``.
 
-    Groups are summed in stream order, one position at a time across every
-    group at once: the rows are grouped by a stable sort, each row is given its
-    position within its group, and one vectorised Kahan step runs per position.
-    The number of steps is the largest number of events any single order has, so
-    this stays a handful of array operations rather than a per-row Python loop.
+    It used to be Kahan summation over a per-position loop, because *values*
+    were floats in the base asset and a plain accumulation drifted in the last
+    bits once an order collected many small fills against a large running
+    total — which moved ``filled_vol`` and, at the margin, the outcome derived
+    from it.  Integers do not drift, so the compensation and the loop are both
+    gone.
     """
-    total = np.zeros(n, dtype=np.float64)
-    if slot.size == 0:
-        return total
-
-    order = np.argsort(slot, kind="stable")
-    grouped_slot = slot[order]
-    grouped_values = values[order]
-    starts = np.flatnonzero(np.r_[True, grouped_slot[1:] != grouped_slot[:-1]])
-    sizes = np.diff(np.r_[starts, len(grouped_slot)])
-    position = np.arange(len(grouped_slot)) - np.repeat(starts, sizes)
-
-    carry = np.zeros(n, dtype=np.float64)
-    for step in range(int(sizes.max())):
-        at_step = position == step
-        group = grouped_slot[at_step]
-        corrected = grouped_values[at_step] - carry[group]
-        stepped = total[group] + corrected
-        carry[group] = (stepped - total[group]) - corrected
-        total[group] = stepped
-    return total
+    total = np.bincount(slot, weights=values, minlength=n)
+    # ``bincount`` returns float64 whenever weights are given, so put the exact
+    # integer back; every summand is an integer lot count, so nothing is lost.
+    return total.astype(np.int64)
 
 
 def _slots(order_ids: np.ndarray, values: np.ndarray) -> np.ndarray:
@@ -182,6 +166,9 @@ def order_lifecycles(
     end_ts[~terminated] = NAT_NS
 
     placed_vol = events.volume[created_row]
+    # Both sides are integer lot counts (issue #226), so the tolerance no
+    # longer does anything: any two distinct lot counts differ by at least 1.
+    # It stays because it is a documented parameter, and it costs nothing.
     fully_executed = filled_vol >= placed_vol - fill_tolerance
     outcome = np.full(n, Outcome.RESTING, dtype=np.int8)
     outcome[terminated & fully_executed & (placed_vol > 0)] = Outcome.FILLED
