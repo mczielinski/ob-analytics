@@ -499,3 +499,54 @@ class TestBuildGalleryModel:
             activity_l2.prep_kwargs["price_from"] == heatmap.prep_kwargs["price_from"]
         )
         assert activity_l2.prep_kwargs["price_to"] == heatmap.prep_kwargs["price_to"]
+
+
+class TestDisplayUnitsPreserveFaces:
+    """``display_result`` changes units, and must change nothing else.
+
+    ``build_gallery_model`` converts a whole result to display units once, so
+    every face sees base-asset floats rather than the canonical integer lots.
+    An analytic that reads sizes therefore has to give the same answer in both
+    unit systems.  ``order_activity``'s L3 face is the one that failed: a
+    lifecycle total cast to ``int64`` sent every sub-unit fill to zero, so the
+    face drew a book of nothing but cancellations.
+    """
+
+    @staticmethod
+    def _result(orders_csv):
+        from ob_analytics.bitstamp import BitstampSource
+        from ob_analytics.pipeline import Pipeline
+
+        return Pipeline(source=BitstampSource()).run(str(orders_csv))
+
+    def test_lifecycle_outcomes_survive_the_conversion(
+        self, fractional_bitstamp_orders_csv
+    ) -> None:
+        from ob_analytics.analytics import order_lifecycles
+        from ob_analytics.visualization.gallery import display_result
+
+        result = self._result(fractional_bitstamp_orders_csv)
+        canonical = order_lifecycles(result.events)
+        displayed = order_lifecycles(display_result(result).events)
+
+        # The fixture has to contain the outcome the bug erased, or this
+        # passes for the wrong reason.
+        assert (canonical["outcome"] == "filled").any()
+        assert list(displayed["id"]) == list(canonical["id"])
+        assert list(displayed["outcome"]) == list(canonical["outcome"])
+
+    def test_order_activity_l3_draws_the_same_spans(
+        self, fractional_bitstamp_orders_csv
+    ) -> None:
+        from ob_analytics.visualization import prepare
+        from ob_analytics.visualization.gallery import display_result
+
+        result = self._result(fractional_bitstamp_orders_csv)
+        canonical = prepare.order_activity_l3(result.events)
+        displayed = prepare.order_activity_l3(display_result(result).events)
+
+        assert len(canonical["filled"]) > 0
+        for fate in ("filled", "cancelled", "resting"):
+            assert list(displayed[fate]["id"]) == list(canonical[fate]["id"]), (
+                f"{fate} spans differ between canonical and display units"
+            )

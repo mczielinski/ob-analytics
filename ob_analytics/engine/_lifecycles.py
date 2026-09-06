@@ -31,9 +31,12 @@ OUTCOMES: tuple[str, ...] = Outcome.labels()
 DEFAULT_FILL_TOLERANCE: float = 1e-9
 """Default tolerance on "fully executed" (:func:`order_lifecycles`).
 
-Venue volumes are 8-decimal floats, and the fills summed over one order can
-drift by a float epsilon, so an order counts as filled when its executed total
-reaches its placed size to within this much."""
+Canonical sizes are integer lots, where the tolerance does nothing: two
+distinct lot counts differ by at least 1.  It earns its keep on a frame
+carrying float sizes in the base asset — the display frame the gallery builds,
+or a pre-4.0 file — where the fills summed over one order can fall an epsilon
+short of the placed size.  Such an order counts as filled when its executed
+total reaches its placed size to within this much."""
 
 
 @dataclass(frozen=True)
@@ -57,8 +60,9 @@ class OrderLifecycles:
         Index in the :class:`OrderEvents` arrays of the order's first
         ``created`` event (``int64``).
     filled_vol : numpy.ndarray
-        Total quantity executed over the order's life, in integer lots
-        (``int64``).
+        Total quantity executed over the order's life, in the units the events
+        carried: integer lots (``int64``) for a canonical frame, base-asset
+        ``float64`` for one holding float sizes.
     end_ts : numpy.ndarray
         Termination time in int64 nanoseconds, or :data:`~ob_analytics.engine.
         NAT_NS` while the order is still resting.
@@ -77,23 +81,64 @@ class OrderLifecycles:
         return len(self.order_id)
 
 
-def _grouped_sum(slot: np.ndarray, values: np.ndarray, n: int) -> np.ndarray:
-    """Sum *values* into *n* groups, exactly.
+def _kahan_grouped_sum(slot: np.ndarray, values: np.ndarray, n: int) -> np.ndarray:
+    """Sum float *values* into *n* groups, compensating for rounding error.
 
-    Sizes are integer lots, so ordinary integer accumulation is
-    exact and this is one ``np.bincount``.
+    Kahan summation, and deliberately so: a plain accumulation drifts in the
+    last bits once an order collects many small fills against a large running
+    total, which moves ``filled_vol`` and, at the margin, the outcome derived
+    from it.
 
-    It used to be Kahan summation over a per-position loop, because *values*
-    were floats in the base asset and a plain accumulation drifted in the last
-    bits once an order collected many small fills against a large running
-    total — which moved ``filled_vol`` and, at the margin, the outcome derived
-    from it.  Integers do not drift, so the compensation and the loop are both
-    gone.
+    Groups are summed in stream order, one position at a time across every
+    group at once: the rows are grouped by a stable sort, each row is given its
+    position within its group, and one vectorised Kahan step runs per position.
+    The number of steps is the largest number of events any single order has, so
+    this stays a handful of array operations rather than a per-row Python loop.
     """
-    total = np.bincount(slot, weights=values, minlength=n)
-    # ``bincount`` returns float64 whenever weights are given, so put the exact
-    # integer back; every summand is an integer lot count, so nothing is lost.
-    return total.astype(np.int64)
+    total = np.zeros(n, dtype=np.float64)
+    if slot.size == 0:
+        return total
+
+    order = np.argsort(slot, kind="stable")
+    grouped_slot = slot[order]
+    grouped_values = values[order]
+    starts = np.flatnonzero(np.r_[True, grouped_slot[1:] != grouped_slot[:-1]])
+    sizes = np.diff(np.r_[starts, len(grouped_slot)])
+    position = np.arange(len(grouped_slot)) - np.repeat(starts, sizes)
+
+    carry = np.zeros(n, dtype=np.float64)
+    for step in range(int(sizes.max())):
+        at_step = position == step
+        group = grouped_slot[at_step]
+        corrected = grouped_values[at_step] - carry[group]
+        stepped = total[group] + corrected
+        carry[group] = (stepped - total[group]) - corrected
+        total[group] = stepped
+    return total
+
+
+def _grouped_sum(slot: np.ndarray, values: np.ndarray, n: int) -> np.ndarray:
+    """Sum *values* into *n* groups, exactly, keeping the dtype it was handed.
+
+    Canonical sizes are integer lots, and integers accumulate exactly, so that
+    path is one unbuffered ``np.add.at`` and needs no compensation.
+
+    *values* may still arrive as floats in the base asset, and that is not a
+    legacy corner: it is what the gallery hands the L3 faces, because
+    ``display_result`` converts a whole result to display units before any face
+    runs.  A frame built by hand or read from a pre-4.0 file is float too.
+    Those are summed with :func:`_kahan_grouped_sum`.
+
+    The dtype has to survive the sum.  Casting a float total to ``int64``
+    truncates, and sizes in the base asset are mostly below 1 — a 0.121 BTC
+    fill lands on ``0``, the order reads as never executed, and every filled
+    order in the frame is reported ``cancelled``.
+    """
+    if np.issubdtype(values.dtype, np.integer):
+        total = np.zeros(n, dtype=np.int64)
+        np.add.at(total, slot, values)
+        return total
+    return _kahan_grouped_sum(slot, values, n)
 
 
 def _slots(order_ids: np.ndarray, values: np.ndarray) -> np.ndarray:
@@ -166,9 +211,10 @@ def order_lifecycles(
     end_ts[~terminated] = NAT_NS
 
     placed_vol = events.volume[created_row]
-    # Both sides are integer lot counts (issue #226), so the tolerance no
-    # longer does anything: any two distinct lot counts differ by at least 1.
-    # It stays because it is a documented parameter, and it costs nothing.
+    # Both sides are in the units the caller passed, and the sum kept them, so
+    # this comparison is like against like.  On integer lots the tolerance does
+    # nothing (distinct lot counts differ by at least 1); on base-asset floats
+    # it absorbs the epsilon a summed fill can fall short by.
     fully_executed = filled_vol >= placed_vol - fill_tolerance
     outcome = np.full(n, Outcome.RESTING, dtype=np.int8)
     outcome[terminated & fully_executed & (placed_vol > 0)] = Outcome.FILLED
