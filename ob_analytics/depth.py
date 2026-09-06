@@ -421,11 +421,27 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
             (dir_events["action"] == "created") & (dir_events["type"] != "market")
         ][cols]
 
+        # The level each order's volume actually sits on: the price of its
+        # `created` row, which is the only row that adds volume.  Every later
+        # row subtracts at that same price rather than at whatever price the
+        # row itself carries, so an order's `+v` and `-v` always cancel on one
+        # level and a level can only empty to exactly zero.
+        #
+        # They can differ.  Bitstamp reports a `deleted` whose price is not the
+        # price the order rested at for 1.3% of orders, and subtracting at the
+        # reported price strands the volume on the created level for the rest of
+        # the session, where it is read back as a resting level that no order is
+        # on.  The per-order rebuild (`engine.book_state`) never had this
+        # problem: it tracks orders by id and removes each one from wherever it
+        # was resting.  This keeps the price-level rebuild consistent with it.
+        resting_price = dir_events.groupby("id")["price"].transform("first")
+
         cancelled_volume = dir_events[
             (dir_events["action"] == "deleted")
             & (dir_events["volume"] > 0)
             & (dir_events["type"] != "market")
-        ][cols]
+        ][cols].copy()
+        cancelled_volume["price"] = resting_price[cancelled_volume.index]
         cancelled_volume["volume"] = -cancelled_volume["volume"]
         cancelled_volume = cancelled_volume[
             cancelled_volume["id"].isin(added_volume["id"])
@@ -445,6 +461,8 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
                 "action",
             ]
         ]
+        filled_volume = filled_volume.copy()
+        filled_volume["price"] = resting_price[filled_volume.index]
         filled_volume["fill"] = -filled_volume["fill"]
         filled_volume = filled_volume[filled_volume["id"].isin(added_volume["id"])]
         filled_volume.columns = pd.Index(cols)
@@ -464,6 +482,7 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
             & (dir_events["type"] != "market")
         ][cols].copy()
         if not reduced_volume.empty:
+            reduced_volume["price"] = resting_price[reduced_volume.index]
             reduced_volume["volume"] = -outstanding_drop[reduced_volume.index]
             reduced_volume = reduced_volume[
                 reduced_volume["id"].isin(added_volume["id"])

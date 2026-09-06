@@ -78,6 +78,13 @@ def _event_diff_bps(
     best = merged[best_price_col]
 
     diff_price = direction * (merged["price"] - best)
+    # A distance from the touch has no meaning when the touch is not a
+    # tradeable price, and dividing by it yields a signed infinity that then
+    # travels through every downstream mean.  The bundled Bitstamp snapshot
+    # carries orders priced at zero (``audit`` reports them as
+    # ``nonpositive_price``), and the crossed-level eviction can leave one of
+    # them as the reported best, so this is reachable on real data.
+    best = best.where(best > 0)
     diff_bps = 10000 * diff_price / best
     return pd.DataFrame({"event_id": merged["event_id"], "diff_bps": diff_bps})
 
