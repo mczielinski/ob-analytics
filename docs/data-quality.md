@@ -71,7 +71,7 @@ Data quality summary
   feed type             : diff_feed
   events / orders       : 314,057 / 156,902
   trades                : 284
-  crossed resting book  : 92.02% of session (6348 episode(s)) [expected for a diff feed — faithful replay, not a bug]
+  crossed resting book  : 91.61% of session (7238 episode(s)) [expected for a diff feed — faithful replay, not a bug]
   unmatched trades      : 0.70%
   duplicate event ids   : 0
   duplicate created ids : 0
@@ -99,7 +99,7 @@ The four headline metrics:
 
 | Metric | What it measures | Matched book | Diff feed |
 |---|---|---|---|
-| **crossed resting book %** | Share of session *time* the faithful book has `best_bid > best_ask` | ~0% | often high (92% here) |
+| **crossed resting book %** | Share of session *time* the faithful book has `best_bid > best_ask` | ~0% | often high (~92% here) |
 | **unmatched trades %** | Trades with no resolvable maker/taker resting order | low | low–moderate |
 | **duplicate ids** | `event_id`s seen twice, or order ids created twice | 0 | 0 (else a feed defect) |
 | **pre-existing orders** | Orders already resting when the capture began (no `created` row) | a few | a few |
