@@ -290,6 +290,12 @@ _Avoid_: options, params
 Recording a live venue to files the pipeline can later replay.
 _Avoid_: stream, ingest, collect, record
 
+**Origin**:
+Which part of a capture wrote a row: `snapshot` (the opening book), `stream`
+(a live message) or `shutdown` (a synthetic close-out at the end). Named
+`origin`.
+_Avoid_: provenance, phase, source (a source is a venue)
+
 ## Ordering and data quality
 
 **Sequence**:

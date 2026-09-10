@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -259,6 +260,102 @@ class TestRunner:
         assert len(events) > 0
         assert "direction" in events.columns
         assert "action" in events.columns
+
+
+class _ConfirmingCapturer(_FakeCapturer):
+    """The stream mentions both opening orders: 1 by a change, 2 by a trade."""
+
+    name = "confirming"
+
+    async def stream(
+        self, config: CaptureConfig
+    ) -> AsyncIterator[tuple[str, EventDict, Any]]:
+        ts = pd.Timestamp("2025-01-01 00:00:01", tz="UTC")
+        yield (
+            "order",
+            {
+                "id": 1,
+                "timestamp": ts,
+                "exchange_timestamp": ts,
+                "price": 100.0,
+                "volume": 0.5,
+                "action": "changed",
+                "direction": "bid",
+            },
+            None,
+        )
+        yield (
+            "trade",
+            {
+                "trade_id": 1,
+                "timestamp": ts,
+                "exchange_timestamp": ts,
+                "price": 101.0,
+                "amount": 1.0,
+                "buy_order_id": 9,
+                "sell_order_id": 2,
+                "side": "buy",
+            },
+            None,
+        )
+
+
+class TestSnapshotProvenance:
+    """Every book row says which part of the capture wrote it, and a capture
+    counts the opening orders the stream never confirmed (issue #237)."""
+
+    def test_order_rows_carry_their_origin(self, tmp_path):
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="btcusd", out_dir=out, minutes=0.001)
+        asyncio.run(run_capturer(_FakeCapturer(), cfg))
+
+        orders = pd.read_csv(out / "orders.csv")
+        by_origin = orders.groupby("origin")["id"].apply(sorted).to_dict()
+        assert by_origin == {
+            "snapshot": [1, 2],
+            "stream": [3],
+            "shutdown": [1, 2, 3],
+        }
+        assert set(orders.loc[orders["origin"] == "snapshot", "action"]) == {"created"}
+
+    def test_depth_rows_carry_their_origin(self, tmp_path):
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="x", out_dir=out, minutes=0.001)
+        asyncio.run(run_capturer(_FakeL2Capturer(), cfg))
+
+        depth = pd.read_csv(out / "depth.csv")
+        assert depth["origin"].tolist() == [
+            "snapshot",
+            "snapshot",
+            "stream",
+            "stream",
+        ]
+
+    def test_counts_opening_orders_the_stream_never_mentions(self, tmp_path):
+        # The fake stream only touches order 3 and trade ids 3 / 4, so
+        # neither opening order (1, 2) is ever confirmed.
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="btcusd", out_dir=out, minutes=0.001)
+        result = asyncio.run(run_capturer(_FakeCapturer(), cfg))
+
+        assert result.n_snapshot_unconfirmed == 2
+        meta = json.loads((out / "meta.json").read_text())
+        assert meta["n_snapshot_unconfirmed"] == 2
+
+    def test_an_order_event_or_a_trade_confirms_an_opening_order(self, tmp_path):
+        cfg = CaptureConfig(pair="btcusd", out_dir=tmp_path / "cap", minutes=0.001)
+        result = asyncio.run(run_capturer(_ConfirmingCapturer(), cfg))
+        assert result.n_snapshot_unconfirmed == 0
+
+    def test_l2_capture_reports_no_unconfirmed_count(self, tmp_path):
+        # A price level has no id for the stream to confirm.
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="x", out_dir=out, minutes=0.001)
+        result = asyncio.run(run_capturer(_FakeL2Capturer(), cfg))
+
+        assert result.n_snapshot_unconfirmed is None
+        meta = json.loads((out / "meta.json").read_text())
+        assert meta["n_snapshot_unconfirmed"] is None
 
 
 class TestL2Runner:
