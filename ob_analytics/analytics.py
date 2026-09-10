@@ -26,7 +26,7 @@ import pandas as pd
 from loguru import logger
 
 from ob_analytics import _engine_frames, engine
-from ob_analytics._utils import validate_columns, validate_non_empty
+from ob_analytics._utils import ticks_to_price, validate_columns, validate_non_empty
 from ob_analytics.depth import price_level_volume
 from ob_analytics.protocols import FeedType
 from ob_analytics.schemas import (
@@ -764,6 +764,292 @@ def _crossed_time_fraction(best: pd.DataFrame) -> tuple[float, int]:
     return crossed_time / total, episodes
 
 
+# ---------------------------------------------------------------------------
+# Stale resting orders
+# ---------------------------------------------------------------------------
+
+# How long a venue may take to report an order after a trade shows it is gone.
+# A diff feed lags: a filled or cancelled order keeps resting until its own
+# report arrives.  On the bundled Bitstamp sample that report comes a median
+# 23 ms and a 95th percentile 234 ms after the trade, and the two orders it never
+# arrives for outlive the trade by more than 25 minutes.  One second sits well
+# clear of both, so the threshold does not need tuning per feed.
+STALE_GRACE: pd.Timedelta = pd.Timedelta(seconds=1)
+
+
+@dataclass(frozen=True)
+class StaleOrder:
+    """A resting order a trade printed through, which the venue did not report.
+
+    A matching engine cannot print a trade at a price worse than a resting order
+    on the other side of it.  So a trade above a resting ask, or below a resting
+    bid, shows that the order had already left the book.  When the venue then
+    does not report the order again within a grace period, the rebuilt book goes
+    on holding an order that is not there.
+
+    Attributes
+    ----------
+    id : int
+        The order id.
+    direction : str
+        ``"bid"`` or ``"ask"``.
+    price : float
+        The price the order rests at, in the quote currency
+        (``ticks * tick_size``).
+    disproved_at : pandas.Timestamp
+        The time of the first trade that printed through it.
+    stale_seconds : float
+        Seconds from that trade to the order's next event row, or to the end of
+        the capture when it has none.
+    touch_seconds : float
+        Seconds of that span in which the order's price was the best price on
+        its side of the faithful book: how long it held the touch after the
+        trade showed it was gone.
+    """
+
+    id: int
+    direction: str
+    price: float
+    disproved_at: pd.Timestamp
+    stale_seconds: float
+    touch_seconds: float
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the order as a plain, JSON-serialisable dict."""
+        return {
+            "id": self.id,
+            "direction": self.direction,
+            "price": self.price,
+            "disproved_at": self.disproved_at.isoformat(),
+            "stale_seconds": self.stale_seconds,
+            "touch_seconds": self.touch_seconds,
+        }
+
+
+def _capture_end_ns(events: pd.DataFrame, trades: pd.DataFrame) -> int:
+    """The last instant either frame covers, in UTC nanoseconds."""
+    ends = [
+        int(frame["timestamp"].astype("int64").max())
+        for frame in (events, trades)
+        if not frame.empty
+    ]
+    return max(ends)
+
+
+def _range_extreme(
+    values: np.ndarray, lo: np.ndarray, hi: np.ndarray, *, highest: bool
+) -> np.ndarray:
+    """Max (or min) of ``values[lo[i]:hi[i]]`` for every ``i``; needs ``hi > lo``.
+
+    A sparse table answers every range in constant time, so the cost does not
+    grow with how many trades an order rests across.
+    """
+    reduce = np.maximum if highest else np.minimum
+    length = hi - lo
+    level = np.floor(np.log2(length)).astype(np.int64)
+    table = [values]
+    width = 1
+    while 2 * width <= int(length.max()):
+        prev = table[-1]
+        table.append(reduce(prev[:-width], prev[width:]))
+        width *= 2
+    out = np.empty(lo.size, dtype=values.dtype)
+    for k in np.unique(level):
+        rows = level == k
+        span = 1 << int(k)
+        out[rows] = reduce(table[k][lo[rows]], table[k][hi[rows] - span])
+    return out
+
+
+def _stale_spans(
+    events: pd.DataFrame, trades: pd.DataFrame, grace: pd.Timedelta, end_ns: int
+) -> pd.DataFrame:
+    """Each order's earliest resting span that a trade printed through.
+
+    A span runs from a ``created`` or ``changed`` row that leaves size on the
+    book to the order's next row, or to *end_ns*.  It is stale when a trade
+    prints through its price more than *grace* before the span ends.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns ``id``, ``is_ask``, ``price`` (ticks), ``disproved_ns`` and
+        ``end_ns``; one row per stale order.
+    """
+    empty = pd.DataFrame(
+        {
+            "id": pd.Series(dtype=np.int64),
+            "is_ask": pd.Series(dtype=bool),
+            "price": pd.Series(dtype=np.float64),
+            "disproved_ns": pd.Series(dtype=np.int64),
+            "end_ns": pd.Series(dtype=np.int64),
+        }
+    )
+    rows = events
+    if "type" in rows.columns:
+        # Market orders never rest; the price-level rebuild skips them too.
+        rows = rows[rows["type"] != "market"]
+    if rows.empty or trades.empty:
+        return empty
+    rows = rows.sort_values(["id", *time_order_keys(rows)], kind="stable")
+
+    ids = rows["id"].to_numpy()
+    ts = rows["timestamp"].astype("int64").to_numpy()
+    ends = np.full(ts.size, end_ns, dtype=np.int64)
+    same_order = ids[1:] == ids[:-1]
+    ends[:-1] = np.where(same_order, ts[1:], end_ns)
+
+    # A non-positive price is not a tradeable level, so no trade can print
+    # through it.
+    resting = (
+        (rows["action"] != "deleted").to_numpy()
+        & (rows["volume"] > 0).to_numpy()
+        & (rows["price"] > 0).to_numpy()
+    )
+    ids, ts, ends = ids[resting], ts[resting], ends[resting]
+    prices = rows["price"].to_numpy(dtype=np.float64)[resting]
+    is_ask = (rows["direction"] == "ask").to_numpy()[resting]
+
+    ordered = trades.sort_values("timestamp", kind="stable")
+    t_ns = ordered["timestamp"].astype("int64").to_numpy()
+    t_px = ordered["price"].to_numpy(dtype=np.float64)
+
+    # Only trades strictly after the row count: a trade stamped in the same
+    # instant as the row cannot be put before or after it.  And only trades
+    # more than *grace* before the span ends, so an order the venue reports
+    # promptly is never flagged.
+    lo = np.searchsorted(t_ns, ts, side="right")
+    hi = np.searchsorted(t_ns, ends - int(grace.value), side="left")
+    has_trades = hi > lo
+    if not has_trades.any():
+        return empty
+    lo, hi = lo[has_trades], hi[has_trades]
+    ids, ends = ids[has_trades], ends[has_trades]
+    prices, is_ask = prices[has_trades], is_ask[has_trades]
+
+    highest = _range_extreme(t_px, lo, hi, highest=True)
+    lowest = _range_extreme(t_px, lo, hi, highest=False)
+    through = np.where(is_ask, highest > prices, lowest < prices)
+    if not through.any():
+        return empty
+
+    disproved = []
+    for i in np.nonzero(through)[0]:
+        window = t_px[lo[i] : hi[i]]
+        hit = window > prices[i] if is_ask[i] else window < prices[i]
+        disproved.append(t_ns[lo[i] + int(np.argmax(hit))])
+
+    spans = pd.DataFrame(
+        {
+            "id": ids[through],
+            "is_ask": is_ask[through],
+            "price": prices[through],
+            "disproved_ns": np.asarray(disproved, dtype=np.int64),
+            "end_ns": ends[through],
+        }
+    )
+    first = spans.groupby("id", sort=False)["disproved_ns"].idxmin()
+    return spans.loc[first].reset_index(drop=True)
+
+
+def _stale_orders(
+    spans: pd.DataFrame, best: pd.DataFrame, end_ns: int, tick_size: float
+) -> tuple[StaleOrder, ...]:
+    """Measure how long each stale span held the touch, worst first."""
+    bt = best["timestamp"].astype("int64").to_numpy()
+    held_until = np.append(bt[1:], end_ns)
+    touch = {True: best["best_ask"].to_numpy(), False: best["best_bid"].to_numpy()}
+    found = []
+    for oid, is_ask, price, disproved, end in zip(
+        spans["id"].to_numpy(),
+        spans["is_ask"].to_numpy(),
+        spans["price"].to_numpy(),
+        spans["disproved_ns"].to_numpy(),
+        spans["end_ns"].to_numpy(),
+        strict=True,
+    ):
+        overlap = np.minimum(held_until, end) - np.maximum(bt, disproved)
+        at_touch = (touch[bool(is_ask)] == price) & (overlap > 0)
+        found.append(
+            StaleOrder(
+                id=int(oid),
+                direction="ask" if is_ask else "bid",
+                price=float(ticks_to_price(price, tick_size)),
+                disproved_at=pd.Timestamp(int(disproved), tz="UTC"),
+                stale_seconds=int(end - disproved) / 1e9,
+                touch_seconds=float(overlap[at_touch].sum()) / 1e9,
+            )
+        )
+    found.sort(key=lambda o: (o.touch_seconds, o.stale_seconds), reverse=True)
+    return tuple(found)
+
+
+def detect_stale_orders(
+    events: pd.DataFrame,
+    trades: pd.DataFrame,
+    *,
+    grace: pd.Timedelta = STALE_GRACE,
+    depth: pd.DataFrame | None = None,
+    tick_size: float = 1.0,
+) -> tuple[StaleOrder, ...]:
+    """Find resting orders a trade printed through that the venue left in place.
+
+    A trade above a resting ask, or below a resting bid, shows that the order
+    had already left the book: a matching engine fills the better price first.
+    The venue normally reports the order within milliseconds.  An order it does
+    not report again within *grace* stays in the rebuilt book although it is no
+    longer at the venue, and distorts the spread, the depth and the queue from
+    then on.
+
+    This only reports.  It does not change what :func:`order_book` returns: the
+    test needs to know what the feed said *after* the trade, which a live
+    capture cannot know in time.
+
+    Parameters
+    ----------
+    events : pandas.DataFrame
+        Order events with ``id``, ``timestamp``, ``price``, ``volume``,
+        ``direction`` and ``action``.  Rows typed ``market`` (see
+        :func:`set_order_types`) are skipped when a ``type`` column is present.
+    trades : pandas.DataFrame
+        Trades with ``timestamp`` and ``price``, in the same price units as
+        *events*.
+    grace : pandas.Timedelta, optional
+        How long after the trade the venue may take to report the order.
+        Defaults to :data:`STALE_GRACE` (one second).
+    depth : pandas.DataFrame, optional
+        The faithful price-level-volume frame, used to measure how long each
+        stale order held the touch.  Computed from *events* with
+        :func:`~ob_analytics.depth.price_level_volume` when ``None`` and an
+        order is found.
+    tick_size : float, optional
+        Quote-currency size of one price tick, so the reported prices read in
+        the quote currency.  Leave at ``1.0`` to report them in the units of
+        ``events["price"]``.
+
+    Returns
+    -------
+    tuple of StaleOrder
+        Worst first: the longest time at the touch, then the longest time
+        stale.  Empty when the venue reported every order in time.
+    """
+    validate_columns(
+        events,
+        {"id", "timestamp", "price", "volume", "direction", "action"},
+        "detect_stale_orders(events)",
+    )
+    validate_columns(trades, {"timestamp", "price"}, "detect_stale_orders(trades)")
+    if events.empty or trades.empty:
+        return ()
+    end_ns = _capture_end_ns(events, trades)
+    spans = _stale_spans(events, trades, grace, end_ns)
+    if spans.empty:
+        return ()
+    if depth is None:
+        depth = price_level_volume(events)
+    return _stale_orders(spans, _faithful_best_series(depth), end_ns, tick_size)
+
+
 class Severity(str, Enum):
     """How much a failed data-quality check matters.
 
@@ -896,6 +1182,12 @@ class DataQualitySummary:
     exchange_time_reordered : int
         Steps where the venue clock goes backwards while the receive clock
         moves forward: messages that reached the capture out of order.
+    stale_orders : tuple of StaleOrder
+        Resting orders a trade printed through that the venue did not report
+        again within :data:`STALE_GRACE`, worst first (see
+        :func:`detect_stale_orders`).  Each one stays in the rebuilt book after
+        it has gone, so a diff feed's crossing is then partly this defect
+        rather than the feed's normal lag.
     """
 
     feed_type: FeedType
@@ -917,6 +1209,7 @@ class DataQualitySummary:
     negative_volume_rows: int = 0
     exchange_time_after_receive: int = 0
     exchange_time_reordered: int = 0
+    stale_orders: tuple[StaleOrder, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         """Return the summary as a plain, JSON-serialisable dict."""
@@ -940,6 +1233,7 @@ class DataQualitySummary:
             "negative_volume_rows": self.negative_volume_rows,
             "exchange_time_after_receive": self.exchange_time_after_receive,
             "exchange_time_reordered": self.exchange_time_reordered,
+            "stale_orders": [o.to_dict() for o in self.stale_orders],
             "ok": self.ok,
             "checks": [c.to_dict() for c in self.checks],
         }
@@ -953,8 +1247,23 @@ class DataQualitySummary:
                 else "UNEXPECTED for a matched book — check reconstruction/data"
             )
         if self.feed_type == FeedType.DIFF_FEED:
+            if self.stale_orders:
+                return (
+                    f"diff feed, but {len(self.stale_orders)} stale resting "
+                    "order(s) stay in the book — see stale resting orders"
+                )
             return "expected for a diff feed — faithful replay, not a bug"
         return "feed type undeclared"
+
+    def _worst_stale(self) -> str:
+        """The worst stale order: its id, side, price and time at the touch."""
+        worst = self.stale_orders[0]
+        return (
+            f"{worst.direction} {worst.id} at {_format_price(worst.price)} held "
+            f"the {worst.direction} touch for "
+            f"{_format_duration(worst.touch_seconds)} after a trade printed "
+            "through it"
+        )
 
     @property
     def checks(self) -> tuple[QualityCheck, ...]:
@@ -1044,6 +1353,16 @@ class DataQualitySummary:
                 "mid-session means the stream lost messages",
             ),
             QualityCheck(
+                "stale_orders",
+                not self.stale_orders,
+                Severity.WARNING,
+                f"{len(self.stale_orders)} resting order(s) a trade printed "
+                "through and the venue did not report again within "
+                f"{STALE_GRACE.total_seconds():g} s; each stays in the rebuilt "
+                "book after it has gone"
+                + (f". Worst: {self._worst_stale()}" if self.stale_orders else ""),
+            ),
+            QualityCheck(
                 "nonpositive_price",
                 self.nonpositive_price_rows == 0,
                 Severity.WARNING,
@@ -1107,6 +1426,10 @@ class DataQualitySummary:
                 f"  crossed resting book  : {self.crossed_pct:.2f}% of session "
                 f"({self.crossed_episodes} episode(s)) [{self._crossed_note()}]"
             ),
+            (
+                f"  stale resting orders  : {len(self.stale_orders)}"
+                + (f" (worst: {self._worst_stale()})" if self.stale_orders else "")
+            ),
             f"  unmatched trades      : {self.unmatched_trades_pct:.2f}%",
             f"  duplicate event ids   : {self.duplicate_event_ids}",
             f"  duplicate created ids : {self.duplicate_created_ids}",
@@ -1144,6 +1467,19 @@ class DataQualitySummary:
         else:
             lines.append("Checks: all passed")
         return "\n".join(lines)
+
+
+def _format_price(price: float) -> str:
+    """A price with thousands separators and only the decimals it needs."""
+    decimals = next((d for d in range(9) if round(price, d) == price), 8)
+    return f"{price:,.{decimals}f}"
+
+
+def _format_duration(seconds: float) -> str:
+    """A duration in the largest unit that keeps it readable."""
+    if seconds >= 60:
+        return f"{seconds / 60:.1f} min"
+    return f"{seconds:.1f} s"
 
 
 def _clock_order_counts(frame: pd.DataFrame) -> tuple[int, int]:
@@ -1189,6 +1525,7 @@ def data_quality_summary(
     *,
     feed_type: FeedType = FeedType.UNKNOWN,
     depth: pd.DataFrame | None = None,
+    tick_size: float = 1.0,
 ) -> DataQualitySummary:
     """Summarise the data quality of one reconstructed session.
 
@@ -1216,6 +1553,10 @@ def data_quality_summary(
         When ``None`` it is computed from *events* via
         :func:`~ob_analytics.depth.price_level_volume`.  **Do not** pass
         ``depth_summary`` — that is already uncrossed and would report ~0%.
+    tick_size : float, optional
+        Quote-currency size of one price tick (``PipelineResult.config.tick_size``),
+        so the prices in ``stale_orders`` read in the quote currency.  Leave at
+        ``1.0`` to report them in ticks.
 
     Returns
     -------
@@ -1241,13 +1582,27 @@ def data_quality_summary(
     if depth is None:
         depth = events if l2 else price_level_volume(events)
 
-    if depth.empty:
+    best = None if depth.empty else _faithful_best_series(depth)
+    if best is None:
         crossed_pct, crossed_episodes = 0.0, 0
     else:
-        crossed_frac, crossed_episodes = _crossed_time_fraction(
-            _faithful_best_series(depth)
-        )
+        crossed_frac, crossed_episodes = _crossed_time_fraction(best)
         crossed_pct = 100.0 * crossed_frac
+
+    # Stale resting orders need per-order events and priced, timed trades.  An
+    # L2 run has neither, and a trades frame without prices has nothing to
+    # print through a resting order.
+    stale_orders: tuple[StaleOrder, ...] = ()
+    if (
+        best is not None
+        and not l2
+        and not trades.empty
+        and {"timestamp", "price"} <= set(trades.columns)
+    ):
+        end_ns = _capture_end_ns(events, trades)
+        spans = _stale_spans(events, trades, STALE_GRACE, end_ns)
+        if not spans.empty:
+            stale_orders = _stale_orders(spans, best, end_ns, tick_size)
 
     n_trades = len(trades)
     if n_trades and not l2:
@@ -1316,4 +1671,5 @@ def data_quality_summary(
         negative_volume_rows=negative_volume_rows,
         exchange_time_after_receive=after_receive,
         exchange_time_reordered=reordered,
+        stale_orders=stale_orders,
     )
