@@ -326,6 +326,20 @@ class TestRestPoll:
         # t1 counted once (not re-emitted on the second poll) + t2 = 2.
         assert result.n_trade_events == 2
 
+    def test_rest_poll_drops_trades_before_the_opening_book(self, tmp_path):
+        # The first poll of a REST tape returns the venue's recent history.
+        # A trade older than the opening book would otherwise be stamped with
+        # the capture's receive time, as if it had just happened.
+        snap = {"bids": [[100.0, 5.0]], "asks": [[101.0, 4.0]], "timestamp": 5_000}
+        old = {"id": "old", "timestamp": 1_000, "price": 100.0, "amount": 1.0}
+        new = {"id": "new", "timestamp": 6_000, "price": 100.0, "amount": 1.0}
+        ex = _FakeCcxtExchange(snap, [], [[old, new]], ws=False)
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="X", out_dir=out, minutes=0.05)
+        result = asyncio.run(run_capturer(_source(ex, poll_interval=0.0), cfg))
+        assert result.n_trade_events == 1
+        assert pd.read_csv(out / "trades.csv")["trade_id"].tolist() == ["new"]
+
 
 # ---------------------------------------------------------------------------
 # ccxt-dependent (skipped without the extra)
@@ -344,3 +358,91 @@ class TestCcxtInstalled:
         from ob_analytics.sources import list_sources
 
         assert "ccxt" in list_sources()
+
+
+_PREDICTION_INSTALLED = (
+    _CCXT_INSTALLED and importlib.util.find_spec("ccxt.prediction") is not None
+)
+
+
+@pytest.mark.skipif(
+    not _PREDICTION_INSTALLED, reason="ccxt release without ccxt.prediction"
+)
+class TestPredictionVenues:
+    """CCXT's prediction markets live in ``ccxt.prediction``, not ``ccxt.pro``."""
+
+    def test_plain_id_reaches_a_prediction_market(self):
+        import ccxt.prediction
+
+        from ob_analytics.live.ccxt_source import _make_exchange
+
+        assert isinstance(_make_exchange("kalshi"), ccxt.prediction.kalshi)
+
+    def test_plain_id_prefers_the_crypto_exchange(self):
+        import ccxt.prediction
+        import ccxt.pro
+
+        from ob_analytics.live.ccxt_source import _make_exchange
+
+        # binance is both; the plain id keeps meaning the crypto exchange.
+        assert isinstance(_make_exchange("binance"), ccxt.pro.binance)
+        assert isinstance(_make_exchange("prediction/binance"), ccxt.prediction.binance)
+
+    def test_prefix_only_searches_prediction_markets(self):
+        from ob_analytics.live.ccxt_source import _make_exchange
+
+        with pytest.raises(ValueError, match="Unknown CCXT exchange"):
+            _make_exchange("prediction/kraken")
+
+    def test_venue_column_drops_the_prefix(self, tmp_path):
+        cap = _source("prediction/kalshi")
+        cap._configure(CaptureConfig(pair="KXTEST", out_dir=tmp_path))
+        assert cap._identity()["venue"] == "kalshi"
+
+
+# ---------------------------------------------------------------------------
+# Tick size, recorded for the replay
+# ---------------------------------------------------------------------------
+
+
+class _FakeWithMetadata(_FakeCcxtExchange):
+    """A fake exchange that also answers CCXT's market-metadata lookups."""
+
+    def __init__(self, *args, precision, mode, lookup="market", **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.precisionMode = mode
+        setattr(self, lookup, lambda symbol: {"precision": {"price": precision}})
+
+
+_TICK_SNAPSHOT = {"bids": [[100.0, 5.0]], "asks": [[101.0, 4.0]], "timestamp": 1_000}
+
+
+class TestTickSize:
+    def _meta_tick(self, exchange, tmp_path):
+        import json
+
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="X", out_dir=out, minutes=0.05)
+        asyncio.run(run_capturer(_source(exchange), cfg))
+        return json.loads((out / "meta.json").read_text())["tick_size"]
+
+    def test_tick_size_mode_is_the_tick(self, tmp_path):
+        ex = _FakeWithMetadata(_TICK_SNAPSHOT, precision=0.001, mode=4)
+        assert self._meta_tick(ex, tmp_path) == 0.001
+
+    def test_prediction_outcome_is_looked_up(self, tmp_path):
+        ex = _FakeWithMetadata(
+            _TICK_SNAPSHOT, precision=0.001, mode=4, lookup="outcome"
+        )
+        assert self._meta_tick(ex, tmp_path) == 0.001
+
+    def test_decimal_places_mode_is_converted(self, tmp_path):
+        ex = _FakeWithMetadata(_TICK_SNAPSHOT, precision=2, mode=2)
+        assert self._meta_tick(ex, tmp_path) == 0.01
+
+    def test_significant_digits_has_no_grid(self, tmp_path):
+        ex = _FakeWithMetadata(_TICK_SNAPSHOT, precision=5, mode=3)
+        assert self._meta_tick(ex, tmp_path) is None
+
+    def test_no_metadata_records_none(self, tmp_path):
+        assert self._meta_tick(_FakeCcxtExchange(_TICK_SNAPSHOT), tmp_path) is None

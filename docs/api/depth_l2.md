@@ -19,3 +19,5 @@ per-order stages (see [`Level`](protocols.md)).
 ::: ob_analytics.depth_l2.DepthCsvWriter
 
 ::: ob_analytics.depth_l2.DepthCsvSource
+
+::: ob_analytics.depth_l2.recorded_tick_size

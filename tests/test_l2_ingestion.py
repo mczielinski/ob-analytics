@@ -157,6 +157,29 @@ class TestL2DepthLoader:
         with pytest.raises(ConfigError, match="missing required columns"):
             L2DepthLoader().load(tmp_path)
 
+    def test_off_grid_price_raises(self, tmp_path):
+        # 0.036 is not a whole number of the default 0.01 ticks; rounding it
+        # to 0.04 would move the level without a word.
+        _write_l2_dir(tmp_path, [(_BASE_MS, "bid", 0.036, 1.0)])
+        with pytest.raises(ConfigError, match="not whole multiples of tick_size"):
+            L2DepthLoader().load(tmp_path)
+
+    def test_finer_tick_keeps_the_price(self, tmp_path):
+        from ob_analytics.config import PipelineConfig
+
+        _write_l2_dir(tmp_path, [(_BASE_MS, "bid", 0.036, 1.0)])
+        depth = L2DepthLoader(PipelineConfig(tick_size=0.001)).load(tmp_path)
+        assert depth["price"].tolist() == [36]
+
+    def test_off_grid_trade_price_raises(self, tmp_path):
+        _write_l2_dir(
+            tmp_path,
+            [(_BASE_MS, "bid", 0.03, 1.0)],
+            [{"timestamp": _BASE_MS, "price": 0.037, "volume": 1.0}],
+        )
+        with pytest.raises(ConfigError, match="L2TradeReader"):
+            L2TradeReader().load(pd.DataFrame(), tmp_path)
+
     def test_missing_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
             L2DepthLoader().load(tmp_path)
@@ -408,6 +431,26 @@ class TestL2Gallery:
         plt.close(fig)
 
 
+class TestRecordedTickSize:
+    def test_reads_meta_json(self, tmp_path):
+        from ob_analytics.depth_l2 import recorded_tick_size
+
+        (tmp_path / "meta.json").write_text('{"tick_size": 0.001}')
+        assert recorded_tick_size(tmp_path) == 0.001
+        # A file inside the capture directory finds it too.
+        (tmp_path / "depth.csv").write_text("")
+        assert recorded_tick_size(tmp_path / "depth.csv") == 0.001
+
+    def test_none_without_a_recorded_value(self, tmp_path):
+        from ob_analytics.depth_l2 import recorded_tick_size
+
+        assert recorded_tick_size(tmp_path) is None  # no meta.json
+        (tmp_path / "meta.json").write_text('{"tick_size": null}')
+        assert recorded_tick_size(tmp_path) is None
+        (tmp_path / "meta.json").write_text("not json")
+        assert recorded_tick_size(tmp_path) is None
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -436,6 +479,26 @@ class TestL2CLI:
         assert (out / "depth.parquet").exists()
         assert (out / "depth_summary.parquet").exists()
         assert (out / "events.parquet").exists()  # empty but written
+
+    def test_process_uses_the_recorded_tick_size(self, cli_runner, tmp_path):
+        import json
+
+        from ob_analytics.data import load_data
+
+        src = tmp_path / "src"
+        src.mkdir()
+        _write_l2_dir(
+            src, [(_BASE_MS, "bid", 0.036, 1.0), (_BASE_MS, "ask", 0.039, 2.0)]
+        )
+        (src / "meta.json").write_text(json.dumps({"tick_size": 0.001}))
+        out = tmp_path / "out"
+        r = cli_runner(
+            "process", str(src), "--source", "depth_csv", "--output", str(out)
+        )
+        assert r.returncode == 0, r.stderr
+        depth = load_data(out)["depth"]
+        assert depth.attrs["tick_size"] == 0.001
+        assert sorted(depth["price"].tolist()) == [36, 39]
 
     def test_validate_runs(self, cli_runner, tmp_path):
         src = tmp_path / "src"
