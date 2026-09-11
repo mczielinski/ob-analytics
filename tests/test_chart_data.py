@@ -605,6 +605,22 @@ class TestPrepareVolumePercentiles:
         assert len(data["asks_cols"]) == 20
         assert len(data["bids_cols"]) == 20
 
+    def test_empty_window_keeps_the_bin_columns(
+        self, sample_depth_summary: pd.DataFrame
+    ) -> None:
+        # A window before the data: pivoting the empty frame used to drop the
+        # bin columns, so selecting them raised KeyError.
+        t0 = sample_depth_summary["timestamp"].min()
+        data = prepare_volume_percentiles_data(
+            sample_depth_summary,
+            start_time=t0 - pd.Timedelta(hours=2),
+            end_time=t0 - pd.Timedelta(hours=1),
+        )
+        assert data["asks_cumsum"].empty
+        assert data["bids_cumsum_neg"].empty
+        assert data["asks_cumsum"].columns.tolist() == data["asks_cols"]
+        assert len(data["asks_cols"]) == 20
+
     def test_palette_is_sequential_luminance(self) -> None:
         from ob_analytics.visualization._data import _volume_percentile_palette
 

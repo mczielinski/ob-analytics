@@ -881,8 +881,10 @@ def plotly_liquidity_at_touch_per_order(data: dict) -> Any:
 def plotly_price_view(data: dict) -> Any:
     """L2 price view: spread ribbon + volume-weighted microprice over time."""
     go = _import_plotly()
-    fig = _base_figure(go, title="Price view — spread ribbon + microprice")
     ts = data["timestamp"]
+    if len(ts) == 0:
+        return _base_figure(go, title="Price view (no data)")
+    fig = _base_figure(go, title="Price view — spread ribbon + microprice")
 
     # Ribbon: best bid (no fill) then best ask filled down to it.
     fig.add_trace(
@@ -1197,6 +1199,8 @@ def plotly_volume_percentiles(data: dict) -> Any:
     volume_scale = data["volume_scale"]
     side_line = data["side_line"]
 
+    if asks_cumsum.empty:
+        return _base_figure(go, title="Volume Percentiles (no data)")
     fig = _base_figure(go, title="Volume Percentiles")
 
     # Convert matplotlib RGBA tuples to plotly rgb strings

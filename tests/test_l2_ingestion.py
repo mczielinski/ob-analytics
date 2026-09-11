@@ -66,6 +66,34 @@ def toy_l2_result(toy_l2_dir):
     return Pipeline.from_source("depth_csv").run(toy_l2_dir)
 
 
+@pytest.fixture
+def sparse_l2_result(tmp_path):
+    """A short, sparse price-level capture: a snapshot, then 6 updates in 70 s.
+
+    The gallery's summary faces drop the first minute of the depth summary,
+    so they get only the rows at 68-70 s, while the zoom window from the
+    depth clock ends at 52.5 s.
+    """
+    snapshot = [
+        row
+        for i in range(80)
+        for row in (
+            (_BASE_MS, "bid", 50.0 - i * 0.01, 10.0 + i),
+            (_BASE_MS, "ask", 50.01 + i * 0.01, 10.0 + i),
+        )
+    ]
+    updates = [
+        (_BASE_MS + 10_000, "bid", 50.0, 25.0),
+        (_BASE_MS + 25_000, "ask", 50.01, 5.0),
+        (_BASE_MS + 40_000, "bid", 49.99, 0.0),
+        (_BASE_MS + 68_000, "ask", 50.02, 30.0),
+        (_BASE_MS + 69_000, "bid", 50.0, 12.0),
+        (_BASE_MS + 70_000, "ask", 50.01, 8.0),
+    ]
+    _write_l2_dir(tmp_path, snapshot + updates)
+    return Pipeline.from_source("depth_csv").run(tmp_path)
+
+
 # ---------------------------------------------------------------------------
 # Source descriptor + registration
 # ---------------------------------------------------------------------------
@@ -373,39 +401,51 @@ class TestL2Gallery:
         assert out.exists()
 
     @pytest.mark.parametrize("concept", ["price_view", "volume_percentiles"])
-    def test_summary_faces_render_on_sparse_capture(self, tmp_path, concept):
+    def test_summary_faces_render_on_sparse_capture(self, sparse_l2_result, concept):
         """A short, sparse capture still draws the depth-summary faces.
 
-        An opening snapshot, then a few updates over 70 s.  The zoom window
-        (from the depth clock) ends at 52.5 s, but these faces drop the first
-        minute of the summary, so their data starts at 68 s.  Before the fix
-        both faces got zero rows and raised, and the gallery dropped them.
+        Before the fix both faces got zero rows (the zoom window ended before
+        their data started) and raised, and the gallery dropped them.
         """
         import matplotlib.pyplot as plt
 
         from ob_analytics.visualization import plot_result
 
-        snapshot = [
-            row
-            for i in range(80)
-            for row in (
-                (_BASE_MS, "bid", 50.0 - i * 0.01, 10.0 + i),
-                (_BASE_MS, "ask", 50.01 + i * 0.01, 10.0 + i),
-            )
-        ]
-        updates = [
-            (_BASE_MS + 10_000, "bid", 50.0, 25.0),
-            (_BASE_MS + 25_000, "ask", 50.01, 5.0),
-            (_BASE_MS + 40_000, "bid", 49.99, 0.0),
-            (_BASE_MS + 68_000, "ask", 50.02, 30.0),
-            (_BASE_MS + 69_000, "bid", 50.0, 12.0),
-            (_BASE_MS + 70_000, "ask", 50.01, 8.0),
-        ]
-        _write_l2_dir(tmp_path, snapshot + updates)
-        result = Pipeline.from_source("depth_csv").run(tmp_path)
-
-        fig = plot_result(result, concept, backend="matplotlib")
+        fig = plot_result(sparse_l2_result, concept, backend="matplotlib")
         plt.close(fig)
+
+    @pytest.mark.parametrize("backend", ["matplotlib", "plotly"])
+    @pytest.mark.parametrize("concept", ["price_view", "volume_percentiles"])
+    def test_summary_faces_draw_no_data_on_an_empty_window(
+        self, sparse_l2_result, concept, backend
+    ):
+        """A window the caller passes that holds no rows gives a "no data" figure.
+
+        Before the fix, price_view raised a TypeError (matplotlib) and
+        volume_percentiles raised a KeyError (both backends).
+        """
+        import matplotlib.pyplot as plt
+
+        from ob_analytics.visualization import plot_result
+
+        if backend == "plotly":
+            pytest.importorskip("plotly")
+        t0 = sparse_l2_result.depth["timestamp"].min()
+        fig = plot_result(
+            sparse_l2_result,
+            concept,
+            backend=backend,
+            start_time=t0 - pd.Timedelta(hours=2),
+            end_time=t0 - pd.Timedelta(hours=1),
+        )
+        if backend == "matplotlib":
+            # The theme places titles on the left; read every slot.
+            ax = fig.axes[0]
+            title = " ".join(ax.get_title(loc=s) for s in ("left", "center", "right"))
+            plt.close(fig)
+        else:
+            title = fig.layout.title.text
+        assert "no data" in title
 
 
 # ---------------------------------------------------------------------------
