@@ -257,6 +257,15 @@ class TestPlotlyEventMap:
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 1
 
+    def test_empty_window_draws_no_data(self, sample_events: pd.DataFrame) -> None:
+        data = prepare_event_map_data(
+            sample_events,
+            start_time=pd.Timestamp("2015-05-01 00:00:00"),
+            end_time=pd.Timestamp("2015-05-01 00:30:00"),
+        )
+        fig = plotly_event_map(data)
+        assert "no data" in fig.layout.title.text
+
 
 class TestPlotlyVolumeMap:
     def test_returns_plotly_figure(self, sample_events: pd.DataFrame) -> None:
@@ -519,6 +528,16 @@ class TestPlotlyEventsHistogram:
         data = prepare_events_histogram_data(sample_events, val="price")
         fig = plotly_events_histogram(data)
         assert isinstance(fig, go.Figure)
+
+    def test_empty_window_draws_no_data(self, sample_events: pd.DataFrame) -> None:
+        data = prepare_events_histogram_data(
+            sample_events,
+            start_time=pd.Timestamp("2015-05-01 00:00:00"),
+            end_time=pd.Timestamp("2015-05-01 00:30:00"),
+            val="price",
+        )
+        fig = plotly_events_histogram(data)
+        assert "no data" in fig.layout.title.text
 
 
 class TestPlotlyVpin:

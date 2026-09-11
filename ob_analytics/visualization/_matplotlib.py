@@ -453,6 +453,9 @@ def mpl_event_map(
     col_pal = {"bid": _BID_COLOR, "ask": _ASK_COLOR}
 
     fig, ax = _create_axes(ax, figsize=(10, 6), theme=theme)
+    if events.empty:
+        ax.set_title("Limit Order Event Map (no data)")
+        return fig
 
     sns.scatterplot(
         data=created,
@@ -1440,6 +1443,9 @@ def mpl_events_histogram(
     bw = data["bw"]
 
     fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
+    if events.empty:
+        ax.set_title(f"Events {val} distribution (no data)")
+        return fig
     # Overlaid step outlines instead of dodged bars: dodging splits each bin
     # into side-by-side combs that misread as a finer x-resolution; layered
     # steps compare the bid and ask distributions bin-for-bin.

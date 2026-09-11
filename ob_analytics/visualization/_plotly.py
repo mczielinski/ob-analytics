@@ -329,6 +329,8 @@ def plotly_event_map(data: dict) -> Any:
     created = data["created"]
     deleted = data["deleted"]
 
+    if data["events"].empty:
+        return _base_figure(go, title="Limit Order Event Map (no data)")
     fig = _base_figure(go, title="Limit Order Event Map")
 
     col_map = {"bid": _BID_COLOR, "ask": _ASK_COLOR}
@@ -1273,6 +1275,8 @@ def plotly_events_histogram(data: dict) -> Any:
     val = data["val"]
     bw = data["bw"]
 
+    if events.empty:
+        return _base_figure(go, title=f"Events {val} distribution (no data)")
     fig = _base_figure(go, title=f"Events {val} distribution")
 
     for direction, color in [("bid", _BID_COLOR), ("ask", _ASK_COLOR)]:

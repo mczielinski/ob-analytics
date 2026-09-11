@@ -253,7 +253,8 @@ def _price_axis_breaks(
 ) -> tuple[float, np.ndarray]:
     """Compute tick step and break array for a price axis."""
     price_range = price_max - price_min
-    if price_range <= 0:
+    # ``not > 0`` (rather than ``<= 0``) also catches NaN, the range of zero rows.
+    if not price_range > 0:
         return 1.0, np.array([price_min])
     price_by = 10 ** round(np.log10(price_range) - 1)
     y_breaks = np.arange(
