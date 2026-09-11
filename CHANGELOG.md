@@ -25,6 +25,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   session. See ["Capture live
   data"](https://mczielinski.github.io/ob-analytics/howto/live-capture/).
 
+- **`audit` names stale resting orders** (#234). A trade above a resting ask,
+  or below a resting bid, shows that the order has gone. An order the venue
+  then does not report again within one second is now reported as a
+  `stale_orders` warning, and the worst one is named with its id, side, price
+  and how long it held the touch. On the bundled Bitstamp sample this names
+  ask `2002347646152704`, which held the ask touch for 27 minutes and causes
+  almost all of the 91.6% crossed time. The crossing note no longer calls a
+  diff feed's crossing normal when the run has stale orders. Nothing is
+  removed: `order_book()` still replays what the feed said. New public names:
+  `detect_stale_orders`, `StaleOrder`, `DataQualitySummary.stale_orders`, and a
+  `tick_size=` argument on `data_quality_summary`.
+
 - **A metric registry, so a user metric runs and plots with no core edit**
   (#140). A metric is a plain object with a `name`, a `title`, the `levels` it
   applies to, `compute(result)` and `prepare(frame)` — no base class to

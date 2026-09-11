@@ -131,6 +131,7 @@ def _cmd_audit(args: argparse.Namespace) -> None:
         result.trades,
         feed_type=feed_type,
         depth=result.depth,
+        tick_size=result.config.tick_size,
     )
 
     if args.json:

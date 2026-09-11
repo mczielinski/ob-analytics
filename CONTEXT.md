@@ -122,6 +122,13 @@ _Avoid_: mid market, fair value
 A state where the best bid is at or above the best ask. Expected in a diff
 feed; a fault in a matched book.
 
+**Stale order**:
+A resting order that a trade printed through, and that the venue did not report
+again within a grace period (one second by default). The trade shows the order
+has gone, but the faithful book still holds it. Reported by `audit`, never
+removed. Found by `detect_stale_orders`.
+_Avoid_: ghost order, zombie order
+
 **Book snapshot**:
 The resting book at one point in time, as separate bid and ask tables.
 _Avoid_: state, image, frame

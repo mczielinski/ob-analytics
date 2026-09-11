@@ -82,7 +82,8 @@ book were never named again by an order event or a trade. Most of these are
 far from the touch and did not trade during the run, so a large number is
 normal. Compare it with the size of the opening book, then look at the
 unconfirmed orders near the touch. An unconfirmed order that trades print
-through was not really on the book. L2 captures report `null`, because a price
+through was not really on the book; [`ob-analytics audit`](audit.md) reports
+these as `stale_orders`. L2 captures report `null`, because a price
 level has no id that the stream could confirm.
 
 ## Adding a new venue

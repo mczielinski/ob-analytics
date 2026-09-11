@@ -40,8 +40,10 @@ from ob_analytics.analytics import (
     QualityCheck,
     SequenceGapReport,
     Severity,
+    StaleOrder,
     data_quality_summary,
     detect_sequence_gaps,
+    detect_stale_orders,
 )
 
 # Importing the source modules fires their register_source(...) self-registration
@@ -185,6 +187,7 @@ __all__ = [
     "Severity",
     "Source",
     "SourceSettings",
+    "StaleOrder",
     "TradeSource",
     "__version__",
     # ── Trade-sign classification ────────────────────────────────────
@@ -196,6 +199,7 @@ __all__ = [
     # ── Data quality ─────────────────────────────────────────────────
     "data_quality_summary",
     "detect_sequence_gaps",
+    "detect_stale_orders",
     "get_metric",
     "get_source",
     "group_by_instrument",
