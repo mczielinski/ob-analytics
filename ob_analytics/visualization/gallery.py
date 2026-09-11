@@ -126,6 +126,27 @@ def _auto_zoom_window(
     return (t_min + quarter, t_min + 2 * quarter)
 
 
+def _window_over(
+    frame: pd.DataFrame,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """Return (*start*, *end*) if it holds a row of *frame*, else *frame*'s span.
+
+    The shared zoom window comes from one clock (events or depth), but some
+    faces are given the depth summary with its first minute dropped.  On a
+    short or sparse capture the two need not overlap, and a window with no
+    rows leaves the face nothing to draw.  A zoom window derived from *frame*
+    alone would not fix that: its middle half can fall between two sparse
+    rows.  So the face keeps the shared window when it can, and otherwise
+    shows all of *frame*.  An empty *frame* returns the window unchanged.
+    """
+    ts = frame["timestamp"]
+    if ts.empty or ts.between(start, end).any():
+        return start, end
+    return ts.min(), ts.max()
+
+
 def _l2(
     key: str,
     title: str,
@@ -263,6 +284,9 @@ def _build_l2_gallery_model(
 
     offset = depth["timestamp"].min() + pd.Timedelta(minutes=1)
     depth_summary_offset = depth_summary[depth_summary["timestamp"] >= offset]
+    summary_start, summary_end = _window_over(
+        depth_summary_offset, zoom_start, zoom_end
+    )
 
     concepts: list[PlotConcept] = [
         _l2(
@@ -309,8 +333,8 @@ def _build_l2_gallery_model(
                 {
                     "depth_summary": depth_summary_offset,
                     "trades": trades,
-                    "start_time": zoom_start,
-                    "end_time": zoom_end,
+                    "start_time": summary_start,
+                    "end_time": summary_end,
                 },
                 note=(
                     "The spread as a ribbon (best bid to best ask) with the "
@@ -327,8 +351,8 @@ def _build_l2_gallery_model(
                 _viz_data.prepare_volume_percentiles_data,
                 {
                     "depth_summary": depth_summary_offset,
-                    "start_time": zoom_start,
-                    "end_time": zoom_end,
+                    "start_time": summary_start,
+                    "end_time": summary_end,
                     "volume_scale": volume_scale,
                 },
                 note=(
@@ -517,6 +541,9 @@ def build_gallery_model(
 
     offset = events["timestamp"].min() + pd.Timedelta(minutes=1)
     depth_summary_offset = depth_summary[depth_summary["timestamp"] >= offset]
+    summary_start, summary_end = _window_over(
+        depth_summary_offset, zoom_start, zoom_end
+    )
 
     concepts: list[PlotConcept] = [
         _paired(
@@ -721,8 +748,8 @@ def build_gallery_model(
                     {
                         "depth_summary": depth_summary_offset,
                         "events": events,
-                        "start_time": zoom_start,
-                        "end_time": zoom_end,
+                        "start_time": summary_start,
+                        "end_time": summary_end,
                         "volume_scale": volume_scale,
                     },
                 ),
@@ -751,8 +778,8 @@ def build_gallery_model(
                 _viz_data.prepare_volume_percentiles_data,
                 {
                     "depth_summary": depth_summary_offset,
-                    "start_time": zoom_start,
-                    "end_time": zoom_end,
+                    "start_time": summary_start,
+                    "end_time": summary_end,
                     "volume_scale": volume_scale,
                 },
                 note=(
@@ -771,8 +798,8 @@ def build_gallery_model(
                 {
                     "depth_summary": depth_summary_offset,
                     "trades": trades,
-                    "start_time": zoom_start,
-                    "end_time": zoom_end,
+                    "start_time": summary_start,
+                    "end_time": summary_end,
                 },
                 note=(
                     "The spread as a ribbon (best bid to best ask) with the "
