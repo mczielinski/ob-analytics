@@ -453,6 +453,9 @@ def mpl_event_map(
     col_pal = {"bid": _BID_COLOR, "ask": _ASK_COLOR}
 
     fig, ax = _create_axes(ax, figsize=(10, 6), theme=theme)
+    if events.empty:
+        ax.set_title("Limit Order Event Map (no data)")
+        return fig
 
     sns.scatterplot(
         data=created,
@@ -1063,6 +1066,9 @@ def mpl_price_view(
 ) -> Figure:
     """L2 price view: spread ribbon + volume-weighted microprice over time."""
     fig, ax = _create_axes(ax, figsize=(11, 6), theme=theme)
+    if len(data["timestamp"]) == 0:
+        ax.set_title("Price view (no data)")
+        return fig
     x = mdates.date2num(data["timestamp"])
     bid = data["best_bid_price"]
     ask = data["best_ask_price"]
@@ -1363,6 +1369,9 @@ def mpl_volume_percentiles(
     pl = 0.1 if perc_line else 0
 
     fig, ax = _create_axes(ax, figsize=(12, 8), theme=theme)
+    if asks_cumsum.empty:
+        ax.set_title("Volume Percentiles (no data)")
+        return fig
 
     # Plot date2num floats (not the DatetimeIndex) so the axis stays off
     # matplotlib's slow date unit-converter; format_time_axis sets the ticks.
@@ -1434,6 +1443,9 @@ def mpl_events_histogram(
     bw = data["bw"]
 
     fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
+    if events.empty:
+        ax.set_title(f"Events {val} distribution (no data)")
+        return fig
     # Overlaid step outlines instead of dodged bars: dodging splits each bin
     # into side-by-side combs that misread as a finer x-resolution; layered
     # steps compare the bid and ask distributions bin-for-bin.

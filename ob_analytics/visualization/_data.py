@@ -253,7 +253,8 @@ def _price_axis_breaks(
 ) -> tuple[float, np.ndarray]:
     """Compute tick step and break array for a price axis."""
     price_range = price_max - price_min
-    if price_range <= 0:
+    # ``not > 0`` (rather than ``<= 0``) also catches NaN, the range of zero rows.
+    if not price_range > 0:
         return 1.0, np.array([price_min])
     price_by = 10 ** round(np.log10(price_range) - 1)
     y_breaks = np.arange(
@@ -1424,7 +1425,9 @@ def prepare_volume_percentiles_data(
     *depth_summary*, so any ``depth_bps`` / ``depth_bins`` configuration works
     (the previous hardcoded 25–500 bps range raised ``KeyError`` for anything
     else).  ``volume_scale=None`` auto-infers a power-of-10 scale from the
-    aggregated bin volumes (after the time-window filter is applied).
+    aggregated bin volumes (after the time-window filter is applied).  A
+    window with no rows gives empty ``asks_cumsum`` / ``bids_cumsum_neg``
+    frames that keep the bin columns; the renderers draw a "no data" figure.
     """
     if start_time is None:
         start_time = depth_summary["timestamp"].iloc[0]
@@ -1525,9 +1528,10 @@ def prepare_volume_percentiles_data(
         values="liquidity",
     )
     # Touch -> far ordering: cumsum then stacks the near-touch bin first
-    # (adjacent to y=0) and accumulates outward.
-    asks_pivot = asks_pivot[ask_names_fmt]
-    bids_pivot = bids_pivot[bid_names_fmt]
+    # (adjacent to y=0) and accumulates outward.  reindex (not []) keeps the
+    # columns when the window holds no rows: pivoting an empty frame gives none.
+    asks_pivot = asks_pivot.reindex(columns=ask_names_fmt)
+    bids_pivot = bids_pivot.reindex(columns=bid_names_fmt)
 
     asks_cumsum = asks_pivot.cumsum(axis=1)
     bids_cumsum = bids_pivot.cumsum(axis=1)
