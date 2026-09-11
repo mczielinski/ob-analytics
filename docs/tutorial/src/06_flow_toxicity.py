@@ -213,7 +213,7 @@ from ob_analytics.flow_toxicity import compute_kyle_lambda
 
 kyle = compute_kyle_lambda(tape, window="30s")
 print(f"λ = {kyle.lambda_:.4f}   t = {kyle.t_stat:.2f}   R² = {kyle.r_squared:.3f}")
-kyle.regression_df.round(2)
+kyle.regression_df.round({"delta_price": 2, "signed_volume": 2})
 
 # %% [markdown]
 # The regression table is the anchor: the two calm-open windows carry
@@ -290,7 +290,7 @@ def amihud(trades: pd.DataFrame, freq: str = "30s") -> pd.DataFrame:
     return (ret / t["volume"]).resample(freq).mean().rename("amihud").reset_index()
 
 
-amihud(tape).dropna().round(5)
+amihud(tape).dropna().round({"amihud": 5})
 
 # %% [markdown]
 # It rises in the accumulation windows for the same reason λ does —
