@@ -35,7 +35,8 @@ timestamp   receive time — integer epoch (``config.timestamp_unit``) or any
             string :func:`pandas.to_datetime` understands
 side        ``bid`` / ``ask`` (``buy`` / ``sell`` and ``b`` / ``a`` accepted)
 price       price level (divided by ``config.price_divisor`` to the quote
-            currency, then stored as integer ``tick_size`` counts)
+            currency, then stored as integer ``tick_size`` counts; a price
+            that is not a whole number of ticks raises ``ConfigError``)
 volume      new absolute resting size at that level (``0`` = level removed)
 ======  ==================================================================
 
@@ -45,6 +46,7 @@ Column names are flexible: ``side`` / ``direction`` and ``volume`` / ``size``
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -112,6 +114,53 @@ def _first_present(columns: pd.Index, candidates: tuple[str, ...]) -> str | None
         if cand in lower:
             return lower[cand]
     return None
+
+
+# How far a price may sit from a whole number of ticks, in ticks, before it
+# counts as off the grid. Large enough to absorb float division noise
+# (0.036 / 0.001 is 35.99999999999999), far below any real price difference.
+_GRID_TOLERANCE = 1e-6
+
+
+def _to_ticks_on_grid(
+    raw_price: pd.Series, cfg: PipelineConfig, where: str
+) -> np.ndarray:
+    """Convert a raw feed price column to integer ticks, refusing off-grid prices.
+
+    :func:`~ob_analytics._utils.price_to_ticks` rounds to the nearest tick, so a
+    price finer than ``tick_size`` would be moved with no warning: 0.036 on the
+    default 0.01 grid becomes 0.04.  A price-level CSV does not carry its own
+    tick size, so a wrong one is easy to pass and cannot be seen afterwards.
+    """
+    quote = raw_price.astype(float) / cfg.price_divisor
+    in_ticks = quote.to_numpy() / cfg.tick_size
+    off_grid = np.abs(in_ticks - np.round(in_ticks)) > _GRID_TOLERANCE
+    if off_grid.any():
+        example = float(quote.to_numpy()[off_grid][0])
+        raise ConfigError(
+            f"{where}: {int(off_grid.sum())} price(s) are not whole multiples "
+            f"of tick_size={cfg.tick_size!r} (for example {example!r}). Set the "
+            "instrument's real tick size, e.g. PipelineConfig(tick_size=0.001, "
+            "price_decimals=3). A ccxt capture records it as tick_size in "
+            "meta.json, and `ob-analytics process` reads it from there."
+        )
+    return price_to_ticks(quote, cfg.tick_size)
+
+
+def recorded_tick_size(source: str | Path) -> float | None:
+    """Return the tick size a live capture recorded in its ``meta.json``.
+
+    *source* is the capture directory or a file inside it.  ``None`` when there
+    is no ``meta.json`` or it records no tick size: a capture from a venue whose
+    metadata gives none, or one written before captures recorded it.
+    """
+    p = Path(source)
+    meta = (p.parent if p.is_file() else p) / "meta.json"
+    try:
+        value = json.loads(meta.read_text()).get("tick_size")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return float(value) if value else None
 
 
 def _to_datetime(series: pd.Series, unit: str) -> pd.Series:
@@ -206,10 +255,8 @@ class L2DepthLoader:
         cfg = self._config
         timestamp = _to_datetime(raw[ts_col], cfg.timestamp_unit)
         # Canonical price is integer ticks (issue #155): scale the raw feed
-        # price to the quote currency, then quantise to ticks.
-        price = price_to_ticks(
-            raw[price_col].astype(float) / cfg.price_divisor, cfg.tick_size
-        )
+        # price to the quote currency, then convert to ticks.
+        price = _to_ticks_on_grid(raw[price_col], cfg, "L2DepthLoader.load")
         # Canonical size is integer lots (issue #226); the raw feed carries a
         # base-asset float, so convert on the way in.
         volume = pd.Series(size_to_lots(raw[vol_col], cfg.lot_size), index=raw.index)
@@ -330,9 +377,7 @@ class L2TradeReader:
         cfg = self._config
         timestamp = _to_datetime(raw[ts_col], cfg.timestamp_unit)
         # Trade prints share the depth grid: integer ticks (issue #155).
-        price = price_to_ticks(
-            raw[price_col].astype(float) / cfg.price_divisor, cfg.tick_size
-        )
+        price = _to_ticks_on_grid(raw[price_col], cfg, "L2TradeReader.load")
         # Canonical size is integer lots (issue #226); the raw feed carries a
         # base-asset float, so convert on the way in.
         volume = pd.Series(size_to_lots(raw[vol_col], cfg.lot_size), index=raw.index)

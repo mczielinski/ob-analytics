@@ -51,7 +51,7 @@ timestamp,side,price,volume
 |--------|---------|
 | `timestamp` | receive time — integer epoch (`config.timestamp_unit`) or any string pandas can parse |
 | `side` | `bid` / `ask` (`buy` / `sell` and `b` / `a` are also accepted) |
-| `price` | the price level (scaled by `config.price_divisor`, rounded to `price_decimals`) |
+| `price` | the price level (divided by `config.price_divisor`, then stored as a whole number of `tick_size` ticks; a price between two ticks raises `ConfigError` instead of being rounded) |
 | `volume` | the level's **new absolute** resting size (`0` = removed) |
 
 Column names are flexible: `side` / `direction` and `volume` / `size` /
@@ -143,7 +143,7 @@ get_spread(summary)
 - [L2 API reference](../api/depth_l2.md) — `L2DepthLoader`, `DepthCsvSource`, …
 
 !!! note "Live L2 capture"
-    This path is for **offline** L2 files. A live depth-update event kind for
-    the [capture runner](live-capture.md) — so `LiveSource`s for L2 venues
-    (Binance, Kalshi, Polymarket) can stream straight into this schema — is a
-    planned follow-up.
+    A live L2 capture writes this schema directly: the [ccxt source](ccxt.md)
+    records `depth.csv` and `trades.csv` for any CCXT venue, including
+    [Kalshi](kalshi.md). It also records the market's tick size in
+    `meta.json`, and `ob-analytics process` uses it.

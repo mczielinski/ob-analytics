@@ -63,7 +63,7 @@ Every source stays drawn once it is built, which makes this diagram the venue
 list as well: purple is a source you can use today, green is one nobody has
 written yet. A venue neither CCXT nor cryptofeed covers needs its own client.
 """
-issues = [112, 137, 106, 134, 99, 100, 101, 102, 103, 98]
+issues = [112, 137, 106, 134, 99, 100, 101, 102, 103, 98, 239, 240]
 # Keep the closed sources. A source that shipped is a source you can use, so
 # pruning it would delete the answer to "which venues work today" from the one
 # diagram that shows venues.
@@ -220,3 +220,5 @@ loaders\
 203 = "Polars port"
 206 = "out-of-core reads"
 216 = "registered writers"
+239 = "API keys"
+240 = "Kalshi WebSocket"

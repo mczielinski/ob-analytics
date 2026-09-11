@@ -39,6 +39,7 @@ def _cmd_process(args: argparse.Namespace) -> None:
     _setup_logging(args.verbose)
     from loguru import logger
 
+    from ob_analytics.config import PipelineConfig
     from ob_analytics.data import save_data
     from ob_analytics.pipeline import Pipeline
     from ob_analytics.protocols import RunContext
@@ -64,8 +65,13 @@ def _cmd_process(args: argparse.Namespace) -> None:
         else RunContext()
     )
 
+    # Only the recorded fields are set explicitly, so the source's own config
+    # defaults still apply to the rest.
+    recorded = _recorded_instrument(Path(data_path))
+    config = PipelineConfig(**recorded) if recorded else None
+
     try:
-        pipeline = Pipeline(source=source, ctx=ctx)
+        pipeline = Pipeline(config, source=source, ctx=ctx)
     except TypeError as exc:  # e.g. a live-only source cannot replay files
         logger.error(str(exc))
         sys.exit(1)
@@ -176,8 +182,11 @@ def _run_for_audit(args: argparse.Namespace, source_name: str) -> Any:
 
     # Load the ordering keys: dropped-message detection reads the venue
     # sequence, and it is off by default elsewhere.  Only this field is set
-    # explicitly, so the source's own config defaults still apply.
-    config = PipelineConfig(track_sequence=True)
+    # explicitly, with the instrument a capture recorded, so the source's own
+    # config defaults still apply to the rest.
+    config = PipelineConfig(
+        track_sequence=True, **_recorded_instrument(Path(args.path))
+    )
 
     try:
         pipeline = Pipeline(config, source=source, ctx=ctx)
@@ -187,6 +196,26 @@ def _run_for_audit(args: argparse.Namespace, source_name: str) -> Any:
 
     logger.info("Auditing {} (source={})...", args.path, source_name)
     return pipeline.run(args.path)
+
+
+def _recorded_instrument(data_path: Path) -> dict[str, Any]:
+    """Config fields a live capture recorded about its instrument.
+
+    A ccxt capture writes the market's tick size to ``meta.json``.  Replaying
+    it at the source's default tick size would round finer prices onto that
+    grid, which the L2 loaders refuse, so the recorded value is used instead,
+    with the display precision set to match.  Empty when nothing is recorded.
+    """
+    from decimal import Decimal
+
+    from ob_analytics.depth_l2 import recorded_tick_size
+
+    tick_size = recorded_tick_size(data_path)
+    if tick_size is None:
+        return {}
+    exponent = Decimal(str(tick_size)).normalize().as_tuple().exponent
+    decimals = max(0, -exponent) if isinstance(exponent, int) else 0
+    return {"tick_size": tick_size, "price_decimals": decimals}
 
 
 def _load_saved_result(data_path: Path) -> Any:

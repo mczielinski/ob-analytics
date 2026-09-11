@@ -12,8 +12,9 @@ Transport is chosen per venue from the exchange's declared capabilities:
 
 * venues with CCXT Pro websockets (``exchange.has['watchOrderBook']``) stream
   via ``watch_order_book`` / ``watch_trades``;
-* the rest (e.g. Kalshi / Polymarket, REST-only in CCXT) are polled via
-  ``fetch_order_book`` / ``fetch_trades``.
+* the rest are polled via ``fetch_order_book`` / ``fetch_trades``.  CCXT's
+  prediction markets (``ccxt.prediction``: Kalshi, Polymarket, ...) are all
+  of this kind, and are reached by the same venue id.
 
 Book updates are turned into depth rows by diffing CCXT's *maintained book*
 against the previous state: a level whose absolute size changed emits its new
@@ -49,6 +50,12 @@ from ob_analytics.protocols import FeedType, Level
 _DEFAULT_DEPTH_LIMIT = 100
 _DEFAULT_POLL_INTERVAL = 1.0  # seconds; REST-poll venues only
 
+# CCXT's precision modes (ccxt.DECIMAL_PLACES / ccxt.TICK_SIZE), written out so
+# this module never imports ccxt.  In TICK_SIZE mode a market's price precision
+# is the tick itself; in DECIMAL_PLACES mode it is a count of decimals.
+_CCXT_DECIMAL_PLACES = 2
+_CCXT_TICK_SIZE = 4
+
 
 class CcxtSettings(SourceSettings):
     """Typed settings for :class:`CcxtSource` (replaces the former extras dict).
@@ -72,8 +79,19 @@ class CcxtSettings(SourceSettings):
     poll_interval: float = _DEFAULT_POLL_INTERVAL
 
 
+#: Prefix that picks a venue from CCXT's prediction markets.  ``binance`` and
+#: ``hyperliquid`` name both a crypto exchange and a prediction market; the
+#: plain id means the crypto exchange, ``prediction/binance`` the other one.
+PREDICTION_PREFIX = "prediction/"
+
+
 def _make_exchange(exchange_id: str) -> Any:
-    """Instantiate a CCXT Pro exchange by id (lazy import of ``ccxt``).
+    """Instantiate a CCXT exchange by id (lazy import of ``ccxt``).
+
+    A plain id is looked up among the CCXT Pro venues first, then among CCXT's
+    prediction markets (``ccxt.prediction``: Kalshi, Polymarket, ...), which
+    have no websockets and are polled.  An id with :data:`PREDICTION_PREFIX`
+    is looked up among the prediction markets only.
 
     Raises :class:`ImportError` with an install hint if ccxt is absent, and
     :class:`ValueError` if *exchange_id* is not a known CCXT venue.
@@ -85,12 +103,26 @@ def _make_exchange(exchange_id: str) -> Any:
             "The ccxt source requires the 'ccxt' extra: "
             'pip install "ob-analytics[ccxt]"'
         ) from exc
-    if exchange_id not in ccxtpro.exchanges:
-        raise ValueError(
-            f"Unknown CCXT exchange {exchange_id!r}; "
-            f"expected one of {len(ccxtpro.exchanges)} ccxt.pro venues."
-        )
-    return getattr(ccxtpro, exchange_id)({"enableRateLimit": True})
+    # Prediction-market classes by id; empty on a ccxt release that predates them.
+    prediction: dict[str, Any] = {}
+    try:
+        import ccxt.prediction as ccxtprediction
+    except ImportError:  # pragma: no cover - only on an old ccxt
+        pass
+    else:
+        prediction = {i: getattr(ccxtprediction, i) for i in ccxtprediction.exchanges}
+
+    name = exchange_id.removeprefix(PREDICTION_PREFIX)
+    options = {"enableRateLimit": True}
+    if name == exchange_id and name in ccxtpro.exchanges:
+        return getattr(ccxtpro, name)(options)
+    if name in prediction:
+        return prediction[name](options)
+    raise ValueError(
+        f"Unknown CCXT exchange {exchange_id!r}; expected one of "
+        f"{len(ccxtpro.exchanges)} ccxt.pro venues or a prediction market "
+        f"({', '.join(prediction) or 'none in this ccxt release'})."
+    )
 
 
 def _epoch_ms_to_ts(ms: Any) -> pd.Timestamp:
@@ -131,9 +163,16 @@ class CcxtSource:
         self._use_ws_trades = False
         # Last seen absolute size per price, per side -- the diff baseline.
         self._last: dict[str, dict[float, float]] = {"bid": {}, "ask": {}}
+        # Epoch-ms time of the opening book. A polled trade tape starts with
+        # the venue's recent history, which can reach back hours; trades
+        # before this are dropped rather than stamped as received now.
+        self._opened_ms: int | None = None
 
         # Diagnostics (surfaced in meta.json via SupportsDiagnostics).
         self.exchange_id = ""
+        # The instrument's price increment, when the venue's metadata gives
+        # one; meta.json records it so the replay uses the same price grid.
+        self.tick_size: float | None = None
         self.book_updates = 0
         self.depth_rows = 0
         self.trade_events = 0
@@ -163,7 +202,8 @@ class CcxtSource:
         # A string is a venue id (built via ccxt); anything else is treated as
         # a pre-built exchange object (tests / advanced callers).
         if isinstance(exchange, str):
-            self.exchange_id = exchange
+            # The venue is the same whichever list it came from.
+            self.exchange_id = exchange.removeprefix(PREDICTION_PREFIX)
             self._exchange = _make_exchange(exchange)
         else:
             self.exchange_id = str(getattr(exchange, "id", "custom"))
@@ -190,6 +230,10 @@ class CcxtSource:
         """
         self._configure(config)
         book = await self._exchange.fetch_order_book(self._symbol, self._depth_limit)
+        # Fetching the book loads the venue's market metadata, so the tick
+        # size can be read from here on.
+        self.tick_size = self._tick_size()
+        self._opened_ms = book.get("timestamp")
         ts = _epoch_ms_to_ts(book.get("timestamp"))
         # CCXT's per-book monotonic sequence (``None`` when the venue omits it);
         # carried as the venue ``sequence`` for gap detection on the L2 path.
@@ -301,7 +345,7 @@ class CcxtSource:
         deadline: float,
     ) -> None:
         """Poll/stream the trade tape and push trade events."""
-        since: int | None = None
+        since = None if self._use_ws_trades else self._opened_ms
         while not stop.is_set() and time.monotonic() < deadline:
             try:
                 if self._use_ws_trades:
@@ -423,6 +467,31 @@ class CcxtSource:
 
     # -- internals ----------------------------------------------------------
 
+    def _tick_size(self) -> float | None:
+        """The instrument's price increment, from CCXT's market metadata.
+
+        A prediction-market venue describes an instrument as an outcome, and a
+        crypto exchange as a market.  ``None`` when the venue has no metadata
+        for the symbol, or no fixed price grid (CCXT's significant-digits mode).
+        """
+        ex = self._exchange
+        lookup = getattr(ex, "outcome", None) or getattr(ex, "market", None)
+        if lookup is None:
+            return None
+        try:
+            step = (lookup(self._symbol).get("precision") or {}).get("price")
+        except Exception as exc:  # noqa: BLE001 - metadata is optional; the capture goes on without it
+            logger.debug("[ccxt] no tick size for {}: {!r}", self._symbol, exc)
+            return None
+        if step is None:
+            return None
+        mode = getattr(ex, "precisionMode", _CCXT_TICK_SIZE)
+        if mode == _CCXT_TICK_SIZE:
+            return float(step)
+        if mode == _CCXT_DECIMAL_PLACES:
+            return 10.0 ** -int(step)
+        return None
+
     async def _close(self) -> None:
         """Close the exchange connection if open (idempotent)."""
         ex = self._exchange
@@ -444,6 +513,7 @@ class CcxtSource:
         """Per-run counters for meta.json (SupportsDiagnostics)."""
         return {
             "exchange": self.exchange_id,
+            "tick_size": self.tick_size,
             "book_updates": self.book_updates,
             "depth_rows": self.depth_rows,
             "trade_events": self.trade_events,

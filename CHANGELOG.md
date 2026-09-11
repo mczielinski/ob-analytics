@@ -10,6 +10,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Kalshi prediction markets, through the ccxt source** (#102).
+  `ob-analytics capture ccxt --exchange kalshi --pair <market ticker>` records
+  a Kalshi market's order book and trades from Kalshi's public API, with no
+  account or API key, and `ob-analytics process` replays it through the L2
+  path. The ccxt source now looks up CCXT's prediction markets
+  (`ccxt.prediction`: Kalshi, Polymarket and others) as well as its crypto
+  exchanges; before, `--exchange kalshi` failed with "Unknown CCXT exchange".
+  `binance` and `hyperliquid` are in both lists, so the plain id keeps meaning
+  the crypto exchange and `prediction/<id>` picks the prediction market.
+
+  The captured book is the market's Yes book: a bid to buy No at `p` is
+  recorded as an offer to sell Yes at `1 - p`, and a trade is priced in Yes
+  and signed from the Yes side. A ccxt capture also records its market's tick
+  size in `meta.json`, which `process` and `audit` use. See the ["Capture
+  Kalshi prediction markets"
+  how-to](https://mczielinski.github.io/ob-analytics/howto/kalshi/).
+
 - **A metric registry, so a user metric runs and plots with no core edit**
   (#140). A metric is a plain object with a `name`, a `title`, the `levels` it
   applies to, `compute(result)` and `prepare(frame)` — no base class to
@@ -126,6 +143,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   how-to document the distinction.
 
 ### Fixed
+
+- **A price-level file no longer has its prices rounded to the tick size.**
+  `L2DepthLoader` and `L2TradeReader` converted each price to the nearest
+  whole number of ticks, so a price finer than `tick_size` moved without a
+  warning: a Kalshi price of 0.036 loaded as 0.04 at the default 0.01 tick,
+  and the most traded Kalshi markets quote in tenths of a cent. Both now raise
+  `ConfigError` when a price is not a whole number of ticks, and say which
+  tick size to set. A ccxt capture records its market's tick size in
+  `meta.json`, and `ob-analytics process` and `ob-analytics audit` read it
+  from there (`recorded_tick_size`), so a CLI replay needs no extra option.
+
+- **A polled ccxt capture no longer records trades from before it started.**
+  On a venue without websockets, the first poll of the trade tape returns the
+  venue's recent history, which on Kalshi reached back nine hours. Those trades
+  were written with the capture's receive time, as if they had just happened.
+  The capture now drops trades older than its opening book.
 
 - **A price level now empties when the order resting on it goes away.**
   `price_level_volume` added an order's volume at the price on its `created`
