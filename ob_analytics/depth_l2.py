@@ -62,6 +62,7 @@ from ob_analytics._utils import (
     empty_trades,
     epoch_to_datetime,
     lots_to_size,
+    off_tick_grid,
     price_to_ticks,
     size_to_lots,
     ticks_to_price,
@@ -116,12 +117,6 @@ def _first_present(columns: pd.Index, candidates: tuple[str, ...]) -> str | None
     return None
 
 
-# How far a price may sit from a whole number of ticks, in ticks, before it
-# counts as off the grid. Large enough to absorb float division noise
-# (0.036 / 0.001 is 35.99999999999999), far below any real price difference.
-_GRID_TOLERANCE = 1e-6
-
-
 def _to_ticks_on_grid(
     raw_price: pd.Series, cfg: PipelineConfig, where: str
 ) -> np.ndarray:
@@ -133,8 +128,7 @@ def _to_ticks_on_grid(
     tick size, so a wrong one is easy to pass and cannot be seen afterwards.
     """
     quote = raw_price.astype(float) / cfg.price_divisor
-    in_ticks = quote.to_numpy() / cfg.tick_size
-    off_grid = np.abs(in_ticks - np.round(in_ticks)) > _GRID_TOLERANCE
+    off_grid = off_tick_grid(quote.to_numpy(), cfg.tick_size)
     if off_grid.any():
         example = float(quote.to_numpy()[off_grid][0])
         raise ConfigError(

@@ -52,9 +52,11 @@ The capturer reads each venue's declared capabilities:
 - venues with CCXT Pro websockets (`exchange.has['watchOrderBook']` — most
   crypto CEXes) **stream** via `watch_order_book` / `watch_trades`;
 - the rest are **polled** via `fetch_order_book` / `fetch_trades` (tune the
-  cadence with `--poll-interval`). CCXT's prediction markets — **Kalshi**,
-  **Polymarket** and others, in CCXT's `ccxt.prediction` package — are all
-  polled.
+  cadence with `--poll-interval`).
+
+CCXT's prediction markets (**Kalshi**, **Polymarket** and others) are in CCXT's
+separate `ccxt.prediction` package, and the same `--exchange` id reaches them.
+Kalshi is polled; Polymarket streams over its public websocket.
 
 Book updates become depth rows by diffing CCXT's maintained book: a level whose
 size changed emits its new absolute size; a level that vanished emits `0`.
@@ -65,8 +67,9 @@ size changed emits its new absolute size; a level that vanished emits `0`.
 # Another crypto CEX (websocket):
 ob-analytics capture ccxt --exchange kraken --pair BTC/USD --out /tmp/kraken
 
-# A prediction market (REST poll):
-ob-analytics capture ccxt --exchange polymarket --pair <token> --poll-interval 2 --out /tmp/poly
+# Prediction markets:
+ob-analytics capture ccxt --exchange kalshi --pair KXPRESNOMD-28-MK --out /tmp/kalshi
+ob-analytics capture ccxt --exchange polymarket --pair <token id> --out /tmp/poly
 ```
 
 | Flag | Meaning |
@@ -79,8 +82,8 @@ ob-analytics capture ccxt --exchange polymarket --pair <token> --poll-interval 2
 !!! note "Prediction markets"
     A prediction market needs a few more choices than a crypto exchange: which
     side of the Yes/No pair the book shows, what tick size the prices use, and
-    how wide the depth bins should be. [Capture Kalshi prediction
-    markets](kalshi.md) covers them for Kalshi.
+    how wide the depth bins should be. [Kalshi](kalshi.md) and
+    [Polymarket](polymarket.md) each have a page that covers them.
 
 ## See also
 
