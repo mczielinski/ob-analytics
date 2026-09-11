@@ -52,6 +52,11 @@ class CaptureResult:
     ended: pd.Timestamp
     extras: dict[str, Any] = field(default_factory=dict)
     n_depth_events: int = 0
+    #: L3 only: orders in the opening book that no later order event or trade
+    #: mentioned. Most are far from the touch and simply never traded; one at
+    #: the touch is an order the venue's snapshot listed after it had gone.
+    #: ``None`` on an L2 run, where a price level has no id to confirm.
+    n_snapshot_unconfirmed: int | None = None
 
 
 # Single canonical event dict shape, mirroring BitstampLoader's CSV columns.

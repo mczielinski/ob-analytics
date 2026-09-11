@@ -42,9 +42,17 @@ can always do `getattr(fmt, "feed_type", FeedType.UNKNOWN)` without special-casi
 
 ## A crossed book is faithful, not a bug
 
-We have **verified** a bid resting above an ask on the bundled Bitstamp
-sample for about 1.5 minutes, neither order ever filling. That is a real
-property of the public feed, not a defect in the reconstruction.
+A diff feed does carry real crossings. An aggressive order can rest for a few
+events until the venue reports its execution, and on the bundled Bitstamp
+sample there are about 100,000 such crossings, each shorter than a
+millisecond. That is a property of the public feed, not a defect in the
+reconstruction.
+
+A crossing that lasts is a different matter. On the same sample, almost all of
+the crossed time comes from one order: an ask at $78,333.00 that the opening
+snapshot reported and the venue never reported again. Trades print above it
+for 27 minutes while it holds the ask touch. It is a
+[stale resting order](#stale-resting-orders), and `audit` names it.
 
 [`order_book()`](api/analytics.md) therefore replays a diff feed **as-is**: a
 crossed book in the output is a property of the feed, not a reconstruction
@@ -71,7 +79,8 @@ Data quality summary
   feed type             : diff_feed
   events / orders       : 314,057 / 156,902
   trades                : 284
-  crossed resting book  : 91.61% of session (7238 episode(s)) [expected for a diff feed — faithful replay, not a bug]
+  crossed resting book  : 91.61% of session (7238 episode(s)) [diff feed, but 2 stale resting order(s) stay in the book — see stale resting orders]
+  stale resting orders  : 2 (worst: ask 2002347646152704 at 78,333 held the ask touch for 27.4 min after a trade printed through it)
   unmatched trades      : 0.70%
   duplicate event ids   : 0
   duplicate created ids : 0
@@ -80,14 +89,46 @@ Data quality summary
   impossible values     : 49 non-positive price(s) / 0 negative volume(s)
   clock order           : 0 venue-after-receive / 11 reordered
   venue sequence        : 0 missing / 0 out-of-order (0 row(s) numbered)
-Checks: 0 error(s), 3 warning(s)
+Checks: 0 error(s), 4 warning(s)
   WARNING orphan_orders: 13 order(s) are changed or deleted with no created event ...
+  WARNING stale_orders: 2 resting order(s) a trade printed through and the venue did not report again within 1 s ...
   WARNING nonpositive_price: 49 row(s) are priced at or below zero: not a tradeable level
   WARNING exchange_time_reordered: 11 message(s) arrived out of venue order ...
 ```
 
 A matched book (LOBSTER) reports **~0%** crossed on the same metric — the
-number is the cleanest single discriminator between the two families.
+number is the cleanest single discriminator between the two families. On a
+diff feed, read it together with the stale-order line below it.
+
+## Stale resting orders
+
+A matching engine fills the better price first. So a trade above a resting
+ask, or below a resting bid, shows that the order has already left the book.
+The venue normally reports it a few milliseconds later: on the bundled sample,
+a median of 23 ms after the trade and 234 ms at the 95th percentile.
+
+An order the venue does not report again within one second is **stale**. The
+rebuilt book goes on holding it, and it distorts the spread, the depth and the
+queue from then on. On the bundled sample two orders are stale, and both came
+from the opening REST snapshot. Removing them would take the crossed share of
+session time from 91.6% to 1.5%.
+
+`audit` reports stale orders as a warning and names the worst one: its id,
+side, price, and how long it held the touch after the trade. From Python,
+[`detect_stale_orders`](api/analytics.md) returns every one. Neither removes
+anything:
+
+- The test needs to know what the feed said *after* the trade. A live capture
+  cannot know that in time, so a repair would make offline and live
+  reconstruction differ.
+- Without the grace period the test is wrong most of the time: it catches
+  orders whose delete is already on its way.
+- `order_book()` replays what the feed said. Changing that to what we think the
+  feed meant is a different promise.
+
+Stale orders are not dropped messages: this capture records none. Nor can
+sequence-gap detection find them: Bitstamp publishes a timestamp, not a
+sequence number.
 
 Each metric is scored by a named check with a severity, and the exit code
 follows the severities: an **error** fails the run, a **warning** only fails it
@@ -95,11 +136,12 @@ under `--strict`. Which severity crossing gets is decided by the feed type —
 the whole point of this page. The [`audit` how-to](howto/audit.md) lists every
 check and what trips it.
 
-The four headline metrics:
+The headline metrics:
 
 | Metric | What it measures | Matched book | Diff feed |
 |---|---|---|---|
-| **crossed resting book %** | Share of session *time* the faithful book has `best_bid > best_ask` | ~0% | often high (~92% here) |
+| **crossed resting book %** | Share of session *time* the faithful book has `best_bid > best_ask` | ~0% | often high (~92% here, almost all of it from one stale order) |
+| **stale resting orders** | Resting orders a trade printed through that the venue did not report again within 1 s | 0 | 0 (else a feed defect) |
 | **unmatched trades %** | Trades with no resolvable maker/taker resting order | low | low–moderate |
 | **duplicate ids** | `event_id`s seen twice, or order ids created twice | 0 | 0 (else a feed defect) |
 | **pre-existing orders** | Orders already resting when the capture began (no `created` row) | a few | a few |

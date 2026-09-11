@@ -22,6 +22,14 @@ from ob_analytics.live._base import (
 )
 from ob_analytics.protocols import Level
 
+# Which part of the capture wrote a book row: the source's opening book, a live
+# message, or a synthetic close-out at the end. The runner stamps it from the
+# phase it is in, so no source has to, and a row's origin never has to be
+# guessed from its timestamp.
+ORIGIN_SNAPSHOT = "snapshot"
+ORIGIN_STREAM = "stream"
+ORIGIN_SHUTDOWN = "shutdown"
+
 # L3 (per-order) rows -- the BitstampLoader schema.  ``sequence`` is the
 # venue's own per-event number when the source supplies one (blank otherwise);
 # BitstampLoader reads it back under ``track_sequence`` for gap detection.
@@ -34,6 +42,7 @@ _ORDER_COLS = [
     "action",
     "direction",
     "sequence",
+    "origin",
 ]
 _TRADE_COLS = [
     "trade_id",
@@ -55,6 +64,7 @@ _DEPTH_COLS = [
     "price",
     "volume",
     "sequence",
+    "origin",
 ]
 
 
@@ -160,6 +170,7 @@ class FileCaptureSink(CaptureSink):
             "n_depth_events": result.n_depth_events,
             "n_trade_events": result.n_trade_events,
             "n_raw_frames": result.n_raw_frames,
+            "n_snapshot_unconfirmed": result.n_snapshot_unconfirmed,
             **result.extras,
         }
         (self.out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
@@ -195,15 +206,24 @@ async def run_capturer(
             # support: fall back to default handling.
             pass
 
+    # L3 only: ids from the opening book that nothing in the stream has yet
+    # mentioned. _stream removes an id when an order event or a trade names
+    # it, so what is left at the end is the opening book the stream never
+    # confirmed. L2 levels carry no id, so an L2 run leaves this as None.
+    unconfirmed: set[Any] | None = None if level is Level.L2 else set()
+
     try:
         logger.info("Capturer '{}': snapshot starting", capturer.name)
         async for ev in capturer.snapshot(config):
+            ev["origin"] = ORIGIN_SNAPSHOT
             if level is Level.L2:
                 sink.write_depth(ev)
                 n_depth += 1
             else:
                 sink.write_order(ev)
                 n_order += 1
+                if unconfirmed is not None:
+                    unconfirmed.add(ev["id"])
         logger.info(
             "Capturer '{}': snapshot wrote {} book events",
             capturer.name,
@@ -221,7 +241,7 @@ async def run_capturer(
         # even though every streamed row was on disk.
         stream_counts = {"order": 0, "trade": 0, "depth": 0, "raw": 0}
         stream_task = asyncio.create_task(
-            _stream(capturer, config, sink, stream_counts)
+            _stream(capturer, config, sink, stream_counts, unconfirmed)
         )
         stop_task = asyncio.create_task(stop.wait())
         try:
@@ -251,6 +271,7 @@ async def run_capturer(
 
         logger.info("Capturer '{}': emitting shutdown synthetic events", capturer.name)
         async for ev in capturer.shutdown_synthetic_events():
+            ev["origin"] = ORIGIN_SHUTDOWN
             if level is Level.L2:
                 sink.write_depth(ev)
                 n_depth += 1
@@ -287,6 +308,7 @@ async def run_capturer(
             ended=ended,
             extras=extras,
             n_depth_events=n_depth,
+            n_snapshot_unconfirmed=None if unconfirmed is None else len(unconfirmed),
         )
         sink.finalize(result)
         logger.info(
@@ -307,22 +329,32 @@ async def _stream(
     config: CaptureConfig,
     sink: CaptureSink,
     counts: dict[str, int],
+    unconfirmed: set[Any] | None = None,
 ) -> None:
     """Pump the capturer's stream into *sink*, updating *counts* in place.
 
     Counts are incremented per write (not returned) so they remain accurate
-    when the task is cancelled mid-stream by a signal.
+    when the task is cancelled mid-stream by a signal. For the same reason
+    *unconfirmed* is shrunk in place: an opening-book order id leaves it as
+    soon as an order event or a trade names it.
     """
     async for kind, event, frame in capturer.stream(config):
         if kind == "order":
+            event["origin"] = ORIGIN_STREAM
             sink.write_order(event)
             counts["order"] += 1
+            if unconfirmed:
+                unconfirmed.discard(event["id"])
         elif kind == "depth":
+            event["origin"] = ORIGIN_STREAM
             sink.write_depth(event)
             counts["depth"] += 1
         elif kind == "trade":
             sink.write_trade(event)
             counts["trade"] += 1
+            if unconfirmed:
+                unconfirmed.discard(event.get("buy_order_id"))
+                unconfirmed.discard(event.get("sell_order_id"))
         # ``raw`` (heartbeats / subscription_succeeded) bypasses CSV writers
         # but still goes to raw.jsonl below for forensic completeness.
         if frame is not None:

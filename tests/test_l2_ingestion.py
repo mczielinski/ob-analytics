@@ -395,6 +395,41 @@ class TestL2Gallery:
         )
         assert out.exists()
 
+    @pytest.mark.parametrize("concept", ["price_view", "volume_percentiles"])
+    def test_summary_faces_render_on_sparse_capture(self, tmp_path, concept):
+        """A short, sparse capture still draws the depth-summary faces.
+
+        An opening snapshot, then a few updates over 70 s.  The zoom window
+        (from the depth clock) ends at 52.5 s, but these faces drop the first
+        minute of the summary, so their data starts at 68 s.  Before the fix
+        both faces got zero rows and raised, and the gallery dropped them.
+        """
+        import matplotlib.pyplot as plt
+
+        from ob_analytics.visualization import plot_result
+
+        snapshot = [
+            row
+            for i in range(80)
+            for row in (
+                (_BASE_MS, "bid", 50.0 - i * 0.01, 10.0 + i),
+                (_BASE_MS, "ask", 50.01 + i * 0.01, 10.0 + i),
+            )
+        ]
+        updates = [
+            (_BASE_MS + 10_000, "bid", 50.0, 25.0),
+            (_BASE_MS + 25_000, "ask", 50.01, 5.0),
+            (_BASE_MS + 40_000, "bid", 49.99, 0.0),
+            (_BASE_MS + 68_000, "ask", 50.02, 30.0),
+            (_BASE_MS + 69_000, "bid", 50.0, 12.0),
+            (_BASE_MS + 70_000, "ask", 50.01, 8.0),
+        ]
+        _write_l2_dir(tmp_path, snapshot + updates)
+        result = Pipeline.from_source("depth_csv").run(tmp_path)
+
+        fig = plot_result(result, concept, backend="matplotlib")
+        plt.close(fig)
+
 
 class TestRecordedTickSize:
     def test_reads_meta_json(self, tmp_path):

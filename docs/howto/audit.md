@@ -26,7 +26,8 @@ Data quality summary
   feed type             : diff_feed
   events / orders       : 314,057 / 156,902
   trades                : 284
-  crossed resting book  : 92.02% of session (6348 episode(s)) [expected for a diff feed — faithful replay, not a bug]
+  crossed resting book  : 91.61% of session (7238 episode(s)) [diff feed, but 2 stale resting order(s) stay in the book — see stale resting orders]
+  stale resting orders  : 2 (worst: ask 2002347646152704 at 78,333 held the ask touch for 27.4 min after a trade printed through it)
   unmatched trades      : 0.70%
   duplicate event ids   : 0
   duplicate created ids : 0
@@ -35,8 +36,9 @@ Data quality summary
   impossible values     : 49 non-positive price(s) / 0 negative volume(s)
   clock order           : 0 venue-after-receive / 11 reordered
   venue sequence        : 0 missing / 0 out-of-order (0 row(s) numbered)
-Checks: 0 error(s), 3 warning(s)
+Checks: 0 error(s), 4 warning(s)
   WARNING orphan_orders: 13 order(s) are changed or deleted with no created event ...
+  WARNING stale_orders: 2 resting order(s) a trade printed through and the venue did not report again within 1 s ...
   WARNING nonpositive_price: 49 row(s) are priced at or below zero: not a tradeable level
   WARNING exchange_time_reordered: 11 message(s) arrived out of venue order ...
 ```
@@ -46,7 +48,8 @@ Checks: 0 error(s), 3 warning(s)
 | Field | Read it as |
 |---|---|
 | **feed type** | `matched_book` (LOBSTER/MBO) or `diff_feed` (Bitstamp) — sets expectations for the next line |
-| **crossed resting book** | Share of session *time* with `best_bid > best_ask`. ~0% for a matched book; high is normal and faithful for a diff feed |
+| **crossed resting book** | Share of session *time* with `best_bid > best_ask`. ~0% for a matched book; can be high and faithful for a diff feed, unless stale resting orders cause it |
+| **stale resting orders** | Resting orders a trade printed through that the venue did not report again within 1 s. The worst is named with its side, price and how long it held the touch |
 | **unmatched trades** | Trades with no resolvable maker/taker resting order |
 | **duplicate event ids / created ids** | Should be `0`; anything else is a feed defect worth chasing |
 | **pre-existing orders** | Orders already resting when the capture began (no `created` row) — structurally unclassifiable, not errors |
@@ -55,10 +58,15 @@ Checks: 0 error(s), 3 warning(s)
 | **clock order** | Rows the venue stamped *after* we received them, and messages that reached the capture out of venue order |
 | **venue sequence** | Skipped and non-advancing sequence numbers: dropped and reordered messages ([gap detection](../api/analytics.md)) |
 
-A high **crossed resting book** number on a `diff_feed` is expected — see
+A high **crossed resting book** number on a `diff_feed` can be expected — see
 [Data quality: matched book vs diff feed](../data-quality.md) for why, and for
 the `uncross=` option that cleans the book up *for display* without touching
 the data you analyse. On a `matched_book`, a non-zero figure is a red flag.
+
+Read it together with **stale resting orders**. On the bundled sample one
+stale order holds the ask touch for 27 minutes, and it causes almost all of the
+91.61%. When the run has stale orders, the crossing note says so instead of
+calling the crossing normal.
 
 ## What fails a run
 
@@ -75,9 +83,9 @@ Errors: `duplicate_event_ids`, `duplicate_created_ids`, `sequence_gaps`,
 `sequence_out_of_order`, `negative_volume`, `exchange_time_after_receive`, and
 `crossed_book` **on a matched book only**.
 
-Warnings: `orphan_orders`, `nonpositive_price`, `exchange_time_reordered`,
-`unmatched_trades` (above 5%), and `crossed_book` when no feed type was
-declared.
+Warnings: `orphan_orders`, `stale_orders`, `nonpositive_price`,
+`exchange_time_reordered`, `unmatched_trades` (above 5%), and `crossed_book`
+when no feed type was declared.
 
 Two of these are judgement calls worth stating plainly:
 
@@ -91,6 +99,13 @@ Two of these are judgement calls worth stating plainly:
   ever changed or deleted. So `orphan_orders` is a warning, and the hard
   evidence for dropped messages is `sequence_gaps`, which needs a feed that
   carries a venue sequence. `audit` always loads with sequence tracking on.
+- **A stale order is reported, not removed.** A trade above a resting ask (or
+  below a resting bid) shows the order has gone, because a matching engine
+  fills the better price first. The venue normally reports that order within
+  milliseconds, so `stale_orders` waits one second before it counts one. The
+  test needs to know what the feed said after the trade, which a live capture
+  cannot know in time, so `order_book()` keeps the order.
+  [`detect_stale_orders`](../api/analytics.md) runs the same test from Python.
 
 ## In CI
 
@@ -127,11 +142,13 @@ summary = data_quality_summary(
     result.events, result.trades,
     feed_type=BitstampSource().feed_type,   # or getattr(source, "feed_type", FeedType.UNKNOWN)
     depth=result.depth,                      # faithful depth; not depth_summary
+    tick_size=result.config.tick_size,       # stale-order prices in the quote currency
 )
 print(summary.render())
 summary.ok            # False when an error-severity check failed
 summary.errors        # the failed error checks, each with a one-line detail
 summary.warnings      # the failed warning checks
+summary.stale_orders  # StaleOrder records, worst first
 summary.to_dict()     # JSON-serialisable, including every check
 ```
 
