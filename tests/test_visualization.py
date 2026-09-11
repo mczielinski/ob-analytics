@@ -1,5 +1,7 @@
 """Tests for ob_analytics.visualization."""
 
+from typing import Any
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -109,7 +111,7 @@ class TestPlotTheme:
     def test_frozen(self):
         theme = PlotTheme()
         with pytest.raises(AttributeError):
-            theme.style = "whitegrid"  # type: ignore[misc]
+            theme.style = "whitegrid"  # ty: ignore[invalid-assignment]
 
     def test_theme_kwarg_threads_through_create_axes(self):
         # A per-call theme is applied when _create_axes builds a new figure;
@@ -243,6 +245,19 @@ class TestPlotEventMap:
         )
         assert fig is fig_orig
 
+    def test_empty_window_draws_no_data(self, sample_events):
+        # A window before the data: the price-axis step used to raise
+        # ValueError on the NaN price range of zero rows.
+        data = _data.prepare_event_map_data(
+            sample_events,
+            start_time=pd.Timestamp("2015-05-01 00:00:00"),
+            end_time=pd.Timestamp("2015-05-01 00:30:00"),
+        )
+        ax = plot("order_activity", Level.L2, **data).axes[0]
+        # The theme places titles on the left; read every slot.
+        title = " ".join(ax.get_title(loc=s) for s in ("left", "center", "right"))
+        assert "no data" in title
+
 
 class TestPlotOrderActivityL3:
     def test_returns_figure(self, sample_order_lifecycle_events):
@@ -285,7 +300,7 @@ class TestPlotOrderActivityL3:
                 "linewidth": [1.5],
             }
         )
-        data = {
+        data: dict[str, Any] = {
             "filled": one,
             "cancelled": empty,
             "resting": empty,
@@ -445,7 +460,7 @@ class TestPlotLiquidityAtTouchL3:
         assert "rank" in ax.get_ylabel().lower()
 
     def test_empty_grid_is_safe(self) -> None:
-        data = {
+        data: dict[str, Any] = {
             "ages": np.empty((0, 0)),
             "times": np.array([], dtype="datetime64[ns]"),
             "max_rank": 0,
@@ -484,7 +499,7 @@ class TestPlotOfiHorizon:
         assert set(data["horizons"]) <= labels
 
     def test_empty_is_safe(self) -> None:
-        data = {
+        data: dict[str, Any] = {
             "ofi": np.empty((0, 0)),
             "times": np.array([], dtype="datetime64[ns]"),
             "horizons": ["5s", "60s"],
@@ -711,6 +726,21 @@ class TestPlotEventsHistogram:
             **_data.prepare_events_histogram_data(sample_events, val="price", bw=0.25),
         )
         assert fig is fig_orig
+
+    def test_empty_window_draws_no_data(self, sample_events):
+        # A window before the data: seaborn's histplot used to raise
+        # ValueError while working out bin edges for zero rows.
+        data = _data.prepare_events_histogram_data(
+            sample_events,
+            start_time=pd.Timestamp("2015-05-01 00:00:00"),
+            end_time=pd.Timestamp("2015-05-01 00:30:00"),
+            val="price",
+            bw=0.25,
+        )
+        ax = plot("events_histogram", **data).axes[0]
+        # The theme places titles on the left; read every slot.
+        title = " ".join(ax.get_title(loc=s) for s in ("left", "center", "right"))
+        assert "no data" in title
 
 
 class TestVolumeNorm:
