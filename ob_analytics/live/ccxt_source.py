@@ -12,9 +12,11 @@ Transport is chosen per venue from the exchange's declared capabilities:
 
 * venues with CCXT Pro websockets (``exchange.has['watchOrderBook']``) stream
   via ``watch_order_book`` / ``watch_trades``;
-* the rest are polled via ``fetch_order_book`` / ``fetch_trades``.  CCXT's
-  prediction markets (``ccxt.prediction``: Kalshi, Polymarket, ...) are all
-  of this kind, and are reached by the same venue id.
+* the rest are polled via ``fetch_order_book`` / ``fetch_trades``.
+
+CCXT's prediction markets (``ccxt.prediction``: Kalshi, Polymarket, ...) are
+reached by the same venue id.  Kalshi has no websocket there and is polled;
+Polymarket streams.
 
 Book updates are turned into depth rows by diffing CCXT's *maintained book*
 against the previous state: a level whose absolute size changed emits its new
@@ -42,6 +44,7 @@ from typing import Any
 import pandas as pd
 from loguru import logger
 
+from ob_analytics._utils import off_tick_grid
 from ob_analytics.config import SourceSettings
 from ob_analytics.live._base import CaptureConfig, EventDict
 from ob_analytics.protocols import FeedType, Level
@@ -55,6 +58,13 @@ _DEFAULT_POLL_INTERVAL = 1.0  # seconds; REST-poll venues only
 # is the tick itself; in DECIMAL_PLACES mode it is a count of decimals.
 _CCXT_DECIMAL_PLACES = 2
 _CCXT_TICK_SIZE = 4
+
+# The finest tick a capture will shrink its recorded tick size to: the default
+# lot grid, finer than any venue quotes a price.
+_FINEST_TICK = 1e-8
+
+# How many recent trades a capture remembers to recognise one delivered twice.
+_SEEN_TRADES_LIMIT = 10_000
 
 
 class CcxtSettings(SourceSettings):
@@ -89,8 +99,8 @@ def _make_exchange(exchange_id: str) -> Any:
     """Instantiate a CCXT exchange by id (lazy import of ``ccxt``).
 
     A plain id is looked up among the CCXT Pro venues first, then among CCXT's
-    prediction markets (``ccxt.prediction``: Kalshi, Polymarket, ...), which
-    have no websockets and are polled.  An id with :data:`PREDICTION_PREFIX`
+    prediction markets (``ccxt.prediction``: Kalshi, Polymarket, ...).  An id
+    with :data:`PREDICTION_PREFIX`
     is looked up among the prediction markets only.
 
     Raises :class:`ImportError` with an install hint if ccxt is absent, and
@@ -167,15 +177,23 @@ class CcxtSource:
         # the venue's recent history, which can reach back hours; trades
         # before this are dropped rather than stamped as received now.
         self._opened_ms: int | None = None
+        # Trades already written, oldest first, capped at _SEEN_TRADES_LIMIT.
+        # A venue can deliver one trade twice: ccxt's Polymarket websocket
+        # handed back an earlier trade alongside the next new one.
+        self._seen_trades: dict[tuple[Any, ...], None] = {}
 
         # Diagnostics (surfaced in meta.json via SupportsDiagnostics).
         self.exchange_id = ""
         # The instrument's price increment, when the venue's metadata gives
         # one; meta.json records it so the replay uses the same price grid.
         self.tick_size: float | None = None
+        # How many times a price arrived between two ticks and the recorded
+        # tick size was made finer to fit it (see _fit_tick).
+        self.tick_size_changes = 0
         self.book_updates = 0
         self.depth_rows = 0
         self.trade_events = 0
+        self.duplicate_trades = 0
         self.errors = 0
 
     # -- configuration ------------------------------------------------------
@@ -229,7 +247,15 @@ class CcxtSource:
         book to diff subsequent updates against.
         """
         self._configure(config)
-        book = await self._exchange.fetch_order_book(self._symbol, self._depth_limit)
+        try:
+            book = await self._exchange.fetch_order_book(
+                self._symbol, self._depth_limit
+            )
+        except Exception:
+            # stream() closes the connection when it ends; a capture that
+            # fails here never reaches it.
+            await self._close()
+            raise
         # Fetching the book loads the venue's market metadata, so the tick
         # size can be read from here on.
         self.tick_size = self._tick_size()
@@ -243,6 +269,7 @@ class CcxtSource:
             for row in book.get(key) or ():
                 price = float(row[0])
                 size = float(row[1])
+                self._fit_tick(price)
                 levels[price] = size
                 if size > 0:
                     yield {
@@ -368,7 +395,19 @@ class CcxtSource:
                     and ts_ms < since
                 ):
                     continue
+                # The whole trade, not the id alone: a Polymarket id is the
+                # settling transaction, which can carry more than one fill.
+                key = tuple(
+                    t.get(k) for k in ("id", "timestamp", "price", "amount", "side")
+                )
+                if key in self._seen_trades:
+                    self.duplicate_trades += 1
+                    continue
+                self._seen_trades[key] = None
+                if len(self._seen_trades) > _SEEN_TRADES_LIMIT:
+                    del self._seen_trades[next(iter(self._seen_trades))]
                 self.trade_events += 1
+                self._fit_tick(float(t["price"]))
                 await queue.put(("trade", self._map_trade(t), t))
                 if ts_ms is not None:
                     since = int(ts_ms) + 1
@@ -415,6 +454,7 @@ class CcxtSource:
             prev = self._last[side]
             for price, size in current.items():
                 if prev.get(price) != size:
+                    self._fit_tick(price)
                     raw = None if raw_attached else book
                     raw_attached = True
                     yield (
@@ -492,6 +532,29 @@ class CcxtSource:
             return 10.0 ** -int(step)
         return None
 
+    def _fit_tick(self, price: float) -> None:
+        """Make the recorded tick size fine enough for *price*.
+
+        A venue can make a market's tick finer during a capture: Polymarket
+        does as a price nears 0 or 1.  The replay needs a grid every written
+        price sits on, so the tick is divided by ten until *price* does.  A
+        venue with no tick size in its metadata records none, and is left so.
+        """
+        tick = self.tick_size
+        if tick is None or not off_tick_grid(price, tick):
+            return
+        while tick > _FINEST_TICK and off_tick_grid(price, tick):
+            tick = round(tick / 10, 12)
+        logger.info(
+            "[ccxt] {}: price {} is between ticks of {}; recording tick size {}",
+            self._symbol,
+            price,
+            self.tick_size,
+            tick,
+        )
+        self.tick_size = tick
+        self.tick_size_changes += 1
+
     async def _close(self) -> None:
         """Close the exchange connection if open (idempotent)."""
         ex = self._exchange
@@ -514,9 +577,11 @@ class CcxtSource:
         return {
             "exchange": self.exchange_id,
             "tick_size": self.tick_size,
+            "tick_size_changes": self.tick_size_changes,
             "book_updates": self.book_updates,
             "depth_rows": self.depth_rows,
             "trade_events": self.trade_events,
+            "duplicate_trades": self.duplicate_trades,
             "errors": self.errors,
         }
 

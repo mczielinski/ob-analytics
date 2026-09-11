@@ -10,6 +10,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Polymarket prediction markets, through the ccxt source** (#103).
+  `ob-analytics capture ccxt --exchange polymarket --pair <token id>` streams
+  one outcome's order book and trades over Polymarket's public websocket, with
+  no account or API key. `--pair` is Polymarket's token id for the outcome,
+  which the Gamma API lists as `clobTokenIds`. Each outcome is its own book,
+  and its trades are priced in that outcome.
+
+  Polymarket makes a market's tick finer as the price nears 0 or 1, so a ccxt
+  capture now makes its recorded tick size finer when a price arrives between
+  two ticks, and counts each change in `tick_size_changes` in `meta.json`. The
+  replay then reads every price exactly. See the ["Capture Polymarket
+  prediction markets"
+  how-to](https://mczielinski.github.io/ob-analytics/howto/polymarket/).
+
 - **Kalshi prediction markets, through the ccxt source** (#102).
   `ob-analytics capture ccxt --exchange kalshi --pair <market ticker>` records
   a Kalshi market's order book and trades from Kalshi's public API, with no
@@ -180,6 +194,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   tick size to set. A ccxt capture records its market's tick size in
   `meta.json`, and `ob-analytics process` and `ob-analytics audit` read it
   from there (`recorded_tick_size`), so a CLI replay needs no extra option.
+
+- **A streamed ccxt capture no longer writes a trade twice.** ccxt's
+  Polymarket websocket handed back a trade it had already delivered, together
+  with the next new one, and only a polled capture skipped repeats. Every ccxt
+  capture now skips a trade identical to one it has written: same id, time,
+  price, size and side. Two fills that share a Polymarket id (the settling
+  transaction) are both kept. `meta.json` counts the skipped repeats in
+  `duplicate_trades`.
 
 - **A polled ccxt capture no longer records trades from before it started.**
   On a venue without websockets, the first poll of the trade tape returns the

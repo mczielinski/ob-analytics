@@ -89,6 +89,22 @@ def price_to_ticks(price: object, tick_size: float) -> np.ndarray:
     return ticks.astype(np.int64)
 
 
+# How far a price may sit from a whole number of ticks, in ticks, and still
+# count as on the grid.  Large enough to absorb float division noise
+# (0.036 / 0.001 is 35.99999999999999), far below any real price difference.
+TICK_GRID_TOLERANCE = 1e-6
+
+
+def off_tick_grid(price: object, tick_size: float) -> np.ndarray:
+    """Return a boolean mask of the prices that are not a whole number of ticks.
+
+    :func:`price_to_ticks` rounds to the nearest tick, so it would move every
+    price this mask marks.  *price* is a scalar or any array-like of floats.
+    """
+    in_ticks = np.asarray(price, dtype=np.float64) / tick_size
+    return np.abs(in_ticks - np.round(in_ticks)) > TICK_GRID_TOLERANCE
+
+
 def ticks_to_price(
     ticks: object, tick_size: float, *, decimals: int | None = None
 ) -> np.ndarray:

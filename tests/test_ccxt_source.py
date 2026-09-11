@@ -126,6 +126,16 @@ class TestConformance:
         assert cap._use_ws_book is True
         assert cap._use_ws_trades is True
 
+    def test_failed_snapshot_closes_the_exchange(self, tmp_path):
+        class _Unresolvable(_FakeCcxtExchange):
+            async def fetch_order_book(self, symbol, limit=None):
+                raise ValueError("could not resolve outcome")
+
+        ex = _Unresolvable({"bids": [], "asks": [], "timestamp": 0})
+        with pytest.raises(ValueError, match="resolve"):
+            asyncio.run(_collect_snapshot(_source(ex), _cfg(tmp_path)))
+        assert ex.closed is True
+
 
 # ---------------------------------------------------------------------------
 # Pure translation
@@ -341,6 +351,39 @@ class TestRestPoll:
         assert pd.read_csv(out / "trades.csv")["trade_id"].tolist() == ["new"]
 
 
+_WS_SNAPSHOT = {"bids": [[100.0, 5.0]], "asks": [[101.0, 4.0]], "timestamp": 1_000}
+
+
+class TestWebsocketTrades:
+    def _capture(self, trades, tmp_path):
+        import json
+
+        ex = _FakeCcxtExchange(_WS_SNAPSHOT, [], trades, ws=True)
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="X", out_dir=out, minutes=0.05)
+        asyncio.run(run_capturer(_source(ex), cfg))
+        meta = json.loads((out / "meta.json").read_text())
+        return pd.read_csv(out / "trades.csv"), meta
+
+    def test_a_trade_delivered_twice_is_written_once(self, tmp_path):
+        # ccxt's Polymarket websocket handed back an earlier trade alongside
+        # the next new one.
+        t1 = {"id": "a", "timestamp": 2_000, "price": 100.0, "amount": 1.0}
+        t2 = {"id": "b", "timestamp": 3_000, "price": 101.0, "amount": 2.0}
+        trades, meta = self._capture([[t1], [t1, t2]], tmp_path)
+        assert trades["trade_id"].tolist() == ["a", "b"]
+        assert meta["duplicate_trades"] == 1
+
+    def test_two_fills_sharing_an_id_are_both_written(self, tmp_path):
+        # A Polymarket trade id is the settling transaction, which can carry
+        # more than one fill; only an exact repeat is a duplicate.
+        f1 = {"id": "0xtx", "timestamp": 2_000, "price": 100.0, "amount": 1.0}
+        f2 = {"id": "0xtx", "timestamp": 2_000, "price": 100.0, "amount": 3.0}
+        trades, meta = self._capture([[f1, f2]], tmp_path)
+        assert trades["amount"].tolist() == [1.0, 3.0]
+        assert meta["duplicate_trades"] == 0
+
+
 # ---------------------------------------------------------------------------
 # ccxt-dependent (skipped without the extra)
 # ---------------------------------------------------------------------------
@@ -439,6 +482,36 @@ class TestTickSize:
     def test_decimal_places_mode_is_converted(self, tmp_path):
         ex = _FakeWithMetadata(_TICK_SNAPSHOT, precision=2, mode=2)
         assert self._meta_tick(ex, tmp_path) == 0.01
+
+    def _meta(self, exchange, tmp_path):
+        import json
+
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="X", out_dir=out, minutes=0.05)
+        asyncio.run(run_capturer(_source(exchange, poll_interval=0.0), cfg))
+        return json.loads((out / "meta.json").read_text())
+
+    def test_a_finer_book_price_makes_the_tick_finer(self, tmp_path):
+        # Polymarket makes a market's tick finer as a price nears 0 or 1; the
+        # capture records a grid every written price sits on.
+        snap = {"bids": [[0.05, 5.0]], "asks": [[0.06, 4.0]], "timestamp": 1_000}
+        later = [{"bids": [[0.035, 5.0]], "asks": [[0.06, 4.0]], "timestamp": 2_000}]
+        ex = _FakeWithMetadata(snap, later, precision=0.01, mode=4)
+        meta = self._meta(ex, tmp_path)
+        assert meta["tick_size"] == 0.001
+        assert meta["tick_size_changes"] == 1
+
+    def test_a_finer_trade_price_makes_the_tick_finer(self, tmp_path):
+        snap = {"bids": [[0.05, 5.0]], "asks": [[0.06, 4.0]], "timestamp": 1_000}
+        trade = {"id": "t1", "timestamp": 2_000, "price": 0.0525, "amount": 1.0}
+        ex = _FakeWithMetadata(snap, [], [[trade]], precision=0.01, mode=4)
+        assert self._meta(ex, tmp_path)["tick_size"] == 0.0001
+
+    def test_no_recorded_tick_is_left_alone(self, tmp_path):
+        snap = {"bids": [[0.035, 5.0]], "asks": [[0.06, 4.0]], "timestamp": 1_000}
+        meta = self._meta(_FakeCcxtExchange(snap), tmp_path)
+        assert meta["tick_size"] is None
+        assert meta["tick_size_changes"] == 0
 
     def test_significant_digits_has_no_grid(self, tmp_path):
         ex = _FakeWithMetadata(_TICK_SNAPSHOT, precision=5, mode=3)
