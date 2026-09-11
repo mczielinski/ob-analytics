@@ -10,6 +10,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **A capture records which rows came from its opening snapshot** (#237).
+  `orders.csv` and `depth.csv` gain an `origin` column: `snapshot` for the
+  opening book, `stream` for a live message, `shutdown` for a synthetic
+  close-out. The capture runner fills it in, so every live source gets it
+  without a change, and the loaders carry it through to `events`. Before this,
+  the only way to tell a snapshot row from a live one was to compare its
+  `exchange_timestamp` with `snapshot_microtimestamp` in `meta.json`.
+
+  `meta.json` also reports `n_snapshot_unconfirmed`: how many orders in the
+  opening book no later order event or trade mentioned. The bundled Bitstamp
+  sample has 6,294 of 6,512. Almost all of them sit far from the touch and did
+  not trade, but two stale asks among them held the best ask for most of the
+  session. See ["Capture live
+  data"](https://mczielinski.github.io/ob-analytics/howto/live-capture/).
+
 - **`audit` names stale resting orders** (#234). A trade above a resting ask,
   or below a resting bid, shows that the order has gone. An order the venue
   then does not report again within one second is now reported as a
@@ -138,6 +153,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   how-to document the distinction.
 
 ### Fixed
+
+- **A Bitstamp capture no longer starts from a snapshot older than its stream**
+  (#237). The capturer subscribes to the WebSocket, then fetches the REST book.
+  It assumed the stream already covered the moment the book describes, but it
+  often does not: in a live test the first order message came 0.7 s after the
+  snapshot's `microtimestamp`, and the bundled sample shows the same 0.74 s gap.
+  An order deleted in that gap stayed in the capture until the synthetic
+  `deleted` at shutdown. In the bundled sample, one such ask was the best ask for
+  89% of the session.
+
+  The capturer now fetches the book again, a second apart and up to 10 times,
+  until some buffered order message is at or before the snapshot's
+  `microtimestamp`. `meta.json` gains `snapshot_fetches` and
+  `snapshot_overlap`. In the live test, the second fetch no longer listed any
+  of the 15 orders that were gone. Eight of those were orders that trades
+  printed through.
 
 - **A price level now empties when the order resting on it goes away.**
   `price_level_volume` added an order's volume at the price on its `created`

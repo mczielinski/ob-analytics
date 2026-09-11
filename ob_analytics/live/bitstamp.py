@@ -11,6 +11,9 @@ The capturer preserves the rich behaviour of the historical script:
 
 * Pulls a REST order-book snapshot concurrently with WS reads so no
   pre-snapshot frames are lost during the HTTP round-trip.
+* Fetches the snapshot again until it overlaps the stream: a buffered live
+  order event must be at or before the snapshot's ``microtimestamp``, so
+  nothing that changed between the two is missed.
 * Drops live ``order_*`` events whose ``microtimestamp`` is older than
   the snapshot (already reflected in the synthetic ``created`` rows).
 * Emits a synthetic ``deleted`` event at shutdown for every order still
@@ -49,6 +52,16 @@ _ACTION_MAP = {
 
 # Bitstamp ``order_type``: 0 = buy (bid), 1 = sell (ask).
 _DIRECTION_MAP = {0: "bid", 1: "ask"}
+
+# A snapshot is only usable if the stream already covers its moment: then every
+# change after the snapshot arrives on the stream. Bitstamp's REST book can
+# describe a moment before the subscription delivers anything -- a live
+# measurement for issue #237 put the first order event 0.7 s after the
+# snapshot -- and an order deleted inside that gap rests in the capture for the
+# whole run. So the snapshot is fetched again, waiting this long in between,
+# until a buffered order event is at or before its microtimestamp.
+SNAPSHOT_MAX_FETCHES = 10
+SNAPSHOT_RETRY_SECONDS = 1.0
 
 
 def _fetch_book_snapshot(pair: str) -> dict[str, Any]:
@@ -100,6 +113,10 @@ class BitstampCapturer:
         self.synthetic_created = 0
         self.synthetic_deleted = 0
         self.reconnects = 0
+        # How many REST fetches the opening snapshot took, and whether the one
+        # used overlapped the stream (see SNAPSHOT_MAX_FETCHES).
+        self.snapshot_fetches = 0
+        self.snapshot_overlap = False
 
     # ---------------------------------------------------------------
     # snapshot
@@ -111,6 +128,15 @@ class BitstampCapturer:
         While the REST round-trip is in flight, WS frames are buffered so
         no live events are lost. :meth:`stream` drains that buffer before
         entering the long ``recv`` loop.
+
+        The snapshot is fetched again until it overlaps the stream: some
+        buffered live order event must be at or before its
+        ``microtimestamp``. A snapshot older than everything the stream has
+        delivered leaves a gap, and an order deleted inside it would rest in
+        the capture until the synthetic ``deleted`` at shutdown. After
+        :data:`SNAPSHOT_MAX_FETCHES` tries the last snapshot is used anyway,
+        with a warning, and ``diagnostics()`` reports
+        ``snapshot_overlap: False``.
         """
         orders_channel = f"live_orders_{config.pair}"
         trades_channel = f"live_trades_{config.pair}"
@@ -121,35 +147,48 @@ class BitstampCapturer:
         # closed deterministically in ``stream``'s ``finally``.
         await self._open_ws([orders_channel, trades_channel])
 
-        snap_task = asyncio.create_task(
-            asyncio.to_thread(_fetch_book_snapshot, config.pair)
-        )
-
-        # While REST is in flight, buffer WS frames.
-        while not snap_task.done():
+        snap: dict[str, Any] | None = None
+        for attempt in range(1, SNAPSHOT_MAX_FETCHES + 1):
+            if attempt > 1:
+                await self._buffer_for(SNAPSHOT_RETRY_SECONDS)
             try:
-                raw = await asyncio.wait_for(self._ws.recv(), timeout=0.5)
-            except TimeoutError:
-                continue
-            recv_ms = int(time.time() * 1000)
-            try:
-                msg = json.loads(raw)
-            except json.JSONDecodeError:
-                continue
-            self._buffered.append((msg, recv_ms))
-
-        try:
-            snap = await snap_task
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            logger.warning(
-                "[bitstamp] snapshot fetch failed ({!r}); continuing without "
-                "seed (incomplete order lifecycles likely)",
-                exc,
+                fetched = await self._fetch_while_buffering(config.pair)
+            except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+                if snap is None:
+                    logger.warning(
+                        "[bitstamp] snapshot fetch failed ({!r}); continuing "
+                        "without seed (incomplete order lifecycles likely)",
+                        exc,
+                    )
+                    self._snapshot_us = 0
+                    return
+                logger.warning(
+                    "[bitstamp] snapshot refetch failed ({!r}); keeping the "
+                    "previous snapshot",
+                    exc,
+                )
+                break
+            snap = fetched
+            self.snapshot_fetches = attempt
+            self._snapshot_us = int(snap.get("microtimestamp", "0"))
+            first_us = self._first_buffered_order_us(orders_channel)
+            if first_us is not None and 0 < first_us <= self._snapshot_us:
+                self.snapshot_overlap = True
+                break
+            logger.info(
+                "[bitstamp] snapshot (microtimestamp={}) does not overlap the "
+                "stream (first order event: {}); fetching again",
+                self._snapshot_us,
+                first_us,
             )
-            self._snapshot_us = 0
-            return
+        if not self.snapshot_overlap:
+            logger.warning(
+                "[bitstamp] no snapshot overlapped the stream after {} fetches; "
+                "orders removed just before the stream started may stay on "
+                "the book until shutdown",
+                self.snapshot_fetches,
+            )
 
-        self._snapshot_us = int(snap.get("microtimestamp", "0"))
         snap_ms = (
             self._snapshot_us // 1000 if self._snapshot_us else int(time.time() * 1000)
         )
@@ -286,6 +325,46 @@ class BitstampCapturer:
     # ---------------------------------------------------------------
     # internals
     # ---------------------------------------------------------------
+
+    async def _buffer_one(self, timeout: float) -> None:
+        """Receive one WS frame into the snapshot buffer, if one arrives."""
+        try:
+            raw = await asyncio.wait_for(self._ws.recv(), timeout=timeout)
+        except TimeoutError:
+            return
+        recv_ms = int(time.time() * 1000)
+        try:
+            msg = json.loads(raw)
+        except json.JSONDecodeError:
+            return
+        self._buffered.append((msg, recv_ms))
+
+    async def _buffer_for(self, seconds: float) -> None:
+        """Buffer WS frames for *seconds* of wall-clock time."""
+        deadline = time.monotonic() + seconds
+        while (remaining := deadline - time.monotonic()) > 0:
+            await self._buffer_one(timeout=min(remaining, 0.5))
+
+    async def _fetch_while_buffering(self, pair: str) -> dict[str, Any]:
+        """GET the REST book, buffering WS frames while it is in flight."""
+        task = asyncio.create_task(asyncio.to_thread(_fetch_book_snapshot, pair))
+        while not task.done():
+            await self._buffer_one(timeout=0.5)
+        return await task
+
+    def _first_buffered_order_us(self, orders_channel: str) -> int | None:
+        """The earliest ``microtimestamp`` among buffered live order events."""
+        stamps = []
+        for msg, _recv_ms in self._buffered:
+            if msg.get("channel") != orders_channel:
+                continue
+            if msg.get("event") not in _ACTION_MAP:
+                continue
+            try:
+                stamps.append(int((msg.get("data") or {})["microtimestamp"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+        return min(stamps, default=None)
 
     @staticmethod
     async def _subscribe(ws: Any, channels: list[str]) -> None:
@@ -451,6 +530,8 @@ class BitstampCapturer:
         """Return per-capturer counters for inclusion in meta.json."""
         return {
             "snapshot_microtimestamp": self._snapshot_us,
+            "snapshot_fetches": self.snapshot_fetches,
+            "snapshot_overlap": self.snapshot_overlap,
             "synthetic_created": self.synthetic_created,
             "synthetic_deleted": self.synthetic_deleted,
             "pre_snapshot_skipped": self.pre_snapshot_skipped,
