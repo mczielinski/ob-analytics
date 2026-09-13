@@ -82,10 +82,16 @@ Timestamps are tz-aware UTC nanoseconds (the schema's canonical time model)
 starting from an arbitrary Monday morning; ``exchange_timestamp`` equals
 ``timestamp`` (as in LOBSTER sessions, where only exchange time exists).
 
-Prices are stored as integer ticks (the schema's canonical price model).  The
-toy book has a tick size of ``1.0`` — the prices 98-103 are already whole
-ticks — so the stored integers read as the same numbers the script above lists;
-multiply by ``TICK_SIZE`` (``1.0``) for the quote currency.
+Prices are stored as integer ticks and sizes as integer lots (the schema's
+canonical price and size models).  The toy book has a tick size of ``1.0`` and a
+lot size of ``1.0`` — the prices 98-103 and the sizes 1-3 are already whole
+ticks and whole lots — so the stored integers read as the same numbers the
+script above lists; multiply by ``TICK_SIZE`` (``1.0``) for the quote currency
+and by ``LOT_SIZE`` (``1.0``) for the base asset.  Both constants apply to the
+L2 samples below as well.  Anything that reads the toy frames back as floats —
+an export to a backtesting engine, say — needs both: a
+``PipelineConfig(tick_size=TICK_SIZE, lot_size=LOT_SIZE)``, not the config
+defaults, whose ``lot_size`` of ``1e-8`` would scale a size of 2 to ``2e-08``.
 """
 
 from __future__ import annotations
@@ -93,12 +99,24 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-__all__ = ["TICK_SIZE", "toy_events", "toy_l2_depth", "toy_l2_trades", "toy_trades"]
+__all__ = [
+    "LOT_SIZE",
+    "TICK_SIZE",
+    "toy_events",
+    "toy_l2_depth",
+    "toy_l2_trades",
+    "toy_trades",
+]
 
 #: Tick size of the toy book (issue #155).  ``1.0`` so the integer-tick prices
 #: equal the whole-number prices in the script; the display price is
 #: ``ticks * TICK_SIZE``.
 TICK_SIZE = 1.0
+
+#: Lot size of the toy book (issue #226).  ``1.0`` so the integer-lot sizes
+#: equal the whole-number sizes in the script; the base-asset size is
+#: ``lots * LOT_SIZE``.
+LOT_SIZE = 1.0
 
 _BASE = pd.Timestamp("2026-01-05 10:00:00")
 
@@ -196,6 +214,7 @@ def toy_events() -> pd.DataFrame:
             "exchange_timestamp": ts.copy(),
             # Integer ticks (issue #155); TICK_SIZE is 1.0, so ticks == price.
             "price": np.array([e[5] for e in _EVENTS], dtype=np.int64),
+            # Integer lots (issue #226); LOT_SIZE is 1.0, so lots == size.
             "volume": np.array([e[6] for e in _EVENTS], dtype=np.int64),
             "action": pd.Categorical(
                 [e[3] for e in _EVENTS],
