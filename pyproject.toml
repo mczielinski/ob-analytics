@@ -114,6 +114,17 @@ combine-as-imports = true
 # dead code (B018) -- both by design.
 "docs/tutorial/src/*.py" = ["E402", "B018"]
 
+# The parity tests import hftbacktest and nautilus-trader, which live in the
+# ``backtest-engines`` group rather than ``dev``, so the type check runs with
+# neither installed.  Stated once here instead of on every import, because an
+# inline suppression would itself become an unused-suppression error for a
+# contributor who does install the group.
+[[tool.ty.overrides]]
+include = ["tests/test_backtest_parity.py"]
+
+[tool.ty.overrides.rules]
+unresolved-import = "ignore"
+
 [tool.hatch.build.targets.sdist]
 include = ["ob_analytics", "tests"]
 

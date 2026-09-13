@@ -92,7 +92,7 @@ class TestTokenBook:
                 "side": "SELL",
                 "asset": "123",
             },
-            _OUTCOME,
+            _OUTCOME,  # ty: ignore[invalid-argument-type]
         )
         assert trade["price"] == 0.36
         assert trade["amount"] == 71.39

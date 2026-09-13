@@ -141,8 +141,11 @@ class TestPreExistingClassification:
 class TestStreamCountsSurviveCancellation:
     """WS-1.6: meta.json counters must include rows streamed before SIGINT."""
 
-    def test_cancelled_stream_keeps_counts(self):
+    def test_cancelled_stream_keeps_counts(self, tmp_path):
+        from ob_analytics.config import SourceSettings
+        from ob_analytics.live._base import CaptureConfig
         from ob_analytics.live._runner import _stream
+        from ob_analytics.protocols import FeedType, Level
 
         class _Sink:
             def __init__(self):
@@ -150,10 +153,13 @@ class TestStreamCountsSurviveCancellation:
                 self.trades = 0
                 self.raw = 0
 
-            def write_order(self, ev):
+            def write_order(self, event):
                 self.orders += 1
 
-            def write_trade(self, ev):
+            def write_depth(self, event):
+                pass
+
+            def write_trade(self, event):
                 self.trades += 1
 
             def write_raw(self, frame):
@@ -164,6 +170,9 @@ class TestStreamCountsSurviveCancellation:
 
         class _Capturer:
             name = "fake"
+            level = Level.L3
+            feed_type = FeedType.DIFF_FEED
+            settings = SourceSettings()
 
             async def stream(self, config):
                 for i in range(1000):
@@ -182,7 +191,8 @@ class TestStreamCountsSurviveCancellation:
         async def run() -> dict[str, int]:
             sink = _Sink()
             counts = {"order": 0, "trade": 0, "raw": 0}
-            task = asyncio.create_task(_stream(_Capturer(), None, sink, counts))
+            config = CaptureConfig(pair="btcusd", out_dir=tmp_path)
+            task = asyncio.create_task(_stream(_Capturer(), config, sink, counts))
             await asyncio.sleep(0.05)
             task.cancel()
             with pytest.raises(asyncio.CancelledError):

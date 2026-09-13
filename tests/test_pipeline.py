@@ -90,7 +90,7 @@ class TestPipelineResult:
             config=PipelineConfig(),
         )
         with pytest.raises(AttributeError):
-            result.events = pd.DataFrame({"new": [1]})
+            result.events = pd.DataFrame({"new": [1]})  # ty: ignore[invalid-assignment]
 
 
 class TestPipelineWithMocks:
@@ -222,9 +222,9 @@ class TestPipelineFlow:
         from ob_analytics import Pipeline
 
         with pytest.raises(TypeError):
-            Pipeline(matcher=object())  # type: ignore[call-arg]
+            Pipeline(matcher=object())  # ty: ignore[unknown-argument]
         with pytest.raises(TypeError):
-            Pipeline(trade_inferrer=object())  # type: ignore[call-arg]
+            Pipeline(trade_inferrer=object())  # ty: ignore[unknown-argument]
 
 
 class TestPipelineEndToEnd:

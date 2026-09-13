@@ -153,7 +153,7 @@ uv run pre-commit install
 ```bash
 uv run pytest tests/ -v
 uv run ruff check ob_analytics/ tests/
-uv run ty check ob_analytics/
+uv run ty check ob_analytics/ tests/
 ```
 
 CI runs automatically on push/PR via GitHub Actions — lint, type check,

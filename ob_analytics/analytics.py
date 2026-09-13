@@ -19,7 +19,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, TypedDict
 
 import numpy as np
 import pandas as pd
@@ -412,6 +412,27 @@ def uncross_book_sides(
     return bids, asks
 
 
+class OrderBookSnapshot(TypedDict):
+    """The order book at one instant, as :func:`order_book` returns it.
+
+    A plain dictionary at run time; the type names its three fixed keys so
+    that callers indexing it get a DataFrame rather than a wide union.
+
+    Attributes
+    ----------
+    timestamp : datetime.datetime or pandas.Timestamp
+        The instant the book was evaluated at.
+    bids : pandas.DataFrame
+        Active bid orders, best first.
+    asks : pandas.DataFrame
+        Active ask orders, best last.
+    """
+
+    timestamp: datetime | pd.Timestamp
+    bids: pd.DataFrame
+    asks: pd.DataFrame
+
+
 def order_book(
     events: pd.DataFrame,
     tp: datetime | None = None,
@@ -420,7 +441,7 @@ def order_book(
     min_bid: float = 0,
     max_ask: float = np.inf,
     uncross: bool = False,
-) -> dict[str, datetime | pd.Timestamp | pd.DataFrame]:
+) -> OrderBookSnapshot:
     """Reconstruct the order book at a specific point in time.
 
     The reconstruction itself is :func:`ob_analytics.engine.book_state`; this
@@ -454,7 +475,7 @@ def order_book(
 
     Returns
     -------
-    dict[str, datetime.datetime or pandas.DataFrame]
+    OrderBookSnapshot
         A dictionary containing:
         - 'timestamp': The evaluation timestamp.
         - 'asks': DataFrame of active ask orders.

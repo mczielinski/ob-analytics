@@ -136,7 +136,7 @@ class TestPlotConcept:
     def test_frozen(self) -> None:
         c = _l2_concept()
         with pytest.raises(dataclasses.FrozenInstanceError):
-            c.key = "other"
+            c.key = "other"  # ty: ignore[invalid-assignment]
 
 
 class TestGalleryModel:

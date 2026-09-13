@@ -94,7 +94,7 @@ class TestYesBook:
                 "count_fp": "2.00",
                 "taker_side": "no",
             },
-            _YES_OUTCOME,
+            _YES_OUTCOME,  # ty: ignore[invalid-argument-type]
         )
         assert trade["price"] == 0.12  # the Yes price
         assert trade["amount"] == 2.0

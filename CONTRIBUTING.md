@@ -39,7 +39,7 @@ The same three commands CI runs:
 ```bash
 uv run pytest tests/ -v
 uv run ruff check ob_analytics/ tests/
-uv run ty check ob_analytics/
+uv run ty check ob_analytics/ tests/
 ```
 
 Coverage:

@@ -45,7 +45,7 @@ repos:
 
       - id: ty
         name: ty check
-        entry: uv run --frozen --group dev --extra interactive --extra live --extra ccxt --extra cryptofeed ty check ob_analytics/
+        entry: uv run --frozen --group dev --extra interactive --extra live --extra ccxt --extra cryptofeed ty check ob_analytics/ tests/
         language: system
         types: [python]
         pass_filenames: false

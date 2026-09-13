@@ -98,9 +98,9 @@ class TestHftbacktestWriter:
         #   CANCEL(11) | EXCH | LOCAL | SELL = 11 + 2147483648 + 1073741824 + 268435456
         events = _events(
             [
-                ("created", "bid", 99, 2.0, 7),
-                ("changed", "bid", 99, 1.0, 7),
-                ("deleted", "ask", 101, 3.0, 8),
+                ("created", "bid", 99, 2, 7),
+                ("changed", "bid", 99, 1, 7),
+                ("deleted", "ask", 101, 3, 8),
             ]
         )
         dest = tmp_path / "session.npz"
@@ -138,9 +138,9 @@ class TestHftbacktestWriter:
         # way (the Bitstamp path is ordered by order id).
         events = _events(
             [
-                ("created", "bid", 99, 2.0, 7),
-                ("created", "ask", 101, 3.0, 8),
-                ("deleted", "bid", 99, 2.0, 7),
+                ("created", "bid", 99, 2, 7),
+                ("created", "ask", 101, 3, 8),
+                ("deleted", "bid", 99, 2, 7),
             ]
         )
         stamps = [
@@ -161,7 +161,7 @@ class TestHftbacktestWriter:
         assert list(array["order_id"]) == [8, 7, 7]
 
     def test_carries_both_clocks_as_nanoseconds(self, tmp_path):
-        events = _events([("created", "bid", 99, 2.0, 7)])
+        events = _events([("created", "bid", 99, 2, 7)])
         events["exchange_timestamp"] = pd.Timestamp("2026-01-05 10:00:00", tz="UTC")
         events["timestamp"] = pd.Timestamp("2026-01-05 10:00:00.25", tz="UTC")
         dest = tmp_path / "session.npz"
@@ -188,9 +188,9 @@ class TestNautilusWriter:
     def test_writes_the_seven_wrangler_columns_on_a_utc_index(self, tmp_path):
         events = _events(
             [
-                ("created", "bid", 99, 2.0, 7),
-                ("changed", "bid", 99, 1.0, 7),
-                ("deleted", "ask", 101, 3.0, 8),
+                ("created", "bid", 99, 2, 7),
+                ("changed", "bid", 99, 1, 7),
+                ("deleted", "ask", 101, 3, 8),
             ]
         )
         dest = tmp_path / "deltas.parquet"
@@ -261,9 +261,7 @@ class TestNautilusWriter:
 
     def test_drops_a_delta_that_never_had_a_size(self, tmp_path):
         # Nothing sensible to tell the engine about an order that never rested.
-        events = _events(
-            [("created", "bid", 99, 0.0, 7), ("created", "ask", 101, 3.0, 8)]
-        )
+        events = _events([("created", "bid", 99, 0, 7), ("created", "ask", 101, 3, 8)])
         dest = tmp_path / "deltas.parquet"
 
         save_data(

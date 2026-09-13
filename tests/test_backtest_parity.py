@@ -16,6 +16,10 @@ only these tests do.  Each half skips when its engine is absent, the way the
 ccxt and cryptofeed tests already do.  Nautilus additionally publishes no build
 that takes both Python 3.11 and pandas 3, so on 3.11 its half always skips.
 
+The type checker runs without that group installed, for the same reason; the
+``[[tool.ty.overrides]]`` entry in ``pyproject.toml`` is what lets the engine
+imports below go unresolved without failing it.
+
 This is what found the two defects fixed alongside it: the writer was exporting
 never-resting marketable orders as book liquidity, and a price level built from
 a float running sum did not empty to exactly zero (issues #224 and #226).
@@ -82,7 +86,10 @@ def _hftbacktest_touch(array: np.ndarray) -> pd.DataFrame:
     result is indexed by the engine's own clock and reduced to the last state
     at each instant, because several events can share one.
     """
-    from hftbacktest import BacktestAsset, HashMapMarketDepthBacktest
+    from hftbacktest import (
+        BacktestAsset,
+        HashMapMarketDepthBacktest,
+    )
 
     asset = (
         BacktestAsset()
@@ -190,7 +197,9 @@ class TestHftbacktestParity:
         # The cheap half of the cross-check: it needs no backtest, only the
         # engine's own validator, and it is what catches a feed written in the
         # wrong order for either of hftbacktest's two clocks.
-        from hftbacktest.data import validate_event_order
+        from hftbacktest.data import (
+            validate_event_order,
+        )
 
         result = _session(seed)
         array = to_hftbacktest_array(
@@ -235,8 +244,12 @@ class TestNautilusParity:
     """The delta frame must be one Nautilus' own wrangler accepts and replays."""
 
     def test_wrangler_accepts_the_written_deltas(self):
-        from nautilus_trader.persistence.wranglers import OrderBookDeltaDataWrangler
-        from nautilus_trader.test_kit.providers import TestInstrumentProvider
+        from nautilus_trader.persistence.wranglers import (
+            OrderBookDeltaDataWrangler,
+        )
+        from nautilus_trader.test_kit.providers import (
+            TestInstrumentProvider,
+        )
 
         result = _session(224)
         deltas = to_nautilus_deltas(
@@ -250,10 +263,18 @@ class TestNautilusParity:
     def test_replaying_the_deltas_reproduces_our_touch(self):
         # Nautilus' own book, built from the deltas the writer emits, must name
         # the same best bid and ask as depth_summary.
-        from nautilus_trader.model.book import OrderBook
-        from nautilus_trader.model.enums import BookType
-        from nautilus_trader.persistence.wranglers import OrderBookDeltaDataWrangler
-        from nautilus_trader.test_kit.providers import TestInstrumentProvider
+        from nautilus_trader.model.book import (
+            OrderBook,
+        )
+        from nautilus_trader.model.enums import (
+            BookType,
+        )
+        from nautilus_trader.persistence.wranglers import (
+            OrderBookDeltaDataWrangler,
+        )
+        from nautilus_trader.test_kit.providers import (
+            TestInstrumentProvider,
+        )
 
         result = _session(224)
         deltas = to_nautilus_deltas(

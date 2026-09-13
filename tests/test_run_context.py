@@ -16,7 +16,7 @@ def test_run_context_defaults_are_empty():
 def test_run_context_is_frozen():
     ctx = RunContext(trading_date="2012-06-21")
     with pytest.raises(FrozenInstanceError):
-        ctx.trading_date = "2013-01-01"  # type: ignore[misc]
+        ctx.trading_date = "2013-01-01"  # ty: ignore[invalid-assignment]
 
 
 def test_lobster_source_requires_trading_date_via_ctx():

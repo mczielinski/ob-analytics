@@ -22,7 +22,7 @@ class SpreadWidthMetric:
 
     name = "spread_width"
     title = "Spread Width"
-    levels = (Level.L2, Level.L3)
+    levels: tuple[Level, ...] = (Level.L2, Level.L3)
 
     def compute(self, result) -> pd.DataFrame:
         summary = result.depth_summary
@@ -113,7 +113,7 @@ class HiddenRefillMetric:
 
     name = "hidden_refill"
     title = "Hidden Refill"
-    levels = (Level.L3,)
+    levels: tuple[Level, ...] = (Level.L3,)
 
     def compute(self, result) -> pd.DataFrame:
         return result.events[["timestamp", "id"]].head(1)
@@ -157,7 +157,7 @@ class BrokenMetric:
 
     name = "broken"
     title = "Broken"
-    levels = (Level.L2, Level.L3)
+    levels: tuple[Level, ...] = (Level.L2, Level.L3)
 
     def compute(self, result) -> pd.DataFrame:
         raise RuntimeError("no data for this run")
@@ -263,6 +263,7 @@ def test_plugin_metric_runs_and_plots_from_the_public_api(
     from matplotlib.figure import Figure
 
     import ob_analytics as ob
+    import ob_analytics.visualization  # ob.visualization, below, needs it bound
     from ob_analytics.visualization import RENDERERS
 
     metrics.METRICS._items.clear()

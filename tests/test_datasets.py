@@ -21,6 +21,7 @@ import pytest
 from ob_analytics.analytics import order_book, order_lifecycles, set_order_types
 from ob_analytics.datasets import toy_events, toy_trades
 from ob_analytics.depth import depth_metrics, price_level_volume
+from ob_analytics.protocols import Level
 from ob_analytics.schemas import (
     validate_depth_df,
     validate_events_df,
@@ -227,14 +228,14 @@ class TestFacesRenderAtToyScale:
     """The tutorial renders these faces on the toy stream — they must accept N≈24."""
 
     def test_trade_tape_l2(self, trades: pd.DataFrame) -> None:
-        fig = plot("trade_tape", level="L2", **prepare.trades(trades))
+        fig = plot("trade_tape", level=Level.L2, **prepare.trades(trades))
         assert fig.axes
         plt.close(fig)
 
     def test_book_snapshot_l2_and_l3(self, classified: pd.DataFrame) -> None:
         tp = classified["timestamp"].iloc[0] + pd.Timedelta(seconds=30)
         snap = order_book(classified, tp=tp)
-        for level, per_order in (("L2", False), ("L3", True)):
+        for level, per_order in ((Level.L2, False), (Level.L3, True)):
             payload = prepare.book_snapshot(snap, per_order=per_order)
             fig = plot("book_snapshot", level=level, **payload)
             assert fig.axes

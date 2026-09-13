@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import pandas as pd
 import pytest
@@ -144,7 +144,7 @@ class TestBuiltInFormatsAreRegisteredWriters:
     def test_a_writer_can_ask_for_canonical_arrow_tables(self, tmp_path):
         # A writer that targets Arrow (#113's Nautilus export is the first)
         # must not have to rebuild the canonical metadata by hand.
-        seen: dict[str, object] = {}
+        seen: dict[str, Any] = {}
 
         class _ArrowWantingWriter:
             def write(self, data, dest, **kwargs):
