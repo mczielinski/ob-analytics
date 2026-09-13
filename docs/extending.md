@@ -362,7 +362,7 @@ engine installed:
 from ob_analytics import Pipeline, save_data
 from ob_analytics.config import PipelineConfig
 
-config = PipelineConfig()
+config = PipelineConfig(tick_size=0.01, lot_size=1e-8)
 result = Pipeline(config=config).run("orders.csv")
 data = {"events": result.events, "trades": result.trades}
 
@@ -371,7 +371,33 @@ save_data(data, "out/deltas.parquet", fmt="nautilus", config=config)
 ```
 
 Both scale the integer tick prices back to the quote currency using the run's
-`tick_size`, so pass the same `config` the run used.
+`tick_size`, **and** the integer lot sizes back to the base asset using its
+`lot_size`, so pass the same `config` the run used. Both matter: a `config`
+whose `lot_size` does not match the data writes sizes that are wrong by that
+ratio. hftbacktest takes the file without complaint, and Nautilus'
+`OrderBookDeltaDataWrangler` raises `ValueError: 'size' not a positive integer,
+was 0` once the sizes round to zero at the instrument's `size_precision`.
+
+Exporting the bundled toy data therefore means passing both toy constants, not
+the `PipelineConfig` defaults — whose `lot_size` of `1e-8` would turn a size of
+2 into `2e-08`:
+
+```python
+from ob_analytics import save_data
+from ob_analytics.config import PipelineConfig
+from ob_analytics.datasets import LOT_SIZE, TICK_SIZE, toy_events, toy_trades
+
+config = PipelineConfig(tick_size=TICK_SIZE, lot_size=LOT_SIZE)
+data = {"events": toy_events(), "trades": toy_trades()}
+
+save_data(data, "out/toy.npz", fmt="hftbacktest", config=config)
+save_data(data, "out/toy-deltas.parquet", fmt="nautilus", config=config)
+```
+
+The toy book's prices and sizes are already whole ticks and whole lots, so both
+constants are `1.0` and the export carries the same numbers the toy script
+lists. A Nautilus book built from `out/toy-deltas.parquet` then reproduces our
+own touch at the end of the stream: best bid 99, best ask 102.
 
 **hftbacktest** gets its feed-event array under the `data` member of the npz,
 which is what `np.load(path)["data"]` and `BacktestAsset.data([...])` read. The
