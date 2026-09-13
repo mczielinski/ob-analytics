@@ -37,6 +37,7 @@ from __future__ import annotations
 from math import erf, sqrt
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 
 from ob_analytics._utils import validate_columns, validate_non_empty
@@ -70,7 +71,7 @@ def _norm_cdf(z: np.ndarray) -> np.ndarray:
 # ── Tick rule ────────────────────────────────────────────────────────
 
 
-def tick_rule(prices: np.ndarray | pd.Series) -> np.ndarray:
+def tick_rule(prices: npt.ArrayLike) -> np.ndarray:
     """Classify trade signs by the tick rule.
 
     Signs each trade from the sign of its price change relative to the
@@ -85,8 +86,9 @@ def tick_rule(prices: np.ndarray | pd.Series) -> np.ndarray:
 
     Parameters
     ----------
-    prices : numpy.ndarray or pandas.Series
-        Trade prices in chronological order.
+    prices : array-like
+        Trade prices in chronological order. Anything
+        :func:`numpy.asarray` accepts: an ndarray, a Series, or a sequence.
 
     Returns
     -------
@@ -118,8 +120,8 @@ def tick_rule(prices: np.ndarray | pd.Series) -> np.ndarray:
 
 
 def lee_ready(
-    prices: np.ndarray | pd.Series,
-    mid: np.ndarray | pd.Series,
+    prices: npt.ArrayLike,
+    mid: npt.ArrayLike,
 ) -> np.ndarray:
     """Classify trade signs by the Lee–Ready quote-midpoint test.
 
@@ -134,9 +136,9 @@ def lee_ready(
 
     Parameters
     ----------
-    prices : numpy.ndarray or pandas.Series
+    prices : array-like
         Trade prices in chronological order.
-    mid : numpy.ndarray or pandas.Series
+    mid : array-like
         Prevailing quote midpoint per trade (``NaN`` where unknown).
 
     Returns

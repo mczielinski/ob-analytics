@@ -22,6 +22,8 @@ output of any format's pipeline run (Bitstamp, LOBSTER, or custom).
 The reconstructions themselves live in the
 [order-book engine](engine.md); these are their frame-level faces.
 
+::: ob_analytics.analytics.OrderBookSnapshot
+
 ::: ob_analytics.analytics.order_book
 
 ::: ob_analytics.analytics.order_lifecycles

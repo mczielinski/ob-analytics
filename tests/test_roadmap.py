@@ -836,7 +836,9 @@ def test_a_ready_issue_nothing_waits_on_is_counted_not_listed(graph, config):
 def test_the_lists_do_not_count_the_same_issue_twice(graph, config):
     """The four groups partition the open work, which is the sum a reader checks."""
     section = next_up(render_epic_body(graph, config))
-    free = int(re.search(r"any order\.\*\* (\d+) other issues", section).group(1))
+    free_match = re.search(r"any order\.\*\* (\d+) other issues", section)
+    assert free_match is not None, section
+    free = int(free_match.group(1))
     named = set(re.findall(r"^- (.+)$", section, re.MULTILINE))
     listed = {int(n) for line in named for n in re.findall(r"#(\d+)", line)}
     open_work = {n.number for n in graph.work if not n.is_closed}

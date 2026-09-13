@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -1336,7 +1337,7 @@ def check_book_payload_level(data: dict[str, Any], *, per_order: bool) -> None:
 
 
 def prepare_book_snapshot_data(
-    order_book: dict,
+    order_book: Mapping[str, Any],
     per_order: bool = False,
     volume_scale: float | None = None,
     show_quantiles: bool = False,

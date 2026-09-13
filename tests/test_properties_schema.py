@@ -267,7 +267,9 @@ def test_volume_conservation(cfg: SynthConfig) -> None:
     # Per aggressor: a market order's created size equals the volume it swept.
     created_vol = events.loc[events["action"] == "created"].set_index("id")["volume"]
     swept = trades.groupby("taker")["volume"].sum()
-    for taker_id, vol in swept.items():
+    for taker_id, vol in zip(
+        swept.index.to_numpy(), swept.to_numpy(dtype=float), strict=True
+    ):
         assert created_vol[taker_id] == pytest.approx(vol, rel=1e-9, abs=1e-6)
 
     # Price-level depth is a non-negative resting size everywhere.
@@ -290,12 +292,18 @@ def test_outstanding_size_reconciles_with_fills(cfg: SynthConfig) -> None:
         assert head["action"] == "created"
         placed = float(head["volume"])
         cum_fill = 0.0
-        for row in rows.iloc[1:].itertuples(index=False):
-            cum_fill += float(row.fill)
+        tail = rows.iloc[1:]
+        for action, fill, volume in zip(
+            tail["action"],
+            tail["fill"].to_numpy(dtype=float),
+            tail["volume"].to_numpy(dtype=float),
+            strict=True,
+        ):
+            cum_fill += fill
             outstanding = placed - cum_fill
             assert outstanding >= -1e-9
-            if row.action == "deleted" and row.fill > 0:
+            if action == "deleted" and fill > 0:
                 assert abs(outstanding) < 1e-6  # a full execution empties it
             else:
-                assert abs(float(row.volume) - outstanding) < 1e-6
+                assert abs(volume - outstanding) < 1e-6
         assert cum_fill <= placed + 1e-6

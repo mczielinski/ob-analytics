@@ -34,7 +34,7 @@ jobs:
       # websockets / ccxt, leaving imports in visualization/ and live/
       # (incl. live/ccxt_source.py's `import ccxt.pro` and
       # live/cryptofeed_source.py's `import cryptofeed`) unresolvable.
-      - run: uv run --group dev --extra interactive --extra live --extra ccxt --extra cryptofeed ty check ob_analytics/
+      - run: uv run --group dev --extra interactive --extra live --extra ccxt --extra cryptofeed ty check ob_analytics/ tests/
 
   test:
     runs-on: ubuntu-latest

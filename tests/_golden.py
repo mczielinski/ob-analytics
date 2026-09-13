@@ -20,6 +20,7 @@ pytest does not collect it.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
@@ -55,7 +56,7 @@ def df_fingerprint(df: pd.DataFrame | None) -> str:
     return h.hexdigest()
 
 
-def book_fingerprint(book: dict[str, Any]) -> str:
+def book_fingerprint(book: Mapping[str, Any]) -> str:
     """Return a stable content hash of an ``order_book`` snapshot.
 
     Combines the ``bids`` and ``asks`` frame fingerprints, so one value locks
@@ -63,7 +64,7 @@ def book_fingerprint(book: dict[str, Any]) -> str:
 
     Parameters
     ----------
-    book : dict
+    book : collections.abc.Mapping
         An :func:`~ob_analytics.analytics.order_book` result, carrying ``bids``
         and ``asks`` DataFrames.
 

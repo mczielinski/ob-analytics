@@ -29,7 +29,7 @@ class TestPipelineConfig:
     def test_frozen(self):
         cfg = PipelineConfig()
         with pytest.raises(ValidationError):
-            cfg.price_decimals = 5
+            cfg.price_decimals = 5  # ty: ignore[invalid-assignment]
 
     def test_custom_values(self):
         cfg = PipelineConfig(
@@ -52,7 +52,7 @@ class TestPipelineConfig:
 
     def test_timestamp_unit_rejects_invalid(self):
         with pytest.raises(ValidationError):
-            PipelineConfig(timestamp_unit="s")
+            PipelineConfig(timestamp_unit="s")  # ty: ignore[invalid-argument-type]
 
 
 class TestExceptionHierarchy:
