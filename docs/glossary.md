@@ -185,6 +185,44 @@ currency. Also called notional or dollar volume.
 **Signed volume**
 : Buyer-initiated volume minus seller-initiated volume. The net direction of
 the flow in a bar, and what an imbalance bar accumulates.
+## Transaction cost
+
+Implemented in [`cost`](api/cost.md).
+
+**Effective spread**
+: What a taker actually paid to cross, measured from the mid-price the trade
+crossed: `2 * D * (price - mid)`, where `D` is `+1` for a buy and `-1` for a
+sell. Doubled so it compares with a quoted spread, which also spans both
+sides of the mid. Unlike the quoted spread it is a property of trades, not of
+the book, so it reflects where in the book people actually traded.
+
+**Realized spread**
+: The part of the effective spread the liquidity provider kept, measured one
+horizon after the trade: `2 * D * (price - mid_later)`. A negative realized
+spread means the provider lost money on the trade — the flow was informed.
+
+**Price impact**
+: The rest of the effective spread: how far the trade moved the market,
+`2 * D * (mid_later - mid)`. Effective spread = realized spread + price
+impact, exactly, trade by trade.
+
+**Horizon**
+: The wait between a trade and the mid-price the realized spread is read
+against. Five minutes is the equity convention; a fast tape needs less,
+because unrelated price moves are charged to the trade as impact. There is no
+neutral value, so the horizon is reported with the number.
+
+**Amihud illiquidity**
+: Amihud (2002). The price move a unit of turnover buys, `|return| / turnover`
+over a window. High means thin: a small amount of trading swings the price.
+Needs no quotes and no aggressor side.
+
+**Roll's implied spread**
+: Roll (1984). The spread implied by bid-ask bounce, `2 * sqrt(-cov)` over the
+lag-1 autocovariance of trade price changes. It assumes an efficient price
+plus a constant half-spread and uninformed flow; on a trending or thin tape
+the autocovariance comes out positive and the estimate does not exist, which
+is reported as `NaN` beside the autocovariance rather than hidden.
 
 ## Pipeline concepts
 

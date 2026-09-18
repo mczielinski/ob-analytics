@@ -243,7 +243,7 @@ def classify_trade_sign(
                 "classify_trade_sign: method='lee_ready' requires quotes "
                 "(a frame with timestamp + mid or bid/ask columns)."
             )
-        mid_sorted = _prevailing_mid(trades["timestamp"].to_numpy()[order], quotes)
+        mid_sorted = prevailing_mid(trades["timestamp"].to_numpy()[order], quotes)
         signs_sorted = lee_ready(prices, mid_sorted)
 
     signs = np.empty(len(trades), dtype=np.int8)
@@ -256,32 +256,90 @@ def classify_trade_sign(
     )
 
 
-def _prevailing_mid(
-    trade_timestamps: np.ndarray,
+def prevailing_mid(
+    timestamps: np.ndarray,
     quotes: pd.DataFrame,
+    context: str = "classify_trade_sign",
+    *,
+    allow_exact: bool = True,
+    skip_crossed: bool = False,
 ) -> np.ndarray:
-    """Midpoint prevailing at or before each (sorted) trade timestamp.
+    """Midpoint prevailing at or before each (sorted) timestamp.
 
-    Backward as-of join of *trade_timestamps* against *quotes*.  Trades
-    before the first quote get ``NaN`` (Lee–Ready then falls back to the
-    tick rule).
+    A backward as-of join of *timestamps* against *quotes*: each instant gets
+    the midpoint of the last quote published at or before it.  Instants before
+    the first quote get ``NaN`` rather than the first quote's mid, so a caller
+    can tell "no quote yet" from a real number (Lee–Ready falls back to the
+    tick rule there; the cost metrics leave the row unmeasured).
 
-    *trade_timestamps* must be sorted ascending.
+    Any of the accepted quote-column spellings works — a mid column (``mid`` /
+    ``midprice`` / ``mid_price``) or a bid/ask pair (``best_bid_price`` /
+    ``best_ask_price``, ``best_bid`` / ``best_ask``, or ``bid`` / ``ask``) — so
+    a pipeline ``depth_summary`` can be passed straight in.
+
+    Parameters
+    ----------
+    timestamps : numpy.ndarray
+        Instants to price, **sorted ascending** (``merge_asof`` requires it).
+    quotes : pandas.DataFrame
+        Quote frame with ``timestamp`` plus a mid or bid/ask pair.
+    context : str, optional
+        Caller name, used in the error message.
+    allow_exact : bool, optional
+        Whether a quote stamped at exactly the same instant counts as
+        prevailing.  ``True`` (default) takes it.  ``False`` takes the last
+        quote *strictly before* the instant, which is what a measurement of
+        the book a trade arrived into needs: on a frame built from the same
+        event stream, the quote sharing the trade's instant is the book
+        *after* that trade consumed the touch, so counting it would measure
+        the cost against a price the trade itself had already moved.
+    skip_crossed : bool, optional
+        Whether to drop crossed quotes — best bid above best ask — from the
+        reference series, so an instant standing on one reaches back to the
+        last quote that was not crossed.  Default ``False`` keeps them.  A
+        diff feed can hold genuinely crossed resting orders, and the midpoint
+        of a crossed book is not a price anything could trade at.  Ignored
+        when *quotes* carries a mid column rather than a bid/ask pair, since
+        there is then nothing to test.
+
+    Returns
+    -------
+    numpy.ndarray
+        The prevailing midpoint per instant, ``NaN`` where none exists yet.
+
+    Raises
+    ------
+    ConfigError
+        If *quotes* lacks ``timestamp`` or any recognised price columns.
     """
-    validate_columns(quotes, {"timestamp"}, "classify_trade_sign(quotes)")
-    mid = _quote_mid(quotes)
+    validate_columns(quotes, {"timestamp"}, f"{context}(quotes)")
+    mid = _quote_mid(quotes, skip_crossed=skip_crossed)
     q = (
         pd.DataFrame({"timestamp": quotes["timestamp"].to_numpy(), "_mid": mid})
         .dropna(subset=["timestamp"])
         .sort_values("timestamp", kind="stable")
     )
-    left = pd.DataFrame({"timestamp": trade_timestamps})
-    merged = pd.merge_asof(left, q, on="timestamp", direction="backward")
+    if skip_crossed:
+        # Dropped rather than left as NaN so the join reaches the last quote
+        # that had a midpoint, instead of reporting "no mid" for the instant.
+        q = q.dropna(subset=["_mid"])
+    left = pd.DataFrame({"timestamp": timestamps})
+    merged = pd.merge_asof(
+        left,
+        q,
+        on="timestamp",
+        direction="backward",
+        allow_exact_matches=allow_exact,
+    )
     return merged["_mid"].to_numpy(dtype=np.float64)
 
 
-def _quote_mid(quotes: pd.DataFrame) -> np.ndarray:
-    """Extract a midpoint array from a quote frame's known column spellings."""
+def _quote_mid(quotes: pd.DataFrame, *, skip_crossed: bool = False) -> np.ndarray:
+    """Extract a midpoint array from a quote frame's known column spellings.
+
+    With *skip_crossed*, a row whose best bid is above its best ask yields
+    ``NaN`` instead of a midpoint: a crossed book has no midpoint to take.
+    """
     for col in _MID_COLUMNS:
         if col in quotes.columns:
             return quotes[col].to_numpy(dtype=np.float64)
@@ -289,7 +347,8 @@ def _quote_mid(quotes: pd.DataFrame) -> np.ndarray:
         if bid_col in quotes.columns and ask_col in quotes.columns:
             bid = quotes[bid_col].to_numpy(dtype=np.float64)
             ask = quotes[ask_col].to_numpy(dtype=np.float64)
-            return 0.5 * (bid + ask)
+            mid = 0.5 * (bid + ask)
+            return np.where(bid > ask, np.nan, mid) if skip_crossed else mid
     raise ConfigError(
         "classify_trade_sign: quotes need a mid column "
         f"({' / '.join(_MID_COLUMNS)}) or a bid/ask pair "

@@ -31,6 +31,11 @@ which is what makes it run from a result and draw as a plot.  :func:`bars`
 resamples the trade stream into OHLCV rows, by the clock or by traded
 activity, and takes a rule of your own through
 :func:`~ob_analytics.bars.register_bar_rule`.
+
+:mod:`~ob_analytics.cost` measures what trading cost: :func:`transaction_costs`
+splits a taker's effective spread into the part the liquidity provider kept and
+the part the market moved, and :func:`amihud` / :func:`roll_spread` read
+liquidity from the trade prices alone.
 """
 
 from importlib.metadata import PackageNotFoundError, version
@@ -59,6 +64,13 @@ from ob_analytics.bars import (
 # at import time; the Source classes are also the public per-venue entry points.
 from ob_analytics.bitstamp import BitstampSource
 from ob_analytics.config import PipelineConfig, SourceSettings
+from ob_analytics.cost import (
+    CostSummary,
+    amihud,
+    cost_summary,
+    roll_spread,
+    transaction_costs,
+)
 from ob_analytics.data import (
     OutputTables,
     ParquetWriter,
@@ -168,6 +180,7 @@ __all__ = [
     "BarRule",
     "BitstampSource",
     "ConfigError",
+    "CostSummary",
     "DataQualitySummary",
     "DataWriter",
     "DepthCsvSource",
@@ -201,6 +214,8 @@ __all__ = [
     "StaleOrder",
     "TradeSource",
     "__version__",
+    # ── Transaction cost and liquidity ───────────────────────────────
+    "amihud",
     # ── Bars ─────────────────────────────────────────────────────────
     "bars",
     # ── Trade-sign classification ────────────────────────────────────
@@ -209,6 +224,7 @@ __all__ = [
     "compute_kyle_lambda",
     # ── Flow toxicity ────────────────────────────────────────────────
     "compute_vpin",
+    "cost_summary",
     # ── Data quality ─────────────────────────────────────────────────
     "data_quality_summary",
     "detect_sequence_gaps",
@@ -228,6 +244,7 @@ __all__ = [
     "register_bar_rule",
     "register_metric",
     "register_source",
+    "roll_spread",
     # ── Sample data ──────────────────────────────────────────────────
     "sample_csv_path",
     "sample_data_dir",
@@ -240,4 +257,5 @@ __all__ = [
     "toy_l2_depth",
     "toy_l2_trades",
     "toy_trades",
+    "transaction_costs",
 ]

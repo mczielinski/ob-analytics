@@ -1526,6 +1526,86 @@ def mpl_vpin(
     return fig
 
 
+def mpl_transaction_costs(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """Render the transaction-cost decomposition: effective, realized, impact.
+
+    Two lines and the band between them.  The upper line is what the taker
+    paid; the lower is what the liquidity provider kept; the shaded gap is
+    the price impact.  Drawing the third measure as the gap rather than as a
+    third line keeps it readable as a share of the whole, which is what the
+    decomposition is for.
+    """
+    times = data["times"]
+    effective = data["effective"]
+    realized = data["realized"]
+    horizon = data["horizon"]
+
+    fig, ax = _create_axes(ax, figsize=(12, 5), theme=theme)
+
+    ax.scatter(
+        data["trade_times"],
+        data["trade_effective"],
+        s=6,
+        color="#888888",
+        alpha=0.3,
+        linewidths=0,
+        label="Per-trade effective spread",
+        zorder=1,
+    )
+
+    ax.fill_between(
+        times,
+        realized,
+        effective,
+        color=_BUY_COLOR,
+        alpha=0.25,
+        label="Price impact",
+        zorder=2,
+    )
+    ax.plot(
+        times,
+        effective,
+        color="#0072B2",
+        linewidth=2,
+        label="Effective spread",
+        zorder=3,
+    )
+    ax.plot(
+        times,
+        realized,
+        color="#CC79A7",
+        linewidth=1.6,
+        linestyle="--",
+        label="Realized spread",
+        zorder=3,
+    )
+
+    ax.axhline(y=0, color="#444444", linewidth=0.8, alpha=0.6)
+    # The per-trade scatter has a much wider range than the averages; clip to
+    # the averaged band so the lines stay readable and the outliers show as
+    # points running off the top rather than flattening everything.
+    _clip_to_series(ax, (effective, realized))
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Basis points")
+    ax.set_title(f"Transaction costs (realized spread at {horizon})")
+    format_time_axis(ax)
+    ax.legend(loc="upper left", fontsize=9)
+    fig.tight_layout()
+    return fig
+
+
+def _clip_to_series(ax: Axes, series: tuple[np.ndarray, ...], pad: float = 3.0) -> None:
+    """Set the y limits from *series*, padded, ignoring anything else drawn."""
+    finite = np.concatenate([s[np.isfinite(s)] for s in series])
+    if finite.size == 0:
+        return
+    low, high = float(finite.min()), float(finite.max())
+    margin = max((high - low) * 0.25, pad)
+    ax.set_ylim(low - margin, high + margin)
+
+
 def mpl_order_flow_imbalance(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -1981,6 +2061,7 @@ for _concept, _level, _fn in [
     ("bars", None, mpl_bars),
     ("vpin", None, mpl_vpin),
     ("order_flow_imbalance", None, mpl_order_flow_imbalance),
+    ("transaction_costs", None, mpl_transaction_costs),
     ("ofi_horizon", None, mpl_ofi_horizon),
     ("kyle_lambda", None, mpl_kyle_lambda),
     ("trading_halts", None, mpl_trading_halts),

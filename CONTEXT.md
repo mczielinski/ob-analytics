@@ -389,3 +389,34 @@ Turnover divided by volume. Named `vwap`.
 Buyer-initiated volume minus seller-initiated volume. Named `signed_volume`,
 with `buy_volume` / `sell_volume` for the two halves.
 _Avoid_: net volume, order flow
+
+## Transaction cost
+
+**Effective spread**:
+What a taker paid to cross, measured from the mid the trade crossed. Named
+`effective_spread`, with `effective_spread_bps` for the same in basis points.
+_Avoid_: realised cost, slippage, execution cost
+
+**Realized spread**:
+The part of the effective spread the liquidity provider kept, read one horizon
+later. Named `realized_spread`. Spelled the American way throughout, matching
+the literature.
+
+**Price impact**:
+The rest of the effective spread — how far the trade moved the market. Named
+`price_impact`.
+_Avoid_: adverse selection, permanent impact, market impact
+
+**Horizon**:
+The wait between a trade and the mid the realized spread is read against.
+Named `horizon`, and its unit is a pandas offset string.
+_Avoid_: lag, delay, window (a window is a span, a horizon is a single wait)
+
+**Amihud illiquidity**:
+The price move a unit of turnover buys. Named `amihud`.
+_Avoid_: ILLIQ, price impact (that is the measure above)
+
+**Roll's implied spread**:
+The spread implied by bid-ask bounce in the trade prices. Named `roll_spread`,
+computed from `autocovariance`.
+_Avoid_: implied spread on its own, serial covariance estimator

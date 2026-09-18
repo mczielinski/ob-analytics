@@ -1059,6 +1059,21 @@ def ofi_horizon_panel(
     )
 
 
+def transaction_costs_panel(costs: pd.DataFrame, *, window: str = "1min") -> PlotSpec:
+    """Build a transaction-cost panel: effective and realized spread, and impact.
+
+    *costs* is a :func:`~ob_analytics.cost.transaction_costs` frame; *window*
+    is the span the per-trade costs are volume-weighted onto for the lines.
+    """
+    return PlotSpec(
+        "transaction_costs",
+        "Transaction Costs (effective, realized, impact)",
+        "transaction_costs",
+        _viz_data.prepare_transaction_costs_data,
+        {"costs": costs, "window": window},
+    )
+
+
 def kyle_panel(kyle_result: Any) -> PlotSpec:
     """Build a Kyle's-Lambda analytic panel."""
     return PlotSpec(

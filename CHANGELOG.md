@@ -31,6 +31,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   ["Build bars from trades"
   how-to](https://mczielinski.github.io/ob-analytics/howto/bars/).
 
+- **Transaction cost and price impact** (#110). A new `cost` module answers
+  what trading cost, rather than what the book advertised.
+  `transaction_costs(trades, quotes)` returns one row per trade with the
+  effective spread — what the taker paid to cross — split into the realized
+  spread the liquidity provider kept and the price impact the trade caused,
+  in price units and in basis points. The three add up exactly, trade by
+  trade. `cost_summary()` reduces that to volume-weighted session figures and
+  reports how many trades each one could be measured on.
+
+  `amihud()` and `roll_spread()` read liquidity from the trade prices alone,
+  so they run on a tape with no quotes and no aggressor side: the price move a
+  unit of turnover buys, and the spread implied by bid-ask bounce. Roll
+  returns `NaN` with its autocovariance beside it when the tape trends and the
+  estimator has no real root, rather than reporting a number its model does
+  not support.
+
+  The mid a trade is measured against is the last quote *strictly before* it,
+  skipping crossed quotes: on a frame built from the same event stream, the
+  quote sharing a trade's instant is the book after that trade took the touch,
+  and a crossed book has no midpoint at all. A trade in the last horizon of
+  the capture has no future mid, so its realized spread is `NaN` rather than
+  the final quote reused.
+
+  The decomposition draws as a level-less `transaction_costs` face on both
+  backends — two lines with the impact as the band between them — and
+  `transaction_costs_panel()` puts it in a gallery. Both demos now include it.
+  See the ["Measure transaction costs"
+  how-to](https://mczielinski.github.io/ob-analytics/howto/transaction-costs/).
+
 - **Polymarket prediction markets, through the ccxt source** (#103).
   `ob-analytics capture ccxt --exchange polymarket --pair <token id>` streams
   one outcome's order book and trades over Polymarket's public websocket, with
@@ -271,6 +300,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   tradeable has no value, so it is now NaN.
 
 ### Changed
+
+- `trade_sign.prevailing_mid()` is now public, and takes `allow_exact` and
+  `skip_crossed` so a caller can ask for the last quote strictly before an
+  instant and skip crossed books. Both default to the previous behaviour, so
+  `classify_trade_sign` is unchanged.
 
 - **Sizes are integer lots plus a `lot_size`, not floats** (issue #226).
   **Breaking: the on-disk schema goes 3.0 → 4.0.** Every `volume` and `fill`
