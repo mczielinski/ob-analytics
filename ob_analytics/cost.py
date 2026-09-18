@@ -137,6 +137,7 @@ def transaction_costs(
     *,
     horizon: str = "1min",
     sign_method: str | None = None,
+    mid_column: str | None = None,
 ) -> pd.DataFrame:
     r"""Measure what each trade cost the taker, and where that cost went.
 
@@ -205,6 +206,16 @@ def transaction_costs(
         ``"lee_ready"`` force that classifier, overriding a native
         ``direction``.  See
         :func:`~ob_analytics.trade_sign.classify_trade_sign`.
+    mid_column : str, optional
+        Column of *quotes* to take the reference price from.  ``None``
+        (default) uses the plain mid.  Pass ``"micro_price"`` to measure
+        against the size-weighted mid instead
+        (:func:`~ob_analytics.depth.micro_price`, present on a frame from
+        :func:`~ob_analytics.depth.depth_signals`): the micro-price is the
+        better forecast of where the price is going, so an effective spread
+        measured against it charges the taker for crossing but not for the
+        move the book was already leaning toward.  The two answer different
+        questions, so the choice is the caller's.
 
     Returns
     -------
@@ -239,7 +250,14 @@ def transaction_costs(
     df = trades.sort_values("timestamp", kind="stable").reset_index(drop=True)
 
     price = df["price"].to_numpy(dtype=np.float64)
-    sign = np.where(df["direction"].to_numpy() == "buy", 1.0, -1.0)
+    # Anything that is neither side leaves the row unmeasured.  Folding an
+    # unlabelled trade into "sell" would not lose it, it would invert it: the
+    # effective spread of a buy comes back negative and drags the run average
+    # the wrong way, with nothing in the output saying so.
+    direction = df["direction"].to_numpy()
+    sign = np.select(
+        [direction == "buy", direction == "sell"], [1.0, -1.0], default=np.nan
+    )
 
     # The contemporaneous mid is the last quote *strictly before* the trade:
     # on a quote frame built from the same event stream, the row sharing the
@@ -251,15 +269,20 @@ def transaction_costs(
         "transaction_costs",
         allow_exact=False,
         skip_crossed=True,
+        mid_column=mid_column,
     )
     later = df["timestamp"] + pd.Timedelta(horizon)
+    # `require_covered` leaves the row unmeasured when the quotes do not reach
+    # the future instant, rather than reusing the final quote and reporting a
+    # shorter wait as though it were the full horizon.
     future_mid = prevailing_mid(
-        later.to_numpy(), quotes, "transaction_costs", skip_crossed=True
+        later.to_numpy(),
+        quotes,
+        "transaction_costs",
+        skip_crossed=True,
+        mid_column=mid_column,
+        require_covered=True,
     )
-    # Past the last quote a backward join keeps returning the final mid, which
-    # would silently measure a shorter horizon than the one asked for.
-    beyond = (later > quotes["timestamp"].max()).to_numpy()
-    future_mid = np.where(beyond, np.nan, future_mid)
 
     effective = 2.0 * sign * (price - mid)
     realized = 2.0 * sign * (price - future_mid)

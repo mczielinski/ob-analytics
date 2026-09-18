@@ -58,6 +58,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the capture has no future mid, so its realized spread is `NaN` rather than
   the final quote reused.
 
+  `transaction_costs` takes `mid_column` to measure against a reference other
+  than the plain mid — `"micro_price"` for the size-weighted mid, which on the
+  bundled capture reads 1.24 bps against the plain mid's 1.45.
+
   The decomposition draws as a level-less `transaction_costs` face on both
   backends — two lines with the impact as the band between them — and
   `transaction_costs_panel()` puts it in a gallery. Both demos now include it.
@@ -305,10 +309,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- `trade_sign.prevailing_mid()` is now public, and takes `allow_exact` and
-  `skip_crossed` so a caller can ask for the last quote strictly before an
-  instant and skip crossed books. Both default to the previous behaviour, so
-  `classify_trade_sign` is unchanged.
+- `trade_sign.prevailing_mid()` is now public, and takes `allow_exact`,
+  `skip_crossed`, `mid_column` and `require_covered` — the last quote strictly
+  before an instant, crossed books skipped, a named reference column such as
+  `micro_price`, and `NaN` rather than the final quote reused once the quotes
+  stop reaching. All four default to the previous behaviour, so
+  `classify_trade_sign` is unchanged. An empty quote frame now returns all
+  `NaN` instead of raising a pandas `MergeError`.
 
 - **Sizes are integer lots plus a `lot_size`, not floats** (issue #226).
   **Breaking: the on-disk schema goes 3.0 → 4.0.** Every `volume` and `fill`

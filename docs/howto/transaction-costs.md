@@ -62,6 +62,29 @@ cost. It also reports `n_trades` and `n_realized` separately: a trade in the
 last horizon of the capture has no future mid to measure against, so it
 carries an effective spread but no realized spread.
 
+## Which mid to measure against
+
+By default the reference is the plain mid, taken from the last quote
+**strictly before** the trade. Pass `mid_column` to measure against something
+else — most usefully the micro-price, the size-weighted mid that leans toward
+the side carrying the heavier opposite book:
+
+```python
+from ob_analytics.depth import depth_signals
+
+quotes = depth_signals(result.depth_summary)   # adds mid_price and micro_price
+costs = transaction_costs(
+    result.trades, quotes, horizon="5s", mid_column="micro_price"
+)
+```
+
+On the bundled capture that moves the effective spread from 1.45 to 1.24 bps.
+The micro-price is the better forecast of where the price is going, so
+measuring against it charges the taker for crossing but not for the move the
+book was already leaning toward. The two answer different questions — what the
+trade cost against the posted mid, or against the best available guess at fair
+value — so the choice is yours to make deliberately.
+
 ## Choosing the horizon
 
 The realized spread is read one *horizon* after the trade, and there is no

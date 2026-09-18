@@ -143,6 +143,61 @@ class TestTransactionCosts:
 
         assert row["mid_price"] == pytest.approx(100.0)
 
+    def test_crossed_guard_survives_a_mid_column(self):
+        """A mid column must not quietly switch the crossed-book guard off.
+
+        ``depth_signals`` adds ``mid_price`` beside the touch, so the natural
+        way to reach the micro-price also puts a mid column on the frame.  The
+        crossing is tested on the bid/ask pair whenever the frame has one, so
+        the same quotes give the same answer either way.
+        """
+        quotes = _quotes([99, 120], [101, 100], offsets=[0, 4])
+        trades = _trades([101], ["buy"], offsets=[5])
+        enriched = quotes.assign(
+            mid_price=(quotes["best_bid_price"] + quotes["best_ask_price"]) / 2
+        )
+
+        bare = transaction_costs(trades, quotes, horizon="1s").iloc[0]
+        rich = transaction_costs(trades, enriched, horizon="1s").iloc[0]
+
+        assert bare["mid_price"] == pytest.approx(100.0)
+        assert rich["mid_price"] == pytest.approx(100.0)
+        assert rich["effective_spread"] == pytest.approx(2.0)
+
+    def test_mid_column_selects_the_reference(self):
+        """`mid_column` measures against another price, e.g. the micro-price."""
+        quotes = _quotes([99] * 12, [101] * 12).assign(micro_price=100.5)
+        trades = _trades([101], ["buy"], offsets=[2])
+
+        row = transaction_costs(
+            trades, quotes, horizon="1s", mid_column="micro_price"
+        ).iloc[0]
+
+        assert row["mid_price"] == pytest.approx(100.5)
+        assert row["effective_spread"] == pytest.approx(1.0)
+
+    def test_unknown_mid_column_raises(self):
+        quotes = _quotes([99] * 5, [101] * 5)
+        trades = _trades([101], ["buy"], offsets=[1])
+
+        with pytest.raises(ConfigError, match="no column 'nope'"):
+            transaction_costs(trades, quotes, mid_column="nope")
+
+    def test_empty_quotes_leave_everything_unmeasured(self):
+        """No quote to join against is an unmeasured run, not a pandas error.
+
+        Built by filtering a real quote frame to nothing, which is how a
+        caller reaches this -- a ``depth_summary`` clipped to a window that
+        turned out to hold no quote -- and which keeps the column dtypes.
+        """
+        quotes = _quotes([99], [101]).iloc[:0]
+        trades = _trades([101], ["buy"], offsets=[1])
+
+        row = transaction_costs(trades, quotes, horizon="1s").iloc[0]
+
+        assert np.isnan(row["mid_price"])
+        assert np.isnan(row["effective_spread"])
+
     def test_no_quote_yet_leaves_the_row_unmeasured(self):
         """A trade before the first quote has nothing to measure against."""
         quotes = _quotes([99], [101], offsets=[10])
@@ -166,6 +221,53 @@ class TestTransactionCosts:
         assert np.isnan(costs["realized_spread"].iloc[1])
         # The effective spread does not need the future, so it survives.
         assert costs["effective_spread"].iloc[1] == pytest.approx(2.0)
+
+    def test_horizon_coverage_counts_only_usable_quotes(self):
+        """Quotes that end on a crossed stretch do not extend the horizon.
+
+        The newest row is at t=10 but it is crossed, so the newest quote the
+        join can return is t=0.  A trade at t=4 asking for a 5s horizon reads
+        a future instant of t=9: inside the frame's time span, but past
+        everything usable in it.  Measuring it against the t=0 quote would
+        report a 5-second wait that was really no wait at all -- realized
+        equal to effective and zero impact.
+        """
+        quotes = _quotes([99, 130], [101, 100], offsets=[0, 10])
+        trades = _trades([101], ["buy"], offsets=[4])
+
+        row = transaction_costs(trades, quotes, horizon="5s").iloc[0]
+
+        assert row["mid_price"] == pytest.approx(100.0)
+        assert np.isnan(row["future_mid_price"])
+        assert np.isnan(row["realized_spread"])
+        assert row["effective_spread"] == pytest.approx(2.0)
+
+    def test_unusable_direction_is_unmeasured_not_a_sell(self):
+        """A trade with no aggressor side must not be scored as the wrong one.
+
+        Both prints lift the ask at 101 against a mid of 100.  Folding the
+        unlabelled one into "sell" would return -2 for it -- the sign
+        inverted, a confident wrong number rather than a missing one.
+        """
+        quotes = _quotes([99] * 9, [101] * 9)
+        trades = pd.DataFrame(
+            {
+                "timestamp": [BASE + pd.Timedelta(seconds=s) for s in (3, 5)],
+                "price": [101, 101],
+                "volume": [1.0, 1.0],
+                "direction": ["buy", None],
+            }
+        )
+
+        costs = transaction_costs(trades, quotes, horizon="1s")
+
+        assert costs["effective_spread"].iloc[0] == pytest.approx(2.0)
+        assert np.isnan(costs["effective_spread"].iloc[1])
+        # And the unmeasured trade is excluded from the run figure, not
+        # averaged into it with the wrong sign.
+        summary = cost_summary(costs)
+        assert summary.n_trades == 1
+        assert summary.effective_spread == pytest.approx(2.0)
 
     def test_output_is_chronological(self):
         quotes = _quotes([99] * 12, [101] * 12)

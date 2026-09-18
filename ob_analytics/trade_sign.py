@@ -263,6 +263,8 @@ def prevailing_mid(
     *,
     allow_exact: bool = True,
     skip_crossed: bool = False,
+    mid_column: str | None = None,
+    require_covered: bool = False,
 ) -> np.ndarray:
     """Midpoint prevailing at or before each (sorted) timestamp.
 
@@ -285,6 +287,11 @@ def prevailing_mid(
         Quote frame with ``timestamp`` plus a mid or bid/ask pair.
     context : str, optional
         Caller name, used in the error message.
+    mid_column : str, optional
+        Column to read the midpoint from, e.g. ``"micro_price"`` for the
+        size-weighted mid (:func:`~ob_analytics.depth.micro_price`).  ``None``
+        (default) takes the first of the accepted mid spellings present, and
+        otherwise averages a bid/ask pair.
     allow_exact : bool, optional
         Whether a quote stamped at exactly the same instant counts as
         prevailing.  ``True`` (default) takes it.  ``False`` takes the last
@@ -298,9 +305,19 @@ def prevailing_mid(
         reference series, so an instant standing on one reaches back to the
         last quote that was not crossed.  Default ``False`` keeps them.  A
         diff feed can hold genuinely crossed resting orders, and the midpoint
-        of a crossed book is not a price anything could trade at.  Ignored
-        when *quotes* carries a mid column rather than a bid/ask pair, since
-        there is then nothing to test.
+        of a crossed book is not a price anything could trade at.  The test
+        reads the bid/ask pair whenever the frame has one, so naming a
+        *mid_column* does not disable it; a frame with neither cannot be
+        tested and is left alone.
+    require_covered : bool, optional
+        Whether an instant past the newest **usable** quote is ``NaN`` rather
+        than that quote's mid.  Default ``False`` returns the last mid known.
+        A backward join cannot tell "the state at this instant" from "the last
+        state before the data ran out", and a caller measuring over a fixed
+        wait needs to: reusing the final quote reports a shorter reach as
+        though it were the full one.  The test is against the newest quote
+        left *after* the filtering above, not the newest row in the frame, so
+        a run whose quotes end on a crossed stretch is handled correctly.
 
     Returns
     -------
@@ -313,7 +330,9 @@ def prevailing_mid(
         If *quotes* lacks ``timestamp`` or any recognised price columns.
     """
     validate_columns(quotes, {"timestamp"}, f"{context}(quotes)")
-    mid = _quote_mid(quotes, skip_crossed=skip_crossed)
+    mid = _quote_mid(
+        quotes, skip_crossed=skip_crossed, mid_column=mid_column, context=context
+    )
     q = (
         pd.DataFrame({"timestamp": quotes["timestamp"].to_numpy(), "_mid": mid})
         .dropna(subset=["timestamp"])
@@ -323,6 +342,10 @@ def prevailing_mid(
         # Dropped rather than left as NaN so the join reaches the last quote
         # that had a midpoint, instead of reporting "no mid" for the instant.
         q = q.dropna(subset=["_mid"])
+    if q.empty:
+        # No quote to join against: every instant is "no mid yet".  Returned
+        # here because merge_asof on an empty frame raises on dtype instead.
+        return np.full(len(timestamps), np.nan, dtype=np.float64)
     left = pd.DataFrame({"timestamp": timestamps})
     merged = pd.merge_asof(
         left,
@@ -331,30 +354,76 @@ def prevailing_mid(
         direction="backward",
         allow_exact_matches=allow_exact,
     )
-    return merged["_mid"].to_numpy(dtype=np.float64)
+    mid_out = merged["_mid"].to_numpy(dtype=np.float64)
+    if require_covered:
+        beyond = (left["timestamp"] > q["timestamp"].max()).to_numpy()
+        mid_out = np.where(beyond, np.nan, mid_out)
+    return mid_out
 
 
-def _quote_mid(quotes: pd.DataFrame, *, skip_crossed: bool = False) -> np.ndarray:
-    """Extract a midpoint array from a quote frame's known column spellings.
+def _bid_ask(quotes: pd.DataFrame) -> tuple[np.ndarray, np.ndarray] | None:
+    """The best bid/ask pair under any accepted spelling, or ``None``."""
+    for bid_col, ask_col in _BID_ASK_COLUMNS:
+        if bid_col in quotes.columns and ask_col in quotes.columns:
+            return (
+                quotes[bid_col].to_numpy(dtype=np.float64),
+                quotes[ask_col].to_numpy(dtype=np.float64),
+            )
+    return None
+
+
+def _quote_mid(
+    quotes: pd.DataFrame,
+    *,
+    skip_crossed: bool = False,
+    mid_column: str | None = None,
+    context: str = "classify_trade_sign",
+) -> np.ndarray:
+    """Extract a midpoint array from a quote frame.
+
+    *mid_column* names the column to read; ``None`` falls back to the known
+    mid spellings, then to the average of a bid/ask pair.
 
     With *skip_crossed*, a row whose best bid is above its best ask yields
     ``NaN`` instead of a midpoint: a crossed book has no midpoint to take.
+    The crossing is tested on the bid/ask pair **whenever the frame carries
+    one**, even when the value itself came from a mid column -- a frame can
+    hold both (:func:`~ob_analytics.depth.depth_signals` adds ``mid_price``
+    beside the touch), and reading the mid from one column must not quietly
+    disable a guard the other columns can still answer.
     """
-    for col in _MID_COLUMNS:
-        if col in quotes.columns:
-            return quotes[col].to_numpy(dtype=np.float64)
-    for bid_col, ask_col in _BID_ASK_COLUMNS:
-        if bid_col in quotes.columns and ask_col in quotes.columns:
-            bid = quotes[bid_col].to_numpy(dtype=np.float64)
-            ask = quotes[ask_col].to_numpy(dtype=np.float64)
-            mid = 0.5 * (bid + ask)
-            return np.where(bid > ask, np.nan, mid) if skip_crossed else mid
-    raise ConfigError(
-        "classify_trade_sign: quotes need a mid column "
-        f"({' / '.join(_MID_COLUMNS)}) or a bid/ask pair "
-        f"({', '.join('/'.join(p) for p in _BID_ASK_COLUMNS)}). "
-        f"Available columns: {sorted(quotes.columns)}"
-    )
+    mid: np.ndarray | None = None
+    if mid_column is not None:
+        if mid_column not in quotes.columns:
+            raise ConfigError(
+                f"{context}: quotes have no column {mid_column!r}. "
+                f"Available columns: {sorted(quotes.columns)}"
+            )
+        mid = quotes[mid_column].to_numpy(dtype=np.float64)
+    else:
+        for col in _MID_COLUMNS:
+            if col in quotes.columns:
+                mid = quotes[col].to_numpy(dtype=np.float64)
+                break
+
+    # Only materialised when it will actually be read: the Lee-Ready path
+    # finds a mid column and needs no crossing test.
+    bid_ask = _bid_ask(quotes) if (mid is None or skip_crossed) else None
+    if mid is None:
+        if bid_ask is None:
+            raise ConfigError(
+                f"{context}: quotes need a mid column "
+                f"({' / '.join(_MID_COLUMNS)}) or a bid/ask pair "
+                f"({', '.join('/'.join(p) for p in _BID_ASK_COLUMNS)}). "
+                f"Available columns: {sorted(quotes.columns)}"
+            )
+        bid, ask = bid_ask
+        mid = 0.5 * (bid + ask)
+
+    if skip_crossed and bid_ask is not None:
+        bid, ask = bid_ask
+        mid = np.where(bid > ask, np.nan, mid)
+    return mid
 
 
 def resolve_direction(

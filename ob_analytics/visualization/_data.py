@@ -1649,11 +1649,19 @@ def prepare_transaction_costs_data(
         ``times`` / ``effective`` / ``realized`` / ``impact`` (the windowed
         series, in basis points), ``trade_times`` / ``trade_effective`` (the
         raw per-trade scatter), and ``horizon`` (the realized-spread horizon
-        the costs were measured at, for the title).
+        the costs were measured at, for the title).  ``impact`` is carried for
+        a backend that wants to draw it outright; the two shipped faces read
+        it off the chart as the band between the other two lines.
     """
     validate_columns(
         costs,
-        {"timestamp", "volume", "effective_spread_bps", "realized_spread_bps"},
+        {
+            "timestamp",
+            "volume",
+            "effective_spread_bps",
+            "realized_spread_bps",
+            "price_impact_bps",
+        },
         "prepare_transaction_costs_data",
     )
     weight = costs["volume"].to_numpy(dtype=np.float64)
