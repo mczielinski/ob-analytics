@@ -1858,6 +1858,98 @@ def mpl_trading_halts(
 # __init__ -- already exists when this module is imported during package init.
 from ob_analytics.visualization import RENDERERS, Level
 
+
+def mpl_bars(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """Render bars as candlesticks over a signed-volume strip.
+
+    Each bar is a high-low line with an open-close body, coloured by whether
+    the bar closed up or down.  The strip behind them is the bar's traded
+    volume, coloured by which side was the net aggressor, on a twin axis
+    scaled so it occupies the lower quarter of the frame.
+
+    Clock bars are drawn on a time axis; activity bars get one slot each, with
+    their closing times as tick labels (see
+    :func:`~ob_analytics.visualization._data.prepare_bars_data`).
+    """
+    bars = data["bars"]
+    rising = np.asarray(data["rising"])
+    on_clock = data["x_axis"] == "time"
+
+    fig, ax = _create_axes(ax, figsize=(12, 6), theme=theme)
+    if on_clock:
+        x = mdates.date2num(data["x"])
+        width = data["bar_width"] / pd.Timedelta(days=1)
+    else:
+        x = np.asarray(data["x"], dtype=float)
+        width = float(data["bar_width"])
+
+    # Volume strip first, on a twin axis, so the price candles sit above it.
+    ax2 = ax.twinx()
+    volume = bars["volume"].to_numpy(dtype=float)
+    signed = bars["signed_volume"].to_numpy(dtype=float)
+    ax2.bar(
+        x,
+        volume,
+        width=width,
+        color=[_BUY_COLOR if s >= 0 else _SELL_COLOR for s in signed],
+        alpha=0.25,
+        linewidth=0,
+    )
+    # Four times the tallest bar: the strip reads as a footer under the
+    # candles rather than competing with them.
+    ax2.set_ylim(0, float(volume.max()) * 4 if volume.size and volume.max() > 0 else 1)
+    ax2.set_ylabel("Volume")
+    ax2.grid(False)
+
+    ax.set_zorder(ax2.get_zorder() + 1)
+    ax.patch.set_visible(False)
+
+    colors = np.where(rising, _BUY_COLOR, _SELL_COLOR)
+    ax.vlines(
+        x,
+        bars["low"].to_numpy(dtype=float),
+        bars["high"].to_numpy(dtype=float),
+        color=colors,
+        linewidth=1.0,
+    )
+    open_ = bars["open"].to_numpy(dtype=float)
+    close = bars["close"].to_numpy(dtype=float)
+    ax.bar(
+        x,
+        height=np.abs(close - open_),
+        bottom=np.minimum(open_, close),
+        width=width,
+        color=colors,
+        edgecolor=colors,
+        linewidth=0.8,
+    )
+
+    ax.set_ylabel("Price")
+    label = data.get("label", "")
+    ax.set_title(f"Bars ({label})" if label else "Bars")
+    if on_clock:
+        ax.set_xlabel("Time")
+        format_time_axis(ax)
+    else:
+        positions, labels = data["ticks"]
+        ax.set_xlabel("Bar (labelled by close time)")
+        ax.set_xticks(positions)
+        ax.set_xticklabels(labels)
+        ax.set_xlim(-1, len(bars))
+    ax.legend(
+        handles=[
+            Patch(facecolor=_BUY_COLOR, label="close up / net buying"),
+            Patch(facecolor=_SELL_COLOR, label="close down / net selling"),
+        ],
+        loc="upper left",
+        fontsize=9,
+    )
+    fig.tight_layout()
+    return fig
+
+
 # (concept, level, renderer).  L2 = aggregate per price level; analytics carry
 # no level and register at ``None``.  The level is a registry *coordinate*, not
 # a name suffix -- L3 faces register the same concept at ``Level.L3``.
@@ -1886,6 +1978,7 @@ for _concept, _level, _fn in [
     ("volume_percentiles", _L2, mpl_volume_percentiles),
     ("events_histogram", _L2, mpl_events_histogram),
     ("hidden_executions", _L2, mpl_hidden_executions),
+    ("bars", None, mpl_bars),
     ("vpin", None, mpl_vpin),
     ("order_flow_imbalance", None, mpl_order_flow_imbalance),
     ("ofi_horizon", None, mpl_ofi_horizon),

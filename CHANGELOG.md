@@ -10,6 +10,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Bars: the trade stream resampled into OHLCV rows** (#148). `bars(trades,
+  rule, threshold)` cuts a trades frame into bars and returns one row each with
+  open, high, low, close, volume, turnover, VWAP, and the buy/sell split of
+  that volume. Five rules ship with it: `time` (a fixed span of the clock),
+  `tick` (a fixed number of trades), `volume` and `dollar` (a fixed amount of
+  size, or of price × size), and `imbalance` (signed size drifting a set amount
+  from where the bar opened). Leave the threshold out and the rule picks one
+  aiming at about 50 bars.
+
+  What differs between bar types is only where the boundaries fall, so that is
+  all a rule decides: `BarRule` states a `name`, how it reads its `threshold`,
+  and which bar each trade belongs to. `register_bar_rule` adds one of your
+  own, usable by name with no edit to the package. Feeds that don't label the
+  aggressor are classified the same way the flow-toxicity metrics do.
+
+  Bars draw as a `"bars"` plot face on both backends — candles over a strip of
+  volume coloured by the net aggressor — and `bars_panel()` puts them in a
+  gallery. The demos show a clock cut and a volume cut side by side. See the
+  ["Build bars from trades"
+  how-to](https://mczielinski.github.io/ob-analytics/howto/bars/).
+
 - **Polymarket prediction markets, through the ccxt source** (#103).
   `ob-analytics capture ccxt --exchange polymarket --pair <token id>` streams
   one outcome's order book and trades over Polymarket's public websocket, with

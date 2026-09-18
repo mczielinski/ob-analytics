@@ -27,7 +27,10 @@ The package exposes two layers:
 All processing stages are pluggable via :mod:`~ob_analytics.protocols`; a whole
 new data source registers via :func:`~ob_analytics.sources.register_source`, and
 a measurement of your own via :func:`~ob_analytics.metrics.register_metric`,
-which is what makes it run from a result and draw as a plot.
+which is what makes it run from a result and draw as a plot.  :func:`bars`
+resamples the trade stream into OHLCV rows, by the clock or by traded
+activity, and takes a rule of your own through
+:func:`~ob_analytics.bars.register_bar_rule`.
 """
 
 from importlib.metadata import PackageNotFoundError, version
@@ -44,6 +47,12 @@ from ob_analytics.analytics import (
     data_quality_summary,
     detect_sequence_gaps,
     detect_stale_orders,
+)
+from ob_analytics.bars import (
+    bars,
+    get_bar_rule,
+    list_bar_rules,
+    register_bar_rule,
 )
 
 # Importing the source modules fires their register_source(...) self-registration
@@ -87,6 +96,7 @@ from ob_analytics.metrics import (
 )
 from ob_analytics.pipeline import Pipeline, PipelineResult
 from ob_analytics.protocols import (
+    BarRule,
     DataWriter,
     DepthSource,
     EventLoader,
@@ -155,6 +165,7 @@ __all__ = [
     "SYMBOL_COLUMN",
     "VENUE_COLUMN",
     # ── Sources (per-venue entry points) ─────────────────────────────
+    "BarRule",
     "BitstampSource",
     "ConfigError",
     "DataQualitySummary",
@@ -190,6 +201,8 @@ __all__ = [
     "StaleOrder",
     "TradeSource",
     "__version__",
+    # ── Bars ─────────────────────────────────────────────────────────
+    "bars",
     # ── Trade-sign classification ────────────────────────────────────
     "bulk_volume_classification",
     "classify_trade_sign",
@@ -200,16 +213,19 @@ __all__ = [
     "data_quality_summary",
     "detect_sequence_gaps",
     "detect_stale_orders",
+    "get_bar_rule",
     "get_metric",
     "get_source",
     "group_by_instrument",
     "lee_ready",
+    "list_bar_rules",
     "list_metrics",
     "list_sources",
     "load_data",
     "load_metric_plugins",
     "load_source_plugins",
     "order_flow_imbalance",
+    "register_bar_rule",
     "register_metric",
     "register_source",
     # ── Sample data ──────────────────────────────────────────────────

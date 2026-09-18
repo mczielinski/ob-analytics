@@ -360,3 +360,32 @@ Which faces a gallery shows: `l2`, `l3`, `both` or `comparison`.
 
 **Gallery**:
 The generated HTML page holding a run's faces.
+
+## Bars
+
+**Bar**:
+One row summarising a run of consecutive trades. Produced by `bars()`.
+_Avoid_: candle, OHLC row, sample
+
+**Bar rule**:
+What decides where the bar boundaries fall — `time`, `tick`, `volume`,
+`dollar` or `imbalance`. Named `rule`, typed `BarRule`, and a coordinate in
+the `BAR_RULES` registry, never a name suffix.
+_Avoid_: bar type, sampling scheme
+
+**Threshold**:
+How much of the rule's own quantity closes a bar. Named `threshold`; the unit
+is the rule's (a duration, a trade count, an amount).
+_Avoid_: bucket size, window, step
+
+**Turnover**:
+Price multiplied by size, summed. Named `turnover`.
+_Avoid_: notional, dollar volume, value
+
+**VWAP**:
+Turnover divided by volume. Named `vwap`.
+
+**Signed volume**:
+Buyer-initiated volume minus seller-initiated volume. Named `signed_volume`,
+with `buy_volume` / `sell_volume` for the two halves.
+_Avoid_: net volume, order flow

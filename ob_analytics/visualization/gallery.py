@@ -975,6 +975,28 @@ def available_concepts(result: PipelineResult) -> dict[str, list[str]]:
     return {**concepts, **{spec.name: [] for spec in model.analytics}}
 
 
+def bars_panel(bars_df: pd.DataFrame, *, label: str = "") -> PlotSpec:
+    """Build a bars analytic panel for :attr:`GalleryModel.analytics`.
+
+    *bars_df* is a table from :func:`ob_analytics.bars.bars`.  *label* names
+    the rule and threshold it was cut with and is shown in the chart title;
+    the default reads them off the frame.  Prices are drawn as they arrive, so
+    cut the bars from a display-unit trades frame (see :func:`display_result`)
+    when the rest of the gallery is in the quote currency.
+    """
+    label = label or _viz_data.bars_label(bars_df)
+    rule = bars_df.attrs.get("bar_rule")
+    return PlotSpec(
+        # The file stem, so two cuts of the same trades do not overwrite each
+        # other's image; the concept both of them draw under is "bars".
+        f"bars_{rule}" if rule else "bars",
+        f"Bars ({label})" if label else "Bars",
+        "bars",
+        _viz_data.prepare_bars_data,
+        {"bars": bars_df, "label": label},
+    )
+
+
 def vpin_panel(vpin_df: pd.DataFrame, *, threshold: float = 0.7) -> PlotSpec:
     """Build a VPIN analytic panel for :attr:`GalleryModel.analytics`."""
     return PlotSpec(

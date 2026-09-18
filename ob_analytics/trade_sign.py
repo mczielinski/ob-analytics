@@ -298,6 +298,64 @@ def _quote_mid(quotes: pd.DataFrame) -> np.ndarray:
     )
 
 
+def resolve_direction(
+    trades: pd.DataFrame,
+    sign_method: str | None,
+    quotes: pd.DataFrame | None,
+    context: str,
+) -> pd.DataFrame:
+    """Return *trades* guaranteed to carry a ``buy``/``sell`` ``direction``.
+
+    Signed-flow analytics need the taker's aggressor side.  L3 feeds provide
+    it natively; L2 / aggregated feeds don't, so synthesize it with a
+    trade-sign classifier (:func:`classify_trade_sign`).
+
+    * ``sign_method=None`` — keep a native ``direction`` if present;
+      otherwise classify with Lee–Ready when *quotes* are supplied, else the
+      tick rule.
+    * ``sign_method="tick"`` / ``"lee_ready"`` — always (re)classify with
+      that method, overriding any existing ``direction``.
+
+    The frame is only copied when a ``direction`` column is written.
+
+    Parameters
+    ----------
+    trades : pandas.DataFrame
+        Trades with at least ``timestamp`` and ``price``.
+    sign_method : str or None
+        ``None``, ``"tick"`` or ``"lee_ready"`` — see above.
+    quotes : pandas.DataFrame or None
+        Quote frame for Lee–Ready (e.g. a pipeline ``depth_summary``).
+    context : str
+        Caller name, used in the error message.
+
+    Returns
+    -------
+    pandas.DataFrame
+        *trades* with a ``direction`` column.
+
+    Raises
+    ------
+    ConfigError
+        If *sign_method* is ``"bvc"``, which labels volume rather than
+        individual trades.
+    """
+    if sign_method is None:
+        if "direction" in trades.columns:
+            return trades
+        method = "lee_ready" if quotes is not None else "tick"
+    elif sign_method == "bvc":
+        raise ConfigError(
+            f"{context}: sign_method='bvc' labels volume bars, not individual "
+            "trades, and is only supported by compute_vpin."
+        )
+    else:
+        method = sign_method
+    out = trades.copy()
+    out["direction"] = classify_trade_sign(trades, method=method, quotes=quotes)
+    return out
+
+
 # ── Bulk volume classification (BVC) ─────────────────────────────────
 
 
