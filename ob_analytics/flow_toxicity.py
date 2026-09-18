@@ -254,6 +254,11 @@ def compute_kyle_lambda(
     ----------
     trades : pandas.DataFrame
         Trades with ``timestamp``, ``price``, ``volume``, ``direction``.
+        Unlike :func:`compute_vpin` and :func:`order_flow_imbalance`, the
+        aggressor side is required rather than inferred, so this needs a feed
+        that labels it (or a ``direction`` attached beforehand with
+        :func:`~ob_analytics.trade_sign.classify_trade_sign`).  Individual
+        rows the venue left blank are filled with the tick rule.
     window : str, optional
         Pandas frequency string for grouping trades.  Default ``"5min"``.
 
@@ -277,6 +282,11 @@ def compute_kyle_lambda(
     )
     validate_non_empty(trades, "compute_kyle_lambda")
 
+    # `direction` is required here, but a column being present does not make
+    # every row in it usable: the signed volume below reads it as == "buy" and
+    # takes the rest as a sell, so a blank would be counted on the wrong side
+    # rather than skipped.  resolve_direction infers those rows instead.
+    trades = resolve_direction(trades, None, None, "compute_kyle_lambda")
     df = trades.sort_values("timestamp").copy()
     df["signed_volume"] = df["volume"].where(df["direction"] == "buy", -df["volume"])
 

@@ -1407,6 +1407,70 @@ def _hex_to_rgba(hexc: str, alpha: float) -> str:
     return f"rgba({r},{g},{b},{alpha})"
 
 
+def plotly_transaction_costs(data: dict) -> Any:
+    """Render the transaction-cost decomposition: effective, realized, impact.
+
+    The matplotlib face's two lines and shaded gap, as a filled band: the
+    realized-spread trace draws first and the effective-spread trace fills
+    down to it, so the fill is the price impact.
+    """
+    go = _import_plotly()
+    times = data["times"]
+    horizon = data["horizon"]
+
+    fig = _base_figure(go, title=f"Transaction costs (realized spread at {horizon})")
+
+    fig.add_trace(
+        go.Scatter(
+            x=data["trade_times"],
+            y=data["trade_effective"],
+            mode="markers",
+            marker={"size": 4, "color": "#888888", "opacity": 0.3},
+            name="Per-trade effective spread",
+            hovertemplate="Time: %{x}<br>Effective: %{y:.2f} bps<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=times,
+            y=data["realized"],
+            mode="lines",
+            line={"color": "#CC79A7", "width": 1.6, "dash": "dash"},
+            name="Realized spread",
+            hovertemplate="Time: %{x}<br>Realized: %{y:.2f} bps<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=times,
+            y=data["effective"],
+            mode="lines",
+            line={"color": "#0072B2", "width": 2},
+            fill="tonexty",
+            fillcolor=_hex_to_rgba(_BUY_COLOR, 0.25),
+            name="Effective spread",
+            hovertemplate="Time: %{x}<br>Effective: %{y:.2f} bps<extra></extra>",
+        )
+    )
+
+    fig.add_hline(y=0, line_color="#444444", line_width=0.5, opacity=0.6)
+    fig.update_yaxes(title_text="Basis points", range=_bps_range(data))
+    fig.update_xaxes(title_text="Time")
+    return fig
+
+
+def _bps_range(data: dict) -> list[float] | None:
+    """Y range covering the averaged lines, so outlying trades do not flatten them."""
+    finite = np.concatenate(
+        [s[np.isfinite(s)] for s in (data["effective"], data["realized"])]
+    )
+    if finite.size == 0:
+        return None
+    low, high = float(finite.min()), float(finite.max())
+    margin = max((high - low) * 0.25, 3.0)
+    return [low - margin, high + margin]
+
+
 def plotly_ofi_horizon(data: dict) -> Any:
     """Order-flow-imbalance horizon graph across multiple look-back horizons.
 
@@ -1791,6 +1855,7 @@ for _concept, _level, _fn in [
     ("bars", None, plotly_bars),
     ("vpin", None, plotly_vpin),
     ("order_flow_imbalance", None, plotly_order_flow_imbalance),
+    ("transaction_costs", None, plotly_transaction_costs),
     ("ofi_horizon", None, plotly_ofi_horizon),
     ("kyle_lambda", None, plotly_kyle_lambda),
     ("trading_halts", None, plotly_trading_halts),

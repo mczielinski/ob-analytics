@@ -14,6 +14,7 @@ from loguru import logger
 
 from ob_analytics.bars import bars
 from ob_analytics.bitstamp import BitstampSource, BitstampWriter
+from ob_analytics.cost import transaction_costs
 from ob_analytics.data import save_data
 from ob_analytics.lobster import LobsterSource
 from ob_analytics.pipeline import Pipeline, PipelineResult
@@ -26,6 +27,7 @@ from ob_analytics.visualization.gallery import (
     generate_gallery,
     ofi_horizon_panel,
     trading_halts_panel,
+    transaction_costs_panel,
 )
 
 # ---------------------------------------------------------------------------
@@ -40,6 +42,18 @@ def _result_dict(result: PipelineResult) -> dict[str, pd.DataFrame]:
         "depth": result.depth,
         "depth_summary": result.depth_summary,
     }
+
+
+def _cost_panels(result: PipelineResult) -> list[PlotSpec]:
+    """The transaction-cost panel, when the run has trades and quotes to use.
+
+    The face reads the basis-point columns, which are ratios to the mid, so
+    the raw tick-price result gives the same picture as a display-unit one.
+    """
+    if result.trades.empty or result.depth_summary.empty:
+        return []
+    costs = transaction_costs(result.trades, result.depth_summary)
+    return [transaction_costs_panel(costs)]
 
 
 def _save_and_gallery(
@@ -187,6 +201,7 @@ def run_bitstamp_demo(
         result,
         out,
         title=f"Bitstamp ({orders_path.name}) -- ob-analytics",
+        analytics=_cost_panels(result),
         view=view,
     )
 
@@ -235,6 +250,7 @@ def run_lobster_demo(
         analytics.append(trading_halts_panel(result.trades, halts))
     if not result.trades.empty:
         analytics.append(ofi_horizon_panel(result.trades))
+    analytics.extend(_cost_panels(result))
 
     return _save_and_gallery(
         result,

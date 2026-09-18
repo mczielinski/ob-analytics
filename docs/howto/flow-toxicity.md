@@ -74,22 +74,42 @@ default). You can also call
 [`classify_trade_sign`](../api/trade_sign.md#ob_analytics.trade_sign.classify_trade_sign)
 directly to attach a `direction` column yourself.
 
+## What the flow cost
+
+Toxic flow is flow the liquidity provider loses money to, and the transaction
+cost measures put a number on that loss in the currency a taker pays. The
+realized spread is what the provider kept after the trade's information
+reached the price; when it is negative, the flow was informed — the same
+finding VPIN and λ report, measured differently:
+
+```python
+from ob_analytics import transaction_costs, cost_summary
+
+costs = transaction_costs(result.trades, result.depth_summary, horizon="5s")
+print(cost_summary(costs))
+```
+
+See [Measure transaction costs](transaction-costs.md) for the full
+decomposition, and for Amihud illiquidity and Roll's implied spread, which
+need no quotes at all.
+
 ## Adding your own metric
 
 There is no metrics plugin registry — a flow-toxicity metric is just a
 function over a trades DataFrame. Write one and call it on `result.trades`:
 
 ```python
+import numpy as np
 import pandas as pd
 
-def amihud(trades: pd.DataFrame, freq: str = "1min") -> pd.DataFrame:
-    """Amihud (2002) illiquidity = |return| / volume."""
-    t = trades.set_index("timestamp").sort_index()
-    ret = t["price"].pct_change().abs()
-    illiq = (ret / t["volume"]).resample(freq).mean()
-    return illiq.rename("amihud").reset_index()
+def signed_volume_skew(trades: pd.DataFrame, freq: str = "1min") -> pd.DataFrame:
+    """How lopsided each window's flow was, beyond its net direction."""
+    t = trades.copy()
+    t["signed"] = t["volume"] * np.where(t["direction"] == "buy", 1.0, -1.0)
+    skew = t.set_index("timestamp")["signed"].resample(freq).skew()
+    return skew.rename("signed_volume_skew").reset_index()
 
-amihud_df = amihud(result.trades)
+skew_df = signed_volume_skew(result.trades)
 ```
 
 To fold a metric into the HTML gallery, wrap it in a panel builder and pass it
@@ -100,4 +120,5 @@ capturer).
 ## Related
 
 - [Flow Toxicity API](../api/flow_toxicity.md) — parameters and return types
+- [Measure transaction costs](transaction-costs.md) — effective spread, price impact, Amihud, Roll
 - [Glossary: flow toxicity](../glossary.md#flow-toxicity) — what the metrics mean, with citations

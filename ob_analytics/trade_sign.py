@@ -39,11 +39,17 @@ from math import erf, sqrt
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+from loguru import logger
 
 from ob_analytics._utils import validate_columns, validate_non_empty
 from ob_analytics.exceptions import ConfigError
 
 _SQRT2 = sqrt(2.0)
+
+#: The two aggressor sides.  Every consumer of a ``direction`` column tests it
+#: as ``== "buy"`` and treats the rest as a sell, so anything else in the
+#: column is not a missing value to them -- it is the wrong side.
+_SIDES: tuple[str, str] = ("buy", "sell")
 
 # Accepted quote-column spellings for the Lee–Ready midpoint, most specific
 # first.  A ``(bid, ask)`` pair is averaged; a single mid column is used as-is.
@@ -243,7 +249,7 @@ def classify_trade_sign(
                 "classify_trade_sign: method='lee_ready' requires quotes "
                 "(a frame with timestamp + mid or bid/ask columns)."
             )
-        mid_sorted = _prevailing_mid(trades["timestamp"].to_numpy()[order], quotes)
+        mid_sorted = prevailing_mid(trades["timestamp"].to_numpy()[order], quotes)
         signs_sorted = lee_ready(prices, mid_sorted)
 
     signs = np.empty(len(trades), dtype=np.int8)
@@ -256,46 +262,174 @@ def classify_trade_sign(
     )
 
 
-def _prevailing_mid(
-    trade_timestamps: np.ndarray,
+def prevailing_mid(
+    timestamps: np.ndarray,
     quotes: pd.DataFrame,
+    context: str = "classify_trade_sign",
+    *,
+    allow_exact: bool = True,
+    skip_crossed: bool = False,
+    mid_column: str | None = None,
+    require_covered: bool = False,
 ) -> np.ndarray:
-    """Midpoint prevailing at or before each (sorted) trade timestamp.
+    """Midpoint prevailing at or before each (sorted) timestamp.
 
-    Backward as-of join of *trade_timestamps* against *quotes*.  Trades
-    before the first quote get ``NaN`` (Lee–Ready then falls back to the
-    tick rule).
+    A backward as-of join of *timestamps* against *quotes*: each instant gets
+    the midpoint of the last quote published at or before it.  Instants before
+    the first quote get ``NaN`` rather than the first quote's mid, so a caller
+    can tell "no quote yet" from a real number (Lee–Ready falls back to the
+    tick rule there; the cost metrics leave the row unmeasured).
 
-    *trade_timestamps* must be sorted ascending.
+    Any of the accepted quote-column spellings works — a mid column (``mid`` /
+    ``midprice`` / ``mid_price``) or a bid/ask pair (``best_bid_price`` /
+    ``best_ask_price``, ``best_bid`` / ``best_ask``, or ``bid`` / ``ask``) — so
+    a pipeline ``depth_summary`` can be passed straight in.
+
+    Parameters
+    ----------
+    timestamps : numpy.ndarray
+        Instants to price, **sorted ascending** (``merge_asof`` requires it).
+    quotes : pandas.DataFrame
+        Quote frame with ``timestamp`` plus a mid or bid/ask pair.
+    context : str, optional
+        Caller name, used in the error message.
+    mid_column : str, optional
+        Column to read the midpoint from, e.g. ``"micro_price"`` for the
+        size-weighted mid (:func:`~ob_analytics.depth.micro_price`).  ``None``
+        (default) takes the first of the accepted mid spellings present, and
+        otherwise averages a bid/ask pair.
+    allow_exact : bool, optional
+        Whether a quote stamped at exactly the same instant counts as
+        prevailing.  ``True`` (default) takes it.  ``False`` takes the last
+        quote *strictly before* the instant, which is what a measurement of
+        the book a trade arrived into needs: on a frame built from the same
+        event stream, the quote sharing the trade's instant is the book
+        *after* that trade consumed the touch, so counting it would measure
+        the cost against a price the trade itself had already moved.
+    skip_crossed : bool, optional
+        Whether to drop crossed quotes — best bid above best ask — from the
+        reference series, so an instant standing on one reaches back to the
+        last quote that was not crossed.  Default ``False`` keeps them.  A
+        diff feed can hold genuinely crossed resting orders, and the midpoint
+        of a crossed book is not a price anything could trade at.  The test
+        reads the bid/ask pair whenever the frame has one, so naming a
+        *mid_column* does not disable it; a frame with neither cannot be
+        tested and is left alone.
+    require_covered : bool, optional
+        Whether an instant past the newest **usable** quote is ``NaN`` rather
+        than that quote's mid.  Default ``False`` returns the last mid known.
+        A backward join cannot tell "the state at this instant" from "the last
+        state before the data ran out", and a caller measuring over a fixed
+        wait needs to: reusing the final quote reports a shorter reach as
+        though it were the full one.  The test is against the newest quote
+        left *after* the filtering above, not the newest row in the frame, so
+        a run whose quotes end on a crossed stretch is handled correctly.
+
+    Returns
+    -------
+    numpy.ndarray
+        The prevailing midpoint per instant, ``NaN`` where none exists yet.
+
+    Raises
+    ------
+    ConfigError
+        If *quotes* lacks ``timestamp`` or any recognised price columns.
     """
-    validate_columns(quotes, {"timestamp"}, "classify_trade_sign(quotes)")
-    mid = _quote_mid(quotes)
+    validate_columns(quotes, {"timestamp"}, f"{context}(quotes)")
+    mid = _quote_mid(
+        quotes, skip_crossed=skip_crossed, mid_column=mid_column, context=context
+    )
     q = (
         pd.DataFrame({"timestamp": quotes["timestamp"].to_numpy(), "_mid": mid})
         .dropna(subset=["timestamp"])
         .sort_values("timestamp", kind="stable")
     )
-    left = pd.DataFrame({"timestamp": trade_timestamps})
-    merged = pd.merge_asof(left, q, on="timestamp", direction="backward")
-    return merged["_mid"].to_numpy(dtype=np.float64)
+    if skip_crossed:
+        # Dropped rather than left as NaN so the join reaches the last quote
+        # that had a midpoint, instead of reporting "no mid" for the instant.
+        q = q.dropna(subset=["_mid"])
+    if q.empty:
+        # No quote to join against: every instant is "no mid yet".  Returned
+        # here because merge_asof on an empty frame raises on dtype instead.
+        return np.full(len(timestamps), np.nan, dtype=np.float64)
+    left = pd.DataFrame({"timestamp": timestamps})
+    merged = pd.merge_asof(
+        left,
+        q,
+        on="timestamp",
+        direction="backward",
+        allow_exact_matches=allow_exact,
+    )
+    mid_out = merged["_mid"].to_numpy(dtype=np.float64)
+    if require_covered:
+        beyond = (left["timestamp"] > q["timestamp"].max()).to_numpy()
+        mid_out = np.where(beyond, np.nan, mid_out)
+    return mid_out
 
 
-def _quote_mid(quotes: pd.DataFrame) -> np.ndarray:
-    """Extract a midpoint array from a quote frame's known column spellings."""
-    for col in _MID_COLUMNS:
-        if col in quotes.columns:
-            return quotes[col].to_numpy(dtype=np.float64)
+def _bid_ask(quotes: pd.DataFrame) -> tuple[np.ndarray, np.ndarray] | None:
+    """The best bid/ask pair under any accepted spelling, or ``None``."""
     for bid_col, ask_col in _BID_ASK_COLUMNS:
         if bid_col in quotes.columns and ask_col in quotes.columns:
-            bid = quotes[bid_col].to_numpy(dtype=np.float64)
-            ask = quotes[ask_col].to_numpy(dtype=np.float64)
-            return 0.5 * (bid + ask)
-    raise ConfigError(
-        "classify_trade_sign: quotes need a mid column "
-        f"({' / '.join(_MID_COLUMNS)}) or a bid/ask pair "
-        f"({', '.join('/'.join(p) for p in _BID_ASK_COLUMNS)}). "
-        f"Available columns: {sorted(quotes.columns)}"
-    )
+            return (
+                quotes[bid_col].to_numpy(dtype=np.float64),
+                quotes[ask_col].to_numpy(dtype=np.float64),
+            )
+    return None
+
+
+def _quote_mid(
+    quotes: pd.DataFrame,
+    *,
+    skip_crossed: bool = False,
+    mid_column: str | None = None,
+    context: str = "classify_trade_sign",
+) -> np.ndarray:
+    """Extract a midpoint array from a quote frame.
+
+    *mid_column* names the column to read; ``None`` falls back to the known
+    mid spellings, then to the average of a bid/ask pair.
+
+    With *skip_crossed*, a row whose best bid is above its best ask yields
+    ``NaN`` instead of a midpoint: a crossed book has no midpoint to take.
+    The crossing is tested on the bid/ask pair **whenever the frame carries
+    one**, even when the value itself came from a mid column -- a frame can
+    hold both (:func:`~ob_analytics.depth.depth_signals` adds ``mid_price``
+    beside the touch), and reading the mid from one column must not quietly
+    disable a guard the other columns can still answer.
+    """
+    mid: np.ndarray | None = None
+    if mid_column is not None:
+        if mid_column not in quotes.columns:
+            raise ConfigError(
+                f"{context}: quotes have no column {mid_column!r}. "
+                f"Available columns: {sorted(quotes.columns)}"
+            )
+        mid = quotes[mid_column].to_numpy(dtype=np.float64)
+    else:
+        for col in _MID_COLUMNS:
+            if col in quotes.columns:
+                mid = quotes[col].to_numpy(dtype=np.float64)
+                break
+
+    # Only materialised when it will actually be read: the Lee-Ready path
+    # finds a mid column and needs no crossing test.
+    bid_ask = _bid_ask(quotes) if (mid is None or skip_crossed) else None
+    if mid is None:
+        if bid_ask is None:
+            raise ConfigError(
+                f"{context}: quotes need a mid column "
+                f"({' / '.join(_MID_COLUMNS)}) or a bid/ask pair "
+                f"({', '.join('/'.join(p) for p in _BID_ASK_COLUMNS)}). "
+                f"Available columns: {sorted(quotes.columns)}"
+            )
+        bid, ask = bid_ask
+        mid = 0.5 * (bid + ask)
+
+    if skip_crossed and bid_ask is not None:
+        bid, ask = bid_ask
+        mid = np.where(bid > ask, np.nan, mid)
+    return mid
 
 
 def resolve_direction(
@@ -310,13 +444,20 @@ def resolve_direction(
     it natively; L2 / aggregated feeds don't, so synthesize it with a
     trade-sign classifier (:func:`classify_trade_sign`).
 
-    * ``sign_method=None`` — keep a native ``direction`` if present;
-      otherwise classify with Lee–Ready when *quotes* are supplied, else the
-      tick rule.
+    * ``sign_method=None`` — keep a native ``direction`` if present, filling
+      any row whose value is neither ``"buy"`` nor ``"sell"`` with the
+      classifier below; otherwise classify every row with Lee–Ready when
+      *quotes* are supplied, else the tick rule.
     * ``sign_method="tick"`` / ``"lee_ready"`` — always (re)classify with
       that method, overriding any existing ``direction``.
 
-    The frame is only copied when a ``direction`` column is written.
+    The frame is only copied when a ``direction`` column is written, so a feed
+    that already labels every trade is passed straight through.
+
+    The returned column is *guaranteed* to hold only ``"buy"`` and ``"sell"``.
+    That matters because every consumer reads it as ``== "buy"`` and treats
+    everything else as a sell: an unlabelled trade left in place is not
+    dropped by them, it is counted on the wrong side.
 
     Parameters
     ----------
@@ -342,7 +483,29 @@ def resolve_direction(
     """
     if sign_method is None:
         if "direction" in trades.columns:
-            return trades
+            unusable = ~trades["direction"].isin(_SIDES)
+            if not unusable.any():
+                return trades
+            # A partly-labelled feed.  Every consumer reads this column as
+            # ``== "buy"`` and takes the rest as a sell, so handing back an NA
+            # would not drop the trade, it would flip it.  Infer the blanks the
+            # same way a wholly unlabelled feed is inferred, and say how many.
+            method = "lee_ready" if quotes is not None else "tick"
+            inferred = classify_trade_sign(trades, method=method, quotes=quotes)
+            out = trades.copy()
+            out["direction"] = pd.Categorical(
+                trades["direction"].astype(object).where(~unusable, inferred),
+                categories=list(_SIDES),
+            )
+            logger.warning(
+                "{}: {} of {} trades carry no usable direction; "
+                "inferred with the {!r} rule.",
+                context,
+                int(unusable.sum()),
+                len(trades),
+                method,
+            )
+            return out
         method = "lee_ready" if quotes is not None else "tick"
     elif sign_method == "bvc":
         raise ConfigError(

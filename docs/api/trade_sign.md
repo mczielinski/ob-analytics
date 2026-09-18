@@ -22,3 +22,12 @@ as an automatic fallback.
 ::: ob_analytics.trade_sign.lee_ready
 
 ::: ob_analytics.trade_sign.bulk_volume_classification
+
+## Shared helpers
+
+The signed-flow analytics reach the quotes and the aggressor side through these
+two, rather than each re-deriving them.
+
+::: ob_analytics.trade_sign.resolve_direction
+
+::: ob_analytics.trade_sign.prevailing_mid

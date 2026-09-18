@@ -13,11 +13,16 @@ import pandas as pd
 import pytest
 
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
-from ob_analytics.flow_toxicity import compute_vpin, order_flow_imbalance
+from ob_analytics.flow_toxicity import (
+    compute_kyle_lambda,
+    compute_vpin,
+    order_flow_imbalance,
+)
 from ob_analytics.trade_sign import (
     bulk_volume_classification,
     classify_trade_sign,
     lee_ready,
+    resolve_direction,
     tick_rule,
 )
 
@@ -186,6 +191,122 @@ class TestClassifyTradeSign:
 
 
 # ── Bulk volume classification (BVC) ─────────────────────────────────
+
+
+class TestResolveDirection:
+    """The column it returns holds only buy and sell -- see the docstring.
+
+    Every consumer (`compute_vpin`, `order_flow_imbalance`, `bars`, the cost
+    metrics) reads the column as ``== "buy"`` and takes everything else as a
+    sell, so a value that is neither is not a gap to them: it is the wrong
+    side.  These tests hold the guarantee that makes that idiom safe.
+    """
+
+    def test_fully_labelled_frame_is_passed_straight_through(self):
+        """The common case does not copy and does not reclassify."""
+        trades = _trades([100, 101, 102]).assign(direction=["buy", "sell", "buy"])
+
+        out = resolve_direction(trades, None, None, "ctx")
+
+        assert out is trades
+
+    def test_unlabelled_rows_are_inferred_not_left_to_read_as_sells(self):
+        """Blanks are filled by the classifier; labelled rows are untouched."""
+        # Rising prices, so the tick rule calls every inferred row a buy.
+        trades = _trades([100, 101, 102, 103]).assign(
+            direction=["sell", None, None, "sell"]
+        )
+
+        out = resolve_direction(trades, None, None, "ctx")
+
+        assert list(out["direction"]) == ["sell", "buy", "buy", "sell"]
+        # The caller's frame is not mutated.
+        assert trades["direction"].isna().sum() == 2
+
+    def test_filled_column_holds_only_the_two_sides(self):
+        trades = _trades([100, 101, 102]).assign(direction=["buy", None, np.nan])
+
+        out = resolve_direction(trades, None, None, "ctx")
+
+        assert set(out["direction"]) <= {"buy", "sell"}
+        assert list(out["direction"].cat.categories) == ["buy", "sell"]
+
+    def test_a_value_that_is_neither_side_is_replaced(self):
+        """A stray label is not a side, so it is inferred rather than trusted.
+
+        Left in place it would read as a sell to every consumer.
+        """
+        trades = _trades([100, 101, 102]).assign(direction=["buy", "BUY", "unknown"])
+
+        out = resolve_direction(trades, None, None, "ctx")
+
+        assert list(out["direction"]) == ["buy", "buy", "buy"]
+
+    def test_lee_ready_used_for_the_blanks_when_quotes_are_given(self):
+        trades = _trades([101, 99]).assign(direction=[None, None])
+        quotes = _trades([100, 100]).rename(columns={"price": "mid"})
+
+        out = resolve_direction(trades, None, quotes, "ctx")
+
+        assert list(out["direction"]) == ["buy", "sell"]
+
+    def test_no_direction_column_classifies_every_row(self):
+        trades = _trades([100, 101, 102])
+
+        out = resolve_direction(trades, None, None, "ctx")
+
+        assert set(out["direction"]) <= {"buy", "sell"}
+
+    def test_bvc_is_rejected(self):
+        trades = _trades([100, 101]).assign(direction=["buy", "sell"])
+
+        with pytest.raises(ConfigError, match="bvc"):
+            resolve_direction(trades, "bvc", None, "ctx")
+
+
+class TestPartlyLabelledFeedReachesTheMetrics:
+    """The guarantee is what `vpin`, `ofi` and `bars` actually depend on."""
+
+    @staticmethod
+    def _half_labelled():
+        # Ten prints on steadily rising prices -- the tick rule calls them all
+        # buys -- but the venue labelled only the first five.
+        trades = _trades(list(range(100, 110)))
+        trades["direction"] = ["buy"] * 5 + [None] * 5
+        return trades
+
+    def test_ofi_does_not_count_the_blanks_as_sells(self):
+        ofi = order_flow_imbalance(self._half_labelled(), window="1min")
+
+        assert float(ofi["sell_volume"].iloc[0]) == 0.0
+        assert float(ofi["ofi"].iloc[0]) == pytest.approx(1.0)
+
+    def test_vpin_does_not_count_the_blanks_as_sells(self):
+        vpin = compute_vpin(self._half_labelled(), bucket_volume=2.0)
+
+        assert vpin["sell_volume"].sum() == 0.0
+        assert vpin["vpin"].eq(1.0).all()
+
+    def test_bars_do_not_count_the_blanks_as_sells(self):
+        from ob_analytics.bars import bars
+
+        built = bars(self._half_labelled(), "tick", 5)
+
+        assert list(built["sell_volume"]) == [0.0, 0.0]
+        assert list(built["buy_volume"]) == [5.0, 5.0]
+
+    def test_kyle_lambda_does_not_sign_the_blanks_the_wrong_way(self):
+        """Kyle requires a direction, which is not the same as trusting it.
+
+        Every print here is a buy on a rising tape, so the signed volume of
+        each window is its whole volume.  Counting the five blanks as sells
+        would cancel most of it out and flip the regression's slope.
+        """
+        result = compute_kyle_lambda(self._half_labelled(), window="1min")
+
+        signed = result.regression_df["signed_volume"]
+        assert (signed > 0).all()
+        assert float(signed.sum()) == pytest.approx(10.0)
 
 
 class TestBulkVolumeClassification:

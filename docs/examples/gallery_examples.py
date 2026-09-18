@@ -11,12 +11,14 @@ so each reads as a standalone snippet.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 import pandas as pd
 
 from ob_analytics.analytics import order_book
+from ob_analytics.cost import transaction_costs
 from ob_analytics.depth import get_spread
 from ob_analytics.flow_toxicity import (
     compute_kyle_lambda,
@@ -174,6 +176,15 @@ def flow_imbalance(result):
     return plot("order_flow_imbalance", **prepare.ofi(ofi, trades=result.trades))
 
 
+# ── Transaction cost ─────────────────────────────────────────────────
+
+
+def cost_decomposition(result):
+    """What the taker paid, split into what the maker kept and what moved."""
+    costs = transaction_costs(result.trades, result.depth_summary, horizon="5s")
+    return plot("transaction_costs", **prepare.transaction_costs(costs, window="1min"))
+
+
 GALLERY: list[Example] = [
     Example(
         "depth_heatmap",
@@ -258,5 +269,12 @@ GALLERY: list[Example] = [
         "Flow toxicity",
         "Net buy-minus-sell volume per minute.",
         flow_imbalance,
+    ),
+    Example(
+        "cost_decomposition",
+        "Transaction costs",
+        "Transaction cost",
+        "The effective spread split into realized spread and price impact.",
+        cost_decomposition,
     ),
 ]

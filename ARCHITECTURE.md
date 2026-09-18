@@ -250,6 +250,8 @@ ob_analytics/
 ├── depth.py              # DepthMetricsEngine, price_level_volume, depth_metrics, get_spread
 ├── data.py               # save_data, load_data, writer registry
 ├── flow_toxicity.py      # compute_vpin, compute_kyle_lambda, order_flow_imbalance, KyleLambdaResult
+├── bars.py               # bars, BAR_RULES registry, register_bar_rule
+├── cost.py               # transaction_costs, cost_summary, amihud, roll_spread, CostSummary
 ├── _utils.py             # Validation, numerics, timestamp conversion helpers
 │
 ├── live/                 # Optional live-capture machinery ([live] / [ccxt] / [cryptofeed] extras)

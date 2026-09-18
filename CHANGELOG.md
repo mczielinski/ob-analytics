@@ -31,6 +31,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   ["Build bars from trades"
   how-to](https://mczielinski.github.io/ob-analytics/howto/bars/).
 
+- **Transaction cost and price impact** (#110). A new `cost` module answers
+  what trading cost, rather than what the book advertised.
+  `transaction_costs(trades, quotes)` returns one row per trade with the
+  effective spread — what the taker paid to cross — split into the realized
+  spread the liquidity provider kept and the price impact the trade caused,
+  in price units and in basis points. The three add up exactly, trade by
+  trade. `cost_summary()` reduces that to volume-weighted session figures and
+  reports how many trades each one could be measured on.
+
+  `amihud()` and `roll_spread()` read liquidity from the trade prices alone,
+  so they run on a tape with no quotes and no aggressor side: the price move a
+  unit of turnover buys, and the spread implied by bid-ask bounce. Roll also
+  returns the lag-1 `autocorrelation` of the price changes, which its model
+  puts at exactly `-0.5`; how far the number sits from that is how little of
+  the price movement the bounce explains. On the bundled capture it is
+  `+0.197` and the estimate has no real root, so it is `NaN` rather than a
+  number the model does not support. The diagnostic matters in the other
+  direction too: when the autocovariance lands negative by chance Roll returns
+  a spread that is not there, and the autocorrelation is what catches it.
+
+  The mid a trade is measured against is the last quote *strictly before* it,
+  skipping crossed quotes: on a frame built from the same event stream, the
+  quote sharing a trade's instant is the book after that trade took the touch,
+  and a crossed book has no midpoint at all. A trade in the last horizon of
+  the capture has no future mid, so its realized spread is `NaN` rather than
+  the final quote reused.
+
+  `transaction_costs` takes `mid_column` to measure against a reference other
+  than the plain mid — `"micro_price"` for the size-weighted mid, which on the
+  bundled capture reads 1.24 bps against the plain mid's 1.45.
+
+  The decomposition draws as a level-less `transaction_costs` face on both
+  backends — two lines with the impact as the band between them — and
+  `transaction_costs_panel()` puts it in a gallery. Both demos now include it.
+  See the ["Measure transaction costs"
+  how-to](https://mczielinski.github.io/ob-analytics/howto/transaction-costs/).
+
 - **Polymarket prediction markets, through the ccxt source** (#103).
   `ob-analytics capture ccxt --exchange polymarket --pair <token id>` streams
   one outcome's order book and trades over Polymarket's public websocket, with
@@ -271,6 +308,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   tradeable has no value, so it is now NaN.
 
 ### Changed
+
+- `trade_sign.resolve_direction()` now makes the guarantee its docstring
+  already claimed: the `direction` column it returns holds only `"buy"` and
+  `"sell"`. A native column was previously passed back untouched however it
+  was filled, and every consumer reads it as `== "buy"` and takes the rest as
+  a sell — so a partly-labelled feed did not lose its unlabelled trades, it
+  counted them on the wrong side. `compute_vpin`, `order_flow_imbalance`,
+  `bars` and the cost metrics were all affected. Rows that are neither side
+  are now inferred the same way a wholly unlabelled feed is, with a warning
+  saying how many. A feed that labels every trade is passed through unchanged.
+  `compute_kyle_lambda` reaches the same guarantee: it still *requires* a
+  `direction` column rather than inferring one, but a column being present no
+  longer means every row in it is trusted.
+
+- `trade_sign.prevailing_mid()` is now public, and takes `allow_exact`,
+  `skip_crossed`, `mid_column` and `require_covered` — the last quote strictly
+  before an instant, crossed books skipped, a named reference column such as
+  `micro_price`, and `NaN` rather than the final quote reused once the quotes
+  stop reaching. All four default to the previous behaviour, so
+  `classify_trade_sign` is unchanged. An empty quote frame now returns all
+  `NaN` instead of raising a pandas `MergeError`.
 
 - **Sizes are integer lots plus a `lot_size`, not floats** (issue #226).
   **Breaking: the on-disk schema goes 3.0 → 4.0.** Every `volume` and `fill`
