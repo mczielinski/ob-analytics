@@ -13,7 +13,11 @@ import pandas as pd
 import pytest
 
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
-from ob_analytics.flow_toxicity import compute_vpin, order_flow_imbalance
+from ob_analytics.flow_toxicity import (
+    compute_kyle_lambda,
+    compute_vpin,
+    order_flow_imbalance,
+)
 from ob_analytics.trade_sign import (
     bulk_volume_classification,
     classify_trade_sign,
@@ -290,6 +294,19 @@ class TestPartlyLabelledFeedReachesTheMetrics:
 
         assert list(built["sell_volume"]) == [0.0, 0.0]
         assert list(built["buy_volume"]) == [5.0, 5.0]
+
+    def test_kyle_lambda_does_not_sign_the_blanks_the_wrong_way(self):
+        """Kyle requires a direction, which is not the same as trusting it.
+
+        Every print here is a buy on a rising tape, so the signed volume of
+        each window is its whole volume.  Counting the five blanks as sells
+        would cancel most of it out and flip the regression's slope.
+        """
+        result = compute_kyle_lambda(self._half_labelled(), window="1min")
+
+        signed = result.regression_df["signed_volume"]
+        assert (signed > 0).all()
+        assert float(signed.sum()) == pytest.approx(10.0)
 
 
 class TestBulkVolumeClassification:

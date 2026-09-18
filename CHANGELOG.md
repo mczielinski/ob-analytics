@@ -318,6 +318,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `bars` and the cost metrics were all affected. Rows that are neither side
   are now inferred the same way a wholly unlabelled feed is, with a warning
   saying how many. A feed that labels every trade is passed through unchanged.
+  `compute_kyle_lambda` reaches the same guarantee: it still *requires* a
+  `direction` column rather than inferring one, but a column being present no
+  longer means every row in it is trusted.
 
 - `trade_sign.prevailing_mid()` is now public, and takes `allow_exact`,
   `skip_crossed`, `mid_column` and `require_covered` — the last quote strictly
