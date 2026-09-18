@@ -205,8 +205,11 @@ the spread to take it. Named `maker` / `taker` for the order ids and
 
 **Trade direction**:
 The taker's side of a trade: `buy` or `sell`. Named `direction` on the trades
-table — the same column name as the book side, but different values.
-_Avoid_: aggressor, sign, initiator
+table — the same column name as the book side, but different values. Because
+one name carries both meanings, prose may call it the **aggressor side** where
+a bare "direction" would be read as the book side; the identifier stays
+`direction`.
+_Avoid_: `aggressor` as an identifier, sign, initiator
 
 **Trade sign**:
 A direction worked out after the fact for a feed that does not label the taker
