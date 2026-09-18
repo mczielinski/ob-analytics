@@ -309,6 +309,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `trade_sign.resolve_direction()` now makes the guarantee its docstring
+  already claimed: the `direction` column it returns holds only `"buy"` and
+  `"sell"`. A native column was previously passed back untouched however it
+  was filled, and every consumer reads it as `== "buy"` and takes the rest as
+  a sell — so a partly-labelled feed did not lose its unlabelled trades, it
+  counted them on the wrong side. `compute_vpin`, `order_flow_imbalance`,
+  `bars` and the cost metrics were all affected. Rows that are neither side
+  are now inferred the same way a wholly unlabelled feed is, with a warning
+  saying how many. A feed that labels every trade is passed through unchanged.
+
 - `trade_sign.prevailing_mid()` is now public, and takes `allow_exact`,
   `skip_crossed`, `mid_column` and `require_covered` — the last quote strictly
   before an instant, crossed books skipped, a named reference column such as

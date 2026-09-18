@@ -250,14 +250,10 @@ def transaction_costs(
     df = trades.sort_values("timestamp", kind="stable").reset_index(drop=True)
 
     price = df["price"].to_numpy(dtype=np.float64)
-    # Anything that is neither side leaves the row unmeasured.  Folding an
-    # unlabelled trade into "sell" would not lose it, it would invert it: the
-    # effective spread of a buy comes back negative and drags the run average
-    # the wrong way, with nothing in the output saying so.
-    direction = df["direction"].to_numpy()
-    sign = np.select(
-        [direction == "buy", direction == "sell"], [1.0, -1.0], default=np.nan
-    )
+    # Safe because resolve_direction guarantees the column holds only the two
+    # sides; an unlabelled trade is inferred there rather than arriving here,
+    # where it would read as a sell and invert the trade's cost.
+    sign = np.where(df["direction"].to_numpy() == "buy", 1.0, -1.0)
 
     # The contemporaneous mid is the last quote *strictly before* the trade:
     # on a quote frame built from the same event stream, the row sharing the

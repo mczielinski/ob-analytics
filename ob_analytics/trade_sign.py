@@ -39,11 +39,17 @@ from math import erf, sqrt
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+from loguru import logger
 
 from ob_analytics._utils import validate_columns, validate_non_empty
 from ob_analytics.exceptions import ConfigError
 
 _SQRT2 = sqrt(2.0)
+
+#: The two aggressor sides.  Every consumer of a ``direction`` column tests it
+#: as ``== "buy"`` and treats the rest as a sell, so anything else in the
+#: column is not a missing value to them -- it is the wrong side.
+_SIDES: tuple[str, str] = ("buy", "sell")
 
 # Accepted quote-column spellings for the Lee–Ready midpoint, most specific
 # first.  A ``(bid, ask)`` pair is averaged; a single mid column is used as-is.
@@ -438,13 +444,20 @@ def resolve_direction(
     it natively; L2 / aggregated feeds don't, so synthesize it with a
     trade-sign classifier (:func:`classify_trade_sign`).
 
-    * ``sign_method=None`` — keep a native ``direction`` if present;
-      otherwise classify with Lee–Ready when *quotes* are supplied, else the
-      tick rule.
+    * ``sign_method=None`` — keep a native ``direction`` if present, filling
+      any row whose value is neither ``"buy"`` nor ``"sell"`` with the
+      classifier below; otherwise classify every row with Lee–Ready when
+      *quotes* are supplied, else the tick rule.
     * ``sign_method="tick"`` / ``"lee_ready"`` — always (re)classify with
       that method, overriding any existing ``direction``.
 
-    The frame is only copied when a ``direction`` column is written.
+    The frame is only copied when a ``direction`` column is written, so a feed
+    that already labels every trade is passed straight through.
+
+    The returned column is *guaranteed* to hold only ``"buy"`` and ``"sell"``.
+    That matters because every consumer reads it as ``== "buy"`` and treats
+    everything else as a sell: an unlabelled trade left in place is not
+    dropped by them, it is counted on the wrong side.
 
     Parameters
     ----------
@@ -470,7 +483,29 @@ def resolve_direction(
     """
     if sign_method is None:
         if "direction" in trades.columns:
-            return trades
+            unusable = ~trades["direction"].isin(_SIDES)
+            if not unusable.any():
+                return trades
+            # A partly-labelled feed.  Every consumer reads this column as
+            # ``== "buy"`` and takes the rest as a sell, so handing back an NA
+            # would not drop the trade, it would flip it.  Infer the blanks the
+            # same way a wholly unlabelled feed is inferred, and say how many.
+            method = "lee_ready" if quotes is not None else "tick"
+            inferred = classify_trade_sign(trades, method=method, quotes=quotes)
+            out = trades.copy()
+            out["direction"] = pd.Categorical(
+                trades["direction"].astype(object).where(~unusable, inferred),
+                categories=list(_SIDES),
+            )
+            logger.warning(
+                "{}: {} of {} trades carry no usable direction; "
+                "inferred with the {!r} rule.",
+                context,
+                int(unusable.sum()),
+                len(trades),
+                method,
+            )
+            return out
         method = "lee_ready" if quotes is not None else "tick"
     elif sign_method == "bvc":
         raise ConfigError(

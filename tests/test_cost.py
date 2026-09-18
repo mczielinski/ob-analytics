@@ -242,12 +242,13 @@ class TestTransactionCosts:
         assert np.isnan(row["realized_spread"])
         assert row["effective_spread"] == pytest.approx(2.0)
 
-    def test_unusable_direction_is_unmeasured_not_a_sell(self):
+    def test_unlabelled_trade_is_inferred_not_scored_as_the_wrong_side(self):
         """A trade with no aggressor side must not be scored as the wrong one.
 
         Both prints lift the ask at 101 against a mid of 100.  Folding the
         unlabelled one into "sell" would return -2 for it -- the sign
         inverted, a confident wrong number rather than a missing one.
+        `resolve_direction` infers the blank instead, so both read +2.
         """
         quotes = _quotes([99] * 9, [101] * 9)
         trades = pd.DataFrame(
@@ -261,13 +262,9 @@ class TestTransactionCosts:
 
         costs = transaction_costs(trades, quotes, horizon="1s")
 
-        assert costs["effective_spread"].iloc[0] == pytest.approx(2.0)
-        assert np.isnan(costs["effective_spread"].iloc[1])
-        # And the unmeasured trade is excluded from the run figure, not
-        # averaged into it with the wrong sign.
-        summary = cost_summary(costs)
-        assert summary.n_trades == 1
-        assert summary.effective_spread == pytest.approx(2.0)
+        assert list(costs["direction"]) == ["buy", "buy"]
+        assert list(costs["effective_spread"]) == [pytest.approx(2.0)] * 2
+        assert cost_summary(costs).n_trades == 2
 
     def test_output_is_chronological(self):
         quotes = _quotes([99] * 12, [101] * 12)
