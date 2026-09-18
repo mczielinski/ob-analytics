@@ -1831,3 +1831,90 @@ def prepare_trading_halts_data(
         "halt_periods": halt_periods,
         "has_halts": has_halts,
     }
+
+
+def bars_label(bars: pd.DataFrame) -> str:
+    """Describe the rule and threshold :func:`~ob_analytics.bars.bars` recorded.
+
+    Returns an empty string for a frame that carries neither, e.g. one rebuilt
+    by hand.
+    """
+    rule = bars.attrs.get("bar_rule")
+    threshold = bars.attrs.get("bar_threshold")
+    if rule is None:
+        return ""
+    if isinstance(threshold, pd.Timedelta):
+        return f"{rule}, {threshold.total_seconds():.4g}s"
+    if isinstance(threshold, (int, float)):
+        return f"{rule}, {threshold:,.4g}"
+    return str(rule)
+
+
+def _bar_tick_labels(closes: pd.Series, count: int = 8) -> tuple[list[int], list[str]]:
+    """Pick about *count* evenly spaced bars and format their closing times.
+
+    The format follows the span: a capture of minutes gets seconds, one of
+    hours gets minutes, one of days gets the date too.
+    """
+    n = len(closes)
+    step = max(1, n // count)
+    positions = list(range(0, n, step))
+    span = closes.iloc[-1] - closes.iloc[0] if n > 1 else pd.Timedelta(0)
+    if span >= pd.Timedelta(days=1):
+        fmt = "%m-%d %H:%M"
+    elif span >= pd.Timedelta(hours=1):
+        fmt = "%H:%M"
+    else:
+        fmt = "%H:%M:%S"
+    return positions, [closes.iloc[i].strftime(fmt) for i in positions]
+
+
+def prepare_bars_data(
+    bars: pd.DataFrame,
+    label: str = "",
+) -> dict[str, Any]:
+    """Prepare data for a candlestick chart with a signed-volume strip.
+
+    *bars* is a table from :func:`ob_analytics.bars.bars`.  *label* names the
+    rule and threshold it was cut with; the default reads them off the frame.
+
+    **The x axis follows the rule.**  Clock bars occupy equal spans of time, so
+    they are drawn on a real time axis, each centred in its own span: a stretch
+    with no trading shows as the gap it was.  Bars cut by trading activity
+    (tick, volume, dollar, imbalance) occupy wildly unequal spans — a burst can
+    close several inside a second — so a time axis would pile them on top of
+    one another.  They are drawn one to a slot instead, evenly spaced, with
+    their closing times as the tick labels.  That even spacing *is* the point
+    of an activity bar: it is what puts the same amount of market in each one.
+
+    The payload says which axis it built in ``x_axis`` (``"time"`` or
+    ``"ordinal"``); ``x`` and ``bar_width`` are in that axis's own units, and
+    ``ticks`` carries the ``(positions, labels)`` an ordinal axis needs.
+    """
+    label = label or bars_label(bars)
+    closes = bars["timestamp_end"]
+    payload: dict[str, Any] = {
+        "bars": bars,
+        "label": label,
+        "rising": (bars["close"] >= bars["open"]).to_numpy(),
+    }
+
+    step = bars.attrs.get("bar_threshold")
+    if bars.attrs.get("bar_rule") == "time" and isinstance(step, pd.Timedelta):
+        return {
+            **payload,
+            "x_axis": "time",
+            # The span's midpoint, so a candle sits over the span it covers
+            # rather than at the last trade inside it.
+            "x": closes.dt.floor(step) + step / 2,
+            "bar_width": step * 0.8,
+            "ticks": None,
+        }
+
+    return {
+        **payload,
+        "x_axis": "ordinal",
+        "x": np.arange(len(bars), dtype=float),
+        "bar_width": 0.8,
+        "ticks": _bar_tick_labels(closes),
+    }

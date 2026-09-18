@@ -12,6 +12,7 @@ from pathlib import Path
 import pandas as pd
 from loguru import logger
 
+from ob_analytics.bars import bars
 from ob_analytics.bitstamp import BitstampSource, BitstampWriter
 from ob_analytics.data import save_data
 from ob_analytics.lobster import LobsterSource
@@ -19,7 +20,9 @@ from ob_analytics.pipeline import Pipeline, PipelineResult
 from ob_analytics.protocols import RunContext
 from ob_analytics.visualization.gallery import (
     PlotSpec,
+    bars_panel,
     build_gallery_model,
+    display_result,
     generate_gallery,
     ofi_horizon_panel,
     trading_halts_panel,
@@ -50,17 +53,21 @@ def _save_and_gallery(
     """Save Parquet + generate gallery; return the gallery HTML path.
 
     *analytics* are level-less panels (built with the ``*_panel`` helpers)
-    appended to the model's :attr:`~...gallery.GalleryModel.analytics`.
+    appended to the model's :attr:`~...gallery.GalleryModel.analytics`, on top
+    of the bars panel every demo shows.
     """
     parquet_dir = output_dir / "parquet"
     # Tag each Parquet file with the run's tick size (issue #155).
     save_data(_result_dict(result), parquet_dir, config=result.config)
     logger.info("Parquet saved to: {}", parquet_dir)
 
+    panels = list(analytics or [])
+    panels.extend(_bars_panels(result))
+
     model = None
-    if analytics:
+    if panels:
         model = build_gallery_model(result)
-        model.analytics.extend(analytics)
+        model.analytics.extend(panels)
 
     gallery_dir = output_dir / "gallery"
     gallery_path = generate_gallery(
@@ -69,6 +76,25 @@ def _save_and_gallery(
     logger.info("Gallery: {}", gallery_path.resolve())
     logger.info("Open in browser: file://{}", gallery_path.resolve())
     return gallery_path
+
+
+def _bars_panels(result: PipelineResult) -> list[PlotSpec]:
+    """Build the demo's bar faces: one cut by the clock, one by traded volume.
+
+    The pair is the point of the card — the same trades cut two ways. Bars come
+    off the display-unit trades so their prices read in the quote currency,
+    like every other face in the gallery.
+    """
+    trades = display_result(result).trades
+    if trades.empty:
+        return []
+    panels: list[PlotSpec] = []
+    for rule in ("time", "volume"):
+        try:
+            panels.append(bars_panel(bars(trades, rule)))
+        except Exception as e:  # noqa: BLE001 -- a demo face must not sink the run
+            logger.warning("Demo: {} bars failed: {}", rule, e)
+    return panels
 
 
 # ---------------------------------------------------------------------------

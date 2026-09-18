@@ -18,6 +18,7 @@ arguments to a single face.
 from __future__ import annotations
 
 from ob_analytics.visualization._data import (
+    prepare_bars_data as bars,
     prepare_book_signals_data as book_signals,
     prepare_book_snapshot_data as book_snapshot,
     prepare_cancellations_l3_data as cancellations_l3,
@@ -45,6 +46,7 @@ from ob_analytics.visualization._data import (
 )
 
 __all__ = [
+    "bars",
     "book_signals",
     "book_snapshot",
     "cancellations_l3",

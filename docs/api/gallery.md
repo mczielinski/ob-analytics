@@ -35,8 +35,10 @@ it to a self-contained HTML page.
 
 ## Extra panels
 
-Build optional flow-toxicity and LOBSTER panels and append them via
+Build optional bar, flow-toxicity and LOBSTER panels and append them via
 `generate_gallery(..., extra_panels=[...])`.
+
+::: ob_analytics.visualization.gallery.bars_panel
 
 ::: ob_analytics.visualization.gallery.vpin_panel
 

@@ -146,6 +146,46 @@ with the regression DataFrame attached.
 : Per-window net buy-minus-sell volume normalised by total traded volume.
 A short-horizon proxy for directional pressure.
 
+## Bars
+
+Implemented in [`bars`](api/bars.md).
+
+**Bar**
+: A summary of a run of consecutive trades: open, high, low, close, volume,
+and the microstructure columns that go with them. The boundaries come from a
+**bar rule**.
+
+**Clock bar (OHLCV)**
+: A bar covering a fixed span of the clock — the familiar 1-minute or daily
+candle.
+
+**Tick bar**
+: A bar covering a fixed number of trades. "Tick" here is the market-data
+sense of one printed trade, not the price increment.
+
+**Volume bar / dollar bar**
+: A bar covering a fixed amount of traded size, or of price × size. Sampling
+by activity rather than by the clock puts the same amount of market in each
+bar, which brings bar returns much closer to being independent and
+identically distributed.
+
+**Imbalance bar**
+: A bar that ends when signed size drifts a set amount away from where the bar
+opened, in either direction (López de Prado). A burst of one-sided flow closes
+a bar; balanced trading stays inside one.
+
+**VWAP**
+: Volume-weighted average price — a bar's turnover divided by its volume. The
+average price actually paid, rather than the average of the prices printed.
+
+**Turnover**
+: Price × size summed over a bar: the value that changed hands, in the quote
+currency. Also called notional or dollar volume.
+
+**Signed volume**
+: Buyer-initiated volume minus seller-initiated volume. The net direction of
+the flow in a bar, and what an imbalance bar accumulates.
+
 ## Pipeline concepts
 
 **Canonical events / trades frames**

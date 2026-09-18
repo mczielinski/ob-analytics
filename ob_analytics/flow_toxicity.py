@@ -22,47 +22,10 @@ import numpy as np
 import pandas as pd
 
 from ob_analytics._utils import validate_columns, validate_non_empty
-from ob_analytics.exceptions import ConfigError
 from ob_analytics.trade_sign import (
     bulk_volume_classification,
-    classify_trade_sign,
+    resolve_direction,
 )
-
-
-def _resolve_direction(
-    trades: pd.DataFrame,
-    sign_method: str | None,
-    quotes: pd.DataFrame | None,
-    context: str,
-) -> pd.DataFrame:
-    """Return *trades* guaranteed to carry a ``buy``/``sell`` ``direction``.
-
-    Signed-flow metrics need the taker's aggressor side.  L3 feeds provide
-    it natively; L2 / aggregated feeds don't, so synthesize it with a
-    trade-sign classifier (:func:`~ob_analytics.trade_sign.classify_trade_sign`).
-
-    * ``sign_method=None`` — keep a native ``direction`` if present;
-      otherwise classify with Lee–Ready when *quotes* are supplied, else the
-      tick rule.
-    * ``sign_method="tick"`` / ``"lee_ready"`` — always (re)classify with
-      that method, overriding any existing ``direction``.
-
-    The frame is only copied when a ``direction`` column is written.
-    """
-    if sign_method is None:
-        if "direction" in trades.columns:
-            return trades
-        method = "lee_ready" if quotes is not None else "tick"
-    elif sign_method == "bvc":
-        raise ConfigError(
-            f"{context}: sign_method='bvc' labels volume bars and is only "
-            "supported by compute_vpin."
-        )
-    else:
-        method = sign_method
-    out = trades.copy()
-    out["direction"] = classify_trade_sign(trades, method=method, quotes=quotes)
-    return out
 
 
 @dataclass(frozen=True)
@@ -170,7 +133,7 @@ def compute_vpin(
     if sign_method == "bvc":
         return _vpin_from_bvc(trades, bucket_volume, n_buckets)
 
-    trades = _resolve_direction(trades, sign_method, quotes, "compute_vpin")
+    trades = resolve_direction(trades, sign_method, quotes, "compute_vpin")
     df = trades.sort_values("timestamp").reset_index(drop=True)
 
     # Assign signed volume
@@ -435,7 +398,7 @@ def order_flow_imbalance(
     validate_columns(trades, {"timestamp", "volume"}, "order_flow_imbalance")
     validate_non_empty(trades, "order_flow_imbalance")
 
-    trades = _resolve_direction(trades, sign_method, quotes, "order_flow_imbalance")
+    trades = resolve_direction(trades, sign_method, quotes, "order_flow_imbalance")
     df = trades.sort_values("timestamp").copy()
     df["buy_vol"] = df["volume"].where(df["direction"] == "buy", 0.0)
     df["sell_vol"] = df["volume"].where(df["direction"] != "buy", 0.0)

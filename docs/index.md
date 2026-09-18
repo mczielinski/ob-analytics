@@ -77,6 +77,7 @@ scale envelope.
 | **Classify orders** | Label as market, resting-limit, flashed-limit, market-limit, or unknown |
 | **Depth & metrics** | Price-level volume, best bid/ask, spread, liquidity in BPS bins |
 | **Flow toxicity** *(post-run)* | VPIN, Kyle's lambda, order-flow imbalance from `result.trades` |
+| **Bars** *(post-run)* | Resample `result.trades` into OHLCV rows by the clock, trade count, volume, turnover, or order-flow imbalance |
 | **Visualize / export** | Depth heatmaps, event maps, trade charts, galleries; Matplotlib or Plotly; Parquet and LOBSTER round-trip I/O |
 
 ## Pipeline

@@ -19,6 +19,7 @@ pass directly.
 | **An export format** | `DataWriter` | `register_writer(name, factory)` | `save_data(data, path, fmt=name)` |
 | **A plot** | a `prepare_*` function + a renderer | `RENDERERS.register((name, backend), fn)` | `plot(name, backend=...)` |
 | **A metric** | `Metric` | `register_metric(metric)` (or an entry point) | `result.metric(name)` · `result.plot(name)` · its own gallery card |
+| **A bar rule** | `BarRule` | `register_bar_rule(rule)` | `bars(trades, rule=name)` |
 
 Registration is an import side-effect: the module that calls
 `register_*` must be imported before the name is looked up. Built-ins register
@@ -638,6 +639,82 @@ amihud = "my_pkg.amihud:AmihudMetric"
 The entry point names the metric *class*; discovery constructs it with no
 arguments and registers it under its own `name`. A metric with required
 settings should either default them or register itself on import instead.
+
+---
+
+## 5. A new bar rule
+
+[`bars()`](api/bars.md) resamples a trade stream into open/high/low/close rows.
+Everything a bar carries — the OHLCV columns, VWAP, the signed-volume split —
+is shared, so what a bar *type* actually decides is one thing: where the
+boundaries fall. That decision is a **`BarRule`**, and a rule of your own is
+the boundary decision and nothing else.
+
+A rule states three members:
+
+- `name` — what `bars(trades, rule=name)` looks it up by.
+- `normalize(threshold)` — read the threshold in the rule's own type, or raise
+  `ConfigError`. Called once before `assign`, so reading and checking the
+  threshold live in one place and cutting in another.
+- `assign(frame, threshold)` — return the 0-based bar index of each trade.
+
+`assign` is handed a normalized frame in trade order, with `timestamp`,
+`price`, `volume`, `turnover` (price × size) and `sign` (`+1` buyer-initiated,
+`-1` seller-initiated) — so a rule never has to sort trades or work out the
+aggressor side itself.
+
+`default_threshold(frame, target_bars)` supplies a threshold when the caller
+passes none, aiming at about `target_bars` bars.
+
+Here is a rule that starts a new bar whenever price moves a set distance from
+where the bar opened — a "range bar":
+
+```python
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+from ob_analytics import register_bar_rule
+from ob_analytics.exceptions import ConfigError
+
+
+class RangeRule:
+    """A new bar every time price travels `threshold` from the bar's open."""
+
+    name = "range"
+
+    def default_threshold(self, frame: pd.DataFrame, target_bars: int) -> float:
+        span = frame["price"].max() - frame["price"].min()
+        return float(span) / target_bars or 1.0
+
+    def normalize(self, threshold: object) -> float:
+        size = float(threshold)
+        if not size > 0:
+            raise ConfigError(f"bars: the 'range' rule needs a positive move, got {threshold!r}")
+        return size
+
+    def assign(self, frame: pd.DataFrame, threshold: float) -> np.ndarray:
+        price = frame["price"].to_numpy(dtype=float)
+        index = np.empty(price.size, dtype=np.int64)
+        bar, opened_at = 0, price[0]
+        for i, p in enumerate(price):
+            index[i] = bar
+            if abs(p - opened_at) >= threshold:
+                bar += 1
+                opened_at = p
+        return index
+
+
+register_bar_rule(RangeRule())
+```
+
+```python
+bars(result.trades, "range", 25)
+```
+
+The bar table, the gallery face and the plot all work unchanged: they never
+knew which rule cut the bars.
 
 ---
 

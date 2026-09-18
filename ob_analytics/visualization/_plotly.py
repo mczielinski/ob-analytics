@@ -1672,6 +1672,90 @@ def plotly_trading_halts(data: dict) -> Any:
 
 # ---------------------------------------------------------------------------
 # Renderer self-registration
+
+
+def plotly_bars(data: dict) -> Any:
+    """Render bars as candlesticks over a signed-volume strip.
+
+    Clock bars are drawn on a time axis; activity bars get one slot each, with
+    their closing times as tick labels (see
+    :func:`~ob_analytics.visualization._data.prepare_bars_data`).
+    """
+    go = _import_plotly()
+    bars = data["bars"]
+    on_clock = data["x_axis"] == "time"
+
+    label = data.get("label", "")
+    fig = _base_figure(go, title=f"Bars ({label})" if label else "Bars")
+
+    x = data["x"]
+    # go.Bar takes a width in milliseconds on a date axis and in axis units on
+    # a numeric one; the candles size themselves from the x spacing.
+    width = (
+        data["bar_width"].total_seconds() * 1000.0
+        if on_clock
+        else float(data["bar_width"])
+    )
+
+    volume = bars["volume"].to_numpy(dtype=float)
+    signed = bars["signed_volume"].to_numpy(dtype=float)
+    fig.add_trace(
+        go.Bar(
+            x=x,
+            y=volume,
+            width=width,
+            marker_color=[_BUY_COLOR if s >= 0 else _SELL_COLOR for s in signed],
+            opacity=0.3,
+            name="Volume",
+            yaxis="y2",
+            hovertemplate="Volume: %{y}<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Candlestick(
+            x=x,
+            open=bars["open"],
+            high=bars["high"],
+            low=bars["low"],
+            close=bars["close"],
+            increasing_line_color=_BUY_COLOR,
+            increasing_fillcolor=_BUY_COLOR,
+            decreasing_line_color=_SELL_COLOR,
+            decreasing_fillcolor=_SELL_COLOR,
+            name="Price",
+            # The bar's own close time, so an ordinal axis still hovers a time.
+            text=bars["timestamp_end"].astype(str),
+        )
+    )
+
+    # Four times the tallest bar: the volume strip reads as a footer under the
+    # candles rather than competing with them.
+    top = float(volume.max()) * 4 if volume.size and volume.max() > 0 else 1.0
+    fig.update_layout(
+        xaxis_rangeslider_visible=False,
+        yaxis2={
+            "overlaying": "y",
+            "side": "right",
+            "range": [0, top],
+            "showgrid": False,
+            "title": {"text": "Volume"},
+        },
+    )
+    if on_clock:
+        fig.update_xaxes(title_text="Time")
+    else:
+        positions, labels = data["ticks"]
+        fig.update_xaxes(
+            title_text="Bar (labelled by close time)",
+            tickmode="array",
+            tickvals=positions,
+            ticktext=labels,
+            range=[-1, len(bars)],
+        )
+    fig.update_yaxes(title_text="Price")
+    return fig
+
+
 # ---------------------------------------------------------------------------
 # Imported here (not at module top) so RENDERERS -- defined in the package
 # __init__ -- already exists when this (lazily imported) module is loaded.
@@ -1704,6 +1788,7 @@ for _concept, _level, _fn in [
     ("volume_percentiles", _L2, plotly_volume_percentiles),
     ("events_histogram", _L2, plotly_events_histogram),
     ("hidden_executions", _L2, plotly_hidden_executions),
+    ("bars", None, plotly_bars),
     ("vpin", None, plotly_vpin),
     ("order_flow_imbalance", None, plotly_order_flow_imbalance),
     ("ofi_horizon", None, plotly_ofi_horizon),

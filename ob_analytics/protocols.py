@@ -25,6 +25,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+import numpy.typing as npt
 import pandas as pd
 
 from ob_analytics.config import SourceSettings
@@ -298,6 +299,64 @@ class Metric(Protocol):
 
     def prepare(self, frame: pd.DataFrame) -> dict[str, Any]:
         """Turn :meth:`compute`'s table into the payload the renderer takes."""
+        ...
+
+
+@runtime_checkable
+class BarRule(Protocol):
+    """Structural contract for a rule that cuts a trade stream into bars.
+
+    A bar rule answers one question: where do the bar boundaries fall?  It is
+    handed the normalized trade frame :func:`~ob_analytics.bars.bars` builds —
+    sorted by ``timestamp``, with ``price``, ``volume`` and a ``sign`` column
+    of ``+1`` (buyer-initiated) / ``-1`` (seller-initiated) — and returns the
+    bar each trade belongs to.  Everything else (the OHLCV columns, VWAP, the
+    signed-volume split) is shared, so a new rule is the boundary decision and
+    nothing more.
+
+    There is **no base class to inherit**: any object providing these members
+    satisfies the contract, and registering it in
+    :data:`~ob_analytics.bars.BAR_RULES` is what makes ``bars(trades,
+    rule=name)`` find it.
+
+    Attributes
+    ----------
+    name : str
+        Short lowercase identifier registered in
+        :data:`~ob_analytics.bars.BAR_RULES`, e.g. ``"volume"``.
+    """
+
+    name: str
+
+    def default_threshold(self, frame: pd.DataFrame, target_bars: int) -> Any:
+        """Return the threshold that cuts *frame* into about *target_bars* bars.
+
+        Used when the caller passes no threshold of its own.  The unit is the
+        rule's own: a :class:`pandas.Timedelta` for a clock rule, a count of
+        trades for a tick rule, an amount for a volume rule.
+        """
+        ...
+
+    def normalize(self, threshold: Any) -> Any:
+        """Return *threshold* in this rule's own type, or say why it cannot.
+
+        Called once before :meth:`assign`, so a rule reads and checks its
+        threshold in one place and cuts in another — and so the caller can
+        report the value the bars were actually cut with, whatever spelling it
+        arrived in.  Raises
+        :class:`~ob_analytics.exceptions.ConfigError` for a threshold the rule
+        cannot use.
+        """
+        ...
+
+    def assign(self, frame: pd.DataFrame, threshold: Any) -> npt.ArrayLike:
+        """Return the 0-based bar index of each row of *frame*.
+
+        One whole number per trade, non-decreasing in trade order — an
+        ndarray, a Series, or any sequence :func:`numpy.asarray` reads.  Index
+        values need not be contiguous: an index no trade carries is an empty
+        bar, and empty bars are dropped.
+        """
         ...
 
 
