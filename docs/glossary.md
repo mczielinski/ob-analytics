@@ -219,10 +219,15 @@ Needs no quotes and no aggressor side.
 
 **Roll's implied spread**
 : Roll (1984). The spread implied by bid-ask bounce, `2 * sqrt(-cov)` over the
-lag-1 autocovariance of trade price changes. It assumes an efficient price
-plus a constant half-spread and uninformed flow; on a trending or thin tape
-the autocovariance comes out positive and the estimate does not exist, which
-is reported as `NaN` beside the autocovariance rather than hidden.
+lag-1 autocovariance of trade price changes. It assumes the bounce is the only
+thing moving the price, which fixes the lag-1 **autocorrelation** of those
+changes at `-0.5` — the diagnostic returned beside the estimate. On a tape
+that is sparse relative to how fast the instrument moves, the price change
+between trades is mostly efficient-price movement rather than bounce; the
+autocovariance then comes out positive, the estimate does not exist, and it is
+reported as `NaN` rather than hidden. When it lands negative by chance the
+estimate exists but means nothing, which is why the autocorrelation matters
+more than the root.
 
 ## Pipeline concepts
 

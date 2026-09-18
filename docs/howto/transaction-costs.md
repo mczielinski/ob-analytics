@@ -114,15 +114,43 @@ from ob_analytics import roll_spread
 roll_spread(result.trades)
 ```
 
-On the bundled capture this returns `NaN`, with an autocovariance of
-`+47795` beside it. That is not a failure to work around — it is the
-estimator saying its model does not fit. Roll assumes an efficient price plus
-a bounce of constant half-spread, with order flow that carries no
-information. This capture trends over its thirty minutes, so the drift swamps
-the bounce and the autocovariance comes out positive, where the formula has
-no real root. The sign is returned so the reason is visible rather than
-hidden behind a number. Where quotes exist, measure the spread with
-`transaction_costs` instead; Roll is for the tapes where they do not.
+On the bundled capture this returns `NaN`. That is the estimator saying its
+model does not fit, and the two diagnostic columns beside it say how badly.
+
+Roll assumes the bounce is the *only* thing moving the price, which fixes the
+lag-1 autocorrelation of the price changes at exactly `-0.5`. Check that
+number first. On a synthetic tape built to Roll's own model it comes back at
+`-0.497` and the estimate recovers the spread to within a fraction of a per
+cent. On the bundled capture it is `+0.197` — the wrong sign entirely.
+
+The reason is not the trend, and not the integer tick grid: prices are exact
+whole ticks and are converted to floats before any arithmetic. It is that
+this capture is *sparse* relative to how fast the instrument moves. It prints
+a trade every 6.3 seconds on average, and over that gap BTC moves far further
+than half a spread:
+
+| | ticks |
+| --- | --- |
+| median quoted spread | 100 (half-spread `c` = 50) |
+| sd of the price change between consecutive trades | 493 |
+| share of `var(Δp)` the bounce would explain (`2c²/var`) | **2.1%** |
+| autocovariance Roll needs (`-c²`) | -2,500 |
+| autocovariance observed | **+47,795** |
+
+The bounce is two per cent of what is moving the price, so there is nothing
+for the estimator to find, and the autocovariance comes out positive where
+the formula has no real root. Sampling more often will not help — the tape
+cannot trade more often than it does. Roll needs a dense tape, or a spread
+wide enough to dominate the price move between trades.
+
+Watch for the opposite failure too. When the autocovariance lands *negative*
+by chance, Roll returns a number rather than `NaN`, and a number that is not
+there is worse than a gap. A pure random walk with no bounce at all does this
+roughly half the time. The autocorrelation is what catches it: far from
+`-0.5` means the estimate is noise, whether or not it has a root.
+
+Where quotes exist, measure the spread with `transaction_costs` instead of
+inferring it. Roll is for the tapes where they do not.
 
 ## Plotting it
 

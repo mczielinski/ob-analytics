@@ -369,6 +369,34 @@ class TestRollSpread:
 
         assert row["roll_spread"] == pytest.approx(2.0, rel=0.05)
 
+    def test_autocorrelation_is_minus_half_when_the_model_holds(self):
+        """The bounce alone moves the price, so the lag-1 autocorrelation is -0.5.
+
+        This is the diagnostic that says whether the estimate means anything:
+        under Roll's model the price change is entirely bounce, which fixes
+        the autocorrelation at exactly -0.5.
+        """
+        row = roll_spread(self._bounce(20_000, 1.0)).iloc[0]
+
+        assert row["autocorrelation"] == pytest.approx(-0.5, abs=0.02)
+
+    def test_autocorrelation_exposes_a_tape_the_model_does_not_fit(self):
+        """A price that also moves for its own reasons pulls it away from -0.5.
+
+        The same ±1 bounce with a random walk of step 10 underneath: the
+        bounce is now a small share of the variance, and the diagnostic says
+        so even where the estimate still has a real root.
+        """
+        rng = np.random.default_rng(3)
+        n = 20_000
+        signs = rng.choice([-1, 1], n)
+        walk = np.cumsum(rng.normal(0, 10.0, n))
+        trades = _trades(100 + walk + 1.0 * signs, ["buy"] * n)
+
+        row = roll_spread(trades).iloc[0]
+
+        assert row["autocorrelation"] > -0.1
+
     def test_wider_bounce_wider_spread(self):
         """Doubling the half-spread doubles the implied spread."""
         narrow = roll_spread(self._bounce(20_000, 1.0, seed=1)).iloc[0]
@@ -392,15 +420,56 @@ class TestRollSpread:
         assert row["autocovariance"] == pytest.approx(-4.0)
         assert row["roll_spread"] == pytest.approx(4.0)
 
-    def test_trending_tape_has_no_estimate(self):
-        """A price that only rises has a positive autocovariance and no root."""
-        trades = _trades(list(range(100, 140)), ["buy"] * 40)
+    def test_momentum_tape_has_no_estimate(self):
+        """Price changes that persist push the autocovariance positive.
+
+        This is what a tape of takers walking the book looks like, and it is
+        the bundled sample's regime: consecutive changes lean the same way,
+        which is the opposite of a bounce, so the formula has no real root.
+        """
+        rng = np.random.default_rng(4)
+        n = 2_000
+        steps = np.zeros(n)
+        for i in range(1, n):  # AR(1) increments: each change follows the last
+            steps[i] = 0.6 * steps[i - 1] + rng.normal(0, 1.0)
+        trades = _trades(1000 + np.cumsum(steps), ["buy"] * n)
 
         row = roll_spread(trades).iloc[0]
 
-        assert row["autocovariance"] >= 0
+        assert row["autocovariance"] > 0
+        assert row["autocorrelation"] > 0
         assert np.isnan(row["roll_spread"])
         assert np.isnan(row["roll_spread_bps"])
+
+    def test_random_walk_gives_a_spurious_estimate_the_diagnostic_catches(self):
+        """A walk with no bounce at all still returns a small number.
+
+        Its increments are independent, so the true autocovariance is zero and
+        sampling noise decides the sign.  When it lands negative the formula
+        has a root and reports a spread that is not there -- which is worse
+        than a NaN, because it looks like an answer.  The autocorrelation is
+        what gives it away: nowhere near the -0.5 the model requires.
+        """
+        rng = np.random.default_rng(4)
+        n = 400
+        trades = _trades(100 + np.cumsum(rng.normal(0.5, 1.0, n)), ["buy"] * n)
+
+        row = roll_spread(trades).iloc[0]
+
+        assert row["roll_spread"] > 0  # a number, and a meaningless one
+        assert row["autocorrelation"] > -0.2
+
+    def test_constant_step_ramp_has_no_diagnostic_either(self):
+        """A price that rises by the same amount every print moves not at all.
+
+        Every change is identical, so their variance is zero and the
+        autocorrelation is 0/0.  It is reported as NaN rather than invented.
+        """
+        row = roll_spread(_trades(list(range(100, 140)), ["buy"] * 40)).iloc[0]
+
+        assert row["autocovariance"] == pytest.approx(0.0)
+        assert np.isnan(row["autocorrelation"])
+        assert np.isnan(row["roll_spread"])
 
     def test_too_few_trades_to_estimate(self):
         """Three prints give one product, not a covariance."""
@@ -476,8 +545,12 @@ class TestBundledSample:
         assert len(illiq) > 1
         assert (illiq["amihud"].dropna() >= 0).all()
 
-        # This capture trends, so Roll has no real root -- the estimate is NaN
-        # and the autocovariance beside it says why.
+        # The efficient price moves much further between these trades than
+        # half a spread, so the bounce Roll looks for is a few per cent of the
+        # variance.  The autocovariance comes out positive, the estimate has
+        # no real root, and the autocorrelation is nowhere near the -0.5 the
+        # model requires -- which is what the diagnostic columns are for.
         roll = roll_spread(result.trades)
         assert roll.iloc[0]["autocovariance"] > 0
+        assert roll.iloc[0]["autocorrelation"] > 0
         assert np.isnan(roll.iloc[0]["roll_spread"])

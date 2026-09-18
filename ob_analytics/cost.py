@@ -452,14 +452,23 @@ def roll_spread(trades: pd.DataFrame, *, window: str | None = None) -> pd.DataFr
     where ``dp`` is the change in trade price.
 
     The model assumes an efficient price plus a bounce of constant half-spread,
-    with order flow that carries no information.  Real flow does carry
-    information, which pushes the autocovariance up, so Roll's estimate reads
-    low against a measured effective spread — and on a thin or trending tape
-    the autocovariance often comes out **positive**, where the formula has no
-    real root.  The estimate is ``NaN`` there, with ``autocovariance`` returned
-    beside it, so a reader can see that the model did not fit rather than being
-    handed a number it does not support.  Compare it against
-    :func:`transaction_costs` where quotes exist; use it where they do not.
+    with order flow that carries no information.  Under it the bounce is the
+    *only* source of price change, so the lag-1 autocorrelation of the changes
+    is exactly ``-0.5``.  That is the number to check: ``autocorrelation`` is
+    returned beside the estimate, and the further it sits from ``-0.5``, the
+    less of the price movement the bounce explains.
+
+    Two things push it away.  Real flow carries information, which raises the
+    autocovariance and makes Roll read low against a measured effective
+    spread.  More decisively, the efficient price moves between trades, and on
+    a sparse tape in a volatile instrument it moves much further than half a
+    spread — the bounce then accounts for a few per cent of the variance and
+    the autocovariance comes out **positive**, where the formula has no real
+    root.  The estimate is ``NaN`` there rather than a number the model does
+    not support, and the two diagnostic columns say why.  Sampling more often
+    than the tape trades will not help: the fix is a denser tape or a wider
+    spread, and where quotes exist :func:`transaction_costs` measures the
+    spread directly instead of inferring it.
 
     Parameters
     ----------
@@ -473,10 +482,13 @@ def roll_spread(trades: pd.DataFrame, *, window: str | None = None) -> pd.DataFr
     -------
     pandas.DataFrame
         One row per window with ``timestamp`` (the window's start),
-        ``n_trades``, ``mean_price``, ``autocovariance``, ``roll_spread`` and
-        ``roll_spread_bps``.  A window with fewer than four trades — too few
-        for two overlapping price changes — or a non-negative autocovariance
-        has ``NaN`` for both spread columns.
+        ``n_trades``, ``mean_price``, ``autocovariance``, ``autocorrelation``,
+        ``roll_spread`` and ``roll_spread_bps``.  ``autocorrelation`` is the
+        lag-1 autocorrelation of the price changes, which Roll's model puts at
+        ``-0.5``; a window whose value is far from that is one the model does
+        not describe.  A window with fewer than four trades — too few for two
+        overlapping price changes — or a non-negative autocovariance has
+        ``NaN`` for both spread columns.
 
     Raises
     ------
@@ -501,6 +513,7 @@ def roll_spread(trades: pd.DataFrame, *, window: str | None = None) -> pd.DataFr
             "n_trades",
             "mean_price",
             "autocovariance",
+            "autocorrelation",
             "roll_spread",
             "roll_spread_bps",
         ],
@@ -529,6 +542,7 @@ def _roll_window(start: pd.Timestamp, prices: np.ndarray) -> dict:
         "n_trades": n,
         "mean_price": mean_price,
         "autocovariance": float("nan"),
+        "autocorrelation": float("nan"),
         "roll_spread": float("nan"),
         "roll_spread_bps": float("nan"),
     }
@@ -544,6 +558,12 @@ def _roll_window(start: pd.Timestamp, prices: np.ndarray) -> dict:
     centred = changes - changes.mean()
     autocovariance = float(np.dot(centred[1:], centred[:-1]) / (len(changes) - 1))
     row["autocovariance"] = autocovariance
+    # Roll's model puts this at exactly -0.5, because the bounce is then the
+    # only thing moving the price.  How far it lands from -0.5 is how much of
+    # the movement the model does not explain.
+    variance = float(np.dot(centred, centred) / len(changes))
+    if variance > 0:
+        row["autocorrelation"] = autocovariance / variance
     if autocovariance < 0:
         spread = 2.0 * np.sqrt(-autocovariance)
         row["roll_spread"] = float(spread)

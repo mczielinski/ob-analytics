@@ -42,10 +42,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
   `amihud()` and `roll_spread()` read liquidity from the trade prices alone,
   so they run on a tape with no quotes and no aggressor side: the price move a
-  unit of turnover buys, and the spread implied by bid-ask bounce. Roll
-  returns `NaN` with its autocovariance beside it when the tape trends and the
-  estimator has no real root, rather than reporting a number its model does
-  not support.
+  unit of turnover buys, and the spread implied by bid-ask bounce. Roll also
+  returns the lag-1 `autocorrelation` of the price changes, which its model
+  puts at exactly `-0.5`; how far the number sits from that is how little of
+  the price movement the bounce explains. On the bundled capture it is
+  `+0.197` and the estimate has no real root, so it is `NaN` rather than a
+  number the model does not support. The diagnostic matters in the other
+  direction too: when the autocovariance lands negative by chance Roll returns
+  a spread that is not there, and the autocorrelation is what catches it.
 
   The mid a trade is measured against is the last quote *strictly before* it,
   skipping crossed quotes: on a frame built from the same event stream, the
