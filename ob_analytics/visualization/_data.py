@@ -17,6 +17,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from ob_analytics._utils import validate_columns
 from ob_analytics.depth import book_imbalance, filter_depth, micro_price
 from ob_analytics.exceptions import ConfigError
 
@@ -1614,6 +1615,91 @@ def prepare_vpin_data(
     else:
         bar_width = 0.001
     return {"vpin_df": vpin_df, "threshold": threshold, "bar_width": bar_width}
+
+
+def prepare_transaction_costs_data(
+    costs: pd.DataFrame,
+    *,
+    window: str = "1min",
+) -> dict[str, Any]:
+    """Prepare the transaction-cost decomposition for plotting.
+
+    The face shows where a taker's cost went: the effective spread is the
+    whole of it, the realized spread is the part the liquidity provider kept,
+    and the gap between the two lines is the price impact.  Because they add
+    up row by row, drawing them as two lines makes the third readable as the
+    band between them, with no third line to follow.
+
+    Per-trade costs are far too noisy to read directly, so they are averaged
+    onto *window*, weighted by trade size the same way
+    :func:`~ob_analytics.cost.cost_summary` weights the session figure.  The
+    raw per-trade effective spread is passed through as well, for a faint
+    scatter behind the lines that shows the spread of what was averaged.
+
+    Parameters
+    ----------
+    costs : pandas.DataFrame
+        A :func:`~ob_analytics.cost.transaction_costs` frame.
+    window : str, optional
+        Pandas offset string for the averaging window.  Default ``"1min"``.
+
+    Returns
+    -------
+    dict
+        ``times`` / ``effective`` / ``realized`` / ``impact`` (the windowed
+        series, in basis points), ``trade_times`` / ``trade_effective`` (the
+        raw per-trade scatter), and ``horizon`` (the realized-spread horizon
+        the costs were measured at, for the title).  ``impact`` is carried for
+        a backend that wants to draw it outright; the two shipped faces read
+        it off the chart as the band between the other two lines.
+    """
+    validate_columns(
+        costs,
+        {
+            "timestamp",
+            "volume",
+            "effective_spread_bps",
+            "realized_spread_bps",
+            "price_impact_bps",
+        },
+        "prepare_transaction_costs_data",
+    )
+    weight = costs["volume"].to_numpy(dtype=np.float64)
+    frame = costs.assign(_weight=weight)
+    for column in ("effective_spread_bps", "realized_spread_bps", "price_impact_bps"):
+        values = frame[column].to_numpy(dtype=np.float64)
+        # NaN * weight stays NaN, which would poison the window's sum; a
+        # missing measure must drop out of both numerator and denominator.
+        frame["_w_" + column] = values * weight
+        frame["_d_" + column] = np.where(np.isnan(values), 0.0, weight)
+
+    grouped = frame.groupby(pd.Grouper(key="timestamp", freq=window))
+    binned = grouped.agg(
+        w_effective=("_w_effective_spread_bps", "sum"),
+        d_effective=("_d_effective_spread_bps", "sum"),
+        w_realized=("_w_realized_spread_bps", "sum"),
+        d_realized=("_d_realized_spread_bps", "sum"),
+        w_impact=("_w_price_impact_bps", "sum"),
+        d_impact=("_d_price_impact_bps", "sum"),
+        n_trades=("_weight", "size"),
+    )
+    binned = binned[binned["n_trades"] > 0].reset_index()
+
+    def ratio(numerator: str, denominator: str) -> np.ndarray:
+        num = binned[numerator].to_numpy(dtype=np.float64)
+        den = binned[denominator].to_numpy(dtype=np.float64)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            return np.where(den > 0, num / den, np.nan)
+
+    return {
+        "times": binned["timestamp"].to_numpy(),
+        "effective": ratio("w_effective", "d_effective"),
+        "realized": ratio("w_realized", "d_realized"),
+        "impact": ratio("w_impact", "d_impact"),
+        "trade_times": costs["timestamp"].to_numpy(),
+        "trade_effective": costs["effective_spread_bps"].to_numpy(dtype=np.float64),
+        "horizon": str(costs.attrs.get("horizon", "")),
+    }
 
 
 def prepare_ofi_data(

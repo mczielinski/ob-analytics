@@ -21,6 +21,8 @@ it to a self-contained HTML page.
 
 ::: ob_analytics.visualization.gallery.available_concepts
 
+::: ob_analytics.visualization.gallery.display_result
+
 ## Gallery model
 
 ::: ob_analytics.visualization.gallery.build_gallery_model
@@ -35,8 +37,8 @@ it to a self-contained HTML page.
 
 ## Extra panels
 
-Build optional bar, flow-toxicity and LOBSTER panels and append them via
-`generate_gallery(..., extra_panels=[...])`.
+Build optional bar, flow-toxicity, transaction-cost and LOBSTER panels and
+append them via `generate_gallery(..., extra_panels=[...])`.
 
 ::: ob_analytics.visualization.gallery.bars_panel
 
@@ -47,5 +49,7 @@ Build optional bar, flow-toxicity and LOBSTER panels and append them via
 ::: ob_analytics.visualization.gallery.ofi_horizon_panel
 
 ::: ob_analytics.visualization.gallery.kyle_panel
+
+::: ob_analytics.visualization.gallery.transaction_costs_panel
 
 ::: ob_analytics.visualization.gallery.trading_halts_panel

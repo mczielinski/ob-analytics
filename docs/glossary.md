@@ -185,6 +185,49 @@ currency. Also called notional or dollar volume.
 **Signed volume**
 : Buyer-initiated volume minus seller-initiated volume. The net direction of
 the flow in a bar, and what an imbalance bar accumulates.
+## Transaction cost
+
+Implemented in [`cost`](api/cost.md).
+
+**Effective spread**
+: What a taker actually paid to cross, measured from the mid-price the trade
+crossed: `2 * D * (price - mid)`, where `D` is `+1` for a buy and `-1` for a
+sell. Doubled so it compares with a quoted spread, which also spans both
+sides of the mid. Unlike the quoted spread it is a property of trades, not of
+the book, so it reflects where in the book people actually traded.
+
+**Realized spread**
+: The part of the effective spread the liquidity provider kept, measured one
+horizon after the trade: `2 * D * (price - mid_later)`. A negative realized
+spread means the provider lost money on the trade — the flow was informed.
+
+**Price impact**
+: The rest of the effective spread: how far the trade moved the market,
+`2 * D * (mid_later - mid)`. Effective spread = realized spread + price
+impact, exactly, trade by trade.
+
+**Horizon**
+: The wait between a trade and the mid-price the realized spread is read
+against. Five minutes is the equity convention; a fast tape needs less,
+because unrelated price moves are charged to the trade as impact. There is no
+neutral value, so the horizon is reported with the number.
+
+**Amihud illiquidity**
+: Amihud (2002). The price move a unit of turnover buys, `|return| / turnover`
+over a window. High means thin: a small amount of trading swings the price.
+Needs no quotes and no aggressor side.
+
+**Roll's implied spread**
+: Roll (1984). The spread implied by bid-ask bounce, `2 * sqrt(-cov)` over the
+lag-1 autocovariance of trade price changes. It assumes the bounce is the only
+thing moving the price, which fixes the lag-1 **autocorrelation** of those
+changes at `-0.5` — the diagnostic returned beside the estimate. On a tape
+that is sparse relative to how fast the instrument moves, the price change
+between trades is mostly efficient-price movement rather than bounce; the
+autocovariance then comes out positive, the estimate does not exist, and it is
+reported as `NaN` rather than hidden. When it lands negative by chance the
+estimate exists but means nothing, which is why the autocorrelation matters
+more than the root.
 
 ## Pipeline concepts
 
