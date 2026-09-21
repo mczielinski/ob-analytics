@@ -222,7 +222,22 @@ kyle.regression_df.round(2)
 # line through those points has slope λ ≈ 0.09 — about one price unit
 # per eleven net units of flow — with a t-statistic near 6 and R² ≈ 0.89:
 # on this constructed tape, signed flow explains nearly all of the price
-# moves. The face draws that scatter and its fitted line:
+# moves.
+#
+# The result also says how far to trust that slope. `diagnostics` lists
+# the reasons not to, and `significant` is `True` only when the list is
+# empty:
+
+# %%
+print(f"significant: {kyle.significant}")
+for reason in kyle.diagnostics:
+    print(" -", reason)
+
+# %% [markdown]
+# A t-statistic near 6 is not enough on its own: six windows are far too
+# few for any regression, and the check says so. That is the right
+# verdict for a tape built to be checked by hand, not to draw
+# conclusions from. The face draws the scatter and its fitted line:
 
 # %%
 fig = plot("kyle_lambda", **prepare.kyle_lambda(kyle))
@@ -248,27 +263,60 @@ print(
     f"λ = {kyle_real.lambda_:.3f}   t = {kyle_real.t_stat:.2f}   "
     f"R² = {kyle_real.r_squared:.3f}   windows = {kyle_real.n_windows}"
 )
+print(
+    f"{kyle_real.ci_level:.0%} interval: "
+    f"[{kyle_real.ci_low:.3f}, {kyle_real.ci_high:.3f}]"
+)
+print(f"significant: {kyle_real.significant}")
+for reason in kyle_real.diagnostics:
+    print(" -", reason)
 
 # %% [markdown]
 # Look at the t-statistic before the λ: **1.45**. As a rule of thumb a
 # coefficient needs |t| ≳ 2 to be distinguishable from zero, so this λ
-# — positive, but weak — is *not statistically significant*. And
-# that is the honest headline for this dataset: a quiet thirty-minute
-# capture with 284 trades and fifteen units of total volume is far below
-# the regime these metrics were designed for. They compute; they just
-# cannot conclude.
+# — positive, but weak — is *not statistically significant*, and the
+# result says so itself, along with the second reason: seven windows.
+# The confidence interval makes the same point in λ's own units. It comes
+# from a *block bootstrap*: resample runs of neighbouring windows with
+# replacement, refit the slope each time, and keep the middle 95% of the
+# slopes. The interval runs from below zero to above it, so the data
+# cannot even settle the sign of λ.
+#
+# VPIN reports the same kind of check. Leave `bucket_volume` out and it
+# is picked from the tape with the common rule, average daily volume ÷ 50.
+# A thirty-minute capture is scaled up to a day at the rate it traded, so
+# each bucket holds about half an hour of this tape's volume:
+
+# %%
+vpin_real = compute_vpin(result.trades)
+print(
+    f"bucket_volume = {vpin_real.attrs['bucket_volume']:.2f} "
+    f"({vpin_real.attrs['bucket_volume_rule']})   buckets = {len(vpin_real)}"
+)
+for reason in vpin_real.attrs["diagnostics"]:
+    print(" -", reason)
+
+# %% [markdown]
+# One bucket, where the trailing average wants fifty. That is the honest
+# headline for this dataset: a quiet thirty-minute capture with 284 trades
+# and fifteen units of total volume is far below the regime these metrics
+# were designed for. They compute; they just cannot conclude — and now
+# they say so.
 #
 # !!! warning "Pitfall: these metrics need volume, and their knobs are not neutral"
 #     Flow-toxicity measures were built for high-frequency equity and
 #     futures data — thousands of trades per minute, not a handful per
 #     minute. On a thin tape, three problems arise. **(1) Significance:** as
 #     above, λ's t-statistic collapses; VPIN's trailing average is taken
-#     over too few buckets to mean much. **(2) The knobs move the
+#     over too few buckets to mean much. Read `significant` and
+#     `diagnostics` on the λ result, and `attrs["diagnostics"]` on the
+#     VPIN frame, before the number. **(2) The knobs move the
 #     answer:** `bucket_volume` for VPIN and `window` for Kyle and OFI
 #     are not neutral defaults — halve the bucket size and VPIN's whole
 #     profile shifts. Choose them from the instrument's typical volume
-#     (a common VPIN starting point is average daily volume ÷ 50), and
-#     report them alongside the number. **(3) Trade side is itself an
+#     (`vpin_bucket_volume` applies the average daily volume ÷ 50 rule),
+#     and report them alongside the number; the VPIN frame keeps its
+#     bucket size in `attrs["bucket_volume"]` for this. **(3) Trade side is itself an
 #     inference:** every metric here needs each trade labelled buy or
 #     sell, which ob-analytics knows exactly (the taker's `direction`
 #     from chapter 4) — but on venues that ship only anonymous prints

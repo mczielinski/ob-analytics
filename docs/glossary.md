@@ -135,12 +135,15 @@ Implemented in [`flow_toxicity`](api/flow_toxicity.md).
 : Easley, López de Prado, & O'Hara (2012). Bucket trades by equal volume,
 classify each bucket as buy- or sell-driven, and report the rolling
 absolute imbalance. High values (≳0.7) signal informed-trader pressure.
+The usual bucket size is average daily volume ÷ 50
+([`vpin_bucket_volume`](api/flow_toxicity.md#ob_analytics.flow_toxicity.vpin_bucket_volume)).
 
 **Kyle's lambda (λ)**
 : Kyle (1985). Slope of `Δprice ~ signed_volume` regression over a rolling
 window. Higher λ → less liquid market (more adverse-selection cost per unit
 of order flow). Returned as a [`KyleLambdaResult`](api/flow_toxicity.md#ob_analytics.flow_toxicity.KyleLambdaResult)
-with the regression DataFrame attached.
+with the regression DataFrame, a bootstrap confidence interval, and a
+`significant` flag that is `False` on too few windows or `|t| < 2`.
 
 **Order flow imbalance (OFI)**
 : Per-window net buy-minus-sell volume normalised by total traded volume.
