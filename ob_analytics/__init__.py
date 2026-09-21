@@ -40,6 +40,10 @@ splits a taker's effective spread into the part the liquidity provider kept and
 the part the market moved, and :func:`amihud` / :func:`roll_spread` read
 liquidity from the trade prices alone.
 
+:func:`detect_icebergs` and :func:`hidden_trades` find liquidity the visible
+book did not show: the refills of an iceberg order, and trades that printed
+inside the visible spread.
+
 :func:`features` puts those measurements side by side: one row per bar, one
 column per microstructure feature, each row stated as of the bar's close and so
 free of look-ahead.  A column of your own registers via
@@ -102,6 +106,11 @@ from ob_analytics.flow_toxicity import (
     compute_vpin,
     order_flow_imbalance,
     vpin_bucket_volume,
+)
+from ob_analytics.hidden_liquidity import (
+    IcebergDetection,
+    detect_icebergs,
+    hidden_trades,
 )
 from ob_analytics.interop import (
     HftbacktestWriter,
@@ -208,6 +217,8 @@ __all__ = [
     "Feature",
     "FeedType",
     "HftbacktestWriter",
+    # ── Hidden liquidity ─────────────────────────────────────────────
+    "IcebergDetection",
     "KyleLambdaResult",
     "Level",
     "LiveSource",
@@ -247,6 +258,7 @@ __all__ = [
     "cost_summary",
     # ── Data quality ─────────────────────────────────────────────────
     "data_quality_summary",
+    "detect_icebergs",
     "detect_sequence_gaps",
     "detect_stale_orders",
     # ── Feature table ────────────────────────────────────────────────
@@ -256,6 +268,7 @@ __all__ = [
     "get_metric",
     "get_source",
     "group_by_instrument",
+    "hidden_trades",
     "lee_ready",
     "list_bar_rules",
     "list_features",

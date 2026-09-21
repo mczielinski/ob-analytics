@@ -160,6 +160,11 @@ session = generate_session(
 )
 ```
 
+`session.icebergs` labels every visible slice of every iceberg: the slice's
+order `id`, and `iceberg`, the order id of its first slice. Use it to score an
+iceberg detector; [Find hidden liquidity](hidden-liquidity.md) does this for
+`detect_icebergs`.
+
 ## Related
 
 - [Custom components](custom-components.md) — write a loader for any other format

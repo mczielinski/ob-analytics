@@ -190,6 +190,30 @@ How an order's life ended: `filled`, `partial`, `cancelled` or `resting`.
 Named `outcome`.
 _Avoid_: status, state, result
 
+## Hidden liquidity
+
+**Hidden order**:
+An order the venue will match but does not show in the visible book. LOBSTER
+gives every execution against one the order id `0` (`HIDDEN_ORDER_ID`).
+_Avoid_: dark order, invisible order
+
+**Iceberg order** (**iceberg**):
+An order that shows a displayed **peak** and keeps the rest in reserve. Each
+visible order it shows is a **slice**.
+_Avoid_: reserve order, hidden-size order
+
+**Filled out**:
+A slice whose last fill as a maker left nothing outstanding.
+
+**Refill**:
+A new slice at the same side and price, within `max_delay` of a slice being
+filled out. Found by `detect_icebergs`.
+_Avoid_: replenishment, reload
+
+**Trade against a hidden order**:
+A trade that printed strictly inside the visible spread standing before its
+maker's fill. Found by `hidden_trades`.
+
 ## Order classification
 
 **Order type**:

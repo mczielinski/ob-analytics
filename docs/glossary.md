@@ -127,6 +127,30 @@ to rest as a passive order at a price inside the book.
 : A limit order that is created and cancelled within a very short window
 without ever filling. Common in HFT quote-stuffing patterns.
 
+## Hidden liquidity
+
+Implemented in [`hidden_liquidity`](api/hidden_liquidity.md).
+
+**Hidden order**
+: An order the venue will match but does not show in the visible book.
+LOBSTER marks an execution against one as event type 5, with order id `0`.
+
+**Iceberg order**
+: An order that shows a small displayed *peak* and keeps the rest in
+reserve. Each visible part is a *slice*. When a slice is filled out, the venue
+shows the next one as a new order at the same price and side.
+
+**Refill**
+: The new slice that appears after an iceberg's slice is filled out.
+[`detect_icebergs`](api/hidden_liquidity.md#ob_analytics.hidden_liquidity.detect_icebergs)
+looks for refills within `max_delay` (one millisecond by default) and chains
+them into one suspected iceberg.
+
+**Trade against a hidden order**
+: A trade that printed strictly inside the visible spread, so no visible order
+rested at its price. Found by
+[`hidden_trades`](api/hidden_liquidity.md#ob_analytics.hidden_liquidity.hidden_trades).
+
 ## Flow toxicity
 
 Implemented in [`flow_toxicity`](api/flow_toxicity.md).
