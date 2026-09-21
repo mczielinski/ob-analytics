@@ -66,7 +66,7 @@ from __future__ import annotations
 
 import math
 from collections import deque
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 import numpy as np
@@ -234,11 +234,21 @@ class SynthSession:
         the ``event_id`` of its maker and taker events.
     config : SynthConfig
         The configuration that produced this session.
+    icebergs : pandas.DataFrame
+        Ground truth for the iceberg injection: one row per visible slice of
+        an iceberg order, with the slice's order ``id`` and ``iceberg``, the
+        order id of the iceberg's first slice.  Empty unless
+        ``iceberg_fraction`` is above zero.
     """
 
     events: pd.DataFrame
     trades: pd.DataFrame
     config: SynthConfig
+    icebergs: pd.DataFrame = field(
+        default_factory=lambda: pd.DataFrame(
+            {"id": pd.Series(dtype="int64"), "iceberg": pd.Series(dtype="int64")}
+        )
+    )
 
 
 @dataclass
@@ -252,6 +262,7 @@ class _Order:
     created_event_id: int
     hidden: int = 0
     peak: int = 0
+    iceberg: int = 0
 
 
 def generate_session(
@@ -286,7 +297,9 @@ def generate_session(
     sim = _Simulator(cfg)
     sim.run()
     events, trades = sim.frames()
-    return SynthSession(events=events, trades=trades, config=cfg)
+    return SynthSession(
+        events=events, trades=trades, config=cfg, icebergs=sim.iceberg_frame()
+    )
 
 
 class _Simulator:
@@ -319,6 +332,8 @@ class _Simulator:
 
         self.events: list[_EventRow] = []
         self.trades: list[_TradeRow] = []
+        # (slice order id, first slice's order id) for every iceberg slice.
+        self.iceberg_slices: list[tuple[int, int]] = []
 
     # ── Public driver ────────────────────────────────────────────────
 
@@ -432,7 +447,7 @@ class _Simulator:
             hidden = total - peak
             stored_peak = peak if hidden > 0 else 0
 
-        self._place_order(side, price_tick, peak, hidden, stored_peak, t)
+        self._place_order(side, price_tick, peak, hidden, stored_peak, t, iceberg=0)
 
     def _cancel(self, t: float) -> None:
         if not self.live_ids:
@@ -564,7 +579,13 @@ class _Simulator:
         hidden = parent.hidden - slice_size
         stored_peak = parent.peak if hidden > 0 else 0
         self._place_order(
-            parent.side, parent.price_tick, slice_size, hidden, stored_peak, t
+            parent.side,
+            parent.price_tick,
+            slice_size,
+            hidden,
+            stored_peak,
+            t,
+            iceberg=parent.iceberg,
         )
 
     def _place_order(
@@ -575,10 +596,22 @@ class _Simulator:
         hidden: int,
         peak: int,
         t: float,
+        *,
+        iceberg: int,
     ) -> None:
+        """Place a resting order.
+
+        *iceberg* is the order id of the first slice when this order is a
+        refilled slice, and ``0`` otherwise; a new order with a hidden reserve
+        starts an iceberg of its own.
+        """
         oid = self._new_order_id()
         eid = self._emit(oid, side, price_tick, "created", size, 0, t)
-        order = _Order(oid, side, price_tick, size, eid, hidden, peak)
+        if iceberg == 0 and hidden > 0:
+            iceberg = oid
+        if iceberg:
+            self.iceberg_slices.append((oid, iceberg))
+        order = _Order(oid, side, price_tick, size, eid, hidden, peak, iceberg)
         self.orders[oid] = order
         levels = self.bid_levels if side == "bid" else self.ask_levels
         levels.setdefault(price_tick, deque()).append(oid)
@@ -641,6 +674,12 @@ class _Simulator:
         return eid
 
     # ── Frame construction ───────────────────────────────────────────
+
+    def iceberg_frame(self) -> pd.DataFrame:
+        """Return the iceberg ground truth: slice ``id`` → ``iceberg``."""
+        return pd.DataFrame(
+            self.iceberg_slices, columns=["id", "iceberg"], dtype="int64"
+        )
 
     def _timestamps(self, seconds: np.ndarray) -> pd.DatetimeIndex:
         # ``Timestamp.value`` is UTC nanoseconds since the epoch (a tz-naive

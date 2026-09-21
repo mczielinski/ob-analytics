@@ -37,7 +37,7 @@ Each run produces a self-contained directory:
 |------|----------|
 | `depth.csv` | Price-level updates (`timestamp,exchange_timestamp,side,price,volume`; `volume` = new absolute size, `0` removes the level; `timestamp` is when the capture received the update) |
 | `trades.csv` | The trade tape (CCXT taker side; feeds trade-sign) |
-| `raw.jsonl` | Raw book frames (omit with `--no-raw`) |
+| `raw.jsonl` | The recorded levels of the book once (the top `--depth-limit` a side), then the changed levels of each book update with its timestamp and nonce, plus the trades as CCXT gave them (omit with `--no-raw`) |
 | `meta.json` | Counts + per-run diagnostics (exchange, tick size, book updates, errors) |
 
 The tick size comes from CCXT's market data. `ob-analytics process` and
@@ -91,8 +91,13 @@ ob-analytics capture ccxt --exchange polymarket --pair <token id> --out /tmp/pol
     levels reach only a few hundredths of a percent from the mid-price. The
     [Binance](binance.md) page covers both.
 
+!!! note "Coinbase"
+    Use the id `coinbase`, not `coinbaseexchange`, which needs an API key.
+    [Coinbase](coinbase.md) has its own page.
+
 ## See also
 
+- [Capture Coinbase](coinbase.md) — which ccxt id to use for Coinbase
 - [Capture cryptofeed venues](cryptofeed.md) — the per-order (L3) complement, for venues that publish order-by-order data
 - [Process L2 (price-level) feeds](l2-depth.md) — what the captured `depth.csv` flows through
 - [Capture live data](live-capture.md) — the capture framework and writing a bespoke venue

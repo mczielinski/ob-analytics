@@ -84,6 +84,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `detect_sequence_gaps()`, and a `sequence_kind` argument on
   `data_quality_summary()`.
 
+- **Find hidden liquidity** (#111). `detect_icebergs(events, trades)` finds
+  iceberg orders from their refills: a resting order filled out, then a new
+  order at the same side and price within one millisecond. It chains refills
+  into one suspected iceberg and gives each a `confidence`.
+  `hidden_trades(events, trades, depth_summary)` returns the trades that
+  printed strictly inside the visible spread. On one day of LOBSTER AAPL it
+  finds 85% of the type-5 hidden executions, with no false ones. The
+  synthetic generator now labels its iceberg slices in
+  `SynthSession.icebergs`, so the detector can be scored exactly. See the
+  [hidden liquidity
+  how-to](https://mczielinski.github.io/ob-analytics/howto/hidden-liquidity/).
+
 - **A feature table for models** (#149). `features(trades, quotes)` returns one
   tidy table: a point in time on each row and a microstructure feature in each
   column — the shape a model or a study wants. It replaces a join per
