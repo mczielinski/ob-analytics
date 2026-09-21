@@ -112,17 +112,37 @@ Databento's own reference book builder treats it.
 
 ## Trades and the aggressor
 
-Which record makes a trade depends on what the publisher sends.
+Databento sends two records for a trade: a print (`T`) for the execution and
+a fill (`F`) for each resting order it hit. `DatabentoSettings(trades_from=...)`
+chooses which one the trades frame is built from.
 
-- **Fills, when the file has them.** A fill names the resting order, so each
-  one becomes a trade row with a `maker` and a `maker_event_id` — one row per
-  resting order a sweep took out.
-- **Trade prints otherwise.** Some publishers report no passive side; then the
-  print is all there is, and the row carries the volume and the aggressor's
-  side but no maker.
+- **`"fills"`, the default.** Each fill becomes a trade row with a `maker` and
+  a `maker_event_id` — one row per resting order a sweep took out. That is what
+  order classification and queue analysis read. A file with no fills at all
+  falls back to its prints.
+- **`"prints"`.** The venue's whole tape, one row per print, but no maker on
+  any row.
 
-Either way the aggressor's side comes from the venue rather than a classifier,
-so `direction` is the real taker side and not an estimate.
+The difference matters for trades the publisher sent no fill for: an opening
+or closing auction, a trade against a non-displayed order, an off-exchange
+print. With fills they are not in the frame, and the loader warns with the
+volume left out. On a US equity day the auctions alone can be a large share of
+the volume, so for a question about the tape — VWAP, bars, flow toxicity,
+transaction costs — use prints:
+
+```python
+from ob_analytics.databento import DatabentoSettings, DatabentoSource
+
+source = DatabentoSource(settings=DatabentoSettings(trades_from="prints"))
+```
+
+The two are not mixed. A print and the fills behind it describe one execution,
+and nothing in a DBN record ties them together reliably — a fill and the modify
+it causes can carry different receive times — so joining them would risk
+counting the same volume twice.
+
+Where the venue states the aggressor, `direction` is its answer rather than an
+estimate.
 
 Databento states no side at all for some trades — an opening or closing
 auction, a trade against a non-displayed order, an implied order, an
@@ -177,8 +197,10 @@ A feed the loader does not understand is **refused**:
 A malformed record inside a feed it does understand is **dropped and counted**
 in a warning:
 
-- A record with no price (`UNDEF_PRICE`, which is `INT64_MAX`). Kept, it would
-  rest at about nine billion and be read back as the best bid or ask.
+- A book action, trade or fill with no price (`UNDEF_PRICE`, which is
+  `INT64_MAX`). Kept, it would sit at about nine billion: read back as the
+  best bid or ask, or as a trade at that price. A clear is exempt, because its
+  price is never read.
 - A book action with no side. There is no side of the book to put it on, and
   keeping it would leave the events frame and the depth frame disagreeing.
 

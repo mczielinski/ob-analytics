@@ -89,7 +89,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   DBN's own alphabet; an order id too big for the schema's signed 64-bit id. A
   malformed record inside a feed it does understand — no price, or no side on a
   book action — is dropped and counted in a warning, because refusing a whole
-  session over a handful of them would be worse. `DatabentoWriter`
+  session over a handful of them would be worse.
+
+  Trades are built from the fill records by default, so each names the resting
+  order it hit. A trade the publisher sent no fill for — an auction, a trade
+  against a non-displayed order, an off-exchange print — is then left out, and
+  the loader warns with the volume. `DatabentoSettings(trades_from="prints")`
+  builds the trades from the whole tape instead, without makers; use it for
+  VWAP, bars, flow toxicity and costs. `DatabentoWriter`
   writes an events frame back out as DBN. `scripts/databento_window.py` sizes a
   query against the in-memory envelope before downloading it, then runs one
   window at a time. `databento` is an optional extra

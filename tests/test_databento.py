@@ -109,6 +109,27 @@ def load(source, config=None, **loader_kwargs):
     return loader, loader.load(source)
 
 
+@pytest.fixture
+def caplog_loguru():
+    """Capture ob-analytics' loguru output (the package disables it by default)."""
+    import io
+
+    from loguru import logger
+
+    buffer = io.StringIO()
+    logger.enable("ob_analytics")
+    handler = logger.add(buffer, level="WARNING", format="{message}")
+
+    class _Capture:
+        @property
+        def text(self) -> str:
+            return buffer.getvalue()
+
+    yield _Capture()
+    logger.remove(handler)
+    logger.disable("ob_analytics")
+
+
 def _config(**overrides) -> PipelineConfig:
     """The config the pipeline would build for a Databento run."""
     defaults = DatabentoSource().config_defaults()
@@ -318,6 +339,52 @@ class TestTrades:
         result = Pipeline(source=DatabentoSource()).run(mbo_frame(LIFECYCLE))
         assert list(result.trades["direction"]) == ["buy", "buy"]
 
+    #: One fill of 3 against a resting ask, then a closing-auction print of
+    #: 5000 that the publisher sent no fill for.
+    AUCTION: ClassVar[list[tuple]] = [
+        (1, "A", "B", px(100.00), 100),
+        (2, "A", "A", px(100.05), 100),
+        (0, "T", "B", px(100.05), 3),
+        (2, "F", "A", px(100.05), 3),
+        (2, "M", "A", px(100.05), 97),
+        (0, "T", "N", px(100.00), 5000),
+    ]
+
+    def test_fills_leave_out_a_print_with_no_fill_behind_it(self):
+        result = Pipeline(source=DatabentoSource()).run(mbo_frame(self.AUCTION))
+        assert result.trades["volume"].sum() == 3
+        assert result.trades["maker"].notna().all()
+
+    def test_prints_keep_the_whole_tape(self):
+        source = DatabentoSource(settings=DatabentoSettings(trades_from="prints"))
+        result = Pipeline(source=source).run(mbo_frame(self.AUCTION))
+
+        assert list(result.trades["volume"]) == [3, 5000]
+        # The venue named the first aggressor; the auction print came with
+        # none and is classified against the quotes.
+        assert result.trades["direction"].notna().all()
+        assert result.trades["direction"].iloc[0] == "buy"
+        assert result.trades["maker"].isna().all()
+
+    def test_prints_on_a_file_with_none_give_the_empty_frame(self):
+        loader, events = load(
+            [
+                (1, "A", "A", px(10.00), 10),
+                (1, "F", "A", px(10.00), 4),
+                (1, "M", "A", px(10.00), 6),
+            ]
+        )
+        reader = DatabentoTradeReader(
+            _config(),
+            loader=loader,
+            settings=DatabentoSettings(trades_from="prints"),
+        )
+        assert reader.load(events, None).empty
+
+    def test_an_unknown_trade_source_is_refused(self):
+        with pytest.raises(ValueError):
+            DatabentoSettings(trades_from="both")  # ty: ignore[invalid-argument-type]
+
     def test_no_trades_at_all_gives_the_empty_frame(self):
         loader, events = load([(1, "A", "B", px(9.99), 30)])
         trades = DatabentoTradeReader(_config(), loader=loader).load(events, None)
@@ -484,6 +551,40 @@ class TestRefusals:
         last = result.depth_summary.iloc[-1]
         assert last["best_bid_price"] == 10000
         assert last["best_ask_price"] == 10005
+
+    def test_a_clear_with_no_price_still_clears(self):
+        # A clear's price is never read, so an undefined one is no reason to
+        # drop it; dropping it would leave order 1 resting for good.
+        _, events = load(
+            [
+                (1, "A", "B", px(100.00), 10),
+                (0, "R", "N", UNDEF_PRICE, 0),
+                (2, "A", "B", px(99.00), 5),
+            ]
+        )
+        assert list(events["action"]) == ["created", "deleted", "created"]
+        assert list(events["raw_event_type"]) == ["A", "R", "A"]
+
+    def test_a_trade_with_no_price_is_dropped(self):
+        loader, events = load(
+            [
+                (1, "A", "B", px(100.00), 10),
+                (0, "T", "A", UNDEF_PRICE, 4),
+                (1, "C", "B", px(100.00), 4),
+            ]
+        )
+        trades = DatabentoTradeReader(_config(), loader=loader).load(events, None)
+        assert trades.empty
+
+    def test_the_drop_warning_does_not_say_which_way_the_book_is_off(
+        self, caplog_loguru
+    ):
+        # A dropped cancel leaves extra size resting, not missing size.
+        load([(1, "A", "B", px(100.00), 10), (1, "C", "B", UNDEF_PRICE, 10)])
+        message = caplog_loguru.text
+        assert "dropped 1 of 2 records" in message
+        assert "missing whatever liquidity" not in message
+        assert "dropped cancel leaves an order resting" in message
 
     def test_a_book_record_with_no_side_is_dropped(self):
         # Databento states a side on every A/M/C. Without one there is no side
