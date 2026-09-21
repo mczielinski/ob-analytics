@@ -36,6 +36,11 @@ activity, and takes a rule of your own through
 splits a taker's effective spread into the part the liquidity provider kept and
 the part the market moved, and :func:`amihud` / :func:`roll_spread` read
 liquidity from the trade prices alone.
+
+:func:`features` puts those measurements side by side: one row per bar, one
+column per microstructure feature, each row stated as of the bar's close and so
+free of look-ahead.  A column of your own registers via
+:func:`~ob_analytics.features.register_feature`.
 """
 
 from importlib.metadata import PackageNotFoundError, version
@@ -81,6 +86,12 @@ from ob_analytics.data import (
 from ob_analytics.datasets import toy_events, toy_l2_depth, toy_l2_trades, toy_trades
 from ob_analytics.depth_l2 import DepthCsvSource
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
+from ob_analytics.features import (
+    features,
+    get_feature,
+    list_features,
+    register_feature,
+)
 from ob_analytics.flow_toxicity import (
     KyleLambdaResult,
     compute_kyle_lambda,
@@ -112,6 +123,7 @@ from ob_analytics.protocols import (
     DataWriter,
     DepthSource,
     EventLoader,
+    Feature,
     FeedType,
     Level,
     Metric,
@@ -186,6 +198,7 @@ __all__ = [
     "DepthCsvSource",
     "DepthSource",
     "EventLoader",
+    "Feature",
     "FeedType",
     "HftbacktestWriter",
     "KyleLambdaResult",
@@ -229,12 +242,16 @@ __all__ = [
     "data_quality_summary",
     "detect_sequence_gaps",
     "detect_stale_orders",
+    # ── Feature table ────────────────────────────────────────────────
+    "features",
     "get_bar_rule",
+    "get_feature",
     "get_metric",
     "get_source",
     "group_by_instrument",
     "lee_ready",
     "list_bar_rules",
+    "list_features",
     "list_metrics",
     "list_sources",
     "load_data",
@@ -242,6 +259,7 @@ __all__ = [
     "load_source_plugins",
     "order_flow_imbalance",
     "register_bar_rule",
+    "register_feature",
     "register_metric",
     "register_source",
     "roll_spread",

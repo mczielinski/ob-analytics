@@ -10,6 +10,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **A feature table for models** (#149). `features(trades, quotes)` returns one
+  tidy table: a point in time on each row and a microstructure feature in each
+  column — the shape a model or a study wants. It replaces a join per
+  measurement.
+
+  Two decisions make the table, and they are separate. Where the rows fall is
+  a bar rule, so `features()` takes the same sampling arguments `bars()` does
+  and the same arguments give the same cut in both; a time grid is the `time`
+  rule. What each column measures is a `Feature`, and ten ship: `price`,
+  `returns`, `flow`, `spread`, `mid_price`, `micro_price`, `imbalance`,
+  `depth`, `vpin` and `kyle_lambda`, writing 20 columns between them.
+  `register_feature` adds one of your own, usable by name with no edit to the
+  package.
+
+  Every row is stated as of the close of its bar. The trade columns hold what
+  happened inside the bar, and the book columns hold the book as it stood at
+  the close, a backward as-of join. Nothing from after that instant reaches
+  the row, so the table carries no look-ahead — which is tested by truncating
+  the inputs and checking that the rows that survive are unchanged, for every
+  rule and every feature. The table holds no target either: a target looks
+  forward, and building one is a shift the caller makes deliberately.
+
+  Without a quotes frame the five book features are skipped and the table
+  holds the trade features alone; naming one explicitly raises instead. Two
+  features that would write the same column are an error rather than a silent
+  overwrite. See the ["Build a feature table"
+  how-to](https://mczielinski.github.io/ob-analytics/howto/feature-table/),
+  which ends in a baseline model.
+
 - **Bars: the trade stream resampled into OHLCV rows** (#148). `bars(trades,
   rule, threshold)` cuts a trades frame into bars and returns one row each with
   open, high, low, close, volume, turnover, VWAP, and the buy/sell split of
@@ -308,6 +337,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   tradeable has no value, so it is now NaN.
 
 ### Changed
+
+- `depth.bin_volume_columns()` is public. It returns the per-bps depth-bin
+  volume columns a depth summary carries, ordered from the touch outward, and
+  it was already the answer `book_imbalance` and `depth_signals` needed. The
+  feature table needs the same answer, and so does anyone writing a depth
+  feature of their own, so it is no longer private. Behaviour is unchanged.
 
 - `trade_sign.resolve_direction()` now makes the guarantee its docstring
   already claimed: the `direction` column it returns holds only `"buy"` and

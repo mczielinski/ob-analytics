@@ -20,6 +20,7 @@ pass directly.
 | **A plot** | a `prepare_*` function + a renderer | `RENDERERS.register((name, backend), fn)` | `plot(name, backend=...)` |
 | **A metric** | `Metric` | `register_metric(metric)` (or an entry point) | `result.metric(name)` · `result.plot(name)` · its own gallery card |
 | **A bar rule** | `BarRule` | `register_bar_rule(rule)` | `bars(trades, rule=name)` |
+| **A feature** | `Feature` | `register_feature(feature)` | a column of `features(trades, quotes)` |
 
 Registration is an import side-effect: the module that calls
 `register_*` must be imported before the name is looked up. Built-ins register
@@ -715,6 +716,93 @@ bars(result.trades, "range", 25)
 
 The bar table, the gallery face and the plot all work unchanged: they never
 knew which rule cut the bars.
+
+---
+
+## 6. A new feature
+
+[`features()`](api/features.md) builds one tidy table: a point in time on each
+row, a microstructure feature in each column. Where the rows fall is a bar
+rule, decided before any measuring starts, so what a **`Feature`** decides is
+one thing: what its columns read on each row.
+
+A feature states four members:
+
+- `name` — what `features(..., include=[name])` looks it up by.
+- `columns` — the columns it writes, in order. Declared rather than
+  discovered, so the table's shape is known before anything is measured.
+- `requires` — the columns of the prepared frame it reads. A feature named
+  explicitly whose requirement is missing raises; one selected by default is
+  skipped, which is how the book features drop out of a run with no quotes.
+- `compute(frame)` — return one array per declared column, in row order.
+
+`compute` is handed one row per bar, in time order, carrying the bar's own
+columns — `open`, `high`, `low`, `close`, `volume`, `turnover`, `n_trades`,
+`vwap`, `buy_volume`, `sell_volume`, `signed_volume` — and the book as it
+stood at the bar's close, joined on from the quotes frame. **That frame holds
+nothing from after a row's close**, so a feature that works row by row is
+free of look-ahead already. One that looks along the frame has to look
+backwards: `shift(1)`, or a trailing `rolling` window.
+
+Here is a feature that measures how far the bar's close sits inside its own
+range — a "close location value":
+
+```python
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+from ob_analytics import features, register_feature
+
+
+class CloseLocationFeature:
+    """Where the close fell in the bar's range: -1 at the low, +1 at the high."""
+
+    name = "close_location"
+    columns = ("close_location",)
+    requires = frozenset({"high", "low", "close"})
+
+    def compute(self, frame: pd.DataFrame) -> dict[str, np.ndarray]:
+        high = frame["high"].to_numpy(dtype=float)
+        low = frame["low"].to_numpy(dtype=float)
+        close = frame["close"].to_numpy(dtype=float)
+        span = high - low
+        with np.errstate(invalid="ignore", divide="ignore"):
+            located = np.where(span > 0, (2 * close - high - low) / span, 0.0)
+        return {"close_location": located}
+
+
+register_feature(CloseLocationFeature())
+```
+
+```python
+features(trades, quotes, "volume", 0.5)["close_location"]
+```
+
+It is measured with the built-in ten and its column lands after theirs. Name
+it in `include` to get it on its own, or to put its column somewhere else.
+
+### Changing a built-in
+
+The features that look back over a window carry that window on the instance,
+so a different one is a second registration, not an argument to thread through
+`features()`. Registering under the same name replaces the built-in; under a
+new name, both run:
+
+```python
+from ob_analytics.features import VpinFeature
+
+register_feature(VpinFeature(window=50))                # the paper's 50 buckets
+register_feature(VpinFeature(name="vpin_5", window=5))  # and a fast one beside it
+```
+
+The two one-column features name their column after themselves, so the second
+registration above writes `vpin_5` and leaves `vpin` alone. Elsewhere the
+columns are fixed, and two features that would write the same one are an
+error rather than a silent overwrite — so a second `ReturnsFeature` under a
+new name is refused, and the way to change that one is to register it under
+`returns` and replace it.
 
 ---
 

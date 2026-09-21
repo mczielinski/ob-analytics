@@ -630,7 +630,7 @@ def get_spread(depth_summary: pd.DataFrame) -> pd.DataFrame:
 # and OBI can also cumulate the per-bps depth-bin volume columns.
 
 
-def _bin_volume_columns(depth_summary: pd.DataFrame, side: str) -> list[str]:
+def bin_volume_columns(depth_summary: pd.DataFrame, side: str) -> list[str]:
     """Return the per-bps depth-bin volume columns for *side*, touch outward.
 
     These are the ``{side}_vol{N}bps`` aggregates written by
@@ -770,8 +770,8 @@ def book_imbalance(depth_summary: pd.DataFrame, levels: int = 1) -> pd.Series:
         bid_vol = depth_summary["best_bid_vol"].to_numpy(dtype=float)
         ask_vol = depth_summary["best_ask_vol"].to_numpy(dtype=float)
     else:
-        bid_cols = _bin_volume_columns(depth_summary, "bid")
-        ask_cols = _bin_volume_columns(depth_summary, "ask")
+        bid_cols = bin_volume_columns(depth_summary, "bid")
+        ask_cols = bin_volume_columns(depth_summary, "ask")
         take = levels - 1
         available = min(len(bid_cols), len(ask_cols))
         if take > available:
@@ -834,8 +834,8 @@ def depth_signals(
     )
 
     available = min(
-        len(_bin_volume_columns(depth_summary, "bid")),
-        len(_bin_volume_columns(depth_summary, "ask")),
+        len(bin_volume_columns(depth_summary, "bid")),
+        len(bin_volume_columns(depth_summary, "ask")),
     )
     effective_levels = max(1, min(depth_levels, available + 1))
 
