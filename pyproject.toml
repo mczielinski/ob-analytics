@@ -39,6 +39,11 @@ ccxt = [
 cryptofeed = [
     "cryptofeed>=2",
 ]
+# The floor is the version this adapter was written and tested against; the
+# DBN record constructors the writer uses are newer than the reader's API.
+databento = [
+    "databento>=0.86",
+]
 
 [project.scripts]
 ob-analytics = "ob_analytics.cli:main"

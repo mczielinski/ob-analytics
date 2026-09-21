@@ -23,6 +23,9 @@ The package exposes two layers:
     :class:`BitstampWriter`, :class:`BitstampSource`
   - LOBSTER: :class:`LobsterLoader`, :class:`LobsterTradeReader`,
     :class:`LobsterWriter`, :class:`LobsterSource`
+  - Databento: :class:`~ob_analytics.databento.DatabentoLoader`,
+    :class:`~ob_analytics.databento.DatabentoTradeReader`,
+    :class:`~ob_analytics.databento.DatabentoWriter`, :class:`DatabentoSource`
 
 All processing stages are pluggable via :mod:`~ob_analytics.protocols`; a whole
 new data source registers via :func:`~ob_analytics.sources.register_source`, and
@@ -83,6 +86,7 @@ from ob_analytics.data import (
     load_data,
     save_data,
 )
+from ob_analytics.databento import DatabentoSettings, DatabentoSource
 from ob_analytics.datasets import toy_events, toy_l2_depth, toy_l2_trades, toy_trades
 from ob_analytics.depth_l2 import DepthCsvSource
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
@@ -195,6 +199,8 @@ __all__ = [
     "CostSummary",
     "DataQualitySummary",
     "DataWriter",
+    "DatabentoSettings",
+    "DatabentoSource",
     "DepthCsvSource",
     "DepthSource",
     "EventLoader",

@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **A trade the venue left unlabelled is now classified on the L3 path too.**
+  `Pipeline.run` labels any trade with no aggressor side against the
+  reconstructed quotes, filling one subset at a time instead of all or nothing,
+  and never overwriting a side the venue did state. This was already what the
+  price-level path did; it now also covers a per-order feed that states the
+  aggressor on most trades but not all, which is what Databento does for
+  auctions, non-displayed orders and off-exchange prints. No change for a feed
+  that labels every trade, which is every other source in the package.
+
 ### Added
 
 - **A feature table for models** (#149). `features(trades, quotes)` returns one
@@ -44,9 +55,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Without a quotes frame the five book features are skipped and the table
   holds the trade features alone; naming one explicitly raises instead. Two
   features that would write the same column are an error rather than a silent
-  overwrite. See the ["Build a feature table"
+  overwrite, and so is a name listed twice in `include`; a trailing window a
+  feature cannot use is refused when the feature is built. See the ["Build a feature table"
   how-to](https://mczielinski.github.io/ob-analytics/howto/feature-table/),
   which ends in a baseline model.
+
+- **Databento market-by-order files** (#100). `DatabentoSource` reads
+  Databento's DBN files in the MBO schema, which is a per-order feed: every
+  record carries an order id, so a file replays through the full L3 path with
+  order lifetimes, queue position and order classification. It reaches many
+  venues that no other source in the package does, US equities and futures
+  among them.
+
+  Databento reports an execution as a fill record that does not change the
+  book, followed by the cancel or modify that takes the size off it. The loader
+  pairs the two, so `fill` tells an execution apart from a cancel the trader
+  asked for, and each trade names the resting order it hit. The aggressor's
+  side comes from the venue rather than a classifier. A book clear deletes the
+  orders still resting, and the record's two clocks are kept apart: Databento's
+  receive time orders the events, the venue's own becomes
+  `exchange_timestamp`.
+
+  One thing does not map: a modify that moves an order to another price or
+  makes it bigger is a new queue entry, and the shared schema has no event for
+  that, so the depth reconstruction cannot follow it. The events, lifetimes and
+  trades are still right, and the loader says how many rows the depth will be
+  off by. Most venues report an amendment as a cancel and a new order, so most
+  files never hit it.
+
+  A feed the loader does not understand is refused: a publisher that only sends
+  top-of-book or price-level data, because its order ids mean nothing; a
+  price-level schema; a file covering more than one book; an action outside
+  DBN's own alphabet; an order id too big for the schema's signed 64-bit id. A
+  malformed record inside a feed it does understand — no price, or no side on a
+  book action — is dropped and counted in a warning, because refusing a whole
+  session over a handful of them would be worse. `DatabentoWriter`
+  writes an events frame back out as DBN. `scripts/databento_window.py` sizes a
+  query against the in-memory envelope before downloading it, then runs one
+  window at a time. `databento` is an optional extra
+  (`pip install "ob-analytics[databento]"`). See the ["Process Databento MBO
+  files"
+  how-to](https://mczielinski.github.io/ob-analytics/howto/databento/).
 
 - **Bars: the trade stream resampled into OHLCV rows** (#148). `bars(trades,
   rule, threshold)` cuts a trades frame into bars and returns one row each with

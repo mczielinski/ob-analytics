@@ -422,6 +422,13 @@ class Pipeline:
                 bins=self.config.depth_bins,
             )
 
+        # Now that the quotes exist, label any trade the venue left unlabelled.
+        # A no-op for a feed that states the aggressor on every trade, which is
+        # every L3 crypto source; Databento leaves auction and off-exchange
+        # prints unset.
+        trades = self._ensure_trade_signs(trades, depth_summary)
+        validate_trades_df(trades)  # data contract (schemas.py)
+
         logger.info("Pipeline: computing order aggressiveness")
         events = order_aggressiveness(events, depth_summary)
 
@@ -486,22 +493,46 @@ class Pipeline:
     def _ensure_trade_signs(
         trades: pd.DataFrame, depth_summary: pd.DataFrame
     ) -> pd.DataFrame:
-        """Fill an unlabelled L2 trades ``direction`` via Lee–Ready.
+        """Fill any unlabelled trade ``direction`` via Lee–Ready.
 
         L3 crypto ships the taker side for free; many price-level venues (and
-        CCXT sources) don't.  When the trade reader leaves ``direction``
-        entirely unset, classify the aggressor with Lee–Ready against the
-        reconstructed BBO (``depth_summary``), falling back to the tick rule
-        at the mid — the trade-sign classifiers added for exactly this case
-        (see :mod:`ob_analytics.trade_sign`).  A reader that *does* label the
-        side (native ``side`` column) is left untouched.
+        CCXT sources) don't.  Where the trade reader left ``direction`` unset,
+        classify the aggressor with Lee–Ready against the reconstructed BBO
+        (``depth_summary``), falling back to the tick rule at the mid — the
+        trade-sign classifiers added for exactly this case (see
+        :mod:`ob_analytics.trade_sign`).  Rows the venue *did* label keep the
+        venue's answer: a classifier is an estimate and the venue's is not.
+
+        Part of a feed can be unlabelled while the rest is not.  Databento
+        states the aggressor on most trades but sends none for an auction, a
+        trade against a non-displayed order, or an off-exchange print, so the
+        unset rows are filled one subset at a time rather than all or nothing.
         """
         if trades.empty or "direction" not in trades.columns:
             return trades
-        if not trades["direction"].isna().all():
-            return trades  # venue already labelled the aggressor side
-        logger.info("Pipeline: classifying {} trade signs (Lee–Ready)", len(trades))
+        unlabelled = trades["direction"].isna()
+        if not unlabelled.any():
+            return trades  # venue labelled every aggressor side
+        if depth_summary is None or depth_summary.empty:
+            logger.warning(
+                "Pipeline: {} trades carry no aggressor side and there are no "
+                "quotes to classify them against; leaving them unset",
+                int(unlabelled.sum()),
+            )
+            return trades
+        logger.info(
+            "Pipeline: classifying {} of {} trade signs (Lee–Ready)",
+            int(unlabelled.sum()),
+            len(trades),
+        )
         direction = classify_trade_sign(
             trades, method="lee_ready", quotes=depth_summary
         )
-        return trades.assign(direction=direction)
+        # Through ``object`` and back: assigning one categorical into another
+        # widens the column, and the trades schema wants the ordered
+        # buy/sell categorical.
+        filled = trades["direction"].astype(object)
+        filled[unlabelled] = direction.astype(object)[unlabelled]
+        return trades.assign(
+            direction=pd.Categorical(filled, categories=["buy", "sell"], ordered=True)
+        )
