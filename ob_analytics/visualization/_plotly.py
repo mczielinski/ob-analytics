@@ -1308,6 +1308,15 @@ def plotly_vpin(data: dict) -> Any:
     vpin_df = data["vpin_df"]
     threshold = data["threshold"]
 
+    if vpin_df.empty:
+        # A capture shorter than one bucket fills none: draw the bare panel.
+        fig = _base_figure(
+            go, title="VPIN — Probability of Informed Trading (no complete buckets)"
+        )
+        fig.update_yaxes(range=[0, 1.05], title_text="VPIN")
+        fig.update_xaxes(title_text="Time")
+        return fig
+
     fig = _base_figure(go, title="VPIN — Probability of Informed Trading")
 
     # Honour the computed bucket width (was ignored, so plotly auto-sized bars

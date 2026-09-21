@@ -298,6 +298,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The VPIN chart draws an empty panel when no bucket is complete.** A
+  capture with less volume than one bucket gives `compute_vpin` zero rows, and
+  `plot("vpin", ...)` then raised: a `TypeError` with matplotlib, a `KeyError`
+  with both backends when the frame had no columns. Both backends now draw the
+  axes with "(no complete buckets)" in the title. `compute_vpin` now returns
+  its usual columns and dtypes when it has no rows, where before it returned a
+  frame with no columns (or, with `sign_method="bvc"`, columns of object
+  dtype).
 - **A price-level file no longer has its prices rounded to the tick size.**
   `L2DepthLoader` and `L2TradeReader` converted each price to the nearest
   whole number of ticks, so a price finer than `tick_size` moved without a
