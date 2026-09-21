@@ -85,8 +85,13 @@ ob-analytics capture ccxt --exchange polymarket --pair <token id> --out /tmp/pol
     how wide the depth bins should be. [Kalshi](kalshi.md) and
     [Polymarket](polymarket.md) each have a page that covers them.
 
+!!! note "Coinbase"
+    Use the id `coinbase`, not `coinbaseexchange`, which needs an API key.
+    [Coinbase](coinbase.md) has its own page.
+
 ## See also
 
+- [Capture Coinbase](coinbase.md) — which ccxt id to use for Coinbase
 - [Capture cryptofeed venues](cryptofeed.md) — the per-order (L3) complement, for venues that publish order-by-order data
 - [Process L2 (price-level) feeds](l2-depth.md) — what the captured `depth.csv` flows through
 - [Capture live data](live-capture.md) — the capture framework and writing a bespoke venue

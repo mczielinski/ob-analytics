@@ -35,6 +35,7 @@ nav = [
     { "Measure transaction costs" = "howto/transaction-costs.md" },
     { "Capture live data" = "howto/live-capture.md" },
     { "Capture CCXT venues (crypto + prediction markets)" = "howto/ccxt.md" },
+    { "Capture Coinbase" = "howto/coinbase.md" },
     { "Capture Kalshi prediction markets" = "howto/kalshi.md" },
     { "Capture Polymarket prediction markets" = "howto/polymarket.md" },
     { "Capture cryptofeed venues (native L3 crypto)" = "howto/cryptofeed.md" },
