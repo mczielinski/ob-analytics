@@ -88,6 +88,10 @@ independent of each other, so any arrow drawn here is the exception rather than
 an order to work in.
 """
 issues = [104, 107, 109, 110, 111, 119, 148, 149, 203]
+# Keep the closed measurements. A metric that shipped is a metric you can use,
+# and these rarely wait on each other, so pruning drops nearly every closed one
+# at once and leaves a list of only what is unbuilt.
+keep_closed = true
 
 [[group]]
 id = "quality"
