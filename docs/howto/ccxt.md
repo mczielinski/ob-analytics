@@ -37,7 +37,7 @@ Each run produces a self-contained directory:
 |------|----------|
 | `depth.csv` | Price-level updates (`timestamp,side,price,volume`; `volume` = new absolute size, `0` removes the level) |
 | `trades.csv` | The trade tape (CCXT taker side; feeds trade-sign) |
-| `raw.jsonl` | Raw book frames (omit with `--no-raw`) |
+| `raw.jsonl` | The whole book once, then the changed levels of each book update with its timestamp and nonce, plus the trades as CCXT gave them (omit with `--no-raw`) |
 | `meta.json` | Counts + per-run diagnostics (exchange, tick size, book updates, errors) |
 
 The tick size comes from CCXT's market data. `ob-analytics process` and
