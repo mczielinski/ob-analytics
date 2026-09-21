@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 
 import pandas as pd
 import pytest
@@ -175,8 +176,67 @@ class TestDiffBook:
         cap._last = {"bid": {}, "ask": {}}
         book = {"bids": [[100.0, 1.0], [99.0, 1.0]], "asks": [[101.0, 1.0]], "ts": 0}
         raws = [raw for _r, raw in cap._diff_book(book, pd.Timestamp.now(tz="UTC"))]
-        # Exactly one row carries the raw book; the rest are None.
+        # Exactly one row carries the raw frame; the rest are None.
         assert sum(raw is not None for raw in raws) == 1
+
+    def test_raw_frame_holds_only_the_changed_levels(self):
+        # A deep book (Coinbase BTC/USD holds ~40k levels) with one level
+        # changed and one removed: the raw frame follows the update, not the
+        # book, so raw.jsonl stays near the size of depth.csv.
+        cap = CcxtSource()
+        cap._full_book_written = True  # past the first frame
+        bids = [[50_000.0 - i * 0.01, 1.0] for i in range(20_000)]
+        asks = [[50_001.0 + i * 0.01, 1.0] for i in range(20_000)]
+        cap._last = {
+            "bid": {p: s for p, s in bids},
+            "ask": {p: s for p, s in asks},
+        }
+        book = {
+            "symbol": "BTC/USD",
+            "bids": [[bids[0][0], 2.5], *bids[1:]],  # top bid resized
+            "asks": asks[1:],  # top ask removed
+            "timestamp": 1_700_000_000_000,
+            "datetime": "2023-11-14T22:13:20.000Z",
+            "nonce": 42,
+        }
+        raws = [raw for _r, raw in cap._diff_book(book, pd.Timestamp.now(tz="UTC"))]
+        frame = next(raw for raw in raws if raw is not None)
+        assert frame == {
+            "symbol": "BTC/USD",
+            "frame": "changes",
+            "timestamp": 1_700_000_000_000,
+            "datetime": "2023-11-14T22:13:20.000Z",
+            "nonce": 42,
+            "bids": [[50_000.0, 2.5]],
+            "asks": [[50_001.0, 0.0]],
+        }
+        assert len(json.dumps(frame)) < 500
+
+    def test_first_frame_is_the_whole_book_and_changes_rebuild_the_rest(self):
+        cap = CcxtSource()
+        cap._last = {"bid": {100.0: 1.0}, "ask": {101.0: 1.0}}
+        books = [
+            {"bids": [[100.0, 1.0]], "asks": [[101.0, 1.0]], "nonce": 1},  # no change
+            {"bids": [[100.0, 2.0], [99.0, 1.0]], "asks": [[101.0, 1.0]], "nonce": 2},
+            {"bids": [[99.0, 1.0]], "asks": [[101.0, 3.0]], "nonce": 3},
+        ]
+        ts = pd.Timestamp.now(tz="UTC")
+        frames = [raw for book in books for _r, raw in cap._diff_book(book, ts) if raw]
+        # An unchanged book writes nothing; the next one writes the whole book.
+        assert frames[0] == {"frame": "book", **books[1]}
+        assert [f["frame"] for f in frames[1:]] == ["changes"]
+        # Replaying raw.jsonl alone gives the venue's last book.
+        rebuilt = {
+            side: {p: s for p, s in frames[0][side]} for side in ("bids", "asks")
+        }
+        for f in frames[1:]:
+            for side in ("bids", "asks"):
+                for price, size in f[side]:
+                    if size:
+                        rebuilt[side][price] = size
+                    else:
+                        rebuilt[side].pop(price, None)
+        assert rebuilt == {"bids": {99.0: 1.0}, "asks": {101.0: 3.0}}
 
 
 class TestMapTrade:

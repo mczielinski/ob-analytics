@@ -173,6 +173,9 @@ class CcxtSource:
         self._use_ws_trades = False
         # Last seen absolute size per price, per side -- the diff baseline.
         self._last: dict[str, dict[float, float]] = {"bid": {}, "ask": {}}
+        # raw.jsonl holds the whole book once, on the first book update that
+        # changes a level; later frames hold only the changed levels.
+        self._full_book_written = False
         # Epoch-ms time of the opening book. A polled trade tape starts with
         # the venue's recent history, which can reach back hours; trades
         # before this are dropped rather than stamped as received now.
@@ -438,15 +441,22 @@ class CcxtSource:
         """Yield ``(depth_row, raw)`` for levels that changed vs the last book.
 
         A changed/added level emits its new absolute size; a level present
-        before but absent now emits ``0`` (removal).  The raw book frame is
-        attached to the first emitted row of the update (for raw.jsonl) and
-        ``None`` on the rest, so the full book is archived once, not per level.
-        Updates the stored per-side book.
+        before but absent now emits ``0`` (removal).  Updates the stored
+        per-side book.
+
+        The raw frame for raw.jsonl is attached to the first emitted row of
+        the update and ``None`` on the rest.  The first frame is the whole
+        book as CCXT gave it, with ``"frame": "book"``.  Every later frame
+        has ``"frame": "changes"`` and holds only the changed levels (as
+        ``[price, size]`` pairs, ``0`` for a removal) with the book's
+        ``symbol``, ``timestamp``, ``datetime`` and ``nonce``.  Applying the
+        changes to the first frame in order gives each book the venue sent,
+        and the file grows with the updates, not with the depth of the book.
         """
-        raw_attached = False
         # CCXT's per-book monotonic sequence (``None`` when the venue omits it);
         # every row from this book update carries it as the venue ``sequence``.
         nonce = book.get("nonce")
+        changes: dict[str, list[tuple[float, float]]] = {"bid": [], "ask": []}
         for side, key in (("bid", "bids"), ("ask", "asks")):
             current: dict[float, float] = {}
             for row in book.get(key) or ():
@@ -455,37 +465,47 @@ class CcxtSource:
             for price, size in current.items():
                 if prev.get(price) != size:
                     self._fit_tick(price)
-                    raw = None if raw_attached else book
-                    raw_attached = True
-                    yield (
-                        {
-                            "timestamp": ts,
-                            "exchange_timestamp": ts,
-                            "side": side,
-                            "price": price,
-                            "volume": size,
-                            "sequence": nonce,
-                            **self._identity(),
-                        },
-                        raw,
-                    )
-            for price in prev:
-                if price not in current:
-                    raw = None if raw_attached else book
-                    raw_attached = True
-                    yield (
-                        {
-                            "timestamp": ts,
-                            "exchange_timestamp": ts,
-                            "side": side,
-                            "price": price,
-                            "volume": 0.0,
-                            "sequence": nonce,
-                            **self._identity(),
-                        },
-                        raw,
-                    )
+                    changes[side].append((price, size))
+            changes[side].extend((price, 0.0) for price in prev if price not in current)
             self._last[side] = current
+        if not (changes["bid"] or changes["ask"]):
+            return
+        raw: dict[str, Any] | None
+        if self._full_book_written:
+            raw = {
+                "frame": "changes",
+                "symbol": book.get("symbol"),
+                "timestamp": book.get("timestamp"),
+                "datetime": book.get("datetime"),
+                "nonce": nonce,
+                "bids": [list(level) for level in changes["bid"]],
+                "asks": [list(level) for level in changes["ask"]],
+            }
+        else:
+            # Copy the levels: ccxt.pro updates its cached book in place, and
+            # the frame is serialised later, after the next update may land.
+            raw = {
+                **book,
+                "frame": "book",
+                "bids": [list(level) for level in book.get("bids") or ()],
+                "asks": [list(level) for level in book.get("asks") or ()],
+            }
+            self._full_book_written = True
+        for side in ("bid", "ask"):
+            for price, size in changes[side]:
+                yield (
+                    {
+                        "timestamp": ts,
+                        "exchange_timestamp": ts,
+                        "side": side,
+                        "price": price,
+                        "volume": size,
+                        "sequence": nonce,
+                        **self._identity(),
+                    },
+                    raw,
+                )
+                raw = None
 
     def _map_trade(self, t: dict[str, Any]) -> EventDict:
         """Map a CCXT trade to the universal trade-event shape.
