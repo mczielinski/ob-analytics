@@ -12,6 +12,14 @@ trading and quantifying price impact:
 
 All functions accept a trades DataFrame from the pipeline (or any
 DataFrame with the required columns).
+
+VPIN and Kyle's λ were designed for markets that trade thousands of times a
+minute.  On a thin tape they still return a number, so both results say when
+that number rests on too little data: :class:`KyleLambdaResult` carries
+``significant`` and ``diagnostics``, and the VPIN frame carries
+``attrs["diagnostics"]``.  The thresholds are the module constants
+:data:`KYLE_MIN_T_STAT` and :data:`KYLE_MIN_WINDOWS`; for VPIN the threshold is
+the ``n_buckets`` argument itself.
 """
 
 from __future__ import annotations
@@ -26,6 +34,23 @@ from ob_analytics.trade_sign import (
     bulk_volume_classification,
     resolve_direction,
 )
+
+#: Smallest ``|t|`` at which λ counts as distinguishable from zero.  The
+#: usual rule of thumb, about a 5% two-sided test on a large sample.
+KYLE_MIN_T_STAT = 2.0
+
+#: Fewest regression windows for λ to mean much.  Below this the t-statistic
+#: itself is unstable, whatever its value.
+KYLE_MIN_WINDOWS = 30
+
+#: Buckets in one average day of volume, for :func:`vpin_bucket_volume`.
+#: Fifty is the rule used by Easley, López de Prado and O'Hara (2012), and
+#: matches the default ``n_buckets`` of :func:`compute_vpin`: the trailing
+#: average then covers about one day.
+VPIN_BUCKETS_PER_DAY = 50
+
+# Most window values the λ bootstrap holds in one array at a time.
+_BOOTSTRAP_CHUNK = 1 << 20
 
 
 @dataclass(frozen=True)
@@ -44,6 +69,11 @@ class KyleLambdaResult:
         Number of time windows in the regression.
     regression_df : pandas.DataFrame
         Per-window ``timestamp``/``delta_price``/``signed_volume`` data.
+    ci_low, ci_high : float
+        Bounds of a block-bootstrap confidence interval for ``lambda_``.
+        ``NaN`` when the bootstrap was turned off or the fit is undefined.
+    ci_level : float
+        Coverage of that interval, for example ``0.95``.
     """
 
     lambda_: float
@@ -51,9 +81,110 @@ class KyleLambdaResult:
     r_squared: float
     n_windows: int
     regression_df: pd.DataFrame = field(default_factory=pd.DataFrame)
+    ci_low: float = float("nan")
+    ci_high: float = float("nan")
+    ci_level: float = 0.95
+
+    @property
+    def diagnostics(self) -> tuple[str, ...]:
+        """Reasons ``lambda_`` should not be relied on; empty when there are none.
+
+        Checks the fit is defined, that there are at least
+        :data:`KYLE_MIN_WINDOWS` windows, and that ``|t_stat|`` reaches
+        :data:`KYLE_MIN_T_STAT`.
+        """
+        if not np.isfinite(self.lambda_):
+            undefined = (
+                "λ is undefined: fewer than 2 windows, or the signed volume "
+                "is the same in every window"
+            )
+            return (undefined,)
+        reasons = []
+        if self.n_windows < KYLE_MIN_WINDOWS:
+            reasons.append(
+                f"only {self.n_windows} windows; at least {KYLE_MIN_WINDOWS} "
+                "are needed for the fit to mean much"
+            )
+        if not np.isfinite(self.t_stat):
+            reasons.append("the t-statistic is undefined")
+        elif abs(self.t_stat) < KYLE_MIN_T_STAT:
+            reasons.append(
+                f"|t| = {abs(self.t_stat):.2f} is below {KYLE_MIN_T_STAT:g}; "
+                "λ is not distinguishable from zero"
+            )
+        return tuple(reasons)
+
+    @property
+    def significant(self) -> bool:
+        """``True`` when :attr:`diagnostics` found nothing wrong."""
+        return not self.diagnostics
 
 
 # ── VPIN ─────────────────────────────────────────────────────────────
+
+
+def vpin_bucket_volume(
+    trades: pd.DataFrame,
+    buckets_per_day: int = VPIN_BUCKETS_PER_DAY,
+    trading_day: str | pd.Timedelta = "24h",
+) -> float:
+    """Pick a VPIN ``bucket_volume`` from the trades: average daily volume ÷ 50.
+
+    Average daily volume is the traded volume per unit of time, scaled to one
+    *trading_day*::
+
+        daily volume = total volume × trading_day / (last timestamp − first timestamp)
+
+    The same formula covers every session length.  A 30-minute capture is
+    scaled up to a full day at the rate it traded; a week-long one is averaged
+    down to a day.  On a short capture the result is therefore a large bucket,
+    and VPIN will fill only a few of them, which :func:`compute_vpin` then
+    reports in its diagnostics.
+
+    Parameters
+    ----------
+    trades : pandas.DataFrame
+        Trades with at least ``timestamp`` and ``volume``.
+    buckets_per_day : int, optional
+        How many buckets one average day of volume fills.  Default 50.
+    trading_day : str or pandas.Timedelta, optional
+        Length of one trading day, on the same clock as the span between the
+        first and last trade.  Default ``"24h"``, which is right for venues
+        that trade around the clock and for any capture that runs over several
+        days, closed hours included.  Use a session length, for example
+        ``"6.5h"`` for US equities, only when the capture falls inside a
+        single session.
+
+    Returns
+    -------
+    float
+        The bucket volume, in the units of ``trades["volume"]``.
+
+    Raises
+    ------
+    ConfigError
+        If required columns are missing.
+    ObAnalyticsError
+        If *trades* is empty.
+    ValueError
+        If the trades span no time, or *buckets_per_day* or *trading_day* is
+        not positive.
+    """
+    validate_columns(trades, {"timestamp", "volume"}, "vpin_bucket_volume")
+    validate_non_empty(trades, "vpin_bucket_volume")
+    if buckets_per_day <= 0:
+        raise ValueError(f"buckets_per_day must be positive, got {buckets_per_day}")
+    day = pd.Timedelta(trading_day)
+    if day <= pd.Timedelta(0):
+        raise ValueError(f"trading_day must be positive, got {trading_day!r}")
+    span = trades["timestamp"].max() - trades["timestamp"].min()
+    if span <= pd.Timedelta(0):
+        raise ValueError(
+            "vpin_bucket_volume: the trades span no time, so there is no rate "
+            "to scale to a day; pass bucket_volume explicitly."
+        )
+    daily_volume = float(trades["volume"].sum()) * (day / span)
+    return daily_volume / buckets_per_day
 
 
 def _empty_vpin_frame(
@@ -79,7 +210,7 @@ def _empty_vpin_frame(
 
 def compute_vpin(
     trades: pd.DataFrame,
-    bucket_volume: float,
+    bucket_volume: float | None = None,
     n_buckets: int = 50,
     sign_method: str | None = None,
     quotes: pd.DataFrame | None = None,
@@ -102,12 +233,14 @@ def compute_vpin(
         Trades with at least ``timestamp``, ``price``, and ``volume``.  A
         ``direction`` column (``"buy"`` / ``"sell"``, the taker side) is used
         when present; otherwise it is inferred — see *sign_method*.
-    bucket_volume : float
-        Total volume per bucket.  This is highly instrument-specific —
-        a reasonable starting point is average daily volume / 50.
+    bucket_volume : float, optional
+        Total volume per bucket.  This is highly instrument-specific.  When
+        left out, it is picked by :func:`vpin_bucket_volume` (average daily
+        volume ÷ 50, with a 24-hour trading day).
     n_buckets : int, optional
         Window length (in buckets) for the trailing VPIN average.
-        Default is 50, following the original paper.
+        Default is 50, following the original paper.  Fewer complete buckets
+        than this is reported in ``attrs["diagnostics"]``.
     sign_method : str, optional
         How to obtain the buy/sell split when there is no native
         ``direction``.  ``None`` (default) uses an existing ``direction`` if
@@ -138,6 +271,18 @@ def compute_vpin(
         * ``vpin`` — ``|buy_volume - sell_volume| / bucket_volume``
         * ``vpin_avg`` — trailing mean of ``vpin`` over *n_buckets*
 
+        The frame's ``attrs`` record how it was computed, so the settings can
+        be reported next to the number:
+
+        * ``attrs["bucket_volume"]`` — the bucket size used
+        * ``attrs["bucket_volume_rule"]`` — ``"given"`` when passed in,
+          ``"adv/50"`` when picked by :func:`vpin_bucket_volume`
+        * ``attrs["n_buckets"]`` — the trailing window, in buckets
+        * ``attrs["diagnostics"]`` — a tuple of reasons the result should not
+          be relied on; empty when there are none.  Today the one check is
+          whether there are at least *n_buckets* complete buckets, since
+          ``vpin_avg`` is not a full trailing average before that.
+
     Raises
     ------
     ConfigError
@@ -145,16 +290,46 @@ def compute_vpin(
     ObAnalyticsError
         If *trades* is empty.
     ValueError
-        If *bucket_volume* is not positive.
+        If *bucket_volume* is not positive, or it is left out and the trades
+        span no time (see :func:`vpin_bucket_volume`).
     """
     validate_columns(trades, {"timestamp", "price", "volume"}, "compute_vpin")
     validate_non_empty(trades, "compute_vpin")
+    rule = "given"
+    if bucket_volume is None:
+        bucket_volume = vpin_bucket_volume(trades)
+        rule = f"adv/{VPIN_BUCKETS_PER_DAY}"
     if bucket_volume <= 0:
         raise ValueError(f"bucket_volume must be positive, got {bucket_volume}")
 
     if sign_method == "bvc":
-        return _vpin_from_bvc(trades, bucket_volume, n_buckets)
+        result = _vpin_from_bvc(trades, bucket_volume, n_buckets)
+    else:
+        result = _vpin_from_signs(trades, bucket_volume, n_buckets, sign_method, quotes)
 
+    diagnostics: tuple[str, ...] = ()
+    if len(result) < n_buckets:
+        plural = "" if len(result) == 1 else "s"
+        too_few = (
+            f"only {len(result)} complete bucket{plural}, fewer than "
+            f"n_buckets={n_buckets}; vpin_avg never averages a full window"
+        )
+        diagnostics = (too_few,)
+    result.attrs["bucket_volume"] = float(bucket_volume)
+    result.attrs["bucket_volume_rule"] = rule
+    result.attrs["n_buckets"] = n_buckets
+    result.attrs["diagnostics"] = diagnostics
+    return result
+
+
+def _vpin_from_signs(
+    trades: pd.DataFrame,
+    bucket_volume: float,
+    n_buckets: int,
+    sign_method: str | None,
+    quotes: pd.DataFrame | None,
+) -> pd.DataFrame:
+    """VPIN from a per-trade buy/sell sign (every ``sign_method`` but ``"bvc"``)."""
     trades = resolve_direction(trades, sign_method, quotes, "compute_vpin")
     df = trades.sort_values("timestamp").reset_index(drop=True)
 
@@ -246,6 +421,10 @@ def _vpin_from_bvc(
 def compute_kyle_lambda(
     trades: pd.DataFrame,
     window: str = "5min",
+    *,
+    n_boot: int = 1000,
+    ci_level: float = 0.95,
+    seed: int | np.random.Generator | None = 0,
 ) -> KyleLambdaResult:
     """Estimate Kyle's Lambda via OLS regression.
 
@@ -274,12 +453,27 @@ def compute_kyle_lambda(
         rows the venue left blank are filled with the tick rule.
     window : str, optional
         Pandas frequency string for grouping trades.  Default ``"5min"``.
+    n_boot : int, optional
+        Number of bootstrap resamples for the confidence interval.  Default
+        1000; ``0`` skips the interval.  Each resample draws blocks of
+        consecutive windows with replacement (a moving block bootstrap, with
+        blocks of ``ceil(n_windows ** (1/3))`` windows), so correlation
+        between neighbouring windows is kept, and refits the slope.  The
+        interval is the percentile range of those slopes.
+    ci_level : float, optional
+        Coverage of the interval, strictly between 0 and 1.  Default 0.95.
+    seed : int or numpy.random.Generator, optional
+        Seed or generator for the bootstrap.  Default ``0``, so the same
+        trades always give the same interval; pass ``None`` for fresh
+        randomness.
 
     Returns
     -------
     KyleLambdaResult
         Frozen dataclass with ``lambda_``, ``t_stat``, ``r_squared``,
-        ``n_windows``, and ``regression_df``.
+        ``n_windows``, ``regression_df``, the interval ``ci_low`` /
+        ``ci_high``, and ``significant`` / ``diagnostics``, which say when λ
+        rests on too little data to rely on.
 
     Raises
     ------
@@ -287,6 +481,8 @@ def compute_kyle_lambda(
         If required columns are missing.
     ObAnalyticsError
         If *trades* is empty.
+    ValueError
+        If *ci_level* is not between 0 and 1, or *n_boot* is negative.
     """
     validate_columns(
         trades,
@@ -294,6 +490,10 @@ def compute_kyle_lambda(
         "compute_kyle_lambda",
     )
     validate_non_empty(trades, "compute_kyle_lambda")
+    if not 0.0 < ci_level < 1.0:
+        raise ValueError(f"ci_level must be between 0 and 1, got {ci_level}")
+    if n_boot < 0:
+        raise ValueError(f"n_boot must not be negative, got {n_boot}")
 
     # `direction` is required here, but a column being present does not make
     # every row in it usable: the signed volume below reads it as == "buy" and
@@ -322,6 +522,7 @@ def compute_kyle_lambda(
             r_squared=float("nan"),
             n_windows=n,
             regression_df=reg_df,
+            ci_level=ci_level,
         )
 
     n = len(reg_df)
@@ -353,13 +554,63 @@ def compute_kyle_lambda(
     else:
         t_stat = float("nan")
 
+    ci_low, ci_high = _block_bootstrap_slope_ci(
+        x, y, n_boot, ci_level, np.random.default_rng(seed)
+    )
+
     return KyleLambdaResult(
         lambda_=lambda_,
         t_stat=t_stat,
         r_squared=r_squared,
         n_windows=n,
         regression_df=reg_df,
+        ci_low=ci_low,
+        ci_high=ci_high,
+        ci_level=ci_level,
     )
+
+
+def _block_bootstrap_slope_ci(
+    x: np.ndarray,
+    y: np.ndarray,
+    n_boot: int,
+    ci_level: float,
+    rng: np.random.Generator,
+) -> tuple[float, float]:
+    """Percentile interval for the OLS slope of *y* on *x*, by moving blocks.
+
+    Returns ``(nan, nan)`` when there are fewer than three points, no
+    resamples were asked for, or fewer than two resamples had any spread in
+    *x* to fit a slope to.
+    """
+    nan = float("nan")
+    n = len(x)
+    if n_boot == 0 or n < 3:
+        return nan, nan
+    block = int(np.ceil(n ** (1 / 3)))
+    n_blocks = -(-n // block)
+    starts = rng.integers(0, n - block + 1, size=(n_boot, n_blocks))
+    # Resamples are handled a chunk of rows at a time, so memory stays near
+    # _BOOTSTRAP_CHUNK values however many windows there are.
+    rows_per_chunk = max(1, _BOOTSTRAP_CHUNK // n)
+    chunks = []
+    for first in range(0, n_boot, rows_per_chunk):
+        part = starts[first : first + rows_per_chunk]
+        # Each row is n window indices, built from n_blocks runs of `block`
+        # consecutive windows, cut back to n.
+        idx = (part[:, :, None] + np.arange(block)).reshape(len(part), -1)[:, :n]
+        xs, ys = x[idx], y[idx]
+        usable = np.ptp(xs, axis=1) > 0  # one x value in a resample: no slope
+        xs, ys = xs[usable], ys[usable]
+        xc = xs - xs.mean(axis=1, keepdims=True)
+        yc = ys - ys.mean(axis=1, keepdims=True)
+        chunks.append((xc * yc).sum(axis=1) / (xc * xc).sum(axis=1))
+    slopes = np.concatenate(chunks)
+    if len(slopes) < 2:
+        return nan, nan
+    tail = (1.0 - ci_level) / 2.0
+    low, high = np.quantile(slopes, [tail, 1.0 - tail])
+    return float(low), float(high)
 
 
 # ── Order Flow Imbalance ─────────────────────────────────────────────

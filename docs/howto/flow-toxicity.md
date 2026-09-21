@@ -18,6 +18,28 @@ fig = plot("vpin", **prepare.vpin(vpin, threshold=0.7))
 save_figure(fig, "vpin.png")
 ```
 
+Leave `bucket_volume` out to pick it from the trades with the common rule,
+average daily volume ÷ 50. `vpin_bucket_volume` applies the same rule on its
+own. A session shorter than a day is scaled up to a day at the rate it traded.
+When the market does not trade around the clock and the capture falls inside
+one session, pass `trading_day="6.5h"` (or your venue's session length). Keep
+the 24-hour default for a capture that runs over several days, since the span
+it divides by then includes the closed hours:
+
+```python
+from ob_analytics import compute_vpin, vpin_bucket_volume
+
+vpin = compute_vpin(result.trades)
+print(vpin.attrs["bucket_volume"], vpin.attrs["bucket_volume_rule"])
+
+bucket = vpin_bucket_volume(result.trades, trading_day="6.5h")
+vpin = compute_vpin(result.trades, bucket_volume=bucket)
+```
+
+The frame's `attrs` also hold `n_buckets` and `diagnostics`. When there are
+fewer complete buckets than `n_buckets`, `vpin_avg` is never a full trailing
+average, and `diagnostics` says so. An empty tuple means no problem was found.
+
 ## Kyle's lambda
 
 ```python
@@ -26,10 +48,20 @@ from ob_analytics.visualization import plot, save_figure, prepare
 
 kyle = compute_kyle_lambda(result.trades, window="5min")
 print(f"λ={kyle.lambda_:.6f}, t={kyle.t_stat:.2f}, R²={kyle.r_squared:.3f}")
+print(f"95% interval: [{kyle.ci_low:.6f}, {kyle.ci_high:.6f}]")
+if not kyle.significant:
+    print("not reliable:", "; ".join(kyle.diagnostics))
 
 fig = plot("kyle_lambda", **prepare.kyle_lambda(kyle))
 save_figure(fig, "kyle_lambda.png")
 ```
+
+`significant` is `False` when there are fewer than 30 windows
+(`KYLE_MIN_WINDOWS`), when `|t|` is below 2 (`KYLE_MIN_T_STAT`), or when the
+fit is undefined; `diagnostics` lists which. The interval `ci_low` / `ci_high`
+comes from a block bootstrap over the regression windows: 1000 resamples by
+default, seeded so the same trades give the same interval. Pass `seed=` to
+change it, `ci_level=` for a different coverage, or `n_boot=0` to skip it.
 
 ## Order flow imbalance
 

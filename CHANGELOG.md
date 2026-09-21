@@ -117,6 +117,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   files"
   how-to](https://mczielinski.github.io/ob-analytics/howto/databento/).
 
+- **Flow-toxicity results say when they rest on too little data** (#119). VPIN
+  and Kyle's λ were designed for markets that trade thousands of times a
+  minute, and on a thin tape they used to return a number with no sign that it
+  meant little. `KyleLambdaResult` now has `significant` and `diagnostics`:
+  λ is flagged when there are fewer than 30 regression windows
+  (`KYLE_MIN_WINDOWS`), when `|t|` is below 2 (`KYLE_MIN_T_STAT`), or when the
+  fit is undefined. It also carries a confidence interval, `ci_low` /
+  `ci_high`, from a block bootstrap over the windows (1000 resamples by
+  default, under a millisecond on the bundled sample, seeded with `seed=0` so
+  the same trades give the same interval; `n_boot=0` skips it).
+
+  `compute_vpin` records how it ran in the frame's `attrs`: `bucket_volume`,
+  `bucket_volume_rule`, `n_buckets`, and `diagnostics`, which flags a result
+  with fewer complete buckets than `n_buckets`. `bucket_volume` is now
+  optional. Left out, it is picked by the new `vpin_bucket_volume(trades)`,
+  which applies the common rule of average daily volume ÷ 50; a session
+  shorter than a day is scaled up to a day at the rate it traded
+  (`trading_day="24h"` by default). Existing calls are unchanged.
+
+  On the bundled sample, λ at 5-minute windows is flagged on both counts (7
+  windows, t = 1.45) and its interval spans zero; VPIN with the default bucket
+  fills one bucket and says so. Tutorial chapter 6 and the flow-toxicity
+  how-to now show these checks in place of the hand-written caveats.
+
 - **Bars: the trade stream resampled into OHLCV rows** (#148). `bars(trades,
   rule, threshold)` cuts a trades frame into bars and returns one row each with
   open, high, low, close, volume, turnover, VWAP, and the buy/sell split of

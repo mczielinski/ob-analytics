@@ -101,6 +101,7 @@ from ob_analytics.flow_toxicity import (
     compute_kyle_lambda,
     compute_vpin,
     order_flow_imbalance,
+    vpin_bucket_volume,
 )
 from ob_analytics.interop import (
     HftbacktestWriter,
@@ -282,4 +283,5 @@ __all__ = [
     "toy_l2_trades",
     "toy_trades",
     "transaction_costs",
+    "vpin_bucket_volume",
 ]

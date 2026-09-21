@@ -6,10 +6,13 @@ import pytest
 
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
 from ob_analytics.flow_toxicity import (
+    KYLE_MIN_T_STAT,
+    KYLE_MIN_WINDOWS,
     KyleLambdaResult,
     compute_kyle_lambda,
     compute_vpin,
     order_flow_imbalance,
+    vpin_bucket_volume,
 )
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -232,6 +235,232 @@ class TestComputeKyleLambda:
         bad = pd.DataFrame({"timestamp": [1]})
         with pytest.raises(ConfigError):
             compute_kyle_lambda(bad)
+
+
+# ── Robustness diagnostics (#119) ────────────────────────────────────
+
+
+def _busy_tape(n_windows: int = 200, seed: int = 1) -> pd.DataFrame:
+    """A tape with many 1-minute windows and a real λ = 0.5 plus noise.
+
+    Each window holds two trades: the first sets the window's opening price,
+    the second closes it at ``open + 0.5 * signed_volume + noise``.  Both
+    trades share one side, so the window's signed volume is their summed size.
+    """
+    rng = np.random.default_rng(seed)
+    base = pd.Timestamp("2026-01-05 00:00:00")
+    rows = []
+    price = 1000.0
+    for w in range(n_windows):
+        side = "buy" if rng.random() < 0.5 else "sell"
+        sizes = rng.uniform(1.0, 5.0, size=2)
+        signed = sizes.sum() * (1.0 if side == "buy" else -1.0)
+        close = price + 0.5 * signed + rng.normal(0.0, 1.0)
+        t0 = base + pd.Timedelta(minutes=w)
+        rows.append((t0, price, sizes[0], side))
+        rows.append((t0 + pd.Timedelta(seconds=30), close, sizes[1], side))
+        price = close
+    return pd.DataFrame(rows, columns=["timestamp", "price", "volume", "direction"])
+
+
+def _thin_tape() -> pd.DataFrame:
+    """Five 1-minute windows: a fit exists, but it cannot mean much."""
+    return _busy_tape(n_windows=5, seed=3)
+
+
+class TestKyleLambdaDiagnostics:
+    def test_thin_tape_is_flagged(self):
+        result = compute_kyle_lambda(_thin_tape(), window="1min")
+        assert result.n_windows == 5
+        assert not result.significant
+        assert any("windows" in d for d in result.diagnostics)
+
+    def test_busy_tape_is_not_flagged(self):
+        result = compute_kyle_lambda(_busy_tape(), window="1min")
+        assert result.n_windows == 200
+        assert abs(result.t_stat) > KYLE_MIN_T_STAT
+        assert result.significant
+        assert result.diagnostics == ()
+
+    def test_low_t_stat_is_flagged(self):
+        """Enough windows but no relationship: flagged on |t| alone."""
+        trades = _busy_tape()
+        rng = np.random.default_rng(9)
+        # Shuffle closes against flow so the slope carries no signal.
+        closes = trades["price"].to_numpy().copy()
+        closes[1::2] = closes[0::2] + rng.normal(0.0, 1.0, size=len(closes) // 2)
+        trades["price"] = closes
+        result = compute_kyle_lambda(trades, window="1min")
+        assert result.n_windows >= KYLE_MIN_WINDOWS
+        assert abs(result.t_stat) < KYLE_MIN_T_STAT
+        assert not result.significant
+        assert len(result.diagnostics) == 1
+        assert "|t|" in result.diagnostics[0]
+
+    def test_undefined_fit_is_flagged(self):
+        result = compute_kyle_lambda(_trades(["buy"]), window="5min")
+        assert np.isnan(result.lambda_)
+        assert not result.significant
+        assert any("undefined" in d for d in result.diagnostics)
+
+    def test_hand_built_result_reports_diagnostics(self):
+        """The flag is derived from the fields, so a hand-built result has it."""
+        weak = KyleLambdaResult(lambda_=1.0, t_stat=1.2, r_squared=0.1, n_windows=5)
+        assert not weak.significant
+        strong = KyleLambdaResult(lambda_=1.0, t_stat=8.0, r_squared=0.6, n_windows=100)
+        assert strong.significant
+
+
+class TestKyleLambdaBootstrap:
+    def test_ci_contains_estimate_on_busy_tape(self):
+        result = compute_kyle_lambda(_busy_tape(), window="1min")
+        assert result.ci_low < result.lambda_ < result.ci_high
+        # The true slope is 0.5; the interval should sit around it.
+        assert result.ci_low < 0.5 < result.ci_high
+
+    def test_ci_is_deterministic_under_a_seed(self):
+        a = compute_kyle_lambda(_busy_tape(), window="1min", seed=42)
+        b = compute_kyle_lambda(_busy_tape(), window="1min", seed=42)
+        c = compute_kyle_lambda(_busy_tape(), window="1min", seed=43)
+        assert (a.ci_low, a.ci_high) == (b.ci_low, b.ci_high)
+        assert (a.ci_low, a.ci_high) != (c.ci_low, c.ci_high)
+
+    def test_accepts_a_generator(self):
+        a = compute_kyle_lambda(
+            _busy_tape(), window="1min", seed=np.random.default_rng(5)
+        )
+        b = compute_kyle_lambda(
+            _busy_tape(), window="1min", seed=np.random.default_rng(5)
+        )
+        assert (a.ci_low, a.ci_high) == (b.ci_low, b.ci_high)
+
+    def test_wider_level_gives_wider_interval(self):
+        narrow = compute_kyle_lambda(_busy_tape(), window="1min", ci_level=0.5)
+        wide = compute_kyle_lambda(_busy_tape(), window="1min", ci_level=0.99)
+        assert wide.ci_low < narrow.ci_low
+        assert wide.ci_high > narrow.ci_high
+
+    def test_bootstrap_can_be_turned_off(self):
+        result = compute_kyle_lambda(_busy_tape(), window="1min", n_boot=0)
+        assert np.isnan(result.ci_low) and np.isnan(result.ci_high)
+        assert np.isfinite(result.lambda_)
+
+    def test_undefined_fit_has_no_interval(self):
+        result = compute_kyle_lambda(_trades(["buy"]), window="5min")
+        assert np.isnan(result.ci_low) and np.isnan(result.ci_high)
+
+    def test_bad_ci_level_raises(self):
+        with pytest.raises(ValueError, match="ci_level"):
+            compute_kyle_lambda(_busy_tape(), window="1min", ci_level=1.5)
+
+
+class TestVpinBucketVolume:
+    def test_hand_built_one_day(self):
+        """Exactly one day of trading: average daily volume is the total."""
+        trades = pd.DataFrame(
+            {
+                "timestamp": pd.to_datetime(
+                    ["2026-01-05 00:00", "2026-01-05 12:00", "2026-01-06 00:00"]
+                ),
+                "price": [100.0, 100.0, 100.0],
+                "volume": [100.0, 200.0, 200.0],
+            }
+        )
+        assert vpin_bucket_volume(trades) == pytest.approx(500.0 / 50)
+
+    def test_short_session_scales_to_a_day(self):
+        """Six hours of trading at 60 units: 240 units a day, /50 = 4.8."""
+        trades = pd.DataFrame(
+            {
+                "timestamp": pd.to_datetime(["2026-01-05 00:00", "2026-01-05 06:00"]),
+                "price": [100.0, 100.0],
+                "volume": [30.0, 30.0],
+            }
+        )
+        assert vpin_bucket_volume(trades) == pytest.approx(4.8)
+
+    def test_trading_day_and_buckets_per_day(self):
+        """A 6-hour session on a 6-hour trading day is one full day."""
+        trades = pd.DataFrame(
+            {
+                "timestamp": pd.to_datetime(["2026-01-05 09:00", "2026-01-05 15:00"]),
+                "price": [100.0, 100.0],
+                "volume": [30.0, 30.0],
+            }
+        )
+        got = vpin_bucket_volume(trades, buckets_per_day=10, trading_day="6h")
+        assert got == pytest.approx(6.0)
+
+    def test_zero_span_raises(self):
+        with pytest.raises(ValueError, match="span"):
+            vpin_bucket_volume(_trades(["buy", "sell"], base_sec_offsets=[0, 0]))
+
+
+class TestVpinDiagnostics:
+    def test_explicit_bucket_is_recorded(self):
+        vpin = compute_vpin(_trades(["buy"] * 10), bucket_volume=2.0, n_buckets=3)
+        assert vpin.attrs["bucket_volume"] == 2.0
+        assert vpin.attrs["bucket_volume_rule"] == "given"
+        assert vpin.attrs["n_buckets"] == 3
+        assert vpin.attrs["diagnostics"] == ()
+
+    def test_too_few_buckets_is_flagged(self):
+        vpin = compute_vpin(_trades(["buy"] * 10), bucket_volume=2.0)
+        assert len(vpin) == 5
+        (message,) = vpin.attrs["diagnostics"]
+        assert "5 complete buckets" in message
+
+    def test_bvc_path_is_recorded_and_flagged(self):
+        vpin = compute_vpin(
+            _trades(["buy"] * 10, prices=[100.0 + i for i in range(10)]),
+            bucket_volume=2.0,
+            sign_method="bvc",
+        )
+        assert vpin.attrs["bucket_volume"] == 2.0
+        assert vpin.attrs["diagnostics"]
+
+    def test_no_complete_bucket_keeps_the_columns(self):
+        """A short tape under the default rule fills no bucket (#119)."""
+        for sign_method in (None, "bvc"):
+            trades = _trades(["buy", "sell"] * 3, prices=[100.0, 101.0] * 3)
+            vpin = compute_vpin(trades, sign_method=sign_method)
+            assert vpin.empty
+            assert "vpin_avg" in vpin.columns
+            assert vpin.attrs["diagnostics"]
+
+    def test_bucket_volume_defaults_to_adv_rule(self):
+        trades = _busy_tape()
+        vpin = compute_vpin(trades)
+        assert vpin.attrs["bucket_volume"] == pytest.approx(vpin_bucket_volume(trades))
+        assert vpin.attrs["bucket_volume_rule"] == "adv/50"
+
+    def test_busy_tape_is_not_flagged(self):
+        trades = _busy_tape()
+        vpin = compute_vpin(trades, bucket_volume=trades["volume"].sum() / 120)
+        assert len(vpin) >= 50
+        assert vpin.attrs["diagnostics"] == ()
+
+
+@pytest.fixture(scope="module")
+def sample_trades(sample_csv_path) -> pd.DataFrame:
+    from ob_analytics import Pipeline
+
+    return Pipeline().run(sample_csv_path).trades
+
+
+class TestBundledSampleDiagnostics:
+    def test_kyle_lambda_not_significant(self, sample_trades):
+        trades = sample_trades
+        result = compute_kyle_lambda(trades, window="5min")
+        assert not result.significant
+        assert len(result.diagnostics) == 2  # too few windows, and |t| < 2
+        assert result.ci_low < result.lambda_ < result.ci_high
+
+    def test_vpin_reports_bucket_and_diagnostic(self, sample_trades):
+        trades = sample_trades
+        vpin = compute_vpin(trades)
+        assert vpin.attrs["bucket_volume"] == pytest.approx(vpin_bucket_volume(trades))
+        assert vpin.attrs["diagnostics"]
 
 
 # ── Order Flow Imbalance ─────────────────────────────────────────────
