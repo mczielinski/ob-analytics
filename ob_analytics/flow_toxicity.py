@@ -49,17 +49,6 @@ KYLE_MIN_WINDOWS = 30
 #: average then covers about one day.
 VPIN_BUCKETS_PER_DAY = 50
 
-# Columns of every compute_vpin result, including an empty one.
-_VPIN_COLUMNS = [
-    "bucket",
-    "timestamp_start",
-    "timestamp_end",
-    "buy_volume",
-    "sell_volume",
-    "vpin",
-    "vpin_avg",
-]
-
 # Most window values the λ bootstrap holds in one array at a time.
 _BOOTSTRAP_CHUNK = 1 << 20
 
@@ -198,6 +187,27 @@ def vpin_bucket_volume(
     return daily_volume / buckets_per_day
 
 
+def _empty_vpin_frame(
+    timestamp_dtype: np.dtype | pd.api.extensions.ExtensionDtype,
+) -> pd.DataFrame:
+    """Zero-row :func:`compute_vpin` result with the standard columns and dtypes.
+
+    *timestamp_dtype* is the trades' ``timestamp`` dtype, so the bucket
+    bounds keep the same time zone as a non-empty result.
+    """
+    return pd.DataFrame(
+        {
+            "bucket": pd.Series(dtype="int64"),
+            "timestamp_start": pd.Series(dtype=timestamp_dtype),
+            "timestamp_end": pd.Series(dtype=timestamp_dtype),
+            "buy_volume": pd.Series(dtype="float64"),
+            "sell_volume": pd.Series(dtype="float64"),
+            "vpin": pd.Series(dtype="float64"),
+            "vpin_avg": pd.Series(dtype="float64"),
+        }
+    )
+
+
 def compute_vpin(
     trades: pd.DataFrame,
     bucket_volume: float | None = None,
@@ -250,7 +260,8 @@ def compute_vpin(
     Returns
     -------
     pandas.DataFrame
-        One row per completed bucket with columns:
+        One row per completed bucket (zero rows, same columns and dtypes,
+        when the trades fill no bucket) with columns:
 
         * ``bucket`` — zero-based bucket index
         * ``timestamp_start`` — first trade timestamp in the bucket
@@ -373,8 +384,7 @@ def _vpin_from_signs(
                 bucket_start_ts = timestamps[i]
 
     if not buckets:
-        # No bucket filled: keep the schema so callers can still select columns.
-        return pd.DataFrame(columns=_VPIN_COLUMNS)
+        return _empty_vpin_frame(df["timestamp"].dtype)
     result = pd.DataFrame(buckets)
     result["vpin_avg"] = result["vpin"].rolling(n_buckets, min_periods=1).mean()
     return result
@@ -394,7 +404,7 @@ def _vpin_from_bvc(
     """
     bvc = bulk_volume_classification(trades, bucket_volume)
     if bvc.empty:
-        return pd.DataFrame(columns=_VPIN_COLUMNS)
+        return _empty_vpin_frame(trades["timestamp"].dtype)
     result = bvc[
         ["bucket", "timestamp_start", "timestamp_end", "buy_volume", "sell_volume"]
     ].copy()

@@ -10,6 +10,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **The price-level depth follows an order that moves or grows.**
+  `price_level_volume` used to count every one of an order's rows on the price
+  of its first row, and ignored a rise in its size. It now reads a `changed`
+  row that reports no execution and carries a new price as a move: the order's
+  volume leaves the old level and joins the new one. A `changed` row that
+  reports no execution and a larger size adds the difference where the order
+  rests. Deletes and rows that report an execution are still taken off where
+  the order rests, whatever price they carry, so the fix for Bitstamp's
+  deletes at the wrong price is kept. The price-level rebuild now agrees with
+  the per-order rebuild (`book_state`) on these orders. This matters for
+  Databento, whose modify can move an order or make it bigger. The Bitstamp and
+  LOBSTER outputs are unchanged: neither feed moves or grows an order this way.
+
 - **A trade the venue left unlabelled is now classified on the L3 path too.**
   `Pipeline.run` labels any trade with no aggressor side against the
   reconstructed quotes, filling one subset at a time instead of all or nothing,
@@ -20,6 +33,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   that labels every trade, which is every other source in the package.
 
 ### Added
+
+- **A feature table for models** (#149). `features(trades, quotes)` returns one
+  tidy table: a point in time on each row and a microstructure feature in each
+  column — the shape a model or a study wants. It replaces a join per
+  measurement.
+
+  Two decisions make the table, and they are separate. Where the rows fall is
+  a bar rule, so `features()` takes the same sampling arguments `bars()` does
+  and the same arguments give the same cut in both; a time grid is the `time`
+  rule. What each column measures is a `Feature`, and ten ship: `price`,
+  `returns`, `flow`, `spread`, `mid_price`, `micro_price`, `imbalance`,
+  `depth`, `vpin` and `kyle_lambda`, writing 20 columns between them.
+  `register_feature` adds one of your own, usable by name with no edit to the
+  package.
+
+  Every row is stated as of the close of its bar. The trade columns hold what
+  happened inside the bar, and the book columns hold the book as it stood at
+  the close, a backward as-of join. Nothing from after that instant reaches
+  the row, so the table carries no look-ahead — which is tested by truncating
+  the inputs and checking that the rows that survive are unchanged, for every
+  rule and every feature. The table holds no target either: a target looks
+  forward, and building one is a shift the caller makes deliberately.
+
+  Two quote states are not books anything could have traded against, and both
+  would otherwise arrive as ordinary numbers: a side with nothing resting on
+  it, which the depth engine marks with a price of `0`, and a crossed book,
+  which a diff feed can genuinely hold. `readable_quotes()` drops them from
+  the reference series, so a row reaches back to the last quote it could read
+  — the same test `transaction_costs` already applied before measuring against
+  a mid. A locked book, bid equal to ask, is a real state at a spread of zero
+  and is kept.
+
+  Without a quotes frame the five book features are skipped and the table
+  holds the trade features alone; naming one explicitly raises instead. Two
+  features that would write the same column are an error rather than a silent
+  overwrite, and so is a name listed twice in `include`; a trailing window a
+  feature cannot use is refused when the feature is built. See the ["Build a feature table"
+  how-to](https://mczielinski.github.io/ob-analytics/howto/feature-table/),
+  which ends in a baseline model.
 
 - **Databento market-by-order files** (#100). `DatabentoSource` reads
   Databento's DBN files in the MBO schema, which is a per-order feed: every
@@ -37,12 +89,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   receive time orders the events, the venue's own becomes
   `exchange_timestamp`.
 
-  One thing does not map: a modify that moves an order to another price or
-  makes it bigger is a new queue entry, and the shared schema has no event for
-  that, so the depth reconstruction cannot follow it. The events, lifetimes and
-  trades are still right, and the loader says how many rows the depth will be
-  off by. Most venues report an amendment as a cancel and a new order, so most
-  files never hit it.
+  A modify that moves an order to another price or makes it bigger is recorded
+  as a `changed` event with the new price and size, and the depth follows it
+  (see Changed). The loss of queue priority is not modelled. The one modify the
+  depth still cannot follow is one that carries a fill and also moves the order
+  or changes its size by more than the fill; the loader says how many rows the
+  depth will be off by.
 
   A feed the loader does not understand is refused: a publisher that only sends
   top-of-book or price-level data, because its order ids mean nothing; a
@@ -322,6 +374,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The VPIN chart draws an empty panel when no bucket is complete.** A
+  capture with less volume than one bucket gives `compute_vpin` zero rows, and
+  `plot("vpin", ...)` then raised: a `TypeError` with matplotlib, a `KeyError`
+  with both backends when the frame had no columns. Both backends now draw the
+  axes with "(no complete buckets)" in the title. `compute_vpin` now returns
+  its usual columns and dtypes when it has no rows, where before it returned a
+  frame with no columns (or, with `sign_method="bvc"`, columns of object
+  dtype).
 - **A price-level file no longer has its prices rounded to the tick size.**
   `L2DepthLoader` and `L2TradeReader` converted each price to the nearest
   whole number of ticks, so a price finer than `tick_size` moved without a
@@ -387,6 +447,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   tradeable has no value, so it is now NaN.
 
 ### Changed
+
+- `depth.bin_volume_columns()` is public. It returns the per-bps depth-bin
+  volume columns a depth summary carries, ordered from the touch outward, and
+  it was already the answer `book_imbalance` and `depth_signals` needed. The
+  feature table needs the same answer, and so does anyone writing a depth
+  feature of their own, so it is no longer private. Behaviour is unchanged.
 
 - `trade_sign.resolve_direction()` now makes the guarantee its docstring
   already claimed: the `direction` column it returns holds only `"buy"` and

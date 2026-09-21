@@ -566,6 +566,19 @@ class TestPlotlyVpin:
         # 0.6 * 60s bucket = 36s = 36_000 ms.
         assert bar.width == pytest.approx(36_000.0)
 
+    def test_empty_draws_no_buckets(self) -> None:
+        # A capture shorter than one bucket gives compute_vpin zero rows.
+        vpin_df = pd.DataFrame(
+            {
+                "timestamp_end": pd.Series(dtype="datetime64[ns, UTC]"),
+                "vpin": pd.Series(dtype="float64"),
+                "vpin_avg": pd.Series(dtype="float64"),
+            }
+        )
+        fig = plotly_vpin(prepare_vpin_data(vpin_df))
+        assert "no complete buckets" in fig.layout.title.text
+        assert len(fig.data) == 0
+
 
 class TestPlotlyOfi:
     def test_returns_plotly_figure(self) -> None:

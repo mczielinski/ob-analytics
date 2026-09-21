@@ -232,6 +232,52 @@ reported as `NaN` rather than hidden. When it lands negative by chance the
 estimate exists but means nothing, which is why the autocorrelation matters
 more than the root.
 
+## Feature table
+
+Implemented in [`features`](api/features.md).
+
+**Feature table**
+: One tidy table for a model or a study: a point in time on each row, a
+microstructure feature in each column. Every row is stated as of one instant,
+and everything in it was known at that instant.
+
+**Feature**
+: One measured column set of that table. Registered under a name, so a
+measurement of your own becomes a column with no edit to the package.
+
+**Look-ahead**
+: Using data from after a row's instant to compute that row. It flatters a
+model in testing and cannot be repeated in trading, which is the most common
+way a backtest comes out wrong. The feature table has none by construction:
+the trade columns cover the bar only, and the book columns are a backward
+as-of join.
+: The test for it is truncation. Cut the inputs short and recompute; a table
+free of look-ahead reproduces the rows that survive exactly, because none of
+them ever read the data that was removed.
+
+**As-of join**
+: Matching each row to the last observation at or before its instant, rather
+than to one sharing its key. How the book state reaches a row whose instant
+falls between two book snapshots.
+
+**Target**
+: What a model predicts, usually the return over the bar after the row. It
+looks forward, so it is not a feature and the table does not hold one: build
+one with a negative shift.
+
+**Trade imbalance**
+: The signed share of a bar's volume, `signed_volume / volume`, from `-1`
+(every trade a sell) to `+1` (every trade a buy).
+
+**Realized volatility**
+: The standard deviation of returns over a trailing window. Per bar rather
+than annualized: only clock bars span equal amounts of time, so there is no
+one factor that would scale it to a year.
+
+**Close location**
+: Where a bar's close fell within its own high-low range. Not a built-in
+feature; the worked example of writing one.
+
 ## Pipeline concepts
 
 **Canonical events / trades frames**

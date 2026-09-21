@@ -10,11 +10,14 @@ one in memory with ``databento_dbn`` and skip without the extra.
 from __future__ import annotations
 
 import importlib.util
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import ClassVar
 
 import numpy as np
 import pandas as pd
 import pytest
+from loguru import logger
 
 from ob_analytics import Pipeline, PipelineConfig
 from ob_analytics.databento import (
@@ -95,6 +98,20 @@ LIFECYCLE = [
     (2, "F", "A", px(100.35), 30),
     (2, "C", "A", px(100.35), 30),  # fully executed -> off the book
 ]
+
+
+@contextmanager
+def warnings_logged() -> Iterator[list[str]]:
+    """Collect the messages logged at WARNING or above inside the block."""
+    messages: list[str] = []
+    # The package disables its own logger on import, as a library should.
+    logger.enable("ob_analytics")
+    sink = logger.add(lambda m: messages.append(m.record["message"]), level="WARNING")
+    try:
+        yield messages
+    finally:
+        logger.remove(sink)
+        logger.disable("ob_analytics")
 
 
 def load(source, config=None, **loader_kwargs):
@@ -221,10 +238,8 @@ class TestActionMapping:
         )
         assert len(events) == 1
 
-    def test_a_modify_that_moves_the_price_is_reported(self, caplog):
-        # The price-level depth cannot represent a move, so it has to be said
-        # out loud rather than silently mis-counted.
-        with caplog.at_level("WARNING"):
+    def test_a_modify_that_moves_the_price_is_a_changed_event(self):
+        with warnings_logged() as logged:
             _, events = load(
                 [
                     (1, "A", "B", px(9.99), 30),
@@ -233,15 +248,39 @@ class TestActionMapping:
             )
         assert list(events["action"]) == ["created", "changed"]
         assert list(events["price"]) == [999, 998]
+        # The depth follows a move now (issue #262), so there is nothing to
+        # warn about.
+        assert not logged
 
-    def test_a_modify_that_grows_an_order_is_reported(self):
-        _, events = load(
-            [
-                (1, "A", "B", px(9.99), 30),
-                (1, "M", "B", px(9.99), 45),
-            ]
-        )
+    def test_a_modify_that_grows_an_order_is_a_changed_event(self):
+        with warnings_logged() as logged:
+            _, events = load(
+                [
+                    (1, "A", "B", px(9.99), 30),
+                    (1, "M", "B", px(9.99), 45),
+                ]
+            )
         assert list(events["volume"]) == [30, 45]
+        assert not logged
+
+    def test_a_modify_that_executes_and_moves_is_reported(self):
+        # The depth reads a modify that carries a fill as an execution report,
+        # so a move on the same record is the one case it still cannot follow.
+        with warnings_logged() as logged:
+            _, events = load(
+                [
+                    (1, "A", "B", px(9.99), 30),
+                    (1, "F", "B", px(9.99), 10),
+                    (1, "M", "B", px(9.98), 20),
+                ]
+            )
+        assert list(events["fill"]) == [0, 10]
+        assert any("1 modifies carry a fill" in m for m in logged)
+
+    def test_a_modify_that_only_executes_is_not_reported(self):
+        with warnings_logged() as logged:
+            load(LIFECYCLE)
+        assert not any("modifies carry a fill" in m for m in logged)
 
     def test_side_becomes_the_resting_direction(self):
         _, events = load([(1, "A", "B", px(9.99), 1), (2, "A", "A", px(10.01), 1)])
@@ -665,6 +704,43 @@ class TestPipelineRun:
         resting = final[final["volume"] > 0]
         assert list(resting["price"]) == [10025]
         assert list(resting["volume"]) == [60]
+
+    def test_the_touch_follows_orders_that_move_and_grow(self):
+        # Issue #262: the reconstructed best bid and ask after every record
+        # must be the ones the records themselves imply.
+        records = [
+            (1, "A", "B", px(100.00), 10),
+            (2, "A", "A", px(100.10), 20),
+            (3, "A", "B", px(99.90), 30),
+            (1, "M", "B", px(100.05), 10),  # the best bid moves up
+            (2, "M", "A", px(100.08), 25),  # the best ask moves down and grows
+            (1, "M", "B", px(99.80), 10),  # the best bid moves away
+            (3, "C", "B", px(99.90), 30),
+        ]
+        # (best bid, its size, best ask, its size) after each record.
+        expected = [
+            (10000, 10, None, 0),
+            (10000, 10, 10010, 20),
+            (10000, 10, 10010, 20),
+            (10005, 10, 10010, 20),
+            (10005, 10, 10008, 25),
+            (9990, 30, 10008, 25),
+            (9980, 10, 10008, 25),
+        ]
+        result = Pipeline(source=DatabentoSource()).run(mbo_frame(records))
+
+        # A move writes two depth rows at one instant; the book after the
+        # record is the last of them.
+        after = result.depth_summary.groupby("timestamp", sort=True).last()
+        got = [
+            (bid if bid_vol else None, bid_vol, ask if ask_vol else None, ask_vol)
+            for bid, bid_vol, ask, ask_vol in after[
+                ["best_bid_price", "best_bid_vol", "best_ask_price", "best_ask_vol"]
+            ]
+            .to_numpy()
+            .tolist()
+        ]
+        assert got == expected
 
 
 # ── Reading and writing real DBN files ────────────────────────────────
