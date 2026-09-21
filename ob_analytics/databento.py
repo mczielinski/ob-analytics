@@ -69,8 +69,10 @@ top-of-book or price-level data, a file holding a price-level schema, a file
 covering more than one book, an ``action`` outside DBN's own alphabet, and an
 ``order_id`` too big for the shared schema's signed 64-bit id.
 
-A malformed record inside a feed it does understand is dropped and counted: one
-with no price (:data:`UNDEF_PRICE`), and one with no side on a book action.
+A malformed record inside a feed it does understand is dropped and counted: a
+book action, trade or fill with no price (:data:`UNDEF_PRICE`), and a book
+action with no side.  A clear is exempt from the price check, because its price
+is never read.
 Either would otherwise land somewhere wrong — a level at nine billion, or an
 order on neither side of the book — and refusing a whole session over a handful
 of them would be worse than saying how many went.
@@ -84,7 +86,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -146,6 +148,10 @@ ACTION_NONE = "N"
 #: The actions that change the resting book, in the order they are handled.
 BOOK_ACTIONS: frozenset[str] = frozenset({ACTION_ADD, ACTION_MODIFY, ACTION_CANCEL})
 
+#: The actions whose ``price`` is read: the book actions place or move an
+#: order, and a trade or fill prices a trade row.  A clear's price is never read.
+PRICED_ACTIONS: frozenset[str] = BOOK_ACTIONS | {ACTION_TRADE, ACTION_FILL}
+
 #: Every action DBN defines.  A record carrying anything else is not a feed
 #: this adapter understands, so it is refused rather than dropped.
 KNOWN_ACTIONS: frozenset[str] = BOOK_ACTIONS | {
@@ -206,6 +212,16 @@ class DatabentoSettings(SourceSettings):
         Keep only records whose mapped ``symbol`` is this.  Works only on a
         file that carries Databento's symbol mapping; use *instrument_id*
         otherwise.
+    trades_from : {"fills", "prints"}
+        Which records the trades frame is built from.  ``"fills"`` (the
+        default) uses the ``F`` records, one row per resting order a trade hit,
+        each naming that order — which is what order classification and queue
+        analysis read.  A file with no fills at all falls back to its prints.
+        ``"prints"`` uses the ``T`` records: the venue's whole tape, including
+        the auction, non-displayed and off-exchange trades that come with no
+        fill, but with no maker named on any row.  Pick ``"prints"`` when the
+        question is about the tape — VWAP, bars, flow toxicity, costs — and the
+        loader has warned that fills leave part of it out.
     dataset : str
         The dataset id :class:`DatabentoWriter` stamps into the DBN metadata it
         writes.  Read only on the way out; the loader takes the file's own.
@@ -214,6 +230,7 @@ class DatabentoSettings(SourceSettings):
     instrument_id: int | None = None
     publisher_id: int | None = None
     raw_symbol: str | None = None
+    trades_from: Literal["fills", "prints"] = "fills"
     dataset: str = "OB.ANALYTICS"
 
 
@@ -537,7 +554,12 @@ def _usable_records(work: pd.DataFrame) -> pd.DataFrame:
             "be put back into DBN's own spelling first."
         )
 
-    no_price = work["raw_price"].to_numpy() == UNDEF_PRICE
+    # Only the records whose price is read can be spoiled by a missing one: the
+    # book actions and the two trade records.  A clear's price means nothing and
+    # is never read, and dropping a clear over it would leave every order it
+    # removed resting for the rest of the window.
+    priced = np.isin(action, list(PRICED_ACTIONS))
+    no_price = priced & (work["raw_price"].to_numpy() == UNDEF_PRICE)
     no_side = np.isin(action, list(BOOK_ACTIONS)) & work["direction"].isna().to_numpy()
 
     for mask, why, effect in (
@@ -554,9 +576,13 @@ def _usable_records(work: pd.DataFrame) -> pd.DataFrame:
     ):
         count = int(mask.sum())
         if count:
+            # Which way the book is off depends on what was dropped: a missing
+            # add leaves it short, a missing cancel leaves an order resting that
+            # should have gone.  Say that it is off, not which way.
             logger.warning(
                 "DatabentoLoader: dropped {} of {} records with {} — {}. The "
-                "book is missing whatever liquidity they carried",
+                "book will not reflect them: a dropped add leaves it short, a "
+                "dropped cancel leaves an order resting that should have gone",
                 count,
                 len(work),
                 why,
@@ -980,19 +1006,27 @@ class DatabentoTradeReader:
 
     Satisfies the :class:`~ob_analytics.protocols.TradeSource` protocol.
 
-    Which record makes a trade depends on what the publisher sends:
+    Which record makes a trade is :attr:`DatabentoSettings.trades_from`:
 
-    * **Fills (``F``) when the file has them.** A fill names the resting order,
-      so each one becomes a trade row with a ``maker`` and a ``maker_event_id``,
-      one row per resting order a sweep took out — the same per-maker-leg shape
-      the LOBSTER and Bitstamp readers produce.
-    * **Trade prints (``T``) otherwise.** Some publishers report no passive
-      side at all; then the print is all there is, and the row carries the
-      volume and the aggressor's side but no maker.
+    * **Fills (``F``), the default.** A fill names the resting order, so each
+      one becomes a trade row with a ``maker`` and a ``maker_event_id``, one row
+      per resting order a sweep took out — the same per-maker-leg shape the
+      LOBSTER and Bitstamp readers produce.  A file with no fills falls back to
+      its prints.  The catch: a trade the publisher sent no fill for — an
+      auction, a trade against a non-displayed order, an off-exchange print —
+      has nothing to become, so it is not in the frame.  The reader warns with
+      the volume left out.
+    * **Trade prints (``T``).** The venue's whole tape, one row per print, but
+      no maker on any row.
 
-    Either way the aggressor's side comes from the venue, not from a
-    classifier: Databento states it on both records, so ``direction`` is the
-    real taker side rather than an estimate.
+    The two are not mixed.  A print and the fills behind it describe one
+    execution, and nothing in a DBN record ties them together reliably — a
+    fill and the modify it causes can carry different receive times — so
+    joining them would risk counting the same volume twice.
+
+    Where the venue states the aggressor, ``direction`` is its answer rather
+    than an estimate.  Where it does not, the pipeline classifies it against
+    the reconstructed quotes.
 
     The taker's own order is **not** identified.  A DBN trade record does not
     reliably carry the aggressing order's id, so ``taker`` and
@@ -1009,6 +1043,8 @@ class DatabentoTradeReader:
         The loader that read the events frame.  The fills come from it, so it
         must be the same instance, already used for the run
         (:class:`DatabentoSource` wires this up).
+    settings : DatabentoSettings, optional
+        Supplies :attr:`~DatabentoSettings.trades_from`.
     """
 
     def __init__(
@@ -1016,9 +1052,11 @@ class DatabentoTradeReader:
         config: PipelineConfig | None = None,
         *,
         loader: DatabentoLoader,
+        settings: DatabentoSettings | None = None,
     ) -> None:
         self._config = config or PipelineConfig()
         self._loader = loader
+        self._settings = settings or DatabentoSettings()
 
     def load(self, events: pd.DataFrame, source: Any) -> pd.DataFrame:
         """Build the trades DataFrame for the run.
@@ -1045,11 +1083,9 @@ class DatabentoTradeReader:
         if records.empty:
             return empty_trades()
 
-        has_fills = (records["raw_event_type"] == ACTION_FILL).any()
-        chosen = records[
-            records["raw_event_type"] == (ACTION_FILL if has_fills else ACTION_TRADE)
-        ]
-        if has_fills:
+        kind = self._record_kind(records)
+        chosen = records[records["raw_event_type"] == kind]
+        if kind == ACTION_FILL:
             _warn_on_volume_gap(records)
         if chosen.empty:
             return empty_trades()
@@ -1085,10 +1121,22 @@ class DatabentoTradeReader:
         logger.info(
             "DatabentoTradeReader: {} trades from {} records ({} with a maker event)",
             len(trades),
-            "fill" if has_fills else "trade-print",
+            "fill" if kind == ACTION_FILL else "trade-print",
             int(trades["maker_event_id"].notna().sum()),
         )
         return trades
+
+    def _record_kind(self, records: pd.DataFrame) -> str:
+        """Return the action the trades are built from for *records*."""
+        kinds = records["raw_event_type"]
+        if self._settings.trades_from == "prints":
+            if not (kinds == ACTION_TRADE).any():
+                logger.warning(
+                    "DatabentoTradeReader: trades_from='prints' but the file "
+                    "has no trade prints; the trades frame is empty"
+                )
+            return ACTION_TRADE
+        return ACTION_FILL if (kinds == ACTION_FILL).any() else ACTION_TRADE
 
 
 def _warn_on_volume_gap(records: pd.DataFrame) -> None:
@@ -1108,7 +1156,8 @@ def _warn_on_volume_gap(records: pd.DataFrame) -> None:
             "DatabentoTradeReader: fills account for {} of {} printed trade "
             "volume ({} unaccounted). Trades with no fill behind them — "
             "auctions, non-displayed orders, off-exchange prints — are not in "
-            "the trades frame",
+            "the trades frame; DatabentoSettings(trades_from='prints') builds "
+            "it from the whole tape instead, without makers",
             filled,
             printed,
             printed - filled,
@@ -1362,7 +1411,7 @@ class DatabentoSource:
         # The trades come off the same read as the events, so the reader takes
         # the loader itself rather than re-reading the file.
         loader = self._loader or self._make_loader(config, ctx)
-        return DatabentoTradeReader(config, loader=loader)
+        return DatabentoTradeReader(config, loader=loader, settings=self.dbn_settings())
 
     def create_writer(
         self, config: PipelineConfig | None, ctx: RunContext
