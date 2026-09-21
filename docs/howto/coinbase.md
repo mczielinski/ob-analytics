@@ -11,7 +11,7 @@ account or an API key: the price-level book and the trades are public.
 ```bash
 pip install "ob-analytics[ccxt]"
 
-ob-analytics capture ccxt --exchange coinbase --pair BTC/USD --minutes 10 --no-raw --out /tmp/coinbase
+ob-analytics capture ccxt --exchange coinbase --pair BTC/USD --minutes 10 --out /tmp/coinbase
 ob-analytics process /tmp/coinbase --source depth_csv --gallery --output /tmp/coinbase_out
 ```
 
@@ -35,13 +35,6 @@ do not run.
 
 Coinbase has a per-order feed, but it needs an API key. ob-analytics does not
 use API keys yet.
-
-## Leave out the raw file
-
-Each raw frame that ccxt gives for Coinbase holds the whole book, which is tens
-of thousands of price levels. In a test, one minute of BTC/USD wrote a
-`raw.jsonl` of 750 MB, next to a `depth.csv` of 2.5 MB. Add `--no-raw` unless
-you need the raw frames.
 
 ## Capture for 5 minutes or more
 

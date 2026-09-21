@@ -91,7 +91,7 @@ ob-analytics capture ccxt --exchange polymarket --pair <token id> --out /tmp/pol
 
 ## See also
 
-- [Capture Coinbase](coinbase.md) — the `coinbase` id, and why its raw file is large
+- [Capture Coinbase](coinbase.md) — which ccxt id to use for Coinbase
 - [Capture cryptofeed venues](cryptofeed.md) — the per-order (L3) complement, for venues that publish order-by-order data
 - [Process L2 (price-level) feeds](l2-depth.md) — what the captured `depth.csv` flows through
 - [Capture live data](live-capture.md) — the capture framework and writing a bespoke venue
