@@ -113,6 +113,20 @@ def get_feature(name: str) -> Feature:
     return FEATURES.get(name)
 
 
+def _check_window(feature: str, window: object, least: int) -> None:
+    """Raise :class:`ConfigError` unless *window* is a whole number of bars >= *least*.
+
+    Checked when the feature is built, so a window the feature cannot use is
+    reported against the feature that was given it, not later from inside
+    pandas when a table is being built.
+    """
+    if isinstance(window, bool) or not isinstance(window, int) or window < least:
+        raise ConfigError(
+            f"features: {feature!r} needs a window of {least} or more bars, "
+            f"got {window!r}."
+        )
+
+
 # ── Trade features ───────────────────────────────────────────────────
 #
 # These read the bar's own columns, which hold what traded between the bar's
@@ -162,6 +176,10 @@ class ReturnsFeature:
     window: int = DEFAULT_WINDOW
     columns = ("log_return", "realized_vol")
     requires = frozenset({"close"})
+
+    def __post_init__(self) -> None:
+        # A standard deviation needs two returns to spread.
+        _check_window(self.name, self.window, 2)
 
     def compute(self, frame: pd.DataFrame) -> dict[str, npt.ArrayLike]:
         """Return the log return per bar and its trailing standard deviation."""
@@ -413,6 +431,7 @@ class VpinFeature:
     requires = frozenset({"volume", "signed_volume"})
 
     def __post_init__(self) -> None:
+        _check_window(self.name, self.window, 1)
         self.columns = (self.name,)
 
     def compute(self, frame: pd.DataFrame) -> dict[str, npt.ArrayLike]:
@@ -464,6 +483,8 @@ class KyleLambdaFeature:
     requires = frozenset({"open", "close", "signed_volume"})
 
     def __post_init__(self) -> None:
+        # A slope needs two bars to run through.
+        _check_window(self.name, self.window, 2)
         self.columns = (self.name,)
 
     def compute(self, frame: pd.DataFrame) -> dict[str, npt.ArrayLike]:
@@ -583,8 +604,9 @@ def features(
     ------
     ConfigError
         If required columns are missing, if the threshold does not suit the
-        rule, if a feature named in *include* cannot read what it needs, or if
-        two features would write the same column.
+        rule, if *include* names a feature twice, if a feature named in
+        *include* cannot read what it needs, or if two features would write
+        the same column.
     KeyError
         If *rule*, or a name in *include*, is not registered; the message
         lists the registered names.
@@ -630,6 +652,18 @@ def features(
         frame = _join_book(frame, quotes)
 
     names = list(include) if include is not None else _default_selection()
+    # Names are matched case-insensitively, so "Spread" repeats "spread".
+    seen: set[str] = set()
+    repeated: list[str] = []
+    for name in names:
+        if name.lower() in seen:
+            repeated.append(name)
+        seen.add(name.lower())
+    if repeated:
+        raise ConfigError(
+            f"features: include names {sorted(set(repeated))} more than once. "
+            f"Each feature is measured once; list it once."
+        )
     table = frame[list(INDEX_COLUMNS)].copy()
     measured: list[str] = []
     skipped: list[str] = []

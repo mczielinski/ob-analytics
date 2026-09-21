@@ -288,6 +288,13 @@ class TestSelection:
         assert list(table.columns) == list(INDEX_COLUMNS)
         assert table.attrs["features"] == []
 
+    @pytest.mark.parametrize("include", [["returns", "returns"], ["spread", "Spread"]])
+    def test_a_repeated_name_is_named_in_the_error(
+        self, toy_trades, toy_quotes, include
+    ):
+        with pytest.raises(ConfigError, match="more than once"):
+            features(toy_trades, toy_quotes, include=include)
+
     def test_unknown_feature_lists_the_registered_ones(self, toy_trades):
         with pytest.raises(KeyError, match="spread"):
             features(toy_trades, include=["not_a_feature"])
@@ -456,6 +463,27 @@ class TestTradeFeatures:
         assert np.isnan(table["log_return"].iloc[0])
         assert np.isnan(table["realized_vol"].iloc[0])
         assert np.isnan(table["kyle_lambda"].iloc[0])
+
+    @pytest.mark.parametrize(
+        ("make", "bad"),
+        [
+            (ReturnsFeature, 1),
+            (ReturnsFeature, 0),
+            (VpinFeature, 0),
+            (KyleLambdaFeature, 1),
+            (ReturnsFeature, 2.5),
+            (VpinFeature, True),
+        ],
+    )
+    def test_an_unusable_window_is_refused_when_built(self, make, bad):
+        """Reported against the feature, not later from inside pandas."""
+        with pytest.raises(ConfigError, match="window"):
+            make(window=bad)
+
+    def test_the_smallest_usable_windows_are_accepted(self):
+        ReturnsFeature(window=2)
+        VpinFeature(window=1)
+        KyleLambdaFeature(window=2)
 
     def test_a_reconfigured_window_is_honoured(self, toy_trades, _restore_registry):
         register_feature(ReturnsFeature(window=3))
