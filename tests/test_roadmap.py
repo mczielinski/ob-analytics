@@ -289,8 +289,9 @@ def test_goal_body_lists_prerequisites_and_draws_the_goal(graph, config):
     """A goal issue gets the list of what it needs and its own diagram.
 
     #173 names 8 blockers; #134 and #99 are a declared choice, so the list has
-    7 entries and the diagram draws the choice as one node.  The diagram prunes
-    closed work nothing open still waits on, so #154 goes and #112 stays.
+    7 entries and the diagram draws the choice as one node.  The diagram draws
+    every prerequisite, so closed #154 and #155 stay even though nothing open
+    still waits on them.
     """
     body = render_goal_body(graph, config, 173)
     checkboxes = [ln for ln in body.splitlines() if ln.startswith("- [")]
@@ -303,7 +304,7 @@ def test_goal_body_lists_prerequisites_and_draws_the_goal(graph, config):
     )
     assert 'g173(["see live data on screen"])' in body
     assert "a live source" in body.split("```mermaid")[1]
-    assert work_nodes(body) == {105, 112, 137, 139}
+    assert work_nodes(body) == {105, 112, 137, 139, 154, 155}
 
 
 def test_goal_diagram_stays_small(graph, config):

@@ -33,12 +33,13 @@ the pruner has dropped is the same fault. Both fail the run. The single
 judgement the graph cannot make, that ready work should still wait, is a
 ``[[hold]]`` in the config, listed only while its issues are open.
 
-**Pruning.** A closed issue is dropped from a diagram unless an open non-goal
-issue still depends on it, so a diagram shows the work ahead rather than the
-whole history. Goal edges must not count: sixteen goals depend on nearly
-everything, so counting them keeps every closed issue and the rule does
+**Pruning.** A closed issue is dropped from a group diagram unless an open
+non-goal issue still depends on it, so a diagram shows the work ahead rather
+than the whole history. Goal edges must not count: sixteen goals depend on
+nearly everything, so counting them keeps every closed issue and the rule does
 nothing. A group marked ``keep_closed`` opts out, for a diagram that records
-completed work.
+completed work. A goal's own diagram is never pruned: it draws every
+prerequisite, so it matches the checklist above it.
 
 **Size.** A diagram runs about 79 px per node and hardly varies with the number
 of edges, so node count is the only lever and each goal gets its own small
@@ -766,15 +767,10 @@ def render_goal_body(graph: Graph, config: Config, number: int) -> str:
     out += [_prereq_line(graph, p) for p in prereqs]
     out.append("")
 
-    # The list is complete; the diagram drops closed work nothing open still
-    # waits on, so it shows what is left plus whatever finished work still
-    # matters to it.
-    drawn = [
-        p
-        for p in prereqs
-        if not _satisfied(graph, p)
-        or (not p.label and _open_dependents(graph, p.members[0]))
-    ]
+    # The diagram draws every prerequisite, closed or not, as the list does.
+    # A goal is a short list of what it needs, so pruning the finished ones
+    # leaves a diagram that no longer matches the checklist above it.
+    drawn = prereqs
     members = [p.members[0] for p in drawn if not p.label]
     node_lines = [_node_line(graph, config, goal)]
     node_lines += [
