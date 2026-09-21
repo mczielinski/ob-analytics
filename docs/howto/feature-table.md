@@ -113,8 +113,29 @@ close. Nothing from later reaches the row.
 
 The trailing-window features — `realized_vol`, `vpin`, `kyle_lambda` — look
 back over the last 20 rows, the row's own included, and are `NaN` until there
-is enough history behind them. A row that closed before the first quote has no
+is enough history behind them. A row with no readable quote behind it has no
 book to read, and is `NaN` too.
+
+## Quotes that are not books
+
+Two states reach a depth summary that nothing could have traded against, and
+both would otherwise arrive in the table as ordinary numbers:
+
+- **A side with nothing resting on it.** The depth engine writes a price and a
+  volume of `0` for an empty side. Read as a price that gives a spread the
+  width of the instrument, a mid at half the other side, and a micro-price of
+  zero — three finite numbers, none of them true.
+- **A crossed book**, where the best bid is above the best ask. A diff feed
+  can hold genuinely crossed resting orders, so on such a feed this is an
+  expected state rather than a fault; but its spread is negative and its mid
+  is not a price.
+
+Both are dropped from the reference series, so a row reaches back to the last
+quote that could be read — the same thing it does for any other instant with
+no quote of its own. A **locked** book, bid equal to ask, is a real state at a
+spread of zero and is kept. The same test is what
+[`transaction_costs()`](transaction-costs.md) applies before measuring against
+a mid.
 
 One thing is not settled by the table: the *choice* of threshold. Left to
 default it is worked out from the whole trades frame, so where the boundaries

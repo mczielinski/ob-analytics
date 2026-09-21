@@ -46,6 +46,8 @@ worked example and a baseline model, and
 
 ::: ob_analytics.features.get_feature
 
+::: ob_analytics.features.readable_quotes
+
 ## The built-in features
 
 ::: ob_analytics.features.PriceFeature

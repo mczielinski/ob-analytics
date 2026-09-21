@@ -32,6 +32,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   rule and every feature. The table holds no target either: a target looks
   forward, and building one is a shift the caller makes deliberately.
 
+  Two quote states are not books anything could have traded against, and both
+  would otherwise arrive as ordinary numbers: a side with nothing resting on
+  it, which the depth engine marks with a price of `0`, and a crossed book,
+  which a diff feed can genuinely hold. `readable_quotes()` drops them from
+  the reference series, so a row reaches back to the last quote it could read
+  — the same test `transaction_costs` already applied before measuring against
+  a mid. A locked book, bid equal to ask, is a real state at a spread of zero
+  and is kept.
+
   Without a quotes frame the five book features are skipped and the table
   holds the trade features alone; naming one explicitly raises instead. Two
   features that would write the same column are an error rather than a silent
