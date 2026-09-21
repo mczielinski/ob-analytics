@@ -21,6 +21,8 @@ from ob_analytics.databento import (
     DBN_PRICE_DIVISOR,
     F_MBP,
     F_TOB,
+    MAX_ORDER_ID,
+    UNDEF_PRICE,
     DatabentoLoader,
     DatabentoSettings,
     DatabentoSource,
@@ -296,6 +298,26 @@ class TestTrades:
         assert trades["volume"].iloc[0] == 12
         assert pd.isna(trades["maker"].iloc[0])
 
+    def test_a_trade_with_no_aggressor_side_is_classified(self):
+        # Databento sends no side for auctions, non-displayed orders and
+        # off-exchange prints. The pipeline labels those against the
+        # reconstructed quotes rather than leaving them unset.
+        recs = [
+            (1, "A", "B", px(100.00), 10),
+            (2, "A", "A", px(100.05), 10),
+            (0, "T", "N", px(100.05), 4),
+            (2, "C", "A", px(100.05), 4),
+        ]
+        result = Pipeline(source=DatabentoSource()).run(mbo_frame(recs))
+
+        assert len(result.trades) == 1
+        # A print at the ask is a buy.
+        assert result.trades["direction"].iloc[0] == "buy"
+
+    def test_a_venue_labelled_side_is_never_overwritten(self):
+        result = Pipeline(source=DatabentoSource()).run(mbo_frame(LIFECYCLE))
+        assert list(result.trades["direction"]) == ["buy", "buy"]
+
     def test_no_trades_at_all_gives_the_empty_frame(self):
         loader, events = load([(1, "A", "B", px(9.99), 30)])
         trades = DatabentoTradeReader(_config(), loader=loader).load(events, None)
@@ -418,6 +440,64 @@ class TestRefusals:
         frame = mbo_frame([(1, "A", "B", px(1.0), 1)], flags=flag)
         with pytest.raises(ConfigError, match="aggregated, not per-order"):
             load(frame)
+
+    def test_an_unknown_action_is_an_error(self):
+        # A record whose meaning is unknown has no safe reading, and dropping
+        # it silently would take its liquidity out of the book unannounced.
+        with pytest.raises(ConfigError, match="action this loader does not know"):
+            load([(1, "A", "B", px(1.0), 1), (2, "a", "A", px(2.0), 1)])
+
+    def test_an_order_id_too_big_for_the_schema_is_an_error(self):
+        # DBN order ids are unsigned 64-bit; the schema's is signed, so a cast
+        # would wrap this to a negative id and could merge two orders.
+        frame = mbo_frame([(1, "A", "B", px(1.0), 1)])
+        frame["order_id"] = pd.array([MAX_ORDER_ID + 6], dtype="uint64")
+        with pytest.raises(ConfigError, match="order id above"):
+            load(frame)
+
+    def test_an_order_id_at_the_ceiling_is_accepted(self):
+        frame = mbo_frame([(1, "A", "B", px(1.0), 1)])
+        frame["order_id"] = pd.array([MAX_ORDER_ID], dtype="uint64")
+        _, events = load(frame)
+        assert events["id"].iloc[0] == MAX_ORDER_ID
+
+    def test_a_record_with_no_price_is_dropped(self):
+        # UNDEF_PRICE is INT64_MAX. Kept, it would rest at ~9.2 billion and be
+        # read back as the best bid.
+        _, events = load(
+            [
+                (1, "A", "B", px(100.00), 10),
+                (2, "A", "A", px(100.05), 10),
+                (3, "A", "B", UNDEF_PRICE, 10),
+            ]
+        )
+        assert list(events["id"]) == [1, 2]
+        assert list(events["price"]) == [10000, 10005]
+
+    def test_a_dropped_undefined_price_leaves_the_book_intact(self):
+        recs = [
+            (1, "A", "B", px(100.00), 10),
+            (2, "A", "A", px(100.05), 10),
+            (3, "A", "B", UNDEF_PRICE, 10),
+        ]
+        result = Pipeline(source=DatabentoSource()).run(mbo_frame(recs))
+        last = result.depth_summary.iloc[-1]
+        assert last["best_bid_price"] == 10000
+        assert last["best_ask_price"] == 10005
+
+    def test_a_book_record_with_no_side_is_dropped(self):
+        # Databento states a side on every A/M/C. Without one there is no side
+        # of the book to put the order on, and the depth rebuild would drop it
+        # while the events frame kept it.
+        _, events = load(
+            [
+                (1, "A", "B", px(100.00), 10),
+                (2, "A", "N", px(100.05), 10),
+                (2, "C", "N", px(100.05), 10),
+            ]
+        )
+        assert list(events["id"]) == [1]
+        assert events["direction"].notna().all()
 
     def test_a_frame_missing_a_required_column_is_an_error(self):
         frame = mbo_frame([(1, "A", "B", px(1.0), 1)]).drop(columns=["side"])

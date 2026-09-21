@@ -62,6 +62,19 @@ lifetime and trade tables — and says in a warning how many rows the depth
 reconstruction will be off by.  Most feeds never hit this: most venues report
 an amendment as a cancel and a new order.
 
+What is refused and what is dropped
+-----------------------------------
+A feed this adapter does not understand is refused: a publisher that only sends
+top-of-book or price-level data, a file holding a price-level schema, a file
+covering more than one book, an ``action`` outside DBN's own alphabet, and an
+``order_id`` too big for the shared schema's signed 64-bit id.
+
+A malformed record inside a feed it does understand is dropped and counted: one
+with no price (:data:`UNDEF_PRICE`), and one with no side on a book action.
+Either would otherwise land somewhere wrong — a level at nine billion, or an
+order on neither side of the book — and refusing a whole session over a handful
+of them would be worse than saying how many went.
+
 ``databento`` is an optional dependency (``pip install
 "ob-analytics[databento]"``).  It is imported lazily, so importing this module —
 and listing sources — never requires it.
@@ -128,9 +141,24 @@ ACTION_CANCEL = "C"
 ACTION_CLEAR = "R"
 ACTION_TRADE = "T"
 ACTION_FILL = "F"
+ACTION_NONE = "N"
 
 #: The actions that change the resting book, in the order they are handled.
 BOOK_ACTIONS: frozenset[str] = frozenset({ACTION_ADD, ACTION_MODIFY, ACTION_CANCEL})
+
+#: Every action DBN defines.  A record carrying anything else is not a feed
+#: this adapter understands, so it is refused rather than dropped.
+KNOWN_ACTIONS: frozenset[str] = BOOK_ACTIONS | {
+    ACTION_CLEAR,
+    ACTION_TRADE,
+    ACTION_FILL,
+    ACTION_NONE,
+}
+
+#: The largest order id the shared schema's ``int64`` id column can hold.
+#: DBN's ``order_id`` is unsigned 64-bit, so a bigger one has no faithful
+#: representation and is refused instead of wrapped to a negative number.
+MAX_ORDER_ID = 2**63 - 1
 
 #: Resting side of an ``A`` / ``M`` / ``C`` record.
 _SIDE_TO_DIRECTION: dict[str, str] = {"B": "bid", "A": "ask"}
@@ -430,13 +458,14 @@ class DatabentoLoader:
         cfg = self._config
         action = raw["action"].astype(str).str.strip()
         side = raw["side"].astype(str).str.strip()
+        order_id = _order_ids(raw["order_id"])
 
         work = pd.DataFrame(
             {
                 "original_number": np.arange(1, len(raw) + 1, dtype="int64"),
                 "action": action.to_numpy(),
                 "side": side.to_numpy(),
-                "id": raw["order_id"].astype("int64").to_numpy(),
+                "id": order_id,
                 "raw_price": raw["price"].astype("int64").to_numpy(),
                 "raw_size": raw["size"].astype("int64").to_numpy(),
                 "timestamp": _as_utc_ns(raw["ts_recv"]),
@@ -455,7 +484,89 @@ class DatabentoLoader:
         )
         work["size_lots"] = size_to_lots(work["raw_size"].to_numpy(), cfg.lot_size)
         work["direction"] = work["side"].map(_SIDE_TO_DIRECTION)
+        return _usable_records(work)
+
+
+def _order_ids(order_id: pd.Series) -> np.ndarray:
+    """Return *order_id* as ``int64``, refusing one the schema cannot hold.
+
+    DBN's ``order_id`` is unsigned 64-bit and the shared schema's ``id`` is
+    signed, so a plain cast wraps an id above :data:`MAX_ORDER_ID` to a
+    negative number — silently, and in a way that can collapse two orders onto
+    one key in the per-order state machine.  Refuse it instead.
+    """
+    as_uint = pd.to_numeric(order_id, errors="raise")
+    too_big = as_uint > MAX_ORDER_ID
+    if bool(np.asarray(too_big).any()):
+        biggest = int(as_uint[too_big].max())
+        raise ConfigError(
+            f"DatabentoLoader: {int(np.asarray(too_big).sum())} records carry "
+            f"an order id above {MAX_ORDER_ID} (largest {biggest}). The shared "
+            "schema holds order ids as signed 64-bit, so these cannot be "
+            "represented without wrapping to a negative id and merging "
+            "distinct orders."
+        )
+    return as_uint.to_numpy(dtype="int64")
+
+
+def _usable_records(work: pd.DataFrame) -> pd.DataFrame:
+    """Return the records this loader can read, refusing or dropping the rest.
+
+    Two different problems, handled two different ways.
+
+    An ``action`` outside :data:`KNOWN_ACTIONS` means the records are not the
+    DBN market-by-order data this adapter was written for — a newer DBN action,
+    or a frame whose action column was spelled some other way.  There is no
+    safe reading of a record whose meaning is unknown, so it raises, the same
+    as an aggregated publisher or a price-level schema.
+
+    A record with no price (:data:`UNDEF_PRICE`) or, on a book action, no side
+    is a single malformed record inside a feed that is otherwise understood.
+    Those are dropped and counted: keeping them would put a level at nine
+    billion, or an order on neither side of the book, and refusing the whole
+    file over a handful of them would be worse than saying how many went.
+    """
+    action = work["action"].to_numpy()
+    unknown = ~np.isin(action, list(KNOWN_ACTIONS))
+    if unknown.any():
+        seen = sorted({str(a) for a in action[unknown]})[:10]
+        raise ConfigError(
+            f"DatabentoLoader: {int(unknown.sum())} records carry an action "
+            f"this loader does not know ({seen}). DBN's actions are "
+            f"{sorted(KNOWN_ACTIONS)}; a lower-case or renamed column has to "
+            "be put back into DBN's own spelling first."
+        )
+
+    no_price = work["raw_price"].to_numpy() == UNDEF_PRICE
+    no_side = np.isin(action, list(BOOK_ACTIONS)) & work["direction"].isna().to_numpy()
+
+    for mask, why, effect in (
+        (
+            no_price,
+            "no price (UNDEF_PRICE)",
+            "there is no level to put them on",
+        ),
+        (
+            no_side,
+            "no side on a book action",
+            "there is no side of the book to put them on",
+        ),
+    ):
+        count = int(mask.sum())
+        if count:
+            logger.warning(
+                "DatabentoLoader: dropped {} of {} records with {} — {}. The "
+                "book is missing whatever liquidity they carried",
+                count,
+                len(work),
+                why,
+                effect,
+            )
+
+    keep = ~(no_price | no_side)
+    if keep.all():
         return work
+    return work[keep].reset_index(drop=True)
 
 
 def _as_utc_ns(series: pd.Series) -> pd.Series:

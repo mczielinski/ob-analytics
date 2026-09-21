@@ -124,6 +124,13 @@ Which record makes a trade depends on what the publisher sends.
 Either way the aggressor's side comes from the venue rather than a classifier,
 so `direction` is the real taker side and not an estimate.
 
+Databento states no side at all for some trades — an opening or closing
+auction, a trade against a non-displayed order, an implied order, an
+off-exchange print. Those reach the pipeline unlabelled and are then classified
+with Lee-Ready against the reconstructed quotes, so they end up with a
+direction like any other trade. A side the venue did state is never overwritten:
+a classifier is an estimate and the venue's answer is not.
+
 The taker's own order is **not** identified: a DBN trade record does not
 reliably carry the aggressing order's id, so `taker` and `taker_event_id` are
 NA. `set_order_types` reads those, so on a Databento run it labels executed
@@ -148,17 +155,39 @@ of rows affected, so the size of the error is visible rather than silent. Most
 feeds never hit this, because most venues report an amendment as a cancel and a
 new order.
 
-## What the loader refuses
+## What the loader refuses, and what it drops
 
-Some Databento publishers only send top-of-book or price-level data, and
-Databento normalizes that into MBO records with `F_TOB` or `F_MBP` set and an
-`order_id` that means nothing. The loader raises rather than reconstruct
-per-order state that the feed never had; read those publishers through the
-[L2 path](l2-depth.md) instead.
+A feed the loader does not understand is **refused**:
 
-It also raises on a file holding a price-level schema (`mbp-1`, `mbp-10`,
-`bbo`, `tbbo`), and warns when records carry `F_MAYBE_BAD_BOOK`, which means
-the feed reported a gap it could not recover from.
+- A publisher that only sends top-of-book or price-level data. Databento
+  normalizes that into MBO records with `F_TOB` or `F_MBP` set and an
+  `order_id` that means nothing, so reconstructing per-order state would invent
+  identity the feed never had. Read those publishers through the
+  [L2 path](l2-depth.md) instead.
+- A file holding a price-level schema (`mbp-1`, `mbp-10`, `bbo`, `tbbo`).
+- A file covering more than one instrument or publisher with no filter saying
+  which book to read.
+- An `action` outside DBN's own alphabet (`A M C R T F N`). A record whose
+  meaning is unknown has no safe reading, and dropping it would take its
+  liquidity out of the book unannounced.
+- An `order_id` above 2⁶³−1. DBN order ids are unsigned 64-bit and the shared
+  schema's is signed, so a cast would wrap to a negative id and could merge two
+  distinct orders into one.
+
+A malformed record inside a feed it does understand is **dropped and counted**
+in a warning:
+
+- A record with no price (`UNDEF_PRICE`, which is `INT64_MAX`). Kept, it would
+  rest at about nine billion and be read back as the best bid or ask.
+- A book action with no side. There is no side of the book to put it on, and
+  keeping it would leave the events frame and the depth frame disagreeing.
+
+Refusing a whole session over a handful of malformed records would be worse
+than saying how many went, which is why these two are a count rather than an
+error.
+
+The loader also warns when records carry `F_MAYBE_BAD_BOOK`, which means the
+feed reported a gap it could not recover from.
 
 ## Size a query before you download it
 

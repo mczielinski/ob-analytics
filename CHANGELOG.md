@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **A trade the venue left unlabelled is now classified on the L3 path too.**
+  `Pipeline.run` labels any trade with no aggressor side against the
+  reconstructed quotes, filling one subset at a time instead of all or nothing,
+  and never overwriting a side the venue did state. This was already what the
+  price-level path did; it now also covers a per-order feed that states the
+  aggressor on most trades but not all, which is what Databento does for
+  auctions, non-displayed orders and off-exchange prints. No change for a feed
+  that labels every trade, which is every other source in the package.
+
 ### Added
 
 - **Databento market-by-order files** (#100). `DatabentoSource` reads
@@ -33,8 +44,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   off by. Most venues report an amendment as a cancel and a new order, so most
   files never hit it.
 
-  A publisher that only sends top-of-book or price-level data is refused rather
-  than reconstructed, because its order ids mean nothing. `DatabentoWriter`
+  A feed the loader does not understand is refused: a publisher that only sends
+  top-of-book or price-level data, because its order ids mean nothing; a
+  price-level schema; a file covering more than one book; an action outside
+  DBN's own alphabet; an order id too big for the schema's signed 64-bit id. A
+  malformed record inside a feed it does understand — no price, or no side on a
+  book action — is dropped and counted in a warning, because refusing a whole
+  session over a handful of them would be worse. `DatabentoWriter`
   writes an events frame back out as DBN. `scripts/databento_window.py` sizes a
   query against the in-memory envelope before downloading it, then runs one
   window at a time. `databento` is an optional extra
