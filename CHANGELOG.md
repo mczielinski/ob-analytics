@@ -10,6 +10,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Databento market-by-order files** (#100). `DatabentoSource` reads
+  Databento's DBN files in the MBO schema, which is a per-order feed: every
+  record carries an order id, so a file replays through the full L3 path with
+  order lifetimes, queue position and order classification. It reaches many
+  venues that no other source in the package does, US equities and futures
+  among them.
+
+  Databento reports an execution as a fill record that does not change the
+  book, followed by the cancel or modify that takes the size off it. The loader
+  pairs the two, so `fill` tells an execution apart from a cancel the trader
+  asked for, and each trade names the resting order it hit. The aggressor's
+  side comes from the venue rather than a classifier. A book clear deletes the
+  orders still resting, and the record's two clocks are kept apart: Databento's
+  receive time orders the events, the venue's own becomes
+  `exchange_timestamp`.
+
+  One thing does not map: a modify that moves an order to another price or
+  makes it bigger is a new queue entry, and the shared schema has no event for
+  that, so the depth reconstruction cannot follow it. The events, lifetimes and
+  trades are still right, and the loader says how many rows the depth will be
+  off by. Most venues report an amendment as a cancel and a new order, so most
+  files never hit it.
+
+  A publisher that only sends top-of-book or price-level data is refused rather
+  than reconstructed, because its order ids mean nothing. `DatabentoWriter`
+  writes an events frame back out as DBN. `scripts/databento_window.py` sizes a
+  query against the in-memory envelope before downloading it, then runs one
+  window at a time. `databento` is an optional extra
+  (`pip install "ob-analytics[databento]"`). See the ["Process Databento MBO
+  files"
+  how-to](https://mczielinski.github.io/ob-analytics/howto/databento/).
+
 - **Bars: the trade stream resampled into OHLCV rows** (#148). `bars(trades,
   rule, threshold)` cuts a trades frame into bars and returns one row each with
   open, high, low, close, volume, turnover, VWAP, and the buy/sell split of

@@ -16,10 +16,10 @@ title: Scale and chunking
 ob-analytics keeps the full event, depth, and trade tables in memory (pandas).
 The [scale envelope](architecture.md#scale-envelope) puts the comfortable
 ceiling at **~5M events (~5 GiB peak RSS)** — a few hours of a single liquid
-instrument. The Databento adapter (WS-6.1) opens the door to venue market-by-order
-(MBO) feeds whose *full* volume is far larger, so before building it we have to
-decide whether the in-memory model needs a chunked execution mode, or whether a
-documented pre-slicing workflow suffices.
+instrument. The [Databento adapter](howto/databento.md) opens the door to venue
+market-by-order (MBO) feeds whose *full* volume is far larger, so before
+building it we had to decide whether the in-memory model needs a chunked
+execution mode, or whether a documented pre-slicing workflow suffices.
 
 ## The criterion
 
@@ -158,9 +158,10 @@ depth  = pd.concat([r.depth  for r in results], ignore_index=True)
       position, order lifetimes, `order_outcome`.
 
     Slice at natural low-activity boundaries, or treat each slice as an
-    independent session. The Databento adapter (WS-6.1) softens the boundary by
-    seeding each window from the feed's periodic snapshot (DBN `F_SNAPSHOT`);
-    WS-6.0's *pre-existing order* class labels the carried-in orders.
+    independent session. A Databento window that includes the feed's periodic
+    snapshot softens the boundary: those records are ordinary adds, so they
+    seed the window's book, and the *pre-existing order* class labels whatever
+    the window carried in without one.
 
 ## When we would revisit this
 
@@ -187,6 +188,8 @@ simpler.
 - [Nasdaq TotalView-ITCH on Databento][xnas] — whole-feed daily message volume.
 - [Databento Python API demo][apidemo] — a concrete single-instrument record count.
 - [`metadata.get_record_count`][getcount] — size any query before downloading it.
+- [Process Databento MBO files](howto/databento.md) and
+  `scripts/databento_window.py` — this workflow as runnable code.
 
 [lobster]: https://lobsterdata.com/info/DataSamples.php
 [xnas]: https://databento.com/datasets/XNAS.ITCH

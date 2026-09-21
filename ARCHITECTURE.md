@@ -150,6 +150,7 @@ classDiagram
 
     class BitstampSource
     class LobsterSource
+    class DatabentoSource
 
     class EventLoader {
         <<Protocol>>
@@ -185,6 +186,7 @@ classDiagram
     OfflineSource <|.. BitstampSource
     LiveSource <|.. BitstampSource
     OfflineSource <|.. LobsterSource
+    OfflineSource <|.. DatabentoSource
 ```
 
 ---
@@ -195,6 +197,7 @@ classDiagram
 |--------|-------|-------------|--------|
 | **Bitstamp** (CSV replay + live capture) | L3 | `Pipeline()` (default) · `capture bitstamp` | Companion `trades.csv` next to `orders.csv` (e.g. `scripts/collect_bitstamp_btcusd.py`) |
 | **LOBSTER** | L3 | `Pipeline(source=LobsterSource(), ctx=RunContext(trading_date=...))` | Embedded execution rows (types 4/5) in the message file |
+| **Databento** (DBN market-by-order) | L3 | `Pipeline(source=DatabentoSource())` · `process --source databento` | Fill records, paired with the book event that took the size off |
 | **L2 depth CSV** | L2 | `Pipeline.from_source("depth_csv").run(...)` | Optional companion `trades.csv` (signed via trade-sign classification) |
 | **CCXT** (live L2 capture) | L2 | `capture ccxt --exchange <venue>` | Public trade tape (taker side) |
 | **cryptofeed** (live capture) | L2 or L3, discovered from the venue | `capture cryptofeed --exchange <venue>` | Public trade tape (taker side) |
@@ -237,6 +240,7 @@ ob_analytics/
 │
 ├── bitstamp.py           # BitstampLoader, BitstampTradeReader, BitstampWriter, BitstampSource (offline + live)
 ├── lobster.py            # LobsterLoader, LobsterTradeReader, LobsterWriter, LobsterSource
+├── databento.py          # DatabentoLoader, DatabentoTradeReader, DatabentoWriter, DatabentoSource (DBN MBO)
 ├── depth_l2.py           # L2DepthLoader, L2TradeReader, DepthCsvWriter, DepthCsvSource (price-level)
 ├── engine/               # Order-book engine: events in, book states + lifecycles out
 │   ├── __init__.py       # the interface: book_state, order_lifecycles, queue_positions, queue_age_grid
