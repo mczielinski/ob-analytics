@@ -1,4 +1,4 @@
-"""Write the roadmap views in epic #124 and the sixteen goal issues.
+"""Write the roadmap views in epic #124 and in each goal issue.
 
 GitHub's own issue graph is the only store of the roadmap. The sub-issues of
 #124 are the nodes and their ``blocked_by`` links are the edges; this script
@@ -35,7 +35,7 @@ judgement the graph cannot make, that ready work should still wait, is a
 
 **Pruning.** A closed issue is dropped from a group diagram unless an open
 non-goal issue still depends on it, so a diagram shows the work ahead rather
-than the whole history. Goal edges must not count: sixteen goals depend on
+than the whole history. Goal edges must not count: the goals depend on
 nearly everything, so counting them keeps every closed issue and the rule does
 nothing. A group marked ``keep_closed`` opts out, for a diagram that records
 completed work. A goal's own diagram is never pruned: it draws every
@@ -67,7 +67,7 @@ of #124 cannot be drawn, so it is left out. It is named in the run log and in
 node set to save it: what belongs on the roadmap stays a deliberate choice.
 
 **Writing.** Each body is compared before it is written, so a run triggered by
-every issue event does not churn seventeen edit histories. A body whose markers
+every issue event does not churn every edit history. A body whose markers
 are missing or malformed is skipped and logged rather than guessed at, and a run
 that skipped anything exits non-zero, because a skipped issue is a stale view.
 
@@ -975,8 +975,8 @@ def _write(
     """Write one generated block, unless the body already says the same thing.
 
     A run that changes nothing reads each body **once**: comparing before
-    writing is what keeps a run on every issue event from churning seventeen
-    edit histories, and one read halves the API calls, 17 rather than 34.
+    writing is what keeps a run on every issue event from churning every
+    edit history, and one read halves the API calls.
 
     A run that does have something to write reads that one body again, and
     splices into the second copy. The gap between reading a body and writing it
@@ -1136,7 +1136,7 @@ def exit_code(report: Report) -> int:
 
     A skip is never harmless. The generator carries on past a body whose
     markers are missing or malformed, so that one broken body cannot stop the
-    other sixteen, but that issue now shows whatever the graph said the last
+    others, but that issue now shows whatever the graph said the last
     time anyone could write to it. Returning success there would report a
     healthy roadmap while a view had quietly stopped updating, which is the
     drift this exists to end. Writing nothing because nothing changed is the

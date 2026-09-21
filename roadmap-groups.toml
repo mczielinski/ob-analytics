@@ -1,7 +1,7 @@
 # Which issues each roadmap diagram draws, and what to call them.
 #
 # Read by scripts/roadmap.py, which writes the generated blocks in epic #124
-# and in the sixteen goal issues. See that file's docstring for how the whole
+# and in each goal issue. See that file's docstring for how the whole
 # thing works.
 #
 # Edges are NEVER listed here. A group is a set of nodes; the generator draws

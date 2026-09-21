@@ -1,7 +1,7 @@
 """Tests for the roadmap generator, ``scripts/roadmap.py``.
 
 The generator reads GitHub's issue graph and writes the generated blocks in
-epic #124 and the sixteen goal issues.  Tests run against
+epic #124 and in each goal issue.  Tests run against
 ``tests/fixtures/roadmap_graph.json``, a snapshot of the real 60-node graph
 taken on 2026-08-30, so nothing here touches the network.
 
@@ -556,7 +556,7 @@ def test_run_keeps_the_hand_written_half_of_every_body(client, config):
 
 
 def test_run_skips_an_issue_whose_markers_are_missing(client, config):
-    """One broken body does not stop the other sixteen, and does not raise."""
+    """One broken body does not stop the others, and does not raise."""
     client.bodies[180] = "someone deleted the markers"
 
     report = run(client, config, epic=124)
@@ -607,7 +607,7 @@ def test_a_skipped_issue_fails_the_run(client, config):
     """A skip means a view nobody is maintaining is now stale, so the run fails.
 
     The generator carries on past a broken body, because one bad marker pair
-    must not stop the other sixteen.  But the run as a whole has not done its
+    must not stop the others.  But the run as a whole has not done its
     job: the skipped issue still shows whatever the graph said the last time
     anyone could write to it.  A green run there would report success for a
     roadmap that had quietly stopped updating, which is the drift this whole
@@ -730,7 +730,7 @@ def test_a_body_edited_during_a_run_keeps_the_edit(client, config):
     """A run with nothing to write reads once, and cannot write back a stale copy.
 
     The comparison is what stops a run on every issue event from churning
-    seventeen edit histories, and a run that finds nothing to change never
+    every edit history, and a run that finds nothing to change never
     reaches a write at all.
     """
     run(client, config, epic=124)
