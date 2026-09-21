@@ -513,9 +513,9 @@ def prepare_event_map_data(
         events = events[events["volume"] <= volume_to]
 
     if price_from is None:
-        price_from = events["price"].quantile(0.01)
+        price_from = float(events["price"].quantile(0.01))
     if price_to is None:
-        price_to = events["price"].quantile(0.99)
+        price_to = float(events["price"].quantile(0.99))
 
     events = events[(events["price"] >= price_from) & (events["price"] <= price_to)]
 
@@ -594,9 +594,9 @@ def prepare_order_activity_l3_data(
 
     if not spans.empty:
         if price_from is None:
-            price_from = spans["price"].quantile(0.01)
+            price_from = float(spans["price"].quantile(0.01))
         if price_to is None:
-            price_to = spans["price"].quantile(0.99)
+            price_to = float(spans["price"].quantile(0.99))
         spans = spans[(spans["price"] >= price_from) & (spans["price"] <= price_to)]
 
     # Three terminal fates; filled/partial collapse to "filled".  Colour and the
@@ -1142,10 +1142,10 @@ def prepare_volume_map_data(
     if price_to:
         events = events[events["price"] <= price_to]
     if volume_from is None:
-        volume_from = events["volume"].quantile(0.0001)
+        volume_from = float(events["volume"].quantile(0.0001))
     events = events[events["volume"] >= volume_from]
     if volume_to is None:
-        volume_to = events["volume"].quantile(0.9999)
+        volume_to = float(events["volume"].quantile(0.9999))
     events = events[events["volume"] <= volume_to]
 
     return {"events": events, "log_scale": log_scale}
