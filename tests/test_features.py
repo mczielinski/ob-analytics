@@ -295,6 +295,18 @@ class TestSelection:
         with pytest.raises(ConfigError, match="more than once"):
             features(toy_trades, toy_quotes, include=include)
 
+    @pytest.mark.parametrize("include", ["spread", "returns"])
+    def test_a_bare_string_is_refused_not_split(self, toy_trades, include):
+        """A string is a sequence of strings; read as one it becomes letters."""
+        with pytest.raises(ConfigError, match=rf"include=\[{include!r}\]"):
+            features(toy_trades, include=include)
+
+    def test_include_mistakes_are_reported_before_any_bars(self, toy_quotes):
+        """No trades are read when the names alone are wrong."""
+        empty = pd.DataFrame(columns=["timestamp", "price", "volume"])
+        with pytest.raises(ConfigError, match="more than once"):
+            features(empty, toy_quotes, include=["spread", "spread"])
+
     def test_unknown_feature_lists_the_registered_ones(self, toy_trades):
         with pytest.raises(KeyError, match="spread"):
             features(toy_trades, include=["not_a_feature"])
@@ -484,6 +496,19 @@ class TestTradeFeatures:
         ReturnsFeature(window=2)
         VpinFeature(window=1)
         KyleLambdaFeature(window=2)
+
+    @pytest.mark.parametrize("window", [np.int64(5), np.int32(5), np.uint8(5)])
+    def test_a_numpy_integer_window_is_accepted(self, toy_trades, window):
+        """A window worked out from data is often a numpy integer."""
+        numpy_window = VpinFeature(name="vpin_np", window=window)
+        python_window = VpinFeature(name="vpin_py", window=5)
+        # The flow columns are what VPIN reads, so the table serves as its input.
+        frame = features(toy_trades, None, "tick", 2, include=["flow"])
+
+        np.testing.assert_allclose(
+            np.asarray(numpy_window.compute(frame)["vpin_np"], dtype=float),
+            np.asarray(python_window.compute(frame)["vpin_py"], dtype=float),
+        )
 
     def test_a_reconfigured_window_is_honoured(self, toy_trades, _restore_registry):
         register_feature(ReturnsFeature(window=3))

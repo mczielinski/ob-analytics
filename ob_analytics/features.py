@@ -39,6 +39,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from numbers import Integral
 from typing import Any
 
 import numpy as np
@@ -120,7 +121,9 @@ def _check_window(feature: str, window: object, least: int) -> None:
     reported against the feature that was given it, not later from inside
     pandas when a table is being built.
     """
-    if isinstance(window, bool) or not isinstance(window, int) or window < least:
+    # Integral rather than int: a window worked out from data is often a numpy
+    # integer, which pandas takes as readily as a Python one.
+    if isinstance(window, bool) or not isinstance(window, Integral) or window < least:
         raise ConfigError(
             f"features: {feature!r} needs a window of {least} or more bars, "
             f"got {window!r}."
@@ -604,7 +607,8 @@ def features(
     ------
     ConfigError
         If required columns are missing, if the threshold does not suit the
-        rule, if *include* names a feature twice, if a feature named in
+        rule, if *include* is a bare string or names a feature twice, if a
+        feature named in
         *include* cannot read what it needs, or if two features would write
         the same column.
     KeyError
@@ -639,6 +643,9 @@ def features(
     ... )
     >>> table[["timestamp", "close", "spread_bps", "obi", "vpin"]]  # doctest: +SKIP
     """
+    # Read the names before building any bars: a mistake in them is cheap to
+    # report and should not wait on a pass over the trades.
+    names = _selected_names(include)
     bar_table = bars(
         trades,
         rule,
@@ -651,19 +658,6 @@ def features(
     if quotes is not None:
         frame = _join_book(frame, quotes)
 
-    names = list(include) if include is not None else _default_selection()
-    # Names are matched case-insensitively, so "Spread" repeats "spread".
-    seen: set[str] = set()
-    repeated: list[str] = []
-    for name in names:
-        if name.lower() in seen:
-            repeated.append(name)
-        seen.add(name.lower())
-    if repeated:
-        raise ConfigError(
-            f"features: include names {sorted(set(repeated))} more than once. "
-            f"Each feature is measured once; list it once."
-        )
     table = frame[list(INDEX_COLUMNS)].copy()
     measured: list[str] = []
     skipped: list[str] = []
@@ -701,6 +695,33 @@ def features(
     table.attrs["features"] = measured
     table.attrs["features_skipped"] = skipped
     return table
+
+
+def _selected_names(include: Sequence[str] | None) -> list[str]:
+    """Return the feature names to measure, or say what is wrong with *include*."""
+    if include is None:
+        return _default_selection()
+    # A string is a sequence of strings too, so without this check
+    # include="spread" would be read as six features named by its letters.
+    if isinstance(include, str):
+        raise ConfigError(
+            f"features: include takes a list of feature names, got the string "
+            f"{include!r}. Write include=[{include!r}]."
+        )
+    names = list(include)
+    # Names are matched case-insensitively, so "Spread" repeats "spread".
+    seen: set[str] = set()
+    repeated: list[str] = []
+    for name in names:
+        if name.lower() in seen:
+            repeated.append(name)
+        seen.add(name.lower())
+    if repeated:
+        raise ConfigError(
+            f"features: include names {sorted(set(repeated))} more than once. "
+            f"Each feature is measured once; list it once."
+        )
+    return names
 
 
 def _default_selection() -> list[str]:
