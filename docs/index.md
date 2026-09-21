@@ -79,6 +79,7 @@ scale envelope.
 | **Flow toxicity** *(post-run)* | VPIN, Kyle's lambda, order-flow imbalance from `result.trades` |
 | **Bars** *(post-run)* | Resample `result.trades` into OHLCV rows by the clock, trade count, volume, turnover, or order-flow imbalance |
 | **Transaction cost** *(post-run)* | Effective and realized spread, price impact, Amihud illiquidity, Roll's implied spread |
+| **Feature table** *(post-run)* | One row per bar, one column per measurement — spread, depth, imbalance, micro-price, signed volume, toxicity — with no look-ahead |
 | **Visualize / export** | Depth heatmaps, event maps, trade charts, galleries; Matplotlib or Plotly; Parquet and LOBSTER round-trip I/O |
 
 ## Pipeline

@@ -34,6 +34,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **A feature table for models** (#149). `features(trades, quotes)` returns one
+  tidy table: a point in time on each row and a microstructure feature in each
+  column — the shape a model or a study wants. It replaces a join per
+  measurement.
+
+  Two decisions make the table, and they are separate. Where the rows fall is
+  a bar rule, so `features()` takes the same sampling arguments `bars()` does
+  and the same arguments give the same cut in both; a time grid is the `time`
+  rule. What each column measures is a `Feature`, and ten ship: `price`,
+  `returns`, `flow`, `spread`, `mid_price`, `micro_price`, `imbalance`,
+  `depth`, `vpin` and `kyle_lambda`, writing 20 columns between them.
+  `register_feature` adds one of your own, usable by name with no edit to the
+  package.
+
+  Every row is stated as of the close of its bar. The trade columns hold what
+  happened inside the bar, and the book columns hold the book as it stood at
+  the close, a backward as-of join. Nothing from after that instant reaches
+  the row, so the table carries no look-ahead — which is tested by truncating
+  the inputs and checking that the rows that survive are unchanged, for every
+  rule and every feature. The table holds no target either: a target looks
+  forward, and building one is a shift the caller makes deliberately.
+
+  Two quote states are not books anything could have traded against, and both
+  would otherwise arrive as ordinary numbers: a side with nothing resting on
+  it, which the depth engine marks with a price of `0`, and a crossed book,
+  which a diff feed can genuinely hold. `readable_quotes()` drops them from
+  the reference series, so a row reaches back to the last quote it could read
+  — the same test `transaction_costs` already applied before measuring against
+  a mid. A locked book, bid equal to ask, is a real state at a spread of zero
+  and is kept.
+
+  Without a quotes frame the five book features are skipped and the table
+  holds the trade features alone; naming one explicitly raises instead. Two
+  features that would write the same column are an error rather than a silent
+  overwrite, and so is a name listed twice in `include`; a trailing window a
+  feature cannot use is refused when the feature is built. See the ["Build a feature table"
+  how-to](https://mczielinski.github.io/ob-analytics/howto/feature-table/),
+  which ends in a baseline model.
+
 - **Databento market-by-order files** (#100). `DatabentoSource` reads
   Databento's DBN files in the MBO schema, which is a per-order feed: every
   record carries an order id, so a file replays through the full L3 path with
@@ -376,6 +415,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   tradeable has no value, so it is now NaN.
 
 ### Changed
+
+- `depth.bin_volume_columns()` is public. It returns the per-bps depth-bin
+  volume columns a depth summary carries, ordered from the touch outward, and
+  it was already the answer `book_imbalance` and `depth_signals` needed. The
+  feature table needs the same answer, and so does anyone writing a depth
+  feature of their own, so it is no longer private. Behaviour is unchanged.
 
 - `trade_sign.resolve_direction()` now makes the guarantee its docstring
   already claimed: the `direction` column it returns holds only `"buy"` and

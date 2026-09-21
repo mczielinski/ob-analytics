@@ -423,3 +423,45 @@ _Avoid_: ILLIQ, price impact (that is the measure above)
 The spread implied by bid-ask bounce in the trade prices. Named `roll_spread`,
 computed from `autocovariance`.
 _Avoid_: implied spread on its own, serial covariance estimator
+
+## Feature table
+
+**Feature table**:
+One row per bar and one column per measurement, for a model or a study.
+Produced by `features()`.
+_Avoid_: design matrix, dataset, panel (a panel is a gallery column)
+
+**Feature**:
+One measured column set of that table. Named `name`, typed `Feature`, and a
+key in the `FEATURES` registry. It declares the columns it writes and the
+columns it reads.
+_Avoid_: signal, predictor, variable, factor
+
+**Look-ahead**:
+Reading data from after a row's instant to compute that row. The feature table
+has none: the word names the fault, not a setting.
+_Avoid_: leakage, peeking, future bias
+
+**As-of join**:
+Matching each row to the last observation at or before its instant. How the
+book reaches a row whose instant falls between two snapshots.
+_Avoid_: backward merge, point-in-time join
+
+**Target**:
+What a model predicts. It looks forward, so the feature table does not hold
+one.
+_Avoid_: label, response, y
+
+**Trade imbalance**:
+The signed share of a bar's volume, from `-1` to `+1`. Named
+`trade_imbalance`, and not the same as book imbalance, which measures resting
+size.
+
+**Realized volatility**:
+The standard deviation of returns over a trailing window, per bar rather than
+annualized. Named `realized_vol`.
+
+**Trailing window**:
+How many bars back a feature looks, the row's own included. Named `window`,
+and its unit is bars.
+_Avoid_: lookback, span, period

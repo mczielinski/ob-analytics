@@ -20,6 +20,7 @@ protocol to :class:`~ob_analytics.pipeline.Pipeline`, or register a whole new
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -356,6 +357,69 @@ class BarRule(Protocol):
         ndarray, a Series, or any sequence :func:`numpy.asarray` reads.  Index
         values need not be contiguous: an index no trade carries is an empty
         bar, and empty bars are dropped.
+        """
+        ...
+
+
+@runtime_checkable
+class Feature(Protocol):
+    """Structural contract for one measured column set of a feature table.
+
+    A feature answers one question: given the bars a run has been cut into,
+    what does this measurement read on each of them?  It is handed the frame
+    :func:`~ob_analytics.features.features` prepares — one row per bar, in
+    time order, carrying the bar's own columns and the state of the book as
+    of the bar's close — and returns one array per column it declares.
+
+    There is **no base class to inherit**: any object providing these members
+    satisfies the contract, and registering it in
+    :data:`~ob_analytics.features.FEATURES` is what puts its columns in the
+    table.
+
+    A feature reads only the row it is on and the rows before it.  The
+    prepared frame holds nothing from after a row's close, so a feature that
+    works row by row is past-only already; one that looks along the frame has
+    to look backwards — ``shift(1)``, a trailing ``rolling`` window — for the
+    table to stay free of look-ahead.
+
+    Attributes
+    ----------
+    name : str
+        Short lowercase identifier registered in
+        :data:`~ob_analytics.features.FEATURES`, e.g. ``"micro_price"``.
+    columns : tuple of str
+        The columns :meth:`compute` returns, in the order they are written.
+        Declared rather than discovered, so the table's shape is known before
+        anything is measured and a caller can be told what it asked for.
+    requires : frozenset of str
+        The columns of the prepared frame :meth:`compute` reads.  A feature
+        named explicitly whose requirement is missing raises; one selected by
+        default is skipped, which is how book features drop out of a run with
+        no quotes.
+
+    Both are read, never written, so a plain class attribute satisfies them:
+    ``columns = ("spread", "spread_bps")`` needs no annotation, and a
+    :func:`~dataclasses.dataclass` field works just as well.
+    """
+
+    name: str
+
+    @property
+    def columns(self) -> tuple[str, ...]:
+        """The columns :meth:`compute` returns, in the order they are written."""
+        ...
+
+    @property
+    def requires(self) -> frozenset[str]:
+        """The columns of the prepared frame :meth:`compute` reads."""
+        ...
+
+    def compute(self, frame: pd.DataFrame) -> Mapping[str, npt.ArrayLike]:
+        """Return this feature's columns for *frame*, keyed by column name.
+
+        Every name in :attr:`columns` must be present, each holding one value
+        per row of *frame*, in row order.  Values are read positionally, so a
+        :class:`pandas.Series` need not carry the frame's index.
         """
         ...
 
