@@ -1478,6 +1478,16 @@ def mpl_vpin(
     bar_width = data["bar_width"]
 
     fig, ax = _create_axes(ax, figsize=(12, 5), theme=theme)
+    if vpin_df.empty:
+        # A capture shorter than one bucket fills none; an empty datetime
+        # column makes ax.bar raise, so draw the bare panel instead.
+        ax.set_ylim(0, 1.05)
+        ax.set_xlabel("Time")
+        ax.set_ylabel("VPIN")
+        ax.set_title(
+            "Volume-Synchronized Probability of Informed Trading (no complete buckets)"
+        )
+        return fig
 
     ax.bar(
         vpin_df["timestamp_end"],

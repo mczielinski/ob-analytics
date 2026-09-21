@@ -96,6 +96,23 @@ class TestComputeVpin:
         with pytest.raises(ObAnalyticsError):
             compute_vpin(empty, bucket_volume=1.0)
 
+    @pytest.mark.parametrize("sign_method", [None, "bvc"])
+    def test_no_full_bucket_returns_typed_empty_frame(self, sign_method):
+        """Too little volume for one bucket gives zero rows, standard dtypes."""
+        trades = _trades(["buy", "sell", "buy"], prices=[100.0, 101.0, 100.5])
+        trades["timestamp"] = trades["timestamp"].dt.tz_localize("UTC")
+        result = compute_vpin(trades, bucket_volume=100.0, sign_method=sign_method)
+        assert result.empty
+        assert result.dtypes.to_dict() == {
+            "bucket": np.dtype("int64"),
+            "timestamp_start": trades["timestamp"].dtype,
+            "timestamp_end": trades["timestamp"].dtype,
+            "buy_volume": np.dtype("float64"),
+            "sell_volume": np.dtype("float64"),
+            "vpin": np.dtype("float64"),
+            "vpin_avg": np.dtype("float64"),
+        }
+
     def test_missing_columns_raises(self):
         """Missing required columns raises ConfigError."""
         bad = pd.DataFrame({"timestamp": [1], "price": [100]})
@@ -280,6 +297,24 @@ class TestFlowToxicityPlots:
         vpin_df = compute_vpin(trades, bucket_volume=2.0)
         fig = plot("vpin", **_data.prepare_vpin_data(vpin_df))
         assert isinstance(fig, Figure)
+
+    @pytest.mark.parametrize(
+        "vpin_df",
+        [
+            # What compute_vpin returns when the trades fill no bucket.
+            compute_vpin(_trades(["buy"]), bucket_volume=100.0),
+            # An untyped empty frame: every column is object dtype.
+            pd.DataFrame(columns=["timestamp_end", "vpin", "vpin_avg"]),
+        ],
+        ids=["typed", "object"],
+    )
+    def test_plot_vpin_empty_draws_no_buckets(self, vpin_df):
+        """Zero buckets draws an empty panel instead of raising."""
+        ax = plot("vpin", **_data.prepare_vpin_data(vpin_df)).axes[0]
+        # The theme places titles on the left; read every slot.
+        title = " ".join(ax.get_title(loc=s) for s in ("left", "center", "right"))
+        assert "no complete buckets" in title
+        assert not ax.patches and not ax.lines
 
     def test_plot_ofi_returns_figure(self):
         """plot_order_flow_imbalance returns a Figure."""
