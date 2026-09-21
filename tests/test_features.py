@@ -586,45 +586,61 @@ class TestBookFeatures:
         np.testing.assert_allclose(table["bid_depth"], table["best_bid_vol"])
         np.testing.assert_allclose(table["ask_depth"], table["best_ask_vol"])
 
-    def _spoil(self, toy_trades, toy_quotes, rows, **values):
-        """Spoil *rows* of the quotes, and delete them, and build both tables.
+    @staticmethod
+    def _build(toy_trades, quotes):
+        return features(toy_trades, quotes, "tick", 4, include=READS_BOOK)
 
-        Dropping a quote from the reference series is exactly what skipping an
-        unreadable one must do, so the two tables have to match.
+    def _spoil_a_quote_a_row_reads(self, toy_trades, toy_quotes, bar, **values):
+        """Spoil the quote *bar* actually reads, and also delete it.
+
+        Picking the quote by position would usually land on one no bar reads,
+        and then spoiling it changes nothing and the test passes however the
+        join behaves.  The quote prevailing at a chosen row's close is one the
+        table demonstrably depends on, which is what gives the comparison
+        below its teeth.
+
+        Returns the three tables: untouched, spoiled, and with that quote
+        deleted.  Skipping a quote and never having it are the same thing, so
+        the last two must match — and the first must differ from them, or the
+        quote was not load-bearing after all.
         """
+        plain = self._build(toy_trades, toy_quotes)
+        at = plain["timestamp"].iloc[bar]
+        reads = toy_quotes.index[toy_quotes["timestamp"] <= at][-1]
+
         spoiled = toy_quotes.copy()
         for column, value in values.items():
-            spoiled.loc[rows, column] = value
-
-        def build(quotes):
-            return features(toy_trades, quotes, "tick", 4, include=READS_BOOK)
-
-        return build(spoiled), build(toy_quotes[~rows])
+            spoiled.loc[reads, column] = value
+        return (
+            plain,
+            self._build(toy_trades, spoiled),
+            self._build(toy_trades, toy_quotes.drop(index=reads)),
+        )
 
     def test_an_empty_book_side_is_not_read_as_a_price(self, toy_trades, toy_quotes):
         """The depth engine writes 0 for an empty side; it is a marker, not a price."""
-        rows = toy_quotes["timestamp"] == toy_quotes["timestamp"].iloc[20]
-        spoiled, deleted = self._spoil(
-            toy_trades, toy_quotes, rows, best_bid_price=0.0, best_bid_vol=0.0
+        plain, spoiled, deleted = self._spoil_a_quote_a_row_reads(
+            toy_trades, toy_quotes, bar=4, best_bid_price=0.0, best_bid_vol=0.0
         )
 
         pd.testing.assert_frame_equal(spoiled, deleted)
-        # Read at face value that row gives a spread the width of the
+        assert not spoiled["spread"].equals(plain["spread"])
+        # Read at face value that quote gives a spread the width of the
         # instrument, a mid at half the ask, and a micro-price of zero.
         assert (spoiled["spread"].dropna() < 20.0).all()
         assert (spoiled["micro_price"].dropna() > 0).all()
 
     def test_a_crossed_book_is_not_read_as_a_spread(self, toy_trades, toy_quotes):
         """A diff feed holds crossed orders; their midpoint is not a price."""
-        rows = toy_quotes["timestamp"] == toy_quotes["timestamp"].iloc[30]
-        spoiled, deleted = self._spoil(
+        plain, spoiled, deleted = self._spoil_a_quote_a_row_reads(
             toy_trades,
             toy_quotes,
-            rows,
-            best_bid_price=toy_quotes["best_ask_price"].iloc[30] + 5.0,
+            bar=4,
+            best_bid_price=toy_quotes["best_ask_price"].max() + 5.0,
         )
 
         pd.testing.assert_frame_equal(spoiled, deleted)
+        assert not spoiled["spread"].equals(plain["spread"])
         assert (spoiled["spread"].dropna() >= 0).all()
 
     def test_a_locked_book_is_kept(self, toy_trades, toy_quotes):
@@ -639,12 +655,29 @@ class TestBookFeatures:
         assert (readable["timestamp"] == at).any()
 
     def test_no_readable_quote_gives_nan_not_zero(self, toy_trades, toy_quotes):
-        """An all-unreadable quotes frame must not come back as integer zeros."""
-        unreadable = toy_quotes.assign(best_bid_price=0.0, best_bid_vol=0.0)
+        """A row with nothing to read takes NaN, never a zero that reads as a price.
+
+        The as-of join widens a whole-number price column to hold the NaN; a
+        pipeline frame carries prices as integer ticks, so a fill of ``0``
+        here would be indistinguishable from the empty-side marker the join
+        was just taught to skip.
+        """
+        # Integer columns, the way a pipeline frame carries ticks and lots.
+        integral = toy_quotes.astype(
+            {column: "int64" for column in toy_quotes.columns if column != "timestamp"}
+        )
+        unreadable = integral.assign(best_bid_price=0, best_bid_vol=0)
         table = features(toy_trades, unreadable, "tick", 4, include=["spread", "depth"])
 
         assert table[["spread", "best_bid_vol", "bid_depth"]].isna().all().all()
         assert table["spread"].dtype == np.float64
+
+        # And with some readable quotes, the rows before the first still do.
+        late = integral[integral["timestamp"] > toy_trades["timestamp"].iloc[6]]
+        partial = features(toy_trades, late, "tick", 2, include=["spread", "depth"])
+
+        assert partial[["spread", "best_bid_vol"]].iloc[0].isna().all()
+        assert partial[["spread", "best_bid_vol"]].iloc[-1].notna().all()
 
     def test_readable_quotes_leaves_an_untestable_frame_alone(self, toy_quotes):
         """A frame with no best bid/ask pair cannot be tested for either fault."""

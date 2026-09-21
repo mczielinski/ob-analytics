@@ -766,18 +766,12 @@ def _join_book(frame: pd.DataFrame, quotes: pd.DataFrame) -> pd.DataFrame:
         if column != "timestamp" and column not in frame.columns
     ]
     book = readable_quotes(quotes)[keep].sort_values("timestamp", kind="stable")
-    joined = pd.merge_asof(
+    # An unmatched row takes NaN, and a whole-number price column is widened
+    # to hold it rather than filled with a zero that would read as a price.
+    return pd.merge_asof(
         frame,
         book,
         on="timestamp",
         direction="backward",
         allow_exact_matches=True,
     )
-    if book.empty:
-        # merge_asof against an empty right frame keeps that frame's dtypes,
-        # so an integer price column comes back as an all-zero int rather
-        # than the "no reading" the row actually has.
-        for column in keep:
-            if column != "timestamp":
-                joined[column] = np.nan
-    return joined
