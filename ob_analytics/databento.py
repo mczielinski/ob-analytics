@@ -51,16 +51,17 @@ Scope
 This module reads stored DBN files.  Databento's Live client is not wired up
 here; see issue #100 for that half.
 
-Two modifies have no canonical event.  Databento's ``M`` can move an order to
-another price or make it bigger, and both lose queue priority, so both are
-really a new queue entry.  The shared schema has ``created``, ``changed`` and
-``deleted`` and nothing for a move, and the price-level rebuild
-(:func:`~ob_analytics.depth.price_level_volume`) counts every one of an order's
-later rows on the price its ``created`` row carried.  The loader therefore
-records the new price and size on a ``changed`` event — right in the events,
-lifetime and trade tables — and says in a warning how many rows the depth
-reconstruction will be off by.  Most feeds never hit this: most venues report
-an amendment as a cancel and a new order.
+A modify has no canonical event of its own.  Databento's ``M`` can move an
+order to another price or make it bigger, and both lose queue priority, so both
+are really a new queue entry.  The shared schema has ``created``, ``changed``
+and ``deleted`` and nothing for a move, so the loader records the new price and
+size on a ``changed`` event.  The price-level rebuild
+(:func:`~ob_analytics.depth.price_level_volume`) reads a ``changed`` row that
+reports no execution as the order's new level and size, so the depth follows
+the order.  The loss of queue priority is not modelled.  A modify that also
+carries a fill is read as an execution report; if it also moves the order or
+changes its size by more than the fill, the loader says in a warning how many
+rows the depth will be off by.
 
 What is refused and what is dropped
 -----------------------------------
@@ -653,6 +654,7 @@ def _book_events_and_fills(
 
     fills = work[is_fill]
     events, trade_records = _charge_fills_to_events(events, fills, work)
+    _warn_on_amend_with_fill(events)
     return events, trade_records
 
 
@@ -724,8 +726,6 @@ def _events_from_book_records(book: pd.DataFrame) -> pd.DataFrame:
     canonical = np.where(created, "created", np.where(emptied, "deleted", "changed"))
     volume = np.where(is_set | emptied, size, outstanding)
 
-    _warn_on_reprice_or_growth(book, keys, action, size, created, outstanding)
-
     return pd.DataFrame(
         {
             "id": order_id,
@@ -745,60 +745,45 @@ def _events_from_book_records(book: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def _warn_on_reprice_or_growth(
-    book: pd.DataFrame,
-    keys: list[np.ndarray],
-    action: np.ndarray,
-    size: np.ndarray,
-    created: np.ndarray,
-    outstanding: np.ndarray,
-) -> None:
-    """Warn about the two modifies the price-level rebuild cannot represent.
+def _warn_on_amend_with_fill(events: pd.DataFrame) -> None:
+    """Warn about the one modify the price-level rebuild cannot represent.
 
     Databento's ``M`` can move an order to another price or make it bigger.
-    Both lose queue priority, so both are really a new queue entry, and the
-    canonical schema has no event for that: it has ``created``, ``changed`` and
-    ``deleted``, and :func:`~ob_analytics.depth.price_level_volume` pins every
-    one of an order's later rows to the price its ``created`` row carried, so
-    that an order's volume can only ever cancel on the level it was added to.
+    Both are recorded on a ``changed`` event with the new price and size, and
+    :func:`~ob_analytics.depth.price_level_volume` follows either: a
+    ``changed`` row that reports no execution moves the order's volume to the
+    price it carries and adds any size it gained.
 
-    The consequence is stated rather than hidden: after a move, the volume
-    stays counted on the old level and is missing from the new one, and after a
-    growth the added size is not counted anywhere.  The per-order tables —
-    events, lifetimes, trades — are right either way; it is the depth
-    reconstruction that is off, by the size of the orders named here.
-
-    Most feeds never trigger this, because most venues report an amendment as a
-    cancel and a new order.
+    A modify that also carries a fill is read as an execution report instead,
+    because some venues report an execution at the price it traded at, not the
+    price the order rests at.  The depth then takes only the fill off, at the
+    level the order was resting on.  If the same modify also moved the order,
+    or left it with a size other than its previous size less the fill, the
+    depth is off by the difference.  The per-order tables — events, lifetimes,
+    trades — are right either way.
     """
-    prev_price = pd.Series(book["price"].to_numpy()).groupby(keys).shift().to_numpy()
-    prev_outstanding = pd.Series(outstanding).groupby(keys).shift().to_numpy()
-    modified = (action == ACTION_MODIFY) & ~created
-
-    repriced = modified & (book["price"].to_numpy() != prev_price)
-    grown = modified & (size > prev_outstanding)
-
-    for count, what, effect in (
-        (
-            int(repriced.sum()),
-            "move an order to another price",
-            "its volume stays counted on the price it was added at",
-        ),
-        (
-            int((grown & ~repriced).sum()),
-            "make an order bigger",
-            "the added size is not counted on any level",
-        ),
-    ):
-        if count:
-            logger.warning(
-                "DatabentoLoader: {} modifies {} — the price-level depth "
-                "cannot represent that, so {}. The events, order lifetimes "
-                "and trades are unaffected",
-                count,
-                what,
-                effect,
-            )
+    order = events.groupby("id", sort=False)
+    prev_price = order["price"].shift()
+    prev_volume = order["volume"].shift()
+    amended = (
+        (events["raw_event_type"] == ACTION_MODIFY)
+        & (events["action"] == "changed")
+        & (events["fill"] > 0)
+        & (
+            (events["price"] != prev_price)
+            | (events["volume"] != prev_volume - events["fill"])
+        )
+    )
+    count = int(amended.sum())
+    if count:
+        logger.warning(
+            "DatabentoLoader: {} modifies carry a fill and also move the "
+            "order or change its size by more than the fill — the price-level "
+            "depth takes off only the fill, at the price the order was resting "
+            "at, so it is off by the rest. The events, order lifetimes and "
+            "trades are unaffected",
+            count,
+        )
 
 
 def _empty_book_events() -> pd.DataFrame:

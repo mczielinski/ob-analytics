@@ -138,22 +138,27 @@ resting orders `resting-limit` and never `market` or `market-limit`. Everything
 that reads the maker side — order lifetimes, queue position, depth, effective
 spread — is unaffected.
 
-## One thing the depth reconstruction cannot represent
+## Orders that move or grow
 
 Databento's `M` can move an order to another price or make it bigger. Both lose
-queue priority, so both are really a new queue entry, and the shared schema has
-no event for that: it has `created`, `changed` and `deleted`, and the
-price-level rebuild counts every one of an order's later rows on the price its
-`created` row carried, so that an order's volume can only cancel on the level it
-was added to.
+queue priority, so both are really a new queue entry. The shared schema has no
+event for that: it has `created`, `changed` and `deleted`. The loader records
+the new price and size on a `changed` event.
 
-The loader records the new price and size on a `changed` event, so the events,
-order lifetimes and trades are right. The depth is not: after a move the volume
-stays counted on the old level and is missing from the new one, and after a
-growth the added size is not counted anywhere. The loader warns with the number
-of rows affected, so the size of the error is visible rather than silent. Most
-feeds never hit this, because most venues report an amendment as a cancel and a
-new order.
+The price-level rebuild follows it. A `changed` row that reports no execution
+and carries a new price moves the order: its volume leaves the old level and
+joins the new one. A `changed` row that reports no execution and a larger size
+adds the difference at the level where the order rests. The queue priority the
+order loses is not modelled.
+
+One case is still not followed. A row that reports an execution is read as an
+execution report, and only the fill is taken off, at the level where the order
+rests. Some venues report an execution at the price it traded at, not the price
+the order rests at, so the rebuild cannot read that price as a move. If a
+Databento modify carries a fill and also moves the order, or changes its size by
+more than the fill, the depth is off by the difference. The loader warns with
+the number of rows affected. The events, order lifetimes and trades are right in
+every case.
 
 ## What the loader refuses, and what it drops
 

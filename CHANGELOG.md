@@ -10,6 +10,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **The price-level depth follows an order that moves or grows.**
+  `price_level_volume` used to count every one of an order's rows on the price
+  of its first row, and ignored a rise in its size. It now reads a `changed`
+  row that reports no execution and carries a new price as a move: the order's
+  volume leaves the old level and joins the new one. A `changed` row that
+  reports no execution and a larger size adds the difference where the order
+  rests. Deletes and rows that report an execution are still taken off where
+  the order rests, whatever price they carry, so the fix for Bitstamp's
+  deletes at the wrong price is kept. The price-level rebuild now agrees with
+  the per-order rebuild (`book_state`) on these orders. This matters for
+  Databento, whose modify can move an order or make it bigger. The Bitstamp and
+  LOBSTER outputs are unchanged: neither feed moves or grows an order this way.
+
 - **A trade the venue left unlabelled is now classified on the L3 path too.**
   `Pipeline.run` labels any trade with no aggressor side against the
   reconstructed quotes, filling one subset at a time instead of all or nothing,
@@ -37,12 +50,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   receive time orders the events, the venue's own becomes
   `exchange_timestamp`.
 
-  One thing does not map: a modify that moves an order to another price or
-  makes it bigger is a new queue entry, and the shared schema has no event for
-  that, so the depth reconstruction cannot follow it. The events, lifetimes and
-  trades are still right, and the loader says how many rows the depth will be
-  off by. Most venues report an amendment as a cancel and a new order, so most
-  files never hit it.
+  A modify that moves an order to another price or makes it bigger is recorded
+  as a `changed` event with the new price and size, and the depth follows it
+  (see Changed). The loss of queue priority is not modelled. The one modify the
+  depth still cannot follow is one that carries a fill and also moves the order
+  or changes its size by more than the fill; the loader says how many rows the
+  depth will be off by.
 
   A feed the loader does not understand is refused: a publisher that only sends
   top-of-book or price-level data, because its order ids mean nothing; a
