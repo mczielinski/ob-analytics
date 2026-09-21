@@ -475,6 +475,12 @@ implemented: sequence numbers (#146), instrument identity (#147), the time model
   order, the stable replay key). `detect_sequence_gaps()` reports dropped and
   out-of-order messages, surfaced in `DataQualitySummary` and the `audit`
   command (which loads with `track_sequence` on for exactly this reason).
+- **Two kinds of sequence** (#101). A `SequenceKind` says what the number
+  promises. `contiguous` (the default) adds one per message, so a skip is a
+  dropped message. `monotonic` only rises, so only a step back is a fault. The
+  CCXT `nonce` is monotonic: on Binance it is the last update ID of a diff
+  that covers a range of IDs. A capture records the kind in `meta.json`, and
+  `audit` reads it from there.
 - **Non-breaking.** The loader-attached columns are gated behind a default-off
   `PipelineConfig.track_sequence` flag, so existing frames are byte-for-byte
   unchanged.

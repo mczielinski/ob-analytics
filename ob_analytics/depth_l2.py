@@ -77,6 +77,7 @@ from ob_analytics.protocols import (
     FeedType,
     Level,
     RunContext,
+    SequenceKind,
     TradeSource,
 )
 from ob_analytics.schemas import SEQUENCE_COLUMN, attach_instrument_identity
@@ -148,13 +149,31 @@ def recorded_tick_size(source: str | Path) -> float | None:
     is no ``meta.json`` or it records no tick size: a capture from a venue whose
     metadata gives none, or one written before captures recorded it.
     """
+    value = _recorded_meta(source).get("tick_size")
+    return float(value) if value else None
+
+
+def recorded_sequence_kind(source: str | Path) -> SequenceKind:
+    """Return what the venue ``sequence`` of a live capture promises.
+
+    *source* is the capture directory or a file inside it.  A capture whose
+    ``meta.json`` records no ``sequence_kind`` (no ``meta.json``, a source
+    that does not declare one, or a capture written before captures recorded
+    it) is read as :attr:`~ob_analytics.protocols.SequenceKind.CONTIGUOUS`.
+    """
+    value = _recorded_meta(source).get("sequence_kind")
+    return SequenceKind(value) if value else SequenceKind.CONTIGUOUS
+
+
+def _recorded_meta(source: str | Path) -> dict[str, Any]:
+    """The ``meta.json`` beside *source*, or ``{}`` when there is none."""
     p = Path(source)
     meta = (p.parent if p.is_file() else p) / "meta.json"
     try:
-        value = json.loads(meta.read_text()).get("tick_size")
-    except (OSError, ValueError, AttributeError):
-        return None
-    return float(value) if value else None
+        data = json.loads(meta.read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _to_datetime(series: pd.Series, unit: str) -> pd.Series:

@@ -107,6 +107,7 @@ def _cmd_audit(args: argparse.Namespace) -> None:
     from loguru import logger
 
     from ob_analytics.analytics import data_quality_summary
+    from ob_analytics.depth_l2 import recorded_sequence_kind
     from ob_analytics.protocols import FeedType
 
     # Running the pipeline needs a source, so it falls back to the default one.
@@ -138,6 +139,7 @@ def _cmd_audit(args: argparse.Namespace) -> None:
         feed_type=feed_type,
         depth=result.depth,
         tick_size=result.config.tick_size,
+        sequence_kind=recorded_sequence_kind(Path(args.path)),
     )
 
     if args.json:
@@ -311,6 +313,7 @@ def _cmd_capture(args: argparse.Namespace) -> None:
 
     from loguru import logger
 
+    from ob_analytics.exceptions import ConfigError
     from ob_analytics.live import CaptureConfig, LiveSource
     from ob_analytics.live._runner import run_capturer
     from ob_analytics.live.ccxt_source import CcxtSettings
@@ -352,6 +355,8 @@ def _cmd_capture(args: argparse.Namespace) -> None:
             ccxt_kwargs["depth_limit"] = args.depth_limit
         if getattr(args, "poll_interval", None) is not None:
             ccxt_kwargs["poll_interval"] = args.poll_interval
+        if getattr(args, "market_data_mirror", False):
+            ccxt_kwargs["market_data_mirror"] = True
         # The registry is typed as `type[Source]`; the core protocol declares
         # no constructor, so passing settings is a checked-at-runtime dynamic
         # call (every built-in source accepts an optional `settings`).
@@ -386,7 +391,13 @@ def _cmd_capture(args: argparse.Namespace) -> None:
         minutes=args.minutes,
         keep_raw=not args.no_raw,
     )
-    result = asyncio.run(run_capturer(source, config))
+    try:
+        result = asyncio.run(run_capturer(source, config))
+    except ConfigError as exc:
+        # The venue or its settings are wrong for this run (a location the
+        # venue refuses, a mirror it does not have): report it, not a traceback.
+        logger.error(str(exc))
+        sys.exit(1)
     logger.info("Capture complete: {}", result.out_dir)
 
 
@@ -648,6 +659,14 @@ def main() -> None:
         type=float,
         default=None,
         help="ccxt: seconds between REST polls (REST-only venues)",
+    )
+    p_cap.add_argument(
+        "--market-data-mirror",
+        action="store_true",
+        help=(
+            "ccxt: read from the venue's market-data-only endpoints "
+            "(binance spot). Check the venue's terms allow it where you are"
+        ),
     )
     p_cap.add_argument(
         "--minutes",

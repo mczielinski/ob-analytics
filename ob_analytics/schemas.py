@@ -91,9 +91,10 @@ consumers read them when present):
   CCXT ``nonce`` on the price-level path; a ``sequence`` column in a Bitstamp or
   L2 capture when the file recorded one).  It is **absent** for sources that do
   not number their events (LOBSTER, and the public Bitstamp diff feed, which
-  publishes a microtimestamp rather than a sequence).  Consecutive values on one
-  channel should rise by exactly one; a skip means a dropped message and a step
-  that does not rise means a reordered one — see
+  publishes a microtimestamp rather than a sequence).  A step that does not rise
+  means a reordered message.  Whether a skip means a dropped one depends on the
+  source's :class:`~ob_analytics.protocols.SequenceKind`: yes for a contiguous
+  counter, no for a number that only rises (the CCXT ``nonce``) — see
   :func:`ob_analytics.analytics.detect_sequence_gaps`.
 * ``ingest_seq`` (:data:`INGEST_SEQ_COLUMN`) — a local monotonic ingest counter,
   a 0-based ``int64`` index in the order the rows were read from the source

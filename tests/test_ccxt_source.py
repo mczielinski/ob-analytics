@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -49,6 +50,7 @@ class _FakeCcxtExchange:
             "fetchOrderBook": True,
             "fetchTrades": True,
         }
+        self.options: dict = {}
         self.closed = False
 
     async def fetch_order_book(self, symbol, limit=None):
@@ -519,3 +521,259 @@ class TestTickSize:
 
     def test_no_metadata_records_none(self, tmp_path):
         assert self._meta_tick(_FakeCcxtExchange(_TICK_SNAPSHOT), tmp_path) is None
+
+
+# ---------------------------------------------------------------------------
+# Depth window, whole-book venues, market-data mirror, refused location (#101)
+# ---------------------------------------------------------------------------
+
+
+class TestDepthWindow:
+    def test_keeps_only_the_top_depth_limit_levels(self):
+        cap = CcxtSource()
+        cap._depth_limit = 2
+        cap._last = {"bid": {}, "ask": {}}
+        book = {"bids": [[100.0, 1.0], [99.0, 1.0], [98.0, 1.0]], "asks": []}
+        rows = [r for r, _ in cap._diff_book(book, pd.Timestamp.now(tz="UTC"))]
+        assert {r["price"] for r in rows} == {100.0, 99.0}
+
+    def test_a_level_that_comes_back_into_the_window_is_recorded_again(self):
+        cap = CcxtSource()
+        cap._depth_limit = 2
+        cap._last = {"bid": {100.0: 1.0, 99.0: 1.0}, "ask": {}}
+        ts = pd.Timestamp.now(tz="UTC")
+        # A better bid pushes 99 out of the window: it is removed.
+        pushed = {"bids": [[101.0, 1.0], [100.0, 1.0], [99.0, 1.0]], "asks": []}
+        rows = [(r["price"], r["volume"]) for r, _ in cap._diff_book(pushed, ts)]
+        assert sorted(rows) == [(99.0, 0.0), (101.0, 1.0)]
+        # The better bid goes: 99 is back in the window with its size.
+        back = {"bids": [[100.0, 1.0], [99.0, 1.0]], "asks": []}
+        rows = [(r["price"], r["volume"]) for r, _ in cap._diff_book(back, ts)]
+        assert sorted(rows) == [(99.0, 1.0), (101.0, 0.0)]
+
+    def test_the_archived_frame_holds_the_window_only(self):
+        cap = CcxtSource()
+        cap._depth_limit = 1
+        cap._last = {"bid": {}, "ask": {}}
+        book = {"bids": [[100.0, 1.0], [99.0, 1.0]], "asks": [], "nonce": 7}
+        raws = [raw for _, raw in cap._diff_book(book, pd.Timestamp.now(tz="UTC"))]
+        archived = next(raw for raw in raws if raw is not None)
+        assert archived["bids"] == [[100.0, 1.0]]
+        assert archived["nonce"] == 7
+
+
+class _LimitRecorder(_FakeCcxtExchange):
+    """Records the ``limit`` each websocket book call asked for."""
+
+    def __init__(self, exchange_id: str, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.id = exchange_id
+        self.limits: list[int | None] = []
+
+    async def watch_order_book(self, symbol, limit=None):
+        self.limits.append(limit)
+        return await super().watch_order_book(symbol, limit)
+
+
+class TestWholeBookVenues:
+    @staticmethod
+    def _limits(exchange_id: str, tmp_path) -> list[int | None]:
+        snap = {"bids": [[100.0, 5.0]], "asks": [[101.0, 4.0]], "timestamp": 1_000}
+        later = [{"bids": [[100.0, 6.0]], "asks": [[101.0, 4.0]], "timestamp": 2_000}]
+        ex = _LimitRecorder(exchange_id, snap, later, [])
+        asyncio.run(run_capturer(_source(ex, depth_limit=50), _cfg(tmp_path)))
+        return ex.limits
+
+    def test_binance_is_asked_for_the_whole_book(self, tmp_path):
+        # A Binance book cut at the limit forgets the levels it drops.
+        assert set(self._limits("binance", tmp_path)) == {None}
+
+    def test_other_venues_are_asked_for_the_depth_limit(self, tmp_path):
+        # Kraken subscribes at the limit it is given; None would mean 10.
+        assert set(self._limits("kraken", tmp_path)) == {50}
+
+
+class TestWholeBookSnapshot:
+    """ccxt's opening Binance snapshot must reach the recorded window."""
+
+    @staticmethod
+    def _snapshot_size(exchange_id: str, depth_limit: int, tmp_path) -> object:
+        ex = _LimitRecorder(exchange_id, {"bids": [], "asks": [], "timestamp": 0})
+        cap = _source(ex, depth_limit=depth_limit)
+        asyncio.run(_collect_snapshot(cap, _cfg(tmp_path)))
+        return ex.options.get("watchOrderBookLimit")
+
+    def test_a_deep_window_gets_a_snapshot_as_deep(self, tmp_path):
+        assert self._snapshot_size("binance", 5000, tmp_path) == 5000
+
+    def test_a_shallow_window_keeps_ccxts_default(self, tmp_path):
+        # 1,000 levels leave room past a 100-level window.
+        assert self._snapshot_size("binance", 100, tmp_path) == 1000
+
+    def test_other_venues_are_left_alone(self, tmp_path):
+        assert self._snapshot_size("kraken", 5000, tmp_path) is None
+
+    def test_more_than_the_venue_returns_is_refused(self, tmp_path):
+        from ob_analytics.exceptions import ConfigError
+
+        with pytest.raises(ConfigError, match="at most 5000"):
+            self._snapshot_size("binance", 5001, tmp_path)
+        with pytest.raises(ConfigError, match="at most 1000"):
+            self._snapshot_size("binanceusdm", 5000, tmp_path)
+
+
+class _FakeWithUrls(_FakeCcxtExchange):
+    def __init__(self, exchange_id: str) -> None:
+        super().__init__({"bids": [], "asks": [], "timestamp": 0})
+        self.id = exchange_id
+        self.urls: dict[str, Any] = {
+            "api": {"public": "main", "ws": {"spot": "main-ws"}}
+        }
+        self.options = {"fetchMarkets": {"types": ["spot", "linear"], "keep": 1}}
+
+
+class TestMarketDataMirror:
+    def test_points_binance_at_the_mirror(self, tmp_path):
+        from ob_analytics.live.ccxt_source import MARKET_DATA_MIRRORS
+
+        ex = _FakeWithUrls("binance")
+        cap = _source(ex, market_data_mirror=True)
+        asyncio.run(_collect_snapshot(cap, _cfg(tmp_path)))
+        assert ex.urls["api"]["public"] == MARKET_DATA_MIRRORS["binance"]["rest"]
+        assert ex.urls["api"]["ws"]["spot"] == MARKET_DATA_MIRRORS["binance"]["ws"]
+        # Spot only, and ccxt's other market-loading options are kept.
+        assert ex.options["fetchMarkets"] == {"types": ["spot"], "keep": 1}
+
+    def test_off_by_default(self, tmp_path):
+        ex = _FakeWithUrls("binance")
+        asyncio.run(_collect_snapshot(_source(ex), _cfg(tmp_path)))
+        assert ex.urls["api"]["public"] == "main"
+
+    def test_a_venue_with_no_mirror_is_refused(self, tmp_path):
+        from ob_analytics.exceptions import ConfigError
+
+        cap = _source(_FakeWithUrls("kraken"), market_data_mirror=True)
+        with pytest.raises(ConfigError, match="No market-data mirror"):
+            asyncio.run(_collect_snapshot(cap, _cfg(tmp_path)))
+
+
+class _Refusing(_FakeCcxtExchange):
+    def __init__(self, exchange_id: str, message: str) -> None:
+        super().__init__({"bids": [], "asks": [], "timestamp": 0})
+        self.id = exchange_id
+        self._message = message
+
+    async def fetch_order_book(self, symbol, limit=None):
+        raise RuntimeError(self._message)
+
+
+class TestRefusedLocation:
+    _451 = "binance GET https://api.binance.com/api/v3/exchangeInfo 451  {}"
+
+    def test_a_451_becomes_a_readable_error(self, tmp_path):
+        from ob_analytics.exceptions import ConfigError
+
+        ex = _Refusing("binance", self._451)
+        with pytest.raises(ConfigError, match="binanceus") as info:
+            asyncio.run(_collect_snapshot(_source(ex), _cfg(tmp_path)))
+        assert "market-data-mirror" in str(info.value)
+        assert ex.closed is True
+
+    def test_other_venues_get_no_binance_hint(self, tmp_path):
+        from ob_analytics.exceptions import ConfigError
+
+        ex = _Refusing("bybit", "bybit GET https://api.bybit.com 451  {}")
+        with pytest.raises(ConfigError, match="HTTP 451") as info:
+            asyncio.run(_collect_snapshot(_source(ex), _cfg(tmp_path)))
+        assert "binanceus" not in str(info.value)
+
+    def test_other_failures_are_left_alone(self, tmp_path):
+        ex = _Refusing("binance", "binance GET https://x 503 Service Unavailable")
+        with pytest.raises(RuntimeError, match="503"):
+            asyncio.run(_collect_snapshot(_source(ex), _cfg(tmp_path)))
+
+
+class TestSequenceKind:
+    def test_the_nonce_is_declared_monotonic_in_meta(self, tmp_path):
+        import json
+
+        from ob_analytics.depth_l2 import recorded_sequence_kind
+        from ob_analytics.protocols import SequenceKind
+
+        snap = {"bids": [[100.0, 5.0]], "asks": [[101.0, 4.0]], "timestamp": 1_000}
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="BTC/USDT", out_dir=out, minutes=0.05)
+        asyncio.run(run_capturer(_source(_FakeCcxtExchange(snap)), cfg))
+        assert json.loads((out / "meta.json").read_text())["sequence_kind"] == (
+            "monotonic"
+        )
+        assert recorded_sequence_kind(out) is SequenceKind.MONOTONIC
+        assert recorded_sequence_kind(out / "depth.csv") is SequenceKind.MONOTONIC
+
+
+class TestClocks:
+    def test_replay_follows_arrival_when_the_venue_clock_steps_back(self, tmp_path):
+        # ccxt stamps its first Binance book with its own snapshot's time,
+        # then applies older buffered diffs: the venue clock steps back.
+        from ob_analytics.depth_l2 import L2DepthLoader
+
+        snap = {"bids": [[100.0, 5.0]], "asks": [[101.0, 4.0]], "timestamp": 1_000}
+        ws_books = [
+            {"bids": [[100.0, 6.0]], "asks": [[101.0, 4.0]], "timestamp": 3_000},
+            {"bids": [[100.0, 7.0]], "asks": [[101.0, 4.0]], "timestamp": 2_000},
+        ]
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="BTC/USDT", out_dir=out, minutes=0.05)
+        asyncio.run(run_capturer(_source(_FakeCcxtExchange(snap, ws_books)), cfg))
+
+        written = pd.read_csv(out / "depth.csv")
+        assert written["timestamp"].is_monotonic_increasing
+        assert list(written["exchange_timestamp"]) == [1_000, 1_000, 3_000, 2_000]
+        # Replay applies the bid sizes 5, 6, 7 in the order they arrived.
+        depth = L2DepthLoader().load(out / "depth.csv")
+        bids = depth.loc[depth["direction"] == "bid", "volume"].tolist()
+        assert len(bids) == 3
+        assert bids == sorted(bids)
+
+
+@pytest.mark.skipif(not _CCXT_INSTALLED, reason="needs the ccxt extra")
+class TestLostSync:
+    class _Gappy(_FakeCcxtExchange):
+        """Raises ccxt's out-of-sync error once, as on a missing Binance diff."""
+
+        def __init__(self, *args, failures: int = 1, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self._failures = failures
+
+        async def watch_order_book(self, symbol, limit=None):
+            if self._failures:
+                self._failures -= 1
+                from ccxt.base.errors import ChecksumError
+
+                raise ChecksumError("binance BTC/USDT out of sync")
+            return await super().watch_order_book(symbol, limit)
+
+    def _meta(self, ex, tmp_path) -> dict:
+        import json
+
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="BTC/USDT", out_dir=out, minutes=0.05)
+        asyncio.run(run_capturer(_source(ex), cfg))
+        return json.loads((out / "meta.json").read_text())
+
+    def test_the_book_is_fetched_again_and_the_capture_goes_on(self, tmp_path):
+        snap = {"bids": [[100.0, 5.0]], "asks": [[101.0, 4.0]], "timestamp": 1_000}
+        later = [{"bids": [[100.0, 6.0]], "asks": [[101.0, 4.0]], "timestamp": 2_000}]
+        meta = self._meta(self._Gappy(snap, later), tmp_path)
+        assert meta["book_resyncs"] == 1
+        assert meta["book_updates"] == 1
+        assert meta["errors"] == 0
+
+    def test_a_feed_that_keeps_losing_sync_is_given_up(self, tmp_path):
+        from ob_analytics.live.ccxt_source import _MAX_BOOK_RESYNCS
+
+        snap = {"bids": [[100.0, 5.0]], "asks": [[101.0, 4.0]], "timestamp": 1_000}
+        ex = self._Gappy(snap, [], failures=_MAX_BOOK_RESYNCS + 1)
+        meta = self._meta(ex, tmp_path)
+        assert meta["book_resyncs"] == _MAX_BOOK_RESYNCS
+        assert meta["errors"] == 1

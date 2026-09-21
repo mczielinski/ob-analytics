@@ -57,9 +57,11 @@ _TRADE_COLS = [
 # L2 (price-level) depth rows -- the L2DepthLoader schema. ``volume`` is the
 # new absolute size at ``price`` (0 removes the level). ``sequence`` is the
 # venue's per-book number when the capturer supplies one (blank otherwise);
-# L2DepthLoader reads it back for gap detection.
+# L2DepthLoader reads it back for gap detection.  ``timestamp`` is the receive
+# time replay sorts on; ``exchange_timestamp`` keeps the venue's time.
 _DEPTH_COLS = [
     "timestamp",
+    "exchange_timestamp",
     "side",
     "price",
     "volume",
@@ -131,8 +133,12 @@ class FileCaptureSink(CaptureSink):
     def write_depth(self, event: EventDict) -> None:
         if self._depth is None:
             return
-        # Only timestamp/side/price/volume are persisted (extras ignored).
-        row = {**event, "timestamp": _ts_ms(event["timestamp"])}
+        # Only the _DEPTH_COLS are persisted (extras ignored).
+        row = {
+            **event,
+            "timestamp": _ts_ms(event["timestamp"]),
+            "exchange_timestamp": _ts_ms(event["exchange_timestamp"]),
+        }
         self._depth.writerow(row)
 
     def write_trade(self, event: EventDict) -> None:

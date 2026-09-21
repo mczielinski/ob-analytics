@@ -35,7 +35,7 @@ Each run produces a self-contained directory:
 
 | File | Contents |
 |------|----------|
-| `depth.csv` | Price-level updates (`timestamp,side,price,volume`; `volume` = new absolute size, `0` removes the level) |
+| `depth.csv` | Price-level updates (`timestamp,exchange_timestamp,side,price,volume`; `volume` = new absolute size, `0` removes the level; `timestamp` is when the capture received the update) |
 | `trades.csv` | The trade tape (CCXT taker side; feeds trade-sign) |
 | `raw.jsonl` | Raw book frames (omit with `--no-raw`) |
 | `meta.json` | Counts + per-run diagnostics (exchange, tick size, book updates, errors) |
@@ -76,7 +76,8 @@ ob-analytics capture ccxt --exchange polymarket --pair <token id> --out /tmp/pol
 |------|---------|
 | `--exchange` | CCXT venue id (`binance`, `kraken`, `coinbase`, `kalshi`, `polymarket`, …). `binance` and `hyperliquid` are also prediction markets; the plain id is the crypto exchange, and `prediction/binance` is the prediction market |
 | `--pair` | Symbol in the venue's CCXT notation (e.g. `BTC/USDT`) |
-| `--depth-limit` | Order-book depth (levels per side) to request |
+| `--depth-limit` | Levels per side to record (default 100) |
+| `--market-data-mirror` | Read from the venue's market-data-only endpoints (Binance spot; see [Binance](binance.md)) |
 | `--poll-interval` | Seconds between REST polls (REST-only venues) |
 
 !!! note "Prediction markets"
@@ -84,6 +85,11 @@ ob-analytics capture ccxt --exchange polymarket --pair <token id> --out /tmp/pol
     side of the Yes/No pair the book shows, what tick size the prices use, and
     how wide the depth bins should be. [Kalshi](kalshi.md) and
     [Polymarket](polymarket.md) each have a page that covers them.
+
+!!! note "Binance"
+    Binance refuses some locations, and its book is dense enough that 100
+    levels reach only a few hundredths of a percent from the mid-price. The
+    [Binance](binance.md) page covers both.
 
 ## See also
 

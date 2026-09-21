@@ -92,6 +92,28 @@ class FeedType(str, Enum):
     UNKNOWN = "unknown"
 
 
+class SequenceKind(str, Enum):
+    """What a feed's venue ``sequence`` number promises.
+
+    A source declares it so a gap check knows what a skipped number means:
+
+    * :attr:`CONTIGUOUS` — every message adds exactly one.  A skipped number
+      is a dropped message.  This is the default, and what a per-message
+      counter (an exchange MBO feed, cryptofeed's L3 channels) gives.
+    * :attr:`MONOTONIC` — the number only rises.  A skip is normal and says
+      nothing about loss; only a step that does not rise is a fault.  CCXT's
+      book ``nonce`` is this kind: on Binance it is the last update ID of a
+      diff that covers a range of IDs, and ``watch_order_book`` can apply
+      several diffs before it returns a book.
+
+    Mixes in ``str`` so members compare and serialise as their value, as
+    :class:`FeedType` does.
+    """
+
+    CONTIGUOUS = "contiguous"
+    MONOTONIC = "monotonic"
+
+
 @dataclass(frozen=True)
 class RunContext:
     """Per-run parameters that don't belong on the Source constructor.
