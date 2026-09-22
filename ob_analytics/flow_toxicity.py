@@ -24,6 +24,7 @@ the ``n_buckets`` argument itself.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -281,7 +282,9 @@ def compute_vpin(
         * ``attrs["diagnostics"]`` — a tuple of reasons the result should not
           be relied on; empty when there are none.  Today the one check is
           whether there are at least *n_buckets* complete buckets, since
-          ``vpin_avg`` is not a full trailing average before that.
+          ``vpin_avg`` is not a full trailing average before that.  The same
+          condition also raises a :class:`UserWarning`, since ``diagnostics``
+          is easy to miss on a frame that otherwise looks fine.
 
     Raises
     ------
@@ -315,6 +318,16 @@ def compute_vpin(
             f"n_buckets={n_buckets}; vpin_avg never averages a full window"
         )
         diagnostics = (too_few,)
+        if rule == "given":
+            advice = "Pass a smaller bucket_volume or a smaller n_buckets."
+        else:
+            advice = (
+                "The default bucket_volume (average daily volume / "
+                f"{VPIN_BUCKETS_PER_DAY}) is too large for a capture that runs "
+                "well under a day; pass a smaller bucket_volume (see "
+                "vpin_bucket_volume) or a smaller n_buckets."
+            )
+        warnings.warn(f"compute_vpin: {too_few}. {advice}", stacklevel=2)
     result.attrs["bucket_volume"] = float(bucket_volume)
     result.attrs["bucket_volume_rule"] = rule
     result.attrs["n_buckets"] = n_buckets

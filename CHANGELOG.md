@@ -42,6 +42,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   answers HTTP 451 from some countries. `capture ccxt` now says so and names
   `--exchange binanceus` and `--market-data-mirror`, instead of printing a
   traceback.
+- **`compute_vpin` now warns when its default bucket size is too big for the
+  capture** (#274). The default `bucket_volume` (average daily volume ÷ 50)
+  scales a short capture up to a full day, so the bundled sample fills only
+  one bucket and the trailing `vpin_avg` never covers a full window. That was
+  already recorded in `attrs["diagnostics"]`, easy to miss on a frame that
+  otherwise looks fine — `compute_vpin` now also raises a `UserWarning` when
+  there are fewer complete buckets than `n_buckets`, naming a smaller
+  `bucket_volume` or `n_buckets` as the fix. The flow-toxicity how-to gains a
+  short-captures section with a working example on the sample.
 
 ### Changed
 

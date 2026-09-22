@@ -38,7 +38,34 @@ vpin = compute_vpin(result.trades, bucket_volume=bucket)
 
 The frame's `attrs` also hold `n_buckets` and `diagnostics`. When there are
 fewer complete buckets than `n_buckets`, `vpin_avg` is never a full trailing
-average, and `diagnostics` says so. An empty tuple means no problem was found.
+average, `diagnostics` says so, and `compute_vpin` raises a `UserWarning`. An
+empty `diagnostics` tuple means no problem was found.
+
+### Short captures
+
+The default `bucket_volume` (average daily volume ÷ 50) assumes a capture
+that runs close to a full day. The bundled sample covers about 30 minutes, so
+the default rule scales that up to a day and picks a bucket far bigger than
+the whole capture — `compute_vpin` fills one bucket and stops:
+
+```python
+from ob_analytics import Pipeline, compute_vpin, sample_csv_path
+
+result = Pipeline().run(sample_csv_path())
+vpin = compute_vpin(result.trades)
+len(vpin)                      # 1, with a UserWarning explaining why
+```
+
+Pass a `bucket_volume` sized to the capture instead of the default. Dividing
+by somewhat more than `n_buckets` (buckets rarely divide the volume evenly,
+so dividing by exactly `n_buckets` can still fall one bucket short) reliably
+fills a whole trailing window:
+
+```python
+bucket_volume = result.trades["volume"].sum() / 60
+vpin = compute_vpin(result.trades, bucket_volume=bucket_volume)
+len(vpin)                      # a full series, no warning
+```
 
 ## Kyle's lambda
 

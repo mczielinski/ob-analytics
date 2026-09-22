@@ -1,5 +1,7 @@
 """Tests for flow_toxicity.py — VPIN, Kyle's Lambda, and OFI."""
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -409,6 +411,22 @@ class TestVpinDiagnostics:
         assert len(vpin) == 5
         (message,) = vpin.attrs["diagnostics"]
         assert "5 complete buckets" in message
+
+    def test_too_few_buckets_warns_with_given_bucket_volume(self):
+        with pytest.warns(UserWarning, match="5 complete buckets"):
+            vpin = compute_vpin(_trades(["buy"] * 10), bucket_volume=2.0)
+        assert len(vpin) == 5
+
+    def test_too_few_buckets_warns_to_shrink_default_bucket_volume(self):
+        trades = _busy_tape()
+        with pytest.warns(UserWarning, match="pass a smaller bucket_volume"):
+            compute_vpin(trades, n_buckets=10**9)
+
+    def test_full_window_raises_no_warning(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            vpin = compute_vpin(_trades(["buy"] * 10), bucket_volume=2.0, n_buckets=3)
+        assert vpin.attrs["diagnostics"] == ()
 
     def test_bvc_path_is_recorded_and_flagged(self):
         vpin = compute_vpin(
