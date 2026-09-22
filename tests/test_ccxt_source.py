@@ -706,6 +706,14 @@ class TestMarketDataMirror:
         # Spot only, and ccxt's other market-loading options are kept.
         assert ex.options["fetchMarkets"] == {"types": ["spot"], "keep": 1}
 
+    def test_an_older_ccxt_with_a_list_of_types(self, tmp_path):
+        # Earlier ccxt 4.x (4.1.100, for one) made the option the list itself.
+        ex = _FakeWithUrls("binance")
+        ex.options = {"fetchMarkets": ["spot", "linear", "inverse"]}
+        cap = _source(ex, market_data_mirror=True)
+        asyncio.run(_collect_snapshot(cap, _cfg(tmp_path)))
+        assert ex.options["fetchMarkets"] == ["spot"]
+
     def test_off_by_default(self, tmp_path):
         ex = _FakeWithUrls("binance")
         asyncio.run(_collect_snapshot(_source(ex), _cfg(tmp_path)))

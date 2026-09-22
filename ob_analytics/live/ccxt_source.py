@@ -187,7 +187,13 @@ def _use_market_data_mirror(exchange: Any, exchange_id: str) -> None:
         )
     exchange.urls["api"]["public"] = mirror["rest"]
     exchange.urls["api"]["ws"]["spot"] = mirror["ws"]
-    exchange.options["fetchMarkets"]["types"] = ["spot"]
+    # Recent ccxt keeps the market types under "types"; earlier 4.x
+    # releases make the option the list of types itself.
+    fetch_markets = exchange.options.get("fetchMarkets")
+    if isinstance(fetch_markets, dict):
+        fetch_markets["types"] = ["spot"]
+    else:
+        exchange.options["fetchMarkets"] = ["spot"]
 
 
 def _refused_location(exc: Exception, exchange_id: str) -> ConfigError | None:

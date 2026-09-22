@@ -101,8 +101,9 @@ narrow for prices between 0 and 1. Use wider rings, as for
 ## What a capture can and cannot see
 
 The capture streams Polymarket's public websocket, so it sees the book change
-and the trades as they happen, with Polymarket's own timestamps. It has two
-limits:
+and the trades as they happen. Each row has two times: `timestamp`, when the
+capture received it, and `exchange_timestamp`, Polymarket's own time. Replay
+orders the rows by `timestamp`. The capture has two limits:
 
 - There is no sequence number, so `audit` cannot check for dropped data.
 - ccxt keeps the book up to date from the websocket, and the capture records
