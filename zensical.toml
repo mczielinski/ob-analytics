@@ -36,6 +36,7 @@ nav = [
     { "Find hidden liquidity" = "howto/hidden-liquidity.md" },
     { "Capture live data" = "howto/live-capture.md" },
     { "Capture CCXT venues (crypto + prediction markets)" = "howto/ccxt.md" },
+    { "Capture Binance spot" = "howto/binance.md" },
     { "Capture Coinbase" = "howto/coinbase.md" },
     { "Capture Kalshi prediction markets" = "howto/kalshi.md" },
     { "Capture Polymarket prediction markets" = "howto/polymarket.md" },

@@ -143,6 +143,7 @@ from ob_analytics.protocols import (
     Metric,
     OfflineSource,
     RunContext,
+    SequenceKind,
     Source,
     TradeSource,
 )
@@ -239,6 +240,7 @@ __all__ = [
     "QualityCheck",
     "RunContext",
     "SequenceGapReport",
+    "SequenceKind",
     "Severity",
     "Source",
     "SourceSettings",

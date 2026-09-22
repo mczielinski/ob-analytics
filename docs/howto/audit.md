@@ -99,6 +99,10 @@ Two of these are judgement calls worth stating plainly:
   ever changed or deleted. So `orphan_orders` is a warning, and the hard
   evidence for dropped messages is `sequence_gaps`, which needs a feed that
   carries a venue sequence. `audit` always loads with sequence tracking on.
+  A skipped number is a dropped message only when the venue adds one per
+  message. A [ccxt](ccxt.md) capture records in `meta.json` that its sequence
+  only rises, and `audit` then checks only that it never goes back, and
+  prints `gaps not checked`.
 - **A stale order is reported, not removed.** A trade above a resting ask (or
   below a resting bid) shows the order has gone, because a matching engine
   fills the better price first. The venue normally reports that order within

@@ -17,6 +17,7 @@ import pandas as pd
 from ob_analytics import (
     FeedType,
     SequenceGapReport,
+    SequenceKind,
     data_quality_summary,
     detect_sequence_gaps,
 )
@@ -223,6 +224,31 @@ class TestDetectSequenceGaps:
         assert payload["n_missing"] == 1
 
 
+class TestMonotonicSequence:
+    """A sequence that only promises to rise (CCXT's book nonce, #101)."""
+
+    def test_skips_are_not_dropped_messages(self):
+        # Binance diffs span a range of update IDs, so the nonce jumps.
+        report = detect_sequence_gaps(
+            _framed([100, 117, 117, 250]), kind=SequenceKind.MONOTONIC
+        )
+        assert report.n_missing == 0
+        assert report.max_gap == 0
+        assert report.clean
+        assert report.first_break_seq is None
+
+    def test_a_step_back_is_still_out_of_order(self):
+        report = detect_sequence_gaps(
+            _framed([100, 250, 117]), kind=SequenceKind.MONOTONIC
+        )
+        assert report.n_missing == 0
+        assert report.n_out_of_order == 1
+        assert report.first_break_seq == 250
+
+    def test_contiguous_is_the_default(self):
+        assert detect_sequence_gaps(_framed([100, 117])).n_missing == 16
+
+
 # ---------------------------------------------------------------------------
 # Loader integration — columns present / absent / opt-in
 # ---------------------------------------------------------------------------
@@ -360,3 +386,13 @@ class TestDataQualitySummary:
         assert summary.sequence_gaps == 0
         # The report still renders the (zeroed) line.
         assert "venue sequence" in summary.render()
+
+    def test_a_monotonic_sequence_reports_no_gaps_and_says_so(self):
+        events = self._classified_with_sequence([1, 5, 9, 20])
+        summary = data_quality_summary(
+            events, empty_trades(), sequence_kind=SequenceKind.MONOTONIC
+        )
+        assert summary.sequence_gaps == 0
+        assert summary.ok
+        assert "gaps not checked" in summary.render()
+        assert summary.to_dict()["sequence_kind"] == "monotonic"

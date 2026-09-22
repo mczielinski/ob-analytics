@@ -8,7 +8,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A Binance capture no longer loses price levels near the top of the book**
+  (#101). ccxt deletes the levels of a Binance book that fall past the depth
+  it is given, and Binance sends a level again only when it changes. After
+  the price moved away and back, the captured book had holes in its top 20
+  levels. The ccxt source now asks for the whole Binance book and keeps the
+  top `--depth-limit` levels itself, so a level that comes back into the
+  window is recorded again. ccxt's opening snapshot is now as deep as
+  `--depth-limit` (never less than 1,000 levels), so a Binance capture can
+  record up to the 5,000 levels a side that Binance sends, about 1% from the
+  price. A deeper `--depth-limit` is refused.
+- **`audit` no longer fails every ccxt capture with missing sequence
+  numbers** (#101). The ccxt `nonce` only rises: a Binance diff covers a range
+  of update IDs, and ccxt can apply several diffs before it returns a book. A
+  capture now records `"sequence_kind": "monotonic"` in `meta.json`, and
+  `audit` then checks only that the number never goes back. Captures made
+  before this change record no kind and are still read as contiguous.
+- **ccxt book rows are stamped with the time they arrived** (#101). The
+  `timestamp` of a ccxt `depth.csv` row was the venue's book time, while its
+  trades used the receive time. ccxt stamps its first Binance book with its
+  own snapshot's time and then applies older diffs, so sorting on that time
+  swapped two updates and left a stale level: `audit` reported the book
+  crossed for 90% of a session. `timestamp` is now the receive time, and the
+  venue's time is kept in a new `exchange_timestamp` column.
+- **A ccxt book that loses sync is fetched again** (#101). When ccxt finds a
+  missing Binance diff it drops its book and raises an error, which used to
+  end the book for the rest of the capture while trades went on. The capture
+  now asks for the book again (up to 10 times) and counts it as
+  `book_resyncs` in `meta.json`.
+- **A venue that refuses your location gives a one-line error.** Binance
+  answers HTTP 451 from some countries. `capture ccxt` now says so and names
+  `--exchange binanceus` and `--market-data-mirror`, instead of printing a
+  traceback.
+
 ### Changed
+
+- **`--depth-limit` now caps the recorded book for every ccxt venue.**
+  Coinbase, Bitstamp and OKX ignore the limit ccxt passes them, so a capture
+  used to record their whole book (over 20,000 levels a side on Coinbase). The
+  ccxt source now keeps the top `--depth-limit` levels (100 by default) of
+  every venue, in `depth.csv` and in `raw.jsonl`.
 
 - **The price-level depth follows an order that moves or grows.**
   `price_level_volume` used to count every one of an order's rows on the price
@@ -33,6 +74,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   that labels every trade, which is every other source in the package.
 
 ### Added
+
+- **Binance venue notes and a market-data mirror** (#101). A new how-to page
+  covers capturing Binance spot through ccxt: the location block, the
+  `binanceus` alternative, the depth a 100-level book reaches, and trade
+  sides. `capture ccxt --market-data-mirror` (`CcxtSettings.market_data_mirror`)
+  reads Binance spot from Binance's market-data-only endpoints. New
+  `SequenceKind` and `recorded_sequence_kind()`, a `kind` argument on
+  `detect_sequence_gaps()`, and a `sequence_kind` argument on
+  `data_quality_summary()`.
 
 - **Find hidden liquidity** (#111). `detect_icebergs(events, trades)` finds
   iceberg orders from their refills: a resting order filled out, then a new

@@ -46,8 +46,9 @@ from loguru import logger
 
 from ob_analytics._utils import off_tick_grid
 from ob_analytics.config import SourceSettings
+from ob_analytics.exceptions import ConfigError
 from ob_analytics.live._base import CaptureConfig, EventDict
-from ob_analytics.protocols import FeedType, Level
+from ob_analytics.protocols import FeedType, Level, SequenceKind
 
 # Per-venue defaults, overridable via CcxtSettings.
 _DEFAULT_DEPTH_LIMIT = 100
@@ -82,17 +83,138 @@ class CcxtSettings(SourceSettings):
         Order-book depth (levels per side) to request.
     poll_interval : float
         Seconds between REST polls, for REST-only venues.
+    market_data_mirror : bool
+        Read from the venue's market-data-only endpoints instead of its main
+        ones (see :data:`MARKET_DATA_MIRRORS`).  Spot markets only.  Binance's
+        main endpoints refuse some locations; whether you may use the mirror
+        from yours is for you to check against the venue's terms.
     """
 
     exchange: Any = ""
     depth_limit: int = _DEFAULT_DEPTH_LIMIT
     poll_interval: float = _DEFAULT_POLL_INTERVAL
+    market_data_mirror: bool = False
 
 
 #: Prefix that picks a venue from CCXT's prediction markets.  ``binance`` and
 #: ``hyperliquid`` name both a crypto exchange and a prediction market; the
 #: plain id means the crypto exchange, ``prediction/binance`` the other one.
 PREDICTION_PREFIX = "prediction/"
+
+#: Market-data-only endpoints, by CCXT venue id: the REST base for public
+#: spot data and the spot websocket.  They serve public data and no trading.
+MARKET_DATA_MIRRORS: dict[str, dict[str, str]] = {
+    "binance": {
+        "rest": "https://data-api.binance.vision/api/v3",
+        "ws": "wss://data-stream.binance.vision/ws",
+    },
+}
+
+#: Venues whose websocket sends changes at every depth and whose CCXT book
+#: deletes the levels past the ``limit`` it is given, with the most levels
+#: their REST snapshot returns.  A deleted level is never sent again unless it
+#: changes, so after the price moves away and back the book has holes near
+#: the top.  These venues are asked for the whole book, and the capture keeps
+#: the top ``depth_limit`` levels itself.  (Other venues differ: Kraken
+#: subscribes at ``limit`` levels and keeps the window filled; Coinbase,
+#: Bitstamp and OKX ignore it.)
+_WHOLE_BOOK_VENUES: dict[str, int] = {
+    "binance": 5000,
+    "binanceus": 5000,
+    "binanceusdm": 1000,
+    "binancecoinm": 1000,
+}
+
+# The fewest levels ccxt's opening snapshot takes for a whole-book venue:
+# ccxt's own default, which leaves room past a small recorded window.
+_MIN_WHOLE_BOOK_SNAPSHOT = 1000
+
+
+def _size_whole_book_snapshot(
+    exchange: Any, exchange_id: str, depth_limit: int
+) -> None:
+    """Make ccxt's opening snapshot at least as deep as the recorded window.
+
+    Past its opening snapshot, ccxt learns a level only when it changes, so a
+    window deeper than the snapshot has gaps at the bottom.  Raises
+    :class:`~ob_analytics.exceptions.ConfigError` when *depth_limit* is more
+    than the venue's snapshot can return.
+    """
+    most = _WHOLE_BOOK_VENUES[exchange_id]
+    if depth_limit > most:
+        raise ConfigError(
+            f"{exchange_id} returns at most {most} levels a side in a snapshot; "
+            f"--depth-limit {depth_limit} would leave the deeper levels "
+            "incomplete."
+        )
+    exchange.options["watchOrderBookLimit"] = max(depth_limit, _MIN_WHOLE_BOOK_SNAPSHOT)
+
+
+# How many times one capture restarts a book that lost sync before it gives up.
+_MAX_BOOK_RESYNCS = 10
+
+
+def _lost_sync(exc: Exception) -> bool:
+    """Whether *exc* is ccxt reporting a missing book update.
+
+    ccxt raises ``InvalidNonce`` (or its subclass ``ChecksumError``) when a
+    diff does not follow on from the one before, after dropping its book.
+    """
+    try:
+        from ccxt.base.errors import InvalidNonce
+    except ImportError:  # pragma: no cover - only without the extra
+        return False
+    return isinstance(exc, InvalidNonce)
+
+
+# The HTTP status a venue answers with when it does not serve the caller's
+# location ("Unavailable For Legal Reasons").
+_HTTP_UNAVAILABLE_FOR_LEGAL_REASONS = 451
+
+
+def _use_market_data_mirror(exchange: Any, exchange_id: str) -> None:
+    """Point *exchange* at the venue's market-data-only endpoints.
+
+    Only spot markets are loaded: the mirror serves no derivatives metadata.
+    Raises :class:`~ob_analytics.exceptions.ConfigError` for a venue with no
+    known mirror.
+    """
+    mirror = MARKET_DATA_MIRRORS.get(exchange_id)
+    if mirror is None:
+        raise ConfigError(
+            f"No market-data mirror is known for {exchange_id!r}; "
+            f"known: {', '.join(MARKET_DATA_MIRRORS)}."
+        )
+    exchange.urls["api"]["public"] = mirror["rest"]
+    exchange.urls["api"]["ws"]["spot"] = mirror["ws"]
+    # Recent ccxt keeps the market types under "types"; earlier 4.x
+    # releases make the option the list of types itself.
+    fetch_markets = exchange.options.get("fetchMarkets")
+    if isinstance(fetch_markets, dict):
+        fetch_markets["types"] = ["spot"]
+    else:
+        exchange.options["fetchMarkets"] = ["spot"]
+
+
+def _refused_location(exc: Exception, exchange_id: str) -> ConfigError | None:
+    """A readable error when the venue refused the caller's location.
+
+    CCXT reports an HTTP 451 as ``ExchangeNotAvailable`` with the status in
+    the message; ``None`` for any other failure.
+    """
+    if f" {_HTTP_UNAVAILABLE_FOR_LEGAL_REASONS} " not in str(exc):
+        return None
+    hint = ""
+    if exchange_id == "binance":
+        hint = (
+            " For Binance US, use --exchange binanceus. Binance's market-data "
+            "mirror is --market-data-mirror; check Binance's terms allow you "
+            "to use it from your location."
+        )
+    return ConfigError(
+        f"{exchange_id} refused this location (HTTP "
+        f"{_HTTP_UNAVAILABLE_FOR_LEGAL_REASONS}).{hint}"
+    )
 
 
 def _make_exchange(exchange_id: str) -> Any:
@@ -159,6 +281,9 @@ class CcxtSource:
     # CCXT's unified book is the venue's own aggregated view: bids never rest
     # above asks, so the reconstructed book is not crossed.
     feed_type = FeedType.MATCHED_BOOK
+    # The book nonce only rises: a Binance diff spans a range of update IDs,
+    # and watch_order_book can apply several diffs before it returns.
+    sequence_kind = SequenceKind.MONOTONIC
 
     def __init__(self, settings: SourceSettings | None = None) -> None:
         # The venue id and per-run knobs are typed CcxtSettings (the empty
@@ -194,6 +319,8 @@ class CcxtSource:
         # tick size was made finer to fit it (see _fit_tick).
         self.tick_size_changes = 0
         self.book_updates = 0
+        # Times ccxt lost a book update and the book was fetched again.
+        self.book_resyncs = 0
         self.depth_rows = 0
         self.trade_events = 0
         self.duplicate_trades = 0
@@ -229,6 +356,12 @@ class CcxtSource:
         else:
             self.exchange_id = str(getattr(exchange, "id", "custom"))
             self._exchange = exchange
+        if settings.market_data_mirror:
+            _use_market_data_mirror(self._exchange, self.exchange_id)
+        if self.exchange_id in _WHOLE_BOOK_VENUES:
+            _size_whole_book_snapshot(
+                self._exchange, self.exchange_id, self._depth_limit
+            )
 
         has = getattr(self._exchange, "has", {}) or {}
         self._use_ws_book = bool(has.get("watchOrderBook"))
@@ -254,30 +387,34 @@ class CcxtSource:
             book = await self._exchange.fetch_order_book(
                 self._symbol, self._depth_limit
             )
-        except Exception:
+        except Exception as exc:
             # stream() closes the connection when it ends; a capture that
             # fails here never reaches it.
             await self._close()
+            refused = _refused_location(exc, self.exchange_id)
+            if refused is not None:
+                raise refused from exc
             raise
         # Fetching the book loads the venue's market metadata, so the tick
         # size can be read from here on.
         self.tick_size = self._tick_size()
         self._opened_ms = book.get("timestamp")
-        ts = _epoch_ms_to_ts(book.get("timestamp"))
+        received = pd.Timestamp.now(tz="UTC").as_unit("ns")
+        venue_ts = _epoch_ms_to_ts(book.get("timestamp"))
         # CCXT's per-book monotonic sequence (``None`` when the venue omits it);
         # carried as the venue ``sequence`` for gap detection on the L2 path.
         nonce = book.get("nonce")
         for side, key in (("bid", "bids"), ("ask", "asks")):
             levels: dict[float, float] = {}
-            for row in book.get(key) or ():
+            for row in self._top(book, key):
                 price = float(row[0])
                 size = float(row[1])
                 self._fit_tick(price)
                 levels[price] = size
                 if size > 0:
                     yield {
-                        "timestamp": ts,
-                        "exchange_timestamp": ts,
+                        "timestamp": received,
+                        "exchange_timestamp": venue_ts,
                         "side": side,
                         "price": price,
                         "volume": size,
@@ -347,7 +484,10 @@ class CcxtSource:
             try:
                 if self._use_ws_book:
                     book = await self._exchange.watch_order_book(
-                        self._symbol, self._depth_limit
+                        self._symbol,
+                        None
+                        if self.exchange_id in _WHOLE_BOOK_VENUES
+                        else self._depth_limit,
                     )
                 else:
                     book = await self._exchange.fetch_order_book(
@@ -357,12 +497,19 @@ class CcxtSource:
                 # Finite feed exhausted (tests). Real feeds block instead.
                 return
             except Exception as exc:  # noqa: BLE001 - one bad frame ends the loop for v1
+                if _lost_sync(exc) and self.book_resyncs < _MAX_BOOK_RESYNCS:
+                    # ccxt found a missing update and dropped its book; the
+                    # next call fetches a new snapshot, and diffing it against
+                    # the last recorded book corrects every level.
+                    self.book_resyncs += 1
+                    logger.warning("[ccxt] book lost sync, restarting: {!r}", exc)
+                    continue
                 self.errors += 1
                 logger.warning("[ccxt] book loop ended on error: {!r}", exc)
                 return
             self.book_updates += 1
-            ts = _epoch_ms_to_ts(book.get("timestamp"))
-            for row, raw in self._diff_book(book, ts):
+            received = pd.Timestamp.now(tz="UTC").as_unit("ns")
+            for row, raw in self._diff_book(book, received):
                 self.depth_rows += 1
                 await queue.put(("depth", row, raw))
             if not self._use_ws_book:
@@ -436,30 +583,39 @@ class CcxtSource:
         return {"venue": self.exchange_id, "symbol": self._symbol}
 
     def _diff_book(
-        self, book: dict[str, Any], ts: pd.Timestamp
+        self, book: dict[str, Any], received: pd.Timestamp
     ) -> Iterator[tuple[EventDict, Any]]:
         """Yield ``(depth_row, raw)`` for levels that changed vs the last book.
 
         A changed/added level emits its new absolute size; a level present
         before but absent now emits ``0`` (removal).  Updates the stored
-        per-side book.
+        per-side book.  Only the top ``depth_limit`` levels a side are
+        compared, so a level that leaves that window emits ``0`` and one that
+        comes back emits its size.
+
+        Rows carry *received*, the time the capture got the book, as
+        ``timestamp``, and the venue's book time as ``exchange_timestamp``.
+        The venue time can step back: ccxt stamps its first Binance book with
+        its own snapshot's time, then applies older buffered diffs.  Replay
+        sorts on ``timestamp``, so it must follow arrival order.
 
         The raw frame for raw.jsonl is attached to the first emitted row of
-        the update and ``None`` on the rest.  The first frame is the whole
-        book as CCXT gave it, with ``"frame": "book"``.  Every later frame
-        has ``"frame": "changes"`` and holds only the changed levels (as
+        the update and ``None`` on the rest.  The first frame is the recorded
+        window of the book, with ``"frame": "book"``.  Every later frame has
+        ``"frame": "changes"`` and holds only the changed levels (as
         ``[price, size]`` pairs, ``0`` for a removal) with the book's
         ``symbol``, ``timestamp``, ``datetime`` and ``nonce``.  Applying the
-        changes to the first frame in order gives each book the venue sent,
-        and the file grows with the updates, not with the depth of the book.
+        changes to the first frame in order gives each recorded book, and the
+        file grows with the updates, not with the depth of the book.
         """
+        venue_ts = _epoch_ms_to_ts(book.get("timestamp"))
         # CCXT's per-book monotonic sequence (``None`` when the venue omits it);
         # every row from this book update carries it as the venue ``sequence``.
         nonce = book.get("nonce")
         changes: dict[str, list[tuple[float, float]]] = {"bid": [], "ask": []}
         for side, key in (("bid", "bids"), ("ask", "asks")):
             current: dict[float, float] = {}
-            for row in book.get(key) or ():
+            for row in self._top(book, key):
                 current[float(row[0])] = float(row[1])
             prev = self._last[side]
             for price, size in current.items():
@@ -487,16 +643,16 @@ class CcxtSource:
             raw = {
                 **book,
                 "frame": "book",
-                "bids": [list(level) for level in book.get("bids") or ()],
-                "asks": [list(level) for level in book.get("asks") or ()],
+                "bids": [list(level) for level in self._top(book, "bids")],
+                "asks": [list(level) for level in self._top(book, "asks")],
             }
             self._full_book_written = True
         for side in ("bid", "ask"):
             for price, size in changes[side]:
                 yield (
                     {
-                        "timestamp": ts,
-                        "exchange_timestamp": ts,
+                        "timestamp": received,
+                        "exchange_timestamp": venue_ts,
                         "side": side,
                         "price": price,
                         "volume": size,
@@ -506,6 +662,13 @@ class CcxtSource:
                     raw,
                 )
                 raw = None
+
+    def _top(self, book: dict[str, Any], key: str) -> list[Any]:
+        """The best ``depth_limit`` levels of one side of a CCXT book.
+
+        CCXT sorts each side best first (bids high to low, asks low to high).
+        """
+        return list(book.get(key) or ())[: self._depth_limit]
 
     def _map_trade(self, t: dict[str, Any]) -> EventDict:
         """Map a CCXT trade to the universal trade-event shape.
@@ -596,9 +759,11 @@ class CcxtSource:
         """Per-run counters for meta.json (SupportsDiagnostics)."""
         return {
             "exchange": self.exchange_id,
+            "sequence_kind": self.sequence_kind.value,
             "tick_size": self.tick_size,
             "tick_size_changes": self.tick_size_changes,
             "book_updates": self.book_updates,
+            "book_resyncs": self.book_resyncs,
             "depth_rows": self.depth_rows,
             "trade_events": self.trade_events,
             "duplicate_trades": self.duplicate_trades,

@@ -28,7 +28,7 @@ from loguru import logger
 from ob_analytics import _engine_frames, engine
 from ob_analytics._utils import ticks_to_price, validate_columns, validate_non_empty
 from ob_analytics.depth import price_level_volume
-from ob_analytics.protocols import FeedType
+from ob_analytics.protocols import FeedType, SequenceKind
 from ob_analytics.schemas import (
     INGEST_SEQ_COLUMN,
     SEQUENCE_COLUMN,
@@ -603,6 +603,7 @@ def detect_sequence_gaps(
     sequence_col: str = SEQUENCE_COLUMN,
     order_col: str = INGEST_SEQ_COLUMN,
     group_cols: Sequence[str] = _SEQUENCE_GROUP_COLUMNS,
+    kind: SequenceKind = SequenceKind.CONTIGUOUS,
 ) -> SequenceGapReport:
     """Report missing or out-of-order venue sequence numbers in *frame*.
 
@@ -621,6 +622,11 @@ def detect_sequence_gaps(
         present in *frame* are used; with none present the whole frame is one
         channel.  Sequences from different channels are not comparable, so each
         group is scored on its own.
+    kind : SequenceKind
+        What the sequence promises.  With
+        :attr:`~ob_analytics.protocols.SequenceKind.MONOTONIC` a skipped number
+        is normal, so nothing is counted as missing and only steps that do not
+        rise are reported.
 
     Returns
     -------
@@ -669,16 +675,20 @@ def detect_sequence_gaps(
             continue
 
         diffs = np.diff(uniq)
-        gap_steps = diffs[diffs > 1] - 1
-        if gap_steps.size:
-            n_missing += int(gap_steps.sum())
-            max_gap = max(max_gap, int(gap_steps.max()))
-        n_out_of_order += int(np.count_nonzero(diffs <= 0))
+        broken = diffs <= 0
+        n_out_of_order += int(np.count_nonzero(broken))
+        # A skip is a dropped message only when every message adds one.
+        if kind is SequenceKind.CONTIGUOUS:
+            gap_steps = diffs[diffs > 1] - 1
+            if gap_steps.size:
+                n_missing += int(gap_steps.sum())
+                max_gap = max(max_gap, int(gap_steps.max()))
+            broken |= diffs > 1
 
         if first_break is None:
-            broken = np.nonzero((diffs > 1) | (diffs <= 0))[0]
-            if broken.size:
-                first_break = int(uniq[broken[0]])
+            where = np.nonzero(broken)[0]
+            if where.size:
+                first_break = int(uniq[where[0]])
 
     return SequenceGapReport(
         n_sequenced, n_updates, n_missing, n_out_of_order, max_gap, first_break
@@ -1181,9 +1191,13 @@ class DataQualitySummary:
         ``track_sequence`` was off at load — the sequence metrics below are then
         trivially zero.
     sequence_gaps : int
-        Dropped-message count: skipped venue sequence numbers.
+        Dropped-message count: skipped venue sequence numbers.  Always ``0``
+        when ``sequence_kind`` is ``MONOTONIC``, where a skip is normal.
     sequence_out_of_order : int
         Reordered or duplicated messages: sequence steps that did not advance.
+    sequence_kind : SequenceKind
+        What the venue sequence promises, and so whether ``sequence_gaps`` was
+        checked (see :class:`~ob_analytics.protocols.SequenceKind`).
     orphan_orders : int
         Distinct order ids with a ``changed`` or ``deleted`` event but no
         ``created`` one.  Every order resting before the capture began is an
@@ -1224,6 +1238,7 @@ class DataQualitySummary:
     events_with_sequence: int = 0
     sequence_gaps: int = 0
     sequence_out_of_order: int = 0
+    sequence_kind: SequenceKind = SequenceKind.CONTIGUOUS
     orphan_orders: int = 0
     orphan_events: int = 0
     nonpositive_price_rows: int = 0
@@ -1248,6 +1263,7 @@ class DataQualitySummary:
             "events_with_sequence": self.events_with_sequence,
             "sequence_gaps": self.sequence_gaps,
             "sequence_out_of_order": self.sequence_out_of_order,
+            "sequence_kind": str(self.sequence_kind.value),
             "orphan_orders": self.orphan_orders,
             "orphan_events": self.orphan_events,
             "nonpositive_price_rows": self.nonpositive_price_rows,
@@ -1438,6 +1454,11 @@ class DataQualitySummary:
 
     def render(self) -> str:
         """Return a fixed-width, human-readable report block."""
+        missing = (
+            f"{self.sequence_gaps} missing"
+            if self.sequence_kind is SequenceKind.CONTIGUOUS
+            else "gaps not checked (sequence only rises)"
+        )
         lines = [
             "Data quality summary",
             f"  feed type             : {self.feed_type.value}",
@@ -1469,7 +1490,7 @@ class DataQualitySummary:
                 f"venue-after-receive / {self.exchange_time_reordered} reordered"
             ),
             (
-                f"  venue sequence        : {self.sequence_gaps} missing / "
+                f"  venue sequence        : {missing} / "
                 f"{self.sequence_out_of_order} out-of-order "
                 f"({self.events_with_sequence} row(s) numbered)"
             ),
@@ -1547,6 +1568,7 @@ def data_quality_summary(
     feed_type: FeedType = FeedType.UNKNOWN,
     depth: pd.DataFrame | None = None,
     tick_size: float = 1.0,
+    sequence_kind: SequenceKind = SequenceKind.CONTIGUOUS,
 ) -> DataQualitySummary:
     """Summarise the data quality of one reconstructed session.
 
@@ -1578,6 +1600,10 @@ def data_quality_summary(
         Quote-currency size of one price tick (``PipelineResult.config.tick_size``),
         so the prices in ``stale_orders`` read in the quote currency.  Leave at
         ``1.0`` to report them in ticks.
+    sequence_kind : SequenceKind, optional
+        What the venue ``sequence`` promises, passed to
+        :func:`detect_sequence_gaps`.  A capture records it in ``meta.json``
+        (read it with :func:`~ob_analytics.depth_l2.recorded_sequence_kind`).
 
     Returns
     -------
@@ -1650,7 +1676,7 @@ def data_quality_summary(
     # Venue sequence gaps: read from events on the L3 path, or from the
     # price-level depth on the L2 path (where sequence, when present, rides on
     # depth rather than the empty events frame).  Absent columns score zero.
-    gaps = detect_sequence_gaps(depth if l2 else events)
+    gaps = detect_sequence_gaps(depth if l2 else events, kind=sequence_kind)
 
     # Orders changed or deleted with no created row.  On the L2 path there are
     # no per-order events, so there is nothing to orphan.
@@ -1686,6 +1712,7 @@ def data_quality_summary(
         events_with_sequence=gaps.n_sequenced,
         sequence_gaps=gaps.n_missing,
         sequence_out_of_order=gaps.n_out_of_order,
+        sequence_kind=sequence_kind,
         orphan_orders=orphan_orders,
         orphan_events=orphan_events,
         nonpositive_price_rows=nonpositive_price_rows,
