@@ -12,7 +12,10 @@ coordinate ``(concept, level, backend)`` where *level* is a :class:`Level`
 (``L2``/``L3``) or ``None`` for level-less analytics.  The registry is
 extensible via :func:`register_plot_backend`.  ``backend="matplotlib"``
 (default) returns a Matplotlib figure; ``backend="plotly"`` returns an
-interactive Plotly figure.
+interactive Plotly figure; ``backend="bokeh"`` returns a Bokeh figure
+(covering the core concepts -- ``trade_tape``, ``depth_heatmap``,
+``book_snapshot``, ``depth_chart`` -- for Bokeh / Panel server dashboards
+and streaming views).
 
 A concept registered at a single level resolves it automatically, so callers
 pass only the concept name; *comparable* concepts (both L2 and L3 registered)
@@ -59,11 +62,12 @@ _UNSET: Any = object()
 
 # Lazy-import bootstrap: backend name → module that self-registers its
 # renderers on import.  matplotlib is a hard dep (imported just below for its
-# theme helpers, which also fires its registration); plotly is optional and
-# imported on first use.
+# theme helpers, which also fires its registration); plotly and bokeh are
+# optional and imported on first use.
 _BACKEND_MODULES: dict[str, str] = {
     "matplotlib": "ob_analytics.visualization._matplotlib",
     "plotly": "ob_analytics.visualization._plotly",
+    "bokeh": "ob_analytics.visualization._bokeh",
 }
 
 
@@ -157,7 +161,7 @@ def plot(
 
     Returns
     -------
-    matplotlib.figure.Figure or plotly.graph_objects.Figure
+    matplotlib.figure.Figure or plotly.graph_objects.Figure or bokeh.plotting.figure
 
     Raises
     ------

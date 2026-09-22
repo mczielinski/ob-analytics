@@ -72,10 +72,12 @@ save_figure(fig, "trades.png")
 
 Overrides flow through to the underlying prepare function, and
 `backend="plotly"` gives an interactive figure (with the `[interactive]`
-extra):
+extra); `backend="bokeh"` (with the `[bokeh]` extra) gives another, suited
+to Bokeh / Panel server dashboards and streaming views:
 
 ```python
 fig = result.plot("depth_heatmap", col_bias=0.1, backend="plotly")
+fig = result.plot("depth_heatmap", col_bias=0.1, backend="bokeh")
 ```
 
 ## Try the CLI

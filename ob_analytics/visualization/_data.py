@@ -1316,6 +1316,22 @@ def book_mid(bids: pd.DataFrame, asks: pd.DataFrame) -> float | None:
     return (float(bids["price"].max()) + float(asks["price"].min())) / 2
 
 
+def book_bar_thickness(*sides: pd.DataFrame) -> float:
+    """Smallest positive gap between distinct prices across *sides*.
+
+    Used as the ``book_snapshot`` ladder's bar thickness (price units) by
+    every backend; windowing to the touch keeps this gap roughly the tick
+    size, so bars stay tall and contiguous.
+    """
+    arrays = [s["price"].to_numpy() for s in sides if not s.empty]
+    if not arrays:
+        return 1.0
+    uniq = np.unique(np.concatenate(arrays))
+    diffs = np.diff(uniq)
+    diffs = diffs[diffs > 0]
+    return float(np.min(diffs)) if diffs.size else 1.0
+
+
 def check_book_payload_level(data: dict[str, Any], *, per_order: bool) -> None:
     """Reject a book payload whose resolution contradicts the renderer's level.
 

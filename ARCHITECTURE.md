@@ -272,7 +272,8 @@ ob_analytics/
     ├── gallery.py        # HTML gallery generation
     ├── _data.py          # Shared data prep for plot backends
     ├── _matplotlib.py    # Matplotlib renderers
-    └── _plotly.py        # Plotly renderers
+    ├── _plotly.py        # Plotly renderers
+    └── _bokeh.py         # Bokeh renderers (core concepts)
 ```
 
 **Live capture** is optional (install with `pip install "ob-analytics[live]"`,
