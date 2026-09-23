@@ -67,6 +67,14 @@ _FINEST_TICK = 1e-8
 # How many recent trades a capture remembers to recognise one delivered twice.
 _SEEN_TRADES_LIMIT = 10_000
 
+# How many depth rows _book_loop enqueues before it yields to the event loop.
+# A whole-book venue's opening diff (or the one after a resync) can carry
+# thousands of rows; queue.put() on an unbounded queue never actually
+# suspends, so without a deliberate yield that whole burst would run as one
+# uninterrupted stretch and starve _trades_loop and the stop/deadline checks
+# in stream() for its entire duration.
+_YIELD_EVERY_DEPTH_ROWS = 256
+
 
 class CcxtSettings(SourceSettings):
     """Typed settings for :class:`CcxtSource` (replaces the former extras dict).
@@ -526,6 +534,8 @@ class CcxtSource:
             for row, raw in self._diff_book(book, received):
                 self.depth_rows += 1
                 await queue.put(("depth", row, raw))
+                if self.depth_rows % _YIELD_EVERY_DEPTH_ROWS == 0:
+                    await asyncio.sleep(0)
             if not self._use_ws_book:
                 await asyncio.sleep(self._poll_interval)
 
@@ -632,16 +642,28 @@ class CcxtSource:
         nonce = book.get("nonce")
         changes: dict[str, list[tuple[float, float]]] = {"bid": [], "ask": []}
         for side, key in (("bid", "bids"), ("ask", "asks")):
-            current: dict[float, float] = {}
-            for row in self._side(book, key):
-                current[float(row[0])] = float(row[1])
+            # Diffed by mutating self._last[side] in place, not by building a
+            # fresh dict every call: for a deep book (whole-book venues, or
+            # Coinbase/Bitstamp/OKX which hand ccxt everything regardless of
+            # depth_limit) that dict can hold tens of thousands of entries,
+            # and this is the hot path for a capture that can run for hours.
+            # Safe because a CCXT book side never repeats a price (ccxt's own
+            # OrderBookSide is keyed by price), so one pass both updates
+            # changed levels and marks what is still present.
             prev = self._last[side]
-            for price, size in current.items():
+            seen: set[float] = set()
+            for row in self._side(book, key):
+                price = float(row[0])
+                size = float(row[1])
+                seen.add(price)
                 if prev.get(price) != size:
                     self._fit_tick(price)
                     changes[side].append((price, size))
-            changes[side].extend((price, 0.0) for price in prev if price not in current)
-            self._last[side] = current
+                    prev[price] = size
+            gone = [price for price in prev if price not in seen]
+            for price in gone:
+                changes[side].append((price, 0.0))
+                del prev[price]
         if not (changes["bid"] or changes["ask"]):
             return
         raw: dict[str, Any] | None

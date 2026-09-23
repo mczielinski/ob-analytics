@@ -652,7 +652,11 @@ def main() -> None:
         "--depth-limit",
         type=int,
         default=None,
-        help="ccxt: order-book depth (levels per side) to request",
+        help=(
+            "ccxt: order-book depth (levels per side) to request -- a floor, "
+            "not a cap: most venues record more than this (see the ccxt "
+            "how-to page)"
+        ),
     )
     p_cap.add_argument(
         "--poll-interval",
