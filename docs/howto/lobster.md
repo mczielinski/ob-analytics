@@ -36,7 +36,11 @@ attribute (`None` when absent):
 ```python
 from ob_analytics import Pipeline, RunContext
 from ob_analytics.lobster import LobsterLoader, LobsterSource
-from ob_analytics.visualization.gallery import generate_gallery, trading_halts_panel
+from ob_analytics.visualization.gallery import (
+    build_gallery_model,
+    generate_gallery,
+    trading_halts_panel,
+)
 
 ctx = RunContext(trading_date="2015-05-01")
 result = Pipeline(source=LobsterSource()).run(path, ctx=ctx)
@@ -46,10 +50,9 @@ loader.load(path)             # populates loader.trading_halts
 halts = loader.trading_halts  # pd.DataFrame | None
 
 if halts is not None:
-    generate_gallery(
-        result, "out/gallery",
-        extra_panels=[trading_halts_panel(result.trades, halts)],
-    )
+    model = build_gallery_model(result)
+    model.analytics.append(trading_halts_panel(result.trades, halts))
+    generate_gallery(result, "out/gallery", model=model)
 ```
 
 Bitstamp runs have no such tables (`loader.trading_halts is None`). Hidden
