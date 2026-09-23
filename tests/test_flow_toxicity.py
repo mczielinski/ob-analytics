@@ -419,8 +419,26 @@ class TestVpinDiagnostics:
 
     def test_too_few_buckets_warns_to_shrink_default_bucket_volume(self):
         trades = _busy_tape()
-        with pytest.warns(UserWarning, match="pass a smaller bucket_volume"):
+        with pytest.warns(UserWarning, match="Pass a smaller bucket_volume"):
             compute_vpin(trades, n_buckets=10**9)
+
+    def test_warning_names_no_cause_it_cannot_know(self):
+        """A big n_buckets, not a short capture, can trigger this (#276).
+
+        The default bucket_volume is sized from a fixed 50-buckets-per-day
+        rule, independent of n_buckets, so a multi-day capture can still
+        produce fewer buckets than a caller-chosen n_buckets. The warning
+        must not claim the capture ran "well under a day" when it didn't.
+        """
+        trades = _trades(
+            ["buy", "sell"] * 100,
+            base_sec_offsets=[i * 900 for i in range(200)],  # 2-day span
+        )
+        with pytest.warns(UserWarning) as records:
+            vpin = compute_vpin(trades, n_buckets=200)
+        assert len(vpin) < 200
+        message = str(records[0].message)
+        assert "day" not in message
 
     def test_full_window_raises_no_warning(self):
         with warnings.catch_warnings():

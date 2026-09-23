@@ -318,15 +318,13 @@ def compute_vpin(
             f"n_buckets={n_buckets}; vpin_avg never averages a full window"
         )
         diagnostics = (too_few,)
-        if rule == "given":
-            advice = "Pass a smaller bucket_volume or a smaller n_buckets."
-        else:
-            advice = (
-                "The default bucket_volume (average daily volume / "
-                f"{VPIN_BUCKETS_PER_DAY}) is too large for a capture that runs "
-                "well under a day; pass a smaller bucket_volume (see "
-                "vpin_bucket_volume) or a smaller n_buckets."
-            )
+        # Both a given and a defaulted bucket_volume are named here — the
+        # default rule sizes buckets from a fixed 50-per-day constant, not
+        # from n_buckets, so a caller who raises n_buckets above 50 can see
+        # this even on a capture that runs well over a day; naming a cause
+        # (e.g. "too large for a capture under a day") would be wrong there.
+        see_rule = " (see vpin_bucket_volume)" if rule != "given" else ""
+        advice = f"Pass a smaller bucket_volume{see_rule} or a smaller n_buckets."
         warnings.warn(f"compute_vpin: {too_few}. {advice}", stacklevel=2)
     result.attrs["bucket_volume"] = float(bucket_volume)
     result.attrs["bucket_volume_rule"] = rule
