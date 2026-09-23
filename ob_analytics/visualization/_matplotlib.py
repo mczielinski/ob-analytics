@@ -10,6 +10,7 @@ The :class:`PlotTheme` value object and :data:`DEFAULT_THEME` also live here.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -163,6 +164,24 @@ def save_figure(
 # ---------------------------------------------------------------------------
 
 
+def _tight_layout(fig: Figure, **kwargs: Any) -> None:
+    """Call ``fig.tight_layout()``, without the "not compatible" warning.
+
+    Renderers that draw onto a caller-supplied *ax* (tutorial grids
+    combining several concepts, or a face that added its own colorbar axes)
+    trip matplotlib's tight_layout compatibility check even though the
+    layout it produces is fine; the pass still runs, only the warning is
+    silenced.
+    """
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="This figure includes Axes that are not compatible with tight_layout",
+            category=UserWarning,
+        )
+        fig.tight_layout(**kwargs)
+
+
 def mpl_time_series(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -260,7 +279,7 @@ def mpl_trades(
     ax.grid(True)
     if any_pts:
         ax.legend(loc="upper right")
-    fig.tight_layout()
+    _tight_layout(fig)
     return fig
 
 
@@ -441,7 +460,7 @@ def mpl_price_levels(
     by_label = dict(zip(labels, handles))
     ax.legend(by_label.values(), by_label.keys())
 
-    fig.tight_layout()
+    _tight_layout(fig)
     return fig
 
 
@@ -885,7 +904,7 @@ def mpl_order_activity_per_order(
         )
     if drew_any:
         ax.legend(loc="upper right")
-    fig.tight_layout()
+    _tight_layout(fig)
     return fig
 
 
@@ -949,7 +968,7 @@ def mpl_queue_position_per_order(
             Line2D([0], [0], color=_PARTIAL_COLOR, label="still resting"),
         ]
         ax.legend(handles=handles, loc="upper right")
-    fig.tight_layout()
+    _tight_layout(fig)
     return fig
 
 
