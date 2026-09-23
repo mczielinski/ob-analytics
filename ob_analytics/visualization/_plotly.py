@@ -9,7 +9,6 @@ Install via ``pip install ob-analytics[interactive]``.
 
 from __future__ import annotations
 
-import math
 from functools import lru_cache
 from typing import Any
 
@@ -17,6 +16,7 @@ import numpy as np
 
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.visualization._data import (
+    biased_color_norm,
     book_mid,
     check_book_payload_level,
     mpl_marker_area_to_plotly_size,
@@ -136,63 +136,22 @@ def plotly_trades(data: dict) -> Any:
     return fig
 
 
-def _format_volume(value: float) -> str:
-    """Compact label for a colorbar volume tick."""
-    if not math.isfinite(value):
-        return ""
-    a = abs(value)
-    if a != 0 and (a < 1e-3 or a >= 1e6):
-        return f"{value:.1e}"
-    if a >= 1000:
-        return f"{value:,.0f}"
-    if a >= 1:
-        return f"{value:.1f}"
-    return f"{value:.3g}"
-
-
 def _biased_color_norm(
     volume: np.ndarray, col_bias: float, n_ticks: int = 5
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Map volumes to [0, 1] color positions under a power/log bias.
 
-    Mirrors the matplotlib backend (see ``mpl_price_levels``): ``col_bias``
-    of ``1.0`` is linear, ``0 < col_bias < 1`` is a PowerNorm gamma that
-    brightens low-volume levels, and ``col_bias <= 0`` selects log10. Returns
-    the normalized color array plus ``marker.colorbar`` kwargs whose ticks sit
-    in normalized space but are labeled in original volume units.
+    Wraps the shared :func:`~ob_analytics.visualization._data.biased_color_norm`
+    (also used by the bokeh backend) and packages the result into Plotly's
+    ``marker.colorbar`` kwarg shape: ticks sit in normalized ``[0, 1]`` space
+    but are labeled in original volume units.
     """
-    v = np.asarray(volume, dtype=float)
-    if col_bias <= 0:
-        finite = v[np.isfinite(v) & (v > 0)]
-    else:
-        finite = v[np.isfinite(v)]
-    base_bar = {"title": "Volume", "x": 1.02, "len": 0.75}
-    if finite.size == 0:
-        return np.zeros_like(v), base_bar
-    vmin = float(finite.min())
-    vmax = float(finite.max())
-    if vmax <= vmin:
-        vmax = vmin + 1.0
-
-    if col_bias <= 0:
-        lo, hi = math.log(vmin), math.log(vmax)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            t = (np.log(np.clip(v, vmin, vmax)) - lo) / (hi - lo)
-
-        def inv(tt: float) -> float:
-            return math.exp(lo + tt * (hi - lo))
-    else:
-        gamma = col_bias
-        base = (np.clip(v, vmin, vmax) - vmin) / (vmax - vmin)
-        t = base**gamma
-
-        def inv(tt: float) -> float:
-            return vmin + (tt ** (1.0 / gamma)) * (vmax - vmin)
-
-    t = np.nan_to_num(t, nan=0.0)
-    tickvals = [i / (n_ticks - 1) for i in range(n_ticks)]
-    ticktext = [_format_volume(inv(tv)) for tv in tickvals]
-    return t, {**base_bar, "tickvals": tickvals, "ticktext": ticktext}
+    t, tickvals, ticktext = biased_color_norm(volume, col_bias, n_ticks)
+    bar: dict[str, Any] = {"title": "Volume", "x": 1.02, "len": 0.75}
+    if tickvals:
+        bar["tickvals"] = tickvals
+        bar["ticktext"] = ticktext
+    return t, bar
 
 
 def plotly_price_levels(data: dict) -> Any:

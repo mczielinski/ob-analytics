@@ -65,15 +65,31 @@ def _stub_fail_plotly(data):
     raise RuntimeError("deliberate plotly failure")
 
 
+def _stub_bokeh(data):
+    from bokeh.plotting import figure
+
+    fig = figure()
+    fig.scatter(x=[0, 1], y=[0, 1])
+    return fig
+
+
+def _stub_fail_bokeh(data):
+    raise RuntimeError("deliberate bokeh failure")
+
+
 _STUB_RENDERERS = {
     ("stub", Level.L2, "matplotlib"): _stub_mpl,
     ("stub", Level.L2, "plotly"): _stub_plotly,
+    ("stub", Level.L2, "bokeh"): _stub_bokeh,
     ("stub", Level.L3, "matplotlib"): _stub_mpl,
     ("stub", Level.L3, "plotly"): _stub_plotly,
+    ("stub", Level.L3, "bokeh"): _stub_bokeh,
     ("stubfail", Level.L2, "matplotlib"): _stub_fail_mpl,
     ("stubfail", Level.L2, "plotly"): _stub_fail_plotly,
+    ("stubfail", Level.L2, "bokeh"): _stub_fail_bokeh,
     ("stubmetric", None, "matplotlib"): _stub_mpl,
     ("stubmetric", None, "plotly"): _stub_plotly,
+    ("stubmetric", None, "bokeh"): _stub_bokeh,
 }
 
 
@@ -263,6 +279,12 @@ class TestRenderPanel:
         assert "mpl-panel" in html
         assert "panel-secondary" in html
 
+    def test_bokeh_rendered_uses_iframe(self) -> None:
+        html = _render_panel(_panel("bokeh", "01.L2"), "Demo")
+        assert "<iframe" in html
+        assert 'src="bokeh/01.L2.html"' in html
+        assert "bokeh-panel" in html
+
     def test_not_rendered_shows_na(self) -> None:
         html = _render_panel(_panel("plotly", "x", rendered=False), "x")
         assert "Not available" in html
@@ -334,6 +356,23 @@ class TestGenerateGallery:
         )
         body = path.read_text().split("<body>", 1)[1]
         assert body.index("mpl-panel") < body.index("plotly-panel")
+
+    def test_bokeh_backend_writes_standalone_html(self, tmp_path: Path) -> None:
+        # Bokeh figures have no matplotlib-style .savefig(); this exercises the
+        # real persist path (not the "custom backend: best-effort PNG"
+        # fallback, which raises AttributeError for a bokeh figure).
+        path = generate_gallery(
+            result=None,
+            output_dir=tmp_path,
+            model=self._model(),
+            backends=["bokeh"],
+        )
+        bokeh_html = tmp_path / "bokeh" / "stub.L2.html"
+        assert bokeh_html.exists()
+        assert "bokeh" in bokeh_html.read_text().lower()
+        body = path.read_text().split("<body>", 1)[1]
+        assert "bokeh-panel" in body
+        assert "Not available" not in body
 
     def test_view_comparison_single_backend_both_faces(self, tmp_path: Path) -> None:
         model = GalleryModel(concepts=[_comparable_concept()])

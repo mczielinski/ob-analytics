@@ -1287,9 +1287,13 @@ def generate_gallery(
     backends : list of str, optional
         Backends to render.  Defaults to ``["plotly", "matplotlib"]`` when
         plotly is installed (plotly is the primary column), else
-        ``["matplotlib"]``.  In ``comparison`` view the backend axis collapses
-        to a single backend (plotly if available) so the two columns carry
-        L2 vs L3.
+        ``["matplotlib"]``.  Pass ``"bokeh"`` explicitly to add a Bokeh
+        column -- it is not auto-detected like plotly since it only covers
+        the core concepts (``trade_tape``, ``depth_heatmap``,
+        ``book_snapshot``, ``depth_chart``); other concepts render as "Not
+        available" in that column.  In ``comparison`` view the backend axis
+        collapses to a single backend (plotly if available) so the two
+        columns carry L2 vs L3.
     title : str
         Gallery page title.
 
@@ -1355,6 +1359,12 @@ def _render_and_save(panel: _Panel, out: Path, plt: Any) -> bool:
             plt.close(fig)
         elif panel.backend == "plotly":
             fig.write_html(f"{target}.html", include_plotlyjs="cdn")
+        elif panel.backend == "bokeh":
+            from bokeh.io import save as bokeh_save
+
+            bokeh_save(
+                fig, filename=f"{target}.html", resources="cdn", title=panel.stem
+            )
         else:  # custom backend: best-effort PNG
             save_figure(fig, f"{target}.png")
         return True
@@ -1376,6 +1386,7 @@ class _BackendStyle:
 _BACKEND_STYLES: dict[str, _BackendStyle] = {
     "plotly": _BackendStyle("Plotly", "plotly-panel"),
     "matplotlib": _BackendStyle("Matplotlib", "mpl-panel"),
+    "bokeh": _BackendStyle("Bokeh", "bokeh-panel"),
 }
 
 
@@ -1388,6 +1399,11 @@ def _render_panel(panel: _Panel, escaped_title: str) -> str:
     elif panel.backend == "plotly":
         body = (
             f'<iframe src="plotly/{panel.stem}.html" loading="lazy" '
+            f'title="{escaped_title} ({panel.label})"></iframe>'
+        )
+    elif panel.backend == "bokeh":
+        body = (
+            f'<iframe src="bokeh/{panel.stem}.html" loading="lazy" '
             f'title="{escaped_title} ({panel.label})"></iframe>'
         )
     elif panel.backend == "matplotlib":
@@ -1459,6 +1475,7 @@ h1{{text-align:center;margin-bottom:24px;color:#e94560}}
 .panel h3{{margin-bottom:8px;font-size:.85em;text-transform:uppercase;letter-spacing:1px}}
 .mpl-panel h3{{color:#81c784}}
 .plotly-panel h3{{color:#ffb74d}}
+.bokeh-panel h3{{color:#4fc3f7}}
 .panel img{{max-width:100%;height:auto;border-radius:4px;cursor:pointer;transition:transform .2s}}
 .panel img:hover{{transform:scale(1.02)}}
 .panel iframe{{width:100%;border:none;border-radius:4px;background:#1e1e1e}}

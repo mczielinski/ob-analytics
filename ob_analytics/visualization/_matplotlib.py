@@ -27,7 +27,11 @@ from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
-from ob_analytics.visualization._data import book_mid, check_book_payload_level
+from ob_analytics.visualization._data import (
+    book_bar_thickness,
+    book_mid,
+    check_book_payload_level,
+)
 from ob_analytics.visualization._palette import (
     _ASK_COLOR,
     _BID_COLOR,
@@ -580,21 +584,6 @@ def mpl_volume_map(
     return fig
 
 
-def _book_bar_thickness(*sides: pd.DataFrame) -> float:
-    """Smallest positive gap between distinct prices across *sides*.
-
-    Used as the ladder bar thickness (price units); windowing to the touch
-    keeps this gap roughly the tick size, so bars stay tall and contiguous.
-    """
-    arrays = [s["price"].to_numpy() for s in sides if not s.empty]
-    if not arrays:
-        return 1.0
-    uniq = np.unique(np.concatenate(arrays))
-    diffs = np.diff(uniq)
-    diffs = diffs[diffs > 0]
-    return float(np.min(diffs)) if diffs.size else 1.0
-
-
 def _rounded_price_ticks(
     lo: float, hi: float, price_by: float, *, max_ticks: int = 12
 ) -> np.ndarray:
@@ -628,7 +617,7 @@ def _mpl_book_bars(
     asks = data["asks"]
     fig, ax = _create_axes(ax, figsize=(11, 8), theme=theme)
 
-    thickness = _book_bar_thickness(bids, asks) * 0.9
+    thickness = book_bar_thickness(bids, asks) * 0.9
     # Windowing to the touch keeps bars tall, so L3 separators are always on.
     edgecolor = "white" if per_order else "none"
     linewidth = 1.3 if per_order else 0.0
