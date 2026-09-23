@@ -80,7 +80,14 @@ class CcxtSettings(SourceSettings):
         required by the time a capture starts (:meth:`CcxtSource._configure`
         raises otherwise).
     depth_limit : int
-        Order-book depth (levels per side) to request.
+        Order-book depth (levels per side) to request.  The capture records
+        whatever CCXT then hands back, uncropped, so this is a floor rather
+        than a cap: Kraken keeps its own subscribed window at exactly this
+        many levels, but Coinbase, Bitstamp and OKX ignore it and always hand
+        back their whole book, and Binance and its family are asked for at
+        least 1,000 levels internally regardless of this value (see
+        :data:`_WHOLE_BOOK_VENUES`), so their recorded depth is at least that
+        many too.
     poll_interval : float
         Seconds between REST polls, for REST-only venues.
     market_data_mirror : bool
@@ -114,10 +121,13 @@ MARKET_DATA_MIRRORS: dict[str, dict[str, str]] = {
 #: deletes the levels past the ``limit`` it is given, with the most levels
 #: their REST snapshot returns.  A deleted level is never sent again unless it
 #: changes, so after the price moves away and back the book has holes near
-#: the top.  These venues are asked for the whole book, and the capture keeps
-#: the top ``depth_limit`` levels itself.  (Other venues differ: Kraken
-#: subscribes at ``limit`` levels and keeps the window filled; Coinbase,
-#: Bitstamp and OKX ignore it.)
+#: the top.  These venues are asked for the whole book, which the capture
+#: records in full -- cropping it to ``depth_limit`` would turn a level that
+#: is still resting, just outside that crop, into what looks like a cancel
+#: (issue #275).  (Other venues differ: Kraken subscribes at ``limit`` levels
+#: and keeps the window filled, so a level leaving it really is gone from
+#: Kraken's own view; Coinbase, Bitstamp and OKX ignore the limit and hand
+#: ccxt the whole book too, so nothing needs to crop those either.)
 _WHOLE_BOOK_VENUES: dict[str, int] = {
     "binance": 5000,
     "binanceus": 5000,
@@ -125,18 +135,22 @@ _WHOLE_BOOK_VENUES: dict[str, int] = {
     "binancecoinm": 1000,
 }
 
-# The fewest levels ccxt's opening snapshot takes for a whole-book venue:
-# ccxt's own default, which leaves room past a small recorded window.
+# The fewest levels ccxt is asked to track for a whole-book venue, whatever
+# depth_limit is: ccxt's own default, and deep enough that a shallow
+# depth_limit does not make ccxt itself evict (and, per the docstring above,
+# potentially never recover) a level near the top. Because the capture now
+# records everything ccxt tracks, this floor is also the least a whole-book
+# venue's capture records by default.
 _MIN_WHOLE_BOOK_SNAPSHOT = 1000
 
 
 def _size_whole_book_snapshot(
     exchange: Any, exchange_id: str, depth_limit: int
 ) -> None:
-    """Make ccxt's opening snapshot at least as deep as the recorded window.
+    """Make ccxt's opening snapshot at least as deep as *depth_limit*.
 
     Past its opening snapshot, ccxt learns a level only when it changes, so a
-    window deeper than the snapshot has gaps at the bottom.  Raises
+    depth deeper than the snapshot has gaps at the bottom.  Raises
     :class:`~ob_analytics.exceptions.ConfigError` when *depth_limit* is more
     than the venue's snapshot can return.
     """
@@ -406,7 +420,7 @@ class CcxtSource:
         nonce = book.get("nonce")
         for side, key in (("bid", "bids"), ("ask", "asks")):
             levels: dict[float, float] = {}
-            for row in self._top(book, key):
+            for row in self._side(book, key):
                 price = float(row[0])
                 size = float(row[1])
                 self._fit_tick(price)
@@ -589,9 +603,13 @@ class CcxtSource:
 
         A changed/added level emits its new absolute size; a level present
         before but absent now emits ``0`` (removal).  Updates the stored
-        per-side book.  Only the top ``depth_limit`` levels a side are
-        compared, so a level that leaves that window emits ``0`` and one that
-        comes back emits its size.
+        per-side book.  Every level CCXT's book reports is compared, with no
+        crop of its own: for most venues that book already is (or the venue
+        makes it) everything CCXT knows about, so ``0`` means the level is
+        genuinely gone, not merely outside some smaller recorded window
+        (issue #275).  The one exception is Kraken, which keeps CCXT's book
+        at exactly its subscribed window; a level leaving that window reads
+        as ``0`` too, because it is gone from Kraken's own view as well.
 
         Rows carry *received*, the time the capture got the book, as
         ``timestamp``, and the venue's book time as ``exchange_timestamp``.
@@ -600,8 +618,8 @@ class CcxtSource:
         sorts on ``timestamp``, so it must follow arrival order.
 
         The raw frame for raw.jsonl is attached to the first emitted row of
-        the update and ``None`` on the rest.  The first frame is the recorded
-        window of the book, with ``"frame": "book"``.  Every later frame has
+        the update and ``None`` on the rest.  The first frame is the whole
+        book CCXT reported, with ``"frame": "book"``.  Every later frame has
         ``"frame": "changes"`` and holds only the changed levels (as
         ``[price, size]`` pairs, ``0`` for a removal) with the book's
         ``symbol``, ``timestamp``, ``datetime`` and ``nonce``.  Applying the
@@ -615,7 +633,7 @@ class CcxtSource:
         changes: dict[str, list[tuple[float, float]]] = {"bid": [], "ask": []}
         for side, key in (("bid", "bids"), ("ask", "asks")):
             current: dict[float, float] = {}
-            for row in self._top(book, key):
+            for row in self._side(book, key):
                 current[float(row[0])] = float(row[1])
             prev = self._last[side]
             for price, size in current.items():
@@ -643,8 +661,8 @@ class CcxtSource:
             raw = {
                 **book,
                 "frame": "book",
-                "bids": [list(level) for level in self._top(book, "bids")],
-                "asks": [list(level) for level in self._top(book, "asks")],
+                "bids": [list(level) for level in self._side(book, "bids")],
+                "asks": [list(level) for level in self._side(book, "asks")],
             }
             self._full_book_written = True
         for side in ("bid", "ask"):
@@ -663,12 +681,14 @@ class CcxtSource:
                 )
                 raw = None
 
-    def _top(self, book: dict[str, Any], key: str) -> list[Any]:
-        """The best ``depth_limit`` levels of one side of a CCXT book.
+    def _side(self, book: dict[str, Any], key: str) -> list[Any]:
+        """One side of a CCXT book, as CCXT reports it -- no crop of its own.
 
         CCXT sorts each side best first (bids high to low, asks low to high).
+        A shallower depth than CCXT tracks is not cropped back down here: see
+        :meth:`_diff_book` for why (issue #275).
         """
-        return list(book.get(key) or ())[: self._depth_limit]
+        return list(book.get(key) or ())
 
     def _map_trade(self, t: dict[str, Any]) -> EventDict:
         """Map a CCXT trade to the universal trade-event shape.

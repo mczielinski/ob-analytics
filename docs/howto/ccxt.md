@@ -37,7 +37,7 @@ Each run produces a self-contained directory:
 |------|----------|
 | `depth.csv` | Price-level updates (`timestamp,exchange_timestamp,side,price,volume`; `volume` = new absolute size, `0` removes the level; `timestamp` is when the capture received the update) |
 | `trades.csv` | The trade tape (CCXT taker side; feeds trade-sign) |
-| `raw.jsonl` | The recorded levels of the book once (the top `--depth-limit` a side), then the changed levels of each book update with its timestamp and nonce, plus the trades as CCXT gave them (omit with `--no-raw`) |
+| `raw.jsonl` | The whole book CCXT reported once, then the changed levels of each book update with its timestamp and nonce, plus the trades as CCXT gave them (omit with `--no-raw`) |
 | `meta.json` | Counts + per-run diagnostics (exchange, tick size, book updates, errors) |
 
 The tick size comes from CCXT's market data. `ob-analytics process` and
@@ -61,6 +61,30 @@ Kalshi is polled; Polymarket streams over its public websocket.
 Book updates become depth rows by diffing CCXT's maintained book: a level whose
 size changed emits its new absolute size; a level that vanished emits `0`.
 
+## What a size-`0` row means
+
+A `0` row means the level is gone from the book CCXT reports — normally a
+cancel. What CCXT reports differs by venue:
+
+- **Coinbase, Bitstamp, OKX** ignore `--depth-limit` and always hand CCXT
+  their whole book, so a `0` here is a real cancel.
+- **Binance and its family** (`binanceus`, `binanceusdm`, `binancecoinm`) are
+  asked for their whole book too — always at least 1,000 levels a side, more
+  with a deeper `--depth-limit` (up to the 5,000 Binance sends) — so a `0`
+  here is also a real cancel. Below that floor, `--depth-limit` does not
+  shrink what is recorded; see [Binance](binance.md#depth-request-more-levels).
+- **Kraken** subscribes at exactly `--depth-limit` levels, and Kraken itself
+  drops a level from what it sends once the price moves it out of that
+  window. A `0` here can be either a real cancel or the level leaving
+  Kraken's own window — CCXT reports both the same way, so the capture
+  cannot tell them apart. The level is recorded again, with its size, if
+  Kraken's window reaches it again.
+
+Earlier captures (before this page's revision) cropped every venue to
+`--depth-limit`, so a `0` could also mean a level merely left that smaller,
+capture-only window while still resting in the book. That crop is gone
+(issue #275); `raw.jsonl` and `depth.csv` now hold whatever CCXT reported.
+
 ## A second venue is a config change, not new code
 
 ```bash
@@ -76,7 +100,7 @@ ob-analytics capture ccxt --exchange polymarket --pair <token id> --out /tmp/pol
 |------|---------|
 | `--exchange` | CCXT venue id (`binance`, `kraken`, `coinbase`, `kalshi`, `polymarket`, …). `binance` and `hyperliquid` are also prediction markets; the plain id is the crypto exchange, and `prediction/binance` is the prediction market |
 | `--pair` | Symbol in the venue's CCXT notation (e.g. `BTC/USDT`) |
-| `--depth-limit` | Levels per side to record (default 100) |
+| `--depth-limit` | Levels per side to request (default 100). Kraken records exactly this many; Coinbase, Bitstamp, OKX, Binance and its family record more — see [what a size-`0` row means](#what-a-size-0-row-means) |
 | `--market-data-mirror` | Read from the venue's market-data-only endpoints (Binance spot; see [Binance](binance.md)) |
 | `--poll-interval` | Seconds between REST polls (REST-only venues) |
 

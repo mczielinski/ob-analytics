@@ -64,24 +64,25 @@ matched exactly in every one.
 Every trade carries its side, so ob-analytics does not have to guess sides
 with [trade-sign classification](l2-depth.md#trade-signs).
 
-## Depth: request more than 100 levels
+## Depth: request more levels
 
-By default the capture keeps 100 levels a side. The BTC/USDT book is dense,
-with an order at almost every cent near the price. In the test, the levels
-reached this far from the mid-price:
+The capture asks ccxt to track at least 1,000 levels a side, whatever
+`--depth-limit` says, and records everything ccxt reports (see the note
+below) — so a default capture (`--depth-limit` is 100) already records up to
+1,000 levels, not 100. The BTC/USDT book is dense, with an order at almost
+every cent near the price. In the test, the levels reached this far from the
+mid-price:
 
 | Levels a side | Reach |
 |---------------|-------|
-| 100 (default) | about 0.02% (about $20) |
-| 1,000 | about 0.2 to 0.3% |
-| 5,000 (the most Binance sends) | about 1.0 to 1.4% |
+| ~1,000 (the floor; also the default) | about 0.2 to 0.3% |
+| 5,000 (the most Binance sends; the most `--depth-limit` allows) | about 1.0 to 1.4% |
 
 Binance publishes no more than 5,000 levels a side, so no capture can see the
 book past about 1% from the price. The depth summary adds up the size in
-rings 25 basis points (0.25%) wide, out to 5%. With 100 levels, all the size
-falls in the first ring.
+rings 25 basis points (0.25%) wide, out to 5%.
 
-Record more levels with `--depth-limit`, and make the rings narrower:
+Reach further, and narrow the rings, by raising `--depth-limit` past 1,000:
 
 ```bash
 ob-analytics capture ccxt --exchange binance --pair BTC/USDT --depth-limit 5000 --out /tmp/binance
@@ -97,22 +98,23 @@ result = Pipeline(config, source=DepthCsvSource()).run("/tmp/binance")
 ccxt starts its Binance book from a REST snapshot, and past that snapshot it
 learns a level only when the level changes. So the capture makes the snapshot
 as deep as `--depth-limit`, and never less than 1,000 levels. A
-`--depth-limit` above 5,000 is refused, because the bottom of the window would
-have gaps. (Binance's futures venues, `binanceusdm` and `binancecoinm`, send at
-most 1,000.)
+`--depth-limit` above 5,000 is refused, because the bottom of the snapshot
+would have gaps. (Binance's futures venues, `binanceusdm` and `binancecoinm`,
+send at most 1,000.)
 
-A level that leaves the recorded window, because the price moved away from it,
-is written with size `0`, the same as a cancelled level. With 5,000 levels the
-window reaches about 1% from the price, so this happens only after a large
-move.
+A level written with size `0` is a real cancel: the capture records whatever
+ccxt reports, uncropped, so a level does not need to leave some smaller
+recorded window to read as gone — see [what a size-`0` row
+means](ccxt.md#what-a-size-0-row-means).
 
 !!! note "Why ccxt gets the whole book"
-    If ccxt is given a depth, it deletes the Binance levels past it. Binance
-    sends a level again only when it changes. So when the price moves away and
-    back, a level that left the window does not come back, and the book has
-    gaps near the top. The capture asks ccxt for the whole Binance book, keeps
-    the top `--depth-limit` levels itself, and records a level again when it
-    comes back into the window.
+    If ccxt is given a shallow depth, it deletes the Binance levels past it,
+    and Binance sends a level again only when it changes. So when the price
+    moves away and back, a level that was deleted does not come back, and the
+    book has gaps near the top. The capture asks ccxt for at least 1,000
+    levels — deep enough that this rarely bites in practice — and records
+    everything ccxt reports, rather than cropping it back down to
+    `--depth-limit` itself (issue #275).
 
 ## Checking the capture
 

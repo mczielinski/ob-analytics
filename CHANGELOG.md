@@ -14,12 +14,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (#101). ccxt deletes the levels of a Binance book that fall past the depth
   it is given, and Binance sends a level again only when it changes. After
   the price moved away and back, the captured book had holes in its top 20
-  levels. The ccxt source now asks for the whole Binance book and keeps the
-  top `--depth-limit` levels itself, so a level that comes back into the
-  window is recorded again. ccxt's opening snapshot is now as deep as
-  `--depth-limit` (never less than 1,000 levels), so a Binance capture can
-  record up to the 5,000 levels a side that Binance sends, about 1% from the
-  price. A deeper `--depth-limit` is refused.
+  levels. The ccxt source now asks for the whole Binance book (see #275
+  below for what it does with that book) and never gives ccxt less than
+  1,000 levels a side to track, so a level rarely falls out of what ccxt
+  itself knows. ccxt's opening snapshot is now as deep as `--depth-limit`
+  (never less than 1,000 levels), so a Binance capture can record up to the
+  5,000 levels a side that Binance sends, about 1% from the price. A deeper
+  `--depth-limit` is refused.
 - **`audit` no longer fails every ccxt capture with missing sequence
   numbers** (#101). The ccxt `nonce` only rises: a Binance diff covers a range
   of update IDs, and ccxt can apply several diffs before it returns a book. A
@@ -42,14 +43,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   answers HTTP 451 from some countries. `capture ccxt` now says so and names
   `--exchange binanceus` and `--market-data-mirror`, instead of printing a
   traceback.
+- **A level that only left `--depth-limit`, not the book, is no longer
+  recorded as cancelled** (#275). Every ccxt capture used to crop
+  `depth.csv`/`raw.jsonl` to the top `--depth-limit` levels a side, so a
+  level that was still resting just outside that crop read as a `0` row when
+  the price moved, the same as a real cancel — 28% of the removals in a
+  five-minute Binance BTC/USDT capture. The capture now records whatever
+  ccxt reports, uncropped: Coinbase, Bitstamp and OKX ignore `--depth-limit`
+  and always hand ccxt their whole book (over 20,000 levels a side on
+  Coinbase); Binance and its family are asked for their whole book too (see
+  #101 above). Kraken is unaffected, because it subscribes at exactly
+  `--depth-limit` levels and drops a level from its own book once the price
+  moves it out of that window — a `0` row there can still be either a real
+  cancel or Kraken's own window exit, which is inherent to how Kraken
+  reports its book. `docs/howto/ccxt.md` now says what a `0` row means, per
+  venue.
 
 ### Changed
-
-- **`--depth-limit` now caps the recorded book for every ccxt venue.**
-  Coinbase, Bitstamp and OKX ignore the limit ccxt passes them, so a capture
-  used to record their whole book (over 20,000 levels a side on Coinbase). The
-  ccxt source now keeps the top `--depth-limit` levels (100 by default) of
-  every venue, in `depth.csv` and in `raw.jsonl`.
 
 - **The price-level depth follows an order that moves or grows.**
   `price_level_volume` used to count every one of an order's rows on the price
