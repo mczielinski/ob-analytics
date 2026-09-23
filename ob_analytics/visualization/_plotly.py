@@ -26,7 +26,9 @@ from ob_analytics.visualization._palette import (
     _BID_COLOR,
     _BUY_COLOR,
     _CANCELLED_COLOR,
+    _CHECK_TRADE_COLOR,
     _FILLED_COLOR,
+    _HIDDEN_TRADE_COLOR,
     _PARTIAL_COLOR,
     _SELL_COLOR,
 )
@@ -314,6 +316,11 @@ def plotly_price_levels(data: dict) -> Any:
                     name="Buy Trades",
                 )
             )
+
+    _add_iceberg_overlay(
+        fig, go, data.get("iceberg_lines"), data.get("iceberg_refills")
+    )
+    _add_hidden_trades_overlay(fig, go, data.get("hidden_trades"))
 
     fig.update_xaxes(title_text="Time")
     fig.update_yaxes(title_text="Limit Price")
@@ -690,6 +697,136 @@ def _plotly_lollipops(fig: Any, go: Any, side: Any, color: str, label: str) -> N
     )
 
 
+# ---------------------------------------------------------------------------
+# Hidden-liquidity overlay (#272): iceberg refills + trades against hidden
+# orders, shared by the depth heatmap and the L3 order-activity map.
+# ---------------------------------------------------------------------------
+
+_ICEBERG_CONFIDENCE_OPACITY = {"low": 0.35, "medium": 0.6, "high": 0.9}
+
+_HIDDEN_TRADE_STYLE = {
+    "hidden": {
+        "symbol": "star",
+        "color": _HIDDEN_TRADE_COLOR,
+        "label": "Hidden-order trade",
+    },
+    "check": {
+        "symbol": "star-open",
+        "color": _CHECK_TRADE_COLOR,
+        "label": "Trade to check (maker not confirmed hidden)",
+    },
+}
+
+
+def _iceberg_chain_xy(group: Any) -> tuple[list, list]:
+    """One ``None``-gapped polyline per iceberg within *group* (>=2 slices)."""
+    xs: list = []
+    ys: list = []
+    for _, g in group.groupby("iceberg", sort=False):
+        g = g.sort_values("timestamp")
+        xs.extend(g["timestamp"].tolist())
+        xs.append(None)
+        ys.extend(g["price"].tolist())
+        ys.append(None)
+    return xs, ys
+
+
+def _add_iceberg_overlay(
+    fig: Any, go: Any, lines: Any | None, refills: Any | None
+) -> None:
+    """Add suspected-iceberg chains (opacity = confidence) + refill markers."""
+    if lines is not None and not lines.empty:
+        first = True
+        for confidence, group in lines.groupby("confidence", observed=True, sort=False):
+            for direction, gg in group.groupby("direction", sort=False):
+                xs, ys = _iceberg_chain_xy(gg)
+                if not xs:
+                    continue
+                color = _BID_COLOR if direction == "bid" else _ASK_COLOR
+                fig.add_trace(
+                    go.Scattergl(
+                        x=xs,
+                        y=ys,
+                        mode="lines",
+                        line={"color": color, "width": 1.4},
+                        opacity=_ICEBERG_CONFIDENCE_OPACITY.get(str(confidence), 0.5),
+                        name="Iceberg chain",
+                        legendgroup="iceberg_chain",
+                        showlegend=first,
+                        hoverinfo="skip",
+                    )
+                )
+                first = False
+    if refills is not None and not refills.empty:
+        colors = np.where(
+            refills["direction"].to_numpy() == "bid", _BID_COLOR, _ASK_COLOR
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=refills["timestamp"],
+                y=refills["price"],
+                mode="markers",
+                marker={
+                    "symbol": "diamond",
+                    "size": 8,
+                    "color": colors,
+                    "line": {"width": 1, "color": "black"},
+                },
+                name="Iceberg refill",
+                hovertemplate="Iceberg %{customdata}<br>Time: %{x}<br>Price: %{y}<extra></extra>",
+                customdata=refills["iceberg"],
+            )
+        )
+
+
+def _add_hidden_trades_overlay(fig: Any, go: Any, hidden: Any | None) -> None:
+    """Add trades ``hidden_trades()`` flagged as printing inside the spread.
+
+    An I-beam runs from the standing best bid to the standing best ask, with
+    the trade print marked between them. Style splits on ``category``:
+    ``"hidden"`` (the maker order was genuinely unseen) vs ``"check"`` (the
+    maker order was visible, or its identity did not resolve -- a diff feed's
+    stale depth summary, see PR #271, is one cause -- so this is a trade to
+    verify, not a confirmed hidden order).
+    """
+    if hidden is None or hidden.empty:
+        return
+    xs, ys = _vstem_xy(
+        hidden["timestamp"], hidden["best_bid_price"], hidden["best_ask_price"]
+    )
+    fig.add_trace(
+        go.Scattergl(
+            x=xs,
+            y=ys,
+            mode="lines",
+            line={"color": "#7f8c8d", "width": 1},
+            opacity=0.5,
+            name="Spread at print",
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+    for category, style in _HIDDEN_TRADE_STYLE.items():
+        sub = hidden[hidden["category"] == category]
+        if sub.empty:
+            continue
+        fig.add_trace(
+            go.Scatter(
+                x=sub["timestamp"],
+                y=sub["price"],
+                mode="markers",
+                marker={
+                    "symbol": style["symbol"],
+                    "size": 10,
+                    "color": style["color"],
+                    "line": {"width": 1, "color": "black"},
+                },
+                name=style["label"],
+                hovertemplate="Price: %{y}<br>Time: %{x}<extra></extra>",
+            )
+        )
+
+
 def _apply_padded_y_range(fig: Any, y_range: tuple[float, float] | None) -> None:
     """Set a 4%-padded y-range so spike prints are never cut at the axis edge."""
     if y_range is None:
@@ -727,6 +864,12 @@ def plotly_order_activity_per_order(data: dict) -> Any:
                 hoverinfo="skip",
             )
         )
+
+    _add_iceberg_overlay(
+        fig, go, data.get("iceberg_lines"), data.get("iceberg_refills")
+    )
+    _add_hidden_trades_overlay(fig, go, data.get("hidden_trades"))
+
     shown_of = data.get("shown_of")
     if shown_of is not None:
         fig.add_annotation(

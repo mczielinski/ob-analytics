@@ -17,6 +17,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import pandas as pd
 import pytest
 
 from ob_analytics.visualization import RENDERERS, Level
@@ -499,6 +500,207 @@ class TestBuildGalleryModel:
             activity_l2.prep_kwargs["price_from"] == heatmap.prep_kwargs["price_from"]
         )
         assert activity_l2.prep_kwargs["price_to"] == heatmap.prep_kwargs["price_to"]
+
+    def test_depth_heatmap_and_order_activity_carry_hidden_liquidity_overlay(
+        self, tiny_bitstamp_orders_csv
+    ) -> None:
+        # #272: the depth heatmap and the L3 order-activity Gantt both receive
+        # the (possibly empty) iceberg/hidden-trade overlay -- this tiny fixture
+        # is too small to contain either, so this checks the wiring, not the
+        # detection.
+        from ob_analytics.bitstamp import BitstampSource
+        from ob_analytics.pipeline import Pipeline
+        from ob_analytics.visualization import plot_result
+
+        result = Pipeline(source=BitstampSource()).run(str(tiny_bitstamp_orders_csv))
+        model = build_gallery_model(result)
+
+        heatmap = next(c for c in model.concepts if c.key == "depth_heatmap").at(
+            Level.L2
+        )
+        activity_l3 = next(c for c in model.concepts if c.key == "order_activity").at(
+            Level.L3
+        )
+        assert heatmap is not None and activity_l3 is not None
+        for spec in (heatmap, activity_l3):
+            assert {"iceberg_lines", "iceberg_refills", "hidden_trades"} <= set(
+                spec.prep_kwargs
+            )
+
+        # No icebergs / no hidden trades on this fixture -- draws without error
+        # (#272 acceptance: a run with neither must not raise).
+        plot_result(result, "depth_heatmap", backend="matplotlib")
+        plot_result(result, "order_activity", level="L3", backend="matplotlib")
+
+    def test_hidden_liquidity_overlay_is_clipped_to_the_zoom_and_price_window(
+        self, sample_csv_path
+    ) -> None:
+        # #272: a full day can have hundreds of icebergs / thousands of hidden
+        # trades; the overlay handed to the faces must be the subset inside the
+        # shared zoom window and mid-anchored price band, not the raw detection.
+        from ob_analytics.hidden_liquidity import hidden_trades as find_hidden_trades
+        from ob_analytics.pipeline import Pipeline
+
+        result = Pipeline().run(sample_csv_path)
+        model = build_gallery_model(result)
+        heatmap = next(c for c in model.concepts if c.key == "depth_heatmap").at(
+            Level.L2
+        )
+        assert heatmap is not None
+        overlay_hidden = heatmap.prep_kwargs["hidden_trades"]
+
+        full_hidden = find_hidden_trades(
+            result.events, result.trades, result.depth_summary
+        )
+        if full_hidden.empty:
+            pytest.skip("bundled sample has no hidden trades to check clipping against")
+
+        # Every overlaid row's maker_event_id is one of the full detection's --
+        # the overlay is a genuine subset, not independently derived data.
+        assert set(overlay_hidden["maker_event_id"]) <= set(
+            full_hidden["maker_event_id"]
+        )
+        assert len(overlay_hidden) <= len(full_hidden)
+        assert {"hidden", "check"} >= set(overlay_hidden["category"].unique())
+
+    def test_hidden_liquidity_overlay_is_not_rescaled_on_a_legacy_float_result(
+        self,
+    ) -> None:
+        # #272: display_result() only scales an *integer* price column, so a
+        # pre-tick result already carrying display-unit floats is returned
+        # unchanged (see its own "legacy-safe" docstring). The hidden-liquidity
+        # overlay must honour the same rule -- applying ticks_to_price to an
+        # already-float price would land icebergs/hidden trades off the axes
+        # they are drawn on (236.50 -> 2.3650 at the default tick_size=0.01).
+        from ob_analytics.config import PipelineConfig
+        from ob_analytics.engine import HIDDEN_ORDER_ID
+        from ob_analytics.pipeline import PipelineResult
+
+        ts = pd.Timestamp("2015-05-01 01:00:00", tz="UTC")
+
+        def _at(**offset):
+            return ts + pd.Timedelta(**offset)
+
+        events = pd.DataFrame(
+            [
+                # Padding events set a 100s span so the auto zoom window's
+                # middle half (25s-75s) covers the story below, at ~50s.
+                {
+                    "event_id": 900,
+                    "id": 900,
+                    "timestamp": ts,
+                    "price": 300.0,
+                    "volume": 1.0,
+                    "action": "created",
+                    "direction": "ask",
+                    "fill": 0.0,
+                },
+                {
+                    "event_id": 901,
+                    "id": 901,
+                    "timestamp": _at(seconds=100),
+                    "price": 300.0,
+                    "volume": 1.0,
+                    "action": "created",
+                    "direction": "ask",
+                    "fill": 0.0,
+                },
+                # A 2-slice iceberg (bid @236.50) at ~50s.
+                {
+                    "event_id": 1,
+                    "id": 10,
+                    "timestamp": _at(seconds=50),
+                    "price": 236.50,
+                    "volume": 100.0,
+                    "action": "created",
+                    "direction": "bid",
+                    "fill": 0.0,
+                },
+                {
+                    "event_id": 2,
+                    "id": 10,
+                    "timestamp": _at(seconds=50, milliseconds=100),
+                    "price": 236.50,
+                    "volume": 0.0,
+                    "action": "changed",
+                    "direction": "bid",
+                    "fill": 100.0,
+                },
+                {
+                    "event_id": 3,
+                    "id": 11,
+                    "timestamp": _at(seconds=50, milliseconds=100, microseconds=200),
+                    "price": 236.50,
+                    "volume": 100.0,
+                    "action": "created",
+                    "direction": "bid",
+                    "fill": 0.0,
+                },
+                # A hidden maker fill at ~51s.
+                {
+                    "event_id": 100,
+                    "id": HIDDEN_ORDER_ID,
+                    "timestamp": _at(seconds=51),
+                    "price": 236.60,
+                    "volume": 0.0,
+                    "action": "changed",
+                    "direction": "ask",
+                    "fill": 5.0,
+                },
+            ]
+        )
+        events["action"] = pd.Categorical(
+            events["action"], categories=["created", "changed", "deleted"], ordered=True
+        )
+        events["direction"] = pd.Categorical(
+            events["direction"], categories=["bid", "ask"]
+        )
+
+        trades = pd.DataFrame(
+            {
+                "timestamp": [_at(seconds=50, milliseconds=100), _at(seconds=51)],
+                "price": [236.50, 236.60],
+                "volume": [100.0, 5.0],
+                "direction": pd.Categorical(
+                    ["sell", "buy"], categories=["buy", "sell"]
+                ),
+                "maker_event_id": [2, 100],
+                "taker_event_id": [50, 51],
+            }
+        )
+        depth_summary = pd.DataFrame(
+            {
+                "timestamp": [ts],
+                "best_bid_price": [236.50],
+                "best_bid_vol": [100.0],
+                "best_ask_price": [237.00],
+                "best_ask_vol": [50.0],
+            }
+        )
+        depth = pd.DataFrame(columns=["timestamp", "price", "volume", "direction"])
+
+        result = PipelineResult(
+            events=events,
+            trades=trades,
+            depth=depth,
+            depth_summary=depth_summary,
+            config=PipelineConfig(),  # tick_size=0.01: any re-scaling is obvious
+            level=Level.L3,
+        )
+
+        model = build_gallery_model(result)
+        heatmap = next(c for c in model.concepts if c.key == "depth_heatmap").at(
+            Level.L2
+        )
+        assert heatmap is not None
+        refills = heatmap.prep_kwargs["iceberg_refills"]
+        hidden = heatmap.prep_kwargs["hidden_trades"]
+
+        assert not refills.empty
+        assert refills["price"].iloc[0] == pytest.approx(236.50)
+        assert not hidden.empty
+        assert hidden["price"].iloc[0] == pytest.approx(236.60)
+        assert hidden["best_bid_price"].iloc[0] == pytest.approx(236.50)
 
 
 class TestDisplayUnitsPreserveFaces:

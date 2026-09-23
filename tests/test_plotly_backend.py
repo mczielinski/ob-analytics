@@ -18,6 +18,7 @@ from ob_analytics.visualization._data import (
     prepare_cancellations_l3_data,
     prepare_event_map_data,
     prepare_events_histogram_data,
+    prepare_hidden_liquidity_overlay,
     prepare_kyle_lambda_data,
     prepare_liquidity_at_touch_data,
     prepare_ofi_data,
@@ -123,6 +124,79 @@ def sample_order_book() -> dict:
         "bids": np.array([[236.50, 100, 100], [236.00, 200, 300]]),
         "asks": np.array([[237.00, 150, 150], [237.50, 250, 400]]),
     }
+
+
+def _hidden_liquidity_overlay_fixture() -> dict:
+    """One 2-slice iceberg (bid @236.50) plus a hidden and a check-me trade (#272)."""
+    from ob_analytics.engine import HIDDEN_ORDER_ID
+    from ob_analytics.hidden_liquidity import detect_icebergs, hidden_trades
+
+    ts = pd.Timestamp("2015-05-01 01:00:00", tz="UTC")
+    events = pd.DataFrame(
+        [
+            {
+                "event_id": 1,
+                "id": 10,
+                "timestamp": ts,
+                "price": 236.50,
+                "volume": 100,
+                "action": "created",
+                "direction": "bid",
+                "fill": 0,
+            },
+            {
+                "event_id": 2,
+                "id": 10,
+                "timestamp": ts + pd.Timedelta(milliseconds=100),
+                "price": 236.50,
+                "volume": 0,
+                "action": "changed",
+                "direction": "bid",
+                "fill": 100,
+            },
+            {
+                "event_id": 3,
+                "id": 11,
+                "timestamp": ts + pd.Timedelta(milliseconds=100, microseconds=200),
+                "price": 236.50,
+                "volume": 100,
+                "action": "created",
+                "direction": "bid",
+                "fill": 0,
+            },
+        ]
+    )
+    events["action"] = pd.Categorical(
+        events["action"], categories=["created", "changed", "deleted"], ordered=True
+    )
+    events["direction"] = pd.Categorical(events["direction"], categories=["bid", "ask"])
+    detection = detect_icebergs(events, pd.DataFrame({"maker_event_id": [2]}))
+
+    maker_events = pd.DataFrame(
+        [
+            {
+                "event_id": 100,
+                "id": HIDDEN_ORDER_ID,
+                "timestamp": ts + pd.Timedelta(seconds=1),
+            },
+            {"event_id": 200, "id": 55, "timestamp": ts + pd.Timedelta(seconds=2)},
+        ]
+    )
+    depth_summary = pd.DataFrame(
+        {"timestamp": [ts], "best_bid_price": [236.50], "best_ask_price": [237.00]}
+    )
+    hidden_input = pd.DataFrame(
+        {
+            "timestamp": [ts + pd.Timedelta(seconds=1), ts + pd.Timedelta(seconds=2)],
+            "price": [236.60, 236.70],
+            "maker_event_id": [100, 200],
+        }
+    )
+    hidden = hidden_trades(maker_events, hidden_input, depth_summary)
+
+    return prepare_hidden_liquidity_overlay(
+        detection.icebergs, detection.slices, hidden, maker_events
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +323,38 @@ class TestPlotlyPriceLevels:
             trace = next(tr for tr in fig.data if tr.name == name)
             assert trace.line.shape == "hv"
 
+    def test_hidden_liquidity_overlay_adds_traces(
+        self, sample_events: pd.DataFrame
+    ) -> None:
+        depth = sample_events[["timestamp", "price", "volume"]].copy()
+        depth["direction"] = "bid"
+        overlay = _hidden_liquidity_overlay_fixture()
+        fig = plotly_price_levels(
+            prepare_price_levels_data(
+                depth,
+                iceberg_lines=overlay["iceberg_lines"],
+                iceberg_refills=overlay["iceberg_refills"],
+                hidden_trades=overlay["hidden_trades"],
+            )
+        )
+        names = {tr.name for tr in fig.data}
+        assert {
+            "Iceberg chain",
+            "Iceberg refill",
+            "Hidden-order trade",
+            "Trade to check (maker not confirmed hidden)",
+        } <= names
+
+    def test_no_overlay_adds_no_hidden_liquidity_traces(
+        self, sample_events: pd.DataFrame
+    ) -> None:
+        depth = sample_events[["timestamp", "price", "volume"]].copy()
+        depth["direction"] = "bid"
+        fig = plotly_price_levels(prepare_price_levels_data(depth))
+        names = {tr.name for tr in fig.data}
+        assert "Iceberg refill" not in names
+        assert "Hidden-order trade" not in names
+
 
 class TestPlotlyEventMap:
     def test_returns_plotly_figure(self, sample_events: pd.DataFrame) -> None:
@@ -313,6 +419,34 @@ class TestPlotlyOrderActivityL3:
         data = prepare_order_activity_l3_data(sample_order_lifecycle_events)
         fig = plotly_order_activity_per_order(data)
         assert all(trace.type == "scattergl" for trace in fig.data)
+
+    def test_hidden_liquidity_overlay_adds_traces(
+        self, sample_order_lifecycle_events: pd.DataFrame
+    ) -> None:
+        overlay = _hidden_liquidity_overlay_fixture()
+        data = prepare_order_activity_l3_data(
+            sample_order_lifecycle_events,
+            iceberg_lines=overlay["iceberg_lines"],
+            iceberg_refills=overlay["iceberg_refills"],
+            hidden_trades=overlay["hidden_trades"],
+        )
+        fig = plotly_order_activity_per_order(data)
+        names = {tr.name for tr in fig.data}
+        assert {
+            "Iceberg chain",
+            "Iceberg refill",
+            "Hidden-order trade",
+            "Trade to check (maker not confirmed hidden)",
+        } <= names
+
+    def test_no_overlay_adds_no_hidden_liquidity_traces(
+        self, sample_order_lifecycle_events: pd.DataFrame
+    ) -> None:
+        data = prepare_order_activity_l3_data(sample_order_lifecycle_events)
+        fig = plotly_order_activity_per_order(data)
+        names = {tr.name for tr in fig.data}
+        assert "Iceberg refill" not in names
+        assert "Hidden-order trade" not in names
 
 
 class TestPlotlyLiquidityAtTouch:

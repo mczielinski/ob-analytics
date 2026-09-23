@@ -391,6 +391,9 @@ def prepare_price_levels_data(
     volume_to: float | None = None,
     volume_scale: float | None = None,
     price_by: float | None = None,
+    iceberg_lines: pd.DataFrame | None = None,
+    iceberg_refills: pd.DataFrame | None = None,
+    hidden_trades: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """Prepare data for the price-level depth heatmap.
 
@@ -405,6 +408,11 @@ def prepare_price_levels_data(
     When ``volume_scale`` is ``None`` (the default), an order-of-magnitude
     scale is auto-inferred from the input depth via
     :func:`infer_volume_scale`.
+
+    ``iceberg_lines``, ``iceberg_refills`` and ``hidden_trades`` are the
+    optional hidden-liquidity overlay (see :func:`prepare_hidden_liquidity_overlay`,
+    issue #272), already clipped to the caller's display window. ``None``
+    (the default) draws the heatmap with no overlay.
     """
     depth_local = depth.copy()
     if volume_scale is None:
@@ -477,6 +485,108 @@ def prepare_price_levels_data(
         "col_bias": col_bias,
         "price_by": price_by,
         "y_range": price_y_range(depth_filtered["price"]),
+        "iceberg_lines": iceberg_lines,
+        "iceberg_refills": iceberg_refills,
+        "hidden_trades": hidden_trades,
+    }
+
+
+def prepare_hidden_liquidity_overlay(
+    icebergs: pd.DataFrame,
+    slices: pd.DataFrame,
+    hidden: pd.DataFrame,
+    events: pd.DataFrame,
+    *,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+    price_from: float | None = None,
+    price_to: float | None = None,
+) -> dict[str, pd.DataFrame]:
+    """Clip iceberg refills and hidden trades to a face's display window (#272).
+
+    Joins :func:`~ob_analytics.hidden_liquidity.detect_icebergs`'s two frames
+    into one row per slice (``iceberg``, ``timestamp``, ``price``,
+    ``direction``, ``confidence``), then clips it and
+    :func:`~ob_analytics.hidden_liquidity.hidden_trades`'s output to
+    *start_time*/*end_time*/*price_from*/*price_to* -- the same window the
+    depth heatmap and order-activity map already clip to, so a full day's
+    ~900 icebergs / ~9,600 hidden trades do not flood a face meant to show a
+    few minutes.
+
+    Each hidden trade is also split into ``category``: ``"hidden"`` when its
+    maker event's order ``id`` is
+    :data:`~ob_analytics.engine.HIDDEN_ORDER_ID` (a genuinely unseen order),
+    or ``"check"`` otherwise -- the maker order *was* visible, or its
+    ``maker_event_id`` did not resolve at all. A diff feed's depth summary can
+    drop a resting level a later quote crosses, which makes a trade against a
+    real order print as if it were inside the spread; a ``"check"`` row is a
+    trade to verify, not a confirmed hidden order, and renderers style the
+    two apart.
+
+    Parameters
+    ----------
+    icebergs, slices : pandas.DataFrame
+        :attr:`~ob_analytics.hidden_liquidity.IcebergDetection.icebergs` and
+        ``.slices``.
+    hidden : pandas.DataFrame
+        Output of :func:`~ob_analytics.hidden_liquidity.hidden_trades`.
+    events : pandas.DataFrame
+        The run's L3 events, used to look up each hidden trade's maker order
+        ``id``.
+
+    Returns
+    -------
+    dict of str to pandas.DataFrame
+        ``"iceberg_lines"`` -- one row per surviving slice, for icebergs with
+        at least two slices left in the window (draw as a joining line).
+        ``"iceberg_refills"`` -- one row per refill slice (``slice > 1``) in
+        the window (draw as a marker).
+        ``"hidden_trades"`` -- hidden-trade rows in the window, with
+        ``category`` added.
+    """
+    from ob_analytics.engine import HIDDEN_ORDER_ID
+
+    def _clip(df: pd.DataFrame, price_col: str) -> pd.DataFrame:
+        if start_time is not None:
+            df = df[df["timestamp"] >= start_time]
+        if end_time is not None:
+            df = df[df["timestamp"] <= end_time]
+        if price_from is not None:
+            df = df[df[price_col] >= price_from]
+        if price_to is not None:
+            df = df[df[price_col] <= price_to]
+        return df
+
+    chain = _clip(
+        slices.merge(
+            icebergs[["iceberg", "direction", "price", "confidence"]],
+            on="iceberg",
+            how="left",
+            # icebergs has exactly one row per iceberg id by construction; a
+            # detect_icebergs regression that broke that would otherwise fan
+            # out rows silently instead of raising.
+            validate="many_to_one",
+        ),
+        "price",
+    )
+    counts = chain.groupby("iceberg")["slice"].transform("size")
+    iceberg_lines = chain[counts >= 2].sort_values(["iceberg", "timestamp"])
+    iceberg_refills = chain[chain["slice"] > 1]
+
+    hidden = _clip(hidden, "price")
+    maker = pd.to_numeric(hidden["maker_event_id"], errors="coerce")
+    order_id = maker.map(events.drop_duplicates("event_id").set_index("event_id")["id"])
+    # NaN here means either a genuinely visible maker or a maker_event_id that
+    # does not resolve at all (hidden_trades() keeps such trades, read at
+    # their own timestamp) -- both are unconfirmed, not confirmed hidden, so
+    # both fall to "check" rather than a false-positive "hidden".
+    is_hidden = order_id.eq(HIDDEN_ORDER_ID).fillna(False)
+    hidden = hidden.assign(category=np.where(is_hidden, "hidden", "check"))
+
+    return {
+        "iceberg_lines": iceberg_lines,
+        "iceberg_refills": iceberg_refills,
+        "hidden_trades": hidden,
     }
 
 
@@ -541,6 +651,9 @@ def prepare_order_activity_l3_data(
     price_to: float | None = None,
     max_spans: int = 2000,
     marker_threshold: int = 300,
+    iceberg_lines: pd.DataFrame | None = None,
+    iceberg_refills: pd.DataFrame | None = None,
+    hidden_trades: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """Per-order lifecycle Gantt: each order one span place -> outcome, by fate.
 
@@ -569,6 +682,11 @@ def prepare_order_activity_l3_data(
     order ends when it is deleted **or fully executed** (LOBSTER fills never
     emit a delete); only genuinely still-resting orders extend to the window
     end.  Lifecycles overlapping the window are clipped to it.
+
+    ``iceberg_lines``, ``iceberg_refills`` and ``hidden_trades`` are the
+    optional hidden-liquidity overlay (see :func:`prepare_hidden_liquidity_overlay`,
+    issue #272), already clipped to the caller's display window. ``None``
+    (the default) draws the Gantt with no overlay.
     """
     from ob_analytics.analytics import order_lifecycles
 
@@ -648,6 +766,9 @@ def prepare_order_activity_l3_data(
         "y_range": y_range,
         "shown_of": shown_of,
         "show_markers": n_total <= marker_threshold,
+        "iceberg_lines": iceberg_lines,
+        "iceberg_refills": iceberg_refills,
+        "hidden_trades": hidden_trades,
     }
 
 
