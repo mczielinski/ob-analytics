@@ -15,7 +15,6 @@ Install via ``pip install ob-analytics[bokeh]``.
 
 from __future__ import annotations
 
-import math
 from functools import lru_cache
 from typing import Any
 
@@ -23,6 +22,7 @@ import numpy as np
 
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.visualization._data import (
+    biased_color_norm,
     book_bar_thickness,
     book_mid,
     check_book_payload_level,
@@ -109,21 +109,53 @@ def _apply_padded_y_range(fig: Any, y_range: tuple[float, float] | None) -> None
 # ---------------------------------------------------------------------------
 
 
+def _bokeh_mid_line(fig: Any, mid_line: Any) -> None:
+    """Reference mid/microprice line, held constant until the next sample.
+
+    "after" steps: the mid holds until the book changes; linear
+    interpolation would paint a ramp between sparse samples.
+    """
+    if mid_line is None or mid_line.empty:
+        return
+    fig.step(
+        x=mid_line["timestamp"],
+        y=mid_line["mid"],
+        mode="after",
+        line_color="#888888",
+        line_width=1,
+        line_alpha=0.8,
+    )
+
+
 def _bokeh_lollipops(fig: Any, side: Any, color: str, label: str) -> None:
     """Stems (mid -> price) plus volume-sized markers for one tape side."""
+    from bokeh.models import ColumnDataSource
+
+    # One source shared by the stem + marker glyphs, so the (potentially
+    # large, one-row-per-order) timestamp/price columns convert once.
+    source = ColumnDataSource(
+        {
+            "timestamp": side["timestamp"],
+            "mid": side["mid"],
+            "price": side["price"],
+            "size": mpl_marker_area_to_plotly_size(side["marker_area"].to_numpy()),
+        }
+    )
     fig.segment(
-        x0=side["timestamp"],
-        y0=side["mid"],
-        x1=side["timestamp"],
-        y1=side["price"],
+        x0="timestamp",
+        y0="mid",
+        x1="timestamp",
+        y1="price",
+        source=source,
         line_color=color,
         line_width=1,
         line_alpha=0.5,
     )
     fig.scatter(
-        x=side["timestamp"],
-        y=side["price"],
-        size=mpl_marker_area_to_plotly_size(side["marker_area"].to_numpy()),
+        x="timestamp",
+        y="price",
+        source=source,
+        size="size",
         fill_color=color,
         line_color=None,
         fill_alpha=0.9,
@@ -144,18 +176,7 @@ def bokeh_trades(data: dict) -> Any:
         bpl, title="Trade Prices", x_axis_label="Time", y_axis_label="Price"
     )
 
-    mid_line = data.get("mid_line")
-    if mid_line is not None and not mid_line.empty:
-        # "after" steps: the mid holds until the book changes; linear
-        # interpolation would paint a ramp between sparse samples.
-        fig.step(
-            x=mid_line["timestamp"],
-            y=mid_line["mid"],
-            mode="after",
-            line_color="#888888",
-            line_width=1,
-            line_alpha=0.8,
-        )
+    _bokeh_mid_line(fig, data.get("mid_line"))
     for side, color, label in (
         (data["buys"], _BUY_COLOR, "buy (lifts ask)"),
         (data["sells"], _SELL_COLOR, "sell (hits bid)"),
@@ -201,16 +222,7 @@ def bokeh_trade_tape_per_order(data: dict) -> Any:
             line_alpha=span_alpha,
         )
 
-    mid_line = data.get("mid_line")
-    if mid_line is not None and not mid_line.empty:
-        fig.step(
-            x=mid_line["timestamp"],
-            y=mid_line["mid"],
-            mode="after",
-            line_color="#888888",
-            line_width=1,
-            line_alpha=0.8,
-        )
+    _bokeh_mid_line(fig, data.get("mid_line"))
 
     suffix = ", per-s VWAP" if dense else ""
     for side, color, label in (
@@ -230,63 +242,9 @@ def bokeh_trade_tape_per_order(data: dict) -> Any:
 # Depth heatmap
 # ---------------------------------------------------------------------------
 
-
-def _format_volume_tick(value: float) -> str:
-    """Compact label for a colorbar volume tick."""
-    if not math.isfinite(value):
-        return ""
-    a = abs(value)
-    if a != 0 and (a < 1e-3 or a >= 1e6):
-        return f"{value:.1e}"
-    if a >= 1000:
-        return f"{value:,.0f}"
-    if a >= 1:
-        return f"{value:.1f}"
-    return f"{value:.3g}"
-
-
-def _bokeh_color_field(
-    volume: np.ndarray, col_bias: float, n_ticks: int = 5
-) -> tuple[np.ndarray, list[float], list[str]]:
-    """Map volumes to [0, 1] color positions under a power/log bias.
-
-    Mirrors the matplotlib backend's ``_volume_norm``: ``col_bias`` of
-    ``1.0`` is linear, ``0 < col_bias < 1`` is a power-law gamma that
-    brightens low-volume levels, and ``col_bias <= 0`` selects log10.
-    Returns the normalized color array plus colorbar tick positions (in
-    ``[0, 1]``) and labels (in original volume units).
-    """
-    v = np.asarray(volume, dtype=float)
-    if col_bias <= 0:
-        finite = v[np.isfinite(v) & (v > 0)]
-    else:
-        finite = v[np.isfinite(v)]
-    if finite.size == 0:
-        return np.zeros_like(v), [], []
-    vmin = float(finite.min())
-    vmax = float(finite.max())
-    if vmax <= vmin:
-        vmax = vmin + 1.0
-
-    if col_bias <= 0:
-        lo, hi = math.log(vmin), math.log(vmax)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            t = (np.log(np.clip(v, vmin, vmax)) - lo) / (hi - lo)
-
-        def inv(tt: float) -> float:
-            return math.exp(lo + tt * (hi - lo))
-    else:
-        gamma = col_bias
-        base = (np.clip(v, vmin, vmax) - vmin) / (vmax - vmin)
-        t = base**gamma
-
-        def inv(tt: float) -> float:
-            return vmin + (tt ** (1.0 / gamma)) * (vmax - vmin)
-
-    t = np.nan_to_num(t, nan=0.0)
-    tickvals = [i / (n_ticks - 1) for i in range(n_ticks)]
-    ticktext = [_format_volume_tick(inv(tv)) for tv in tickvals]
-    return t, tickvals, ticktext
+# Re-exported under the backend's own name: shared with the plotly backend's
+# depth-heatmap color mapping (see _data.biased_color_norm's docstring).
+_bokeh_color_field = biased_color_norm
 
 
 def bokeh_price_levels(data: dict) -> Any:
@@ -512,6 +470,8 @@ def _bokeh_depth_curve(data: dict, *, per_order: bool) -> Any:
     """Cumulative-depth curve: stepped per level (L2) or per order (L3)."""
     check_book_payload_level(data, per_order=per_order)
     bpl = _import_bokeh()
+    from bokeh.models import ColumnDataSource
+
     fig = _base_figure(
         bpl,
         title=data["timestamp"].strftime("%Y-%m-%d %H:%M:%S UTC"),
@@ -527,14 +487,23 @@ def _bokeh_depth_curve(data: dict, *, per_order: bool) -> Any:
         if side.empty:
             continue
         s = side.sort_values("price")
+        # One source shared across the fill/step/scatter glyphs below, so the
+        # price/liquidity columns are converted once per side, not per glyph.
+        source = ColumnDataSource({"price": s["price"], "liquidity": s["liquidity"]})
         # "before" steps mirror the matplotlib ``where="pre"`` curve: the
         # level jumps to y_i before reaching x_i.
         fig.varea(
-            x=s["price"], y1=0, y2=s["liquidity"], fill_color=color, fill_alpha=0.15
+            x="price",
+            y1=0,
+            y2="liquidity",
+            source=source,
+            fill_color=color,
+            fill_alpha=0.15,
         )
         fig.step(
-            x=s["price"],
-            y=s["liquidity"],
+            x="price",
+            y="liquidity",
+            source=source,
             mode="before",
             line_color=color,
             line_width=2,
@@ -542,8 +511,9 @@ def _bokeh_depth_curve(data: dict, *, per_order: bool) -> Any:
         )
         if per_order:
             fig.scatter(
-                x=s["price"],
-                y=s["liquidity"],
+                x="price",
+                y="liquidity",
+                source=source,
                 size=6,
                 fill_color=color,
                 line_color=None,

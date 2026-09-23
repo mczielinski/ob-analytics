@@ -156,6 +156,67 @@ def mpl_marker_area_to_plotly_size(area: np.ndarray) -> np.ndarray:
     return np.sqrt(np.maximum(area, 0.0)) * 0.8
 
 
+def format_volume_tick(value: float) -> str:
+    """Compact label for a depth-heatmap colorbar volume tick."""
+    if not math.isfinite(value):
+        return ""
+    a = abs(value)
+    if a != 0 and (a < 1e-3 or a >= 1e6):
+        return f"{value:.1e}"
+    if a >= 1000:
+        return f"{value:,.0f}"
+    if a >= 1:
+        return f"{value:.1f}"
+    return f"{value:.3g}"
+
+
+def biased_color_norm(
+    volume: np.ndarray, col_bias: float, n_ticks: int = 5
+) -> tuple[np.ndarray, list[float], list[str]]:
+    """Map volumes to [0, 1] color positions under a power/log bias.
+
+    Shared by the plotly and bokeh depth-heatmap backends (matplotlib's
+    ``_volume_norm`` stays independent, since it returns a matplotlib
+    ``Normalize`` object rather than a plain array). ``col_bias`` of ``1.0``
+    is linear, ``0 < col_bias < 1`` is a power-law gamma that brightens
+    low-volume levels, and ``col_bias <= 0`` selects log10. Returns the
+    normalized color array plus colorbar tick positions (in ``[0, 1]``) and
+    labels (in original volume units) -- empty lists when no volume is
+    finite (and positive, under a log bias).
+    """
+    v = np.asarray(volume, dtype=float)
+    if col_bias <= 0:
+        finite = v[np.isfinite(v) & (v > 0)]
+    else:
+        finite = v[np.isfinite(v)]
+    if finite.size == 0:
+        return np.zeros_like(v), [], []
+    vmin = float(finite.min())
+    vmax = float(finite.max())
+    if vmax <= vmin:
+        vmax = vmin + 1.0
+
+    if col_bias <= 0:
+        lo, hi = math.log(vmin), math.log(vmax)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            t = (np.log(np.clip(v, vmin, vmax)) - lo) / (hi - lo)
+
+        def inv(tt: float) -> float:
+            return math.exp(lo + tt * (hi - lo))
+    else:
+        gamma = col_bias
+        base = (np.clip(v, vmin, vmax) - vmin) / (vmax - vmin)
+        t = base**gamma
+
+        def inv(tt: float) -> float:
+            return vmin + (tt ** (1.0 / gamma)) * (vmax - vmin)
+
+    t = np.nan_to_num(t, nan=0.0)
+    tickvals = [i / (n_ticks - 1) for i in range(n_ticks)]
+    ticktext = [format_volume_tick(inv(tv)) for tv in tickvals]
+    return t, tickvals, ticktext
+
+
 # Per-side (dark touch anchor, pale far anchor) for the depth ramp.  The two
 # anchors of each family sit at near-identical luminance to their counterpart
 # in the other family (Δlum ≤ 0.02 across the whole ramp), so the *luminance*
