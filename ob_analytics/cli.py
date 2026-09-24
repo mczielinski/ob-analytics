@@ -313,7 +313,6 @@ def _cmd_capture(args: argparse.Namespace) -> None:
 
     from loguru import logger
 
-    from ob_analytics.exceptions import ConfigError
     from ob_analytics.live import CaptureConfig, LiveSource, SupportsPreflight
     from ob_analytics.live._runner import run_capturer
     from ob_analytics.live.ccxt_source import CcxtSettings
@@ -400,18 +399,16 @@ def _cmd_capture(args: argparse.Namespace) -> None:
         minutes=args.minutes,
         keep_raw=not args.no_raw,
     )
-    try:
-        result = asyncio.run(run_capturer(source, config))
-    except ConfigError as exc:
-        # The venue or its settings are wrong for this run (a location the
-        # venue refuses, a mirror it does not have): report it, not a traceback.
-        logger.error(str(exc))
-        sys.exit(1)
-    if result.stream_error is not None:
-        # The rows written before the error are kept, but the run is cut short.
+    result = asyncio.run(run_capturer(source, config))
+    if result.capture_error is not None:
+        # The runner kept the rows written before the error and recorded it in
+        # meta.json; the run is still a failure. This includes the venue or its
+        # settings being wrong for this run (a location the venue refuses, a
+        # mirror it does not have).
         logger.error(
-            "Capture failed: the stream raised {}; partial output in {}",
-            result.stream_error,
+            "Capture failed in the {}: {}; partial output in {}",
+            result.capture_error_phase,
+            result.capture_error,
             result.out_dir,
         )
         sys.exit(1)

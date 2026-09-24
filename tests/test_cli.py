@@ -471,8 +471,19 @@ class TestCaptureSubcommand:
         assert exc.value.code == 1
         assert not (tmp_path / "o").exists()
 
-    def test_stream_error_exits_nonzero(self, monkeypatch, tmp_path):
-        """A stream that raises part way through fails the command (#283)."""
+    @pytest.mark.skipif(not _CCXT_INSTALLED, reason="ccxt extra not installed")
+    def test_unknown_ccxt_exchange_exits_nonzero_before_output(self, tmp_path):
+        """A misspelt --exchange stops the capture before it starts (#283)."""
+        from ob_analytics import cli
+
+        args = self._capture_args(tmp_path, "ccxt", exchange="binanse")
+        with pytest.raises(SystemExit) as exc:
+            cli._cmd_capture(args)
+        assert exc.value.code == 1
+        assert not (tmp_path / "o").exists()
+
+    def test_capture_error_exits_nonzero(self, monkeypatch, tmp_path):
+        """A capture that fails part way through fails the command (#283)."""
         import pandas as pd
 
         from ob_analytics import cli
@@ -487,7 +498,8 @@ class TestCaptureSubcommand:
                 n_raw_frames=0,
                 started=now,
                 ended=now,
-                stream_error="ValueError('boom')",
+                capture_error="ValueError('boom')",
+                capture_error_phase="stream",
             )
 
         monkeypatch.setattr("ob_analytics.live._runner.run_capturer", _failed_run)

@@ -57,10 +57,13 @@ class CaptureResult:
     #: the touch is an order the venue's snapshot listed after it had gone.
     #: ``None`` on an L2 run, where a price level has no id to confirm.
     n_snapshot_unconfirmed: int | None = None
-    #: ``repr`` of the exception that ended the stream early, or ``None`` when
-    #: the stream ran to its end or was stopped by a signal. The rows written
-    #: before the error stay on disk, so a failed run is still readable.
-    stream_error: str | None = None
+    #: ``repr`` of the first exception raised once output existed, or ``None``
+    #: for a run that ended normally or was stopped by a signal. The rows
+    #: written before the error stay on disk, so a failed run is still readable.
+    capture_error: str | None = None
+    #: Where :attr:`capture_error` was raised: ``"snapshot"``, ``"stream"`` or
+    #: ``"shutdown"``; ``None`` when there was no error.
+    capture_error_phase: str | None = None
 
 
 # Single canonical event dict shape, mirroring BitstampLoader's CSV columns.

@@ -88,14 +88,17 @@ level has no id that the stream could confirm.
 
 ## A capture that fails
 
-If a source needs an optional extra that is not installed, `ob-analytics
-capture` stops before it starts. It prints the install hint, exits with
-status 1, and creates no output directory.
+`ob-analytics capture` checks the source before it starts. If a source needs
+an optional extra that is not installed, or the venue name is unknown, it
+prints the reason, exits with status 1, and creates no output directory.
 
-If the stream raises part way through, the capture keeps the rows it wrote
-before the error, then exits with status 1. `meta.json` records the error as
-`stream_error` and counts it in `errors`. Check the exit status or
-`stream_error` before you use a capture.
+If the opening snapshot, the stream, or the shutdown events raise an error
+after the capture has started, the capture keeps the rows it wrote before
+the error and exits with status 1. `meta.json` records the error as
+`capture_error`, the step that failed as `capture_error_phase` (`snapshot`,
+`stream` or `shutdown`), and counts it in `errors`. After a failed snapshot
+the stream does not run. Check the exit status or `capture_error` before you
+use a capture.
 
 ## Adding a new venue
 

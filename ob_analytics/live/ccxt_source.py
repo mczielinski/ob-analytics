@@ -240,6 +240,14 @@ def _make_exchange(exchange_id: str) -> Any:
     Raises :class:`ImportError` with an install hint if ccxt is absent, and
     :class:`ValueError` if *exchange_id* is not a known CCXT venue.
     """
+    return _exchange_class(exchange_id)({"enableRateLimit": True})
+
+
+def _exchange_class(exchange_id: str) -> Any:
+    """Look up the CCXT exchange class for *exchange_id* without building it.
+
+    Raises the same errors as :func:`_make_exchange`.
+    """
     ccxtpro = _import_ccxt_pro()
     # Prediction-market classes by id; empty on a ccxt release that predates them.
     prediction: dict[str, Any] = {}
@@ -251,11 +259,10 @@ def _make_exchange(exchange_id: str) -> Any:
         prediction = {i: getattr(ccxtprediction, i) for i in ccxtprediction.exchanges}
 
     name = exchange_id.removeprefix(PREDICTION_PREFIX)
-    options = {"enableRateLimit": True}
     if name == exchange_id and name in ccxtpro.exchanges:
-        return getattr(ccxtpro, name)(options)
+        return getattr(ccxtpro, name)
     if name in prediction:
-        return prediction[name](options)
+        return prediction[name]
     raise ValueError(
         f"Unknown CCXT exchange {exchange_id!r}; expected one of "
         f"{len(ccxtpro.exchanges)} ccxt.pro venues or a prediction market "
@@ -335,12 +342,21 @@ class CcxtSource:
     # -- configuration ------------------------------------------------------
 
     def preflight(self) -> None:
-        """Raise the install hint now if ccxt is needed and missing (SupportsPreflight).
+        """Raise now if the venue cannot be built (SupportsPreflight).
 
-        A pre-built exchange object in the settings needs no import.
+        Raises the install hint when ccxt is missing and :class:`ValueError`
+        for no venue or an unknown one. A pre-built exchange object in the
+        settings needs no check.
         """
-        if isinstance(getattr(self.settings, "exchange", None), str):
-            _import_ccxt_pro()
+        exchange = getattr(self.settings, "exchange", None)
+        if not isinstance(exchange, str):
+            return
+        if not exchange:
+            raise ValueError(
+                "ccxt source needs CcxtSettings(exchange='<venue id>') "
+                "(e.g. 'binance')."
+            )
+        _exchange_class(exchange)
 
     def _configure(self, config: CaptureConfig) -> None:
         """Resolve the exchange, symbol, and per-transport capabilities."""

@@ -424,6 +424,33 @@ class _CrashingCapturer(_FakeCapturer):
             raise ValueError("stream broke")
 
 
+class _SnapshotCrashingCapturer(_FakeCapturer):
+    """Writes one opening order, then raises; the stream must not run."""
+
+    name = "snapshot-crashing"
+
+    async def snapshot(self, config: CaptureConfig) -> AsyncIterator[EventDict]:
+        async for ev in super().snapshot(config):
+            yield ev
+            raise ConnectionError("snapshot fetch failed")
+
+    async def stream(
+        self, config: CaptureConfig
+    ) -> AsyncIterator[tuple[str, EventDict, Any]]:
+        raise AssertionError("the stream ran after a failed snapshot")
+        yield  # pragma: no cover - makes this an async generator
+
+
+class _ShutdownCrashingCapturer(_FakeCapturer):
+    """Streams normally, then fails while closing out the book."""
+
+    name = "shutdown-crashing"
+
+    async def shutdown_synthetic_events(self) -> AsyncIterator[EventDict]:
+        raise RuntimeError("close-out failed")
+        yield  # pragma: no cover - makes this an async generator
+
+
 class _MissingExtraCapturer(_FakeCapturer):
     """A source whose optional extra is not installed."""
 
@@ -439,9 +466,11 @@ class TestFailedCapture:
         cfg = CaptureConfig(pair="btcusd", out_dir=out, minutes=0.001)
         result = asyncio.run(run_capturer(_CrashingCapturer(), cfg))
 
-        assert result.stream_error == repr(ValueError("stream broke"))
+        assert result.capture_error == repr(ValueError("stream broke"))
+        assert result.capture_error_phase == "stream"
         meta = json.loads((out / "meta.json").read_text())
-        assert meta["stream_error"] == result.stream_error
+        assert meta["capture_error"] == result.capture_error
+        assert meta["capture_error_phase"] == "stream"
         assert meta["errors"] == 1
         # The order streamed before the error is still on disk.
         orders = pd.read_csv(out / "orders.csv")
@@ -457,12 +486,38 @@ class TestFailedCapture:
         asyncio.run(run_capturer(_CountingCrasher(), cfg))
         assert json.loads((out / "meta.json").read_text())["errors"] == 3
 
-    def test_clean_run_has_no_stream_error(self, tmp_path):
+    def test_snapshot_error_is_recorded_and_stream_skipped(self, tmp_path):
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="btcusd", out_dir=out, minutes=0.001)
+        result = asyncio.run(run_capturer(_SnapshotCrashingCapturer(), cfg))
+
+        assert result.capture_error_phase == "snapshot"
+        assert "snapshot fetch failed" in (result.capture_error or "")
+        meta = json.loads((out / "meta.json").read_text())
+        assert meta["capture_error_phase"] == "snapshot"
+        assert meta["errors"] == 1
+        # The opening order written before the error is kept, and the
+        # shutdown events still close it out.
+        orders = pd.read_csv(out / "orders.csv")
+        assert list(orders["origin"]) == ["snapshot", "shutdown"]
+
+    def test_shutdown_error_is_recorded(self, tmp_path):
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="btcusd", out_dir=out, minutes=0.001)
+        result = asyncio.run(run_capturer(_ShutdownCrashingCapturer(), cfg))
+
+        assert result.capture_error_phase == "shutdown"
+        assert result.n_trade_events == 1  # the stream ran to its end
+        assert json.loads((out / "meta.json").read_text())["errors"] == 1
+
+    def test_clean_run_has_no_capture_error(self, tmp_path):
         out = tmp_path / "cap"
         cfg = CaptureConfig(pair="btcusd", out_dir=out, minutes=0.001)
         result = asyncio.run(run_capturer(_FakeCapturer(), cfg))
-        assert result.stream_error is None
-        assert "stream_error" not in json.loads((out / "meta.json").read_text())
+        assert result.capture_error is None
+        assert result.capture_error_phase is None
+        meta = json.loads((out / "meta.json").read_text())
+        assert "capture_error" not in meta
 
     def test_failed_preflight_creates_no_output(self, tmp_path):
         out = tmp_path / "cap"
