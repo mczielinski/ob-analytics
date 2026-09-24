@@ -28,7 +28,6 @@ from scripts.roadmap import (
     render_goal_body,
     run,
     splice_generated_block,
-    stale_captions,
     stale_mentions,
     unknown_holds,
 )
@@ -84,13 +83,11 @@ def work_nodes(body: str) -> set[int]:
 CLOSED_WORK = [98, 106, 107, 109, 112, 114, 137, 143, 146, 154, 155]
 
 
-def test_diagram_drops_closed_work_nothing_open_waits_on(graph, tmp_path):
-    """#192: pruning keeps #106, #112, #114, #137, #143 and #146, and drops
-    #98, #107, #109, #154 and #155.
+def test_diagram_draws_every_closed_issue_it_lists(graph, tmp_path):
+    """A group draws its closed issues, including ones nothing open waits on.
 
-    A closed issue stays only while an **open non-goal** issue still depends on
-    it.  #154 and #155 survive only if goal edges count, and because 16 goals
-    depend on nearly everything, counting them turns the rule into a no-op.
+    #98, #107, #109, #154 and #155 are closed in the snapshot with no open
+    non-goal issue behind them; they are drawn all the same.
     """
     config = write_config(
         tmp_path,
@@ -100,25 +97,6 @@ id = "closed"
 title = "Every closed issue"
 prose = "One diagram holding all of them."
 issues = {CLOSED_WORK}
-""",
-    )
-
-    drawn = work_nodes(render_epic_body(graph, config))
-
-    assert drawn == {106, 112, 114, 137, 143, 146}
-
-
-def test_keep_closed_group_prunes_nothing(graph, tmp_path):
-    """``keep_closed`` opts a diagram out, for one recording finished work."""
-    config = write_config(
-        tmp_path,
-        f"""
-[[group]]
-id = "closed"
-title = "Every closed issue"
-prose = "One diagram holding all of them."
-issues = {CLOSED_WORK}
-keep_closed = true
 """,
     )
 
@@ -140,16 +118,16 @@ def test_arrow_runs_from_the_blocker_to_the_work_it_unblocks(graph, config):
 
 
 def test_edge_needs_both_ends_in_the_diagram(graph, tmp_path):
-    """#112 blocks both #146 and #155, but #155 is pruned out, so only the
-    edge with both ends still drawn survives."""
+    """#112 blocks both #146 and #155, but only #146 is in the group, so only
+    the edge with both ends drawn appears."""
     config = write_config(
         tmp_path,
-        f"""
+        """
 [[group]]
-id = "closed"
-title = "Every closed issue"
-prose = "One diagram holding all of them."
-issues = {CLOSED_WORK}
+id = "some"
+title = "Two closed issues"
+prose = "Two of them."
+issues = [112, 146]
 """,
     )
 
@@ -350,11 +328,10 @@ issues = [110]
     assert body.index("## What each capability waits on") < body.index("## Ungrouped")
 
 
-def test_pruned_closed_issue_is_not_reported_as_ungrouped(graph, tmp_path):
-    """Membership is read from the config, not from what survived pruning.
+def test_closed_grouped_issue_is_drawn_and_not_ungrouped(graph, tmp_path):
+    """#154 is closed and nothing open still waits on it.
 
-    #154 is closed and nothing open still waits on it, so a diagram naming it
-    draws nothing.  It is still grouped, and reporting it as ungrouped would
+    It is drawn in its group, and it is not listed as ungrouped: that would
     invite someone to add an issue that is already there.
     """
     config = write_config(
@@ -373,7 +350,7 @@ issues = [154, 155]
         int(m) for m in re.findall(r"^- \[[ x]\] #(\d+) ", body, flags=re.MULTILINE)
     ]
 
-    assert "n154" not in body
+    assert "n154" in body
     assert 154 not in listed
 
 
@@ -970,57 +947,3 @@ def test_prose_that_names_an_issue_fails_the_run(client, config):
     assert 124 in report.written
     assert exit_code(report) == 1
     assert any("#124 names #112" in complaint for complaint in report.stale_prose)
-
-
-def test_a_caption_naming_an_issue_its_diagram_dropped_is_reported(graph, tmp_path):
-    """The mistake that put four stale captions in #124, found without reading it.
-
-    #107 is closed in the snapshot with nothing open waiting on it, so pruning
-    drops it from the diagram and the caption is left describing a box that is
-    not there. That is exactly the sentence Part 4 carried: "trade signs and the
-    first signals are done", about two boxes no reader could see.
-    """
-    config = write_config(
-        tmp_path,
-        """
-        [[group]]
-        id = "analytics"
-        title = "Part 4 - metrics"
-        prose = "Trade signs are done."
-        issues = [107, 110]
-
-        [labels]
-        107 = "trade signs"
-        """,
-    )
-
-    assert stale_captions(graph, config) == [
-        (
-            "analytics: the caption says 'trade signs', but #107 is not drawn "
-            "in that diagram any more"
-        )
-    ]
-
-
-def test_a_caption_may_name_what_its_diagram_still_draws(graph, tmp_path):
-    """The check is about what is drawn, not about naming a thing at all.
-
-    A group that keeps its closed issues, like the sources and the data-quality
-    checks, can describe them freely: they are still on screen.
-    """
-    config = write_config(
-        tmp_path,
-        """
-        [[group]]
-        id = "analytics"
-        title = "Part 4 - metrics"
-        prose = "Trade signs are done."
-        issues = [107, 110]
-        keep_closed = true
-
-        [labels]
-        107 = "trade signs"
-        """,
-    )
-
-    assert stale_captions(graph, config) == []

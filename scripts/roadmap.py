@@ -27,19 +27,14 @@ is the one thing that changes without anyone touching the words. So the epic's
 own advice on what to do next is derived here — which goal is one issue from
 done, which issue frees other work, how much is free to take in any order — and
 the hand-written half above the marker is checked for issue numbers, each of
-which is a claim about another issue that the graph can quietly outrun. A
-caption is checked the same way against its own diagram: a caption naming a node
-the pruner has dropped is the same fault. Both fail the run. The single
-judgement the graph cannot make, that ready work should still wait, is a
+which is a claim about another issue that the graph can quietly outrun, and
+such a claim fails the run. The single judgement the graph cannot make, that ready work should still wait, is a
 ``[[hold]]`` in the config, listed only while its issues are open.
 
-**Pruning.** A closed issue is dropped from a group diagram unless an open
-non-goal issue still depends on it, so a diagram shows the work ahead rather
-than the whole history. Goal edges must not count: the goals depend on
-nearly everything, so counting them keeps every closed issue and the rule does
-nothing. A group marked ``keep_closed`` opts out, for a diagram that records
-completed work. A goal's own diagram is never pruned: it draws every
-prerequisite, so it matches the checklist above it.
+**Closed work.** Every diagram draws its closed issues as well as its open
+ones. A group diagram draws every issue the config lists for it, so it shows
+what that part of the library holds, not only what is left to build. A goal's
+diagram draws every prerequisite, so it matches the checklist above it.
 
 **Size.** A diagram runs about 79 px per node and hardly varies with the number
 of edges, so node count is the only lever and each goal gets its own small
@@ -160,7 +155,6 @@ class Group:
     title: str
     prose: str
     issues: tuple[int, ...]
-    keep_closed: bool = False
 
 
 @dataclass(frozen=True)
@@ -263,7 +257,6 @@ def load_config(path: Path) -> Config:
                 title=g["title"],
                 prose=g["prose"].strip(),
                 issues=tuple(g["issues"]),
-                keep_closed=g.get("keep_closed", False),
             )
             for g in raw.get("group", ())
         ),
@@ -390,19 +383,14 @@ def _open_dependents(graph: Graph, number: int) -> list[Node]:
     """Open **non-goal** issues waiting on this one.
 
     Goals are excluded on purpose: they depend on nearly everything, so
-    counting them would keep every closed issue alive and make pruning a no-op.
+    counting them would make every issue look like it frees other work.
     """
     return [n for n in graph.work if not n.is_closed and number in n.blocked_by]
 
 
 def _members(graph: Graph, group: Group) -> list[int]:
-    """The issues a group actually draws, after dropping stale closed work."""
-    present = [i for i in sorted(group.issues) if i in graph.nodes]
-    if group.keep_closed:
-        return present
-    return [
-        i for i in present if not graph.nodes[i].is_closed or _open_dependents(graph, i)
-    ]
+    """The issues a group draws: those it lists that are children of the epic."""
+    return [i for i in sorted(group.issues) if i in graph.nodes]
 
 
 def _edges_between(graph: Graph, members: list[int]) -> list[tuple[str, str]]:
@@ -465,10 +453,8 @@ def _goal_class(graph: Graph, config: Config, goal: Node) -> str:
 def _ungrouped(graph: Graph, config: Config) -> list[Node]:
     """Work issues no group names.
 
-    Read from the config, never from what survived pruning: a closed issue
-    dropped from its diagram is still grouped.  Goals are not groups either —
-    every work issue is a prerequisite of some goal, so counting those would
-    leave this list permanently empty.
+    Goals are not groups: every work issue is a prerequisite of some goal, so
+    counting those would leave this list permanently empty.
     """
     named = {i for group in config.groups for i in group.issues}
     return [n for n in graph.work if n.number not in named]
@@ -768,8 +754,6 @@ def render_goal_body(graph: Graph, config: Config, number: int) -> str:
     out.append("")
 
     # The diagram draws every prerequisite, closed or not, as the list does.
-    # A goal is a short list of what it needs, so pruning the finished ones
-    # leaves a diagram that no longer matches the checklist above it.
     drawn = prereqs
     members = [p.members[0] for p in drawn if not p.label]
     node_lines = [_node_line(graph, config, goal)]
@@ -830,32 +814,6 @@ def stale_mentions(body: str, tracked: set[int]) -> list[int]:
     contradicted by a graph that does not contain it.
     """
     return [n for n in named_issues(body) if n in tracked]
-
-
-def stale_captions(graph: Graph, config: Config) -> list[str]:
-    """Group captions that name an issue their diagram no longer draws.
-
-    A closed issue nothing waits on is pruned from its diagram, and a caption
-    written when it was there goes on describing a box that is gone. The short
-    labels are exactly the words a caption uses for a node, so a label that
-    appears in a caption whose node is not drawn is that mistake, found without
-    anyone re-reading the epic.
-    """
-    out = []
-    for group in config.groups:
-        drawn = set(_members(graph, group))
-        for number in group.issues:
-            if number in drawn or number not in graph.nodes:
-                continue
-            label = config.labels.get(number)
-            if not label:
-                continue
-            if re.search(rf"\b{re.escape(label)}\b", group.prose, re.IGNORECASE):
-                out.append(
-                    f"{group.id}: the caption says {label!r}, but #{number} is "
-                    "not drawn in that diagram any more"
-                )
-    return out
 
 
 def unknown_holds(config: Config) -> list[str]:
@@ -1029,7 +987,6 @@ def run(client: Issues, config: Config, epic: int = EPIC) -> Report:
             blocker,
             epic,
         )
-    report.stale_prose += stale_captions(graph, config)
     report.stale_prose += unknown_holds(config)
     # The epic is the one number prose may name: a goal belongs to it whatever
     # the graph does, and the generator would not be running without it.

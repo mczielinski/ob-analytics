@@ -19,8 +19,8 @@
 # A caption says what a diagram is for. It never says where the work stands:
 # what is done, what is next and what waits on what are all drawn in the
 # diagram under it and recomputed on every run, and a caption that repeats them
-# is wrong as soon as an issue closes. The generator fails a run whose caption
-# names an issue its diagram no longer draws.
+# is wrong as soon as an issue closes. Every issue listed in a group is drawn,
+# closed or not.
 
 [[group]]
 id = "foundation"
@@ -31,9 +31,6 @@ it, directly or through a piece built on it. This diagram is the order that
 dependency forces.
 """
 issues = [112, 136, 137, 104, 113, 140, 216]
-# Keep the closed pieces. The rest of the roadmap is built on them, so the
-# diagram shows what that is even after they ship.
-keep_closed = true
 
 [[group]]
 id = "data-model"
@@ -52,10 +49,6 @@ definitions join. All five stay drawn, closed or not, because together they are
 the data model.
 """
 issues = [112, 146, 147, 154, 155, 226]
-# Keep the closed issues. Pruning would show two of the four, because two of
-# them have nothing open left behind them, and the point of this diagram is to
-# show all four decisions together.
-keep_closed = true
 
 [[group]]
 id = "sources"
@@ -67,10 +60,6 @@ list as well: purple is a source you can use today, green is one nobody has
 written yet. A venue neither CCXT nor cryptofeed covers needs its own client.
 """
 issues = [112, 137, 106, 134, 99, 100, 101, 102, 103, 98, 239, 240]
-# Keep the closed sources. A source that shipped is a source you can use, so
-# pruning it would delete the answer to "which venues work today" from the one
-# diagram that shows venues.
-keep_closed = true
 
 [[group]]
 id = "engine"
@@ -81,10 +70,6 @@ work on data larger than memory sits here too. The diagram shows what each one
 waits on.
 """
 issues = [112, 136, 100, 114, 143, 144, 105, 116, 138, 139, 206]
-# Keep the closed work. The checks and the synthetic data that shipped are what
-# a faster engine will be measured against, so they belong in the picture even
-# when nothing open still waits on them.
-keep_closed = true
 
 [[group]]
 id = "analytics"
@@ -95,10 +80,6 @@ independent of each other, so any arrow drawn here is the exception rather than
 an order to work in.
 """
 issues = [104, 107, 109, 110, 111, 119, 148, 149, 203]
-# Keep the closed measurements. A metric that shipped is a metric you can use,
-# and these rarely wait on each other, so pruning drops nearly every closed one
-# at once and leaves a list of only what is unbuilt.
-keep_closed = true
 
 [[group]]
 id = "quality"
@@ -118,10 +99,6 @@ same events through an engine written by someone else can: if the two books
 disagree, one of them is wrong.
 """
 issues = [108, 114, 143, 146, 150, 224]
-# Keep the closed checks, for the same reason as the sources: this diagram
-# answers "how do I know the data is sound", and a check that shipped is the
-# best answer it has.
-keep_closed = true
 
 [[group]]
 id = "viz"
@@ -131,10 +108,6 @@ The full plot catalogue, one theme across backends, and a second backend. The
 live view and the replay scrubber show a book as it changes.
 """
 issues = [105, 117, 118, 122, 123, 140, 272]
-# Keep the closed views. A backend or plot that shipped is one you can use, and
-# nothing but the goal waits on them, so pruning drops each one the day it
-# closes and leaves only what is unbuilt.
-keep_closed = true
 
 [[group]]
 id = "release"
@@ -144,9 +117,6 @@ What a version other projects can depend on needs: the release decisions,
 conda-forge distribution, and the documentation work.
 """
 issues = [115, 120, 121, 141, 142, 145, 216]
-# Keep the closed pieces. A release needs all of them, so the diagram shows the
-# whole list rather than only what is unbuilt.
-keep_closed = true
 
 # Either/or prerequisites.
 #
