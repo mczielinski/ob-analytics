@@ -217,6 +217,18 @@ def _refused_location(exc: Exception, exchange_id: str) -> ConfigError | None:
     )
 
 
+def _import_ccxt_pro() -> Any:
+    """Return ``ccxt.pro``, or raise :class:`ImportError` with the install hint."""
+    try:
+        import ccxt.pro as ccxtpro
+    except ImportError as exc:  # pragma: no cover - only without the extra
+        raise ImportError(
+            "The ccxt source requires the 'ccxt' extra: "
+            'pip install "ob-analytics[ccxt]"'
+        ) from exc
+    return ccxtpro
+
+
 def _make_exchange(exchange_id: str) -> Any:
     """Instantiate a CCXT exchange by id (lazy import of ``ccxt``).
 
@@ -228,13 +240,7 @@ def _make_exchange(exchange_id: str) -> Any:
     Raises :class:`ImportError` with an install hint if ccxt is absent, and
     :class:`ValueError` if *exchange_id* is not a known CCXT venue.
     """
-    try:
-        import ccxt.pro as ccxtpro
-    except ImportError as exc:  # pragma: no cover - only without the extra
-        raise ImportError(
-            "The ccxt source requires the 'ccxt' extra: "
-            'pip install "ob-analytics[ccxt]"'
-        ) from exc
+    ccxtpro = _import_ccxt_pro()
     # Prediction-market classes by id; empty on a ccxt release that predates them.
     prediction: dict[str, Any] = {}
     try:
@@ -327,6 +333,14 @@ class CcxtSource:
         self.errors = 0
 
     # -- configuration ------------------------------------------------------
+
+    def preflight(self) -> None:
+        """Raise the install hint now if ccxt is needed and missing (SupportsPreflight).
+
+        A pre-built exchange object in the settings needs no import.
+        """
+        if isinstance(getattr(self.settings, "exchange", None), str):
+            _import_ccxt_pro()
 
     def _configure(self, config: CaptureConfig) -> None:
         """Resolve the exchange, symbol, and per-transport capabilities."""

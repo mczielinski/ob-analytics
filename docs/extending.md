@@ -229,6 +229,11 @@ class CoinbaseSource:  # ... plus the offline members above
     # Optional — satisfies SupportsDiagnostics; merged into meta.json.
     def diagnostics(self) -> dict[str, Any]:
         return {"reconnects": self._reconnects}
+
+    # Optional — satisfies SupportsPreflight; runs before any output exists.
+    # Raise ImportError with the install hint when an optional extra is missing.
+    def preflight(self) -> None:
+        import websockets  # noqa: F401
 ```
 
 Capturing from the CLI (requires the `[live]` extra):

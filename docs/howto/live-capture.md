@@ -86,6 +86,17 @@ through was not really on the book; [`ob-analytics audit`](audit.md) reports
 these as `stale_orders`. L2 captures report `null`, because a price
 level has no id that the stream could confirm.
 
+## A capture that fails
+
+If a source needs an optional extra that is not installed, `ob-analytics
+capture` stops before it starts. It prints the install hint, exits with
+status 1, and creates no output directory.
+
+If the stream raises part way through, the capture keeps the rows it wrote
+before the error, then exits with status 1. `meta.json` records the error as
+`stream_error` and counts it in `errors`. Check the exit status or
+`stream_error` before you use a capture.
+
 ## Adding a new venue
 
 Give your source the live capability -- the three async-iterator methods of a

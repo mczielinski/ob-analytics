@@ -19,6 +19,7 @@ from ob_analytics.live._base import (
     EventDict,
     LiveSource,
     SupportsDiagnostics,
+    SupportsPreflight,
 )
 from ob_analytics.protocols import Level
 
@@ -179,6 +180,11 @@ class FileCaptureSink(CaptureSink):
             "n_snapshot_unconfirmed": result.n_snapshot_unconfirmed,
             **result.extras,
         }
+        if result.stream_error is not None:
+            # A stream that raised is one more error on top of the ones the
+            # source counted itself.
+            meta["stream_error"] = result.stream_error
+            meta["errors"] = int(meta.get("errors") or 0) + 1
         (self.out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
 
 
@@ -191,7 +197,15 @@ async def run_capturer(
 
     Handles SIGINT/SIGTERM by cancelling the streaming task; the shutdown
     synthetic events still run so every order id keeps a full lifecycle.
+
+    A source that implements :class:`SupportsPreflight` is checked before any
+    output is created, so a missing optional extra raises :class:`ImportError`
+    here and leaves no output directory behind. An exception from the stream
+    does not propagate: the rows already written are kept, and the error is
+    recorded in :attr:`CaptureResult.stream_error` and ``meta.json``.
     """
+    if isinstance(capturer, SupportsPreflight):
+        capturer.preflight()
     # The source declares its granularity; the runner routes book events to
     # the matching writer. Fall back to L3 for sources predating the attr.
     level = getattr(capturer, "level", Level.L3)
@@ -199,6 +213,7 @@ async def run_capturer(
         sink = FileCaptureSink(config.out_dir, keep_raw=config.keep_raw, level=level)
     started = pd.Timestamp.now(tz="UTC")
     n_order = n_trade = n_depth = n_raw = 0
+    stream_error: str | None = None
 
     stop = asyncio.Event()
     loop = asyncio.get_event_loop()
@@ -269,6 +284,7 @@ async def run_capturer(
         if stream_task in done and not stream_task.cancelled():
             exc = stream_task.exception()
             if exc is not None:
+                stream_error = repr(exc)
                 logger.error("Capturer '{}' stream raised: {!r}", capturer.name, exc)
         n_order += stream_counts["order"]
         n_trade += stream_counts["trade"]
@@ -315,6 +331,7 @@ async def run_capturer(
             extras=extras,
             n_depth_events=n_depth,
             n_snapshot_unconfirmed=None if unconfirmed is None else len(unconfirmed),
+            stream_error=stream_error,
         )
         sink.finalize(result)
         logger.info(

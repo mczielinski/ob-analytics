@@ -57,6 +57,10 @@ class CaptureResult:
     #: the touch is an order the venue's snapshot listed after it had gone.
     #: ``None`` on an L2 run, where a price level has no id to confirm.
     n_snapshot_unconfirmed: int | None = None
+    #: ``repr`` of the exception that ended the stream early, or ``None`` when
+    #: the stream ran to its end or was stopped by a signal. The rows written
+    #: before the error stay on disk, so a failed run is still readable.
+    stream_error: str | None = None
 
 
 # Single canonical event dict shape, mirroring BitstampLoader's CSV columns.
@@ -177,4 +181,23 @@ class SupportsDiagnostics(Protocol):
 
     def diagnostics(self) -> dict[str, Any]:
         """Return a JSON-serialisable mapping of per-run counters."""
+        ...
+
+
+@runtime_checkable
+class SupportsPreflight(Protocol):
+    """Optional source capability: check the source can run before it starts.
+
+    A source whose venue library is an optional extra imports it lazily, so a
+    missing extra would otherwise surface only once the stream starts, after
+    the output files exist. The runner calls :meth:`preflight` before it
+    creates any output, so such a run stops with the install hint instead.
+    """
+
+    def preflight(self) -> None:
+        """Raise :class:`ImportError` (with the install hint) if the source cannot run.
+
+        May also raise :class:`ValueError` for settings that cannot work (no
+        venue chosen, an unknown venue id).
+        """
         ...

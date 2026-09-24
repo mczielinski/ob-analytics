@@ -404,3 +404,69 @@ class TestL2Runner:
         # 4 absolute-size price-level rows (the 0-size removal is kept)
         assert len(depth) == 4
         assert set(depth["direction"].dropna().unique()) <= {"bid", "ask"}
+
+
+# ---------------------------------------------------------------------------
+# A capture that fails reports it (#283)
+# ---------------------------------------------------------------------------
+
+
+class _CrashingCapturer(_FakeCapturer):
+    """Streams one order, then raises part way through."""
+
+    name = "crashing"
+
+    async def stream(
+        self, config: CaptureConfig
+    ) -> AsyncIterator[tuple[str, EventDict, Any]]:
+        async for item in super().stream(config):
+            yield item
+            raise ValueError("stream broke")
+
+
+class _MissingExtraCapturer(_FakeCapturer):
+    """A source whose optional extra is not installed."""
+
+    name = "missing-extra"
+
+    def preflight(self) -> None:
+        raise ImportError('pip install "ob-analytics[missing]"')
+
+
+class TestFailedCapture:
+    def test_stream_error_is_recorded_and_rows_kept(self, tmp_path):
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="btcusd", out_dir=out, minutes=0.001)
+        result = asyncio.run(run_capturer(_CrashingCapturer(), cfg))
+
+        assert result.stream_error == repr(ValueError("stream broke"))
+        meta = json.loads((out / "meta.json").read_text())
+        assert meta["stream_error"] == result.stream_error
+        assert meta["errors"] == 1
+        # The order streamed before the error is still on disk.
+        orders = pd.read_csv(out / "orders.csv")
+        assert 3 in set(orders["id"])
+
+    def test_stream_error_adds_to_the_source_error_count(self, tmp_path):
+        class _CountingCrasher(_CrashingCapturer):
+            def diagnostics(self) -> dict[str, Any]:
+                return {"errors": 2}
+
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="btcusd", out_dir=out, minutes=0.001)
+        asyncio.run(run_capturer(_CountingCrasher(), cfg))
+        assert json.loads((out / "meta.json").read_text())["errors"] == 3
+
+    def test_clean_run_has_no_stream_error(self, tmp_path):
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="btcusd", out_dir=out, minutes=0.001)
+        result = asyncio.run(run_capturer(_FakeCapturer(), cfg))
+        assert result.stream_error is None
+        assert "stream_error" not in json.loads((out / "meta.json").read_text())
+
+    def test_failed_preflight_creates_no_output(self, tmp_path):
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="btcusd", out_dir=out, minutes=0.001)
+        with pytest.raises(ImportError, match="ob-analytics"):
+            asyncio.run(run_capturer(_MissingExtraCapturer(), cfg))
+        assert not out.exists()
