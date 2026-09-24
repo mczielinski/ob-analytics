@@ -182,11 +182,10 @@ class TestDiffBook:
         assert sum(raw is not None for raw in raws) == 1
 
     def test_raw_frame_holds_only_the_changed_levels(self):
-        # A deep recorded window (Coinbase BTC/USD holds ~40k levels) with one
-        # level changed and one removed: the raw frame follows the update, not
-        # the book, so raw.jsonl stays near the size of depth.csv.
+        # A deep book (Coinbase BTC/USD holds ~40k levels) with one level
+        # changed and one removed: the raw frame follows the update, not the
+        # book, so raw.jsonl stays near the size of depth.csv.
         cap = CcxtSource()
-        cap._depth_limit = 20_000  # record the whole test book
         cap._full_book_written = True  # past the first frame
         bids = [[50_000.0 - i * 0.01, 1.0] for i in range(20_000)]
         asks = [[50_001.0 + i * 0.01, 1.0] for i in range(20_000)]
@@ -589,30 +588,74 @@ class TestTickSize:
 # ---------------------------------------------------------------------------
 
 
-class TestDepthWindow:
-    def test_keeps_only_the_top_depth_limit_levels(self):
+class TestDepthRecording:
+    """The capture no longer crops what CCXT reports to ``depth_limit``
+    (issue #275): a level that is only outside that number, but still in
+    CCXT's own book, used to be recorded as a synthetic cancel (``0``) when
+    the price moved and a real cancel when it moved back, indistinguishable
+    from an honest one.
+
+    ``_diff_book``/``_side`` no longer branch on the venue -- what differs
+    per venue is only the *book CCXT hands them*, which mirrors the three
+    rows of the table in the issue.  ``exchange_id`` is set in each test
+    below purely to document which venue's behaviour is being simulated.
+    """
+
+    def test_binance_family_keeps_levels_past_depth_limit(self):
+        # Binance is asked for the whole book (TestWholeBookVenues), so
+        # CCXT's own maintained book reaches past depth_limit. A deep level
+        # must stay recorded, not read as gone just because it is outside
+        # depth_limit.
         cap = CcxtSource()
+        cap.exchange_id = "binance"
         cap._depth_limit = 2
         cap._last = {"bid": {}, "ask": {}}
         book = {"bids": [[100.0, 1.0], [99.0, 1.0], [98.0, 1.0]], "asks": []}
         rows = [r for r, _ in cap._diff_book(book, pd.Timestamp.now(tz="UTC"))]
-        assert {r["price"] for r in rows} == {100.0, 99.0}
+        assert {r["price"] for r in rows} == {100.0, 99.0, 98.0}
+        # A later update that only touches the deep level does not zero it
+        # out first -- it was never treated as removed to begin with.
+        cap._last = {"bid": {100.0: 1.0, 99.0: 1.0, 98.0: 1.0}, "ask": {}}
+        moved = {"bids": [[100.0, 1.0], [99.0, 1.0], [98.0, 2.0]], "asks": []}
+        rows = [
+            (r["price"], r["volume"])
+            for r, _ in cap._diff_book(moved, pd.Timestamp.now(tz="UTC"))
+        ]
+        assert rows == [(98.0, 2.0)]
 
-    def test_a_level_that_comes_back_into_the_window_is_recorded_again(self):
+    def test_ignoring_venues_keep_levels_past_depth_limit(self):
+        # Coinbase, Bitstamp and OKX hand ccxt the whole book regardless of
+        # the limit ccxt is asked for -- same fix, and no whole-book-venue
+        # special-casing (_WHOLE_BOOK_VENUES) is needed to get it.
         cap = CcxtSource()
+        cap.exchange_id = "coinbase"
+        cap._depth_limit = 1
+        cap._last = {"bid": {}, "ask": {}}
+        book = {"bids": [[100.0, 1.0], [99.0, 1.0], [98.0, 1.0]], "asks": []}
+        rows = [r for r, _ in cap._diff_book(book, pd.Timestamp.now(tz="UTC"))]
+        assert {r["price"] for r in rows} == {100.0, 99.0, 98.0}
+
+    def test_kraken_style_venue_still_reads_its_own_window_exit_as_removed(self):
+        # Kraken subscribes at depth_limit and its own book drops a level
+        # once it leaves that window, so ccxt hands the capture a book that
+        # already lacks it -- correctly a removal. This is the one case
+        # #275 leaves as-is (the issue: "Kraken's own window exits look like
+        # cancels whichever option is chosen").
+        cap = CcxtSource()
+        cap.exchange_id = "kraken"
         cap._depth_limit = 2
         cap._last = {"bid": {100.0: 1.0, 99.0: 1.0}, "ask": {}}
         ts = pd.Timestamp.now(tz="UTC")
-        # A better bid pushes 99 out of the window: it is removed.
-        pushed = {"bids": [[101.0, 1.0], [100.0, 1.0], [99.0, 1.0]], "asks": []}
+        # A better bid arrives; Kraken's own window drops 99 from what it sends.
+        pushed = {"bids": [[101.0, 1.0], [100.0, 1.0]], "asks": []}
         rows = [(r["price"], r["volume"]) for r, _ in cap._diff_book(pushed, ts)]
         assert sorted(rows) == [(99.0, 0.0), (101.0, 1.0)]
-        # The better bid goes: 99 is back in the window with its size.
+        # 99 comes back once Kraken's own window reports it again.
         back = {"bids": [[100.0, 1.0], [99.0, 1.0]], "asks": []}
         rows = [(r["price"], r["volume"]) for r, _ in cap._diff_book(back, ts)]
         assert sorted(rows) == [(99.0, 1.0), (101.0, 0.0)]
 
-    def test_the_archived_frame_holds_the_window_only(self):
+    def test_the_archived_frame_holds_whatever_ccxt_reported(self):
         cap = CcxtSource()
         cap._depth_limit = 1
         cap._last = {"bid": {}, "ask": {}}
@@ -620,7 +663,7 @@ class TestDepthWindow:
         raws = [raw for _, raw in cap._diff_book(book, pd.Timestamp.now(tz="UTC"))]
         archived = next(raw for raw in raws if raw is not None)
         assert archived["frame"] == "book"
-        assert archived["bids"] == [[100.0, 1.0]]
+        assert archived["bids"] == [[100.0, 1.0], [99.0, 1.0]]
         assert archived["nonce"] == 7
 
 
@@ -804,6 +847,62 @@ class TestClocks:
         bids = depth.loc[depth["direction"] == "bid", "volume"].tolist()
         assert len(bids) == 3
         assert bids == sorted(bids)
+
+
+class TestBookLoopYield:
+    """A large book update yields to the event loop without losing rows."""
+
+    @staticmethod
+    def _loop_parts(tmp_path, n_levels: int):
+        book = {
+            "bids": [[100.0 - i * 0.01, 1.0] for i in range(n_levels)],
+            "asks": [],
+            "timestamp": 1_000,
+        }
+        ex = _FakeCcxtExchange({"bids": [], "asks": [], "timestamp": 0}, [book])
+        cap = _source(ex)
+        cap._configure(_cfg(tmp_path))
+        return cap, asyncio.Queue(), asyncio.Event()
+
+    def test_a_large_update_yields_to_the_event_loop(self, tmp_path, monkeypatch):
+        from ob_analytics.live import ccxt_source
+
+        cap, queue, stop = self._loop_parts(tmp_path, 600)
+        real_sleep = asyncio.sleep
+        yields: list[float] = []
+
+        async def counting_sleep(delay, *args, **kwargs):
+            yields.append(delay)
+            await real_sleep(delay, *args, **kwargs)
+
+        monkeypatch.setattr(ccxt_source.asyncio, "sleep", counting_sleep)
+        asyncio.run(cap._book_loop(queue, stop, deadline=float("inf")))
+        assert queue.qsize() == 600
+        # 600 rows with a yield every 256: after rows 256 and 512.
+        assert yields == [0, 0]
+
+    def test_a_cancel_at_the_yield_still_enqueues_the_whole_update(
+        self, tmp_path, monkeypatch
+    ):
+        # _diff_book has already applied the whole update to _last by the
+        # time the first row is enqueued, so stopping part way would leave
+        # depth.csv missing rows the book state already includes.
+        from ob_analytics.live import ccxt_source
+
+        cap, queue, stop = self._loop_parts(tmp_path, 300)
+        real_sleep = asyncio.sleep
+
+        async def cancelling_sleep(delay, *args, **kwargs):
+            task = asyncio.current_task()
+            assert task is not None
+            task.cancel()
+            await real_sleep(delay, *args, **kwargs)
+
+        monkeypatch.setattr(ccxt_source.asyncio, "sleep", cancelling_sleep)
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(cap._book_loop(queue, stop, deadline=float("inf")))
+        assert queue.qsize() == 300
+        assert len(cap._last["bid"]) == 300
 
 
 @pytest.mark.skipif(not _CCXT_INSTALLED, reason="needs the ccxt extra")
