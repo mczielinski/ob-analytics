@@ -34,3 +34,13 @@ _CANCELLED_COLOR = "#E69F00"  # removed without any execution (orange)
 # Aggressor (taker side) — bluish green / vermillion
 _BUY_COLOR = "#009E73"  # buyer-initiated execution (lifts the ask)
 _SELL_COLOR = "#D55E00"  # seller-initiated execution (hits the bid)
+
+# Hidden liquidity overlay (icebergs, hidden trades) — depth heatmap / order
+# activity map. Side already reads from _BID_COLOR/_ASK_COLOR for icebergs;
+# these two distinguish a confirmed hidden-order trade from one flagged by
+# hidden_trades() whose maker order was actually visible (a diff feed's stale
+# depth summary -- see PR #271), which needs checking rather than trusting.
+_HIDDEN_TRADE_COLOR = "#F0E442"  # confirmed hidden-order trade (Okabe-Ito yellow)
+_CHECK_TRADE_COLOR = (
+    "#999999"  # maker was visible -- a trade to check, not a hidden order
+)

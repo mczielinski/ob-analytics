@@ -21,8 +21,9 @@
 #   `queue_position`, …);
 # - **level** — at what *resolution*, `L2` (aggregated) or `L3`
 #   (per-order), the distinction from [chapter 2](02_three_resolutions.md);
-# - **backend** — with which *renderer*, Matplotlib (static, default) or
-#   Plotly (interactive).
+# - **backend** — with which *renderer*: Matplotlib (static, default),
+#   Plotly (interactive), or Bokeh (interactive, suited to Bokeh / Panel
+#   server dashboards and streaming views).
 #
 # Name a concept and a level; the system finds the data preparation and
 # the renderer for you.
@@ -180,7 +181,7 @@ fig = plot("vpin", **prepare.vpin(vpin, threshold=0.7))
 # envelope — the pre-slicing you met in chapter 3. Convenience, control,
 # scale — the same three levels seaborn and similar libraries offer.
 #
-# ## Two backends
+# ## Three backends
 #
 # Everything so far rendered with Matplotlib. Pass `backend="plotly"`
 # for an interactive figure — zoom, pan, hover — from the *same* concept
@@ -193,16 +194,30 @@ type(fig).__module__.split(".")[0], type(fig).__name__
 # %% [markdown]
 # The call returns a Plotly figure instead of a Matplotlib one; in a
 # notebook `fig.show()` renders it live, and `fig.write_html("depth.html")`
-# saves a standalone interactive file. The rule of thumb:
+# saves a standalone interactive file.
+#
+# `backend="bokeh"` renders the same concept a third way (Bokeh ships in
+# the `[bokeh]` extra) — it covers the core concepts (`trade_tape`,
+# `depth_heatmap`, `book_snapshot`, `depth_chart`), and is the one to
+# reach for when the figure is going into a Bokeh or Panel server app
+# rather than a notebook or a static page:
+
+# %%
+fig = result.plot("depth_heatmap", backend="bokeh", col_bias=0.4)
+type(fig).__module__.split(".")[0], type(fig).__name__
+
+# %% [markdown]
+# The rule of thumb:
 #
 # | You want… | Backend |
 # |---|---|
 # | A figure for a paper, README, or the docs | `matplotlib` (default) |
 # | To explore — zoom into a burst, read exact values on hover | `plotly` |
-# | A third renderer (Bokeh, …) | register your own (below) |
+# | A figure embedded in a Bokeh / Panel server app or streaming view | `bokeh` |
+# | A fourth renderer | register your own (below) |
 #
 # Backends live in a registry, so a new one is a module path away —
-# `register_plot_backend("bokeh", "my_package._bokeh_backend")` — the
+# `register_plot_backend("altair", "my_package._altair_backend")` — the
 # same structural-typing story as loaders and formats from
 # [chapter 3](03_loading_data.md). See
 # [Extending ob-analytics](../extending.md).
@@ -229,7 +244,8 @@ save_figure(fig, "trades_talk.png", dpi=200)
 # %% [markdown]
 # `PlotTheme` bundles a Seaborn style, context, font scale, and any
 # Matplotlib `rc` overrides; `save_figure` writes at the DPI you ask for.
-# Theming is Matplotlib-only — Plotly figures carry their own styling.
+# Theming is Matplotlib-only — Plotly and Bokeh figures carry their own
+# styling.
 #
 # ## Wrapping up
 #

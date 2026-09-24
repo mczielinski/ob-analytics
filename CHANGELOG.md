@@ -75,6 +75,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **A Bokeh plot backend** (#123). `result.plot(concept, backend="bokeh")`
+  renders the core concepts — `trade_tape`, `depth_heatmap`, `book_snapshot`,
+  `depth_chart` — as interactive Bokeh figures, alongside the static
+  Matplotlib default and the Plotly backend. Suited to Bokeh / Panel server
+  dashboards and streaming views. Ships in the new `bokeh` extra:
+  `pip install "ob-analytics[bokeh]"`.
+
 - **Binance venue notes and a market-data mirror** (#101). A new how-to page
   covers capturing Binance spot through ccxt: the location block, the
   `binanceus` alternative, the depth a 100-level book reaches, and trade
@@ -95,6 +102,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `SynthSession.icebergs`, so the detector can be scored exactly. See the
   [hidden liquidity
   how-to](https://mczielinski.github.io/ob-analytics/howto/hidden-liquidity/).
+
+- **Iceberg refills and hidden trades drawn on the depth heatmap and order
+  activity map** (#272). Both L3 faces now overlay `detect_icebergs` and
+  `hidden_trades`: a diamond marks each refill, joined by a line per iceberg
+  (opacity = `confidence`); a star marks a hidden trade, with a thin line to
+  the standing best bid and best ask so the print reads as inside that
+  spread. A filled star is a confirmed hidden order; an open star is a trade
+  to check, where the maker order was actually visible or its maker
+  identity did not resolve at all — the diff-feed case the how-to guide
+  describes. Both overlays clip to the gallery's zoom window, and are absent
+  without error when a run has neither. New `prepare.hidden_liquidity_overlay`
+  builds the same overlay for a custom plot. `hidden_trades` now returns
+  `best_bid_price`/`best_ask_price` in `depth_summary`'s own dtype instead of
+  always casting to `int64`, so a caller already holding display-unit floats
+  gets floats back rather than a silently truncated value.
 
 - **A feature table for models** (#149). `features(trades, quotes)` returns one
   tidy table: a point in time on each row and a microstructure feature in each

@@ -513,16 +513,43 @@ the dispatcher at the module so it imports lazily on first use:
 ```python
 from ob_analytics.visualization import register_plot_backend
 
-# In your package, e.g. my_pkg/_bokeh.py, call at import time:
-#     RENDERERS.register(("cumvol", Level.L2, "bokeh"), bokeh_cumvol)  # def bokeh_cumvol(data): ...
-register_plot_backend("bokeh", "my_pkg._bokeh")
+# In your package, e.g. my_pkg/_altair.py, call at import time:
+#     RENDERERS.register(("cumvol", Level.L2, "altair"), altair_cumvol)  # def altair_cumvol(data): ...
+register_plot_backend("altair", "my_pkg._altair")
 
-fig = plot("cumvol", backend="bokeh", **prepare_cumvol_data(result.trades))
+fig = plot("cumvol", backend="altair", **prepare_cumvol_data(result.trades))
 ```
 
-**In the gallery.** There is no panel registry. To put a custom plot in the
-HTML gallery, pass it through `extra_panels=` — see the
-[Gallery API](api/gallery.md).
+Matplotlib (static, default), Plotly, and Bokeh already ship first-party this
+way — `backend="bokeh"` covers the core concepts (`trade_tape`,
+`depth_heatmap`, `book_snapshot`, `depth_chart`) for Bokeh / Panel server
+dashboards and streaming views (`pip install ob-analytics[bokeh]`).
+
+**In the gallery.** There is no panel registry. Gallery cards outside the
+built-in concepts are level-less, so the renderer needs a `level=None`
+registration too:
+
+```python
+RENDERERS.register(("cumvol", None, "matplotlib"), mpl_cumvol)
+```
+
+Then build the model, append a `PlotSpec` for the panel to its `analytics`
+list, and render that model instead of a bare result — see the
+[Gallery API](api/gallery.md):
+
+```python
+from ob_analytics.visualization.gallery import (
+    PlotSpec,
+    build_gallery_model,
+    generate_gallery,
+)
+
+model = build_gallery_model(result)
+model.analytics.append(
+    PlotSpec("cumvol", "Cumulative Volume", "cumvol", prepare_cumvol_data, {"trades": result.trades})
+)
+generate_gallery(result, "output/gallery/", model=model)
+```
 
 ---
 
@@ -624,7 +651,7 @@ run's resolution.
 
 **In the gallery.** A registered metric becomes a gallery card on its own —
 `generate_gallery(result, ...)` draws it beside the built-in faces with no
-`extra_panels=` needed. A metric that raises is logged and its card dropped, so
+extra step needed. A metric that raises is logged and its card dropped, so
 one broken metric does not stop the gallery being built.
 
 **Shipping a metric as its own package.** Advertise it under the

@@ -144,10 +144,10 @@ def signed_volume_skew(trades: pd.DataFrame, freq: str = "1min") -> pd.DataFrame
 skew_df = signed_volume_skew(result.trades)
 ```
 
-To fold a metric into the HTML gallery, wrap it in a panel builder and pass it
-via `extra_panels=` — see [Extending ob-analytics](../extending.md) for the
-full walkthrough (new data source, export format, plot, metric, or live
-capturer).
+To fold a metric into the HTML gallery, wrap it in a panel builder and append
+it to the gallery model's `analytics` list — see
+[Extending ob-analytics](../extending.md) for the full walkthrough (new data
+source, export format, plot, metric, or live capturer).
 
 ## Related
 
