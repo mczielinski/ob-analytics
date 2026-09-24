@@ -140,10 +140,13 @@ keep_closed = true
 id = "release"
 title = "Part 7 - packaging, docs and release decisions"
 prose = """
-What is left before a version other projects can depend on: four decisions,
+What a version other projects can depend on needs: the release decisions,
 conda-forge distribution, and the documentation work.
 """
 issues = [115, 120, 121, 141, 142, 145, 216]
+# Keep the closed pieces. A release needs all of them, so the diagram shows the
+# whole list rather than only what is unbuilt.
+keep_closed = true
 
 # Either/or prerequisites.
 #
