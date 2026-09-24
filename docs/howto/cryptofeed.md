@@ -57,7 +57,7 @@ Each run produces a self-contained directory:
 | `orders.csv` | L3 only: per-order `created` / `changed` / `deleted` events |
 | `depth.csv` | L2 only: price-level updates (`volume` = new absolute size, `0` removes the level) |
 | `trades.csv` | The trade tape (taker side; feeds trade-sign) |
-| `raw.jsonl` | Raw frames as the venue sent them (omit with `--no-raw`) |
+| `raw.jsonl` | Raw frames as cryptofeed passed them on (omit with `--no-raw`). cryptofeed reads prices and sizes as `Decimal`, and these are written as strings so no digits are lost: a venue's `0.011` is stored as `"0.011"` |
 | `meta.json` | Counts + per-run diagnostics (venue, level, book updates, sequence gaps, errors) |
 
 ## How the per-order events are derived
