@@ -26,7 +26,11 @@ from typing import Any
 import pandas as pd
 from loguru import logger
 
-from ob_analytics._utils import lots_to_size, ticks_to_price
+from ob_analytics._utils import (
+    lots_to_size,
+    ticks_to_price,
+    ticks_to_price_if_integer,
+)
 from ob_analytics.analytics import order_book
 from ob_analytics.depth import get_spread
 from ob_analytics.pipeline import PipelineResult
@@ -574,18 +578,21 @@ def build_gallery_model(
         tick_size = getattr(raw_result.config, "tick_size", 1.0)
         decimals = getattr(raw_result.config, "price_decimals", None)
 
-        def _display_price(series: pd.Series) -> pd.Series | Any:
-            if not pd.api.types.is_integer_dtype(series):
-                return series
-            return ticks_to_price(series.to_numpy(), tick_size, decimals=decimals)
-
         icebergs_display = detection.icebergs.assign(
-            price=_display_price(detection.icebergs["price"])
+            price=ticks_to_price_if_integer(
+                detection.icebergs["price"], tick_size, decimals=decimals
+            )
         )
         hidden_display = hidden.assign(
-            price=_display_price(hidden["price"]),
-            best_bid_price=_display_price(hidden["best_bid_price"]),
-            best_ask_price=_display_price(hidden["best_ask_price"]),
+            price=ticks_to_price_if_integer(
+                hidden["price"], tick_size, decimals=decimals
+            ),
+            best_bid_price=ticks_to_price_if_integer(
+                hidden["best_bid_price"], tick_size, decimals=decimals
+            ),
+            best_ask_price=ticks_to_price_if_integer(
+                hidden["best_ask_price"], tick_size, decimals=decimals
+            ),
         )
         hidden_liquidity_overlay = _viz_data.prepare_hidden_liquidity_overlay(
             icebergs_display,

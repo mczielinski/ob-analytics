@@ -25,6 +25,7 @@ from ob_analytics.visualization.gallery import (
     GalleryModel,
     PlotConcept,
     PlotSpec,
+    _auto_zoom_window,
     _Card,
     _Panel,
     _project,
@@ -599,8 +600,24 @@ class TestBuildGalleryModel:
         assert set(overlay_hidden["maker_event_id"]) <= set(
             full_hidden["maker_event_id"]
         )
-        assert len(overlay_hidden) <= len(full_hidden)
         assert {"hidden", "check"} >= set(overlay_hidden["category"].unique())
+
+        # ... and it really is clipped: strictly fewer rows than the raw
+        # detection, all inside the zoom window and the shared price band.
+        assert 0 < len(overlay_hidden) < len(full_hidden)
+        zoom_start, zoom_end = _auto_zoom_window(result.events)
+        assert overlay_hidden["timestamp"].between(zoom_start, zoom_end).all()
+        assert (
+            overlay_hidden["price"]
+            .between(heatmap.prep_kwargs["price_from"], heatmap.prep_kwargs["price_to"])
+            .all()
+        )
+
+        for frame in (
+            heatmap.prep_kwargs["iceberg_lines"],
+            heatmap.prep_kwargs["iceberg_refills"],
+        ):
+            assert frame["timestamp"].between(zoom_start, zoom_end).all()
 
     def test_hidden_liquidity_overlay_is_not_rescaled_on_a_legacy_float_result(
         self,

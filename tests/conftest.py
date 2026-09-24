@@ -769,3 +769,113 @@ def tiny_depth() -> pd.DataFrame:
             ),
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# Hidden-liquidity overlay (#272): one iceberg + trades against hidden orders,
+# shared by the prepare, matplotlib and plotly tests.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def iceberg_events_and_trades() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """One 2-slice iceberg (bid @236.50) plus an unrelated lone order (ask @237.00)."""
+    ts = pd.Timestamp("2015-05-01 01:00:00", tz="UTC")
+    events = pd.DataFrame(
+        [
+            {
+                "event_id": 1,
+                "id": 10,
+                "timestamp": ts,
+                "price": 236.50,
+                "volume": 100,
+                "action": "created",
+                "direction": "bid",
+                "fill": 0,
+            },
+            {
+                "event_id": 2,
+                "id": 10,
+                "timestamp": ts + pd.Timedelta(milliseconds=100),
+                "price": 236.50,
+                "volume": 0,
+                "action": "changed",
+                "direction": "bid",
+                "fill": 100,
+            },
+            {
+                "event_id": 3,
+                "id": 11,
+                "timestamp": ts + pd.Timedelta(milliseconds=100, microseconds=200),
+                "price": 236.50,
+                "volume": 100,
+                "action": "created",
+                "direction": "bid",
+                "fill": 0,
+            },
+            {
+                "event_id": 4,
+                "id": 20,
+                "timestamp": ts + pd.Timedelta(seconds=5),
+                "price": 237.00,
+                "volume": 50,
+                "action": "created",
+                "direction": "ask",
+                "fill": 0,
+            },
+        ]
+    )
+    events["action"] = pd.Categorical(
+        events["action"], categories=["created", "changed", "deleted"], ordered=True
+    )
+    events["direction"] = pd.Categorical(events["direction"], categories=["bid", "ask"])
+    trades = pd.DataFrame({"maker_event_id": [2]})
+    return events, trades
+
+
+@pytest.fixture
+def hidden_trades_and_events() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """``hidden_trades()`` output for a truly-hidden maker and a visible one.
+
+    Returns the hidden-trade rows and the maker events they were read against.
+    """
+    from ob_analytics.engine import HIDDEN_ORDER_ID
+    from ob_analytics.hidden_liquidity import hidden_trades
+
+    ts = pd.Timestamp("2015-05-01 01:00:00", tz="UTC")
+    maker_events = pd.DataFrame(
+        [
+            {
+                "event_id": 100,
+                "id": HIDDEN_ORDER_ID,
+                "timestamp": ts + pd.Timedelta(seconds=1),
+            },
+            {"event_id": 200, "id": 55, "timestamp": ts + pd.Timedelta(seconds=2)},
+        ]
+    )
+    depth_summary = pd.DataFrame(
+        {"timestamp": [ts], "best_bid_price": [236.50], "best_ask_price": [237.00]}
+    )
+    trades = pd.DataFrame(
+        {
+            "timestamp": [ts + pd.Timedelta(seconds=1), ts + pd.Timedelta(seconds=2)],
+            "price": [236.60, 236.70],
+            "maker_event_id": [100, 200],
+        }
+    )
+    return hidden_trades(maker_events, trades, depth_summary), maker_events
+
+
+@pytest.fixture
+def hidden_liquidity_overlay(
+    iceberg_events_and_trades, hidden_trades_and_events
+) -> dict[str, pd.DataFrame]:
+    """The overlay frames for the two fixtures above, unclipped."""
+    from ob_analytics.hidden_liquidity import detect_icebergs
+    from ob_analytics.visualization._data import prepare_hidden_liquidity_overlay
+
+    detection = detect_icebergs(*iceberg_events_and_trades)
+    hidden, maker_events = hidden_trades_and_events
+    return prepare_hidden_liquidity_overlay(
+        detection.icebergs, detection.slices, hidden, maker_events
+    )

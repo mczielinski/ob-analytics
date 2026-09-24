@@ -4,10 +4,29 @@ import pandas as pd
 import pytest
 
 from ob_analytics._utils import (
+    ticks_to_price_if_integer,
     validate_columns,
     validate_non_empty,
 )
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
+
+
+class TestTicksToPriceIfInteger:
+    def test_integer_ticks_are_converted(self):
+        out = ticks_to_price_if_integer(
+            pd.Series([25001, 25002], dtype="int64"), 0.01, decimals=2
+        )
+        assert list(out) == [250.01, 250.02]
+
+    def test_float_prices_are_returned_unchanged(self):
+        # Already a quote-currency price: converting again would rescale it.
+        prices = pd.Series([250.01, 250.02])
+        out = ticks_to_price_if_integer(prices, 0.01, decimals=2)
+        assert out is prices
+
+    def test_empty_integer_series_is_safe(self):
+        out = ticks_to_price_if_integer(pd.Series([], dtype="int64"), 0.01)
+        assert len(out) == 0
 
 
 class TestValidateColumns:
