@@ -849,7 +849,6 @@ class TestClocks:
         assert bids == sorted(bids)
 
 
-@pytest.mark.skipif(not _CCXT_INSTALLED, reason="needs the ccxt extra")
 class TestBookLoopYield:
     """A large book update yields to the event loop without losing rows."""
 
@@ -906,6 +905,7 @@ class TestBookLoopYield:
         assert len(cap._last["bid"]) == 300
 
 
+@pytest.mark.skipif(not _CCXT_INSTALLED, reason="needs the ccxt extra")
 class TestLostSync:
     class _Gappy(_FakeCcxtExchange):
         """Raises ccxt's out-of-sync error once, as on a missing Binance diff."""
