@@ -378,8 +378,8 @@ _Avoid_: panel for a face, or for a level-less analytic plot
 A concept with both an L2 and an L3 variant, so the two can sit side by side.
 
 **Backend**:
-The drawing library a face is rendered with: matplotlib or plotly. A renderer
-is the registered function, not the library.
+The drawing library a face is rendered with: matplotlib, plotly, or bokeh. A
+renderer is the registered function, not the library.
 _Avoid_: engine, renderer library
 
 **View**:

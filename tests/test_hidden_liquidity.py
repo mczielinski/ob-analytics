@@ -3,6 +3,7 @@
 from itertools import pairwise
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -326,6 +327,24 @@ class TestHiddenTrades:
 
         assert out["price"].tolist() == [101, 103]
         assert out.index.tolist() == [7, 7]
+
+    def test_best_prices_keep_depth_summarys_own_dtype(self):
+        # depth_summary carries whatever price representation the caller
+        # already has -- integer ticks on the canonical schema, but a caller
+        # holding display-unit floats must get floats back, not a value
+        # silently truncated to int64.
+        summary = _summary([(0, 100, 104)]).astype(
+            {"best_bid_price": "float64", "best_ask_price": "float64"}
+        )
+        summary.loc[0, ["best_bid_price", "best_ask_price"]] = [100.5, 104.5]
+        trades = _trade_frame([(10, 102.75)])
+
+        out = hidden_trades(NO_EVENTS, trades, summary)
+
+        assert out["best_bid_price"].dtype == np.float64
+        assert out["best_ask_price"].dtype == np.float64
+        assert out["best_bid_price"].tolist() == [100.5]
+        assert out["best_ask_price"].tolist() == [104.5]
 
     def test_book_is_read_before_the_maker_fill(self):
         # The order stream reported the fill at t=10, and the print arrived at

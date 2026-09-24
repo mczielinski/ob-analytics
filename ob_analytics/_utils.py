@@ -119,6 +119,21 @@ def ticks_to_price(
     return price if decimals is None else np.round(price, decimals)
 
 
+def ticks_to_price_if_integer(
+    prices: pd.Series, tick_size: float, *, decimals: int | None = None
+) -> pd.Series | np.ndarray:
+    """Convert *prices* from ticks to a quote-currency price, only if they are ticks.
+
+    A column of integer dtype is a whole number of ticks and is converted with
+    :func:`ticks_to_price`.  Any other dtype is already a quote-currency price
+    (a pre-tick file, or a frame already converted) and is returned unchanged,
+    so converting twice never rescales a price by ``tick_size`` again.
+    """
+    if not pd.api.types.is_integer_dtype(prices):
+        return prices
+    return ticks_to_price(prices.to_numpy(), tick_size, decimals=decimals)
+
+
 # ---------------------------------------------------------------------------
 # Size / lot conversions (issue #226)
 # ---------------------------------------------------------------------------

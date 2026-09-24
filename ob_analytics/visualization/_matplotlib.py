@@ -27,13 +27,19 @@ from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
-from ob_analytics.visualization._data import book_mid, check_book_payload_level
+from ob_analytics.visualization._data import (
+    book_bar_thickness,
+    book_mid,
+    check_book_payload_level,
+)
 from ob_analytics.visualization._palette import (
     _ASK_COLOR,
     _BID_COLOR,
     _BUY_COLOR,
     _CANCELLED_COLOR,
+    _CHECK_TRADE_COLOR,
     _FILLED_COLOR,
+    _HIDDEN_TRADE_COLOR,
     _PARTIAL_COLOR,
     _SELL_COLOR,
 )
@@ -280,6 +286,144 @@ def _volume_norm(volume: pd.Series, col_bias: float) -> mcolors.Normalize:
     return mcolors.Normalize(vmin=vmin, vmax=vmax)
 
 
+# ---------------------------------------------------------------------------
+# Hidden-liquidity overlay (#272): iceberg refills + trades against hidden
+# orders, shared by the depth heatmap and the L3 order-activity map.
+# ---------------------------------------------------------------------------
+
+_ICEBERG_CONFIDENCE_ALPHA = {"low": 0.35, "medium": 0.6, "high": 0.9}
+
+_HIDDEN_TRADE_STYLE = {
+    "hidden": {
+        "marker": "*",
+        "color": _HIDDEN_TRADE_COLOR,
+        "label": "Hidden-order trade",
+    },
+    "check": {
+        "marker": "*",
+        "color": _CHECK_TRADE_COLOR,
+        "label": "Trade to check (maker not confirmed hidden)",
+    },
+}
+
+
+def _draw_iceberg_overlay(
+    ax: Axes, lines: pd.DataFrame | None, refills: pd.DataFrame | None
+) -> bool:
+    """Draw suspected-iceberg chains (line, opacity = confidence) + refill (♦) markers.
+
+    Returns whether anything was drawn, so callers can add a legend entry.
+    """
+    drew = False
+    if lines is not None and not lines.empty:
+        for _, g in lines.groupby("iceberg", sort=False):
+            g = g.sort_values("timestamp")
+            color = _BID_COLOR if g["direction"].iloc[0] == "bid" else _ASK_COLOR
+            alpha = _ICEBERG_CONFIDENCE_ALPHA.get(str(g["confidence"].iloc[0]), 0.5)
+            ax.plot(
+                mdates.date2num(g["timestamp"]),
+                g["price"],
+                color=color,
+                alpha=alpha,
+                linewidth=1.2,
+                zorder=4,
+            )
+            drew = True
+    if refills is not None and not refills.empty:
+        colors = np.where(
+            refills["direction"].to_numpy() == "bid", _BID_COLOR, _ASK_COLOR
+        )
+        ax.scatter(
+            mdates.date2num(refills["timestamp"]),
+            refills["price"],
+            s=32,
+            marker="D",
+            c=colors,
+            edgecolors="black",
+            linewidths=0.5,
+            zorder=5,
+        )
+        drew = True
+    return drew
+
+
+def _iceberg_legend_handles() -> list[Line2D]:
+    return [
+        Line2D(
+            [0], [0], color="#888888", alpha=0.7, linewidth=1.2, label="Iceberg chain"
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker="D",
+            linestyle="none",
+            markerfacecolor="#888888",
+            markeredgecolor="black",
+            markersize=6,
+            label="Iceberg refill",
+        ),
+    ]
+
+
+def _draw_hidden_trades_overlay(ax: Axes, hidden: pd.DataFrame | None) -> bool:
+    """Draw trades ``hidden_trades()`` flagged as printing inside the spread.
+
+    An I-beam runs from the standing best bid to the standing best ask, with
+    the trade print marked between them. Style splits on ``category``:
+    ``"hidden"`` (the maker order was genuinely unseen) vs ``"check"`` (the
+    maker order was visible, or its identity did not resolve -- a diff feed's
+    stale depth summary, see PR #271, is one cause -- so this is a trade to
+    verify, not a confirmed hidden order).
+    """
+    if hidden is None or hidden.empty:
+        return False
+    x = mdates.date2num(hidden["timestamp"])
+    ax.vlines(
+        x,
+        hidden["best_bid_price"],
+        hidden["best_ask_price"],
+        colors="#7f8c8d",
+        linewidth=0.8,
+        alpha=0.5,
+        zorder=3,
+    )
+    for category, style in _HIDDEN_TRADE_STYLE.items():
+        sub = hidden[hidden["category"] == category]
+        if sub.empty:
+            continue
+        ax.scatter(
+            mdates.date2num(sub["timestamp"]),
+            sub["price"],
+            marker=style["marker"],
+            s=50,
+            color=style["color"],
+            edgecolors="black",
+            linewidths=0.4,
+            zorder=6,
+        )
+    return True
+
+
+def _hidden_trade_legend_handles(hidden: pd.DataFrame | None) -> list[Line2D]:
+    if hidden is None:
+        return []
+    present = set(hidden["category"].unique())
+    return [
+        Line2D(
+            [0],
+            [0],
+            marker=style["marker"],
+            linestyle="none",
+            markerfacecolor=style["color"],
+            markeredgecolor="black",
+            markersize=8,
+            label=style["label"],
+        )
+        for category, style in _HIDDEN_TRADE_STYLE.items()
+        if category in present
+    ]
+
+
 def mpl_price_levels(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -412,6 +556,12 @@ def mpl_price_levels(
                 label="Buy Trades",
             )
 
+    drew_icebergs = _draw_iceberg_overlay(
+        ax, data.get("iceberg_lines"), data.get("iceberg_refills")
+    )
+    hidden_trades_df = data.get("hidden_trades")
+    drew_hidden = _draw_hidden_trades_overlay(ax, hidden_trades_df)
+
     # All artists above plot date2num floats; format_time_axis keeps the
     # axis off the date units converter (see its docstring).
     format_time_axis(ax)
@@ -435,6 +585,12 @@ def mpl_price_levels(
 
     handles, labels = ax.get_legend_handles_labels()
     by_label = dict(zip(labels, handles))
+    if drew_icebergs:
+        for h in _iceberg_legend_handles():
+            by_label[h.get_label()] = h
+    if drew_hidden:
+        for h in _hidden_trade_legend_handles(hidden_trades_df):
+            by_label[h.get_label()] = h
     ax.legend(by_label.values(), by_label.keys())
 
     fig.tight_layout()
@@ -580,21 +736,6 @@ def mpl_volume_map(
     return fig
 
 
-def _book_bar_thickness(*sides: pd.DataFrame) -> float:
-    """Smallest positive gap between distinct prices across *sides*.
-
-    Used as the ladder bar thickness (price units); windowing to the touch
-    keeps this gap roughly the tick size, so bars stay tall and contiguous.
-    """
-    arrays = [s["price"].to_numpy() for s in sides if not s.empty]
-    if not arrays:
-        return 1.0
-    uniq = np.unique(np.concatenate(arrays))
-    diffs = np.diff(uniq)
-    diffs = diffs[diffs > 0]
-    return float(np.min(diffs)) if diffs.size else 1.0
-
-
 def _rounded_price_ticks(
     lo: float, hi: float, price_by: float, *, max_ticks: int = 12
 ) -> np.ndarray:
@@ -628,7 +769,7 @@ def _mpl_book_bars(
     asks = data["asks"]
     fig, ax = _create_axes(ax, figsize=(11, 8), theme=theme)
 
-    thickness = _book_bar_thickness(bids, asks) * 0.9
+    thickness = book_bar_thickness(bids, asks) * 0.9
     # Windowing to the touch keeps bars tall, so L3 separators are always on.
     edgecolor = "white" if per_order else "none"
     linewidth = 1.3 if per_order else 0.0
@@ -869,6 +1010,12 @@ def mpl_order_activity_per_order(
                     ends, side["price"], marker=marker, s=22, color=color, zorder=4
                 )
 
+    drew_icebergs = _draw_iceberg_overlay(
+        ax, data.get("iceberg_lines"), data.get("iceberg_refills")
+    )
+    hidden_trades_df = data.get("hidden_trades")
+    drew_hidden = _draw_hidden_trades_overlay(ax, hidden_trades_df)
+
     format_time_axis(ax)
 
     y_range = data.get("y_range")
@@ -894,8 +1041,13 @@ def mpl_order_activity_per_order(
             color="#555555",
             fontstyle="italic",
         )
-    if drew_any:
-        ax.legend(loc="upper right")
+    handles = list(ax.get_legend_handles_labels()[0]) if drew_any else []
+    if drew_icebergs:
+        handles.extend(_iceberg_legend_handles())
+    if drew_hidden:
+        handles.extend(_hidden_trade_legend_handles(hidden_trades_df))
+    if handles:
+        ax.legend(handles=handles, loc="upper right")
     fig.tight_layout()
     return fig
 

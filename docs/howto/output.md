@@ -73,7 +73,7 @@ save_data(
 )
 ```
 
-## Plotly (interactive)
+## Plotly and Bokeh (interactive)
 
 `plot()` accepts `backend="plotly"` for interactive figures with
 zoom, pan, and hover tooltips. Plotly is an optional dependency:
@@ -95,11 +95,20 @@ fig.show()
 fig.write_html("depth.html")
 ```
 
+`backend="bokeh"` (with the `[bokeh]` extra: `pip install "ob-analytics[bokeh]"`)
+renders the core concepts — `trade_tape`, `depth_heatmap`, `book_snapshot`,
+`depth_chart` — the same way, for Bokeh / Panel server dashboards and
+streaming views:
+
+```python
+fig = result.plot("depth_heatmap", backend="bokeh", col_bias=0.1)
+```
+
 Whole new backends can be registered by module path:
 
 ```python
 from ob_analytics.visualization import register_plot_backend
-register_plot_backend("bokeh", "my_package._bokeh_backend")
+register_plot_backend("altair", "my_package._altair_backend")
 ```
 
 ## Related

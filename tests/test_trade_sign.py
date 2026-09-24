@@ -281,6 +281,7 @@ class TestPartlyLabelledFeedReachesTheMetrics:
         assert float(ofi["sell_volume"].iloc[0]) == 0.0
         assert float(ofi["ofi"].iloc[0]) == pytest.approx(1.0)
 
+    @pytest.mark.filterwarnings("ignore::UserWarning")
     def test_vpin_does_not_count_the_blanks_as_sells(self):
         vpin = compute_vpin(self._half_labelled(), bucket_volume=2.0)
 
@@ -368,6 +369,7 @@ class TestFlowToxicityFallback:
     def _prices(self):
         return [100, 101, 102, 101, 100, 99, 100, 101, 102, 103, 102, 101]
 
+    @pytest.mark.filterwarnings("ignore::UserWarning")
     def test_vpin_without_direction_uses_tick(self):
         trades = _trades(self._prices())
         got = compute_vpin(trades, bucket_volume=2.0)
@@ -377,6 +379,7 @@ class TestFlowToxicityFallback:
         expected = compute_vpin(seeded, bucket_volume=2.0)
         pd.testing.assert_frame_equal(got, expected)
 
+    @pytest.mark.filterwarnings("ignore::UserWarning")
     def test_vpin_native_direction_is_backward_compatible(self):
         trades = _trades(self._prices())
         trades["direction"] = ["buy", "sell"] * 6
@@ -386,6 +389,7 @@ class TestFlowToxicityFallback:
         reclassified = compute_vpin(trades, bucket_volume=2.0, sign_method="tick")
         assert not np.allclose(got["vpin"].to_numpy(), reclassified["vpin"].to_numpy())
 
+    @pytest.mark.filterwarnings("ignore::UserWarning")
     def test_vpin_lee_ready_with_quotes(self):
         trades = _trades(self._prices())
         quotes = pd.DataFrame(
@@ -401,6 +405,7 @@ class TestFlowToxicityFallback:
         assert not got.empty
         assert {"vpin", "vpin_avg"}.issubset(got.columns)
 
+    @pytest.mark.filterwarnings("ignore::UserWarning")
     def test_vpin_bvc_path(self):
         trades = _trades(self._prices())
         got = compute_vpin(trades, bucket_volume=2.0, sign_method="bvc")

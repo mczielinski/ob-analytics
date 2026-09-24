@@ -313,6 +313,36 @@ class TestPlotOrderActivityL3:
         ax = fig.axes[0]
         assert 0 < len(ax.get_yticks()) <= 13
 
+    def test_hidden_liquidity_overlay_draws_and_legends(
+        self, sample_order_lifecycle_events, hidden_liquidity_overlay
+    ) -> None:
+        overlay = hidden_liquidity_overlay
+
+        data = _data.prepare_order_activity_l3_data(
+            sample_order_lifecycle_events,
+            iceberg_lines=overlay["iceberg_lines"],
+            iceberg_refills=overlay["iceberg_refills"],
+            hidden_trades=overlay["hidden_trades"],
+        )
+        fig = plot("order_activity", Level.L3, **data)
+        labels = {h.get_label() for h in fig.axes[0].get_legend().legend_handles}
+        assert {
+            "Iceberg chain",
+            "Iceberg refill",
+            "Hidden-order trade",
+            "Trade to check (maker not confirmed hidden)",
+        } <= labels
+
+    def test_no_overlay_draws_no_extra_legend_entries(
+        self, sample_order_lifecycle_events
+    ) -> None:
+        data = _data.prepare_order_activity_l3_data(sample_order_lifecycle_events)
+        fig = plot("order_activity", Level.L3, **data)
+        legend = fig.axes[0].get_legend()
+        labels = {h.get_label() for h in legend.legend_handles} if legend else set()
+        assert "Iceberg refill" not in labels
+        assert "Hidden-order trade" not in labels
+
 
 class TestPlotVolumeMap:
     def test_returns_figure(self, sample_events):
@@ -825,6 +855,152 @@ class TestPriceLevelsColBias:
         )
         mid = next(ln for ln in fig.axes[0].get_lines() if ln.get_label() == "Midprice")
         assert mid.get_drawstyle() == "steps-post"
+
+
+# ---------------------------------------------------------------------------
+# Hidden-liquidity overlay (#272): iceberg refills + trades against hidden
+# orders, on the depth heatmap and the L3 order-activity map.
+# ---------------------------------------------------------------------------
+
+
+class TestPrepareHiddenLiquidityOverlay:
+    @staticmethod
+    def _overlay(iceberg_events_and_trades, hidden_trades_and_events, **window):
+        from ob_analytics.hidden_liquidity import detect_icebergs
+
+        detection = detect_icebergs(*iceberg_events_and_trades)
+        hidden, hidden_events = hidden_trades_and_events
+        return _data.prepare_hidden_liquidity_overlay(
+            detection.icebergs, detection.slices, hidden, hidden_events, **window
+        )
+
+    def test_lines_need_two_surviving_slices(
+        self, iceberg_events_and_trades, hidden_trades_and_events
+    ):
+        out = self._overlay(iceberg_events_and_trades, hidden_trades_and_events)
+        assert len(out["iceberg_lines"]) == 2
+        assert sorted(out["iceberg_refills"]["slice"]) == [2]
+
+    def test_price_window_drops_icebergs_outside_it(
+        self, iceberg_events_and_trades, hidden_trades_and_events
+    ):
+        out = self._overlay(
+            iceberg_events_and_trades,
+            hidden_trades_and_events,
+            price_from=300.0,
+            price_to=400.0,
+        )
+        assert out["iceberg_lines"].empty
+        assert out["iceberg_refills"].empty
+
+    def test_time_window_clips_slices(
+        self, iceberg_events_and_trades, hidden_trades_and_events
+    ):
+        events, _ = iceberg_events_and_trades
+        ts = events["timestamp"].iloc[0]
+
+        out = self._overlay(
+            iceberg_events_and_trades,
+            hidden_trades_and_events,
+            start_time=ts,
+            end_time=ts + pd.Timedelta(milliseconds=50),
+        )
+        # Only the first slice survives -- no line, no refill.
+        assert out["iceberg_lines"].empty
+        assert out["iceberg_refills"].empty
+
+    def test_hidden_trade_categorized_by_maker_visibility(
+        self, hidden_liquidity_overlay
+    ):
+        by_maker = hidden_liquidity_overlay["hidden_trades"].set_index(
+            "maker_event_id"
+        )["category"]
+        assert by_maker.loc[100] == "hidden"  # maker order id was HIDDEN_ORDER_ID
+        assert by_maker.loc[200] == "check"  # maker order id was a real, visible order
+
+    def test_unresolved_maker_is_check_not_hidden(
+        self, iceberg_events_and_trades, hidden_trades_and_events
+    ):
+        # A maker_event_id that matches no event is unconfirmed, so it must not
+        # be drawn as a confirmed hidden order.
+        hidden, hidden_events = hidden_trades_and_events
+        unresolved = hidden.assign(maker_event_id=[9998, 9999])
+
+        from ob_analytics.hidden_liquidity import detect_icebergs
+
+        detection = detect_icebergs(*iceberg_events_and_trades)
+        out = _data.prepare_hidden_liquidity_overlay(
+            detection.icebergs, detection.slices, unresolved, hidden_events
+        )
+        assert set(out["hidden_trades"]["category"]) == {"check"}
+
+    def test_no_icebergs_or_hidden_trades_is_safe(self, hidden_trades_and_events):
+        empty_icebergs = pd.DataFrame(
+            columns=[
+                "iceberg",
+                "direction",
+                "price",
+                "start",
+                "end",
+                "slices",
+                "refills",
+                "same_size_refills",
+                "peak",
+                "executed",
+                "median_delay_s",
+                "confidence",
+            ]
+        )
+        empty_slices = pd.DataFrame(
+            columns=["iceberg", "slice", "id", "timestamp", "volume", "fill", "delay_s"]
+        )
+        hidden, hidden_events = hidden_trades_and_events
+
+        out = _data.prepare_hidden_liquidity_overlay(
+            empty_icebergs, empty_slices, hidden.iloc[0:0], hidden_events
+        )
+        assert out["iceberg_lines"].empty
+        assert out["iceberg_refills"].empty
+        assert out["hidden_trades"].empty
+
+
+class TestPriceLevelsHiddenLiquidityOverlay:
+    """Depth heatmap draws the #272 overlay when given, and skips it when not."""
+
+    def _depth(self, sample_events):
+        depth = sample_events[["timestamp", "price", "volume"]].copy()
+        depth["direction"] = "bid"
+        return depth
+
+    def test_no_overlay_draws_no_extra_legend_entries(self, sample_events):
+        depth = self._depth(sample_events)
+        fig = plot("depth_heatmap", **_data.prepare_price_levels_data(depth))
+        labels = {t.get_text() for t in fig.axes[0].get_legend().get_texts()}
+        assert "Iceberg refill" not in labels
+        assert "Hidden-order trade" not in labels
+
+    def test_iceberg_and_hidden_trade_overlay_draws_and_legends(
+        self, sample_events, hidden_liquidity_overlay
+    ):
+        overlay = hidden_liquidity_overlay
+
+        depth = self._depth(sample_events)
+        fig = plot(
+            "depth_heatmap",
+            **_data.prepare_price_levels_data(
+                depth,
+                iceberg_lines=overlay["iceberg_lines"],
+                iceberg_refills=overlay["iceberg_refills"],
+                hidden_trades=overlay["hidden_trades"],
+            ),
+        )
+        labels = {t.get_text() for t in fig.axes[0].get_legend().get_texts()}
+        assert {
+            "Iceberg chain",
+            "Iceberg refill",
+            "Hidden-order trade",
+            "Trade to check (maker not confirmed hidden)",
+        } <= labels
 
 
 # ---------------------------------------------------------------------------

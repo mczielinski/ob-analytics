@@ -1,5 +1,7 @@
 """Tests for flow_toxicity.py — VPIN, Kyle's Lambda, and OFI."""
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -41,7 +43,15 @@ def _trades(directions, volumes=None, prices=None, base_sec_offsets=None):
 # ── VPIN ─────────────────────────────────────────────────────────────
 
 
+@pytest.mark.filterwarnings("ignore::UserWarning")
 class TestComputeVpin:
+    """VPIN computation correctness; not about the too-few-buckets warning.
+
+    bucket_volume is small on purpose here to keep the fixtures readable, so
+    most of these trip compute_vpin's too-few-buckets warning as a side
+    effect. TestVpinDiagnostics covers that warning directly.
+    """
+
     def test_uniform_buys_vpin_one(self):
         """All-buy trades → VPIN = 1.0 for every bucket."""
         trades = _trades(["buy"] * 10, volumes=[1.0] * 10)
@@ -405,17 +415,53 @@ class TestVpinDiagnostics:
         assert vpin.attrs["diagnostics"] == ()
 
     def test_too_few_buckets_is_flagged(self):
-        vpin = compute_vpin(_trades(["buy"] * 10), bucket_volume=2.0)
+        with pytest.warns(UserWarning):
+            vpin = compute_vpin(_trades(["buy"] * 10), bucket_volume=2.0)
         assert len(vpin) == 5
         (message,) = vpin.attrs["diagnostics"]
         assert "5 complete buckets" in message
 
-    def test_bvc_path_is_recorded_and_flagged(self):
-        vpin = compute_vpin(
-            _trades(["buy"] * 10, prices=[100.0 + i for i in range(10)]),
-            bucket_volume=2.0,
-            sign_method="bvc",
+    def test_too_few_buckets_warns_with_given_bucket_volume(self):
+        with pytest.warns(UserWarning, match="5 complete buckets"):
+            vpin = compute_vpin(_trades(["buy"] * 10), bucket_volume=2.0)
+        assert len(vpin) == 5
+
+    def test_too_few_buckets_warns_to_shrink_default_bucket_volume(self):
+        trades = _busy_tape()
+        with pytest.warns(UserWarning, match="Pass a smaller bucket_volume"):
+            compute_vpin(trades, n_buckets=10**9)
+
+    def test_warning_names_no_cause_it_cannot_know(self):
+        """A big n_buckets, not a short capture, can trigger this (#276).
+
+        The default bucket_volume is sized from a fixed 50-buckets-per-day
+        rule, independent of n_buckets, so a multi-day capture can still
+        produce fewer buckets than a caller-chosen n_buckets. The warning
+        must not claim the capture ran "well under a day" when it didn't.
+        """
+        trades = _trades(
+            ["buy", "sell"] * 100,
+            base_sec_offsets=[i * 900 for i in range(200)],  # 2-day span
         )
+        with pytest.warns(UserWarning) as records:
+            vpin = compute_vpin(trades, n_buckets=200)
+        assert len(vpin) < 200
+        message = str(records[0].message)
+        assert "day" not in message
+
+    def test_full_window_raises_no_warning(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            vpin = compute_vpin(_trades(["buy"] * 10), bucket_volume=2.0, n_buckets=3)
+        assert vpin.attrs["diagnostics"] == ()
+
+    def test_bvc_path_is_recorded_and_flagged(self):
+        with pytest.warns(UserWarning):
+            vpin = compute_vpin(
+                _trades(["buy"] * 10, prices=[100.0 + i for i in range(10)]),
+                bucket_volume=2.0,
+                sign_method="bvc",
+            )
         assert vpin.attrs["bucket_volume"] == 2.0
         assert vpin.attrs["diagnostics"]
 
@@ -423,14 +469,16 @@ class TestVpinDiagnostics:
         """A short tape under the default rule fills no bucket (#119)."""
         for sign_method in (None, "bvc"):
             trades = _trades(["buy", "sell"] * 3, prices=[100.0, 101.0] * 3)
-            vpin = compute_vpin(trades, sign_method=sign_method)
+            with pytest.warns(UserWarning):
+                vpin = compute_vpin(trades, sign_method=sign_method)
             assert vpin.empty
             assert "vpin_avg" in vpin.columns
             assert vpin.attrs["diagnostics"]
 
     def test_bucket_volume_defaults_to_adv_rule(self):
         trades = _busy_tape()
-        vpin = compute_vpin(trades)
+        with pytest.warns(UserWarning):
+            vpin = compute_vpin(trades)
         assert vpin.attrs["bucket_volume"] == pytest.approx(vpin_bucket_volume(trades))
         assert vpin.attrs["bucket_volume_rule"] == "adv/50"
 
@@ -458,7 +506,8 @@ class TestBundledSampleDiagnostics:
 
     def test_vpin_reports_bucket_and_diagnostic(self, sample_trades):
         trades = sample_trades
-        vpin = compute_vpin(trades)
+        with pytest.warns(UserWarning, match="only 1 complete bucket"):
+            vpin = compute_vpin(trades)
         assert vpin.attrs["bucket_volume"] == pytest.approx(vpin_bucket_volume(trades))
         assert vpin.attrs["diagnostics"]
 
@@ -518,7 +567,14 @@ from matplotlib.figure import Figure
 
 from ob_analytics.visualization import _data, plot
 
+# Built at import time (parametrize arguments are evaluated on collection,
+# where a pytest mark does not apply), so the warning is silenced inline.
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", UserWarning)
+    _NO_BUCKET_VPIN = compute_vpin(_trades(["buy"]), bucket_volume=100.0)
 
+
+@pytest.mark.filterwarnings("ignore::UserWarning")
 class TestFlowToxicityPlots:
     def test_plot_vpin_returns_figure(self):
         """plot_vpin returns a Figure."""
@@ -531,7 +587,7 @@ class TestFlowToxicityPlots:
         "vpin_df",
         [
             # What compute_vpin returns when the trades fill no bucket.
-            compute_vpin(_trades(["buy"]), bucket_volume=100.0),
+            _NO_BUCKET_VPIN,
             # An untyped empty frame: every column is object dtype.
             pd.DataFrame(columns=["timestamp_end", "vpin", "vpin_avg"]),
         ],

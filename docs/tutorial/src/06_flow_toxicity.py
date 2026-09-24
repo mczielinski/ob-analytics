@@ -288,7 +288,13 @@ for reason in kyle_real.diagnostics:
 # each bucket holds about half an hour of this tape's volume:
 
 # %%
-vpin_real = compute_vpin(result.trades)
+import warnings
+
+# compute_vpin also raises a UserWarning here; suppressed since the
+# diagnostics it points at are printed explicitly below.
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", UserWarning)
+    vpin_real = compute_vpin(result.trades)
 print(
     f"bucket_volume = {vpin_real.attrs['bucket_volume']:.2f} "
     f"({vpin_real.attrs['bucket_volume_rule']})   buckets = {len(vpin_real)}"
