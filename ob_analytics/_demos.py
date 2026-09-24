@@ -76,7 +76,7 @@ def _save_and_gallery(
     logger.info("Parquet saved to: {}", parquet_dir)
 
     panels = list(analytics or [])
-    panels.extend(_bars_panels(result))
+    panels.extend(_bars_panels(display_result(result).trades))
 
     model = None
     if panels:
@@ -92,14 +92,13 @@ def _save_and_gallery(
     return gallery_path
 
 
-def _bars_panels(result: PipelineResult) -> list[PlotSpec]:
+def _bars_panels(trades: pd.DataFrame) -> list[PlotSpec]:
     """Build the demo's bar faces: one cut by the clock, one by traded volume.
 
-    The pair is the point of the card — the same trades cut two ways. Bars come
-    off the display-unit trades so their prices read in the quote currency,
-    like every other face in the gallery.
+    The pair is the point of the card — the same trades cut two ways. *trades*
+    must already be in display units (see :func:`display_result`) so bar
+    prices read in the quote currency, like every other face in the gallery.
     """
-    trades = display_result(result).trades
     if trades.empty:
         return []
     panels: list[PlotSpec] = []
@@ -108,6 +107,26 @@ def _bars_panels(result: PipelineResult) -> list[PlotSpec]:
             panels.append(bars_panel(bars(trades, rule)))
         except Exception as e:  # noqa: BLE001 -- a demo face must not sink the run
             logger.warning("Demo: {} bars failed: {}", rule, e)
+    return panels
+
+
+def _lobster_analytics_panels(
+    result: PipelineResult, halts: pd.DataFrame | None
+) -> list[PlotSpec]:
+    """Build the LOBSTER-only analytic panels: trading halts and OFI horizon.
+
+    Trading halts draws trade price as a line with halt bands overlaid, so it
+    needs the same display-unit trades as every other panel in the gallery
+    (see :func:`display_result`). The OFI horizon panel instead plots a
+    buy/sell volume ratio in ``[-1, 1]``; the lot-to-base-asset scale factor
+    cancels in that ratio, so raw-tick trades give the same numbers there.
+    """
+    panels: list[PlotSpec] = []
+    if halts is not None and not halts.empty:
+        display_trades = display_result(result).trades
+        panels.append(trading_halts_panel(display_trades, halts))
+    if not result.trades.empty:
+        panels.append(ofi_horizon_panel(result.trades))
     return panels
 
 
@@ -245,11 +264,7 @@ def run_lobster_demo(
     # LOBSTER halts are not part of the slim PipelineResult; read them off the
     # loader and append them to the gallery model's analytics.
     halts = getattr(pipeline.loader, "trading_halts", None)
-    analytics: list[PlotSpec] = []
-    if halts is not None and not halts.empty:
-        analytics.append(trading_halts_panel(result.trades, halts))
-    if not result.trades.empty:
-        analytics.append(ofi_horizon_panel(result.trades))
+    analytics = _lobster_analytics_panels(result, halts)
     analytics.extend(_cost_panels(result))
 
     return _save_and_gallery(

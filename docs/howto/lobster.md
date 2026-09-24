@@ -38,6 +38,7 @@ from ob_analytics import Pipeline, RunContext
 from ob_analytics.lobster import LobsterLoader, LobsterSource
 from ob_analytics.visualization.gallery import (
     build_gallery_model,
+    display_result,
     generate_gallery,
     trading_halts_panel,
 )
@@ -51,7 +52,9 @@ halts = loader.trading_halts  # pd.DataFrame | None
 
 if halts is not None:
     model = build_gallery_model(result)
-    model.analytics.append(trading_halts_panel(result.trades, halts))
+    # The halts panel draws trade price, so give it display-unit trades
+    # (quote-currency floats), like the rest of the gallery.
+    model.analytics.append(trading_halts_panel(display_result(result).trades, halts))
     generate_gallery(result, "out/gallery", model=model)
 ```
 
