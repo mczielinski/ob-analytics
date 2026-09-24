@@ -75,6 +75,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **A Bokeh plot backend** (#123). `result.plot(concept, backend="bokeh")`
+  renders the core concepts — `trade_tape`, `depth_heatmap`, `book_snapshot`,
+  `depth_chart` — as interactive Bokeh figures, alongside the static
+  Matplotlib default and the Plotly backend. Suited to Bokeh / Panel server
+  dashboards and streaming views. Ships in the new `bokeh` extra:
+  `pip install "ob-analytics[bokeh]"`.
+
 - **Binance venue notes and a market-data mirror** (#101). A new how-to page
   covers capturing Binance spot through ccxt: the location block, the
   `binanceus` alternative, the depth a 100-level book reaches, and trade

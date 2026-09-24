@@ -29,7 +29,11 @@ fig = plot("trade_tape", level="L2", **prepare.trades(trades))
 
 `backend="matplotlib"` (default) returns a Matplotlib figure;
 `backend="plotly"` returns an interactive Plotly figure (requires
-`pip install ob-analytics[interactive]`). Renderers never call `plt.show()`.
+`pip install ob-analytics[interactive]`); `backend="bokeh"` returns a Bokeh
+figure (requires `pip install ob-analytics[bokeh]`), covering the core
+concepts — `trade_tape`, `depth_heatmap`, `book_snapshot`, `depth_chart` —
+for Bokeh / Panel server dashboards and streaming views. Renderers never
+call `plt.show()`.
 
 Every concept declares a resolution **level** — `Level.L2` (Market-By-Price
 aggregate) or `Level.L3` (Market-By-Order, per order). A concept registered at

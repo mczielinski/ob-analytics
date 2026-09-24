@@ -513,12 +513,17 @@ the dispatcher at the module so it imports lazily on first use:
 ```python
 from ob_analytics.visualization import register_plot_backend
 
-# In your package, e.g. my_pkg/_bokeh.py, call at import time:
-#     RENDERERS.register(("cumvol", Level.L2, "bokeh"), bokeh_cumvol)  # def bokeh_cumvol(data): ...
-register_plot_backend("bokeh", "my_pkg._bokeh")
+# In your package, e.g. my_pkg/_altair.py, call at import time:
+#     RENDERERS.register(("cumvol", Level.L2, "altair"), altair_cumvol)  # def altair_cumvol(data): ...
+register_plot_backend("altair", "my_pkg._altair")
 
-fig = plot("cumvol", backend="bokeh", **prepare_cumvol_data(result.trades))
+fig = plot("cumvol", backend="altair", **prepare_cumvol_data(result.trades))
 ```
+
+Matplotlib (static, default), Plotly, and Bokeh already ship first-party this
+way — `backend="bokeh"` covers the core concepts (`trade_tape`,
+`depth_heatmap`, `book_snapshot`, `depth_chart`) for Bokeh / Panel server
+dashboards and streaming views (`pip install ob-analytics[bokeh]`).
 
 **In the gallery.** There is no panel registry. Gallery cards outside the
 built-in concepts are level-less, so the renderer needs a `level=None`
