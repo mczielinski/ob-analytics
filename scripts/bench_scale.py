@@ -17,7 +17,10 @@ loop, and not file reading or the depth kernels, is the slow part.
 
 Memory is the process high-water mark read after each stage, not the allocation
 each stage makes: ``tracemalloc`` would attribute it properly but slows the code
-it watches several times over, and this runs on every pull request.
+it watches several times over, and this runs on every pull request. Before each
+stage the script hands freed heap memory back to the operating system (see
+:func:`_return_freed_memory`), so the mark reflects what the stage holds and not
+where the allocator happened to leave the previous stage's garbage.
 
 ``--envelope`` keeps the original mode this script started as: the bundled
 sample tiled to several sizes, each size in its own subprocess, peak RSS from
@@ -29,6 +32,7 @@ event count — so it is not part of the CI check.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import platform
 import resource
@@ -179,7 +183,43 @@ def _peak_rss_mib() -> float:
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
 
 
-def _pass(load: Load, config: PipelineConfig) -> tuple[list[Measurement], int]:
+def _load_malloc_trim() -> Callable[[int], int] | None:
+    """glibc's ``malloc_trim``, or ``None`` where the C library has none."""
+    if sys.platform != "linux":
+        return None
+    trim = getattr(ctypes.CDLL(None), "malloc_trim", None)
+    if trim is None:  # not glibc, e.g. musl
+        return None
+    trim.argtypes = [ctypes.c_size_t]
+    trim.restype = ctypes.c_int
+    return trim
+
+
+_MALLOC_TRIM = _load_malloc_trim()
+
+
+def _return_freed_memory() -> None:
+    """Hand the heap memory freed so far back to the operating system.
+
+    glibc keeps freed memory inside its heap resident, and returns it on its
+    own only from the top of the heap. Whether the frames an earlier stage
+    dropped sit at the top depends on where the heap starts, which address
+    space randomisation moves from one process to the next. So without this, the
+    same stage over the same input entered ``queue_positions`` holding either
+    about 305 or about 390 MiB, and its high-water mark came out near 418 or
+    near 471 MiB on CI, a coin toss that failed half the pushes to main. Trimming
+    before each stage gives the same mark on every run. It only releases pages
+    nothing is using, so it cannot raise a stage's peak. It runs outside the
+    timed window, but the stage then faults those pages back in, which adds a
+    few percent to its seconds: well inside :data:`DEFAULT_MARGINS`.
+    """
+    if _MALLOC_TRIM is not None:
+        _MALLOC_TRIM(0)
+
+
+def _pass(
+    load: Load, config: PipelineConfig
+) -> tuple[list[tuple[str, float, float]], int]:
     """Run every stage once, timing it and reading the high-water mark after it.
 
     One pass, not two. ``tracemalloc`` would attribute allocations to the stage
@@ -189,6 +229,7 @@ def _pass(load: Load, config: PipelineConfig) -> tuple[list[Measurement], int]:
     state, chain = _stages(load, config)
     records = []
     for stage, step in chain:
+        _return_freed_memory()
         start = time.perf_counter()
         step()
         records.append((stage, time.perf_counter() - start, _peak_rss_mib()))
