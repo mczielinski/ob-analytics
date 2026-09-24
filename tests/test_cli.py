@@ -409,6 +409,10 @@ class TestCaptureSubcommand:
             )
 
         monkeypatch.setattr("ob_analytics.live._runner.run_capturer", _fake_run)
+        # This test checks the flag wiring, not the extra: skip the check for it.
+        monkeypatch.setattr(
+            "ob_analytics.live.ccxt_source.CcxtSource.preflight", lambda self: None
+        )
 
         args = argparse.Namespace(
             verbose=False,
@@ -436,3 +440,76 @@ class TestCaptureSubcommand:
         assert isinstance(cfg, CaptureConfig)
         assert cfg.pair == "BTC/USDT"
         assert not hasattr(cfg, "extras")  # the untyped dict is gone
+
+    def _capture_args(self, tmp_path, venue, **extra):
+        import argparse
+
+        base = {
+            "verbose": False,
+            "list": False,
+            "venue": venue,
+            "pair": "BTC/USD",
+            "exchange": None,
+            "level": None,
+            "depth_limit": None,
+            "poll_interval": None,
+            "minutes": 0.001,
+            "out": str(tmp_path / "o"),
+            "no_raw": True,
+        }
+        return argparse.Namespace(**{**base, **extra})
+
+    def test_missing_extra_exits_nonzero_before_output(self, monkeypatch, tmp_path):
+        """Without the cryptofeed extra the capture stops before it starts (#283)."""
+        import sys
+
+        from ob_analytics import cli
+
+        # A None entry in sys.modules makes the import raise ImportError.
+        for mod in ("cryptofeed", "cryptofeed.exchanges"):
+            monkeypatch.setitem(sys.modules, mod, None)
+
+        args = self._capture_args(tmp_path, "cryptofeed", exchange="bitstamp")
+        with pytest.raises(SystemExit) as exc:
+            cli._cmd_capture(args)
+        assert exc.value.code == 1
+        assert not (tmp_path / "o").exists()
+
+    @pytest.mark.skipif(not _CCXT_INSTALLED, reason="ccxt extra not installed")
+    def test_unknown_ccxt_exchange_exits_nonzero_before_output(self, tmp_path):
+        """A misspelt --exchange stops the capture before it starts (#283)."""
+        from ob_analytics import cli
+
+        args = self._capture_args(tmp_path, "ccxt", exchange="binanse")
+        with pytest.raises(SystemExit) as exc:
+            cli._cmd_capture(args)
+        assert exc.value.code == 1
+        assert not (tmp_path / "o").exists()
+
+    def test_capture_error_exits_nonzero(self, monkeypatch, tmp_path):
+        """A capture that fails part way through fails the command (#283)."""
+        import pandas as pd
+
+        from ob_analytics import cli
+        from ob_analytics.live._base import CaptureResult
+
+        async def _failed_run(source, config, sink=None):
+            now = pd.Timestamp.now(tz="UTC")
+            return CaptureResult(
+                out_dir=config.out_dir,
+                n_order_events=0,
+                n_trade_events=0,
+                n_raw_frames=0,
+                started=now,
+                ended=now,
+                capture_error="ValueError('boom')",
+                capture_error_phase="stream",
+            )
+
+        monkeypatch.setattr("ob_analytics.live._runner.run_capturer", _failed_run)
+        monkeypatch.setattr(
+            "ob_analytics.bitstamp.BitstampSource.preflight", lambda self: None
+        )
+        with pytest.raises(SystemExit) as exc:
+            cli._cmd_capture(self._capture_args(tmp_path, "bitstamp"))
+        assert exc.value.code == 1

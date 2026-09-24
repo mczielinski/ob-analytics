@@ -6,7 +6,7 @@ Live sources register into the one unified registry with every other source
 
 Public API:
     CaptureConfig, CaptureResult, CaptureSink, EventDict
-    LiveSource, SupportsDiagnostics
+    LiveSource, SupportsDiagnostics, SupportsPreflight
 
 Importing this package registers the built-in ccxt and cryptofeed live sources.  The bitstamp
 live capability rides on :class:`ob_analytics.bitstamp.BitstampSource`, so it is
@@ -30,6 +30,7 @@ from ob_analytics.live._base import (
     EventDict,
     LiveSource,
     SupportsDiagnostics,
+    SupportsPreflight,
 )
 
 __all__ = [
@@ -39,4 +40,5 @@ __all__ = [
     "EventDict",
     "LiveSource",
     "SupportsDiagnostics",
+    "SupportsPreflight",
 ]

@@ -127,6 +127,18 @@ class CryptofeedSettings(SourceSettings):
     feed_handler: Any = None
 
 
+def _import_feed_handler() -> Any:
+    """Return cryptofeed's ``FeedHandler`` class, or raise the install hint."""
+    try:
+        from cryptofeed import FeedHandler
+    except ImportError as exc:  # pragma: no cover - only without the extra
+        raise ImportError(
+            "The cryptofeed source requires the 'cryptofeed' extra: "
+            'pip install "ob-analytics[cryptofeed]"'
+        ) from exc
+    return FeedHandler
+
+
 def _venue_channels(exchange: Any) -> dict[str, str]:
     """Return the venue's ``websocket_channels`` mapping (empty if unknown)."""
     return getattr(exchange, "websocket_channels", None) or {}
@@ -528,19 +540,23 @@ class CryptofeedSource:
 
     # -- the cryptofeed bridge ----------------------------------------------
 
+    def preflight(self) -> None:
+        """Raise now if the capture cannot start (SupportsPreflight).
+
+        Resolves the venue, which raises the install hint when the extra is
+        missing and :class:`ValueError` for no venue or an unknown one. A
+        supplied ``feed_handler`` and exchange class need no import.
+        """
+        self._exchange_class()
+        if getattr(self.settings, "feed_handler", None) is None:
+            _import_feed_handler()
+
     def _build_feed_handler(self) -> Any:
         """Return the ``FeedHandler`` to run (lazy import of ``cryptofeed``)."""
         supplied = getattr(self.settings, "feed_handler", None)
         if supplied is not None:
             return supplied
-        try:
-            from cryptofeed import FeedHandler
-        except ImportError as exc:  # pragma: no cover - only without the extra
-            raise ImportError(
-                "The cryptofeed source requires the 'cryptofeed' extra: "
-                'pip install "ob-analytics[cryptofeed]"'
-            ) from exc
-        return FeedHandler()
+        return _import_feed_handler()()
 
     def _exchange_class(self) -> Any:
         """Resolve the settings' venue to a cryptofeed exchange class.

@@ -10,6 +10,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A capture that fails now exits non-zero and says why** (#283).
+  `ob-analytics capture` used to exit 0 and write `"errors": 0` to
+  `meta.json` when the stream raised, or when the source's optional extra was
+  missing. A source is now checked before the capture starts: a missing
+  extra, or an unknown ccxt or cryptofeed venue, stops the run with status 1
+  and creates no output directory. An error in the snapshot, the stream or
+  the shutdown events keeps the rows already written, is recorded in
+  `meta.json` as `capture_error` and `capture_error_phase` and counted in
+  `errors`, and makes the command exit 1. A source can take part in the early
+  check by adding a `preflight()` method (`SupportsPreflight`).
 - **A Binance capture no longer loses price levels near the top of the book**
   (#101). ccxt deletes the levels of a Binance book that fall past the depth
   it is given, and Binance sends a level again only when it changes. After

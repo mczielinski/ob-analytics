@@ -239,6 +239,18 @@ def _refused_location(exc: Exception, exchange_id: str) -> ConfigError | None:
     )
 
 
+def _import_ccxt_pro() -> Any:
+    """Return ``ccxt.pro``, or raise :class:`ImportError` with the install hint."""
+    try:
+        import ccxt.pro as ccxtpro
+    except ImportError as exc:  # pragma: no cover - only without the extra
+        raise ImportError(
+            "The ccxt source requires the 'ccxt' extra: "
+            'pip install "ob-analytics[ccxt]"'
+        ) from exc
+    return ccxtpro
+
+
 def _make_exchange(exchange_id: str) -> Any:
     """Instantiate a CCXT exchange by id (lazy import of ``ccxt``).
 
@@ -250,13 +262,15 @@ def _make_exchange(exchange_id: str) -> Any:
     Raises :class:`ImportError` with an install hint if ccxt is absent, and
     :class:`ValueError` if *exchange_id* is not a known CCXT venue.
     """
-    try:
-        import ccxt.pro as ccxtpro
-    except ImportError as exc:  # pragma: no cover - only without the extra
-        raise ImportError(
-            "The ccxt source requires the 'ccxt' extra: "
-            'pip install "ob-analytics[ccxt]"'
-        ) from exc
+    return _exchange_class(exchange_id)({"enableRateLimit": True})
+
+
+def _exchange_class(exchange_id: str) -> Any:
+    """Look up the CCXT exchange class for *exchange_id* without building it.
+
+    Raises the same errors as :func:`_make_exchange`.
+    """
+    ccxtpro = _import_ccxt_pro()
     # Prediction-market classes by id; empty on a ccxt release that predates them.
     prediction: dict[str, Any] = {}
     try:
@@ -267,11 +281,10 @@ def _make_exchange(exchange_id: str) -> Any:
         prediction = {i: getattr(ccxtprediction, i) for i in ccxtprediction.exchanges}
 
     name = exchange_id.removeprefix(PREDICTION_PREFIX)
-    options = {"enableRateLimit": True}
     if name == exchange_id and name in ccxtpro.exchanges:
-        return getattr(ccxtpro, name)(options)
+        return getattr(ccxtpro, name)
     if name in prediction:
-        return prediction[name](options)
+        return prediction[name]
     raise ValueError(
         f"Unknown CCXT exchange {exchange_id!r}; expected one of "
         f"{len(ccxtpro.exchanges)} ccxt.pro venues or a prediction market "
@@ -349,6 +362,23 @@ class CcxtSource:
         self.errors = 0
 
     # -- configuration ------------------------------------------------------
+
+    def preflight(self) -> None:
+        """Raise now if the venue cannot be built (SupportsPreflight).
+
+        Raises the install hint when ccxt is missing and :class:`ValueError`
+        for no venue or an unknown one. A pre-built exchange object in the
+        settings needs no check.
+        """
+        exchange = getattr(self.settings, "exchange", None)
+        if not isinstance(exchange, str):
+            return
+        if not exchange:
+            raise ValueError(
+                "ccxt source needs CcxtSettings(exchange='<venue id>') "
+                "(e.g. 'binance')."
+            )
+        _exchange_class(exchange)
 
     def _configure(self, config: CaptureConfig) -> None:
         """Resolve the exchange, symbol, and per-transport capabilities."""

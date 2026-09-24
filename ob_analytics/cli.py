@@ -313,8 +313,7 @@ def _cmd_capture(args: argparse.Namespace) -> None:
 
     from loguru import logger
 
-    from ob_analytics.exceptions import ConfigError
-    from ob_analytics.live import CaptureConfig, LiveSource
+    from ob_analytics.live import CaptureConfig, LiveSource, SupportsPreflight
     from ob_analytics.live._runner import run_capturer
     from ob_analytics.live.ccxt_source import CcxtSettings
     from ob_analytics.live.cryptofeed_source import CryptofeedSettings
@@ -385,18 +384,33 @@ def _cmd_capture(args: argparse.Namespace) -> None:
         logger.error("Source %r has no live capture; it is offline-only.", args.venue)
         sys.exit(1)
 
+    # A missing optional extra or an unusable venue stops the run here, before
+    # the output directory exists (run_capturer checks again for library use).
+    if isinstance(source, SupportsPreflight):
+        try:
+            source.preflight()
+        except (ImportError, ValueError) as exc:
+            logger.error(str(exc))
+            sys.exit(1)
+
     config = CaptureConfig(
         pair=args.pair,
         out_dir=Path(args.out),
         minutes=args.minutes,
         keep_raw=not args.no_raw,
     )
-    try:
-        result = asyncio.run(run_capturer(source, config))
-    except ConfigError as exc:
-        # The venue or its settings are wrong for this run (a location the
-        # venue refuses, a mirror it does not have): report it, not a traceback.
-        logger.error(str(exc))
+    result = asyncio.run(run_capturer(source, config))
+    if result.capture_error is not None:
+        # The runner kept the rows written before the error and recorded it in
+        # meta.json; the run is still a failure. This includes the venue or its
+        # settings being wrong for this run (a location the venue refuses, a
+        # mirror it does not have).
+        logger.error(
+            "Capture failed in the {}: {}; partial output in {}",
+            result.capture_error_phase,
+            result.capture_error,
+            result.out_dir,
+        )
         sys.exit(1)
     logger.info("Capture complete: {}", result.out_dir)
 

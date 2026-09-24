@@ -617,6 +617,10 @@ class BitstampSource:
             self._engine = BitstampCapturer()
         return self._engine
 
+    def preflight(self) -> None:
+        """Raise the install hint now if the ``[live]`` extra is missing (SupportsPreflight)."""
+        self._live_engine()
+
     def snapshot(self, config: CaptureConfig) -> AsyncIterator[EventDict]:
         return self._live_engine().snapshot(config)
 

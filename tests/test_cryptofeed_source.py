@@ -806,6 +806,11 @@ class TestCliWiring:
             )
 
         monkeypatch.setattr("ob_analytics.live._runner.run_capturer", _fake_run)
+        # This test checks the flag wiring, not the extra: skip the check for it.
+        monkeypatch.setattr(
+            "ob_analytics.live.cryptofeed_source.CryptofeedSource.preflight",
+            lambda self: None,
+        )
 
         args = argparse.Namespace(
             verbose=False,
