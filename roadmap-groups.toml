@@ -124,6 +124,10 @@ The full plot catalogue, one theme across backends, and a second backend. The
 live view and the replay scrubber show a book as it changes.
 """
 issues = [105, 117, 118, 122, 123]
+# Keep the closed views. A backend or plot that shipped is one you can use, and
+# nothing but the goal waits on them, so pruning drops each one the day it
+# closes and leaves only what is unbuilt.
+keep_closed = true
 
 [[group]]
 id = "release"
