@@ -850,6 +850,62 @@ class TestClocks:
 
 
 @pytest.mark.skipif(not _CCXT_INSTALLED, reason="needs the ccxt extra")
+class TestBookLoopYield:
+    """A large book update yields to the event loop without losing rows."""
+
+    @staticmethod
+    def _loop_parts(tmp_path, n_levels: int):
+        book = {
+            "bids": [[100.0 - i * 0.01, 1.0] for i in range(n_levels)],
+            "asks": [],
+            "timestamp": 1_000,
+        }
+        ex = _FakeCcxtExchange({"bids": [], "asks": [], "timestamp": 0}, [book])
+        cap = _source(ex)
+        cap._configure(_cfg(tmp_path))
+        return cap, asyncio.Queue(), asyncio.Event()
+
+    def test_a_large_update_yields_to_the_event_loop(self, tmp_path, monkeypatch):
+        from ob_analytics.live import ccxt_source
+
+        cap, queue, stop = self._loop_parts(tmp_path, 600)
+        real_sleep = asyncio.sleep
+        yields: list[float] = []
+
+        async def counting_sleep(delay, *args, **kwargs):
+            yields.append(delay)
+            await real_sleep(delay, *args, **kwargs)
+
+        monkeypatch.setattr(ccxt_source.asyncio, "sleep", counting_sleep)
+        asyncio.run(cap._book_loop(queue, stop, deadline=float("inf")))
+        assert queue.qsize() == 600
+        # 600 rows with a yield every 256: after rows 256 and 512.
+        assert yields == [0, 0]
+
+    def test_a_cancel_at_the_yield_still_enqueues_the_whole_update(
+        self, tmp_path, monkeypatch
+    ):
+        # _diff_book has already applied the whole update to _last by the
+        # time the first row is enqueued, so stopping part way would leave
+        # depth.csv missing rows the book state already includes.
+        from ob_analytics.live import ccxt_source
+
+        cap, queue, stop = self._loop_parts(tmp_path, 300)
+        real_sleep = asyncio.sleep
+
+        async def cancelling_sleep(delay, *args, **kwargs):
+            task = asyncio.current_task()
+            assert task is not None
+            task.cancel()
+            await real_sleep(delay, *args, **kwargs)
+
+        monkeypatch.setattr(ccxt_source.asyncio, "sleep", cancelling_sleep)
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(cap._book_loop(queue, stop, deadline=float("inf")))
+        assert queue.qsize() == 300
+        assert len(cap._last["bid"]) == 300
+
+
 class TestLostSync:
     class _Gappy(_FakeCcxtExchange):
         """Raises ccxt's out-of-sync error once, as on a missing Binance diff."""

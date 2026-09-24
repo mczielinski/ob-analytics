@@ -531,11 +531,30 @@ class CcxtSource:
                 return
             self.book_updates += 1
             received = pd.Timestamp.now(tz="UTC").as_unit("ns")
+            # _diff_book already applied every row of this update to
+            # self._last before yielding the first one (it needs the whole
+            # picture to build the raw.jsonl frame), so by the time we are
+            # enqueueing, that state is committed whether or not we finish
+            # enqueueing. A cancellation landing on the periodic yield below
+            # must not stop until this generator (pure sync code, no further
+            # awaits) is fully drained -- otherwise the tail of an update
+            # ccxt already told us happened would be silently missing from
+            # depth.csv while self._last (and the next diff) reflects it.
+            # queue.put() itself is not a cancellation point: this queue has
+            # no maxsize, so put() never actually suspends -- put_nowait()
+            # says that plainly instead of relying on that implementation
+            # detail.
+            cancelled: asyncio.CancelledError | None = None
             for row, raw in self._diff_book(book, received):
                 self.depth_rows += 1
-                await queue.put(("depth", row, raw))
-                if self.depth_rows % _YIELD_EVERY_DEPTH_ROWS == 0:
-                    await asyncio.sleep(0)
+                queue.put_nowait(("depth", row, raw))
+                if cancelled is None and self.depth_rows % _YIELD_EVERY_DEPTH_ROWS == 0:
+                    try:
+                        await asyncio.sleep(0)
+                    except asyncio.CancelledError as exc:
+                        cancelled = exc
+            if cancelled is not None:
+                raise cancelled
             if not self._use_ws_book:
                 await asyncio.sleep(self._poll_interval)
 
