@@ -149,6 +149,40 @@ quote.
 On a diff feed, run the [data-quality audit](audit.md) first, and read what
 `hidden_trades` returns as trades to look at, not as hidden orders.
 
+## See it on a plot
+
+The gallery's depth heatmap and L3 order-activity map draw both detectors
+directly, on an L3 result, with no extra call:
+
+```python
+from ob_analytics.visualization import plot_result
+
+plot_result(result, "depth_heatmap")
+plot_result(result, "order_activity", level="L3")
+```
+
+Diamonds mark iceberg refills, joined by a line per iceberg (opacity =
+`confidence`); stars mark `hidden_trades` rows, with a thin line to the
+standing best bid and best ask so a print reads as *inside* that spread. A
+filled star is a confirmed hidden order; an open star is a trade to check --
+the diff-feed case above, where the maker order was actually visible, or one
+where its identity did not resolve at all. Both overlays clip to the
+gallery's zoom window, since a full day can carry hundreds of icebergs and
+thousands of hidden trades.
+
+To draw the same overlay elsewhere, build it with
+`prepare.hidden_liquidity_overlay` and pass the three frames it returns
+(`iceberg_lines`, `iceberg_refills`, `hidden_trades`) into
+`prepare.price_levels` or `prepare.order_activity_l3`:
+
+```python
+from ob_analytics.visualization import prepare
+
+overlay = prepare.hidden_liquidity_overlay(
+    found.icebergs, found.slices, inside, result.events,
+)
+```
+
 ## Related
 
 - [Generate synthetic L3 data](synthetic-data.md) — icebergs with known labels

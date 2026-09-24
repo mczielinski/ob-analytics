@@ -313,6 +313,9 @@ class TestPrepareOrderActivityL3:
             "y_range",
             "shown_of",
             "show_markers",
+            "iceberg_lines",
+            "iceberg_refills",
+            "hidden_trades",
         }
         for fate in (data["filled"], data["cancelled"], data["resting"]):
             assert isinstance(fate, pd.DataFrame)

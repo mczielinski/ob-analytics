@@ -384,7 +384,8 @@ def hidden_trades(
     -------
     pandas.DataFrame
         The matching rows of *trades*, index kept, with the standing
-        ``best_bid_price`` and ``best_ask_price`` added.
+        ``best_bid_price`` and ``best_ask_price`` added, in *depth_summary*'s
+        own dtype (integer ticks on the canonical schema).
 
     Raises
     ------
@@ -427,6 +428,10 @@ def hidden_trades(
     price = trades["price"].to_numpy(dtype="float64")
     inside = (bid > 0) & (ask > 0) & (bid < ask) & (bid < price) & (price < ask)
     out = trades.iloc[np.flatnonzero(inside)].copy()
-    out["best_bid_price"] = bid[inside].astype("int64")
-    out["best_ask_price"] = ask[inside].astype("int64")
+    # Cast back to depth_summary's own dtype rather than hardcoding int64: the
+    # canonical schema carries integer ticks, but a caller already holding
+    # display-unit floats (or any other future price representation) gets its
+    # own dtype back, not a silently truncated one.
+    out["best_bid_price"] = bid[inside].astype(depth_summary["best_bid_price"].dtype)
+    out["best_ask_price"] = ask[inside].astype(depth_summary["best_ask_price"].dtype)
     return out

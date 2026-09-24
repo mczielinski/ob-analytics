@@ -512,6 +512,11 @@ def build_gallery_model(
     -------
     GalleryModel
     """
+    # Kept for the hidden-liquidity overlay below, which needs canonical
+    # integer-tick prices (exact equality, and hidden_trades()'s int64 output)
+    # rather than the converted display floats.
+    raw_result = result
+
     # Convert integer-tick prices to the quote currency once, here, so every
     # face renders display prices (issue #155).
     result = display_result(result)
@@ -538,6 +543,62 @@ def build_gallery_model(
     focus = _viz_data.focus_window(trades)
     price_from = focus.price_from
     price_to = focus.price_to
+
+    # Iceberg refills and trades against hidden orders (#111), overlaid on the
+    # depth heatmap and per-order activity map so hidden liquidity is visible
+    # without reading the tables (#272). Clipped to the zoom window: a full
+    # LOBSTER day has ~900 suspected icebergs and ~9,600 hidden trades, which
+    # would flood a face meant to show a few minutes -- deliberately narrower
+    # than depth_heatmap/order_activity's own (unclipped) time axis, per the
+    # issue's own instruction to restrict the overlay, not the base plot.
+    # A single bad detector run, unit conversion, or clip must not sink the
+    # gallery (the same trade-off _metric_panels makes for a bad metric), so
+    # any failure here just drops the overlay and logs a warning.
+    hidden_liquidity_overlay: dict[str, pd.DataFrame] = {}
+    try:
+        from ob_analytics.hidden_liquidity import (
+            detect_icebergs,
+            hidden_trades as find_hidden_trades,
+        )
+
+        # Detected on raw ticks (exact price equality), then its own price
+        # columns are converted to display units the same way display_result()
+        # converted the core frames -- the overlay must land on the axes it
+        # draws over. Legacy-safe like display_result()'s own _scale: only an
+        # integer (tick) column is converted, so a pre-tick result whose
+        # events/trades already carry display-unit floats is not scaled twice.
+        detection = detect_icebergs(raw_result.events, raw_result.trades)
+        hidden = find_hidden_trades(
+            raw_result.events, raw_result.trades, raw_result.depth_summary
+        )
+        tick_size = getattr(raw_result.config, "tick_size", 1.0)
+        decimals = getattr(raw_result.config, "price_decimals", None)
+
+        def _display_price(series: pd.Series) -> pd.Series | Any:
+            if not pd.api.types.is_integer_dtype(series):
+                return series
+            return ticks_to_price(series.to_numpy(), tick_size, decimals=decimals)
+
+        icebergs_display = detection.icebergs.assign(
+            price=_display_price(detection.icebergs["price"])
+        )
+        hidden_display = hidden.assign(
+            price=_display_price(hidden["price"]),
+            best_bid_price=_display_price(hidden["best_bid_price"]),
+            best_ask_price=_display_price(hidden["best_ask_price"]),
+        )
+        hidden_liquidity_overlay = _viz_data.prepare_hidden_liquidity_overlay(
+            icebergs_display,
+            detection.slices,
+            hidden_display,
+            raw_result.events,
+            start_time=zoom_start,
+            end_time=zoom_end,
+            price_from=price_from,
+            price_to=price_to,
+        )
+    except Exception as e:  # noqa: BLE001 -- one bad overlay must not sink the gallery
+        logger.warning("Gallery: hidden-liquidity overlay failed: {}", e)
 
     offset = events["timestamp"].min() + pd.Timedelta(minutes=1)
     depth_summary_offset = depth_summary[depth_summary["timestamp"] >= offset]
@@ -581,13 +642,17 @@ def build_gallery_model(
                 "volume_scale": volume_scale,
                 "price_from": price_from,
                 "price_to": price_to,
+                **hidden_liquidity_overlay,
             },
             note=(
                 "Resting liquidity through time: one horizontal line per "
                 "price level, colored by available volume; the pale line is "
                 "the midprice. Triangles mark executions (aggressor side). "
                 "Gaps mean the level emptied. Pass col_bias<1 to brighten "
-                "thin levels and reveal near-touch structure."
+                "thin levels and reveal near-touch structure. Diamonds mark "
+                "suspected iceberg refills (joined by a line per iceberg) "
+                "and stars mark trades against hidden orders, from #111's "
+                "detectors, inside the zoom window."
             ),
         ),
         _paired(
@@ -621,13 +686,15 @@ def build_gallery_model(
                     "volume_scale": volume_scale,
                     "price_from": price_from,
                     "price_to": price_to,
+                    **hidden_liquidity_overlay,
                 },
             ),
             note=(
                 "Order placement and removal. L2: created/deleted events "
                 "scattered at their price. L3: each order is one lifespan "
                 "from placement to outcome - orange = pulled (flashed), "
-                "green = rested/filled."
+                "green = rested/filled. L3 also overlays iceberg refills "
+                "and trades against hidden orders, from #111's detectors."
             ),
         ),
         _paired(
@@ -858,7 +925,11 @@ def build_gallery_model(
         )
     )
 
-    # Hidden executions are LOBSTER-only (raw_event_type == 5).
+    # Hidden executions are LOBSTER-only (raw_event_type == 5) -- kept
+    # alongside the general hidden_trades() overlay on depth_heatmap /
+    # order_activity (#272) rather than replaced: the venue's own type-5
+    # label is ground truth where it exists, while hidden_trades() is an
+    # inference that works on any L3 feed.
     if "raw_event_type" in events.columns:
         hidden = events[events["raw_event_type"] == 5]
         if not hidden.empty:
