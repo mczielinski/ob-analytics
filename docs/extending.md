@@ -525,9 +525,31 @@ way — `backend="bokeh"` covers the core concepts (`trade_tape`,
 `depth_heatmap`, `book_snapshot`, `depth_chart`) for Bokeh / Panel server
 dashboards and streaming views (`pip install ob-analytics[bokeh]`).
 
-**In the gallery.** There is no panel registry. To put a custom plot in the
-HTML gallery, pass it through `extra_panels=` — see the
-[Gallery API](api/gallery.md).
+**In the gallery.** There is no panel registry. Gallery cards outside the
+built-in concepts are level-less, so the renderer needs a `level=None`
+registration too:
+
+```python
+RENDERERS.register(("cumvol", None, "matplotlib"), mpl_cumvol)
+```
+
+Then build the model, append a `PlotSpec` for the panel to its `analytics`
+list, and render that model instead of a bare result — see the
+[Gallery API](api/gallery.md):
+
+```python
+from ob_analytics.visualization.gallery import (
+    PlotSpec,
+    build_gallery_model,
+    generate_gallery,
+)
+
+model = build_gallery_model(result)
+model.analytics.append(
+    PlotSpec("cumvol", "Cumulative Volume", "cumvol", prepare_cumvol_data, {"trades": result.trades})
+)
+generate_gallery(result, "output/gallery/", model=model)
+```
 
 ---
 
@@ -629,7 +651,7 @@ run's resolution.
 
 **In the gallery.** A registered metric becomes a gallery card on its own —
 `generate_gallery(result, ...)` draws it beside the built-in faces with no
-`extra_panels=` needed. A metric that raises is logged and its card dropped, so
+extra step needed. A metric that raises is logged and its card dropped, so
 one broken metric does not stop the gallery being built.
 
 **Shipping a metric as its own package.** Advertise it under the

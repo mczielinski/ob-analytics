@@ -159,8 +159,9 @@ source, export format, plot, flow-toxicity metric, or live capturer — see
 
    Auxiliary per-format tables (e.g. LOBSTER trading halts / cross trades /
    hidden executions) ride on the loader itself — expose them as an attribute
-   such as `loader.trading_halts` and feed them to the gallery via
-   `extra_panels=`; they are no longer attached to `PipelineResult`.
+   such as `loader.trading_halts` and feed them to the gallery by appending a
+   panel to `build_gallery_model(result).analytics`; they are no longer
+   attached to `PipelineResult`.
 
    Per-run parameters that vary across runs of the same `Format` instance
    (e.g. LOBSTER `trading_date`) belong on `RunContext`, not on the

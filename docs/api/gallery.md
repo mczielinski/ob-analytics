@@ -38,7 +38,13 @@ it to a self-contained HTML page.
 ## Extra panels
 
 Build optional bar, flow-toxicity, transaction-cost and LOBSTER panels and
-append them via `generate_gallery(..., extra_panels=[...])`.
+append them to `model.analytics` before rendering:
+
+```python
+model = build_gallery_model(result)
+model.analytics.append(vpin_panel(vpin_df))
+generate_gallery(result, "out/gallery", model=model)
+```
 
 ::: ob_analytics.visualization.gallery.bars_panel
 
