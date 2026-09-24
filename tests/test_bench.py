@@ -211,6 +211,20 @@ class TestMeasureRun:
         peaks = [m.peak_rss_mib for m in measured]
         assert peaks == sorted(peaks)
 
+    def test_freed_memory_is_returned_before_every_stage(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Without it the queue_positions mark depended on where glibc's heap
+        # landed and came out near 418 or near 471 MiB on CI from one push to
+        # the next.
+        trims: list[int] = []
+        monkeypatch.setattr(bench_scale, "_MALLOC_TRIM", trims.append)
+        session = generate_session(seed=1, duration=60)
+
+        measure_run("synth", lambda: (session.events, session.trades))
+
+        assert trims == [0, 0, 0, 0, 0, 0]
+
 
 class TestMeasureRuns:
     """Each run is measured on its own, so the runs do not read as one."""
