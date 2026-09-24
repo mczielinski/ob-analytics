@@ -78,6 +78,10 @@ work on data larger than memory sits here too. The diagram shows what each one
 waits on.
 """
 issues = [112, 136, 100, 114, 143, 144, 105, 116, 138, 139, 206]
+# Keep the closed work. The checks and the synthetic data that shipped are what
+# a faster engine will be measured against, so they belong in the picture even
+# when nothing open still waits on them.
+keep_closed = true
 
 [[group]]
 id = "analytics"
@@ -123,7 +127,7 @@ prose = """
 The full plot catalogue, one theme across backends, and a second backend. The
 live view and the replay scrubber show a book as it changes.
 """
-issues = [105, 117, 118, 122, 123]
+issues = [105, 117, 118, 122, 123, 140, 272]
 # Keep the closed views. A backend or plot that shipped is one you can use, and
 # nothing but the goal waits on them, so pruning drops each one the day it
 # closes and leaves only what is unbuilt.
@@ -230,3 +234,4 @@ loaders\
 216 = "registered writers"
 239 = "API keys"
 240 = "Kalshi WebSocket"
+272 = "iceberg overlay"
