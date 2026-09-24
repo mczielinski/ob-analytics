@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from decimal import Decimal
 from typing import Any
 
 import pandas as pd
@@ -13,7 +14,7 @@ import pytest
 from ob_analytics.config import SourceSettings
 from ob_analytics.live import CaptureConfig, LiveSource, SupportsDiagnostics
 from ob_analytics.live._base import EventDict
-from ob_analytics.live._runner import run_capturer
+from ob_analytics.live._runner import FileCaptureSink, run_capturer
 from ob_analytics.protocols import FeedType, Level
 from ob_analytics.sources import get_source, list_sources, register_source
 
@@ -246,6 +247,25 @@ class TestRunner:
         cfg = CaptureConfig(pair="btcusd", out_dir=out, minutes=0.001, keep_raw=False)
         asyncio.run(run_capturer(_FakeCapturer(), cfg))
         assert not (out / "raw.jsonl").exists()
+
+    def test_raw_frame_with_decimal_keeps_every_digit(self, tmp_path):
+        # cryptofeed hands over Bitstamp trade payloads holding Decimal values.
+        sink = FileCaptureSink(tmp_path, keep_raw=True)
+        sink.write_raw(
+            {"price": Decimal("65432.123456789012345"), "n": [Decimal("0.00010000")]}
+        )
+        assert sink._raw_fp is not None
+        sink._raw_fp.flush()
+        line = (tmp_path / "raw.jsonl").read_text().strip()
+        assert json.loads(line) == {
+            "price": "65432.123456789012345",
+            "n": ["0.00010000"],
+        }
+
+    def test_raw_frame_with_other_unknown_type_still_fails(self, tmp_path):
+        sink = FileCaptureSink(tmp_path, keep_raw=True)
+        with pytest.raises(TypeError, match="object"):
+            sink.write_raw({"x": object()})
 
     def test_output_is_loader_compatible(self, tmp_path):
         """The captured orders.csv must be loadable by BitstampLoader."""

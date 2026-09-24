@@ -7,6 +7,7 @@ import csv
 import json
 import signal
 from collections.abc import Callable
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -76,6 +77,14 @@ def _ts_ms(ts: pd.Timestamp | float) -> int:
     if isinstance(ts, pd.Timestamp):
         return int(ts.value // 1_000_000)
     return int(ts)
+
+
+def _raw_json_default(value: Any) -> Any:
+    # Some feeds parse prices and sizes as Decimal (cryptofeed does for
+    # Bitstamp trades). Write them as strings so raw.jsonl keeps every digit.
+    if isinstance(value, Decimal):
+        return str(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 class FileCaptureSink(CaptureSink):
@@ -154,7 +163,9 @@ class FileCaptureSink(CaptureSink):
     def write_raw(self, frame: Any) -> None:
         if self._raw_fp is None or frame is None:
             return
-        self._raw_fp.write(json.dumps(frame, separators=(",", ":")) + "\n")
+        self._raw_fp.write(
+            json.dumps(frame, separators=(",", ":"), default=_raw_json_default) + "\n"
+        )
 
     def finalize(self, result: CaptureResult) -> None:
         # Flush + close everything.
