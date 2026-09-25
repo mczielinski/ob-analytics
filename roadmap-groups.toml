@@ -59,7 +59,7 @@ Every source stays drawn once it is built, which makes this diagram the venue
 list as well: purple is a source you can use today, green is one nobody has
 written yet. A venue neither CCXT nor cryptofeed covers needs its own client.
 """
-issues = [112, 137, 106, 134, 99, 100, 101, 102, 103, 98, 239, 240]
+issues = [112, 137, 106, 134, 99, 100, 101, 102, 103, 98, 239, 240, 262]
 
 [[group]]
 id = "engine"
@@ -98,7 +98,7 @@ recorded, because the baseline and the code agree by construction. Replaying the
 same events through an engine written by someone else can: if the two books
 disagree, one of them is wrong.
 """
-issues = [108, 114, 143, 146, 150, 224]
+issues = [108, 114, 143, 146, 150, 224, 282, 283, 284]
 
 [[group]]
 id = "viz"
@@ -116,7 +116,7 @@ prose = """
 What a version other projects can depend on needs: the release decisions,
 conda-forge distribution, and the documentation work.
 """
-issues = [115, 120, 121, 141, 142, 145, 216]
+issues = [115, 120, 121, 141, 142, 145, 216, 288]
 
 # Either/or prerequisites.
 #
