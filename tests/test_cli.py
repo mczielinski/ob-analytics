@@ -207,6 +207,58 @@ class TestAuditSubcommand:
         assert r.returncode == 0, r.stderr
         assert "diff_feed" in r.stdout
 
+    @staticmethod
+    def _capture_by_cryptofeed(tmp_path, tiny_bitstamp_orders_csv):
+        """The tiny capture, with the meta.json a cryptofeed capture writes."""
+        import json
+        import shutil
+
+        cap = tmp_path / "cap"
+        cap.mkdir()
+        for name in ("orders.csv", "trades.csv"):
+            shutil.copy(tiny_bitstamp_orders_csv.parent / name, cap / name)
+        (cap / "meta.json").write_text(
+            json.dumps(
+                {
+                    "source": "cryptofeed",
+                    "feed_type": "matched_book",
+                    "trade_attribution": "maker_only",
+                }
+            )
+        )
+        return cap
+
+    def test_process_keeps_the_capture_record(
+        self, cli_runner, tmp_path, tiny_bitstamp_orders_csv
+    ):
+        """meta.json travels into the output, so a later audit can read it (#284)."""
+        cap = self._capture_by_cryptofeed(tmp_path, tiny_bitstamp_orders_csv)
+        out = tmp_path / "out"
+        r = cli_runner("process", str(cap / "orders.csv"), "--output", str(out))
+        assert r.returncode == 0, r.stderr
+        assert (out / "meta.json").read_text() == (cap / "meta.json").read_text()
+
+    def test_audit_checks_against_the_source_that_made_the_capture(
+        self, cli_runner, tmp_path, tiny_bitstamp_orders_csv
+    ):
+        """--source bitstamp reads the files; the record sets the expectations.
+
+        A cryptofeed L3 capture can only be read as bitstamp, whose feed shows
+        takers and may cross.  Checking it against bitstamp's declarations
+        would fault the capture for what its feed cannot show (#284).
+        """
+        cap = self._capture_by_cryptofeed(tmp_path, tiny_bitstamp_orders_csv)
+        out = tmp_path / "out"
+        r = cli_runner("process", str(cap / "orders.csv"), "--output", str(out))
+        assert r.returncode == 0, r.stderr
+
+        for target, extra in ((out, ["--from-parquet"]), (cap / "orders.csv", [])):
+            r = cli_runner("audit", str(target), *extra, "--source", "bitstamp")
+            assert r.returncode == 0, r.stderr
+            assert "matched_book" in r.stdout
+            assert "maker only" in r.stdout
+            assert "declares" in r.stderr
+
 
 # ---------------------------------------------------------------------------
 # gallery

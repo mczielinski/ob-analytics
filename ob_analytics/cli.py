@@ -93,6 +93,7 @@ def _cmd_process(args: argparse.Namespace) -> None:
     # Pass the config so each Parquet file is tagged with its tick size
     # (issue #155), letting a reader recover the quote-currency price.
     save_data(result_dict, output, config=result.config)
+    _keep_capture_record(Path(data_path), output)
     logger.info("Saved to: {}", output.resolve())
 
     if args.gallery:
@@ -107,8 +108,13 @@ def _cmd_audit(args: argparse.Namespace) -> None:
     from loguru import logger
 
     from ob_analytics.analytics import data_quality_summary
-    from ob_analytics.depth_l2 import recorded_sequence_kind
-    from ob_analytics.protocols import FeedType
+    from ob_analytics.depth_l2 import (
+        recorded_feed_type,
+        recorded_sequence_kind,
+        recorded_source,
+        recorded_trade_attribution,
+    )
+    from ob_analytics.protocols import FeedType, TradeAttribution, trade_attribution_of
 
     # Running the pipeline needs a source, so it falls back to the default one.
     # Reading a saved result does not: the feed type is a property of the
@@ -119,14 +125,35 @@ def _cmd_audit(args: argparse.Namespace) -> None:
         source_name = "bitstamp"
 
     feed_type = FeedType.UNKNOWN
+    trade_attribution = TradeAttribution.BOTH
     if source_name is not None:
         from ob_analytics.sources import get_source
 
         try:
-            feed_type = getattr(get_source(source_name)(), "feed_type", feed_type)
+            source = get_source(source_name)()
         except KeyError as exc:
             logger.error(str(exc))
             sys.exit(1)
+        feed_type = getattr(source, "feed_type", feed_type)
+        trade_attribution = trade_attribution_of(source)
+
+    # A live capture records what its own source declares, and that describes
+    # this data exactly.  --source may name a different source because it also
+    # says how to read the files: a cryptofeed L3 capture is read as bitstamp,
+    # whose feed shows more.  So the record, when there is one, sets what the
+    # checks expect.
+    path = Path(args.path)
+    made_by = recorded_source(path)
+    if made_by is not None:
+        feed_type = recorded_feed_type(path) or feed_type
+        trade_attribution = recorded_trade_attribution(path) or trade_attribution
+        if source_name is not None and made_by != source_name:
+            logger.info(
+                "Checking against what the {} source declares (recorded in "
+                "meta.json when it made this capture), not {}",
+                made_by,
+                source_name,
+            )
 
     if args.from_parquet:
         result = _load_saved_result(Path(args.path))
@@ -139,7 +166,8 @@ def _cmd_audit(args: argparse.Namespace) -> None:
         feed_type=feed_type,
         depth=result.depth,
         tick_size=result.config.tick_size,
-        sequence_kind=recorded_sequence_kind(Path(args.path)),
+        sequence_kind=recorded_sequence_kind(path),
+        trade_attribution=trade_attribution,
     )
 
     if args.json:
@@ -199,6 +227,22 @@ def _run_for_audit(args: argparse.Namespace, source_name: str) -> Any:
 
     logger.info("Auditing {} (source={})...", args.path, source_name)
     return pipeline.run(args.path)
+
+
+def _keep_capture_record(data_path: Path, output: Path) -> None:
+    """Copy a live capture's ``meta.json`` into the processed output.
+
+    The record says which source made the capture and what that source
+    declares about its feed.  ``audit --from-parquet`` on the output reads it
+    from there; without the copy, the output would be audited against the
+    expectations of whichever source read the files.
+    """
+    meta = (data_path.parent if data_path.is_file() else data_path) / "meta.json"
+    if not meta.is_file():
+        return
+    dest = output / "meta.json"
+    if meta.resolve() != dest.resolve():
+        dest.write_bytes(meta.read_bytes())
 
 
 def _recorded_instrument(data_path: Path) -> dict[str, Any]:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 
+import pandas as pd
 import pytest
 
 from ob_analytics.protocols import Level
@@ -389,7 +390,7 @@ class _FakeTrade:
         self.timestamp = timestamp
         self.id = trade_id
         self.type = None
-        self.raw = {"frame": "raw"}
+        self.raw: dict[str, object] = {"frame": "raw"}
 
 
 class TestTradeTranslation:
@@ -1223,3 +1224,403 @@ class TestAcceptanceReplay:
 
         result = Pipeline.from_source("depth_csv").run(out / "depth.csv")
         assert len(result.depth) == 3
+
+
+# ---------------------------------------------------------------------------
+# #284: Bitstamp's detail book is a top-100 window, clocks, fills from the tape
+# ---------------------------------------------------------------------------
+
+
+def _bitstamp_venue() -> _FakeExchangeCls:
+    """A venue with Bitstamp's id, whose L3 book shows the top 100 a side."""
+    return _l3_venue("BITSTAMP")
+
+
+def _window_book(bids: dict, *, extra_asks: dict | None = None, **kw) -> _FakeBook:
+    """A Bitstamp-style book: *bids* plus filler so the bid side is full.
+
+    *bids* maps ``price -> {order_id: size}``.  Filler bids at 50.00 and down
+    bring the side to exactly 100 orders, so its worst price is the filler's.
+    The ask side is a single order, so it is never cut off.
+    """
+    shown = sum(len(orders) for orders in bids.values())
+    filler = {round(50.0 - i * 0.01, 2): {f"f{i}": 1.0} for i in range(100 - shown)}
+    asks = {200.0: {"a1": 1.0}, **(extra_asks or {})}
+    return _FakeBook(
+        {"bid": {**bids, **filler}, "ask": asks}, exchange="BITSTAMP", **kw
+    )
+
+
+def _cut_book(bids: dict, *, edge: float, **kw) -> _FakeBook:
+    """A full bid side whose worst price is *edge*: *bids* plus filler above it."""
+    shown = sum(len(orders) for orders in bids.values())
+    filler = {round(150.0 - i * 0.01, 2): {f"g{i}": 1.0} for i in range(99 - shown)}
+    return _FakeBook(
+        {
+            "bid": {**filler, **bids, edge: {"edge": 1.0}},
+            "ask": {200.0: {"a1": 1.0}},
+        },
+        exchange="BITSTAMP",
+        **kw,
+    )
+
+
+class TestBookWindow:
+    """An order that drops out of a cut-off book has left the view, not the book."""
+
+    def _source(self, venue=None):
+        from ob_analytics.live.cryptofeed_source import (
+            CryptofeedSettings,
+            CryptofeedSource,
+        )
+
+        return CryptofeedSource(
+            settings=CryptofeedSettings(exchange=venue or _bitstamp_venue())
+        )
+
+    def test_an_order_past_the_edge_is_kept_without_an_event(self):
+        src = self._source()
+        src._l3_events(_cut_book({40.0: {"low": 2.0}}, edge=45.0))
+        events = src._l3_events(_cut_book({}, edge=45.0))
+        assert "low" not in {e["id"] for e in events}
+        assert "low" in src._open_orders
+
+    def test_an_order_that_comes_back_is_the_same_order(self):
+        """No second ``created``: the duplicate the #284 audit reported."""
+        src = self._source()
+        src._l3_events(_cut_book({40.0: {"low": 2.0}}, edge=45.0))
+        src._l3_events(_cut_book({}, edge=45.0))
+        events = src._l3_events(_cut_book({40.0: {"low": 2.0}}, edge=39.0))
+        assert "low" not in {e["id"] for e in events}
+
+    def test_an_order_at_the_edge_price_is_kept(self):
+        """The edge level may be cut in two, so an order missing there is unseen."""
+        src = self._source()
+        src._l3_events(_cut_book({45.0: {"tie": 2.0}}, edge=45.0))
+        events = src._l3_events(_cut_book({}, edge=45.0))
+        assert "tie" not in {e["id"] for e in events}
+
+    def test_an_order_missing_inside_the_window_is_deleted(self):
+        src = self._source()
+        src._l3_events(_cut_book({120.0: {"mid": 2.0}}, edge=45.0))
+        events = src._l3_events(_cut_book({}, edge=45.0))
+        assert ("mid", "deleted") in {(e["id"], e["action"]) for e in events}
+
+    def test_a_kept_order_is_deleted_once_the_window_covers_its_price(self):
+        src = self._source()
+        src._l3_events(_cut_book({40.0: {"low": 2.0}}, edge=45.0))
+        src._l3_events(_cut_book({}, edge=45.0))
+        events = src._l3_events(_cut_book({}, edge=30.0))
+        assert ("low", "deleted") in {(e["id"], e["action"]) for e in events}
+
+    def test_a_side_short_of_the_window_is_the_whole_book(self):
+        """The ask side shows one order, so an ask it leaves out is gone."""
+        src = self._source()
+        src._l3_events(_window_book({}, extra_asks={300.0: {"far": 1.0}}))
+        events = src._l3_events(_window_book({}))
+        assert ("far", "deleted") in {(e["id"], e["action"]) for e in events}
+
+    def test_a_venue_without_a_window_deletes_what_it_leaves_out(self):
+        src = self._source(_l3_venue("fakel3"))
+        book = _cut_book({40.0: {"low": 2.0}}, edge=45.0)
+        book.exchange = "fakel3"
+        src._l3_events(book)
+        later = _cut_book({}, edge=45.0)
+        later.exchange = "fakel3"
+        events = src._l3_events(later)
+        assert ("low", "deleted") in {(e["id"], e["action"]) for e in events}
+
+
+class TestReceiptClock:
+    def _source(self):
+        from ob_analytics.live.cryptofeed_source import (
+            CryptofeedSettings,
+            CryptofeedSource,
+        )
+
+        return CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
+
+    def test_book_rows_carry_receipt_and_venue_time(self):
+        """``timestamp`` is receipt, ``exchange_timestamp`` the venue's (#284)."""
+        (ev,) = self._source()._l3_events(
+            _l3_book({"bid": {100.0: {11: 2.0}}, "ask": {}}, timestamp=1_700_000_000.0),
+            1_700_000_000.25,
+        )
+        assert ev["exchange_timestamp"].value == 1_700_000_000_000_000_000
+        assert ev["timestamp"].value == 1_700_000_000_250_000_000
+
+    def test_trades_carry_receipt_time(self):
+        ev = self._source()._map_trade(_FakeTrade(), 1_700_000_000.5)
+        assert ev["timestamp"].value == 1_700_000_000_500_000_000
+
+
+def _tape_trade(buy, sell, *, amount="0.5", timestamp=1_700_000_010.0, side="buy"):
+    """A trade whose raw frame names its orders, as Bitstamp's live_trades does."""
+    trade = _FakeTrade(amount=amount, timestamp=timestamp, side=side)
+    trade.raw = {"data": {"buy_order_id": buy, "sell_order_id": sell}}
+    return trade
+
+
+class TestTradeOrderIds:
+    def _source(self):
+        from ob_analytics.live.cryptofeed_source import (
+            CryptofeedSettings,
+            CryptofeedSource,
+        )
+
+        return CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
+
+    def test_ids_are_read_from_the_raw_frame(self):
+        ev = self._source()._map_trade(_tape_trade(7, 9))
+        assert (ev["buy_order_id"], ev["sell_order_id"]) == (7, 9)
+
+    def test_a_frame_without_ids_leaves_them_empty(self):
+        ev = self._source()._map_trade(_FakeTrade())
+        assert (ev["buy_order_id"], ev["sell_order_id"]) == ("", "")
+
+
+class TestFillsFromTheTape:
+    """A trade that names a tracked order reports its fill (#284)."""
+
+    def _source(self):
+        from ob_analytics.live.cryptofeed_source import (
+            CryptofeedSettings,
+            CryptofeedSource,
+        )
+
+        return CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
+
+    @staticmethod
+    def _book(orders: dict, t: float) -> _FakeBook:
+        return _l3_book({"bid": {}, "ask": {101.0: orders}}, timestamp=t)
+
+    def test_a_trade_after_the_book_reports_the_fill(self):
+        src = self._source()
+        src._l3_events(self._book({"s1": 2.0}, 1_700_000_000.0))
+        (fill,) = src._fill_events(_tape_trade(99, 42 if False else "s1"))
+        assert (fill["id"], fill["action"], fill["volume"]) == ("s1", "changed", 1.5)
+        assert fill["price"] == 101.0
+
+    def test_an_integer_id_on_the_tape_names_a_string_id_in_the_book(self):
+        """Bitstamp lists book ids as strings and trade ids as integers."""
+        src = self._source()
+        src._l3_events(self._book({"12345": 2.0}, 1_700_000_000.0))
+        (fill,) = src._fill_events(_tape_trade(99, 12345))
+        assert fill["id"] == "12345"
+
+    def test_the_next_book_agreeing_with_the_fill_says_nothing(self):
+        src = self._source()
+        src._l3_events(self._book({"s1": 2.0}, 1_700_000_000.0))
+        src._fill_events(_tape_trade(99, "s1"))
+        assert src._l3_events(self._book({"s1": 1.5}, 1_700_000_011.0)) == []
+
+    def test_a_full_fill_is_deleted_at_size_zero(self):
+        """How the native Bitstamp feed reports a fill, so the loader reads it."""
+        src = self._source()
+        src._l3_events(self._book({"s1": 0.5}, 1_700_000_000.0))
+        (fill,) = src._fill_events(_tape_trade(99, "s1"))
+        assert fill["volume"] == 0.0
+        # The tape names orders, so a book's delete waits _FILL_GRACE_S for a
+        # late trade before it is reported.
+        assert src._l3_events(self._book({}, 1_700_000_011.0)) == []
+        (gone,) = src._l3_events(self._book({}, 1_700_000_014.0))
+        assert (gone["action"], gone["volume"]) == ("deleted", 0.0)
+
+    def test_a_trade_the_book_already_shows_is_not_applied_twice(self):
+        src = self._source()
+        src._l3_events(self._book({"s1": 1.5}, 1_700_000_020.0))
+        assert src._fill_events(_tape_trade(99, "s1")) == []
+        assert src.tape_fills_already_shown == 1
+        assert src._open_orders["s1"][2] == 1.5
+
+    def test_a_book_older_than_a_fill_leaves_the_order_alone(self):
+        src = self._source()
+        src._l3_events(self._book({"s1": 2.0}, 1_700_000_000.0))
+        src._fill_events(_tape_trade(99, "s1"))
+        # This book predates the trade (t=10), so it still shows 2.0.
+        assert src._l3_events(self._book({"s1": 2.0}, 1_700_000_005.0)) == []
+        assert src._open_orders["s1"][2] == 1.5
+
+    def test_a_book_older_than_a_fill_does_not_delete_the_order(self):
+        src = self._source()
+        src._l3_events(self._book({"s1": 0.5}, 1_700_000_000.0))
+        src._fill_events(_tape_trade(99, "s1"))
+        assert src._l3_events(self._book({}, 1_700_000_005.0)) == []
+        assert "s1" in src._open_orders
+
+    def test_a_trade_for_an_unknown_order_reports_nothing(self):
+        src = self._source()
+        src._l3_events(self._book({"s1": 2.0}, 1_700_000_000.0))
+        assert src._fill_events(_tape_trade(98, 99)) == []
+
+
+class TestHeldDeletes:
+    """A book that leaves out a filled order before its trade arrives (#284)."""
+
+    def _source(self):
+        from ob_analytics.live.cryptofeed_source import (
+            CryptofeedSettings,
+            CryptofeedSource,
+        )
+
+        src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
+        # Once a trade has named an order, the tape is known to name them.
+        src._fill_events(_tape_trade(1, 2))
+        return src
+
+    @staticmethod
+    def _book(orders: dict, t: float) -> _FakeBook:
+        return _l3_book({"bid": {}, "ask": {101.0: orders}}, timestamp=t)
+
+    def test_the_delete_waits_for_a_late_trade(self):
+        src = self._source()
+        src._l3_events(self._book({"s1": 0.5}, 1_700_000_000.0))
+        assert src._l3_events(self._book({}, 1_700_000_001.0)) == []
+        (fill,) = src._fill_events(_tape_trade(99, "s1", timestamp=1_700_000_000.5))
+        assert (fill["action"], fill["volume"]) == ("changed", 0.0)
+        (gone,) = src._l3_events(self._book({}, 1_700_000_004.0))
+        assert (gone["id"], gone["action"], gone["volume"]) == ("s1", "deleted", 0.0)
+
+    def test_the_fill_keeps_the_book_receive_time_and_the_trade_venue_time(self):
+        src = self._source()
+        src._l3_events(self._book({"s1": 0.5}, 1_700_000_000.0))
+        src._l3_events(self._book({}, 1_700_000_001.0), 1_700_000_001.1)
+        (fill,) = src._fill_events(
+            _tape_trade(99, "s1", timestamp=1_700_000_000.5), 1_700_000_001.2
+        )
+        assert fill["timestamp"].value == pytest.approx(
+            1_700_000_001_100_000_000, abs=1_000
+        )
+        assert fill["exchange_timestamp"].value == 1_700_000_000_500_000_000
+
+    def test_a_cancel_is_deleted_at_its_size_after_the_wait(self):
+        src = self._source()
+        src._l3_events(self._book({"s1": 0.5}, 1_700_000_000.0))
+        src._l3_events(self._book({}, 1_700_000_001.0))
+        (gone,) = src._l3_events(self._book({}, 1_700_000_004.0))
+        assert (gone["action"], gone["volume"]) == ("deleted", 0.5)
+
+    def test_an_order_back_in_the_next_book_was_never_gone(self):
+        src = self._source()
+        src._l3_events(self._book({"s1": 0.5}, 1_700_000_000.0))
+        src._l3_events(self._book({}, 1_700_000_001.0))
+        assert src._l3_events(self._book({"s1": 0.5}, 1_700_000_001.5)) == []
+        assert src._l3_events(self._book({"s1": 0.5}, 1_700_000_004.0)) == []
+
+    def test_shutdown_releases_what_is_held(self):
+        import asyncio
+
+        src = self._source()
+        src._l3_events(self._book({"s1": 0.5}, 1_700_000_000.0))
+        src._l3_events(self._book({}, 1_700_000_001.0))
+
+        async def _drain():
+            return [ev async for ev in src.shutdown_synthetic_events()]
+
+        (gone,) = asyncio.run(_drain())
+        assert (gone["id"], gone["action"]) == ("s1", "deleted")
+
+    def test_without_order_ids_on_the_tape_the_delete_is_immediate(self):
+        from ob_analytics.live.cryptofeed_source import (
+            CryptofeedSettings,
+            CryptofeedSource,
+        )
+
+        src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
+        src._fill_events(_FakeTrade())  # a tape that names no orders
+        src._l3_events(self._book({"s1": 0.5}, 1_700_000_000.0))
+        (gone,) = src._l3_events(self._book({}, 1_700_000_001.0))
+        assert gone["action"] == "deleted"
+
+
+class TestTradeAttribution:
+    def test_an_l3_capture_names_the_maker_only(self):
+        from ob_analytics.live.cryptofeed_source import (
+            CryptofeedSettings,
+            CryptofeedSource,
+        )
+        from ob_analytics.protocols import TradeAttribution
+
+        src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
+        assert src.trade_attribution is TradeAttribution.MAKER_ONLY
+
+    def test_an_l2_capture_names_neither(self):
+        from ob_analytics.live.cryptofeed_source import (
+            CryptofeedSettings,
+            CryptofeedSource,
+        )
+        from ob_analytics.protocols import TradeAttribution
+
+        src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l2_venue()))
+        assert src.trade_attribution is TradeAttribution.NONE
+        forced = CryptofeedSource(
+            settings=CryptofeedSettings(exchange=_l3_venue(), level=Level.L2)
+        )
+        assert forced.trade_attribution is TradeAttribution.NONE
+
+
+class TestCaptureToAudit:
+    """A windowed capture with fills on the tape replays and passes ``audit``."""
+
+    def test_the_capture_records_its_declarations_and_passes_audit(self, tmp_path):
+        import asyncio
+        import json
+
+        from ob_analytics.analytics import data_quality_summary
+        from ob_analytics.bitstamp import BitstampSource
+        from ob_analytics.config import PipelineConfig
+        from ob_analytics.depth_l2 import recorded_trade_attribution
+        from ob_analytics.live._runner import run_capturer
+        from ob_analytics.pipeline import Pipeline
+
+        t0 = 1_700_000_000.0
+        script = [
+            # An earlier trade between orders never in view: from here on the
+            # tape is known to name orders, so a book's delete waits for it.
+            ("trades", _tape_trade(1, 2, amount="0.1", timestamp=t0 - 1)),
+            # "low" rests past the edge, drops out of view, and comes back.
+            (
+                "l3_book",
+                _cut_book(
+                    {40.0: {"low": 2.0}, 120.0: {"9001": 0.5}}, edge=45.0, timestamp=t0
+                ),
+            ),
+            ("l3_book", _cut_book({120.0: {"9001": 0.5}}, edge=45.0, timestamp=t0 + 1)),
+            # A seller takes all of the resting bid 9001; the book shows it
+            # gone before the trade arrives.
+            ("l3_book", _cut_book({}, edge=45.0, timestamp=t0 + 2)),
+            (
+                "trades",
+                _tape_trade(9001, 5555, amount="0.5", side="sell", timestamp=t0 + 1.5),
+            ),
+            ("l3_book", _cut_book({40.0: {"low": 2.0}}, edge=39.0, timestamp=t0 + 5)),
+        ]
+        src = _source_with(_bitstamp_venue(), script)
+        asyncio.run(run_capturer(src, _capture_cfg(tmp_path)))
+        cap = tmp_path / "cap"
+
+        meta = json.loads((cap / "meta.json").read_text())
+        assert meta["source"] == "cryptofeed"
+        assert meta["trade_attribution"] == "maker_only"
+        assert recorded_trade_attribution(cap) == "maker_only"
+
+        result = Pipeline(PipelineConfig(), source=BitstampSource()).run(
+            cap / "orders.csv"
+        )
+        created = result.events[result.events["action"] == "created"]
+        assert not created["id"].duplicated().any()
+        # The trade against 9001 links to its maker; the earlier one names
+        # orders the capture never saw.
+        linked = result.trades.set_index("maker")["maker_event_id"]
+        assert pd.notna(linked[9001])
+
+        summary = data_quality_summary(
+            result.events,
+            result.trades,
+            feed_type=src.feed_type,
+            trade_attribution=src.trade_attribution,
+        )
+        # The fake feed handler hands every message the same receipt time, so
+        # the clock checks are covered by TestReceiptClock instead.
+        assert summary.duplicate_created_ids == 0
+        assert summary.unmatched_trades_pct == 50.0

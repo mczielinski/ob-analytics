@@ -219,10 +219,15 @@ class TestDiagnosticsProtocol:
         assert result.extras["dropped"] == 7
         assert result.extras["reconnects"] == 2
 
-    def test_runner_no_diagnostics_leaves_extras_empty(self, tmp_path):
+    def test_runner_no_diagnostics_records_only_the_declarations(self, tmp_path):
+        """Without diagnostics, extras hold only what the source declares (#284)."""
         cfg = CaptureConfig(pair="btcusd", out_dir=tmp_path / "cap", minutes=0.001)
         result = asyncio.run(run_capturer(_FakeCapturer(), cfg))
-        assert result.extras == {}
+        assert result.extras == {
+            "source": "fake",
+            "feed_type": "diff_feed",
+            "trade_attribution": "both",
+        }
 
 
 class TestRunner:

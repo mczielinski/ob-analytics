@@ -38,7 +38,7 @@ from loguru import logger
 
 from ob_analytics.config import SourceSettings
 from ob_analytics.live._base import CaptureConfig, EventDict
-from ob_analytics.protocols import FeedType, Level
+from ob_analytics.protocols import FeedType, Level, TradeAttribution
 
 #: cryptofeed's channel names (``cryptofeed.defines``), spelled out so this
 #: module imports without cryptofeed installed.
@@ -49,15 +49,45 @@ _TRADES_CHANNEL = "trades"
 #: Default depth of the callback -> iterator buffer.
 _DEFAULT_QUEUE_SIZE = 10_000
 
+#: How many orders per side a venue's L3 book shows, for venues whose book is
+#: a window on the full book rather than all of it.  Keyed by cryptofeed's
+#: exchange id.  Bitstamp's ``detail_order_book`` channel sends the top 100
+#: bids and the top 100 asks on every message, so an order that drops below
+#: the 100th place has left the view, not the book.
+_L3_WINDOW: dict[str, int] = {"BITSTAMP": 100}
+
+#: How long, in seconds of venue time, a book's report that an order is gone
+#: is held for a trade that filled it (see ``_fill_events``).  The book and the
+#: trades arrive on separate channels; on Bitstamp the book usually lands a few
+#: milliseconds first, so without the wait a filled order reads as cancelled.
+_FILL_GRACE_S = 2.0
+
 
 def _epoch_s_to_ts(seconds: Any) -> pd.Timestamp:
-    """cryptofeed timestamps are float epoch *seconds*; ``None`` uses receive time.
+    """cryptofeed timestamps are float epoch *seconds*; ``None`` uses the time now.
 
     Both branches land on the canonical tz-aware UTC nanosecond clock.
     """
     if seconds is None:
         return pd.Timestamp.now(tz="UTC").as_unit("ns")
     return pd.Timestamp(float(seconds), unit="s", tz="UTC").as_unit("ns")
+
+
+def _trade_order_ids(trade: Any) -> tuple[Any, Any]:
+    """Return ``(buy_order_id, sell_order_id)`` from a trade's raw frame.
+
+    cryptofeed's ``Trade`` has no field for the orders on each side of a
+    print, but some venues send them: Bitstamp's ``live_trades`` frame carries
+    ``buy_order_id`` and ``sell_order_id`` in its ``data``.  They are read from
+    the raw frame so the trade can be matched to the orders in the book.  A
+    venue that does not send them gets empty strings, never invented ids.
+    """
+    raw = getattr(trade, "raw", None)
+    data = raw.get("data") if isinstance(raw, dict) else None
+    if not isinstance(data, dict):
+        return "", ""
+    buy, sell = data.get("buy_order_id"), data.get("sell_order_id")
+    return ("" if buy is None else buy), ("" if sell is None else sell)
 
 
 def _has_entries(delta: Any) -> TypeGuard[dict[str, Any]]:
@@ -182,6 +212,17 @@ class CryptofeedSource:
         self._last_l2: dict[str, dict[float, float]] = {"bid": {}, "ask": {}}
         # Every order currently resting: order_id -> (price, direction, volume).
         self._open_orders: dict[Any, tuple[float, str, float]] = {}
+        # Venue time (epoch seconds) of the last book that showed each order,
+        # and of the last trade applied to it (see ``_fill_events``).  The
+        # book and the trades arrive on separate channels, so these say which
+        # of the two already accounts for a fill.
+        self._shown_at: dict[Any, float] = {}
+        self._filled_at: dict[Any, float] = {}
+        # Orders a book left out while in view, held for a late trade:
+        # order_id -> (the ``deleted`` event, venue time it is due out).  Only
+        # once the trade tape has named an order (``_tape_names_orders``).
+        self._held_deletes: dict[Any, tuple[EventDict, float]] = {}
+        self._tape_names_orders = False
         # Identity for events synthesised at shutdown, when no book is in hand.
         self._symbol = ""
         self.synthetic_deleted = 0
@@ -196,6 +237,8 @@ class CryptofeedSource:
         self.order_events = 0
         self.depth_rows = 0
         self.trade_events = 0
+        self.tape_fills = 0
+        self.tape_fills_already_shown = 0
         self.errors = 0
 
     @property
@@ -238,6 +281,26 @@ class CryptofeedSource:
         self._level = value
 
     @property
+    def trade_attribution(self) -> TradeAttribution:
+        """Which orders of a trade this capture's order events can name.
+
+        cryptofeed's L3 channels carry the book, and a book holds resting
+        orders only: a taker trades on arrival and never appears.  So an L3
+        capture names the maker only, and an L2 capture, with no order
+        identity, names neither.  Until the venue resolves, the answer is the
+        L3 one unless L2 was asked for: an L2 run ignores attribution anyway.
+        """
+        if getattr(self.settings, "level", None) is Level.L2:
+            return TradeAttribution.NONE
+        try:
+            self._exchange_class()
+        except (ImportError, ValueError):
+            return TradeAttribution.MAKER_ONLY
+        if self.level is Level.L2:
+            return TradeAttribution.NONE
+        return TradeAttribution.MAKER_ONLY
+
+    @property
     def _venue(self) -> str:
         """The venue id to report, matching what cryptofeed stamps on payloads.
 
@@ -278,17 +341,26 @@ class CryptofeedSource:
             "symbol": str(getattr(payload, "symbol", "") or "") or self._symbol,
         }
 
-    def _book_common(self, book: Any) -> dict[str, Any]:
+    def _book_common(
+        self, book: Any, receipt_timestamp: float | None = None
+    ) -> dict[str, Any]:
         """The fields every row of one book callback shares.
 
-        Both resolutions stamp the same clock, venue sequence, and instrument
+        Both resolutions stamp the same clocks, venue sequence, and instrument
         identity onto each row they emit, so the two translators build it here
-        rather than each spelling it out.
+        rather than each spelling it out.  ``timestamp`` is when the capture
+        received the message (cryptofeed's receipt time) and
+        ``exchange_timestamp`` is the venue's own stamp; without a receipt time
+        the venue stamp stands in for both.
         """
-        ts = _epoch_s_to_ts(getattr(book, "timestamp", None))
+        venue_ts = _epoch_s_to_ts(getattr(book, "timestamp", None))
         return {
-            "timestamp": ts,
-            "exchange_timestamp": ts,
+            "timestamp": (
+                venue_ts
+                if receipt_timestamp is None
+                else _epoch_s_to_ts(receipt_timestamp)
+            ),
+            "exchange_timestamp": venue_ts,
             "sequence": getattr(book, "sequence_number", None),
             **self._payload_identity(book),
         }
@@ -325,7 +397,9 @@ class CryptofeedSource:
 
     # -- L2 translation (pure) ----------------------------------------------
 
-    def _l2_rows(self, book: Any) -> list[EventDict]:
+    def _l2_rows(
+        self, book: Any, receipt_timestamp: float | None = None
+    ) -> list[EventDict]:
         """Return the depth rows for one cryptofeed L2 book callback.
 
         cryptofeed's L2 delta entries are ``(price, new_absolute_size)`` with
@@ -335,7 +409,7 @@ class CryptofeedSource:
         maintained book is diffed against the last one so unchanged levels stay
         silent and vanished levels emit a ``0``.
         """
-        common = self._book_common(book)
+        common = self._book_common(book, receipt_timestamp)
         delta = getattr(book, "delta", None)
         if _has_entries(delta):
             rows = [
@@ -372,7 +446,9 @@ class CryptofeedSource:
 
     # -- L3 translation (pure) ----------------------------------------------
 
-    def _l3_events(self, book: Any) -> list[EventDict]:
+    def _l3_events(
+        self, book: Any, receipt_timestamp: float | None = None
+    ) -> list[EventDict]:
         """Return the per-order events for one cryptofeed L3 book callback.
 
         Two paths, because cryptofeed's L3 venues do not agree on shape:
@@ -387,15 +463,22 @@ class CryptofeedSource:
           maintained book: bitstamp resends it whole every message, and
           blockchain, independent_reserve and bitfinex all open that way.  The
           book is diffed against the tracked orders to recover the same
-          created / changed / deleted vocabulary.
+          created / changed / deleted vocabulary.  Where the book is only the
+          top of the venue's book (bitstamp, see ``_L3_WINDOW``), an order
+          that drops out past the edge of the window is out of view, not gone.
 
         Either way the IDs are the venue's own.  Nothing here invents one.
         """
-        common = self._book_common(book)
+        common = self._book_common(book, receipt_timestamp)
         delta = getattr(book, "delta", None)
         if _has_entries(delta):
             return self._l3_events_from_delta(delta, common)
-        return self._l3_events_from_full_book(_book_levels(book), common)
+        shown_at = getattr(book, "timestamp", None)
+        return self._l3_events_from_full_book(
+            _book_levels(book),
+            common,
+            shown_at=None if shown_at is None else float(shown_at),
+        )
 
     def _l3_events_from_delta(
         self, delta: dict[str, Any], common: dict[str, Any]
@@ -435,19 +518,83 @@ class CryptofeedSource:
         self._open_orders = staged
         return events
 
+    def _window_edges(
+        self, levels: dict[str, dict[float, Any]]
+    ) -> dict[str, float | None]:
+        """Return the worst price each side shows, if that side is cut off.
+
+        A side is cut off when the venue declares a window (``_L3_WINDOW``) and
+        the side shows that many orders or more: the venue's book may go on past
+        the last order shown.  Past that edge, and at the edge price itself,
+        where the level may be cut in two, an order the message leaves out is
+        out of view rather than gone.  ``None`` means the side is the whole
+        book, so every order it leaves out is gone.
+        """
+        window = _L3_WINDOW.get(self._venue.upper())
+        edges: dict[str, float | None] = {"bid": None, "ask": None}
+        if window is None:
+            return edges
+        for direction in ("bid", "ask"):
+            side = levels.get(direction, {})
+            if sum(len(orders) for orders in side.values()) >= window:
+                edges[direction] = min(side) if direction == "bid" else max(side)
+        return edges
+
     def _l3_events_from_full_book(
-        self, levels: dict[str, dict[float, Any]], common: dict[str, Any]
+        self,
+        levels: dict[str, dict[float, Any]],
+        common: dict[str, Any],
+        *,
+        shown_at: float | None = None,
     ) -> list[EventDict]:
-        """Diff a whole per-order book against the tracked orders."""
+        """Diff a whole per-order book against the tracked orders.
+
+        An order the book leaves out is ``deleted`` only if the book shows its
+        price.  One past the edge of a cut-off side (see ``_window_edges``) is
+        kept as it last was, with no event: when it comes back into view it is
+        the same order, and it is only reported deleted once the window covers
+        its price and it is not there.
+
+        *shown_at* is the venue time of the book.  An order that a trade has
+        filled since then (see ``_fill_events``) is already more up to date
+        than this book, so the book says nothing about it and it is left as
+        tracked.
+        """
         current: dict[Any, tuple[float, str, float]] = {}
         for direction in ("bid", "ask"):
             for price, orders in levels.get(direction, {}).items():
                 for order_id, size in orders.items():
                     current[order_id] = (price, direction, float(size))
+        edges = self._window_edges(levels)
+
+        def out_of_view(price: float, direction: str) -> bool:
+            edge = edges[direction]
+            if edge is None:
+                return False
+            return price <= edge if direction == "bid" else price >= edge
+
+        def filled_since(order_id: Any) -> bool:
+            filled_at = self._filled_at.get(order_id)
+            return (
+                shown_at is not None and filled_at is not None and filled_at > shown_at
+            )
 
         events: list[EventDict] = []
-        for order_id, (price, direction, volume) in current.items():
+        kept: dict[Any, tuple[float, str, float]] = {}
+        for order_id, (price, direction, volume) in list(current.items()):
             previous = self._open_orders.get(order_id)
+            held = self._held_deletes.pop(order_id, None)
+            if previous is None and held is not None:
+                # Left out of one book and back in the next: not gone after
+                # all, so the held ``deleted`` is dropped, not reported.
+                event = held[0]
+                previous = (event["price"], event["direction"], event["volume"])
+            if previous is not None and filled_since(order_id):
+                kept[order_id] = previous
+                del current[order_id]
+                continue
+            if shown_at is not None:
+                self._shown_at[order_id] = shown_at
             if previous == (price, direction, volume):
                 continue
             events.append(
@@ -461,38 +608,177 @@ class CryptofeedSource:
                 }
             )
         for order_id, (price, direction, volume) in self._open_orders.items():
-            if order_id not in current:
-                events.append(
-                    {
-                        "id": order_id,
-                        "price": price,
-                        "volume": volume,
-                        "action": "deleted",
-                        "direction": direction,
-                        **common,
-                    }
-                )
-        self._open_orders = current
+            if order_id in current or order_id in kept:
+                continue
+            if out_of_view(price, direction) or filled_since(order_id):
+                kept[order_id] = (price, direction, volume)
+                continue
+            self._shown_at.pop(order_id, None)
+            self._filled_at.pop(order_id, None)
+            deleted = {
+                "id": order_id,
+                "price": price,
+                "volume": volume,
+                "action": "deleted",
+                "direction": direction,
+                **common,
+            }
+            if self._tape_names_orders and shown_at is not None:
+                self._held_deletes[order_id] = (deleted, shown_at + _FILL_GRACE_S)
+            else:
+                events.append(deleted)
+        self._open_orders = {**kept, **current}
+        if shown_at is not None:
+            events.extend(self._release_held_deletes(shown_at))
+        return events
+
+    def _release_held_deletes(self, now: float | None = None) -> list[EventDict]:
+        """Return the held ``deleted`` events due by venue time *now* (all if ``None``)."""
+        due = [
+            order_id
+            for order_id, (_, due_at) in self._held_deletes.items()
+            if now is None or due_at <= now
+        ]
+        return [self._held_deletes.pop(order_id)[0] for order_id in due]
+
+    # -- fills from the trade tape (pure) -----------------------------------
+
+    def _tracked_id(self, order_id: Any) -> Any:
+        """The tracked order a trade's order id names, or ``None``.
+
+        A venue can spell one id two ways: Bitstamp's book lists order ids as
+        strings and its trades as integers.
+        """
+        if order_id in ("", None):
+            return None
+        if order_id in self._open_orders:
+            return order_id
+        spelled = str(order_id)
+        return spelled if spelled in self._open_orders else None
+
+    def _held_id(self, order_id: Any) -> Any:
+        """The held-for-deletion order a trade's order id names, or ``None``."""
+        if order_id in self._held_deletes:
+            return order_id
+        spelled = str(order_id)
+        return spelled if spelled in self._held_deletes else None
+
+    def _fill_held(
+        self, order_id: Any, amount: float, traded_at: float | None
+    ) -> EventDict:
+        """Report a fill of an order a book has already left out.
+
+        The book that left the order out came first, so the fill happened
+        before it: the ``changed`` event is stamped with that book's receive
+        time and the trade's venue time, and the held ``deleted`` now reports
+        the size left after the fill, 0 for a full fill.
+        """
+        deleted, due_at = self._held_deletes[order_id]
+        remaining = max(round(deleted["volume"] - amount, 12), 0.0)
+        self._held_deletes[order_id] = ({**deleted, "volume": remaining}, due_at)
+        self.tape_fills += 1
+        return {
+            **deleted,
+            "exchange_timestamp": (
+                deleted["exchange_timestamp"]
+                if traded_at is None
+                else _epoch_s_to_ts(traded_at)
+            ),
+            "volume": remaining,
+            "action": "changed",
+        }
+
+    def _fill_events(
+        self, trade: Any, receipt_timestamp: float | None = None
+    ) -> list[EventDict]:
+        """Return a ``changed`` event for each tracked order a trade filled.
+
+        A book that shows only resting orders learns of a fill from the next
+        book: a size that dropped, or an order that is gone.  A full fill
+        then reads like a cancel, and several fills between two books merge
+        into one drop that matches no single trade.  Where the venue's trade
+        names its orders (Bitstamp does; see ``_trade_order_ids``), each fill
+        is reported as the trade arrives instead: the resting order's size
+        drops by the trade's amount.
+
+        The order is never deleted here.  A fully filled order drops to size
+        0 and stays tracked until a book leaves it out; that book reports it
+        ``deleted`` at size 0, which is how the native Bitstamp feed reports a
+        fill.  When the book comes first and has already left the order out,
+        its ``deleted`` is held for ``_FILL_GRACE_S`` of venue time (once the
+        tape is known to name orders), and the late trade reports its fill
+        against it (see ``_fill_held``).
+
+        Books and trades arrive on separate channels, in either order, so a
+        trade is applied only when it is later, on the venue's clock, than the
+        last book that showed the order.  A book as late as the trade already
+        includes it, and applying it again would count the fill twice; the
+        book's own size change stands for it instead.
+        """
+        traded_at = getattr(trade, "timestamp", None)
+        traded_at = None if traded_at is None else float(traded_at)
+        amount = float(trade.amount)
+        events: list[EventDict] = []
+        for named in _trade_order_ids(trade):
+            if named in ("", None):
+                continue
+            self._tape_names_orders = True
+            held_id = self._held_id(named)
+            if held_id is not None:
+                events.append(self._fill_held(held_id, amount, traded_at))
+                continue
+            order_id = self._tracked_id(named)
+            if order_id is None:
+                continue
+            shown_at = self._shown_at.get(order_id)
+            if traded_at is not None and shown_at is not None and traded_at <= shown_at:
+                self.tape_fills_already_shown += 1
+                continue
+            price, direction, volume = self._open_orders[order_id]
+            # Sizes are exact decimals on the venue; rounding keeps the
+            # difference on the same float a book would report it as.
+            remaining = max(round(volume - amount, 12), 0.0)
+            self._open_orders[order_id] = (price, direction, remaining)
+            if traded_at is not None:
+                self._filled_at[order_id] = traded_at
+            self.tape_fills += 1
+            events.append(
+                {
+                    "id": order_id,
+                    "timestamp": _epoch_s_to_ts(receipt_timestamp),
+                    "exchange_timestamp": _epoch_s_to_ts(traded_at),
+                    "sequence": None,
+                    "price": price,
+                    "volume": remaining,
+                    "action": "changed",
+                    "direction": direction,
+                    **self._payload_identity(trade),
+                }
+            )
         return events
 
     # -- trade translation (pure) -------------------------------------------
 
-    def _map_trade(self, trade: Any) -> EventDict:
+    def _map_trade(
+        self, trade: Any, receipt_timestamp: float | None = None
+    ) -> EventDict:
         """Map a cryptofeed ``Trade`` to the universal trade-event shape.
 
         cryptofeed reports price and amount as ``Decimal``; they are floated
-        for the shared schema.  A public tape carries no maker/taker order IDs,
-        so those stay empty rather than being invented, and ``side`` is the
-        taker side.
+        for the shared schema.  The buy and sell order IDs come from the raw
+        frame where the venue sends them (see ``_trade_order_ids``) and stay
+        empty where it does not.  ``side`` is the taker side.  ``timestamp`` is
+        the receipt time (the time now, without one).
         """
+        buy_order_id, sell_order_id = _trade_order_ids(trade)
         return {
             "trade_id": getattr(trade, "id", "") or "",
-            "timestamp": pd.Timestamp.now(tz="UTC").as_unit("ns"),
+            "timestamp": _epoch_s_to_ts(receipt_timestamp),
             "exchange_timestamp": _epoch_s_to_ts(getattr(trade, "timestamp", None)),
             "price": float(trade.price),
             "amount": float(trade.amount),
-            "buy_order_id": "",
-            "sell_order_id": "",
+            "buy_order_id": buy_order_id,
+            "sell_order_id": sell_order_id,
             "side": getattr(trade, "side", "") or "",
             **self._payload_identity(trade),
         }
@@ -506,6 +792,8 @@ class CryptofeedSource:
         nothing here.
         """
         if self.level is not Level.L2:
+            for held in self._release_held_deletes():
+                yield held
             ts = pd.Timestamp.now(tz="UTC").as_unit("ns")
             for order_id, (price, direction, volume) in list(self._open_orders.items()):
                 self.synthetic_deleted += 1
@@ -532,6 +820,8 @@ class CryptofeedSource:
             "order_events": self.order_events,
             "depth_rows": self.depth_rows,
             "trade_events": self.trade_events,
+            "tape_fills": self.tape_fills,
+            "tape_fills_already_shown": self.tape_fills_already_shown,
             "sequence_gaps": self.sequence_gaps,
             "sequence_missing": self.sequence_missing,
             "synthetic_deleted": self.synthetic_deleted,
@@ -637,11 +927,11 @@ class CryptofeedSource:
             self.note_sequence(book)
             try:
                 if self.level is Level.L3:
-                    events = self._l3_events(book)
+                    events = self._l3_events(book, receipt_timestamp)
                     self.order_events += len(events)
                     kind = "order"
                 else:
-                    events = self._l2_rows(book)
+                    events = self._l2_rows(book, receipt_timestamp)
                     self.depth_rows += len(events)
                     kind = "depth"
             except Exception as exc:  # noqa: BLE001 - one bad frame must not kill the run
@@ -656,11 +946,19 @@ class CryptofeedSource:
 
         async def on_trade(trade: Any, receipt_timestamp: float) -> None:
             try:
-                event = self._map_trade(trade)
+                event = self._map_trade(trade, receipt_timestamp)
+                fills = (
+                    self._fill_events(trade, receipt_timestamp)
+                    if self.level is Level.L3
+                    else []
+                )
             except Exception as exc:  # noqa: BLE001
                 self.errors += 1
                 logger.warning("[cryptofeed] dropped a trade: {!r}", exc)
                 return
+            for fill in fills:
+                await queue.put(("order", fill, None))
+            self.order_events += len(fills)
             self.trade_events += 1
             await queue.put(("trade", event, getattr(trade, "raw", None)))
 
