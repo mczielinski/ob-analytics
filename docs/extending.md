@@ -458,9 +458,11 @@ a single level dispatches without naming it; registering the *same* concept at
 both `L2` and `L3` makes it *comparable*, and callers then pass `level=`.
 
 The matplotlib backend calls `renderer(data, ax)`; other backends call
-`renderer(data)`. When the caller passes a theme, every backend adds
-`theme=theme`, so a renderer should accept a keyword-only
-`theme: PlotTheme = DEFAULT_THEME` and take its colours from `theme.palette`.
+`renderer(data)`. When the caller passes a theme, `plot()` adds `theme=theme`
+for any renderer that accepts it, so a renderer should take a keyword-only
+`theme: PlotTheme = DEFAULT_THEME` and read its colours from `theme.palette`.
+A renderer without a `theme` parameter still works; `plot()` logs a warning
+and draws it without the theme.
 
 ```python
 from __future__ import annotations
@@ -520,7 +522,8 @@ the dispatcher at the module so it imports lazily on first use:
 from ob_analytics.visualization import register_plot_backend
 
 # In your package, e.g. my_pkg/_altair.py, call at import time:
-#     RENDERERS.register(("cumvol", Level.L2, "altair"), altair_cumvol)  # def altair_cumvol(data): ...
+#     RENDERERS.register(("cumvol", Level.L2, "altair"), altair_cumvol)
+#     # def altair_cumvol(data, *, theme=DEFAULT_THEME): ...
 register_plot_backend("altair", "my_pkg._altair")
 
 fig = plot("cumvol", backend="altair", **prepare_cumvol_data(result.trades))

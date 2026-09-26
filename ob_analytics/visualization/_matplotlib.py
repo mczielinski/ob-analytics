@@ -1814,11 +1814,11 @@ def mpl_ofi_horizon(
     """Order-flow-imbalance horizon graph: OFI at several lookbacks, stacked.
 
     A *horizon graph* -- each lookback is a row that fills from its own
-    baseline; blue = net buy, orange = net sell, with both fill height and
-    colour saturation (three overlaid bands) growing with the size of the
-    imbalance.  OFI is already bounded to ``[-1, +1]``, so every row shares
-    one scale: short rows are jumpy (fleeting pressure), long rows smooth
-    (persistent pressure), readable in a single compact panel.
+    baseline in the theme's buy / sell colours (net buy / net sell), with both
+    fill height and colour saturation (three overlaid bands) growing with the
+    size of the imbalance.  OFI is already bounded to ``[-1, +1]``, so every
+    row shares one scale: short rows are jumpy (fleeting pressure), long rows
+    smooth (persistent pressure), readable in a single compact panel.
     """
     pal = theme.palette
     fig, ax = _create_axes(ax, figsize=(11, 4.2), theme=theme)
@@ -1842,7 +1842,7 @@ def mpl_ofi_horizon(
                 y0,
                 y0 + pos,
                 where=sn > lo,
-                color=pal.bid,
+                color=pal.buy,
                 alpha=alpha,
                 linewidth=0,
             )

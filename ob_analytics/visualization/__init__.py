@@ -28,9 +28,11 @@ trade price charts, volume percentiles, and event histograms.
 from __future__ import annotations
 
 import importlib
+import inspect
 from collections.abc import Callable
 from typing import Any
 
+from loguru import logger
 from matplotlib.axes import Axes
 
 from ob_analytics._registry import Registry
@@ -98,6 +100,21 @@ def _registered_levels(concept: str, backend: str) -> list[Level | None]:
     return [
         key[1] for key in RENDERERS.list() if key[0] == concept and key[2] == backend
     ]
+
+
+def _accepts_theme(renderer: RendererFn) -> bool:
+    """Whether *renderer* takes a ``theme`` keyword (by name or ``**kwargs``).
+
+    Renderers written before themes applied to every backend take only
+    ``(data)``; :func:`plot` must not pass them ``theme=``.
+    """
+    try:
+        params = inspect.signature(renderer).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        p.name == "theme" or p.kind is inspect.Parameter.VAR_KEYWORD for p in params
+    )
 
 
 def _resolve_level(concept: str, backend: str) -> Level | None:
@@ -183,7 +200,17 @@ def plot(
     if level is _UNSET:
         level = _resolve_level(concept, backend)
     renderer = RENDERERS.get((concept, level, backend))
-    kwargs = {} if theme is None else {"theme": theme}
+    kwargs: dict[str, Any] = {}
+    if theme is not None:
+        if _accepts_theme(renderer):
+            kwargs["theme"] = theme
+        else:
+            logger.warning(
+                "The {!r} renderer for {!r} takes no theme= argument; "
+                "ignoring the theme.",
+                backend,
+                concept,
+            )
     if backend == "matplotlib":
         return renderer(data, ax, **kwargs)
     return renderer(data, **kwargs)

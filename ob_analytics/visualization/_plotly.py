@@ -1664,9 +1664,10 @@ def plotly_ofi_horizon(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Order-flow-imbalance horizon graph across multiple look-back horizons.
 
     One stacked subplot per horizon (sharing the time axis); each fills from
-    its baseline with blue (net buy) / orange (net sell), height and colour
-    saturation (three overlaid bands) both growing with the imbalance.  Short
-    rows are jumpy, long rows smooth -- fleeting vs persistent pressure.
+    its baseline in the theme's buy (net buy) / sell (net sell) colours,
+    height and colour saturation (three overlaid bands) both growing with the
+    imbalance.  Short rows are jumpy, long rows smooth -- fleeting vs
+    persistent pressure.
     """
     pal = theme.palette
     go = _import_plotly()
@@ -1692,7 +1693,7 @@ def plotly_ofi_horizon(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
         for b in range(n_bands):
             lo, hi = b / n_bands, (b + 1) / n_bands
             alpha = 0.25 + 0.25 * b
-            for signed, color in ((sn, pal.bid), (-sn, pal.sell)):
+            for signed, color in ((sn, pal.buy), (-sn, pal.sell)):
                 height = (np.clip(signed, lo, hi) - lo) * band_h * n_bands
                 fig.add_trace(
                     go.Scatter(

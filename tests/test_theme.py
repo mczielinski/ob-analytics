@@ -6,6 +6,7 @@ and scales its text by ``context`` x ``font_scale``.
 """
 
 import json
+from contextlib import contextmanager
 
 import matplotlib
 
@@ -28,6 +29,7 @@ from ob_analytics.visualization import (
 from ob_analytics.visualization._data import (
     prepare_book_snapshot_data,
     prepare_ofi_data,
+    prepare_ofi_horizon_data,
     prepare_trades_data,
 )
 
@@ -176,6 +178,113 @@ def test_ofi_bars_use_buy_and_sell(backend: str) -> None:
     found = _colours(backend, fig)
     assert CUSTOM.buy in found
     assert CUSTOM.sell in found
+
+
+@pytest.mark.parametrize("backend", ["matplotlib", "plotly"])
+def test_ofi_horizon_uses_buy_and_sell(backend: str) -> None:
+    # Net buy / net sell bands share the OFI bar chart's aggressor colours.
+    _skip_missing(backend)
+    ts = pd.Timestamp("2015-05-01 01:00:00")
+    rng = np.random.default_rng(2)
+    n = 120
+    trades = pd.DataFrame(
+        {
+            "timestamp": [ts + pd.Timedelta(seconds=5 * i) for i in range(n)],
+            "price": 236.0 + rng.normal(0, 0.05, n),
+            "volume": rng.uniform(100, 1000, n),
+            "direction": pd.Categorical(
+                rng.choice(["buy", "sell"], n), categories=["buy", "sell"]
+            ),
+        }
+    )
+    theme = PlotTheme(palette=CUSTOM)
+    fig = plot(
+        "ofi_horizon", backend=backend, theme=theme, **prepare_ofi_horizon_data(trades)
+    )
+    if backend == "plotly":
+        # Plotly fills are rgba() strings built from the palette's hex.
+        found = fig.to_json()
+        assert "rgba(10,11,12," in found  # CUSTOM.buy
+        assert "rgba(192,176,160," in found  # CUSTOM.sell
+        assert "rgba(18,52,86," not in found  # CUSTOM.bid
+    else:
+        found = _mpl_colours(fig)
+        assert CUSTOM.buy in found
+        assert CUSTOM.sell in found
+        assert CUSTOM.bid not in found
+
+
+# ---------------------------------------------------------------------------
+# Dispatch: theme= only reaches renderers that accept it
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _backend(renderer):
+    """Register *renderer* for ``("probe", None, "probe")`` for the block."""
+    from ob_analytics.visualization import _BACKEND_MODULES, RENDERERS
+
+    # Any importable module will do: the renderer is registered by hand.
+    _BACKEND_MODULES["probe"] = "ob_analytics.visualization._palette"
+    RENDERERS.register(("probe", None, "probe"), renderer)
+    try:
+        yield
+    finally:
+        _BACKEND_MODULES.pop("probe", None)
+        RENDERERS._items.pop(("probe", None, "probe"), None)
+
+
+@contextmanager
+def _warnings_logged():
+    from loguru import logger
+
+    messages: list[str] = []
+    logger.enable("ob_analytics")
+    sink = logger.add(lambda m: messages.append(m.record["message"]), level="WARNING")
+    try:
+        yield messages
+    finally:
+        logger.remove(sink)
+        logger.disable("ob_analytics")
+
+
+class TestThemeDispatch:
+    def test_renderer_without_theme_still_draws(self) -> None:
+        # A renderer written before themes reached every backend takes only
+        # (data); passing a theme must not break it.
+        def legacy(data):
+            return ("drawn", data)
+
+        with _backend(legacy), _warnings_logged() as messages:
+            out = plot("probe", backend="probe", theme=PlotTheme(), x=1)
+        assert out == ("drawn", {"x": 1})
+        assert any("takes no theme=" in m for m in messages)
+
+    def test_theme_reaches_a_renderer_that_accepts_it(self) -> None:
+        theme = PlotTheme(context="talk")
+
+        def aware(data, *, theme=DEFAULT_THEME):
+            return theme
+
+        with _backend(aware):
+            assert plot("probe", backend="probe", theme=theme) is theme
+
+    def test_theme_reaches_kwargs(self) -> None:
+        theme = PlotTheme(context="paper")
+
+        def open_ended(data, **kwargs):
+            return kwargs.get("theme")
+
+        with _backend(open_ended):
+            assert plot("probe", backend="probe", theme=theme) is theme
+
+    def test_no_warning_without_a_theme(self) -> None:
+        def legacy(data):
+            return "drawn"
+
+        with _backend(legacy), _warnings_logged() as messages:
+            assert plot("probe", backend="probe") == "drawn"
+        assert messages == []
 
 
 # ---------------------------------------------------------------------------
