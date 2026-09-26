@@ -238,6 +238,23 @@ class TestAuditSubcommand:
         assert r.returncode == 0, r.stderr
         assert (out / "meta.json").read_text() == (cap / "meta.json").read_text()
 
+    def test_process_removes_a_record_an_earlier_run_left(
+        self, cli_runner, tmp_path, tiny_bitstamp_orders_csv
+    ):
+        """A reused output directory never keeps another capture's record."""
+        cap = self._capture_by_cryptofeed(tmp_path, tiny_bitstamp_orders_csv)
+        out = tmp_path / "out"
+        r = cli_runner("process", str(cap / "orders.csv"), "--output", str(out))
+        assert r.returncode == 0, r.stderr
+        assert (out / "meta.json").exists()
+
+        r = cli_runner("process", str(tiny_bitstamp_orders_csv), "--output", str(out))
+        assert r.returncode == 0, r.stderr
+        assert not (out / "meta.json").exists()
+        r = cli_runner("audit", str(out), "--from-parquet", "--source", "bitstamp")
+        assert r.returncode == 0, r.stderr
+        assert "diff_feed" in r.stdout
+
     def test_audit_checks_against_the_source_that_made_the_capture(
         self, cli_runner, tmp_path, tiny_bitstamp_orders_csv
     ):

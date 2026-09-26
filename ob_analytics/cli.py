@@ -236,13 +236,19 @@ def _keep_capture_record(data_path: Path, output: Path) -> None:
     declares about its feed.  ``audit --from-parquet`` on the output reads it
     from there; without the copy, the output would be audited against the
     expectations of whichever source read the files.
+
+    Input without a record removes any ``meta.json`` an earlier run left in
+    *output*, so a reused output directory never carries another capture's
+    record.
     """
     meta = (data_path.parent if data_path.is_file() else data_path) / "meta.json"
-    if not meta.is_file():
-        return
     dest = output / "meta.json"
-    if meta.resolve() != dest.resolve():
+    if meta.is_file() and meta.resolve() == dest.resolve():
+        return
+    if meta.is_file():
         dest.write_bytes(meta.read_bytes())
+    else:
+        dest.unlink(missing_ok=True)
 
 
 def _recorded_instrument(data_path: Path) -> dict[str, Any]:

@@ -1493,6 +1493,21 @@ class TestHeldDeletes:
         )
         assert fill["exchange_timestamp"].value == 1_700_000_000_500_000_000
 
+    def test_a_late_trade_a_book_already_showed_is_not_counted_twice(self):
+        """A partial fill seen in one book, then a cancel before its trade arrives."""
+        src = self._source()
+        src._l3_events(self._book({"s1": 1.5}, 1_700_000_000.0))
+        # The book at t=1.0 already shows the 0.5 filled at t=0.9.
+        (shrunk,) = src._l3_events(self._book({"s1": 1.0}, 1_700_000_001.0))
+        assert (shrunk["action"], shrunk["volume"]) == ("changed", 1.0)
+        # Cancelled: the next book leaves it out, and the delete is held.
+        assert src._l3_events(self._book({}, 1_700_000_001.1)) == []
+        late = _tape_trade(99, "s1", timestamp=1_700_000_000.9)
+        assert src._fill_events(late) == []
+        assert src.tape_fills_already_shown == 1
+        (gone,) = src._l3_events(self._book({}, 1_700_000_004.0))
+        assert (gone["action"], gone["volume"]) == ("deleted", 1.0)
+
     def test_a_cancel_is_deleted_at_its_size_after_the_wait(self):
         src = self._source()
         src._l3_events(self._book({"s1": 0.5}, 1_700_000_000.0))

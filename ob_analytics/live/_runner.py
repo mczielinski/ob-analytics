@@ -209,12 +209,27 @@ def _source_declarations(capturer: Any) -> dict[str, Any]:
     :class:`~ob_analytics.protocols.TradeAttribution`).  ``sequence_kind`` is
     written only by a capturer that declares one.  Read back with
     :func:`~ob_analytics.depth_l2.recorded_source` and its siblings.
+
+    It runs while a capture is closing, so a declaration that cannot be read
+    (a plug-in's value outside the enum, say) is logged and never stops the
+    files being finished: an unreadable ``feed_type`` is recorded as
+    ``unknown``, and an unreadable ``trade_attribution`` is left out, so
+    ``audit`` falls back to ``--source`` rather than to a guess.
     """
-    declared: dict[str, Any] = {
-        "source": capturer.name,
-        "feed_type": FeedType(getattr(capturer, "feed_type", FeedType.UNKNOWN)).value,
-        "trade_attribution": trade_attribution_of(capturer).value,
-    }
+    declared: dict[str, Any] = {"source": capturer.name}
+    try:
+        declared["feed_type"] = FeedType(
+            getattr(capturer, "feed_type", FeedType.UNKNOWN)
+        ).value
+    except Exception as exc:  # noqa: BLE001 - never block finalize
+        logger.warning("Capturer '{}' feed_type unreadable: {!r}", capturer.name, exc)
+        declared["feed_type"] = FeedType.UNKNOWN.value
+    try:
+        declared["trade_attribution"] = trade_attribution_of(capturer).value
+    except Exception as exc:  # noqa: BLE001 - never block finalize
+        logger.warning(
+            "Capturer '{}' trade_attribution unreadable: {!r}", capturer.name, exc
+        )
     sequence_kind = getattr(capturer, "sequence_kind", None)
     if sequence_kind is not None:
         declared["sequence_kind"] = str(getattr(sequence_kind, "value", sequence_kind))

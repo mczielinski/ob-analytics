@@ -219,9 +219,10 @@ class CryptofeedSource:
         self._shown_at: dict[Any, float] = {}
         self._filled_at: dict[Any, float] = {}
         # Orders a book left out while in view, held for a late trade:
-        # order_id -> (the ``deleted`` event, venue time it is due out).  Only
-        # once the trade tape has named an order (``_tape_names_orders``).
-        self._held_deletes: dict[Any, tuple[EventDict, float]] = {}
+        # order_id -> (the ``deleted`` event, venue time it is due out, venue
+        # time of the last book that showed the order).  Only once the trade
+        # tape has named an order (``_tape_names_orders``).
+        self._held_deletes: dict[Any, tuple[EventDict, float, float | None]] = {}
         self._tape_names_orders = False
         # Identity for events synthesised at shutdown, when no book is in hand.
         self._symbol = ""
@@ -613,7 +614,7 @@ class CryptofeedSource:
             if out_of_view(price, direction) or filled_since(order_id):
                 kept[order_id] = (price, direction, volume)
                 continue
-            self._shown_at.pop(order_id, None)
+            last_shown = self._shown_at.pop(order_id, None)
             self._filled_at.pop(order_id, None)
             deleted = {
                 "id": order_id,
@@ -624,7 +625,11 @@ class CryptofeedSource:
                 **common,
             }
             if self._tape_names_orders and shown_at is not None:
-                self._held_deletes[order_id] = (deleted, shown_at + _FILL_GRACE_S)
+                self._held_deletes[order_id] = (
+                    deleted,
+                    shown_at + _FILL_GRACE_S,
+                    last_shown,
+                )
             else:
                 events.append(deleted)
         self._open_orders = {**kept, **current}
@@ -636,7 +641,7 @@ class CryptofeedSource:
         """Return the held ``deleted`` events due by venue time *now* (all if ``None``)."""
         due = [
             order_id
-            for order_id, (_, due_at) in self._held_deletes.items()
+            for order_id, (_, due_at, _) in self._held_deletes.items()
             if now is None or due_at <= now
         ]
         return [self._held_deletes.pop(order_id)[0] for order_id in due]
@@ -665,17 +670,28 @@ class CryptofeedSource:
 
     def _fill_held(
         self, order_id: Any, amount: float, traded_at: float | None
-    ) -> EventDict:
+    ) -> EventDict | None:
         """Report a fill of an order a book has already left out.
 
         The book that left the order out came first, so the fill happened
         before it: the ``changed`` event is stamped with that book's receive
         time and the trade's venue time, and the held ``deleted`` now reports
         the size left after the fill, 0 for a full fill.
+
+        A trade no later than the last book that showed the order is already
+        in that book's size, so it returns ``None`` rather than counting the
+        fill a second time.
         """
-        deleted, due_at = self._held_deletes[order_id]
+        deleted, due_at, last_shown = self._held_deletes[order_id]
+        if traded_at is not None and last_shown is not None and traded_at <= last_shown:
+            self.tape_fills_already_shown += 1
+            return None
         remaining = max(round(deleted["volume"] - amount, 12), 0.0)
-        self._held_deletes[order_id] = ({**deleted, "volume": remaining}, due_at)
+        self._held_deletes[order_id] = (
+            {**deleted, "volume": remaining},
+            due_at,
+            last_shown,
+        )
         self.tape_fills += 1
         return {
             **deleted,
@@ -725,7 +741,9 @@ class CryptofeedSource:
             self._tape_names_orders = True
             held_id = self._held_id(named)
             if held_id is not None:
-                events.append(self._fill_held(held_id, amount, traded_at))
+                fill = self._fill_held(held_id, amount, traded_at)
+                if fill is not None:
+                    events.append(fill)
                 continue
             order_id = self._tracked_id(named)
             if order_id is None:
