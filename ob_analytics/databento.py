@@ -111,6 +111,7 @@ from ob_analytics.protocols import (
     FeedType,
     Level,
     RunContext,
+    TradeAttribution,
     TradeSource,
 )
 from ob_analytics.schemas import SEQUENCE_COLUMN, attach_instrument_identity
@@ -1353,6 +1354,11 @@ class DatabentoSource:
     # Databento normalizes a venue's own matching-engine feed, so a bid can
     # never rest above an ask and the reconstructed book is never crossed.
     feed_type: FeedType = field(default=FeedType.MATCHED_BOOK, init=False, repr=False)
+    # A fill names the resting order it was charged to; a DBN trade record
+    # does not reliably carry the aggressor's order id.
+    trade_attribution: TradeAttribution = field(
+        default=TradeAttribution.MAKER_ONLY, init=False, repr=False
+    )
     # Market-by-order: one record per resting order, with stable identity.
     level: Level = field(default=Level.L3, init=False, repr=False)
     # Declared as the base type the ``Source`` protocol states, the way every

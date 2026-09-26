@@ -78,6 +78,15 @@ genuinely crossed resting orders. `FeedType.DIFF_FEED`.
 **Unknown feed type**:
 A source that does not declare a feed type. `FeedType.UNKNOWN`, the default.
 
+**Trade attribution**:
+Which orders of a trade a feed's order events can name: the maker, the order
+that was resting, and the taker, the order that arrived and traded against it.
+Named `trade_attribution` and typed `TradeAttribution`; a property of the
+source. `BOTH` when the feed reports every order, takers included (Bitstamp's
+`live_orders`). `MAKER_ONLY` when it shows resting orders only, so a taker never
+appears (LOBSTER, Databento, cryptofeed). `NONE` for L2, which has no order
+identity. The unmatched-trades check counts only the orders the feed can name.
+
 **Faithful**:
 Replayed exactly as the feed states it, crossed resting orders included.
 _Avoid_: raw, unmodified, as-is

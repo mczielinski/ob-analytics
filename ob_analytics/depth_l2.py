@@ -78,6 +78,7 @@ from ob_analytics.protocols import (
     Level,
     RunContext,
     SequenceKind,
+    TradeAttribution,
     TradeSource,
 )
 from ob_analytics.schemas import SEQUENCE_COLUMN, attach_instrument_identity
@@ -163,6 +164,36 @@ def recorded_sequence_kind(source: str | Path) -> SequenceKind:
     """
     value = _recorded_meta(source).get("sequence_kind")
     return SequenceKind(value) if value else SequenceKind.CONTIGUOUS
+
+
+def recorded_source(source: str | Path) -> str | None:
+    """Return the name of the source that made a live capture.
+
+    *source* is the capture directory, a file inside it, or the output of
+    ``ob-analytics process``, which keeps the capture's ``meta.json``.
+    ``None`` when there is no record: a file that is not a capture, or a
+    capture written before captures recorded it.
+    """
+    value = _recorded_meta(source).get("source")
+    return str(value) if value else None
+
+
+def recorded_feed_type(source: str | Path) -> FeedType | None:
+    """Return the :class:`~ob_analytics.protocols.FeedType` a capture's source declared.
+
+    ``None`` when the capture records none (see :func:`recorded_source`).
+    """
+    value = _recorded_meta(source).get("feed_type")
+    return FeedType(value) if value else None
+
+
+def recorded_trade_attribution(source: str | Path) -> TradeAttribution | None:
+    """Return the :class:`~ob_analytics.protocols.TradeAttribution` a capture's source declared.
+
+    ``None`` when the capture records none (see :func:`recorded_source`).
+    """
+    value = _recorded_meta(source).get("trade_attribution")
+    return TradeAttribution(value) if value else None
 
 
 def _recorded_meta(source: str | Path) -> dict[str, Any]:
@@ -569,6 +600,8 @@ class DepthCsvSource:
     # A price-level feed is the venue's own aggregated view: bids never rest
     # above asks, so the reconstructed book is not crossed.
     feed_type: FeedType = FeedType.MATCHED_BOOK
+    # Price levels carry no order identity, so no order of a trade is named.
+    trade_attribution: TradeAttribution = TradeAttribution.NONE
     # No per-source knobs; empty typed settings keep construction uniform.
     settings: SourceSettings = field(default_factory=SourceSettings)
 

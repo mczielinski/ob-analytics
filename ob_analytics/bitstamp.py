@@ -41,6 +41,7 @@ from ob_analytics.protocols import (
     FeedType,
     Level,
     RunContext,
+    TradeAttribution,
     TradeSource,
 )
 from ob_analytics.schemas import SEQUENCE_COLUMN, attach_instrument_identity
@@ -552,6 +553,9 @@ class BitstampSource:
     # The Bitstamp public feed is a placement/cancellation diff stream, not a
     # matched-engine view, so it can carry genuinely crossed resting orders.
     feed_type = FeedType.DIFF_FEED
+    # The live_orders channel reports every order, takers included, and each
+    # trade names both orders, so a trade's maker and taker can both be found.
+    trade_attribution = TradeAttribution.BOTH
 
     def __init__(self, settings: SourceSettings | None = None) -> None:
         # Bitstamp needs no per-source knobs; the empty typed settings keep the
