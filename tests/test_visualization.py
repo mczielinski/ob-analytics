@@ -113,12 +113,39 @@ class TestPlotTheme:
         with pytest.raises(AttributeError):
             theme.style = "whitegrid"  # ty: ignore[invalid-assignment]
 
-    def test_theme_kwarg_threads_through_create_axes(self):
-        # A per-call theme is applied when _create_axes builds a new figure;
-        # there is no global theme to set or restore.
-        custom = PlotTheme(style="white", font_scale=2.0)
-        fig, _ = _create_axes(None, theme=custom)
-        assert isinstance(fig, Figure)
+    def test_theme_does_not_leak_into_rcparams(self, sample_trades):
+        # The theme is scoped to the figure plot() creates: matplotlib's
+        # global rcParams are the same before and after the call.
+        before = dict(matplotlib.rcParams)
+        plot(
+            "trade_tape",
+            Level.L2,
+            theme=PlotTheme(style="darkgrid", context="talk"),
+            **_data.prepare_trades_data(sample_trades),
+        )
+        assert dict(matplotlib.rcParams) == before
+
+    def test_themed_figure_keeps_theme_after_call(self, sample_trades):
+        # The returned figure still shows the theme when drawn after the
+        # call, when tick artists are built outside the theme's rc_context.
+        fig = plot(
+            "trade_tape",
+            Level.L2,
+            theme=PlotTheme(style="darkgrid", context="talk", font_scale=1.0),
+            **_data.prepare_trades_data(sample_trades),
+        )
+        fig.canvas.draw()
+        ax = fig.axes[0]
+        # darkgrid background; talk context ticks (11 * 1.5 = 16.5 pt).
+        assert matplotlib.colors.to_hex(ax.get_facecolor()) == "#eaeaf2"
+        for tick in ax.xaxis.get_major_ticks():
+            assert tick.label1.get_fontsize() == pytest.approx(16.5)
+        # A plain figure made afterwards gets matplotlib's own settings.
+        plain_fig, plain_ax = plt.subplots()
+        plain_fig.canvas.draw()
+        assert matplotlib.colors.to_hex(plain_ax.get_facecolor()) != "#eaeaf2"
+        plain_tick = plain_ax.xaxis.get_major_ticks()[0]
+        assert plain_tick.label1.get_fontsize() != pytest.approx(16.5)
 
     def test_plot_accepts_theme_kwarg(self, sample_trades):
         # plot() pops theme= from kwargs and forwards it to the renderer.

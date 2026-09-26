@@ -10,16 +10,20 @@ The :class:`PlotTheme` value object and :data:`DEFAULT_THEME` also live here.
 
 from __future__ import annotations
 
+import functools
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 
+import matplotlib as mpl
 import matplotlib.colors as mcolors
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from cycler import cycler
 from loguru import logger
 from matplotlib import collections
 from matplotlib.axes import Axes
@@ -88,31 +92,60 @@ class PlotTheme:
 
 #: Default theme applied when a renderer creates its own figure.  Pass a
 #: ``theme=`` kwarg to :func:`~ob_analytics.visualization.plot` (or directly to
-#: a renderer) to override it per call; there is no global mutable theme.
+#: a renderer) to override it per call.  The theme applies to that figure only:
+#: matplotlib's global ``rcParams`` are unchanged after the call.
 DEFAULT_THEME: PlotTheme = PlotTheme()
 
 
-def _apply_theme(theme: PlotTheme = DEFAULT_THEME) -> None:
-    """Apply *theme* to matplotlib / seaborn."""
-    sns.set_theme(
-        style=cast(Any, theme.style),
-        context=cast(Any, theme.context),
-        font_scale=theme.font_scale,
-        rc=dict(theme.rc),
-    )
+def _theme_rc(theme: PlotTheme) -> dict[str, Any]:
+    """Return the rc settings :func:`seaborn.set_theme` would apply for *theme*.
+
+    Built as a plain dict so it can be scoped with
+    :func:`matplotlib.rc_context` instead of written to the global
+    ``rcParams``.
+    """
+    return {
+        **sns.axes_style(cast(Any, theme.style), rc={"font.family": "sans-serif"}),
+        **sns.plotting_context(cast(Any, theme.context), theme.font_scale),
+        "axes.prop_cycle": cycler(color=sns.color_palette("deep")),
+        **theme.rc,
+    }
+
+
+_Renderer = TypeVar("_Renderer", bound=Callable[..., Figure])
+
+
+def _themed(renderer: _Renderer) -> _Renderer:
+    """Apply the ``theme=`` kwarg to *renderer* for that call only.
+
+    When the renderer creates its own figure (``ax is None``) the whole call
+    runs inside :func:`matplotlib.rc_context`: figure creation and every
+    drawing call (titles, legends, tick labels) read the theme, and the
+    global ``rcParams`` are restored on return.  A caller's own ``ax`` keeps
+    the caller's settings.
+    """
+
+    @functools.wraps(renderer)
+    def wrapper(
+        data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+    ) -> Figure:
+        if ax is not None:
+            return renderer(data, ax, theme=theme)
+        with mpl.rc_context(cast(Any, _theme_rc(theme))):
+            return renderer(data, None, theme=theme)
+
+    return cast(_Renderer, wrapper)
 
 
 def _create_axes(
     ax: Axes | None,
     figsize: tuple[float, float] = (10, 6),
-    theme: PlotTheme = DEFAULT_THEME,
 ) -> tuple[Figure, Axes]:
     """Return ``(fig, ax)``, creating a new figure only when *ax* is ``None``."""
     if ax is not None:
         fig = ax.get_figure()
         assert isinstance(fig, Figure)
         return fig, ax
-    _apply_theme(theme)
     fig, new_ax = plt.subplots(figsize=figsize)
     return fig, new_ax
 
@@ -165,12 +198,13 @@ def save_figure(
 # ---------------------------------------------------------------------------
 
 
+@_themed
 def mpl_time_series(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """Render a time-series step plot."""
     df = data["df"]
-    fig, ax = _create_axes(ax, figsize=(10, 6), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(10, 6))
     sns.lineplot(data=df, x="ts", y="val", drawstyle="steps-post", ax=ax)
     ax.set_title(data["title"])
     ax.set_xlabel("time")
@@ -216,6 +250,7 @@ def _draw_lollipops(
     )
 
 
+@_themed
 def mpl_trades(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -225,7 +260,7 @@ def mpl_trades(
     volume-sized marker and coloured by aggressor side.  The price axis spans
     the full data extent (no quantile clip), so spike prints stay visible.
     """
-    fig, ax = _create_axes(ax, figsize=(10, 6), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(10, 6))
 
     mid_line = data.get("mid_line")
     if mid_line is not None and not mid_line.empty:
@@ -424,6 +459,7 @@ def _hidden_trade_legend_handles(hidden: pd.DataFrame | None) -> list[Line2D]:
     ]
 
 
+@_themed
 def mpl_price_levels(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -439,7 +475,7 @@ def mpl_price_levels(
     depth.sort_values(by="timestamp", inplace=True, kind="stable")
     if depth.empty or depth.groupby("price").size().min() < 2:
         logger.warning("Not enough data for any price level")
-        fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
+        fig, ax = _create_axes(ax, figsize=(12, 7))
         return fig
 
     depth["alpha"] = np.where(
@@ -449,7 +485,7 @@ def mpl_price_levels(
     cmap = plt.get_cmap("viridis")
     norm = _volume_norm(depth["volume"], col_bias)
 
-    fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(12, 7))
 
     # The depth heatmap reads best on a neutral background: a gray facecolor so
     # the bright cells and the white midprice line pop, with a white y-grid
@@ -597,6 +633,7 @@ def mpl_price_levels(
     return fig
 
 
+@_themed
 def mpl_event_map(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -608,7 +645,7 @@ def mpl_event_map(
 
     col_pal = {"bid": _BID_COLOR, "ask": _ASK_COLOR}
 
-    fig, ax = _create_axes(ax, figsize=(10, 6), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(10, 6))
     if events.empty:
         ax.set_title("Limit Order Event Map (no data)")
         return fig
@@ -707,6 +744,7 @@ def mpl_event_map(
     return fig
 
 
+@_themed
 def mpl_volume_map(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -715,7 +753,7 @@ def mpl_volume_map(
     log_scale = data["log_scale"]
     col_pal = {"bid": _BID_COLOR, "ask": _ASK_COLOR}
 
-    fig, ax = _create_axes(ax, figsize=(10, 6), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(10, 6))
     if log_scale:
         ax.set_yscale("log")
     sns.scatterplot(
@@ -755,9 +793,7 @@ def _rounded_price_ticks(
     return np.arange(start, stop, price_by * factor)
 
 
-def _mpl_book_bars(
-    data: dict, ax: Axes | None, theme: PlotTheme, *, per_order: bool
-) -> Figure:
+def _mpl_book_bars(data: dict, ax: Axes | None, *, per_order: bool) -> Figure:
     """Horizontal book ladder: price on y, size on x, bids below / asks above.
 
     L2 draws one bar per price level; L3 segments each level into its individual
@@ -767,7 +803,7 @@ def _mpl_book_bars(
     check_book_payload_level(data, per_order=per_order)
     bids = data["bids"]
     asks = data["asks"]
-    fig, ax = _create_axes(ax, figsize=(11, 8), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(11, 8))
 
     thickness = book_bar_thickness(bids, asks) * 0.9
     # Windowing to the touch keeps bars tall, so L3 separators are always on.
@@ -812,30 +848,30 @@ def _mpl_book_bars(
     return fig
 
 
+@_themed
 def mpl_book_snapshot_aggregate(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """L2 (MBP) book snapshot: aggregate size per price level."""
-    return _mpl_book_bars(data, ax, theme, per_order=False)
+    return _mpl_book_bars(data, ax, per_order=False)
 
 
+@_themed
 def mpl_book_snapshot_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """L3 (MBO) book snapshot: each order a stacked segment within its level."""
-    return _mpl_book_bars(data, ax, theme, per_order=True)
+    return _mpl_book_bars(data, ax, per_order=True)
 
 
-def _mpl_depth_curve(
-    data: dict, ax: Axes | None, theme: PlotTheme, *, per_order: bool
-) -> Figure:
+def _mpl_depth_curve(data: dict, ax: Axes | None, *, per_order: bool) -> Figure:
     """Cumulative-depth curve: stepped per level (L2) or per order (L3).
 
     The L3 face currently differs from L2 only by per-order markers; making the
     per-order resolution legible is a possible future enhancement (a density toggle).
     """
     check_book_payload_level(data, per_order=per_order)
-    fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(12, 7))
     for side, color, label in (
         (data["bids"], _BID_COLOR, "bid"),
         (data["asks"], _ASK_COLOR, "ask"),
@@ -863,18 +899,20 @@ def _mpl_depth_curve(
     return fig
 
 
+@_themed
 def mpl_depth_chart_aggregate(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """L2 (MBP) depth chart: cumulative liquidity stepped per price level."""
-    return _mpl_depth_curve(data, ax, theme, per_order=False)
+    return _mpl_depth_curve(data, ax, per_order=False)
 
 
+@_themed
 def mpl_depth_chart_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """L3 (MBO) depth chart: cumulative liquidity stepped per individual order."""
-    return _mpl_depth_curve(data, ax, theme, per_order=True)
+    return _mpl_depth_curve(data, ax, per_order=True)
 
 
 def _annotate_cancel_populations(ax: Axes) -> None:
@@ -897,6 +935,7 @@ def _annotate_cancel_populations(ax: Axes) -> None:
     label(0.62, 0.88, "deep resting\n(pulled later)")
 
 
+@_themed
 def mpl_cancellations_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -910,7 +949,6 @@ def mpl_cancellations_per_order(
     cmap = plt.get_cmap("Blues")
 
     if ax is None:
-        _apply_theme(theme)
         # constrained layout: tight_layout cannot place a colorbar spanning two
         # axes (it warns and mis-sizes), so let the constrained engine do it.
         fig, axes = plt.subplots(
@@ -963,6 +1001,7 @@ def mpl_cancellations_per_order(
     return fig
 
 
+@_themed
 def mpl_order_activity_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -972,7 +1011,7 @@ def mpl_order_activity_per_order(
     drawn when few enough spans survive.  Dense books are degraded upstream
     (see :func:`prepare_order_activity_l3_data`) and annotated "showing n of N".
     """
-    fig, ax = _create_axes(ax, figsize=(11, 7), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(11, 7))
     show_markers = data.get("show_markers", False)
     drew_any = False
     for side, color, label, marker in (
@@ -1052,6 +1091,7 @@ def mpl_order_activity_per_order(
     return fig
 
 
+@_themed
 def mpl_queue_position_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -1061,7 +1101,7 @@ def mpl_queue_position_per_order(
     inverted y-axis) as orders ahead leave; colour = terminal outcome, with a
     × (filled) / ○ (cancelled) at the order's last seen rank when sparse.
     """
-    fig, ax = _create_axes(ax, figsize=(11, 7), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(11, 7))
     show_markers = data.get("show_markers", False)
     drew_any = False
     for side, color, label, marker in (
@@ -1116,11 +1156,12 @@ def mpl_queue_position_per_order(
     return fig
 
 
+@_themed
 def mpl_liquidity_at_touch(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """L2 (MBP) liquidity at the touch: best bid/ask resting size over time."""
-    fig, ax = _create_axes(ax, figsize=(10, 6), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(10, 6))
     ts = data["timestamp"]
     # Thin, semi-transparent step lines so the bid and ask series stay legible
     # where they overplot in the dense band near the touch.
@@ -1175,6 +1216,7 @@ def mpl_liquidity_at_touch(
     return fig
 
 
+@_themed
 def mpl_liquidity_at_touch_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -1183,7 +1225,7 @@ def mpl_liquidity_at_touch_per_order(
     A ``pcolormesh`` of order age over time (x) x FIFO rank (y, 1 = front at the
     bottom); pale = recent churn, dark = sticky liquidity.
     """
-    fig, ax = _create_axes(ax, figsize=(12, 6), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(12, 6))
     ages = data["ages"]
     times = data["times"]
     max_rank = data["max_rank"]
@@ -1213,11 +1255,12 @@ def mpl_liquidity_at_touch_per_order(
     return fig
 
 
+@_themed
 def mpl_price_view(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """L2 price view: spread ribbon + volume-weighted microprice over time."""
-    fig, ax = _create_axes(ax, figsize=(11, 6), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(11, 6))
     if len(data["timestamp"]) == 0:
         ax.set_title("Price view (no data)")
         return fig
@@ -1280,6 +1323,7 @@ def mpl_price_view(
     return fig
 
 
+@_themed
 def mpl_book_signals(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -1290,7 +1334,7 @@ def mpl_book_signals(
     cumulative-depth OBI as a line -- sits on a twin ``[-1, +1]`` axis behind
     them.
     """
-    fig, ax = _create_axes(ax, figsize=(11, 6), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(11, 6))
     x = mdates.date2num(data["timestamp"])
 
     # OBI strip on a twin axis, drawn first so the price lines sit above it.
@@ -1357,11 +1401,12 @@ def mpl_book_signals(
     return fig
 
 
+@_themed
 def mpl_trade_size(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """Trade-size strip: jittered execution dots on a log size axis, by side."""
-    fig, ax = _create_axes(ax, figsize=(11, 4.5), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(11, 4.5))
     drew = False
     for side, color, base, label in (
         (data["sells"], _SELL_COLOR, 0.0, "sell"),
@@ -1393,11 +1438,12 @@ def mpl_trade_size(
     return fig
 
 
+@_themed
 def mpl_order_outcome_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """L3 (MBO) order outcome: each order as placement distance x size, by fate."""
-    fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(12, 7))
     any_pts = False
     # Draw the dominant 'cancelled' class first (underneath) so the rarer
     # filled/partial outcomes land on top instead of being buried, and fade it.
@@ -1431,6 +1477,7 @@ def mpl_order_outcome_per_order(
     return fig
 
 
+@_themed
 def mpl_trade_tape_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -1441,7 +1488,7 @@ def mpl_trade_tape_per_order(
     are never clipped, so spike prints stay visible.  Above the density
     threshold the lollipops are per-second VWAPs.
     """
-    fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(12, 7))
     dense = data.get("dense", False)
     # Maker resting spans: faint underneath the lollipops.  Thinner/fainter when
     # dense so the span cloud reads as texture rather than a solid block.
@@ -1502,6 +1549,7 @@ def mpl_trade_tape_per_order(
     return fig
 
 
+@_themed
 def mpl_volume_percentiles(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -1520,7 +1568,7 @@ def mpl_volume_percentiles(
 
     pl = 0.1 if perc_line else 0
 
-    fig, ax = _create_axes(ax, figsize=(12, 8), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(12, 8))
     if asks_cumsum.empty:
         ax.set_title("Volume Percentiles (no data)")
         return fig
@@ -1586,6 +1634,7 @@ def mpl_volume_percentiles(
     return fig
 
 
+@_themed
 def mpl_events_histogram(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -1594,7 +1643,7 @@ def mpl_events_histogram(
     val = data["val"]
     bw = data["bw"]
 
-    fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(12, 7))
     if events.empty:
         ax.set_title(f"Events {val} distribution (no data)")
         return fig
@@ -1621,6 +1670,7 @@ def mpl_events_histogram(
     return fig
 
 
+@_themed
 def mpl_vpin(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -1629,7 +1679,7 @@ def mpl_vpin(
     threshold = data["threshold"]
     bar_width = data["bar_width"]
 
-    fig, ax = _create_axes(ax, figsize=(12, 5), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(12, 5))
     if vpin_df.empty:
         # A capture shorter than one bucket fills none; an empty datetime
         # column makes ax.bar raise, so draw the bare panel instead.
@@ -1688,6 +1738,7 @@ def mpl_vpin(
     return fig
 
 
+@_themed
 def mpl_transaction_costs(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -1704,7 +1755,7 @@ def mpl_transaction_costs(
     realized = data["realized"]
     horizon = data["horizon"]
 
-    fig, ax = _create_axes(ax, figsize=(12, 5), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(12, 5))
 
     ax.scatter(
         data["trade_times"],
@@ -1768,6 +1819,7 @@ def _clip_to_series(ax: Axes, series: tuple[np.ndarray, ...], pad: float = 3.0) 
     ax.set_ylim(low - margin, high + margin)
 
 
+@_themed
 def mpl_order_flow_imbalance(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -1787,7 +1839,7 @@ def mpl_order_flow_imbalance(
     else:
         bar_width = 0.001
 
-    fig, ax = _create_axes(ax, figsize=(12, 5), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(12, 5))
 
     ax.bar(
         ofi_df["timestamp"],
@@ -1827,6 +1879,7 @@ def mpl_order_flow_imbalance(
 _OFI_N_BANDS = 3
 
 
+@_themed
 def mpl_ofi_horizon(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -1839,7 +1892,7 @@ def mpl_ofi_horizon(
     one scale: short rows are jumpy (fleeting pressure), long rows smooth
     (persistent pressure), readable in a single compact panel.
     """
-    fig, ax = _create_axes(ax, figsize=(11, 4.2), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(11, 4.2))
     ofi = data["ofi"]
     horizons = data["horizons"]
     if ofi.size == 0:
@@ -1895,6 +1948,7 @@ def mpl_ofi_horizon(
     return fig
 
 
+@_themed
 def mpl_kyle_lambda(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -1904,7 +1958,7 @@ def mpl_kyle_lambda(
     r_squared = data["r_squared"]
     t_stat = data["t_stat"]
 
-    fig, ax = _create_axes(ax, figsize=(8, 6), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(8, 6))
 
     ax.scatter(
         reg_df["signed_volume"],
@@ -1954,6 +2008,7 @@ def mpl_kyle_lambda(
 # ---------------------------------------------------------------------------
 
 
+@_themed
 def mpl_hidden_executions(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -1962,7 +2017,7 @@ def mpl_hidden_executions(
     hidden = data["hidden"]
     has_hidden = data["has_hidden"]
 
-    fig, ax = _create_axes(ax, figsize=(12, 6), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(12, 6))
 
     if has_hidden and not hidden.empty:
         # Hue by aggressor side (bid/ask) -- size already encodes volume, so a
@@ -2041,6 +2096,7 @@ def mpl_hidden_executions(
     return fig
 
 
+@_themed
 def mpl_trading_halts(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -2049,7 +2105,7 @@ def mpl_trading_halts(
     halt_periods = data["halt_periods"]
     has_halts = data["has_halts"]
 
-    fig, ax = _create_axes(ax, figsize=(12, 6), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(12, 6))
 
     if not trades.empty:
         ax.step(
@@ -2101,6 +2157,7 @@ def mpl_trading_halts(
 from ob_analytics.visualization import RENDERERS, Level
 
 
+@_themed
 def mpl_bars(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -2119,7 +2176,7 @@ def mpl_bars(
     rising = np.asarray(data["rising"])
     on_clock = data["x_axis"] == "time"
 
-    fig, ax = _create_axes(ax, figsize=(12, 6), theme=theme)
+    fig, ax = _create_axes(ax, figsize=(12, 6))
     if on_clock:
         x = mdates.date2num(data["x"])
         width = data["bar_width"] / pd.Timedelta(days=1)
