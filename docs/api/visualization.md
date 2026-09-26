@@ -55,11 +55,15 @@ Concepts with both L2 and L3 faces: `trade_tape`, `order_activity`,
 ## Theme and Saving
 
 Pass `theme=PlotTheme(...)` to `plot()` to override `DEFAULT_THEME` for a
-single call (matplotlib backend only); there is no global theme to set.
+single call, on any backend; there is no global theme to set.
 
 ::: ob_analytics.visualization.PlotTheme
 
 ::: ob_analytics.visualization.DEFAULT_THEME
+
+::: ob_analytics.visualization.Palette
+
+::: ob_analytics.visualization.DEFAULT_PALETTE
 
 ::: ob_analytics.visualization.save_figure
 

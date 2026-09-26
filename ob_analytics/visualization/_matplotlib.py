@@ -5,12 +5,12 @@ This module contains all matplotlib-specific rendering logic.  Each
 :mod:`~ob_analytics.visualization._data`) and an optional *ax* parameter, and
 returns a :class:`~matplotlib.figure.Figure`.
 
-The :class:`PlotTheme` value object and :data:`DEFAULT_THEME` also live here.
+The :class:`PlotTheme` value object lives in :mod:`._theme`; each renderer
+reads its colours from ``theme.palette``.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
@@ -32,64 +32,12 @@ from ob_analytics.visualization._data import (
     book_mid,
     check_book_payload_level,
 )
-from ob_analytics.visualization._palette import (
-    _ASK_COLOR,
-    _BID_COLOR,
-    _BUY_COLOR,
-    _CANCELLED_COLOR,
-    _CHECK_TRADE_COLOR,
-    _FILLED_COLOR,
-    _HIDDEN_TRADE_COLOR,
-    _PARTIAL_COLOR,
-    _SELL_COLOR,
-)
+from ob_analytics.visualization._palette import Palette
+from ob_analytics.visualization._theme import DEFAULT_THEME, PlotTheme
 
 # ---------------------------------------------------------------------------
 # Theme system
 # ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class PlotTheme:
-    """Configurable visual theme for ob-analytics plots.
-
-    Attributes
-    ----------
-    style : str
-        Seaborn style name (e.g. ``"darkgrid"``, ``"whitegrid"``).
-    context : str
-        Seaborn context name (e.g. ``"notebook"``, ``"talk"``).
-    font_scale : float
-        Global font scaling factor.
-    rc : dict[str, object]
-        Matplotlib rc overrides applied on top of the seaborn theme.
-    """
-
-    style: str = "white"
-    context: str = "notebook"
-    font_scale: float = 1.05
-    rc: dict[str, object] = field(
-        # The reference style (Cleveland–McGill bundle): white background,
-        # dotted light grid, no top/right spines, bold left-aligned titles.
-        # Built on top of seaborn (style + context still apply).
-        default_factory=lambda: {
-            "axes.grid": True,
-            "grid.linestyle": ":",
-            "grid.alpha": 0.35,
-            "axes.spines.top": False,
-            "axes.spines.right": False,
-            "axes.edgecolor": "#444444",
-            "axes.titlelocation": "left",
-            "axes.titleweight": "bold",
-            "lines.linewidth": 2.0,
-        }
-    )
-
-
-#: Default theme applied when a renderer creates its own figure.  Pass a
-#: ``theme=`` kwarg to :func:`~ob_analytics.visualization.plot` (or directly to
-#: a renderer) to override it per call; there is no global mutable theme.
-DEFAULT_THEME: PlotTheme = PlotTheme()
 
 
 def _apply_theme(theme: PlotTheme = DEFAULT_THEME) -> None:
@@ -225,6 +173,7 @@ def mpl_trades(
     volume-sized marker and coloured by aggressor side.  The price axis spans
     the full data extent (no quantile clip), so spike prints stay visible.
     """
+    pal = theme.palette
     fig, ax = _create_axes(ax, figsize=(10, 6), theme=theme)
 
     mid_line = data.get("mid_line")
@@ -234,7 +183,7 @@ def mpl_trades(
         ax.plot(
             mdates.date2num(mid_line["timestamp"]),
             mid_line["mid"].to_numpy(),
-            color="#888888",
+            color=pal.reference_line,
             linewidth=1.0,
             alpha=0.8,
             zorder=1,
@@ -243,8 +192,8 @@ def mpl_trades(
 
     any_pts = False
     for side, color, label in (
-        (data["buys"], _BUY_COLOR, "buy (lifts ask)"),
-        (data["sells"], _SELL_COLOR, "sell (hits bid)"),
+        (data["buys"], pal.buy, "buy (lifts ask)"),
+        (data["sells"], pal.sell, "sell (hits bid)"),
     ):
         if side.empty:
             continue
@@ -293,22 +242,26 @@ def _volume_norm(volume: pd.Series, col_bias: float) -> mcolors.Normalize:
 
 _ICEBERG_CONFIDENCE_ALPHA = {"low": 0.35, "medium": 0.6, "high": 0.9}
 
+# "color" names a Palette field.
 _HIDDEN_TRADE_STYLE = {
     "hidden": {
         "marker": "*",
-        "color": _HIDDEN_TRADE_COLOR,
+        "color": "hidden_trade",
         "label": "Hidden-order trade",
     },
     "check": {
         "marker": "*",
-        "color": _CHECK_TRADE_COLOR,
+        "color": "check_trade",
         "label": "Trade to check (maker not confirmed hidden)",
     },
 }
 
 
 def _draw_iceberg_overlay(
-    ax: Axes, lines: pd.DataFrame | None, refills: pd.DataFrame | None
+    ax: Axes,
+    lines: pd.DataFrame | None,
+    refills: pd.DataFrame | None,
+    pal: Palette,
 ) -> bool:
     """Draw suspected-iceberg chains (line, opacity = confidence) + refill (♦) markers.
 
@@ -318,7 +271,7 @@ def _draw_iceberg_overlay(
     if lines is not None and not lines.empty:
         for _, g in lines.groupby("iceberg", sort=False):
             g = g.sort_values("timestamp")
-            color = _BID_COLOR if g["direction"].iloc[0] == "bid" else _ASK_COLOR
+            color = pal.bid if g["direction"].iloc[0] == "bid" else pal.ask
             alpha = _ICEBERG_CONFIDENCE_ALPHA.get(str(g["confidence"].iloc[0]), 0.5)
             ax.plot(
                 mdates.date2num(g["timestamp"]),
@@ -330,9 +283,7 @@ def _draw_iceberg_overlay(
             )
             drew = True
     if refills is not None and not refills.empty:
-        colors = np.where(
-            refills["direction"].to_numpy() == "bid", _BID_COLOR, _ASK_COLOR
-        )
+        colors = np.where(refills["direction"].to_numpy() == "bid", pal.bid, pal.ask)
         ax.scatter(
             mdates.date2num(refills["timestamp"]),
             refills["price"],
@@ -347,17 +298,22 @@ def _draw_iceberg_overlay(
     return drew
 
 
-def _iceberg_legend_handles() -> list[Line2D]:
+def _iceberg_legend_handles(pal: Palette) -> list[Line2D]:
     return [
         Line2D(
-            [0], [0], color="#888888", alpha=0.7, linewidth=1.2, label="Iceberg chain"
+            [0],
+            [0],
+            color=pal.reference_line,
+            alpha=0.7,
+            linewidth=1.2,
+            label="Iceberg chain",
         ),
         Line2D(
             [0],
             [0],
             marker="D",
             linestyle="none",
-            markerfacecolor="#888888",
+            markerfacecolor=pal.reference_line,
             markeredgecolor="black",
             markersize=6,
             label="Iceberg refill",
@@ -365,7 +321,9 @@ def _iceberg_legend_handles() -> list[Line2D]:
     ]
 
 
-def _draw_hidden_trades_overlay(ax: Axes, hidden: pd.DataFrame | None) -> bool:
+def _draw_hidden_trades_overlay(
+    ax: Axes, hidden: pd.DataFrame | None, pal: Palette
+) -> bool:
     """Draw trades ``hidden_trades()`` flagged as printing inside the spread.
 
     An I-beam runs from the standing best bid to the standing best ask, with
@@ -382,7 +340,7 @@ def _draw_hidden_trades_overlay(ax: Axes, hidden: pd.DataFrame | None) -> bool:
         x,
         hidden["best_bid_price"],
         hidden["best_ask_price"],
-        colors="#7f8c8d",
+        colors=pal.neutral,
         linewidth=0.8,
         alpha=0.5,
         zorder=3,
@@ -396,7 +354,7 @@ def _draw_hidden_trades_overlay(ax: Axes, hidden: pd.DataFrame | None) -> bool:
             sub["price"],
             marker=style["marker"],
             s=50,
-            color=style["color"],
+            color=getattr(pal, style["color"]),
             edgecolors="black",
             linewidths=0.4,
             zorder=6,
@@ -404,7 +362,9 @@ def _draw_hidden_trades_overlay(ax: Axes, hidden: pd.DataFrame | None) -> bool:
     return True
 
 
-def _hidden_trade_legend_handles(hidden: pd.DataFrame | None) -> list[Line2D]:
+def _hidden_trade_legend_handles(
+    hidden: pd.DataFrame | None, pal: Palette
+) -> list[Line2D]:
     if hidden is None:
         return []
     present = set(hidden["category"].unique())
@@ -414,7 +374,7 @@ def _hidden_trade_legend_handles(hidden: pd.DataFrame | None) -> list[Line2D]:
             [0],
             marker=style["marker"],
             linestyle="none",
-            markerfacecolor=style["color"],
+            markerfacecolor=getattr(pal, style["color"]),
             markeredgecolor="black",
             markersize=8,
             label=style["label"],
@@ -428,6 +388,7 @@ def mpl_price_levels(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """Render the price-level depth heatmap."""
+    pal = theme.palette
     depth = data["depth"]
     spread = data["spread"]
     trades = data["trades"]
@@ -512,7 +473,7 @@ def mpl_price_levels(
                 ax.step(
                     spread_x,
                     spread["best_ask_price"],
-                    color=_ASK_COLOR,
+                    color=pal.ask,
                     linewidth=1.5,
                     where="post",
                     label="Best Ask",
@@ -521,7 +482,7 @@ def mpl_price_levels(
                 ax.step(
                     spread_x,
                     spread["best_bid_price"],
-                    color=_BID_COLOR,
+                    color=pal.bid,
                     linewidth=1.5,
                     where="post",
                     label="Best Bid",
@@ -537,7 +498,7 @@ def mpl_price_levels(
                 sells["price"],
                 s=50,
                 facecolors="none",
-                edgecolors=_SELL_COLOR,
+                edgecolors=pal.sell,
                 linewidths=1.5,
                 zorder=5,
                 marker="v",
@@ -549,7 +510,7 @@ def mpl_price_levels(
                 buys["price"],
                 s=50,
                 facecolors="none",
-                edgecolors=_BUY_COLOR,
+                edgecolors=pal.buy,
                 linewidths=1.5,
                 zorder=5,
                 marker="^",
@@ -557,10 +518,10 @@ def mpl_price_levels(
             )
 
     drew_icebergs = _draw_iceberg_overlay(
-        ax, data.get("iceberg_lines"), data.get("iceberg_refills")
+        ax, data.get("iceberg_lines"), data.get("iceberg_refills"), pal
     )
     hidden_trades_df = data.get("hidden_trades")
-    drew_hidden = _draw_hidden_trades_overlay(ax, hidden_trades_df)
+    drew_hidden = _draw_hidden_trades_overlay(ax, hidden_trades_df, pal)
 
     # All artists above plot date2num floats; format_time_axis keeps the
     # axis off the date units converter (see its docstring).
@@ -586,10 +547,10 @@ def mpl_price_levels(
     handles, labels = ax.get_legend_handles_labels()
     by_label = dict(zip(labels, handles))
     if drew_icebergs:
-        for h in _iceberg_legend_handles():
+        for h in _iceberg_legend_handles(pal):
             by_label[h.get_label()] = h
     if drew_hidden:
-        for h in _hidden_trade_legend_handles(hidden_trades_df):
+        for h in _hidden_trade_legend_handles(hidden_trades_df, pal):
             by_label[h.get_label()] = h
     ax.legend(by_label.values(), by_label.keys())
 
@@ -601,12 +562,13 @@ def mpl_event_map(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """Render a limit-order event map."""
+    pal = theme.palette
     events = data["events"]
     created = data["created"]
     deleted = data["deleted"]
     price_by = data["price_by"]
 
-    col_pal = {"bid": _BID_COLOR, "ask": _ASK_COLOR}
+    col_pal = {"bid": pal.bid, "ask": pal.ask}
 
     fig, ax = _create_axes(ax, figsize=(10, 6), theme=theme)
     if events.empty:
@@ -619,7 +581,7 @@ def mpl_event_map(
         y="price",
         size="volume",
         sizes=(20, 200),
-        color="#333333",
+        color=pal.price_line,
         ax=ax,
         legend=False,
         marker="o",
@@ -630,7 +592,7 @@ def mpl_event_map(
         y="price",
         size="volume",
         sizes=(20, 200),
-        color="#333333",
+        color=pal.price_line,
         ax=ax,
         legend=False,
         marker="o",
@@ -664,7 +626,7 @@ def mpl_event_map(
             [0],
             marker="o",
             linestyle="none",
-            markerfacecolor=_BID_COLOR,
+            markerfacecolor=pal.bid,
             markeredgecolor="none",
             markersize=7,
             label="bid",
@@ -674,7 +636,7 @@ def mpl_event_map(
             [0],
             marker="o",
             linestyle="none",
-            markerfacecolor=_ASK_COLOR,
+            markerfacecolor=pal.ask,
             markeredgecolor="none",
             markersize=7,
             label="ask",
@@ -684,7 +646,7 @@ def mpl_event_map(
             [0],
             marker="o",
             linestyle="none",
-            markerfacecolor="#333333",
+            markerfacecolor=pal.price_line,
             markeredgecolor="none",
             markersize=8,
             label="created",
@@ -694,7 +656,7 @@ def mpl_event_map(
             [0],
             marker="o",
             linestyle="none",
-            markerfacecolor="#333333",
+            markerfacecolor=pal.price_line,
             markeredgecolor="black",
             alpha=0.5,
             markersize=8,
@@ -711,9 +673,10 @@ def mpl_volume_map(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """Render a volume map of flashed limit orders."""
+    pal = theme.palette
     events = data["events"]
     log_scale = data["log_scale"]
-    col_pal = {"bid": _BID_COLOR, "ask": _ASK_COLOR}
+    col_pal = {"bid": pal.bid, "ask": pal.ask}
 
     fig, ax = _create_axes(ax, figsize=(10, 6), theme=theme)
     if log_scale:
@@ -764,6 +727,7 @@ def _mpl_book_bars(
     orders (biggest-first from the axis) with white separators, so a whale and a
     crowd of small orders that look identical on L2 read differently here.
     """
+    pal = theme.palette
     check_book_payload_level(data, per_order=per_order)
     bids = data["bids"]
     asks = data["asks"]
@@ -773,7 +737,7 @@ def _mpl_book_bars(
     # Windowing to the touch keeps bars tall, so L3 separators are always on.
     edgecolor = "white" if per_order else "none"
     linewidth = 1.3 if per_order else 0.0
-    for side, color, label in ((bids, _BID_COLOR, "bid"), (asks, _ASK_COLOR, "ask")):
+    for side, color, label in ((bids, pal.bid, "bid"), (asks, pal.ask, "ask")):
         if side.empty:
             continue
         ax.barh(
@@ -790,13 +754,13 @@ def _mpl_book_bars(
 
     mid = book_mid(bids, asks)
     if mid is not None:
-        ax.axhline(mid, color="#444444", linestyle="--", linewidth=1, zorder=1)
+        ax.axhline(mid, color=pal.rule, linestyle="--", linewidth=1, zorder=1)
 
     if data["show_quantiles"]:
         for y_value in (*data["bid_quantiles"], *data["ask_quantiles"]):
             ax.axhline(
                 y=y_value,
-                color="#888888",
+                color=pal.reference_line,
                 linestyle=":",
                 linewidth=0.8,
                 alpha=0.5,
@@ -834,11 +798,12 @@ def _mpl_depth_curve(
     The L3 face currently differs from L2 only by per-order markers; making the
     per-order resolution legible is a possible future enhancement (a density toggle).
     """
+    pal = theme.palette
     check_book_payload_level(data, per_order=per_order)
     fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
     for side, color, label in (
-        (data["bids"], _BID_COLOR, "bid"),
-        (data["asks"], _ASK_COLOR, "ask"),
+        (data["bids"], pal.bid, "bid"),
+        (data["asks"], pal.ask, "ask"),
     ):
         if side.empty:
             continue
@@ -877,7 +842,7 @@ def mpl_depth_chart_per_order(
     return _mpl_depth_curve(data, ax, theme, per_order=True)
 
 
-def _annotate_cancel_populations(ax: Axes) -> None:
+def _annotate_cancel_populations(ax: Axes, pal: Palette) -> None:
     """Faint hints for the three latent populations on a log-log cancel panel."""
 
     def label(x: float, y: float, text: str) -> None:
@@ -886,7 +851,7 @@ def _annotate_cancel_populations(ax: Axes) -> None:
             y,
             text,
             transform=ax.transAxes,
-            color="#555555",
+            color=pal.label,
             fontstyle="italic",
             fontsize=9,
             zorder=5,
@@ -947,7 +912,7 @@ def mpl_cancellations_per_order(
             )
             hb.set_rasterized(True)
             last_hb = hb
-            _annotate_cancel_populations(panel_ax)
+            _annotate_cancel_populations(panel_ax, theme.palette)
         else:
             panel_ax.set_xscale("log")
             panel_ax.set_yscale("log")
@@ -972,13 +937,14 @@ def mpl_order_activity_per_order(
     drawn when few enough spans survive.  Dense books are degraded upstream
     (see :func:`prepare_order_activity_l3_data`) and annotated "showing n of N".
     """
+    pal = theme.palette
     fig, ax = _create_axes(ax, figsize=(11, 7), theme=theme)
     show_markers = data.get("show_markers", False)
     drew_any = False
     for side, color, label, marker in (
-        (data["filled"], _FILLED_COLOR, "filled", "x"),
-        (data["cancelled"], _CANCELLED_COLOR, "cancelled", "o"),
-        (data["resting"], _PARTIAL_COLOR, "still resting", None),
+        (data["filled"], pal.filled, "filled", "x"),
+        (data["cancelled"], pal.cancelled, "cancelled", "o"),
+        (data["resting"], pal.partial, "still resting", None),
     ):
         if side.empty:
             continue
@@ -1011,10 +977,10 @@ def mpl_order_activity_per_order(
                 )
 
     drew_icebergs = _draw_iceberg_overlay(
-        ax, data.get("iceberg_lines"), data.get("iceberg_refills")
+        ax, data.get("iceberg_lines"), data.get("iceberg_refills"), pal
     )
     hidden_trades_df = data.get("hidden_trades")
-    drew_hidden = _draw_hidden_trades_overlay(ax, hidden_trades_df)
+    drew_hidden = _draw_hidden_trades_overlay(ax, hidden_trades_df, pal)
 
     format_time_axis(ax)
 
@@ -1038,14 +1004,14 @@ def mpl_order_activity_per_order(
             ha="right",
             va="bottom",
             fontsize=8,
-            color="#555555",
+            color=pal.label,
             fontstyle="italic",
         )
     handles = list(ax.get_legend_handles_labels()[0]) if drew_any else []
     if drew_icebergs:
-        handles.extend(_iceberg_legend_handles())
+        handles.extend(_iceberg_legend_handles(pal))
     if drew_hidden:
-        handles.extend(_hidden_trade_legend_handles(hidden_trades_df))
+        handles.extend(_hidden_trade_legend_handles(hidden_trades_df, pal))
     if handles:
         ax.legend(handles=handles, loc="upper right")
     fig.tight_layout()
@@ -1061,13 +1027,14 @@ def mpl_queue_position_per_order(
     inverted y-axis) as orders ahead leave; colour = terminal outcome, with a
     × (filled) / ○ (cancelled) at the order's last seen rank when sparse.
     """
+    pal = theme.palette
     fig, ax = _create_axes(ax, figsize=(11, 7), theme=theme)
     show_markers = data.get("show_markers", False)
     drew_any = False
     for side, color, label, marker in (
-        (data["filled"], _FILLED_COLOR, "filled", "x"),
-        (data["cancelled"], _CANCELLED_COLOR, "cancelled", "o"),
-        (data["resting"], _PARTIAL_COLOR, "still resting", None),
+        (data["filled"], pal.filled, "filled", "x"),
+        (data["cancelled"], pal.cancelled, "cancelled", "o"),
+        (data["resting"], pal.partial, "still resting", None),
     ):
         if side.empty:
             continue
@@ -1107,9 +1074,9 @@ def mpl_queue_position_per_order(
     ax.set_title("Queue position at the touch")
     if drew_any:
         handles = [
-            Line2D([0], [0], color=_FILLED_COLOR, label="filled"),
-            Line2D([0], [0], color=_CANCELLED_COLOR, label="cancelled"),
-            Line2D([0], [0], color=_PARTIAL_COLOR, label="still resting"),
+            Line2D([0], [0], color=pal.filled, label="filled"),
+            Line2D([0], [0], color=pal.cancelled, label="cancelled"),
+            Line2D([0], [0], color=pal.partial, label="still resting"),
         ]
         ax.legend(handles=handles, loc="upper right")
     fig.tight_layout()
@@ -1120,6 +1087,7 @@ def mpl_liquidity_at_touch(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """L2 (MBP) liquidity at the touch: best bid/ask resting size over time."""
+    pal = theme.palette
     fig, ax = _create_axes(ax, figsize=(10, 6), theme=theme)
     ts = data["timestamp"]
     # Thin, semi-transparent step lines so the bid and ask series stay legible
@@ -1127,7 +1095,7 @@ def mpl_liquidity_at_touch(
     ax.plot(
         ts,
         data["bid_vol"],
-        color=_BID_COLOR,
+        color=pal.bid,
         linewidth=0.9,
         alpha=0.7,
         drawstyle="steps-post",
@@ -1136,7 +1104,7 @@ def mpl_liquidity_at_touch(
     ax.plot(
         ts,
         data["ask_vol"],
-        color=_ASK_COLOR,
+        color=pal.ask,
         linewidth=0.9,
         alpha=0.7,
         drawstyle="steps-post",
@@ -1148,9 +1116,9 @@ def mpl_liquidity_at_touch(
         # churned -- created / cancelled / filled bursts the size line hides.
         trans = ax.get_xaxis_transform()
         for cat, color, y0 in (
-            ("created", "#888888", 0.0),
-            ("cancelled", _CANCELLED_COLOR, 0.020),
-            ("filled", _FILLED_COLOR, 0.040),
+            ("created", pal.reference_line, 0.0),
+            ("cancelled", pal.cancelled, 0.020),
+            ("filled", pal.filled, 0.040),
         ):
             t = rug.get(cat)
             if t is not None and len(t):
@@ -1217,6 +1185,7 @@ def mpl_price_view(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """L2 price view: spread ribbon + volume-weighted microprice over time."""
+    pal = theme.palette
     fig, ax = _create_axes(ax, figsize=(11, 6), theme=theme)
     if len(data["timestamp"]) == 0:
         ax.set_title("Price view (no data)")
@@ -1226,15 +1195,15 @@ def mpl_price_view(
     ask = data["best_ask_price"]
 
     ax.fill_between(
-        x, bid, ask, step="post", color="#9aa0a6", alpha=0.25, label="spread"
+        x, bid, ask, step="post", color=pal.spread_fill, alpha=0.25, label="spread"
     )
-    ax.step(x, bid, where="post", color=_BID_COLOR, linewidth=0.8, alpha=0.8)
-    ax.step(x, ask, where="post", color=_ASK_COLOR, linewidth=0.8, alpha=0.8)
+    ax.step(x, bid, where="post", color=pal.bid, linewidth=0.8, alpha=0.8)
+    ax.step(x, ask, where="post", color=pal.ask, linewidth=0.8, alpha=0.8)
     ax.step(
         x,
         data["mid"],
         where="post",
-        color="#888888",
+        color=pal.reference_line,
         linewidth=0.8,
         alpha=0.6,
         linestyle=":",
@@ -1244,7 +1213,7 @@ def mpl_price_view(
         x,
         data["microprice"],
         where="post",
-        color="#222222",
+        color=pal.price_line,
         linewidth=1.4,
         label="microprice",
     )
@@ -1252,8 +1221,8 @@ def mpl_price_view(
     trades = data.get("trades")
     if trades is not None and not trades.empty:
         for side, color, label in (
-            (trades[trades["direction"] == "buy"], _BUY_COLOR, "buy"),
-            (trades[trades["direction"] == "sell"], _SELL_COLOR, "sell"),
+            (trades[trades["direction"] == "buy"], pal.buy, "buy"),
+            (trades[trades["direction"] == "sell"], pal.sell, "sell"),
         ):
             if side.empty:
                 continue
@@ -1290,24 +1259,25 @@ def mpl_book_signals(
     cumulative-depth OBI as a line -- sits on a twin ``[-1, +1]`` axis behind
     them.
     """
+    pal = theme.palette
     fig, ax = _create_axes(ax, figsize=(11, 6), theme=theme)
     x = mdates.date2num(data["timestamp"])
 
     # OBI strip on a twin axis, drawn first so the price lines sit above it.
     ax2 = ax.twinx()
     obi = np.asarray(data["obi"], dtype=float)
-    colors = [_BUY_COLOR if v >= 0 else _SELL_COLOR for v in np.nan_to_num(obi)]
+    colors = [pal.buy if v >= 0 else pal.sell for v in np.nan_to_num(obi)]
     bar_width = float(np.median(np.diff(x))) * 0.8 if len(x) > 1 else 0.001
     ax2.bar(x, obi, width=bar_width, color=colors, alpha=0.3, linewidth=0)
     ax2.plot(
         x,
         data["obi_depth"],
-        color="#6d28d9",
+        color=pal.imbalance,
         linewidth=1.2,
         alpha=0.9,
         label=f"OBI (depth x{data['levels']})",
     )
-    ax2.axhline(y=0, color="#444444", linewidth=0.6, alpha=0.5)
+    ax2.axhline(y=0, color=pal.rule, linewidth=0.6, alpha=0.5)
     ax2.set_ylim(-1.05, 1.05)
     ax2.set_ylabel("OBI")
 
@@ -1319,7 +1289,7 @@ def mpl_book_signals(
         data["best_bid_price"],
         data["best_ask_price"],
         step="post",
-        color="#9aa0a6",
+        color=pal.spread_fill,
         alpha=0.20,
         label="spread",
     )
@@ -1327,7 +1297,7 @@ def mpl_book_signals(
         x,
         data["mid"],
         where="post",
-        color="#888888",
+        color=pal.reference_line,
         linewidth=0.8,
         alpha=0.7,
         linestyle=":",
@@ -1337,7 +1307,7 @@ def mpl_book_signals(
         x,
         data["microprice"],
         where="post",
-        color="#222222",
+        color=pal.price_line,
         linewidth=1.4,
         label="micro-price",
     )
@@ -1361,11 +1331,12 @@ def mpl_trade_size(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """Trade-size strip: jittered execution dots on a log size axis, by side."""
+    pal = theme.palette
     fig, ax = _create_axes(ax, figsize=(11, 4.5), theme=theme)
     drew = False
     for side, color, base, label in (
-        (data["sells"], _SELL_COLOR, 0.0, "sell"),
-        (data["buys"], _BUY_COLOR, 1.0, "buy"),
+        (data["sells"], pal.sell, 0.0, "sell"),
+        (data["buys"], pal.buy, 1.0, "buy"),
     ):
         if side.empty:
             continue
@@ -1397,15 +1368,16 @@ def mpl_order_outcome_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """L3 (MBO) order outcome: each order as placement distance x size, by fate."""
+    pal = theme.palette
     fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
     any_pts = False
     # Draw the dominant 'cancelled' class first (underneath) so the rarer
     # filled/partial outcomes land on top instead of being buried, and fade it.
     # A distance-binned fate variant is a possible future enhancement.
     for frame, color, label, pt_alpha in (
-        (data["cancelled"], _CANCELLED_COLOR, "cancelled", 0.18),
-        (data["partial"], _PARTIAL_COLOR, "partial", 0.6),
-        (data["filled"], _FILLED_COLOR, "filled", 0.85),
+        (data["cancelled"], pal.cancelled, "cancelled", 0.18),
+        (data["partial"], pal.partial, "partial", 0.6),
+        (data["filled"], pal.filled, "filled", 0.85),
     ):
         if frame.empty:
             continue
@@ -1421,7 +1393,9 @@ def mpl_order_outcome_per_order(
         )
     # The touch: points right of it improved the best quote (the aggressive
     # tail the asymmetric clip in the prepare fn keeps visible).
-    ax.axvline(x=0, color="#888888", linestyle="--", linewidth=1, label="touch")
+    ax.axvline(
+        x=0, color=pal.reference_line, linestyle="--", linewidth=1, label="touch"
+    )
     ax.set_title("Order outcome by placement distance and size")
     ax.set_xlabel("Placement distance from touch (bps)  -  >0 improved the touch")
     ax.set_ylabel("Order size")
@@ -1441,6 +1415,7 @@ def mpl_trade_tape_per_order(
     are never clipped, so spike prints stay visible.  Above the density
     threshold the lollipops are per-second VWAPs.
     """
+    pal = theme.palette
     fig, ax = _create_axes(ax, figsize=(12, 7), theme=theme)
     dense = data.get("dense", False)
     # Maker resting spans: faint underneath the lollipops.  Thinner/fainter when
@@ -1448,8 +1423,8 @@ def mpl_trade_tape_per_order(
     span_alpha = 0.12 if dense else 0.35
     span_lw = 0.5 if dense else 1.0
     for side, color in (
-        (data["buys"], _BUY_COLOR),
-        (data["sells"], _SELL_COLOR),
+        (data["buys"], pal.buy),
+        (data["sells"], pal.sell),
     ):
         if side.empty:
             continue
@@ -1469,7 +1444,7 @@ def mpl_trade_tape_per_order(
         ax.plot(
             mdates.date2num(mid_line["timestamp"]),
             mid_line["mid"].to_numpy(),
-            color="#888888",
+            color=pal.reference_line,
             linewidth=1.0,
             alpha=0.8,
             zorder=2,
@@ -1479,8 +1454,8 @@ def mpl_trade_tape_per_order(
     any_pts = False
     suffix = ", per-s VWAP" if dense else ""
     for side, color, label in (
-        (data["lolli_buys"], _BUY_COLOR, f"buy (lifts ask){suffix}"),
-        (data["lolli_sells"], _SELL_COLOR, f"sell (hits bid){suffix}"),
+        (data["lolli_buys"], pal.buy, f"buy (lifts ask){suffix}"),
+        (data["lolli_sells"], pal.sell, f"sell (hits bid){suffix}"),
     ):
         if side.empty:
             continue
@@ -1506,6 +1481,7 @@ def mpl_volume_percentiles(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """Render volume-percentile stacked area chart."""
+    pal = theme.palette
     asks_cumsum = data["asks_cumsum"]
     bids_cumsum_neg = data["bids_cumsum_neg"]
     asks_cols = data["asks_cols"]
@@ -1556,7 +1532,7 @@ def mpl_volume_percentiles(
         prev = current
 
     if side_line:
-        ax.axhline(y=0, color="#000000", linewidth=0.6)
+        ax.axhline(y=0, color=pal.rule, linewidth=0.6)
 
     y_range = volume_scale * max(max_ask, max_bid)
     ax.set_ylim(-y_range, y_range)
@@ -1590,6 +1566,7 @@ def mpl_events_histogram(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """Render an events price/volume histogram."""
+    pal = theme.palette
     events = data["events"]
     val = data["val"]
     bw = data["bw"]
@@ -1610,7 +1587,7 @@ def mpl_events_histogram(
         fill=True,
         alpha=0.35,
         binwidth=bw,
-        palette={"bid": _BID_COLOR, "ask": _ASK_COLOR},
+        palette={"bid": pal.bid, "ask": pal.ask},
         linewidth=1.2,
         ax=ax,
     )
@@ -1625,6 +1602,7 @@ def mpl_vpin(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """Render VPIN time series."""
+    pal = theme.palette
     vpin_df = data["vpin_df"]
     threshold = data["threshold"]
     bar_width = data["bar_width"]
@@ -1645,7 +1623,7 @@ def mpl_vpin(
         vpin_df["timestamp_end"],
         vpin_df["vpin"],
         width=bar_width,
-        color="#5dade2",
+        color=pal.series,
         alpha=0.35,
         label="Per-bucket VPIN",
     )
@@ -1654,14 +1632,14 @@ def mpl_vpin(
         ax.plot(
             vpin_df["timestamp_end"],
             vpin_df["vpin_avg"],
-            color="#e74c3c",
+            color=pal.emphasis,
             linewidth=2,
             label="VPIN (rolling avg)",
         )
 
     ax.axhline(
         y=threshold,
-        color="#f39c12",
+        color=pal.threshold,
         linewidth=1.5,
         linestyle="--",
         label=f"Threshold ({threshold})",
@@ -1674,7 +1652,7 @@ def mpl_vpin(
             threshold,
             vpin_df["vpin_avg"],
             where=above,
-            color="#e74c3c",
+            color=pal.emphasis,
             alpha=0.15,
         )
 
@@ -1699,6 +1677,7 @@ def mpl_transaction_costs(
     third line keeps it readable as a share of the whole, which is what the
     decomposition is for.
     """
+    pal = theme.palette
     times = data["times"]
     effective = data["effective"]
     realized = data["realized"]
@@ -1710,7 +1689,7 @@ def mpl_transaction_costs(
         data["trade_times"],
         data["trade_effective"],
         s=6,
-        color="#888888",
+        color=pal.reference_line,
         alpha=0.3,
         linewidths=0,
         label="Per-trade effective spread",
@@ -1721,7 +1700,7 @@ def mpl_transaction_costs(
         times,
         realized,
         effective,
-        color=_BUY_COLOR,
+        color=pal.buy,
         alpha=0.25,
         label="Price impact",
         zorder=2,
@@ -1729,7 +1708,7 @@ def mpl_transaction_costs(
     ax.plot(
         times,
         effective,
-        color="#0072B2",
+        color=pal.effective_spread,
         linewidth=2,
         label="Effective spread",
         zorder=3,
@@ -1737,14 +1716,14 @@ def mpl_transaction_costs(
     ax.plot(
         times,
         realized,
-        color="#CC79A7",
+        color=pal.realized_spread,
         linewidth=1.6,
         linestyle="--",
         label="Realized spread",
         zorder=3,
     )
 
-    ax.axhline(y=0, color="#444444", linewidth=0.8, alpha=0.6)
+    ax.axhline(y=0, color=pal.rule, linewidth=0.8, alpha=0.6)
     # The per-trade scatter has a much wider range than the averages; clip to
     # the averaged band so the lines stay readable and the outliers show as
     # points running off the top rather than flattening everything.
@@ -1772,9 +1751,11 @@ def mpl_order_flow_imbalance(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """Render order flow imbalance bar chart."""
+    pal = theme.palette
     ofi_df = data["ofi_df"]
     trades = data["trades"]
-    colors = data["colors"]
+    # Buy pressure (OFI >= 0) in the buy colour, sell pressure in the sell colour.
+    colors = np.where(ofi_df["ofi"].to_numpy() >= 0, pal.buy, pal.sell)
 
     # Bar width in matplotlib date-number units (days): 80% of the median
     # inter-bar gap. Computed here because it is backend-specific to the
@@ -1799,7 +1780,7 @@ def mpl_order_flow_imbalance(
         linewidth=0.3,
     )
 
-    ax.axhline(y=0, color="#444444", linewidth=0.8, alpha=0.6)
+    ax.axhline(y=0, color=pal.rule, linewidth=0.8, alpha=0.6)
     ax.set_ylim(-1.05, 1.05)
     ax.set_xlabel("Time")
     ax.set_ylabel("OFI")
@@ -1811,13 +1792,13 @@ def mpl_order_flow_imbalance(
         ax2.plot(
             trades["timestamp"],
             trades["price"],
-            color="#f1c40f",
+            color=pal.secondary_axis,
             linewidth=1.2,
             alpha=0.8,
             label="Price",
         )
-        ax2.set_ylabel("Price", color="#f1c40f")
-        ax2.tick_params(axis="y", labelcolor="#f1c40f")
+        ax2.set_ylabel("Price", color=pal.secondary_axis)
+        ax2.tick_params(axis="y", labelcolor=pal.secondary_axis)
 
     fig.tight_layout()
     return fig
@@ -1839,6 +1820,7 @@ def mpl_ofi_horizon(
     one scale: short rows are jumpy (fleeting pressure), long rows smooth
     (persistent pressure), readable in a single compact panel.
     """
+    pal = theme.palette
     fig, ax = _create_axes(ax, figsize=(11, 4.2), theme=theme)
     ofi = data["ofi"]
     horizons = data["horizons"]
@@ -1860,7 +1842,7 @@ def mpl_ofi_horizon(
                 y0,
                 y0 + pos,
                 where=sn > lo,
-                color=_BID_COLOR,
+                color=pal.bid,
                 alpha=alpha,
                 linewidth=0,
             )
@@ -1870,7 +1852,7 @@ def mpl_ofi_horizon(
                 y0,
                 y0 + neg,
                 where=sn < -lo,
-                color=_SELL_COLOR,
+                color=pal.sell,
                 alpha=alpha,
                 linewidth=0,
             )
@@ -1882,7 +1864,7 @@ def mpl_ofi_horizon(
             va="center",
             ha="right",
             fontsize=9,
-            color="#555555",
+            color=pal.label,
         )
 
     ax.set_ylim(-0.2, len(horizons) * (band_h + gap))
@@ -1899,6 +1881,7 @@ def mpl_kyle_lambda(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """Render Kyle's Lambda regression scatter."""
+    pal = theme.palette
     reg_df = data["reg_df"]
     lambda_ = data["lambda_"]
     r_squared = data["r_squared"]
@@ -1909,7 +1892,7 @@ def mpl_kyle_lambda(
     ax.scatter(
         reg_df["signed_volume"],
         reg_df["delta_price"],
-        color="#5dade2",
+        color=pal.series,
         alpha=0.6,
         edgecolors="white",
         linewidths=0.5,
@@ -1929,14 +1912,14 @@ def mpl_kyle_lambda(
         ax.plot(
             x_range,
             intercept + lambda_ * x_range,
-            color="#e74c3c",
+            color=pal.emphasis,
             linewidth=2,
             label=f"λ = {lambda_:.6f}",
             zorder=4,
         )
 
-    ax.axhline(y=0, color="#444444", linewidth=0.5, alpha=0.5)
-    ax.axvline(x=0, color="#444444", linewidth=0.5, alpha=0.5)
+    ax.axhline(y=0, color=pal.rule, linewidth=0.5, alpha=0.5)
+    ax.axvline(x=0, color=pal.rule, linewidth=0.5, alpha=0.5)
 
     ax.set_xlabel("Signed Order Flow (net volume)")
     ax.set_ylabel("ΔPrice")
@@ -1958,6 +1941,7 @@ def mpl_hidden_executions(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """Render hidden execution volume overlaid on the trade price."""
+    pal = theme.palette
     trades = data["trades"]
     hidden = data["hidden"]
     has_hidden = data["has_hidden"]
@@ -1970,10 +1954,10 @@ def mpl_hidden_executions(
         # near-white.  Fall back to a single neutral hue when no
         # direction is available.  A thin contrasting edge keeps overlapping
         # prints readable as discrete events.
-        neutral = "#7f8c8d"
+        neutral = pal.neutral
         direction = data.get("direction")
         if direction is not None:
-            colors = direction.map({"bid": _BID_COLOR, "ask": _ASK_COLOR})
+            colors = direction.map({"bid": pal.bid, "ask": pal.ask})
             colors = colors.where(colors.notna(), neutral).to_numpy()
         else:
             colors = neutral
@@ -1995,7 +1979,7 @@ def mpl_hidden_executions(
             mdates.date2num(trades["timestamp"]),
             trades["price"],
             where="post",
-            color="#222222",
+            color=pal.price_line,
             linewidth=1.0,
             alpha=0.9,
             label="Trade price",
@@ -2014,7 +1998,7 @@ def mpl_hidden_executions(
             ha="center",
             va="center",
             fontsize=14,
-            color="#888",
+            color=pal.reference_line,
         )
 
     ax.set_xlabel("Time")
@@ -2028,12 +2012,14 @@ def mpl_hidden_executions(
     if has_hidden and not hidden.empty:
         if data.get("direction") is not None:
             handles += [
-                Patch(facecolor=_BID_COLOR, edgecolor="white", label="Hidden (bid)"),
-                Patch(facecolor=_ASK_COLOR, edgecolor="white", label="Hidden (ask)"),
+                Patch(facecolor=pal.bid, edgecolor="white", label="Hidden (bid)"),
+                Patch(facecolor=pal.ask, edgecolor="white", label="Hidden (ask)"),
             ]
         else:
             handles.append(
-                Patch(facecolor="#7f8c8d", edgecolor="white", label="Hidden executions")
+                Patch(
+                    facecolor=pal.neutral, edgecolor="white", label="Hidden executions"
+                )
             )
     if handles:
         ax.legend(handles=handles, loc="upper left")
@@ -2045,6 +2031,7 @@ def mpl_trading_halts(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """Render trade price with shaded halt periods."""
+    pal = theme.palette
     trades = data["trades"]
     halt_periods = data["halt_periods"]
     has_halts = data["has_halts"]
@@ -2056,7 +2043,7 @@ def mpl_trading_halts(
             trades["timestamp"],
             trades["price"],
             where="post",
-            color="#5dade2",
+            color=pal.series,
             linewidth=1,
             alpha=0.8,
             label="Trade price",
@@ -2067,7 +2054,7 @@ def mpl_trading_halts(
             ax.axvspan(
                 h_start,
                 h_end,
-                color="#e74c3c",
+                color=pal.emphasis,
                 alpha=0.2,
                 label="Trading halt" if i == 0 else None,
             )
@@ -2082,7 +2069,7 @@ def mpl_trading_halts(
             ha="center",
             va="center",
             fontsize=14,
-            color="#888",
+            color=pal.reference_line,
         )
 
     ax.set_xlabel("Time")
@@ -2115,6 +2102,7 @@ def mpl_bars(
     their closing times as tick labels (see
     :func:`~ob_analytics.visualization._data.prepare_bars_data`).
     """
+    pal = theme.palette
     bars = data["bars"]
     rising = np.asarray(data["rising"])
     on_clock = data["x_axis"] == "time"
@@ -2135,7 +2123,7 @@ def mpl_bars(
         x,
         volume,
         width=width,
-        color=[_BUY_COLOR if s >= 0 else _SELL_COLOR for s in signed],
+        color=[pal.buy if s >= 0 else pal.sell for s in signed],
         alpha=0.25,
         linewidth=0,
     )
@@ -2148,7 +2136,7 @@ def mpl_bars(
     ax.set_zorder(ax2.get_zorder() + 1)
     ax.patch.set_visible(False)
 
-    colors = np.where(rising, _BUY_COLOR, _SELL_COLOR)
+    colors = np.where(rising, pal.buy, pal.sell)
     ax.vlines(
         x,
         bars["low"].to_numpy(dtype=float),
@@ -2182,8 +2170,8 @@ def mpl_bars(
         ax.set_xlim(-1, len(bars))
     ax.legend(
         handles=[
-            Patch(facecolor=_BUY_COLOR, label="close up / net buying"),
-            Patch(facecolor=_SELL_COLOR, label="close down / net selling"),
+            Patch(facecolor=pal.buy, label="close up / net buying"),
+            Patch(facecolor=pal.sell, label="close down / net selling"),
         ],
         loc="upper left",
         fontsize=9,

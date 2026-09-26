@@ -1906,15 +1906,13 @@ def prepare_ofi_data(
 ) -> dict[str, Any]:
     """Prepare data for an order-flow-imbalance bar chart.
 
-    Bar colours are a backend-agnostic green/red split on the sign of the
-    OFI.  Bar *width* depends on the renderer's x-axis units (matplotlib
-    uses date numbers), so it is computed by each backend rather than here.
+    Bar colours (the theme's buy / sell split on the sign of the OFI) and bar
+    *width* (which depends on the renderer's x-axis units; matplotlib uses
+    date numbers) are chosen by each backend rather than here.
     """
-    colors = ["#27ae60" if v >= 0 else "#e74c3c" for v in ofi_df["ofi"]]
     return {
         "ofi_df": ofi_df,
         "trades": trades,
-        "colors": colors,
     }
 
 

@@ -36,6 +36,7 @@ from ob_analytics.depth import get_spread
 from ob_analytics.pipeline import PipelineResult
 from ob_analytics.visualization import (
     Level,
+    PlotTheme,
     _data as _viz_data,
     infer_volume_scale,
     plot,
@@ -965,6 +966,7 @@ def plot_result(
     *,
     backend: str = "matplotlib",
     volume_scale: float | None = None,
+    theme: PlotTheme | None = None,
     **overrides: Any,
 ) -> Any:
     """Render one plot *concept* straight from a :class:`PipelineResult`.
@@ -988,9 +990,12 @@ def plot_result(
         ``"L2"`` / ``"L3"`` (or a :class:`Level`).  ``None`` picks the concept's
         only level, preferring L2 when both exist.
     backend : str
-        ``"matplotlib"`` (default) or ``"plotly"``.
+        ``"matplotlib"`` (default), ``"plotly"``, or ``"bokeh"``.
     volume_scale : float or None
         Display volume scale; ``None`` auto-infers (as the gallery does).
+    theme : PlotTheme or None
+        Theme for this call, on any backend; ``None`` uses
+        :data:`~ob_analytics.visualization.DEFAULT_THEME`.
     **overrides
         Extra keyword arguments merged over the prepare call (e.g.
         ``col_bias=0.1`` for the depth heatmap).
@@ -1015,6 +1020,8 @@ def plot_result(
         metric_spec = metric_map.get(concept)
         if metric_spec is not None:
             data = metric_spec.prepare(**{**metric_spec.prep_kwargs, **overrides})
+            if theme is not None:
+                data["theme"] = theme
             return plot(concept, None, backend=backend, **data)
         raise KeyError(
             f"Unknown concept {concept!r} for this result. "
@@ -1035,6 +1042,8 @@ def plot_result(
         )
 
     data = spec.prepare(**{**spec.prep_kwargs, **overrides})
+    if theme is not None:
+        data["theme"] = theme
     return plot(concept, resolved, backend=backend, **data)
 
 

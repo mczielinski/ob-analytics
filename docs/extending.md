@@ -457,9 +457,10 @@ The **level** is the order-book resolution the plot renders at: `Level.L2`
 a single level dispatches without naming it; registering the *same* concept at
 both `L2` and `L3` makes it *comparable*, and callers then pass `level=`.
 
-The matplotlib backend calls `renderer(data, ax)` (or
-`renderer(data, ax, theme=theme)` when a theme is passed); other backends call
-`renderer(data)`.
+The matplotlib backend calls `renderer(data, ax)`; other backends call
+`renderer(data)`. When the caller passes a theme, every backend adds
+`theme=theme`, so a renderer should accept a keyword-only
+`theme: PlotTheme = DEFAULT_THEME` and take its colours from `theme.palette`.
 
 ```python
 from __future__ import annotations
@@ -485,8 +486,8 @@ def mpl_cumvol(data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT
     if ax is None:
         _, ax = plt.subplots()
     df = data["series"]
-    ax.plot(df["timestamp"], df["signed_cumvol"])
-    ax.axhline(0, lw=0.5)
+    ax.plot(df["timestamp"], df["signed_cumvol"], color=theme.palette.series)
+    ax.axhline(0, lw=0.5, color=theme.palette.rule)
     ax.set_ylabel("signed cumulative volume")
     return ax.figure
 
@@ -504,7 +505,7 @@ result = Pipeline().run("orders.csv")
 
 fig = plot("cumvol", backend="matplotlib", **prepare_cumvol_data(result.trades))
 
-# Override the theme per call (matplotlib only):
+# Override the theme per call:
 fig = plot(
     "cumvol",
     theme=PlotTheme(style="darkgrid"),

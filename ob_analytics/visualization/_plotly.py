@@ -21,17 +21,8 @@ from ob_analytics.visualization._data import (
     check_book_payload_level,
     mpl_marker_area_to_plotly_size,
 )
-from ob_analytics.visualization._palette import (
-    _ASK_COLOR,
-    _BID_COLOR,
-    _BUY_COLOR,
-    _CANCELLED_COLOR,
-    _CHECK_TRADE_COLOR,
-    _FILLED_COLOR,
-    _HIDDEN_TRADE_COLOR,
-    _PARTIAL_COLOR,
-    _SELL_COLOR,
-)
+from ob_analytics.visualization._palette import Palette
+from ob_analytics.visualization._theme import DEFAULT_THEME, PlotTheme
 
 
 @lru_cache(maxsize=1)
@@ -58,19 +49,40 @@ def _import_plotly() -> Any:
 # Shared layout helpers
 # ---------------------------------------------------------------------------
 
-# Light theme, matching the matplotlib default (one polarity across the
-# gallery; the reference bundle is light).
-_BASE_LAYOUT = {
-    "template": "plotly_white",
-    "font": {"family": "Inter, sans-serif", "size": 13},
+# Font size of the default theme; other themes scale it by
+# ``PlotTheme.text_scale`` (context x font_scale).
+_BASE_FONT_SIZE = 13
+
+_BASE_LAYOUT: dict[str, Any] = {
+    "font": {"family": "Inter, sans-serif"},
     "margin": {"l": 60, "r": 30, "t": 50, "b": 50},
     "hovermode": "x unified",
 }
 
 
-def _base_figure(go: Any, title: str = "", **kwargs: Any) -> Any:
-    """Create a Plotly figure with the dark ob-analytics theme."""
-    layout = {**_BASE_LAYOUT, "title": {"text": title, "x": 0.5}}
+def _template(go: Any, theme: PlotTheme) -> Any:
+    """Translate *theme* into a Plotly template for one figure.
+
+    The light styles start from ``plotly_white`` and the dark ones from
+    ``seaborn`` (seaborn's gray background); ``"ticks"`` adds outside tick
+    marks.  ``theme.plotly_layout`` is applied last.  A new template is built
+    per call, so nothing is registered in ``plotly.io.templates``.
+    """
+    import plotly.io as pio
+
+    base = pio.templates["seaborn" if theme.dark else "plotly_white"]
+    template = go.layout.Template(base)
+    template.layout.update(_BASE_LAYOUT)
+    template.layout.update(font={"size": _BASE_FONT_SIZE * theme.text_scale})
+    if theme.style == "ticks":
+        template.layout.update(xaxis={"ticks": "outside"}, yaxis={"ticks": "outside"})
+    template.layout.update(theme.plotly_layout)
+    return template
+
+
+def _base_figure(go: Any, theme: PlotTheme, title: str = "", **kwargs: Any) -> Any:
+    """Create a Plotly figure styled by *theme*."""
+    layout = {"template": _template(go, theme), "title": {"text": title}}
     layout.update(kwargs)
     return go.Figure(layout=layout)
 
@@ -80,17 +92,18 @@ def _base_figure(go: Any, title: str = "", **kwargs: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def plotly_time_series(data: dict) -> Any:
+def plotly_time_series(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render a time-series step plot."""
+    pal = theme.palette
     go = _import_plotly()
     df = data["df"]
-    fig = _base_figure(go, title=data["title"])
+    fig = _base_figure(go, theme, title=data["title"])
     fig.add_trace(
         go.Scatter(
             x=df["ts"],
             y=df["val"],
             mode="lines",
-            line={"shape": "hv", "width": 2, "color": "#5dade2"},
+            line={"shape": "hv", "width": 2, "color": pal.series},
             name=data["y_label"],
         )
     )
@@ -99,15 +112,16 @@ def plotly_time_series(data: dict) -> Any:
     return fig
 
 
-def plotly_trades(data: dict) -> Any:
+def plotly_trades(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render the L2 signed-lollipop trade tape.
 
     Each trade is a stem from the mid line to its execution price, tipped by a
     volume-sized marker and coloured by aggressor side.  The price axis spans
     the full data extent (no quantile clip), so spike prints stay visible.
     """
+    pal = theme.palette
     go = _import_plotly()
-    fig = _base_figure(go, title="Trade Prices")
+    fig = _base_figure(go, theme, title="Trade Prices")
 
     mid_line = data.get("mid_line")
     if mid_line is not None and not mid_line.empty:
@@ -118,15 +132,15 @@ def plotly_trades(data: dict) -> Any:
                 x=mid_line["timestamp"],
                 y=mid_line["mid"],
                 mode="lines",
-                line={"color": "#888888", "width": 1, "shape": "hv"},
+                line={"color": pal.reference_line, "width": 1, "shape": "hv"},
                 opacity=0.8,
                 name="mid",
                 hoverinfo="skip",
             )
         )
     for side, color, label in (
-        (data["buys"], _BUY_COLOR, "buy (lifts ask)"),
-        (data["sells"], _SELL_COLOR, "sell (hits bid)"),
+        (data["buys"], pal.buy, "buy (lifts ask)"),
+        (data["sells"], pal.sell, "sell (hits bid)"),
     ):
         if side.empty:
             continue
@@ -156,8 +170,9 @@ def _biased_color_norm(
     return t, bar
 
 
-def plotly_price_levels(data: dict) -> Any:
+def plotly_price_levels(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render the price-level depth heatmap using Scattergl."""
+    pal = theme.palette
     go = _import_plotly()
     depth = data["depth"]
     spread = data["spread"]
@@ -165,7 +180,7 @@ def plotly_price_levels(data: dict) -> Any:
     show_mp = data["show_mp"]
     col_bias = data.get("col_bias", 1.0)
 
-    fig = _base_figure(go, title="Price Levels Over Time")
+    fig = _base_figure(go, theme, title="Price Levels Over Time")
 
     if not depth.empty:
         vol = depth["volume"].fillna(0)
@@ -206,7 +221,7 @@ def plotly_price_levels(data: dict) -> Any:
                     x=spread["timestamp"],
                     y=mp,
                     mode="lines",
-                    line={"color": "#222222", "width": 1.5, "shape": "hv"},
+                    line={"color": pal.price_line, "width": 1.5, "shape": "hv"},
                     name="Midprice",
                 )
             )
@@ -218,7 +233,7 @@ def plotly_price_levels(data: dict) -> Any:
                     y=spread["best_ask_price"],
                     mode="lines",
                     line={
-                        "color": _ASK_COLOR,
+                        "color": pal.ask,
                         "width": 1.2,
                         "dash": "dot",
                         "shape": "hv",
@@ -233,7 +248,7 @@ def plotly_price_levels(data: dict) -> Any:
                     y=spread["best_bid_price"],
                     mode="lines",
                     line={
-                        "color": _BID_COLOR,
+                        "color": pal.bid,
                         "width": 1.2,
                         "dash": "dot",
                         "shape": "hv",
@@ -254,7 +269,7 @@ def plotly_price_levels(data: dict) -> Any:
                     marker={
                         "symbol": "triangle-down",
                         "size": 8,
-                        "color": _SELL_COLOR,
+                        "color": pal.sell,
                         "line": {"width": 1, "color": "white"},
                     },
                     name="Sell Trades",
@@ -269,7 +284,7 @@ def plotly_price_levels(data: dict) -> Any:
                     marker={
                         "symbol": "triangle-up",
                         "size": 8,
-                        "color": _BUY_COLOR,
+                        "color": pal.buy,
                         "line": {"width": 1, "color": "white"},
                     },
                     name="Buy Trades",
@@ -277,9 +292,9 @@ def plotly_price_levels(data: dict) -> Any:
             )
 
     _add_iceberg_overlay(
-        fig, go, data.get("iceberg_lines"), data.get("iceberg_refills")
+        fig, go, data.get("iceberg_lines"), data.get("iceberg_refills"), pal
     )
-    _add_hidden_trades_overlay(fig, go, data.get("hidden_trades"))
+    _add_hidden_trades_overlay(fig, go, data.get("hidden_trades"), pal)
 
     fig.update_xaxes(title_text="Time")
     fig.update_yaxes(title_text="Limit Price")
@@ -289,17 +304,18 @@ def plotly_price_levels(data: dict) -> Any:
     return fig
 
 
-def plotly_event_map(data: dict) -> Any:
+def plotly_event_map(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render a limit-order event map."""
+    pal = theme.palette
     go = _import_plotly()
     created = data["created"]
     deleted = data["deleted"]
 
     if data["events"].empty:
-        return _base_figure(go, title="Limit Order Event Map (no data)")
-    fig = _base_figure(go, title="Limit Order Event Map")
+        return _base_figure(go, theme, title="Limit Order Event Map (no data)")
+    fig = _base_figure(go, theme, title="Limit Order Event Map")
 
-    col_map = {"bid": _BID_COLOR, "ask": _ASK_COLOR}
+    col_map = {"bid": pal.bid, "ask": pal.ask}
 
     if not created.empty:
         for direction in ["bid", "ask"]:
@@ -355,14 +371,15 @@ def plotly_event_map(data: dict) -> Any:
     return fig
 
 
-def plotly_volume_map(data: dict) -> Any:
+def plotly_volume_map(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render a volume map of flashed limit orders."""
+    pal = theme.palette
     go = _import_plotly()
     events = data["events"]
     log_scale = data["log_scale"]
-    col_map = {"bid": _BID_COLOR, "ask": _ASK_COLOR}
+    col_map = {"bid": pal.bid, "ask": pal.ask}
 
-    fig = _base_figure(go, title="Volume Map of Flashed Limit Orders")
+    fig = _base_figure(go, theme, title="Volume Map of Flashed Limit Orders")
 
     for direction in ["bid", "ask"]:
         subset = events[events["direction"] == direction]
@@ -390,22 +407,27 @@ def _rgba(hex_color: str, alpha: float) -> str:
     return f"rgba({r},{g},{b},{alpha})"
 
 
-def _plotly_book_bars(data: dict, *, per_order: bool) -> Any:
+def _plotly_book_bars(
+    data: dict, *, per_order: bool, theme: PlotTheme = DEFAULT_THEME
+) -> Any:
     """Horizontal book ladder: price on y, size on x, bids below / asks above.
 
     L2 draws one bar per price level; L3 segments each level into its individual
     orders with white separators, so equal-total levels with different
     composition read differently.
     """
+    pal = theme.palette
     check_book_payload_level(data, per_order=per_order)
     go = _import_plotly()
-    fig = _base_figure(go, title=data["timestamp"].strftime("%Y-%m-%d %H:%M:%S UTC"))
+    fig = _base_figure(
+        go, theme, title=data["timestamp"].strftime("%Y-%m-%d %H:%M:%S UTC")
+    )
 
     # White per-order separators (dark ones vanished against the fill).
     line = {"color": "white", "width": 1.0} if per_order else {"width": 0}
     for side, color, label in (
-        (data["bids"], _BID_COLOR, "Bid"),
-        (data["asks"], _ASK_COLOR, "Ask"),
+        (data["bids"], pal.bid, "Bid"),
+        (data["asks"], pal.ask, "Ask"),
     ):
         if side.empty:
             continue
@@ -423,11 +445,13 @@ def _plotly_book_bars(data: dict, *, per_order: bool) -> Any:
 
     mid = book_mid(data["bids"], data["asks"])
     if mid is not None:
-        fig.add_hline(y=mid, line_dash="dash", line_color="#444444", line_width=1)
+        fig.add_hline(y=mid, line_dash="dash", line_color=pal.rule, line_width=1)
 
     if data["show_quantiles"]:
         for y_val in (*data["bid_quantiles"], *data["ask_quantiles"]):
-            fig.add_hline(y=y_val, line_dash="dot", line_color="#888888", line_width=1)
+            fig.add_hline(
+                y=y_val, line_dash="dot", line_color=pal.reference_line, line_width=1
+            )
 
     fig.update_layout(barmode="overlay")
     fig.update_xaxes(
@@ -437,16 +461,21 @@ def _plotly_book_bars(data: dict, *, per_order: bool) -> Any:
     return fig
 
 
-def _plotly_depth_curve(data: dict, *, per_order: bool) -> Any:
+def _plotly_depth_curve(
+    data: dict, *, per_order: bool, theme: PlotTheme = DEFAULT_THEME
+) -> Any:
     """Cumulative-depth curve: stepped per level (L2) or per order (L3)."""
+    pal = theme.palette
     check_book_payload_level(data, per_order=per_order)
     go = _import_plotly()
-    fig = _base_figure(go, title=data["timestamp"].strftime("%Y-%m-%d %H:%M:%S UTC"))
+    fig = _base_figure(
+        go, theme, title=data["timestamp"].strftime("%Y-%m-%d %H:%M:%S UTC")
+    )
 
     mode = "lines+markers" if per_order else "lines"
     for side, color, label in (
-        (data["bids"], _BID_COLOR, "Bid"),
-        (data["asks"], _ASK_COLOR, "Ask"),
+        (data["bids"], pal.bid, "Bid"),
+        (data["asks"], pal.ask, "Ask"),
     ):
         if side.empty:
             continue
@@ -469,24 +498,32 @@ def _plotly_depth_curve(data: dict, *, per_order: bool) -> Any:
     return fig
 
 
-def plotly_book_snapshot_aggregate(data: dict) -> Any:
+def plotly_book_snapshot_aggregate(
+    data: dict, *, theme: PlotTheme = DEFAULT_THEME
+) -> Any:
     """L2 (MBP) book snapshot: aggregate size per price level."""
-    return _plotly_book_bars(data, per_order=False)
+    return _plotly_book_bars(data, per_order=False, theme=theme)
 
 
-def plotly_book_snapshot_per_order(data: dict) -> Any:
+def plotly_book_snapshot_per_order(
+    data: dict, *, theme: PlotTheme = DEFAULT_THEME
+) -> Any:
     """L3 (MBO) book snapshot: each order a stacked segment within its level."""
-    return _plotly_book_bars(data, per_order=True)
+    return _plotly_book_bars(data, per_order=True, theme=theme)
 
 
-def plotly_depth_chart_aggregate(data: dict) -> Any:
+def plotly_depth_chart_aggregate(
+    data: dict, *, theme: PlotTheme = DEFAULT_THEME
+) -> Any:
     """L2 (MBP) depth chart: cumulative liquidity stepped per price level."""
-    return _plotly_depth_curve(data, per_order=False)
+    return _plotly_depth_curve(data, per_order=False, theme=theme)
 
 
-def plotly_depth_chart_per_order(data: dict) -> Any:
+def plotly_depth_chart_per_order(
+    data: dict, *, theme: PlotTheme = DEFAULT_THEME
+) -> Any:
     """L3 (MBO) depth chart: cumulative liquidity stepped per individual order."""
-    return _plotly_depth_curve(data, per_order=True)
+    return _plotly_depth_curve(data, per_order=True, theme=theme)
 
 
 # Log-decade ticks shared by both cancel panels (axes carry log10 values, so
@@ -512,7 +549,9 @@ def _log_density_grid(side: Any, xedges: np.ndarray, yedges: np.ndarray) -> np.n
     return np.where(counts == 0, np.nan, counts).T  # (y, x) for Heatmap z
 
 
-def plotly_cancellations_per_order(data: dict) -> Any:
+def plotly_cancellations_per_order(
+    data: dict, *, theme: PlotTheme = DEFAULT_THEME
+) -> Any:
     """L3 (MBO) cancellations: per-side log-log *density* of age x distance.
 
     A pre-binned ``go.Heatmap`` per side (small multiples, bid | ask) replaces
@@ -530,9 +569,9 @@ def plotly_cancellations_per_order(data: dict) -> Any:
         horizontal_spacing=0.06,
         subplot_titles=("Cancelled bid", "Cancelled ask"),
     )
-    fig.update_layout(**_BASE_LAYOUT)
+    fig.update_layout(template=_template(go, theme))
     fig.update_layout(
-        title={"text": "Cancelled orders by age and distance from touch", "x": 0.5},
+        title={"text": "Cancelled orders by age and distance from touch"},
         coloraxis={"colorscale": "Blues", "colorbar": {"title": "Orders<br>per bin"}},
         hovermode="closest",
     )
@@ -663,15 +702,16 @@ def _plotly_lollipops(fig: Any, go: Any, side: Any, color: str, label: str) -> N
 
 _ICEBERG_CONFIDENCE_OPACITY = {"low": 0.35, "medium": 0.6, "high": 0.9}
 
+# "color" names a Palette field.
 _HIDDEN_TRADE_STYLE = {
     "hidden": {
         "symbol": "star",
-        "color": _HIDDEN_TRADE_COLOR,
+        "color": "hidden_trade",
         "label": "Hidden-order trade",
     },
     "check": {
         "symbol": "star-open",
-        "color": _CHECK_TRADE_COLOR,
+        "color": "check_trade",
         "label": "Trade to check (maker not confirmed hidden)",
     },
 }
@@ -691,7 +731,7 @@ def _iceberg_chain_xy(group: Any) -> tuple[list, list]:
 
 
 def _add_iceberg_overlay(
-    fig: Any, go: Any, lines: Any | None, refills: Any | None
+    fig: Any, go: Any, lines: Any | None, refills: Any | None, pal: Palette
 ) -> None:
     """Add suspected-iceberg chains (opacity = confidence) + refill markers."""
     if lines is not None and not lines.empty:
@@ -701,7 +741,7 @@ def _add_iceberg_overlay(
                 xs, ys = _iceberg_chain_xy(gg)
                 if not xs:
                     continue
-                color = _BID_COLOR if direction == "bid" else _ASK_COLOR
+                color = pal.bid if direction == "bid" else pal.ask
                 fig.add_trace(
                     go.Scattergl(
                         x=xs,
@@ -717,9 +757,7 @@ def _add_iceberg_overlay(
                 )
                 first = False
     if refills is not None and not refills.empty:
-        colors = np.where(
-            refills["direction"].to_numpy() == "bid", _BID_COLOR, _ASK_COLOR
-        )
+        colors = np.where(refills["direction"].to_numpy() == "bid", pal.bid, pal.ask)
         fig.add_trace(
             go.Scatter(
                 x=refills["timestamp"],
@@ -738,7 +776,9 @@ def _add_iceberg_overlay(
         )
 
 
-def _add_hidden_trades_overlay(fig: Any, go: Any, hidden: Any | None) -> None:
+def _add_hidden_trades_overlay(
+    fig: Any, go: Any, hidden: Any | None, pal: Palette
+) -> None:
     """Add trades ``hidden_trades()`` flagged as printing inside the spread.
 
     An I-beam runs from the standing best bid to the standing best ask, with
@@ -758,7 +798,7 @@ def _add_hidden_trades_overlay(fig: Any, go: Any, hidden: Any | None) -> None:
             x=xs,
             y=ys,
             mode="lines",
-            line={"color": "#7f8c8d", "width": 1},
+            line={"color": pal.neutral, "width": 1},
             opacity=0.5,
             name="Spread at print",
             hoverinfo="skip",
@@ -777,7 +817,7 @@ def _add_hidden_trades_overlay(fig: Any, go: Any, hidden: Any | None) -> None:
                 marker={
                     "symbol": style["symbol"],
                     "size": 10,
-                    "color": style["color"],
+                    "color": getattr(pal, style["color"]),
                     "line": {"width": 1, "color": "black"},
                 },
                 name=style["label"],
@@ -795,19 +835,22 @@ def _apply_padded_y_range(fig: Any, y_range: tuple[float, float] | None) -> None
     fig.update_yaxes(range=[lo - pad, hi + pad])
 
 
-def plotly_order_activity_per_order(data: dict) -> Any:
+def plotly_order_activity_per_order(
+    data: dict, *, theme: PlotTheme = DEFAULT_THEME
+) -> Any:
     """L3 (MBO) order activity: each order one lifecycle bar, coloured by fate.
 
     Uses ``Scattergl`` (WebGL) like the L2 ``plotly_event_map`` it pairs with: a
     per-order face draws one segment per limit order, so the line cloud is large
     and the SVG ``Scatter`` path does not scale.
     """
+    pal = theme.palette
     go = _import_plotly()
-    fig = _base_figure(go, title="Order lifecycles (place → outcome)")
+    fig = _base_figure(go, theme, title="Order lifecycles (place → outcome)")
     for side, color, label in (
-        (data["filled"], _FILLED_COLOR, "filled"),
-        (data["cancelled"], _CANCELLED_COLOR, "cancelled"),
-        (data["resting"], _PARTIAL_COLOR, "still resting"),
+        (data["filled"], pal.filled, "filled"),
+        (data["cancelled"], pal.cancelled, "cancelled"),
+        (data["resting"], pal.partial, "still resting"),
     ):
         if side.empty:
             continue
@@ -825,9 +868,9 @@ def plotly_order_activity_per_order(data: dict) -> Any:
         )
 
     _add_iceberg_overlay(
-        fig, go, data.get("iceberg_lines"), data.get("iceberg_refills")
+        fig, go, data.get("iceberg_lines"), data.get("iceberg_refills"), pal
     )
-    _add_hidden_trades_overlay(fig, go, data.get("hidden_trades"))
+    _add_hidden_trades_overlay(fig, go, data.get("hidden_trades"), pal)
 
     shown_of = data.get("shown_of")
     if shown_of is not None:
@@ -838,7 +881,7 @@ def plotly_order_activity_per_order(data: dict) -> Any:
             y=0.01,
             text=f"showing {shown_of[0]:,} of {shown_of[1]:,} orders",
             showarrow=False,
-            font={"size": 10, "color": "#555555"},
+            font={"size": 10, "color": pal.label},
         )
     fig.update_xaxes(title_text="Time")
     fig.update_yaxes(title_text="Limit Price")
@@ -861,19 +904,22 @@ def _queue_traj_xy(side: Any) -> tuple[list, list]:
     return xs, ys
 
 
-def plotly_queue_position_per_order(data: dict) -> Any:
+def plotly_queue_position_per_order(
+    data: dict, *, theme: PlotTheme = DEFAULT_THEME
+) -> Any:
     """L3 (MBO) queue position: each touch order's FIFO rank over time, by fate.
 
     One ``Scattergl`` trace per fate (all that fate's order trajectories as a
     single ``None``-gapped polyline) so the line cloud scales; the y-axis is
     reversed so rank 1 (front of queue) sits at the top.
     """
+    pal = theme.palette
     go = _import_plotly()
-    fig = _base_figure(go, title="Queue position at the touch")
+    fig = _base_figure(go, theme, title="Queue position at the touch")
     for side, color, label in (
-        (data["filled"], _FILLED_COLOR, "filled"),
-        (data["cancelled"], _CANCELLED_COLOR, "cancelled"),
-        (data["resting"], _PARTIAL_COLOR, "still resting"),
+        (data["filled"], pal.filled, "filled"),
+        (data["cancelled"], pal.cancelled, "cancelled"),
+        (data["resting"], pal.partial, "still resting"),
     ):
         if side.empty:
             continue
@@ -894,14 +940,15 @@ def plotly_queue_position_per_order(data: dict) -> Any:
     return fig
 
 
-def plotly_liquidity_at_touch(data: dict) -> Any:
+def plotly_liquidity_at_touch(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """L2 (MBP) liquidity at the touch: best bid/ask resting size over time."""
+    pal = theme.palette
     go = _import_plotly()
-    fig = _base_figure(go, title="Liquidity at the touch")
+    fig = _base_figure(go, theme, title="Liquidity at the touch")
     ts = data["timestamp"]
     for vol, color, label in (
-        (data["bid_vol"], _BID_COLOR, "Best bid size"),
-        (data["ask_vol"], _ASK_COLOR, "Best ask size"),
+        (data["bid_vol"], pal.bid, "Best bid size"),
+        (data["ask_vol"], pal.ask, "Best ask size"),
     ):
         fig.add_trace(
             go.Scatter(
@@ -923,9 +970,9 @@ def plotly_liquidity_at_touch(data: dict) -> Any:
         )
         step = vmax * 0.04
         for cat, color, level in (
-            ("created", "#888888", -step),
-            ("cancelled", _CANCELLED_COLOR, -2 * step),
-            ("filled", _FILLED_COLOR, -3 * step),
+            ("created", pal.reference_line, -step),
+            ("cancelled", pal.cancelled, -2 * step),
+            ("filled", pal.filled, -3 * step),
         ):
             t = rug.get(cat)
             if t is not None and len(t):
@@ -951,7 +998,9 @@ def plotly_liquidity_at_touch(data: dict) -> Any:
     return fig
 
 
-def plotly_liquidity_at_touch_per_order(data: dict) -> Any:
+def plotly_liquidity_at_touch_per_order(
+    data: dict, *, theme: PlotTheme = DEFAULT_THEME
+) -> Any:
     """L3 (MBO) queue composition at the touch: order age by rank over time.
 
     A ``go.Heatmap`` of order age over time x FIFO rank (rank 1 = front, at the
@@ -959,7 +1008,7 @@ def plotly_liquidity_at_touch_per_order(data: dict) -> Any:
     """
     go = _import_plotly()
     side = data.get("side", "bid")
-    fig = _base_figure(go, title=f"Queue composition at the touch ({side})")
+    fig = _base_figure(go, theme, title=f"Queue composition at the touch ({side})")
     ages = data["ages"]
     max_rank = data["max_rank"]
     if max_rank and ages.size:
@@ -982,13 +1031,14 @@ def plotly_liquidity_at_touch_per_order(data: dict) -> Any:
     return fig
 
 
-def plotly_price_view(data: dict) -> Any:
+def plotly_price_view(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """L2 price view: spread ribbon + volume-weighted microprice over time."""
+    pal = theme.palette
     go = _import_plotly()
     ts = data["timestamp"]
     if len(ts) == 0:
-        return _base_figure(go, title="Price view (no data)")
-    fig = _base_figure(go, title="Price view — spread ribbon + microprice")
+        return _base_figure(go, theme, title="Price view (no data)")
+    fig = _base_figure(go, theme, title="Price view — spread ribbon + microprice")
 
     # Ribbon: best bid (no fill) then best ask filled down to it.
     fig.add_trace(
@@ -996,7 +1046,7 @@ def plotly_price_view(data: dict) -> Any:
             x=ts,
             y=data["best_bid_price"],
             mode="lines",
-            line={"color": _BID_COLOR, "width": 1, "shape": "hv"},
+            line={"color": pal.bid, "width": 1, "shape": "hv"},
             name="best bid",
         )
     )
@@ -1005,7 +1055,7 @@ def plotly_price_view(data: dict) -> Any:
             x=ts,
             y=data["best_ask_price"],
             mode="lines",
-            line={"color": _ASK_COLOR, "width": 1, "shape": "hv"},
+            line={"color": pal.ask, "width": 1, "shape": "hv"},
             fill="tonexty",
             fillcolor="rgba(154,160,166,0.25)",
             name="best ask",
@@ -1016,7 +1066,12 @@ def plotly_price_view(data: dict) -> Any:
             x=ts,
             y=data["mid"],
             mode="lines",
-            line={"color": "#888888", "width": 1, "shape": "hv", "dash": "dot"},
+            line={
+                "color": pal.reference_line,
+                "width": 1,
+                "shape": "hv",
+                "dash": "dot",
+            },
             name="mid",
         )
     )
@@ -1025,7 +1080,7 @@ def plotly_price_view(data: dict) -> Any:
             x=ts,
             y=data["microprice"],
             mode="lines",
-            line={"color": "#222222", "width": 2, "shape": "hv"},
+            line={"color": pal.price_line, "width": 2, "shape": "hv"},
             name="microprice",
         )
     )
@@ -1033,8 +1088,8 @@ def plotly_price_view(data: dict) -> Any:
     trades = data.get("trades")
     if trades is not None and not trades.empty:
         for side, color, label in (
-            (trades[trades["direction"] == "buy"], _BUY_COLOR, "buy"),
-            (trades[trades["direction"] == "sell"], _SELL_COLOR, "sell"),
+            (trades[trades["direction"] == "buy"], pal.buy, "buy"),
+            (trades[trades["direction"] == "sell"], pal.sell, "sell"),
         ):
             if side.empty:
                 continue
@@ -1056,19 +1111,22 @@ def plotly_price_view(data: dict) -> Any:
     return fig
 
 
-def plotly_book_signals(data: dict) -> Any:
+def plotly_book_signals(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Predictive touch signals: micro-price vs mid, with an OBI strip.
 
     Micro-price vs mid (over the spread ribbon) on the price axis; the
     order-book-imbalance strip -- touch OBI as green/red bars, cumulative-depth
     OBI as a line -- on a twin ``[-1, +1]`` axis behind them.
     """
+    pal = theme.palette
     go = _import_plotly()
-    fig = _base_figure(go, title="Book signals — micro-price vs mid, with OBI strip")
+    fig = _base_figure(
+        go, theme, title="Book signals — micro-price vs mid, with OBI strip"
+    )
     ts = data["timestamp"]
 
     obi = np.asarray(data["obi"], dtype=float)
-    colors = [_BUY_COLOR if v >= 0 else _SELL_COLOR for v in np.nan_to_num(obi)]
+    colors = [pal.buy if v >= 0 else pal.sell for v in np.nan_to_num(obi)]
     fig.add_trace(
         go.Bar(
             x=ts,
@@ -1085,7 +1143,7 @@ def plotly_book_signals(data: dict) -> Any:
             x=ts,
             y=data["obi_depth"],
             mode="lines",
-            line={"color": "#6d28d9", "width": 1.4},
+            line={"color": pal.imbalance, "width": 1.4},
             name=f"OBI (depth x{data['levels']})",
             yaxis="y2",
         )
@@ -1097,7 +1155,7 @@ def plotly_book_signals(data: dict) -> Any:
             x=ts,
             y=data["best_bid_price"],
             mode="lines",
-            line={"color": _BID_COLOR, "width": 1, "shape": "hv"},
+            line={"color": pal.bid, "width": 1, "shape": "hv"},
             name="best bid",
         )
     )
@@ -1106,7 +1164,7 @@ def plotly_book_signals(data: dict) -> Any:
             x=ts,
             y=data["best_ask_price"],
             mode="lines",
-            line={"color": _ASK_COLOR, "width": 1, "shape": "hv"},
+            line={"color": pal.ask, "width": 1, "shape": "hv"},
             fill="tonexty",
             fillcolor="rgba(154,160,166,0.2)",
             name="best ask",
@@ -1117,7 +1175,12 @@ def plotly_book_signals(data: dict) -> Any:
             x=ts,
             y=data["mid"],
             mode="lines",
-            line={"color": "#888888", "width": 1, "shape": "hv", "dash": "dot"},
+            line={
+                "color": pal.reference_line,
+                "width": 1,
+                "shape": "hv",
+                "dash": "dot",
+            },
             name="mid",
         )
     )
@@ -1126,7 +1189,7 @@ def plotly_book_signals(data: dict) -> Any:
             x=ts,
             y=data["microprice"],
             mode="lines",
-            line={"color": "#222222", "width": 2, "shape": "hv"},
+            line={"color": pal.price_line, "width": 2, "shape": "hv"},
             name="micro-price",
         )
     )
@@ -1148,13 +1211,14 @@ def plotly_book_signals(data: dict) -> Any:
     return fig
 
 
-def plotly_trade_size(data: dict) -> Any:
+def plotly_trade_size(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Trade-size strip: jittered execution dots on a log size axis, by side."""
+    pal = theme.palette
     go = _import_plotly()
-    fig = _base_figure(go, title="Trade-size distribution")
+    fig = _base_figure(go, theme, title="Trade-size distribution")
     for side, color, base, label in (
-        (data["sells"], _SELL_COLOR, 0.0, "sell"),
-        (data["buys"], _BUY_COLOR, 1.0, "buy"),
+        (data["sells"], pal.sell, 0.0, "sell"),
+        (data["buys"], pal.buy, 1.0, "buy"),
     ):
         if side.empty:
             continue
@@ -1174,20 +1238,23 @@ def plotly_trade_size(data: dict) -> Any:
     return fig
 
 
-def plotly_order_outcome_per_order(data: dict) -> Any:
+def plotly_order_outcome_per_order(
+    data: dict, *, theme: PlotTheme = DEFAULT_THEME
+) -> Any:
     """L3 (MBO) order outcome: each order as placement distance x size, by fate.
 
     Uses ``Scattergl`` (WebGL) because a per-order face draws one marker per limit
     order, so the point cloud is large and the SVG ``Scatter`` path does not scale.
     """
+    pal = theme.palette
     go = _import_plotly()
-    fig = _base_figure(go, title="Order outcome by placement distance and size")
+    fig = _base_figure(go, theme, title="Order outcome by placement distance and size")
     # Cancelled first (underneath) and faded; see the matplotlib backend.
     # A distance-binned fate variant is a possible future enhancement.
     for frame, color, label, pt_opacity in (
-        (data["cancelled"], _CANCELLED_COLOR, "cancelled", 0.18),
-        (data["partial"], _PARTIAL_COLOR, "partial", 0.6),
-        (data["filled"], _FILLED_COLOR, "filled", 0.85),
+        (data["cancelled"], pal.cancelled, "cancelled", 0.18),
+        (data["partial"], pal.partial, "partial", 0.6),
+        (data["filled"], pal.filled, "filled", 0.85),
     ):
         if frame.empty:
             continue
@@ -1212,7 +1279,7 @@ def plotly_order_outcome_per_order(data: dict) -> Any:
     fig.add_vline(
         x=0,
         line_dash="dash",
-        line_color="#888888",
+        line_color=pal.reference_line,
         line_width=1,
         annotation_text="touch",
         annotation_position="top",
@@ -1224,7 +1291,7 @@ def plotly_order_outcome_per_order(data: dict) -> Any:
     return fig
 
 
-def plotly_trade_tape_per_order(data: dict) -> Any:
+def plotly_trade_tape_per_order(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """L3 (MBO) signed-lollipop trade tape with maker resting spans.
 
     Same signed lollipops as the L2 tape (stem mid -> price, marker sized by
@@ -1233,15 +1300,16 @@ def plotly_trade_tape_per_order(data: dict) -> Any:
     are never clipped; above the density threshold the lollipops are per-second
     VWAPs.  All clouds use ``Scattergl`` (WebGL) so they scale.
     """
+    pal = theme.palette
     go = _import_plotly()
-    fig = _base_figure(go, title="Trade tape with maker order lifecycles")
+    fig = _base_figure(go, theme, title="Trade tape with maker order lifecycles")
 
     dense = data.get("dense", False)
     span_opacity = 0.12 if dense else 0.35
     # Maker resting spans (horizontal), faint underneath the lollipops.
     for side, color in (
-        (data["buys"], _BUY_COLOR),
-        (data["sells"], _SELL_COLOR),
+        (data["buys"], pal.buy),
+        (data["sells"], pal.sell),
     ):
         if side.empty:
             continue
@@ -1266,7 +1334,7 @@ def plotly_trade_tape_per_order(data: dict) -> Any:
                 x=mid_line["timestamp"],
                 y=mid_line["mid"],
                 mode="lines",
-                line={"color": "#888888", "width": 1, "shape": "hv"},
+                line={"color": pal.reference_line, "width": 1, "shape": "hv"},
                 opacity=0.8,
                 name="mid",
                 hoverinfo="skip",
@@ -1276,8 +1344,8 @@ def plotly_trade_tape_per_order(data: dict) -> Any:
 
     suffix = ", per-s VWAP" if dense else ""
     for side, color, label in (
-        (data["lolli_buys"], _BUY_COLOR, f"buy (lifts ask){suffix}"),
-        (data["lolli_sells"], _SELL_COLOR, f"sell (hits bid){suffix}"),
+        (data["lolli_buys"], pal.buy, f"buy (lifts ask){suffix}"),
+        (data["lolli_sells"], pal.sell, f"sell (hits bid){suffix}"),
     ):
         if side.empty:
             continue
@@ -1289,8 +1357,9 @@ def plotly_trade_tape_per_order(data: dict) -> Any:
     return fig
 
 
-def plotly_volume_percentiles(data: dict) -> Any:
+def plotly_volume_percentiles(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render volume-percentile stacked area chart."""
+    pal = theme.palette
     go = _import_plotly()
     asks_cumsum = data["asks_cumsum"]
     bids_cumsum_neg = data["bids_cumsum_neg"]
@@ -1304,8 +1373,8 @@ def plotly_volume_percentiles(data: dict) -> Any:
     side_line = data["side_line"]
 
     if asks_cumsum.empty:
-        return _base_figure(go, title="Volume Percentiles (no data)")
-    fig = _base_figure(go, title="Volume Percentiles")
+        return _base_figure(go, theme, title="Volume Percentiles (no data)")
+    fig = _base_figure(go, theme, title="Volume Percentiles")
 
     # Convert matplotlib RGBA tuples to plotly rgb strings
     def _to_rgb(c: Any) -> str:
@@ -1348,7 +1417,7 @@ def plotly_volume_percentiles(data: dict) -> Any:
         )
 
     if side_line:
-        fig.add_hline(y=0, line_color="#444444", line_width=0.5)
+        fig.add_hline(y=0, line_color=pal.rule, line_width=0.5)
 
     y_range = volume_scale * max(max_ask, max_bid)
     fig.update_yaxes(
@@ -1370,18 +1439,19 @@ def plotly_volume_percentiles(data: dict) -> Any:
     return fig
 
 
-def plotly_events_histogram(data: dict) -> Any:
+def plotly_events_histogram(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render an events price/volume histogram."""
+    pal = theme.palette
     go = _import_plotly()
     events = data["events"]
     val = data["val"]
     bw = data["bw"]
 
     if events.empty:
-        return _base_figure(go, title=f"Events {val} distribution (no data)")
-    fig = _base_figure(go, title=f"Events {val} distribution")
+        return _base_figure(go, theme, title=f"Events {val} distribution (no data)")
+    fig = _base_figure(go, theme, title=f"Events {val} distribution")
 
-    for direction, color in [("bid", _BID_COLOR), ("ask", _ASK_COLOR)]:
+    for direction, color in [("bid", pal.bid), ("ask", pal.ask)]:
         subset = events[events["direction"] == direction]
         if subset.empty:
             continue
@@ -1404,8 +1474,9 @@ def plotly_events_histogram(data: dict) -> Any:
     return fig
 
 
-def plotly_vpin(data: dict) -> Any:
+def plotly_vpin(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render VPIN time series."""
+    pal = theme.palette
     go = _import_plotly()
     vpin_df = data["vpin_df"]
     threshold = data["threshold"]
@@ -1413,13 +1484,15 @@ def plotly_vpin(data: dict) -> Any:
     if vpin_df.empty:
         # A capture shorter than one bucket fills none: draw the bare panel.
         fig = _base_figure(
-            go, title="VPIN — Probability of Informed Trading (no complete buckets)"
+            go,
+            theme,
+            title="VPIN — Probability of Informed Trading (no complete buckets)",
         )
         fig.update_yaxes(range=[0, 1.05], title_text="VPIN")
         fig.update_xaxes(title_text="Time")
         return fig
 
-    fig = _base_figure(go, title="VPIN — Probability of Informed Trading")
+    fig = _base_figure(go, theme, title="VPIN — Probability of Informed Trading")
 
     # Honour the computed bucket width (was ignored, so plotly auto-sized bars
     # and overlapped at sub-second cadence).  bar_width is a Timedelta on a date
@@ -1432,7 +1505,7 @@ def plotly_vpin(data: dict) -> Any:
             x=vpin_df["timestamp_end"],
             y=vpin_df["vpin"],
             width=width_ms,
-            marker_color="#5dade2",
+            marker_color=pal.series,
             opacity=0.4,
             name="Per-bucket VPIN",
             hovertemplate="Time: %{x}<br>VPIN: %{y:.3f}<extra></extra>",
@@ -1445,7 +1518,7 @@ def plotly_vpin(data: dict) -> Any:
                 x=vpin_df["timestamp_end"],
                 y=vpin_df["vpin_avg"],
                 mode="lines",
-                line={"color": "#e74c3c", "width": 2.5},
+                line={"color": pal.emphasis, "width": 2.5},
                 name="VPIN (rolling avg)",
             )
         )
@@ -1453,7 +1526,7 @@ def plotly_vpin(data: dict) -> Any:
     fig.add_hline(
         y=threshold,
         line_dash="dash",
-        line_color="#f39c12",
+        line_color=pal.threshold,
         line_width=2,
         annotation_text=f"Threshold ({threshold})",
         annotation_position="top left",
@@ -1464,14 +1537,16 @@ def plotly_vpin(data: dict) -> Any:
     return fig
 
 
-def plotly_order_flow_imbalance(data: dict) -> Any:
+def plotly_order_flow_imbalance(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render order flow imbalance bar chart."""
+    pal = theme.palette
     go = _import_plotly()
     ofi_df = data["ofi_df"]
     trades = data["trades"]
-    colors = data["colors"]
+    # Buy pressure (OFI >= 0) in the buy colour, sell pressure in the sell colour.
+    colors = np.where(ofi_df["ofi"].to_numpy() >= 0, pal.buy, pal.sell)
 
-    fig = _base_figure(go, title="Order Flow Imbalance")
+    fig = _base_figure(go, theme, title="Order Flow Imbalance")
 
     fig.add_trace(
         go.Bar(
@@ -1484,7 +1559,7 @@ def plotly_order_flow_imbalance(data: dict) -> Any:
         )
     )
 
-    fig.add_hline(y=0, line_color="#444444", line_width=0.5, opacity=0.6)
+    fig.add_hline(y=0, line_color=pal.rule, line_width=0.5, opacity=0.6)
     fig.update_yaxes(range=[-1.05, 1.05], title_text="OFI")
     fig.update_xaxes(title_text="Time")
 
@@ -1494,17 +1569,17 @@ def plotly_order_flow_imbalance(data: dict) -> Any:
                 x=trades["timestamp"],
                 y=trades["price"],
                 mode="lines",
-                line={"color": "#f1c40f", "width": 1.5},
+                line={"color": pal.secondary_axis, "width": 1.5},
                 name="Price",
                 yaxis="y2",
             )
         )
         fig.update_layout(
             yaxis2={
-                "title": {"text": "Price", "font": {"color": "#f1c40f"}},
+                "title": {"text": "Price", "font": {"color": pal.secondary_axis}},
                 "overlaying": "y",
                 "side": "right",
-                "tickfont": {"color": "#f1c40f"},
+                "tickfont": {"color": pal.secondary_axis},
             },
         )
 
@@ -1518,25 +1593,28 @@ def _hex_to_rgba(hexc: str, alpha: float) -> str:
     return f"rgba({r},{g},{b},{alpha})"
 
 
-def plotly_transaction_costs(data: dict) -> Any:
+def plotly_transaction_costs(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render the transaction-cost decomposition: effective, realized, impact.
 
     The matplotlib face's two lines and shaded gap, as a filled band: the
     realized-spread trace draws first and the effective-spread trace fills
     down to it, so the fill is the price impact.
     """
+    pal = theme.palette
     go = _import_plotly()
     times = data["times"]
     horizon = data["horizon"]
 
-    fig = _base_figure(go, title=f"Transaction costs (realized spread at {horizon})")
+    fig = _base_figure(
+        go, theme, title=f"Transaction costs (realized spread at {horizon})"
+    )
 
     fig.add_trace(
         go.Scatter(
             x=data["trade_times"],
             y=data["trade_effective"],
             mode="markers",
-            marker={"size": 4, "color": "#888888", "opacity": 0.3},
+            marker={"size": 4, "color": pal.reference_line, "opacity": 0.3},
             name="Per-trade effective spread",
             hovertemplate="Time: %{x}<br>Effective: %{y:.2f} bps<extra></extra>",
         )
@@ -1546,7 +1624,7 @@ def plotly_transaction_costs(data: dict) -> Any:
             x=times,
             y=data["realized"],
             mode="lines",
-            line={"color": "#CC79A7", "width": 1.6, "dash": "dash"},
+            line={"color": pal.realized_spread, "width": 1.6, "dash": "dash"},
             name="Realized spread",
             hovertemplate="Time: %{x}<br>Realized: %{y:.2f} bps<extra></extra>",
         )
@@ -1556,15 +1634,15 @@ def plotly_transaction_costs(data: dict) -> Any:
             x=times,
             y=data["effective"],
             mode="lines",
-            line={"color": "#0072B2", "width": 2},
+            line={"color": pal.effective_spread, "width": 2},
             fill="tonexty",
-            fillcolor=_hex_to_rgba(_BUY_COLOR, 0.25),
+            fillcolor=_hex_to_rgba(pal.buy, 0.25),
             name="Effective spread",
             hovertemplate="Time: %{x}<br>Effective: %{y:.2f} bps<extra></extra>",
         )
     )
 
-    fig.add_hline(y=0, line_color="#444444", line_width=0.5, opacity=0.6)
+    fig.add_hline(y=0, line_color=pal.rule, line_width=0.5, opacity=0.6)
     fig.update_yaxes(title_text="Basis points", range=_bps_range(data))
     fig.update_xaxes(title_text="Time")
     return fig
@@ -1582,7 +1660,7 @@ def _bps_range(data: dict) -> list[float] | None:
     return [low - margin, high + margin]
 
 
-def plotly_ofi_horizon(data: dict) -> Any:
+def plotly_ofi_horizon(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Order-flow-imbalance horizon graph across multiple look-back horizons.
 
     One stacked subplot per horizon (sharing the time axis); each fills from
@@ -1590,11 +1668,12 @@ def plotly_ofi_horizon(data: dict) -> Any:
     saturation (three overlaid bands) both growing with the imbalance.  Short
     rows are jumpy, long rows smooth -- fleeting vs persistent pressure.
     """
+    pal = theme.palette
     go = _import_plotly()
     ofi = data["ofi"]
     horizons = data["horizons"]
     if getattr(ofi, "size", 0) == 0:
-        return _base_figure(go, title="Order flow imbalance — horizon graph")
+        return _base_figure(go, theme, title="Order flow imbalance — horizon graph")
 
     from plotly.subplots import make_subplots
 
@@ -1613,7 +1692,7 @@ def plotly_ofi_horizon(data: dict) -> Any:
         for b in range(n_bands):
             lo, hi = b / n_bands, (b + 1) / n_bands
             alpha = 0.25 + 0.25 * b
-            for signed, color in ((sn, _BID_COLOR), (-sn, _SELL_COLOR)):
+            for signed, color in ((sn, pal.bid), (-sn, pal.sell)):
                 height = (np.clip(signed, lo, hi) - lo) * band_h * n_bands
                 fig.add_trace(
                     go.Scatter(
@@ -1629,13 +1708,17 @@ def plotly_ofi_horizon(data: dict) -> Any:
                     col=1,
                 )
         fig.update_yaxes(range=[0, band_h], showticklabels=False, row=i + 1, col=1)
-    fig.update_layout(title="Order flow imbalance — horizon graph (buy / sell)")
+    fig.update_layout(
+        template=_template(go, theme),
+        title="Order flow imbalance — horizon graph (buy / sell)",
+    )
     fig.update_xaxes(title_text="Time", row=n, col=1)
     return fig
 
 
-def plotly_kyle_lambda(data: dict) -> Any:
+def plotly_kyle_lambda(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render Kyle's Lambda regression scatter."""
+    pal = theme.palette
     go = _import_plotly()
     reg_df = data["reg_df"]
     lambda_ = data["lambda_"]
@@ -1646,7 +1729,7 @@ def plotly_kyle_lambda(data: dict) -> Any:
     if not np.isnan(r_squared):
         title += f"<br><sub>R² = {r_squared:.3f}, t = {t_stat:.2f}</sub>"
 
-    fig = _base_figure(go, title=title)
+    fig = _base_figure(go, theme, title=title)
 
     fig.add_trace(
         go.Scatter(
@@ -1655,7 +1738,7 @@ def plotly_kyle_lambda(data: dict) -> Any:
             mode="markers",
             marker={
                 "size": 7,
-                "color": "#5dade2",
+                "color": pal.series,
                 "opacity": 0.6,
                 "line": {"width": 0.5, "color": "white"},
             },
@@ -1680,13 +1763,13 @@ def plotly_kyle_lambda(data: dict) -> Any:
                 x=x_range,
                 y=intercept + lambda_ * x_range,
                 mode="lines",
-                line={"color": "#e74c3c", "width": 2.5},
+                line={"color": pal.emphasis, "width": 2.5},
                 name=f"λ = {lambda_:.6f}",
             )
         )
 
-    fig.add_hline(y=0, line_color="#444444", line_width=0.3, opacity=0.5)
-    fig.add_vline(x=0, line_color="#444444", line_width=0.3, opacity=0.5)
+    fig.add_hline(y=0, line_color=pal.rule, line_width=0.3, opacity=0.5)
+    fig.add_vline(x=0, line_color=pal.rule, line_width=0.3, opacity=0.5)
     fig.update_xaxes(title_text="Signed Order Flow (net volume)")
     fig.update_yaxes(title_text="ΔPrice")
     return fig
@@ -1697,8 +1780,9 @@ def plotly_kyle_lambda(data: dict) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def plotly_hidden_executions(data: dict) -> Any:
+def plotly_hidden_executions(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render hidden execution volume overlaid on the trade price."""
+    pal = theme.palette
     go = _import_plotly()
     trades = data["trades"]
     hidden = data["hidden"]
@@ -1709,7 +1793,7 @@ def plotly_hidden_executions(data: dict) -> Any:
         if has_hidden
         else "Hidden Order Executions (no hidden execution data)"
     )
-    fig = _base_figure(go, title=title)
+    fig = _base_figure(go, theme, title=title)
 
     if has_hidden and not hidden.empty:
         # Hue by aggressor side instead of a Reds-by-volume ramp: size already
@@ -1717,7 +1801,7 @@ def plotly_hidden_executions(data: dict) -> Any:
         # by volume too washed typical prints out to near-white.
         sizes = mpl_marker_area_to_plotly_size(data["marker_area"])
         direction = data.get("direction")
-        col_map = {"bid": _BID_COLOR, "ask": _ASK_COLOR}
+        col_map = {"bid": pal.bid, "ask": pal.ask}
         if direction is not None:
             for d in ("bid", "ask"):
                 mask = np.asarray(direction == d)
@@ -1752,7 +1836,7 @@ def plotly_hidden_executions(data: dict) -> Any:
                     customdata=hidden["volume"],
                     marker={
                         "size": sizes,
-                        "color": "#7f8c8d",
+                        "color": pal.neutral,
                         "opacity": 0.55,
                         "line": {"width": 0.4, "color": "white"},
                     },
@@ -1771,7 +1855,7 @@ def plotly_hidden_executions(data: dict) -> Any:
                 x=trades["timestamp"],
                 y=trades["price"],
                 mode="lines",
-                line={"color": "#222222", "width": 1, "shape": "hv"},
+                line={"color": pal.price_line, "width": 1, "shape": "hv"},
                 name="Trade price",
                 opacity=0.9,
             )
@@ -1785,7 +1869,7 @@ def plotly_hidden_executions(data: dict) -> Any:
             x=0.5,
             y=0.5,
             showarrow=False,
-            font={"size": 16, "color": "#888"},
+            font={"size": 16, "color": pal.reference_line},
         )
 
     fig.update_xaxes(title_text="Time")
@@ -1796,15 +1880,16 @@ def plotly_hidden_executions(data: dict) -> Any:
     return fig
 
 
-def plotly_trading_halts(data: dict) -> Any:
+def plotly_trading_halts(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render trade price with shaded halt periods."""
+    pal = theme.palette
     go = _import_plotly()
     trades = data["trades"]
     halt_periods = data["halt_periods"]
     has_halts = data["has_halts"]
 
     title = "Trading Halts" if has_halts else "Trading Halts (no halt data)"
-    fig = _base_figure(go, title=title)
+    fig = _base_figure(go, theme, title=title)
 
     if not trades.empty:
         fig.add_trace(
@@ -1812,7 +1897,7 @@ def plotly_trading_halts(data: dict) -> Any:
                 x=trades["timestamp"],
                 y=trades["price"],
                 mode="lines",
-                line={"color": "#5dade2", "width": 1, "shape": "hv"},
+                line={"color": pal.series, "width": 1, "shape": "hv"},
                 name="Trade price",
                 opacity=0.8,
             )
@@ -1823,7 +1908,7 @@ def plotly_trading_halts(data: dict) -> Any:
             fig.add_vrect(
                 x0=h_start,
                 x1=h_end,
-                fillcolor="#e74c3c",
+                fillcolor=pal.emphasis,
                 opacity=0.2,
                 layer="below",
                 line_width=0,
@@ -1837,7 +1922,7 @@ def plotly_trading_halts(data: dict) -> Any:
             x=0.5,
             y=0.5,
             showarrow=False,
-            font={"size": 16, "color": "#888"},
+            font={"size": 16, "color": pal.reference_line},
         )
 
     fig.update_xaxes(title_text="Time")
@@ -1849,19 +1934,20 @@ def plotly_trading_halts(data: dict) -> Any:
 # Renderer self-registration
 
 
-def plotly_bars(data: dict) -> Any:
+def plotly_bars(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render bars as candlesticks over a signed-volume strip.
 
     Clock bars are drawn on a time axis; activity bars get one slot each, with
     their closing times as tick labels (see
     :func:`~ob_analytics.visualization._data.prepare_bars_data`).
     """
+    pal = theme.palette
     go = _import_plotly()
     bars = data["bars"]
     on_clock = data["x_axis"] == "time"
 
     label = data.get("label", "")
-    fig = _base_figure(go, title=f"Bars ({label})" if label else "Bars")
+    fig = _base_figure(go, theme, title=f"Bars ({label})" if label else "Bars")
 
     x = data["x"]
     # go.Bar takes a width in milliseconds on a date axis and in axis units on
@@ -1879,7 +1965,7 @@ def plotly_bars(data: dict) -> Any:
             x=x,
             y=volume,
             width=width,
-            marker_color=[_BUY_COLOR if s >= 0 else _SELL_COLOR for s in signed],
+            marker_color=[pal.buy if s >= 0 else pal.sell for s in signed],
             opacity=0.3,
             name="Volume",
             yaxis="y2",
@@ -1893,10 +1979,10 @@ def plotly_bars(data: dict) -> Any:
             high=bars["high"],
             low=bars["low"],
             close=bars["close"],
-            increasing_line_color=_BUY_COLOR,
-            increasing_fillcolor=_BUY_COLOR,
-            decreasing_line_color=_SELL_COLOR,
-            decreasing_fillcolor=_SELL_COLOR,
+            increasing_line_color=pal.buy,
+            increasing_fillcolor=pal.buy,
+            decreasing_line_color=pal.sell,
+            decreasing_fillcolor=pal.sell,
             name="Price",
             # The bar's own close time, so an ordinal axis still hovers a time.
             text=bars["timestamp_end"].astype(str),
