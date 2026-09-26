@@ -157,7 +157,7 @@ def plot(
     **data
         Prepared plot data, as returned by the matching ``prepare_*`` helper.
         May include ``theme=PlotTheme(...)`` to override :data:`DEFAULT_THEME`
-        (matplotlib backend only; ignored by other backends).
+        for this call, on any backend.
 
     Returns
     -------
@@ -183,9 +183,10 @@ def plot(
     if level is _UNSET:
         level = _resolve_level(concept, backend)
     renderer = RENDERERS.get((concept, level, backend))
+    kwargs = {} if theme is None else {"theme": theme}
     if backend == "matplotlib":
-        return renderer(data, ax) if theme is None else renderer(data, ax, theme=theme)
-    return renderer(data)
+        return renderer(data, ax, **kwargs)
+    return renderer(data, **kwargs)
 
 
 # Shared display-window primitive: one mid-anchored clipping
@@ -193,23 +194,22 @@ def plot(
 FocusWindow = _viz_data.FocusWindow
 focus_window = _viz_data.focus_window
 
-# matplotlib theme + save exports.  Imported *after* RENDERERS is defined: the
+# matplotlib save exports.  Imported *after* RENDERERS is defined: the
 # self-registration block at the bottom of _matplotlib imports RENDERERS from
 # this (partially initialized) package, so RENDERERS must already exist to
 # avoid a circular-import deadlock.
-from ob_analytics.visualization._matplotlib import (
-    DEFAULT_THEME,
-    PlotTheme,
-    format_time_axis,
-    save_figure,
-)
+from ob_analytics.visualization._matplotlib import format_time_axis, save_figure
+from ob_analytics.visualization._palette import DEFAULT_PALETTE, Palette
+from ob_analytics.visualization._theme import DEFAULT_THEME, PlotTheme
 
 __all__ = [
+    "DEFAULT_PALETTE",
     "DEFAULT_THEME",
     "RENDERERS",
     "FocusWindow",
     "Level",
     # Themes / persistence
+    "Palette",
     "PlotTheme",
     "available_concepts",
     # Ticks -> quote-currency for low-level plotting (issue #155)
