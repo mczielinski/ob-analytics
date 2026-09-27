@@ -20,6 +20,7 @@ import pytest
 from loguru import logger
 
 from ob_analytics import Pipeline, PipelineConfig
+from ob_analytics.analytics import DataQualitySummary, data_quality_summary
 from ob_analytics.databento import (
     DBN_PRICE_DIVISOR,
     F_MBP,
@@ -33,7 +34,15 @@ from ob_analytics.databento import (
     DatabentoWriter,
 )
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.protocols import FeedType, Level, OfflineSource, RunContext
+from ob_analytics.protocols import (
+    FeedType,
+    Level,
+    OfflineSource,
+    RunContext,
+    SequenceKind,
+    sequence_kind_of,
+    trade_attribution_of,
+)
 from ob_analytics.schemas import validate_events_df, validate_trades_df
 from ob_analytics.sources import get_source
 
@@ -662,6 +671,12 @@ class TestSource:
     def test_it_needs_no_run_context(self):
         assert DatabentoSource().required_context() == []
 
+    def test_its_sequence_only_rises(self):
+        # Trade and fill records leave the events table, and a file usually
+        # holds one instrument of a channel, so a skipped number is normal.
+        assert DatabentoSource().sequence_kind is SequenceKind.MONOTONIC
+        assert sequence_kind_of(DatabentoSource()) is SequenceKind.MONOTONIC
+
     def test_its_defaults_carry_the_fixed_point_scale(self):
         defaults = DatabentoSource().config_defaults()
         assert defaults["price_divisor"] == DBN_PRICE_DIVISOR
@@ -743,6 +758,43 @@ class TestPipelineRun:
         assert got == expected
 
 
+def audit_frame(frame: pd.DataFrame) -> DataQualitySummary:
+    """Run *frame* through the pipeline and score it the way ``audit`` does."""
+    source = DatabentoSource()
+    result = Pipeline(_config(track_sequence=True), source=source).run(frame)
+    return data_quality_summary(
+        result.events,
+        result.trades,
+        feed_type=source.feed_type,
+        depth=result.depth,
+        sequence_kind=sequence_kind_of(source),
+        trade_attribution=trade_attribution_of(source),
+    )
+
+
+class TestSequenceCheck:
+    def test_a_complete_window_passes(self):
+        # Records 1 to 9 with none missing.  The trade and fill records become
+        # trades, so the events keep only 1, 2, 3, 6 and 9 (issue #298).
+        summary = audit_frame(mbo_frame(LIFECYCLE))
+
+        assert summary.events_with_sequence == 5
+        assert summary.sequence_gaps == 0
+        assert summary.ok, [check.detail for check in summary.errors]
+        assert "gaps not checked" in summary.render()
+
+    def test_a_sequence_that_goes_back_still_fails(self):
+        # The book records are numbered 1, 2, 3, 9 and then 6.
+        frame = mbo_frame(
+            LIFECYCLE, sequence=np.array([1, 2, 3, 4, 5, 9, 7, 8, 6], dtype="uint32")
+        )
+        summary = audit_frame(frame)
+
+        assert summary.sequence_out_of_order == 1
+        assert not summary.ok
+        assert [check.name for check in summary.errors] == ["sequence_out_of_order"]
+
+
 # ── Reading and writing real DBN files ────────────────────────────────
 
 
@@ -793,6 +845,17 @@ class TestDbnFiles:
             "deleted",
         ]
         assert len(result.trades) == 2
+
+    def test_audit_passes_a_complete_file(self, tmp_path, cli_runner):
+        # Every record is numbered and none is missing, so the file is sound;
+        # audit used to report the trade and fill records' numbers as lost.
+        path = tmp_path / "lifecycle.mbo.dbn"
+        path.write_bytes(dbn_bytes(LIFECYCLE))
+
+        r = cli_runner("audit", str(path), "--source", "databento")
+
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "gaps not checked" in r.stdout
 
     def test_an_open_store_is_accepted_too(self):
         import databento as db

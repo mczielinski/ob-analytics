@@ -25,7 +25,9 @@ from ob_analytics._utils import empty_trades
 from ob_analytics.analytics import set_order_types
 from ob_analytics.bitstamp import BitstampLoader
 from ob_analytics.config import PipelineConfig
+from ob_analytics.depth_l2 import recorded_sequence_kind
 from ob_analytics.lobster import LobsterLoader
+from ob_analytics.protocols import sequence_kind_of
 from ob_analytics.schemas import INGEST_SEQ_COLUMN, SEQUENCE_COLUMN
 
 # ---------------------------------------------------------------------------
@@ -247,6 +249,38 @@ class TestMonotonicSequence:
 
     def test_contiguous_is_the_default(self):
         assert detect_sequence_gaps(_framed([100, 117])).n_missing == 16
+
+
+class TestDeclaredSequenceKind:
+    """A source states what its sequence promises; a capture records it."""
+
+    def test_a_source_that_declares_nothing_is_contiguous(self):
+        class _OldPlugin:
+            name = "old"
+
+        assert sequence_kind_of(_OldPlugin()) is SequenceKind.CONTIGUOUS
+
+    def test_a_declared_kind_is_read(self):
+        class _Declares:
+            sequence_kind = "monotonic"
+
+        assert sequence_kind_of(_Declares()) is SequenceKind.MONOTONIC
+
+    def test_with_no_record_the_default_is_returned(self, tmp_path):
+        orders = tmp_path / "orders.csv"
+        orders.write_text("id\n")
+        assert recorded_sequence_kind(orders) is SequenceKind.CONTIGUOUS
+        assert (
+            recorded_sequence_kind(orders, default=SequenceKind.MONOTONIC)
+            is SequenceKind.MONOTONIC
+        )
+
+    def test_a_record_wins_over_the_default(self, tmp_path):
+        (tmp_path / "meta.json").write_text('{"sequence_kind": "contiguous"}')
+        assert (
+            recorded_sequence_kind(tmp_path, default=SequenceKind.MONOTONIC)
+            is SequenceKind.CONTIGUOUS
+        )
 
 
 # ---------------------------------------------------------------------------
