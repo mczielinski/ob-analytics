@@ -8,7 +8,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Each source declares which orders of a trade it can name** (#284). The
+  new `Source.trade_attribution` (`TradeAttribution.BOTH`, `MAKER_ONLY` or
+  `NONE`) says whether a feed's order events show the trade's maker, its taker,
+  or neither. `bitstamp` names both. `lobster`, `databento` and `cryptofeed` at
+  L3 name the maker only: their feeds show resting orders, and a taker trades on
+  arrival. The L2 sources name neither. The `unmatched_trades` check now counts
+  only the orders the feed can name, and says which. Before, a Databento run
+  could only report every trade as unmatched, and LOBSTER's guessed takers
+  counted as matches. A source that does not declare it is read as `BOTH`, the
+  old check.
+- **A capture records what its source declares, and `audit` holds it to that**
+  (#284). `meta.json` now records `source`, `feed_type` and `trade_attribution`.
+  `ob-analytics process` copies `meta.json` into its output. `audit` checks a
+  capture against the declarations of the source that made it, even when
+  `--source` names another: a cryptofeed L3 capture is read with
+  `--source bitstamp`, whose feed shows more. Read the record with
+  `recorded_source`, `recorded_feed_type` and `recorded_trade_attribution`.
+
 ### Fixed
+
+- **A Bitstamp L3 capture through cryptofeed passes `audit`** (#284).
+  cryptofeed's Bitstamp L3 channel is `detail_order_book`: a picture of the top
+  100 bids and top 100 asks about 10 times a second, not every order. Four
+  defects followed from that:
+  - An order that dropped past the 100th place was recorded as deleted, and
+    as created again when it came back. It now stays tracked at its last size
+    until the book shows its price again. This removes the duplicate created
+    ids, and the clock errors the Bitstamp reader made from them.
+  - Book rows carried the venue's time in both clock columns. `timestamp` is
+    now the time the capture received the message, like the trades.
+  - Trades dropped the maker and taker order ids that Bitstamp sends. They are
+    now read from the raw message.
+  - A fill showed only as a size change between two pictures, so a fully
+    filled order read as cancelled. A trade that names a tracked order now
+    reports its fill as it arrives, and a filled order is deleted at size 0,
+    as the native Bitstamp feed reports it. A picture that shows an order gone
+    before its trade arrives holds the delete for up to 2 seconds for it.
+
+  On a 90-second capture, makers now link on 40 of 42 trades, up from 16. For
+  analysis, the native `bitstamp` source still shows more: every order,
+  takers included.
 
 - **A capture that fails now exits non-zero and says why** (#283).
   `ob-analytics capture` used to exit 0 and write `"errors": 0` to

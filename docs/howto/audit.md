@@ -28,7 +28,7 @@ Data quality summary
   trades                : 284
   crossed resting book  : 91.61% of session (7238 episode(s)) [diff feed, but 2 stale resting order(s) stay in the book — see stale resting orders]
   stale resting orders  : 2 (worst: ask 2002347646152704 at 78,333 held the ask touch for 27.4 min after a trade printed through it)
-  unmatched trades      : 0.70%
+  unmatched trades      : 0.70% [maker and taker]
   duplicate event ids   : 0
   duplicate created ids : 0
   pre-existing orders   : 13
@@ -50,7 +50,7 @@ Checks: 0 error(s), 4 warning(s)
 | **feed type** | `matched_book` (LOBSTER/MBO) or `diff_feed` (Bitstamp) — sets expectations for the next line |
 | **crossed resting book** | Share of session *time* with `best_bid > best_ask`. ~0% for a matched book; can be high and faithful for a diff feed, unless stale resting orders cause it |
 | **stale resting orders** | Resting orders a trade printed through that the venue did not report again within 1 s. The worst is named with its side, price and how long it held the touch |
-| **unmatched trades** | Trades with no resolvable maker/taker resting order |
+| **unmatched trades** | Trades whose maker or taker order could not be found among the order events. Only the orders the feed can show are looked for: the note in brackets says which |
 | **duplicate event ids / created ids** | Should be `0`; anything else is a feed defect worth chasing |
 | **pre-existing orders** | Orders already resting when the capture began (no `created` row) — structurally unclassifiable, not errors |
 | **orphan orders** | Orders changed or deleted with no `created` row at all. The opening book is the honest source of these; a rise mid-session is the stream losing messages |
@@ -103,6 +103,29 @@ Two of these are judgement calls worth stating plainly:
   message. A [ccxt](ccxt.md) capture records in `meta.json` that its sequence
   only rises, and `audit` then checks only that it never goes back, and
   prints `gaps not checked`.
+- **Unmatched trades count only the orders the feed can show.** Every trade
+  has a maker, the order that was resting, and a taker, the order that
+  arrived and traded against it. Only a feed that reports every order shows
+  the taker. Each source declares which it can show, as its
+  [`TradeAttribution`](../api/protocols.md):
+
+  | Source | Shows | What `unmatched_trades` counts |
+  |---|---|---|
+  | `bitstamp` | maker and taker | trades missing either |
+  | `lobster`, `databento`, `cryptofeed` at L3 | maker only: a taker trades on arrival and never rests | trades missing the maker |
+  | `ccxt`, `depth_csv`, `cryptofeed` at L2 | neither: price levels have no order identity | nothing |
+
+  LOBSTER's trades do carry a taker, but it is a guess: Nasdaq ITCH names only
+  the resting order of an execution, and the reader picks the most recent new
+  order on the other side that could have traded. So the check does not count
+  it.
+- **A capture is checked against the source that made it.** A live capture
+  records its source and that source's declarations in `meta.json`, and
+  `ob-analytics process` copies `meta.json` into its output. `audit` uses the
+  record even when `--source` names another source. `--source` also says how
+  to read the files, and a [cryptofeed](cryptofeed.md) L3 capture can only be
+  read as `bitstamp`, whose feed shows more. The log says when the record
+  overrides `--source`.
 - **A stale order is reported, not removed.** A trade above a resting ask (or
   below a resting bid) shows the order has gone, because a matching engine
   fills the better price first. The venue normally reports that order within

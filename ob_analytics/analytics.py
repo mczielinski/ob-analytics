@@ -28,7 +28,7 @@ from loguru import logger
 from ob_analytics import _engine_frames, engine
 from ob_analytics._utils import ticks_to_price, validate_columns, validate_non_empty
 from ob_analytics.depth import price_level_volume
-from ob_analytics.protocols import FeedType, SequenceKind
+from ob_analytics.protocols import FeedType, SequenceKind, TradeAttribution
 from ob_analytics.schemas import (
     INGEST_SEQ_COLUMN,
     SEQUENCE_COLUMN,
@@ -215,6 +215,13 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
     Classifies each order as one of: *market*, *resting-limit*,
     *flashed-limit*, or *market-limit*, based on how the order interacts
     with the book over its lifetime.
+
+    *market* and *market-limit* mark takers, so they need the trades' taker
+    ids.  A feed that shows resting orders only (see
+    :class:`~ob_analytics.protocols.TradeAttribution`) has none, and no order
+    is labelled either; that is the feed, not a session without market orders.
+    LOBSTER fills its taker ids with a guess, so its labels are only as good
+    as the guess.
 
     Parameters
     ----------
@@ -1175,8 +1182,10 @@ class DataQualitySummary:
     crossed_episodes : int
         Number of distinct crossed intervals.
     unmatched_trades_pct : float
-        Percentage of trades missing a resolved ``maker_event_id`` or
-        ``taker_event_id`` (could not be tied to a resting order).
+        Percentage of trades with an order the feed can name left unresolved:
+        a missing ``maker_event_id`` or ``taker_event_id`` when the feed names
+        both, a missing ``maker_event_id`` when it names the maker only, and
+        ``0`` when it names neither (see ``trade_attribution``).
     duplicate_event_ids : int
         Count of ``event_id`` values occurring more than once (``event_id``
         should be globally unique — any non-zero value is suspect).
@@ -1223,6 +1232,10 @@ class DataQualitySummary:
         :func:`detect_stale_orders`).  Each one stays in the rebuilt book after
         it has gone, so a diff feed's crossing is then partly this defect
         rather than the feed's normal lag.
+    trade_attribution : TradeAttribution
+        Which orders of a trade the feed can name (see
+        :class:`~ob_analytics.protocols.TradeAttribution`); sets which sides
+        ``unmatched_trades_pct`` counts.
     """
 
     feed_type: FeedType
@@ -1246,6 +1259,7 @@ class DataQualitySummary:
     exchange_time_after_receive: int = 0
     exchange_time_reordered: int = 0
     stale_orders: tuple[StaleOrder, ...] = ()
+    trade_attribution: TradeAttribution = TradeAttribution.BOTH
 
     def to_dict(self) -> dict[str, Any]:
         """Return the summary as a plain, JSON-serialisable dict."""
@@ -1271,6 +1285,7 @@ class DataQualitySummary:
             "exchange_time_after_receive": self.exchange_time_after_receive,
             "exchange_time_reordered": self.exchange_time_reordered,
             "stale_orders": [o.to_dict() for o in self.stale_orders],
+            "trade_attribution": str(self.trade_attribution.value),
             "ok": self.ok,
             "checks": [c.to_dict() for c in self.checks],
         }
@@ -1291,6 +1306,20 @@ class DataQualitySummary:
                 )
             return "expected for a diff feed — faithful replay, not a bug"
         return "feed type undeclared"
+
+    def _unmatched_sides(self) -> str:
+        """The order(s) a trade must resolve, in words, for the check's text."""
+        if self.trade_attribution == TradeAttribution.BOTH:
+            return "maker or taker"
+        return "maker"
+
+    def _unmatched_note(self) -> str:
+        """Which orders of a trade ``unmatched_trades_pct`` looked for."""
+        if self.trade_attribution == TradeAttribution.MAKER_ONLY:
+            return "maker only: this feed does not show takers"
+        if self.trade_attribution == TradeAttribution.NONE:
+            return "not checked: this feed names no orders"
+        return "maker and taker"
 
     def _worst_stale(self) -> str:
         """The worst stale order: its id, side, price and time at the touch."""
@@ -1376,7 +1405,8 @@ class DataQualitySummary:
                 self.unmatched_trades_pct <= UNMATCHED_TRADES_WARN_PCT,
                 Severity.WARNING,
                 f"{self.unmatched_trades_pct:.2f}% of trades have no resolvable "
-                "maker or taker order; above "
+                f"{self._unmatched_sides()} order "
+                f"[{self._unmatched_note()}]; above "
                 f"{UNMATCHED_TRADES_WARN_PCT:.0f}% the trades and events may not "
                 "describe the same session",
             ),
@@ -1472,7 +1502,10 @@ class DataQualitySummary:
                 f"  stale resting orders  : {len(self.stale_orders)}"
                 + (f" (worst: {self._worst_stale()})" if self.stale_orders else "")
             ),
-            f"  unmatched trades      : {self.unmatched_trades_pct:.2f}%",
+            (
+                f"  unmatched trades      : {self.unmatched_trades_pct:.2f}% "
+                f"[{self._unmatched_note()}]"
+            ),
             f"  duplicate event ids   : {self.duplicate_event_ids}",
             f"  duplicate created ids : {self.duplicate_created_ids}",
             f"  pre-existing orders   : {self.pre_existing_orders}",
@@ -1569,6 +1602,7 @@ def data_quality_summary(
     depth: pd.DataFrame | None = None,
     tick_size: float = 1.0,
     sequence_kind: SequenceKind = SequenceKind.CONTIGUOUS,
+    trade_attribution: TradeAttribution = TradeAttribution.BOTH,
 ) -> DataQualitySummary:
     """Summarise the data quality of one reconstructed session.
 
@@ -1604,6 +1638,11 @@ def data_quality_summary(
         What the venue ``sequence`` promises, passed to
         :func:`detect_sequence_gaps`.  A capture records it in ``meta.json``
         (read it with :func:`~ob_analytics.depth_l2.recorded_sequence_kind`).
+    trade_attribution : TradeAttribution, optional
+        Which orders of a trade the feed can name, so the unmatched-trades
+        check looks only for those.  Read it off the source with
+        :func:`~ob_analytics.protocols.trade_attribution_of`; a capture records
+        it in ``meta.json``.
 
     Returns
     -------
@@ -1651,15 +1690,16 @@ def data_quality_summary(
         if not spans.empty:
             stale_orders = _stale_orders(spans, best, end_ns, tick_size)
 
+    # Look only for the orders the feed can name: a feed that shows resting
+    # orders only never shows a taker, so a missing taker there is the feed,
+    # not a match failure.  L2 trades carry no attribution at all.
     n_trades = len(trades)
-    if n_trades and not l2:
-        unmatched = (
-            trades["maker_event_id"].isna() | trades["taker_event_id"].isna()
-        ).sum()
-        unmatched_pct = 100.0 * float(unmatched) / n_trades
+    if n_trades and not l2 and trade_attribution != TradeAttribution.NONE:
+        unmatched = trades["maker_event_id"].isna()
+        if trade_attribution == TradeAttribution.BOTH:
+            unmatched = unmatched | trades["taker_event_id"].isna()
+        unmatched_pct = 100.0 * float(unmatched.sum()) / n_trades
     else:
-        # L2 trades carry no maker/taker attribution — there is nothing to
-        # resolve, so a missing id is not a "match failure".
         unmatched_pct = 0.0
 
     event_id_counts = events["event_id"].value_counts()
@@ -1720,4 +1760,5 @@ def data_quality_summary(
         exchange_time_after_receive=after_receive,
         exchange_time_reordered=reordered,
         stale_orders=stale_orders,
+        trade_attribution=trade_attribution,
     )

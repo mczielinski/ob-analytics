@@ -158,6 +158,10 @@ resting orders `resting-limit` and never `market` or `market-limit`. Everything
 that reads the maker side — order lifetimes, queue position, depth, effective
 spread — is unaffected.
 
+The source declares this as `trade_attribution = maker_only`, so
+[`audit`](audit.md) counts a trade as unmatched only when its maker is missing,
+not because it has no taker.
+
 ## Orders that move or grow
 
 Databento's `M` can move an order to another price or make it bigger. Both lose

@@ -219,10 +219,33 @@ class TestDiagnosticsProtocol:
         assert result.extras["dropped"] == 7
         assert result.extras["reconnects"] == 2
 
-    def test_runner_no_diagnostics_leaves_extras_empty(self, tmp_path):
+    def test_an_unreadable_declaration_never_stops_the_capture_finishing(
+        self, tmp_path
+    ):
+        """A plug-in's value outside the enums is logged, not raised (#284)."""
+
+        class _OddCapturer(_FakeCapturer):
+            feed_type = "l2_snapshot"
+            trade_attribution = "taker"
+
+        cfg = CaptureConfig(pair="btcusd", out_dir=tmp_path / "cap", minutes=0.001)
+        # Deliberately off the protocol: that is the case under test.
+        odd = _OddCapturer()
+        result = asyncio.run(run_capturer(odd, cfg))  # ty: ignore[invalid-argument-type]
+        meta = json.loads((tmp_path / "cap" / "meta.json").read_text())
+        assert meta["feed_type"] == "unknown"
+        assert "trade_attribution" not in meta
+        assert result.n_order_events > 0
+
+    def test_runner_no_diagnostics_records_only_the_declarations(self, tmp_path):
+        """Without diagnostics, extras hold only what the source declares (#284)."""
         cfg = CaptureConfig(pair="btcusd", out_dir=tmp_path / "cap", minutes=0.001)
         result = asyncio.run(run_capturer(_FakeCapturer(), cfg))
-        assert result.extras == {}
+        assert result.extras == {
+            "source": "fake",
+            "feed_type": "diff_feed",
+            "trade_attribution": "both",
+        }
 
 
 class TestRunner:

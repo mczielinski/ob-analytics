@@ -48,7 +48,7 @@ from ob_analytics._utils import off_tick_grid
 from ob_analytics.config import SourceSettings
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.live._base import CaptureConfig, EventDict
-from ob_analytics.protocols import FeedType, Level, SequenceKind
+from ob_analytics.protocols import FeedType, Level, SequenceKind, TradeAttribution
 
 # Per-venue defaults, overridable via CcxtSettings.
 _DEFAULT_DEPTH_LIMIT = 100
@@ -316,6 +316,8 @@ class CcxtSource:
     # CCXT's unified book is the venue's own aggregated view: bids never rest
     # above asks, so the reconstructed book is not crossed.
     feed_type = FeedType.MATCHED_BOOK
+    # Price levels carry no order identity, so no order of a trade is named.
+    trade_attribution = TradeAttribution.NONE
     # The book nonce only rises: a Binance diff spans a range of update IDs,
     # and watch_order_book can apply several diffs before it returns.
     sequence_kind = SequenceKind.MONOTONIC

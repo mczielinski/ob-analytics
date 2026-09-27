@@ -23,7 +23,7 @@ from ob_analytics.live._base import (
     SupportsDiagnostics,
     SupportsPreflight,
 )
-from ob_analytics.protocols import Level
+from ob_analytics.protocols import FeedType, Level, trade_attribution_of
 
 # Which part of the capture wrote a book row: the source's opening book, a live
 # message, or a synthetic close-out at the end. The runner stamps it from the
@@ -201,6 +201,41 @@ class FileCaptureSink(CaptureSink):
         (self.out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
 
 
+def _source_declarations(capturer: Any) -> dict[str, Any]:
+    """The capturer's declarations about its feed, as ``meta.json`` values.
+
+    ``source`` names the capturer; ``feed_type`` and ``trade_attribution`` are
+    what it declares (see :class:`~ob_analytics.protocols.FeedType` and
+    :class:`~ob_analytics.protocols.TradeAttribution`).  ``sequence_kind`` is
+    written only by a capturer that declares one.  Read back with
+    :func:`~ob_analytics.depth_l2.recorded_source` and its siblings.
+
+    It runs while a capture is closing, so a declaration that cannot be read
+    (a plug-in's value outside the enum, say) is logged and never stops the
+    files being finished: an unreadable ``feed_type`` is recorded as
+    ``unknown``, and an unreadable ``trade_attribution`` is left out, so
+    ``audit`` falls back to ``--source`` rather than to a guess.
+    """
+    declared: dict[str, Any] = {"source": capturer.name}
+    try:
+        declared["feed_type"] = FeedType(
+            getattr(capturer, "feed_type", FeedType.UNKNOWN)
+        ).value
+    except Exception as exc:  # noqa: BLE001 - never block finalize
+        logger.warning("Capturer '{}' feed_type unreadable: {!r}", capturer.name, exc)
+        declared["feed_type"] = FeedType.UNKNOWN.value
+    try:
+        declared["trade_attribution"] = trade_attribution_of(capturer).value
+    except Exception as exc:  # noqa: BLE001 - never block finalize
+        logger.warning(
+            "Capturer '{}' trade_attribution unreadable: {!r}", capturer.name, exc
+        )
+    sequence_kind = getattr(capturer, "sequence_kind", None)
+    if sequence_kind is not None:
+        declared["sequence_kind"] = str(getattr(sequence_kind, "value", sequence_kind))
+    return declared
+
+
 async def run_capturer(
     capturer: LiveSource,
     config: CaptureConfig,
@@ -314,7 +349,11 @@ async def run_capturer(
                 pass
 
         ended = pd.Timestamp.now(tz="UTC")
-        extras: dict[str, Any] = {}
+        # What the source declares about its feed, so a later `audit` can hold
+        # the capture to its own source's expectations.  The capture is read
+        # back with a file format's source (a cryptofeed L3 capture replays as
+        # bitstamp), which would otherwise supply the wrong ones.
+        extras: dict[str, Any] = _source_declarations(capturer)
         # Capturers may implement the optional SupportsDiagnostics capability
         # to enrich meta.json with per-run counters.
         if isinstance(capturer, SupportsDiagnostics):
