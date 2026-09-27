@@ -110,8 +110,17 @@ a median of 23 ms after the trade and 234 ms at the 95th percentile.
 An order the venue does not report again within one second is **stale**. The
 rebuilt book goes on holding it, and it distorts the spread, the depth and the
 queue from then on. On the bundled sample two orders are stale, and both came
-from the opening REST snapshot. Removing them would take the crossed share of
-session time from 91.6% to 1.5%.
+from the opening REST snapshot. Removing each one at the moment a trade proved
+it gone takes the crossed share of session time from 91.6% to 1.3%.
+
+Stale orders distort the book that `order_book()` rebuilds, and everything
+read from it, such as the crossed share above. They reach the depth summary
+much less, because the depth engine already drops a level that a newer quote
+crosses. On the bundled sample, without the two stale orders the depth
+summary's best ask changes on 0.6% of rows, the transaction costs and the
+count of hidden trades do not change, and the
+[feature table](howto/feature-table.md) changes by a small amount on 14 of
+its 127 rows.
 
 `audit` reports stale orders as a warning and names the worst one: its id,
 side, price, and how long it held the touch after the trade. From Python,
