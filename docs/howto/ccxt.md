@@ -31,7 +31,8 @@ per-order state.
 For per-order (L3) capture on the crypto venues that publish it, use the
 [cryptofeed source](cryptofeed.md) instead.
 
-Each run produces a self-contained directory:
+A capture is a directory of segments with a `manifest.json` (see
+[Running for days](live-capture.md#running-for-days)). Each segment holds:
 
 | File | Contents |
 |------|----------|

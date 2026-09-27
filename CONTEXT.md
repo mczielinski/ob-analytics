@@ -333,6 +333,17 @@ _Avoid_: options, params
 Recording a live venue to files the pipeline can later replay.
 _Avoid_: stream, ingest, collect, record
 
+**Segment**:
+One part of a capture, from a snapshot to its close-out, in its own folder
+(`seg-0001`, ...). A disconnect, a roll or a restart ends one segment and
+starts the next, so every segment replays alone.
+_Avoid_: chunk, part, file, shard
+
+**Capture gap**:
+A stretch of a capture that no segment covers, recorded in `manifest.json`
+with its cause. Not a sequence gap, which is a message missing inside a
+segment.
+
 **Origin**:
 Which part of a capture wrote a row: `snapshot` (the opening book), `stream`
 (a live message) or `shutdown` (a synthetic close-out at the end). Named

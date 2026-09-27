@@ -50,7 +50,8 @@ ob-analytics capture cryptofeed --exchange bitstamp --pair BTC-USD --level L2 --
 ob-analytics capture cryptofeed --exchange binance --pair BTC-USDT --out /tmp/cap
 ```
 
-Each run produces a self-contained directory:
+A capture is a directory of segments with a `manifest.json` (see
+[Running for days](live-capture.md#running-for-days)). Each segment holds:
 
 | File | Contents |
 |------|----------|

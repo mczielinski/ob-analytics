@@ -141,3 +141,42 @@ class TestSnapshotOverlap:
         # Order 9's created (t=1000) is already in the t=2000 book.
         assert [kind for kind, _, _ in asyncio.run(replay())] == []
         assert cap.diagnostics()["pre_snapshot_skipped"] == 1
+
+
+class _ClosedWs:
+    """A connection the venue has closed: every recv raises."""
+
+    async def recv(self) -> str:
+        from websockets.exceptions import ConnectionClosedError
+
+        raise ConnectionClosedError(None, None)
+
+
+class TestDisconnect:
+    def test_a_closed_connection_ends_the_stream_with_the_error(self, monkeypatch):
+        """No silent reconnect: the book would miss what changed meanwhile (#150).
+
+        The feed has no sequence numbers, so an order deleted while the
+        connection was down would rest in the capture until the end.  The
+        stream raises instead, and run_capture starts a new segment from a
+        fresh snapshot.
+        """
+        from websockets.exceptions import ConnectionClosed
+
+        cap = _capturer(
+            monkeypatch,
+            frames=[_order_frame(9, 1_000)],
+            books=[_book(2_000, 8)],
+            fetch_delay=0.05,
+        )
+        assert _snapshot_ids(cap) == [8]
+        cap._ws = _ClosedWs()
+        config = CaptureConfig(pair="btcusd", out_dir=Path("unused"), minutes=1.0)
+
+        async def replay() -> None:
+            async for _ in cap.stream(config):
+                pass
+
+        with pytest.raises(ConnectionClosed):
+            asyncio.run(replay())
+        assert "reconnects" not in cap.diagnostics()

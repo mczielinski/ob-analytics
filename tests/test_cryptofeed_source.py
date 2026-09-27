@@ -793,7 +793,7 @@ class TestCliWiring:
 
         captured: dict = {}
 
-        async def _fake_run(source, config, sink=None):
+        async def _fake_run(source, config, sink=None, **_kwargs):
             captured["source"] = source
             captured["config"] = config
             now = pd.Timestamp.now(tz="UTC")
@@ -806,7 +806,7 @@ class TestCliWiring:
                 ended=now,
             )
 
-        monkeypatch.setattr("ob_analytics.live._runner.run_capturer", _fake_run)
+        monkeypatch.setattr("ob_analytics.live._supervisor.run_capturer", _fake_run)
         # This test checks the flag wiring, not the extra: skip the check for it.
         monkeypatch.setattr(
             "ob_analytics.live.cryptofeed_source.CryptofeedSource.preflight",

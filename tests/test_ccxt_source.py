@@ -945,4 +945,38 @@ class TestLostSync:
         ex = self._Gappy(snap, [], failures=_MAX_BOOK_RESYNCS + 1)
         meta = self._meta(ex, tmp_path)
         assert meta["book_resyncs"] == _MAX_BOOK_RESYNCS
-        assert meta["errors"] == 1
+        # Giving up ends the stream with the error (#150), so the run records
+        # it on top of the source's own count.
+        assert meta["capture_error_phase"] == "stream"
+        assert "out of sync" in meta["capture_error"]
+        assert meta["errors"] == 2
+
+
+class TestLostConnection:
+    """A dropped connection ends the run with the error, not half a feed (#150).
+
+    Before, a loop that failed stopped alone: the run went on with the other
+    feed until its deadline and reported success.
+    """
+
+    class _Dropping(_FakeCcxtExchange):
+        async def watch_trades(self, symbol):
+            if self._trades:
+                return self._trades.pop(0)
+            raise ConnectionError("socket closed")
+
+    def test_the_rows_before_the_drop_are_kept_and_the_error_recorded(self, tmp_path):
+        import json
+
+        snap = {"bids": [[100.0, 5.0]], "asks": [[101.0, 4.0]], "timestamp": 1_000}
+        trade = {"id": "t1", "timestamp": 2_000, "price": 100.5, "amount": 1.0}
+        ex = self._Dropping(snap, [], [[{**trade, "side": "buy"}]])
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="BTC/USDT", out_dir=out, minutes=1.0)
+        result = asyncio.run(run_capturer(_source(ex), cfg))
+
+        assert result.capture_error_phase == "stream"
+        assert "socket closed" in (result.capture_error or "")
+        assert result.n_trade_events == 1
+        meta = json.loads((out / "meta.json").read_text())
+        assert meta["errors"] == 2  # the source's count, plus the run's

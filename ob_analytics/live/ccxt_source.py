@@ -176,6 +176,14 @@ def _size_whole_book_snapshot(
 _MAX_BOOK_RESYNCS = 10
 
 
+def _first_failure(tasks: list[asyncio.Task[None]]) -> BaseException | None:
+    """The error of the first finished task that raised one, if any."""
+    for task in tasks:
+        if task.done() and not task.cancelled() and task.exception() is not None:
+            return task.exception()
+    return None
+
+
 def _lost_sync(exc: Exception) -> bool:
     """Whether *exc* is ccxt reporting a missing book update.
 
@@ -493,6 +501,11 @@ class CcxtSource:
         and pushes ``(kind, event, raw)`` onto a queue that this generator
         drains.  The run ends at ``config.minutes`` (production) or when both
         producers finish (finite feeds, i.e. tests).
+
+        When either producer fails -- a lost connection, most often -- the
+        events it queued first are yielded and then its error is raised, so the
+        run ends instead of carrying on with half its feed.
+        :func:`~ob_analytics.live.run_capture` then starts a new segment.
         """
         deadline = time.monotonic() + config.minutes * 60.0
         queue: asyncio.Queue[tuple[str, EventDict, Any]] = asyncio.Queue()
@@ -503,8 +516,12 @@ class CcxtSource:
         ]
         try:
             while True:
-                if all(p.done() for p in producers) and queue.empty():
-                    break
+                if queue.empty():
+                    failed = _first_failure(producers)
+                    if failed is not None:
+                        raise failed
+                    if all(p.done() for p in producers):
+                        break
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     break
@@ -550,7 +567,7 @@ class CcxtSource:
             except StopAsyncIteration:
                 # Finite feed exhausted (tests). Real feeds block instead.
                 return
-            except Exception as exc:  # noqa: BLE001 - one bad frame ends the loop for v1
+            except Exception as exc:
                 if _lost_sync(exc) and self.book_resyncs < _MAX_BOOK_RESYNCS:
                     # ccxt found a missing update and dropped its book; the
                     # next call fetches a new snapshot, and diffing it against
@@ -560,7 +577,7 @@ class CcxtSource:
                     continue
                 self.errors += 1
                 logger.warning("[ccxt] book loop ended on error: {!r}", exc)
-                return
+                raise
             self.book_updates += 1
             received = pd.Timestamp.now(tz="UTC").as_unit("ns")
             # _diff_book already applied every row of this update to
@@ -606,10 +623,10 @@ class CcxtSource:
                     trades = await self._exchange.fetch_trades(self._symbol, since)
             except StopAsyncIteration:
                 return
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 self.errors += 1
                 logger.warning("[ccxt] trades loop ended on error: {!r}", exc)
-                return
+                raise
             for t in trades or ():
                 ts_ms = t.get("timestamp")
                 # REST polling can re-serve trades; drop anything <= the cursor.
