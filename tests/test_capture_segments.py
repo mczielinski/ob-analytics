@@ -587,6 +587,43 @@ class TestReadBack:
         assert r.returncode == 1
         assert "No segment" in r.stderr
 
+    def test_a_segment_still_being_captured_is_named_and_left_out(
+        self, cli_runner, gappy, tmp_path
+    ):
+        """Auditing a running capture reads its closed segments only."""
+        manifest = read_manifest(gappy)
+        assert manifest is not None
+        # seg-0003 is open: rows on disk, no counts or end in the manifest.
+        (gappy / "seg-0003").mkdir()
+        for name in ("orders.csv", "trades.csv"):
+            (gappy / "seg-0003" / name).write_bytes(
+                (gappy / "seg-0002" / name).read_bytes()
+            )
+        manifest.segments.append(Segment(name="seg-0003", started=_now()))
+        manifest.write(gappy)
+
+        r = cli_runner("audit", str(gappy))
+        assert r.returncode == 0, r.stderr
+        assert "== seg-0002 ==" in r.stdout
+        assert "== seg-0003 ==" not in r.stdout
+        assert "seg-0003 was not checked: it is still being captured" in r.stderr
+
+        out = tmp_path / "out"
+        r = cli_runner("process", str(gappy), "--output", str(out))
+        assert r.returncode == 0, r.stderr
+        assert not (out / "seg-0003").exists()
+        assert "seg-0003 was not processed" in r.stderr
+
+    def test_a_capture_whose_only_data_is_still_being_captured(
+        self, cli_runner, tmp_path
+    ):
+        root = tmp_path / "cap"
+        _crashed_capture(root)  # one open segment, rows on disk
+        r = cli_runner("audit", str(root))
+        assert r.returncode == 1
+        assert "No closed segment" in r.stderr
+        assert "seg-0001 was not checked" in r.stderr
+
     def test_process_writes_each_segment_and_the_manifest(
         self, cli_runner, gappy, tmp_path
     ):

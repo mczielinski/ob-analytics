@@ -389,18 +389,30 @@ class CaptureManifest:
 
     # -- reading ------------------------------------------------------------
 
+    @property
+    def open_segments(self) -> list[Segment]:
+        """Segments not yet closed: still being captured, or left by a process
+        that died and has not been restarted.  Their files have no closing
+        rows yet, and their row counts are not in the manifest."""
+        return [s for s in self.segments if s.end_reason is None]
+
     def segment_dirs(self, root: Path) -> list[Path]:
-        """The segment directories under *root* that hold data, in order.
+        """The directories under *root* of closed segments that hold data, in order.
 
         *root* is the capture directory, or a ``process`` output made from it
         (which keeps the same segment names).  A segment that wrote no book
         rows -- its snapshot failed -- is left out: there is nothing to read.
+        So is an open segment (see :attr:`open_segments`): it has no closing
+        rows yet, so the checks would read every order still resting as a
+        fault.
         """
         root = Path(root)
         return [
             root / s.name
             for s in self.segments
-            if s.n_book_events > 0 and (root / s.name).is_dir()
+            if s.end_reason is not None
+            and s.n_book_events > 0
+            and (root / s.name).is_dir()
         ]
 
     def checks(self) -> tuple[QualityCheck, ...]:

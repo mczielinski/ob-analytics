@@ -160,6 +160,10 @@ capture runs, so it is never more than 10 seconds out of date.
 `ob-analytics audit /tmp/cap` audits each segment, then prints the capture's
 own checks: gaps, segments a dead process left open, and dropped messages.
 These are warnings, so `audit --strict` fails a capture that has any.
+You can audit or process a capture while it runs. The segment still being
+captured is left out, and the log names it: it has no closing rows yet, so
+every order still resting would read as a fault. Only closed segments are
+read.
 
 ## A capture that fails
 

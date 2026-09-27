@@ -49,23 +49,44 @@ def _cmd_process(args: argparse.Namespace) -> None:
         return
     output = Path(args.output)
     seg_dirs = manifest.segment_dirs(root)
+    _note_open_segments(manifest, "processed")
     if not seg_dirs:
-        _no_segment_data(root)
+        _no_segment_data(root, manifest)
     for seg_dir in seg_dirs:
         _process_one(args, str(_segment_input(seg_dir)), output / seg_dir.name)
     output.mkdir(parents=True, exist_ok=True)
     (output / "manifest.json").write_bytes((root / "manifest.json").read_bytes())
 
 
-def _no_segment_data(root: Path) -> None:
-    """Stop: a segmented capture in which no segment wrote any book rows."""
+def _note_open_segments(manifest: Any, verb: str) -> None:
+    """Say which segments are left out because they are not closed yet."""
     from loguru import logger
 
-    logger.error(
-        "No segment of the capture in {} holds data: see its manifest.json "
-        "for why each one ended.",
-        root,
-    )
+    for segment in manifest.open_segments:
+        logger.warning(
+            "{} was not {}: it is still being captured (or its capture process "
+            "died and has not been restarted), so it has no closing rows yet",
+            segment.name,
+            verb,
+        )
+
+
+def _no_segment_data(root: Path, manifest: Any) -> None:
+    """Stop: a segmented capture in which no closed segment holds book rows."""
+    from loguru import logger
+
+    if manifest.open_segments:
+        logger.error(
+            "No closed segment of the capture in {} holds data yet. Check it "
+            "once a segment has rolled or the capture has stopped.",
+            root,
+        )
+    else:
+        logger.error(
+            "No segment of the capture in {} holds data: see its manifest.json "
+            "for why each one ended.",
+            root,
+        )
     sys.exit(1)
 
 
@@ -184,6 +205,7 @@ def _cmd_audit(args: argparse.Namespace) -> None:
         capture_checks: tuple[Any, ...] = ()
     else:
         seg_dirs = manifest.segment_dirs(root)
+        _note_open_segments(manifest, "checked")
         named = [(d.name, _audit_one(args, _segment_input(d))) for d in seg_dirs]
         capture_checks = manifest.checks()
         if args.json:
@@ -201,7 +223,7 @@ def _cmd_audit(args: argparse.Namespace) -> None:
             print(manifest.render())
         if not seg_dirs:
             # Nothing to check is not a pass.
-            _no_segment_data(root)
+            _no_segment_data(root, manifest)
 
     failed = [
         f"{name + ': ' if name else ''}{c.name} — {c.detail}"
