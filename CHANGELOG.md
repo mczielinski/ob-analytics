@@ -68,9 +68,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   its connection is left to finish. Python 3.12 and later were not affected.
 - **A segment that does not stop cannot hold up the capture** (#296). A
   segment asked to stop has 20 seconds to close. After that it is cancelled
-  and closed from its files, like a segment a crash left open, and the manifest
-  marks it `failed`. At the end of a capture all running segments are stopped
-  together, so SIGTERM ends a capture within about half a minute.
+  and closed from its files, like a segment a crash left open. The manifest
+  keeps why it was stopped and records the delay as its error, not as a gap.
+  At the end of a capture all running segments are stopped together, so
+  SIGTERM ends a capture in under a minute even when a source hangs.
 - **A Bitstamp L3 capture through cryptofeed passes `audit`** (#284).
   cryptofeed's Bitstamp L3 channel is `detail_order_book`: a picture of the top
   100 bids and top 100 asks about 10 times a second, not every order. Four

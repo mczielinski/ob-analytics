@@ -44,10 +44,14 @@ SILENT = "silent"  # connects, sends nothing for 0.6 s, then drops
 # Streams like OK, but carries on after the first cancel, as a stream waiting
 # in asyncio.wait_for does on Python 3.11 when a message arrives with it.
 DEAF_ONCE = "deaf_once"
+# Like DEAF_ONCE, but yields only heartbeats: items the runner writes nowhere.
+DEAF_ONCE_RAW = "deaf_once_raw"
 # Streams like OK, but takes 0.1 s to close its connection once stopped.
 SLOW_CLOSE = "slow_close"
 # Streams like OK, but never finishes closing its connection once stopped.
 HANG_ON_STOP = "hang_on_stop"
+# Its opening snapshot never finishes, so it never streams.
+STUCK_SNAPSHOT = "stuck_snapshot"
 
 
 def _disconnect_after(n: int) -> str:
@@ -80,6 +84,8 @@ class _ScriptedSource:
     async def snapshot(self, config: CaptureConfig) -> AsyncIterator[EventDict]:
         if self._behaviour == FAIL_SNAPSHOT:
             raise ConnectionError("venue unreachable")
+        if self._behaviour == STUCK_SNAPSHOT:
+            await asyncio.sleep(3600)
         ts = _now()
         book = [(1, 100.0, "bid"), (2, 101.0, "ask")]
         if self._behaviour == BIG_SNAPSHOT:
@@ -108,7 +114,7 @@ class _ScriptedSource:
             await asyncio.sleep(0.6)
             raise ConnectionError("connection closed by venue")
         sent = 0
-        ignore_cancel = self._behaviour == DEAF_ONCE
+        ignore_cancel = self._behaviour in (DEAF_ONCE, DEAF_ONCE_RAW)
         deadline = time.monotonic() + config.minutes * 60
         try:
             while time.monotonic() < deadline:
@@ -120,6 +126,9 @@ class _ScriptedSource:
                     if not ignore_cancel:
                         raise
                     ignore_cancel = False
+                if self._behaviour == DEAF_ONCE_RAW:
+                    yield ("raw", {}, None)
+                    continue
                 ts = _now()
                 oid = self._next_id
                 if oid in self._open:
@@ -343,9 +352,22 @@ class TestRoll:
                 seconds=0.5
             )
 
-    def test_a_stream_that_is_closing_is_not_cancelled_again(self, tmp_path):
+    def test_a_stream_of_unwritten_items_that_ignores_one_cancel_stops(self, tmp_path):
+        # Nothing it yields is written, so only the count of items shows that
+        # it is still running and needs another cancel.
+        run = _capture(tmp_path, [DEAF_ONCE_RAW], seconds=0.8, roll_minutes=0.3 / 60)
+
+        segments = run.manifest.segments
+        assert len(segments) >= 2
+        assert all(s.error is None for s in segments)
+
+    def test_a_stream_that_is_closing_is_not_cancelled_again(
+        self, tmp_path, monkeypatch
+    ):
         # Closing takes 0.1 s, five times the retry interval: cancelling again
-        # would cut it short and leave the connection open.
+        # would cut it short and leave the connection open.  The stop limit is
+        # far above it, so only the retry interval is under test.
+        monkeypatch.setattr(_supervisor, "STOP_TIMEOUT_SECONDS", 5.0)
         run = _capture(tmp_path, [SLOW_CLOSE], seconds=0.8, roll_minutes=0.3 / 60)
 
         segments = run.manifest.segments
@@ -364,15 +386,39 @@ class TestRoll:
         assert run.error is None
         segments = run.manifest.segments
         assert len(segments) >= 2
+        # Each stopped when asked, only late: the reason stays, the lateness
+        # is the error, and nothing is recorded as a gap.
+        assert {s.end_reason for s in segments[:-1]} == {EndReason.ROLLED_TIME}
+        assert segments[-1].end_reason is EndReason.FINISHED
+        assert run.manifest.gaps == []
         for segment in segments:
-            assert segment.end_reason is EndReason.FAILED
             assert "did not stop within" in (segment.error or "")
             seg_dir = run.out_dir / segment.name
             assert _every_order_closed(seg_dir / "orders.csv"), segment.name
             meta = json.loads((seg_dir / "meta.json").read_text())
             assert "did not stop within" in meta["capture_error"]
-        # Each next segment was streaming before the stuck one was given up.
-        assert [g.cause for g in run.manifest.gaps if g.cause == "roll"] == []
+
+    def test_segments_still_running_at_the_end_stop_together(
+        self, tmp_path, monkeypatch
+    ):
+        # The capture ends while the next segment is still taking its snapshot,
+        # so both are running, and neither stops by itself.
+        monkeypatch.setattr(_supervisor, "STOP_TIMEOUT_SECONDS", 2.0)
+        monkeypatch.setattr(_supervisor, "STOP_GRACE_SECONDS", 0.1)
+        started = time.monotonic()
+        run = _capture(
+            tmp_path,
+            [HANG_ON_STOP, STUCK_SNAPSHOT],
+            seconds=0.6,
+            roll_minutes=0.3 / 60,
+        )
+
+        # One limit (2 s) after the end, not one per segment (4 s).
+        assert time.monotonic() - started < 3.7
+        first, second = run.manifest.segments
+        assert first.end_reason is second.end_reason is EndReason.FINISHED
+        assert "did not stop within" in (first.error or "")
+        assert "did not stop within" in (second.error or "")
 
     def test_a_size_roll(self, tmp_path):
         run = _capture(tmp_path, [OK], seconds=1.0, roll_mb=0.002)

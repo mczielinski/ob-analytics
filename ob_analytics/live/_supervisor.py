@@ -61,6 +61,7 @@ from ob_analytics.live._runner import (
     _TRADE_COLS,
     ORIGIN_SHUTDOWN,
     FileCaptureSink,
+    _retrieve_outcome,
     _source_declarations,
     install_stop_signals,
     run_capturer,
@@ -294,10 +295,21 @@ class _Supervisor:
                 source = self._make_source()
         finally:
             reason = EndReason.STOPPED if self._stop.is_set() else EndReason.FINISHED
-            # Together, so the capture ends within one stop's time limit.
-            await asyncio.gather(
-                *(self._stop_segment(r, reason) for r in list(self._running))
+            # Together, so the capture ends within one stop's time limit.  One
+            # that fails must not keep the rest of this block from running.
+            stopping = list(self._running)
+            outcomes = await asyncio.gather(
+                *(self._stop_segment(r, reason) for r in stopping),
+                return_exceptions=True,
             )
+            for running, outcome in zip(stopping, outcomes, strict=True):
+                if isinstance(outcome, BaseException):
+                    logger.error(
+                        "Capture '{}': stopping {} failed: {!r}",
+                        self._manifest.source,
+                        running.segment.name,
+                        outcome,
+                    )
             heartbeat.cancel()
             stop_task.cancel()
             for task in (heartbeat, stop_task):
@@ -449,7 +461,7 @@ class _Supervisor:
             self._running.remove(running)
 
         if running.stuck:
-            self._close_stuck(running)
+            await self._close_stuck(running)
         elif result is not None:
             segment.ended = result.ended
             if segment.stream_started is None and result.stream_started is not None:
@@ -466,7 +478,12 @@ class _Supervisor:
         else:
             segment.ended = pd.Timestamp.now(tz="UTC")
 
-        if segment.error is not None:
+        if running.stuck and running.stop_reason is not None:
+            # It was asked to stop and did, only late: why it was stopped
+            # stands, and the lateness is its error.  Recording it as failed
+            # would count the end of its stream as a disconnect.
+            segment.end_reason = running.stop_reason
+        elif segment.error is not None:
             segment.end_reason = EndReason.FAILED
         elif running.stop_reason is not None:
             segment.end_reason = running.stop_reason
@@ -483,7 +500,7 @@ class _Supervisor:
         )
         return segment
 
-    def _close_stuck(self, running: _Running) -> None:
+    async def _close_stuck(self, running: _Running) -> None:
         """Record a segment that did not stop in time and was cancelled.
 
         Once it has ended, its files are closed the way a restart closes a
@@ -494,9 +511,12 @@ class _Supervisor:
         segment = running.segment
         task = running.task
         if task.done():
-            if not task.cancelled():
-                task.exception()  # read, so asyncio does not log it as lost
-            _close_unfinished(
+            _retrieve_outcome(task)
+            # In a thread: it reads the segment's files in full, and the next
+            # segment is streaming on this loop.  It changes only this
+            # segment's fields, and the manifest is written again after it.
+            await asyncio.to_thread(
+                _close_unfinished,
                 self._root / segment.name,
                 segment,
                 self._manifest,
@@ -616,7 +636,9 @@ class _Supervisor:
             await asyncio.sleep(HEARTBEAT_SECONDS)
             now = pd.Timestamp.now(tz="UTC")
             for running in self._running:
-                if running.task.done():
+                # A segment asked to stop no longer covers the market: its
+                # heartbeat would count the time it takes to close.
+                if running.task.done() or running.stop.is_set():
                     continue
                 running.segment.heartbeat = now
                 running.sink.flush()

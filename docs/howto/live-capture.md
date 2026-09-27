@@ -138,9 +138,12 @@ directory stops with an error instead of rewriting the first one's files.
 **A segment that does not stop.** A segment asked to stop, at a roll, at the
 end or on a signal, has 20 seconds to close its connection and write its
 closing rows. If it takes longer, it is cancelled and closed from its files,
-the same way a restart closes a segment a crash left open. The manifest marks
-it `failed`, with the reason. So a hanging connection cannot stop the rolls,
-and SIGTERM ends a capture within about half a minute.
+the same way a restart closes a segment a crash left open. The manifest keeps
+why it was stopped (`rolled_time`, `finished`, ...) and records the delay as
+its error. The delay is not a gap: the segment had already stopped streaming.
+So a connection that hangs cannot stop the rolls, and SIGTERM ends a capture
+in under a minute: at most two of these limits, if it arrives while a roll is
+waiting for a segment that hangs.
 
 This lets a service manager restart the capture. For example, a systemd unit
 with `Restart=always` and
