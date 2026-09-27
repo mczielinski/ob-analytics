@@ -141,6 +141,7 @@ closing rows. If it takes longer, it is cancelled and closed from its files,
 the same way a restart closes a segment a crash left open. The manifest keeps
 why it was stopped (`rolled_time`, `finished`, ...) and records the delay as
 its error. The delay is not a gap: the segment had already stopped streaming.
+If closing its files fails, the error says so and the capture carries on.
 So a connection that hangs cannot stop the rolls, and SIGTERM ends a capture
 in under a minute: at most two of these limits, if it arrives while a roll is
 waiting for a segment that hangs.

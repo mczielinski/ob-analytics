@@ -7,6 +7,7 @@ connection, a failed snapshot, a crash -- happens on cue and with no network.
 from __future__ import annotations
 
 import asyncio
+import copy
 import csv
 import json
 import time
@@ -56,6 +57,11 @@ STUCK_SNAPSHOT = "stuck_snapshot"
 
 def _disconnect_after(n: int) -> str:
     return f"disconnect:{n}"
+
+
+def _stubborn_shutdown(seconds: float) -> str:
+    """Streams like OK, then spends *seconds* on its closing rows, deaf to cancels."""
+    return f"stubborn_shutdown:{seconds}"
 
 
 def _now() -> pd.Timestamp:
@@ -161,6 +167,13 @@ class _ScriptedSource:
             self._closed = True
 
     async def shutdown_synthetic_events(self) -> AsyncIterator[EventDict]:
+        if self._behaviour.startswith("stubborn_shutdown"):
+            until = time.monotonic() + float(self._behaviour.split(":")[1])
+            while (left := until - time.monotonic()) > 0:
+                try:
+                    await asyncio.sleep(left)
+                except asyncio.CancelledError:
+                    pass
         ts = _now()
         for oid, (price, side) in list(self._open.items()):
             yield {
@@ -398,6 +411,49 @@ class TestRoll:
             meta = json.loads((seg_dir / "meta.json").read_text())
             assert "did not stop within" in meta["capture_error"]
 
+    def test_a_late_stop_that_ends_by_itself_keeps_its_own_result(self, tmp_path):
+        # Its closing rows take 0.45 s: past the 0.3 s limit, and it ignores
+        # the cancel, but it is done within the 0.3 s grace.
+        run = _capture(tmp_path, [_stubborn_shutdown(0.45)], seconds=0.6)
+
+        (segment,) = run.manifest.segments
+        assert segment.end_reason is EndReason.FINISHED
+        assert "took more than" in (segment.error or "")
+        assert run.manifest.gaps == []
+        seg_dir = run.out_dir / segment.name
+        assert _every_order_closed(seg_dir / "orders.csv")
+        # The runner's own meta.json, not one rebuilt from the files.
+        meta = json.loads((seg_dir / "meta.json").read_text())
+        assert "unfinished" not in meta
+        assert "n_snapshot_unconfirmed" in meta
+
+    def test_a_segment_that_ignores_the_cancel_is_left_behind(self, tmp_path):
+        run = _capture(tmp_path, [_stubborn_shutdown(1.5)], seconds=0.6)
+
+        (segment,) = run.manifest.segments
+        assert segment.end_reason is EndReason.FINISHED
+        assert "even when cancelled" in (segment.error or "")
+        # It covers the market only until it was asked to stop, not until it
+        # was given up 0.6 s later.
+        assert segment.stream_ended is not None and segment.ended is not None
+        assert segment.ended - segment.stream_ended >= pd.Timedelta(seconds=0.5)
+
+    def test_a_capture_goes_on_when_closing_a_stuck_segment_fails(
+        self, tmp_path, monkeypatch
+    ):
+        def disk_full(*args: Any, **kwargs: Any) -> Any:
+            raise OSError("No space left on device")
+
+        monkeypatch.setattr(_supervisor, "_close_segment_files", disk_full)
+        run = _capture(tmp_path, [HANG_ON_STOP], seconds=1.0, roll_minutes=0.3 / 60)
+
+        assert run.error is None
+        segments = run.manifest.segments
+        assert len(segments) >= 2
+        for segment in segments:
+            assert "closing its files failed" in (segment.error or "")
+            assert "No space left" in (segment.error or "")
+
     def test_segments_still_running_at_the_end_stop_together(
         self, tmp_path, monkeypatch
     ):
@@ -587,6 +643,27 @@ def _crashed_capture(root: Path) -> None:
         ],
     )
     manifest.write(root)
+
+
+class TestCloseSegmentFiles:
+    def test_changes_the_files_but_not_the_segment_or_manifest(self, tmp_path):
+        """It runs in a thread, so it must leave what the capture reads alone."""
+        root = tmp_path / "cap"
+        _crashed_capture(root)
+        manifest = read_manifest(root)
+        assert manifest is not None
+        segment = manifest.segments[0]
+        before = (copy.deepcopy(segment), copy.deepcopy(manifest.to_dict()))
+
+        closed = _supervisor._close_segment_files(
+            root / segment.name, segment, manifest, "it did not stop"
+        )
+
+        assert (segment, manifest.to_dict()) == before
+        assert closed.orders_closed == 1
+        assert _every_order_closed(root / segment.name / "orders.csv")
+        meta = json.loads((root / segment.name / "meta.json").read_text())
+        assert meta["capture_error"] == "it did not stop"
 
 
 class TestRestart:

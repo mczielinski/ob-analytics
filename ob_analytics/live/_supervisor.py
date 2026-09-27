@@ -142,7 +142,9 @@ class _Running:
     bytes_at_stream: int | None = None
     # Set when the supervisor asks the segment to stop, and why.
     stop_reason: EndReason | None = None
-    # Set when the segment did not stop in time and was cancelled.
+    # When the supervisor asked it to stop, and whether it then did not stop
+    # in time and was cancelled.
+    stop_requested: pd.Timestamp | None = None
     stuck: bool = False
     watchers: list[asyncio.Task[Any]] = field(default_factory=list)
 
@@ -431,6 +433,7 @@ class _Supervisor:
         goes unhandled, and a signal cannot end the capture.
         """
         running.stop_reason = reason
+        running.stop_requested = pd.Timestamp.now(tz="UTC")
         running.stop.set()
         if not await _ends_within(running.task, STOP_TIMEOUT_SECONDS):
             logger.error(
@@ -455,12 +458,16 @@ class _Supervisor:
                 # run_capturer keeps errors from its phases; one that escapes
                 # it happened before any of them (the preflight, say).
                 segment.error = repr(exc)
+        elif _finished_normally(running.task):
+            # Late, but it ended by itself before the cancel took: its own
+            # closing rows and meta.json are complete.
+            result = running.task.result()
         for watcher in running.watchers:
             watcher.cancel()
         if running in self._running:
             self._running.remove(running)
 
-        if running.stuck:
+        if result is None and running.stuck:
             await self._close_stuck(running)
         elif result is not None:
             segment.ended = result.ended
@@ -475,6 +482,11 @@ class _Supervisor:
             segment.n_trade_events = result.n_trade_events
             segment.dropped = int(result.extras.get("dropped") or 0)
             segment.sequence_missing = int(result.extras.get("sequence_missing") or 0)
+            if running.stuck:
+                late = (
+                    f"the segment took more than {STOP_TIMEOUT_SECONDS:.0f} s to stop"
+                )
+                segment.error = "; ".join(e for e in (segment.error, late) if e)
         else:
             segment.ended = pd.Timestamp.now(tz="UTC")
 
@@ -506,33 +518,46 @@ class _Supervisor:
         Once it has ended, its files are closed the way a restart closes a
         segment a crash left open: every order still open gets its
         ``deleted`` row at the last recorded time.  One that ignored the
-        cancel too is left as it is, since it may still be writing.
+        cancel too is left as it is, since it may still be writing.  Either
+        way the capture goes on, even if closing the files fails.
         """
         segment = running.segment
         task = running.task
+        limit = f"the segment did not stop within {STOP_TIMEOUT_SECONDS:.0f} s"
         if task.done():
             _retrieve_outcome(task)
-            # In a thread: it reads the segment's files in full, and the next
-            # segment is streaming on this loop.  It changes only this
-            # segment's fields, and the manifest is written again after it.
-            await asyncio.to_thread(
-                _close_unfinished,
-                self._root / segment.name,
-                segment,
-                self._manifest,
-                error=(
-                    f"the segment did not stop within {STOP_TIMEOUT_SECONDS:.0f} s,"
-                    " so it was cancelled and closed from its files"
-                ),
-            )
-            return
-        segment.error = (
-            f"the segment did not stop within {STOP_TIMEOUT_SECONDS:.0f} s, even "
-            "when cancelled; its files may be incomplete"
-        )
+            error = f"{limit}, so it was cancelled and closed from its files"
+            try:
+                # In a thread: it reads the segment's files in full, and the
+                # next segment is streaming on this loop.  It changes nothing
+                # the loop uses; the results are applied here.
+                closed = await asyncio.to_thread(
+                    _close_segment_files,
+                    self._root / segment.name,
+                    segment,
+                    self._manifest,
+                    error,
+                )
+            except Exception as exc:  # noqa: BLE001 - the capture must go on
+                logger.error(
+                    "Capture '{}': closing the files of {} failed: {!r}",
+                    self._manifest.source,
+                    segment.name,
+                    exc,
+                )
+                error = f"{limit}; closing its files failed: {exc!r}"
+            else:
+                _apply_closed_files(segment, closed, error)
+                segment.ended = pd.Timestamp.now(tz="UTC")
+                return
+        else:
+            error = f"{limit}, even when cancelled; its files may be incomplete"
+        # Nothing on disk says how far it got: count it as covering the market
+        # only until it was asked to stop, so a gap after it is not hidden.
+        segment.error = error
         segment.ended = pd.Timestamp.now(tz="UTC")
         if segment.stream_started is not None:
-            segment.stream_ended = segment.ended
+            segment.stream_ended = running.stop_requested
 
     # -- waiting ------------------------------------------------------------
 
@@ -651,6 +676,11 @@ class _Supervisor:
 # ---------------------------------------------------------------------------
 
 
+def _finished_normally(task: asyncio.Task[Any]) -> bool:
+    """Whether *task* has ended with a result (not cancelled, not raised)."""
+    return task.done() and not task.cancelled() and task.exception() is None
+
+
 async def _ends_within(task: asyncio.Task[Any], seconds: float) -> bool:
     """Wait up to *seconds* for *task* to end; whether it did."""
     await asyncio.wait({task}, timeout=seconds)
@@ -730,16 +760,45 @@ def _close_unfinished(
     """Close a segment a dead capture process left open, so it replays.
 
     The process never wrote the segment's closing rows or its final
-    ``meta.json``, and its last line in each file may be cut short -- or, if
-    the process died before its first flush, a file may be empty.  This cuts
-    each file back to its last whole line, puts back a missing header, closes
-    every L3 order still open at the last recorded time (the same ``deleted``
-    rows a normal shutdown writes), and completes ``meta.json``.  The segment is marked
+    ``meta.json``.  :func:`_close_segment_files` completes the files, and the
+    segment is marked
     :attr:`~ob_analytics.live._manifest.EndReason.UNFINISHED`; it is taken to
     cover up to its last row or last heartbeat, whichever is later.
 
     *error* says why the segment was left open.  Returns how many orders it
     closed.
+    """
+    closed = _close_segment_files(seg_dir, segment, manifest, error)
+    segment.end_reason = EndReason.UNFINISHED
+    _apply_closed_files(segment, closed, error)
+    return closed.orders_closed
+
+
+@dataclass(frozen=True)
+class _ClosedFiles:
+    """What :func:`_close_segment_files` found and wrote."""
+
+    covered_to: pd.Timestamp | None
+    orders_closed: int
+    n_book: int
+    n_trade: int
+    dropped: int
+    sequence_missing: int
+
+
+def _close_segment_files(
+    seg_dir: Path, segment: Segment, manifest: CaptureManifest, error: str
+) -> _ClosedFiles:
+    """Complete the files of a segment whose capture never closed them.
+
+    Its last line in each file may be cut short -- or, if the capture died
+    before its first flush, a file may be empty.  This cuts each file back to
+    its last whole line, puts back a missing header, closes every L3 order
+    still open at the last recorded time (the same ``deleted`` rows a normal
+    shutdown writes), and completes ``meta.json`` with *error*.
+
+    It reads *segment* and *manifest* but changes neither, so it can run in a
+    thread while the capture goes on.
     """
     for name in ("orders.csv", "depth.csv", "trades.csv", "raw.jsonl"):
         _trim_to_last_line(seg_dir / name)
@@ -798,17 +857,26 @@ def _close_unfinished(
         }
     )
     _write_json_atomic(meta_path, meta)
+    return _ClosedFiles(
+        covered_to=covered_to,
+        orders_closed=closed,
+        n_book=n_book,
+        n_trade=n_trade,
+        dropped=int(meta.get("dropped") or 0),
+        sequence_missing=int(meta.get("sequence_missing") or 0),
+    )
 
-    segment.end_reason = EndReason.UNFINISHED
+
+def _apply_closed_files(segment: Segment, closed: _ClosedFiles, error: str) -> None:
+    """Record on *segment* what closing its files found."""
     segment.error = error
-    segment.ended = covered_to or segment.started
+    segment.ended = closed.covered_to or segment.started
     if segment.stream_started is not None:
-        segment.stream_ended = covered_to
-    segment.n_book_events = n_book
-    segment.n_trade_events = n_trade
-    segment.dropped = int(meta.get("dropped") or 0)
-    segment.sequence_missing = int(meta.get("sequence_missing") or 0)
-    return closed
+        segment.stream_ended = closed.covered_to
+    segment.n_book_events = closed.n_book
+    segment.n_trade_events = closed.n_trade
+    segment.dropped = closed.dropped
+    segment.sequence_missing = closed.sequence_missing
 
 
 _TRIM_BLOCK = 64 * 1024

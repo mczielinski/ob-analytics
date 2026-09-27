@@ -70,6 +70,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   segment asked to stop has 20 seconds to close. After that it is cancelled
   and closed from its files, like a segment a crash left open. The manifest
   keeps why it was stopped and records the delay as its error, not as a gap.
+  If closing its files fails, the error says so and the capture carries on.
   At the end of a capture all running segments are stopped together, so
   SIGTERM ends a capture in under a minute even when a source hangs.
 - **A Bitstamp L3 capture through cryptofeed passes `audit`** (#284).
