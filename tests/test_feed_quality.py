@@ -30,6 +30,7 @@ from ob_analytics import (
     LobsterSource,
     Severity,
     StaleOrder,
+    TradeAttribution,
     data_quality_summary,
     detect_stale_orders,
 )
@@ -42,6 +43,7 @@ from ob_analytics.analytics import (
 from ob_analytics.datasets import toy_events, toy_trades
 from ob_analytics.depth import price_level_volume
 from ob_analytics.engine import crossed_prefix_counts
+from ob_analytics.protocols import trade_attribution_of
 
 # ---------------------------------------------------------------------------
 # Builders
@@ -301,6 +303,84 @@ class TestDataQualitySummary:
         s = data_quality_summary(ev, trades)
         # 2 of 3 trades miss a maker or taker.
         assert s.unmatched_trades_pct == pytest.approx(200.0 / 3.0)
+
+    # -- trade attribution (#284) -------------------------------------------
+
+    @staticmethod
+    def _no_takers() -> pd.DataFrame:
+        """Three trades: makers resolved on two, takers resolved on none."""
+        return pd.DataFrame(
+            {
+                "maker_event_id": np.array([1, 2, np.nan], dtype=object),
+                "taker_event_id": np.array([np.nan, np.nan, np.nan], dtype=object),
+            }
+        )
+
+    def test_maker_only_feed_counts_makers_only(self):
+        """A feed that shows resting orders only is not faulted for takers."""
+        s = data_quality_summary(
+            crossed_events(),
+            self._no_takers(),
+            trade_attribution=TradeAttribution.MAKER_ONLY,
+        )
+        assert s.unmatched_trades_pct == pytest.approx(100.0 / 3.0)
+        assert s.trade_attribution is TradeAttribution.MAKER_ONLY
+
+    def test_both_sides_feed_still_counts_takers(self):
+        s = data_quality_summary(crossed_events(), self._no_takers())
+        assert s.unmatched_trades_pct == 100.0
+        assert s.trade_attribution is TradeAttribution.BOTH
+
+    def test_feed_naming_no_orders_is_not_checked(self):
+        s = data_quality_summary(
+            crossed_events(),
+            self._no_takers(),
+            trade_attribution=TradeAttribution.NONE,
+        )
+        assert s.unmatched_trades_pct == 0.0
+
+    def test_the_check_says_which_orders_it_looked_for(self):
+        s = data_quality_summary(
+            crossed_events(),
+            self._no_takers(),
+            trade_attribution=TradeAttribution.MAKER_ONLY,
+        )
+        (check,) = [c for c in s.checks if c.name == "unmatched_trades"]
+        assert "no resolvable maker order" in check.detail
+        assert "does not show takers" in check.detail
+        assert "maker only" in s.render()
+        assert s.to_dict()["trade_attribution"] == "maker_only"
+
+
+class TestTradeAttributionDeclarations:
+    """Each source says which orders of a trade its order events can name."""
+
+    def test_native_bitstamp_names_both(self):
+        assert BitstampSource().trade_attribution is TradeAttribution.BOTH
+
+    def test_lobster_names_the_maker_only(self):
+        """ITCH does not identify the aggressor; the taker columns are a guess."""
+        assert LobsterSource().trade_attribution is TradeAttribution.MAKER_ONLY
+
+    def test_databento_names_the_maker_only(self):
+        from ob_analytics.databento import DatabentoSource
+
+        assert DatabentoSource().trade_attribution is TradeAttribution.MAKER_ONLY
+
+    def test_price_level_sources_name_neither(self):
+        from ob_analytics.depth_l2 import DepthCsvSource
+        from ob_analytics.live.ccxt_source import CcxtSource
+
+        assert DepthCsvSource().trade_attribution is TradeAttribution.NONE
+        assert CcxtSource().trade_attribution is TradeAttribution.NONE
+
+    def test_an_undeclared_source_is_read_as_both(self):
+        """A plug-in written before the declaration keeps today's check."""
+
+        class _OldPlugin:
+            name = "old"
+
+        assert trade_attribution_of(_OldPlugin()) is TradeAttribution.BOTH
 
     def test_duplicate_event_ids_counted(self):
         # Two rows share event_id 2 (event_id must be globally unique).

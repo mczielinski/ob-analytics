@@ -28,12 +28,8 @@ from ob_analytics.visualization._data import (
     check_book_payload_level,
     mpl_marker_area_to_plotly_size,
 )
-from ob_analytics.visualization._palette import (
-    _ASK_COLOR,
-    _BID_COLOR,
-    _BUY_COLOR,
-    _SELL_COLOR,
-)
+from ob_analytics.visualization._palette import Palette
+from ob_analytics.visualization._theme import DEFAULT_THEME, PlotTheme
 
 
 @lru_cache(maxsize=1)
@@ -60,30 +56,51 @@ def _import_bokeh() -> Any:
 # Shared layout helpers
 # ---------------------------------------------------------------------------
 
-# Light theme, matching the matplotlib default and the plotly backend (one
-# polarity across the gallery; the reference bundle is light).
 _BASE_FIGURE_KWARGS: dict[str, Any] = {
     "width": 900,
     "height": 520,
     "tools": "pan,wheel_zoom,box_zoom,reset,save",
     "toolbar_location": "above",
-    "background_fill_color": "#ffffff",
 }
 
+# Plot-area background of the light and dark styles (the dark one is
+# seaborn's gray, as in the matplotlib and plotly backends).
+_LIGHT_BACKGROUND = "#ffffff"
+_DARK_BACKGROUND = "#EAEAF2"
 
-def _base_figure(bpl: Any, title: str = "", **kwargs: Any) -> Any:
-    """Create a Bokeh figure with the ob-analytics theme."""
+# Text sizes of the default theme (bokeh's own axis defaults); other themes
+# scale them by ``PlotTheme.text_scale`` (context x font_scale).
+_TITLE_FONT_PT = 13
+_AXIS_LABEL_FONT_PX = 13
+_TICK_LABEL_FONT_PX = 11
+
+
+def _base_figure(bpl: Any, theme: PlotTheme, title: str = "", **kwargs: Any) -> Any:
+    """Create a Bokeh figure styled by *theme*.
+
+    ``theme.bokeh_figure`` goes on top of the theme's defaults; the face's own
+    *kwargs* (axis types, ranges) go last.
+    """
     opts: dict[str, Any] = {
         **_BASE_FIGURE_KWARGS,
+        "background_fill_color": _DARK_BACKGROUND if theme.dark else _LIGHT_BACKGROUND,
         "title": title,
         "x_axis_type": "datetime",
     }
+    opts.update(theme.bokeh_figure)
     opts.update(kwargs)
     fig = bpl.figure(**opts)
-    fig.title.text_font_size = "13pt"
+    scale = theme.text_scale
+    fig.title.text_font_size = f"{_TITLE_FONT_PT * scale:g}pt"
     fig.title.align = "left"
+    fig.axis.axis_label_text_font_size = f"{_AXIS_LABEL_FONT_PX * scale:g}px"
+    fig.axis.major_label_text_font_size = f"{_TICK_LABEL_FONT_PX * scale:g}px"
     fig.grid.grid_line_dash = [2, 2]
     fig.grid.grid_line_alpha = 0.35
+    if theme.dark:
+        fig.grid.grid_line_color = "white"
+        fig.grid.grid_line_alpha = 1.0
+        fig.grid.grid_line_dash = []
     return fig
 
 
@@ -109,7 +126,7 @@ def _apply_padded_y_range(fig: Any, y_range: tuple[float, float] | None) -> None
 # ---------------------------------------------------------------------------
 
 
-def _bokeh_mid_line(fig: Any, mid_line: Any) -> None:
+def _bokeh_mid_line(fig: Any, mid_line: Any, pal: Palette) -> None:
     """Reference mid/microprice line, held constant until the next sample.
 
     "after" steps: the mid holds until the book changes; linear
@@ -121,7 +138,7 @@ def _bokeh_mid_line(fig: Any, mid_line: Any) -> None:
         x=mid_line["timestamp"],
         y=mid_line["mid"],
         mode="after",
-        line_color="#888888",
+        line_color=pal.reference_line,
         line_width=1,
         line_alpha=0.8,
     )
@@ -163,7 +180,7 @@ def _bokeh_lollipops(fig: Any, side: Any, color: str, label: str) -> None:
     )
 
 
-def bokeh_trades(data: dict) -> Any:
+def bokeh_trades(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render the L2 signed-lollipop trade tape.
 
     Each trade is a stem from the mid line to its execution price, tipped by
@@ -171,15 +188,16 @@ def bokeh_trades(data: dict) -> Any:
     spans the full data extent (no quantile clip), so spike prints stay
     visible.
     """
+    pal = theme.palette
     bpl = _import_bokeh()
     fig = _base_figure(
-        bpl, title="Trade Prices", x_axis_label="Time", y_axis_label="Price"
+        bpl, theme, title="Trade Prices", x_axis_label="Time", y_axis_label="Price"
     )
 
-    _bokeh_mid_line(fig, data.get("mid_line"))
+    _bokeh_mid_line(fig, data.get("mid_line"), pal)
     for side, color, label in (
-        (data["buys"], _BUY_COLOR, "buy (lifts ask)"),
-        (data["sells"], _SELL_COLOR, "sell (hits bid)"),
+        (data["buys"], pal.buy, "buy (lifts ask)"),
+        (data["sells"], pal.sell, "sell (hits bid)"),
     ):
         if side.empty:
             continue
@@ -190,7 +208,7 @@ def bokeh_trades(data: dict) -> Any:
     return fig
 
 
-def bokeh_trade_tape_per_order(data: dict) -> Any:
+def bokeh_trade_tape_per_order(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """L3 (MBO) signed-lollipop trade tape with maker resting spans.
 
     Same signed lollipops as the L2 tape (stem mid -> price, marker sized by
@@ -198,9 +216,11 @@ def bokeh_trade_tape_per_order(data: dict) -> Any:
     span from each consumed maker order's creation to its fill.  Above the
     density threshold the lollipops are per-second VWAPs.
     """
+    pal = theme.palette
     bpl = _import_bokeh()
     fig = _base_figure(
         bpl,
+        theme,
         title="Trade tape with maker order lifecycles",
         x_axis_label="Time",
         y_axis_label="Execution Price",
@@ -209,7 +229,7 @@ def bokeh_trade_tape_per_order(data: dict) -> Any:
     dense = data.get("dense", False)
     span_alpha = 0.12 if dense else 0.35
     # Maker resting spans (horizontal), faint underneath the lollipops.
-    for side, color in ((data["buys"], _BUY_COLOR), (data["sells"], _SELL_COLOR)):
+    for side, color in ((data["buys"], pal.buy), (data["sells"], pal.sell)):
         if side.empty:
             continue
         fig.segment(
@@ -222,12 +242,12 @@ def bokeh_trade_tape_per_order(data: dict) -> Any:
             line_alpha=span_alpha,
         )
 
-    _bokeh_mid_line(fig, data.get("mid_line"))
+    _bokeh_mid_line(fig, data.get("mid_line"), pal)
 
     suffix = ", per-s VWAP" if dense else ""
     for side, color, label in (
-        (data["lolli_buys"], _BUY_COLOR, f"buy (lifts ask){suffix}"),
-        (data["lolli_sells"], _SELL_COLOR, f"sell (hits bid){suffix}"),
+        (data["lolli_buys"], pal.buy, f"buy (lifts ask){suffix}"),
+        (data["lolli_sells"], pal.sell, f"sell (hits bid){suffix}"),
     ):
         if side.empty:
             continue
@@ -247,8 +267,9 @@ def bokeh_trade_tape_per_order(data: dict) -> Any:
 _bokeh_color_field = biased_color_norm
 
 
-def bokeh_price_levels(data: dict) -> Any:
+def bokeh_price_levels(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render the price-level depth heatmap."""
+    pal = theme.palette
     bpl = _import_bokeh()
     from bokeh.models import (
         ColorBar,
@@ -267,6 +288,7 @@ def bokeh_price_levels(data: dict) -> Any:
 
     fig = _base_figure(
         bpl,
+        theme,
         title="Price Levels Over Time",
         x_axis_label="Time",
         y_axis_label="Limit Price",
@@ -325,7 +347,7 @@ def bokeh_price_levels(data: dict) -> Any:
                 x=spread["timestamp"],
                 y=mp,
                 mode="after",
-                line_color="#222222",
+                line_color=pal.price_line,
                 line_width=1.5,
                 legend_label="Midprice",
             )
@@ -335,7 +357,7 @@ def bokeh_price_levels(data: dict) -> Any:
                 x=spread["timestamp"],
                 y=spread["best_ask_price"],
                 mode="after",
-                line_color=_ASK_COLOR,
+                line_color=pal.ask,
                 line_width=1.2,
                 line_dash="dotted",
                 legend_label="Best Ask",
@@ -345,7 +367,7 @@ def bokeh_price_levels(data: dict) -> Any:
                 x=spread["timestamp"],
                 y=spread["best_bid_price"],
                 mode="after",
-                line_color=_BID_COLOR,
+                line_color=pal.bid,
                 line_width=1.2,
                 line_dash="dotted",
                 legend_label="Best Bid",
@@ -360,7 +382,7 @@ def bokeh_price_levels(data: dict) -> Any:
                 y=sells["price"],
                 marker="inverted_triangle",
                 size=8,
-                fill_color=_SELL_COLOR,
+                fill_color=pal.sell,
                 line_color="white",
                 legend_label="Sell Trades",
             )
@@ -370,7 +392,7 @@ def bokeh_price_levels(data: dict) -> Any:
                 y=buys["price"],
                 marker="triangle",
                 size=8,
-                fill_color=_BUY_COLOR,
+                fill_color=pal.buy,
                 line_color="white",
                 legend_label="Buy Trades",
             )
@@ -388,13 +410,16 @@ def bokeh_price_levels(data: dict) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def _bokeh_book_bars(data: dict, *, per_order: bool) -> Any:
+def _bokeh_book_bars(
+    data: dict, *, per_order: bool, theme: PlotTheme = DEFAULT_THEME
+) -> Any:
     """Horizontal book ladder: price on y, size on x, bids below / asks above.
 
     L2 draws one bar per price level; L3 segments each level into its
     individual orders with white separators, so equal-total levels with
     different composition read differently.
     """
+    pal = theme.palette
     check_book_payload_level(data, per_order=per_order)
     bpl = _import_bokeh()
     from bokeh.models import Span
@@ -403,6 +428,7 @@ def _bokeh_book_bars(data: dict, *, per_order: bool) -> Any:
     asks = data["asks"]
     fig = _base_figure(
         bpl,
+        theme,
         title=data["timestamp"].strftime("%Y-%m-%d %H:%M:%S UTC"),
         x_axis_type="linear",
         x_axis_label="Size (per order)" if per_order else "Size",
@@ -413,7 +439,7 @@ def _bokeh_book_bars(data: dict, *, per_order: bool) -> Any:
     # White per-order separators (dark ones vanished against the fill).
     line_color = "white" if per_order else None
     line_width = 1.0 if per_order else 0.0
-    for side, color, label in ((bids, _BID_COLOR, "Bid"), (asks, _ASK_COLOR, "Ask")):
+    for side, color, label in ((bids, pal.bid, "Bid"), (asks, pal.ask, "Ask")):
         if side.empty:
             continue
         fig.hbar(
@@ -433,7 +459,7 @@ def _bokeh_book_bars(data: dict, *, per_order: bool) -> Any:
             Span(
                 location=mid,
                 dimension="width",
-                line_color="#444444",
+                line_color=pal.rule,
                 line_dash="dashed",
                 line_width=1,
             )
@@ -445,7 +471,7 @@ def _bokeh_book_bars(data: dict, *, per_order: bool) -> Any:
                 Span(
                     location=y_val,
                     dimension="width",
-                    line_color="#888888",
+                    line_color=pal.reference_line,
                     line_dash="dotted",
                     line_width=0.8,
                 )
@@ -456,24 +482,32 @@ def _bokeh_book_bars(data: dict, *, per_order: bool) -> Any:
     return fig
 
 
-def bokeh_book_snapshot_aggregate(data: dict) -> Any:
+def bokeh_book_snapshot_aggregate(
+    data: dict, *, theme: PlotTheme = DEFAULT_THEME
+) -> Any:
     """L2 (MBP) book snapshot: aggregate size per price level."""
-    return _bokeh_book_bars(data, per_order=False)
+    return _bokeh_book_bars(data, per_order=False, theme=theme)
 
 
-def bokeh_book_snapshot_per_order(data: dict) -> Any:
+def bokeh_book_snapshot_per_order(
+    data: dict, *, theme: PlotTheme = DEFAULT_THEME
+) -> Any:
     """L3 (MBO) book snapshot: each order a stacked segment within its level."""
-    return _bokeh_book_bars(data, per_order=True)
+    return _bokeh_book_bars(data, per_order=True, theme=theme)
 
 
-def _bokeh_depth_curve(data: dict, *, per_order: bool) -> Any:
+def _bokeh_depth_curve(
+    data: dict, *, per_order: bool, theme: PlotTheme = DEFAULT_THEME
+) -> Any:
     """Cumulative-depth curve: stepped per level (L2) or per order (L3)."""
+    pal = theme.palette
     check_book_payload_level(data, per_order=per_order)
     bpl = _import_bokeh()
     from bokeh.models import ColumnDataSource
 
     fig = _base_figure(
         bpl,
+        theme,
         title=data["timestamp"].strftime("%Y-%m-%d %H:%M:%S UTC"),
         x_axis_type="linear",
         x_axis_label="Price",
@@ -481,8 +515,8 @@ def _bokeh_depth_curve(data: dict, *, per_order: bool) -> Any:
     )
 
     for side, color, label in (
-        (data["bids"], _BID_COLOR, "Bid"),
-        (data["asks"], _ASK_COLOR, "Ask"),
+        (data["bids"], pal.bid, "Bid"),
+        (data["asks"], pal.ask, "Ask"),
     ):
         if side.empty:
             continue
@@ -524,14 +558,14 @@ def _bokeh_depth_curve(data: dict, *, per_order: bool) -> Any:
     return fig
 
 
-def bokeh_depth_chart_aggregate(data: dict) -> Any:
+def bokeh_depth_chart_aggregate(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """L2 (MBP) depth chart: cumulative liquidity stepped per price level."""
-    return _bokeh_depth_curve(data, per_order=False)
+    return _bokeh_depth_curve(data, per_order=False, theme=theme)
 
 
-def bokeh_depth_chart_per_order(data: dict) -> Any:
+def bokeh_depth_chart_per_order(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """L3 (MBO) depth chart: cumulative liquidity stepped per individual order."""
-    return _bokeh_depth_curve(data, per_order=True)
+    return _bokeh_depth_curve(data, per_order=True, theme=theme)
 
 
 # ---------------------------------------------------------------------------

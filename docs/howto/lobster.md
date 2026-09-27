@@ -69,6 +69,21 @@ hidden-execution rows.
     rows; the implementation logs a warning and uses the minimum consistent
     length.
 
+## Takers are guessed
+
+A LOBSTER execution row names the resting order it hit. The order that hit it
+is not in the file: LOBSTER is built from Nasdaq ITCH, which does not identify
+the aggressor, and an order that trades on arrival never rests. The trade
+reader fills the `taker` columns with a guess: the most recent new order on the
+other side, before the execution, at a price that could have traded. The guess
+changes only the `taker` columns, so book volumes are exact, but
+`set_order_types` labels the guessed order `market` or `market-limit`, and a
+wrong guess mislabels an order.
+
+The source declares `trade_attribution = maker_only`, so
+[`audit`](audit.md) counts a trade as unmatched only when its maker is missing
+and does not count a guessed taker as a match.
+
 ## LOBSTER round-trip output
 
 To write results back to LOBSTER message + orderbook CSVs, see

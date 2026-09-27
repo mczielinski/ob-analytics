@@ -457,9 +457,12 @@ The **level** is the order-book resolution the plot renders at: `Level.L2`
 a single level dispatches without naming it; registering the *same* concept at
 both `L2` and `L3` makes it *comparable*, and callers then pass `level=`.
 
-The matplotlib backend calls `renderer(data, ax)` (or
-`renderer(data, ax, theme=theme)` when a theme is passed); other backends call
-`renderer(data)`.
+The matplotlib backend calls `renderer(data, ax)`; other backends call
+`renderer(data)`. When the caller passes a theme, `plot()` adds `theme=theme`
+for any renderer that accepts it, so a renderer should take a keyword-only
+`theme: PlotTheme = DEFAULT_THEME` and read its colours from `theme.palette`.
+A renderer without a `theme` parameter still works; `plot()` logs a warning
+and draws it without the theme.
 
 ```python
 from __future__ import annotations
@@ -485,8 +488,8 @@ def mpl_cumvol(data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT
     if ax is None:
         _, ax = plt.subplots()
     df = data["series"]
-    ax.plot(df["timestamp"], df["signed_cumvol"])
-    ax.axhline(0, lw=0.5)
+    ax.plot(df["timestamp"], df["signed_cumvol"], color=theme.palette.series)
+    ax.axhline(0, lw=0.5, color=theme.palette.rule)
     ax.set_ylabel("signed cumulative volume")
     return ax.figure
 
@@ -504,7 +507,7 @@ result = Pipeline().run("orders.csv")
 
 fig = plot("cumvol", backend="matplotlib", **prepare_cumvol_data(result.trades))
 
-# Override the theme per call (matplotlib only):
+# Override the theme per call:
 fig = plot(
     "cumvol",
     theme=PlotTheme(style="darkgrid"),
@@ -519,7 +522,8 @@ the dispatcher at the module so it imports lazily on first use:
 from ob_analytics.visualization import register_plot_backend
 
 # In your package, e.g. my_pkg/_altair.py, call at import time:
-#     RENDERERS.register(("cumvol", Level.L2, "altair"), altair_cumvol)  # def altair_cumvol(data): ...
+#     RENDERERS.register(("cumvol", Level.L2, "altair"), altair_cumvol)
+#     # def altair_cumvol(data, *, theme=DEFAULT_THEME): ...
 register_plot_backend("altair", "my_pkg._altair")
 
 fig = plot("cumvol", backend="altair", **prepare_cumvol_data(result.trades))

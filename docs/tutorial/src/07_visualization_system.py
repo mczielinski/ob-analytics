@@ -242,10 +242,26 @@ fig = plot(
 save_figure(fig, "trades_talk.png", dpi=200)
 
 # %% [markdown]
-# `PlotTheme` bundles a Seaborn style, context, font scale, and any
-# Matplotlib `rc` overrides; `save_figure` writes at the DPI you ask for.
-# Theming is Matplotlib-only — Plotly and Bokeh figures carry their own
-# styling.
+# `PlotTheme` bundles a Seaborn style, context, font scale, and a
+# `Palette` of named colours; `save_figure` writes at the DPI you ask for.
+# The same theme works on every backend, so one concept looks the same in
+# each: the palette colours every backend's marks, the context and font
+# scale size its text, and the dark styles give Plotly and Bokeh
+# Seaborn's gray background. Each backend also takes its own overrides:
+# `rc` for Matplotlib, `plotly_layout` for Plotly, and `bokeh_figure` for
+# Bokeh.
+#
+# ```python
+# from ob_analytics.visualization import Palette
+#
+# theme = PlotTheme(
+#     context="talk",
+#     palette=Palette(buy="#1f77b4", sell="#d62728"),
+#     plotly_layout={"font": {"family": "Georgia"}},
+# )
+# plot("trade_tape", level="L2", theme=theme, **payload)
+# plot("trade_tape", level="L2", backend="plotly", theme=theme, **payload)
+# ```
 #
 # ## Wrapping up
 #

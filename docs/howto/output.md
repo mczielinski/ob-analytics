@@ -10,7 +10,7 @@ the interactive Plotly backend.
 ## Themes and saving
 
 There is no global theme to set. Pass a `PlotTheme` to `plot()` and it
-applies only to that call (matplotlib backend only):
+applies only to that call, on any backend:
 
 ```python
 from ob_analytics.visualization import plot, save_figure, prepare, PlotTheme
@@ -24,6 +24,39 @@ theme = PlotTheme(
 
 fig = plot("trade_tape", level="L2", theme=theme, **prepare.trades(result.trades))
 save_figure(fig, "trades_hires.png", dpi=300)
+```
+
+The same theme styles the Plotly and Bokeh backends. Each backend reads
+what it can from the shared fields and ignores the other backends'
+overrides:
+
+| Field | Matplotlib | Plotly | Bokeh |
+|---|---|---|---|
+| `palette` | every mark's colour | every mark's colour | every mark's colour |
+| `context`, `font_scale` | Seaborn text sizes | template font size | title, axis, and tick text |
+| `style` | Seaborn style | `plotly_white`, or `seaborn` for `dark`/`darkgrid` | white, or Seaborn's gray for `dark`/`darkgrid` |
+| `rc` | applied last | — | — |
+| `plotly_layout` | — | applied last to the template | — |
+| `bokeh_figure` | — | — | passed to `bokeh.plotting.figure` |
+
+To change colours, pass a `Palette`. Its fields name what each colour
+means, such as `bid`/`ask` (side), `buy`/`sell` (aggressor), and
+`price_line`/`reference_line` (neutral marks):
+
+```python
+from ob_analytics.visualization import Palette, PlotTheme
+
+theme = PlotTheme(
+    palette=Palette(buy="#1f77b4", sell="#d62728"),
+    plotly_layout={"font": {"family": "Georgia"}},
+)
+fig = plot(
+    "trade_tape",
+    level="L2",
+    backend="plotly",
+    theme=theme,
+    **prepare.trades(result.trades),
+)
 ```
 
 ## Serialisation

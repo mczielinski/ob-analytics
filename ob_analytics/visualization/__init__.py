@@ -28,9 +28,11 @@ trade price charts, volume percentiles, and event histograms.
 from __future__ import annotations
 
 import importlib
+import inspect
 from collections.abc import Callable
 from typing import Any
 
+from loguru import logger
 from matplotlib.axes import Axes
 
 from ob_analytics._registry import Registry
@@ -100,6 +102,21 @@ def _registered_levels(concept: str, backend: str) -> list[Level | None]:
     ]
 
 
+def _accepts_theme(renderer: RendererFn) -> bool:
+    """Whether *renderer* takes a ``theme`` keyword (by name or ``**kwargs``).
+
+    Renderers written before themes applied to every backend take only
+    ``(data)``; :func:`plot` must not pass them ``theme=``.
+    """
+    try:
+        params = inspect.signature(renderer).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        p.name == "theme" or p.kind is inspect.Parameter.VAR_KEYWORD for p in params
+    )
+
+
 def _resolve_level(concept: str, backend: str) -> Level | None:
     """Resolve the implicit level of *concept* on *backend*.
 
@@ -157,7 +174,7 @@ def plot(
     **data
         Prepared plot data, as returned by the matching ``prepare_*`` helper.
         May include ``theme=PlotTheme(...)`` to override :data:`DEFAULT_THEME`
-        (matplotlib backend only; ignored by other backends).
+        for this call, on any backend.
 
     Returns
     -------
@@ -183,9 +200,20 @@ def plot(
     if level is _UNSET:
         level = _resolve_level(concept, backend)
     renderer = RENDERERS.get((concept, level, backend))
+    kwargs: dict[str, Any] = {}
+    if theme is not None:
+        if _accepts_theme(renderer):
+            kwargs["theme"] = theme
+        else:
+            logger.warning(
+                "The {!r} renderer for {!r} takes no theme= argument; "
+                "ignoring the theme.",
+                backend,
+                concept,
+            )
     if backend == "matplotlib":
-        return renderer(data, ax) if theme is None else renderer(data, ax, theme=theme)
-    return renderer(data)
+        return renderer(data, ax, **kwargs)
+    return renderer(data, **kwargs)
 
 
 # Shared display-window primitive: one mid-anchored clipping
@@ -193,23 +221,22 @@ def plot(
 FocusWindow = _viz_data.FocusWindow
 focus_window = _viz_data.focus_window
 
-# matplotlib theme + save exports.  Imported *after* RENDERERS is defined: the
+# matplotlib save exports.  Imported *after* RENDERERS is defined: the
 # self-registration block at the bottom of _matplotlib imports RENDERERS from
 # this (partially initialized) package, so RENDERERS must already exist to
 # avoid a circular-import deadlock.
-from ob_analytics.visualization._matplotlib import (
-    DEFAULT_THEME,
-    PlotTheme,
-    format_time_axis,
-    save_figure,
-)
+from ob_analytics.visualization._matplotlib import format_time_axis, save_figure
+from ob_analytics.visualization._palette import DEFAULT_PALETTE, Palette
+from ob_analytics.visualization._theme import DEFAULT_THEME, PlotTheme
 
 __all__ = [
+    "DEFAULT_PALETTE",
     "DEFAULT_THEME",
     "RENDERERS",
     "FocusWindow",
     "Level",
     # Themes / persistence
+    "Palette",
     "PlotTheme",
     "available_concepts",
     # Ticks -> quote-currency for low-level plotting (issue #155)

@@ -145,6 +145,7 @@ from ob_analytics.protocols import (
     RunContext,
     SequenceKind,
     Source,
+    TradeAttribution,
     TradeSource,
 )
 from ob_analytics.schemas import (
@@ -245,6 +246,7 @@ __all__ = [
     "Source",
     "SourceSettings",
     "StaleOrder",
+    "TradeAttribution",
     "TradeSource",
     "__version__",
     # ── Transaction cost and liquidity ───────────────────────────────

@@ -716,7 +716,7 @@ class TestPrepareVpin:
 
 
 class TestPrepareOfi:
-    def test_returns_colors_and_bar_width(self) -> None:
+    def test_leaves_colours_to_the_renderer(self) -> None:
         ts = pd.date_range("2015-01-01", periods=5, freq="min")
         ofi_df = pd.DataFrame(
             {
@@ -725,10 +725,9 @@ class TestPrepareOfi:
             }
         )
         data = prepare_ofi_data(ofi_df)
-        assert "colors" in data
-        assert len(data["colors"]) == 5
-        assert data["colors"][0] == "#27ae60"  # positive → green
-        assert data["colors"][1] == "#e74c3c"  # negative → red
+        # Bar colours come from the theme's palette at render time.
+        assert "colors" not in data
+        assert data["ofi_df"] is ofi_df
 
 
 class TestPrepareOfiHorizon:

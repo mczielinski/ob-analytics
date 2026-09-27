@@ -114,6 +114,46 @@ class SequenceKind(str, Enum):
     MONOTONIC = "monotonic"
 
 
+class TradeAttribution(str, Enum):
+    """Which orders of a trade a feed's order events can name.
+
+    Every trade has a maker, the order that was resting in the book, and a
+    taker, the order that arrived and traded against it.  Whether the order
+    events show both depends on the feed, not on the reconstruction:
+
+    * :attr:`BOTH` — the feed reports every order the venue accepts, takers
+      included, so both orders of a trade can be found.  Bitstamp's
+      ``live_orders`` channel does this.
+    * :attr:`MAKER_ONLY` — the feed shows resting orders only.  A taker trades
+      on arrival and never rests, so it never appears.  Exchange order-by-order
+      feeds (Nasdaq ITCH, from which LOBSTER is built, and Databento MBO) do
+      not identify the aggressor, and a feed made of book snapshots cannot
+      show it.
+    * :attr:`NONE` — the feed has no order identity (L2), so neither order can
+      be named.
+
+    A source declares it so the unmatched-trades check in
+    :func:`~ob_analytics.analytics.data_quality_summary` counts only the orders
+    the feed can show.  A source that does not declare it is read as
+    :attr:`BOTH`, the check's behaviour before this declaration existed.
+
+    Mixes in ``str`` so members compare and serialise as their value, as
+    :class:`FeedType` does.
+    """
+
+    BOTH = "both"
+    MAKER_ONLY = "maker_only"
+    NONE = "none"
+
+
+def trade_attribution_of(source: Any) -> TradeAttribution:
+    """Return what *source* declares as its :class:`TradeAttribution`.
+
+    A source that does not declare one is read as :attr:`TradeAttribution.BOTH`.
+    """
+    return TradeAttribution(getattr(source, "trade_attribution", TradeAttribution.BOTH))
+
+
 @dataclass(frozen=True)
 class RunContext:
     """Per-run parameters that don't belong on the Source constructor.
@@ -473,6 +513,13 @@ class Source(Protocol):
     feed_type : FeedType
         The source's crossing invariant (:class:`FeedType`), so downstream code
         reasons about crossed books by coordinate, not by source name.
+    trade_attribution : TradeAttribution
+        Which orders of a trade the source's order events can name
+        (:class:`TradeAttribution`).  Every source in this package declares
+        it.  It is not a required member, so a plug-in written before it
+        existed still satisfies the contract; read it with
+        :func:`trade_attribution_of`, which treats a missing one as
+        :attr:`TradeAttribution.BOTH`.
     settings : SourceSettings
         Typed per-source configuration.  The empty base for a source that needs
         none; a typed subclass (e.g. ``CcxtSettings``) for one with venue knobs.
