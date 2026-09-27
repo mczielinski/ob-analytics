@@ -34,6 +34,9 @@ ORIGIN_SNAPSHOT = "snapshot"
 ORIGIN_STREAM = "stream"
 ORIGIN_SHUTDOWN = "shutdown"
 
+# How long a stopped stream has to end before it is cancelled again.
+CANCEL_RETRY_SECONDS = 0.5
+
 # L3 (per-order) rows -- the BitstampLoader schema.  ``sequence`` is the
 # venue's own per-event number when the source supplies one (blank otherwise);
 # BitstampLoader reads it back under ``track_sequence`` for gap detection.
@@ -484,9 +487,8 @@ async def _run_stream(
             return_when=asyncio.FIRST_COMPLETED,
         )
     finally:
-        for t in (stream_task, stop_task):
-            if not t.done():
-                t.cancel()
+        stop_task.cancel()
+        await _cancel_until_done(stream_task)
         # Drain cancellation cleanly.
         for t in (stream_task, stop_task):
             try:
@@ -498,6 +500,21 @@ async def _run_stream(
         exc = stream_task.exception()
         if exc is not None:
             record_error("stream", exc)
+
+
+async def _cancel_until_done(task: asyncio.Task[Any]) -> None:
+    """Cancel *task* and wait for it to end, cancelling again while it runs on.
+
+    A source can lose a cancel and keep streaming, and then only a second
+    cancel stops it.
+    """
+    # On Python 3.11, asyncio.wait_for drops a cancel that arrives in the same
+    # loop tick as the result it awaits (CPython gh-86296, fixed in 3.12). A
+    # busy feed makes that likely, and a source written against 3.12 may wait
+    # that way.
+    while not task.done():
+        task.cancel()
+        await asyncio.wait({task}, timeout=CANCEL_RETRY_SECONDS)
 
 
 async def _stream(

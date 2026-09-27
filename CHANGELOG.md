@@ -57,6 +57,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **On Python 3.11, a capture stops each segment when asked** (#296). The
+  live sources waited for messages with `asyncio.wait_for`, which on Python
+  3.11 can drop a cancel that arrives with a message. A roll then left the old
+  segment streaming next to the new one to the end of the capture, with no
+  further rolls, and SIGTERM or Ctrl-C did nothing. The sources now use
+  `asyncio.timeout`, and the runner cancels a stream again if it keeps
+  running, so a plug-in source with the same pattern cannot block a stop.
+  Python 3.12 and later were not affected.
 - **A Bitstamp L3 capture through cryptofeed passes `audit`** (#284).
   cryptofeed's Bitstamp L3 channel is `detail_order_book`: a picture of the top
   100 bids and top 100 asks about 10 times a second, not every order. Four

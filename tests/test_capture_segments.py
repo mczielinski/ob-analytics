@@ -40,6 +40,9 @@ OK = "ok"
 FAIL_SNAPSHOT = "fail_snapshot"
 BIG_SNAPSHOT = "big_snapshot"  # streams like OK, from a 5,000-order book
 SILENT = "silent"  # connects, sends nothing for 0.6 s, then drops
+# Streams like OK, but carries on after the first cancel, as a stream waiting
+# in asyncio.wait_for does on Python 3.11 when a message arrives with it.
+DEAF_ONCE = "deaf_once"
 
 
 def _disconnect_after(n: int) -> str:
@@ -99,11 +102,17 @@ class _ScriptedSource:
             await asyncio.sleep(0.6)
             raise ConnectionError("connection closed by venue")
         sent = 0
+        ignore_cancel = self._behaviour == DEAF_ONCE
         deadline = time.monotonic() + config.minutes * 60
         while time.monotonic() < deadline:
             if limit is not None and sent >= limit:
                 raise ConnectionError("connection closed by venue")
-            await asyncio.sleep(0.005)
+            try:
+                await asyncio.sleep(0.005)
+            except asyncio.CancelledError:
+                if not ignore_cancel:
+                    raise
+                ignore_cancel = False
             ts = _now()
             oid = self._next_id
             if oid in self._open:
@@ -296,6 +305,21 @@ class TestRoll:
             assert later.stream_started is not None
             assert earlier.stream_ended is not None
             assert later.stream_started <= earlier.stream_ended
+
+    def test_a_stream_that_ignores_one_cancel_still_rolls_and_stops(self, tmp_path):
+        # Each source runs its stream a minute past the capture's end, so a
+        # segment that is not stopped holds the capture for that minute.
+        started = time.monotonic()
+        run = _capture(tmp_path, [DEAF_ONCE], seconds=1.2, roll_minutes=0.3 / 60)
+
+        assert time.monotonic() - started < 10
+        segments = run.manifest.segments
+        assert len(segments) >= 3
+        assert {s.end_reason for s in segments[:-1]} == {EndReason.ROLLED_TIME}
+        assert segments[-1].end_reason is EndReason.FINISHED
+        for earlier, later in pairwise(segments):
+            assert earlier.stream_ended is not None
+            assert earlier.stream_ended - later.stream_started < pd.Timedelta(seconds=2)
 
     def test_a_size_roll(self, tmp_path):
         run = _capture(tmp_path, [OK], seconds=1.0, roll_mb=0.002)
