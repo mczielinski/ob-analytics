@@ -135,6 +135,13 @@ that holds a different venue or pair, files but no `manifest.json`, or a
 lock on `--out` (the `.capture.lock` file), so a second capture into the same
 directory stops with an error instead of rewriting the first one's files.
 
+**A segment that does not stop.** A segment asked to stop, at a roll, at the
+end or on a signal, has 20 seconds to close its connection and write its
+closing rows. If it takes longer, it is cancelled and closed from its files,
+the same way a restart closes a segment a crash left open. The manifest marks
+it `failed`, with the reason. So a hanging connection cannot stop the rolls,
+and SIGTERM ends a capture within about half a minute.
+
 This lets a service manager restart the capture. For example, a systemd unit
 with `Restart=always` and
 `ExecStart=ob-analytics capture bitstamp --pair btcusd --minutes 10080 --roll-minutes 60 --out /data/btcusd`
@@ -218,6 +225,13 @@ That's enough to make `ob-analytics capture coinbase` work. Persistence,
 raw-frame archival, signal handling, segments, and `meta.json` all live in the
 generic runner -- you only write the per-venue parser. A source can also add
 the offline-replay factories and be both.
+
+To wait for the next message with a time limit, use
+`async with asyncio.timeout(...)`, not `asyncio.wait_for`. On Python 3.11,
+`wait_for` can drop the cancel that stops a segment when a message arrives at
+the same moment, and the stream then carries on. Keep the cleanup in `stream`'s
+`finally` short: a segment that takes more than 20 seconds to stop is
+cancelled.
 
 Do not reconnect inside `stream`. When the connection drops, let `stream`
 raise: the capture then starts a new segment from a fresh snapshot and records

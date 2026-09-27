@@ -62,9 +62,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   3.11 can drop a cancel that arrives with a message. A roll then left the old
   segment streaming next to the new one to the end of the capture, with no
   further rolls, and SIGTERM or Ctrl-C did nothing. The sources now use
-  `asyncio.timeout`, and the runner cancels a stream again if it keeps
-  running, so a plug-in source with the same pattern cannot block a stop.
-  Python 3.12 and later were not affected.
+  `asyncio.timeout`, and ruff bans `asyncio.wait_for` in this repository. The
+  runner cancels a stream again while it keeps writing rows, so a plug-in
+  source with the same pattern cannot block a stop; a stream that is closing
+  its connection is left to finish. Python 3.12 and later were not affected.
+- **A segment that does not stop cannot hold up the capture** (#296). A
+  segment asked to stop has 20 seconds to close. After that it is cancelled
+  and closed from its files, like a segment a crash left open, and the manifest
+  marks it `failed`. At the end of a capture all running segments are stopped
+  together, so SIGTERM ends a capture within about half a minute.
 - **A Bitstamp L3 capture through cryptofeed passes `audit`** (#284).
   cryptofeed's Bitstamp L3 channel is `detail_order_book`: a picture of the top
   100 bids and top 100 asks about 10 times a second, not every order. Four

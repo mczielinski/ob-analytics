@@ -110,6 +110,14 @@ backtest-engines = [
     "nautilus-trader>=1.222; python_version >= '3.12'",
 ]
 
+[tool.ruff.lint]
+extend-select = ["TID251"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+# On Python 3.11 it drops a cancel that arrives with the result it awaits, and
+# a live capture then cannot stop a segment (issue #296).
+"asyncio.wait_for".msg = "Use `async with asyncio.timeout(...)`: on Python 3.11 wait_for can drop a cancel."
+
 [tool.ruff.lint.isort]
 # Keep aliased re-exports in a single grouped ``from x import (a as b, ...)``
 # block rather than exploding each alias onto its own import statement.

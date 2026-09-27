@@ -17,6 +17,10 @@ closed and a new one starts from a fresh snapshot:
   closed first (:func:`_close_unfinished`), and the downtime is recorded as a
   gap.
 
+A segment asked to stop has :data:`STOP_TIMEOUT_SECONDS` to do so.  One that
+takes longer is cancelled and closed from its files the same way, so a source
+that hangs while it closes cannot hold up the capture or a signal to end it.
+
 Only a capture that has never streamed may stop on an error: when its first
 segment fails before its first event the settings are probably wrong, and
 retrying would hide that.
@@ -80,6 +84,12 @@ HANDOVER_TIMEOUT_SECONDS = 120.0
 HEARTBEAT_SECONDS = 10.0
 #: How often the supervisor checks the roll limits.
 POLL_SECONDS = 1.0
+#: How long a segment asked to stop (at a roll, at the end, or on a signal) has
+#: to close its connection and write its closing rows.  One that takes longer
+#: is cancelled and closed from its files.
+STOP_TIMEOUT_SECONDS = 20.0
+#: How long a cancelled segment has to end before the capture goes on without it.
+STOP_GRACE_SECONDS = 5.0
 
 SourceFactory = Callable[[], LiveSource]
 
@@ -131,6 +141,8 @@ class _Running:
     bytes_at_stream: int | None = None
     # Set when the supervisor asks the segment to stop, and why.
     stop_reason: EndReason | None = None
+    # Set when the segment did not stop in time and was cancelled.
+    stuck: bool = False
     watchers: list[asyncio.Task[Any]] = field(default_factory=list)
 
 
@@ -282,8 +294,10 @@ class _Supervisor:
                 source = self._make_source()
         finally:
             reason = EndReason.STOPPED if self._stop.is_set() else EndReason.FINISHED
-            for running in list(self._running):
-                await self._stop_segment(running, reason)
+            # Together, so the capture ends within one stop's time limit.
+            await asyncio.gather(
+                *(self._stop_segment(r, reason) for r in list(self._running))
+            )
             heartbeat.cancel()
             stop_task.cancel()
             for task in (heartbeat, stop_task):
@@ -398,26 +412,45 @@ class _Supervisor:
         logger.info("Capture '{}': {} streaming", self._manifest.source, segment.name)
 
     async def _stop_segment(self, running: _Running, reason: EndReason) -> Segment:
+        """Stop the segment, cancelling it if it does not stop in time.
+
+        A segment that hangs while it closes must not hold the capture: until
+        it ends, there are no more rolls, a disconnect of the next segment
+        goes unhandled, and a signal cannot end the capture.
+        """
         running.stop_reason = reason
         running.stop.set()
+        if not await _ends_within(running.task, STOP_TIMEOUT_SECONDS):
+            logger.error(
+                "Capture '{}': {} did not stop within {:.0f} s; cancelling it",
+                self._manifest.source,
+                running.segment.name,
+                STOP_TIMEOUT_SECONDS,
+            )
+            running.stuck = True
+            running.task.cancel()
+            await _ends_within(running.task, STOP_GRACE_SECONDS)
         return await self._finish(running)
 
     async def _finish(self, running: _Running) -> Segment:
         """Wait for the segment's task and record how it ended."""
         segment = running.segment
         result: CaptureResult | None = None
-        try:
-            result = await running.task
-        except Exception as exc:  # noqa: BLE001 - recorded in the manifest
-            # run_capturer keeps errors from its phases; one that escapes it
-            # happened before any of them (the preflight, say).
-            segment.error = repr(exc)
+        if not running.stuck:
+            try:
+                result = await running.task
+            except Exception as exc:  # noqa: BLE001 - recorded in the manifest
+                # run_capturer keeps errors from its phases; one that escapes
+                # it happened before any of them (the preflight, say).
+                segment.error = repr(exc)
         for watcher in running.watchers:
             watcher.cancel()
         if running in self._running:
             self._running.remove(running)
 
-        if result is not None:
+        if running.stuck:
+            self._close_stuck(running)
+        elif result is not None:
             segment.ended = result.ended
             if segment.stream_started is None and result.stream_started is not None:
                 segment.stream_started = result.stream_started
@@ -449,6 +482,37 @@ class _Supervisor:
             f": {segment.error}" if segment.error else "",
         )
         return segment
+
+    def _close_stuck(self, running: _Running) -> None:
+        """Record a segment that did not stop in time and was cancelled.
+
+        Once it has ended, its files are closed the way a restart closes a
+        segment a crash left open: every order still open gets its
+        ``deleted`` row at the last recorded time.  One that ignored the
+        cancel too is left as it is, since it may still be writing.
+        """
+        segment = running.segment
+        task = running.task
+        if task.done():
+            if not task.cancelled():
+                task.exception()  # read, so asyncio does not log it as lost
+            _close_unfinished(
+                self._root / segment.name,
+                segment,
+                self._manifest,
+                error=(
+                    f"the segment did not stop within {STOP_TIMEOUT_SECONDS:.0f} s,"
+                    " so it was cancelled and closed from its files"
+                ),
+            )
+            return
+        segment.error = (
+            f"the segment did not stop within {STOP_TIMEOUT_SECONDS:.0f} s, even "
+            "when cancelled; its files may be incomplete"
+        )
+        segment.ended = pd.Timestamp.now(tz="UTC")
+        if segment.stream_started is not None:
+            segment.stream_ended = segment.ended
 
     # -- waiting ------------------------------------------------------------
 
@@ -565,6 +629,12 @@ class _Supervisor:
 # ---------------------------------------------------------------------------
 
 
+async def _ends_within(task: asyncio.Task[Any], seconds: float) -> bool:
+    """Wait up to *seconds* for *task* to end; whether it did."""
+    await asyncio.wait({task}, timeout=seconds)
+    return task.done()
+
+
 def _declarations(source: LiveSource) -> dict[str, Any]:
     declared = _source_declarations(source)
     declared.pop("source", None)
@@ -613,7 +683,12 @@ def _open_manifest(
     existing.roll_mb = config.roll_mb
     for segment in existing.segments:
         if segment.end_reason is None:
-            _close_unfinished(root / segment.name, segment, existing)
+            closed = _close_unfinished(root / segment.name, segment, existing)
+            logger.warning(
+                "Closed {} left open by a capture that stopped ({} order(s) closed)",
+                segment.name,
+                closed,
+            )
     existing.write(root)
     logger.info(
         "Continuing the capture in {} ({} segment(s) so far, restart #{})",
@@ -625,8 +700,11 @@ def _open_manifest(
 
 
 def _close_unfinished(
-    seg_dir: Path, segment: Segment, manifest: CaptureManifest
-) -> None:
+    seg_dir: Path,
+    segment: Segment,
+    manifest: CaptureManifest,
+    error: str = _UNFINISHED_ERROR,
+) -> int:
     """Close a segment a dead capture process left open, so it replays.
 
     The process never wrote the segment's closing rows or its final
@@ -637,6 +715,9 @@ def _close_unfinished(
     rows a normal shutdown writes), and completes ``meta.json``.  The segment is marked
     :attr:`~ob_analytics.live._manifest.EndReason.UNFINISHED`; it is taken to
     cover up to its last row or last heartbeat, whichever is later.
+
+    *error* says why the segment was left open.  Returns how many orders it
+    closed.
     """
     for name in ("orders.csv", "depth.csv", "trades.csv", "raw.jsonl"):
         _trim_to_last_line(seg_dir / name)
@@ -689,7 +770,7 @@ def _close_unfinished(
             "stream_ended": None if covered_to is None else str(covered_to),
             "synthetic_deleted": closed,
             "unfinished": True,
-            "capture_error": _UNFINISHED_ERROR,
+            "capture_error": error,
             "capture_error_phase": "stream",
             "errors": int(meta.get("errors") or 0) + 1,
         }
@@ -697,7 +778,7 @@ def _close_unfinished(
     _write_json_atomic(meta_path, meta)
 
     segment.end_reason = EndReason.UNFINISHED
-    segment.error = _UNFINISHED_ERROR
+    segment.error = error
     segment.ended = covered_to or segment.started
     if segment.stream_started is not None:
         segment.stream_ended = covered_to
@@ -705,11 +786,7 @@ def _close_unfinished(
     segment.n_trade_events = n_trade
     segment.dropped = int(meta.get("dropped") or 0)
     segment.sequence_missing = int(meta.get("sequence_missing") or 0)
-    logger.warning(
-        "Closed {} left open by a capture that stopped ({} order(s) closed)",
-        segment.name,
-        closed,
-    )
+    return closed
 
 
 _TRIM_BLOCK = 64 * 1024

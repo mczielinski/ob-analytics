@@ -34,7 +34,7 @@ ORIGIN_SNAPSHOT = "snapshot"
 ORIGIN_STREAM = "stream"
 ORIGIN_SHUTDOWN = "shutdown"
 
-# How long a stopped stream has to end before it is cancelled again.
+# How often a stopped stream that is still writing rows is cancelled again.
 CANCEL_RETRY_SECONDS = 0.5
 
 # L3 (per-order) rows -- the BitstampLoader schema.  ``sequence`` is the
@@ -488,7 +488,14 @@ async def _run_stream(
         )
     finally:
         stop_task.cancel()
-        await _cancel_until_done(stream_task)
+        try:
+            await _cancel_until_done(stream_task, state.counts)
+        except asyncio.CancelledError:
+            # This task was cancelled too (the supervisor stopped waiting for
+            # it): leave the stream cancelled and do not wait for it.
+            stream_task.cancel()
+            stream_task.add_done_callback(_retrieve_outcome)
+            raise
         # Drain cancellation cleanly.
         for t in (stream_task, stop_task):
             try:
@@ -502,19 +509,28 @@ async def _run_stream(
             record_error("stream", exc)
 
 
-async def _cancel_until_done(task: asyncio.Task[Any]) -> None:
-    """Cancel *task* and wait for it to end, cancelling again while it runs on.
+async def _cancel_until_done(task: asyncio.Task[Any], counts: dict[str, int]) -> None:
+    """Cancel *task* and wait for it to end, cancelling again while it writes.
 
-    A source can lose a cancel and keep streaming, and then only a second
-    cancel stops it.
+    A stream that lost the cancel keeps writing rows, and only another cancel
+    stops it.  A stream that has stopped writing is closing its connection,
+    and is left to finish: another cancel would cut that short.
     """
     # On Python 3.11, asyncio.wait_for drops a cancel that arrives in the same
-    # loop tick as the result it awaits (CPython gh-86296, fixed in 3.12). A
-    # busy feed makes that likely, and a source written against 3.12 may wait
-    # that way.
+    # loop tick as the result it awaits (CPython gh-86296, fixed in 3.12).  The
+    # bundled sources do not wait that way, but a plug-in source may.
+    task.cancel()
     while not task.done():
-        task.cancel()
+        written = sum(counts.values())
         await asyncio.wait({task}, timeout=CANCEL_RETRY_SECONDS)
+        if not task.done() and sum(counts.values()) != written:
+            task.cancel()
+
+
+def _retrieve_outcome(task: asyncio.Task[Any]) -> None:
+    """Read how an abandoned task ended, so asyncio does not log it as lost."""
+    if not task.cancelled():
+        task.exception()
 
 
 async def _stream(

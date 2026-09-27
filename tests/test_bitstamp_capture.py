@@ -180,3 +180,41 @@ class TestDisconnect:
         with pytest.raises(ConnectionClosed):
             asyncio.run(replay())
         assert "reconnects" not in cap.diagnostics()
+
+
+class _QueueWs:
+    """A connection whose next message arrives when the test sends it."""
+
+    def __init__(self) -> None:
+        self.frames: asyncio.Queue[str] = asyncio.Queue()
+
+    async def recv(self) -> str:
+        return await self.frames.get()
+
+
+class TestStop:
+    def test_one_cancel_stops_the_stream_as_a_message_arrives(self):
+        """A stop that lands with a message still ends the stream (#296).
+
+        On Python 3.11, waiting with asyncio.wait_for drops such a cancel, and
+        the stream runs on after its segment was told to stop.
+        """
+        cap = BitstampCapturer()
+        config = CaptureConfig(pair="btcusd", out_dir=Path("unused"), minutes=1.0)
+
+        async def stop_as_a_message_arrives() -> bool:
+            ws = _QueueWs()
+            cap._ws = ws
+
+            async def consume() -> None:
+                async for _ in cap.stream(config):
+                    pass
+
+            task = asyncio.create_task(consume())
+            await asyncio.sleep(0.01)  # the stream is now waiting in recv
+            ws.frames.put_nowait(_order_frame(9, 1_000))
+            task.cancel()
+            await asyncio.wait({task}, timeout=1.0)
+            return task.done()
+
+        assert asyncio.run(stop_as_a_message_arrives())

@@ -25,6 +25,7 @@ from ob_analytics.live import (
     CaptureManifest,
     EndReason,
     Segment,
+    _runner,
     _supervisor,
     read_manifest,
     run_capture,
@@ -43,6 +44,10 @@ SILENT = "silent"  # connects, sends nothing for 0.6 s, then drops
 # Streams like OK, but carries on after the first cancel, as a stream waiting
 # in asyncio.wait_for does on Python 3.11 when a message arrives with it.
 DEAF_ONCE = "deaf_once"
+# Streams like OK, but takes 0.1 s to close its connection once stopped.
+SLOW_CLOSE = "slow_close"
+# Streams like OK, but never finishes closing its connection once stopped.
+HANG_ON_STOP = "hang_on_stop"
 
 
 def _disconnect_after(n: int) -> str:
@@ -70,6 +75,7 @@ class _ScriptedSource:
         self._behaviour = behaviour
         self._open: dict[int, tuple[float, str]] = {}
         self._next_id = 1000
+        self._closed = False
 
     async def snapshot(self, config: CaptureConfig) -> AsyncIterator[EventDict]:
         if self._behaviour == FAIL_SNAPSHOT:
@@ -104,39 +110,46 @@ class _ScriptedSource:
         sent = 0
         ignore_cancel = self._behaviour == DEAF_ONCE
         deadline = time.monotonic() + config.minutes * 60
-        while time.monotonic() < deadline:
-            if limit is not None and sent >= limit:
-                raise ConnectionError("connection closed by venue")
-            try:
-                await asyncio.sleep(0.005)
-            except asyncio.CancelledError:
-                if not ignore_cancel:
-                    raise
-                ignore_cancel = False
-            ts = _now()
-            oid = self._next_id
-            if oid in self._open:
-                price, side = self._open.pop(oid)
-                action = "deleted"
-                self._next_id += 1
-            else:
-                price, side = 99.0, "bid"
-                self._open[oid] = (price, side)
-                action = "created"
-            sent += 1
-            yield (
-                "order",
-                {
-                    "id": oid,
-                    "timestamp": ts,
-                    "exchange_timestamp": ts,
-                    "price": price,
-                    "volume": 0.5,
-                    "action": action,
-                    "direction": side,
-                },
-                None,
-            )
+        try:
+            while time.monotonic() < deadline:
+                if limit is not None and sent >= limit:
+                    raise ConnectionError("connection closed by venue")
+                try:
+                    await asyncio.sleep(0.005)
+                except asyncio.CancelledError:
+                    if not ignore_cancel:
+                        raise
+                    ignore_cancel = False
+                ts = _now()
+                oid = self._next_id
+                if oid in self._open:
+                    price, side = self._open.pop(oid)
+                    action = "deleted"
+                    self._next_id += 1
+                else:
+                    price, side = 99.0, "bid"
+                    self._open[oid] = (price, side)
+                    action = "created"
+                sent += 1
+                yield (
+                    "order",
+                    {
+                        "id": oid,
+                        "timestamp": ts,
+                        "exchange_timestamp": ts,
+                        "price": price,
+                        "volume": 0.5,
+                        "action": action,
+                        "direction": side,
+                    },
+                    None,
+                )
+        finally:
+            if self._behaviour == SLOW_CLOSE:
+                await asyncio.sleep(0.1)
+            elif self._behaviour == HANG_ON_STOP:
+                await asyncio.sleep(3600)
+            self._closed = True
 
     async def shutdown_synthetic_events(self) -> AsyncIterator[EventDict]:
         ts = _now()
@@ -151,6 +164,9 @@ class _ScriptedSource:
                 "direction": side,
             }
         self._open.clear()
+
+    def diagnostics(self) -> dict[str, Any]:
+        return {"closed_cleanly": self._closed}
 
 
 def _factory(plan: list[str]):
@@ -171,6 +187,9 @@ def _fast_clock(monkeypatch):
     monkeypatch.setattr(_supervisor, "POLL_SECONDS", 0.02)
     monkeypatch.setattr(_supervisor, "HEARTBEAT_SECONDS", 0.05)
     monkeypatch.setattr(_supervisor, "HANDOVER_TIMEOUT_SECONDS", 1.0)
+    monkeypatch.setattr(_supervisor, "STOP_TIMEOUT_SECONDS", 0.3)
+    monkeypatch.setattr(_supervisor, "STOP_GRACE_SECONDS", 0.3)
+    monkeypatch.setattr(_runner, "CANCEL_RETRY_SECONDS", 0.02)
 
 
 def _capture(tmp_path: Path, plan: list[str], seconds: float, **config: Any):
@@ -319,7 +338,41 @@ class TestRoll:
         assert segments[-1].end_reason is EndReason.FINISHED
         for earlier, later in pairwise(segments):
             assert earlier.stream_ended is not None
-            assert earlier.stream_ended - later.stream_started < pd.Timedelta(seconds=2)
+            assert later.stream_started is not None
+            assert earlier.stream_ended - later.stream_started < pd.Timedelta(
+                seconds=0.5
+            )
+
+    def test_a_stream_that_is_closing_is_not_cancelled_again(self, tmp_path):
+        # Closing takes 0.1 s, five times the retry interval: cancelling again
+        # would cut it short and leave the connection open.
+        run = _capture(tmp_path, [SLOW_CLOSE], seconds=0.8, roll_minutes=0.3 / 60)
+
+        segments = run.manifest.segments
+        assert len(segments) >= 2
+        assert all(s.error is None for s in segments)
+        for segment in segments:
+            meta = json.loads((run.out_dir / segment.name / "meta.json").read_text())
+            assert meta["closed_cleanly"] is True, segment.name
+
+    def test_a_segment_that_does_not_stop_is_cancelled_and_closed(self, tmp_path):
+        started = time.monotonic()
+        run = _capture(tmp_path, [HANG_ON_STOP], seconds=1.0, roll_minutes=0.3 / 60)
+
+        # Without the limit, the first roll would wait for its stream an hour.
+        assert time.monotonic() - started < 10
+        assert run.error is None
+        segments = run.manifest.segments
+        assert len(segments) >= 2
+        for segment in segments:
+            assert segment.end_reason is EndReason.FAILED
+            assert "did not stop within" in (segment.error or "")
+            seg_dir = run.out_dir / segment.name
+            assert _every_order_closed(seg_dir / "orders.csv"), segment.name
+            meta = json.loads((seg_dir / "meta.json").read_text())
+            assert "did not stop within" in meta["capture_error"]
+        # Each next segment was streaming before the stuck one was given up.
+        assert [g.cause for g in run.manifest.gaps if g.cause == "roll"] == []
 
     def test_a_size_roll(self, tmp_path):
         run = _capture(tmp_path, [OK], seconds=1.0, roll_mb=0.002)
