@@ -561,7 +561,7 @@ class TestPlotOrderOutcomeL3:
     def test_draws_cancelled_underneath(self, sample_executed_orders):
         import matplotlib.colors as mcolors
 
-        from ob_analytics.visualization._matplotlib import _CANCELLED_COLOR
+        from ob_analytics.visualization import DEFAULT_PALETTE
 
         events, _trades = sample_executed_orders
         data = _data.prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
@@ -570,7 +570,9 @@ class TestPlotOrderOutcomeL3:
         # The dominant cancelled class must be drawn first (underneath) so the
         # rarer fills/partials are not buried; first collection == cancelled.
         first_rgb = ax.collections[0].get_facecolor()[0][:3]
-        assert np.allclose(first_rgb, mcolors.to_rgba(_CANCELLED_COLOR)[:3], atol=0.01)
+        assert np.allclose(
+            first_rgb, mcolors.to_rgba(DEFAULT_PALETTE.cancelled)[:3], atol=0.01
+        )
 
 
 class TestPlotBookSnapshot:
