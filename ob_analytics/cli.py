@@ -48,10 +48,25 @@ def _cmd_process(args: argparse.Namespace) -> None:
         _process_one(args, args.path, Path(args.output))
         return
     output = Path(args.output)
-    for seg_dir in manifest.segment_dirs(root):
+    seg_dirs = manifest.segment_dirs(root)
+    if not seg_dirs:
+        _no_segment_data(root)
+    for seg_dir in seg_dirs:
         _process_one(args, str(_segment_input(seg_dir)), output / seg_dir.name)
     output.mkdir(parents=True, exist_ok=True)
     (output / "manifest.json").write_bytes((root / "manifest.json").read_bytes())
+
+
+def _no_segment_data(root: Path) -> None:
+    """Stop: a segmented capture in which no segment wrote any book rows."""
+    from loguru import logger
+
+    logger.error(
+        "No segment of the capture in {} holds data: see its manifest.json "
+        "for why each one ended.",
+        root,
+    )
+    sys.exit(1)
 
 
 def _segment_input(seg_dir: Path) -> Path:
@@ -168,10 +183,8 @@ def _cmd_audit(args: argparse.Namespace) -> None:
         named = [("", summary)]
         capture_checks: tuple[Any, ...] = ()
     else:
-        named = [
-            (d.name, _audit_one(args, _segment_input(d)))
-            for d in manifest.segment_dirs(root)
-        ]
+        seg_dirs = manifest.segment_dirs(root)
+        named = [(d.name, _audit_one(args, _segment_input(d))) for d in seg_dirs]
         capture_checks = manifest.checks()
         if args.json:
             report = {
@@ -186,6 +199,9 @@ def _cmd_audit(args: argparse.Namespace) -> None:
             for name, summary in named:
                 print(f"== {name} ==\n{summary.render()}\n")
             print(manifest.render())
+        if not seg_dirs:
+            # Nothing to check is not a pass.
+            _no_segment_data(root)
 
     failed = [
         f"{name + ': ' if name else ''}{c.name} — {c.detail}"

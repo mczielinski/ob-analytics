@@ -39,6 +39,7 @@ from ob_analytics.protocols import FeedType, Level
 OK = "ok"
 FAIL_SNAPSHOT = "fail_snapshot"
 BIG_SNAPSHOT = "big_snapshot"  # streams like OK, from a 5,000-order book
+SILENT = "silent"  # connects, sends nothing for 0.6 s, then drops
 
 
 def _disconnect_after(n: int) -> str:
@@ -94,6 +95,9 @@ class _ScriptedSource:
             if self._behaviour.startswith("disconnect")
             else None
         )
+        if self._behaviour == SILENT:
+            await asyncio.sleep(0.6)
+            raise ConnectionError("connection closed by venue")
         sent = 0
         deadline = time.monotonic() + config.minutes * 60
         while time.monotonic() < deadline:
@@ -311,6 +315,26 @@ class TestRoll:
         with pytest.raises(ConfigError, match="greater than 0"):
             _capture(tmp_path, [OK], seconds=0.3, **limit)
         assert not (tmp_path / "cap").exists()
+
+    def test_a_roll_whose_next_segment_never_streams_leaves_a_recorded_gap(
+        self, tmp_path, monkeypatch
+    ):
+        """The venue goes quiet at a roll and never comes back."""
+        monkeypatch.setattr(_supervisor, "HANDOVER_TIMEOUT_SECONDS", 0.2)
+        run = _capture(
+            tmp_path, [OK, SILENT, FAIL_SNAPSHOT], seconds=1.5, roll_minutes=0.3 / 60
+        )
+        first = run.manifest.segments[0]
+        assert first.end_reason is EndReason.ROLLED_TIME
+        assert all(s.stream_started is None for s in run.manifest.segments[1:])
+
+        (gap,) = run.manifest.gaps
+        assert (gap.after, gap.before, gap.cause) == ("seg-0001", None, "roll")
+        assert gap.start == first.stream_ended
+        assert gap.end == run.manifest.ended
+        assert not next(
+            c for c in run.manifest.checks() if c.name == "capture_gaps"
+        ).passed
 
     def test_a_next_segment_that_fails_leaves_the_current_one_running(self, tmp_path):
         run = _capture(
@@ -551,6 +575,17 @@ class TestReadBack:
         assert len(report["capture"]["gaps"]) == 1
         checks = {c["name"]: c["passed"] for c in report["capture"]["checks"]}
         assert checks["capture_gaps"] is False
+
+    def test_a_capture_with_no_data_fails_audit_and_process(self, cli_runner, tmp_path):
+        """A capture whose first snapshot failed has nothing that could pass."""
+        empty = _capture(tmp_path, [FAIL_SNAPSHOT], seconds=5.0).out_dir
+        for command in (["audit", str(empty)], ["audit", str(empty), "--json"]):
+            r = cli_runner(*command)
+            assert r.returncode == 1
+            assert "No segment" in r.stderr
+        r = cli_runner("process", str(empty), "--output", str(tmp_path / "out"))
+        assert r.returncode == 1
+        assert "No segment" in r.stderr
 
     def test_process_writes_each_segment_and_the_manifest(
         self, cli_runner, gappy, tmp_path

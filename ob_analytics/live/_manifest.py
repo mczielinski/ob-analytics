@@ -183,7 +183,7 @@ class Gap:
     cause : str
         How the segment before it ended: ``"disconnect"``, ``"restart"`` (the
         capture process died), ``"roll"`` (a roll whose next segment was slow
-        to stream), or ``"stopped"`` / ``"finished"`` (the capture was stopped
+        to stream, or never did), or ``"stopped"`` / ``"finished"`` (the capture was stopped
         and later started again into the same directory).
     """
 
@@ -351,18 +351,19 @@ class CaptureManifest:
         )
 
     def note_uncovered_end(self, ended: pd.Timestamp) -> None:
-        """Record a gap if the capture ended while no segment was streaming."""
+        """Record a gap if the capture ended while no segment was streaming.
+
+        The last segment that streamed is looked at.  If it ran to the end
+        (``finished``/``stopped``) nothing is missing.  Otherwise -- a failure,
+        or a roll whose next segment never streamed -- the time from its last
+        event to the end of the capture is a gap.
+        """
         if any(s.end_reason is None for s in self.segments):
             return
         previous = self._last_covered(before=None)
         if previous is None or previous.end_reason is None:
             return
-        if previous.end_reason in (
-            EndReason.FINISHED,
-            EndReason.STOPPED,
-            EndReason.ROLLED_TIME,
-            EndReason.ROLLED_SIZE,
-        ):
+        if previous.end_reason in (EndReason.FINISHED, EndReason.STOPPED):
             return
         covered_to = previous.stream_ended or previous.heartbeat
         if covered_to is None or covered_to >= ended:
