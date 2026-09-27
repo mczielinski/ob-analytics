@@ -114,7 +114,9 @@ Add your own by writing a function over a trades DataFrame — see the
 ### Live capture (Bitstamp)
 
 With the `[live]` extra installed, capture a live order book straight to
-`orders.csv` / `trades.csv` that the pipeline understands:
+`orders.csv` / `trades.csv` that the pipeline understands. A capture can run
+for days: it reconnects, rolls to new files, continues after a restart, and
+records every gap in `manifest.json`:
 
 ```bash
 ob-analytics capture bitstamp --pair btcusd --out ./capture --minutes 30

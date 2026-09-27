@@ -464,7 +464,7 @@ class TestCaptureSubcommand:
 
         captured: dict = {}
 
-        async def _fake_run(source, config, sink=None):
+        async def _fake_run(source, config, sink=None, **_kwargs):
             captured["source"] = source
             captured["config"] = config
             now = pd.Timestamp.now(tz="UTC")
@@ -477,7 +477,7 @@ class TestCaptureSubcommand:
                 ended=now,
             )
 
-        monkeypatch.setattr("ob_analytics.live._runner.run_capturer", _fake_run)
+        monkeypatch.setattr("ob_analytics.live._supervisor.run_capturer", _fake_run)
         # This test checks the flag wiring, not the extra: skip the check for it.
         monkeypatch.setattr(
             "ob_analytics.live.ccxt_source.CcxtSource.preflight", lambda self: None
@@ -562,7 +562,7 @@ class TestCaptureSubcommand:
         from ob_analytics import cli
         from ob_analytics.live._base import CaptureResult
 
-        async def _failed_run(source, config, sink=None):
+        async def _failed_run(source, config, sink=None, **_kwargs):
             now = pd.Timestamp.now(tz="UTC")
             return CaptureResult(
                 out_dir=config.out_dir,
@@ -575,7 +575,7 @@ class TestCaptureSubcommand:
                 capture_error_phase="stream",
             )
 
-        monkeypatch.setattr("ob_analytics.live._runner.run_capturer", _failed_run)
+        monkeypatch.setattr("ob_analytics.live._supervisor.run_capturer", _failed_run)
         monkeypatch.setattr(
             "ob_analytics.bitstamp.BitstampSource.preflight", lambda self: None
         )

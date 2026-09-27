@@ -38,6 +38,15 @@ class CaptureConfig:
     out_dir: Path
     minutes: float = 10.0
     keep_raw: bool = True  # write raw.jsonl alongside parsed CSVs
+    #: Start a new segment after the current one has been current for this
+    #: many minutes (``None``: never on time).
+    #: Used by :func:`~ob_analytics.live.run_capture` only.
+    roll_minutes: float | None = None
+    #: Start a new segment once the current one has written this many
+    #: megabytes since its first live event, so the opening snapshot does not
+    #: count (``None``: never on size).  Both limits must be above 0.  Used by
+    #: :func:`~ob_analytics.live.run_capture` only.
+    roll_mb: float | None = None
 
 
 @dataclass(frozen=True)
@@ -64,6 +73,11 @@ class CaptureResult:
     #: Where :attr:`capture_error` was raised: ``"snapshot"``, ``"stream"`` or
     #: ``"shutdown"``; ``None`` when there was no error.
     capture_error_phase: str | None = None
+    #: When the first live event arrived, and when the stream stopped: the
+    #: stretch of time the run covers.  ``stream_started`` is ``None`` when the
+    #: stream delivered nothing.
+    stream_started: pd.Timestamp | None = None
+    stream_ended: pd.Timestamp | None = None
 
 
 # Single canonical event dict shape, mirroring BitstampLoader's CSV columns.
@@ -125,8 +139,13 @@ class LiveSource(Source, Protocol):
     depth updates to ``depth.csv``.
 
     Implementors only worry about parsing. Persistence, raw-frame archival,
-    rate-limiting reconnects, and signal handling all live in
-    ``ob_analytics.live._runner``.
+    and signal handling live in ``ob_analytics.live._runner``.
+
+    A source does not reconnect on its own.  When it loses its connection it
+    raises from :meth:`stream`: a book carried across a disconnect misses
+    every change made while it was down.  :func:`~ob_analytics.live.run_capture`
+    then closes the segment, waits, and starts a new one from a fresh snapshot,
+    recording the time between them as a gap in ``manifest.json``.
 
     A live source MAY additionally implement :class:`SupportsDiagnostics` to
     surface per-run counters in ``meta.json``; that hook is a separate,

@@ -7,6 +7,7 @@ import csv
 import json
 import signal
 from collections.abc import Callable
+from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -167,6 +168,20 @@ class FileCaptureSink(CaptureSink):
             json.dumps(frame, separators=(",", ":"), default=_raw_json_default) + "\n"
         )
 
+    def flush(self) -> None:
+        """Push buffered rows to disk, so a crash loses as few as possible."""
+        for fp in (self._orders_fp, self._depth_fp, self._trades_fp, self._raw_fp):
+            if fp is not None:
+                fp.flush()
+
+    def bytes_written(self) -> int:
+        """Bytes written so far across every open file (what a size roll reads)."""
+        return sum(
+            fp.tell()
+            for fp in (self._orders_fp, self._depth_fp, self._trades_fp, self._raw_fp)
+            if fp is not None
+        )
+
     def finalize(self, result: CaptureResult) -> None:
         # Flush + close everything.
         for fp in (self._orders_fp, self._depth_fp, self._trades_fp, self._raw_fp):
@@ -190,6 +205,8 @@ class FileCaptureSink(CaptureSink):
             "n_trade_events": result.n_trade_events,
             "n_raw_frames": result.n_raw_frames,
             "n_snapshot_unconfirmed": result.n_snapshot_unconfirmed,
+            "stream_started": _iso_or_none(result.stream_started),
+            "stream_ended": _iso_or_none(result.stream_ended),
             **result.extras,
         }
         if result.capture_error is not None:
@@ -199,6 +216,10 @@ class FileCaptureSink(CaptureSink):
             meta["capture_error_phase"] = result.capture_error_phase
             meta["errors"] = int(meta.get("errors") or 0) + 1
         (self.out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
+
+
+def _iso_or_none(ts: pd.Timestamp | None) -> str | None:
+    return None if ts is None else str(ts)
 
 
 def _source_declarations(capturer: Any) -> dict[str, Any]:
@@ -240,11 +261,21 @@ async def run_capturer(
     capturer: LiveSource,
     config: CaptureConfig,
     sink: CaptureSink | None = None,
+    *,
+    stop: asyncio.Event | None = None,
+    streaming: asyncio.Event | None = None,
 ) -> CaptureResult:
     """Drive a live source: snapshot, stream, shutdown -- writing through *sink*.
 
+    This is one capture into one directory, and it ends at the first
+    disconnect.  :func:`~ob_analytics.live.run_capture` runs it once per
+    segment to capture for days.
+
     Handles SIGINT/SIGTERM by cancelling the streaming task; the shutdown
-    synthetic events still run so every order id keeps a full lifecycle.
+    synthetic events still run so every order id keeps a full lifecycle.  A
+    caller that passes *stop* owns the signals instead: setting it ends the
+    stream the same way, and no handler is installed.  *streaming*, when
+    given, is set as the first live event arrives.
 
     A source that implements :class:`SupportsPreflight` is checked before any
     output is created, so a missing optional extra raises :class:`ImportError`
@@ -263,6 +294,7 @@ async def run_capturer(
     if sink is None:
         sink = FileCaptureSink(config.out_dir, keep_raw=config.keep_raw, level=level)
     started = pd.Timestamp.now(tz="UTC")
+    stream_times: dict[str, pd.Timestamp] = {}
     n_order = n_trade = n_depth = n_raw = 0
     capture_error: str | None = None
     capture_error_phase: str | None = None
@@ -275,17 +307,11 @@ async def run_capturer(
             capture_error = repr(exc)
             capture_error_phase = phase
 
-    stop = asyncio.Event()
     loop = asyncio.get_event_loop()
     installed_signals: list[int] = []
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, stop.set)
-            installed_signals.append(sig)
-        except (NotImplementedError, RuntimeError):
-            # Windows / test environments / non-main thread without signal
-            # support: fall back to default handling.
-            pass
+    if stop is None:
+        stop = asyncio.Event()
+        installed_signals = install_stop_signals(loop, stop)
 
     # L3 only: ids from the opening book that nothing in the stream has yet
     # mentioned. _stream removes an id when an order event or a trade names
@@ -321,8 +347,14 @@ async def run_capturer(
         stream_counts = {"order": 0, "trade": 0, "depth": 0, "raw": 0}
         if capture_error is None:
             await _run_stream(
-                capturer, config, sink, stream_counts, unconfirmed, stop, _record_error
+                capturer,
+                config,
+                sink,
+                _StreamState(stream_counts, unconfirmed, stream_times, streaming),
+                stop,
+                _record_error,
             )
+            stream_times["ended"] = pd.Timestamp.now(tz="UTC")
         n_order += stream_counts["order"]
         n_trade += stream_counts["trade"]
         n_depth += stream_counts["depth"]
@@ -377,6 +409,8 @@ async def run_capturer(
             n_snapshot_unconfirmed=None if unconfirmed is None else len(unconfirmed),
             capture_error=capture_error,
             capture_error_phase=capture_error_phase,
+            stream_started=stream_times.get("started"),
+            stream_ended=stream_times.get("ended"),
         )
         sink.finalize(result)
         logger.info(
@@ -392,12 +426,45 @@ async def run_capturer(
     return result
 
 
+def install_stop_signals(
+    loop: asyncio.AbstractEventLoop, stop: asyncio.Event
+) -> list[int]:
+    """Make SIGINT/SIGTERM set *stop*; return the signals handled.
+
+    Where signals cannot be handled (Windows, a thread other than the main
+    one, some test environments) nothing is installed and default handling
+    stays.
+    """
+    installed: list[int] = []
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, stop.set)
+            installed.append(sig)
+        except (NotImplementedError, RuntimeError):
+            pass
+    return installed
+
+
+@dataclass
+class _StreamState:
+    """What the stream updates in place, so it survives a cancellation.
+
+    ``counts`` are rows written per kind; ``unconfirmed`` the opening-book
+    order ids nothing has named yet (L3 only); ``times["started"]`` is set at
+    the first live event, and so is ``streaming``.
+    """
+
+    counts: dict[str, int]
+    unconfirmed: set[Any] | None
+    times: dict[str, pd.Timestamp]
+    streaming: asyncio.Event | None = None
+
+
 async def _run_stream(
     capturer: LiveSource,
     config: CaptureConfig,
     sink: CaptureSink,
-    counts: dict[str, int],
-    unconfirmed: set[Any] | None,
+    state: _StreamState,
     stop: asyncio.Event,
     record_error: Callable[[str, BaseException], None],
 ) -> None:
@@ -409,9 +476,7 @@ async def _run_stream(
     logger.info(
         "Capturer '{}': streaming for {:.1f} min", capturer.name, config.minutes
     )
-    stream_task = asyncio.create_task(
-        _stream(capturer, config, sink, counts, unconfirmed)
-    )
+    stream_task = asyncio.create_task(_stream(capturer, config, sink, state))
     stop_task = asyncio.create_task(stop.wait())
     try:
         done, _pending = await asyncio.wait(
@@ -439,17 +504,22 @@ async def _stream(
     capturer: LiveSource,
     config: CaptureConfig,
     sink: CaptureSink,
-    counts: dict[str, int],
-    unconfirmed: set[Any] | None = None,
+    state: _StreamState,
 ) -> None:
-    """Pump the capturer's stream into *sink*, updating *counts* in place.
+    """Pump the capturer's stream into *sink*, updating *state* in place.
 
     Counts are incremented per write (not returned) so they remain accurate
     when the task is cancelled mid-stream by a signal. For the same reason
-    *unconfirmed* is shrunk in place: an opening-book order id leaves it as
-    soon as an order event or a trade names it.
+    the unconfirmed ids are shrunk in place: an opening-book order id leaves
+    them as soon as an order event or a trade names it.
     """
+    counts = state.counts
+    unconfirmed = state.unconfirmed
     async for kind, event, frame in capturer.stream(config):
+        if "started" not in state.times:
+            state.times["started"] = pd.Timestamp.now(tz="UTC")
+            if state.streaming is not None:
+                state.streaming.set()
         if kind == "order":
             event["origin"] = ORIGIN_STREAM
             sink.write_order(event)

@@ -283,3 +283,7 @@ ob_analytics/
 it; a source can add the offline factories too and do both. The runner
 (`run_capturer`) handles persistence, raw-frame archival, signal handling, and
 `meta.json` finalisation so source authors only write the per-venue parser.
+`run_capture` runs it once per **segment** of a long capture: a disconnect, a
+time or size roll, or a restart closes the current segment and starts the next
+from a fresh snapshot, and `manifest.json` records the segments and the gaps
+between them.

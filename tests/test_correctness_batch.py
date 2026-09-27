@@ -144,7 +144,7 @@ class TestStreamCountsSurviveCancellation:
     def test_cancelled_stream_keeps_counts(self, tmp_path):
         from ob_analytics.config import SourceSettings
         from ob_analytics.live._base import CaptureConfig
-        from ob_analytics.live._runner import _stream
+        from ob_analytics.live._runner import _stream, _StreamState
         from ob_analytics.protocols import FeedType, Level
 
         class _Sink:
@@ -192,7 +192,8 @@ class TestStreamCountsSurviveCancellation:
             sink = _Sink()
             counts = {"order": 0, "trade": 0, "raw": 0}
             config = CaptureConfig(pair="btcusd", out_dir=tmp_path)
-            task = asyncio.create_task(_stream(_Capturer(), config, sink, counts))
+            state = _StreamState(counts, None, {})
+            task = asyncio.create_task(_stream(_Capturer(), config, sink, state))
             await asyncio.sleep(0.05)
             task.cancel()
             with pytest.raises(asyncio.CancelledError):

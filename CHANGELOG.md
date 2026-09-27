@@ -10,6 +10,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **A live capture can run for days** (#150). `ob-analytics capture` now
+  writes a directory of segments with a `manifest.json`. A lost connection ends
+  the segment; the capture waits (1 s, doubling to 60 s) and starts a new one
+  from a fresh snapshot. `--roll-minutes` and `--roll-mb` start a new segment
+  by time or size, and the new segment is streaming before the old one stops,
+  so a roll loses nothing. Running the same command again continues the
+  capture, and closes a segment a crashed process left open; a lock on the
+  directory stops a second process from writing to it at once. The manifest
+  records every segment, why it ended, and every gap with its cause.
+  `process` and `audit` read the whole capture, and `audit` adds the checks
+  `capture_gaps`, `unfinished_segments` and `dropped_messages`. From Python:
+  `ob_analytics.live.run_capture` and `read_manifest`.
+
 - **Each source declares which orders of a trade it can name** (#284). The
   new `Source.trade_attribution` (`TradeAttribution.BOTH`, `MAKER_ONLY` or
   `NONE`) says whether a feed's order events show the trade's maker, its taker,
@@ -27,6 +40,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `--source` names another: a cryptofeed L3 capture is read with
   `--source bitstamp`, whose feed shows more. Read the record with
   `recorded_source`, `recorded_feed_type` and `recorded_trade_attribution`.
+
+### Changed
+
+- **The capture directory layout** (#150). A capture's files are now in
+  `seg-0001/`, `seg-0002/`, ... under `--out`, next to `manifest.json`. Read
+  one segment as before, from its `orders.csv` or `depth.csv`; give `process`
+  and `audit` the capture directory to read them all. `--out` must be new,
+  empty, or a capture of the same venue and pair.
+- **Live sources no longer reconnect by themselves** (#150). The Bitstamp
+  source reconnected without a new snapshot, so an order deleted while it was
+  disconnected stayed on the book to the end of the run, and only a
+  `reconnects` count (now removed) recorded it. The ccxt source stopped its
+  book or trade loop on a network error and ran on with half its feed. Both now
+  end the stream with the error, and the capture starts a new segment.
 
 ### Fixed
 

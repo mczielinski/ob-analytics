@@ -184,10 +184,14 @@ The built-in `CcxtSource` is the worked example
 
 A `LiveSource` translates a venue's WebSocket (or REST-poll) feed into the same
 event dicts the pipeline reads. It only **parses**: persistence, raw-frame
-archival, reconnect/rate-limiting, signal handling, and `meta.json`
-finalisation are all handled generically by the runner
-(`ob_analytics.live._runner.run_capturer`). Add the three async methods to your
-source (alongside the offline factories, if it does both):
+archival, signal handling, and `meta.json` finalisation are handled by the
+runner (`ob_analytics.live._runner.run_capturer`, one segment), and
+reconnecting, rolling and restarting by `ob_analytics.live.run_capture`. So
+`stream` does not reconnect: when the connection drops it raises, and
+`run_capture` starts a new segment from a fresh snapshot (see
+[Running for days](howto/live-capture.md#running-for-days)). Add the three
+async methods to your source (alongside the offline factories, if it does
+both):
 
 ```python
 from collections.abc import AsyncIterator
@@ -228,7 +232,7 @@ class CoinbaseSource:  # ... plus the offline members above
 
     # Optional — satisfies SupportsDiagnostics; merged into meta.json.
     def diagnostics(self) -> dict[str, Any]:
-        return {"reconnects": self._reconnects}
+        return {"dropped": self._dropped}
 
     # Optional — satisfies SupportsPreflight; runs before any output exists.
     # Raise ImportError with the install hint when an optional extra is missing.
@@ -243,9 +247,9 @@ ob-analytics capture coinbase --pair btcusd --minutes 10 --out capture/
 ob-analytics capture --list   # show live-capable sources
 ```
 
-The runner writes `orders.csv` (L3) or `depth.csv` (L2) plus `trades.csv`, in
-the same schema the pipeline reads, so a capture feeds straight back in:
-`Pipeline.from_source("coinbase").run("capture/")`.
+Each segment of the capture holds `orders.csv` (L3) or `depth.csv` (L2) plus
+`trades.csv`, in the same schema the pipeline reads, so a segment feeds
+straight back in: `Pipeline.from_source("coinbase").run("capture/seg-0001/orders.csv")`.
 
 ### Shipping a source as its own package
 

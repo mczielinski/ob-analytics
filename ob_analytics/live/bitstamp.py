@@ -18,8 +18,11 @@ The capturer preserves the rich behaviour of the historical script:
   the snapshot (already reflected in the synthetic ``created`` rows).
 * Emits a synthetic ``deleted`` event at shutdown for every order still
   resting (full ``created -> ... -> deleted`` lifecycle).
-* Reconnects on ``ConnectionClosed`` (websockets' built-in retry) and
-  re-subscribes without re-snapshotting (would duplicate creates).
+* Raises on ``ConnectionClosed`` instead of reconnecting.  The feed has no
+  sequence numbers, so nothing could tell which orders changed while the
+  connection was down, and an order deleted then would rest in the capture
+  until the end.  :func:`~ob_analytics.live.run_capture` starts a new segment
+  from a fresh snapshot instead, and records the gap.
 """
 
 from __future__ import annotations
@@ -101,7 +104,7 @@ class BitstampCapturer:
         # WebSocket state -- opened in ``snapshot``, used in ``stream``.
         # The live connection is entered through an ``AsyncExitStack`` so it
         # can be opened in one coroutine and closed deterministically from
-        # another (``stream``'s ``finally`` / ``_reconnect``).
+        # another (``stream``'s ``finally``).
         self._ws: Any = None
         self._ws_stack: AsyncExitStack | None = None
         # Buffered WS frames received during the REST snapshot fetch.
@@ -112,7 +115,6 @@ class BitstampCapturer:
         self.pre_snapshot_skipped = 0
         self.synthetic_created = 0
         self.synthetic_deleted = 0
-        self.reconnects = 0
         # How many REST fetches the opening snapshot took, and whether the one
         # used overlapped the stream (see SNAPSHOT_MAX_FETCHES).
         self.snapshot_fetches = 0
@@ -230,7 +232,12 @@ class BitstampCapturer:
     async def stream(
         self, config: CaptureConfig
     ) -> AsyncIterator[tuple[str, EventDict, Any]]:
-        """Drain the snapshot buffer, then recv frames until the deadline."""
+        """Drain the snapshot buffer, then recv frames until the deadline.
+
+        A closed connection before the deadline raises
+        :class:`~websockets.exceptions.ConnectionClosed`: this capture cannot
+        continue past a disconnect (see the module notes).
+        """
         orders_channel = f"live_orders_{config.pair}"
         trades_channel = f"live_trades_{config.pair}"
         deadline = time.monotonic() + config.minutes * 60.0
@@ -245,7 +252,7 @@ class BitstampCapturer:
         if self._ws is None:
             return
 
-        # 2. Main recv loop with reconnect-on-close.
+        # 2. Main recv loop; a closed connection ends the stream.
         last_progress = time.monotonic()
         try:
             while True:
@@ -261,16 +268,8 @@ class BitstampCapturer:
                 except ConnectionClosed as exc:
                     if time.monotonic() >= deadline:
                         return
-                    self.reconnects += 1
-                    logger.info(
-                        "[bitstamp] connection closed ({} {!r}); reconnecting (#{})",
-                        exc.code,
-                        exc.reason,
-                        self.reconnects,
-                    )
-                    if not await self._reconnect(orders_channel, trades_channel):
-                        return
-                    continue
+                    logger.warning("[bitstamp] connection closed: {}", exc)
+                    raise
 
                 recv_ms = int(time.time() * 1000)
                 try:
@@ -288,11 +287,9 @@ class BitstampCapturer:
                 if now - last_progress >= 15.0:
                     mins_left = max(0.0, (deadline - now) / 60.0)
                     logger.info(
-                        "[bitstamp] open={} dropped={} reconnects={} "
-                        "~{:.1f} min remaining",
+                        "[bitstamp] open={} dropped={} ~{:.1f} min remaining",
                         len(self._open_orders),
                         self.dropped,
-                        self.reconnects,
                         mins_left,
                     )
                     last_progress = now
@@ -410,24 +407,6 @@ class BitstampCapturer:
             self._ws_stack = None
             self._ws = None
 
-    async def _reconnect(self, orders_channel: str, trades_channel: str) -> bool:
-        """Tear down the dead WS, open a new one, and re-subscribe.
-
-        Returns True on success. The capturer must NOT re-snapshot --
-        doing so would emit duplicate ``created`` rows for every resting
-        order. Events that occurred during the disconnect window are
-        unavoidably lost.
-        """
-        try:
-            await self._close_ws()
-            await self._open_ws([orders_channel, trades_channel])
-            return True
-        except Exception as exc:  # noqa: BLE001
-            logger.error("[bitstamp] reconnect failed: {!r}", exc)
-            self._ws = None
-            self._ws_stack = None
-            return False
-
     def _parse_buffered(
         self,
         msg: dict[str, Any],
@@ -536,7 +515,6 @@ class BitstampCapturer:
             "synthetic_deleted": self.synthetic_deleted,
             "pre_snapshot_skipped": self.pre_snapshot_skipped,
             "dropped": self.dropped,
-            "reconnects": self.reconnects,
         }
 
 

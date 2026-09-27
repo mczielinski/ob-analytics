@@ -126,6 +126,13 @@ Two of these are judgement calls worth stating plainly:
   to read the files, and a [cryptofeed](cryptofeed.md) L3 capture can only be
   read as `bitstamp`, whose feed shows more. The log says when the record
   overrides `--source`.
+- **A capture of several segments is audited one segment at a time.** Given a
+  capture directory (or the `process` output made from one), `audit` prints a
+  report for each segment and then the capture's own checks from
+  `manifest.json`: `capture_gaps` (time no segment covered),
+  `unfinished_segments` (segments a dead capture process left open), and
+  `dropped_messages`. All three are warnings, so `--strict` fails on them. See
+  [Running for days](live-capture.md#running-for-days).
 - **A stale order is reported, not removed.** A trade above a resting ask (or
   below a resting bid) shows the order has gone, because a matching engine
   fills the better price first. The venue normally reports that order within

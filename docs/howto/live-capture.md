@@ -12,17 +12,34 @@ straight into the format the pipeline reads. Install the optional
 pip install "ob-analytics[live]"
 
 ob-analytics capture bitstamp --pair btcusd --minutes 10 --out /tmp/cap
-ob-analytics process /tmp/cap/orders.csv --gallery --output /tmp/cap_out
+ob-analytics process /tmp/cap --gallery --output /tmp/cap_out
 ```
 
-Each capture run produces a self-contained directory:
+A capture is a directory of **segments**. A short run has one; a long run can
+have many (see [Running for days](#running-for-days)). Each segment is a
+complete capture on its own, so it replays alone:
+
+```text
+/tmp/cap/
+  manifest.json
+  seg-0001/
+    orders.csv  trades.csv  raw.jsonl  meta.json
+  seg-0002/
+    ...
+```
 
 | File | Contents |
 |------|----------|
-| `orders.csv` | BitstampLoader-compatible event log (`created` / `changed` / `deleted`) |
-| `trades.csv` | Venue-reported trades (informational; pipeline infers fills itself) |
-| `raw.jsonl` | Every raw WebSocket frame (omit with `--no-raw`) |
-| `meta.json` | Run metadata: start/end, counts, per-capturer diagnostics |
+| `manifest.json` | The whole capture: its segments, why each one ended, and the gaps between them |
+| `seg-NNNN/orders.csv` | BitstampLoader-compatible event log (`created` / `changed` / `deleted`) |
+| `seg-NNNN/trades.csv` | Venue-reported trades (informational; pipeline infers fills itself) |
+| `seg-NNNN/raw.jsonl` | Every raw WebSocket frame (omit with `--no-raw`) |
+| `seg-NNNN/meta.json` | Segment metadata: start/end, counts, per-capturer diagnostics |
+
+`process` and `audit` given the capture directory work through each segment.
+`process` writes each segment's results to the folder of the same name under
+`--output` and copies `manifest.json` there. To read one segment in Python,
+pass its book file: `Pipeline().run("/tmp/cap/seg-0001/orders.csv")`.
 
 The Bitstamp capturer also pulls a REST order-book snapshot at startup
 (emitting synthetic `created` events for every resting order) and emits
@@ -86,19 +103,80 @@ through was not really on the book; [`ob-analytics audit`](audit.md) reports
 these as `stale_orders`. L2 captures report `null`, because a price
 level has no id that the stream could confirm.
 
+## Running for days
+
+A capture can run unattended. Every break in it is handled the same way: the
+current segment is closed, with its closing rows, and a new segment starts from
+a fresh snapshot. `manifest.json` records each break.
+
+**Rolling to a new segment.** `--roll-minutes 60` starts a new segment every
+hour, and `--roll-mb 500` starts one when a segment has written 500 MB since
+its first live event (the opening snapshot does not count). Both must be above
+0. The
+new segment starts before the old one stops, and the old one stops only when
+the new one is streaming. The two segments overlap, so a roll loses nothing.
+
+**A lost connection.** The segment ends with the error in its `meta.json`. The
+capture waits 1 second, then starts a new segment. The wait doubles after each
+failure in a row, up to 60 seconds, and goes back to 1 second after a segment
+that ran for a minute. The time between the two segments is recorded as a gap.
+Book changes made during a gap cannot be recovered: no venue replays them. The
+new snapshot means the book is correct again from the start of the next
+segment.
+
+**A restart.** Run the same command again with the same `--out` and the
+capture continues in the next segment. If the old process died without
+closing its last segment, the restart closes it: it cuts off a half-written
+last line, writes a `deleted` row for each order still open at the last
+recorded time, and completes `meta.json` with `"unfinished": true`. The time
+the capture was down is recorded as a gap. The capture refuses an `--out`
+that holds a different venue or pair, files but no `manifest.json`, or a
+`manifest.json` this version cannot read. While it runs, the capture holds a
+lock on `--out` (the `.capture.lock` file), so a second capture into the same
+directory stops with an error instead of rewriting the first one's files.
+
+This lets a service manager restart the capture. For example, a systemd unit
+with `Restart=always` and
+`ExecStart=ob-analytics capture bitstamp --pair btcusd --minutes 10080 --roll-minutes 60 --out /data/btcusd`
+captures for a week (counted from each start) and continues after a crash or
+reboot.
+
+`manifest.json` records:
+
+| Field | Meaning |
+|-------|---------|
+| `source`, `pair`, `level` | What was captured. A restart must match them |
+| `feed_type`, `trade_attribution`, `sequence_kind` | What the source declares about its feed |
+| `version` | The layout version (currently `1`) |
+| `started`, `ended` | When the capture started, and when it last stopped |
+| `restarts` | How many times the capture was started again in this directory |
+| `segments` | Each segment: when it streamed from and to, why it ended (`rolled_time`, `rolled_size`, `failed`, `ended_early`, `unfinished`, `stopped`, `finished`), its error, row counts, and the messages its source dropped |
+| `gaps` | Each stretch with no segment streaming: start, end, length, and cause (`disconnect`, `restart`, `roll`, `stopped`, `finished`) |
+| `dropped`, `gap_seconds` | Totals over the whole capture |
+
+The manifest is rewritten after every change and every 10 seconds while the
+capture runs, so it is never more than 10 seconds out of date.
+
+`ob-analytics audit /tmp/cap` audits each segment, then prints the capture's
+own checks: gaps, segments a dead process left open, and dropped messages.
+These are warnings, so `audit --strict` fails a capture that has any.
+
 ## A capture that fails
 
 `ob-analytics capture` checks the source before it starts. If a source needs
 an optional extra that is not installed, or the venue name is unknown, it
 prints the reason, exits with status 1, and creates no output directory.
 
-If the opening snapshot, the stream, or the shutdown events raise an error
-after the capture has started, the capture keeps the rows it wrote before
-the error and exits with status 1. `meta.json` records the error as
-`capture_error`, the step that failed as `capture_error_phase` (`snapshot`,
-`stream` or `shutdown`), and counts it in `errors`. After a failed snapshot
-the stream does not run. Check the exit status or `capture_error` before you
-use a capture.
+If the first segment of a new capture fails before its first event, the
+settings are probably wrong (a pair the venue does not list, a location it
+refuses), so the capture stops and exits with status 1 instead of retrying. It also exits with status 1
+if no segment streamed at all. A failure after that ends the segment and the
+capture carries on, as described above.
+
+A segment keeps the rows it wrote before an error. Its `meta.json` records the
+error as `capture_error`, the step that failed as `capture_error_phase`
+(`snapshot`, `stream` or `shutdown`), and counts it in `errors`. After a failed
+snapshot the stream does not run.
 
 ## Adding a new venue
 
@@ -133,9 +211,14 @@ register_source("coinbase", CoinbaseSource)
 ```
 
 That's enough to make `ob-analytics capture coinbase` work. Persistence,
-raw-frame archival, signal handling, and `meta.json` all live in the
+raw-frame archival, signal handling, segments, and `meta.json` all live in the
 generic runner -- you only write the per-venue parser. A source can also add
 the offline-replay factories and be both.
+
+Do not reconnect inside `stream`. When the connection drops, let `stream`
+raise: the capture then starts a new segment from a fresh snapshot and records
+the gap. A source that reconnects by itself carries its book across the gap,
+and every order changed while it was disconnected stays wrong.
 
 ## Related
 
