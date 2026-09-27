@@ -4,8 +4,9 @@ A theme is passed per call -- ``plot(..., theme=PlotTheme(...))`` -- and
 applies only to that call; there is no global theme to set.  Each backend
 turns the shared fields into its own terms:
 
-* **matplotlib** -- ``style`` / ``context`` / ``font_scale`` go to
-  :func:`seaborn.set_theme`, then ``rc`` on top.
+* **matplotlib** -- ``style`` / ``context`` / ``font_scale`` become the rc
+  settings :func:`seaborn.set_theme` would apply, then ``rc`` on top, scoped
+  to the call with :func:`matplotlib.rc_context`.
 * **plotly** -- a per-figure template: ``style`` picks the base template,
   ``context`` x ``font_scale`` sets the font size, then ``plotly_layout`` on
   top.
@@ -131,5 +132,6 @@ class PlotTheme:
 
 #: Default theme applied when a renderer creates its own figure.  Pass a
 #: ``theme=`` kwarg to :func:`~ob_analytics.visualization.plot` (or directly to
-#: a renderer) to override it per call; there is no global mutable theme.
+#: a renderer) to override it per call.  The theme applies to that figure only:
+#: matplotlib's global ``rcParams`` are unchanged after the call.
 DEFAULT_THEME: PlotTheme = PlotTheme()
