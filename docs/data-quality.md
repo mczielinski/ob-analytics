@@ -118,9 +118,9 @@ read from it, such as the crossed share above. They reach the depth summary
 much less, because the depth engine already drops a level that a newer quote
 crosses. On the bundled sample, without the two stale orders the depth
 summary's best ask changes on 0.6% of rows, the transaction costs and the
-count of hidden trades do not change, and the
-[feature table](howto/feature-table.md) changes by a small amount on 14 of
-its 127 rows.
+count of hidden trades do not change, and the table the
+[feature-table how-to](howto/feature-table.md) builds changes by a small
+amount on 14 of its 127 rows.
 
 `audit` reports stale orders as a warning and names the worst one: its id,
 side, price, and how long it held the touch after the trade. From Python,

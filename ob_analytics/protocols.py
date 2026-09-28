@@ -226,7 +226,7 @@ class TradeSource(Protocol):
 
     Returned DataFrame columns:
 
-    * ``timestamp``        — pandas datetime64[ns]
+    * ``timestamp``        — pandas datetime64[ns, UTC]
     * ``price``            — int64 (integer ticks; × ``tick_size`` for the
       quote currency)
     * ``volume``           — int64 (integer lots; × ``lot_size`` for the base
@@ -276,7 +276,7 @@ class DepthSource(Protocol):
     Returned DataFrame columns (see
     :data:`~ob_analytics.schemas.DEPTH_COLUMNS`):
 
-    * ``timestamp``  — pandas datetime64[ns]
+    * ``timestamp``  — pandas datetime64[ns, UTC]
     * ``price``      — int64, the price level in integer ticks (× ``tick_size``
       for the quote currency)
     * ``volume``     — int64, the level's **new absolute** resting size in

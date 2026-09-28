@@ -126,8 +126,8 @@ The value falls as the bars grow, so compare `vpin` only between tables cut
 the same way. The original measure uses buckets of about a fiftieth of a day's
 volume, which on a liquid market holds many trades each. Check `n_trades`
 before you read `vpin` as toxicity. [`compute_vpin`](flow-toxicity.md#vpin)
-behaves the same way: with buckets the size of these bars it gives the same
-readings.
+behaves the same way: with buckets the size of these bars, its readings on
+the sample are within 0.06 of the column's.
 
 ## No look-ahead
 

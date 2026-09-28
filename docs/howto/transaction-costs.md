@@ -44,9 +44,9 @@ market then moved 1.86 basis points in the taker's favour, and the liquidity
 provider was left 0.41 basis points down. A *negative* realized spread means
 the flow was, on average, informed — the same story VPIN and Kyle's λ tell,
 measured in the currency a taker pays. On this capture, read the split with
-care: a quarter of the trades are measured against a mid that had already
-moved, and every figure here carries that error (see
-[below](#trust-the-book-before-you-trust-the-cost)).
+care: a quarter of the trades have a negative effective spread, so the mid
+they are measured from is not the one the taker faced, and every figure here
+carries that error (see [below](#trust-the-book-before-you-trust-the-cost)).
 
 `costs` is one row per trade, so the distribution is there too:
 
