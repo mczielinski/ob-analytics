@@ -63,7 +63,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   segment streaming next to the new one to the end of the capture, with no
   further rolls, and SIGTERM or Ctrl-C did nothing. The sources now use
   `asyncio.timeout`, and ruff bans `asyncio.wait_for` in this repository. The
-  runner cancels a stream again while it keeps writing rows, so a plug-in
+  runner cancels a stream again while it keeps yielding items, so a plug-in
   source with the same pattern cannot block a stop; a stream that is closing
   its connection is left to finish. Python 3.12 and later were not affected.
 - **A segment that does not stop cannot hold up the capture** (#296). A

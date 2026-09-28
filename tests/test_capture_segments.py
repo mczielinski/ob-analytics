@@ -47,8 +47,6 @@ SILENT = "silent"  # connects, sends nothing for 0.6 s, then drops
 DEAF_ONCE = "deaf_once"
 # Like DEAF_ONCE, but yields only heartbeats: items the runner writes nowhere.
 DEAF_ONCE_RAW = "deaf_once_raw"
-# Streams like OK, but takes 0.1 s to close its connection once stopped.
-SLOW_CLOSE = "slow_close"
 # Streams like OK, but never finishes closing its connection once stopped.
 HANG_ON_STOP = "hang_on_stop"
 # Its opening snapshot never finishes, so it never streams.
@@ -57,6 +55,16 @@ STUCK_SNAPSHOT = "stuck_snapshot"
 
 def _disconnect_after(n: int) -> str:
     return f"disconnect:{n}"
+
+
+def _slow_close(seconds: float) -> str:
+    """Streams like OK, but takes *seconds* to close its connection once stopped."""
+    return f"slow_close:{seconds}"
+
+
+def _slow_snapshot(seconds: float) -> str:
+    """Streams like OK, after an opening snapshot that takes *seconds*."""
+    return f"slow_snapshot:{seconds}"
 
 
 def _stubborn_shutdown(seconds: float) -> str:
@@ -92,6 +100,8 @@ class _ScriptedSource:
             raise ConnectionError("venue unreachable")
         if self._behaviour == STUCK_SNAPSHOT:
             await asyncio.sleep(3600)
+        if self._behaviour.startswith("slow_snapshot"):
+            await asyncio.sleep(float(self._behaviour.split(":")[1]))
         ts = _now()
         book = [(1, 100.0, "bid"), (2, 101.0, "ask")]
         if self._behaviour == BIG_SNAPSHOT:
@@ -160,8 +170,8 @@ class _ScriptedSource:
                     None,
                 )
         finally:
-            if self._behaviour == SLOW_CLOSE:
-                await asyncio.sleep(0.1)
+            if self._behaviour.startswith("slow_close"):
+                await asyncio.sleep(float(self._behaviour.split(":")[1]))
             elif self._behaviour == HANG_ON_STOP:
                 await asyncio.sleep(3600)
             self._closed = True
@@ -381,7 +391,7 @@ class TestRoll:
         # would cut it short and leave the connection open.  The stop limit is
         # far above it, so only the retry interval is under test.
         monkeypatch.setattr(_supervisor, "STOP_TIMEOUT_SECONDS", 5.0)
-        run = _capture(tmp_path, [SLOW_CLOSE], seconds=0.8, roll_minutes=0.3 / 60)
+        run = _capture(tmp_path, [_slow_close(0.1)], seconds=0.8, roll_minutes=0.3 / 60)
 
         segments = run.manifest.segments
         assert len(segments) >= 2
@@ -411,9 +421,54 @@ class TestRoll:
             meta = json.loads((seg_dir / "meta.json").read_text())
             assert "did not stop within" in meta["capture_error"]
 
-    def test_a_late_stop_that_ends_by_itself_keeps_its_own_result(self, tmp_path):
+    def test_a_segment_covers_the_market_only_until_asked_to_stop(
+        self, tmp_path, monkeypatch
+    ):
+        # Closing takes 0.5 s, well under the limit.  The market is covered by
+        # the next segment from the moment it streams, and the old one is
+        # asked to stop straight after: its close is not coverage.
+        monkeypatch.setattr(_supervisor, "STOP_TIMEOUT_SECONDS", 5.0)
+        run = _capture(tmp_path, [_slow_close(0.5)], seconds=1.0, roll_minutes=0.3 / 60)
+
+        segments = run.manifest.segments
+        assert len(segments) >= 2
+        for earlier, later in pairwise(segments):
+            assert earlier.stream_ended is not None
+            assert later.stream_started is not None
+            assert earlier.stream_ended - later.stream_started < pd.Timedelta(
+                seconds=0.25
+            )
+
+    def test_a_stuck_segment_covers_only_until_asked_to_stop(
+        self, tmp_path, monkeypatch
+    ):
+        # The next segment's snapshot takes 1 s, so the roll gives up waiting
+        # after 0.3 s and stops the current one, which then hangs.  Its
+        # heartbeat must not run on while it hangs, or the gap before the
+        # next segment would look shorter than it is.
+        monkeypatch.setattr(_supervisor, "HANDOVER_TIMEOUT_SECONDS", 0.3)
+        run = _capture(
+            tmp_path,
+            [HANG_ON_STOP, _slow_snapshot(1.0), OK],
+            seconds=1.8,
+            roll_minutes=0.3 / 60,
+        )
+
+        first = run.manifest.segments[0]
+        assert "did not stop within" in (first.error or "")
+        assert first.stream_ended is not None and first.ended is not None
+        # It hung for the whole 0.3 s limit after it was asked to stop.
+        assert first.ended - first.stream_ended >= pd.Timedelta(seconds=0.25)
+        (gap,) = [g for g in run.manifest.gaps if g.after == "seg-0001"]
+        assert gap.cause == "roll"
+        assert gap.start == first.stream_ended
+
+    def test_a_late_stop_that_ends_by_itself_keeps_its_own_result(
+        self, tmp_path, monkeypatch
+    ):
         # Its closing rows take 0.45 s: past the 0.3 s limit, and it ignores
-        # the cancel, but it is done within the 0.3 s grace.
+        # the cancel, but it is done well within the 2 s grace.
+        monkeypatch.setattr(_supervisor, "STOP_GRACE_SECONDS", 2.0)
         run = _capture(tmp_path, [_stubborn_shutdown(0.45)], seconds=0.6)
 
         (segment,) = run.manifest.segments
@@ -437,6 +492,17 @@ class TestRoll:
         # was given up 0.6 s later.
         assert segment.stream_ended is not None and segment.ended is not None
         assert segment.ended - segment.stream_ended >= pd.Timedelta(seconds=0.5)
+
+    def test_a_stuck_segment_that_then_fails_says_how(self, tmp_path, monkeypatch):
+        def full_disk(self: Any, result: Any) -> None:
+            raise OSError("No space left on device")
+
+        monkeypatch.setattr(_runner.FileCaptureSink, "finalize", full_disk)
+        run = _capture(tmp_path, [HANG_ON_STOP], seconds=0.5)
+
+        (segment,) = run.manifest.segments
+        assert "did not stop within" in (segment.error or "")
+        assert "No space left on device" in (segment.error or "")
 
     def test_a_capture_goes_on_when_closing_a_stuck_segment_fails(
         self, tmp_path, monkeypatch

@@ -61,7 +61,6 @@ from ob_analytics.live._runner import (
     _TRADE_COLS,
     ORIGIN_SHUTDOWN,
     FileCaptureSink,
-    _retrieve_outcome,
     _source_declarations,
     install_stop_signals,
     run_capturer,
@@ -477,6 +476,10 @@ class _Supervisor:
             segment.stream_ended = (
                 result.stream_ended if segment.stream_started is not None else None
             )
+            if segment.stream_ended is not None and running.stop_requested is not None:
+                # Once asked to stop it no longer covers the market, however
+                # long closing its connection then takes.
+                segment.stream_ended = min(segment.stream_ended, running.stop_requested)
             segment.error = result.capture_error
             segment.n_book_events = result.n_order_events + result.n_depth_events
             segment.n_trade_events = result.n_trade_events
@@ -525,8 +528,10 @@ class _Supervisor:
         task = running.task
         limit = f"the segment did not stop within {STOP_TIMEOUT_SECONDS:.0f} s"
         if task.done():
-            _retrieve_outcome(task)
             error = f"{limit}, so it was cancelled and closed from its files"
+            failure = None if task.cancelled() else task.exception()
+            if failure is not None:
+                error += f" (it ended with {failure!r})"
             try:
                 # In a thread: it reads the segment's files in full, and the
                 # next segment is streaming on this loop.  It changes nothing
@@ -661,11 +666,13 @@ class _Supervisor:
             await asyncio.sleep(HEARTBEAT_SECONDS)
             now = pd.Timestamp.now(tz="UTC")
             for running in self._running:
-                # A segment asked to stop no longer covers the market: its
-                # heartbeat would count the time it takes to close.
-                if running.task.done() or running.stop.is_set():
+                if running.task.done():
                     continue
-                running.segment.heartbeat = now
+                # A segment asked to stop no longer covers the market: its
+                # heartbeat would count the time it takes to close.  Its rows
+                # are still flushed, so a crash while it closes loses none.
+                if not running.stop.is_set():
+                    running.segment.heartbeat = now
                 running.sink.flush()
                 _write_provisional_meta(running)
             self._manifest.write(self._root)
