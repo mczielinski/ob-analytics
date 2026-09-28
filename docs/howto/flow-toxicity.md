@@ -45,8 +45,9 @@ empty `diagnostics` tuple means no problem was found.
 
 The default `bucket_volume` (average daily volume ÷ 50) assumes a capture
 that runs close to a full day. The bundled sample covers about 30 minutes, so
-the default rule scales that up to a day and picks a bucket far bigger than
-the whole capture — `compute_vpin` fills one bucket and stops:
+the default rule scales that up to a day and picks a bucket almost as large
+as the whole capture (96% of its volume) — `compute_vpin` fills one bucket and
+stops:
 
 ```python
 from ob_analytics import Pipeline, compute_vpin, sample_csv_path

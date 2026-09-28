@@ -36,8 +36,9 @@ change what you see:
   in 40 of those trades the taker's order reaches the order stream before the
   print does. See the transaction-costs how-to.
 - **30 minutes is short for VPIN.** The default VPIN bucket is a fiftieth of a
-  day's volume, which is more than this whole capture traded, so
-  `compute_vpin` fills one bucket and warns. Pass a smaller `bucket_volume`.
+  day's volume. Worked out from this capture, it comes to 96% of all the
+  volume the capture traded, so `compute_vpin` fills one bucket and warns.
+  Pass a smaller `bucket_volume`.
 
 ## Loading the sample
 

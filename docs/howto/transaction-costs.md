@@ -226,17 +226,18 @@ Every number here inherits the quality of the book it is measured against. A
 means the mid was not the one the taker faced. Crossed quotes are already
 skipped, because a book whose best bid is above its best ask has no midpoint.
 
-On the bundled capture, the 72 negative effective spreads come from the order
-in which the feed reports things, not from stale orders:
+On the bundled capture, the 72 negative effective spreads do not come from
+stale orders, and at least part of them come from the order in which the feed
+reports things:
 
 - **Stale orders are not the cause.** The capture holds two stale asks (see
   [Check data quality](audit.md)). Moving their deletes back to the moment a
   trade proved them gone leaves 72 negative spreads and an effective spread of
   1.45 bps. The depth summary had already dropped the levels they crossed.
-- **Message order is.** Bitstamp sends order messages and trade prints on
-  separate channels, and either can arrive first. In 40 of the 72 trades the
-  taker's own order reaches the order stream before the print, so the mid
-  read just before the print has already moved toward the taker.
+- **Message order explains part of it.** Bitstamp sends order messages and
+  trade prints on separate channels, and either can arrive first. In 40 of the
+  72 trades the taker's own order reaches the order stream before the print,
+  so the book read just before the print can already include it.
 - **The size of the effect.** Measuring each trade from the mid just before
   its maker's fill, rather than just before the print, leaves 43 negative
   spreads and gives an effective spread of 0.76 bps instead of 1.45. Neither
