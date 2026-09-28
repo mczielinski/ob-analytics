@@ -73,6 +73,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   If closing its files fails, the error says so and the capture carries on.
   At the end of a capture all running segments are stopped together, so
   SIGTERM ends a capture in under a minute even when a source hangs.
+- **`audit` no longer fails a complete Databento file** (#298). Databento
+  numbers every message on the venue's channel, so the numbers in one
+  instrument's events skip the other instruments' messages and the trade and
+  fill records, which become trades. `audit` read every skip as a lost message
+  and failed a sound file with a `sequence_gaps` error. `DatabentoSource` now
+  declares `sequence_kind = SequenceKind.MONOTONIC`, so `audit` checks only
+  that the numbers never go back. `audit` reads a source's declared
+  `sequence_kind` when no capture `meta.json` records one; read it with the
+  new `sequence_kind_of`, and pass it to `recorded_sequence_kind` as its new
+  `default`.
+
 - **A Bitstamp L3 capture through cryptofeed passes `audit`** (#284).
   cryptofeed's Bitstamp L3 channel is `detail_order_book`: a picture of the top
   100 bids and top 100 asks about 10 times a second, not every order. Four

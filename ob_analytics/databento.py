@@ -111,6 +111,7 @@ from ob_analytics.protocols import (
     FeedType,
     Level,
     RunContext,
+    SequenceKind,
     TradeAttribution,
     TradeSource,
 )
@@ -1358,6 +1359,13 @@ class DatabentoSource:
     # does not reliably carry the aggressor's order id.
     trade_attribution: TradeAttribution = field(
         default=TradeAttribution.MAKER_ONLY, init=False, repr=False
+    )
+    # ``sequence`` numbers every message on the venue's channel, so it skips
+    # the messages about other instruments, and the trade and fill records'
+    # numbers leave with them when they become trades.  Only a step back is a
+    # fault.
+    sequence_kind: SequenceKind = field(
+        default=SequenceKind.MONOTONIC, init=False, repr=False
     )
     # Market-by-order: one record per resting order, with stable identity.
     level: Level = field(default=Level.L3, init=False, repr=False)

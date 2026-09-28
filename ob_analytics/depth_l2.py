@@ -154,16 +154,20 @@ def recorded_tick_size(source: str | Path) -> float | None:
     return float(value) if value else None
 
 
-def recorded_sequence_kind(source: str | Path) -> SequenceKind:
+def recorded_sequence_kind(
+    source: str | Path, default: SequenceKind = SequenceKind.CONTIGUOUS
+) -> SequenceKind:
     """Return what the venue ``sequence`` of a live capture promises.
 
     *source* is the capture directory or a file inside it.  A capture whose
     ``meta.json`` records no ``sequence_kind`` (no ``meta.json``, a source
     that does not declare one, or a capture written before captures recorded
-    it) is read as :attr:`~ob_analytics.protocols.SequenceKind.CONTIGUOUS`.
+    it) is read as *default*.  Pass what the source reading the files
+    declares (:func:`~ob_analytics.protocols.sequence_kind_of`), so a file
+    that is not a live capture is checked the way its source says.
     """
     value = _recorded_meta(source).get("sequence_kind")
-    return SequenceKind(value) if value else SequenceKind.CONTIGUOUS
+    return SequenceKind(value) if value else default
 
 
 def recorded_source(source: str | Path) -> str | None:

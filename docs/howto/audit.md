@@ -103,6 +103,27 @@ Two of these are judgement calls worth stating plainly:
   message. A [ccxt](ccxt.md) capture records in `meta.json` that its sequence
   only rises, and `audit` then checks only that it never goes back, and
   prints `gaps not checked`.
+
+  Most sources carry no sequence that can prove a message was lost. On those,
+  `audit` prints `0 row(s) numbered` for the venue sequence, and a dropped
+  message shows only indirectly, as orphan or stale orders:
+
+  | Source | Venue sequence | What `audit` can check |
+  |---|---|---|
+  | `bitstamp` (files and live capture) | none: the feed has a timestamp only | nothing |
+  | `lobster` | none | nothing |
+  | `cryptofeed` | one number per message, on venues that publish one | gaps and order |
+  | `ccxt`, including Binance | rises, but skips on its own | order only |
+  | `ccxt` for Kalshi and Polymarket | none | nothing |
+  | `databento` | rises, but skips on its own | order only |
+
+  Databento numbers every message on the venue's channel. A file usually holds
+  one instrument of that channel, and its trade and fill records become
+  trades rather than book events, so the numbers left in the events skip even
+  when nothing was lost. The source declares this, and `audit` then prints
+  `gaps not checked`. Audit a saved Databento output with
+  `--from-parquet --source databento`: without `--source`, nothing says what
+  the numbers promise, and every skip counts as a lost message.
 - **Unmatched trades count only the orders the feed can show.** Every trade
   has a maker, the order that was resting, and a taker, the order that
   arrived and traded against it. Only a feed that reports every order shows
@@ -184,6 +205,26 @@ summary.errors        # the failed error checks, each with a one-line detail
 summary.warnings      # the failed warning checks
 summary.stale_orders  # StaleOrder records, worst first
 summary.to_dict()     # JSON-serialisable, including every check
+```
+
+The sequence checks need the venue's numbers, which a run keeps only with
+`PipelineConfig(track_sequence=True)`; `audit` turns this on for you. Pass the
+source's `sequence_kind` too, or a source whose numbers skip on their own,
+such as `databento` or `ccxt`, is read as losing messages:
+
+```python
+from ob_analytics import DatabentoSource, Pipeline, PipelineConfig, data_quality_summary
+from ob_analytics.protocols import sequence_kind_of, trade_attribution_of
+
+source = DatabentoSource()
+result = Pipeline(PipelineConfig(track_sequence=True), source=source).run("aapl.mbo.dbn.zst")
+summary = data_quality_summary(
+    result.events, result.trades,
+    feed_type=source.feed_type,
+    depth=result.depth,
+    sequence_kind=sequence_kind_of(source),
+    trade_attribution=trade_attribution_of(source),
+)
 ```
 
 !!! note "Pass `depth`, not `depth_summary`"
