@@ -248,7 +248,13 @@ def _audit_one(args: argparse.Namespace, path: Path) -> Any:
         recorded_source,
         recorded_trade_attribution,
     )
-    from ob_analytics.protocols import FeedType, TradeAttribution, trade_attribution_of
+    from ob_analytics.protocols import (
+        FeedType,
+        SequenceKind,
+        TradeAttribution,
+        sequence_kind_of,
+        trade_attribution_of,
+    )
 
     # Running the pipeline needs a source, so it falls back to the default one.
     # Reading a saved result does not: the feed type is a property of the
@@ -260,6 +266,7 @@ def _audit_one(args: argparse.Namespace, path: Path) -> Any:
 
     feed_type = FeedType.UNKNOWN
     trade_attribution = TradeAttribution.BOTH
+    sequence_kind = SequenceKind.CONTIGUOUS
     if source_name is not None:
         from ob_analytics.sources import get_source
 
@@ -270,6 +277,7 @@ def _audit_one(args: argparse.Namespace, path: Path) -> Any:
             sys.exit(1)
         feed_type = getattr(source, "feed_type", feed_type)
         trade_attribution = trade_attribution_of(source)
+        sequence_kind = sequence_kind_of(source)
 
     # A live capture records what its own source declares, and that describes
     # this data exactly.  --source may name a different source because it also
@@ -299,7 +307,7 @@ def _audit_one(args: argparse.Namespace, path: Path) -> Any:
         feed_type=feed_type,
         depth=result.depth,
         tick_size=result.config.tick_size,
-        sequence_kind=recorded_sequence_kind(path),
+        sequence_kind=recorded_sequence_kind(path, default=sequence_kind),
         trade_attribution=trade_attribution,
     )
 

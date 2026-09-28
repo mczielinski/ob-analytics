@@ -23,8 +23,10 @@ A `Source` declares two coordinates: a `FeedType` (`matched_book` vs
 `diff_feed`; see [Data quality](../data-quality.md)) and a `Level` (`L2` vs
 `L3`; see [Process L2 feeds](../howto/l2-depth.md)). It also declares a
 `TradeAttribution`: which orders of a trade its order events can name (see
-[Check data quality](../howto/audit.md)). It carries typed `settings` and
-registers in the source registry (see [Sources](sources.md)).
+[Check data quality](../howto/audit.md)). A source that records the venue's
+sequence number may also declare a `SequenceKind`: whether a skipped number
+means a lost message. It carries typed `settings` and registers in the source
+registry (see [Sources](sources.md)).
 
 ::: ob_analytics.protocols.Level
 
@@ -33,6 +35,10 @@ registers in the source registry (see [Sources](sources.md)).
 ::: ob_analytics.protocols.TradeAttribution
 
 ::: ob_analytics.protocols.trade_attribution_of
+
+::: ob_analytics.protocols.SequenceKind
+
+::: ob_analytics.protocols.sequence_kind_of
 
 ::: ob_analytics.protocols.EventLoader
 

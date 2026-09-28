@@ -99,12 +99,15 @@ class SequenceKind(str, Enum):
 
     * :attr:`CONTIGUOUS` — every message adds exactly one.  A skipped number
       is a dropped message.  This is the default, and what a per-message
-      counter (an exchange MBO feed, cryptofeed's L3 channels) gives.
+      counter (cryptofeed's L3 channels) gives.
     * :attr:`MONOTONIC` — the number only rises.  A skip is normal and says
       nothing about loss; only a step that does not rise is a fault.  CCXT's
       book ``nonce`` is this kind: on Binance it is the last update ID of a
       diff that covers a range of IDs, and ``watch_order_book`` can apply
-      several diffs before it returns a book.
+      several diffs before it returns a book.  Databento's ``sequence`` is
+      too: it numbers every message on the venue's channel, but a file
+      usually holds one instrument of that channel, and the trade and fill
+      records it carries become trades rather than book events.
 
     Mixes in ``str`` so members compare and serialise as their value, as
     :class:`FeedType` does.
@@ -152,6 +155,15 @@ def trade_attribution_of(source: Any) -> TradeAttribution:
     A source that does not declare one is read as :attr:`TradeAttribution.BOTH`.
     """
     return TradeAttribution(getattr(source, "trade_attribution", TradeAttribution.BOTH))
+
+
+def sequence_kind_of(source: Any) -> SequenceKind:
+    """Return what *source* declares as its :class:`SequenceKind`.
+
+    A source that does not declare one is read as
+    :attr:`SequenceKind.CONTIGUOUS`.
+    """
+    return SequenceKind(getattr(source, "sequence_kind", SequenceKind.CONTIGUOUS))
 
 
 @dataclass(frozen=True)
@@ -520,6 +532,11 @@ class Source(Protocol):
         existed still satisfies the contract; read it with
         :func:`trade_attribution_of`, which treats a missing one as
         :attr:`TradeAttribution.BOTH`.
+    sequence_kind : SequenceKind
+        What the venue ``sequence`` the source records promises
+        (:class:`SequenceKind`), so a gap check knows whether a skipped number
+        is a lost message.  Optional: read it with :func:`sequence_kind_of`,
+        which treats a missing one as :attr:`SequenceKind.CONTIGUOUS`.
     settings : SourceSettings
         Typed per-source configuration.  The empty base for a source that needs
         none; a typed subclass (e.g. ``CcxtSettings``) for one with venue knobs.
