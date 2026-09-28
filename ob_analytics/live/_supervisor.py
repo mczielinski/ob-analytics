@@ -61,6 +61,7 @@ from ob_analytics.live._runner import (
     _TRADE_COLS,
     ORIGIN_SHUTDOWN,
     FileCaptureSink,
+    _FirstEvent,
     _source_declarations,
     install_stop_signals,
     run_capturer,
@@ -130,7 +131,7 @@ class _Running:
     source: LiveSource
     sink: FileCaptureSink
     stop: asyncio.Event
-    streaming: asyncio.Event
+    streaming: _FirstEvent
     task: asyncio.Task[CaptureResult]
     opened: float  # monotonic time the segment started
     # Monotonic time it became the current segment, and the bytes it had
@@ -393,7 +394,7 @@ class _Supervisor:
             keep_raw=self._config.keep_raw,
         )
         stop = asyncio.Event()
-        streaming = asyncio.Event()
+        streaming = _FirstEvent()
         task = asyncio.create_task(
             run_capturer(source, seg_config, sink, stop=stop, streaming=streaming)
         )
@@ -424,7 +425,7 @@ class _Supervisor:
             # neither ends a gap nor starts one.
             return
         segment = running.segment
-        segment.stream_started = pd.Timestamp.now(tz="UTC")
+        segment.stream_started = running.streaming.at or pd.Timestamp.now(tz="UTC")
         self._manifest.note_streaming(segment)
         self._manifest.write(self._root)
         logger.info("Capture '{}': {} streaming", self._manifest.source, segment.name)

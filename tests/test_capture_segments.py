@@ -445,12 +445,17 @@ class TestRoll:
                 seconds=0.25
             )
 
-    def test_a_segment_asked_to_stop_before_it_streams_covers_nothing(self, tmp_path):
-        # The capture ends while the next segment is still taking its 0.4 s
-        # snapshot.  Once the snapshot is done, its stream replays a message
-        # before it sees the stop, so its first event comes after the stop.
+    def test_a_segment_asked_to_stop_before_it_streams_covers_nothing(
+        self, tmp_path, monkeypatch
+    ):
+        # The roll at 0.3 s starts the next segment, and the capture ends at
+        # 0.8 s while that segment is still taking its 1 s snapshot.  Once the
+        # snapshot is done, its stream replays a message before it sees the
+        # stop, so its first event comes after the stop.  The stop limit is
+        # longer than the snapshot, so the segment is not cancelled first.
+        monkeypatch.setattr(_supervisor, "STOP_TIMEOUT_SECONDS", 5.0)
         run = _capture(
-            tmp_path, [OK, _slow_snapshot(0.4)], seconds=0.5, roll_minutes=0.3 / 60
+            tmp_path, [OK, _slow_snapshot(1.0)], seconds=0.8, roll_minutes=0.3 / 60
         )
 
         first, second = run.manifest.segments

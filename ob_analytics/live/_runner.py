@@ -448,6 +448,18 @@ def install_stop_signals(
     return installed
 
 
+class _FirstEvent(asyncio.Event):
+    """An event set at a stream's first live event, that also says when.
+
+    :func:`run_capture` passes one as *streaming*, so the manifest records the
+    time the runner saw the first event, not the later moment a watcher woke.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.at: pd.Timestamp | None = None
+
+
 @dataclass
 class _StreamState:
     """What the stream updates in place, so it survives a cancellation.
@@ -555,6 +567,8 @@ async def _stream(
         state.items += 1
         if "started" not in state.times:
             state.times["started"] = pd.Timestamp.now(tz="UTC")
+            if isinstance(state.streaming, _FirstEvent):
+                state.streaming.at = state.times["started"]
             if state.streaming is not None:
                 state.streaming.set()
         if kind == "order":
