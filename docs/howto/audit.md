@@ -207,6 +207,26 @@ summary.stale_orders  # StaleOrder records, worst first
 summary.to_dict()     # JSON-serialisable, including every check
 ```
 
+The sequence checks need the venue's numbers, which a run keeps only with
+`PipelineConfig(track_sequence=True)`; `audit` turns this on for you. Pass the
+source's `sequence_kind` too, or a source whose numbers skip on their own,
+such as `databento` or `ccxt`, is read as losing messages:
+
+```python
+from ob_analytics import DatabentoSource, Pipeline, PipelineConfig, data_quality_summary
+from ob_analytics.protocols import sequence_kind_of, trade_attribution_of
+
+source = DatabentoSource()
+result = Pipeline(PipelineConfig(track_sequence=True), source=source).run("aapl.mbo.dbn.zst")
+summary = data_quality_summary(
+    result.events, result.trades,
+    feed_type=source.feed_type,
+    depth=result.depth,
+    sequence_kind=sequence_kind_of(source),
+    trade_attribution=trade_attribution_of(source),
+)
+```
+
 !!! note "Pass `depth`, not `depth_summary`"
     Crossing is measured from the *faithful* resting book. `depth_summary` is
     already uncrossed by the depth engine, so passing it would always report
