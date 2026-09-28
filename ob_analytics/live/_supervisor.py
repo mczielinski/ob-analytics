@@ -419,13 +419,11 @@ class _Supervisor:
         """Record the segment's first live event, and any gap before it."""
         await running.streaming.wait()
         running.bytes_at_stream = running.sink.bytes_written()
-        if running.stop.is_set():
-            # Asked to stop before its first live event (a source can replay
-            # what it buffered during its snapshot): it covers nothing, so it
-            # neither ends a gap nor starts one.
+        first_event = running.streaming.at or pd.Timestamp.now(tz="UTC")
+        if not _streamed_before_stop(first_event, running.stop_requested):
             return
         segment = running.segment
-        segment.stream_started = running.streaming.at or pd.Timestamp.now(tz="UTC")
+        segment.stream_started = first_event
         self._manifest.note_streaming(segment)
         self._manifest.write(self._root)
         logger.info("Capture '{}': {} streaming", self._manifest.source, segment.name)
@@ -476,13 +474,8 @@ class _Supervisor:
             await self._close_stuck(running)
         elif result is not None:
             segment.ended = result.ended
-            if (
-                segment.stream_started is None
-                and result.stream_started is not None
-                and (
-                    running.stop_requested is None
-                    or result.stream_started < running.stop_requested
-                )
+            if segment.stream_started is None and _streamed_before_stop(
+                result.stream_started, running.stop_requested
             ):
                 segment.stream_started = result.stream_started
                 self._manifest.note_streaming(segment)
@@ -701,6 +694,19 @@ class _Supervisor:
 # ---------------------------------------------------------------------------
 # Starting and continuing a capture directory
 # ---------------------------------------------------------------------------
+
+
+def _streamed_before_stop(
+    first_event: pd.Timestamp | None, stop_requested: pd.Timestamp | None
+) -> bool:
+    """Whether a segment's first live event came before it was asked to stop.
+
+    One asked to stop first (a source can replay what it buffered during its
+    snapshot) covers nothing, so it neither ends a gap nor starts one.
+    """
+    if first_event is None:
+        return False
+    return stop_requested is None or first_event < stop_requested
 
 
 def _covered_until(

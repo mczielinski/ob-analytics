@@ -14,7 +14,7 @@ import time
 from collections.abc import AsyncIterator
 from itertools import pairwise
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 import pytest
@@ -748,6 +748,67 @@ def _crashed_capture(root: Path) -> None:
         ],
     )
     manifest.write(root)
+
+
+def _first_event_recorded(
+    tmp_path: Path, first_event_s: float, stop_s: float | None
+) -> tuple[pd.Timestamp | None, pd.Timestamp]:
+    """What the supervisor records as a segment's start, and the first event.
+
+    The first event came *first_event_s* seconds from now, and the segment was
+    asked to stop at *stop_s* (or never).  The stop flag is set whenever a stop
+    time is given, as it would be by the time the watcher wakes.
+    """
+
+    async def run() -> tuple[pd.Timestamp | None, pd.Timestamp]:
+        t0 = _now()
+        manifest = CaptureManifest(
+            source="scripted", pair="btcusd", level="L3", started=t0
+        )
+        config = CaptureConfig(pair="btcusd", out_dir=tmp_path, minutes=1.0)
+        supervisor = _supervisor._Supervisor(
+            _factory([OK]), config, tmp_path, manifest, asyncio.Event()
+        )
+        segment = Segment(name="seg-0001", started=t0)
+        manifest.segments.append(segment)
+        running = _supervisor._Running(
+            segment=segment,
+            source=_ScriptedSource(OK),
+            sink=_runner.FileCaptureSink(tmp_path / "seg-0001", keep_raw=False),
+            stop=asyncio.Event(),
+            streaming=_runner._FirstEvent(),
+            # The watcher never reads the task.
+            task=cast(Any, asyncio.create_task(asyncio.sleep(0))),
+            opened=time.monotonic(),
+        )
+        if stop_s is not None:
+            running.stop_requested = t0 + pd.Timedelta(seconds=stop_s)
+            running.stop.set()
+        first_event = t0 + pd.Timedelta(seconds=first_event_s)
+        running.streaming.at = first_event
+        running.streaming.set()
+        await supervisor._on_streaming(running)
+        await running.task
+        return segment.stream_started, first_event
+
+    return asyncio.run(run())
+
+
+class TestFirstEvent:
+    def test_the_runners_time_is_recorded(self, tmp_path):
+        # Not the later moment the supervisor's watcher woke.
+        recorded, first_event = _first_event_recorded(tmp_path, -5.0, None)
+        assert recorded == first_event
+
+    def test_an_event_just_before_the_stop_counts(self, tmp_path):
+        # The stop flag is already set when the watcher wakes, but the first
+        # event came first: the segment covered the market until the stop.
+        recorded, first_event = _first_event_recorded(tmp_path, 0.0, 0.001)
+        assert recorded == first_event
+
+    def test_an_event_after_the_stop_does_not_count(self, tmp_path):
+        recorded, _ = _first_event_recorded(tmp_path, 0.001, 0.0)
+        assert recorded is None
 
 
 class TestCloseSegmentFiles:
