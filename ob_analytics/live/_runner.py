@@ -34,6 +34,9 @@ ORIGIN_SNAPSHOT = "snapshot"
 ORIGIN_STREAM = "stream"
 ORIGIN_SHUTDOWN = "shutdown"
 
+# How often a stopped stream that is still yielding items is cancelled again.
+CANCEL_RETRY_SECONDS = 0.5
+
 # L3 (per-order) rows -- the BitstampLoader schema.  ``sequence`` is the
 # venue's own per-event number when the source supplies one (blank otherwise);
 # BitstampLoader reads it back under ``track_sequence`` for gap detection.
@@ -445,11 +448,24 @@ def install_stop_signals(
     return installed
 
 
+class _FirstEvent(asyncio.Event):
+    """An event set at a stream's first live event, that also says when.
+
+    :func:`run_capture` passes one as *streaming*, so the manifest records the
+    time the runner saw the first event, not the later moment a watcher woke.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.at: pd.Timestamp | None = None
+
+
 @dataclass
 class _StreamState:
     """What the stream updates in place, so it survives a cancellation.
 
-    ``counts`` are rows written per kind; ``unconfirmed`` the opening-book
+    ``counts`` are rows written per kind, and ``items`` everything the stream
+    yielded, written or not; ``unconfirmed`` the opening-book
     order ids nothing has named yet (L3 only); ``times["started"]`` is set at
     the first live event, and so is ``streaming``.
     """
@@ -458,6 +474,7 @@ class _StreamState:
     unconfirmed: set[Any] | None
     times: dict[str, pd.Timestamp]
     streaming: asyncio.Event | None = None
+    items: int = 0
 
 
 async def _run_stream(
@@ -484,9 +501,15 @@ async def _run_stream(
             return_when=asyncio.FIRST_COMPLETED,
         )
     finally:
-        for t in (stream_task, stop_task):
-            if not t.done():
-                t.cancel()
+        stop_task.cancel()
+        try:
+            await _cancel_until_done(stream_task, state)
+        except asyncio.CancelledError:
+            # This task was cancelled too (the supervisor stopped waiting for
+            # it): leave the stream cancelled and do not wait for it.
+            stream_task.cancel()
+            stream_task.add_done_callback(_retrieve_outcome)
+            raise
         # Drain cancellation cleanly.
         for t in (stream_task, stop_task):
             try:
@@ -498,6 +521,31 @@ async def _run_stream(
         exc = stream_task.exception()
         if exc is not None:
             record_error("stream", exc)
+
+
+async def _cancel_until_done(task: asyncio.Task[Any], state: _StreamState) -> None:
+    """Cancel *task* and wait for it to end, cancelling again while it streams.
+
+    A stream that lost the cancel keeps yielding items (``state.items``),
+    and only another cancel stops it.  A stream that yields nothing more is
+    closing its connection, and is left to finish: another cancel would cut
+    that short.
+    """
+    # On Python 3.11, asyncio.wait_for drops a cancel that arrives in the same
+    # loop tick as the result it awaits (CPython gh-86296, fixed in 3.12).  The
+    # bundled sources do not wait that way, but a plug-in source may.
+    task.cancel()
+    while not task.done():
+        seen = state.items
+        await asyncio.wait({task}, timeout=CANCEL_RETRY_SECONDS)
+        if not task.done() and state.items != seen:
+            task.cancel()
+
+
+def _retrieve_outcome(task: asyncio.Task[Any]) -> None:
+    """Read how an abandoned task ended, so asyncio does not log it as lost."""
+    if not task.cancelled():
+        task.exception()
 
 
 async def _stream(
@@ -516,8 +564,11 @@ async def _stream(
     counts = state.counts
     unconfirmed = state.unconfirmed
     async for kind, event, frame in capturer.stream(config):
+        state.items += 1
         if "started" not in state.times:
             state.times["started"] = pd.Timestamp.now(tz="UTC")
+            if isinstance(state.streaming, _FirstEvent):
+                state.streaming.at = state.times["started"]
             if state.streaming is not None:
                 state.streaming.set()
         if kind == "order":

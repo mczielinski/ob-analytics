@@ -7,13 +7,14 @@ connection, a failed snapshot, a crash -- happens on cue and with no network.
 from __future__ import annotations
 
 import asyncio
+import copy
 import csv
 import json
 import time
 from collections.abc import AsyncIterator
 from itertools import pairwise
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 import pytest
@@ -25,6 +26,7 @@ from ob_analytics.live import (
     CaptureManifest,
     EndReason,
     Segment,
+    _runner,
     _supervisor,
     read_manifest,
     run_capture,
@@ -40,10 +42,38 @@ OK = "ok"
 FAIL_SNAPSHOT = "fail_snapshot"
 BIG_SNAPSHOT = "big_snapshot"  # streams like OK, from a 5,000-order book
 SILENT = "silent"  # connects, sends nothing for 0.6 s, then drops
+# Streams like OK, but carries on after the first cancel, as a stream waiting
+# in asyncio.wait_for does on Python 3.11 when a message arrives with it.
+DEAF_ONCE = "deaf_once"
+# Like DEAF_ONCE, but yields only heartbeats: items the runner writes nowhere.
+DEAF_ONCE_RAW = "deaf_once_raw"
+# Streams like OK, but never finishes closing its connection once stopped.
+HANG_ON_STOP = "hang_on_stop"
+# Its opening snapshot never finishes, so it never streams.
+STUCK_SNAPSHOT = "stuck_snapshot"
 
 
 def _disconnect_after(n: int) -> str:
     return f"disconnect:{n}"
+
+
+def _slow_close(seconds: float) -> str:
+    """Streams like OK, but takes *seconds* to close its connection once stopped."""
+    return f"slow_close:{seconds}"
+
+
+def _slow_snapshot(seconds: float) -> str:
+    """Streams like OK, after an opening snapshot that takes *seconds*.
+
+    Like Bitstamp, it replays a message it buffered during the snapshot the
+    moment its stream starts, before it waits for anything.
+    """
+    return f"slow_snapshot:{seconds}"
+
+
+def _stubborn_shutdown(seconds: float) -> str:
+    """Streams like OK, then spends *seconds* on its closing rows, deaf to cancels."""
+    return f"stubborn_shutdown:{seconds}"
 
 
 def _now() -> pd.Timestamp:
@@ -67,10 +97,15 @@ class _ScriptedSource:
         self._behaviour = behaviour
         self._open: dict[int, tuple[float, str]] = {}
         self._next_id = 1000
+        self._closed = False
 
     async def snapshot(self, config: CaptureConfig) -> AsyncIterator[EventDict]:
         if self._behaviour == FAIL_SNAPSHOT:
             raise ConnectionError("venue unreachable")
+        if self._behaviour == STUCK_SNAPSHOT:
+            await asyncio.sleep(3600)
+        if self._behaviour.startswith("slow_snapshot"):
+            await asyncio.sleep(float(self._behaviour.split(":")[1]))
         ts = _now()
         book = [(1, 100.0, "bid"), (2, 101.0, "ask")]
         if self._behaviour == BIG_SNAPSHOT:
@@ -99,37 +134,62 @@ class _ScriptedSource:
             await asyncio.sleep(0.6)
             raise ConnectionError("connection closed by venue")
         sent = 0
+        ignore_cancel = self._behaviour in (DEAF_ONCE, DEAF_ONCE_RAW)
+        replay_first = self._behaviour.startswith("slow_snapshot")
         deadline = time.monotonic() + config.minutes * 60
-        while time.monotonic() < deadline:
-            if limit is not None and sent >= limit:
-                raise ConnectionError("connection closed by venue")
-            await asyncio.sleep(0.005)
-            ts = _now()
-            oid = self._next_id
-            if oid in self._open:
-                price, side = self._open.pop(oid)
-                action = "deleted"
-                self._next_id += 1
-            else:
-                price, side = 99.0, "bid"
-                self._open[oid] = (price, side)
-                action = "created"
-            sent += 1
-            yield (
-                "order",
-                {
-                    "id": oid,
-                    "timestamp": ts,
-                    "exchange_timestamp": ts,
-                    "price": price,
-                    "volume": 0.5,
-                    "action": action,
-                    "direction": side,
-                },
-                None,
-            )
+        try:
+            while time.monotonic() < deadline:
+                if limit is not None and sent >= limit:
+                    raise ConnectionError("connection closed by venue")
+                try:
+                    if not (replay_first and sent == 0):
+                        await asyncio.sleep(0.005)
+                except asyncio.CancelledError:
+                    if not ignore_cancel:
+                        raise
+                    ignore_cancel = False
+                if self._behaviour == DEAF_ONCE_RAW:
+                    yield ("raw", {}, None)
+                    continue
+                ts = _now()
+                oid = self._next_id
+                if oid in self._open:
+                    price, side = self._open.pop(oid)
+                    action = "deleted"
+                    self._next_id += 1
+                else:
+                    price, side = 99.0, "bid"
+                    self._open[oid] = (price, side)
+                    action = "created"
+                sent += 1
+                yield (
+                    "order",
+                    {
+                        "id": oid,
+                        "timestamp": ts,
+                        "exchange_timestamp": ts,
+                        "price": price,
+                        "volume": 0.5,
+                        "action": action,
+                        "direction": side,
+                    },
+                    None,
+                )
+        finally:
+            if self._behaviour.startswith("slow_close"):
+                await asyncio.sleep(float(self._behaviour.split(":")[1]))
+            elif self._behaviour == HANG_ON_STOP:
+                await asyncio.sleep(3600)
+            self._closed = True
 
     async def shutdown_synthetic_events(self) -> AsyncIterator[EventDict]:
+        if self._behaviour.startswith("stubborn_shutdown"):
+            until = time.monotonic() + float(self._behaviour.split(":")[1])
+            while (left := until - time.monotonic()) > 0:
+                try:
+                    await asyncio.sleep(left)
+                except asyncio.CancelledError:
+                    pass
         ts = _now()
         for oid, (price, side) in list(self._open.items()):
             yield {
@@ -142,6 +202,9 @@ class _ScriptedSource:
                 "direction": side,
             }
         self._open.clear()
+
+    def diagnostics(self) -> dict[str, Any]:
+        return {"closed_cleanly": self._closed}
 
 
 def _factory(plan: list[str]):
@@ -162,6 +225,9 @@ def _fast_clock(monkeypatch):
     monkeypatch.setattr(_supervisor, "POLL_SECONDS", 0.02)
     monkeypatch.setattr(_supervisor, "HEARTBEAT_SECONDS", 0.05)
     monkeypatch.setattr(_supervisor, "HANDOVER_TIMEOUT_SECONDS", 1.0)
+    monkeypatch.setattr(_supervisor, "STOP_TIMEOUT_SECONDS", 0.3)
+    monkeypatch.setattr(_supervisor, "STOP_GRACE_SECONDS", 0.3)
+    monkeypatch.setattr(_runner, "CANCEL_RETRY_SECONDS", 0.02)
 
 
 def _capture(tmp_path: Path, plan: list[str], seconds: float, **config: Any):
@@ -296,6 +362,224 @@ class TestRoll:
             assert later.stream_started is not None
             assert earlier.stream_ended is not None
             assert later.stream_started <= earlier.stream_ended
+
+    def test_a_stream_that_ignores_one_cancel_still_rolls_and_stops(self, tmp_path):
+        # Each source runs its stream a minute past the capture's end, so a
+        # segment that is not stopped holds the capture for that minute.
+        started = time.monotonic()
+        run = _capture(tmp_path, [DEAF_ONCE], seconds=1.2, roll_minutes=0.3 / 60)
+
+        assert time.monotonic() - started < 10
+        segments = run.manifest.segments
+        assert len(segments) >= 3
+        assert {s.end_reason for s in segments[:-1]} == {EndReason.ROLLED_TIME}
+        assert segments[-1].end_reason is EndReason.FINISHED
+        for earlier, later in pairwise(segments):
+            assert earlier.stream_ended is not None
+            assert later.stream_started is not None
+            assert earlier.stream_ended - later.stream_started < pd.Timedelta(
+                seconds=0.5
+            )
+
+    def test_a_stream_of_unwritten_items_that_ignores_one_cancel_stops(self, tmp_path):
+        # Nothing it yields is written, so only the count of items shows that
+        # it is still running and needs another cancel.
+        run = _capture(tmp_path, [DEAF_ONCE_RAW], seconds=0.8, roll_minutes=0.3 / 60)
+
+        segments = run.manifest.segments
+        assert len(segments) >= 2
+        assert all(s.error is None for s in segments)
+
+    def test_a_stream_that_is_closing_is_not_cancelled_again(
+        self, tmp_path, monkeypatch
+    ):
+        # Closing takes 0.1 s, five times the retry interval: cancelling again
+        # would cut it short and leave the connection open.  The stop limit is
+        # far above it, so only the retry interval is under test.
+        monkeypatch.setattr(_supervisor, "STOP_TIMEOUT_SECONDS", 5.0)
+        run = _capture(tmp_path, [_slow_close(0.1)], seconds=0.8, roll_minutes=0.3 / 60)
+
+        segments = run.manifest.segments
+        assert len(segments) >= 2
+        assert all(s.error is None for s in segments)
+        for segment in segments:
+            meta = json.loads((run.out_dir / segment.name / "meta.json").read_text())
+            assert meta["closed_cleanly"] is True, segment.name
+
+    def test_a_segment_that_does_not_stop_is_cancelled_and_closed(self, tmp_path):
+        started = time.monotonic()
+        run = _capture(tmp_path, [HANG_ON_STOP], seconds=1.0, roll_minutes=0.3 / 60)
+
+        # Without the limit, the first roll would wait for its stream an hour.
+        assert time.monotonic() - started < 10
+        assert run.error is None
+        segments = run.manifest.segments
+        assert len(segments) >= 2
+        # Each stopped when asked, only late: the reason stays, the lateness
+        # is the error, and nothing is recorded as a gap.
+        assert {s.end_reason for s in segments[:-1]} == {EndReason.ROLLED_TIME}
+        assert segments[-1].end_reason is EndReason.FINISHED
+        assert run.manifest.gaps == []
+        for segment in segments:
+            assert "did not stop within" in (segment.error or "")
+            seg_dir = run.out_dir / segment.name
+            assert _every_order_closed(seg_dir / "orders.csv"), segment.name
+            meta = json.loads((seg_dir / "meta.json").read_text())
+            assert "did not stop within" in meta["capture_error"]
+
+    def test_a_segment_covers_the_market_only_until_asked_to_stop(
+        self, tmp_path, monkeypatch
+    ):
+        # Closing takes 0.5 s, well under the limit.  The market is covered by
+        # the next segment from the moment it streams, and the old one is
+        # asked to stop straight after: its close is not coverage.
+        monkeypatch.setattr(_supervisor, "STOP_TIMEOUT_SECONDS", 5.0)
+        run = _capture(tmp_path, [_slow_close(0.5)], seconds=1.0, roll_minutes=0.3 / 60)
+
+        segments = run.manifest.segments
+        assert len(segments) >= 2
+        for earlier, later in pairwise(segments):
+            assert earlier.stream_ended is not None
+            assert later.stream_started is not None
+            assert earlier.stream_ended - later.stream_started < pd.Timedelta(
+                seconds=0.25
+            )
+
+    def test_a_segment_asked_to_stop_before_it_streams_covers_nothing(
+        self, tmp_path, monkeypatch
+    ):
+        # The roll at 0.3 s starts the next segment, and the capture ends at
+        # 0.8 s while that segment is still taking its 1 s snapshot.  Once the
+        # snapshot is done, its stream replays a message before it sees the
+        # stop, so its first event comes after the stop.  The stop limit is
+        # longer than the snapshot, so the segment is not cancelled first.
+        monkeypatch.setattr(_supervisor, "STOP_TIMEOUT_SECONDS", 5.0)
+        run = _capture(
+            tmp_path, [OK, _slow_snapshot(1.0)], seconds=0.8, roll_minutes=0.3 / 60
+        )
+
+        first, second = run.manifest.segments
+        assert first.stream_started is not None
+        assert first.stream_ended is not None
+        assert first.stream_ended >= first.stream_started
+        # The late one covers nothing, so it neither ends nor starts a gap...
+        assert second.stream_started is None and second.stream_ended is None
+        assert run.manifest.gaps == []
+        # ...but keeps the rows it wrote.
+        rows = _rows(run.out_dir / second.name / "orders.csv")
+        assert any(r["origin"] == "stream" for r in rows)
+        # Each meta.json says the same as the manifest.
+        for segment in (first, second):
+            meta = json.loads((run.out_dir / segment.name / "meta.json").read_text())
+            for key in ("stream_started", "stream_ended"):
+                recorded = meta[key]
+                expected = getattr(segment, key)
+                assert (recorded is None) == (expected is None), (segment.name, key)
+                if recorded is not None:
+                    assert pd.Timestamp(recorded) == expected, (segment.name, key)
+
+    def test_a_stuck_segment_covers_only_until_asked_to_stop(
+        self, tmp_path, monkeypatch
+    ):
+        # The next segment's snapshot takes 1 s, so the roll gives up waiting
+        # after 0.3 s and stops the current one, which then hangs.  Its
+        # heartbeat must not run on while it hangs, or the gap before the
+        # next segment would look shorter than it is.
+        monkeypatch.setattr(_supervisor, "HANDOVER_TIMEOUT_SECONDS", 0.3)
+        run = _capture(
+            tmp_path,
+            [HANG_ON_STOP, _slow_snapshot(1.0), OK],
+            seconds=1.8,
+            roll_minutes=0.3 / 60,
+        )
+
+        first = run.manifest.segments[0]
+        assert "did not stop within" in (first.error or "")
+        assert first.stream_ended is not None and first.ended is not None
+        # It hung for the whole 0.3 s limit after it was asked to stop.
+        assert first.ended - first.stream_ended >= pd.Timedelta(seconds=0.25)
+        (gap,) = [g for g in run.manifest.gaps if g.after == "seg-0001"]
+        assert gap.cause == "roll"
+        assert gap.start == first.stream_ended
+
+    def test_a_late_stop_that_ends_by_itself_keeps_its_own_result(
+        self, tmp_path, monkeypatch
+    ):
+        # Its closing rows take 0.45 s: past the 0.3 s limit, and it ignores
+        # the cancel, but it is done well within the 2 s grace.
+        monkeypatch.setattr(_supervisor, "STOP_GRACE_SECONDS", 2.0)
+        run = _capture(tmp_path, [_stubborn_shutdown(0.45)], seconds=0.6)
+
+        (segment,) = run.manifest.segments
+        assert segment.end_reason is EndReason.FINISHED
+        assert "took more than" in (segment.error or "")
+        assert run.manifest.gaps == []
+        seg_dir = run.out_dir / segment.name
+        assert _every_order_closed(seg_dir / "orders.csv")
+        # The runner's own meta.json, not one rebuilt from the files.
+        meta = json.loads((seg_dir / "meta.json").read_text())
+        assert "unfinished" not in meta
+        assert "n_snapshot_unconfirmed" in meta
+
+    def test_a_segment_that_ignores_the_cancel_is_left_behind(self, tmp_path):
+        run = _capture(tmp_path, [_stubborn_shutdown(1.5)], seconds=0.6)
+
+        (segment,) = run.manifest.segments
+        assert segment.end_reason is EndReason.FINISHED
+        assert "even when cancelled" in (segment.error or "")
+        # It covers the market only until it was asked to stop, not until it
+        # was given up 0.6 s later.
+        assert segment.stream_ended is not None and segment.ended is not None
+        assert segment.ended - segment.stream_ended >= pd.Timedelta(seconds=0.5)
+
+    def test_a_stuck_segment_that_then_fails_says_how(self, tmp_path, monkeypatch):
+        def full_disk(self: Any, result: Any) -> None:
+            raise OSError("No space left on device")
+
+        monkeypatch.setattr(_runner.FileCaptureSink, "finalize", full_disk)
+        run = _capture(tmp_path, [HANG_ON_STOP], seconds=0.5)
+
+        (segment,) = run.manifest.segments
+        assert "did not stop within" in (segment.error or "")
+        assert "No space left on device" in (segment.error or "")
+
+    def test_a_capture_goes_on_when_closing_a_stuck_segment_fails(
+        self, tmp_path, monkeypatch
+    ):
+        def disk_full(*args: Any, **kwargs: Any) -> Any:
+            raise OSError("No space left on device")
+
+        monkeypatch.setattr(_supervisor, "_close_segment_files", disk_full)
+        run = _capture(tmp_path, [HANG_ON_STOP], seconds=1.0, roll_minutes=0.3 / 60)
+
+        assert run.error is None
+        segments = run.manifest.segments
+        assert len(segments) >= 2
+        for segment in segments:
+            assert "closing its files failed" in (segment.error or "")
+            assert "No space left" in (segment.error or "")
+
+    def test_segments_still_running_at_the_end_stop_together(
+        self, tmp_path, monkeypatch
+    ):
+        # The capture ends while the next segment is still taking its snapshot,
+        # so both are running, and neither stops by itself.
+        monkeypatch.setattr(_supervisor, "STOP_TIMEOUT_SECONDS", 2.0)
+        monkeypatch.setattr(_supervisor, "STOP_GRACE_SECONDS", 0.1)
+        started = time.monotonic()
+        run = _capture(
+            tmp_path,
+            [HANG_ON_STOP, STUCK_SNAPSHOT],
+            seconds=0.6,
+            roll_minutes=0.3 / 60,
+        )
+
+        # One limit (2 s) after the end, not one per segment (4 s).
+        assert time.monotonic() - started < 3.7
+        first, second = run.manifest.segments
+        assert first.end_reason is second.end_reason is EndReason.FINISHED
+        assert "did not stop within" in (first.error or "")
+        assert "did not stop within" in (second.error or "")
 
     def test_a_size_roll(self, tmp_path):
         run = _capture(tmp_path, [OK], seconds=1.0, roll_mb=0.002)
@@ -464,6 +748,88 @@ def _crashed_capture(root: Path) -> None:
         ],
     )
     manifest.write(root)
+
+
+def _first_event_recorded(
+    tmp_path: Path, first_event_s: float, stop_s: float | None
+) -> tuple[pd.Timestamp | None, pd.Timestamp]:
+    """What the supervisor records as a segment's start, and the first event.
+
+    The first event came *first_event_s* seconds from now, and the segment was
+    asked to stop at *stop_s* (or never).  The stop flag is set whenever a stop
+    time is given, as it would be by the time the watcher wakes.
+    """
+
+    async def run() -> tuple[pd.Timestamp | None, pd.Timestamp]:
+        t0 = _now()
+        manifest = CaptureManifest(
+            source="scripted", pair="btcusd", level="L3", started=t0
+        )
+        config = CaptureConfig(pair="btcusd", out_dir=tmp_path, minutes=1.0)
+        supervisor = _supervisor._Supervisor(
+            _factory([OK]), config, tmp_path, manifest, asyncio.Event()
+        )
+        segment = Segment(name="seg-0001", started=t0)
+        manifest.segments.append(segment)
+        running = _supervisor._Running(
+            segment=segment,
+            source=_ScriptedSource(OK),
+            sink=_runner.FileCaptureSink(tmp_path / "seg-0001", keep_raw=False),
+            stop=asyncio.Event(),
+            streaming=_runner._FirstEvent(),
+            # The watcher never reads the task.
+            task=cast(Any, asyncio.create_task(asyncio.sleep(0))),
+            opened=time.monotonic(),
+        )
+        if stop_s is not None:
+            running.stop_requested = t0 + pd.Timedelta(seconds=stop_s)
+            running.stop.set()
+        first_event = t0 + pd.Timedelta(seconds=first_event_s)
+        running.streaming.at = first_event
+        running.streaming.set()
+        await supervisor._on_streaming(running)
+        await running.task
+        return segment.stream_started, first_event
+
+    return asyncio.run(run())
+
+
+class TestFirstEvent:
+    def test_the_runners_time_is_recorded(self, tmp_path):
+        # Not the later moment the supervisor's watcher woke.
+        recorded, first_event = _first_event_recorded(tmp_path, -5.0, None)
+        assert recorded == first_event
+
+    def test_an_event_just_before_the_stop_counts(self, tmp_path):
+        # The stop flag is already set when the watcher wakes, but the first
+        # event came first: the segment covered the market until the stop.
+        recorded, first_event = _first_event_recorded(tmp_path, 0.0, 0.001)
+        assert recorded == first_event
+
+    def test_an_event_after_the_stop_does_not_count(self, tmp_path):
+        recorded, _ = _first_event_recorded(tmp_path, 0.001, 0.0)
+        assert recorded is None
+
+
+class TestCloseSegmentFiles:
+    def test_changes_the_files_but_not_the_segment_or_manifest(self, tmp_path):
+        """It runs in a thread, so it must leave what the capture reads alone."""
+        root = tmp_path / "cap"
+        _crashed_capture(root)
+        manifest = read_manifest(root)
+        assert manifest is not None
+        segment = manifest.segments[0]
+        before = (copy.deepcopy(segment), copy.deepcopy(manifest.to_dict()))
+
+        closed = _supervisor._close_segment_files(
+            root / segment.name, segment, manifest, "it did not stop"
+        )
+
+        assert (segment, manifest.to_dict()) == before
+        assert closed.orders_closed == 1
+        assert _every_order_closed(root / segment.name / "orders.csv")
+        meta = json.loads((root / segment.name / "meta.json").read_text())
+        assert meta["capture_error"] == "it did not stop"
 
 
 class TestRestart:

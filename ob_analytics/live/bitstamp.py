@@ -259,10 +259,11 @@ class BitstampCapturer:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return
+                # asyncio.timeout, not wait_for: on Python 3.11 wait_for can drop the
+                # cancel that stops this segment (see _runner._cancel_until_done).
                 try:
-                    raw = await asyncio.wait_for(
-                        self._ws.recv(), timeout=min(remaining, 5.0)
-                    )
+                    async with asyncio.timeout(min(remaining, 5.0)):
+                        raw = await self._ws.recv()
                 except TimeoutError:
                     continue
                 except ConnectionClosed as exc:
@@ -326,7 +327,8 @@ class BitstampCapturer:
     async def _buffer_one(self, timeout: float) -> None:
         """Receive one WS frame into the snapshot buffer, if one arrives."""
         try:
-            raw = await asyncio.wait_for(self._ws.recv(), timeout=timeout)
+            async with asyncio.timeout(timeout):
+                raw = await self._ws.recv()
         except TimeoutError:
             return
         recv_ms = int(time.time() * 1000)

@@ -101,8 +101,10 @@ class Segment:
         it runs.
     stream_started, stream_ended : pandas.Timestamp or None
         The stretch of time the segment covers: from its first live event to
-        the moment its stream stopped.  ``stream_started`` is ``None`` for a
-        segment that never streamed (a snapshot that failed, say).
+        the moment it was asked to stop, or its stream stopped by itself.
+        ``stream_started`` is ``None`` for a segment that never streamed (a
+        snapshot that failed, say), or that was asked to stop before its
+        first live event: it wrote rows, but covered nothing.
     heartbeat : pandas.Timestamp or None
         Last time the running capture said the segment was alive.  After a
         crash it is the latest time the segment is known to cover.

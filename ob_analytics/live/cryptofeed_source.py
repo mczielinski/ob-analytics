@@ -1008,12 +1008,14 @@ class CryptofeedSource:
                 # out the rest of the window against a dead handler.
                 if not getattr(handler, "running", True) and queue.empty():
                     return
+                # asyncio.timeout, not wait_for: on Python 3.11 wait_for can drop the
+                # cancel that stops this segment (see _runner._cancel_until_done).
                 try:
-                    yield await asyncio.wait_for(
-                        queue.get(), timeout=min(remaining, 0.5)
-                    )
+                    async with asyncio.timeout(min(remaining, 0.5)):
+                        item = await queue.get()
                 except TimeoutError:
                     continue
+                yield item
         finally:
             await self._stop_handler(handler)
 

@@ -57,6 +57,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **On Python 3.11, a capture stops each segment when asked** (#296). The
+  live sources waited for messages with `asyncio.wait_for`, which on Python
+  3.11 can drop a cancel that arrives with a message. A roll then left the old
+  segment streaming next to the new one to the end of the capture, with no
+  further rolls, and SIGTERM or Ctrl-C did nothing. The sources now use
+  `asyncio.timeout`, and ruff bans `asyncio.wait_for` in this repository. The
+  runner cancels a stream again while it keeps yielding items, so a plug-in
+  source with the same pattern cannot block a stop; a stream that is closing
+  its connection is left to finish. Python 3.12 and later were not affected.
+- **A segment that does not stop cannot hold up the capture** (#296). A
+  segment asked to stop has 20 seconds to close. After that it is cancelled
+  and closed from its files, like a segment a crash left open. The manifest
+  keeps why it was stopped and records the delay as its error, not as a gap.
+  If closing its files fails, the error says so and the capture carries on.
+  A segment covers the market only until it is asked to stop, and one asked
+  to stop before its first live event covers nothing, so it no longer adds a
+  second gap next to the real one.
+  At the end of a capture all running segments are stopped together, so
+  SIGTERM ends a capture in under a minute even when a source hangs.
 - **`audit` no longer fails a complete Databento file** (#298). Databento
   numbers every message on the venue's channel, so the numbers in one
   instrument's events skip the other instruments' messages and the trade and

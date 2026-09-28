@@ -135,6 +135,17 @@ that holds a different venue or pair, files but no `manifest.json`, or a
 lock on `--out` (the `.capture.lock` file), so a second capture into the same
 directory stops with an error instead of rewriting the first one's files.
 
+**A segment that does not stop.** A segment asked to stop, at a roll, at the
+end or on a signal, has 20 seconds to close its connection and write its
+closing rows. If it takes longer, it is cancelled and closed from its files,
+the same way a restart closes a segment a crash left open. The manifest keeps
+why it was stopped (`rolled_time`, `finished`, ...) and records the delay as
+its error. The delay is not a gap: the segment had already stopped streaming.
+If closing its files fails, the error says so and the capture carries on.
+So a connection that hangs cannot stop the rolls, and SIGTERM ends a capture
+in under a minute: at most two of these limits, if it arrives while a roll is
+waiting for a segment that hangs.
+
 This lets a service manager restart the capture. For example, a systemd unit
 with `Restart=always` and
 `ExecStart=ob-analytics capture bitstamp --pair btcusd --minutes 10080 --roll-minutes 60 --out /data/btcusd`
@@ -150,7 +161,7 @@ reboot.
 | `version` | The layout version (currently `1`) |
 | `started`, `ended` | When the capture started, and when it last stopped |
 | `restarts` | How many times the capture was started again in this directory |
-| `segments` | Each segment: when it streamed from and to, why it ended (`rolled_time`, `rolled_size`, `failed`, `ended_early`, `unfinished`, `stopped`, `finished`), its error, row counts, and the messages its source dropped |
+| `segments` | Each segment: when it streamed from and to (until it was asked to stop; none for a segment asked to stop before its first live event), why it ended (`rolled_time`, `rolled_size`, `failed`, `ended_early`, `unfinished`, `stopped`, `finished`), its error, row counts, and the messages its source dropped |
 | `gaps` | Each stretch with no segment streaming: start, end, length, and cause (`disconnect`, `restart`, `roll`, `stopped`, `finished`) |
 | `dropped`, `gap_seconds` | Totals over the whole capture |
 
@@ -218,6 +229,13 @@ That's enough to make `ob-analytics capture coinbase` work. Persistence,
 raw-frame archival, signal handling, segments, and `meta.json` all live in the
 generic runner -- you only write the per-venue parser. A source can also add
 the offline-replay factories and be both.
+
+To wait for the next message with a time limit, use
+`async with asyncio.timeout(...)`, not `asyncio.wait_for`. On Python 3.11,
+`wait_for` can drop the cancel that stops a segment when a message arrives at
+the same moment, and the stream then carries on. Keep the cleanup in `stream`'s
+`finally` short: a segment that takes more than 20 seconds to stop is
+cancelled.
 
 Do not reconnect inside `stream`. When the connection drops, let `stream`
 raise: the capture then starts a new segment from a fresh snapshot and records
