@@ -418,6 +418,11 @@ class _Supervisor:
         """Record the segment's first live event, and any gap before it."""
         await running.streaming.wait()
         running.bytes_at_stream = running.sink.bytes_written()
+        if running.stop.is_set():
+            # Asked to stop before its first live event (a source can replay
+            # what it buffered during its snapshot): it covers nothing, so it
+            # neither ends a gap nor starts one.
+            return
         segment = running.segment
         segment.stream_started = pd.Timestamp.now(tz="UTC")
         self._manifest.note_streaming(segment)
@@ -470,16 +475,24 @@ class _Supervisor:
             await self._close_stuck(running)
         elif result is not None:
             segment.ended = result.ended
-            if segment.stream_started is None and result.stream_started is not None:
+            if (
+                segment.stream_started is None
+                and result.stream_started is not None
+                and (
+                    running.stop_requested is None
+                    or result.stream_started < running.stop_requested
+                )
+            ):
                 segment.stream_started = result.stream_started
                 self._manifest.note_streaming(segment)
-            segment.stream_ended = (
-                result.stream_ended if segment.stream_started is not None else None
+            segment.stream_ended = _covered_until(
+                segment.stream_started, result.stream_ended, running.stop_requested
             )
-            if segment.stream_ended is not None and running.stop_requested is not None:
-                # Once asked to stop it no longer covers the market, however
-                # long closing its connection then takes.
-                segment.stream_ended = min(segment.stream_ended, running.stop_requested)
+            if (segment.stream_started, segment.stream_ended) != (
+                result.stream_started,
+                result.stream_ended,
+            ):
+                _record_coverage(self._root / segment.name, segment)
             segment.error = result.capture_error
             segment.n_book_events = result.n_order_events + result.n_depth_events
             segment.n_trade_events = result.n_trade_events
@@ -554,6 +567,11 @@ class _Supervisor:
             else:
                 _apply_closed_files(segment, closed, error)
                 segment.ended = pd.Timestamp.now(tz="UTC")
+                segment.stream_ended = _covered_until(
+                    segment.stream_started, segment.stream_ended, running.stop_requested
+                )
+                if segment.stream_ended != closed.covered_to:
+                    _record_coverage(self._root / segment.name, segment)
                 return
         else:
             error = f"{limit}, even when cancelled; its files may be incomplete"
@@ -561,8 +579,9 @@ class _Supervisor:
         # only until it was asked to stop, so a gap after it is not hidden.
         segment.error = error
         segment.ended = pd.Timestamp.now(tz="UTC")
-        if segment.stream_started is not None:
-            segment.stream_ended = running.stop_requested
+        segment.stream_ended = _covered_until(
+            segment.stream_started, segment.ended, running.stop_requested
+        )
 
     # -- waiting ------------------------------------------------------------
 
@@ -681,6 +700,39 @@ class _Supervisor:
 # ---------------------------------------------------------------------------
 # Starting and continuing a capture directory
 # ---------------------------------------------------------------------------
+
+
+def _covered_until(
+    stream_started: pd.Timestamp | None,
+    stream_ended: pd.Timestamp | None,
+    stop_requested: pd.Timestamp | None,
+) -> pd.Timestamp | None:
+    """How long a segment covered the market, given when its stream ended.
+
+    Once asked to stop it covers the market no longer, however long closing
+    its connection then takes.  A segment asked to stop before its first live
+    event (still taking its snapshot, say) covered nothing: its coverage ends
+    where it started, never before.  ``None`` for one that never streamed.
+    """
+    if stream_started is None or stream_ended is None:
+        return None
+    if stop_requested is not None:
+        stream_ended = min(stream_ended, stop_requested)
+    return max(stream_ended, stream_started)
+
+
+def _record_coverage(seg_dir: Path, segment: Segment) -> None:
+    """Make the segment's ``meta.json`` agree with the manifest's coverage."""
+    meta_path = seg_dir / "meta.json"
+    try:
+        meta = json.loads(meta_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Could not update {}: {!r}", meta_path, exc)
+        return
+    for key in ("stream_started", "stream_ended"):
+        value = getattr(segment, key)
+        meta[key] = None if value is None else str(value)
+    _write_json_atomic(meta_path, meta)
 
 
 def _finished_normally(task: asyncio.Task[Any]) -> bool:

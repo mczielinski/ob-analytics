@@ -71,6 +71,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and closed from its files, like a segment a crash left open. The manifest
   keeps why it was stopped and records the delay as its error, not as a gap.
   If closing its files fails, the error says so and the capture carries on.
+  A segment covers the market only until it is asked to stop, and one asked
+  to stop before its first live event covers nothing, so it no longer adds a
+  second gap next to the real one.
   At the end of a capture all running segments are stopped together, so
   SIGTERM ends a capture in under a minute even when a source hangs.
 - **`audit` no longer fails a complete Databento file** (#298). Databento

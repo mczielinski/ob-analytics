@@ -63,7 +63,11 @@ def _slow_close(seconds: float) -> str:
 
 
 def _slow_snapshot(seconds: float) -> str:
-    """Streams like OK, after an opening snapshot that takes *seconds*."""
+    """Streams like OK, after an opening snapshot that takes *seconds*.
+
+    Like Bitstamp, it replays a message it buffered during the snapshot the
+    moment its stream starts, before it waits for anything.
+    """
     return f"slow_snapshot:{seconds}"
 
 
@@ -131,13 +135,15 @@ class _ScriptedSource:
             raise ConnectionError("connection closed by venue")
         sent = 0
         ignore_cancel = self._behaviour in (DEAF_ONCE, DEAF_ONCE_RAW)
+        replay_first = self._behaviour.startswith("slow_snapshot")
         deadline = time.monotonic() + config.minutes * 60
         try:
             while time.monotonic() < deadline:
                 if limit is not None and sent >= limit:
                     raise ConnectionError("connection closed by venue")
                 try:
-                    await asyncio.sleep(0.005)
+                    if not (replay_first and sent == 0):
+                        await asyncio.sleep(0.005)
                 except asyncio.CancelledError:
                     if not ignore_cancel:
                         raise
@@ -438,6 +444,34 @@ class TestRoll:
             assert earlier.stream_ended - later.stream_started < pd.Timedelta(
                 seconds=0.25
             )
+
+    def test_a_segment_asked_to_stop_before_it_streams_covers_nothing(self, tmp_path):
+        # The capture ends while the next segment is still taking its 0.4 s
+        # snapshot.  Once the snapshot is done, its stream replays a message
+        # before it sees the stop, so its first event comes after the stop.
+        run = _capture(
+            tmp_path, [OK, _slow_snapshot(0.4)], seconds=0.5, roll_minutes=0.3 / 60
+        )
+
+        first, second = run.manifest.segments
+        assert first.stream_started is not None
+        assert first.stream_ended is not None
+        assert first.stream_ended >= first.stream_started
+        # The late one covers nothing, so it neither ends nor starts a gap...
+        assert second.stream_started is None and second.stream_ended is None
+        assert run.manifest.gaps == []
+        # ...but keeps the rows it wrote.
+        rows = _rows(run.out_dir / second.name / "orders.csv")
+        assert any(r["origin"] == "stream" for r in rows)
+        # Each meta.json says the same as the manifest.
+        for segment in (first, second):
+            meta = json.loads((run.out_dir / segment.name / "meta.json").read_text())
+            for key in ("stream_started", "stream_ended"):
+                recorded = meta[key]
+                expected = getattr(segment, key)
+                assert (recorded is None) == (expected is None), (segment.name, key)
+                if recorded is not None:
+                    assert pd.Timestamp(recorded) == expected, (segment.name, key)
 
     def test_a_stuck_segment_covers_only_until_asked_to_stop(
         self, tmp_path, monkeypatch
