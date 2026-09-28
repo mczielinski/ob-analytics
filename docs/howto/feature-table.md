@@ -103,6 +103,32 @@ Naming a book feature without quotes raises instead: an explicit request that
 cannot be met is an error, while a default that cannot be met is a smaller
 table.
 
+## VPIN needs bars that hold many trades
+
+`vpin` is the average, over the last 20 bars, of how one-sided each bar's
+trades were. A bar that holds one or two trades is nearly always all buying or
+all selling, so it reads close to `1` whatever the flow is doing. The example
+above cuts a bar every 0.05 BTC, which on the sample is about two trades a bar,
+and its `vpin` column sits near `1` on every row. That says the bars are small,
+not that the flow is toxic.
+
+On the bundled sample:
+
+| Rule | Trades per bar | Median `vpin` |
+|---|---:|---:|
+| `volume`, 0.05 BTC | 2.2 | 1.00 |
+| `time`, 1 minute | 9.5 | 0.96 |
+| `volume`, 0.5 BTC | 12.3 | 0.87 |
+| `tick`, 20 trades | 18.9 | 0.78 |
+| `volume`, 2 BTC | 40.6 | 0.72 |
+
+The value falls as the bars grow, so compare `vpin` only between tables cut
+the same way. The original measure uses buckets of about a fiftieth of a day's
+volume, which on a liquid market holds many trades each. Check `n_trades`
+before you read `vpin` as toxicity. [`compute_vpin`](flow-toxicity.md#vpin)
+behaves the same way: with buckets the size of these bars, its readings on
+the sample are within 0.06 of the column's.
+
 ## No look-ahead
 
 Each row is stated as of the close of its bar, which is the `timestamp`

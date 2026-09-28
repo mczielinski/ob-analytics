@@ -43,7 +43,10 @@ Read that as: the average unit traded paid 1.45 basis points to cross, the
 market then moved 1.86 basis points in the taker's favour, and the liquidity
 provider was left 0.41 basis points down. A *negative* realized spread means
 the flow was, on average, informed — the same story VPIN and Kyle's λ tell,
-measured in the currency a taker pays.
+measured in the currency a taker pays. On this capture, read the split with
+care: a quarter of the trades have a negative effective spread, so the mid
+they are measured from is not the one the taker faced, and every figure here
+carries that error (see [below](#trust-the-book-before-you-trust-the-cost)).
 
 `costs` is one row per trade, so the distribution is there too:
 
@@ -218,13 +221,32 @@ A native `direction` is honored as-is unless `sign_method` overrides it. See
 
 ## Trust the book before you trust the cost
 
-Every number here inherits the quality of the book it is measured against. On
-a diff feed a trade can print through resting orders the venue never withdrew,
-which reads as a *negative* effective spread — the taker apparently paying
-less than the mid. That is a finding about the capture, not about the market.
-Crossed quotes are already skipped, because a book whose best bid is above its
-best ask has no midpoint; stale orders are not, because removing them is a
-judgement the library leaves to you. Run the audit first:
+Every number here inherits the quality of the book it is measured against. A
+*negative* effective spread — the taker apparently paying less than the mid —
+means the mid was not the one the taker faced. Crossed quotes are already
+skipped, because a book whose best bid is above its best ask has no midpoint.
+
+On the bundled capture, the 72 negative effective spreads do not come from
+stale orders, and at least part of them come from the order in which the feed
+reports things:
+
+- **Stale orders are not the cause.** The capture holds two stale asks (see
+  [Check data quality](audit.md)). Moving their deletes back to the moment a
+  trade proved them gone leaves 72 negative spreads and an effective spread of
+  1.45 bps. The depth summary had already dropped the levels they crossed.
+- **Message order explains part of it.** Bitstamp sends order messages and
+  trade prints on separate channels, and either can arrive first. In 40 of the
+  72 trades the taker's own order reaches the order stream before the print,
+  so the book read just before the print can already include it.
+- **The size of the effect.** Measuring each trade from the mid just before
+  its maker's fill, rather than just before the print, leaves 43 negative
+  spreads and gives an effective spread of 0.76 bps instead of 1.45. Neither
+  instant is exactly the one the taker saw, so on a feed like this the
+  effective spread is uncertain by about that much.
+
+A matched book such as LOBSTER or Databento reports each execution as a change
+to the book at the same instant, so this timing problem does not arise there.
+Run the audit first:
 
 ```bash
 ob-analytics audit orders.csv

@@ -81,10 +81,9 @@ class CoinbaseLoader:
         self.config = config
 
     def load(self, source: Any) -> pd.DataFrame:
-        # Parse the venue feed into the canonical event columns
-        # (event_id, timestamp, price, volume, action, direction, ...).
-        # See ob_analytics.bitstamp.BitstampLoader for a full implementation
-        # and docs/api/schemas.md for the column contract.
+        # Parse the venue feed into the canonical event columns (listed
+        # below this example). See ob_analytics.bitstamp.BitstampLoader for
+        # a full implementation.
         raw = pd.read_json(source)
         ...
         return events
@@ -98,7 +97,8 @@ class CoinbaseTradeReader:
 
     def load(self, events: pd.DataFrame, source: Any) -> pd.DataFrame:
         # Project explicit trade records into the canonical trades schema
-        # (timestamp, price, volume, direction, maker/taker ids, ...).
+        # (listed below this example). Return a frame, never None: a run
+        # with no trades returns an empty frame with those columns.
         ...
         return trades
 
@@ -134,6 +134,26 @@ class CoinbaseSource:
 
 register_source("coinbase", CoinbaseSource)
 ```
+
+The pipeline checks both frames on the way in and names any column that is
+missing. The loader's events need these columns:
+
+| Column | Type | What it holds |
+|---|---|---|
+| `event_id` | `int64` | A unique id for each row, in the order the rows happened |
+| `id` | `int64` | The order's id, the same on every row of one order |
+| `timestamp` | `datetime64[ns, UTC]` | When you received the message |
+| `exchange_timestamp` | `datetime64[ns, UTC]` | The venue's own time; repeat `timestamp` if the feed has none |
+| `price` | `int64` | Integer ticks: the price divided by `config.tick_size` |
+| `volume` | `int64` | Integer lots: the size divided by `config.lot_size` |
+| `action` | categorical | `created`, `changed` or `deleted` |
+| `direction` | categorical | `bid` or `ask` |
+| `fill` | `int64` | The size executed at this event, in lots; `0` when nothing traded |
+
+The pipeline adds `type` itself. The trade source's frame needs `timestamp`,
+`price`, `volume`, `direction` (`buy` or `sell`, the taker's side),
+`maker_event_id` and `taker_event_id`. [The schema](schema.md) says what each
+column means, including how `volume` and `fill` change over an order's life.
 
 !!! warning "`compute_depth` must be defined"
     The pipeline calls `source.compute_depth(...)` unconditionally. **Return
@@ -431,6 +451,16 @@ from nautilus_trader.persistence.wranglers import OrderBookDeltaDataWrangler
 deltas = OrderBookDeltaDataWrangler(instrument).process(
     pd.read_parquet("out/deltas.parquet")
 )
+```
+
+Writing the file does not need Nautilus, but reading it back does, and
+nautilus-trader publishes no build for Python 3.11 that works with pandas 3,
+which ob-analytics uses. Read the export from a Python 3.12 or later
+environment. The tests that compare our book with Nautilus' run there for the
+same reason:
+
+```bash
+UV_PROJECT_ENVIRONMENT=$HOME/.cache/ob-analytics-py312 uv run --python 3.12 --group backtest-engines pytest tests/test_backtest_parity.py
 ```
 
 The `instrument` you pass must declare a `size_precision` fine enough for your

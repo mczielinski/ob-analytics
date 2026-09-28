@@ -45,8 +45,9 @@ empty `diagnostics` tuple means no problem was found.
 
 The default `bucket_volume` (average daily volume ÷ 50) assumes a capture
 that runs close to a full day. The bundled sample covers about 30 minutes, so
-the default rule scales that up to a day and picks a bucket far bigger than
-the whole capture — `compute_vpin` fills one bucket and stops:
+the default rule scales that up to a day and picks a bucket almost as large
+as the whole capture (96% of its volume) — `compute_vpin` fills one bucket and
+stops:
 
 ```python
 from ob_analytics import Pipeline, compute_vpin, sample_csv_path
@@ -139,7 +140,10 @@ Toxic flow is flow the liquidity provider loses money to, and the transaction
 cost measures put a number on that loss in the currency a taker pays. The
 realized spread is what the provider kept after the trade's information
 reached the price; when it is negative, the flow was informed — the same
-finding VPIN and λ report, measured differently:
+finding VPIN and λ report, measured differently. On a diff feed, check the
+effective spread before reading the split: when order messages and trade prints
+arrive out of step, the mid a trade is measured from may already have moved
+(see [Trust the book](transaction-costs.md#trust-the-book-before-you-trust-the-cost)):
 
 ```python
 from ob_analytics import transaction_costs, cost_summary
@@ -154,8 +158,8 @@ need no quotes at all.
 
 ## Adding your own metric
 
-There is no metrics plugin registry — a flow-toxicity metric is just a
-function over a trades DataFrame. Write one and call it on `result.trades`:
+A flow-toxicity metric can be a plain function over a trades DataFrame. Write
+one and call it on `result.trades`:
 
 ```python
 import numpy as np
@@ -171,10 +175,10 @@ def signed_volume_skew(trades: pd.DataFrame, freq: str = "1min") -> pd.DataFrame
 skew_df = signed_volume_skew(result.trades)
 ```
 
-To fold a metric into the HTML gallery, wrap it in a panel builder and append
-it to the gallery model's `analytics` list — see
-[Extending ob-analytics](../extending.md) for the full walkthrough (new data
-source, export format, plot, metric, or live capturer).
+To have it run and draw from a result like the built-in measures, wrap it in
+a small `Metric` object and register it with `register_metric`. It then works
+with `result.metric(name)` and `result.plot(name)`, and gets its own gallery
+card. [A new metric](../extending.md#4-a-new-metric) shows how.
 
 ## Related
 

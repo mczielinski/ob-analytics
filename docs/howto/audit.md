@@ -89,9 +89,11 @@ when no feed type was declared.
 
 Two of these are judgement calls worth stating plainly:
 
-- **A crossed book is scored by feed type, not by size.** The same 92% is a
-  defect in a matched book and a faithful replay of a diff feed, and only the
-  source's declared [`FeedType`](../api/protocols.md) can tell them apart. With
+- **A crossed book is scored by feed type, not by size.** A crossed book is
+  always a defect in a matched book, but can be a faithful replay of a diff
+  feed. Only the source's declared [`FeedType`](../api/protocols.md) can tell
+  them apart. Size alone says little: on the bundled sample, almost all of the
+  92% comes from two stale orders, which `stale_orders` reports. With
   `--from-parquet` and no `--source`, the feed type is undeclared and crossing
   drops to a warning rather than being guessed.
 - **A dropped `created` message cannot be told apart from an order that was

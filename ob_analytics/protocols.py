@@ -238,10 +238,11 @@ class TradeSource(Protocol):
 
     Returned DataFrame columns:
 
-    * ``timestamp``        — pandas datetime64[ns]
+    * ``timestamp``        — pandas datetime64[ns, UTC]
     * ``price``            — int64 (integer ticks; × ``tick_size`` for the
       quote currency)
-    * ``volume``           — float
+    * ``volume``           — int64 (integer lots; × ``lot_size`` for the base
+      asset)
     * ``direction``        — categorical ``buy``/``sell`` (taker side)
     * ``maker_event_id``   — integer event id of the resting order
     * ``taker_event_id``   — integer event id of the aggressing order
@@ -287,11 +288,12 @@ class DepthSource(Protocol):
     Returned DataFrame columns (see
     :data:`~ob_analytics.schemas.DEPTH_COLUMNS`):
 
-    * ``timestamp``  — pandas datetime64[ns]
+    * ``timestamp``  — pandas datetime64[ns, UTC]
     * ``price``      — int64, the price level in integer ticks (× ``tick_size``
       for the quote currency)
-    * ``volume``     — float, the level's **new absolute** resting size after
-      the update (``0`` removes the level); *not* a signed delta
+    * ``volume``     — int64, the level's **new absolute** resting size in
+      integer lots (× ``lot_size`` for the base asset) after the update (``0``
+      removes the level); *not* a signed delta
     * ``direction``  — categorical ``bid``/``ask``
     """
 

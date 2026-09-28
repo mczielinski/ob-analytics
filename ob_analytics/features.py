@@ -409,11 +409,19 @@ class VpinFeature:
     the bar's own volume, so a bar that traded less is not read as a quieter
     one.
 
+    The reading depends on how many trades a bar holds.  A bar of one or two
+    trades is almost always all buying or all selling, so its imbalance is
+    close to ``1`` whatever the flow is doing, and a window of such bars reads
+    close to ``1`` too.  The original measure uses buckets of about a fiftieth
+    of a day's volume, each holding many trades.  Choose bars that each hold
+    many trades before reading this column as toxicity; ``n_trades`` in the
+    same table shows how many each bar holds.
+
     :func:`~ob_analytics.flow_toxicity.compute_vpin` computes VPIN without a
     bar table, and cuts its buckets slightly differently: a trade that
     straddles a bucket boundary is split between the two, where a volume bar
     keeps the trade whole and closes a little past its threshold.  The two
-    readings track each other closely rather than matching row for row.
+    readings agree only when the bars and the buckets are about the same size.
 
     Attributes
     ----------
