@@ -21,6 +21,7 @@ from ob_analytics.live._base import CaptureConfig
 from ob_analytics.live.bitstamp import BitstampCapturer
 
 _ORDERS = "live_orders_btcusd"
+_TRADES = "live_trades_btcusd"
 _CONFIG = CaptureConfig(pair="btcusd", out_dir=Path("unused"), minutes=0.001)
 
 
@@ -34,6 +35,24 @@ def _order_frame(order_id: int, microtimestamp: int) -> str:
                 "price": "100.0",
                 "amount": "1.0",
                 "order_type": 0,
+                "microtimestamp": str(microtimestamp),
+            },
+        }
+    )
+
+
+def _trade_frame(trade_id: int, microtimestamp: int) -> str:
+    return json.dumps(
+        {
+            "channel": _TRADES,
+            "event": "trade",
+            "data": {
+                "id": trade_id,
+                "price": "100.0",
+                "amount": "0.5",
+                "buy_order_id": 8,
+                "sell_order_id": 9,
+                "type": 0,
                 "microtimestamp": str(microtimestamp),
             },
         }
@@ -140,6 +159,32 @@ class TestSnapshotOverlap:
 
         # Order 9's created (t=1000) is already in the t=2000 book.
         assert [kind for kind, _, _ in asyncio.run(replay())] == []
+        assert cap.diagnostics()["pre_snapshot_skipped"] == 1
+
+    def test_trades_the_snapshot_covers_are_skipped(self, monkeypatch):
+        # The order event at t=1500 proves the t=2000 book overlaps the
+        # stream, so the first fetch is used.
+        cap = _capturer(
+            monkeypatch,
+            frames=[
+                _trade_frame(1, 1_000),
+                _order_frame(9, 1_500),
+                _trade_frame(2, 3_000),
+            ],
+            books=[_book(2_000, 8)],
+            fetch_delay=0.05,
+        )
+        assert _snapshot_ids(cap) == [8]
+        assert cap.diagnostics()["snapshot_overlap"] is True
+
+        async def replay() -> list[tuple[str, Any, Any]]:
+            return [item async for item in cap.stream(_CONFIG)]
+
+        # Trade 1 (t=1000) happened before the t=2000 book, like order 9's
+        # event, so both are skipped (#301).
+        trades = [ev for kind, ev, _ in asyncio.run(replay()) if kind == "trade"]
+        assert [ev["trade_id"] for ev in trades] == [2]
+        assert cap.diagnostics()["pre_snapshot_trades_skipped"] == 1
         assert cap.diagnostics()["pre_snapshot_skipped"] == 1
 
 
