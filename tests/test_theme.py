@@ -32,6 +32,7 @@ from ob_analytics.visualization._data import (
     prepare_ofi_horizon_data,
     prepare_trades_data,
 )
+from tests._logging import warnings_logged
 
 # Colours no default palette field uses, so finding them in a figure proves
 # the theme's palette reached the renderer.
@@ -234,20 +235,6 @@ def _backend(renderer):
         RENDERERS._items.pop(("probe", None, "probe"), None)
 
 
-@contextmanager
-def _warnings_logged():
-    from loguru import logger
-
-    messages: list[str] = []
-    logger.enable("ob_analytics")
-    sink = logger.add(lambda m: messages.append(m.record["message"]), level="WARNING")
-    try:
-        yield messages
-    finally:
-        logger.remove(sink)
-        logger.disable("ob_analytics")
-
-
 class TestThemeDispatch:
     def test_renderer_without_theme_still_draws(self) -> None:
         # A renderer written before themes reached every backend takes only
@@ -255,7 +242,7 @@ class TestThemeDispatch:
         def legacy(data):
             return ("drawn", data)
 
-        with _backend(legacy), _warnings_logged() as messages:
+        with _backend(legacy), warnings_logged() as messages:
             out = plot("probe", backend="probe", theme=PlotTheme(), x=1)
         assert out == ("drawn", {"x": 1})
         assert any("takes no theme=" in m for m in messages)
@@ -282,7 +269,7 @@ class TestThemeDispatch:
         def legacy(data):
             return "drawn"
 
-        with _backend(legacy), _warnings_logged() as messages:
+        with _backend(legacy), warnings_logged() as messages:
             assert plot("probe", backend="probe") == "drawn"
         assert messages == []
 

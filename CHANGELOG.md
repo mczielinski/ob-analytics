@@ -57,6 +57,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`raw.jsonl` no longer stops a cryptofeed capture of independent_reserve
+  or blockchain.** cryptofeed reads these venues' date and time strings as
+  `datetime`, `date` and `time` values, which `raw.jsonl` could not write, so
+  every segment failed unless `--no-raw` was passed. They are now written as
+  ISO 8601 strings. Any other value or dict key that JSON cannot hold is
+  written as text (`str(value)`), and a frame JSON cannot hold at all, such as
+  one that refers to itself, is skipped. Neither stops the capture. Each
+  segment's `meta.json` names the types written as text (`raw_text_types`) and
+  counts the skipped frames (`n_raw_frames_skipped`); the manifest adds up
+  `raw_frames_skipped`, and the capture logs each kind of warning once.
 - **On Python 3.11, a capture stops each segment when asked** (#296). The
   live sources waited for messages with `asyncio.wait_for`, which on Python
   3.11 can drop a cancel that arrives with a message. A roll then left the old
