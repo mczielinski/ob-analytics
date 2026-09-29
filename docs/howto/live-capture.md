@@ -71,7 +71,10 @@ The Bitstamp capturer subscribes to the stream first, then fetches the REST
 book while it holds the live messages in a buffer. That only works if the
 stream already covers the moment the REST book describes. Then every change
 after the snapshot arrives on the stream, and buffered messages the snapshot
-already includes are skipped (`pre_snapshot_skipped` in `meta.json`).
+already includes are skipped (`pre_snapshot_skipped` in `meta.json`). Trades
+from before the snapshot are skipped too (`pre_snapshot_trades_skipped`). The
+orders they filled are not in the capture, so `audit` would count them as
+unmatched. At a roll, the previous segment already has these trades.
 
 Bitstamp's REST book can be older than that. In a live test the first order
 message on the stream came 0.7 seconds after the snapshot's `microtimestamp`.
