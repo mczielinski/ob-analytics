@@ -57,6 +57,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A Bitstamp capture no longer keeps trades from before its snapshot**
+  (#301). It already skipped order messages from before the REST snapshot, but
+  kept the trades from the same time. The orders those trades filled are not in
+  the capture, so `audit` counted the trades as unmatched: up to 52% of a
+  segment's trades with 30-second segments. The trades are now skipped and
+  counted as `pre_snapshot_trades_skipped` in `meta.json`. At a roll, the
+  previous segment already has these trades.
 - **On Python 3.11, a capture stops each segment when asked** (#296). The
   live sources waited for messages with `asyncio.wait_for`, which on Python
   3.11 can drop a cancel that arrives with a message. A roll then left the old
