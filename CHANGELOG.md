@@ -64,6 +64,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   segment's trades with 30-second segments. The trades are now skipped and
   counted as `pre_snapshot_trades_skipped` in `meta.json`. At a roll, the
   previous segment already has these trades.
+- **A custom plot keeps working after it is added to the gallery** (#302).
+  The "A new plot" guide registered a plot at `Level.L2`, then registered it
+  again at `None` to put it in the gallery. After the second step,
+  `plot("cumvol")` raised and told you to pass `Level.L3`, which was not
+  registered. A concept is now level-less (`None`) or drawn at a level, and
+  the same kind on every backend: registering it the other way raises a
+  `ValueError` that says which to use. So does a key that is not
+  `(concept, level, backend)`. Code that registered one plot both ways now
+  fails at the second registration; a metric plug-in that does so is skipped
+  when `ob_analytics` is imported, with a logged warning. The guide registers
+  its trade-only example once, at `None`, draws the gallery on the one backend
+  it registered, and shows how a plot drawn at a level goes into the gallery
+  as a `PlotConcept`. A test runs the guide's plot section as written.
 - **On Python 3.11, a capture stops each segment when asked** (#296). The
   live sources waited for messages with `asyncio.wait_for`, which on Python
   3.11 can drop a cancel that arrives with a message. A roll then left the old

@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 
 from loguru import logger
@@ -51,12 +51,69 @@ infer_volume_scale = _viz_data.infer_volume_scale
 # ---------------------------------------------------------------------------
 
 RendererFn = Callable[..., Any]
+RendererKey = tuple[str, Level | None, str]
+
+
+class RendererRegistry(Registry[RendererKey, RendererFn]):
+    """The renderer :class:`Registry`, which keeps each concept one kind.
+
+    A concept is either level-less, registered at ``None``, or drawn at a
+    level, registered at ``Level.L2`` and/or ``Level.L3``.  It is the same
+    kind on every backend: :func:`plot` and the gallery call it the same way
+    whichever backend draws it.
+    """
+
+    def placements(self, concept: str) -> Iterator[tuple[Level | None, str]]:
+        """Yield each ``(level, backend)`` *concept* is registered at, in order."""
+        return ((lvl, b) for (c, lvl, b) in self._items if c == concept)
+
+    def register(self, key: RendererKey, value: RendererFn) -> None:
+        """Register *value* under the key ``(concept, level, backend)``.
+
+        Raises
+        ------
+        ValueError
+            If *key* is not a ``(concept, level, backend)`` triple, or its
+            concept is already registered, on any backend, as the other kind:
+            at a level when *key* is level-less, or level-less when *key* has
+            a level.
+        """
+        if not (isinstance(key, tuple) and len(key) == 3):
+            raise ValueError(
+                f"A renderer key is (concept, level, backend), got {key!r}. "
+                "Use level=None for a plot that reads only trades or a "
+                "metric's table."
+            )
+        concept, level, _backend = key
+        clash = next(
+            (
+                (other, b)
+                for other, b in self.placements(concept)
+                if (other is None) != (level is None)
+            ),
+            None,
+        )
+        if clash is not None:
+            other, other_backend = clash
+            existing = "level-less" if other is None else f"at {other}"
+            wanted = "level-less" if level is None else f"at {level}"
+            raise ValueError(
+                f"Plot concept {concept!r} is already registered {existing} on "
+                f"{other_backend!r}, so it cannot also be registered {wanted}. "
+                "A concept is the same kind on every backend. A plot that "
+                "reads only trades or a metric's table is level-less "
+                "(level=None); a plot that draws the book is registered at "
+                "Level.L2 and/or Level.L3."
+            )
+        super().register(key, value)
+
 
 #: Registry of ``(concept, level, backend)`` → renderer function, where
 #: *level* is a :class:`Level` (``L2``/``L3``) or ``None`` for level-less
-#: analytics.  Renderer modules (``_matplotlib``, ``_plotly``) self-register
-#: at import time -- see the self-registration block at the bottom of each.
-RENDERERS: Registry[tuple[str, Level | None, str], RendererFn] = Registry("renderer")
+#: analytics.  A concept is one kind or the other on every backend.
+#: Renderer modules (``_matplotlib``, ``_plotly``) self-register at import
+#: time -- see the self-registration block at the bottom of each.
+RENDERERS: RendererRegistry = RendererRegistry("renderer")
 
 #: Sentinel for ``plot(level=...)`` meaning "resolve the level from the
 #: registry" -- distinct from ``None``, which is the explicit level of analytics.
@@ -95,13 +152,6 @@ def register_plot_backend(name: str, module_path: str) -> None:
     _BACKEND_MODULES[name] = module_path
 
 
-def _registered_levels(concept: str, backend: str) -> list[Level | None]:
-    """Levels at which *concept* is registered for *backend* (in registry order)."""
-    return [
-        key[1] for key in RENDERERS.list() if key[0] == concept and key[2] == backend
-    ]
-
-
 def _accepts_theme(renderer: RendererFn) -> bool:
     """Whether *renderer* takes a ``theme`` keyword (by name or ``**kwargs``).
 
@@ -125,7 +175,7 @@ def _resolve_level(concept: str, backend: str) -> Level | None:
     *comparable* concept, registered at both L2 and L3, is ambiguous and needs
     an explicit ``level=`` from the caller.
     """
-    levels = _registered_levels(concept, backend)
+    levels = [lvl for lvl, b in RENDERERS.placements(concept) if b == backend]
     if not levels:
         raise KeyError(
             f"Unknown plot concept {concept!r} for backend {backend!r}. "
