@@ -15,6 +15,33 @@ ob-analytics capture bitstamp --pair btcusd --minutes 10 --out /tmp/cap
 ob-analytics process /tmp/cap --gallery --output /tmp/cap_out
 ```
 
+!!! info "What the `bitstamp` source shows"
+
+    | Property | Value |
+    |---|---|
+    | Level | L3 |
+    | Depth shown | whole book |
+    | Orders shown | every order, takers included |
+    | Update form | every change |
+    | What can be missed | a lost message |
+    | After a lost message | drifts: the order stays until the capture ends |
+    | Sequence | none |
+    | Clocks | venue + receive |
+    | Crossing | diff feed |
+    | Trade sides named | both |
+    | Taker side | venue |
+    | Fills | per fill |
+    | Trade tape gaps | none |
+    | Price grid | fixed (0.01 on BTC/USD) |
+    | What the book means | normal |
+    | Access | public |
+
+    Use it for Bitstamp order analysis: order lifetimes, order types, queue
+    position and maker–taker links. Don't use it without reading `audit`'s
+    stale-order check: a lost message leaves an order in the book until the
+    capture ends. [What each feed shows](../feeds.md) explains each property and
+    compares every source.
+
 A capture is a directory of **segments**. A short run has one; a long run can
 have many (see [Running for days](#running-for-days)). Each segment is a
 complete capture on its own, so it replays alone:

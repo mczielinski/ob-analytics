@@ -8,6 +8,29 @@ ob-analytics captures a Coinbase market through the [ccxt source](ccxt.md) and
 replays it through the [L2 path](l2-depth.md). You do not need a Coinbase
 account or an API key: the price-level book and the trades are public.
 
+!!! info "What this feed shows"
+
+    | Property | Value |
+    |---|---|
+    | Level | L2 |
+    | Depth shown | whole book |
+    | Update form | changes, merged |
+    | What can be missed | merged changes; a lost message |
+    | After a lost message | drifts until the level changes again |
+    | Sequence | none |
+    | Clocks | venue + receive |
+    | Crossing | price levels |
+    | Taker side | **reversed**: Coinbase names the maker's side; reverse the signs before use |
+    | Trade tape gaps | starts with trades from before the capture |
+    | Price grid | fixed (0.01 on BTC/USD) |
+    | What the book means | normal |
+    | Access | `coinbase` public; `coinbaseexchange` needs a key |
+
+    Use it for depth and spread over the whole book. Don't use it for trade
+    signs or flow toxicity without reversing the trade sides first, or for long
+    captures where a lost message matters. [What each feed shows](../feeds.md)
+    explains each property and compares every source.
+
 ```bash
 pip install "ob-analytics[ccxt]"
 

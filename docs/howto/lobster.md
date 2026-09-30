@@ -9,6 +9,33 @@ supported out of the box via `LobsterLoader`, `LobsterTradeReader`,
 `LobsterWriter`, and `LobsterSource`. Depth is read from the official
 orderbook file (ground-truth) when present.
 
+!!! info "What this feed shows"
+
+    | Property | Value |
+    |---|---|
+    | Level | L3 |
+    | Depth shown | whole displayed book |
+    | Orders shown | resting only |
+    | Update form | every change |
+    | What can be missed | nothing (a file) |
+    | After a lost message | — |
+    | Sequence | none |
+    | Clocks | venue only |
+    | Crossing | matched book |
+    | Trade sides named | maker only; the taker is guessed |
+    | Taker side | from the execution row |
+    | Fills | execution rows |
+    | Trade tape gaps | — |
+    | Price grid | from the file |
+    | What the book means | normal |
+    | Access | paid files |
+
+    Use it for order lifetimes, queue position and depth on US equities. Don't
+    use it for anything that depends on the taker (market-order labels, trade
+    impact per taker) or on latency: the taker is guessed and there is one
+    clock. [What each feed shows](../feeds.md) explains each property and
+    compares every source.
+
 ```python
 from ob_analytics import LobsterSource, Pipeline
 from ob_analytics.protocols import RunContext

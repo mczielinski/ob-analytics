@@ -10,6 +10,29 @@ through the [ccxt source](ccxt.md) and replays it through the
 [L2 path](l2-depth.md). You do not need a Kalshi account or an API key: the
 order book and the trades are public.
 
+!!! info "What this feed shows"
+
+    | Property | Value |
+    |---|---|
+    | Level | L2 |
+    | Depth shown | whole book, each poll |
+    | Update form | polls, 1 a second |
+    | What can be missed | anything shorter than a poll |
+    | After a lost message | the next poll corrects it |
+    | Sequence | none |
+    | Clocks | receive only |
+    | Crossing | price levels |
+    | Taker side | venue (buy = the taker bought Yes) |
+    | Trade tape gaps | polled; trades from before the opening book dropped |
+    | Price grid | by market: cents; tenths of a cent near 0 and 1; tenths or hundredths of a cent throughout |
+    | What the book means | Yes book, from Yes and No bids |
+    | Access | REST public; websocket needs a key |
+
+    Use it for the market's probability of Yes and its trades over minutes and
+    hours. Don't use it for anything shorter than a poll, or for book latency:
+    the book has only the poll time. [What each feed shows](../feeds.md)
+    explains each property and compares every source.
+
 ```bash
 pip install "ob-analytics[ccxt]"
 

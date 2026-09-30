@@ -47,7 +47,8 @@ nav = [
   ] },
   { "Explanation" = [
     { "Architecture" = "architecture.md" },
-    { "Data quality: matched book vs diff feed" = "data-quality.md" },
+    { "What each feed shows" = "feeds.md" },
+    { "Data quality: matched book, diff feed and price levels" = "data-quality.md" },
     { "Parquet / Arrow schema" = "schema.md" },
     { "Scale and chunking" = "scale-and-chunking.md" },
   ] },
