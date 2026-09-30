@@ -113,6 +113,7 @@ class BitstampCapturer:
         # Diagnostic counters (mirror the historical script's meta.json).
         self.dropped = 0
         self.pre_snapshot_skipped = 0
+        self.pre_snapshot_trades_skipped = 0
         self.synthetic_created = 0
         self.synthetic_deleted = 0
         # How many REST fetches the opening snapshot took, and whether the one
@@ -259,10 +260,11 @@ class BitstampCapturer:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return
+                # asyncio.timeout, not wait_for: on Python 3.11 wait_for can drop the
+                # cancel that stops this segment (see _runner._cancel_until_done).
                 try:
-                    raw = await asyncio.wait_for(
-                        self._ws.recv(), timeout=min(remaining, 5.0)
-                    )
+                    async with asyncio.timeout(min(remaining, 5.0)):
+                        raw = await self._ws.recv()
                 except TimeoutError:
                     continue
                 except ConnectionClosed as exc:
@@ -326,7 +328,8 @@ class BitstampCapturer:
     async def _buffer_one(self, timeout: float) -> None:
         """Receive one WS frame into the snapshot buffer, if one arrives."""
         try:
-            raw = await asyncio.wait_for(self._ws.recv(), timeout=timeout)
+            async with asyncio.timeout(timeout):
+                raw = await self._ws.recv()
         except TimeoutError:
             return
         recv_ms = int(time.time() * 1000)
@@ -486,10 +489,19 @@ class BitstampCapturer:
             buy_id = int(d["buy_order_id"])
             sell_id = int(d["sell_order_id"])
             side = "buy" if int(d["type"]) == 0 else "sell"
-            ex_ms = int(d["microtimestamp"]) // 1000
+            ex_us = int(d["microtimestamp"])
         except (KeyError, TypeError, ValueError):
             self.dropped += 1
             return None
+
+        # Pre-snapshot trade: it happened before the book the snapshot
+        # describes, so an order it filled completely is not in the capture.
+        # Keep the same boundary as ``_normalise_order_event``.
+        if self._snapshot_us and ex_us <= self._snapshot_us:
+            self.pre_snapshot_trades_skipped += 1
+            return None
+
+        ex_ms = ex_us // 1000
         return {
             "trade_id": trade_id,
             "timestamp": _epoch_ms_to_ts(recv_ms),
@@ -514,6 +526,7 @@ class BitstampCapturer:
             "synthetic_created": self.synthetic_created,
             "synthetic_deleted": self.synthetic_deleted,
             "pre_snapshot_skipped": self.pre_snapshot_skipped,
+            "pre_snapshot_trades_skipped": self.pre_snapshot_trades_skipped,
             "dropped": self.dropped,
         }
 

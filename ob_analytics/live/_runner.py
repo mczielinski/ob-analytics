@@ -8,6 +8,7 @@ import json
 import signal
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date, time
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,9 @@ from ob_analytics.protocols import FeedType, Level, trade_attribution_of
 ORIGIN_SNAPSHOT = "snapshot"
 ORIGIN_STREAM = "stream"
 ORIGIN_SHUTDOWN = "shutdown"
+
+# How often a stopped stream that is still yielding items is cancelled again.
+CANCEL_RETRY_SECONDS = 0.5
 
 # L3 (per-order) rows -- the BitstampLoader schema.  ``sequence`` is the
 # venue's own per-event number when the source supplies one (blank otherwise);
@@ -80,14 +84,6 @@ def _ts_ms(ts: pd.Timestamp | float) -> int:
     return int(ts)
 
 
-def _raw_json_default(value: Any) -> Any:
-    # Some feeds parse prices and sizes as Decimal (cryptofeed does for
-    # Bitstamp trades). Write them as strings so raw.jsonl keeps every digit.
-    if isinstance(value, Decimal):
-        return str(value)
-    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
-
-
 class FileCaptureSink(CaptureSink):
     """Default sink: writes the book file, trades.csv, raw.jsonl, meta.json.
 
@@ -98,7 +94,12 @@ class FileCaptureSink(CaptureSink):
     """
 
     def __init__(
-        self, out_dir: Path, *, keep_raw: bool, level: Level = Level.L3
+        self,
+        out_dir: Path,
+        *,
+        keep_raw: bool,
+        level: Level = Level.L3,
+        raw_warned: set[str] | None = None,
     ) -> None:
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -131,6 +132,23 @@ class FileCaptureSink(CaptureSink):
         self._trades.writeheader()
 
         self._raw_fp = (self.out_dir / "raw.jsonl").open("w") if keep_raw else None
+        # raw.jsonl is a record for debugging, so what it cannot hold never
+        # stops the capture. The types it wrote as str(value) and the frames it
+        # skipped go to meta.json. The warnings already logged are shared by
+        # the caller across a capture's segments, so each is logged once.
+        self._raw_text_types: set[str] = set()
+        self._raw_skipped = 0
+        self._raw_warned = set() if raw_warned is None else raw_warned
+        # The types the frame being encoded wrote as text. They join
+        # _raw_text_types only once the frame is written.
+        self._frame_text_types: set[str] = set()
+        self._raw_type_names: dict[type, str] = {}
+        # Whether the last frame had a dict key JSON cannot hold. A source that
+        # sends one usually sends them in every frame, so the next frame goes
+        # straight to _encode instead of failing json.dumps first. A frame
+        # with no such key turns it off, since _encode is slower.
+        self._raw_keys_as_text = False
+        self._frame_had_text_key = False
 
     def write_order(self, event: EventDict) -> None:
         if self._orders is None:
@@ -164,9 +182,117 @@ class FileCaptureSink(CaptureSink):
     def write_raw(self, frame: Any) -> None:
         if self._raw_fp is None or frame is None:
             return
-        self._raw_fp.write(
-            json.dumps(frame, separators=(",", ":"), default=_raw_json_default) + "\n"
-        )
+        self._frame_text_types.clear()
+        self._frame_had_text_key = False
+        try:
+            if self._raw_keys_as_text:
+                line = self._encode(frame, set())
+                self._raw_keys_as_text = self._frame_had_text_key
+            else:
+                try:
+                    line = json.dumps(
+                        frame, separators=(",", ":"), default=self._raw_default
+                    )
+                except TypeError:
+                    # json.dumps never passes a dict key to default=, so a key
+                    # that is not a str, int, float, bool or None raises.
+                    self._frame_text_types.clear()
+                    line = self._encode(frame, set())
+                    self._raw_keys_as_text = self._frame_had_text_key
+        except Exception as exc:  # noqa: BLE001 - one bad frame must not kill the run
+            # A circular reference, or a value whose str() raises: JSON cannot
+            # hold the frame at all.
+            self._raw_skipped += 1
+            kind = type(exc).__name__
+            self._warn_once(
+                f"skip:{kind}",
+                f"raw.jsonl: skipping frames JSON cannot hold ({kind}: {exc})",
+            )
+            return
+        self._raw_fp.write(line + "\n")
+        for name in self._frame_text_types:
+            self._raw_text_types.add(name)
+            self._warn_once(
+                f"text:{name}",
+                f"raw.jsonl: writing {name} values or keys as text (str(value))",
+            )
+
+    def _encode(self, value: Any, path: set[int]) -> str:
+        """Encode *value* as ``json.dumps`` would, writing any dict key as text.
+
+        A key is written the way :meth:`_raw_default` writes a value. Keys
+        that turn into the same text are all kept, as ``json.dumps`` keeps
+        both ``1`` and ``"1"``. *path* holds the containers above *value*, so
+        a circular reference raises ``ValueError`` as ``json.dumps`` would.
+        """
+        if not isinstance(value, dict | list | tuple):
+            return json.dumps(value, default=self._raw_default)
+        if id(value) in path:
+            raise ValueError("Circular reference detected")
+        path.add(id(value))
+        try:
+            if isinstance(value, dict):
+                return (
+                    "{"
+                    + ",".join(
+                        f"{json.dumps(self._key_text(k))}:{self._encode(v, path)}"
+                        for k, v in value.items()
+                    )
+                    + "}"
+                )
+            return "[" + ",".join(self._encode(v, path) for v in value) + "]"
+        finally:
+            path.discard(id(value))
+
+    def _key_text(self, key: Any) -> str:
+        # As json.dumps writes a key: a str as it is, None, a bool or a number
+        # as its JSON text.
+        if isinstance(key, str):
+            return key
+        if key is None or isinstance(key, bool | int | float):
+            return json.dumps(key)
+        self._frame_had_text_key = True
+        return str(self._raw_default(key))
+
+    def _raw_default(self, value: Any) -> Any:
+        # Some feeds parse prices and sizes as Decimal (cryptofeed does for
+        # Bitstamp trades). Write them as strings so raw.jsonl keeps every digit.
+        if isinstance(value, Decimal):
+            return str(value)
+        # cryptofeed parses most venues' frames with yapic json, which turns ISO
+        # date and time strings into date, datetime and time objects
+        # (independent_reserve, blockchain). Write them back as ISO 8601
+        # strings. datetime is a subclass of date.
+        if isinstance(value, (date, time)):
+            return value.isoformat()
+        kind = type(value)
+        name = self._raw_type_names.get(kind)
+        if name is None:
+            name = self._raw_type_names[kind] = f"{kind.__module__}.{kind.__qualname__}"
+        self._frame_text_types.add(name)
+        return str(value)
+
+    def _warn_once(self, key: str, message: str) -> None:
+        if key not in self._raw_warned:
+            self._raw_warned.add(key)
+            logger.warning("{}", message)
+
+    @property
+    def raw_frames_skipped(self) -> int:
+        """Frames raw.jsonl skipped because JSON cannot hold them."""
+        return self._raw_skipped
+
+    def raw_diagnostics(self) -> dict[str, Any]:
+        """What raw.jsonl wrote as text or skipped, as ``meta.json`` fields.
+
+        Empty when raw.jsonl is off.
+        """
+        if not self._keep_raw:
+            return {}
+        return {
+            "raw_text_types": sorted(self._raw_text_types),
+            "n_raw_frames_skipped": self._raw_skipped,
+        }
 
     def flush(self) -> None:
         """Push buffered rows to disk, so a crash loses as few as possible."""
@@ -195,7 +321,7 @@ class FileCaptureSink(CaptureSink):
         self._trades_fp = None  # type: ignore[assignment]
         self._raw_fp = None
 
-        meta = {
+        meta: dict[str, Any] = {
             "out_dir": str(result.out_dir),
             "started": str(result.started),
             "ended": str(result.ended),
@@ -208,6 +334,7 @@ class FileCaptureSink(CaptureSink):
             "stream_started": _iso_or_none(result.stream_started),
             "stream_ended": _iso_or_none(result.stream_ended),
             **result.extras,
+            **self.raw_diagnostics(),
         }
         if result.capture_error is not None:
             # A phase that raised is one more error on top of the ones the
@@ -445,11 +572,24 @@ def install_stop_signals(
     return installed
 
 
+class _FirstEvent(asyncio.Event):
+    """An event set at a stream's first live event, that also says when.
+
+    :func:`run_capture` passes one as *streaming*, so the manifest records the
+    time the runner saw the first event, not the later moment a watcher woke.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.at: pd.Timestamp | None = None
+
+
 @dataclass
 class _StreamState:
     """What the stream updates in place, so it survives a cancellation.
 
-    ``counts`` are rows written per kind; ``unconfirmed`` the opening-book
+    ``counts`` are rows written per kind, and ``items`` everything the stream
+    yielded, written or not; ``unconfirmed`` the opening-book
     order ids nothing has named yet (L3 only); ``times["started"]`` is set at
     the first live event, and so is ``streaming``.
     """
@@ -458,6 +598,7 @@ class _StreamState:
     unconfirmed: set[Any] | None
     times: dict[str, pd.Timestamp]
     streaming: asyncio.Event | None = None
+    items: int = 0
 
 
 async def _run_stream(
@@ -484,9 +625,15 @@ async def _run_stream(
             return_when=asyncio.FIRST_COMPLETED,
         )
     finally:
-        for t in (stream_task, stop_task):
-            if not t.done():
-                t.cancel()
+        stop_task.cancel()
+        try:
+            await _cancel_until_done(stream_task, state)
+        except asyncio.CancelledError:
+            # This task was cancelled too (the supervisor stopped waiting for
+            # it): leave the stream cancelled and do not wait for it.
+            stream_task.cancel()
+            stream_task.add_done_callback(_retrieve_outcome)
+            raise
         # Drain cancellation cleanly.
         for t in (stream_task, stop_task):
             try:
@@ -498,6 +645,31 @@ async def _run_stream(
         exc = stream_task.exception()
         if exc is not None:
             record_error("stream", exc)
+
+
+async def _cancel_until_done(task: asyncio.Task[Any], state: _StreamState) -> None:
+    """Cancel *task* and wait for it to end, cancelling again while it streams.
+
+    A stream that lost the cancel keeps yielding items (``state.items``),
+    and only another cancel stops it.  A stream that yields nothing more is
+    closing its connection, and is left to finish: another cancel would cut
+    that short.
+    """
+    # On Python 3.11, asyncio.wait_for drops a cancel that arrives in the same
+    # loop tick as the result it awaits (CPython gh-86296, fixed in 3.12).  The
+    # bundled sources do not wait that way, but a plug-in source may.
+    task.cancel()
+    while not task.done():
+        seen = state.items
+        await asyncio.wait({task}, timeout=CANCEL_RETRY_SECONDS)
+        if not task.done() and state.items != seen:
+            task.cancel()
+
+
+def _retrieve_outcome(task: asyncio.Task[Any]) -> None:
+    """Read how an abandoned task ended, so asyncio does not log it as lost."""
+    if not task.cancelled():
+        task.exception()
 
 
 async def _stream(
@@ -516,8 +688,11 @@ async def _stream(
     counts = state.counts
     unconfirmed = state.unconfirmed
     async for kind, event, frame in capturer.stream(config):
+        state.items += 1
         if "started" not in state.times:
             state.times["started"] = pd.Timestamp.now(tz="UTC")
+            if isinstance(state.streaming, _FirstEvent):
+                state.streaming.at = state.times["started"]
             if state.streaming is not None:
                 state.streaming.set()
         if kind == "order":

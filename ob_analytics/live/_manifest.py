@@ -101,8 +101,10 @@ class Segment:
         it runs.
     stream_started, stream_ended : pandas.Timestamp or None
         The stretch of time the segment covers: from its first live event to
-        the moment its stream stopped.  ``stream_started`` is ``None`` for a
-        segment that never streamed (a snapshot that failed, say).
+        the moment it was asked to stop, or its stream stopped by itself.
+        ``stream_started`` is ``None`` for a segment that never streamed (a
+        snapshot that failed, say), or that was asked to stop before its
+        first live event: it wrote rows, but covered nothing.
     heartbeat : pandas.Timestamp or None
         Last time the running capture said the segment was alive.  After a
         crash it is the latest time the segment is known to cover.
@@ -118,6 +120,9 @@ class Segment:
     sequence_missing : int
         Venue sequence numbers the source never received (its
         ``sequence_missing`` counter), for sources that count them live.
+    raw_frames_skipped : int
+        Frames ``raw.jsonl`` skipped because JSON cannot hold them (its
+        ``n_raw_frames_skipped`` in ``meta.json``).
     """
 
     name: str
@@ -132,6 +137,7 @@ class Segment:
     n_trade_events: int = 0
     dropped: int = 0
     sequence_missing: int = 0
+    raw_frames_skipped: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -147,6 +153,7 @@ class Segment:
             "n_trade_events": self.n_trade_events,
             "dropped": self.dropped,
             "sequence_missing": self.sequence_missing,
+            "raw_frames_skipped": self.raw_frames_skipped,
         }
 
     @classmethod
@@ -165,6 +172,7 @@ class Segment:
             n_trade_events=int(d.get("n_trade_events") or 0),
             dropped=int(d.get("dropped") or 0),
             sequence_missing=int(d.get("sequence_missing") or 0),
+            raw_frames_skipped=int(d.get("raw_frames_skipped") or 0),
         )
 
 
@@ -249,6 +257,11 @@ class CaptureManifest:
         return sum(s.dropped + s.sequence_missing for s in self.segments)
 
     @property
+    def raw_frames_skipped(self) -> int:
+        """Frames ``raw.jsonl`` skipped across every segment."""
+        return sum(s.raw_frames_skipped for s in self.segments)
+
+    @property
     def gap_seconds(self) -> float:
         return sum(g.seconds for g in self.gaps)
 
@@ -273,6 +286,7 @@ class CaptureManifest:
             "ended": _iso(self.ended),
             "restarts": self.restarts,
             "dropped": self.dropped,
+            "raw_frames_skipped": self.raw_frames_skipped,
             "gap_seconds": self.gap_seconds,
             "segments": [s.to_dict() for s in self.segments],
             "gaps": [g.to_dict() for g in self.gaps],
@@ -471,6 +485,10 @@ class CaptureManifest:
             f"  gaps                  : {len(self.gaps)} ({self.gap_seconds:.1f} s)",
             f"  dropped messages      : {self.dropped}",
         ]
+        if self.raw_frames_skipped:
+            # Only when there were some: a capture run with --no-raw has no
+            # raw.jsonl, and the manifest does not record that.
+            lines.append(f"  raw frames skipped    : {self.raw_frames_skipped}")
         for s in self.segments:
             reason = "running" if s.end_reason is None else s.end_reason.value
             lines.append(

@@ -60,8 +60,8 @@ complete capture on its own, so it replays alone:
 | `manifest.json` | The whole capture: its segments, why each one ended, and the gaps between them |
 | `seg-NNNN/orders.csv` | BitstampLoader-compatible event log (`created` / `changed` / `deleted`) |
 | `seg-NNNN/trades.csv` | Venue-reported trades (informational; pipeline infers fills itself) |
-| `seg-NNNN/raw.jsonl` | Every raw WebSocket frame (omit with `--no-raw`) |
-| `seg-NNNN/meta.json` | Segment metadata: start/end, counts, per-capturer diagnostics |
+| `seg-NNNN/raw.jsonl` | The raw WebSocket frames, one per line (omit with `--no-raw`). A value or dict key that JSON cannot hold is written as text (`str(value)`). A frame that JSON cannot hold at all, such as one that refers to itself, is skipped. Neither stops the capture |
+| `seg-NNNN/meta.json` | Segment metadata: start/end, counts, per-capturer diagnostics. With `raw.jsonl` on, `raw_text_types` names the types written as text and `n_raw_frames_skipped` counts the skipped frames. `n_raw_frames` counts every frame, skipped ones included, so `raw.jsonl` has `n_raw_frames - n_raw_frames_skipped` lines. The capture logs a warning the first time each happens |
 
 `process` and `audit` given the capture directory work through each segment.
 `process` writes each segment's results to the folder of the same name under
@@ -98,7 +98,10 @@ The Bitstamp capturer subscribes to the stream first, then fetches the REST
 book while it holds the live messages in a buffer. That only works if the
 stream already covers the moment the REST book describes. Then every change
 after the snapshot arrives on the stream, and buffered messages the snapshot
-already includes are skipped (`pre_snapshot_skipped` in `meta.json`).
+already includes are skipped (`pre_snapshot_skipped` in `meta.json`). Trades
+from before the snapshot are skipped too (`pre_snapshot_trades_skipped`). The
+orders they filled are not in the capture, so `audit` would count them as
+unmatched. At a roll, the previous segment already has these trades.
 
 Bitstamp's REST book can be older than that. In a live test the first order
 message on the stream came 0.7 seconds after the snapshot's `microtimestamp`.
@@ -162,6 +165,17 @@ that holds a different venue or pair, files but no `manifest.json`, or a
 lock on `--out` (the `.capture.lock` file), so a second capture into the same
 directory stops with an error instead of rewriting the first one's files.
 
+**A segment that does not stop.** A segment asked to stop, at a roll, at the
+end or on a signal, has 20 seconds to close its connection and write its
+closing rows. If it takes longer, it is cancelled and closed from its files,
+the same way a restart closes a segment a crash left open. The manifest keeps
+why it was stopped (`rolled_time`, `finished`, ...) and records the delay as
+its error. The delay is not a gap: the segment had already stopped streaming.
+If closing its files fails, the error says so and the capture carries on.
+So a connection that hangs cannot stop the rolls, and SIGTERM ends a capture
+in under a minute: at most two of these limits, if it arrives while a roll is
+waiting for a segment that hangs.
+
 This lets a service manager restart the capture. For example, a systemd unit
 with `Restart=always` and
 `ExecStart=ob-analytics capture bitstamp --pair btcusd --minutes 10080 --roll-minutes 60 --out /data/btcusd`
@@ -177,9 +191,9 @@ reboot.
 | `version` | The layout version (currently `1`) |
 | `started`, `ended` | When the capture started, and when it last stopped |
 | `restarts` | How many times the capture was started again in this directory |
-| `segments` | Each segment: when it streamed from and to, why it ended (`rolled_time`, `rolled_size`, `failed`, `ended_early`, `unfinished`, `stopped`, `finished`), its error, row counts, and the messages its source dropped |
+| `segments` | Each segment: when it streamed from and to (until it was asked to stop; none for a segment asked to stop before its first live event), why it ended (`rolled_time`, `rolled_size`, `failed`, `ended_early`, `unfinished`, `stopped`, `finished`), its error, row counts, the messages its source dropped, and the frames `raw.jsonl` skipped |
 | `gaps` | Each stretch with no segment streaming: start, end, length, and cause (`disconnect`, `restart`, `roll`, `stopped`, `finished`) |
-| `dropped`, `gap_seconds` | Totals over the whole capture |
+| `dropped`, `raw_frames_skipped`, `gap_seconds` | Totals over the whole capture |
 
 The manifest is rewritten after every change and every 10 seconds while the
 capture runs, so it is never more than 10 seconds out of date.
@@ -245,6 +259,13 @@ That's enough to make `ob-analytics capture coinbase` work. Persistence,
 raw-frame archival, signal handling, segments, and `meta.json` all live in the
 generic runner -- you only write the per-venue parser. A source can also add
 the offline-replay factories and be both.
+
+To wait for the next message with a time limit, use
+`async with asyncio.timeout(...)`, not `asyncio.wait_for`. On Python 3.11,
+`wait_for` can drop the cancel that stops a segment when a message arrives at
+the same moment, and the stream then carries on. Keep the cleanup in `stream`'s
+`finally` short: a segment that takes more than 20 seconds to stop is
+cancelled.
 
 Do not reconnect inside `stream`. When the connection drops, let `stream`
 raise: the capture then starts a new segment from a fresh snapshot and records

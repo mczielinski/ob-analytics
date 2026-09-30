@@ -525,10 +525,11 @@ class CcxtSource:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     break
+                # asyncio.timeout, not wait_for: on Python 3.11 wait_for can drop the
+                # cancel that stops this segment (see _runner._cancel_until_done).
                 try:
-                    item = await asyncio.wait_for(
-                        queue.get(), timeout=min(remaining, 0.5)
-                    )
+                    async with asyncio.timeout(min(remaining, 0.5)):
+                        item = await queue.get()
                 except TimeoutError:
                     continue
                 yield item
