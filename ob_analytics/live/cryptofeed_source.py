@@ -200,9 +200,6 @@ class CryptofeedSource:
     """Live-capture a cryptofeed venue as an L3 order stream or L2 depth stream."""
 
     name = "cryptofeed"
-    # cryptofeed maintains the venue's own book (applying its snapshot +
-    # deltas), so bids never rest above asks in the reconstructed book.
-    feed_type = FeedType.MATCHED_BOOK
 
     def __init__(self, settings: SourceSettings | None = None) -> None:
         self.settings: SourceSettings = settings or CryptofeedSettings()
@@ -282,24 +279,48 @@ class CryptofeedSource:
         self._level = value
 
     @property
+    def feed_type(self) -> FeedType:
+        """How this capture's book can cross, which follows its level.
+
+        At L3, cryptofeed keeps the venue's book of resting orders, applying
+        its opening book and changes, or taking each new snapshot whole.  Bids
+        never rest above asks in it, so it is a matched book.  At L2 it keeps
+        the venue's total size at each price.  The level is read with
+        :meth:`_effective_level`.
+        """
+        if self._effective_level() is Level.L2:
+            return FeedType.PRICE_LEVELS
+        return FeedType.MATCHED_BOOK
+
+    @property
     def trade_attribution(self) -> TradeAttribution:
         """Which orders of a trade this capture's order events can name.
 
         cryptofeed's L3 channels carry the book, and a book holds resting
         orders only: a taker trades on arrival and never appears.  So an L3
         capture names the maker only, and an L2 capture, with no order
-        identity, names neither.  Until the venue resolves, the answer is the
-        L3 one unless L2 was asked for: an L2 run ignores attribution anyway.
+        identity, names neither.  The level is read with
+        :meth:`_effective_level`.
+        """
+        if self._effective_level() is Level.L2:
+            return TradeAttribution.NONE
+        return TradeAttribution.MAKER_ONLY
+
+    def _effective_level(self) -> Level:
+        """The level the declarations follow, even before the venue resolves.
+
+        An explicit request for L2 stands without a venue.  Otherwise, until
+        the venue resolves (no venue chosen, or the extra not installed), the
+        answer is L3, the level cryptofeed is used for: an L2 run ignores the
+        L3 declarations anyway.
         """
         if getattr(self.settings, "level", None) is Level.L2:
-            return TradeAttribution.NONE
+            return Level.L2
         try:
             self._exchange_class()
         except (ImportError, ValueError):
-            return TradeAttribution.MAKER_ONLY
-        if self.level is Level.L2:
-            return TradeAttribution.NONE
-        return TradeAttribution.MAKER_ONLY
+            return Level.L3
+        return self.level
 
     @property
     def _venue(self) -> str:

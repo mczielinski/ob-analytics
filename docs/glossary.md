@@ -345,6 +345,13 @@ reconstruction bug. See the pitfall note in
 [Data quality explainer](data-quality.md), which shows how to measure the
 crossing (`audit`) and uncross it for display (`uncross=`).
 
+**Price levels**
+: An L2 feed: the venue's total size at each price, with no order identity
+(Binance, Coinbase, Kraken, Kalshi, Polymarket, and cryptofeed at L2). The
+venue does not publish a crossed book, so a crossed one means the capture's copy
+is wrong: most often, the capture kept a level the venue removed. See
+[What each feed shows](feeds.md).
+
 **Bitstamp CSV**
 : One row per order event with columns `id, timestamp, exchange_timestamp,
 price, volume, action, direction`. The pipeline also expects a sibling

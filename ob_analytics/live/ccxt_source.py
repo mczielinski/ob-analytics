@@ -321,9 +321,9 @@ class CcxtSource:
 
     name = "ccxt"
     level = Level.L2
-    # CCXT's unified book is the venue's own aggregated view: bids never rest
-    # above asks, so the reconstructed book is not crossed.
-    feed_type = FeedType.MATCHED_BOOK
+    # CCXT's unified book is the venue's total size at each price, kept up to
+    # date by CCXT from merged changes or polls.
+    feed_type = FeedType.PRICE_LEVELS
     # Price levels carry no order identity, so no order of a trade is named.
     trade_attribution = TradeAttribution.NONE
     # The book nonce only rises: a Binance diff spans a range of update IDs,
