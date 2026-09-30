@@ -33,8 +33,8 @@ complete capture on its own, so it replays alone:
 | `manifest.json` | The whole capture: its segments, why each one ended, and the gaps between them |
 | `seg-NNNN/orders.csv` | BitstampLoader-compatible event log (`created` / `changed` / `deleted`) |
 | `seg-NNNN/trades.csv` | Venue-reported trades (informational; pipeline infers fills itself) |
-| `seg-NNNN/raw.jsonl` | Every raw WebSocket frame (omit with `--no-raw`) |
-| `seg-NNNN/meta.json` | Segment metadata: start/end, counts, per-capturer diagnostics |
+| `seg-NNNN/raw.jsonl` | The raw WebSocket frames, one per line (omit with `--no-raw`). A value or dict key that JSON cannot hold is written as text (`str(value)`). A frame that JSON cannot hold at all, such as one that refers to itself, is skipped. Neither stops the capture |
+| `seg-NNNN/meta.json` | Segment metadata: start/end, counts, per-capturer diagnostics. With `raw.jsonl` on, `raw_text_types` names the types written as text and `n_raw_frames_skipped` counts the skipped frames. `n_raw_frames` counts every frame, skipped ones included, so `raw.jsonl` has `n_raw_frames - n_raw_frames_skipped` lines. The capture logs a warning the first time each happens |
 
 `process` and `audit` given the capture directory work through each segment.
 `process` writes each segment's results to the folder of the same name under
@@ -164,9 +164,9 @@ reboot.
 | `version` | The layout version (currently `1`) |
 | `started`, `ended` | When the capture started, and when it last stopped |
 | `restarts` | How many times the capture was started again in this directory |
-| `segments` | Each segment: when it streamed from and to (until it was asked to stop; none for a segment asked to stop before its first live event), why it ended (`rolled_time`, `rolled_size`, `failed`, `ended_early`, `unfinished`, `stopped`, `finished`), its error, row counts, and the messages its source dropped |
+| `segments` | Each segment: when it streamed from and to (until it was asked to stop; none for a segment asked to stop before its first live event), why it ended (`rolled_time`, `rolled_size`, `failed`, `ended_early`, `unfinished`, `stopped`, `finished`), its error, row counts, the messages its source dropped, and the frames `raw.jsonl` skipped |
 | `gaps` | Each stretch with no segment streaming: start, end, length, and cause (`disconnect`, `restart`, `roll`, `stopped`, `finished`) |
-| `dropped`, `gap_seconds` | Totals over the whole capture |
+| `dropped`, `raw_frames_skipped`, `gap_seconds` | Totals over the whole capture |
 
 The manifest is rewritten after every change and every 10 seconds while the
 capture runs, so it is never more than 10 seconds out of date.
