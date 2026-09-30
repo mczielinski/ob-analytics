@@ -10,14 +10,11 @@ one in memory with ``databento_dbn`` and skip without the extra.
 from __future__ import annotations
 
 import importlib.util
-from collections.abc import Iterator
-from contextlib import contextmanager
 from typing import ClassVar
 
 import numpy as np
 import pandas as pd
 import pytest
-from loguru import logger
 
 from ob_analytics import Pipeline, PipelineConfig
 from ob_analytics.analytics import DataQualitySummary, data_quality_summary
@@ -45,6 +42,7 @@ from ob_analytics.protocols import (
 )
 from ob_analytics.schemas import validate_events_df, validate_trades_df
 from ob_analytics.sources import get_source
+from tests._logging import warnings_logged
 
 _DATABENTO_INSTALLED = importlib.util.find_spec("databento") is not None
 
@@ -109,20 +107,6 @@ LIFECYCLE = [
 ]
 
 
-@contextmanager
-def warnings_logged() -> Iterator[list[str]]:
-    """Collect the messages logged at WARNING or above inside the block."""
-    messages: list[str] = []
-    # The package disables its own logger on import, as a library should.
-    logger.enable("ob_analytics")
-    sink = logger.add(lambda m: messages.append(m.record["message"]), level="WARNING")
-    try:
-        yield messages
-    finally:
-        logger.remove(sink)
-        logger.disable("ob_analytics")
-
-
 def load(source, config=None, **loader_kwargs):
     """Load *source* and return ``(loader, events)``.
 
@@ -133,27 +117,6 @@ def load(source, config=None, **loader_kwargs):
         source = mbo_frame(source)
     loader = DatabentoLoader(config or _config(), **loader_kwargs)
     return loader, loader.load(source)
-
-
-@pytest.fixture
-def caplog_loguru():
-    """Capture ob-analytics' loguru output (the package disables it by default)."""
-    import io
-
-    from loguru import logger
-
-    buffer = io.StringIO()
-    logger.enable("ob_analytics")
-    handler = logger.add(buffer, level="WARNING", format="{message}")
-
-    class _Capture:
-        @property
-        def text(self) -> str:
-            return buffer.getvalue()
-
-    yield _Capture()
-    logger.remove(handler)
-    logger.disable("ob_analytics")
 
 
 def _config(**overrides) -> PipelineConfig:
@@ -624,12 +587,11 @@ class TestRefusals:
         trades = DatabentoTradeReader(_config(), loader=loader).load(events, None)
         assert trades.empty
 
-    def test_the_drop_warning_does_not_say_which_way_the_book_is_off(
-        self, caplog_loguru
-    ):
+    def test_the_drop_warning_does_not_say_which_way_the_book_is_off(self):
         # A dropped cancel leaves extra size resting, not missing size.
-        load([(1, "A", "B", px(100.00), 10), (1, "C", "B", UNDEF_PRICE, 10)])
-        message = caplog_loguru.text
+        with warnings_logged() as logged:
+            load([(1, "A", "B", px(100.00), 10), (1, "C", "B", UNDEF_PRICE, 10)])
+        message = "\n".join(logged)
         assert "dropped 1 of 2 records" in message
         assert "missing whatever liquidity" not in message
         assert "dropped cancel leaves an order resting" in message
