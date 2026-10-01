@@ -487,10 +487,12 @@ plotting library:
 
 The **level** is the order-book resolution the plot renders at: `Level.L2`
 (Market-By-Price aggregate) or `Level.L3` (Market-By-Order, per order). A plot
-that reads only trades or a metric's table draws the same at either, so it is
-**level-less** and registered at `None`. A concept is one kind or the other,
-on every backend: registering it both at `None` and at a level raises
-`ValueError`.
+with no L2 and L3 variants of its own can instead be **level-less**, registered
+at `None`: a metric's chart is, and so is the example below, which reads only
+trades. The kind decides how the plot is called and where the gallery shows it,
+not what data it reads: the built-in `trade_size` reads only trades and is
+registered at `L2`. A concept is one kind or the other, on every backend:
+registering it both at `None` and at a level raises `ValueError`.
 
 A concept registered at a single level dispatches without naming it;
 registering the *same* concept at both `L2` and `L3` makes it *comparable*, and
@@ -533,7 +535,7 @@ def mpl_cumvol(data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT
     return ax.figure
 
 
-# Reads only trades, so it is level-less.
+# Level-less: it has no L2 and L3 variants of its own.
 RENDERERS.register(("cumvol", None, "matplotlib"), mpl_cumvol)
 ```
 

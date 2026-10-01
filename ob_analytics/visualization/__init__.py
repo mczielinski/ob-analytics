@@ -81,8 +81,8 @@ class RendererRegistry(Registry[RendererKey, RendererFn]):
         if not (isinstance(key, tuple) and len(key) == 3):
             raise ValueError(
                 f"A renderer key is (concept, level, backend), got {key!r}. "
-                "Use level=None for a plot that reads only trades or a "
-                "metric's table."
+                "The level is Level.L2, Level.L3, or None for a level-less "
+                "plot."
             )
         concept, level, _backend = key
         clash = next(
@@ -100,10 +100,8 @@ class RendererRegistry(Registry[RendererKey, RendererFn]):
             raise ValueError(
                 f"Plot concept {concept!r} is already registered {existing} on "
                 f"{other_backend!r}, so it cannot also be registered {wanted}. "
-                "A concept is the same kind on every backend. A plot that "
-                "reads only trades or a metric's table is level-less "
-                "(level=None); a plot that draws the book is registered at "
-                "Level.L2 and/or Level.L3."
+                "A concept is the same kind on every backend: register it at "
+                "None everywhere, or at Level.L2 and/or Level.L3 everywhere."
             )
         super().register(key, value)
 
@@ -182,7 +180,7 @@ def _resolve_level(concept: str, backend: str) -> Level | None:
             f"Registered: {RENDERERS.list()}"
         )
     if len(levels) > 1:
-        shown = ", ".join(str(lvl) for lvl in levels)
+        shown = ", ".join(sorted(str(lvl) for lvl in levels))
         raise ValueError(
             f"Plot concept {concept!r} is comparable (registered at levels "
             f"{shown}); pass level=Level.L2 or level=Level.L3 to disambiguate."
