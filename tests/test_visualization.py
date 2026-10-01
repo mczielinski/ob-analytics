@@ -1201,11 +1201,21 @@ class TestRendererKinds:
             (Level.L3, "plotly"),
         )
 
-    def test_key_without_a_level_raises(self):
+    @pytest.mark.parametrize(
+        "key",
+        [
+            ("kind_probe", "matplotlib"),  # no level
+            ("kind_probe", "matplotlib", None),  # level and backend swapped
+            ("kind_probe", "L4", "matplotlib"),  # not a level
+            (7, Level.L2, "matplotlib"),  # concept not text
+        ],
+    )
+    def test_malformed_key_raises(self, key):
         from ob_analytics.visualization import RENDERERS
 
         with pytest.raises(ValueError, match=r"\(concept, level, backend\)"):
-            RENDERERS.register(("kind_probe", "matplotlib"), self._renderer)  # ty: ignore[invalid-argument-type]
+            RENDERERS.register(key, self._renderer)
+        assert not [k for k in RENDERERS._items if k[0] in ("kind_probe", 7)]
 
     def test_the_guide_plot_section_runs_as_written(
         self, tiny_bitstamp_orders_csv, tmp_path
