@@ -77,8 +77,12 @@ for level-less analytics). A concept is level-less or drawn at a level, and the
 same kind on every backend: registering it the other way raises `ValueError`.
 Register a whole new backend module with
 `register_plot_backend`, or a single renderer directly with
-`RENDERERS.register((concept, level, backend), fn)`.
+`RENDERERS.register((concept, level, backend), fn)`. To see how a concept is
+registered before adding to it, list its `(level, backend)` pairs with
+`RENDERERS.placements(concept)`.
 
 ::: ob_analytics.visualization.register_plot_backend
 
 ::: ob_analytics.visualization.RENDERERS
+
+::: ob_analytics.visualization.RendererRegistry

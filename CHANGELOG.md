@@ -83,10 +83,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `ValueError` that says which to use. So does a key that is not
   `(concept, level, backend)`. Code that registered one plot both ways now
   fails at the second registration; a metric plug-in that does so is skipped
-  when `ob_analytics` is imported, with a logged warning. The guide registers
-  its trade-only example once, at `None`, draws the gallery on the one backend
-  it registered, and shows how a plot drawn at a level goes into the gallery
-  as a `PlotConcept`. A test runs the guide's plot section as written.
+  when `ob_analytics` is imported, with a logged warning. A backend module
+  loaded with `register_plot_backend` that registers a built-in concept as the
+  other kind fails to load, so no plot on that backend draws until it is
+  fixed. A metric named like a built-in plot drawn at a level, such as
+  `trade_size`, cannot register its level-less renderer; give it another name.
+  `RENDERERS.placements(concept)` lists how a concept is registered. The
+  guide registers its trade-only example once, at `None`, draws the gallery on
+  the one backend it registered, and shows how a plot drawn at a level goes
+  into the gallery as a `PlotConcept`. A test runs the guide's plot section as
+  written.
 - **On Python 3.11, a capture stops each segment when asked** (#296). The
   live sources waited for messages with `asyncio.wait_for`, which on Python
   3.11 can drop a cancel that arrives with a message. A roll then left the old
