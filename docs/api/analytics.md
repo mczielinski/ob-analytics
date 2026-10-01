@@ -32,7 +32,7 @@ The reconstructions themselves live in the
 
 ## Data Quality
 
-See [Data quality: matched book vs diff feed](../data-quality.md) for the
+See [Data quality: matched book, diff feed and price levels](../data-quality.md) for the
 concepts and the [`audit` how-to](../howto/audit.md) for the CLI.
 
 ::: ob_analytics.analytics.data_quality_summary

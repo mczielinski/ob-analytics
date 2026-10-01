@@ -11,6 +11,32 @@ per-order feed: every record carries an `order_id`, a `price`, a `size` and a
 replays through the standard pipeline with order lifetimes, queue position and
 order classification all available.
 
+!!! info "What this feed shows"
+
+    | Property | Value |
+    |---|---|
+    | Level | L3 |
+    | Depth shown | whole displayed book |
+    | Orders shown | resting only |
+    | Update form | every change |
+    | What can be missed | nothing (a file) |
+    | After a lost message | — |
+    | Sequence | venue's where sent; only rises |
+    | Clocks | venue + Databento receive |
+    | Crossing | matched book |
+    | Trade sides named | maker only |
+    | Taker side | venue |
+    | Fills | fill records |
+    | Trade tape gaps | — |
+    | Price grid | from the file |
+    | What the book means | normal |
+    | Access | paid, API key |
+
+    Use it for order lifetimes, queue position, depth and trade signs. Don't use
+    it for anything that depends on the taker's order: the venue does not name
+    it. [What each feed shows](../feeds.md) explains each property and compares
+    every source.
+
 `databento` is an optional dependency:
 
 ```bash

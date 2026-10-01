@@ -18,7 +18,7 @@ import pytest
 from ob_analytics.live._base import CaptureConfig
 from ob_analytics.live._runner import run_capturer
 from ob_analytics.live.ccxt_source import CcxtSettings, CcxtSource, _epoch_ms_to_ts
-from ob_analytics.protocols import Level
+from ob_analytics.protocols import FeedType, Level
 
 _CCXT_INSTALLED = importlib.util.find_spec("ccxt") is not None
 
@@ -108,6 +108,7 @@ class TestConformance:
         cap = CcxtSource()
         assert isinstance(cap, LiveSource)
         assert cap.level is Level.L2
+        assert cap.feed_type is FeedType.PRICE_LEVELS
 
     def test_missing_exchange_errors(self, tmp_path):
         cap = CcxtSource()  # empty settings -> no exchange

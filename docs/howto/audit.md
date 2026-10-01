@@ -47,8 +47,8 @@ Checks: 0 error(s), 4 warning(s)
 
 | Field | Read it as |
 |---|---|
-| **feed type** | `matched_book` (LOBSTER/MBO) or `diff_feed` (Bitstamp) — sets expectations for the next line |
-| **crossed resting book** | Share of session *time* with `best_bid > best_ask`. ~0% for a matched book; can be high and faithful for a diff feed, unless stale resting orders cause it |
+| **feed type** | `matched_book` (LOBSTER/MBO), `diff_feed` (Bitstamp) or `price_levels` (any L2 feed) — sets expectations for the next line |
+| **crossed resting book** | Share of session *time* with `best_bid > best_ask`. ~0% for a matched book or price levels; can be high and faithful for a diff feed, unless stale resting orders cause it |
 | **stale resting orders** | Resting orders a trade printed through that the venue did not report again within 1 s. The worst is named with its side, price and how long it held the touch |
 | **unmatched trades** | Trades whose maker or taker order could not be found among the order events. Only the orders the feed can show are looked for: the note in brackets says which |
 | **duplicate event ids / created ids** | Should be `0`; anything else is a feed defect worth chasing |
@@ -59,9 +59,10 @@ Checks: 0 error(s), 4 warning(s)
 | **venue sequence** | Skipped and non-advancing sequence numbers: dropped and reordered messages ([gap detection](../api/analytics.md)) |
 
 A high **crossed resting book** number on a `diff_feed` can be expected — see
-[Data quality: matched book vs diff feed](../data-quality.md) for why, and for
+[Data quality: matched book, diff feed and price levels](../data-quality.md) for why, and for
 the `uncross=` option that cleans the book up *for display* without touching
-the data you analyse. On a `matched_book`, a non-zero figure is a red flag.
+the data you analyse. On a `matched_book` or `price_levels`, a non-zero figure
+is a red flag.
 
 Read it together with **stale resting orders**. On the bundled sample one
 stale order holds the ask touch for 27 minutes, and it causes almost all of the
@@ -81,7 +82,7 @@ code follows the severities rather than the numbers:
 
 Errors: `duplicate_event_ids`, `duplicate_created_ids`, `sequence_gaps`,
 `sequence_out_of_order`, `negative_volume`, `exchange_time_after_receive`, and
-`crossed_book` **on a matched book only**.
+`crossed_book` **on a matched book or price levels only**.
 
 Warnings: `orphan_orders`, `stale_orders`, `nonpositive_price`,
 `exchange_time_reordered`, `unmatched_trades` (above 5%), and `crossed_book`
@@ -90,8 +91,8 @@ when no feed type was declared.
 Two of these are judgement calls worth stating plainly:
 
 - **A crossed book is scored by feed type, not by size.** A crossed book is
-  always a defect in a matched book, but can be a faithful replay of a diff
-  feed. Only the source's declared [`FeedType`](../api/protocols.md) can tell
+  always a defect in a matched book or a price-level book, but can be a
+  faithful replay of a diff feed. Only the source's declared [`FeedType`](../api/protocols.md) can tell
   them apart. Size alone says little: on the bundled sample, almost all of the
   92% comes from two stale orders, which `stale_orders` reports. With
   `--from-parquet` and no `--source`, the feed type is undeclared and crossing
@@ -236,6 +237,7 @@ summary = data_quality_summary(
 
 ## Related
 
-- [Data quality: matched book vs diff feed](../data-quality.md) — the concepts behind these numbers
+- [Data quality: matched book, diff feed and price levels](../data-quality.md) — the concepts behind these numbers
+- [What each feed shows](../feeds.md) — what each source can and cannot show, so which checks can fire on it
 - [Run from the command line](cli.md) — every CLI verb
 - [`data_quality_summary` reference](../api/analytics.md)

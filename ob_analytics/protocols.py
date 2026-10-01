@@ -79,6 +79,11 @@ class FeedType(str, Enum):
       ask, neither filling); :func:`~ob_analytics.analytics.order_book`
       replays this faithfully — a crossed book in the output is a property of
       the feed, not a reconstruction bug.
+    * :attr:`PRICE_LEVELS` — an L2 feed: the venue's total size at each price,
+      as a stream of changes, merged changes, repeated snapshots or polls.  The
+      venue does not publish a crossed book, so a crossed one means the
+      capture's copy is wrong: most often, the capture kept a level the venue
+      removed.
     * :attr:`UNKNOWN` — a source that does not declare its feed type (the
       structural default for third-party sources predating this attribute).
 
@@ -89,6 +94,7 @@ class FeedType(str, Enum):
 
     MATCHED_BOOK = "matched_book"
     DIFF_FEED = "diff_feed"
+    PRICE_LEVELS = "price_levels"
     UNKNOWN = "unknown"
 
 
@@ -545,9 +551,20 @@ class Source(Protocol):
     """
 
     name: str
-    level: Level
-    feed_type: FeedType
     settings: SourceSettings
+
+    # The two coordinates are read-only: a source declares them, and nothing
+    # downstream sets them.  A class attribute satisfies them, and so does a
+    # property that works one out, as the cryptofeed source does from its venue.
+    @property
+    def level(self) -> Level:
+        """The source's resolution (:class:`Level`)."""
+        ...
+
+    @property
+    def feed_type(self) -> FeedType:
+        """The source's crossing invariant (:class:`FeedType`)."""
+        ...
 
 
 @runtime_checkable

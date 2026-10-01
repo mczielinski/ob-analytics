@@ -19,8 +19,8 @@ inheritance required.
 | `LiveSource` | `snapshot` · `stream` · `shutdown_synthetic_events` | A `Source` that captures a live venue feed |
 | `Metric` | `compute(result)` · `prepare(frame)` | A measurement taken from a finished run, drawn as a level-less plot |
 
-A `Source` declares two coordinates: a `FeedType` (`matched_book` vs
-`diff_feed`; see [Data quality](../data-quality.md)) and a `Level` (`L2` vs
+A `Source` declares two coordinates: a `FeedType` (`matched_book`, `diff_feed`
+or `price_levels`; see [Data quality](../data-quality.md)) and a `Level` (`L2` vs
 `L3`; see [Process L2 feeds](../howto/l2-depth.md)). It also declares a
 `TradeAttribution`: which orders of a trade its order events can name (see
 [Check data quality](../howto/audit.md)). A source that records the venue's

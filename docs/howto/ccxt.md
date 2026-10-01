@@ -9,6 +9,33 @@ for crypto: one interface to ~100 exchanges *and* the Kalshi / Polymarket
 prediction markets. The `ccxt` source wraps it, so any CCXT-supported venue
 becomes an ob-analytics source by passing a venue id — no per-venue code.
 
+!!! info "What this feed shows"
+
+    | Property | Kraken |
+    |---|---|
+    | Level | L2 |
+    | Depth shown | top `--depth-limit` levels (100 by default), kept filled by Kraken |
+    | Update form | changes, merged |
+    | What can be missed | merged changes; a lost message |
+    | After a lost message | drifts until the level changes again |
+    | Sequence | none |
+    | Clocks | venue + receive |
+    | Crossing | price levels |
+    | Taker side | venue |
+    | Trade tape gaps | none |
+    | Price grid | fixed (0.1 on BTC/USD) |
+    | What the book means | normal |
+    | Access | public |
+
+    Each venue has its own values. [Binance](binance.md),
+    [Coinbase](coinbase.md), [Kalshi](kalshi.md) and [Polymarket](polymarket.md)
+    open their own pages with them; Kraken has no page, so its values are above.
+    Use the ccxt source for depth, spread and trades on the widest range of
+    venues, prediction markets included. Don't use it for single orders (it is
+    L2), for events shorter than one update, or for Coinbase trade signs, which
+    are reversed. [What each feed shows](../feeds.md) explains each property and
+    compares every source.
+
 Install the optional `[ccxt]` extra (CCXT Pro ships inside `ccxt`) and use the
 `capture` verb with `--exchange`:
 
