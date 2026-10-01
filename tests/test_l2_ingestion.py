@@ -104,8 +104,7 @@ class TestDepthCsvSource:
         source = DepthCsvSource()
         assert source.level is Level.L2
         assert source.name == "depth_csv"
-        # A price-level feed is the venue's own aggregated (matched) view.
-        assert source.feed_type is FeedType.MATCHED_BOOK
+        assert source.feed_type is FeedType.PRICE_LEVELS
 
     def test_registered(self):
         assert "depth_csv" in list_sources()
@@ -375,18 +374,18 @@ class TestL2DataQuality:
     def test_summary_on_l2_result(self, toy_l2_result):
         r = toy_l2_result
         summary = data_quality_summary(
-            r.events, r.trades, feed_type=FeedType.MATCHED_BOOK, depth=r.depth
+            r.events, r.trades, feed_type=FeedType.PRICE_LEVELS, depth=r.depth
         )
         # Per-order metrics degrade to zero; the report still renders.
         assert summary.n_events == 0
         assert summary.n_orders == 0
         assert summary.pre_existing_orders == 0
         assert summary.n_trades == len(r.trades)
-        # A matched aggregated book is not crossed, and unlabelled attribution
+        # The toy price-level book is not crossed, and unlabelled attribution
         # is not counted as a failure.
         assert summary.crossed_pct == pytest.approx(0.0)
         assert summary.unmatched_trades_pct == pytest.approx(0.0)
-        assert "matched_book" in summary.render()
+        assert "price_levels" in summary.render()
 
 
 class TestL2Gallery:
@@ -546,7 +545,7 @@ class TestL2CLI:
         self._write_cli_fixture(src)
         r = cli_runner("validate", str(src), "--source", "depth_csv")
         assert r.returncode == 0, r.stderr
-        assert "matched_book" in r.stdout
+        assert "price_levels" in r.stdout
 
 
 # ---------------------------------------------------------------------------

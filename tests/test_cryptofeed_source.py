@@ -13,7 +13,7 @@ import importlib.util
 import pandas as pd
 import pytest
 
-from ob_analytics.protocols import Level
+from ob_analytics.protocols import FeedType, Level
 
 _CRYPTOFEED_INSTALLED = importlib.util.find_spec("cryptofeed") is not None
 
@@ -1572,6 +1572,30 @@ class TestTradeAttribution:
             settings=CryptofeedSettings(exchange=_l3_venue(), level=Level.L2)
         )
         assert forced.trade_attribution is TradeAttribution.NONE
+
+
+class TestFeedType:
+    def test_an_l3_capture_is_a_matched_book(self):
+        from ob_analytics.live.cryptofeed_source import (
+            CryptofeedSettings,
+            CryptofeedSource,
+        )
+
+        src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
+        assert src.feed_type is FeedType.MATCHED_BOOK
+
+    def test_an_l2_capture_is_price_levels(self):
+        from ob_analytics.live.cryptofeed_source import (
+            CryptofeedSettings,
+            CryptofeedSource,
+        )
+
+        src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l2_venue()))
+        assert src.feed_type is FeedType.PRICE_LEVELS
+        forced = CryptofeedSource(
+            settings=CryptofeedSettings(exchange=_l3_venue(), level=Level.L2)
+        )
+        assert forced.feed_type is FeedType.PRICE_LEVELS
 
 
 class TestCaptureToAudit:

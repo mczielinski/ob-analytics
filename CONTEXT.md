@@ -63,7 +63,7 @@ The matching rule that gives the queue its order: better prices execute first,
 and at one price, earlier arrivals execute first.
 
 **Feed type**:
-Whether an L3 feed's resting book can be crossed. Named `feed_type` and typed
+Whether a feed's resting book can be crossed. Named `feed_type` and typed
 `FeedType`, with the values below; it is a property of the source, not of the
 rebuild.
 
@@ -74,6 +74,11 @@ crossed. `FeedType.MATCHED_BOOK`.
 **Diff feed**:
 An L3 feed rebuilt from a public placement and cancellation stream. It can hold
 genuinely crossed resting orders. `FeedType.DIFF_FEED`.
+
+**Price levels**:
+An L2 feed: the venue's total size at each price. The venue does not publish a
+crossed book, so a crossed one means the capture's copy is wrong: most often,
+the capture kept a level the venue removed. `FeedType.PRICE_LEVELS`.
 
 **Unknown feed type**:
 A source that does not declare a feed type. `FeedType.UNKNOWN`, the default.

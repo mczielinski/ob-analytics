@@ -253,7 +253,7 @@ ob-analytics audit orders.csv
 ```
 
 See [Check data quality](audit.md) and
-[Matched book vs diff feed](../data-quality.md).
+[Matched book, diff feed and price levels](../data-quality.md).
 
 ## Related
 

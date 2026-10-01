@@ -601,9 +601,8 @@ class DepthCsvSource:
 
     name: str = "depth_csv"
     level: Level = Level.L2
-    # A price-level feed is the venue's own aggregated view: bids never rest
-    # above asks, so the reconstructed book is not crossed.
-    feed_type: FeedType = FeedType.MATCHED_BOOK
+    # A price-level feed: the venue's total size at each price.
+    feed_type: FeedType = FeedType.PRICE_LEVELS
     # Price levels carry no order identity, so no order of a trade is named.
     trade_attribution: TradeAttribution = TradeAttribution.NONE
     # No per-source knobs; empty typed settings keep construction uniform.
