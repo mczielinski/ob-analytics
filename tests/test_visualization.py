@@ -1187,6 +1187,20 @@ class TestRendererKinds:
         with pytest.raises(ValueError, match="comparable"):
             plot("kind_probe")
 
+    def test_placements_can_be_looped_over_while_registering(self):
+        from ob_analytics.visualization import RENDERERS
+
+        RENDERERS.register(("kind_probe", Level.L2, "matplotlib"), self._renderer)
+        RENDERERS.register(("kind_probe", Level.L3, "matplotlib"), self._renderer)
+        for level, _ in RENDERERS.placements("kind_probe"):
+            RENDERERS.register(("kind_probe", level, "plotly"), self._renderer)
+        assert RENDERERS.placements("kind_probe") == (
+            (Level.L2, "matplotlib"),
+            (Level.L3, "matplotlib"),
+            (Level.L2, "plotly"),
+            (Level.L3, "plotly"),
+        )
+
     def test_key_without_a_level_raises(self):
         from ob_analytics.visualization import RENDERERS
 

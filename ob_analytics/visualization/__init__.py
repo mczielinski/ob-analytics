@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from typing import Any
 
 from loguru import logger
@@ -63,9 +63,12 @@ class RendererRegistry(Registry[RendererKey, RendererFn]):
     whichever backend draws it.
     """
 
-    def placements(self, concept: str) -> Iterator[tuple[Level | None, str]]:
-        """Yield each ``(level, backend)`` *concept* is registered at, in order."""
-        return ((lvl, b) for (c, lvl, b) in self._items if c == concept)
+    def placements(self, concept: str) -> tuple[tuple[Level | None, str], ...]:
+        """Return each ``(level, backend)`` *concept* is registered at, in order.
+
+        A snapshot, so a caller can register while looping over it.
+        """
+        return tuple((lvl, b) for (c, lvl, b) in self._items if c == concept)
 
     def register(self, key: RendererKey, value: RendererFn) -> None:
         """Register *value* under the key ``(concept, level, backend)``.
