@@ -366,6 +366,22 @@ class TestL3Translation:
         assert {e["action"] for e in events} == {"deleted"}
 
 
+class TestRepeatedDelta:
+    def test_a_delta_that_repeats_an_order_writes_nothing(self):
+        """On a venue whose trades name no orders, as on one whose trades do."""
+        from ob_analytics.live.cryptofeed_source import (
+            CryptofeedSettings,
+            CryptofeedSource,
+        )
+
+        src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
+        src._fill_events(_FakeTrade())  # a tape that names no orders
+        same = {"bid": [(11, 100.0, 2.0)], "ask": []}
+        (created,) = src._l3_events(_l3_book({"bid": {}, "ask": {}}, delta=same))
+        assert created["action"] == "created"
+        assert src._l3_events(_l3_book({"bid": {}, "ask": {}}, delta=same)) == []
+
+
 class _FakeTrade:
     """Stand-in for ``cryptofeed.types.Trade``."""
 
@@ -1077,7 +1093,9 @@ class TestDeltaFailureLeavesStateIntact:
     def test_a_bad_entry_mid_delta_rolls_the_whole_update_back(self):
         src = self._source()
         src._l3_events(_l3_book({"bid": {100.0: {11: 2.0}}, "ask": {}}, delta=None))
-        before = dict(src._open_orders)
+        src._fill_events(_tape_trade(11, 99))
+        before = (dict(src._open_orders), dict(src._shown_at), dict(src._filled_at))
+        assert all(before)
 
         # Unpacking a two-field entry into three raises ValueError.
         with pytest.raises(ValueError):
@@ -1089,7 +1107,7 @@ class TestDeltaFailureLeavesStateIntact:
                 )
             )
 
-        assert src._open_orders == before
+        assert (src._open_orders, src._shown_at, src._filled_at) == before
 
 
 @pytest.mark.skipif(not _CRYPTOFEED_INSTALLED, reason="cryptofeed extra not installed")
@@ -1546,6 +1564,206 @@ class TestHeldDeletes:
         src._l3_events(self._book({"s1": 0.5}, 1_700_000_000.0))
         (gone,) = src._l3_events(self._book({}, 1_700_000_001.0))
         assert gone["action"] == "deleted"
+
+
+# ---------------------------------------------------------------------------
+# #311: Independent Reserve's trades name both orders; its book sends deltas
+# ---------------------------------------------------------------------------
+
+
+def _ir_trade(
+    bid,
+    offer,
+    *,
+    amount="0.1",
+    timestamp=1_700_000_010.0,
+    sent=None,
+    side="sell",
+):
+    """A trade whose raw frame is Independent Reserve's ``ticker`` message.
+
+    *timestamp* is the ``TradeDate`` cryptofeed reports, and *sent* the
+    message's ``Time``, which by default is 50 ms later, as in a live capture.
+    """
+    sent = timestamp + 0.05 if sent is None else sent
+    trade = _FakeTrade(amount=amount, timestamp=timestamp, side=side)
+    trade.raw = {
+        "Channel": "ticker-xbt-aud",
+        "Data": {
+            "TradeGuid": "6d1c2e90-592a-409c-a8d8-58b2d25e0b0b",
+            "BidGuid": bid,
+            "OfferGuid": offer,
+            "Side": "Sell" if side == "sell" else "Buy",
+        },
+        "Time": round(sent * 1000),
+        "Event": "Trade",
+    }
+    return trade
+
+
+def _ir_delta(side: str, order_id: str, price: float, size: float, t: float):
+    """One Independent Reserve book message, as cryptofeed's delta reports it."""
+    return _l3_book(
+        {"bid": {}, "ask": {}},
+        delta={"bid": [], "ask": [], side: [(order_id, price, size)]},
+        timestamp=t,
+    )
+
+
+class TestIndependentReserveTrades:
+    """A fill reaches the capture twice: from the tape and from the book.
+
+    The book message that reports a fill carries the same ``Time`` as the
+    trade message, 50 ms after the trade's ``TradeDate`` here (#311).
+    """
+
+    #: The ``TradeDate`` of the trade in these tests, and the ``Time`` of the
+    #: trade message and of the book message that reports its fill.
+    TRADED = 1_700_000_010.0
+    SENT = 1_700_000_010.05
+
+    def _source(self):
+        from ob_analytics.live.cryptofeed_source import (
+            CryptofeedSettings,
+            CryptofeedSource,
+        )
+
+        src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
+        src._l3_events(_ir_delta("ask", "m1", 101.0, 1.0, 1_700_000_000.0))
+        return src
+
+    def test_both_order_ids_are_read_from_the_raw_frame(self):
+        ev = self._source()._map_trade(_ir_trade("b-guid", "o-guid"))
+        assert (ev["buy_order_id"], ev["sell_order_id"]) == ("b-guid", "o-guid")
+
+    def test_a_trade_before_the_books_change_reports_the_fill_once(self):
+        src = self._source()
+        (fill,) = src._fill_events(_ir_trade("t1", "m1", amount="0.3"))
+        assert (fill["id"], fill["volume"]) == ("m1", 0.7)
+        assert fill["exchange_timestamp"].value == 1_700_000_010_000_000_000
+        assert src._l3_events(_ir_delta("ask", "m1", 101.0, 0.7, self.SENT)) == []
+
+    def test_a_books_change_before_the_trade_reports_the_fill_once(self):
+        src = self._source()
+        (shrunk,) = src._l3_events(_ir_delta("ask", "m1", 101.0, 0.7, self.SENT))
+        assert (shrunk["action"], shrunk["volume"]) == ("changed", 0.7)
+        assert src._fill_events(_ir_trade("t1", "m1", amount="0.3")) == []
+        assert src._open_orders["m1"][2] == 0.7
+
+    def test_an_order_shown_after_its_trade_date_still_takes_the_fill(self):
+        """A taker's ``NewOrder`` can be sent after the ``TradeDate``."""
+        src = self._source()
+        src._l3_events(_ir_delta("bid", "t1", 101.0, 0.3, self.TRADED + 0.01))
+        fills = src._fill_events(_ir_trade("t1", "m1", amount="0.3"))
+        assert {(f["id"], f["volume"]) for f in fills} == {("t1", 0.0), ("m1", 0.7)}
+
+    def test_a_removal_is_written_at_once(self):
+        """Holding it for a late trade would put it after later messages' rows.
+
+        So a full fill whose removal comes before its trade reads as a cancel.
+        """
+        src = self._source()
+        src._fill_events(_ir_trade("t0", "x0", timestamp=1_700_000_001.0))
+        (gone,) = src._l3_events(_ir_delta("ask", "m1", 101.0, 0, self.SENT))
+        assert (gone["action"], gone["volume"]) == ("deleted", 1.0)
+        assert src._fill_events(_ir_trade("t1", "m1", amount="1.0")) == []
+
+    def test_a_change_older_than_the_last_fill_is_skipped(self):
+        """Two trades reach one order before the book reports either fill."""
+        src = self._source()
+        src._fill_events(_ir_trade("t1", "m1", amount="0.3"))
+        src._fill_events(
+            _ir_trade("t2", "m1", amount="0.2", timestamp=self.TRADED + 0.01)
+        )
+        assert src._l3_events(_ir_delta("ask", "m1", 101.0, 0.7, self.SENT)) == []
+        assert (
+            src._l3_events(_ir_delta("ask", "m1", 101.0, 0.5, self.SENT + 0.01)) == []
+        )
+        assert src._open_orders["m1"][2] == 0.5
+
+    def test_a_full_fill_the_tape_reports_first_is_deleted_at_size_zero(self):
+        src = self._source()
+        src._fill_events(_ir_trade("t1", "m1", amount="1.0"))
+        (gone,) = src._l3_events(_ir_delta("ask", "m1", 101.0, 0, self.SENT))
+        assert (gone["action"], gone["volume"]) == ("deleted", 0.0)
+
+    def test_both_orders_of_a_trade_match_orders_in_the_book(self, tmp_path):
+        """The maker always links, and the taker when the book shows it (#311)."""
+        import asyncio
+
+        from ob_analytics.analytics import data_quality_summary
+        from ob_analytics.bitstamp import BitstampSource
+        from ob_analytics.config import PipelineConfig
+        from ob_analytics.live._runner import run_capturer
+        from ob_analytics.pipeline import Pipeline
+
+        t0 = 1_700_000_000.0
+        maker_bid = "8cac7755-5dce-46fd-9af9-19ca2d89e681"
+        taker_offer = "8dead502-9f3c-45ea-8a92-1702a382be0d"
+        maker_offer = "1aee63b1-9673-4241-9c0a-9681ebaf4788"
+        taker_bid = "b45d594f-b02a-40e3-a5a1-6836e8c191ca"
+        script = [
+            # The opening book, from Independent Reserve's REST snapshot.
+            (
+                "l3_book",
+                _l3_book(
+                    {
+                        "bid": {100.5: {maker_bid: 1.0}},
+                        "ask": {101.0: {maker_offer: 1.0}},
+                    },
+                    timestamp=t0,
+                ),
+            ),
+            # A sell order arrives below the bid and takes 0.1 of it, then
+            # rests until it is cancelled.  Its NewOrder is sent after the
+            # TradeDate, and the trade comes before the book's changes, as in
+            # a live capture.
+            ("l3_book", _ir_delta("ask", taker_offer, 100.0, 0.5, t0 + 1.01)),
+            ("trades", _ir_trade(maker_bid, taker_offer, timestamp=t0 + 1.0)),
+            ("l3_book", _ir_delta("bid", maker_bid, 100.5, 0.9, t0 + 1.05)),
+            ("l3_book", _ir_delta("ask", taker_offer, 100.0, 0.4, t0 + 1.05)),
+            ("l3_book", _ir_delta("ask", taker_offer, 100.0, 0, t0 + 1.1)),
+            # A buy order the book never shows takes part of the resting
+            # offer.  Here the book's change comes before the trade.
+            ("l3_book", _ir_delta("ask", maker_offer, 101.0, 0.7, t0 + 2.05)),
+            (
+                "trades",
+                _ir_trade(
+                    taker_bid, maker_offer, amount="0.3", side="buy", timestamp=t0 + 2.0
+                ),
+            ),
+            # A second sell order takes the rest of the bid and is filled in
+            # full itself.
+            ("l3_book", _ir_delta("ask", "taker-2", 100.0, 0.9, t0 + 3.01)),
+            (
+                "trades",
+                _ir_trade(maker_bid, "taker-2", amount="0.9", timestamp=t0 + 3.0),
+            ),
+            ("l3_book", _ir_delta("bid", maker_bid, 100.5, 0, t0 + 3.05)),
+            ("l3_book", _ir_delta("ask", "taker-2", 100.0, 0, t0 + 3.05)),
+        ]
+        src = _source_with(_l3_venue(), script)
+        asyncio.run(run_capturer(src, _capture_cfg(tmp_path)))
+
+        result = Pipeline(PipelineConfig(), source=BitstampSource()).run(
+            tmp_path / "cap" / "orders.csv"
+        )
+        trades = result.trades.set_index("taker")
+        for taker in (taker_offer, "taker-2"):
+            assert trades.loc[taker, "maker"] == maker_bid
+            assert pd.notna(trades.loc[taker, "maker_event_id"])
+            assert pd.notna(trades.loc[taker, "taker_event_id"])
+        assert trades.loc[taker_bid, "maker"] == maker_offer
+        assert pd.notna(trades.loc[taker_bid, "maker_event_id"])
+        assert pd.isna(trades.loc[taker_bid, "taker_event_id"])
+
+        summary = data_quality_summary(
+            result.events,
+            result.trades,
+            feed_type=src.feed_type,
+            trade_attribution=src.trade_attribution,
+        )
+        assert summary.unmatched_trades_pct == 0.0
 
 
 class TestTradeAttribution:

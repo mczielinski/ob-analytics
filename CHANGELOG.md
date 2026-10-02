@@ -70,6 +70,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`audit` no longer stops on UUID order ids** (#311). A stale resting order
+  from an Independent Reserve capture made `audit` raise `ValueError`.
+  `StaleOrder.id` now holds the id as the feed writes it (`int | str`), and the
+  text and JSON reports print it.
+- **cryptofeed's Independent Reserve trades are linked to their orders**
+  (#311). The trades now carry both order ids (`BidGuid` and `OfferGuid`) in
+  `buy_order_id` and `sell_order_id`, and each fill is recorded from the trade,
+  as on Bitstamp. On a per-change book, a fill that the trade and the book both
+  report is recorded once, and a book message that repeats an order's size
+  writes no row.
 - **A Bitstamp capture no longer keeps trades from before its snapshot**
   (#301). It already skipped order messages from before the REST snapshot, but
   kept the trades from the same time. The orders those trades filled are not in

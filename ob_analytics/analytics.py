@@ -827,8 +827,9 @@ class StaleOrder:
 
     Attributes
     ----------
-    id : int
-        The order id.
+    id : int or str
+        The order id, as the feed writes it: an integer on most venues, a UUID
+        string on Independent Reserve.
     direction : str
         ``"bid"`` or ``"ask"``.
     price : float
@@ -845,7 +846,7 @@ class StaleOrder:
         trade showed it was gone.
     """
 
-    id: int
+    id: int | str
     direction: str
     price: float
     disproved_at: pd.Timestamp
@@ -1010,7 +1011,9 @@ def _stale_orders(
         at_touch = (touch[bool(is_ask)] == price) & (overlap > 0)
         found.append(
             StaleOrder(
-                id=int(oid),
+                # A NumPy scalar becomes the plain Python value, so the
+                # report serialises to JSON.
+                id=oid.item() if isinstance(oid, np.generic) else oid,
                 direction="ask" if is_ask else "bid",
                 price=float(ticks_to_price(price, tick_size)),
                 disproved_at=pd.Timestamp(int(disproved), tz="UTC"),
