@@ -10,6 +10,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **A page on what each feed shows** (#288). "What each feed shows" describes
+  16 properties that decide what a capture can tell you, such as depth shown,
+  what can be missed, sequence, clocks and taker side. It gives each property's
+  value for every source and venue, checked with live captures. Every source's
+  how-to page now opens with its values and when to use it.
+- **`FeedType.PRICE_LEVELS`, the crossing value for L2 feeds** (#288). The ccxt
+  source, cryptofeed at L2 and `depth_csv` declare it instead of
+  `MATCHED_BOOK`. The venue does not publish a crossed price-level book, so
+  `audit` scores a crossed one as an error, as for a matched book: most often,
+  the capture kept a level the venue removed. Captures made before this record
+  `matched_book` and are scored the same way. In the `Source` protocol, `level`
+  and `feed_type` are now read-only, so a source can work either one out, as
+  the cryptofeed source does from its venue.
 - **A live capture can run for days** (#150). `ob-analytics capture` now
   writes a directory of segments with a `manifest.json`. A lost connection ends
   the segment; the capture waits (1 s, doubling to 60 s) and starts a new one
@@ -43,6 +56,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **A plot concept is level-less or drawn at a level, on every backend**
+  (#302). Registering a concept at `None` when it is registered at a level on
+  any backend, or the reverse, raises a `ValueError` that says which to use.
+  So does a renderer key that is not `(concept, level, backend)`.
+  `RENDERERS.placements(concept)` lists how a concept is registered. This can
+  break code that worked before:
+  - Code that registered one plot both ways fails at the second registration.
+  - A metric plug-in that does so is skipped when `ob_analytics` is imported,
+    with a logged warning.
+  - A backend module loaded with `register_plot_backend` that registers a
+    built-in concept as the other kind fails to load, so no plot on that
+    backend draws until it is fixed.
+  - A metric named like a built-in plot drawn at a level, such as
+    `trade_size`, cannot register its level-less renderer; give it another
+    name.
 - **The capture directory layout** (#150). A capture's files are now in
   `seg-0001/`, `seg-0002/`, ... under `--out`, next to `manifest.json`. Read
   one segment as before, from its `orders.csv` or `depth.csv`; give `process`
@@ -78,15 +106,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   The "A new plot" guide registered a plot at `Level.L2`, then registered it
   again at `None` to put it in the gallery. After the second step,
   `plot("cumvol")` raised and told you to pass `Level.L3`, which was not
-  registered. A concept is now level-less (`None`) or drawn at a level, and
-  the same kind on every backend: registering it the other way raises a
-  `ValueError` that says which to use. So does a key that is not
-  `(concept, level, backend)`. Code that registered one plot both ways now
-  fails at the second registration; a metric plug-in that does so is skipped
-  when `ob_analytics` is imported, with a logged warning. The guide registers
-  its trade-only example once, at `None`, draws the gallery on the one backend
-  it registered, and shows how a plot drawn at a level goes into the gallery
-  as a `PlotConcept`. A test runs the guide's plot section as written.
+  registered. The guide now registers its example once, at `None`, draws the
+  gallery on the one backend it registered, and shows how a plot drawn at a
+  level goes into the gallery as a `PlotConcept`. A test runs the guide's plot
+  section as written. See Changed for the rule that replaces the second
+  registration.
 - **A gallery card added the wrong way says how to fix it** (#312). A
   level-less plot added to `GalleryModel.concepts`, a plot drawn at a level
   added to `GalleryModel.analytics`, or a `PlotConcept` variant at a level no

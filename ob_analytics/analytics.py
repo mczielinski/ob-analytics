@@ -1151,6 +1151,25 @@ class QualityCheck:
 # treated as uncrossed: floating-point ties at the touch, not a defect.
 CROSSED_TOLERANCE_PCT: float = 0.05
 
+# How much a crossed book matters, by feed type.  A matched book and a
+# price-level book must not cross; a diff feed can, faithfully.  An undeclared
+# feed type is scored between the two.
+_CROSSED_SEVERITY: dict[FeedType, Severity] = {
+    FeedType.MATCHED_BOOK: Severity.ERROR,
+    FeedType.PRICE_LEVELS: Severity.ERROR,
+    FeedType.DIFF_FEED: Severity.INFO,
+}
+
+# For the feed types that must not cross: their name in the crossing note, and
+# the most likely cause of a crossing.
+_MUST_NOT_CROSS: dict[FeedType, tuple[str, str]] = {
+    FeedType.MATCHED_BOOK: ("a matched book", "check reconstruction/data"),
+    FeedType.PRICE_LEVELS: (
+        "price levels",
+        "most often the capture kept a level the venue removed",
+    ),
+}
+
 # Above this share, unresolved maker/taker attribution stops being incidental
 # (trades against orders that were resting before the capture began) and starts
 # suggesting the trades and events do not describe the same session.
@@ -1177,8 +1196,9 @@ class DataQualitySummary:
         Row / distinct-order / trade counts.
     crossed_pct : float
         Percentage of session *time* the faithful book is crossed
-        (``best_bid > best_ask``).  Expected ``~0`` for a matched book; a
-        genuine, faithfully-replayed property of a diff feed.
+        (``best_bid > best_ask``).  Expected ``~0`` for a matched book or a
+        price-level book; a genuine, faithfully-replayed property of a diff
+        feed.
     crossed_episodes : int
         Number of distinct crossed intervals.
     unmatched_trades_pct : float
@@ -1292,12 +1312,11 @@ class DataQualitySummary:
 
     def _crossed_note(self) -> str:
         """One-line reading of ``crossed_pct`` given the feed type."""
-        if self.feed_type == FeedType.MATCHED_BOOK:
-            return (
-                "as expected for a matched book"
-                if self.crossed_pct <= CROSSED_TOLERANCE_PCT
-                else "UNEXPECTED for a matched book — check reconstruction/data"
-            )
+        if self.feed_type in _MUST_NOT_CROSS:
+            name, cause = _MUST_NOT_CROSS[self.feed_type]
+            if self.crossed_pct <= CROSSED_TOLERANCE_PCT:
+                return f"as expected for {name}"
+            return f"UNEXPECTED for {name} — {cause}"
         if self.feed_type == FeedType.DIFF_FEED:
             if self.stale_orders:
                 return (
@@ -1336,17 +1355,12 @@ class DataQualitySummary:
         """Every check this run was scored against, errors first.
 
         The crossing check reads its severity off :attr:`feed_type`: a crossed
-        resting book is a defect in a matched book and a faithful property of a
-        diff feed, so the same number means opposite things and only the
-        declared feed type can tell them apart.
+        resting book is a defect in a matched book or a price-level book and a
+        faithful property of a diff feed, so the same number means opposite
+        things and only the declared feed type can tell them apart.
         """
         crossed = self.crossed_pct > CROSSED_TOLERANCE_PCT
-        if self.feed_type == FeedType.MATCHED_BOOK:
-            crossed_severity = Severity.ERROR
-        elif self.feed_type == FeedType.DIFF_FEED:
-            crossed_severity = Severity.INFO
-        else:
-            crossed_severity = Severity.WARNING
+        crossed_severity = _CROSSED_SEVERITY.get(self.feed_type, Severity.WARNING)
 
         checks = [
             QualityCheck(

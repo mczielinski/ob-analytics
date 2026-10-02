@@ -84,8 +84,14 @@ class RendererRegistry(Registry[RendererKey, RendererFn]):
     whichever backend draws it.
     """
 
-    def placements(self, concept: str) -> Iterator[tuple[Level | None, str]]:
-        """Yield each ``(level, backend)`` *concept* is registered at, in order."""
+    def placements(self, concept: str) -> tuple[tuple[Level | None, str], ...]:
+        """Return each ``(level, backend)`` *concept* is registered at, in order.
+
+        A snapshot, so a caller can register while looping over it.
+        """
+        return tuple(self._placements(concept))
+
+    def _placements(self, concept: str) -> Iterator[tuple[Level | None, str]]:
         return ((lvl, b) for (c, lvl, b) in self._items if c == concept)
 
     def register(self, key: RendererKey, value: RendererFn) -> None:
@@ -94,22 +100,31 @@ class RendererRegistry(Registry[RendererKey, RendererFn]):
         Raises
         ------
         ValueError
-            If *key* is not a ``(concept, level, backend)`` triple, or its
-            concept is already registered, on any backend, as the other kind:
-            at a level when *key* is level-less, or level-less when *key* has
-            a level.
+            If *key* is not ``(concept, level, backend)`` with a text
+            concept, a :class:`Level` or ``None`` level and a text backend,
+            or its concept is already registered, on any backend, as the
+            other kind: at a level when *key* is level-less, or level-less
+            when *key* has a level.
         """
-        if not (isinstance(key, tuple) and len(key) == 3):
+        if not (
+            isinstance(key, tuple)
+            and len(key) == 3
+            and isinstance(key[0], str)
+            and (key[1] is None or key[1] in tuple(Level))
+            and isinstance(key[2], str)
+        ):
             raise ValueError(
                 f"A renderer key is (concept, level, backend), got {key!r}. "
-                "The level is Level.L2, Level.L3, or None for a level-less "
-                "plot."
+                "The concept and backend are text; the level is Level.L2, "
+                "Level.L3, or None for a level-less plot."
             )
-        concept, level, _backend = key
+        concept, level, backend = key
+        if level is not None:
+            level = Level(level)  # store Level.L2, not an equal "L2"
         clash = next(
             (
                 (other, b)
-                for other, b in self.placements(concept)
+                for other, b in self._placements(concept)
                 if not _same_kind(other, level)
             ),
             None,
@@ -123,7 +138,7 @@ class RendererRegistry(Registry[RendererKey, RendererFn]):
                 "A concept is the same kind on every backend: register it at "
                 "None everywhere, or at Level.L2 and/or Level.L3 everywhere."
             )
-        super().register(key, value)
+        super().register((concept, level, backend), value)
 
 
 #: Registry of ``(concept, level, backend)`` → renderer function, where

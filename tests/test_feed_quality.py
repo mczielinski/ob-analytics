@@ -556,6 +556,7 @@ class TestQualityChecks:
         ("feed_type", "severity", "ok"),
         [
             (FeedType.MATCHED_BOOK, Severity.ERROR, False),
+            (FeedType.PRICE_LEVELS, Severity.ERROR, False),
             (FeedType.DIFF_FEED, Severity.INFO, True),
             (FeedType.UNKNOWN, Severity.WARNING, True),
         ],
@@ -567,6 +568,14 @@ class TestQualityChecks:
         assert not crossed.passed
         assert crossed.severity is severity
         assert s.ok is ok
+
+    def test_a_crossed_price_level_book_names_the_cause(self):
+        """A price-level book should not cross; the note says what went wrong."""
+        s = data_quality_summary(
+            crossed_events(), _empty_trades(), feed_type=FeedType.PRICE_LEVELS
+        )
+        crossed = next(c for c in s.checks if c.name == "crossed_book")
+        assert "kept a level the venue removed" in crossed.detail
 
     def test_to_dict_carries_the_verdict(self):
         s = data_quality_summary(crossed_events(), _empty_trades())
