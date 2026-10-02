@@ -276,6 +276,23 @@ class TestAuditSubcommand:
             assert "maker only" in r.stdout
             assert "declares" in r.stderr
 
+    @pytest.mark.parametrize(
+        "error", [KeyError("not installed"), TypeError("needs settings")]
+    )
+    def test_a_recording_source_that_cannot_be_built_keeps_the_default(
+        self, monkeypatch, error
+    ):
+        """Reading what the capture's source declares never stops ``audit``."""
+        from ob_analytics import cli
+        from ob_analytics.protocols import SequenceKind
+
+        def get_source(name):
+            raise error
+
+        monkeypatch.setattr("ob_analytics.sources.get_source", get_source)
+        kind = cli._declared_sequence_kind("plugin", default=SequenceKind.CONTIGUOUS)
+        assert kind is SequenceKind.CONTIGUOUS
+
 
 # ---------------------------------------------------------------------------
 # gallery

@@ -38,7 +38,7 @@ from loguru import logger
 
 from ob_analytics.config import SourceSettings
 from ob_analytics.live._base import CaptureConfig, EventDict
-from ob_analytics.protocols import FeedType, Level, TradeAttribution
+from ob_analytics.protocols import FeedType, Level, SequenceKind, TradeAttribution
 
 #: cryptofeed's channel names (``cryptofeed.defines``), spelled out so this
 #: module imports without cryptofeed installed.
@@ -200,6 +200,13 @@ class CryptofeedSource:
     """Live-capture a cryptofeed venue as an L3 order stream or L2 depth stream."""
 
     name = "cryptofeed"
+    # The venue numbers skip on every venue that sends them, though no message
+    # was lost: on Bitfinex and Blockchain.com they count every message on the
+    # connection, trades and heartbeats too, and on Independent Reserve
+    # cryptofeed passes on no change to an order it does not hold.  cryptofeed
+    # checks the whole stream itself and reconnects on a real gap, which the
+    # capture counts as a resync (see ``note_resync``).
+    sequence_kind = SequenceKind.MONOTONIC
 
     def __init__(self, settings: SourceSettings | None = None) -> None:
         self.settings: SourceSettings = settings or CryptofeedSettings()
@@ -225,12 +232,18 @@ class CryptofeedSource:
         self._symbol = ""
         self.synthetic_deleted = 0
 
-        # Venue sequence continuity (see ``note_sequence``).
-        self._last_sequence: int | None = None
+        # Venue sequence order, per symbol (see ``note_sequence``).
+        self._last_sequence: dict[str, int] = {}
+        # Per symbol, the last book object; the symbols that have had an
+        # opening book; and those with changes since it (see ``note_resync``).
+        self._last_book: dict[str, Any] = {}
+        self._opened: set[str] = set()
+        self._changed_since_opening: set[str] = set()
 
         # Diagnostics (surfaced in meta.json via SupportsDiagnostics).
-        self.sequence_gaps = 0
-        self.sequence_missing = 0
+        self.sequence_out_of_order = 0
+        self.sequence_restarts = 0
+        self.book_resyncs = 0
         self.book_updates = 0
         self.order_events = 0
         self.depth_rows = 0
@@ -350,6 +363,10 @@ class CryptofeedSource:
         """
         return {"venue": self._venue, "symbol": self._symbol}
 
+    def _symbol_of(self, payload: Any) -> str:
+        """The symbol a cryptofeed book or trade is for, or the run's symbol."""
+        return str(getattr(payload, "symbol", "") or "") or self._symbol
+
     def _payload_identity(self, payload: Any) -> dict[str, str]:
         """Venue + symbol read off a cryptofeed book or trade.
 
@@ -360,7 +377,7 @@ class CryptofeedSource:
         """
         return {
             "venue": str(getattr(payload, "exchange", "") or "") or self._venue,
-            "symbol": str(getattr(payload, "symbol", "") or "") or self._symbol,
+            "symbol": self._symbol_of(payload),
         }
 
     def _book_common(
@@ -387,19 +404,23 @@ class CryptofeedSource:
             **self._payload_identity(book),
         }
 
-    # -- sequence continuity ------------------------------------------------
+    # -- sequence order -----------------------------------------------------
 
-    def note_sequence(self, book: Any) -> None:
-        """Record one book's venue sequence and score it for continuity.
+    def note_sequence(self, book: Any, *, opening: bool = False) -> None:
+        """Record one book's venue sequence and count it if it went back.
 
-        cryptofeed owns reconnection: it re-establishes a dropped connection
-        internally, so a capture cannot count reconnects directly.  What it can
-        observe is the discontinuity a reconnect (or a dropped message) leaves
-        in the venue's own sequence, which is what
-        :func:`~ob_analytics.analytics.detect_sequence_gaps` scores after the
-        fact.  Counting it live too means ``meta.json`` says whether a run is
+        The number only rises (:attr:`sequence_kind`), so a skip says nothing
+        about loss and is not counted; cryptofeed finds a lost message itself
+        and reconnects (see :meth:`note_resync`).  A number lower than the one
+        before for the same symbol is one of two things.  On an *opening* book
+        it is the count starting again on a new connection, as on Bitfinex and
+        Blockchain.com: a ``sequence_restarts``, which ``audit`` does not
+        count as out of order because the resync already accounts for it.
+        Anywhere else it is a reordered or repeated message, the fault
+        :func:`~ob_analytics.analytics.detect_sequence_gaps` reports as out of
+        order.  Counting it live too means ``meta.json`` says whether a run is
         clean without re-reading the capture.  Venues that publish no sequence
-        are simply never scored.
+        are never scored.
         """
         sequence = getattr(book, "sequence_number", None)
         if sequence is None:
@@ -408,14 +429,54 @@ class CryptofeedSource:
             current = int(sequence)
         except (TypeError, ValueError):
             return
-        previous = self._last_sequence
-        self._last_sequence = current
-        if previous is None:
-            return
-        skipped = current - previous - 1
-        if skipped > 0:
-            self.sequence_gaps += 1
-            self.sequence_missing += skipped
+        symbol = self._symbol_of(book)
+        previous = self._last_sequence.get(symbol)
+        self._last_sequence[symbol] = current
+        if previous is not None and current < previous:
+            if opening:
+                self.sequence_restarts += 1
+            else:
+                self.sequence_out_of_order += 1
+
+    def note_resync(self, book: Any) -> bool:
+        """Count a new opening book that follows changes to the old one.
+
+        Returns whether *book* is an opening book, for :meth:`note_sequence`.
+
+        cryptofeed reconnects by itself when it finds a lost message, and
+        starts again from a new opening book, so the capture cannot see the
+        reconnect directly.  It can see its result.  cryptofeed applies each
+        change to the book object it holds and passes that same object on,
+        with the changes as its delta.  An opening book carries no changes,
+        and cryptofeed either builds a new object for it or, on Coinbase,
+        refills the one it holds and passes no delta at all.  So an opening
+        book after changes to an earlier one is a resync.  The full-book diff
+        in :meth:`_l3_events` (or :meth:`_l2_rows`) brings the tracked book
+        into line with it, but the changes between the two connections were
+        missed, so each one is counted as ``book_resyncs`` in ``meta.json``.
+
+        Three cases do not count.  Changes that come before the first opening
+        book: Bitstamp's L2 channel streams them for 5 s before its REST book.
+        An update whose changes cryptofeed all skipped, which passes on the
+        same object with an empty delta: Kraken sends deletions of prices not
+        in the book.  A venue that sends a new whole book every time and never
+        a change: Bitstamp's L3 channel.
+        """
+        symbol = self._symbol_of(book)
+        is_new = book is not self._last_book.get(symbol)
+        self._last_book[symbol] = book
+        delta = getattr(book, "delta", None)
+        if _has_entries(delta):
+            if symbol in self._opened:
+                self._changed_since_opening.add(symbol)
+            return False
+        if not is_new and delta is not None:
+            return False
+        if symbol in self._changed_since_opening:
+            self.book_resyncs += 1
+        self._opened.add(symbol)
+        self._changed_since_opening.discard(symbol)
+        return True
 
     # -- L2 translation (pure) ----------------------------------------------
 
@@ -861,8 +922,9 @@ class CryptofeedSource:
             "trade_events": self.trade_events,
             "tape_fills": self.tape_fills,
             "tape_fills_already_shown": self.tape_fills_already_shown,
-            "sequence_gaps": self.sequence_gaps,
-            "sequence_missing": self.sequence_missing,
+            "sequence_out_of_order": self.sequence_out_of_order,
+            "sequence_restarts": self.sequence_restarts,
+            "book_resyncs": self.book_resyncs,
             "synthetic_deleted": self.synthetic_deleted,
             "errors": self.errors,
         }
@@ -963,7 +1025,7 @@ class CryptofeedSource:
 
         async def on_book(book: Any, receipt_timestamp: float) -> None:
             self.book_updates += 1
-            self.note_sequence(book)
+            self.note_sequence(book, opening=self.note_resync(book))
             try:
                 if self.level is Level.L3:
                     events = self._l3_events(book, receipt_timestamp)

@@ -117,9 +117,10 @@ class Segment:
     dropped : int
         Messages the source received but could not use (its ``dropped``
         counter in ``meta.json``).
-    sequence_missing : int
-        Venue sequence numbers the source never received (its
-        ``sequence_missing`` counter), for sources that count them live.
+    book_resyncs : int
+        Times the source lost the venue's stream and started again from a new
+        opening book within the segment (its ``book_resyncs`` counter in
+        ``meta.json``).  The changes in between were missed.
     raw_frames_skipped : int
         Frames ``raw.jsonl`` skipped because JSON cannot hold them (its
         ``n_raw_frames_skipped`` in ``meta.json``).
@@ -136,7 +137,7 @@ class Segment:
     n_book_events: int = 0
     n_trade_events: int = 0
     dropped: int = 0
-    sequence_missing: int = 0
+    book_resyncs: int = 0
     raw_frames_skipped: int = 0
 
     def to_dict(self) -> dict[str, Any]:
@@ -152,7 +153,7 @@ class Segment:
             "n_book_events": self.n_book_events,
             "n_trade_events": self.n_trade_events,
             "dropped": self.dropped,
-            "sequence_missing": self.sequence_missing,
+            "book_resyncs": self.book_resyncs,
             "raw_frames_skipped": self.raw_frames_skipped,
         }
 
@@ -171,7 +172,7 @@ class Segment:
             n_book_events=int(d.get("n_book_events") or 0),
             n_trade_events=int(d.get("n_trade_events") or 0),
             dropped=int(d.get("dropped") or 0),
-            sequence_missing=int(d.get("sequence_missing") or 0),
+            book_resyncs=int(d.get("book_resyncs") or 0),
             raw_frames_skipped=int(d.get("raw_frames_skipped") or 0),
         )
 
@@ -253,8 +254,13 @@ class CaptureManifest:
 
     @property
     def dropped(self) -> int:
-        """Messages lost across every segment: unusable plus never received."""
-        return sum(s.dropped + s.sequence_missing for s in self.segments)
+        """Messages the sources could not use, across every segment."""
+        return sum(s.dropped for s in self.segments)
+
+    @property
+    def book_resyncs(self) -> int:
+        """New opening books the sources took within segments, across all."""
+        return sum(s.book_resyncs for s in self.segments)
 
     @property
     def raw_frames_skipped(self) -> int:
@@ -286,6 +292,7 @@ class CaptureManifest:
             "ended": _iso(self.ended),
             "restarts": self.restarts,
             "dropped": self.dropped,
+            "book_resyncs": self.book_resyncs,
             "raw_frames_skipped": self.raw_frames_skipped,
             "gap_seconds": self.gap_seconds,
             "segments": [s.to_dict() for s in self.segments],
@@ -432,9 +439,9 @@ class CaptureManifest:
     def checks(self) -> tuple[QualityCheck, ...]:
         """The capture-level checks ``ob-analytics audit`` adds to each segment's.
 
-        Each is a :attr:`~ob_analytics.analytics.Severity.WARNING`: a gap or a
-        dropped message is data the capture does not have, which the segments
-        on either side of it still describe correctly.
+        Each is a :attr:`~ob_analytics.analytics.Severity.WARNING`: a gap, a
+        dropped message or a resync is data the capture does not have, which
+        the data on either side of it still describes correctly.
         """
         longest = max(self.gaps, key=lambda g: g.seconds, default=None)
         gap_detail = (
@@ -468,9 +475,16 @@ class CaptureManifest:
                 name="dropped_messages",
                 passed=self.dropped == 0,
                 severity=Severity.WARNING,
+                detail=(f"{self.dropped} message(s) the sources could not use"),
+            ),
+            QualityCheck(
+                name="book_resyncs",
+                passed=self.book_resyncs == 0,
+                severity=Severity.WARNING,
                 detail=(
-                    f"{self.dropped} message(s) the sources could not use or "
-                    "never received"
+                    f"{self.book_resyncs} time(s) a source lost the venue's "
+                    "stream and started again from a new opening book; the "
+                    "changes in between were missed"
                 ),
             ),
         )
@@ -484,6 +498,7 @@ class CaptureManifest:
             f"  segments / restarts   : {len(self.segments)} / {self.restarts}",
             f"  gaps                  : {len(self.gaps)} ({self.gap_seconds:.1f} s)",
             f"  dropped messages      : {self.dropped}",
+            f"  book resyncs          : {self.book_resyncs}",
         ]
         if self.raw_frames_skipped:
             # Only when there were some: a capture run with --no-raw has no

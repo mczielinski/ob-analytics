@@ -191,15 +191,16 @@ reboot.
 | `version` | The layout version (currently `1`) |
 | `started`, `ended` | When the capture started, and when it last stopped |
 | `restarts` | How many times the capture was started again in this directory |
-| `segments` | Each segment: when it streamed from and to (until it was asked to stop; none for a segment asked to stop before its first live event), why it ended (`rolled_time`, `rolled_size`, `failed`, `ended_early`, `unfinished`, `stopped`, `finished`), its error, row counts, the messages its source dropped, and the frames `raw.jsonl` skipped |
+| `segments` | Each segment: when it streamed from and to (until it was asked to stop; none for a segment asked to stop before its first live event), why it ended (`rolled_time`, `rolled_size`, `failed`, `ended_early`, `unfinished`, `stopped`, `finished`), its error, row counts, the messages its source dropped, its `book_resyncs`, and the frames `raw.jsonl` skipped |
 | `gaps` | Each stretch with no segment streaming: start, end, length, and cause (`disconnect`, `restart`, `roll`, `stopped`, `finished`) |
-| `dropped`, `raw_frames_skipped`, `gap_seconds` | Totals over the whole capture |
+| `dropped`, `book_resyncs`, `raw_frames_skipped`, `gap_seconds` | Totals over the whole capture |
 
 The manifest is rewritten after every change and every 10 seconds while the
 capture runs, so it is never more than 10 seconds out of date.
 
 `ob-analytics audit /tmp/cap` audits each segment, then prints the capture's
-own checks: gaps, segments a dead process left open, and dropped messages.
+own checks: gaps, segments a dead process left open, dropped messages, and
+resyncs.
 These are warnings, so `audit --strict` fails a capture that has any.
 You can audit or process a capture while it runs. The segment still being
 captured is left out, and the log names it: it has no closing rows yet, so

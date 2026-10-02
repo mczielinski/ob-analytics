@@ -997,10 +997,10 @@ class TestSequenceReachesTheOutput:
         assert report.n_missing == 1  # sequence 42 never arrived
 
 
-class TestGapDiagnostics:
-    """cryptofeed reconnects internally, so a run cannot count reconnects
-    directly -- what it can do is notice the sequence discontinuity a reconnect
-    leaves behind, and say so in meta.json."""
+class TestSequenceDiagnostics:
+    """cryptofeed's venue numbers only rise: on every venue that sends them the
+    book rows skip numbers although no message was lost (#309).  So a skip is
+    not counted, and only a number lower than the one before is."""
 
     def _source(self):
         from ob_analytics.live.cryptofeed_source import (
@@ -1010,29 +1010,59 @@ class TestGapDiagnostics:
 
         return CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
 
-    def test_contiguous_sequences_report_no_gap(self):
-        src = self._source()
-        for n in (10, 11, 12):
-            src.note_sequence(_l3_book({"bid": {}, "ask": {}}, sequence_number=n))
-        assert src.diagnostics()["sequence_gaps"] == 0
+    def test_the_source_declares_a_number_that_only_rises(self):
+        from ob_analytics.protocols import SequenceKind, sequence_kind_of
 
-    def test_a_skipped_sequence_is_counted(self):
+        assert sequence_kind_of(self._source()) is SequenceKind.MONOTONIC
+
+    def test_a_skipped_sequence_is_not_counted(self):
         src = self._source()
-        for n in (10, 13):
+        for n in (10, 11, 13, 40):
             src.note_sequence(_l3_book({"bid": {}, "ask": {}}, sequence_number=n))
         d = src.diagnostics()
-        assert d["sequence_gaps"] == 1
-        assert d["sequence_missing"] == 2  # 11 and 12
+        assert d["sequence_out_of_order"] == 0
+        assert "sequence_missing" not in d
+
+    def test_a_step_back_is_counted(self):
+        src = self._source()
+        for n in (10, 13, 12, 14):
+            src.note_sequence(_l3_book({"bid": {}, "ask": {}}, sequence_number=n))
+        assert src.diagnostics()["sequence_out_of_order"] == 1
+        assert src.diagnostics()["sequence_restarts"] == 0
+
+    def test_a_step_back_at_an_opening_book_is_a_restart(self):
+        """Bitfinex and Blockchain.com count again from 1 on a new connection."""
+        src = self._source()
+        for n in (48211, 48212):
+            src.note_sequence(_l3_book({"bid": {}, "ask": {}}, sequence_number=n))
+        src.note_sequence(
+            _l3_book({"bid": {}, "ask": {}}, sequence_number=1), opening=True
+        )
+        d = src.diagnostics()
+        assert d["sequence_restarts"] == 1
+        assert d["sequence_out_of_order"] == 0
 
     def test_a_venue_without_sequences_reports_none(self):
         src = self._source()
         for _ in range(3):
             src.note_sequence(_l3_book({"bid": {}, "ask": {}}, sequence_number=None))
-        assert src.diagnostics()["sequence_gaps"] == 0
+        assert src.diagnostics()["sequence_out_of_order"] == 0
 
-    def test_gaps_land_in_meta(self, tmp_path):
+    def test_each_symbol_is_scored_on_its_own(self):
+        """Independent Reserve numbers each instrument separately."""
+        src = self._source()
+        for symbol, n in (("BTC-AUD", 900), ("ETH-AUD", 12), ("BTC-AUD", 901)):
+            book = _l3_book({"bid": {}, "ask": {}}, sequence_number=n)
+            book.symbol = symbol
+            src.note_sequence(book)
+        assert src.diagnostics()["sequence_out_of_order"] == 0
+
+    def _skipping_capture(self, tmp_path):
+        """Capture three book messages whose numbers skip 2-4 and 6-9.
+
+        Order sizes only fall, as on Bitstamp, whose loader reads the files.
+        """
         import asyncio
-        import json
 
         from ob_analytics.live._runner import run_capturer
 
@@ -1040,7 +1070,7 @@ class TestGapDiagnostics:
             (
                 "l3_book",
                 _l3_book(
-                    {"bid": {100.0: {11: 2.0}}, "ask": {}},
+                    {"bid": {100.0: {11: 3.0}}, "ask": {101.0: {12: 1.0}}},
                     delta=None,
                     sequence_number=1,
                 ),
@@ -1048,18 +1078,178 @@ class TestGapDiagnostics:
             (
                 "l3_book",
                 _l3_book(
-                    {"bid": {100.0: {11: 3.0}}, "ask": {}},
-                    delta={"bid": [(11, 100.0, 3.0)], "ask": []},
+                    {"bid": {100.0: {11: 2.0}}, "ask": {101.0: {12: 1.0}}},
+                    delta={"bid": [(11, 100.0, 2.0)], "ask": []},
                     sequence_number=5,
+                ),
+            ),
+            (
+                "l3_book",
+                _l3_book(
+                    {"bid": {100.0: {11: 2.0}}, "ask": {101.0: {12: 0.5}}},
+                    delta={"bid": [], "ask": [(12, 101.0, 0.5)]},
+                    sequence_number=10,
                 ),
             ),
         ]
         src = _source_with(_l3_venue(), script)
-        out = tmp_path / "cap"
         asyncio.run(run_capturer(src, _capture_cfg(tmp_path)))
-        meta = json.loads((out / "meta.json").read_text())
-        assert meta["sequence_gaps"] == 1
-        assert meta["sequence_missing"] == 3
+        return tmp_path / "cap"
+
+    def test_meta_records_the_kind_and_no_missing_numbers(self, tmp_path):
+        import json
+
+        meta = json.loads((self._skipping_capture(tmp_path) / "meta.json").read_text())
+        assert meta["sequence_kind"] == "monotonic"
+        assert meta["sequence_out_of_order"] == 0
+        assert "sequence_missing" not in meta
+
+    def test_skipped_numbers_pass_audit(self, tmp_path, cli_runner):
+        """The #309 report: ``audit --source bitstamp`` failed with
+        ``sequence_gaps`` on a capture that lost nothing."""
+        import json
+
+        cap = self._skipping_capture(tmp_path)
+        r = cli_runner(
+            "audit", str(cap / "orders.csv"), "--source", "bitstamp", "--json"
+        )
+        assert r.returncode == 0, r.stdout + r.stderr
+        payload = json.loads(r.stdout)
+        assert payload["ok"] is True
+        assert payload["sequence_kind"] == "monotonic"
+        assert payload["sequence_gaps"] == 0
+
+    def test_a_capture_that_records_no_kind_is_checked_as_its_source_declares(
+        self, tmp_path, cli_runner
+    ):
+        """A capture made before the source declared its sequence kind."""
+        import json
+
+        cap = self._skipping_capture(tmp_path)
+        meta_path = cap / "meta.json"
+        meta = json.loads(meta_path.read_text())
+        del meta["sequence_kind"]
+        meta_path.write_text(json.dumps(meta))
+
+        r = cli_runner(
+            "audit", str(cap / "orders.csv"), "--source", "bitstamp", "--json"
+        )
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert json.loads(r.stdout)["sequence_kind"] == "monotonic"
+
+
+class TestResyncDiagnostics:
+    """cryptofeed reconnects by itself and starts again from a new opening
+    book; the capture counts each one as ``book_resyncs``.
+
+    As in cryptofeed, a change is applied to the book object already held and
+    that same object is passed on, while an opening book is a new object.
+    """
+
+    _CHANGE = ("change", {"bid": [(11, 100.0, 2.0)], "ask": []})
+    _OPEN = ("open", None)
+
+    def _source(self):
+        from ob_analytics.live.cryptofeed_source import (
+            CryptofeedSettings,
+            CryptofeedSource,
+        )
+
+        return CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
+
+    def _books(self, steps):
+        src = self._source()
+        book = _l3_book({"bid": {}, "ask": {}})
+        for kind, delta in steps:
+            if kind == "open":
+                book = _l3_book({"bid": {}, "ask": {}})
+            book.delta = delta
+            src.note_resync(book)
+        return src.diagnostics()["book_resyncs"]
+
+    def test_the_opening_book_is_not_a_resync(self):
+        assert self._books([self._OPEN, self._CHANGE, self._CHANGE]) == 0
+
+    def test_a_new_opening_book_after_changes_is_a_resync(self):
+        bitfinex_open = ("open", {"bid": [], "ask": []})
+        steps = [self._OPEN, self._CHANGE, bitfinex_open, self._CHANGE]
+        steps += [self._OPEN, self._CHANGE]
+        assert self._books(steps) == 2
+
+    def test_changes_before_the_first_opening_book_are_not_a_resync(self):
+        """Bitstamp's L2 channel streams changes for 5 s before its REST book."""
+        steps = [self._CHANGE, self._CHANGE, self._OPEN, self._CHANGE]
+        assert self._books(steps) == 0
+
+    def test_an_update_whose_changes_were_all_skipped_is_not_a_resync(self):
+        """Kraken sends deletions of prices not in the book; cryptofeed skips
+        them and passes on the same book with no changes."""
+        skipped = ("change", {"bid": [], "ask": []})
+        steps = [self._OPEN, self._CHANGE, skipped, self._CHANGE]
+        assert self._books(steps) == 0
+
+    def test_a_venue_that_resends_the_whole_book_never_resyncs(self):
+        """Bitstamp's L3 channel sends a new whole book every time."""
+        assert self._books([self._OPEN, self._OPEN, self._OPEN]) == 0
+
+    def test_a_book_refilled_with_no_delta_is_a_resync(self):
+        """cryptofeed's Coinbase L2 refills the book it holds for a new
+        opening book, and passes no delta at all."""
+        refilled = ("change", None)
+        assert self._books([self._OPEN, self._CHANGE, refilled]) == 1
+
+    def test_resyncs_land_in_meta(self, tmp_path):
+        import asyncio
+        import json
+
+        from ob_analytics.live._runner import run_capturer
+
+        def book(size, delta, n):
+            levels = {"bid": {100.0: {11: size}}, "ask": {}}
+            return ("l3_book", _l3_book(levels, delta=delta, sequence_number=n))
+
+        script = [
+            book(2.0, None, 1),
+            book(3.0, {"bid": [(11, 100.0, 3.0)], "ask": []}, 2),
+            # A new connection: the count starts again, from a new opening book.
+            book(4.0, None, 1),
+        ]
+        asyncio.run(
+            run_capturer(_source_with(_l3_venue(), script), _capture_cfg(tmp_path))
+        )
+        meta = json.loads((tmp_path / "cap" / "meta.json").read_text())
+        assert meta["book_resyncs"] == 1
+        assert meta["sequence_restarts"] == 1
+        assert meta["sequence_out_of_order"] == 0
+
+    def test_a_restart_at_a_resync_passes_audit(self, tmp_path, cli_runner):
+        """The resync is the capture's warning; the sequence check passes."""
+        import asyncio
+        import json
+
+        from ob_analytics.live._runner import run_capturer
+
+        def book(size, delta, n):
+            levels = {"bid": {100.0: {11: size}}, "ask": {}}
+            return ("l3_book", _l3_book(levels, delta=delta, sequence_number=n))
+
+        script = [
+            book(3.0, None, 40),
+            book(2.0, {"bid": [(11, 100.0, 2.0)], "ask": []}, 41),
+            book(1.0, None, 1),
+            book(0.5, {"bid": [(11, 100.0, 0.5)], "ask": []}, 2),
+        ]
+        asyncio.run(
+            run_capturer(_source_with(_l3_venue(), script), _capture_cfg(tmp_path))
+        )
+        cap = tmp_path / "cap"
+        r = cli_runner(
+            "audit", str(cap / "orders.csv"), "--source", "bitstamp", "--json"
+        )
+        assert r.returncode == 0, r.stdout + r.stderr
+        payload = json.loads(r.stdout)
+        assert payload["sequence_out_of_order"] == 0
+        assert payload["sequence_restarts"] == 1
 
 
 class TestDeltaFailureLeavesStateIntact:

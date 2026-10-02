@@ -103,9 +103,12 @@ Two of these are judgement calls worth stating plainly:
   evidence for dropped messages is `sequence_gaps`, which needs a feed that
   carries a venue sequence. `audit` always loads with sequence tracking on.
   A skipped number is a dropped message only when the venue adds one per
-  message. A [ccxt](ccxt.md) capture records in `meta.json` that its sequence
-  only rises, and `audit` then checks only that it never goes back, and
-  prints `gaps not checked`.
+  message. A [ccxt](ccxt.md) or [cryptofeed](cryptofeed.md) capture records
+  in `meta.json` that its sequence only rises, and `audit` then checks only
+  that it never goes back, and prints `gaps not checked`. When a cryptofeed
+  capture reconnects, some venues start the count again; the capture records
+  each such step back as `sequence_restarts`, and `audit` leaves those out of
+  `sequence_out_of_order`.
 
   Most sources carry no sequence that can prove a message was lost. On those,
   `audit` prints `0 row(s) numbered` for the venue sequence, and a dropped
@@ -154,8 +157,10 @@ Two of these are judgement calls worth stating plainly:
   capture directory (or the `process` output made from one), `audit` prints a
   report for each segment and then the capture's own checks from
   `manifest.json`: `capture_gaps` (time no segment covered),
-  `unfinished_segments` (segments a dead capture process left open), and
-  `dropped_messages`. All three are warnings, so `--strict` fails on them. See
+  `unfinished_segments` (segments a dead capture process left open),
+  `dropped_messages` (messages a source could not use), and `book_resyncs`
+  (times a source lost the venue's stream and started again from a new opening
+  book). All four are warnings, so `--strict` fails on them. See
   [Running for days](live-capture.md#running-for-days).
 - **A stale order is reported, not removed.** A trade above a resting ask (or
   below a resting bid) shows the order has gone, because a matching engine
