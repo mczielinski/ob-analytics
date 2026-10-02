@@ -38,10 +38,13 @@ venues that publish it — the feed the reconstruction engine was built for.
     with stale orders
     ([#311](https://github.com/mczielinski/ob-analytics/issues/311)). Don't use
     it for Bitstamp order analysis (use the native [`bitstamp`](live-capture.md)
-    source), for Bitfinex order lifetimes, or for the sequence check on
-    Bitfinex, Blockchain.com and Independent Reserve, where book rows skip
-    numbers without losing any. [What each feed shows](../feeds.md) explains
-    each property and compares every source.
+    source) or for Bitfinex order lifetimes. On Bitfinex, Blockchain.com and
+    Independent Reserve the book rows skip sequence numbers without losing any,
+    so `audit` checks only that the numbers never go back; a lost message shows
+    as a `book_resyncs` warning instead (see
+    [Dropped messages and reconnects](#dropped-messages-and-reconnects)).
+    [What each feed shows](../feeds.md) explains each property and compares
+    every source.
 
 Install the optional `[cryptofeed]` extra and use the `capture` verb:
 
