@@ -87,6 +87,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   its trade-only example once, at `None`, draws the gallery on the one backend
   it registered, and shows how a plot drawn at a level goes into the gallery
   as a `PlotConcept`. A test runs the guide's plot section as written.
+- **A gallery card added the wrong way says how to fix it** (#312). A
+  level-less plot added to `GalleryModel.concepts`, a plot drawn at a level
+  added to `GalleryModel.analytics`, or a `PlotConcept` variant at a level no
+  renderer is registered at, showed a bare "Not available", the same as a
+  renderer that raised. The gallery now checks each card against the levels
+  its renderers are registered at. When they disagree, the card says how the
+  plot is registered and how to change the model, and the log has the same
+  text once. A backend that cannot be loaded says so on its cards, and is
+  tried once instead of once for each card. A backend with no renderer for a
+  plot that other backends draw still shows a bare "Not available".
 - **On Python 3.11, a capture stops each segment when asked** (#296). The
   live sources waited for messages with `asyncio.wait_for`, which on Python
   3.11 can drop a cancel that arrives with a message. A roll then left the old

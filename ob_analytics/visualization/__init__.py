@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from typing import Any
 
 from loguru import logger
@@ -52,6 +52,27 @@ infer_volume_scale = _viz_data.infer_volume_scale
 
 RendererFn = Callable[..., Any]
 RendererKey = tuple[str, Level | None, str]
+
+
+def _same_kind(a: Level | None, b: Level | None) -> bool:
+    """Whether *a* and *b* are one kind: both level-less or both levels."""
+    return (a is None) == (b is None)
+
+
+def _kind_text(levels: Iterable[Level | None]) -> str:
+    """Name a kind for a message: ``"level-less"`` or ``"at L2 and L3"``.
+
+    Raises
+    ------
+    ValueError
+        If *levels* is empty: there is no kind to name.
+    """
+    levels = set(levels)
+    if not levels:
+        raise ValueError("No levels to describe.")
+    if None in levels:
+        return "level-less"
+    return "at " + " and ".join(sorted(str(lvl) for lvl in levels))
 
 
 class RendererRegistry(Registry[RendererKey, RendererFn]):
@@ -89,17 +110,16 @@ class RendererRegistry(Registry[RendererKey, RendererFn]):
             (
                 (other, b)
                 for other, b in self.placements(concept)
-                if (other is None) != (level is None)
+                if not _same_kind(other, level)
             ),
             None,
         )
         if clash is not None:
             other, other_backend = clash
-            existing = "level-less" if other is None else f"at {other}"
-            wanted = "level-less" if level is None else f"at {level}"
             raise ValueError(
-                f"Plot concept {concept!r} is already registered {existing} on "
-                f"{other_backend!r}, so it cannot also be registered {wanted}. "
+                f"Plot concept {concept!r} is already registered "
+                f"{_kind_text([other])} on {other_backend!r}, so it cannot also "
+                f"be registered {_kind_text([level])}. "
                 "A concept is the same kind on every backend: register it at "
                 "None everywhere, or at Level.L2 and/or Level.L3 everywhere."
             )
@@ -148,6 +168,23 @@ def register_plot_backend(name: str, module_path: str) -> None:
     >>> register_plot_backend("bokeh", "my_pkg._bokeh")
     """
     _BACKEND_MODULES[name] = module_path
+
+
+def _load_backend(backend: str) -> None:
+    """Import *backend*'s module so its renderers are in :data:`RENDERERS`.
+
+    The import is cached after the first call.
+
+    Raises
+    ------
+    ValueError
+        If *backend* is not registered.
+    """
+    if backend not in _BACKEND_MODULES:
+        raise ValueError(
+            f"Unknown backend {backend!r}. Available: {sorted(_BACKEND_MODULES)}"
+        )
+    importlib.import_module(_BACKEND_MODULES[backend])
 
 
 def _accepts_theme(renderer: RendererFn) -> bool:
@@ -237,13 +274,7 @@ def plot(
         If *concept* (at the resolved *level*) is not registered.
     """
     theme = data.pop("theme", None)
-    if backend not in _BACKEND_MODULES:
-        raise ValueError(
-            f"Unknown backend {backend!r}. Available: {sorted(_BACKEND_MODULES)}"
-        )
-    # Fire the backend's self-registration (cached after first import) so the
-    # registry is populated before we resolve the level coordinate.
-    importlib.import_module(_BACKEND_MODULES[backend])
+    _load_backend(backend)
 
     if level is _UNSET:
         level = _resolve_level(concept, backend)
