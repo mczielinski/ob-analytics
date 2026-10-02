@@ -163,3 +163,46 @@ class TestDeciCentCapture:
         )
         assert r.returncode == 0, r.stderr
         assert load_data(out)["depth"].attrs["tick_size"] == 0.001
+
+
+_QUIET_NOTICE = "No price level changed in this window, so every level is drawn."
+
+
+class TestQuietMarketHeatmap:
+    """A capture in which no price level changes still draws its book.
+
+    A short capture of a quiet prediction market is the usual case (#303):
+    every level is unchanged, so the heatmap draws them all as flat lines and
+    says why, instead of leaving every level out.
+    """
+
+    @pytest.fixture
+    def result(self, tmp_path):
+        book = {
+            "bids": [[0.04, 30.0], [0.05, 12.0]],
+            "asks": [[0.09, 306.0]],
+            "timestamp": 1_000,
+        }
+        polled = [{**book, "timestamp": 2_000}, {**book, "timestamp": 3_000}]
+        ex = _FakeKalshi(book, polled, [], ws=False)
+        source = CcxtSource(settings=CcxtSettings(exchange=ex, poll_interval=0.0))
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="KXTEST", out_dir=out, minutes=0.05)
+        asyncio.run(run_capturer(source, cfg))
+        config = PipelineConfig(tick_size=0.001, price_decimals=3)
+        return Pipeline(config, source=DepthCsvSource()).run(out)
+
+    def test_heatmap_draws_every_level_and_says_why(self, result):
+        from ob_analytics.visualization.gallery import plot_result
+
+        ax = plot_result(result, "depth_heatmap").axes[0]
+        assert ax.collections
+        assert [t.get_text() for t in ax.texts] == [_QUIET_NOTICE]
+
+    def test_gallery_card_says_no_level_changed(self, result, tmp_path):
+        pytest.importorskip("plotly")
+        from ob_analytics.visualization.gallery import generate_gallery
+
+        generate_gallery(result, tmp_path / "gallery", view="l2", backends=["plotly"])
+        card = (tmp_path / "gallery" / "plotly" / "depth_heatmap.L2.html").read_text()
+        assert _QUIET_NOTICE in card

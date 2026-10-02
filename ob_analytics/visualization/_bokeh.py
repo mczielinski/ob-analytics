@@ -22,6 +22,7 @@ import numpy as np
 
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.visualization._data import (
+    NO_DEPTH_NOTICE,
     biased_color_norm,
     book_bar_thickness,
     book_mid,
@@ -75,11 +76,20 @@ _AXIS_LABEL_FONT_PX = 13
 _TICK_LABEL_FONT_PX = 11
 
 
-def _base_figure(bpl: Any, theme: PlotTheme, title: str = "", **kwargs: Any) -> Any:
+def _base_figure(
+    bpl: Any,
+    theme: PlotTheme,
+    title: str = "",
+    *,
+    notice: str | None = None,
+    **kwargs: Any,
+) -> Any:
     """Create a Bokeh figure styled by *theme*.
 
     ``theme.bokeh_figure`` goes on top of the theme's defaults; the face's own
-    *kwargs* (axis types, ranges) go last.
+    *kwargs* (axis types, ranges) go last.  *notice*, a payload's note on the
+    chart (why it is empty, or what it left out), goes on a line under the
+    title, where it covers no data.
     """
     opts: dict[str, Any] = {
         **_BASE_FIGURE_KWARGS,
@@ -101,6 +111,18 @@ def _base_figure(bpl: Any, theme: PlotTheme, title: str = "", **kwargs: Any) -> 
         fig.grid.grid_line_color = "white"
         fig.grid.grid_line_alpha = 1.0
         fig.grid.grid_line_dash = []
+    if notice:
+        from bokeh.models import Title
+
+        fig.add_layout(
+            Title(
+                text=notice,
+                text_color=theme.palette.label,
+                text_font_style="normal",
+                text_font_size=f"{_AXIS_LABEL_FONT_PX * scale:g}px",
+            ),
+            "above",
+        )
     return fig
 
 
@@ -290,6 +312,7 @@ def bokeh_price_levels(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
         bpl,
         theme,
         title="Price Levels Over Time",
+        notice=data.get("notice") or (NO_DEPTH_NOTICE if depth.empty else None),
         x_axis_label="Time",
         y_axis_label="Limit Price",
     )

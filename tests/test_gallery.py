@@ -376,6 +376,27 @@ class TestGenerateGallery:
         assert "bokeh-panel" in body
         assert "Not available" not in body
 
+    def test_backend_columns_share_one_prepare(self, tmp_path: Path) -> None:
+        # One prepare per face, not per backend: it runs (and logs) once.
+        calls: list[dict] = []
+
+        def prepare(**kw):
+            calls.append(kw)
+            return {}
+
+        spec = PlotSpec("stub", "Stub", "stub", prepare, {"x": 1})
+        model = GalleryModel(concepts=[PlotConcept("stub", "Stub", {Level.L2: spec})])
+        generate_gallery(
+            result=None,
+            output_dir=tmp_path,
+            model=model,
+            view="l2",
+            backends=["matplotlib", "plotly"],
+        )
+        assert (tmp_path / "matplotlib" / "stub.L2.png").exists()
+        assert (tmp_path / "plotly" / "stub.L2.html").exists()
+        assert calls == [{"x": 1}]
+
     def test_view_comparison_single_backend_both_faces(self, tmp_path: Path) -> None:
         model = GalleryModel(concepts=[_comparable_concept()])
         path = generate_gallery(

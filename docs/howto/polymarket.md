@@ -98,6 +98,15 @@ The depth summary's rings are 25 basis points wide by default, which is too
 narrow for prices between 0 and 1. Use wider rings, as for
 [Kalshi](kalshi.md#depth-bins).
 
+## A depth heatmap of flat lines
+
+The depth heatmap leaves out each price level that does not change during the
+capture. A short capture of a quiet market can change no level at all. The
+heatmap then draws every level as a flat line, with a note that no level
+changed. Capture for longer to see the book move, or pass
+`show_all_depth=True` to draw the unchanged levels, as for
+[Kalshi](kalshi.md#a-depth-heatmap-of-flat-lines).
+
 ## What a capture can and cannot see
 
 The capture streams Polymarket's public websocket, so it sees the book change

@@ -90,6 +90,24 @@ config = PipelineConfig(tick_size=0.001, price_decimals=3, depth_bps=500)
 The depth heatmap and the price view draw the book directly and do not use the
 rings.
 
+## A depth heatmap of flat lines
+
+The depth heatmap leaves out each price level that does not change during the
+capture, because it would only draw a flat line. If no level changes at all,
+the heatmap draws every level instead, and a note on the chart says that no
+level changed. A short capture of a quiet market often gives this result,
+because a Kalshi book can go minutes without a change. Capture for longer to
+see the book move.
+
+To draw the unchanged levels when some levels do change, pass
+`show_all_depth=True`:
+
+```python
+from ob_analytics.visualization import plot_result
+
+fig = plot_result(result, "depth_heatmap", show_all_depth=True)
+```
+
 ## What a capture can and cannot see
 
 The capture polls Kalshi's public REST API, once a second by default. Change

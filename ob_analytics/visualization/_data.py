@@ -16,6 +16,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from loguru import logger
 
 from ob_analytics._utils import validate_columns
 from ob_analytics.depth import book_imbalance, filter_depth, micro_price
@@ -437,6 +438,32 @@ def prepare_trades_data(
     }
 
 
+#: What the depth heatmap shows when it is given no depth rows at all.
+NO_DEPTH_NOTICE = "No depth data to draw."
+
+
+def _price_bound(value: float) -> float | None:
+    """Return *value*, or ``None`` when it is NaN.
+
+    A bound taken from the spread or trades of an empty window is NaN, and
+    filtering on NaN would drop every price level.
+    """
+    return None if pd.isna(value) else float(value)
+
+
+def _price_range_notice(price_from: float | None, price_to: float | None) -> str:
+    """Name the price range that left the depth heatmap with no level.
+
+    Only called after the price filter emptied the frame, so at least one
+    bound is set.
+    """
+    if price_from is not None and price_to is not None:
+        return f"No price level between {price_from:.6g} and {price_to:.6g}."
+    if price_from is not None:
+        return f"No price level at or above {price_from:.6g}."
+    return f"No price level at or below {price_to:.6g}."
+
+
 def prepare_price_levels_data(
     depth: pd.DataFrame,
     spread: pd.DataFrame | None = None,
@@ -470,6 +497,15 @@ def prepare_price_levels_data(
     scale is auto-inferred from the input depth via
     :func:`infer_volume_scale`.
 
+    By default a price level that does not change in the window is left
+    out: it would be one flat line from start to end. When no level changes
+    at all, every level is kept instead, so a quiet book still draws.
+    ``show_all_depth=True`` keeps every level in all cases.
+
+    The payload's ``notice`` is ``None`` or a short sentence for the
+    renderer to show on the chart: why the heatmap is empty, or that no
+    level changed.
+
     ``iceberg_lines``, ``iceberg_refills`` and ``hidden_trades`` are the
     optional hidden-liquidity overlay (see :func:`prepare_hidden_liquidity_overlay`,
     issue #272), already clipped to the caller's display window. ``None``
@@ -480,31 +516,37 @@ def prepare_price_levels_data(
         volume_scale = infer_volume_scale(depth_local["volume"])
     depth_local["volume"] = depth_local["volume"] * volume_scale
 
-    if start_time is None:
-        start_time = depth_local["timestamp"].iloc[0]
-    if end_time is None:
-        end_time = depth_local["timestamp"].iloc[-1]
+    # The first step that leaves no rows names the reason the heatmap is empty.
+    notice: str | None = NO_DEPTH_NOTICE if depth_local.empty else None
+
+    if not depth_local.empty:
+        if start_time is None:
+            start_time = depth_local["timestamp"].iloc[0]
+        if end_time is None:
+            end_time = depth_local["timestamp"].iloc[-1]
 
     if spread is not None:
-        spread = spread[
-            (spread["timestamp"] >= start_time) & (spread["timestamp"] <= end_time)
-        ]
+        if start_time is not None and end_time is not None:
+            spread = spread[
+                (spread["timestamp"] >= start_time) & (spread["timestamp"] <= end_time)
+            ]
         spread = _sanitize_spread(spread)
         if price_from is None:
-            price_from = 0.995 * spread["best_bid_price"].min()
+            price_from = _price_bound(0.995 * spread["best_bid_price"].min())
         if price_to is None:
-            price_to = 1.005 * spread["best_ask_price"].max()
+            price_to = _price_bound(1.005 * spread["best_ask_price"].max())
 
     if trades is not None:
-        trades = trades[
-            (trades["timestamp"] >= start_time) & (trades["timestamp"] <= end_time)
-        ]
+        if start_time is not None and end_time is not None:
+            trades = trades[
+                (trades["timestamp"] >= start_time) & (trades["timestamp"] <= end_time)
+            ]
         if price_from is None:
-            price_from = 0.995 * trades["price"].min()
+            price_from = _price_bound(0.995 * trades["price"].min())
         else:
             trades = trades[trades["price"] >= price_from]
         if price_to is None:
-            price_to = 1.005 * trades["price"].max()
+            price_to = _price_bound(1.005 * trades["price"].max())
         else:
             trades = trades[trades["price"] <= price_to]
 
@@ -512,16 +554,26 @@ def prepare_price_levels_data(
         depth_local = depth_local[depth_local["price"] >= price_from]
     if price_to is not None:
         depth_local = depth_local[depth_local["price"] <= price_to]
+    if notice is None and depth_local.empty:
+        notice = _price_range_notice(price_from, price_to)
     if volume_from is not None:
         depth_local = depth_local[
             (depth_local["volume"] >= volume_from) | (depth_local["volume"] == 0)
         ]
     if volume_to is not None:
         depth_local = depth_local[depth_local["volume"] <= volume_to]
+    if notice is None and depth_local.empty:
+        notice = "No price level in the chosen volume range."
 
-    depth_filtered = filter_depth(depth_local, start_time, end_time)
+    if depth_local.empty or start_time is None or end_time is None:
+        # Only an empty depth frame leaves the window unset.
+        depth_filtered = depth_local
+    else:
+        depth_filtered = filter_depth(depth_local, start_time, end_time)
+    if notice is None and depth_filtered.empty:
+        notice = "No resting orders in this time window."
 
-    if not show_all_depth:
+    if not show_all_depth and not depth_filtered.empty:
         counts = depth_filtered.groupby("price", as_index=False)["timestamp"].agg(
             count="size",
             first_ts="min",
@@ -532,11 +584,29 @@ def prepare_price_levels_data(
             & (counts["first_ts"] == start_time)
             & (counts["last_ts"] == end_time)
         ]
-        depth_filtered = depth_filtered[
-            ~depth_filtered["price"].isin(unchanged["price"])
-        ]
+        if len(unchanged) == len(counts):
+            # Leaving out every level would draw an empty chart; the flat
+            # lines are what a quiet book has to show.
+            notice = "No price level changed in this window, so every level is drawn."
+        else:
+            depth_filtered = depth_filtered[
+                ~depth_filtered["price"].isin(unchanged["price"])
+            ]
 
     depth_filtered.loc[depth_filtered["volume"] == 0, "volume"] = np.nan
+
+    if notice is not None:
+        log = logger.warning if depth_filtered.empty else logger.info
+        log("Depth heatmap: {}", notice)
+
+    y_range = price_y_range(depth_filtered["price"])
+    if y_range is None:
+        # Nothing to draw from the book: frame the midprice and trades instead.
+        y_range = price_y_range(
+            spread["best_bid_price"] if spread is not None else None,
+            spread["best_ask_price"] if spread is not None else None,
+            trades["price"] if trades is not None else None,
+        )
 
     return {
         "depth": depth_filtered,
@@ -545,7 +615,8 @@ def prepare_price_levels_data(
         "show_mp": show_mp,
         "col_bias": col_bias,
         "price_by": price_by,
-        "y_range": price_y_range(depth_filtered["price"]),
+        "y_range": y_range,
+        "notice": notice,
         "iceberg_lines": iceberg_lines,
         "iceberg_refills": iceberg_refills,
         "hidden_trades": hidden_trades,
