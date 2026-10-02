@@ -253,6 +253,7 @@ class TestDiagnosticsProtocol:
         class _OddCapturer(_FakeCapturer):
             feed_type = "l2_snapshot"
             trade_attribution = "taker"
+            clocks = "sundial"
 
         cfg = CaptureConfig(pair="btcusd", out_dir=tmp_path / "cap", minutes=0.001)
         # Deliberately off the protocol: that is the case under test.
@@ -261,6 +262,7 @@ class TestDiagnosticsProtocol:
         meta = json.loads((tmp_path / "cap" / "meta.json").read_text())
         assert meta["feed_type"] == "unknown"
         assert "trade_attribution" not in meta
+        assert "clocks" not in meta
         assert result.n_order_events > 0
 
     def test_runner_no_diagnostics_records_only_the_declarations(self, tmp_path):
@@ -271,6 +273,7 @@ class TestDiagnosticsProtocol:
             "source": "fake",
             "feed_type": "diff_feed",
             "trade_attribution": "both",
+            "clocks": "both",
         }
 
 

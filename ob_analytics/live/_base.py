@@ -16,7 +16,7 @@ from typing import Any, Protocol, runtime_checkable
 
 import pandas as pd
 
-from ob_analytics.protocols import Source
+from ob_analytics.protocols import Clocks, Source
 
 # ---------------------------------------------------------------------------
 # Data shapes
@@ -91,6 +91,39 @@ EventDict = dict[str, Any]
 # Required keys for a trade event:   trade_id, timestamp, exchange_timestamp,
 #                                    price, amount, buy_order_id,
 #                                    sell_order_id, side
+
+
+@dataclass
+class VenueClockCount:
+    """How many of a capture's books carried the venue's own time.
+
+    A venue that sends no time with its book gives a capture one clock, the
+    receive time, and ``exchange_timestamp`` copies it.  Some venues send a
+    time on every message but none on the opening book (cryptofeed's
+    Independent Reserve and Coinbase); those books count as without, and the
+    capture still has two clocks.  :attr:`clocks` says which the capture had.
+    """
+
+    with_venue_time: int = 0
+    without_venue_time: int = 0
+
+    def note(self, venue_time: Any) -> None:
+        """Count one book, given the venue time it carried (``None`` for none)."""
+        if venue_time is None:
+            self.without_venue_time += 1
+        else:
+            self.with_venue_time += 1
+
+    @property
+    def clocks(self) -> Clocks:
+        """:attr:`Clocks.RECEIVE_ONLY` when books came and none had a venue time.
+
+        Before any book, and when any book had one, the capture has both
+        clocks.
+        """
+        if self.without_venue_time and not self.with_venue_time:
+            return Clocks.RECEIVE_ONLY
+        return Clocks.BOTH
 
 
 # ---------------------------------------------------------------------------

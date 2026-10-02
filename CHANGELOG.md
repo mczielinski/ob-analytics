@@ -70,6 +70,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The clock checks compare two real clocks, and run on L2** (#310). Where a
+  venue sent no time, the cryptofeed and ccxt sources wrote the time they
+  handled the message into `exchange_timestamp`, which is later than the
+  receive time. On cryptofeed's Bitfinex and Blockchain.com books, and on the
+  Independent Reserve opening book, `audit` then failed the capture on
+  `exchange_time_after_receive`. Such rows now copy the receive time, as
+  LOBSTER's one clock fills both columns. The new `Clocks` declaration
+  (`BOTH`, `RECEIVE_ONLY` or `VENUE_ONLY`) says which clocks a source's rows
+  carry. LOBSTER declares `VENUE_ONLY`. A live capture records `clocks` and
+  `books_without_venue_time` in `meta.json`; read it with `recorded_clocks`.
+  With one clock, `audit` does not run the two clock checks and says why. The
+  L2 depth frame now keeps `exchange_timestamp` when `depth.csv` has it, so the
+  clock checks run on L2 captures, which before were never checked.
+  The clock checks leave out the opening book's rows (`origin` `snapshot`),
+  whose clocks the capture may not have measured; the L2 depth frame now keeps
+  `origin` for this.
+- **A cryptofeed REST opening book replays before the message that changed
+  it** (#310). On Binance and Independent Reserve, cryptofeed fetches the
+  opening book while it handles the first live message, and hands the book
+  over first with a later receipt time. On Binance (L2), replay applied the
+  message and then the book's older size. On Independent Reserve (L3), with
+  sequences tracked, the numbered message sorted before the book. The capture
+  now holds a book with no delta until the next one arrives, and places it
+  1 ms before a message received earlier. The message keeps its own receipt
+  time, and the book's rows are marked as the opening book.
 - **A Bitstamp capture no longer keeps trades from before its snapshot**
   (#301). It already skipped order messages from before the REST snapshot, but
   kept the trades from the same time. The orders those trades filled are not in

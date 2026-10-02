@@ -25,13 +25,15 @@ from ob_analytics.live._base import (
     SupportsDiagnostics,
     SupportsPreflight,
 )
-from ob_analytics.protocols import FeedType, Level, trade_attribution_of
+from ob_analytics.protocols import FeedType, Level, clocks_of, trade_attribution_of
+from ob_analytics.schemas import SNAPSHOT_ORIGIN
 
 # Which part of the capture wrote a book row: the source's opening book, a live
 # message, or a synthetic close-out at the end. The runner stamps it from the
 # phase it is in, so no source has to, and a row's origin never has to be
-# guessed from its timestamp.
-ORIGIN_SNAPSHOT = "snapshot"
+# guessed from its timestamp. A source whose opening book arrives through the
+# stream (cryptofeed) marks those rows itself, and the mark is kept.
+ORIGIN_SNAPSHOT = SNAPSHOT_ORIGIN
 ORIGIN_STREAM = "stream"
 ORIGIN_SHUTDOWN = "shutdown"
 
@@ -355,7 +357,9 @@ def _source_declarations(capturer: Any) -> dict[str, Any]:
     ``source`` names the capturer; ``feed_type`` and ``trade_attribution`` are
     what it declares (see :class:`~ob_analytics.protocols.FeedType` and
     :class:`~ob_analytics.protocols.TradeAttribution`).  ``sequence_kind`` is
-    written only by a capturer that declares one.  Read back with
+    written only by a capturer that declares one.  ``clocks`` (see
+    :class:`~ob_analytics.protocols.Clocks`) is read when the capture closes,
+    since a live source learns it from the venue's books.  Read back with
     :func:`~ob_analytics.depth_l2.recorded_source` and its siblings.
 
     It runs while a capture is closing, so a declaration that cannot be read
@@ -381,6 +385,10 @@ def _source_declarations(capturer: Any) -> dict[str, Any]:
     sequence_kind = getattr(capturer, "sequence_kind", None)
     if sequence_kind is not None:
         declared["sequence_kind"] = str(getattr(sequence_kind, "value", sequence_kind))
+    try:
+        declared["clocks"] = clocks_of(capturer).value
+    except Exception as exc:  # noqa: BLE001 - never block finalize
+        logger.warning("Capturer '{}' clocks unreadable: {!r}", capturer.name, exc)
     return declared
 
 
@@ -490,7 +498,7 @@ async def run_capturer(
         logger.info("Capturer '{}': emitting shutdown synthetic events", capturer.name)
         try:
             async for ev in capturer.shutdown_synthetic_events():
-                ev["origin"] = ORIGIN_SHUTDOWN
+                ev.setdefault("origin", ORIGIN_SHUTDOWN)
                 if level is Level.L2:
                     sink.write_depth(ev)
                     n_depth += 1
@@ -696,13 +704,13 @@ async def _stream(
             if state.streaming is not None:
                 state.streaming.set()
         if kind == "order":
-            event["origin"] = ORIGIN_STREAM
+            event.setdefault("origin", ORIGIN_STREAM)
             sink.write_order(event)
             counts["order"] += 1
             if unconfirmed:
                 unconfirmed.discard(event["id"])
         elif kind == "depth":
-            event["origin"] = ORIGIN_STREAM
+            event.setdefault("origin", ORIGIN_STREAM)
             sink.write_depth(event)
             counts["depth"] += 1
         elif kind == "trade":
