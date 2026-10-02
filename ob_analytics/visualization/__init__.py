@@ -97,7 +97,9 @@ class RendererRegistry(Registry[RendererKey, RendererFn]):
                 "The concept and backend are text; the level is Level.L2, "
                 "Level.L3, or None for a level-less plot."
             )
-        concept, level, _backend = key
+        concept, level, backend = key
+        if level is not None:
+            level = Level(level)  # store Level.L2, not an equal "L2"
         clash = next(
             (
                 (other, b)
@@ -116,7 +118,7 @@ class RendererRegistry(Registry[RendererKey, RendererFn]):
                 "A concept is the same kind on every backend: register it at "
                 "None everywhere, or at Level.L2 and/or Level.L3 everywhere."
             )
-        super().register(key, value)
+        super().register((concept, level, backend), value)
 
 
 #: Registry of ``(concept, level, backend)`` → renderer function, where

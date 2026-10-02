@@ -1201,6 +1201,15 @@ class TestRendererKinds:
             (Level.L3, "plotly"),
         )
 
+    def test_text_level_is_stored_as_a_level(self):
+        from ob_analytics.visualization import RENDERERS
+
+        key = ("kind_probe", "L2", "matplotlib")  # text, not Level.L2
+        RENDERERS.register(key, self._renderer)  # ty: ignore[invalid-argument-type]
+        ((level, _),) = RENDERERS.placements("kind_probe")
+        assert level is Level.L2
+        assert isinstance(plot("kind_probe"), Figure)
+
     @pytest.mark.parametrize(
         "key",
         [
