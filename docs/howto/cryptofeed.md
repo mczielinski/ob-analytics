@@ -32,13 +32,16 @@ venues that publish it — the feed the reconstruction engine was built for.
     | What the book means | normal | normal | normal | normal | normal |
     | Access | public | public | public | public | public; Coinbase needs an API key in cryptofeed 2.4.1; other venues not checked |
 
-    Use it for an independent check of the top of the Bitstamp book, and for
-    per-order data on Independent Reserve. Don't use it for Bitstamp order
-    analysis (use the native [`bitstamp`](live-capture.md) source), for Bitfinex
-    order lifetimes, or for the sequence check on Bitfinex, Blockchain.com and
-    Independent Reserve, where book rows skip numbers without losing any. [What
-    each feed shows](../feeds.md) explains each property and compares every
-    source.
+    Use it for an independent check of the top of the Bitstamp book, and for the
+    per-order book on Independent Reserve. Independent Reserve trades are not
+    yet linked to their orders, and `audit` can stop with an error on a capture
+    with stale orders
+    ([#311](https://github.com/mczielinski/ob-analytics/issues/311)). Don't use
+    it for Bitstamp order analysis (use the native [`bitstamp`](live-capture.md)
+    source), for Bitfinex order lifetimes, or for the sequence check on
+    Bitfinex, Blockchain.com and Independent Reserve, where book rows skip
+    numbers without losing any. [What each feed shows](../feeds.md) explains
+    each property and compares every source.
 
 Install the optional `[cryptofeed]` extra and use the `capture` verb:
 
