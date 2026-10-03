@@ -51,6 +51,13 @@ from ob_analytics.visualization import (
 #: Views recognised by :func:`generate_gallery` / :func:`_project`.
 VIEWS = ("l2", "l3", "both", "comparison")
 
+# How the depth heatmap picks its levels (#303), shared by its L2 and L3 notes.
+_HIDDEN_LEVELS_NOTE = (
+    "Levels that do not change in the window are left out unless no level "
+    'changes; plot_result(result, "depth_heatmap", show_all_depth=True) '
+    "keeps them all."
+)
+
 
 @dataclass
 class PlotSpec:
@@ -316,7 +323,8 @@ def _build_l2_gallery_model(
                 "Resting liquidity through time: one horizontal line per price "
                 "level, colored by available volume; the pale line is the "
                 "midprice. Triangles mark executions (aggressor side). The "
-                "native L2 view — aggregate size per price, no order identity."
+                "native L2 view — aggregate size per price, no order identity. "
+                f"{_HIDDEN_LEVELS_NOTE}"
             ),
         ),
     ]
@@ -665,7 +673,8 @@ def build_gallery_model(
                 "thin levels and reveal near-touch structure. Diamonds mark "
                 "suspected iceberg refills (joined by a line per iceberg) "
                 "and stars mark trades against hidden orders, from #111's "
-                "detectors, inside the zoom window."
+                "detectors, inside the zoom window. "
+                f"{_HIDDEN_LEVELS_NOTE}"
             ),
         ),
         _paired(
@@ -1440,6 +1449,9 @@ def generate_gallery(
     logged: set[str] = set()
     for card in cards:
         logger.info("Gallery: generating {}", card.title)
+        # The backend columns of a card share one prepared payload, so the
+        # prepare step runs (and logs) once per face, not once per backend.
+        prepared: dict[tuple[int, int], dict] = {}
         for panel in card.panels:
             panel.reason = unloaded.get(panel.backend) or _misplaced(panel, loaded)
             if panel.reason:
@@ -1450,7 +1462,7 @@ def generate_gallery(
             if panel.backend not in rendered_dirs:
                 (out / panel.backend).mkdir(parents=True, exist_ok=True)
                 rendered_dirs.add(panel.backend)
-            panel.rendered = _render_and_save(panel, out, plt)
+            panel.rendered = _render_and_save(panel, out, plt, prepared)
 
     html_path = out / "gallery.html"
     _write_gallery_html(html_path, cards, title)
@@ -1497,11 +1509,20 @@ def _misplaced(panel: _Panel, backends: frozenset[str]) -> str:
     return ""
 
 
-def _render_and_save(panel: _Panel, out: Path, plt: Any) -> bool:
-    """Render one panel to a figure and persist it; return success."""
+def _render_and_save(
+    panel: _Panel, out: Path, plt: Any, prepared: dict[tuple[int, int], dict]
+) -> bool:
+    """Render one panel to a figure and persist it; return success.
+
+    *prepared* caches payloads by (prepare function, keyword arguments) so
+    panels of one card that differ only by backend prepare once.  Renderers
+    do not modify their payload, so sharing it is safe.
+    """
+    key = (id(panel.prepare), id(panel.prep_kwargs))
     try:
-        data = panel.prepare(**panel.prep_kwargs)
-        fig = plot(panel.concept, panel.level, backend=panel.backend, **data)
+        if key not in prepared:
+            prepared[key] = panel.prepare(**panel.prep_kwargs)
+        fig = plot(panel.concept, panel.level, backend=panel.backend, **prepared[key])
     except Exception as e:  # noqa: BLE001 -- one bad panel must not sink the gallery
         logger.warning("Gallery: {} {} failed: {}", panel.backend, panel.stem, e)
         return False

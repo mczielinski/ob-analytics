@@ -24,14 +24,15 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 from cycler import cycler
-from loguru import logger
 from matplotlib import collections
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
+from matplotlib.font_manager import FontProperties
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
 from ob_analytics.visualization._data import (
+    NO_DEPTH_NOTICE,
     book_bar_thickness,
     book_mid,
     check_book_payload_level,
@@ -418,42 +419,59 @@ def _hidden_trade_legend_handles(
     ]
 
 
-@_themed
-def mpl_price_levels(
-    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
-) -> Figure:
-    """Render the price-level depth heatmap."""
-    pal = theme.palette
-    depth = data["depth"]
-    spread = data["spread"]
-    trades = data["trades"]
-    show_mp = data["show_mp"]
-    col_bias = data["col_bias"]
-    price_by = data["price_by"]
+def _draw_notice(ax: Axes, text: str, pal: Palette) -> None:
+    """Write why a chart has nothing to draw in the middle of *ax*."""
+    ax.text(
+        0.5,
+        0.5,
+        text,
+        transform=ax.transAxes,
+        ha="center",
+        va="center",
+        fontsize=14,
+        color=pal.reference_line,
+    )
 
-    depth = depth.copy()
-    depth.sort_values(by="timestamp", inplace=True, kind="stable")
-    if depth.empty or depth.groupby("price").size().min() < 2:
-        logger.warning("Not enough data for any price level")
-        fig, ax = _create_axes(ax, figsize=(12, 7))
-        return fig
 
+def _set_title(ax: Axes, title: str, notice: str | None, pal: Palette) -> None:
+    """Set *ax*'s title, with *notice* on its own line beneath it.
+
+    A payload's ``notice`` explains the chart (why it is empty, or what it
+    left out). Between the title and the plot it covers no data and cannot
+    run into the title, however narrow the axes.
+    """
+    if not notice:
+        ax.set_title(title)
+        return
+    size = FontProperties(size="small").get_size_in_points()
+    pad = mpl.rcParams["axes.titlepad"]
+    # The title moves up by one notice line; the notice takes its place.
+    ax.set_title(title, pad=pad + 1.6 * size)
+    x, ha = {"left": (0.0, "left"), "right": (1.0, "right")}.get(
+        mpl.rcParams["axes.titlelocation"], (0.5, "center")
+    )
+    ax.annotate(
+        notice,
+        xy=(x, 1.0),
+        xycoords="axes fraction",
+        xytext=(0, pad),
+        textcoords="offset points",
+        ha=ha,
+        va="bottom",
+        fontsize=size,
+        color=pal.label,
+    )
+
+
+def _draw_depth_lines(ax: Axes, depth: pd.DataFrame, col_bias: float) -> None:
+    """Draw one line per price level, colored by volume, with its colorbar."""
+    depth = depth.sort_values(by="timestamp", kind="stable")
     depth["alpha"] = np.where(
         depth["volume"].isna(), 0, np.where(depth["volume"] < 1, 0.1, 1)
     )
 
     cmap = plt.get_cmap("viridis")
     norm = _volume_norm(depth["volume"], col_bias)
-
-    fig, ax = _create_axes(ax, figsize=(12, 7))
-
-    # The depth heatmap reads best on a neutral background: a gray facecolor so
-    # the bright cells and the white midprice line pop, with a white y-grid
-    # (price guides) behind the cells. Other faces keep the default white theme.
-    ax.set_facecolor("#a9a9a9")
-    ax.set_axisbelow(True)
-    ax.grid(False)
-    ax.grid(True, axis="y", color="white", linewidth=0.8, alpha=0.7)
 
     depth["timestamp_numeric"] = mdates.date2num(depth["timestamp"])
 
@@ -485,6 +503,35 @@ def mpl_price_levels(
     sm.set_array([])
     cbar = plt.colorbar(sm, ax=ax)
     cbar.set_label("Volume")
+
+
+@_themed
+def mpl_price_levels(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """Render the price-level depth heatmap."""
+    pal = theme.palette
+    depth = data["depth"]
+    spread = data["spread"]
+    trades = data["trades"]
+    show_mp = data["show_mp"]
+    col_bias = data["col_bias"]
+    price_by = data["price_by"]
+
+    fig, ax = _create_axes(ax, figsize=(12, 7))
+
+    # The depth heatmap reads best on a neutral background: a gray facecolor so
+    # the bright cells and the white midprice line pop, with a white y-grid
+    # (price guides) behind the cells. Other faces keep the default white theme.
+    ax.set_facecolor("#a9a9a9")
+    ax.set_axisbelow(True)
+    ax.grid(False)
+    ax.grid(True, axis="y", color="white", linewidth=0.8, alpha=0.7)
+
+    # An empty book still draws the midprice and trades; the notice under the
+    # title says why there are no levels.
+    if not depth.empty:
+        _draw_depth_lines(ax, depth, col_bias)
 
     if spread is not None:
         spread = spread.copy()
@@ -564,12 +611,13 @@ def mpl_price_levels(
 
     ax.set_xlabel("Time")
     ax.set_ylabel("Limit Price")
-    ax.set_title("Price Levels Over Time")
+    notice = data.get("notice") or (NO_DEPTH_NOTICE if depth.empty else None)
+    _set_title(ax, "Price Levels Over Time", notice, pal)
 
     y_range = data.get("y_range")
     if y_range is not None:
         ax.set_ylim(y_range)
-    else:
+    elif not depth.empty:
         ymin = depth["price"].min()
         ymax = depth["price"].max()
         ax.set_ylim((ymin, ymax))
@@ -2048,15 +2096,10 @@ def mpl_hidden_executions(
         ax.set_title("Hidden Order Executions")
     else:
         ax.set_title("Hidden Order Executions (no hidden execution data)")
-        ax.text(
-            0.5,
-            0.5,
+        _draw_notice(
+            ax,
             "No hidden execution events\n(raw_event_type == 5)\nin this dataset",
-            transform=ax.transAxes,
-            ha="center",
-            va="center",
-            fontsize=14,
-            color=pal.reference_line,
+            pal,
         )
 
     ax.set_xlabel("Time")
@@ -2120,15 +2163,10 @@ def mpl_trading_halts(
         ax.set_title("Trading Halts")
     else:
         ax.set_title("Trading Halts (no halt data)")
-        ax.text(
-            0.5,
-            0.5,
+        _draw_notice(
+            ax,
             "No trading halt events\n(raw_event_type == 7)\nin this dataset",
-            transform=ax.transAxes,
-            ha="center",
-            va="center",
-            fontsize=14,
-            color=pal.reference_line,
+            pal,
         )
 
     ax.set_xlabel("Time")
