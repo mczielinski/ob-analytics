@@ -29,6 +29,7 @@ listing sources -- never requires it.
 from __future__ import annotations
 
 import asyncio
+import functools
 import time
 from collections.abc import AsyncIterator
 from typing import Any, NamedTuple, TypeGuard
@@ -332,6 +333,64 @@ def _resolve_level(exchange: Any, requested: Level | None) -> Level:
     return requested
 
 
+@functools.cache
+def _independent_reserve(base: Any) -> Any:
+    """Return cryptofeed's Independent Reserve feed, fixed to keep changed orders.
+
+    Before 3.0, cryptofeed forgets an order after its first ``OrderChanged``,
+    even when the order still has size.  It then skips every later message for
+    that order, so a cancel after a partial fill never reaches the capture and
+    the order stays in the book until the capture ends.  This subclass puts the
+    order back in cryptofeed's index while the book still holds it.  On 3.0 and
+    later the index already keeps it, so the subclass changes nothing.
+    """
+
+    class IndependentReserve(base):
+        async def _book(self, msg: dict, timestamp: float) -> None:
+            data = msg.get("Data") or {}
+            uuid = data.get("OrderGuid")
+            changed = {}
+            if msg.get("Event") == "OrderChanged":
+                changed = {
+                    instrument: ids[uuid]
+                    for instrument, ids in self._order_ids.items()
+                    if uuid in ids
+                }
+            try:
+                await super()._book(msg, timestamp)
+            finally:
+                for instrument, (price, side) in changed.items():
+                    book = self._l3_book.get(instrument)
+                    levels = book.book[side] if book is not None else {}
+                    if price in levels and uuid in levels[price]:
+                        self._order_ids[instrument].setdefault(uuid, (price, side))
+
+    return IndependentReserve
+
+
+def _independent_reserve_fixed(base: Any) -> Any:
+    """Return Independent Reserve's feed with both of its fixes.
+
+    The opening book no older than the stream (see
+    :mod:`ob_analytics.live._cryptofeed_venues`, imported here because it needs
+    cryptofeed), and changed orders kept (see ``_independent_reserve``).
+    """
+    from ob_analytics.live._cryptofeed_venues import with_newer_opening_book
+
+    return _independent_reserve(with_newer_opening_book(base))
+
+
+#: Feeds whose cryptofeed class loses data, keyed by cryptofeed's exchange id,
+#: each mapped to a function that returns a fixed subclass.
+_FIXED_FEEDS = {"INDEPENDENT_RESERVE": _independent_reserve_fixed}
+
+
+def _fixed_feed(feed: Any) -> Any:
+    """Return *feed*'s fixed subclass if ``_FIXED_FEEDS`` has one, else *feed*."""
+    fix = _FIXED_FEEDS.get(getattr(feed, "id", None))
+    return fix(feed) if fix is not None and isinstance(feed, type) else feed
+
+
 class CryptofeedSource:
     """Live-capture a cryptofeed venue as an L3 order stream or L2 depth stream."""
 
@@ -339,9 +398,9 @@ class CryptofeedSource:
     # The venue numbers skip on every venue that sends them, though no message
     # was lost: on Bitfinex and Blockchain.com they count every message on the
     # connection, trades and heartbeats too, and on Independent Reserve
-    # cryptofeed passes on no change to an order it does not hold.  cryptofeed
-    # checks the whole stream itself and reconnects on a real gap, which the
-    # capture counts as a resync (see ``note_resync``).
+    # cryptofeed passes on no message about an order it does not hold.
+    # cryptofeed checks the whole stream itself and reconnects on a real gap,
+    # which the capture counts as a resync (see ``note_resync``).
     sequence_kind = SequenceKind.MONOTONIC
 
     def __init__(self, settings: SourceSettings | None = None) -> None:
@@ -1198,14 +1257,11 @@ class CryptofeedSource:
 
         A string is looked up in cryptofeed's ``EXCHANGE_MAP``; anything else
         is taken to be an exchange class already (tests / advanced callers).
-        Where this package corrects cryptofeed's feed for a venue named by a
-        string, the corrected class is returned instead (see
-        :mod:`ob_analytics.live._cryptofeed_venues`).  A class is used as
-        given.
+        Either way, a venue in ``_FIXED_FEEDS`` gets its fixed subclass.
         """
         exchange = self._exchange
         if not isinstance(exchange, str):
-            return exchange
+            return _fixed_feed(exchange)
         if not exchange:
             raise ValueError(
                 "cryptofeed source needs CryptofeedSettings(exchange='<venue id>') "
@@ -1219,15 +1275,13 @@ class CryptofeedSource:
                 'pip install "ob-analytics[cryptofeed]"'
             ) from exc
         try:
-            exchange_cls = EXCHANGE_MAP[exchange.upper()]
+            feed = EXCHANGE_MAP[exchange.upper()]
         except KeyError:
             raise ValueError(
                 f"Unknown cryptofeed exchange {exchange!r}; expected one of "
                 f"{len(EXCHANGE_MAP)} venues."
             ) from None
-        from ob_analytics.live._cryptofeed_venues import FEEDS
-
-        return FEEDS.get(exchange_cls.id, exchange_cls)
+        return _fixed_feed(feed)
 
     async def snapshot(self, config: CaptureConfig) -> AsyncIterator[EventDict]:
         """Yield nothing: cryptofeed delivers the opening book as its first callback.

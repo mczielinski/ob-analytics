@@ -244,8 +244,29 @@ class TestTheSourceUsesTheCorrectedFeed:
         src = CryptofeedSource(
             settings=CryptofeedSettings(exchange="independent_reserve")
         )
-        assert src._exchange_class() is IndependentReserveFeed
+        assert issubclass(src._exchange_class(), IndependentReserveFeed)
         assert src.diagnostics()["exchange"] == "INDEPENDENT_RESERVE"
+
+    def test_a_caller_s_own_class_gets_the_corrected_feed_too(self):
+        from cryptofeed.exchanges import IndependentReserve
+
+        from ob_analytics.live._cryptofeed_venues import IndependentReserveFeed
+        from ob_analytics.live.cryptofeed_source import (
+            CryptofeedSettings,
+            CryptofeedSource,
+        )
+
+        class Mine(IndependentReserve):
+            pass
+
+        feed_cls = CryptofeedSource(
+            settings=CryptofeedSettings(exchange=Mine)
+        )._exchange_class()
+        assert issubclass(feed_cls, IndependentReserveFeed)
+        assert issubclass(feed_cls, Mine)
+        # This feed's _book runs before the caller's class and cryptofeed's.
+        mro = feed_cls.__mro__
+        assert mro.index(IndependentReserveFeed) < mro.index(Mine)
 
     def test_other_venues_keep_cryptofeed_s_feed(self):
         from cryptofeed.exchanges import EXCHANGE_MAP

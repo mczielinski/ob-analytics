@@ -1,12 +1,14 @@
-"""Corrections to cryptofeed's venue feeds, used in place of cryptofeed's own.
+"""Independent Reserve's opening book, taken no older than the stream.
 
 Imported only when a capture resolves its venue, since it needs cryptofeed.
-:data:`FEEDS` maps a cryptofeed exchange id to the class that replaces it.
+The cryptofeed source's ``_FIXED_FEEDS`` applies :func:`with_newer_opening_book`
+to the venue's feed class.
 """
 
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 from decimal import Decimal
 from time import time
@@ -174,4 +176,16 @@ class IndependentReserveFeed(IndependentReserve):
         return book
 
 
-FEEDS: dict[str, Any] = {IndependentReserve.id: IndependentReserveFeed}
+@functools.cache
+def with_newer_opening_book(base: type) -> type:
+    """Return *base*, an Independent Reserve feed class, as an
+    :class:`IndependentReserveFeed`.
+
+    *base* is cryptofeed's class, or a subclass of it a caller passed in, which
+    keeps its own behaviour under this feed's.
+    """
+    if issubclass(base, IndependentReserveFeed):
+        return base
+    if base is IndependentReserve:
+        return IndependentReserveFeed
+    return type(base.__name__, (IndependentReserveFeed, base), {})
