@@ -56,6 +56,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **A plot concept is level-less or drawn at a level, on every backend**
+  (#302). Registering a concept at `None` when it is registered at a level on
+  any backend, or the reverse, raises a `ValueError` that says which to use.
+  So does a renderer key that is not `(concept, level, backend)`.
+  `RENDERERS.placements(concept)` lists how a concept is registered. This can
+  break code that worked before:
+  - Code that registered one plot both ways fails at the second registration.
+  - A metric plug-in that does so is skipped when `ob_analytics` is imported,
+    with a logged warning.
+  - A backend module loaded with `register_plot_backend` that registers a
+    built-in concept as the other kind fails to load, so no plot on that
+    backend draws until it is fixed.
+  - A metric named like a built-in plot drawn at a level, such as
+    `trade_size`, cannot register its level-less renderer; give it another
+    name.
 - **The capture directory layout** (#150). A capture's files are now in
   `seg-0001/`, `seg-0002/`, ... under `--out`, next to `manifest.json`. Read
   one segment as before, from its `orders.csv` or `depth.csv`; give `process`
@@ -87,6 +102,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   segment's `meta.json` names the types written as text (`raw_text_types`) and
   counts the skipped frames (`n_raw_frames_skipped`); the manifest adds up
   `raw_frames_skipped`, and the capture logs each kind of warning once.
+- **A custom plot keeps working after it is added to the gallery** (#302).
+  The "A new plot" guide registered a plot at `Level.L2`, then registered it
+  again at `None` to put it in the gallery. After the second step,
+  `plot("cumvol")` raised and told you to pass `Level.L3`, which was not
+  registered. The guide now registers its example once, at `None`, draws the
+  gallery on the one backend it registered, and shows how a plot drawn at a
+  level goes into the gallery as a `PlotConcept`. A test runs the guide's plot
+  section as written. See Changed for the rule that replaces the second
+  registration.
 - **On Python 3.11, a capture stops each segment when asked** (#296). The
   live sources waited for messages with `asyncio.wait_for`, which on Python
   3.11 can drop a cancel that arrives with a message. A roll then left the old

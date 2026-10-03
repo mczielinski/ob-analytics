@@ -1,5 +1,7 @@
 """Tests for ob_analytics.visualization."""
 
+import re
+from pathlib import Path
 from typing import Any
 
 import matplotlib
@@ -1137,6 +1139,125 @@ class TestRegisterBackend:
             # Registry has no public removal; the inert (trade_tape, L2, dummy)
             # entry is dropped here so the dummy module's renderer doesn't linger.
             RENDERERS._items.pop(("trade_tape", Level.L2, "dummy"), None)
+
+
+class TestRendererKinds:
+    """A concept is level-less or leveled on every backend, never both (#302)."""
+
+    @pytest.fixture(autouse=True)
+    def _drop_probe_renderers(self):
+        from ob_analytics.visualization import RENDERERS
+
+        yield
+        probes = ("kind_probe", "cumvol")
+        for key in [k for k in RENDERERS._items if k[0] in probes]:
+            RENDERERS._items.pop(key)
+
+    @staticmethod
+    def _renderer(data, ax=None):
+        return _create_axes(ax)[0]
+
+    @pytest.mark.parametrize(
+        ("first", "second"),
+        [(Level.L2, None), (None, Level.L2), (Level.L3, None), (None, Level.L3)],
+    )
+    def test_mixing_kinds_raises(self, first, second):
+        from ob_analytics.visualization import RENDERERS
+
+        RENDERERS.register(("kind_probe", first, "matplotlib"), self._renderer)
+        with pytest.raises(ValueError, match="already registered"):
+            RENDERERS.register(("kind_probe", second, "matplotlib"), self._renderer)
+        assert ("kind_probe", second, "matplotlib") not in RENDERERS
+
+    def test_mixing_kinds_across_backends_raises(self):
+        from ob_analytics.visualization import RENDERERS
+
+        RENDERERS.register(("kind_probe", Level.L2, "matplotlib"), self._renderer)
+        with pytest.raises(ValueError, match="at L2 on 'matplotlib'"):
+            RENDERERS.register(("kind_probe", None, "plotly"), self._renderer)
+        assert ("kind_probe", None, "plotly") not in RENDERERS
+
+    def test_same_key_and_both_levels_still_register(self):
+        from ob_analytics.visualization import RENDERERS
+
+        RENDERERS.register(("kind_probe", Level.L2, "matplotlib"), self._renderer)
+        RENDERERS.register(("kind_probe", Level.L2, "matplotlib"), self._renderer)
+        RENDERERS.register(("kind_probe", Level.L3, "matplotlib"), self._renderer)
+        RENDERERS.register(("kind_probe", Level.L2, "plotly"), self._renderer)
+        with pytest.raises(ValueError, match="comparable"):
+            plot("kind_probe")
+
+    def test_placements_can_be_looped_over_while_registering(self):
+        from ob_analytics.visualization import RENDERERS
+
+        RENDERERS.register(("kind_probe", Level.L2, "matplotlib"), self._renderer)
+        RENDERERS.register(("kind_probe", Level.L3, "matplotlib"), self._renderer)
+        for level, _ in RENDERERS.placements("kind_probe"):
+            RENDERERS.register(("kind_probe", level, "plotly"), self._renderer)
+        assert RENDERERS.placements("kind_probe") == (
+            (Level.L2, "matplotlib"),
+            (Level.L3, "matplotlib"),
+            (Level.L2, "plotly"),
+            (Level.L3, "plotly"),
+        )
+
+    def test_text_level_is_stored_as_a_level(self):
+        from ob_analytics.visualization import RENDERERS
+
+        key = ("kind_probe", "L2", "matplotlib")  # text, not Level.L2
+        RENDERERS.register(key, self._renderer)  # ty: ignore[invalid-argument-type]
+        ((level, _),) = RENDERERS.placements("kind_probe")
+        assert level is Level.L2
+        assert isinstance(plot("kind_probe"), Figure)
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            ("kind_probe", "matplotlib"),  # no level
+            ("kind_probe", "matplotlib", None),  # level and backend swapped
+            ("kind_probe", "L4", "matplotlib"),  # not a level
+            (7, Level.L2, "matplotlib"),  # concept not text
+        ],
+    )
+    def test_malformed_key_raises(self, key):
+        from ob_analytics.visualization import RENDERERS
+
+        with pytest.raises(ValueError, match=r"\(concept, level, backend\)"):
+            RENDERERS.register(key, self._renderer)
+        assert not [k for k in RENDERERS._items if k[0] in ("kind_probe", 7)]
+
+    def test_the_guide_plot_section_runs_as_written(
+        self, tiny_bitstamp_orders_csv, tmp_path
+    ):
+        """Section 3 of extending.md: register, plot, gallery, plot again."""
+        text = (Path(__file__).parents[1] / "docs" / "extending.md").read_text()
+        section = text[
+            text.index("## 3. A new plot") : text.index("## 4. A new metric")
+        ]
+        blocks = re.findall(r"```python\n(.*?)```", section, flags=re.DOTALL)
+        gallery = tmp_path / "gallery"
+        replaced = {'"orders.csv"': 0, '"output/gallery/"': 0}
+        namespace: dict[str, Any] = {}
+        for block in blocks:
+            # The custom backend and the leveled face name modules and
+            # functions the guide leaves to the reader.
+            if "my_pkg" in block or "my_face" in block:
+                continue
+            for old in replaced:
+                replaced[old] += block.count(old)
+            block = block.replace('"orders.csv"', repr(str(tiny_bitstamp_orders_csv)))
+            block = block.replace('"output/gallery/"', repr(str(gallery)))
+            exec(compile(block, "extending.md", "exec"), namespace)  # noqa: S102 - the guide's own code
+        assert all(replaced.values()), replaced
+
+        assert (gallery / "matplotlib" / "cumvol.png").exists()
+        html = (gallery / "gallery.html").read_text()
+        start = html.index('<div class="card-title">Cumulative Volume<')
+        end = html.find('<div class="card">', start)
+        assert "Not available" not in html[start : end if end != -1 else None]
+        trades = namespace["result"].trades
+        fig = plot("cumvol", **namespace["prepare_cumvol_data"](trades))
+        assert isinstance(fig, Figure)
 
 
 class TestPlotPriceView:
