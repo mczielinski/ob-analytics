@@ -692,11 +692,18 @@ class TestRawFrames:
         assert sum(m.startswith("raw.jsonl: skipping frames") for m in logged) == 1
 
         total = 0
+        reporting = 0
         for segment in segments:
             meta = json.loads((run.out_dir / segment.name / "meta.json").read_text())
             assert segment.raw_frames_skipped == meta["n_raw_frames_skipped"]
-            assert meta["raw_text_types"] == ["uuid.UUID"]
+            # A segment can start just as the capture ends and write no frame,
+            # so it has no type to report.
+            written = meta["n_raw_frames"] - meta["n_raw_frames_skipped"]
+            assert meta["raw_text_types"] == (["uuid.UUID"] if written else [])
+            reporting += bool(written)
             total += segment.raw_frames_skipped
+        # Each segment that wrote frames reports the type, not only the first.
+        assert reporting >= 2
         assert total > 0
         assert run.manifest.raw_frames_skipped == total
         raw = json.loads((run.out_dir / "manifest.json").read_text())
