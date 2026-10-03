@@ -283,6 +283,18 @@ Windows are run separately so peak memory is bounded by the largest one.
 [Scale and chunking](../scale-and-chunking.md) sets out what concatenates
 cleanly across a cut and what does not.
 
+A file you already hold can be cut the same way without the script. Use
+`run_windows`, which carries the book across each cut, so the output matches a
+single run:
+
+```python
+from ob_analytics import Pipeline
+from ob_analytics.databento import DatabentoSource
+
+cuts = ["2024-02-12T16:00", "2024-02-12T18:00"]  # UTC
+Pipeline(source=DatabentoSource()).run_windows("aapl.mbo.dbn.zst", cuts, "out/")
+```
+
 ## Write a file back out
 
 `DatabentoWriter` inverts the loader record for record, so a window you have

@@ -10,6 +10,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Run a large input one time window at a time** (#116).
+  `Pipeline.run_windows(source, boundaries, output)` cuts one input at the
+  given times and runs the depth stages on one window at a time, so their peak
+  memory is set by the largest window. Each window is written to `output` as it
+  finishes, as one Parquet file per table, the same folder `save_data` writes;
+  `load_data` reads it back. With `carry=True`, the default, each window starts
+  from the book the previous one ended with, and the output matches a single
+  run row for row. The exceptions are `aggressiveness_bps` on a Bitstamp
+  input, and depth where the Databento loader already warns that it is off. A
+  run that fails part-way leaves the output folder as it was. On 1.26M events, eight windows peak at 771 MiB against 1,507 MiB for
+  a single run. The loader still reads the whole input. See "Scale and
+  chunking".
 - **The flow-toxicity faces and the L1 quote are built-in metrics** (#118).
   `vpin`, `kyle_lambda`, `order_flow_imbalance` and `ofi_horizon` are now
   registered metrics, so `available_concepts` lists them and
