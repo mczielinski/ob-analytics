@@ -165,22 +165,29 @@ lob[["actor", "action", "volume", "fill", "raw_event_type", "raw_size"]].iloc[6:
 # in the call: prices become **integers in ten-thousandths of a dollar**
 # (`price_divisor=10_000`), and timestamps become **seconds after
 # midnight**, so the writer must be told *which* midnight
-# (`trading_date`). The toy book's canonical prices are integer ticks with
-# a `tick_size` of $1 (its levels are whole dollars), so we pass that too —
-# the writer scales ticks back through the tick size and the divisor:
+# (`trading_date`). The toy book's canonical prices are integer ticks and
+# its sizes integer lots, each worth exactly 1 (`TICK_SIZE` and `LOT_SIZE`
+# are both 1.0), so the config says that too. The writer scales ticks back
+# through the tick size and the divisor, and lots through the lot size.
+# Leave `lot_size` out and the default of 1e-8 (one satoshi) writes a size
+# of 2 as `2e-08`:
 
 # %%
 import tempfile
 from pathlib import Path
 
 from ob_analytics import PipelineConfig, RunContext, save_data
+from ob_analytics.datasets import LOT_SIZE, TICK_SIZE
 
+toy_config = PipelineConfig(
+    price_divisor=10_000, tick_size=TICK_SIZE, lot_size=LOT_SIZE
+)
 outdir = Path(tempfile.mkdtemp())
 save_data(
     {"events": lob, "trades": toy_trades()},
     outdir,
     fmt="lobster",
-    config=PipelineConfig(price_divisor=10_000, tick_size=1.0),
+    config=toy_config,
     ctx=RunContext(trading_date="2026-01-05"),
     ticker="TOY",
     num_levels=2,
@@ -200,12 +207,14 @@ print(
 )
 
 # %% [markdown]
-# Every encoding is visible in the raw text. Column 1 is the time:
-# 36000.0 seconds after midnight is 10:00:00 — Alice's t=0. Column 2 is
-# the event-type code: seven type-1 submissions, then at 36020 two
+# Every encoding is visible in the raw text. Column 1 is the time in
+# seconds after midnight on the exchange's own clock, which for LOBSTER is
+# New York: 18000.0 is 05:00:00 New York time, the same instant as the
+# toy's 10:00:00 UTC — Alice's t=0. Column 2 is
+# the event-type code: seven type-1 submissions, then at 18020 two
 # type-4 executions — Frank's market buy from chapter 1 hitting Bob
 # (their order ids, 7 and 2, are column 3) — then Gus, then Dana's
-# type-3 cancellation at 36040. Column 4 is the size delta, column 5 the
+# type-3 cancellation at 18040. Column 4 is the size delta, column 5 the
 # price (990000 = $99.00), column 6 the side: 1 = bid, −1 = ask. Notice
 # Frank's "market" buy arrives as a *limit priced at the ask* — chapter
 # 1's crossing-the-spread, visible in a raw file.
@@ -227,20 +236,26 @@ print((outdir / "TOY_2026-01-05_2_orderbook.csv").read_text().splitlines()[5])
 # Now the trip home. `LobsterSource` bundles the matching loader, trade
 # reader, and config defaults (that `price_divisor`, among others), and
 # needs the same date anchor to turn seconds-after-midnight back into
-# timestamps:
+# timestamps. Its default `tick_size` is a cent, the equity grid, so it
+# would read $99.00 back as 9900 ticks; passing the same `toy_config`
+# that wrote the files keeps the toy's whole-dollar ticks:
 
 # %%
-rt = Pipeline.from_source("lobster", ctx=RunContext(trading_date="2026-01-05")).run(
-    outdir
-)
+from ob_analytics import LobsterSource
+
+rt = Pipeline(
+    source=LobsterSource(),
+    config=toy_config,
+    ctx=RunContext(trading_date="2026-01-05"),
+).run(outdir)
 print("executed units, original frames :", events["fill"].sum())
 print("executed units, after round trip:", rt.events["fill"].sum())
 
 # %% [markdown]
-# (`Pipeline(source=LobsterSource(), ctx=...)` is the explicit spelling
-# of the same thing.) The toy's five trades total 7 units; counted from
-# both sides — maker fills plus taker fills — that is 14 units of
-# executions, and all 14 survive the round trip.
+# (With the source's own defaults, `Pipeline.from_source("lobster",
+# ctx=...)` is the short spelling.) The toy's five trades total 7 units;
+# counted from both sides — maker fills plus taker fills — that is 14
+# units of executions, and all 14 survive the round trip.
 #
 # One honest wrinkle: the message file we wrote contains *ten* type-4
 # rows for those five trades, because our canonical stream records
@@ -297,16 +312,15 @@ fig.tight_layout()
 # Whichever route you take, two warnings apply.
 #
 # !!! warning "Pitfall: every venue keeps its own clock"
-#     Timestamps in canonical frames are **tz-naive, in each venue's
-#     native clock** — UTC for Bitstamp captures, exchange-local
-#     (US/Eastern) for LOBSTER sessions. We just did it ourselves: the
-#     toy's 10:00:00 became 36 000 seconds after "midnight" with no time
-#     zone attached anywhere. Each frame is internally consistent, but
-#     timestamps from different formats are **not comparable** — never
-#     join or concatenate events across venues without explicit
-#     conversion. A naive 09:30 in a LOBSTER session and a naive 09:30
-#     in a Bitstamp capture are four or five real-world hours apart,
-#     depending on the season.
+#     Timestamps in canonical frames are **tz-aware UTC**, whatever the
+#     venue. The raw files are not: a LOBSTER file counts seconds after
+#     midnight on the exchange's clock (New York), with no time zone
+#     written anywhere. We just saw it: the toy's 10:00:00 UTC became
+#     18 000 seconds, 05:00 in New York. The loader converts back only
+#     because it knows the session's zone — `RunContext.session_tz`,
+#     New York by default for LOBSTER. Load a session from another
+#     exchange without setting it and every timestamp is off by the gap
+#     between the two zones, with no error to tell you so.
 #
 # !!! warning "Pitfall: know which kind of L3 file you hold"
 #     LOBSTER files come from a **matched book** (the venue's engine

@@ -213,7 +213,7 @@ from ob_analytics.flow_toxicity import compute_kyle_lambda
 
 kyle = compute_kyle_lambda(tape, window="30s")
 print(f"λ = {kyle.lambda_:.4f}   t = {kyle.t_stat:.2f}   R² = {kyle.r_squared:.3f}")
-kyle.regression_df.round(2)
+kyle.regression_df.set_index("timestamp").round(2)
 
 # %% [markdown]
 # The regression table is the anchor: the two calm-open windows carry
@@ -351,7 +351,7 @@ fig = result.plot("kyle_lambda")  # the same fit as kyle_real above
 def amihud(trades: pd.DataFrame, freq: str = "30s") -> pd.DataFrame:
     t = trades.set_index("timestamp").sort_index()
     ret = t["price"].pct_change().abs()
-    return (ret / t["volume"]).resample(freq).mean().rename("amihud").reset_index()
+    return (ret / t["volume"]).resample(freq).mean().rename("amihud").to_frame()
 
 
 amihud(tape).dropna().round(5)
