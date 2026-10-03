@@ -33,8 +33,7 @@ venues that publish it — the feed the reconstruction engine was built for.
     | Access | public | public | public | public | public; Coinbase needs an API key in cryptofeed 2.4.1; other venues not checked |
 
     Use it for an independent check of the top of the Bitstamp book, and for the
-    per-order book on Independent Reserve. There, the trades include other
-    markets' trades, at prices in another currency
+    per-order book on Independent Reserve
     ([see below](#independent-reserve-both-orders-of-a-trade)).
     Don't use it for Bitstamp order analysis (use the native
     [`bitstamp`](live-capture.md) source) or for Bitfinex order lifetimes. On
@@ -185,11 +184,14 @@ same for a trade and the book change it causes.
   [Dropped messages and reconnects](#dropped-messages-and-reconnects)).
   Otherwise an order cancelled just before the stream started would stay in
   the book.
-- **Some trades come from the venue's other markets.** A BTC-AUD capture
-  also gets BTC-NZD and BTC-SGD trades, at prices in those currencies: 3 of 26
-  trades in 40 minutes. They name orders in the capture, since the venue keeps
-  one book for all currencies, but their prices are far from the AUD price, so
-  `audit` reports orders that are still resting as stale. See [What each feed
+- **Trades from the venue's other markets are left out of `trades.csv`.** A
+  BTC-AUD capture also gets BTC-NZD and BTC-SGD trades, at prices in those
+  currencies: 3 of 26 trades in 40 minutes. The source writes a trade to
+  `trades.csv` only when it is for the capture's pair, and `meta.json` counts
+  the others as `other_market_trades`. Their raw frames are still in
+  `raw.jsonl`. The venue keeps one book for all currencies, so these trades
+  name orders in the capture, and the source still records their fills, at the
+  order's price in the capture's currency. See [What each feed
   shows](../feeds.md#trades).
 
 Order IDs are the venue's own throughout, exactly as published — integers on

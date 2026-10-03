@@ -245,8 +245,9 @@ Three cryptofeed L3 captures failed the crossing check in testing:
 - **Independent Reserve:** crossed for 58% of a 20-minute capture on 1 October
   2026. `audit` reported 321 stale resting orders. 223 of them were still in
   the venue's book a day later: trades from the venue's other markets, at
-  prices in another currency, made them look stale (see the note under
-  [Trades](#trades)). Without the other 98, the book was never crossed. Of
+  prices in another currency, made them look stale. The cryptofeed source now
+  leaves those trades out (see the note under [Trades](#trades)). Without the
+  other 98, the book was never crossed. Of
   those 98:
   - 52 came from the opening book, which cryptofeed fetches from the venue's
     REST interface, and the stream never mentioned them again. Those files
@@ -510,10 +511,12 @@ Note on this table:
   carries trades from the venue's other markets for the same coin, at prices in
   their own currency. In 40 minutes of BTC-AUD on 1 October 2026, 3 of 26
   trades came from BTC-NZD or BTC-SGD, at about 148,700 and 107,000, while
-  BTC-AUD traded near 120,000. The venue keeps one book for all its currencies,
-  so these trades name orders in the capture, and their fills are right. Their
-  prices are not: `audit` reads them as trades through the book and reports
-  orders that are still resting as stale.
+  BTC-AUD traded near 120,000. The cryptofeed source leaves these trades out of
+  `trades.csv` and counts them as `other_market_trades` in `meta.json`. The
+  venue keeps one book for all its currencies, so these trades name orders in
+  the capture, and the source still records their fills. A capture made before
+  this change holds them in `trades.csv`, and `audit` reads them as trades
+  through the book and reports orders that are still resting as stale.
 
 ## Venue rules
 

@@ -136,6 +136,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   as on Bitstamp. On a per-change book, a fill that the trade and the book both
   report is recorded once, and a book message that repeats an order's size
   writes no row.
+- **An Independent Reserve capture's `trades.csv` no longer holds other
+  markets' trades** (#316). The venue sends a market's trade channel the
+  trades of its other markets for the same coin, so a BTC-AUD capture also got
+  BTC-NZD and BTC-SGD trades, priced in NZD and SGD. `audit` read them as
+  trades through the book and reported resting orders as stale. The cryptofeed
+  source now writes a trade to `trades.csv` only when it is for the capture's
+  pair, and counts the others as `other_market_trades` in `meta.json`. The
+  venue keeps one book for all its markets, so a trade left out still reports
+  the fill of any order it names in the capture, at the order's price.
 - **`audit` no longer reports lost messages on cryptofeed captures that lost
   none** (#309). On Bitfinex and Blockchain.com cryptofeed's sequence number
   counts every message on the connection, trades and heartbeats too, and on
