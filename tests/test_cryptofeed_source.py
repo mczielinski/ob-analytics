@@ -115,7 +115,7 @@ class _FakeBook:
         delta: dict | None = None,
         exchange: str = "fakel2",
         symbol: str = "BTC-USD",
-        timestamp: float = 1_700_000_000.0,
+        timestamp: float | None = 1_700_000_000.0,
         sequence_number: int | None = 7,
         raw: object = None,
     ) -> None:
@@ -491,8 +491,10 @@ class _FakeFeedHandler:
     callbacks the capturer registered.
     """
 
-    def __init__(self, script: list[tuple[str, object]]) -> None:
+    def __init__(self, script: list[tuple], *, idle: bool = False) -> None:
         self._script = script
+        # Keep "running" after the script, as a live feed with nothing to say.
+        self._idle = idle
         self.feeds: list = []
         self.stopped = False
         self.started = False
@@ -516,9 +518,11 @@ class _FakeFeedHandler:
 
     async def _drive(self):
         callbacks = self.feeds[0].kwargs["callbacks"]
-        for channel, obj in self._script:
-            await callbacks[channel](obj, 1_700_000_000.0)
-        self.running = False
+        # An item may carry its own receipt time as a third element.
+        for channel, obj, *receipt in self._script:
+            await callbacks[channel](obj, receipt[0] if receipt else 1_700_000_000.0)
+        if not self._idle:
+            self.running = False
 
     async def stop_async(self, loop=None):
         self.stopped = True
@@ -1542,6 +1546,317 @@ class TestReceiptClock:
     def test_trades_carry_receipt_time(self):
         ev = self._source()._map_trade(_FakeTrade(), 1_700_000_000.5)
         assert ev["timestamp"].value == 1_700_000_000_500_000_000
+
+    def test_a_book_without_venue_time_copies_the_receipt_time(self):
+        """Bitfinex and Blockchain.com send no book time: one clock, not "now" (#310)."""
+        (ev,) = self._source()._l3_events(
+            _l3_book({"bid": {100.0: {11: 2.0}}, "ask": {}}, timestamp=None),
+            1_700_000_000.25,
+        )
+        assert ev["timestamp"].value == 1_700_000_000_250_000_000
+        assert ev["exchange_timestamp"] == ev["timestamp"]
+
+    def test_an_l2_book_without_venue_time_copies_the_receipt_time(self):
+        """Kraken's L2 book sends no time either (#310)."""
+        from ob_analytics.live.cryptofeed_source import (
+            CryptofeedSettings,
+            CryptofeedSource,
+        )
+
+        src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l2_venue()))
+        rows = src._l2_rows(
+            _FakeBook({"bid": {100.0: 1.0}, "ask": {}}, timestamp=None),
+            1_700_000_000.25,
+        )
+        assert rows
+        for row in rows:
+            assert row["timestamp"].value == 1_700_000_000_250_000_000
+            assert row["exchange_timestamp"] == row["timestamp"]
+
+    def test_a_trade_without_venue_time_copies_the_receipt_time(self):
+        ev = self._source()._map_trade(_FakeTrade(timestamp=None), 1_700_000_000.5)
+        assert ev["exchange_timestamp"] == ev["timestamp"]
+        assert ev["timestamp"].value == 1_700_000_000_500_000_000
+
+
+class TestClocks:
+    """A capture records whether the venue's books carried a time (#310)."""
+
+    @staticmethod
+    def _capture(tmp_path, book_times: list[float | None]):
+        import asyncio
+        import json
+
+        from ob_analytics.live._runner import run_capturer
+
+        script = [
+            (
+                "l3_book",
+                _l3_book({"bid": {100.0 + i: {i: 1.0}}, "ask": {}}, timestamp=t),
+            )
+            for i, t in enumerate(book_times)
+        ]
+        src = _source_with(_l3_venue(), script)
+        asyncio.run(run_capturer(src, _capture_cfg(tmp_path)))
+        cap = tmp_path / "cap"
+        return src, cap, json.loads((cap / "meta.json").read_text())
+
+    def test_a_venue_with_no_book_time_records_one_clock(self, tmp_path):
+        from ob_analytics.depth_l2 import recorded_clocks
+        from ob_analytics.protocols import Clocks
+
+        src, cap, meta = self._capture(tmp_path, [None, None])
+        assert src.clocks is Clocks.RECEIVE_ONLY
+        assert meta["clocks"] == "receive_only"
+        assert meta["books_without_venue_time"] == 2
+        assert recorded_clocks(cap / "orders.csv") is Clocks.RECEIVE_ONLY
+        orders = pd.read_csv(cap / "orders.csv")
+        book_rows = orders[orders["origin"] == "stream"]
+        assert (book_rows["exchange_timestamp"] == book_rows["timestamp"]).all()
+
+    def test_an_opening_book_without_venue_time_keeps_both_clocks(self, tmp_path):
+        """Independent Reserve and Coinbase send no time on the opening book only."""
+        from ob_analytics.protocols import Clocks
+
+        src, cap, meta = self._capture(tmp_path, [None, 1_699_999_999.9])
+        assert src.clocks is Clocks.BOTH
+        assert meta["clocks"] == "both"
+        assert meta["books_without_venue_time"] == 1
+        orders = pd.read_csv(cap / "orders.csv")
+        # The opening book's rows carry the receipt time in both columns, so no
+        # row has a venue time later than its receipt.
+        assert (orders["exchange_timestamp"] <= orders["timestamp"]).all()
+
+    @staticmethod
+    def _held(venue_time):
+        """A source holding one book row received at 10.0 s."""
+        from ob_analytics.live.cryptofeed_source import (
+            CryptofeedSettings,
+            CryptofeedSource,
+        )
+
+        src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l2_venue()))
+        (row,) = src._l2_rows(
+            _FakeBook({"bid": {100.0: 1.0}, "ask": {}}, timestamp=venue_time), 10.0
+        )
+        src._hold_book("depth", [row], {"frame": "raw"}, 10.0, venue_time)
+        return src
+
+    def test_a_book_received_after_the_next_is_placed_before_it(self):
+        ((kind, row, raw),) = self._held(None)._release_held_book(9.5)
+        assert (kind, raw) == ("depth", {"frame": "raw"})
+        assert row["timestamp"] == pd.Timestamp(9.499, unit="s", tz="UTC")
+        assert row["exchange_timestamp"] == row["timestamp"]
+        assert row["origin"] == "snapshot"
+
+    def test_a_placed_book_keeps_its_venue_time(self):
+        ((_, row, _),) = self._held(9.9)._release_held_book(9.5)
+        assert row["timestamp"] == pd.Timestamp(9.499, unit="s", tz="UTC")
+        assert row["exchange_timestamp"] == pd.Timestamp(9.9, unit="s", tz="UTC")
+        assert row["origin"] == "snapshot"
+
+    def test_a_book_in_order_keeps_its_receive_time(self):
+        ((_, row, _),) = self._held(9.9)._release_held_book(10.5)
+        assert row["timestamp"] == pd.Timestamp(10.0, unit="s", tz="UTC")
+        # Both clocks measured: an ordinary row.
+        assert "origin" not in row
+
+    def test_a_book_without_venue_time_is_marked_even_in_order(self):
+        ((_, row, _),) = self._held(None)._release_held_book(10.5)
+        assert row["timestamp"] == pd.Timestamp(10.0, unit="s", tz="UTC")
+        assert row["origin"] == "snapshot"
+
+    def test_a_rest_opening_book_replays_before_the_message_that_changed_it(
+        self, tmp_path
+    ):
+        """cryptofeed fetches a REST opening book inside the first message (#310).
+
+        The book is handed over first with a later receipt time; the message's
+        change must still replay after it.
+        """
+        import asyncio
+
+        from ob_analytics.depth_l2 import L2DepthLoader
+        from ob_analytics.live._runner import run_capturer
+
+        t0 = 1_700_000_000.0
+        script = [
+            # The REST book, received after the message that triggered it.
+            ("l2_book", _FakeBook({"bid": {100.0: 1.0}, "ask": {}}), t0 + 0.3),
+            (
+                "l2_book",
+                _FakeBook(
+                    {"bid": {100.0: 2.0}, "ask": {}},
+                    delta={"bid": [(100.0, 2.0)], "ask": []},
+                ),
+                t0,
+            ),
+        ]
+        asyncio.run(
+            run_capturer(_source_with(_l2_venue(), script), _capture_cfg(tmp_path))
+        )
+        depth = L2DepthLoader().load(tmp_path / "cap" / "depth.csv")
+        # The book's size first, then the message's change to it.
+        opening, changed = depth["volume"].tolist()
+        assert changed == 2 * opening
+        # The message keeps its own receipt time; the book is placed before it.
+        t0_ms = pd.Timestamp(t0, unit="s", tz="UTC")
+        assert depth["timestamp"].tolist() == [
+            t0_ms - pd.Timedelta(milliseconds=1),
+            t0_ms,
+        ]
+        assert depth["origin"].tolist() == ["snapshot", "stream"]
+
+    def test_an_opening_book_sorts_before_its_message_by_every_key(self, tmp_path):
+        """With sequences tracked, the unnumbered opening book still comes first.
+
+        Independent Reserve's REST book has no sequence; the message after it
+        has one.  A tie on ``timestamp`` would sort the numbered message first.
+        """
+        import asyncio
+
+        from ob_analytics.bitstamp import BitstampSource
+        from ob_analytics.config import PipelineConfig
+        from ob_analytics.live._runner import run_capturer
+        from ob_analytics.pipeline import Pipeline
+        from ob_analytics.schemas import time_order_keys
+
+        t0 = 1_700_000_000.0
+        script = [
+            (
+                "l3_book",
+                _l3_book(
+                    {"bid": {100.0: {"x": 1.0}}, "ask": {}},
+                    timestamp=None,
+                    sequence_number=None,
+                ),
+                t0 + 0.3,
+            ),
+            (
+                "l3_book",
+                _l3_book(
+                    {"bid": {100.0: {"x": 1.0, "y": 2.0}}, "ask": {}},
+                    delta={"bid": [("y", 100.0, 2.0)], "ask": []},
+                    timestamp=t0 - 0.01,
+                    sequence_number=5,
+                ),
+                t0,
+            ),
+        ]
+        asyncio.run(
+            run_capturer(_source_with(_l3_venue(), script), _capture_cfg(tmp_path))
+        )
+        result = Pipeline(
+            PipelineConfig(track_sequence=True), source=BitstampSource()
+        ).run(tmp_path / "cap" / "orders.csv")
+        ordered = result.events.sort_values(time_order_keys(result.events))
+        created = ordered[ordered["action"] == "created"]
+        assert created["id"].tolist() == ["x", "y"]
+
+    @staticmethod
+    def _idle_source(script):
+        from ob_analytics.live.cryptofeed_source import (
+            CryptofeedSettings,
+            CryptofeedSource,
+        )
+
+        return CryptofeedSource(
+            settings=CryptofeedSettings(
+                exchange=_l2_venue(), feed_handler=_FakeFeedHandler(script, idle=True)
+            )
+        )
+
+    def test_a_held_book_is_written_when_the_feed_goes_quiet(self, tmp_path):
+        """A quiet feed must not keep the opening book off disk (#310)."""
+        import asyncio
+
+        src = self._idle_source(
+            [("l2_book", _FakeBook({"bid": {100.0: 1.0}, "ask": {}}))]
+        )
+
+        async def first_item():
+            stream = src.stream(_capture_cfg(tmp_path, minutes=1.0))
+            try:
+                async with asyncio.timeout(3.0):
+                    return await anext(stream)
+            finally:
+                await stream.aclose()
+
+        kind, row, _ = asyncio.run(first_item())
+        assert kind == "depth"
+        assert row["price"] == 100.0
+
+    def test_what_is_queued_at_the_deadline_is_written_before_the_held_book(
+        self, tmp_path, monkeypatch
+    ):
+        import asyncio
+        from types import SimpleNamespace
+
+        from ob_analytics.live import cryptofeed_source
+        from ob_analytics.live._runner import run_capturer
+
+        # The clock passes the deadline after the first row has been read, so
+        # the rest of the books are still queued.
+        calls = iter([0.0, 0.0])
+        monkeypatch.setattr(
+            cryptofeed_source,
+            "time",
+            SimpleNamespace(monotonic=lambda: next(calls, 1e9)),
+        )
+        script = [
+            ("l2_book", _FakeBook({"bid": {100.0: 1.0}, "ask": {}})),
+            (
+                "l2_book",
+                _FakeBook(
+                    {"bid": {100.0: 2.0}, "ask": {}}, delta={"bid": [(100.0, 2.0)]}
+                ),
+            ),
+            (
+                "l2_book",
+                _FakeBook(
+                    {"bid": {100.0: 3.0}, "ask": {}}, delta={"bid": [(100.0, 3.0)]}
+                ),
+            ),
+            # A whole book again, so it is still held at the deadline.
+            ("l2_book", _FakeBook({"bid": {100.0: 3.0}, "ask": {101.0: 1.0}})),
+        ]
+        asyncio.run(
+            run_capturer(_source_with(_l2_venue(), script), _capture_cfg(tmp_path))
+        )
+        written = pd.read_csv(tmp_path / "cap" / "depth.csv")
+        assert list(zip(written["price"], written["volume"])) == [
+            (100.0, 1.0),
+            (100.0, 2.0),
+            (100.0, 3.0),
+            (101.0, 1.0),
+        ]
+
+    def test_a_held_book_is_written_at_shutdown_as_a_streamed_row(self, tmp_path):
+        """Stopped before the feed goes quiet, the held book still lands (#310)."""
+        import asyncio
+
+        from ob_analytics.live._runner import run_capturer
+
+        src = self._idle_source(
+            [("l2_book", _FakeBook({"bid": {100.0: 1.0}, "ask": {}}, timestamp=1.0))]
+        )
+
+        async def capture():
+            stop = asyncio.Event()
+            asyncio.get_running_loop().call_later(0.1, stop.set)
+            await run_capturer(src, _capture_cfg(tmp_path, minutes=1.0), stop=stop)
+
+        asyncio.run(capture())
+        written = pd.read_csv(tmp_path / "cap" / "depth.csv")
+        assert written["price"].tolist() == [100.0]
+        # It came from the stream, and had a venue time: not a shutdown row.
+        assert written["origin"].tolist() == ["stream"]
+
+    def test_audit_says_the_clocks_were_not_checked(self, tmp_path, cli_runner):
+        _, cap, _ = self._capture(tmp_path, [None, None])
+        r = cli_runner("audit", str(cap / "orders.csv"))
+        assert r.returncode == 0, r.stderr
+        assert "clock order           : not checked" in r.stdout
 
 
 def _tape_trade(buy, sell, *, amount="0.5", timestamp=1_700_000_010.0, side="buy"):

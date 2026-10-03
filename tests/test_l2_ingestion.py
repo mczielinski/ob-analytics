@@ -25,7 +25,7 @@ from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
 from ob_analytics.depth import depth_metrics, get_spread
 from ob_analytics.depth_l2 import DepthCsvWriter, L2DepthLoader, L2TradeReader
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.protocols import DepthSource, FeedType
+from ob_analytics.protocols import Clocks, DepthSource, FeedType
 from ob_analytics.schemas import (
     validate_depth_df,
     validate_events_df,
@@ -363,6 +363,66 @@ class TestDepthCsvWriter:
         assert (tmp_path / "trades.csv").exists()
         trades = L2TradeReader().load(pd.DataFrame(), tmp_path)
         assert len(trades) == len(toy_l2_trades())
+
+
+class TestVenueClock:
+    """The L2 depth frame keeps the venue's time, so audit can check it (#310)."""
+
+    @staticmethod
+    def _write(directory, venue_ms: list[int | None]) -> None:
+        """Two depth rows received 1 s apart, with the given venue times."""
+        pd.DataFrame(
+            {
+                "timestamp": [_BASE_MS, _BASE_MS + 1_000],
+                "exchange_timestamp": venue_ms,
+                "side": ["bid", "ask"],
+                "price": [100.0, 101.0],
+                "volume": [1.0, 1.0],
+            }
+        ).to_csv(directory / "depth.csv", index=False)
+
+    def test_the_loader_keeps_exchange_timestamp(self, tmp_path):
+        self._write(tmp_path, [_BASE_MS - 5, _BASE_MS + 990])
+        depth = L2DepthLoader().load(tmp_path)
+        validate_depth_df(depth)
+        assert list(depth.columns[:2]) == ["timestamp", "exchange_timestamp"]
+        assert str(depth["exchange_timestamp"].dtype) == "datetime64[ns, UTC]"
+        assert depth["exchange_timestamp"].iloc[0] == pd.Timestamp(
+            _BASE_MS - 5, unit="ms", tz="UTC"
+        )
+
+    def test_a_file_with_one_clock_has_no_exchange_timestamp(self, tmp_path):
+        _write_l2_dir(tmp_path, [(_BASE_MS, "bid", 100.0, 1.0)])
+        assert "exchange_timestamp" not in L2DepthLoader().load(tmp_path).columns
+
+    def test_the_writer_round_trips_it(self, tmp_path):
+        self._write(tmp_path, [_BASE_MS - 5, _BASE_MS + 990])
+        depth_in = L2DepthLoader().load(tmp_path)
+        out = tmp_path / "out"
+        DepthCsvWriter().write({"depth": depth_in}, out)
+        depth_out = L2DepthLoader().load(out)
+        pd.testing.assert_series_equal(
+            depth_in["exchange_timestamp"], depth_out["exchange_timestamp"]
+        )
+
+    def test_audit_checks_the_clocks_on_an_l2_capture(self, tmp_path):
+        # The second row's venue time is after the time it was received.
+        self._write(tmp_path, [_BASE_MS - 5, _BASE_MS + 1_500])
+        r = Pipeline.from_source("depth_csv").run(tmp_path)
+        summary = data_quality_summary(
+            r.events, r.trades, feed_type=FeedType.PRICE_LEVELS, depth=r.depth
+        )
+        assert summary.exchange_time_after_receive == 1
+        assert "exchange_time_after_receive" in {c.name for c in summary.errors}
+
+    def test_audit_says_why_a_file_with_one_clock_is_not_checked(self, tmp_path):
+        _write_l2_dir(tmp_path, [(_BASE_MS, "bid", 100.0, 1.0)])
+        r = Pipeline.from_source("depth_csv").run(tmp_path)
+        summary = data_quality_summary(
+            r.events, r.trades, feed_type=FeedType.PRICE_LEVELS, depth=r.depth
+        )
+        assert summary.clocks is Clocks.RECEIVE_ONLY
+        assert "not checked" in summary.render()
 
 
 # ---------------------------------------------------------------------------

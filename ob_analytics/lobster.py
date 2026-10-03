@@ -44,6 +44,7 @@ from ob_analytics._utils import (
 )
 from ob_analytics.config import PipelineConfig, SourceSettings
 from ob_analytics.protocols import (
+    Clocks,
     DataWriter,
     EventLoader,
     FeedType,
@@ -974,6 +975,9 @@ class LobsterSource:
     trade_attribution: TradeAttribution = field(
         default=TradeAttribution.MAKER_ONLY, init=False, repr=False
     )
+    # A LOBSTER message file holds the exchange's time only; the loader copies
+    # it into ``timestamp``, so there is no receive time to check it against.
+    clocks: Clocks = field(default=Clocks.VENUE_ONLY, init=False, repr=False)
     # Per-order (market-by-order) feed — the full reconstruction model.
     level: Level = field(default=Level.L3, init=False, repr=False)
     # LOBSTER needs no per-source knobs; empty typed settings keep the
