@@ -138,6 +138,27 @@ class TestComputeVpin:
         with pytest.raises(ValueError, match="positive"):
             compute_vpin(trades, bucket_volume=-1.0)
 
+    @pytest.mark.parametrize("sign_method", [None, "bvc"])
+    def test_bucket_volume_in_the_wrong_units_raises(self, sign_method):
+        """A bucket far smaller than the volume is refused before any bucket is built.
+
+        Sizes are integer lots, so a bucket of 1.0 against 0.01 BTC trades
+        (1e6 lots each at a lot size of 1e-8) asks for two million buckets.
+        """
+        trades = _trades(["buy", "sell"], volumes=[1_000_000, 1_000_000])
+        with pytest.raises(ValueError, match="MAX_VOLUME_BUCKETS.*lots"):
+            compute_vpin(trades, bucket_volume=1.0, sign_method=sign_method)
+
+    def test_default_bucket_over_a_bad_time_span_blames_the_timestamps(self):
+        """The default rule makes ~50 buckets a day, so decades trip the cap.
+
+        The bucket was not passed in, so the error points at the time span,
+        not at bucket_volume's units.
+        """
+        trades = _trades(["buy", "sell"], base_sec_offsets=[0, 100 * 365 * 86_400])
+        with pytest.raises(ValueError, match="MAX_VOLUME_BUCKETS.*time span"):
+            compute_vpin(trades)
+
 
 # ── Kyle's Lambda ────────────────────────────────────────────────────
 

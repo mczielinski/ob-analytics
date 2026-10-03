@@ -43,7 +43,7 @@ timestamp:
 import pandas as pd
 from ob_analytics.analytics import order_book
 
-# Snapshot ten minutes into the run (events.timestamp is timezone-naive UTC).
+# Snapshot ten minutes into the run (events.timestamp is tz-aware UTC).
 tp = events["timestamp"].iloc[0] + pd.Timedelta(minutes=10)
 snapshot = order_book(events, tp=tp, max_levels=5)
 print(snapshot["timestamp"])
