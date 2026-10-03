@@ -243,15 +243,18 @@ def _audit_one(args: argparse.Namespace, path: Path) -> Any:
 
     from ob_analytics.analytics import data_quality_summary
     from ob_analytics.depth_l2 import (
+        recorded_clocks,
         recorded_feed_type,
         recorded_sequence_kind,
         recorded_source,
         recorded_trade_attribution,
     )
     from ob_analytics.protocols import (
+        Clocks,
         FeedType,
         SequenceKind,
         TradeAttribution,
+        clocks_of,
         sequence_kind_of,
         trade_attribution_of,
     )
@@ -267,6 +270,7 @@ def _audit_one(args: argparse.Namespace, path: Path) -> Any:
     feed_type = FeedType.UNKNOWN
     trade_attribution = TradeAttribution.BOTH
     sequence_kind = SequenceKind.CONTIGUOUS
+    clocks = Clocks.BOTH
     if source_name is not None:
         from ob_analytics.sources import get_source
 
@@ -278,6 +282,7 @@ def _audit_one(args: argparse.Namespace, path: Path) -> Any:
         feed_type = getattr(source, "feed_type", feed_type)
         trade_attribution = trade_attribution_of(source)
         sequence_kind = sequence_kind_of(source)
+        clocks = clocks_of(source)
 
     # A live capture records what its own source declares, and that describes
     # this data exactly.  --source may name a different source because it also
@@ -288,6 +293,7 @@ def _audit_one(args: argparse.Namespace, path: Path) -> Any:
     if made_by is not None:
         feed_type = recorded_feed_type(path) or feed_type
         trade_attribution = recorded_trade_attribution(path) or trade_attribution
+        clocks = recorded_clocks(path) or clocks
         if source_name is not None and made_by != source_name:
             logger.info(
                 "Checking against what the {} source declares (recorded in "
@@ -309,6 +315,7 @@ def _audit_one(args: argparse.Namespace, path: Path) -> Any:
         tick_size=result.config.tick_size,
         sequence_kind=recorded_sequence_kind(path, default=sequence_kind),
         trade_attribution=trade_attribution,
+        clocks=clocks,
     )
 
 

@@ -22,7 +22,7 @@ venues that publish it — the feed the reconstruction engine was built for.
     | What can be missed | orders that come and go between snapshots | nothing | nothing | any change or cancel after an order's first change, which cryptofeed ignores; the trades restore the fills | a lost message |
     | After a lost message | the next snapshot corrects it | reconnects; new opening book | reconnects; new opening book | reconnects; new opening book | drifts until the level changes again |
     | Sequence | none | counts every message on the connection, so book rows skip numbers | counts every message on the connection, so book rows skip numbers | contiguous, with skips cryptofeed makes itself | none |
-    | Clocks | venue + receive | receive only | receive only | venue + receive; the opening book's rows carry a venue time later than their receive time | Bitstamp: venue + receive. Kraken: receive only |
+    | Clocks | venue + receive | receive only | receive only | venue + receive; the opening book receive only | Bitstamp: venue + receive. Kraken: receive only |
     | Crossing | matched book; failed the check in testing (0.125% crossed): Bitstamp's own snapshots can briefly show a bid at a resting ask's price | matched book; failed the check in testing (58% crossed; cause not found) | matched book | matched book; failed the check in testing (58% crossed): orders that stayed in the book after they had gone | price levels |
     | Trade sides named | maker only, from the tape | neither | neither | maker only, from the tape | — |
     | Taker side | venue | venue | venue (not checked) | venue | venue |

@@ -34,7 +34,7 @@ from ob_analytics.live import (
     run_capture,
 )
 from ob_analytics.live._base import EventDict
-from ob_analytics.protocols import FeedType, Level
+from ob_analytics.protocols import Clocks, FeedType, Level
 from tests._logging import warnings_logged
 
 # ---------------------------------------------------------------------------
@@ -705,6 +705,28 @@ class TestManifest:
         assert raw["dropped"] == 0
         assert raw["gap_seconds"] == pytest.approx(run.manifest.gaps[0].seconds)
 
+    def test_each_segment_records_its_clocks_and_the_manifest_does_not(self, tmp_path):
+        """A live source learns its clocks from the books, after the manifest opens."""
+
+        class _OneClock(_ScriptedSource):
+            clocks = Clocks.RECEIVE_ONLY
+
+        plan = [_disconnect_after(4), OK]
+
+        def make() -> _OneClock:
+            return _OneClock(plan.pop(0) if len(plan) > 1 else plan[0])
+
+        cfg = CaptureConfig(
+            pair="btcusd", out_dir=tmp_path / "cap", minutes=0.8 / 60, keep_raw=False
+        )
+        run = asyncio.run(run_capture(make, cfg))
+        assert len(run.manifest.segments) == 2
+        for seg in run.manifest.segments:
+            meta = json.loads((run.out_dir / seg.name / "meta.json").read_text())
+            assert meta["clocks"] == "receive_only"
+        raw = json.loads((run.out_dir / "manifest.json").read_text())
+        assert "clocks" not in raw
+
     def test_a_running_segment_keeps_a_provisional_meta_on_disk(self, tmp_path):
         cfg = CaptureConfig(
             pair="btcusd", out_dir=tmp_path / "cap", minutes=1.0 / 60, keep_raw=False
@@ -901,6 +923,24 @@ class TestCloseSegmentFiles:
         assert segment.raw_frames_skipped == 4
         meta = json.loads(meta_path.read_text())
         assert meta["raw_text_types"] == ["uuid.UUID"]
+
+    def test_keeps_the_clocks_of_the_provisional_meta(self, tmp_path):
+        # The manifest's declarations are merged over the provisional meta;
+        # they must not replace the clocks the segment saw.
+        root = tmp_path / "cap"
+        _crashed_capture(root)
+        meta_path = root / "seg-0001" / "meta.json"
+        meta = json.loads(meta_path.read_text())
+        meta["clocks"] = "receive_only"
+        meta_path.write_text(json.dumps(meta))
+        manifest = read_manifest(root)
+        assert manifest is not None
+
+        _supervisor._close_segment_files(
+            root / "seg-0001", manifest.segments[0], manifest, "it did not stop"
+        )
+
+        assert json.loads(meta_path.read_text())["clocks"] == "receive_only"
 
     def test_the_sinks_raw_counters_replace_the_provisional_ones(self, tmp_path):
         # A segment stuck on stop is closed while its sink is still at hand:

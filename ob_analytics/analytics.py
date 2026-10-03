@@ -28,10 +28,12 @@ from loguru import logger
 from ob_analytics import _engine_frames, engine
 from ob_analytics._utils import ticks_to_price, validate_columns, validate_non_empty
 from ob_analytics.depth import price_level_volume
-from ob_analytics.protocols import FeedType, SequenceKind, TradeAttribution
+from ob_analytics.protocols import Clocks, FeedType, SequenceKind, TradeAttribution
 from ob_analytics.schemas import (
     INGEST_SEQ_COLUMN,
+    ORIGIN_COLUMN,
     SEQUENCE_COLUMN,
+    SNAPSHOT_ORIGIN,
     time_order_keys,
 )
 
@@ -1246,9 +1248,19 @@ class DataQualitySummary:
     exchange_time_after_receive : int
         Rows whose venue clock (``exchange_timestamp``) is later than the local
         receive clock (``timestamp``) — an event received before it happened.
+        Always ``0`` when ``clocks`` is not ``BOTH``.  Rows from a capture's
+        opening book (``origin`` ``snapshot``) are not counted: the capture
+        may not have measured their clocks.
     exchange_time_reordered : int
         Steps where the venue clock goes backwards while the receive clock
         moves forward: messages that reached the capture out of order.
+        Always ``0`` when ``clocks`` is not ``BOTH``; the opening book's rows
+        are left out, as for ``exchange_time_after_receive``.
+    clocks : Clocks
+        Which clocks the data carries (see
+        :class:`~ob_analytics.protocols.Clocks`).  The two clock checks run
+        only when it is ``BOTH``; with one clock there is nothing to compare,
+        and the report says so.
     stale_orders : tuple of StaleOrder
         Resting orders a trade printed through that the venue did not report
         again within :data:`STALE_GRACE`, worst first (see
@@ -1281,6 +1293,7 @@ class DataQualitySummary:
     negative_volume_rows: int = 0
     exchange_time_after_receive: int = 0
     exchange_time_reordered: int = 0
+    clocks: Clocks = Clocks.BOTH
     stale_orders: tuple[StaleOrder, ...] = ()
     trade_attribution: TradeAttribution = TradeAttribution.BOTH
 
@@ -1307,6 +1320,7 @@ class DataQualitySummary:
             "negative_volume_rows": self.negative_volume_rows,
             "exchange_time_after_receive": self.exchange_time_after_receive,
             "exchange_time_reordered": self.exchange_time_reordered,
+            "clocks": str(self.clocks.value),
             "stale_orders": [o.to_dict() for o in self.stale_orders],
             "trade_attribution": str(self.trade_attribution.value),
             "ok": self.ok,
@@ -1342,6 +1356,20 @@ class DataQualitySummary:
         if self.trade_attribution == TradeAttribution.NONE:
             return "not checked: this feed names no orders"
         return "maker and taker"
+
+    def _clocks_note(self) -> str:
+        """Why the clock checks did not run, or ``""`` when they did."""
+        if self.clocks is Clocks.RECEIVE_ONLY:
+            return (
+                "not checked: the data has no venue time, so exchange_timestamp "
+                "copies the receive time"
+            )
+        if self.clocks is Clocks.VENUE_ONLY:
+            return (
+                "not checked: the data has no receive time, so timestamp copies "
+                "the venue time"
+            )
+        return ""
 
     def _worst_stale(self) -> str:
         """The worst stale order: its id, side, price and time at the touch."""
@@ -1402,14 +1430,6 @@ class DataQualitySummary:
                 "or fill: an impossible size",
             ),
             QualityCheck(
-                "exchange_time_after_receive",
-                self.exchange_time_after_receive == 0,
-                Severity.ERROR,
-                f"{self.exchange_time_after_receive} row(s) have a venue "
-                "timestamp later than the receive timestamp: an event received "
-                "before it happened (clock skew, or the two clocks swapped)",
-            ),
-            QualityCheck(
                 "crossed_book",
                 not crossed,
                 crossed_severity,
@@ -1454,14 +1474,6 @@ class DataQualitySummary:
                 "zero: not a tradeable level",
             ),
             QualityCheck(
-                "exchange_time_reordered",
-                self.exchange_time_reordered == 0,
-                Severity.WARNING,
-                f"{self.exchange_time_reordered} message(s) arrived out of venue "
-                "order (the venue clock goes back while the receive clock moves "
-                "forward)",
-            ),
-            QualityCheck(
                 "pre_existing_orders",
                 True,
                 Severity.INFO,
@@ -1476,9 +1488,34 @@ class DataQualitySummary:
                 if self.events_with_sequence
                 else "no venue sequence in this feed, so gaps cannot be detected",
             ),
+            *self._clock_checks(),
         ]
         order = {Severity.ERROR: 0, Severity.WARNING: 1, Severity.INFO: 2}
         return tuple(sorted(checks, key=lambda c: order[c.severity]))
+
+    def _clock_checks(self) -> list[QualityCheck]:
+        """The two clock checks, or one note saying why they did not run."""
+        skipped = self._clocks_note()
+        if skipped:
+            return [QualityCheck("clocks", True, Severity.INFO, skipped)]
+        return [
+            QualityCheck(
+                "exchange_time_after_receive",
+                self.exchange_time_after_receive == 0,
+                Severity.ERROR,
+                f"{self.exchange_time_after_receive} row(s) have a venue "
+                "timestamp later than the receive timestamp: an event received "
+                "before it happened (clock skew, or the two clocks swapped)",
+            ),
+            QualityCheck(
+                "exchange_time_reordered",
+                self.exchange_time_reordered == 0,
+                Severity.WARNING,
+                f"{self.exchange_time_reordered} message(s) arrived out of venue "
+                "order (the venue clock goes back while the receive clock moves "
+                "forward)",
+            ),
+        ]
 
     @property
     def errors(self) -> tuple[QualityCheck, ...]:
@@ -1505,6 +1542,10 @@ class DataQualitySummary:
             f"{self.sequence_gaps} missing"
             if self.sequence_kind is SequenceKind.CONTIGUOUS
             else "gaps not checked (sequence only rises)"
+        )
+        clock_order = self._clocks_note() or (
+            f"{self.exchange_time_after_receive} venue-after-receive / "
+            f"{self.exchange_time_reordered} reordered"
         )
         lines = [
             "Data quality summary",
@@ -1535,10 +1576,7 @@ class DataQualitySummary:
                 f"non-positive price(s) / {self.negative_volume_rows} "
                 "negative volume(s)"
             ),
-            (
-                f"  clock order           : {self.exchange_time_after_receive} "
-                f"venue-after-receive / {self.exchange_time_reordered} reordered"
-            ),
+            f"  clock order           : {clock_order}",
             (
                 f"  venue sequence        : {missing} / "
                 f"{self.sequence_out_of_order} out-of-order "
@@ -1587,10 +1625,13 @@ def _clock_order_counts(frame: pd.DataFrame) -> tuple[int, int]:
       the venue clock should not go backwards while the receive clock moves
       forward — where it does, those messages reached the capture out of order.
 
-    Rows sharing a receive instant are skipped for the second count: their
-    relative order is set by the tie-break key, not by arrival, so a venue-clock
-    step across them says nothing.  A frame without both columns (the L2 depth
-    path carries only ``timestamp``) scores zero on both counts.
+    Rows from a capture's opening book (``origin`` ``snapshot``) are left
+    out of both counts: the capture may not have measured their clocks (an
+    opening book sent without a venue time copies the receive time).  Rows
+    sharing a receive instant are skipped for the second count: their relative
+    order is set by the tie-break key, not by arrival, so a venue-clock step
+    across them says nothing.  A frame without both columns scores zero on
+    both counts.
     """
     if "exchange_timestamp" not in frame.columns or "timestamp" not in frame.columns:
         return 0, 0
@@ -1598,6 +1639,10 @@ def _clock_order_counts(frame: pd.DataFrame) -> tuple[int, int]:
         return 0, 0
 
     both = frame[["timestamp", "exchange_timestamp"]].notna().all(axis=1)
+    if ORIGIN_COLUMN in frame.columns:
+        # Only rows marked as the opening book; a blank origin is checked.
+        opening = frame[ORIGIN_COLUMN].eq(SNAPSHOT_ORIGIN).fillna(False)
+        both &= ~opening.astype(bool)
     after_receive = int(
         (frame.loc[both, "exchange_timestamp"] > frame.loc[both, "timestamp"]).sum()
     )
@@ -1620,6 +1665,7 @@ def data_quality_summary(
     tick_size: float = 1.0,
     sequence_kind: SequenceKind = SequenceKind.CONTIGUOUS,
     trade_attribution: TradeAttribution = TradeAttribution.BOTH,
+    clocks: Clocks = Clocks.BOTH,
 ) -> DataQualitySummary:
     """Summarise the data quality of one reconstructed session.
 
@@ -1660,6 +1706,16 @@ def data_quality_summary(
         check looks only for those.  Read it off the source with
         :func:`~ob_analytics.protocols.trade_attribution_of`; a capture records
         it in ``meta.json``.
+    clocks : Clocks, optional
+        Which clocks the data carries, so the clock checks run only when there
+        are two to compare.  With two, the checks still leave out rows from a
+        capture's opening book (``origin`` ``snapshot``).  Read it off the source with
+        :func:`~ob_analytics.protocols.clocks_of`; a live capture records it in
+        ``meta.json`` (read it with
+        :func:`~ob_analytics.depth_l2.recorded_clocks`).  Data with no venue
+        time at all (a price-level file without ``exchange_timestamp``) is
+        read as :attr:`~ob_analytics.protocols.Clocks.RECEIVE_ONLY` whatever
+        is declared; an empty frame keeps the declaration.
 
     Returns
     -------
@@ -1753,7 +1809,18 @@ def data_quality_summary(
     if not l2 and "fill" in events.columns:
         negative_volume_rows += int((events["fill"] < 0).sum())
 
-    after_receive, reordered = _clock_order_counts(levels)
+    # Rows with no venue time have one clock, whatever the source declares.
+    # An empty frame has no rows to say so, and keeps the declaration.
+    clocks = Clocks(clocks)
+    no_venue_time = "exchange_timestamp" not in levels.columns or bool(
+        levels["exchange_timestamp"].isna().all()
+    )
+    if clocks is Clocks.BOTH and not levels.empty and no_venue_time:
+        clocks = Clocks.RECEIVE_ONLY
+    if clocks is Clocks.BOTH:
+        after_receive, reordered = _clock_order_counts(levels)
+    else:
+        after_receive, reordered = 0, 0
 
     return DataQualitySummary(
         feed_type=feed_type,
@@ -1776,6 +1843,7 @@ def data_quality_summary(
         negative_volume_rows=negative_volume_rows,
         exchange_time_after_receive=after_receive,
         exchange_time_reordered=reordered,
+        clocks=clocks,
         stale_orders=stale_orders,
         trade_attribution=trade_attribution,
     )

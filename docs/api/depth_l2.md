@@ -29,3 +29,5 @@ per-order stages (see [`Level`](protocols.md)).
 ::: ob_analytics.depth_l2.recorded_feed_type
 
 ::: ob_analytics.depth_l2.recorded_trade_attribution
+
+::: ob_analytics.depth_l2.recorded_clocks

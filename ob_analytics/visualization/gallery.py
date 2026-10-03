@@ -35,9 +35,14 @@ from ob_analytics.analytics import order_book
 from ob_analytics.depth import get_spread
 from ob_analytics.pipeline import PipelineResult
 from ob_analytics.visualization import (
+    _BACKEND_MODULES,
+    RENDERERS,
     Level,
     PlotTheme,
     _data as _viz_data,
+    _kind_text,
+    _load_backend,
+    _same_kind,
     infer_volume_scale,
     plot,
     save_figure,
@@ -1199,8 +1204,8 @@ class _Panel:
 
     The render coordinate (``concept``/``level``/``prepare``) drives
     :func:`ob_analytics.visualization.plot`; the display fields
-    (``backend``/``stem``/``label``/...) drive the HTML.  ``rendered`` is set by
-    the render loop and consumed by :func:`_render_panel`.
+    (``backend``/``stem``/``label``/...) drive the HTML.  ``rendered`` and
+    ``reason`` are set by the render loop and consumed by :func:`_render_panel`.
     """
 
     concept: str
@@ -1213,6 +1218,7 @@ class _Panel:
     panel_cls: str
     role: str  # "primary" | "secondary" | "equal"
     rendered: bool = False
+    reason: str = ""  # why the panel was not drawn, shown on the card
 
 
 @dataclass
@@ -1414,11 +1420,33 @@ def generate_gallery(
 
     cards = _project(model, view, backends)
 
+    # Load each backend the cards draw once, before the placement check reads
+    # the registry.  The comparison view draws one backend, so it loads one.
+    drawn = list(dict.fromkeys(p.backend for card in cards for p in card.panels))
+    unloaded: dict[str, str] = {}
+    for backend in drawn:
+        try:
+            _load_backend(backend)
+        except Exception as e:  # noqa: BLE001 -- the other backends still draw
+            unloaded[backend] = (
+                str(e)  # a name that was never registered: the error names it
+                if backend not in _BACKEND_MODULES
+                else f"The {backend!r} backend could not be loaded: {e}"
+            )
+    loaded = frozenset(drawn) - unloaded.keys()
+
     # Render each panel once and persist it under <backend>/<stem>.{png,html}.
     rendered_dirs: set[str] = set()
+    logged: set[str] = set()
     for card in cards:
         logger.info("Gallery: generating {}", card.title)
         for panel in card.panels:
+            panel.reason = unloaded.get(panel.backend) or _misplaced(panel, loaded)
+            if panel.reason:
+                if panel.reason not in logged:
+                    logger.warning("Gallery: {}", panel.reason)
+                    logged.add(panel.reason)
+                continue
             if panel.backend not in rendered_dirs:
                 (out / panel.backend).mkdir(parents=True, exist_ok=True)
                 rendered_dirs.add(panel.backend)
@@ -1428,6 +1456,45 @@ def generate_gallery(
     _write_gallery_html(html_path, cards, title)
     logger.info("Gallery: {} cards ({} view) saved to {}", len(cards), view, out)
     return html_path
+
+
+def _misplaced(panel: _Panel, backends: frozenset[str]) -> str:
+    """Say why *panel* does not match its registered renderers, or return ``""``.
+
+    The model decides how a panel is drawn: a :class:`PlotConcept` in
+    :attr:`GalleryModel.concepts` is drawn at the level of each variant, and a
+    :class:`PlotSpec` in :attr:`GalleryModel.analytics` is drawn level-less.
+    The renderer registry decides it separately, from the level each renderer
+    is registered at.  Only the renderers on *backends*, the gallery's own
+    loaded backends, are read, so the answer does not depend on what else was
+    imported.  The panel does not match when it is the other kind, or when
+    none of *backends* has a renderer at its level.  The text says how to fix
+    the model.  A plot drawn by another of *backends* but not by this one is
+    not a mismatch, and neither is a plot none of them draws, so both return
+    ``""``.
+    """
+    levels = {lvl for lvl, b in RENDERERS.placements(panel.concept) if b in backends}
+    if not levels:
+        return ""
+    registered = f"{panel.concept!r} is registered {_kind_text(levels)}"
+    if not _same_kind(next(iter(levels)), panel.level):
+        if panel.level is None:
+            return (
+                f"{registered}, but the gallery model has it in analytics, which "
+                "is drawn level-less. Add it to GalleryModel.concepts as a "
+                "PlotConcept instead."
+            )
+        return (
+            f"{registered}, but the gallery model has it in concepts, which is "
+            "drawn at a level. Add it to GalleryModel.analytics as a PlotSpec "
+            "instead."
+        )
+    if panel.level is not None and panel.level not in levels:
+        return (
+            f"{registered}, but its PlotConcept has a variant at {panel.level}. "
+            f"Remove that variant, or register a renderer at {panel.level}."
+        )
+    return ""
 
 
 def _render_and_save(panel: _Panel, out: Path, plt: Any) -> bool:
@@ -1483,6 +1550,8 @@ def _render_panel(panel: _Panel, escaped_title: str) -> str:
 
     if not panel.rendered:
         body = '<p class="na">Not available</p>'
+        if panel.reason:
+            body += f'<p class="na-reason">{html_mod.escape(panel.reason)}</p>'
     elif panel.backend == "plotly":
         body = (
             f'<iframe src="plotly/{panel.stem}.html" loading="lazy" '
@@ -1570,6 +1639,7 @@ h1{{text-align:center;margin-bottom:24px;color:#e94560}}
 .panel-secondary iframe{{height:300px}}
 .panel-equal iframe{{height:500px}}
 .panel .na{{color:#666;font-style:italic;margin-top:40px}}
+.panel .na-reason{{color:#9fb3c8;font-size:.9em;margin:8px 16px 0}}
 .empty{{text-align:center;color:#888;font-style:italic;margin-top:40px}}
 .overlay{{display:none;position:fixed;top:0;left:0;width:100%;height:100%;
   background:rgba(0,0,0,.9);z-index:1000;justify-content:center;

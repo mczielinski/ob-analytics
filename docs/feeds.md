@@ -178,23 +178,37 @@ this in mind.
 
 Which times each row carries.
 
-- **Values:** venue and receive; receive only; venue only.
+- **Values:** `both`, venue and receive; `receive_only`; `venue_only`.
 - **Sources:** most live feeds carry both. Kalshi books and cryptofeed's
   Bitfinex, Blockchain.com and Kraken books carry receive time only. LOBSTER
   carries venue time only.
 - **Lets you conclude:** with both clocks, latency, and whether messages
   arrived out of order.
-- **Stops you concluding:** with one clock, either of those. The clock checks
-  then have nothing to compare, and pass.
-- **In the package:** `audit`'s `exchange_time_after_receive` and
-  `exchange_time_reordered` checks, at L3.
+- **Stops you concluding:** with one clock, either of those.
+- **In the package:** the [`Clocks`](api/protocols.md) declaration, and
+  `audit`'s `exchange_time_after_receive` and `exchange_time_reordered` checks,
+  at L2 and L3.
 
-Where cryptofeed passes no venue time, the source writes the time it handled
-the message into `exchange_timestamp`. That column is then not a venue clock,
-and it can be later than the receive time. On Independent Reserve, every row of
-the opening book carries a venue time later than its receive time, so `audit`
-fails the capture on `exchange_time_after_receive`. The L2 path does not keep
-`exchange_timestamp`, so the two clock checks do not run on an L2 capture.
+The schema has a column for each clock, so a row with one clock copies it into
+the other column, as LOBSTER does. Where a live venue sends no time with its
+book, `exchange_timestamp` holds the receive time. A live capture counts the
+books that came without a venue time (`books_without_venue_time` in
+`meta.json`). When none came with one, it records `"clocks": "receive_only"`.
+With one clock the two columns are equal, so `audit` does not run the clock
+checks. It says why in their place.
+
+Independent Reserve and Coinbase send a time with every message except the
+opening book. The opening book's rows carry the receive time in both columns,
+and the capture keeps both clocks. Those rows are marked as the opening book
+(`origin` is `snapshot`), and the clock checks leave them out.
+
+Where cryptofeed fetches the opening book over REST (Binance, Independent
+Reserve), it does so while it handles the first live message, and hands the
+book over first. The book is stamped with a time taken after that message
+arrived. So the capture holds a book that has no changes listed until the next
+book arrives. If the next one was received earlier, the held book is placed
+1 ms before it and marked as the opening book. The message keeps its own
+receipt time, and replay applies the book first.
 
 ### Crossing
 
@@ -406,7 +420,7 @@ What you need to capture the feed.
 | cryptofeed, Bitstamp | snapshots, about 10 a second | orders that come and go between snapshots | the next snapshot corrects it | none | venue + receive | matched book; failed the check in testing |
 | cryptofeed, Bitfinex | opening book, then every change | nothing | cryptofeed reconnects and takes a new opening book | counts every message on the connection | receive only | matched book; failed the check in testing |
 | cryptofeed, Blockchain.com | opening book, then every change | nothing | cryptofeed reconnects and takes a new opening book | counts every message on the connection | receive only | matched book |
-| cryptofeed, Independent Reserve | REST book, then every change | any change or cancel after an order's first change, which cryptofeed ignores; the trades restore the fills | cryptofeed reconnects and takes a new opening book | contiguous, with skips cryptofeed makes itself | venue + receive; the opening book's venue times are too late | matched book; failed the check in testing (58% crossed) |
+| cryptofeed, Independent Reserve | REST book, then every change | any change or cancel after an order's first change, which cryptofeed ignores; the trades restore the fills | cryptofeed reconnects and takes a new opening book | contiguous, with skips cryptofeed makes itself | venue + receive; the opening book receive only | matched book; failed the check in testing (58% crossed) |
 | `lobster` | every change | nothing (a file) | — | none | venue only | matched book |
 | `databento` | every change | nothing (a file) | — | venue's where sent; only rises | venue + Databento receive | matched book |
 | cryptofeed, Bitstamp L2 | REST book after 5 s, then changes | a lost message | drifts until the level changes again | none | venue + receive | price levels |
