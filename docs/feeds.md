@@ -466,6 +466,16 @@ Notes on this table:
 | ccxt, Polymarket | — | — | venue | — | repeated trades removed |
 | `depth_csv` | — | — | the `side` column, or Lee–Ready | — | as recorded |
 
+**Independent Reserve sends other markets' trades.** A market's trade channel
+also carries the venue's other markets for the same coin: a BTC-AUD capture
+gets BTC-NZD and BTC-SGD trades, priced in NZD and SGD. The cryptofeed source
+leaves them out of `trades.csv` and counts them as `other_market_trades` in
+`meta.json`. The venue keeps one book for all its markets, so such a trade can
+still fill an order in the capture. The next book shows that fill; the trade
+cannot report it while the source does not read Independent Reserve's order
+ids. See
+[cryptofeed](howto/cryptofeed.md#independent-reserve-trades-from-other-markets).
+
 ## Venue rules
 
 | Source | Price grid | What the book means | Access |

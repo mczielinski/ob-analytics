@@ -161,6 +161,22 @@ re-labelled on the way through.
 At shutdown every order still resting is closed out with a synthetic
 `deleted`, so each ID in `orders.csv` has a complete lifecycle.
 
+### Independent Reserve: trades from other markets
+
+Independent Reserve sends a market's trade channel the trades of its other
+markets for the same coin. A BTC-AUD capture also gets BTC-NZD and BTC-SGD
+trades, priced in NZD and SGD: on 1 October 2026, 3 of 26 trades in 40 minutes.
+The source writes a trade to `trades.csv` only when it is for the capture's
+pair, and `meta.json` counts the others as `other_market_trades`. Their raw
+frames are still in `raw.jsonl`.
+
+The venue keeps one book for all its markets, so a trade from another market
+can fill an order in the capture's book. A trade left out of `trades.csv` still
+reports the fill of any order it names, at the order's price in the capture's
+currency. The source does not read the order ids in Independent Reserve trades
+yet ([#311](https://github.com/mczielinski/ob-analytics/issues/311)), so for
+now these fills show only in the next book.
+
 ## Dropped messages and reconnects
 
 cryptofeed owns reconnection. It checks the venue's sequence numbers on every
