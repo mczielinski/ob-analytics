@@ -1062,6 +1062,10 @@ class CryptofeedSource:
 
         A string is looked up in cryptofeed's ``EXCHANGE_MAP``; anything else
         is taken to be an exchange class already (tests / advanced callers).
+        Where this package corrects cryptofeed's feed for a venue named by a
+        string, the corrected class is returned instead (see
+        :mod:`ob_analytics.live._cryptofeed_venues`).  A class is used as
+        given.
         """
         exchange = self._exchange
         if not isinstance(exchange, str):
@@ -1079,12 +1083,15 @@ class CryptofeedSource:
                 'pip install "ob-analytics[cryptofeed]"'
             ) from exc
         try:
-            return EXCHANGE_MAP[exchange.upper()]
+            exchange_cls = EXCHANGE_MAP[exchange.upper()]
         except KeyError:
             raise ValueError(
                 f"Unknown cryptofeed exchange {exchange!r}; expected one of "
                 f"{len(EXCHANGE_MAP)} venues."
             ) from None
+        from ob_analytics.live._cryptofeed_venues import FEEDS
+
+        return FEEDS.get(exchange_cls.id, exchange_cls)
 
     async def snapshot(self, config: CaptureConfig) -> AsyncIterator[EventDict]:
         """Yield nothing: cryptofeed delivers the opening book as its first callback.

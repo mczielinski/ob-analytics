@@ -18,7 +18,7 @@ venues that publish it — the feed the reconstruction engine was built for.
     | Level | L3 | L3 | L3 | L3 | L2 |
     | Depth shown | top 100 orders a side | top 100 orders a side | not checked (the book held 1 to 34 orders) | whole book | Bitstamp: whole book. Kraken: top 1,000 levels a side, and levels that leave it are kept |
     | Orders shown | resting only | resting only | resting only | resting only | — |
-    | Update form | snapshots, about 10 a second | opening book, then every change | opening book, then every change | REST book, then every change | Bitstamp: REST book after 5 s, then changes. Kraken: changes |
+    | Update form | snapshots, about 10 a second | opening book, then every change | opening book, then every change | REST book newer than the stream, then every change | Bitstamp: REST book after 5 s, then changes. Kraken: changes |
     | What can be missed | orders that come and go between snapshots | nothing | nothing | a second change to one order, which cryptofeed ignores (read in the code; not seen in 13 minutes) | a lost message |
     | After a lost message | the next snapshot corrects it | reconnects; new opening book | reconnects; new opening book | reconnects; new opening book | drifts until the level changes again |
     | Sequence | none | counts every message on the connection, so book rows skip numbers; only rises | counts every message on the connection, so book rows skip numbers; only rises | skips the changes cryptofeed ignores; only rises | none |
@@ -173,6 +173,16 @@ connections were missed. A capture of several segments adds the counts up in
 Changes that come before the first opening book, such as on Bitstamp L2, are
 not a resync. Bitstamp's L3 channel sends the whole book every time, so it
 never counts one.
+
+On Independent Reserve, cryptofeed takes the opening book from the venue's REST
+interface when the first stream message arrives. The venue serves that book
+from a cache, so it can be a few seconds older than the stream, and an order
+cancelled in between would stay in the book until the capture ended. The
+source fetches the book again, once a second, until it was created at least
+3 s after the first message, at the start and after each reconnect. The stream
+waits meanwhile and loses nothing, so the first rows arrive 3 to 6 s later than
+on other venues. If no new enough book comes in 15 tries, the source uses the
+last one and logs a warning.
 
 The sequence numbers are recorded per row in both `orders.csv` and
 `depth.csv`, but they skip although no message was lost: on Bitfinex and
