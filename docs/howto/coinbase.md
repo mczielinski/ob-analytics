@@ -20,16 +20,15 @@ account or an API key: the price-level book and the trades are public.
     | Sequence | none |
     | Clocks | venue + receive |
     | Crossing | price levels |
-    | Taker side | **reversed**: Coinbase names the maker's side; reverse the signs before use |
+    | Taker side | venue; Coinbase names the maker's side, so the capture reverses it |
     | Trade tape gaps | starts with trades from before the capture |
     | Price grid | fixed (0.01 on BTC/USD) |
     | What the book means | normal |
     | Access | `coinbase` public; `coinbaseexchange` needs a key |
 
-    Use it for depth and spread over the whole book. Don't use it for trade
-    signs or flow toxicity without reversing the trade sides first, or for long
-    captures where a lost message matters. [What each feed shows](../feeds.md)
-    explains each property and compares every source.
+    Use it for depth, spread and trade signs over the whole book. Don't use it
+    for long captures where a lost message matters. [What each feed
+    shows](../feeds.md) explains each property and compares every source.
 
 ```bash
 pip install "ob-analytics[ccxt]"
@@ -49,6 +48,18 @@ ccxt has two ids for Coinbase:
 
 Use `coinbase`. `--pair` takes a ccxt symbol, such as `BTC/USD`, `ETH/USD` or
 `BTC/USDC`.
+
+## Trade sides are reversed for you
+
+Coinbase reports each trade with the side of the maker, the order that was
+resting. ccxt passes that side on unchanged, so the capture reverses it:
+`trades.csv` names the taker's side, as it does for every other venue, and
+`meta.json` records `"trade_side_reversed": true`. `raw.jsonl` keeps each trade
+as ccxt handed it over, with the maker's side.
+
+A capture made before ob-analytics did this has no `trade_side_reversed` in its
+`meta.json`, and its `trades.csv` holds the maker's side. Reverse its signs
+before you use them.
 
 ## You get price levels, not orders
 
