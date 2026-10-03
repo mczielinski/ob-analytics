@@ -90,6 +90,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **A plot drawn on your own axes leaves your figure's layout alone** (#120).
+  With `ax=`, a matplotlib face used to call `tight_layout()` on the figure
+  that holds the axes. That moved panels you had placed, and warned when the
+  figure held axes `tight_layout` cannot place, such as a gridspec strip or a
+  colorbar. A face now lays out only a figure it creates. **If you draw
+  panels with `ax=`, call `fig.tight_layout()` yourself once every panel is
+  drawn.** On your axes, the `cancellations` colorbar now shares your
+  gridspec, so your `tight_layout()` can place it.
+
 - **A metric is computed when its plot is drawn** (#118). Building the gallery
   model, `available_concepts` and `result.plot` of another concept no longer
   run every registered metric. A metric that raises now keeps its gallery card,
@@ -155,6 +164,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   pages say timestamps are tz-aware UTC. Tutorial chapter 3's LOBSTER round
   trip now passes `lot_size=1.0`; without it every size was written as a
   fraction of a lot, and the round trip read back no executed volume.
+- **The tutorial pages show no warnings** (#120). Chapter 3 now reads its
+  LOBSTER files back with the toy's tick size. With LOBSTER's one-cent
+  default, $99 came back as 9900 ticks against the original 99, so the
+  books before and after the round trip did not match. An empty book
+  snapshot no longer draws an empty legend. The docs build now fails when a
+  tutorial cell prints a warning or a figure fails to draw, and when a
+  gallery recipe raises a warning.
 - **An Independent Reserve capture no longer keeps orders cancelled before
   it started** (#315). cryptofeed takes the opening book from the venue's REST
   interface when the first stream message arrives. The venue serves that book

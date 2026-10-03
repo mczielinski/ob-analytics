@@ -270,7 +270,11 @@ def plot(
     backend : str, optional
         Registered backend name (default ``"matplotlib"``).
     ax : matplotlib.axes.Axes, optional
-        Axes to draw on (matplotlib only; ignored by other backends).
+        Axes to draw on (matplotlib only; ignored by other backends).  The
+        figure that holds *ax* is yours: the face draws on *ax* and leaves the
+        figure's layout alone, so call ``fig.tight_layout()`` (or use a
+        layout engine) once all the panels are drawn.  Without *ax*, the face
+        creates its own figure and lays it out.
     **data
         Prepared plot data, as returned by the matching ``prepare_*`` helper.
         May include ``theme=PlotTheme(...)`` to override :data:`DEFAULT_THEME`

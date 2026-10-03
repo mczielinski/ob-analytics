@@ -72,8 +72,6 @@ available_concepts(result)
 # the chapter that introduced it:
 
 # %%
-import warnings
-
 import matplotlib.pyplot as plt
 import pandas as pd
 from _docs_theme import DOCS_THEME
@@ -125,16 +123,7 @@ fig, axes = plt.subplots(2, 3, figsize=(16, 8))
 for ax, (concept, level, make_payload) in zip(axes.ravel(), catalogue):
     plot(concept, level=level, ax=ax, theme=DOCS_THEME, **make_payload())
     ax.set_title(f"{concept}  ·  {level}", fontsize=10)
-# One of the faces above (the depth heatmap) carries its own colorbar axes,
-# which trips tight_layout's compatibility check even though the layout it
-# produces here is fine; only the warning is silenced.
-with warnings.catch_warnings():
-    warnings.filterwarnings(
-        "ignore",
-        message="This figure includes Axes that are not compatible with tight_layout",
-        category=UserWarning,
-    )
-    fig.tight_layout()
+fig.tight_layout()
 
 # %% [markdown]
 # Six of the concepts, one capture, one loop. The full set, organised:
@@ -188,11 +177,16 @@ fig = plot("trade_tape", level="L2", **payload)
 # A metric's settings do not need either step. A keyword to the one-liner
 # goes to the calculation or to the picture, whichever names it. Here
 # `bucket_volume` sizes the VPIN buckets (twenty of them across this
-# capture, not the default one) and `threshold` places the alert line:
+# capture, not the default one), `n_buckets` averages them ten at a time
+# (the default window of fifty would never fill), and `threshold` places
+# the alert line:
 
 # %%
 fig = result.plot(
-    "vpin", bucket_volume=result.trades["volume"].sum() / 20, threshold=0.7
+    "vpin",
+    bucket_volume=result.trades["volume"].sum() / 20,
+    n_buckets=10,
+    threshold=0.7,
 )
 
 # %% [markdown]
