@@ -14,6 +14,7 @@ import pandas as pd
 import pytest
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
+from matplotlib.text import Text
 
 from ob_analytics.visualization import (
     Level,
@@ -1032,6 +1033,213 @@ class TestPriceLevelsHiddenLiquidityOverlay:
             "Hidden-order trade",
             "Trade to check (maker not confirmed hidden)",
         } <= labels
+
+
+class TestPriceLevelsNotice:
+    """The depth heatmap says why it is empty, or that no level changed (#303).
+
+    Unchanged levels are left out by default, so a quiet book used to leave
+    every level out and draw blank axes with no reason given.
+    """
+
+    T0 = pd.Timestamp("2026-09-01 12:00", tz="UTC")
+
+    @classmethod
+    def _quiet_depth(cls) -> pd.DataFrame:
+        # One row per level at the opening book and nothing after it: the
+        # shape of a short capture of a market whose book never moved.
+        return pd.DataFrame(
+            {
+                "timestamp": [cls.T0] * 3,
+                "price": [0.04, 0.05, 0.09],
+                "volume": [30.0, 12.0, 306.0],
+                "direction": ["bid", "bid", "ask"],
+            }
+        )
+
+    @classmethod
+    def _one_change(cls) -> pd.DataFrame:
+        # Level 0.04 grows after 30s; the other two never change.
+        moved = pd.DataFrame(
+            {
+                "timestamp": [cls.T0 + pd.Timedelta(seconds=30)],
+                "price": [0.04],
+                "volume": [40.0],
+                "direction": ["bid"],
+            }
+        )
+        return pd.concat([cls._quiet_depth(), moved], ignore_index=True)
+
+    @classmethod
+    def _spread(cls) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "timestamp": [cls.T0, cls.T0 + pd.Timedelta(seconds=60)],
+                "best_bid_price": [0.05, 0.05],
+                "best_bid_vol": [12.0, 12.0],
+                "best_ask_price": [0.09, 0.09],
+                "best_ask_vol": [306.0, 306.0],
+            }
+        )
+
+    def _prepare(self, depth: pd.DataFrame, **kwargs: Any) -> dict:
+        kwargs.setdefault("end_time", self.T0 + pd.Timedelta(seconds=60))
+        return _data.prepare_price_levels_data(depth, **kwargs)
+
+    def test_no_level_changed_draws_every_level(self):
+        data = self._prepare(self._quiet_depth())
+        assert set(data["depth"]["price"]) == {0.04, 0.05, 0.09}
+        assert data["notice"] == (
+            "No price level changed in this window, so every level is drawn."
+        )
+
+    def test_unchanged_levels_left_out_when_one_changes(self):
+        data = self._prepare(self._one_change())
+        assert set(data["depth"]["price"]) == {0.04}
+        assert data["notice"] is None
+
+    def test_show_all_depth_keeps_every_level(self):
+        data = self._prepare(self._one_change(), show_all_depth=True)
+        assert set(data["depth"]["price"]) == {0.04, 0.05, 0.09}
+        assert data["notice"] is None
+
+    def test_empty_depth_frame_says_so(self):
+        data = _data.prepare_price_levels_data(self._quiet_depth().iloc[0:0])
+        assert data["depth"].empty
+        assert data["notice"] == _data.NO_DEPTH_NOTICE
+
+    def test_price_range_with_no_level_names_the_range(self):
+        data = self._prepare(self._quiet_depth(), price_from=0.5)
+        assert data["notice"] == "No price level at or above 0.5."
+        data = self._prepare(self._quiet_depth(), price_from=0.1, price_to=0.2)
+        assert data["notice"] == "No price level between 0.1 and 0.2."
+
+    def test_spread_outside_window_sets_no_price_range(self):
+        # The spread's only row is before the window, so it gives no price
+        # bounds; NaN bounds used to drop every level.
+        spread = self._spread()
+        spread["timestamp"] = self.T0 - pd.Timedelta(hours=1)
+        data = self._prepare(self._quiet_depth(), spread=spread.iloc[:1])
+        assert set(data["depth"]["price"]) == {0.04, 0.05, 0.09}
+        assert data["notice"] == (
+            "No price level changed in this window, so every level is drawn."
+        )
+
+    def test_volume_range_with_no_level_says_so(self):
+        data = self._prepare(self._quiet_depth(), volume_from=1000)
+        assert data["notice"] == "No price level in the chosen volume range."
+
+    def test_time_window_with_no_orders_says_so(self):
+        data = self._prepare(
+            self._quiet_depth(),
+            start_time=self.T0 - pd.Timedelta(hours=2),
+            end_time=self.T0 - pd.Timedelta(hours=1),
+        )
+        assert data["notice"] == "No resting orders in this time window."
+
+    def test_notice_is_logged(self):
+        from loguru import logger
+
+        messages: list[str] = []
+        logger.enable("ob_analytics")
+        sink = logger.add(lambda m: messages.append(m.record["message"]))
+        try:
+            self._prepare(self._quiet_depth(), price_from=0.5)
+        finally:
+            logger.remove(sink)
+            logger.disable("ob_analytics")
+        assert messages == ["Depth heatmap: No price level at or above 0.5."]
+
+    def test_empty_window_frames_the_spread(self):
+        data = self._prepare(self._quiet_depth(), spread=self._spread(), price_from=0.1)
+        assert data["depth"].empty
+        assert data["y_range"] == (0.05, 0.09)
+
+    @staticmethod
+    def _title_and_notice(ax: Axes) -> tuple[Text, Text]:
+        (notice,) = ax.texts
+        title = next(
+            t
+            for t in ax.get_children()
+            if isinstance(t, Text) and t.get_text() == "Price Levels Over Time"
+        )
+        return title, notice
+
+    def test_matplotlib_draws_flat_levels_with_notice(self):
+        data = self._prepare(self._quiet_depth())
+        ax = plot("depth_heatmap", **data).axes[0]
+        assert ax.collections
+        title, notice = self._title_and_notice(ax)
+        assert title.get_text() == "Price Levels Over Time"
+        assert notice.get_text() == data["notice"]
+
+    @pytest.mark.parametrize("width", [12, 6, 4])
+    def test_matplotlib_notice_sits_under_the_title(self, width):
+        # Between the title and the plot, even in a narrow subplot, where a
+        # notice beside the title used to print over it.
+        data = self._prepare(self._quiet_depth())
+        fig, axes = plt.subplots(2, 2, figsize=(width, 8))
+        ax = axes[0, 0]
+        plot("depth_heatmap", ax=ax, **data)
+        fig.draw_without_rendering()
+        title, notice = self._title_and_notice(ax)
+        title_box = title.get_window_extent()
+        notice_box = notice.get_window_extent()
+        plot_box = ax.get_window_extent()
+        assert notice_box.y1 <= title_box.y0
+        assert notice_box.y0 >= plot_box.y1
+
+    def test_matplotlib_empty_still_draws_midprice(self):
+        data = self._prepare(self._quiet_depth(), spread=self._spread(), price_from=0.1)
+        ax = plot("depth_heatmap", **data).axes[0]
+        _, notice = self._title_and_notice(ax)
+        assert notice.get_text() == data["notice"]
+        assert [line.get_label() for line in ax.get_lines()] == ["Midprice"]
+
+    def test_matplotlib_hand_built_empty_payload_says_no_depth(self):
+        data = self._prepare(self._quiet_depth(), price_from=0.5)
+        data["notice"] = None
+        ax = plot("depth_heatmap", **data).axes[0]
+        _, notice = self._title_and_notice(ax)
+        assert notice.get_text() == _data.NO_DEPTH_NOTICE
+
+    def test_matplotlib_draws_a_level_with_one_row(self):
+        # A level whose only row in the window is a removal draws no segment,
+        # but it no longer blanks the whole heatmap.
+        removed = pd.DataFrame(
+            {
+                "timestamp": [self.T0 + pd.Timedelta(seconds=30)],
+                "price": [0.07],
+                "volume": [0.0],
+                "direction": ["ask"],
+            }
+        )
+        data = self._prepare(pd.concat([self._one_change(), removed]))
+        assert data["depth"].groupby("price").size().min() == 1
+        ax = plot("depth_heatmap", **data).axes[0]
+        assert ax.collections
+        assert not ax.texts
+
+    @pytest.mark.parametrize("price_from", [None, 0.5])
+    def test_plotly_puts_the_notice_under_the_title(self, price_from):
+        # A second title line, on top of the plot area: clear of the data and
+        # of the hover toolbar, whether the chart has levels or not.
+        pytest.importorskip("plotly")
+        data = self._prepare(self._quiet_depth(), price_from=price_from)
+        fig = plot("depth_heatmap", backend="plotly", **data)
+        title = fig.layout.title
+        first, second = title.text.split("<br>")
+        assert first == "Price Levels Over Time"
+        assert data["notice"] in second
+        assert (title.yref, title.y, title.yanchor) == ("paper", 1.0, "bottom")
+        assert title.automargin
+        assert not fig.layout.annotations
+
+    def test_bokeh_draws_the_notice(self):
+        pytest.importorskip("bokeh")
+        data = self._prepare(self._quiet_depth())
+        fig = plot("depth_heatmap", backend="bokeh", **data)
+        assert [getattr(obj, "text", "") for obj in fig.above] == [data["notice"]]
 
 
 # ---------------------------------------------------------------------------

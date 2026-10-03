@@ -95,6 +95,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   as on Bitstamp. On a per-change book, a fill that the trade and the book both
   report is recorded once, and a book message that repeats an order's size
   writes no row.
+- **A quiet book no longer gives a blank depth heatmap** (#303). The heatmap
+  leaves out each price level that does not change in the window. When no
+  level changed, as in a short capture of a quiet prediction market, that left
+  out every level and drew blank axes, with only `Not enough data for any price
+  level` in the log. Now the heatmap draws every level in that case, with a
+  note under the title that no level changed. When the heatmap really is
+  empty, the note says why: no depth data, no level between two named prices,
+  no level in the chosen volume range, or no resting orders in the time
+  window. All three backends put the note on its own line under the title and
+  write it to the log. An empty heatmap still draws the midprice and trades. A
+  spread or trades frame with no rows in the window no longer sets a NaN price
+  range that left out every level. The gallery's depth-heatmap card names
+  `plot_result(result, "depth_heatmap", show_all_depth=True)`, and the Kalshi
+  and Polymarket how-tos describe the case. The matplotlib heatmap also no
+  longer goes blank when one level has a single row in the window.
+
+- **The gallery prepares each card's data once** (#303). The backend columns
+  of a card now share one prepared payload, so the prepare step runs, and logs,
+  once per card instead of once per backend.
+
 - **The clock checks compare two real clocks, and run on L2** (#310). Where a
   venue sent no time, the cryptofeed and ccxt sources wrote the time they
   handled the message into `exchange_timestamp`, which is later than the

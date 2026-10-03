@@ -9,6 +9,7 @@ Install via ``pip install ob-analytics[interactive]``.
 
 from __future__ import annotations
 
+import html
 from functools import lru_cache
 from typing import Any
 
@@ -16,6 +17,7 @@ import numpy as np
 
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.visualization._data import (
+    NO_DEPTH_NOTICE,
     biased_color_norm,
     book_mid,
     check_book_payload_level,
@@ -80,9 +82,38 @@ def _template(go: Any, theme: PlotTheme) -> Any:
     return template
 
 
-def _base_figure(go: Any, theme: PlotTheme, title: str = "", **kwargs: Any) -> Any:
-    """Create a Plotly figure styled by *theme*."""
-    layout = {"template": _template(go, theme), "title": {"text": title}}
+def _base_figure(
+    go: Any,
+    theme: PlotTheme,
+    title: str = "",
+    *,
+    notice: str | None = None,
+    **kwargs: Any,
+) -> Any:
+    """Create a Plotly figure styled by *theme*.
+
+    *notice*, a payload's note on the chart (why it is empty, or what it left
+    out), goes on a second, smaller line of the title, where it covers no data.
+    """
+    title_layout: dict[str, Any] = {"text": title}
+    if notice:
+        size = round(_BASE_FONT_SIZE * theme.text_scale)
+        title_layout.update(
+            # Plotly's own subtitle is left out of the margin it reserves and
+            # hangs over the plot; one two-line title is measured whole.
+            text=(
+                f"{title}<br><span style='font-size:{size}px;font-weight:normal;"
+                f"color:{theme.palette.label}'>{html.escape(notice)}</span>"
+            ),
+            # Sit the title on top of the plot area and grow the top margin
+            # to fit it.
+            yref="paper",
+            y=1.0,
+            yanchor="bottom",
+            pad={"b": 8},
+            automargin=True,
+        )
+    layout = {"template": _template(go, theme), "title": title_layout}
     layout.update(kwargs)
     return go.Figure(layout=layout)
 
@@ -170,6 +201,19 @@ def _biased_color_norm(
     return t, bar
 
 
+def _add_notice(fig: Any, text: str, pal: Palette) -> None:
+    """Write why a chart has nothing to draw in the middle of *fig*."""
+    fig.add_annotation(
+        text=text.replace("\n", "<br>"),
+        xref="paper",
+        yref="paper",
+        x=0.5,
+        y=0.5,
+        showarrow=False,
+        font={"size": 16, "color": pal.reference_line},
+    )
+
+
 def plotly_price_levels(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render the price-level depth heatmap using Scattergl."""
     pal = theme.palette
@@ -180,7 +224,8 @@ def plotly_price_levels(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     show_mp = data["show_mp"]
     col_bias = data.get("col_bias", 1.0)
 
-    fig = _base_figure(go, theme, title="Price Levels Over Time")
+    notice = data.get("notice") or (NO_DEPTH_NOTICE if depth.empty else None)
+    fig = _base_figure(go, theme, title="Price Levels Over Time", notice=notice)
 
     if not depth.empty:
         vol = depth["volume"].fillna(0)
@@ -1863,15 +1908,7 @@ def plotly_hidden_executions(data: dict, *, theme: PlotTheme = DEFAULT_THEME) ->
         )
 
     if not has_hidden:
-        fig.add_annotation(
-            text="No hidden execution events (raw_event_type == 5)",
-            xref="paper",
-            yref="paper",
-            x=0.5,
-            y=0.5,
-            showarrow=False,
-            font={"size": 16, "color": pal.reference_line},
-        )
+        _add_notice(fig, "No hidden execution events (raw_event_type == 5)", pal)
 
     fig.update_xaxes(title_text="Time")
     fig.update_yaxes(title_text="Price")
@@ -1916,15 +1953,7 @@ def plotly_trading_halts(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any
                 annotation_text="Halt" if i == 0 else None,
             )
     elif not has_halts:
-        fig.add_annotation(
-            text="No trading halt events (raw_event_type == 7)",
-            xref="paper",
-            yref="paper",
-            x=0.5,
-            y=0.5,
-            showarrow=False,
-            font={"size": 16, "color": pal.reference_line},
-        )
+        _add_notice(fig, "No trading halt events (raw_event_type == 7)", pal)
 
     fig.update_xaxes(title_text="Time")
     fig.update_yaxes(title_text="Price")
