@@ -15,7 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   registered metrics, so `available_concepts` lists them and
   `result.plot("vpin")` computes and draws VPIN with the defaults of
   `compute_vpin`. A keyword goes to the calculation or to the picture,
-  whichever names it: `result.plot("vpin", bucket_volume=5.0, threshold=0.8)`.
+  whichever names it: `result.plot("vpin", n_buckets=20, threshold=0.8)`.
   `result.metric(name, **settings)` takes the calculation's settings too. The
   new `l1_ticker` metric is the Level 1 quote — best bid, best ask and last
   trade. It draws the three prices over time, or the quote card for one
@@ -118,6 +118,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`compute_vpin` refuses a bucket size in the wrong units.** Sizes are
+  integer lots, so `bucket_volume=5.0` on the Bitstamp sample means 5e-8 BTC
+  and asked for about 300 million buckets, enough to run the machine out of
+  memory. `compute_vpin` and `bulk_volume_classification` now raise
+  `ValueError` when a bucket would make more than `MAX_VOLUME_BUCKETS` (one
+  million) buckets, and say which units `bucket_volume` is in. The how-to
+  pages that passed `bucket_volume=5.0` now size the bucket from the trades.
+- **Docs written before lots and UTC timestamps are corrected.** The schema
+  page gives the current version, `4.0`. The step-by-step and synthetic-data
+  pages say timestamps are tz-aware UTC. Tutorial chapter 3's LOBSTER round
+  trip now passes `lot_size=1.0`; without it every size was written as a
+  fraction of a lot, and the round trip read back no executed volume.
 - **An Independent Reserve capture no longer keeps orders cancelled before
   it started** (#315). cryptofeed takes the opening book from the venue's REST
   interface when the first stream message arrives. The venue serves that book

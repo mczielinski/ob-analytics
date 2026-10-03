@@ -31,3 +31,9 @@ two, rather than each re-deriving them.
 ::: ob_analytics.trade_sign.resolve_direction
 
 ::: ob_analytics.trade_sign.prevailing_mid
+
+The volume-bucket analytics check their bucket size through this one.
+
+::: ob_analytics.trade_sign.check_bucket_count
+
+::: ob_analytics.trade_sign.MAX_VOLUME_BUCKETS

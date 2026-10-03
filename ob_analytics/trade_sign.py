@@ -51,6 +51,14 @@ _SQRT2 = sqrt(2.0)
 #: column is not a missing value to them -- it is the wrong side.
 _SIDES: tuple[str, str] = ("buy", "sell")
 
+#: Most volume buckets :func:`bulk_volume_classification` and
+#: :func:`~ob_analytics.flow_toxicity.compute_vpin` build.  Both hold every
+#: bucket in memory, so a ``bucket_volume`` given in the base asset against
+#: sizes in integer lots (10^8 times too small for BTC) would otherwise ask for
+#: hundreds of millions of buckets and run out of memory.  Fifty buckets a day
+#: for fifty years is under a million.
+MAX_VOLUME_BUCKETS = 1_000_000
+
 # Accepted quote-column spellings for the Lee–Ready midpoint, most specific
 # first.  A ``(bid, ask)`` pair is averaged; a single mid column is used as-is.
 _MID_COLUMNS: tuple[str, ...] = ("mid", "midprice", "mid_price")
@@ -519,6 +527,52 @@ def resolve_direction(
     return out
 
 
+_UNITS_ADVICE = (
+    "bucket_volume is in the units of trades['volume'], which are integer lots "
+    "on a pipeline result (size = lots * lot_size). Size it from the data, "
+    "e.g. trades['volume'].sum() / 60."
+)
+
+
+def check_bucket_count(
+    trades: pd.DataFrame,
+    bucket_volume: float,
+    context: str,
+    *,
+    advice: str | None = None,
+) -> None:
+    """Refuse a *bucket_volume* that cuts the trades into too many buckets.
+
+    Parameters
+    ----------
+    trades : pandas.DataFrame
+        Trades with a ``volume`` column.
+    bucket_volume : float
+        Volume per bucket, in the units of ``trades["volume"]``.  Must be
+        positive.
+    context : str
+        Name of the caller, used in the error message.
+    advice : str, optional
+        What to do about it, ending the error message.  ``None`` (default)
+        says which units *bucket_volume* is in, the usual cause.
+
+    Raises
+    ------
+    ValueError
+        If the trades' total volume divided by *bucket_volume* is more than
+        :data:`MAX_VOLUME_BUCKETS`.
+    """
+    total = float(trades["volume"].sum())
+    count = total / bucket_volume
+    if count > MAX_VOLUME_BUCKETS:
+        raise ValueError(
+            f"{context}: bucket_volume={bucket_volume:g} cuts the trades' total "
+            f"volume of {total:g} into about {count:.3g} buckets, more than "
+            f"MAX_VOLUME_BUCKETS ({MAX_VOLUME_BUCKETS:,}). "
+            f"{_UNITS_ADVICE if advice is None else advice}"
+        )
+
+
 # ── Bulk volume classification (BVC) ─────────────────────────────────
 
 
@@ -547,7 +601,8 @@ def bulk_volume_classification(
     trades : pandas.DataFrame
         Trades with ``timestamp``, ``price``, and ``volume``.
     bucket_volume : float
-        Total volume per bucket (instrument-specific).
+        Total volume per bucket (instrument-specific), in the units of
+        ``trades["volume"]``: integer lots on a pipeline result.
     sigma : float, optional
         Standard deviation of bucketed price changes.  Estimated from the
         data (sample std of the bucket ΔP series) when omitted.
@@ -567,7 +622,8 @@ def bulk_volume_classification(
     ObAnalyticsError
         If *trades* is empty.
     ValueError
-        If *bucket_volume* is not positive, or *sigma* is not positive.
+        If *bucket_volume* is not positive or would make more than
+        :data:`MAX_VOLUME_BUCKETS` buckets, or *sigma* is not positive.
     """
     validate_columns(
         trades, {"timestamp", "price", "volume"}, "bulk_volume_classification"
@@ -575,6 +631,7 @@ def bulk_volume_classification(
     validate_non_empty(trades, "bulk_volume_classification")
     if bucket_volume <= 0:
         raise ValueError(f"bucket_volume must be positive, got {bucket_volume}")
+    check_bucket_count(trades, bucket_volume, "bulk_volume_classification")
     if sigma is not None and sigma <= 0:
         raise ValueError(f"sigma must be positive, got {sigma}")
 

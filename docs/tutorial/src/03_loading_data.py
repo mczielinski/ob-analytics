@@ -166,8 +166,10 @@ lob[["actor", "action", "volume", "fill", "raw_event_type", "raw_size"]].iloc[6:
 # (`price_divisor=10_000`), and timestamps become **seconds after
 # midnight**, so the writer must be told *which* midnight
 # (`trading_date`). The toy book's canonical prices are integer ticks with
-# a `tick_size` of $1 (its levels are whole dollars), so we pass that too —
-# the writer scales ticks back through the tick size and the divisor:
+# a `tick_size` of $1 (its levels are whole dollars), and its sizes are
+# integer lots with a `lot_size` of 1 (whole units), so we pass both — the
+# writer scales ticks and lots back through them. Leave `lot_size` out and
+# the config default of `1e-8` writes a size of 2 as `2e-08`:
 
 # %%
 import tempfile
@@ -180,7 +182,7 @@ save_data(
     {"events": lob, "trades": toy_trades()},
     outdir,
     fmt="lobster",
-    config=PipelineConfig(price_divisor=10_000, tick_size=1.0),
+    config=PipelineConfig(price_divisor=10_000, tick_size=1.0, lot_size=1.0),
     ctx=RunContext(trading_date="2026-01-05"),
     ticker="TOY",
     num_levels=2,
@@ -200,15 +202,16 @@ print(
 )
 
 # %% [markdown]
-# Every encoding is visible in the raw text. Column 1 is the time:
-# 36000.0 seconds after midnight is 10:00:00 — Alice's t=0. Column 2 is
-# the event-type code: seven type-1 submissions, then at 36020 two
-# type-4 executions — Frank's market buy from chapter 1 hitting Bob
-# (their order ids, 7 and 2, are column 3) — then Gus, then Dana's
-# type-3 cancellation at 36040. Column 4 is the size delta, column 5 the
-# price (990000 = $99.00), column 6 the side: 1 = bid, −1 = ask. Notice
-# Frank's "market" buy arrives as a *limit priced at the ask* — chapter
-# 1's crossing-the-spread, visible in a raw file.
+# Every encoding is visible in the raw text. Column 1 is the time in
+# seconds after the venue's local midnight. The writer's default venue
+# zone is New York, so Alice's t=0, 10:00 UTC, is 05:00 there: 18000.0
+# seconds. Column 2 is the event-type code: seven type-1 submissions,
+# then at 18020 two type-4 executions — Frank's market buy from chapter 1
+# hitting Bob (their order ids, 7 and 2, are column 3) — then Gus, then
+# Dana's type-3 cancellation at 18040. Column 4 is the size delta,
+# column 5 the price (990000 = $99.00), column 6 the side: 1 = bid,
+# −1 = ask. Notice Frank's "market" buy arrives as a *limit priced at the
+# ask* — chapter 1's crossing-the-spread, visible in a raw file.
 #
 # The orderbook twin answers "and what did the book look like?" after
 # every one of those messages. Its sixth row is the book just after
@@ -296,17 +299,18 @@ fig.tight_layout()
 #
 # Whichever route you take, two warnings apply.
 #
-# !!! warning "Pitfall: every venue keeps its own clock"
-#     Timestamps in canonical frames are **tz-naive, in each venue's
-#     native clock** — UTC for Bitstamp captures, exchange-local
-#     (US/Eastern) for LOBSTER sessions. We just did it ourselves: the
-#     toy's 10:00:00 became 36 000 seconds after "midnight" with no time
-#     zone attached anywhere. Each frame is internally consistent, but
-#     timestamps from different formats are **not comparable** — never
-#     join or concatenate events across venues without explicit
-#     conversion. A naive 09:30 in a LOBSTER session and a naive 09:30
-#     in a Bitstamp capture are four or five real-world hours apart,
-#     depending on the season.
+# !!! warning "Pitfall: a LOBSTER file has no time zone"
+#     Timestamps in canonical frames are **tz-aware UTC**, whatever the
+#     venue, so frames from different venues share one clock. A LOBSTER
+#     file does not carry that clock: it stores seconds after the venue's
+#     *local* midnight, with no zone. The writer and the loader place
+#     those seconds with `RunContext(session_tz=...)`, which defaults to
+#     `"America/New_York"`, the zone of LOBSTER's US equity data. We just
+#     saw it: the toy's 10:00 UTC became 18 000 seconds, 05:00 in New
+#     York. For a LOBSTER-format file from another venue, pass that
+#     venue's zone both when you write and when you load. A wrong zone
+#     moves every timestamp by whole hours, and nothing in the file shows
+#     it.
 #
 # !!! warning "Pitfall: know which kind of L3 file you hold"
 #     LOBSTER files come from a **matched book** (the venue's engine

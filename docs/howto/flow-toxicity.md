@@ -13,10 +13,22 @@ DataFrame — run the pipeline first, then compute metrics on `result.trades`.
 from ob_analytics import compute_vpin
 from ob_analytics.visualization import plot, save_figure, prepare
 
-vpin = compute_vpin(result.trades, bucket_volume=5.0)
+# About 60 buckets: enough to fill the 50-bucket trailing window.
+bucket_volume = result.trades["volume"].sum() / 60
+vpin = compute_vpin(result.trades, bucket_volume=bucket_volume)
 fig = plot("vpin", **prepare.vpin(vpin, threshold=0.7))
 save_figure(fig, "vpin.png")
 ```
+
+`bucket_volume` is in the units of the trades' `volume` column. On a pipeline
+result those are integer lots: the size in the base asset is
+`lots × lot_size`. The Bitstamp sample uses the default `lot_size` of `1e-8`,
+so there a `bucket_volume` of `5.0` means 5e-8 BTC, not 5 BTC. Size the bucket
+from the trades, as above, rather than typing a number;
+[Short captures](#short-captures) explains the 60. `compute_vpin` raises
+`ValueError` when the bucket would cut the trades into more than
+[`MAX_VOLUME_BUCKETS`](../api/trade_sign.md#ob_analytics.trade_sign.MAX_VOLUME_BUCKETS)
+(one million) buckets, which is what a bucket in the wrong units does.
 
 Leave `bucket_volume` out to pick it from the trades with the common rule,
 average daily volume ÷ 50. `vpin_bucket_volume` applies the same rule on its
@@ -112,19 +124,22 @@ many CCXT sources) don't — so VPIN and OFI infer the buy/sell split with a
 ```python
 from ob_analytics import compute_vpin, order_flow_imbalance
 
+# Sizes are integer lots; size the bucket from the trades.
+bucket = l2_trades["volume"].sum() / 60
+
 # No `direction` column → tick rule by default.
-vpin = compute_vpin(l2_trades, bucket_volume=5.0)
+vpin = compute_vpin(l2_trades, bucket_volume=bucket)
 
 # Lee–Ready: pass quotes (e.g. the pipeline's depth_summary — it carries
 # best_bid_price / best_ask_price).
 vpin = compute_vpin(
-    l2_trades, bucket_volume=5.0,
+    l2_trades, bucket_volume=bucket,
     sign_method="lee_ready", quotes=result.depth_summary,
 )
 
 # BVC (bulk volume classification) — the VPIN-native estimator; needs no
 # per-trade sign at all.
-vpin = compute_vpin(l2_trades, bucket_volume=5.0, sign_method="bvc")
+vpin = compute_vpin(l2_trades, bucket_volume=bucket, sign_method="bvc")
 
 ofi = order_flow_imbalance(l2_trades, window="1min", sign_method="tick")
 ```

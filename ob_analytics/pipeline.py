@@ -194,7 +194,7 @@ class PipelineResult:
         **settings
             Keyword arguments for the metric's
             :meth:`~ob_analytics.protocols.Metric.compute`, e.g.
-            ``result.metric("vpin", bucket_volume=5.0)``.  Leave them out to
+            ``result.metric("vpin", n_buckets=20)``.  Leave them out to
             use the metric's defaults.
 
         Returns
