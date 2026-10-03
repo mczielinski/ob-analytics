@@ -2386,3 +2386,141 @@ class TestCaptureToAudit:
         # the clock checks are covered by TestReceiptClock instead.
         assert summary.duplicate_created_ids == 0
         assert summary.unmatched_trades_pct == 50.0
+
+
+@pytest.mark.skipif(not _CRYPTOFEED_INSTALLED, reason="cryptofeed extra not installed")
+class TestIndependentReserveKeepsChangedOrders:
+    """Before 3.0, cryptofeed forgets an Independent Reserve order after its
+    first ``OrderChanged``, so a later cancel is skipped and the order stays in
+    the book (issue #313).  These replay the venue's own messages through the
+    feed class the source uses, with no network."""
+
+    _ORDER = "0b7f1c2e-aaaa-4bbb-8ccc-000000000001"
+
+    def _feed(self, monkeypatch):
+        """Return (feed, connection, book callbacks) for BTC-AUD."""
+        from cryptofeed.symbols import Symbols
+
+        from ob_analytics.live.cryptofeed_source import (
+            CryptofeedSettings,
+            CryptofeedSource,
+        )
+
+        feed_cls = CryptofeedSource(
+            CryptofeedSettings(exchange="independent_reserve")
+        )._exchange_class()
+        monkeypatch.setitem(
+            Symbols.data,
+            feed_cls.id,
+            dict(
+                zip(
+                    ("normalized", "info"),
+                    feed_cls._parse_symbol_data([["Xbt"], ["Aud"]]),
+                )
+            ),
+        )
+        books = []
+
+        async def on_book(book, receipt_timestamp):
+            books.append(book.delta)
+
+        feed = feed_cls(
+            symbols=["BTC-AUD"], channels=["l3_book"], callbacks={"l3_book": on_book}
+        )
+        # The opening book comes from REST: an empty one, served locally.
+        monkeypatch.setattr(feed, "request_limit", 1000)
+
+        async def opening_book(url, **kwargs):
+            return '{"BuyOrders": [], "SellOrders": []}'
+
+        monkeypatch.setattr(feed.http_conn, "read", opening_book)
+
+        class _Conn:
+            subscription = feed.subscription
+
+            async def write(self, message):
+                pass
+
+        return feed, _Conn(), books
+
+    def _replay(self, feed, conn, events):
+        import asyncio
+        import json
+
+        async def run():
+            await feed.subscribe(conn)
+            for nonce, (event, data) in enumerate(events, start=1):
+                frame = {
+                    "Channel": "orderbook-xbt",
+                    "Nonce": nonce,
+                    "Data": {"OrderType": "LimitBid", "OrderGuid": self._ORDER, **data},
+                    "Time": 1_759_300_000_000 + nonce,
+                    "Event": event,
+                }
+                await feed.message_handler(json.dumps(frame), conn, 1_759_300_000.0)
+
+        asyncio.run(run())
+
+    def test_venue_id_resolves_to_the_fixed_feed(self):
+        from cryptofeed.exchanges import EXCHANGE_MAP
+
+        from ob_analytics.live.cryptofeed_source import (
+            CryptofeedSettings,
+            CryptofeedSource,
+        )
+
+        stock = EXCHANGE_MAP["INDEPENDENT_RESERVE"]
+        feed_cls = CryptofeedSource(
+            CryptofeedSettings(exchange="independent_reserve")
+        )._exchange_class()
+        assert feed_cls is not stock
+        assert issubclass(feed_cls, stock)
+        assert feed_cls.id == stock.id
+
+    def test_cryptofeed_class_also_gets_the_fixed_feed(self):
+        from cryptofeed.exchanges import EXCHANGE_MAP
+
+        from ob_analytics.live.cryptofeed_source import (
+            CryptofeedSettings,
+            CryptofeedSource,
+        )
+
+        stock = EXCHANGE_MAP["INDEPENDENT_RESERVE"]
+        by_class = CryptofeedSource(CryptofeedSettings(exchange=stock))
+        by_name = CryptofeedSource(CryptofeedSettings(exchange="independent_reserve"))
+        assert by_class._exchange_class() is by_name._exchange_class()
+
+    def test_cancel_after_a_partial_fill_deletes_the_order(self, monkeypatch):
+        from decimal import Decimal
+
+        feed, conn, books = self._feed(monkeypatch)
+        self._replay(
+            feed,
+            conn,
+            [
+                ("NewOrder", {"Price": {"aud": 100000.0}, "Volume": 0.5}),
+                ("OrderChanged", {"Volume": 0.2}),
+                ("OrderCanceled", {}),
+            ],
+        )
+        # The opening book, then one delta per message: none is skipped.
+        assert books[1:] == [
+            {"bid": [(self._ORDER, 100000, Decimal("0.5"))], "ask": []},
+            {"bid": [(self._ORDER, 100000, Decimal("0.2"))], "ask": []},
+            {"bid": [(self._ORDER, 100000, 0)], "ask": []},
+        ]
+        assert len(feed._l3_book["BTC-AUD"].book.bids) == 0
+
+    def test_a_second_change_is_passed_on(self, monkeypatch):
+        feed, conn, books = self._feed(monkeypatch)
+        self._replay(
+            feed,
+            conn,
+            [
+                ("NewOrder", {"Price": {"aud": 100000.0}, "Volume": 0.5}),
+                ("OrderChanged", {"Volume": 0.2}),
+                ("OrderChanged", {"Volume": 0.0}),
+            ],
+        )
+        assert books[-1] == {"bid": [(self._ORDER, 100000, 0)], "ask": []}
+        assert len(feed._l3_book["BTC-AUD"].book.bids) == 0
