@@ -55,7 +55,7 @@ Checks: 0 error(s), 4 warning(s)
 | **pre-existing orders** | Orders already resting when the capture began (no `created` row) — structurally unclassifiable, not errors |
 | **orphan orders** | Orders changed or deleted with no `created` row at all. The opening book is the honest source of these; a rise mid-session is the stream losing messages |
 | **impossible values** | Levels priced at or below zero, and negative volumes or fills |
-| **clock order** | Rows the venue stamped *after* we received them, and messages that reached the capture out of venue order |
+| **clock order** | Rows the venue stamped *after* we received them, and messages that reached the capture out of venue order. The opening book's rows are left out; `not checked` when the data has one clock |
 | **venue sequence** | Skipped and non-advancing sequence numbers: dropped and reordered messages ([gap detection](../api/analytics.md)) |
 
 A high **crossed resting book** number on a `diff_feed` can be expected — see
@@ -143,6 +143,17 @@ Two of these are judgement calls worth stating plainly:
   the resting order of an execution, and the reader picks the most recent new
   order on the other side that could have traded. So the check does not count
   it.
+- **The clock checks need two clocks.** They compare the venue's time,
+  `exchange_timestamp`, with the receive time, `timestamp`. Some data has only
+  one, and the schema copies it into both columns: LOBSTER has the venue's
+  time only, and some live venues send no time with their book. Each source
+  declares its [`Clocks`](../api/protocols.md), and a live capture records
+  what the venue sent in `meta.json`. With one clock, `audit` prints
+  `clock order : not checked` and the reason, and the two checks do not run.
+  With two clocks, the checks still leave out a capture's opening book (rows
+  whose `origin` is `snapshot`): a REST book's receive time is when the
+  capture asked for it, and some venues send it with no venue time. See
+  [Clocks](../feeds.md#clocks) for which feeds have which.
 - **A capture is checked against the source that made it.** A live capture
   records its source and that source's declarations in `meta.json`, and
   `ob-analytics process` copies `meta.json` into its output. `audit` uses the

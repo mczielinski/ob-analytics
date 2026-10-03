@@ -155,6 +155,39 @@ class TradeAttribution(str, Enum):
     NONE = "none"
 
 
+class Clocks(str, Enum):
+    """Which clocks a feed's book rows carry.
+
+    The schema has two clock columns: ``exchange_timestamp``, the time the
+    venue stamped on the message, and ``timestamp``, the time the capture
+    received it.  Not every feed has both.  Where one is missing, the other is
+    copied into its column, so the two columns are equal and comparing them
+    says nothing:
+
+    * :attr:`BOTH` — the venue stamps each message and the capture stamps its
+      receipt.  The two clocks can be checked against each other.  This is the
+      default.
+    * :attr:`RECEIVE_ONLY` — the venue sends no time with its book, so
+      ``exchange_timestamp`` copies ``timestamp``.  The cryptofeed Bitfinex,
+      Blockchain.com and Kraken books are like this.
+    * :attr:`VENUE_ONLY` — the data holds the venue's time only, so
+      ``timestamp`` copies ``exchange_timestamp``.  LOBSTER files are like
+      this.
+
+    A source declares it so :func:`~ob_analytics.analytics.data_quality_summary`
+    runs its clock checks only when there are two clocks to compare, and says
+    why when it does not.  A live capture finds out from the venue's messages
+    and records it in ``meta.json``.
+
+    Mixes in ``str`` so members compare and serialise as their value, as
+    :class:`FeedType` does.
+    """
+
+    BOTH = "both"
+    RECEIVE_ONLY = "receive_only"
+    VENUE_ONLY = "venue_only"
+
+
 def trade_attribution_of(source: Any) -> TradeAttribution:
     """Return what *source* declares as its :class:`TradeAttribution`.
 
@@ -170,6 +203,14 @@ def sequence_kind_of(source: Any) -> SequenceKind:
     :attr:`SequenceKind.CONTIGUOUS`.
     """
     return SequenceKind(getattr(source, "sequence_kind", SequenceKind.CONTIGUOUS))
+
+
+def clocks_of(source: Any) -> Clocks:
+    """Return what *source* declares as its :class:`Clocks`.
+
+    A source that does not declare one is read as :attr:`Clocks.BOTH`.
+    """
+    return Clocks(getattr(source, "clocks", Clocks.BOTH))
 
 
 @dataclass(frozen=True)
@@ -545,6 +586,11 @@ class Source(Protocol):
         (:class:`SequenceKind`), so a gap check knows whether a skipped number
         is a lost message.  Optional: read it with :func:`sequence_kind_of`,
         which treats a missing one as :attr:`SequenceKind.CONTIGUOUS`.
+    clocks : Clocks
+        Which clocks the source's book rows carry (:class:`Clocks`), so the
+        clock checks run only when there are two to compare.  Optional: read
+        it with :func:`clocks_of`, which treats a missing one as
+        :attr:`Clocks.BOTH`.
     settings : SourceSettings
         Typed per-source configuration.  The empty base for a source that needs
         none; a typed subclass (e.g. ``CcxtSettings``) for one with venue knobs.

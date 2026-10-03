@@ -439,6 +439,17 @@ DEPTH_COLUMNS: tuple[str, ...] = (
 # and concatenates across venues without dtype surprises.  A Parquet writer may
 # dictionary-encode either column for near-zero storage.
 
+ORIGIN_COLUMN: str = "origin"
+"""Name of the optional per-row column saying which part of a capture wrote it.
+
+A live capture writes ``snapshot`` (the opening book), ``stream`` or
+``shutdown``.  A row from the opening book may carry a clock the capture did
+not measure, so the clock checks leave those rows out.
+"""
+
+SNAPSHOT_ORIGIN: str = "snapshot"
+"""The :data:`ORIGIN_COLUMN` value of a row from a capture's opening book."""
+
 VENUE_COLUMN: str = "venue"
 """Name of the optional per-row source-venue column."""
 

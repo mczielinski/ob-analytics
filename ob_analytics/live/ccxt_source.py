@@ -47,8 +47,14 @@ from loguru import logger
 from ob_analytics._utils import off_tick_grid
 from ob_analytics.config import SourceSettings
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.live._base import CaptureConfig, EventDict
-from ob_analytics.protocols import FeedType, Level, SequenceKind, TradeAttribution
+from ob_analytics.live._base import CaptureConfig, EventDict, VenueClockCount
+from ob_analytics.protocols import (
+    Clocks,
+    FeedType,
+    Level,
+    SequenceKind,
+    TradeAttribution,
+)
 
 # Per-venue defaults, overridable via CcxtSettings.
 _DEFAULT_DEPTH_LIMIT = 100
@@ -300,13 +306,15 @@ def _exchange_class(exchange_id: str) -> Any:
     )
 
 
-def _epoch_ms_to_ts(ms: Any) -> pd.Timestamp:
-    """CCXT timestamps are epoch-ms; ``None`` falls back to receive time.
+def _epoch_ms_to_ts(ms: Any, received: pd.Timestamp) -> pd.Timestamp:
+    """CCXT timestamps are epoch-ms; ``None`` falls back to *received*.
 
-    Both branches land on the canonical tz-aware UTC nanosecond clock.
+    A venue that sends no time gives the row one clock, so
+    ``exchange_timestamp`` copies the receive time rather than taking a later
+    one.  Both branches land on the canonical tz-aware UTC nanosecond clock.
     """
     if ms is None:
-        return pd.Timestamp.now(tz="UTC").as_unit("ns")
+        return received
     return pd.Timestamp(int(ms), unit="ms", tz="UTC").as_unit("ns")
 
 
@@ -364,12 +372,25 @@ class CcxtSource:
         # tick size was made finer to fit it (see _fit_tick).
         self.tick_size_changes = 0
         self.book_updates = 0
+        # Books with and without the venue's own time (see ``clocks``).
+        self.venue_clock = VenueClockCount()
         # Times ccxt lost a book update and the book was fetched again.
         self.book_resyncs = 0
         self.depth_rows = 0
         self.trade_events = 0
         self.duplicate_trades = 0
         self.errors = 0
+
+    @property
+    def clocks(self) -> Clocks:
+        """Which clocks this capture's depth rows carry, read from the venue's books.
+
+        A CCXT book carries the venue's time where the venue sends one.  Where
+        no book does, the rows copy the receive time into
+        ``exchange_timestamp`` and the capture has one clock,
+        :attr:`~ob_analytics.protocols.Clocks.RECEIVE_ONLY`.
+        """
+        return self.venue_clock.clocks
 
     # -- configuration ------------------------------------------------------
 
@@ -462,7 +483,8 @@ class CcxtSource:
         self.tick_size = self._tick_size()
         self._opened_ms = book.get("timestamp")
         received = pd.Timestamp.now(tz="UTC").as_unit("ns")
-        venue_ts = _epoch_ms_to_ts(book.get("timestamp"))
+        self.venue_clock.note(book.get("timestamp"))
+        venue_ts = _epoch_ms_to_ts(book.get("timestamp"), received)
         # CCXT's per-book monotonic sequence (``None`` when the venue omits it);
         # carried as the venue ``sequence`` for gap detection on the L2 path.
         nonce = book.get("nonce")
@@ -694,7 +716,8 @@ class CcxtSource:
         ``timestamp``, and the venue's book time as ``exchange_timestamp``.
         The venue time can step back: ccxt stamps its first Binance book with
         its own snapshot's time, then applies older buffered diffs.  Replay
-        sorts on ``timestamp``, so it must follow arrival order.
+        sorts on ``timestamp``, so it must follow arrival order.  A book with
+        no venue time gives its rows *received* in both columns.
 
         The raw frame for raw.jsonl is attached to the first emitted row of
         the update and ``None`` on the rest.  The first frame is the whole
@@ -705,7 +728,8 @@ class CcxtSource:
         changes to the first frame in order gives each recorded book, and the
         file grows with the updates, not with the depth of the book.
         """
-        venue_ts = _epoch_ms_to_ts(book.get("timestamp"))
+        self.venue_clock.note(book.get("timestamp"))
+        venue_ts = _epoch_ms_to_ts(book.get("timestamp"), received)
         # CCXT's per-book monotonic sequence (``None`` when the venue omits it);
         # every row from this book update carries it as the venue ``sequence``.
         nonce = book.get("nonce")
@@ -787,10 +811,11 @@ class CcxtSource:
         Public trades carry no order IDs, so ``buy_order_id`` /
         ``sell_order_id`` are left empty; ``side`` is CCXT's taker side.
         """
+        received = pd.Timestamp.now(tz="UTC").as_unit("ns")
         return {
             "trade_id": t.get("id") or "",
-            "timestamp": pd.Timestamp.now(tz="UTC").as_unit("ns"),
-            "exchange_timestamp": _epoch_ms_to_ts(t.get("timestamp")),
+            "timestamp": received,
+            "exchange_timestamp": _epoch_ms_to_ts(t.get("timestamp"), received),
             "price": float(t["price"]),
             "amount": float(t["amount"]),
             "buy_order_id": "",
@@ -875,6 +900,7 @@ class CcxtSource:
             "tick_size_changes": self.tick_size_changes,
             "book_updates": self.book_updates,
             "book_resyncs": self.book_resyncs,
+            "books_without_venue_time": self.venue_clock.without_venue_time,
             "depth_rows": self.depth_rows,
             "trade_events": self.trade_events,
             "duplicate_trades": self.duplicate_trades,

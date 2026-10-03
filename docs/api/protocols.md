@@ -25,7 +25,8 @@ or `price_levels`; see [Data quality](../data-quality.md)) and a `Level` (`L2` v
 `TradeAttribution`: which orders of a trade its order events can name (see
 [Check data quality](../howto/audit.md)). A source that records the venue's
 sequence number may also declare a `SequenceKind`: whether a skipped number
-means a lost message. It carries typed `settings` and registers in the source
+means a lost message. A source whose data has one clock declares `Clocks`, so
+the clock checks know there is nothing to compare. It carries typed `settings` and registers in the source
 registry (see [Sources](sources.md)).
 
 ::: ob_analytics.protocols.Level
@@ -39,6 +40,10 @@ registry (see [Sources](sources.md)).
 ::: ob_analytics.protocols.SequenceKind
 
 ::: ob_analytics.protocols.sequence_kind_of
+
+::: ob_analytics.protocols.Clocks
+
+::: ob_analytics.protocols.clocks_of
 
 ::: ob_analytics.protocols.EventLoader
 
