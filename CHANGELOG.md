@@ -110,6 +110,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   feed, which fetches the book again, once a second, until it was created at
   least 3 s after the first message. The stream waits meanwhile and loses
   nothing. After 15 tries it uses the last book and logs a warning.
+- **Coinbase captures through ccxt record the taker's side** (#308). Coinbase
+  reports each trade with the side of the maker, and ccxt passes it on
+  unchanged, so every Coinbase capture had its trade signs reversed, and so did
+  order flow imbalance, VPIN and everything else built on them. The ccxt source
+  now reverses the side for the `coinbase` venue, on both its websocket and
+  REST trades, and records `trade_side_reversed` in `meta.json`. A Coinbase
+  capture without that key was made before this change: reverse its signs.
+  `coinbaseexchange` needs no change, because ccxt already reverses its side.
 - **An Independent Reserve order no longer stays in the book after its cancel**
   (#313). Before 3.0, cryptofeed forgets an Independent Reserve order after its
   first change, even when the order still has size, and skips every later
