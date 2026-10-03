@@ -506,7 +506,7 @@ class _Supervisor:
             segment.n_book_events = result.n_order_events + result.n_depth_events
             segment.n_trade_events = result.n_trade_events
             segment.dropped = int(result.extras.get("dropped") or 0)
-            segment.sequence_missing = int(result.extras.get("sequence_missing") or 0)
+            segment.book_resyncs = int(result.extras.get("book_resyncs") or 0)
             segment.raw_frames_skipped = running.sink.raw_frames_skipped
             if running.stuck:
                 late = (
@@ -872,7 +872,7 @@ class _ClosedFiles:
     n_book: int
     n_trade: int
     dropped: int
-    sequence_missing: int
+    book_resyncs: int
     raw_frames_skipped: int
 
 
@@ -964,7 +964,7 @@ def _close_segment_files(
         n_book=n_book,
         n_trade=n_trade,
         dropped=int(meta.get("dropped") or 0),
-        sequence_missing=int(meta.get("sequence_missing") or 0),
+        book_resyncs=int(meta.get("book_resyncs") or 0),
         raw_frames_skipped=int(meta.get("n_raw_frames_skipped") or 0),
     )
 
@@ -978,7 +978,7 @@ def _apply_closed_files(segment: Segment, closed: _ClosedFiles, error: str) -> N
     segment.n_book_events = closed.n_book
     segment.n_trade_events = closed.n_trade
     segment.dropped = closed.dropped
-    segment.sequence_missing = closed.sequence_missing
+    segment.book_resyncs = closed.book_resyncs
     segment.raw_frames_skipped = closed.raw_frames_skipped
 
 

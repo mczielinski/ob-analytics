@@ -1225,7 +1225,13 @@ class DataQualitySummary:
         Dropped-message count: skipped venue sequence numbers.  Always ``0``
         when ``sequence_kind`` is ``MONOTONIC``, where a skip is normal.
     sequence_out_of_order : int
-        Reordered or duplicated messages: sequence steps that did not advance.
+        Reordered or duplicated messages: sequence steps that did not advance,
+        leaving out ``sequence_restarts``.
+    sequence_restarts : int
+        Steps back where the source started again from a new opening book
+        and the venue's count started again with it.  The source reports them
+        (``sequence_restarts`` in ``meta.json``); they are not faults of the
+        sequence, and the resync is reported by the capture's own checks.
     sequence_kind : SequenceKind
         What the venue sequence promises, and so whether ``sequence_gaps`` was
         checked (see :class:`~ob_analytics.protocols.SequenceKind`).
@@ -1283,6 +1289,7 @@ class DataQualitySummary:
     events_with_sequence: int = 0
     sequence_gaps: int = 0
     sequence_out_of_order: int = 0
+    sequence_restarts: int = 0
     sequence_kind: SequenceKind = SequenceKind.CONTIGUOUS
     orphan_orders: int = 0
     orphan_events: int = 0
@@ -1310,6 +1317,7 @@ class DataQualitySummary:
             "events_with_sequence": self.events_with_sequence,
             "sequence_gaps": self.sequence_gaps,
             "sequence_out_of_order": self.sequence_out_of_order,
+            "sequence_restarts": self.sequence_restarts,
             "sequence_kind": str(self.sequence_kind.value),
             "orphan_orders": self.orphan_orders,
             "orphan_events": self.orphan_events,
@@ -1577,7 +1585,12 @@ class DataQualitySummary:
             (
                 f"  venue sequence        : {missing} / "
                 f"{self.sequence_out_of_order} out-of-order "
-                f"({self.events_with_sequence} row(s) numbered)"
+                + (
+                    f"/ {self.sequence_restarts} restart(s) at a resync "
+                    if self.sequence_restarts
+                    else ""
+                )
+                + f"({self.events_with_sequence} row(s) numbered)"
             ),
         ]
 
@@ -1661,6 +1674,7 @@ def data_quality_summary(
     depth: pd.DataFrame | None = None,
     tick_size: float = 1.0,
     sequence_kind: SequenceKind = SequenceKind.CONTIGUOUS,
+    sequence_restarts: int = 0,
     trade_attribution: TradeAttribution = TradeAttribution.BOTH,
     clocks: Clocks = Clocks.BOTH,
 ) -> DataQualitySummary:
@@ -1698,6 +1712,12 @@ def data_quality_summary(
         What the venue ``sequence`` promises, passed to
         :func:`detect_sequence_gaps`.  A capture records it in ``meta.json``
         (read it with :func:`~ob_analytics.depth_l2.recorded_sequence_kind`).
+    sequence_restarts : int, optional
+        How many of the sequence's steps back the source counted as the count
+        starting again at a new opening book.  That many are left out of
+        ``sequence_out_of_order``.  A capture records it in ``meta.json``
+        (read it with
+        :func:`~ob_analytics.depth_l2.recorded_sequence_restarts`).
     trade_attribution : TradeAttribution, optional
         Which orders of a trade the feed can name, so the unmatched-trades
         check looks only for those.  Read it off the source with
@@ -1787,6 +1807,8 @@ def data_quality_summary(
     # price-level depth on the L2 path (where sequence, when present, rides on
     # depth rather than the empty events frame).  Absent columns score zero.
     gaps = detect_sequence_gaps(depth if l2 else events, kind=sequence_kind)
+    # Steps back the source accounts for: never more than the data shows.
+    restarts = min(max(sequence_restarts, 0), gaps.n_out_of_order)
 
     # Orders changed or deleted with no created row.  On the L2 path there are
     # no per-order events, so there is nothing to orphan.
@@ -1832,7 +1854,8 @@ def data_quality_summary(
         pre_existing_orders=pre_existing_orders,
         events_with_sequence=gaps.n_sequenced,
         sequence_gaps=gaps.n_missing,
-        sequence_out_of_order=gaps.n_out_of_order,
+        sequence_out_of_order=gaps.n_out_of_order - restarts,
+        sequence_restarts=restarts,
         sequence_kind=sequence_kind,
         orphan_orders=orphan_orders,
         orphan_events=orphan_events,

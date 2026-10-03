@@ -19,7 +19,10 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ob_analytics.protocols import SequenceKind
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -187,7 +190,7 @@ def _cmd_audit(args: argparse.Namespace) -> None:
     A segmented live capture (a directory with ``manifest.json``, or the
     ``process`` output made from one) is audited one segment at a time, and
     the manifest adds the capture's own checks: gaps between segments,
-    segments a dead process left open, and dropped messages.
+    segments a dead process left open, dropped messages, and resyncs.
     """
     _setup_logging(args.verbose)
     import json
@@ -246,6 +249,7 @@ def _audit_one(args: argparse.Namespace, path: Path) -> Any:
         recorded_clocks,
         recorded_feed_type,
         recorded_sequence_kind,
+        recorded_sequence_restarts,
         recorded_source,
         recorded_trade_attribution,
     )
@@ -294,6 +298,10 @@ def _audit_one(args: argparse.Namespace, path: Path) -> Any:
         feed_type = recorded_feed_type(path) or feed_type
         trade_attribution = recorded_trade_attribution(path) or trade_attribution
         clocks = recorded_clocks(path) or clocks
+        # A capture written before captures recorded the sequence kind is
+        # checked the way the source that made it declares it now.
+        if made_by != source_name and recorded_sequence_kind(path) is None:
+            sequence_kind = _declared_sequence_kind(made_by, default=sequence_kind)
         if source_name is not None and made_by != source_name:
             logger.info(
                 "Checking against what the {} source declares (recorded in "
@@ -313,10 +321,29 @@ def _audit_one(args: argparse.Namespace, path: Path) -> Any:
         feed_type=feed_type,
         depth=result.depth,
         tick_size=result.config.tick_size,
-        sequence_kind=recorded_sequence_kind(path, default=sequence_kind),
+        sequence_kind=recorded_sequence_kind(path) or sequence_kind,
+        sequence_restarts=recorded_sequence_restarts(path),
         trade_attribution=trade_attribution,
         clocks=clocks,
     )
+
+
+def _declared_sequence_kind(source_name: str, default: SequenceKind) -> SequenceKind:
+    """What the source called *source_name* declares as its sequence kind.
+
+    *default* when the source cannot be built here: not installed, or a
+    plug-in that needs settings to start.  The check must not stop ``audit``.
+    """
+    from loguru import logger
+
+    from ob_analytics.protocols import sequence_kind_of
+    from ob_analytics.sources import get_source
+
+    try:
+        return sequence_kind_of(get_source(source_name)())
+    except Exception as exc:  # noqa: BLE001 - fall back, never stop audit
+        logger.debug("Cannot read what {} declares: {!r}", source_name, exc)
+        return default
 
 
 def _run_for_audit(args: argparse.Namespace, path: Path, source_name: str) -> Any:

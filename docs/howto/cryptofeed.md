@@ -21,7 +21,7 @@ venues that publish it — the feed the reconstruction engine was built for.
     | Update form | snapshots, about 10 a second | opening book, then every change | opening book, then every change | REST book, then every change | Bitstamp: REST book after 5 s, then changes. Kraken: changes |
     | What can be missed | orders that come and go between snapshots | nothing | nothing | a second change to one order, which cryptofeed ignores (read in the code; not seen in 13 minutes) | a lost message |
     | After a lost message | the next snapshot corrects it | reconnects; new opening book | reconnects; new opening book | reconnects; new opening book | drifts until the level changes again |
-    | Sequence | none | counts every message on the connection, so book rows skip numbers | counts every message on the connection, so book rows skip numbers | contiguous, with skips cryptofeed makes itself | none |
+    | Sequence | none | counts every message on the connection, so book rows skip numbers; only rises | counts every message on the connection, so book rows skip numbers; only rises | skips the changes cryptofeed ignores; only rises | none |
     | Clocks | venue + receive | receive only | receive only | venue + receive; the opening book's rows carry a venue time later than their receive time | Bitstamp: venue + receive. Kraken: receive only |
     | Crossing | matched book; failed the check in testing (0.125% crossed): Bitstamp's own snapshots can briefly show a bid at a resting ask's price | matched book; failed the check in testing (58% crossed; cause not found) | matched book | matched book | price levels |
     | Trade sides named | maker only, from the tape | neither | neither | neither (the venue sends both ids; the capture does not read them yet) | — |
@@ -38,10 +38,13 @@ venues that publish it — the feed the reconstruction engine was built for.
     with stale orders
     ([#311](https://github.com/mczielinski/ob-analytics/issues/311)). Don't use
     it for Bitstamp order analysis (use the native [`bitstamp`](live-capture.md)
-    source), for Bitfinex order lifetimes, or for the sequence check on
-    Bitfinex, Blockchain.com and Independent Reserve, where book rows skip
-    numbers without losing any. [What each feed shows](../feeds.md) explains
-    each property and compares every source.
+    source) or for Bitfinex order lifetimes. On Bitfinex, Blockchain.com and
+    Independent Reserve the book rows skip sequence numbers without losing any,
+    so `audit` checks only that the numbers never go back; a lost message shows
+    as a `book_resyncs` warning instead (see
+    [Dropped messages and reconnects](#dropped-messages-and-reconnects)).
+    [What each feed shows](../feeds.md) explains each property and compares
+    every source.
 
 Install the optional `[cryptofeed]` extra and use the `capture` verb:
 
@@ -160,22 +163,40 @@ At shutdown every order still resting is closed out with a synthetic
 
 ## Dropped messages and reconnects
 
-cryptofeed owns reconnection — it re-establishes a dropped connection itself,
-so a capture cannot count reconnects directly. What it can see is the
-discontinuity a reconnect or a dropped message leaves in the venue's own
-sequence numbers. Those are recorded per row in both `orders.csv` and
-`depth.csv`, and each run reports `sequence_gaps` (how many breaks) and
-`sequence_missing` (how many numbers went by unseen) in `meta.json`.
+cryptofeed owns reconnection. It checks the venue's sequence numbers on every
+message, and on a lost one it reconnects and takes a new opening book. The
+capture cannot see the reconnect, but it can see the new opening book after
+changes to the old one. It brings its book into line with the new one and
+counts it as `book_resyncs` in `meta.json`. The changes between the two
+connections were missed. A capture of several segments adds the counts up in
+`manifest.json`, and `audit` warns about them in the `book_resyncs` check.
+Changes that come before the first opening book, such as on Bitstamp L2, are
+not a resync. Bitstamp's L3 channel sends the whole book every time, so it
+never counts one.
+
+The sequence numbers are recorded per row in both `orders.csv` and
+`depth.csv`, but they skip although no message was lost: on Bitfinex and
+Blockchain.com they count every message on the connection, trades and
+heartbeats too, and on Independent Reserve cryptofeed passes on no change to an
+order it does not hold. So the source declares them as only rising
+(`sequence_kind` is `monotonic` in `meta.json`), and `audit` checks only that
+they never go back. Each run also reports `sequence_out_of_order`, how many
+times the number went back, in `meta.json`. On Bitfinex and Blockchain.com the
+count starts again on a new connection. The capture counts that step back as a
+`sequence_restarts`, not as out of order, and `audit` leaves it out of
+`sequence_out_of_order`: the `book_resyncs` warning already reports the
+reconnect.
 
 For the authoritative check, replay the capture and score it:
 
 ```python
+from ob_analytics import SequenceKind
 from ob_analytics.analytics import detect_sequence_gaps
 from ob_analytics.bitstamp import BitstampLoader
 from ob_analytics.config import PipelineConfig
 
 events = BitstampLoader(config=PipelineConfig(track_sequence=True)).load("orders.csv")
-print(detect_sequence_gaps(events))
+print(detect_sequence_gaps(events, kind=SequenceKind.MONOTONIC))
 ```
 
 A venue that publishes no sequence number is never scored, and reports zero.
