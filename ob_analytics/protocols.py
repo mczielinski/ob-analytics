@@ -115,7 +115,8 @@ class SequenceKind(str, Enum):
       records it carries become trades rather than book events.  So is
       cryptofeed's: on Bitfinex and Blockchain.com it numbers every message
       on the connection, trades and heartbeats too, and on Independent
-      Reserve cryptofeed passes on no change to an order it does not hold.
+      Reserve cryptofeed passes on no message about an order it does not
+      hold.
 
     Mixes in ``str`` so members compare and serialise as their value, as
     :class:`FeedType` does.

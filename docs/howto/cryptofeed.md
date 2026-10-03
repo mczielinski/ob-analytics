@@ -19,9 +19,9 @@ venues that publish it — the feed the reconstruction engine was built for.
     | Depth shown | top 100 orders a side | top 100 orders a side | not checked (the book held 1 to 34 orders) | whole book | Bitstamp: whole book. Kraken: top 1,000 levels a side, and levels that leave it are kept |
     | Orders shown | resting only | resting only | resting only | resting only | — |
     | Update form | snapshots, about 10 a second | opening book, then every change | opening book, then every change | REST book, then every change | Bitstamp: REST book after 5 s, then changes. Kraken: changes |
-    | What can be missed | orders that come and go between snapshots | nothing | nothing | a second change to one order, which cryptofeed ignores (read in the code; not seen in 13 minutes) | a lost message |
+    | What can be missed | orders that come and go between snapshots | nothing | nothing | nothing found | a lost message |
     | After a lost message | the next snapshot corrects it | reconnects; new opening book | reconnects; new opening book | reconnects; new opening book | drifts until the level changes again |
-    | Sequence | none | counts every message on the connection, so book rows skip numbers; only rises | counts every message on the connection, so book rows skip numbers; only rises | skips the changes cryptofeed ignores; only rises | none |
+    | Sequence | none | counts every message on the connection, so book rows skip numbers; only rises | counts every message on the connection, so book rows skip numbers; only rises | skips messages for orders cryptofeed does not hold; only rises | none |
     | Clocks | venue + receive | receive only | receive only | venue + receive; the opening book's rows carry a venue time later than their receive time | Bitstamp: venue + receive. Kraken: receive only |
     | Crossing | matched book; failed the check in testing (0.125% crossed): Bitstamp's own snapshots can briefly show a bid at a resting ask's price | matched book; failed the check in testing (58% crossed; cause not found) | matched book | matched book | price levels |
     | Trade sides named | maker only, from the tape | neither | neither | neither (the venue sends both ids; the capture does not read them yet) | — |
@@ -177,8 +177,8 @@ never counts one.
 The sequence numbers are recorded per row in both `orders.csv` and
 `depth.csv`, but they skip although no message was lost: on Bitfinex and
 Blockchain.com they count every message on the connection, trades and
-heartbeats too, and on Independent Reserve cryptofeed passes on no change to an
-order it does not hold. So the source declares them as only rising
+heartbeats too, and on Independent Reserve cryptofeed passes on no message about
+an order it does not hold. So the source declares them as only rising
 (`sequence_kind` is `monotonic` in `meta.json`), and `audit` checks only that
 they never go back. Each run also reports `sequence_out_of_order`, how many
 times the number went back, in `meta.json`. On Bitfinex and Blockchain.com the
