@@ -184,16 +184,49 @@ def test_gallery_model_carries_a_panel_per_registered_metric(
     assert list(payload["series"].columns) == ["timestamp", "spread_width"]
 
 
-def test_gallery_model_skips_a_metric_that_fails(tiny_result, _restore_registry):
+def test_a_metric_that_fails_fails_only_its_own_panel(tiny_result, _restore_registry):
     from ob_analytics.visualization.gallery import build_gallery_model
 
     metrics.METRICS._items.clear()
     metrics.register_metric(SpreadWidthMetric())
     metrics.register_metric(BrokenMetric())
 
+    # Metrics are computed when a panel is prepared, not when the model is
+    # built, so the broken one is listed and raises only when drawn.
     model = build_gallery_model(tiny_result)
+    panels = {panel.name: panel for panel in model.analytics}
 
-    assert [panel.name for panel in model.analytics] == ["spread_width"]
+    assert sorted(panels) == ["broken", "spread_width"]
+    assert panels["spread_width"].prepare(**panels["spread_width"].prep_kwargs)
+    with pytest.raises(RuntimeError, match="no data for this run"):
+        panels["broken"].prepare(**panels["broken"].prep_kwargs)
+
+
+def test_a_failing_metric_card_says_why(
+    tiny_result, _restore_registry, tmp_path, monkeypatch
+):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from ob_analytics.visualization.gallery import generate_gallery
+
+    metrics.METRICS._items.clear()
+    metrics.register_metric(BrokenMetric())
+
+    calls = []
+    original = BrokenMetric.compute
+
+    def counted(self, result):
+        calls.append(1)
+        return original(self, result)
+
+    monkeypatch.setattr(BrokenMetric, "compute", counted)
+    html = generate_gallery(
+        tiny_result, tmp_path, view="l2", backends=["matplotlib", "plotly"]
+    ).read_text()
+
+    assert html.count("Preparing the data failed: no data for this run") == 2
+    assert calls == [1]  # one card, two backends, one attempt
 
 
 @pytest.fixture

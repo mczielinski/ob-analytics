@@ -25,7 +25,6 @@
 # %matplotlib inline
 import matplotlib.pyplot as plt
 import pandas as pd
-from _docs_theme import plot_l1_ticker
 
 from ob_analytics import toy_events, toy_trades
 from ob_analytics.analytics import order_book, set_order_types
@@ -36,7 +35,7 @@ t30 = events["timestamp"].iloc[0] + pd.Timedelta(seconds=30)
 snap = order_book(events, tp=t30)
 
 fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 4.4))
-plot_l1_ticker(bid=99, ask=101, last=101, ax=ax1)
+plot("l1_ticker", ax=ax1, bid=99, ask=101, last=101, symbol="TOY")
 ax1.set_title("L1 — the quote", fontsize=10)
 plot("book_snapshot", level="L2", ax=ax2, **prepare.book_snapshot(snap))
 ax2.set_title("L2 — market by price", fontsize=10)
@@ -188,6 +187,9 @@ available_concepts(result)
 # `book_snapshot` — the *comparable* pairs you've been looking at);
 # some only make sense at one (`depth_heatmap` aggregates by
 # construction; `queue_position` and `order_outcome` need identities).
+# Some have no resolution at all: the metrics, such as `vpin` and
+# `l1_ticker`, are measured from the finished run, so their level list
+# is empty.
 # Here is the queue face again — same code as the toy — on 314,000
 # real events:
 

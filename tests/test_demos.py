@@ -48,15 +48,6 @@ class TestLobsterAnalyticsPanels:
         assert got == pytest.approx(expected)
         assert got.max() < result.trades["price"].max()
 
-    def test_ofi_horizon_matches_display_units(self, result: PipelineResult) -> None:
-        # OFI is a volume ratio, so raw and display trades must agree.
-        panel = _panel(_lobster_analytics_panels(result, None), "ofi_horizon")
-        raw = panel.prepare(**panel.prep_kwargs)
-        shown = panel.prepare(
-            **{**panel.prep_kwargs, "trades": display_result(result).trades}
-        )
-        assert raw["ofi"] == pytest.approx(shown["ofi"], nan_ok=True)
-
     def test_no_halts_no_halts_panel(self, result: PipelineResult) -> None:
         keys = {p.name for p in _lobster_analytics_panels(result, None)}
         assert "trading_halts" not in keys

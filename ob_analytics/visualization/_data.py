@@ -21,6 +21,7 @@ from loguru import logger
 from ob_analytics._utils import validate_columns
 from ob_analytics.depth import book_imbalance, filter_depth, micro_price
 from ob_analytics.exceptions import ConfigError
+from ob_analytics.flow_toxicity import OFI_HORIZONS, ofi_by_horizon
 
 
 @dataclass(frozen=True)
@@ -1087,6 +1088,163 @@ def prepare_price_view_data(
     }
 
 
+def prepare_l1_ticker_data(
+    l1: pd.DataFrame,
+    *,
+    at: pd.Timestamp | str | None = None,
+    symbol: str = "",
+    start_time: pd.Timestamp | str | None = None,
+    end_time: pd.Timestamp | str | None = None,
+) -> dict[str, Any]:
+    """The Level 1 quote: best bid, best ask and last trade.
+
+    *l1* is the ``l1_ticker`` metric's table (see
+    :class:`~ob_analytics.metrics.L1TickerMetric`).  The face draws one of two
+    pictures:
+
+    * With *at*, the quote card for that instant: the last row at or before
+      *at*.  *symbol* names the instrument on the card.
+    * Without *at*, the three prices over time, from *start_time* to
+      *end_time* (default: the whole table).  The price axis covers every
+      trade and the 1st to 99th percentile of the quotes.
+
+    A time with no time zone (*at*, *start_time*, *end_time*) is read in the
+    data's time zone.  The card's payload is plain numbers, so a card can also
+    be drawn without a result: ``plot("l1_ticker", bid=99, ask=101, last=100)``.
+
+    Returns
+    -------
+    dict
+        For the card: ``bid`` / ``ask`` / ``last`` (prices),
+        ``bid_size`` / ``ask_size`` / ``last_size``, ``at`` and ``symbol``;
+        a value the table does not have yet is ``None``.  For the prices over
+        time: ``timestamp``, ``best_bid_price``, ``best_ask_price``,
+        ``last_price`` and ``y_range``, with only the rows where a price
+        changes.
+    """
+    tz = getattr(l1["timestamp"].dtype, "tz", None)
+
+    def in_data_tz(t: pd.Timestamp | str | None) -> pd.Timestamp | None:
+        """Read *t* as a time, in the data's time zone when it names none."""
+        if t is None:
+            return None
+        t = pd.Timestamp(t)
+        return t.tz_localize(tz) if t.tzinfo is None and tz is not None else t
+
+    if at is not None:
+        at = in_data_tz(at)
+        before = l1[l1["timestamp"] <= at]
+        row = before.iloc[-1] if not before.empty else pd.Series(dtype=float)
+
+        def value(column: str) -> float | None:
+            v = row.get(column)
+            return None if v is None or pd.isna(v) else float(v)
+
+        return {
+            "bid": value("best_bid_price"),
+            "ask": value("best_ask_price"),
+            "last": value("last_price"),
+            "bid_size": value("best_bid_vol"),
+            "ask_size": value("best_ask_vol"),
+            "last_size": value("last_volume"),
+            "at": at,
+            "symbol": symbol,
+        }
+
+    start_time, end_time = _default_start_end(
+        l1, in_data_tz(start_time), in_data_tz(end_time)
+    )
+    win = l1[(l1["timestamp"] >= start_time) & (l1["timestamp"] <= end_time)]
+    prices = win[["best_bid_price", "best_ask_price", "last_price"]]
+    # The table also changes when only a size changes; the lines do not.
+    # Two missing values count as the same (last_price before the first trade).
+    previous = prices.shift()
+    same = prices.eq(previous) | (prices.isna() & previous.isna())
+    lines = win[~same.all(axis=1)]
+    return {
+        "timestamp": lines["timestamp"].reset_index(drop=True),
+        "best_bid_price": lines["best_bid_price"].to_numpy(dtype=float),
+        "best_ask_price": lines["best_ask_price"].to_numpy(dtype=float),
+        "last_price": lines["last_price"].to_numpy(dtype=float),
+        # From every row, not just the changes: one far quote is one change.
+        "y_range": _l1_y_range(win),
+    }
+
+
+@dataclass(frozen=True)
+class CardText:
+    """One piece of text on the L1 quote card, placed in axes fractions.
+
+    *color* names a :class:`~ob_analytics.visualization.Palette` field, so
+    each backend colours the card from the theme it is given.
+    """
+
+    x: float
+    y: float
+    text: str
+    size: float
+    color: str
+    align: str = "center"
+    bold: bool = False
+
+
+def _card_number(value: float | None, digits: int) -> str:
+    """Format a card number; a missing one is a dash."""
+    return "—" if value is None else f"{value:,.{digits}g}"
+
+
+def l1_card_texts(data: Mapping[str, Any]) -> list[CardText]:
+    """Lay out the L1 quote card: the heading row, then bid, ask and last.
+
+    *data* is the card payload of :func:`prepare_l1_ticker_data`.  Sizes are
+    in points for a card about 4.6 inches wide; a long price gets a smaller
+    font so the three columns do not run into each other.
+    """
+    symbol = data.get("symbol") or ""
+    at = data.get("at")
+    heading = symbol or "Level 1 quote"
+    note = "Level 1 quote" if symbol else ""
+    if at is not None:
+        stamp = pd.Timestamp(at).strftime("%Y-%m-%d %H:%M:%S")
+        note = f"{note} · {stamp}" if note else stamp
+    texts = [CardText(0.06, 0.80, heading, 12, "price_line", "left", bold=True)]
+    if note:
+        texts.append(CardText(0.94, 0.80, note, 7.5, "label", "right"))
+
+    columns = (
+        ("BID", "bid", "bid_size", "bid"),
+        ("ASK", "ask", "ask_size", "ask"),
+        ("LAST", "last", "last_size", "price_line"),
+    )
+    prices = [_card_number(data.get(key), 10) for _, key, _, _ in columns]
+    # About 0.7 em per bold digit; each column is about 95 pt wide.
+    longest = max(len(p) for p in prices)
+    price_size = min(16.0, 90.0 / (0.7 * longest))
+    for x, (label, _, size_key, color), price in zip(
+        (0.20, 0.50, 0.80), columns, prices
+    ):
+        texts.append(CardText(x, 0.60, label, 8, "label"))
+        texts.append(CardText(x, 0.38, price, price_size, color, bold=True))
+        size = data.get(size_key)
+        if size is not None:
+            texts.append(CardText(x, 0.17, f"× {_card_number(size, 6)}", 7.5, "label"))
+    return texts
+
+
+def _l1_y_range(l1: pd.DataFrame) -> tuple[float, float] | None:
+    """The price axis for the L1 lines: every trade and most of the quotes.
+
+    A few resting orders far from the market can be the best quote when the
+    book is thin, for example as a capture's book empties at its end.  Taking
+    the quotes' 1st to 99th percentile keeps them from flattening the lines;
+    every trade price stays in view.
+    """
+    quotes = pd.concat([l1["best_bid_price"], l1["best_ask_price"]]).dropna()
+    if not quotes.empty:
+        quotes = quotes.quantile([0.01, 0.99])
+    return price_y_range(quotes, l1["last_price"])
+
+
 def prepare_book_signals_data(
     depth_summary: pd.DataFrame,
     *,
@@ -1990,7 +2148,7 @@ def prepare_ofi_data(
 def prepare_ofi_horizon_data(
     trades: pd.DataFrame,
     *,
-    horizons: tuple[str, ...] = ("5s", "15s", "60s", "300s"),
+    horizons: tuple[str, ...] = OFI_HORIZONS,
     grid: str = "5s",
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
@@ -1998,15 +2156,11 @@ def prepare_ofi_horizon_data(
     """Multi-horizon order-flow-imbalance grid for the OFI horizon graph.
 
     A single OFI line shows one lookback; this computes OFI at several
-    *horizons* and aligns them onto one *grid* so short- vs long-horizon
-    pressure can be compared at a glance.  Each row is a horizon; the value is
-    OFI in ``[-1, +1]`` (buy pressure positive), rendered as a stacked
-    horizon-graph band per row.
-
-    Each horizon is a *trailing rolling window* evaluated at every grid step
-    (not a coarse non-overlapping resample), so long horizons read as smooth
-    curves and short ones as jumpy -- the persistent-vs-fleeting contrast --
-    rather than wide forward-filled blocks.
+    *horizons* on one *grid* (:func:`~ob_analytics.flow_toxicity.ofi_by_horizon`)
+    from the trades between *start_time* and *end_time*, so short- vs
+    long-horizon pressure can be compared at a glance.  Each row is a horizon;
+    the value is OFI in ``[-1, +1]`` (buy pressure positive), rendered as a
+    stacked horizon-graph band per row.
 
     Returns ``ofi`` (a ``len(horizons)`` x ``n_grid`` array, longest horizon
     last so it plots at the top), ``times`` (grid timestamps) and ``horizons``.
@@ -2019,39 +2173,31 @@ def prepare_ofi_horizon_data(
             "times": np.array([], dtype="datetime64[ns]"),
             "horizons": list(horizons),
         }
+    return prepare_ofi_horizon_grid_data(
+        ofi_by_horizon(tr, horizons=horizons, grid=grid)
+    )
 
-    step = pd.Timedelta(grid)
-    gidx = pd.date_range(
-        tr["timestamp"].min().floor(grid), tr["timestamp"].max().ceil(grid), freq=grid
-    )
-    # Signed volume binned onto the fine grid, then trailing-summed per horizon.
-    floored = tr["timestamp"].dt.floor(grid)
-    is_buy = tr["direction"] == "buy"
-    buy = (
-        tr["volume"]
-        .where(is_buy, 0.0)
-        .groupby(floored)
-        .sum()
-        .reindex(gidx, fill_value=0.0)
-    )
-    sell = (
-        tr["volume"]
-        .where(~is_buy, 0.0)
-        .groupby(floored)
-        .sum()
-        .reindex(gidx, fill_value=0.0)
-    )
-    rows = []
-    for h in horizons:
-        k = max(round(pd.Timedelta(h).total_seconds() / step.total_seconds()), 1)
-        b = buy.rolling(k, min_periods=1).sum()
-        s = sell.rolling(k, min_periods=1).sum()
-        total = (b + s).replace(0.0, np.nan)
-        rows.append(((b - s) / total).to_numpy())
+
+def prepare_ofi_horizon_grid_data(
+    grid: pd.DataFrame,
+    *,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+) -> dict[str, Any]:
+    """The OFI horizon graph payload from an already computed grid.
+
+    *grid* is a :func:`~ob_analytics.flow_toxicity.ofi_by_horizon` table:
+    ``timestamp`` and one column per horizon.  Returns the same payload as
+    :func:`prepare_ofi_horizon_data`, for the grid steps between *start_time*
+    and *end_time*.
+    """
+    start_time, end_time = _default_start_end(grid, start_time, end_time)
+    rows = grid[(grid["timestamp"] >= start_time) & (grid["timestamp"] <= end_time)]
+    horizons = [c for c in grid.columns if c != "timestamp"]
     return {
-        "ofi": np.vstack(rows),
-        "times": gidx.to_numpy(),
-        "horizons": list(horizons),
+        "ofi": rows[horizons].to_numpy(dtype=float).T.reshape(len(horizons), -1),
+        "times": pd.DatetimeIndex(rows["timestamp"]).to_numpy(),
+        "horizons": horizons,
     }
 
 

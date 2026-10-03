@@ -17,6 +17,8 @@ quantifying price impact.
 
 ::: ob_analytics.flow_toxicity.order_flow_imbalance
 
+::: ob_analytics.flow_toxicity.ofi_by_horizon
+
 ## Models
 
 ::: ob_analytics.flow_toxicity.KyleLambdaResult
@@ -28,3 +30,5 @@ quantifying price impact.
 ::: ob_analytics.flow_toxicity.KYLE_MIN_WINDOWS
 
 ::: ob_analytics.flow_toxicity.VPIN_BUCKETS_PER_DAY
+
+::: ob_analytics.flow_toxicity.OFI_HORIZONS

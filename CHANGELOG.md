@@ -10,6 +10,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **The flow-toxicity faces and the L1 quote are built-in metrics** (#118).
+  `vpin`, `kyle_lambda`, `order_flow_imbalance` and `ofi_horizon` are now
+  registered metrics, so `available_concepts` lists them and
+  `result.plot("vpin")` computes and draws VPIN with the defaults of
+  `compute_vpin`. A keyword goes to the calculation or to the picture,
+  whichever names it: `result.plot("vpin", bucket_volume=5.0, threshold=0.8)`.
+  `result.metric(name, **settings)` takes the calculation's settings too. The
+  new `l1_ticker` metric is the Level 1 quote — best bid, best ask and last
+  trade. It draws the three prices over time, or the quote card for one
+  instant with `at=`; `plot("l1_ticker", bid=99, ask=101, last=100)` draws a
+  card from plain numbers. Each built-in metric gets a gallery card.
+  `ofi_by_horizon` is the multi-horizon order flow imbalance that the
+  `ofi_horizon` face draws, now a function in `flow_toxicity`.
+
 - **A page on what each feed shows** (#288). "What each feed shows" describes
   16 properties that decide what a capture can tell you, such as depth shown,
   what can be missed, sequence, clocks and taker side. It gives each property's
@@ -63,6 +77,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and pass it to `data_quality_summary(sequence_restarts=...)`.
 
 ### Changed
+
+- **A metric is computed when its plot is drawn** (#118). Building the gallery
+  model, `available_concepts` and `result.plot` of another concept no longer
+  run every registered metric. A metric that raises now keeps its gallery card,
+  which says why it has no plot, instead of being left out.
 
 - **A plot concept is level-less or drawn at a level, on every backend**
   (#302). Registering a concept at `None` when it is registered at a level on

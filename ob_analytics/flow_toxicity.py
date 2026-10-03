@@ -1,7 +1,7 @@
 """Order flow toxicity and imbalance metrics.
 
-Implements three market microstructure measures for detecting informed
-trading and quantifying price impact:
+Implements market microstructure measures for detecting informed trading and
+quantifying price impact:
 
 * :func:`compute_vpin` — Volume-Synchronized Probability of Informed
   Trading (Easley, López de Prado & O'Hara, 2012).
@@ -9,6 +9,8 @@ trading and quantifying price impact:
   (Kyle, 1985).
 * :func:`order_flow_imbalance` — Normalised buy/sell volume imbalance
   per time window.
+* :func:`ofi_by_horizon` — the same imbalance over several trailing horizons
+  on one time grid.
 
 All functions accept a trades DataFrame from the pipeline (or any
 DataFrame with the required columns).
@@ -700,3 +702,80 @@ def order_flow_imbalance(
     grouped["ofi"] = grouped["net_volume"] / total.replace(0, np.nan)
 
     return grouped
+
+
+#: Trailing horizons :func:`ofi_by_horizon` measures by default, shortest first.
+OFI_HORIZONS: tuple[str, ...] = ("5s", "15s", "60s", "300s")
+
+
+def ofi_by_horizon(
+    trades: pd.DataFrame,
+    horizons: tuple[str, ...] = OFI_HORIZONS,
+    grid: str = "5s",
+    sign_method: str | None = None,
+    quotes: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Compute order flow imbalance over several trailing horizons on one grid.
+
+    :func:`order_flow_imbalance` measures one window at a time.  This measures
+    each of *horizons* at every step of a common time *grid*, so short- and
+    long-horizon pressure can be compared at the same instant.  Each value is
+    a *trailing* window ending at the grid step, not a block of the grid, so a
+    long horizon changes slowly and a short one changes quickly.
+
+    Parameters
+    ----------
+    trades : pandas.DataFrame
+        Trades with ``timestamp`` and ``volume``.  A ``direction`` column is
+        used when present; otherwise it is inferred — see *sign_method*.
+    horizons : tuple of str, optional
+        Pandas offset strings, one per horizon.  Each is rounded to a whole
+        number of *grid* steps, with a minimum of one.  Default
+        :data:`OFI_HORIZONS`.
+    grid : str, optional
+        Pandas offset string for the time grid.  Default ``"5s"``.
+    sign_method, quotes : optional
+        How to obtain the buy/sell split, as for :func:`order_flow_imbalance`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per grid step, with ``timestamp`` and one column per horizon,
+        named by its offset string.  Each value is OFI in ``[-1, +1]`` (buy
+        pressure positive), or ``NaN`` when nothing traded in that window.
+
+    Raises
+    ------
+    ConfigError
+        If required columns are missing.
+    ObAnalyticsError
+        If *trades* is empty.
+    """
+    validate_columns(trades, {"timestamp", "volume"}, "ofi_by_horizon")
+    validate_non_empty(trades, "ofi_by_horizon")
+    trades = resolve_direction(trades, sign_method, quotes, "ofi_by_horizon")
+
+    step = pd.Timedelta(grid)
+    timestamps = trades["timestamp"]
+    index = pd.date_range(
+        timestamps.min().floor(grid), timestamps.max().ceil(grid), freq=grid
+    )
+    # Signed volume binned onto the fine grid, then trailing-summed per horizon.
+    floored = timestamps.dt.floor(grid)
+    is_buy = trades["direction"] == "buy"
+    volume = trades["volume"]
+    buy = (
+        volume.where(is_buy, 0.0).groupby(floored).sum().reindex(index, fill_value=0.0)
+    )
+    sell = (
+        volume.where(~is_buy, 0.0).groupby(floored).sum().reindex(index, fill_value=0.0)
+    )
+
+    out = pd.DataFrame({"timestamp": index})
+    for horizon in horizons:
+        k = max(round(pd.Timedelta(horizon).total_seconds() / step.total_seconds()), 1)
+        b = buy.rolling(k, min_periods=1).sum()
+        s = sell.rolling(k, min_periods=1).sum()
+        total = (b + s).replace(0.0, np.nan)
+        out[horizon] = ((b - s) / total).to_numpy()
+    return out

@@ -21,6 +21,7 @@ from ob_analytics.visualization._data import (
     biased_color_norm,
     book_mid,
     check_book_payload_level,
+    l1_card_texts,
     mpl_marker_area_to_plotly_size,
 )
 from ob_analytics.visualization._palette import Palette
@@ -1156,6 +1157,85 @@ def plotly_price_view(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     return fig
 
 
+def plotly_l1_ticker(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
+    """Level 1 quote: a quote card for one instant, or the prices over time.
+
+    The payload decides which (see
+    :func:`~ob_analytics.visualization._data.prepare_l1_ticker_data`): one with
+    ``bid`` is a card, one with ``timestamp`` is the prices over time.
+    """
+    if "bid" in data:
+        return _plotly_l1_card(data, theme)
+    pal = theme.palette
+    go = _import_plotly()
+    ts = data["timestamp"]
+    if len(ts) == 0:
+        return _base_figure(go, theme, title="Level 1 quote (no data)")
+    fig = _base_figure(
+        go, theme, title="Level 1 quote — best bid, best ask, last trade"
+    )
+    for key, color, width, name in (
+        ("best_ask_price", pal.ask, 1, "best ask"),
+        ("last_price", pal.price_line, 2, "last trade"),
+        ("best_bid_price", pal.bid, 1, "best bid"),
+    ):
+        fig.add_trace(
+            go.Scatter(
+                x=ts,
+                y=data[key],
+                mode="lines",
+                line={"color": color, "width": width, "shape": "hv"},
+                name=name,
+            )
+        )
+    fig.update_xaxes(title_text="Time")
+    fig.update_yaxes(title_text="Price")
+    y_range = data.get("y_range")
+    if y_range is not None and y_range[0] < y_range[1]:
+        fig.update_yaxes(range=list(y_range))
+    return fig
+
+
+def _plotly_l1_card(data: dict, theme: PlotTheme) -> Any:
+    """The Level 1 quote card: best bid, best ask and last trade at one time."""
+    pal = theme.palette
+    go = _import_plotly()
+    fig = _base_figure(
+        go,
+        theme,
+        width=460,
+        height=200,
+        margin={"l": 10, "r": 10, "t": 10, "b": 10},
+        xaxis={"visible": False, "range": [0, 1]},
+        yaxis={"visible": False, "range": [0, 1]},
+        hovermode=False,
+        showlegend=False,
+    )
+    fig.add_shape(
+        type="rect",
+        x0=0.02,
+        y0=0.04,
+        x1=0.98,
+        y1=0.96,
+        line={"color": pal.rule, "width": 1},
+        fillcolor=pal.neutral,
+        opacity=0.15,
+        layer="below",
+    )
+    # The layout is in points; plotly sizes text in pixels, 96 to the inch.
+    for t in l1_card_texts(data):
+        text = html.escape(t.text)
+        fig.add_annotation(
+            x=t.x,
+            y=t.y,
+            text=f"<b>{text}</b>" if t.bold else text,
+            showarrow=False,
+            xanchor=t.align,
+            font={"size": t.size * 96 / 72, "color": getattr(pal, t.color)},
+        )
+    return fig
+
+
 def plotly_book_signals(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Predictive touch signals: micro-price vs mid, with an OBI strip.
 
@@ -2068,6 +2148,7 @@ for _concept, _level, _fn in [
     ("liquidity_at_touch", _L2, plotly_liquidity_at_touch),
     ("liquidity_at_touch", _L3, plotly_liquidity_at_touch_per_order),
     ("price_view", _L2, plotly_price_view),
+    ("l1_ticker", None, plotly_l1_ticker),
     ("book_signals", None, plotly_book_signals),
     ("trade_size", _L2, plotly_trade_size),
     ("cancellations", _L2, plotly_volume_map),
