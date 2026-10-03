@@ -584,7 +584,8 @@ backend in `backends=`, by default Plotly (when it is installed) and Matplotlib.
 A backend with no renderer for the plot shows "Not available" on its card.
 The example registers only a Matplotlib renderer, so it asks for that backend
 alone. A level-less plot is a `PlotSpec` appended to the model's `analytics`
-list:
+list. If it goes in the wrong list, its card shows "Not available" and says
+which list it belongs in:
 
 ```python
 from ob_analytics.visualization.gallery import (

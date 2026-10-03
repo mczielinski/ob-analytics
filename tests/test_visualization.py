@@ -1144,6 +1144,14 @@ class TestRegisterBackend:
 class TestRendererKinds:
     """A concept is level-less or leveled on every backend, never both (#302)."""
 
+    def test_kind_text(self) -> None:
+        from ob_analytics.visualization import _kind_text
+
+        assert _kind_text([None]) == "level-less"
+        assert _kind_text([Level.L3, Level.L2, Level.L3]) == "at L2 and L3"
+        with pytest.raises(ValueError, match="No levels"):
+            _kind_text([])
+
     @pytest.fixture(autouse=True)
     def _drop_probe_renderers(self):
         from ob_analytics.visualization import RENDERERS
