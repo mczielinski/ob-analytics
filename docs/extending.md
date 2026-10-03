@@ -17,7 +17,7 @@ pass directly.
 |---|---|---|---|
 | **A data source** (new venue, file and/or live) | `Source` + `OfflineSource` and/or `LiveSource` | `register_source(name, cls)` (or an entry point) | `Pipeline.from_source(name)` · CLI `process --source name` / `capture name` |
 | **An export format** | `DataWriter` | `register_writer(name, factory)` | `save_data(data, path, fmt=name)` |
-| **A plot** | a `prepare_*` function + a renderer | `RENDERERS.register((name, backend), fn)` | `plot(name, backend=...)` |
+| **A plot** | a `prepare_*` function + a renderer | `RENDERERS.register((name, level, backend), fn)` | `plot(name, backend=...)` |
 | **A metric** | `Metric` | `register_metric(metric)` (or an entry point) | `result.metric(name)` · `result.plot(name)` · its own gallery card |
 | **A bar rule** | `BarRule` | `register_bar_rule(rule)` | `bars(trades, rule=name)` |
 | **A feature** | `Feature` | `register_feature(feature)` | a column of `features(trades, quotes)` |
@@ -486,10 +486,17 @@ plotting library:
 2. a **renderer** registered under the coordinate `(concept, level, backend)`.
 
 The **level** is the order-book resolution the plot renders at: `Level.L2`
-(Market-By-Price aggregate) or `Level.L3` (Market-By-Order, per order), or
-`None` for a level-less plot such as a derived metric. A concept registered at
-a single level dispatches without naming it; registering the *same* concept at
-both `L2` and `L3` makes it *comparable*, and callers then pass `level=`.
+(Market-By-Price aggregate) or `Level.L3` (Market-By-Order, per order). A plot
+with no L2 and L3 variants of its own can instead be **level-less**, registered
+at `None`: a metric's chart is, and so is the example below, which reads only
+trades. The kind decides how the plot is called and where the gallery shows it,
+not what data it reads: the built-in `trade_size` reads only trades and is
+registered at `L2`. A concept is one kind or the other, on every backend:
+registering it both at `None` and at a level raises `ValueError`.
+
+A concept registered at a single level dispatches without naming it;
+registering the *same* concept at both `L2` and `L3` makes it *comparable*, and
+callers then pass `level=`.
 
 The matplotlib backend calls `renderer(data, ax)`; other backends call
 `renderer(data)`. When the caller passes a theme, `plot()` adds `theme=theme`
@@ -504,7 +511,7 @@ from __future__ import annotations
 import pandas as pd
 from matplotlib.axes import Axes
 
-from ob_analytics.visualization import RENDERERS, DEFAULT_THEME, Level, PlotTheme, plot
+from ob_analytics.visualization import RENDERERS, DEFAULT_THEME, PlotTheme, plot
 
 
 def prepare_cumvol_data(trades: pd.DataFrame) -> dict:
@@ -528,7 +535,8 @@ def mpl_cumvol(data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT
     return ax.figure
 
 
-RENDERERS.register(("cumvol", Level.L2, "matplotlib"), mpl_cumvol)  # None = level-less metric
+# Level-less: it has no L2 and L3 variants of its own.
+RENDERERS.register(("cumvol", None, "matplotlib"), mpl_cumvol)
 ```
 
 Using it:
@@ -556,7 +564,7 @@ the dispatcher at the module so it imports lazily on first use:
 from ob_analytics.visualization import register_plot_backend
 
 # In your package, e.g. my_pkg/_altair.py, call at import time:
-#     RENDERERS.register(("cumvol", Level.L2, "altair"), altair_cumvol)
+#     RENDERERS.register(("cumvol", None, "altair"), altair_cumvol)
 #     # def altair_cumvol(data, *, theme=DEFAULT_THEME): ...
 register_plot_backend("altair", "my_pkg._altair")
 
@@ -568,17 +576,16 @@ way — `backend="bokeh"` covers the core concepts (`trade_tape`,
 `depth_heatmap`, `book_snapshot`, `depth_chart`) for Bokeh / Panel server
 dashboards and streaming views (`pip install ob-analytics[bokeh]`).
 
-**In the gallery.** There is no panel registry. Gallery cards outside the
-built-in concepts are level-less, so the renderer needs a `level=None`
-registration too:
-
-```python
-RENDERERS.register(("cumvol", None, "matplotlib"), mpl_cumvol)
-```
-
-Then build the model, append a `PlotSpec` for the panel to its `analytics`
-list, and render that model instead of a bare result — see the
-[Gallery API](api/gallery.md):
+**In the gallery.** There is no panel registry. Build the model, add a card
+for the plot, and render that model instead of a bare result — see the
+[Gallery API](api/gallery.md). The gallery draws the plot through the renderers
+already registered, so nothing is registered a second time. It draws each
+backend in `backends=`, by default Plotly (when it is installed) and Matplotlib.
+A backend with no renderer for the plot shows "Not available" on its card.
+The example registers only a Matplotlib renderer, so it asks for that backend
+alone. A level-less plot is a `PlotSpec` appended to the model's `analytics`
+list. If it goes in the wrong list, its card shows "Not available" and says
+which list it belongs in:
 
 ```python
 from ob_analytics.visualization.gallery import (
@@ -591,7 +598,20 @@ model = build_gallery_model(result)
 model.analytics.append(
     PlotSpec("cumvol", "Cumulative Volume", "cumvol", prepare_cumvol_data, {"trades": result.trades})
 )
-generate_gallery(result, "output/gallery/", model=model)
+generate_gallery(result, "output/gallery/", model=model, backends=["matplotlib"])
+```
+
+A plot registered at a level is a `PlotConcept` appended to the model's
+`concepts` list instead, before `generate_gallery` is called. Its `variants` map
+each level it is registered at to a `PlotSpec`, and the gallery gives it one
+card per level:
+
+```python
+from ob_analytics.visualization import Level
+from ob_analytics.visualization.gallery import PlotConcept
+
+spec = PlotSpec("my_face", "My Face", "my_face", prepare_my_face, {"depth": result.depth})
+model.concepts.append(PlotConcept("my_face", "My Face", {Level.L2: spec}))
 ```
 
 ---

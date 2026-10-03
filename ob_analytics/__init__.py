@@ -134,6 +134,7 @@ from ob_analytics.metrics import (
 from ob_analytics.pipeline import Pipeline, PipelineResult
 from ob_analytics.protocols import (
     BarRule,
+    Clocks,
     DataWriter,
     DepthSource,
     EventLoader,
@@ -207,6 +208,7 @@ __all__ = [
     # ── Sources (per-venue entry points) ─────────────────────────────
     "BarRule",
     "BitstampSource",
+    "Clocks",
     "ConfigError",
     "CostSummary",
     "DataQualitySummary",

@@ -12,9 +12,11 @@ import csv
 import json
 import time
 from collections.abc import AsyncIterator
+from decimal import Decimal
 from itertools import pairwise
 from pathlib import Path
 from typing import Any, cast
+from uuid import UUID
 
 import pandas as pd
 import pytest
@@ -32,7 +34,8 @@ from ob_analytics.live import (
     run_capture,
 )
 from ob_analytics.live._base import EventDict
-from ob_analytics.protocols import FeedType, Level
+from ob_analytics.protocols import Clocks, FeedType, Level
+from tests._logging import warnings_logged
 
 # ---------------------------------------------------------------------------
 # A scripted L3 source
@@ -51,6 +54,17 @@ DEAF_ONCE_RAW = "deaf_once_raw"
 HANG_ON_STOP = "hang_on_stop"
 # Its opening snapshot never finishes, so it never streams.
 STUCK_SNAPSHOT = "stuck_snapshot"
+# Streams like OK, but each raw frame holds a UUID value and a Decimal key,
+# and every third one refers to itself, which JSON cannot hold.
+ODD_RAW = "odd_raw"
+ODD_GUID = UUID("b3cb9a0f-8db9-4965-ba74-9400530797a8")
+
+
+def _odd_raw_frame(sent: int) -> Any:
+    frame: dict[Any, Any] = {"Guid": ODD_GUID, "bids": {Decimal("99.0"): "0.5"}}
+    if sent % 3 == 0:
+        frame["self"] = frame
+    return frame
 
 
 def _disconnect_after(n: int) -> str:
@@ -173,7 +187,7 @@ class _ScriptedSource:
                         "action": action,
                         "direction": side,
                     },
-                    None,
+                    _odd_raw_frame(sent) if self._behaviour == ODD_RAW else None,
                 )
         finally:
             if self._behaviour.startswith("slow_close"):
@@ -235,8 +249,7 @@ def _capture(tmp_path: Path, plan: list[str], seconds: float, **config: Any):
         pair="btcusd",
         out_dir=tmp_path / "cap",
         minutes=seconds / 60,
-        keep_raw=False,
-        **config,
+        **{"keep_raw": False, **config},
     )
     return asyncio.run(run_capture(_factory(plan), cfg))
 
@@ -638,6 +651,42 @@ class TestRoll:
 # ---------------------------------------------------------------------------
 
 
+class TestRawFrames:
+    def test_raw_warnings_and_skips_are_reported_once_per_capture(self, tmp_path):
+        # Every segment gets a new sink; the supervisor hands each the same
+        # set of warnings already logged, and adds up what each skipped.
+        with warnings_logged() as logged:
+            run = _capture(
+                tmp_path, [ODD_RAW], seconds=1.2, roll_minutes=0.3 / 60, keep_raw=True
+            )
+        segments = run.manifest.segments
+        assert len(segments) >= 3
+        assert (
+            logged.count(
+                "raw.jsonl: writing uuid.UUID values or keys as text (str(value))"
+            )
+            == 1
+        )
+        assert sum(m.startswith("raw.jsonl: skipping frames") for m in logged) == 1
+
+        total = 0
+        for segment in segments:
+            meta = json.loads((run.out_dir / segment.name / "meta.json").read_text())
+            assert segment.raw_frames_skipped == meta["n_raw_frames_skipped"]
+            assert meta["raw_text_types"] == ["uuid.UUID"]
+            total += segment.raw_frames_skipped
+        assert total > 0
+        assert run.manifest.raw_frames_skipped == total
+        raw = json.loads((run.out_dir / "manifest.json").read_text())
+        assert raw["raw_frames_skipped"] == total
+        assert f"raw frames skipped    : {total}" in run.manifest.render()
+        assert any(f"raw.jsonl skipped {total} frame(s)" in m for m in logged)
+        # The frames that were written keep their Decimal-keyed book.
+        first = run.out_dir / segments[0].name / "raw.jsonl"
+        line = json.loads(first.read_text().splitlines()[0])
+        assert line["bids"] == {"99.0": "0.5"}
+
+
 class TestManifest:
     def test_round_trips_through_the_file(self, tmp_path):
         run = _capture(tmp_path, [_disconnect_after(4), OK], seconds=0.8)
@@ -655,6 +704,28 @@ class TestManifest:
         assert raw["feed_type"] == "matched_book"
         assert raw["dropped"] == 0
         assert raw["gap_seconds"] == pytest.approx(run.manifest.gaps[0].seconds)
+
+    def test_each_segment_records_its_clocks_and_the_manifest_does_not(self, tmp_path):
+        """A live source learns its clocks from the books, after the manifest opens."""
+
+        class _OneClock(_ScriptedSource):
+            clocks = Clocks.RECEIVE_ONLY
+
+        plan = [_disconnect_after(4), OK]
+
+        def make() -> _OneClock:
+            return _OneClock(plan.pop(0) if len(plan) > 1 else plan[0])
+
+        cfg = CaptureConfig(
+            pair="btcusd", out_dir=tmp_path / "cap", minutes=0.8 / 60, keep_raw=False
+        )
+        run = asyncio.run(run_capture(make, cfg))
+        assert len(run.manifest.segments) == 2
+        for seg in run.manifest.segments:
+            meta = json.loads((run.out_dir / seg.name / "meta.json").read_text())
+            assert meta["clocks"] == "receive_only"
+        raw = json.loads((run.out_dir / "manifest.json").read_text())
+        assert "clocks" not in raw
 
     def test_a_running_segment_keeps_a_provisional_meta_on_disk(self, tmp_path):
         cfg = CaptureConfig(
@@ -830,6 +901,81 @@ class TestCloseSegmentFiles:
         assert _every_order_closed(root / segment.name / "orders.csv")
         meta = json.loads((root / segment.name / "meta.json").read_text())
         assert meta["capture_error"] == "it did not stop"
+
+    def test_keeps_the_raw_counters_of_the_provisional_meta(self, tmp_path):
+        # A running segment's provisional meta.json carries what raw.jsonl
+        # skipped so far, so a crash does not lose the count.
+        root = tmp_path / "cap"
+        _crashed_capture(root)
+        meta_path = root / "seg-0001" / "meta.json"
+        meta = json.loads(meta_path.read_text())
+        meta.update({"raw_text_types": ["uuid.UUID"], "n_raw_frames_skipped": 4})
+        meta_path.write_text(json.dumps(meta))
+        manifest = read_manifest(root)
+        assert manifest is not None
+        segment = manifest.segments[0]
+
+        closed = _supervisor._close_segment_files(
+            root / segment.name, segment, manifest, "it did not stop"
+        )
+        _supervisor._apply_closed_files(segment, closed, "it did not stop")
+
+        assert segment.raw_frames_skipped == 4
+        meta = json.loads(meta_path.read_text())
+        assert meta["raw_text_types"] == ["uuid.UUID"]
+
+    def test_keeps_the_clocks_of_the_provisional_meta(self, tmp_path):
+        # The manifest's declarations are merged over the provisional meta;
+        # they must not replace the clocks the segment saw.
+        root = tmp_path / "cap"
+        _crashed_capture(root)
+        meta_path = root / "seg-0001" / "meta.json"
+        meta = json.loads(meta_path.read_text())
+        meta["clocks"] = "receive_only"
+        meta_path.write_text(json.dumps(meta))
+        manifest = read_manifest(root)
+        assert manifest is not None
+
+        _supervisor._close_segment_files(
+            root / "seg-0001", manifest.segments[0], manifest, "it did not stop"
+        )
+
+        assert json.loads(meta_path.read_text())["clocks"] == "receive_only"
+
+    def test_the_sinks_raw_counters_replace_the_provisional_ones(self, tmp_path):
+        # A segment stuck on stop is closed while its sink is still at hand:
+        # the sink's final counts win over the provisional meta.json, which is
+        # as old as the last heartbeat.
+        root = tmp_path / "cap"
+        _crashed_capture(root)
+        meta_path = root / "seg-0001" / "meta.json"
+        meta = json.loads(meta_path.read_text())
+        meta.update({"raw_text_types": [], "n_raw_frames_skipped": 4})
+        meta_path.write_text(json.dumps(meta))
+        manifest = read_manifest(root)
+        assert manifest is not None
+        segment = manifest.segments[0]
+
+        closed = _supervisor._close_segment_files(
+            root / segment.name,
+            segment,
+            manifest,
+            "it did not stop",
+            {"raw_text_types": ["uuid.UUID"], "n_raw_frames_skipped": 9},
+        )
+
+        assert closed.raw_frames_skipped == 9
+        meta = json.loads(meta_path.read_text())
+        assert meta["raw_text_types"] == ["uuid.UUID"]
+        assert meta["n_raw_frames_skipped"] == 9
+
+    def test_the_summary_leaves_out_raw_frames_when_none_were_skipped(self, tmp_path):
+        # A --no-raw capture skips none, and has no raw.jsonl to speak of.
+        root = tmp_path / "cap"
+        _crashed_capture(root)
+        manifest = read_manifest(root)
+        assert manifest is not None
+        assert "raw frames skipped" not in manifest.render()
 
 
 class TestRestart:

@@ -5,18 +5,22 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import pandas as pd
 import pytest
 
 from ob_analytics.config import SourceSettings
 from ob_analytics.live import CaptureConfig, LiveSource, SupportsDiagnostics
-from ob_analytics.live._base import EventDict
+from ob_analytics.live._base import CaptureResult, EventDict
 from ob_analytics.live._runner import FileCaptureSink, run_capturer
 from ob_analytics.protocols import FeedType, Level
 from ob_analytics.sources import get_source, list_sources, register_source
+from tests._logging import warnings_logged
 
 # ---------------------------------------------------------------------------
 # A deterministic, no-network capturer
@@ -171,6 +175,28 @@ class _FakeL2Capturer:
             yield {}
 
 
+def _close(sink: FileCaptureSink, out: Path) -> tuple[list[Any], dict[str, Any]]:
+    """Close *sink*; return its raw.jsonl frames and its meta.json."""
+    now = pd.Timestamp.now(tz="UTC")
+    sink.finalize(
+        CaptureResult(
+            out_dir=out,
+            n_order_events=0,
+            n_trade_events=0,
+            n_raw_frames=0,
+            started=now,
+            ended=now,
+        )
+    )
+    raw = out / "raw.jsonl"
+    frames = (
+        [json.loads(line) for line in raw.read_text().splitlines()]
+        if raw.exists()
+        else []
+    )
+    return frames, json.loads((out / "meta.json").read_text())
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -227,6 +253,7 @@ class TestDiagnosticsProtocol:
         class _OddCapturer(_FakeCapturer):
             feed_type = "l2_snapshot"
             trade_attribution = "taker"
+            clocks = "sundial"
 
         cfg = CaptureConfig(pair="btcusd", out_dir=tmp_path / "cap", minutes=0.001)
         # Deliberately off the protocol: that is the case under test.
@@ -235,6 +262,7 @@ class TestDiagnosticsProtocol:
         meta = json.loads((tmp_path / "cap" / "meta.json").read_text())
         assert meta["feed_type"] == "unknown"
         assert "trade_attribution" not in meta
+        assert "clocks" not in meta
         assert result.n_order_events > 0
 
     def test_runner_no_diagnostics_records_only_the_declarations(self, tmp_path):
@@ -245,6 +273,7 @@ class TestDiagnosticsProtocol:
             "source": "fake",
             "feed_type": "diff_feed",
             "trade_attribution": "both",
+            "clocks": "both",
         }
 
 
@@ -277,18 +306,211 @@ class TestRunner:
         sink.write_raw(
             {"price": Decimal("65432.123456789012345"), "n": [Decimal("0.00010000")]}
         )
-        assert sink._raw_fp is not None
-        sink._raw_fp.flush()
-        line = (tmp_path / "raw.jsonl").read_text().strip()
-        assert json.loads(line) == {
-            "price": "65432.123456789012345",
-            "n": ["0.00010000"],
-        }
+        frames, _ = _close(sink, tmp_path)
+        assert frames == [{"price": "65432.123456789012345", "n": ["0.00010000"]}]
 
-    def test_raw_frame_with_other_unknown_type_still_fails(self, tmp_path):
+    def test_raw_frame_with_datetime_is_written_as_iso_string(self, tmp_path):
+        # cryptofeed parses most venues' frames with yapic json, which turns
+        # ISO date and time strings into date, datetime and time objects
+        # (independent_reserve's Data.TradeDate, blockchain). A string with no
+        # offset becomes a naive datetime, and stays without one.
         sink = FileCaptureSink(tmp_path, keep_raw=True)
-        with pytest.raises(TypeError, match="object"):
-            sink.write_raw({"x": object()})
+        sink.write_raw(
+            {
+                "Data": {
+                    "TradeDate": datetime(2026, 9, 28, 8, 30, 15, 123456, tzinfo=UTC),
+                    "LocalDate": datetime.fromisoformat("2026-09-28T18:30:15"),
+                    "SettleDate": date(2026, 9, 28),
+                    "Cutoff": time(12, 30),
+                    "Price": Decimal("98765.43"),
+                }
+            }
+        )
+        frames, meta = _close(sink, tmp_path)
+        assert frames == [
+            {
+                "Data": {
+                    "TradeDate": "2026-09-28T08:30:15.123456+00:00",
+                    "LocalDate": "2026-09-28T18:30:15",
+                    "SettleDate": "2026-09-28",
+                    "Cutoff": "12:30:00",
+                    "Price": "98765.43",
+                }
+            }
+        ]
+        # Dates, times and Decimals are expected: none is reported as text.
+        assert meta["raw_text_types"] == []
+
+    def test_raw_frame_with_other_unknown_type_is_written_as_text(self, tmp_path):
+        # raw.jsonl is a record for debugging: a value the encoder does not
+        # know must never stop the capture. It is written as str(value), the
+        # type is logged once and meta.json names it.
+        guid = UUID("b3cb9a0f-8db9-4965-ba74-9400530797a8")
+        with warnings_logged() as logged:
+            sink = FileCaptureSink(tmp_path, keep_raw=True)
+            sink.write_raw({"Guid": guid})
+            sink.write_raw({"Guid": guid})
+        frames, meta = _close(sink, tmp_path)
+        assert frames == [{"Guid": "b3cb9a0f-8db9-4965-ba74-9400530797a8"}] * 2
+        assert meta["raw_text_types"] == ["uuid.UUID"]
+        assert logged == [
+            "raw.jsonl: writing uuid.UUID values or keys as text (str(value))"
+        ]
+
+    def test_raw_text_types_are_told_apart_by_module_and_qualname(self, tmp_path):
+        class _A:
+            class Tag:
+                pass
+
+        class _B:
+            class Tag:
+                pass
+
+        with warnings_logged() as logged:
+            sink = FileCaptureSink(tmp_path, keep_raw=True)
+            sink.write_raw({"a": _A.Tag(), "b": _B.Tag()})
+        _, meta = _close(sink, tmp_path)
+        assert len(meta["raw_text_types"]) == 2
+        assert len(logged) == 2
+
+    def test_raw_frame_keys_json_cannot_hold_are_written_as_text(self, tmp_path):
+        # json.dumps never passes a dict key to default=, so a book keyed by
+        # Decimal price would fail. Keys are written as text, like values, and
+        # the rest of the frame is kept.
+        guid = UUID("b3cb9a0f-8db9-4965-ba74-9400530797a8")
+        with warnings_logged() as logged:
+            sink = FileCaptureSink(tmp_path, keep_raw=True)
+            sink.write_raw(
+                {
+                    "seq": 7,
+                    "bids": {Decimal("99.50"): Decimal("0.5"), 98: "1"},
+                    "by_id": [{guid: date(2026, 9, 28)}],
+                }
+            )
+        frames, meta = _close(sink, tmp_path)
+        assert frames == [
+            {
+                "seq": 7,
+                "bids": {"99.50": "0.5", "98": "1"},
+                "by_id": [{"b3cb9a0f-8db9-4965-ba74-9400530797a8": "2026-09-28"}],
+            }
+        ]
+        assert meta["n_raw_frames_skipped"] == 0
+        # A Decimal key is expected, a UUID key is not.
+        assert meta["raw_text_types"] == ["uuid.UUID"]
+        assert logged == [
+            "raw.jsonl: writing uuid.UUID values or keys as text (str(value))"
+        ]
+
+    def test_raw_frame_keys_that_turn_into_the_same_text_are_all_kept(self, tmp_path):
+        # json.dumps keeps both 1 and "1"; writing keys as text must not merge
+        # Decimal("1.0") and "1.0" into one.
+        sink = FileCaptureSink(tmp_path, keep_raw=True)
+        sink.write_raw({Decimal("1.0"): "a", "1.0": "b", "seq": 3})
+        _close(sink, tmp_path)
+        line = (tmp_path / "raw.jsonl").read_text().strip()
+        assert line == '{"1.0":"a","1.0":"b","seq":3}'
+
+    def test_frames_after_one_with_text_keys_are_written_the_same(self, tmp_path):
+        # Once a frame had a key JSON cannot hold, later frames skip the
+        # json.dumps attempt; what they write must not change.
+        frame = {
+            "a": [1, 2.5, None, True, "x", {"b": float("inf")}],
+            "price": Decimal("1.10"),
+            "day": date(2026, 1, 2),
+            3: "n",
+            1.5: "f",
+            None: "z",
+            False: "q",
+            "\u00e9": "\u00fc\n",
+            "empty": [[], {}],
+        }
+        sink = FileCaptureSink(tmp_path, keep_raw=True)
+        sink.write_raw(frame)
+        sink.write_raw({Decimal("99.5"): "1"})
+        sink.write_raw(frame)
+        _close(sink, tmp_path)
+        lines = (tmp_path / "raw.jsonl").read_text().splitlines()
+        assert lines[1] == '{"99.5":"1"}'
+        assert lines[2] == lines[0]
+
+    def test_the_slower_key_encoder_is_used_only_while_frames_need_it(
+        self, tmp_path, monkeypatch
+    ):
+        # After a frame with a key JSON cannot hold, the next frame goes
+        # straight to the key encoder; a frame without one turns that off.
+        sink = FileCaptureSink(tmp_path, keep_raw=True)
+        encode = sink._encode
+        frames_encoded: list[Any] = []
+
+        def spy(value: Any, path: set[int]) -> str:
+            if not path:
+                frames_encoded.append(value)
+            return encode(value, path)
+
+        monkeypatch.setattr(sink, "_encode", spy)
+        by_price = {Decimal("99.5"): "1"}
+        first_plain, second_plain = {"plain": 1}, {"plain": 2}
+        for frame in (by_price, first_plain, second_plain):
+            sink.write_raw(frame)
+        frames, _ = _close(sink, tmp_path)
+        assert frames == [{"99.5": "1"}, {"plain": 1}, {"plain": 2}]
+        assert frames_encoded == [by_price, first_plain]
+
+    def test_raw_frame_json_cannot_hold_is_skipped_and_counted(self, tmp_path):
+        # A circular reference, or a value whose str() raises, cannot be
+        # written at all: the frame is skipped, the capture goes on.
+        class _Unprintable:
+            def __init__(self, n: int) -> None:
+                self.n = n
+
+            def __str__(self) -> str:
+                raise ValueError(f"cannot print tick {self.n}")
+
+        loop: list[Any] = []
+        loop.append(loop)
+        with warnings_logged() as logged:
+            sink = FileCaptureSink(tmp_path, keep_raw=True)
+            sink.write_raw({"tick": _Unprintable(1)})
+            sink.write_raw({"tick": _Unprintable(2)})
+            sink.write_raw({Decimal(1): loop})
+            sink.write_raw({"ok": 1})
+        frames, meta = _close(sink, tmp_path)
+        assert frames == [{"ok": 1}]
+        assert meta["n_raw_frames_skipped"] == 3
+        # The warning is keyed on the kind of error, not its text, so errors
+        # whose text changes from frame to frame still log once.
+        assert logged == [
+            (
+                "raw.jsonl: skipping frames JSON cannot hold "
+                "(ValueError: cannot print tick 1)"
+            )
+        ]
+        # The skipped frames wrote nothing as text.
+        assert meta["raw_text_types"] == []
+
+    def test_raw_warnings_are_logged_once_across_segments(self, tmp_path):
+        # The supervisor hands every segment's sink the same set, so a long
+        # rolled capture logs each warning once, while every segment's
+        # meta.json still names the types it wrote as text.
+        warned: set[str] = set()
+        guid = UUID("b3cb9a0f-8db9-4965-ba74-9400530797a8")
+        with warnings_logged() as logged:
+            for name in ("seg-0001", "seg-0002"):
+                sink = FileCaptureSink(
+                    tmp_path / name, keep_raw=True, raw_warned=warned
+                )
+                sink.write_raw({"Guid": guid})
+                _, meta = _close(sink, tmp_path / name)
+                assert meta["raw_text_types"] == ["uuid.UUID"]
+        assert len(logged) == 1
+
+    def test_no_raw_fields_in_meta_without_raw(self, tmp_path):
+        sink = FileCaptureSink(tmp_path, keep_raw=False)
+        _close(sink, tmp_path)
+        meta = json.loads((tmp_path / "meta.json").read_text())
+        assert "raw_text_types" not in meta
+        assert "n_raw_frames_skipped" not in meta
 
     def test_output_is_loader_compatible(self, tmp_path):
         """The captured orders.csv must be loadable by BitstampLoader."""

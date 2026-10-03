@@ -37,8 +37,9 @@ import pandas as pd
 from loguru import logger
 
 from ob_analytics.config import SourceSettings
-from ob_analytics.live._base import CaptureConfig, EventDict
-from ob_analytics.protocols import FeedType, Level, TradeAttribution
+from ob_analytics.live._base import CaptureConfig, EventDict, VenueClockCount
+from ob_analytics.protocols import Clocks, FeedType, Level, TradeAttribution
+from ob_analytics.schemas import ORIGIN_COLUMN, SNAPSHOT_ORIGIN
 
 #: cryptofeed's channel names (``cryptofeed.defines``), spelled out so this
 #: module imports without cryptofeed installed.
@@ -62,6 +63,11 @@ _L3_WINDOW: dict[str, int] = {"BITSTAMP": 100}
 #: milliseconds first, so without the wait a filled order reads as cancelled.
 _FILL_GRACE_S = 2.0
 
+#: How far before the next book a held opening book is placed, in seconds (see
+#: ``_release_held_book``).  A capture writes its clocks in whole milliseconds,
+#: so the gap must be at least one for the order to survive.
+_PLACE_BEFORE_S = 0.001
+
 
 def _epoch_s_to_ts(seconds: Any) -> pd.Timestamp:
     """cryptofeed timestamps are float epoch *seconds*; ``None`` uses the time now.
@@ -71,6 +77,24 @@ def _epoch_s_to_ts(seconds: Any) -> pd.Timestamp:
     if seconds is None:
         return pd.Timestamp.now(tz="UTC").as_unit("ns")
     return pd.Timestamp(float(seconds), unit="s", tz="UTC").as_unit("ns")
+
+
+def _clocks(venue: Any, receipt: Any) -> dict[str, pd.Timestamp]:
+    """Return a row's ``timestamp`` and ``exchange_timestamp`` (epoch seconds in).
+
+    ``timestamp`` is the receipt time and ``exchange_timestamp`` the venue's.
+    Where one is missing the other is copied, so a row never carries a clock
+    that nobody stamped: a venue that sends no time gets the receipt time, as
+    LOBSTER's one clock fills both columns.  With neither, both are the time
+    now.
+    """
+    if receipt is None:
+        receipt = venue
+    received = _epoch_s_to_ts(receipt)
+    return {
+        "timestamp": received,
+        "exchange_timestamp": received if venue is None else _epoch_s_to_ts(venue),
+    }
 
 
 def _trade_order_ids(trade: Any) -> tuple[Any, Any]:
@@ -200,9 +224,6 @@ class CryptofeedSource:
     """Live-capture a cryptofeed venue as an L3 order stream or L2 depth stream."""
 
     name = "cryptofeed"
-    # cryptofeed maintains the venue's own book (applying its snapshot +
-    # deltas), so bids never rest above asks in the reconstructed book.
-    feed_type = FeedType.MATCHED_BOOK
 
     def __init__(self, settings: SourceSettings | None = None) -> None:
         self.settings: SourceSettings = settings or CryptofeedSettings()
@@ -230,6 +251,14 @@ class CryptofeedSource:
 
         # Venue sequence continuity (see ``note_sequence``).
         self._last_sequence: int | None = None
+        # A book with no delta, held until the next callback (see
+        # ``_hold_book``): its kind, rows, raw frame, receipt time, and
+        # whether it carried a venue time.
+        self._held_book: tuple[str, list[EventDict], Any, float | None, bool] | None = (
+            None
+        )
+        # Books with and without the venue's own time (see ``clocks``).
+        self.venue_clock = VenueClockCount()
 
         # Diagnostics (surfaced in meta.json via SupportsDiagnostics).
         self.sequence_gaps = 0
@@ -282,24 +311,61 @@ class CryptofeedSource:
         self._level = value
 
     @property
+    def feed_type(self) -> FeedType:
+        """How this capture's book can cross, which follows its level.
+
+        At L3, cryptofeed keeps the venue's book of resting orders, applying
+        its opening book and changes, or taking each new snapshot whole.  Bids
+        never rest above asks in it, so it is a matched book.  At L2 it keeps
+        the venue's total size at each price.  The level is read with
+        :meth:`_effective_level`.
+        """
+        if self._effective_level() is Level.L2:
+            return FeedType.PRICE_LEVELS
+        return FeedType.MATCHED_BOOK
+
+    @property
     def trade_attribution(self) -> TradeAttribution:
         """Which orders of a trade this capture's order events can name.
 
         cryptofeed's L3 channels carry the book, and a book holds resting
         orders only: a taker trades on arrival and never appears.  So an L3
         capture names the maker only, and an L2 capture, with no order
-        identity, names neither.  Until the venue resolves, the answer is the
-        L3 one unless L2 was asked for: an L2 run ignores attribution anyway.
+        identity, names neither.  The level is read with
+        :meth:`_effective_level`.
+        """
+        if self._effective_level() is Level.L2:
+            return TradeAttribution.NONE
+        return TradeAttribution.MAKER_ONLY
+
+    @property
+    def clocks(self) -> Clocks:
+        """Which clocks this capture's book rows carry, read from the venue's books.
+
+        Some cryptofeed venues send no time with their book: Bitfinex and
+        Blockchain.com at L3, Kraken at L2.  Their rows copy the receipt time
+        into ``exchange_timestamp``, so the capture has one clock,
+        :attr:`~ob_analytics.protocols.Clocks.RECEIVE_ONLY`.  Independent
+        Reserve and Coinbase send a time on every message but none on the
+        opening book, so they keep both clocks.
+        """
+        return self.venue_clock.clocks
+
+    def _effective_level(self) -> Level:
+        """The level the declarations follow, even before the venue resolves.
+
+        An explicit request for L2 stands without a venue.  Otherwise, until
+        the venue resolves (no venue chosen, or the extra not installed), the
+        answer is L3, the level cryptofeed is used for: an L2 run ignores the
+        L3 declarations anyway.
         """
         if getattr(self.settings, "level", None) is Level.L2:
-            return TradeAttribution.NONE
+            return Level.L2
         try:
             self._exchange_class()
         except (ImportError, ValueError):
-            return TradeAttribution.MAKER_ONLY
-        if self.level is Level.L2:
-            return TradeAttribution.NONE
-        return TradeAttribution.MAKER_ONLY
+            return Level.L3
+        return self.level
 
     @property
     def _venue(self) -> str:
@@ -351,20 +417,71 @@ class CryptofeedSource:
         identity onto each row they emit, so the two translators build it here
         rather than each spelling it out.  ``timestamp`` is when the capture
         received the message (cryptofeed's receipt time) and
-        ``exchange_timestamp`` is the venue's own stamp; without a receipt time
-        the venue stamp stands in for both.
+        ``exchange_timestamp`` is the venue's own stamp.  Where one is missing
+        the other stands in for both (see ``_clocks``).
         """
-        venue_ts = _epoch_s_to_ts(getattr(book, "timestamp", None))
         return {
-            "timestamp": (
-                venue_ts
-                if receipt_timestamp is None
-                else _epoch_s_to_ts(receipt_timestamp)
-            ),
-            "exchange_timestamp": venue_ts,
+            **_clocks(getattr(book, "timestamp", None), receipt_timestamp),
             "sequence": getattr(book, "sequence_number", None),
             **self._payload_identity(book),
         }
+
+    def _hold_book(
+        self,
+        kind: str,
+        events: list[EventDict],
+        raw: Any,
+        receipt_timestamp: float | None,
+        venue_time: Any,
+    ) -> None:
+        """Keep a book with no delta back until the next callback.
+
+        A venue whose opening book comes from REST fetches it while cryptofeed
+        handles the first live message (Binance, Independent Reserve).  The
+        book is handed over first, with a receipt time taken after that
+        message arrived, so the message that changes it carries the earlier
+        time, and replay, which sorts on ``timestamp``, would apply it first.
+        Only the next book's receipt time shows this, so the book waits for it
+        (see ``_release_held_book``).
+        """
+        self._held_book = (kind, events, raw, receipt_timestamp, venue_time is not None)
+
+    def _release_held_book(
+        self, next_receipt: float | None = None
+    ) -> list[tuple[str, EventDict, Any]]:
+        """Return the held book's ``(kind, row, raw)`` items, placed if need be.
+
+        *next_receipt* is the receipt time of the book that follows.  When it
+        is earlier than the held book's, the held book is placed
+        ``_PLACE_BEFORE_S`` before it, so it replays before the message it
+        precedes; that message keeps its own receipt time.  Without a venue
+        time, ``exchange_timestamp`` copies the placed time.
+
+        The capture did not measure every clock on such a book: the receive
+        time is placed, or the venue time is a copy.  Its rows are marked as
+        the opening book (``origin`` ``snapshot``), and the clock checks leave
+        them out.  A book whose clocks were both measured is left unmarked.
+        """
+        if self._held_book is None:
+            return []
+        kind, events, raw, receipt, had_venue_time = self._held_book
+        self._held_book = None
+        placed = (
+            next_receipt is not None and receipt is not None and next_receipt < receipt
+        )
+        if placed:
+            at = _epoch_s_to_ts(next_receipt - _PLACE_BEFORE_S)
+            for event in events:
+                event["timestamp"] = at
+                if not had_venue_time:
+                    event["exchange_timestamp"] = at
+        items: list[tuple[str, EventDict, Any]] = []
+        for event in events:
+            if placed or not had_venue_time:
+                event[ORIGIN_COLUMN] = SNAPSHOT_ORIGIN
+            items.append((kind, event, raw))
+            raw = None
+        return items
 
     # -- sequence continuity ------------------------------------------------
 
@@ -763,8 +880,7 @@ class CryptofeedSource:
             events.append(
                 {
                     "id": order_id,
-                    "timestamp": _epoch_s_to_ts(receipt_timestamp),
-                    "exchange_timestamp": _epoch_s_to_ts(traded_at),
+                    **_clocks(traded_at, receipt_timestamp),
                     "sequence": None,
                     "price": price,
                     "volume": remaining,
@@ -786,13 +902,13 @@ class CryptofeedSource:
         for the shared schema.  The buy and sell order IDs come from the raw
         frame where the venue sends them (see ``_trade_order_ids``) and stay
         empty where it does not.  ``side`` is the taker side.  ``timestamp`` is
-        the receipt time (the time now, without one).
+        the receipt time and ``exchange_timestamp`` the venue's (see
+        ``_clocks``).
         """
         buy_order_id, sell_order_id = _trade_order_ids(trade)
         return {
             "trade_id": getattr(trade, "id", "") or "",
-            "timestamp": _epoch_s_to_ts(receipt_timestamp),
-            "exchange_timestamp": _epoch_s_to_ts(getattr(trade, "timestamp", None)),
+            **_clocks(getattr(trade, "timestamp", None), receipt_timestamp),
             "price": float(trade.price),
             "amount": float(trade.amount),
             "buy_order_id": buy_order_id,
@@ -806,9 +922,15 @@ class CryptofeedSource:
     async def shutdown_synthetic_events(self) -> AsyncIterator[EventDict]:
         """Close out everything still resting, so every ``id`` has a lifecycle.
 
-        L2 price levels have no lifecycle to close, so an L2 capture yields
-        nothing here.
+        A book still held when the capture stopped is written first (see
+        ``_hold_book``).  L2 price levels have no lifecycle to close, so an L2
+        capture yields nothing else here.
         """
+        for _, event, _ in self._release_held_book():
+            # It came from the stream; only the close-outs below are the
+            # shutdown's own rows.
+            event.setdefault(ORIGIN_COLUMN, "stream")
+            yield event
         if self.level is not Level.L2:
             for held in self._release_held_deletes():
                 yield held
@@ -842,6 +964,7 @@ class CryptofeedSource:
             "tape_fills_already_shown": self.tape_fills_already_shown,
             "sequence_gaps": self.sequence_gaps,
             "sequence_missing": self.sequence_missing,
+            "books_without_venue_time": self.venue_clock.without_venue_time,
             "synthetic_deleted": self.synthetic_deleted,
             "errors": self.errors,
         }
@@ -943,6 +1066,8 @@ class CryptofeedSource:
         async def on_book(book: Any, receipt_timestamp: float) -> None:
             self.book_updates += 1
             self.note_sequence(book)
+            venue_time = getattr(book, "timestamp", None)
+            self.venue_clock.note(venue_time)
             try:
                 if self.level is Level.L3:
                     events = self._l3_events(book, receipt_timestamp)
@@ -956,8 +1081,13 @@ class CryptofeedSource:
                 self.errors += 1
                 logger.warning("[cryptofeed] dropped a book update: {!r}", exc)
                 return
+            for item in self._release_held_book(receipt_timestamp):
+                await queue.put(item)
             # The raw frame is archived once per update, not once per event.
             raw = getattr(book, "raw", None)
+            if events and not _has_entries(getattr(book, "delta", None)):
+                self._hold_book(kind, events, raw, receipt_timestamp, venue_time)
+                return
             for event in events:
                 await queue.put((kind, event, raw))
                 raw = None
@@ -974,6 +1104,9 @@ class CryptofeedSource:
                 self.errors += 1
                 logger.warning("[cryptofeed] dropped a trade: {!r}", exc)
                 return
+            # A held book was handed over before this trade: write it first.
+            for item in self._release_held_book():
+                await queue.put(item)
             for fill in fills:
                 await queue.put(("order", fill, None))
             self.order_events += len(fills)
@@ -998,26 +1131,44 @@ class CryptofeedSource:
 
         deadline = time.monotonic() + config.minutes * 60.0
         handler.run(start_loop=False, install_signal_handlers=False)
+        stopped = False
         try:
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    return
+                    break
                 # cryptofeed clears ``running`` once it has shut its feeds
                 # down.  Draining what is left and returning beats spinning
                 # out the rest of the window against a dead handler.
                 if not getattr(handler, "running", True) and queue.empty():
-                    return
+                    break
                 # asyncio.timeout, not wait_for: on Python 3.11 wait_for can drop the
                 # cancel that stops this segment (see _runner._cancel_until_done).
                 try:
                     async with asyncio.timeout(min(remaining, 0.5)):
                         item = await queue.get()
                 except TimeoutError:
+                    item = None
+                if item is None:
+                    # Nothing came for a while, so no message is about to
+                    # place a held book: write it now rather than leave it
+                    # off disk until the next message (see ``_hold_book``).
+                    for held in self._release_held_book():
+                        yield held
                     continue
                 yield item
-        finally:
+            # Stop the feed first, so nothing is added while the queue drains,
+            # then write what it delivered, and the held book last: it came
+            # after everything in the queue.
+            stopped = True
             await self._stop_handler(handler)
+            while not queue.empty():
+                yield queue.get_nowait()
+            for held in self._release_held_book():
+                yield held
+        finally:
+            if not stopped:
+                await self._stop_handler(handler)
 
     async def _stop_handler(self, handler: Any) -> None:
         """Shut the feed handler down without touching the running loop."""

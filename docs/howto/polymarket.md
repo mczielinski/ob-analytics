@@ -11,6 +11,28 @@ outcome pays $1. ob-analytics captures a Polymarket market through the
 not need an account or an API key: the order book and the trades stream over
 Polymarket's public websocket.
 
+!!! info "What this feed shows"
+
+    | Property | Value |
+    |---|---|
+    | Level | L2 |
+    | Depth shown | whole book |
+    | Update form | changes, merged, and a whole-book snapshot every second or two while trading |
+    | What can be missed | merged changes |
+    | After a lost message | the next snapshot corrects it |
+    | Sequence | none |
+    | Clocks | venue + receive |
+    | Crossing | price levels |
+    | Taker side | venue |
+    | Trade tape gaps | repeated trades removed |
+    | Price grid | 0.01 or 0.001, finer near 0 and 1; can change during the capture, and the capture finds the finer step from the prices |
+    | What the book means | one book per outcome |
+    | Access | public |
+
+    Use it for one outcome's book, probability and trades. Don't use it for the
+    sequence check: Polymarket sends no sequence number. [What each feed
+    shows](../feeds.md) explains each property and compares every source.
+
 ```bash
 pip install "ob-analytics[ccxt]"
 

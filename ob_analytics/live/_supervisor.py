@@ -239,6 +239,9 @@ class _Supervisor:
         # A failing handover is retried no sooner than this (monotonic).
         self._retry_at = 0.0
         self._running: list[_Running] = []
+        # raw.jsonl warnings already logged, shared by every segment's sink so
+        # each is logged once per capture.
+        self._raw_warned: set[str] = set()
         # Segments before this index belong to an earlier run (a restart).
         self._first_segment = len(manifest.segments)
         self.error: str | None = None
@@ -332,6 +335,13 @@ class _Supervisor:
                 self._manifest.gap_seconds,
                 self._manifest.dropped,
             )
+            if self._manifest.raw_frames_skipped:
+                logger.warning(
+                    "Capture '{}': raw.jsonl skipped {} frame(s) JSON cannot hold "
+                    "(see each segment's meta.json)",
+                    self._manifest.source,
+                    self._manifest.raw_frames_skipped,
+                )
 
     def _should_end(self) -> bool:
         return self._stop.is_set() or self._remaining() <= 0
@@ -384,7 +394,12 @@ class _Supervisor:
         name = self._manifest.next_segment_name()
         out_dir = self._root / name
         level = getattr(source, "level", Level.L3)
-        sink = FileCaptureSink(out_dir, keep_raw=self._config.keep_raw, level=level)
+        sink = FileCaptureSink(
+            out_dir,
+            keep_raw=self._config.keep_raw,
+            level=level,
+            raw_warned=self._raw_warned,
+        )
         # The source's own clock runs past the capture's end: the supervisor
         # stops each segment, so a source never ends a segment early by itself.
         seg_config = CaptureConfig(
@@ -492,6 +507,7 @@ class _Supervisor:
             segment.n_trade_events = result.n_trade_events
             segment.dropped = int(result.extras.get("dropped") or 0)
             segment.sequence_missing = int(result.extras.get("sequence_missing") or 0)
+            segment.raw_frames_skipped = running.sink.raw_frames_skipped
             if running.stuck:
                 late = (
                     f"the segment took more than {STOP_TIMEOUT_SECONDS:.0f} s to stop"
@@ -534,6 +550,8 @@ class _Supervisor:
         segment = running.segment
         task = running.task
         limit = f"the segment did not stop within {STOP_TIMEOUT_SECONDS:.0f} s"
+        # What raw.jsonl skipped so far, in case its files cannot be closed.
+        segment.raw_frames_skipped = running.sink.raw_frames_skipped
         if task.done():
             error = f"{limit}, so it was cancelled and closed from its files"
             failure = None if task.cancelled() else task.exception()
@@ -549,6 +567,8 @@ class _Supervisor:
                     segment,
                     self._manifest,
                     error,
+                    # The task has ended, so the sink's counts are final.
+                    running.sink.raw_diagnostics(),
                 )
             except Exception as exc:  # noqa: BLE001 - the capture must go on
                 logger.error(
@@ -756,6 +776,9 @@ async def _ends_within(task: asyncio.Task[Any], seconds: float) -> bool:
 def _declarations(source: LiveSource) -> dict[str, Any]:
     declared = _source_declarations(source)
     declared.pop("source", None)
+    # A live source learns its clocks from the venue's books, so the value is
+    # not known when the manifest is opened.  Each segment's meta.json has it.
+    declared.pop("clocks", None)
     return declared
 
 
@@ -850,10 +873,15 @@ class _ClosedFiles:
     n_trade: int
     dropped: int
     sequence_missing: int
+    raw_frames_skipped: int
 
 
 def _close_segment_files(
-    seg_dir: Path, segment: Segment, manifest: CaptureManifest, error: str
+    seg_dir: Path,
+    segment: Segment,
+    manifest: CaptureManifest,
+    error: str,
+    raw: dict[str, Any] | None = None,
 ) -> _ClosedFiles:
     """Complete the files of a segment whose capture never closed them.
 
@@ -862,6 +890,12 @@ def _close_segment_files(
     its last whole line, puts back a missing header, closes every L3 order
     still open at the last recorded time (the same ``deleted`` rows a normal
     shutdown writes), and completes ``meta.json`` with *error*.
+
+    *raw* is what the segment's sink counted for ``raw.jsonl`` (see
+    :meth:`FileCaptureSink.raw_diagnostics`), when the sink is still at hand.
+    It replaces the counts in the provisional ``meta.json``, which are as old
+    as its last rewrite.  After a crash there is no sink, and those counts
+    stand.
 
     It reads *segment* and *manifest* but changes neither, so it can run in a
     thread while the capture goes on.
@@ -920,6 +954,7 @@ def _close_segment_files(
             "capture_error": error,
             "capture_error_phase": "stream",
             "errors": int(meta.get("errors") or 0) + 1,
+            **(raw or {}),
         }
     )
     _write_json_atomic(meta_path, meta)
@@ -930,6 +965,7 @@ def _close_segment_files(
         n_trade=n_trade,
         dropped=int(meta.get("dropped") or 0),
         sequence_missing=int(meta.get("sequence_missing") or 0),
+        raw_frames_skipped=int(meta.get("n_raw_frames_skipped") or 0),
     )
 
 
@@ -943,6 +979,7 @@ def _apply_closed_files(segment: Segment, closed: _ClosedFiles, error: str) -> N
     segment.n_trade_events = closed.n_trade
     segment.dropped = closed.dropped
     segment.sequence_missing = closed.sequence_missing
+    segment.raw_frames_skipped = closed.raw_frames_skipped
 
 
 _TRIM_BLOCK = 64 * 1024
@@ -1051,6 +1088,7 @@ def _write_provisional_meta(running: _Running) -> None:
             meta.update(running.source.diagnostics())
         except Exception as exc:  # noqa: BLE001 - a heartbeat must not stop the capture
             logger.debug("diagnostics() raised during heartbeat: {!r}", exc)
+    meta.update(running.sink.raw_diagnostics())
     _write_json_atomic(running.sink.out_dir / "meta.json", meta)
 
 

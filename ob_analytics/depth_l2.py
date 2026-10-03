@@ -33,6 +33,9 @@ column  meaning
 ======  ==================================================================
 timestamp   receive time — integer epoch (``config.timestamp_unit``) or any
             string :func:`pandas.to_datetime` understands
+exchange_timestamp  optional: the venue's time, in the same form as
+            ``timestamp``.  Kept in the depth frame when present, so the
+            clock checks can compare the two clocks.
 side        ``bid`` / ``ask`` (``buy`` / ``sell`` and ``b`` / ``a`` accepted)
 price       price level (divided by ``config.price_divisor`` to the quote
             currency, then stored as integer ``tick_size`` counts; a price
@@ -72,6 +75,7 @@ from ob_analytics._utils import (
 from ob_analytics.config import PipelineConfig, SourceSettings
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import (
+    Clocks,
     DataWriter,
     DepthSource,
     FeedType,
@@ -81,11 +85,18 @@ from ob_analytics.protocols import (
     TradeAttribution,
     TradeSource,
 )
-from ob_analytics.schemas import SEQUENCE_COLUMN, attach_instrument_identity
+from ob_analytics.schemas import (
+    ORIGIN_COLUMN,
+    SEQUENCE_COLUMN,
+    attach_instrument_identity,
+)
 
 # ── Column-spelling tolerance ─────────────────────────────────────────
 
 _TIMESTAMP_COLUMNS: tuple[str, ...] = ("timestamp", "time", "ts")
+# The venue's own time, when the capture recorded one (every live capture
+# does).  Optional: a price-level CSV with one clock has only ``timestamp``.
+_EXCHANGE_TIMESTAMP_COLUMNS: tuple[str, ...] = ("exchange_timestamp",)
 _SIDE_COLUMNS: tuple[str, ...] = ("side", "direction")
 _VOLUME_COLUMNS: tuple[str, ...] = ("volume", "size", "amount", "quantity")
 # Venue per-event sequence, when the capture recorded one (CCXT persists its
@@ -200,6 +211,17 @@ def recorded_trade_attribution(source: str | Path) -> TradeAttribution | None:
     return TradeAttribution(value) if value else None
 
 
+def recorded_clocks(source: str | Path) -> Clocks | None:
+    """Return the :class:`~ob_analytics.protocols.Clocks` a live capture recorded.
+
+    A live source learns it from the venue's books, so it is written when the
+    capture closes.  ``None`` when the capture records none (see
+    :func:`recorded_source`).
+    """
+    value = _recorded_meta(source).get("clocks")
+    return Clocks(value) if value else None
+
+
 def _recorded_meta(source: str | Path) -> dict[str, Any]:
     """The ``meta.json`` beside *source*, or ``{}`` when there is none."""
     p = Path(source)
@@ -274,7 +296,9 @@ class L2DepthLoader:
             Columns ``timestamp``, ``price``, ``volume`` (absolute level
             size), ``direction`` (categorical ``bid``/``ask``), sorted by
             ``timestamp`` — a :func:`~ob_analytics.schemas.validate_depth_df`
-            frame.
+            frame.  ``exchange_timestamp`` follows ``timestamp`` when the file
+            has it, and ``origin`` (which part of a capture wrote the row) is
+            kept when the file has it.
         """
         path = self._resolve_depth_file(source)
         logger.info("L2DepthLoader: reading {}", path)
@@ -312,14 +336,25 @@ class L2DepthLoader:
             raw[side_col].astype(str).str.strip().str.lower().map(_SIDE_TO_DIRECTION)
         )
 
+        clocks = {"timestamp": timestamp.array}
+        venue_col = _first_present(raw.columns, _EXCHANGE_TIMESTAMP_COLUMNS)
+        if venue_col is not None:
+            clocks["exchange_timestamp"] = _to_datetime(
+                raw[venue_col], cfg.timestamp_unit
+            ).array
         depth = pd.DataFrame(
             {
-                "timestamp": timestamp.array,
+                **clocks,
                 "price": price,
                 "volume": volume.to_numpy(),
                 "direction": direction.to_numpy(),
             }
         )
+        # Carry which part of a capture wrote each row, when the file says: the
+        # clock checks leave out the opening book's rows (see ORIGIN_COLUMN).
+        origin_col = _first_present(raw.columns, (ORIGIN_COLUMN,))
+        if origin_col is not None:
+            depth[ORIGIN_COLUMN] = raw[origin_col].astype("string")
         # Carry the venue sequence (nullable Int64) when the capture recorded
         # one and tracking is on; ``raw`` shares ``depth``'s row index, so the
         # column stays aligned through the filter/sort below.
@@ -534,9 +569,21 @@ class DepthCsvWriter:
         )
         # datetime_to_epoch accepts the canonical tz-aware UTC column directly
         # (and reads a tz-naive one as UTC), so the round-trip is exact.
+        clocks = {
+            "timestamp": datetime_to_epoch(depth["timestamp"], cfg.timestamp_unit)
+        }
+        if "exchange_timestamp" in depth.columns:
+            clocks["exchange_timestamp"] = datetime_to_epoch(
+                depth["exchange_timestamp"], cfg.timestamp_unit
+            )
+        origin = (
+            {ORIGIN_COLUMN: depth[ORIGIN_COLUMN].to_numpy()}
+            if ORIGIN_COLUMN in depth.columns
+            else {}
+        )
         depth_out = pd.DataFrame(
             {
-                "timestamp": datetime_to_epoch(depth["timestamp"], cfg.timestamp_unit),
+                **clocks,
                 "side": depth["direction"].astype(str),
                 # Restore the raw feed price from integer ticks (issue #155).
                 "price": (
@@ -548,6 +595,7 @@ class DepthCsvWriter:
                     self._config.lot_size,
                     decimals=self._config.volume_decimals,
                 ),
+                **origin,
             }
         )
         depth_path = out_dir / "depth.csv"
@@ -601,9 +649,8 @@ class DepthCsvSource:
 
     name: str = "depth_csv"
     level: Level = Level.L2
-    # A price-level feed is the venue's own aggregated view: bids never rest
-    # above asks, so the reconstructed book is not crossed.
-    feed_type: FeedType = FeedType.MATCHED_BOOK
+    # A price-level feed: the venue's total size at each price.
+    feed_type: FeedType = FeedType.PRICE_LEVELS
     # Price levels carry no order identity, so no order of a trade is named.
     trade_attribution: TradeAttribution = TradeAttribution.NONE
     # No per-source knobs; empty typed settings keep construction uniform.

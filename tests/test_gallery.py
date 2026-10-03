@@ -20,13 +20,21 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import pytest
 
-from ob_analytics.visualization import RENDERERS, Level
+from ob_analytics.visualization import (
+    _BACKEND_MODULES,
+    RENDERERS,
+    Level,
+    _load_backend,
+    register_plot_backend,
+)
 from ob_analytics.visualization.gallery import (
+    VIEWS,
     GalleryModel,
     PlotConcept,
     PlotSpec,
     _auto_zoom_window,
     _Card,
+    _misplaced,
     _Panel,
     _project,
     _render_panel,
@@ -34,6 +42,7 @@ from ob_analytics.visualization.gallery import (
     build_gallery_model,
     generate_gallery,
 )
+from tests._logging import warnings_logged
 
 # ---------------------------------------------------------------------------
 # Stub renderers
@@ -287,6 +296,13 @@ class TestRenderPanel:
         assert 'src="bokeh/01.L2.html"' in html
         assert "bokeh-panel" in html
 
+    def test_reason_is_shown_and_escaped(self) -> None:
+        panel = _panel("matplotlib", "x", rendered=False)
+        panel.reason = "<b>moved</b>"
+        html = _render_panel(panel, "x")
+        assert "Not available" in html
+        assert '<p class="na-reason">&lt;b&gt;moved&lt;/b&gt;</p>' in html
+
     def test_not_rendered_shows_na(self) -> None:
         html = _render_panel(_panel("plotly", "x", rendered=False), "x")
         assert "Not available" in html
@@ -439,6 +455,209 @@ class TestGenerateGallery:
             generate_gallery(result=None, output_dir=tmp_path)
 
 
+class TestMisplacedCard:
+    """A card that does not match its renderers says how to fix it (#312)."""
+
+    def test_levelless_plot_added_as_concept(self, tmp_path: Path) -> None:
+        model = GalleryModel(concepts=[_l2_concept("stubmetric", "Metric")])
+        path = generate_gallery(
+            result=None, output_dir=tmp_path, model=model, backends=["matplotlib"]
+        )
+        html = path.read_text()
+        assert "Metric -- L2" in html
+        assert "Not available" in html
+        assert (
+            "&#x27;stubmetric&#x27; is registered level-less, but the gallery "
+            "model has it in concepts, which is drawn at a level. Add it to "
+            "GalleryModel.analytics as a PlotSpec instead."
+        ) in html
+        assert not (tmp_path / "matplotlib" / "stubmetric.L2.png").exists()
+
+    def test_leveled_plot_added_to_analytics(self, tmp_path: Path) -> None:
+        model = GalleryModel(concepts=[], analytics=[_spec("stub", "Leveled", "stub")])
+        path = generate_gallery(
+            result=None, output_dir=tmp_path, model=model, backends=["matplotlib"]
+        )
+        html = path.read_text()
+        assert "Not available" in html
+        assert (
+            "&#x27;stub&#x27; is registered at L2 and L3, but the gallery model "
+            "has it in analytics, which is drawn level-less. Add it to "
+            "GalleryModel.concepts as a PlotConcept instead."
+        ) in html
+
+    def test_single_level_plot_added_to_analytics(self, tmp_path: Path) -> None:
+        model = GalleryModel(
+            concepts=[], analytics=[_spec("stubfail", "One Level", "stubfail")]
+        )
+        path = generate_gallery(
+            result=None, output_dir=tmp_path, model=model, backends=["matplotlib"]
+        )
+        assert (
+            "&#x27;stubfail&#x27; is registered at L2, but the gallery model has "
+            "it in analytics"
+        ) in path.read_text()
+
+    def test_variant_at_an_unregistered_level(self, tmp_path: Path) -> None:
+        concept = PlotConcept("stubfail", "Wrong Level", {Level.L3: _spec()})
+        path = generate_gallery(
+            result=None,
+            output_dir=tmp_path,
+            model=GalleryModel(concepts=[concept]),
+            backends=["matplotlib"],
+        )
+        assert (
+            "&#x27;stubfail&#x27; is registered at L2, but its PlotConcept has a "
+            "variant at L3. Remove that variant, or register a renderer at L3."
+        ) in path.read_text()
+
+    def test_reason_on_every_backend(self, tmp_path: Path) -> None:
+        model = GalleryModel(concepts=[_l2_concept("stubmetric", "Metric")])
+        path = generate_gallery(
+            result=None,
+            output_dir=tmp_path,
+            model=model,
+            backends=["plotly", "matplotlib"],
+        )
+        html = path.read_text()
+        assert html.count("Not available") == 2
+        assert html.count('class="na-reason"') == 2
+
+    def test_comparison_view_shows_the_reason(self, tmp_path: Path) -> None:
+        model = GalleryModel(concepts=[_comparable_concept("stubmetric", "Metric")])
+        path = generate_gallery(
+            result=None, output_dir=tmp_path, model=model, view="comparison"
+        )
+        html = path.read_text()
+        assert html.count('class="na-reason"') == 2  # the L2 and L3 columns
+        assert "Add it to GalleryModel.analytics as a PlotSpec instead." in html
+
+    def test_one_mistake_logs_one_warning(self, tmp_path: Path) -> None:
+        model = GalleryModel(concepts=[_comparable_concept("stubmetric", "Metric")])
+        with warnings_logged() as messages:
+            generate_gallery(
+                result=None,
+                output_dir=tmp_path,
+                model=model,
+                view="both",
+                backends=["plotly", "matplotlib"],
+            )
+        assert len(messages) == 1  # four panels, one reason
+        assert "is registered level-less" in messages[0]
+
+    def test_unloadable_backend_says_so_once(self, tmp_path: Path) -> None:
+        register_plot_backend("nosuch", "ob_analytics_no_such_backend_module")
+        try:
+            model = GalleryModel(concepts=[_comparable_concept()])
+            with warnings_logged() as messages:
+                path = generate_gallery(
+                    result=None,
+                    output_dir=tmp_path,
+                    model=model,
+                    view="both",
+                    backends=["matplotlib", "nosuch"],
+                )
+        finally:
+            _BACKEND_MODULES.pop("nosuch", None)
+        html = path.read_text()
+        assert html.count("The &#x27;nosuch&#x27; backend could not be loaded") == 2
+        assert (tmp_path / "matplotlib" / "stub.L2.png").exists()
+        assert not (tmp_path / "nosuch").exists()
+        assert len(messages) == 1
+        assert "'nosuch' backend could not be loaded" in messages[0]
+
+    def test_unknown_backend_names_the_typo(self, tmp_path: Path) -> None:
+        path = generate_gallery(
+            result=None,
+            output_dir=tmp_path,
+            model=GalleryModel(concepts=[_l2_concept()]),
+            backends=["matplotib"],
+        )
+        html = path.read_text()
+        assert "Unknown backend &#x27;matplotib&#x27;. Available:" in html
+        assert "could not be loaded" not in html
+
+    def test_value_error_on_import_names_the_backend(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A registered backend whose import raises ValueError (as a numpy
+        # binary mismatch does) is a load failure, not an unknown name.
+        (tmp_path / "ob_bad_backend.py").write_text("raise ValueError('bad build')\n")
+        monkeypatch.syspath_prepend(str(tmp_path))
+        register_plot_backend("badbuild", "ob_bad_backend")
+        try:
+            path = generate_gallery(
+                result=None,
+                output_dir=tmp_path / "out",
+                model=GalleryModel(concepts=[_l2_concept()]),
+                backends=["badbuild"],
+            )
+        finally:
+            _BACKEND_MODULES.pop("badbuild", None)
+        assert (
+            "The &#x27;badbuild&#x27; backend could not be loaded: bad build"
+        ) in path.read_text()
+
+    def test_comparison_view_loads_only_its_backend(self, tmp_path: Path) -> None:
+        # The comparison view draws plotly alone, so a broken second backend
+        # is never loaded and never reported.
+        register_plot_backend("nosuch", "ob_analytics_no_such_backend_module")
+        try:
+            with warnings_logged() as messages:
+                generate_gallery(
+                    result=None,
+                    output_dir=tmp_path,
+                    model=GalleryModel(concepts=[_comparable_concept()]),
+                    view="comparison",
+                    backends=["plotly", "nosuch"],
+                )
+        finally:
+            _BACKEND_MODULES.pop("nosuch", None)
+        assert messages == []
+
+    def test_other_backends_do_not_change_the_answer(self, tmp_path: Path) -> None:
+        # bokeh draws the plot at L3, but the gallery draws matplotlib only,
+        # which has no L3 renderer: the L3 variant is reported either way.
+        RENDERERS.register(("stubfail", Level.L3, "bokeh"), _stub_bokeh)
+        try:
+            concept = PlotConcept("stubfail", "Wrong Level", {Level.L3: _spec()})
+            path = generate_gallery(
+                result=None,
+                output_dir=tmp_path,
+                model=GalleryModel(concepts=[concept]),
+                backends=["matplotlib"],
+            )
+        finally:
+            RENDERERS._items.pop(("stubfail", Level.L3, "bokeh"), None)
+        assert "its PlotConcept has a variant at L3" in path.read_text()
+
+    def test_missing_backend_shows_bare_na(self, tmp_path: Path) -> None:
+        # A plot with no renderer on one backend is not a mismatch: that
+        # backend shows a bare "Not available", the other draws.
+        RENDERERS.register(("stubmplonly", Level.L2, "matplotlib"), _stub_mpl)
+        try:
+            model = GalleryModel(concepts=[_l2_concept("stubmplonly", "Mpl Only")])
+            path = generate_gallery(
+                result=None,
+                output_dir=tmp_path,
+                model=model,
+                backends=["plotly", "matplotlib"],
+            )
+        finally:
+            RENDERERS._items.pop(("stubmplonly", Level.L2, "matplotlib"), None)
+        html = path.read_text()
+        assert html.count("Not available") == 1
+        assert "na-reason" not in html.split("<body>", 1)[1]
+        assert (tmp_path / "matplotlib" / "stubmplonly.L2.png").exists()
+
+    def test_matching_kinds_have_no_reason(self, tmp_path: Path) -> None:
+        model = GalleryModel(concepts=[_l2_concept()], analytics=[_metric_spec()])
+        path = generate_gallery(
+            result=None, output_dir=tmp_path, model=model, backends=["matplotlib"]
+        )
+        assert "Not available" not in path.read_text()
+
+
 # ---------------------------------------------------------------------------
 # build_gallery_model (real tiny pipeline)
 # ---------------------------------------------------------------------------
@@ -492,6 +711,23 @@ class TestBuildGalleryModel:
         assert order_outcome.at(Level.L3) is not None
         # Analytics are appended by callers, not derived here.
         assert model.analytics == []
+
+    def test_no_built_in_card_is_misplaced(self, tiny_bitstamp_orders_csv) -> None:
+        from ob_analytics.bitstamp import BitstampSource
+        from ob_analytics.pipeline import Pipeline
+
+        result = Pipeline(source=BitstampSource()).run(str(tiny_bitstamp_orders_csv))
+        model = build_gallery_model(result)
+        backends = ["plotly", "matplotlib", "bokeh"]
+        for backend in backends:
+            _load_backend(backend)
+        for view in VIEWS:
+            for card in _project(model, view, backends):
+                for panel in card.panels:
+                    assert _misplaced(panel, frozenset(backends)) == "", (
+                        view,
+                        card.title,
+                    )
 
     def test_order_activity_l3_shares_depth_heatmap_window(
         self, tiny_bitstamp_orders_csv

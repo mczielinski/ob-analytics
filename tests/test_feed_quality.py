@@ -25,6 +25,7 @@ from hypothesis import given, settings, strategies as st
 
 from ob_analytics import (
     BitstampSource,
+    Clocks,
     DataQualitySummary,
     FeedType,
     LobsterSource,
@@ -43,7 +44,7 @@ from ob_analytics.analytics import (
 from ob_analytics.datasets import toy_events, toy_trades
 from ob_analytics.depth import price_level_volume
 from ob_analytics.engine import crossed_prefix_counts
-from ob_analytics.protocols import trade_attribution_of
+from ob_analytics.protocols import clocks_of, trade_attribution_of
 
 # ---------------------------------------------------------------------------
 # Builders
@@ -529,14 +530,105 @@ class TestQualityChecks:
                 (3, 3, 2.0, 98.0, 2.0, "bid", "created", 0.0),
             ]
         )
-        # The middle event was stamped by the venue before the first one, so
+        # Each event reaches the capture 0.1 s after the venue stamped it,
+        # except the middle one, stamped by the venue before the first one:
         # the two reached the capture out of order.
+        ev["exchange_timestamp"] -= pd.Timedelta(seconds=0.1)
         ev.loc[ev.index[1], "exchange_timestamp"] -= pd.Timedelta(seconds=10)
         s = data_quality_summary(ev, _empty_trades())
         assert s.exchange_time_reordered == 1
         assert s.exchange_time_after_receive == 0
         assert s.ok
         assert "exchange_time_reordered" in {c.name for c in s.warnings}
+
+    @pytest.mark.parametrize(
+        ("clocks", "why"),
+        [
+            (Clocks.RECEIVE_ONLY, "exchange_timestamp copies the receive time"),
+            (Clocks.VENUE_ONLY, "timestamp copies the venue time"),
+        ],
+    )
+    def test_one_clock_skips_the_clock_checks_and_says_why(self, clocks, why):
+        """With one clock the columns are copies: the checks say so, not pass (#310)."""
+        ev = _classified(
+            [
+                (1, 1, 0.0, 99.0, 2.0, "bid", "created", 0.0),
+                (2, 2, 1.0, 101.0, 2.0, "ask", "created", 0.0),
+            ]
+        )
+        ev.loc[ev.index[1], "exchange_timestamp"] += pd.Timedelta(seconds=1)
+        s = data_quality_summary(ev, _empty_trades(), clocks=clocks)
+        assert s.exchange_time_after_receive == 0
+        assert s.ok
+        names = {c.name for c in s.checks}
+        assert "exchange_time_after_receive" not in names
+        assert "exchange_time_reordered" not in names
+        (note,) = [c for c in s.checks if c.name == "clocks"]
+        assert note.severity is Severity.INFO
+        assert why in note.detail
+        assert f"clock order           : {note.detail}" in s.render()
+        assert s.to_dict()["clocks"] == clocks.value
+
+    @staticmethod
+    def _opening_book_then_messages() -> pd.DataFrame:
+        """Row 1 is an opening book with a copied clock; rows 2 and 3 are
+        messages stamped by the venue 0.5 s before receipt."""
+        ev = _classified(
+            [
+                (1, 1, 1.0, 99.0, 2.0, "bid", "created", 0.0),
+                (2, 2, 1.2, 101.0, 2.0, "ask", "created", 0.0),
+                (3, 3, 2.0, 98.0, 2.0, "bid", "created", 0.0),
+            ]
+        )
+        venue = ev["exchange_timestamp"] - pd.Timedelta(seconds=0.5)
+        ev["exchange_timestamp"] = venue.where(ev["id"] != 1, ev["timestamp"])
+        ev["origin"] = ["snapshot", "stream", "stream"]
+        return ev
+
+    def test_the_opening_books_clocks_are_not_checked(self):
+        """Its venue time is a copy, later than the next message's (#310)."""
+        s = data_quality_summary(self._opening_book_then_messages(), _empty_trades())
+        assert s.exchange_time_reordered == 0
+
+    def test_a_row_with_no_origin_is_still_checked(self):
+        """Only rows marked as the opening book are left out."""
+        ev = self._opening_book_then_messages()
+        ev["origin"] = pd.array(["snapshot", None, None], dtype="string")
+        ev.loc[ev.index[2], "exchange_timestamp"] += pd.Timedelta(seconds=1)
+        s = data_quality_summary(ev, _empty_trades())
+        assert s.exchange_time_after_receive == 1
+
+    def test_equal_clocks_on_a_message_are_still_checked(self):
+        """Only the opening book is left out, not every row whose clocks match."""
+        ev = self._opening_book_then_messages()
+        ev["origin"] = "stream"
+        s = data_quality_summary(ev, _empty_trades())
+        assert s.exchange_time_reordered == 1
+
+    def test_an_empty_frame_keeps_the_declared_clocks(self):
+        from ob_analytics._utils import empty_events
+
+        s = data_quality_summary(
+            empty_events().assign(type=pd.Series(dtype=object)),
+            _empty_trades(),
+            depth=pd.DataFrame(
+                {
+                    "timestamp": pd.Series(dtype="datetime64[ns, UTC]"),
+                    "price": pd.Series(dtype="int64"),
+                    "volume": pd.Series(dtype="int64"),
+                    "direction": pd.Series(dtype=object),
+                }
+            ),
+        )
+        assert s.clocks is Clocks.BOTH
+        assert "not checked" not in s.render()
+
+    def test_two_clocks_are_checked(self):
+        s = data_quality_summary(crossed_events(), _empty_trades())
+        assert s.clocks is Clocks.BOTH
+        names = {c.name for c in s.checks}
+        assert {"exchange_time_after_receive", "exchange_time_reordered"} <= names
+        assert "clocks" not in names
 
     def test_sequence_gap_is_an_error(self):
         ev = _classified(
@@ -556,6 +648,7 @@ class TestQualityChecks:
         ("feed_type", "severity", "ok"),
         [
             (FeedType.MATCHED_BOOK, Severity.ERROR, False),
+            (FeedType.PRICE_LEVELS, Severity.ERROR, False),
             (FeedType.DIFF_FEED, Severity.INFO, True),
             (FeedType.UNKNOWN, Severity.WARNING, True),
         ],
@@ -567,6 +660,14 @@ class TestQualityChecks:
         assert not crossed.passed
         assert crossed.severity is severity
         assert s.ok is ok
+
+    def test_a_crossed_price_level_book_names_the_cause(self):
+        """A price-level book should not cross; the note says what went wrong."""
+        s = data_quality_summary(
+            crossed_events(), _empty_trades(), feed_type=FeedType.PRICE_LEVELS
+        )
+        crossed = next(c for c in s.checks if c.name == "crossed_book")
+        assert "kept a level the venue removed" in crossed.detail
 
     def test_to_dict_carries_the_verdict(self):
         s = data_quality_summary(crossed_events(), _empty_trades())
@@ -586,6 +687,26 @@ class TestQualityChecks:
         assert "ERROR   negative_volume" in text
         # INFO checks are context, not findings: they stay out of the verdict.
         assert "INFO" not in text
+
+
+class TestClocksDeclarations:
+    """Each source says which clocks its book rows carry (#310)."""
+
+    def test_lobster_has_the_venue_time_only(self):
+        assert clocks_of(LobsterSource()) is Clocks.VENUE_ONLY
+
+    def test_sources_with_two_clocks(self):
+        from ob_analytics.databento import DatabentoSource
+        from ob_analytics.depth_l2 import DepthCsvSource
+
+        for source in (BitstampSource(), DatabentoSource(), DepthCsvSource()):
+            assert clocks_of(source) is Clocks.BOTH
+
+    def test_an_undeclared_source_is_read_as_both(self):
+        class _OldPlugin:
+            name = "old"
+
+        assert clocks_of(_OldPlugin()) is Clocks.BOTH
 
 
 # ---------------------------------------------------------------------------

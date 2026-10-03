@@ -1,4 +1,4 @@
-# Data quality: matched book vs diff feed
+# Data quality: matched book, diff feed and price levels
 
 Before you trust a reconstructed order book, you need to know **what kind of
 feed produced it**. The single most important property is the book's
@@ -10,6 +10,9 @@ This page explains the distinction, why a crossed book is often *faithful*
 rather than a bug, and the two tools `ob-analytics` gives you to work with it:
 the [`audit`](howto/audit.md) command that **measures** data quality,
 and the `uncross=` option that **cleans the book up for display**.
+
+Crossing is one of several properties that decide what a capture can tell you.
+[What each feed shows](feeds.md) sets them all out, source by source.
 
 ## Two kinds of L3 feed
 
@@ -39,6 +42,23 @@ FeedType.DIFF_FEED == "diff_feed"   # True — the enum mixes in str
 
 A format that predates the attribute reads back as `FeedType.UNKNOWN`, so you
 can always do `getattr(fmt, "feed_type", FeedType.UNKNOWN)` without special-casing.
+
+## Price-level (L2) feeds
+
+An L2 feed has no orders, only the venue's total size at each price. Every L2
+source declares `FeedType.PRICE_LEVELS`: the ccxt source, cryptofeed at L2, and
+`depth_csv`. The venue does not publish a crossed book, so a crossed capture
+means the capture's copy is wrong, most often because it kept a level that the
+venue removed. `audit` scores it as an error, as for a matched book.
+
+In test captures of nine L2 feeds (Binance, Coinbase, Kraken, two Kalshi and two
+Polymarket markets, and cryptofeed's Bitstamp and Kraken books), none was
+crossed for any measurable time. Some showed crossings that lasted no time at
+all: one venue update is written as several rows, and between those rows the
+book can briefly be half old, half new.
+
+Captures made before this value existed record `matched_book` in `meta.json`.
+`audit` reads the record, so it scores them the same way.
 
 ## A crossed book is faithful, not a bug
 

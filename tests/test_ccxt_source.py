@@ -17,8 +17,8 @@ import pytest
 
 from ob_analytics.live._base import CaptureConfig
 from ob_analytics.live._runner import run_capturer
-from ob_analytics.live.ccxt_source import CcxtSettings, CcxtSource, _epoch_ms_to_ts
-from ob_analytics.protocols import Level
+from ob_analytics.live.ccxt_source import CcxtSettings, CcxtSource
+from ob_analytics.protocols import FeedType, Level
 
 _CCXT_INSTALLED = importlib.util.find_spec("ccxt") is not None
 
@@ -108,6 +108,7 @@ class TestConformance:
         cap = CcxtSource()
         assert isinstance(cap, LiveSource)
         assert cap.level is Level.L2
+        assert cap.feed_type is FeedType.PRICE_LEVELS
 
     def test_missing_exchange_errors(self, tmp_path):
         cap = CcxtSource()  # empty settings -> no exchange
@@ -258,7 +259,9 @@ class TestMapTrade:
         assert ev["amount"] == 0.5
         assert ev["side"] == "buy"
         assert ev["buy_order_id"] == ""  # public trades carry no order IDs
-        assert ev["exchange_timestamp"] == _epoch_ms_to_ts(1_700_000_000_000)
+        assert ev["exchange_timestamp"] == pd.Timestamp(
+            1_700_000_000_000, unit="ms", tz="UTC"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -847,6 +850,68 @@ class TestClocks:
         bids = depth.loc[depth["direction"] == "bid", "volume"].tolist()
         assert len(bids) == 3
         assert bids == sorted(bids)
+
+    def test_a_book_without_venue_time_copies_the_receive_time(self, tmp_path):
+        """No venue time means one clock, not the time the row was written (#310)."""
+        import json
+
+        from ob_analytics.depth_l2 import recorded_clocks
+        from ob_analytics.protocols import Clocks
+
+        snap = {"bids": [[100.0, 5.0]], "asks": [[101.0, 4.0]], "timestamp": None}
+        ws_books = [{"bids": [[100.0, 6.0]], "asks": [[101.0, 4.0]]}]
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="BTC/USDT", out_dir=out, minutes=0.05)
+        cap = _source(_FakeCcxtExchange(snap, ws_books))
+        asyncio.run(run_capturer(cap, cfg))
+
+        written = pd.read_csv(out / "depth.csv")
+        assert len(written) == 3
+        assert (written["exchange_timestamp"] == written["timestamp"]).all()
+        meta = json.loads((out / "meta.json").read_text())
+        assert meta["clocks"] == "receive_only"
+        assert meta["books_without_venue_time"] == 2
+        assert recorded_clocks(out) is Clocks.RECEIVE_ONLY
+
+    def test_a_venue_with_book_time_records_both_clocks(self, tmp_path):
+        import json
+
+        snap = {"bids": [[100.0, 5.0]], "asks": [[101.0, 4.0]], "timestamp": 1_000}
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="BTC/USDT", out_dir=out, minutes=0.05)
+        asyncio.run(run_capturer(_source(_FakeCcxtExchange(snap)), cfg))
+        meta = json.loads((out / "meta.json").read_text())
+        assert meta["clocks"] == "both"
+        assert meta["books_without_venue_time"] == 0
+
+    def test_a_trade_without_venue_time_copies_the_receive_time(self):
+        ev = _source(_FakeCcxtExchange({}))._map_trade(
+            {"id": "t", "price": 1.0, "amount": 1.0, "side": "buy"}
+        )
+        assert ev["exchange_timestamp"] == ev["timestamp"]
+
+    def test_audit_checks_the_clocks_on_a_ccxt_capture(self, tmp_path, cli_runner):
+        """The L2 clock checks run on a capture's depth.csv (#310)."""
+        snap = {"bids": [[100.0, 5.0]], "asks": [[101.0, 4.0]], "timestamp": 1_000}
+        ws_books = [
+            {"bids": [[100.0, 6.0]], "asks": [[101.0, 4.0]], "timestamp": 2_000}
+        ]
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="BTC/USDT", out_dir=out, minutes=0.05)
+        asyncio.run(run_capturer(_source(_FakeCcxtExchange(snap, ws_books)), cfg))
+        # Move the streamed row's venue time past the time it was received.
+        # (The opening book's rows are not checked.)
+        depth = pd.read_csv(out / "depth.csv")
+        streamed = depth["origin"] == "stream"
+        assert streamed.sum() == 1
+        depth.loc[streamed, "exchange_timestamp"] = (
+            depth.loc[streamed, "timestamp"] + 1_000
+        )
+        depth.to_csv(out / "depth.csv", index=False)
+
+        r = cli_runner("audit", str(out / "depth.csv"), "--source", "depth_csv")
+        assert r.returncode == 1
+        assert "exchange_time_after_receive" in r.stderr + r.stdout
 
 
 class TestBookLoopYield:

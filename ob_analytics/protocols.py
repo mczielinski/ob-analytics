@@ -79,6 +79,11 @@ class FeedType(str, Enum):
       ask, neither filling); :func:`~ob_analytics.analytics.order_book`
       replays this faithfully — a crossed book in the output is a property of
       the feed, not a reconstruction bug.
+    * :attr:`PRICE_LEVELS` — an L2 feed: the venue's total size at each price,
+      as a stream of changes, merged changes, repeated snapshots or polls.  The
+      venue does not publish a crossed book, so a crossed one means the
+      capture's copy is wrong: most often, the capture kept a level the venue
+      removed.
     * :attr:`UNKNOWN` — a source that does not declare its feed type (the
       structural default for third-party sources predating this attribute).
 
@@ -89,6 +94,7 @@ class FeedType(str, Enum):
 
     MATCHED_BOOK = "matched_book"
     DIFF_FEED = "diff_feed"
+    PRICE_LEVELS = "price_levels"
     UNKNOWN = "unknown"
 
 
@@ -149,6 +155,39 @@ class TradeAttribution(str, Enum):
     NONE = "none"
 
 
+class Clocks(str, Enum):
+    """Which clocks a feed's book rows carry.
+
+    The schema has two clock columns: ``exchange_timestamp``, the time the
+    venue stamped on the message, and ``timestamp``, the time the capture
+    received it.  Not every feed has both.  Where one is missing, the other is
+    copied into its column, so the two columns are equal and comparing them
+    says nothing:
+
+    * :attr:`BOTH` — the venue stamps each message and the capture stamps its
+      receipt.  The two clocks can be checked against each other.  This is the
+      default.
+    * :attr:`RECEIVE_ONLY` — the venue sends no time with its book, so
+      ``exchange_timestamp`` copies ``timestamp``.  The cryptofeed Bitfinex,
+      Blockchain.com and Kraken books are like this.
+    * :attr:`VENUE_ONLY` — the data holds the venue's time only, so
+      ``timestamp`` copies ``exchange_timestamp``.  LOBSTER files are like
+      this.
+
+    A source declares it so :func:`~ob_analytics.analytics.data_quality_summary`
+    runs its clock checks only when there are two clocks to compare, and says
+    why when it does not.  A live capture finds out from the venue's messages
+    and records it in ``meta.json``.
+
+    Mixes in ``str`` so members compare and serialise as their value, as
+    :class:`FeedType` does.
+    """
+
+    BOTH = "both"
+    RECEIVE_ONLY = "receive_only"
+    VENUE_ONLY = "venue_only"
+
+
 def trade_attribution_of(source: Any) -> TradeAttribution:
     """Return what *source* declares as its :class:`TradeAttribution`.
 
@@ -164,6 +203,14 @@ def sequence_kind_of(source: Any) -> SequenceKind:
     :attr:`SequenceKind.CONTIGUOUS`.
     """
     return SequenceKind(getattr(source, "sequence_kind", SequenceKind.CONTIGUOUS))
+
+
+def clocks_of(source: Any) -> Clocks:
+    """Return what *source* declares as its :class:`Clocks`.
+
+    A source that does not declare one is read as :attr:`Clocks.BOTH`.
+    """
+    return Clocks(getattr(source, "clocks", Clocks.BOTH))
 
 
 @dataclass(frozen=True)
@@ -539,15 +586,31 @@ class Source(Protocol):
         (:class:`SequenceKind`), so a gap check knows whether a skipped number
         is a lost message.  Optional: read it with :func:`sequence_kind_of`,
         which treats a missing one as :attr:`SequenceKind.CONTIGUOUS`.
+    clocks : Clocks
+        Which clocks the source's book rows carry (:class:`Clocks`), so the
+        clock checks run only when there are two to compare.  Optional: read
+        it with :func:`clocks_of`, which treats a missing one as
+        :attr:`Clocks.BOTH`.
     settings : SourceSettings
         Typed per-source configuration.  The empty base for a source that needs
         none; a typed subclass (e.g. ``CcxtSettings``) for one with venue knobs.
     """
 
     name: str
-    level: Level
-    feed_type: FeedType
     settings: SourceSettings
+
+    # The two coordinates are read-only: a source declares them, and nothing
+    # downstream sets them.  A class attribute satisfies them, and so does a
+    # property that works one out, as the cryptofeed source does from its venue.
+    @property
+    def level(self) -> Level:
+        """The source's resolution (:class:`Level`)."""
+        ...
+
+    @property
+    def feed_type(self) -> FeedType:
+        """The source's crossing invariant (:class:`FeedType`)."""
+        ...
 
 
 @runtime_checkable

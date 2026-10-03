@@ -11,6 +11,38 @@ venue's snapshot and deltas. It is the **per-order complement** to the
 price-level detail, cryptofeed can also deliver **market-by-order (L3)** on the
 venues that publish it — the feed the reconstruction engine was built for.
 
+!!! info "What this feed shows"
+
+    | Property | Bitstamp L3 | Bitfinex L3 | Blockchain.com L3 | Independent Reserve L3 | L2 (Bitstamp, Kraken) |
+    |---|---|---|---|---|---|
+    | Level | L3 | L3 | L3 | L3 | L2 |
+    | Depth shown | top 100 orders a side | top 100 orders a side | not checked (the book held 1 to 34 orders) | whole book | Bitstamp: whole book. Kraken: top 1,000 levels a side, and levels that leave it are kept |
+    | Orders shown | resting only | resting only | resting only | resting only | — |
+    | Update form | snapshots, about 10 a second | opening book, then every change | opening book, then every change | REST book, then every change | Bitstamp: REST book after 5 s, then changes. Kraken: changes |
+    | What can be missed | orders that come and go between snapshots | nothing | nothing | a second change to one order, which cryptofeed ignores (read in the code; not seen in 13 minutes) | a lost message |
+    | After a lost message | the next snapshot corrects it | reconnects; new opening book | reconnects; new opening book | reconnects; new opening book | drifts until the level changes again |
+    | Sequence | none | counts every message on the connection, so book rows skip numbers | counts every message on the connection, so book rows skip numbers | contiguous, with skips cryptofeed makes itself | none |
+    | Clocks | venue + receive | receive only | receive only | venue + receive; the opening book's rows carry a venue time later than their receive time | Bitstamp: venue + receive. Kraken: receive only |
+    | Crossing | matched book; failed the check in testing (0.125% crossed): Bitstamp's own snapshots can briefly show a bid at a resting ask's price | matched book; failed the check in testing (58% crossed; cause not found) | matched book | matched book | price levels |
+    | Trade sides named | maker only, from the tape | neither | neither | neither (the venue sends both ids; the capture does not read them yet) | — |
+    | Taker side | venue | venue | venue (not checked) | venue | venue |
+    | Fills | from the tape | not linked | not linked | not linked | — |
+    | Trade tape gaps | a few trades from before the first snapshot | starts with the last 30 trades before the capture | not checked | none found | Bitstamp: a few trades from before the REST book |
+    | Price grid | fixed (0.01 on BTC/USD) | five significant figures | fixed (0.01 on BTC/USD) | fixed (0.01 on BTC/AUD); some trade prices are off it | fixed (Bitstamp 0.01, Kraken 0.1 on BTC/USD) |
+    | What the book means | normal | normal | normal | normal | normal |
+    | Access | public | public | public | public | public; Coinbase needs an API key in cryptofeed 2.4.1; other venues not checked |
+
+    Use it for an independent check of the top of the Bitstamp book, and for the
+    per-order book on Independent Reserve. Independent Reserve trades are not
+    yet linked to their orders, and `audit` can stop with an error on a capture
+    with stale orders
+    ([#311](https://github.com/mczielinski/ob-analytics/issues/311)). Don't use
+    it for Bitstamp order analysis (use the native [`bitstamp`](live-capture.md)
+    source), for Bitfinex order lifetimes, or for the sequence check on
+    Bitfinex, Blockchain.com and Independent Reserve, where book rows skip
+    numbers without losing any. [What each feed shows](../feeds.md) explains
+    each property and compares every source.
+
 Install the optional `[cryptofeed]` extra and use the `capture` verb:
 
 ```bash
@@ -58,8 +90,8 @@ A capture is a directory of segments with a `manifest.json` (see
 | `orders.csv` | L3 only: per-order `created` / `changed` / `deleted` events |
 | `depth.csv` | L2 only: price-level updates (`volume` = new absolute size, `0` removes the level) |
 | `trades.csv` | The trade tape (taker side; feeds trade-sign) |
-| `raw.jsonl` | Raw frames as cryptofeed passed them on (omit with `--no-raw`). cryptofeed reads prices and sizes as `Decimal`, and these are written as strings so no digits are lost: a venue's `0.011` is stored as `"0.011"` |
-| `meta.json` | Counts + per-run diagnostics (venue, level, book updates, sequence gaps, fills from the trade tape, errors), and what the source declares about its feed (`source`, `feed_type`, `trade_attribution`) |
+| `raw.jsonl` | Raw frames as cryptofeed passed them on (omit with `--no-raw`). cryptofeed reads prices and sizes as `Decimal`, and these are written as strings so no digits are lost: a venue's `0.011` is stored as `"0.011"`. For some venues (independent_reserve, blockchain) cryptofeed also reads date and time strings as dates and times; these are written back as ISO 8601 strings, such as `"2026-09-28T08:30:15.123456+00:00"`. These strings come from cryptofeed's parsed value, not the venue's text: `Z` becomes `+00:00`, and digits past the microsecond are lost. Any other value or dict key that JSON cannot hold is written as text, and a frame that JSON cannot hold at all is skipped; `meta.json` records both (see [Capture live order-book data](live-capture.md)) |
+| `meta.json` | Counts + per-run diagnostics (venue, level, book updates, sequence gaps, fills from the trade tape, errors), what the source declares about its feed (`source`, `feed_type`, `trade_attribution`), and what `raw.jsonl` wrote as text or skipped (`raw_text_types`, `n_raw_frames_skipped`) |
 
 ## How the per-order events are derived
 
@@ -80,32 +112,32 @@ source handles both shapes:
 ### Bitstamp: a top-100 window, not every order
 
 cryptofeed does not read Bitstamp's order channel (`live_orders`). Its Bitstamp
-L3 book is the `detail_order_book` channel: about 10 times a second, a picture
+L3 book is the `detail_order_book` channel: about 10 times a second, a snapshot
 of the **top 100 bids and the top 100 asks**. Three things follow.
 
-- **An order can leave the picture without leaving the book.** When the book
+- **An order can leave the snapshot without leaving the book.** When the book
   shows 100 orders on a side, an order missing past the last price shown, or at
   that price, may just have dropped below the 100th place. The source keeps it
   at its last known size and records nothing. When it comes back it is the same
-  order. It is recorded `deleted` only once a picture shows its price again and
+  order. It is recorded `deleted` only once a snapshot shows its price again and
   it is not there, or at the end of the capture. So an order cancelled while out
   of view stays in the rebuilt book, below the 100th order, until then.
 - **Takers never appear.** A taker trades the moment it arrives, so it is never
-  resting when a picture is taken. `trades.csv` names both orders of every
+  resting when a snapshot is taken. `trades.csv` names both orders of every
   trade (Bitstamp sends them), but only the maker can be found in `orders.csv`.
   The source declares this as `trade_attribution = maker_only`, and `audit`
   counts only makers (see [Check data quality](audit.md)). No order can be
   labelled a market order.
-- **Fills come from the trade tape.** Between two pictures, a fill and a cancel
+- **Fills come from the trade tape.** Between two snapshots, a fill and a cancel
   look the same: the order's size drops, or the order is gone. So when a trade
   names an order the source is tracking, the source records the fill straight
   away as a `changed` event, and an order filled completely is later recorded
-  `deleted` at size 0, as the native Bitstamp feed reports a fill. The pictures
+  `deleted` at size 0, as the native Bitstamp feed reports a fill. The snapshots
   and the trades come on separate channels, in either order:
-  - A trade that a picture already shows (the picture is as late as the trade,
+  - A trade that a snapshot already shows (the snapshot is as late as the trade,
     on the venue's clock) is not applied twice; `meta.json` counts these as
     `tape_fills_already_shown`.
-  - A picture that shows an order gone before its trade arrives holds the
+  - A snapshot that shows an order gone before its trade arrives holds the
     `deleted` for up to 2 seconds of venue time, so the late trade can still
     report its fill.
 
@@ -114,7 +146,7 @@ of the **top 100 bids and the top 100 asks**. Three things follow.
 
 For analysis of Bitstamp orders, use the native [`bitstamp`](live-capture.md)
 source: it reports every order, takers included, and every fill. The cryptofeed
-capture is still useful as a check on the top of the native book. Each picture
+capture is still useful as a check on the top of the native book. Each snapshot
 states the top 100 in full, so an error there is corrected within a tenth of a
 second, where a stream of changes keeps a lost message until the capture ends.
 
@@ -158,17 +190,19 @@ A venue that publishes no sequence number is never scored, and reports zero.
 
 ## Which source for which venue
 
-Prefer **one source per venue** rather than two ways to capture the same thing:
-
-- **cryptofeed** when you want L3 on bitfinex, blockchain or
-  independent_reserve, or when its websocket handling for a venue is the more
-  robust path;
-- **[native `bitstamp`](live-capture.md)** for Bitstamp L3: it shows every
-  order and every fill, where cryptofeed's Bitstamp book shows the top 100
-  orders a side and no takers (see
-  [above](#bitstamp-a-top-100-window-not-every-order));
-- **[CCXT](ccxt.md)** for breadth and for the prediction markets (Kalshi,
-  Polymarket), which cryptofeed does not cover.
+- **Bitstamp orders:** use the [native `bitstamp`](live-capture.md) source for
+  analysis. It shows every order and every fill, where cryptofeed's Bitstamp
+  book shows the top 100 orders a side and no takers (see
+  [above](#bitstamp-a-top-100-window-not-every-order)). A cryptofeed capture of
+  the same period is still worth making as an independent check of the top of
+  the native book: each snapshot states the top 100 in full, so it does not keep
+  an order the native stream lost.
+- **bitfinex, blockchain or independent_reserve orders:** use cryptofeed. It is
+  the only per-order source for these venues. Read [What each feed
+  shows](../feeds.md) first: Bitfinex's book is a top-100 window too, and on all
+  three the book rows skip sequence numbers without losing messages.
+- **Price levels and prediction markets:** use [CCXT](ccxt.md). It covers the
+  most venues, and Kalshi and Polymarket, which cryptofeed does not.
 
 ## See also
 

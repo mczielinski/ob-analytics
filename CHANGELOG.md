@@ -10,6 +10,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **A page on what each feed shows** (#288). "What each feed shows" describes
+  16 properties that decide what a capture can tell you, such as depth shown,
+  what can be missed, sequence, clocks and taker side. It gives each property's
+  value for every source and venue, checked with live captures. Every source's
+  how-to page now opens with its values and when to use it.
+- **`FeedType.PRICE_LEVELS`, the crossing value for L2 feeds** (#288). The ccxt
+  source, cryptofeed at L2 and `depth_csv` declare it instead of
+  `MATCHED_BOOK`. The venue does not publish a crossed price-level book, so
+  `audit` scores a crossed one as an error, as for a matched book: most often,
+  the capture kept a level the venue removed. Captures made before this record
+  `matched_book` and are scored the same way. In the `Source` protocol, `level`
+  and `feed_type` are now read-only, so a source can work either one out, as
+  the cryptofeed source does from its venue.
 - **A live capture can run for days** (#150). `ob-analytics capture` now
   writes a directory of segments with a `manifest.json`. A lost connection ends
   the segment; the capture waits (1 s, doubling to 60 s) and starts a new one
@@ -43,6 +56,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **A plot concept is level-less or drawn at a level, on every backend**
+  (#302). Registering a concept at `None` when it is registered at a level on
+  any backend, or the reverse, raises a `ValueError` that says which to use.
+  So does a renderer key that is not `(concept, level, backend)`.
+  `RENDERERS.placements(concept)` lists how a concept is registered. This can
+  break code that worked before:
+  - Code that registered one plot both ways fails at the second registration.
+  - A metric plug-in that does so is skipped when `ob_analytics` is imported,
+    with a logged warning.
+  - A backend module loaded with `register_plot_backend` that registers a
+    built-in concept as the other kind fails to load, so no plot on that
+    backend draws until it is fixed.
+  - A metric named like a built-in plot drawn at a level, such as
+    `trade_size`, cannot register its level-less renderer; give it another
+    name.
 - **The capture directory layout** (#150). A capture's files are now in
   `seg-0001/`, `seg-0002/`, ... under `--out`, next to `manifest.json`. Read
   one segment as before, from its `orders.csv` or `depth.csv`; give `process`
@@ -77,6 +105,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   of a card now share one prepared payload, so the prepare step runs, and logs,
   once per card instead of once per backend.
 
+- **The clock checks compare two real clocks, and run on L2** (#310). Where a
+  venue sent no time, the cryptofeed and ccxt sources wrote the time they
+  handled the message into `exchange_timestamp`, which is later than the
+  receive time. On cryptofeed's Bitfinex and Blockchain.com books, and on the
+  Independent Reserve opening book, `audit` then failed the capture on
+  `exchange_time_after_receive`. Such rows now copy the receive time, as
+  LOBSTER's one clock fills both columns. The new `Clocks` declaration
+  (`BOTH`, `RECEIVE_ONLY` or `VENUE_ONLY`) says which clocks a source's rows
+  carry. LOBSTER declares `VENUE_ONLY`. A live capture records `clocks` and
+  `books_without_venue_time` in `meta.json`; read it with `recorded_clocks`.
+  With one clock, `audit` does not run the two clock checks and says why. The
+  L2 depth frame now keeps `exchange_timestamp` when `depth.csv` has it, so the
+  clock checks run on L2 captures, which before were never checked.
+  The clock checks leave out the opening book's rows (`origin` `snapshot`),
+  whose clocks the capture may not have measured; the L2 depth frame now keeps
+  `origin` for this.
+- **A cryptofeed REST opening book replays before the message that changed
+  it** (#310). On Binance and Independent Reserve, cryptofeed fetches the
+  opening book while it handles the first live message, and hands the book
+  over first with a later receipt time. On Binance (L2), replay applied the
+  message and then the book's older size. On Independent Reserve (L3), with
+  sequences tracked, the numbered message sorted before the book. The capture
+  now holds a book with no delta until the next one arrives, and places it
+  1 ms before a message received earlier. The message keeps its own receipt
+  time, and the book's rows are marked as the opening book.
 - **A Bitstamp capture no longer keeps trades from before its snapshot**
   (#301). It already skipped order messages from before the REST snapshot, but
   kept the trades from the same time. The orders those trades filled are not in
@@ -84,6 +137,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   segment's trades with 30-second segments. The trades are now skipped and
   counted as `pre_snapshot_trades_skipped` in `meta.json`. At a roll, the
   previous segment already has these trades.
+- **`raw.jsonl` no longer stops a cryptofeed capture of independent_reserve
+  or blockchain.** cryptofeed reads these venues' date and time strings as
+  `datetime`, `date` and `time` values, which `raw.jsonl` could not write, so
+  every segment failed unless `--no-raw` was passed. They are now written as
+  ISO 8601 strings. Any other value or dict key that JSON cannot hold is
+  written as text (`str(value)`), and a frame JSON cannot hold at all, such as
+  one that refers to itself, is skipped. Neither stops the capture. Each
+  segment's `meta.json` names the types written as text (`raw_text_types`) and
+  counts the skipped frames (`n_raw_frames_skipped`); the manifest adds up
+  `raw_frames_skipped`, and the capture logs each kind of warning once.
+- **A custom plot keeps working after it is added to the gallery** (#302).
+  The "A new plot" guide registered a plot at `Level.L2`, then registered it
+  again at `None` to put it in the gallery. After the second step,
+  `plot("cumvol")` raised and told you to pass `Level.L3`, which was not
+  registered. The guide now registers its example once, at `None`, draws the
+  gallery on the one backend it registered, and shows how a plot drawn at a
+  level goes into the gallery as a `PlotConcept`. A test runs the guide's plot
+  section as written. See Changed for the rule that replaces the second
+  registration.
+- **A gallery card added the wrong way says how to fix it** (#312). A
+  level-less plot added to `GalleryModel.concepts`, a plot drawn at a level
+  added to `GalleryModel.analytics`, or a `PlotConcept` variant at a level no
+  renderer is registered at, showed a bare "Not available", the same as a
+  renderer that raised. The gallery now checks each card against the levels
+  its renderers are registered at. When they disagree, the card says how the
+  plot is registered and how to change the model, and the log has the same
+  text once. A backend that cannot be loaded says so on its cards, and is
+  tried once instead of once for each card. A backend with no renderer for a
+  plot that other backends draw still shows a bare "Not available".
 - **On Python 3.11, a capture stops each segment when asked** (#296). The
   live sources waited for messages with `asyncio.wait_for`, which on Python
   3.11 can drop a cancel that arrives with a message. A roll then left the old
