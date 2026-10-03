@@ -149,6 +149,16 @@ _WHOLE_BOOK_VENUES: dict[str, int] = {
     "binancecoinm": 1000,
 }
 
+#: Venues whose trades name the side of the maker, the resting order, and
+#: which ccxt passes on unchanged as the trade's side. The capture reverses
+#: that side so ``trades.csv`` names the taker's side, as every other venue's
+#: does (issue #308). Coinbase Advanced Trade (``coinbase``) does this on both
+#: its websocket and its REST trades. Coinbase Exchange (``coinbaseexchange``)
+#: names the maker's side too, but ccxt already reverses it there.
+_MAKER_SIDE_VENUES = frozenset({"coinbase"})
+
+_REVERSED_SIDE = {"buy": "sell", "sell": "buy"}
+
 # The fewest levels ccxt is asked to track for a whole-book venue, whatever
 # depth_limit is: ccxt's own default, and deep enough that a shallow
 # depth_limit does not make ccxt itself evict (and, per the docstring above,
@@ -368,6 +378,10 @@ class CcxtSource:
         # The instrument's price increment, when the venue's metadata gives
         # one; meta.json records it so the replay uses the same price grid.
         self.tick_size: float | None = None
+        # Whether trade sides are reversed from the maker's to the taker's;
+        # meta.json records it, so a capture from before the fix is told
+        # apart by its missing key.
+        self.trade_side_reversed = False
         # How many times a price arrived between two ticks and the recorded
         # tick size was made finer to fit it (see _fit_tick).
         self.tick_size_changes = 0
@@ -439,6 +453,7 @@ class CcxtSource:
         else:
             self.exchange_id = str(getattr(exchange, "id", "custom"))
             self._exchange = exchange
+        self.trade_side_reversed = self.exchange_id in _MAKER_SIDE_VENUES
         if settings.market_data_mirror:
             _use_market_data_mirror(self._exchange, self.exchange_id)
         if self.exchange_id in _WHOLE_BOOK_VENUES:
@@ -809,9 +824,14 @@ class CcxtSource:
         """Map a CCXT trade to the universal trade-event shape.
 
         Public trades carry no order IDs, so ``buy_order_id`` /
-        ``sell_order_id`` are left empty; ``side`` is CCXT's taker side.
+        ``sell_order_id`` are left empty; ``side`` is the taker's side, which
+        is CCXT's side reversed on a venue that names the maker's (see
+        :data:`_MAKER_SIDE_VENUES`).
         """
         received = pd.Timestamp.now(tz="UTC").as_unit("ns")
+        side = t.get("side") or ""
+        if self.trade_side_reversed:
+            side = _REVERSED_SIDE.get(side, side)
         return {
             "trade_id": t.get("id") or "",
             "timestamp": received,
@@ -820,7 +840,7 @@ class CcxtSource:
             "amount": float(t["amount"]),
             "buy_order_id": "",
             "sell_order_id": "",
-            "side": t.get("side") or "",
+            "side": side,
             **self._identity(),
         }
 
@@ -898,6 +918,7 @@ class CcxtSource:
             "sequence_kind": self.sequence_kind.value,
             "tick_size": self.tick_size,
             "tick_size_changes": self.tick_size_changes,
+            "trade_side_reversed": self.trade_side_reversed,
             "book_updates": self.book_updates,
             "book_resyncs": self.book_resyncs,
             "books_without_venue_time": self.venue_clock.without_venue_time,

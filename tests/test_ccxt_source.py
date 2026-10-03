@@ -449,6 +449,49 @@ class TestWebsocketTrades:
         assert meta["duplicate_trades"] == 0
 
 
+# A Coinbase Advanced Trade ``market_trades`` trade as ccxt parses it: the
+# resting order was a buy, so the taker sold into the bid.
+_COINBASE_TRADE = {
+    "id": "1",
+    "timestamp": 2_000,
+    "price": 100.0,
+    "amount": 0.3,
+    "side": "buy",
+}
+
+
+class TestCoinbaseTradeSide:
+    """Coinbase names the maker's side; the capture records the taker's (#308)."""
+
+    def _capture(self, venue, tmp_path):
+        ex = _FakeCcxtExchange(_WS_SNAPSHOT, [], [[_COINBASE_TRADE]], ws=True)
+        ex.id = venue
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="BTC/USD", out_dir=out, minutes=0.05)
+        asyncio.run(run_capturer(_source(ex), cfg))
+        meta = json.loads((out / "meta.json").read_text())
+        return pd.read_csv(out / "trades.csv"), meta
+
+    def test_coinbase_side_is_reversed(self, tmp_path):
+        trades, meta = self._capture("coinbase", tmp_path)
+        assert trades["side"].tolist() == ["sell"]
+        assert meta["trade_side_reversed"] is True
+
+    @pytest.mark.parametrize("venue", ["coinbaseexchange", "kraken"])
+    def test_other_venues_keep_ccxts_side(self, venue, tmp_path):
+        trades, meta = self._capture(venue, tmp_path)
+        assert trades["side"].tolist() == ["buy"]
+        assert meta["trade_side_reversed"] is False
+
+    def test_a_missing_side_stays_empty(self, tmp_path):
+        ex = _FakeCcxtExchange(_WS_SNAPSHOT)
+        ex.id = "coinbase"
+        cap = _source(ex)
+        asyncio.run(_collect_snapshot(cap, _cfg(tmp_path)))
+        ev = cap._map_trade({**_COINBASE_TRADE, "side": None})
+        assert ev["side"] == ""
+
+
 # ---------------------------------------------------------------------------
 # ccxt-dependent (skipped without the extra)
 # ---------------------------------------------------------------------------
@@ -466,6 +509,34 @@ class TestCcxtInstalled:
         from ob_analytics.sources import list_sources
 
         assert "ccxt" in list_sources()
+
+    def test_ccxt_passes_on_coinbases_maker_side(self):
+        # The capture reverses Coinbase's side because ccxt does not. If ccxt
+        # starts reversing it, the capture would reverse it back to the
+        # maker's side, so this pins ccxt's behaviour.
+        import ccxt.pro
+
+        frame = {
+            "trade_id": "1",
+            "product_id": "BTC-USD",
+            "price": "100",
+            "size": "0.3",
+            "side": "BUY",
+            "time": "2026-09-28T12:00:00.000Z",
+        }
+        assert ccxt.pro.coinbase().parse_trade(frame)["side"] == "buy"
+
+    def test_ccxt_reverses_coinbase_exchanges_side_itself(self):
+        import ccxt.pro
+
+        frame = {
+            "trade_id": 1,
+            "price": "100",
+            "size": "0.3",
+            "side": "buy",
+            "time": "2026-09-28T12:00:00.000Z",
+        }
+        assert ccxt.pro.coinbaseexchange().parse_trade(frame)["side"] == "sell"
 
 
 _PREDICTION_INSTALLED = (

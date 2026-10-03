@@ -99,6 +99,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Coinbase captures through ccxt record the taker's side** (#308). Coinbase
+  reports each trade with the side of the maker, and ccxt passes it on
+  unchanged, so every Coinbase capture had its trade signs reversed, and so did
+  order flow imbalance, VPIN and everything else built on them. The ccxt source
+  now reverses the side for the `coinbase` venue, on both its websocket and
+  REST trades, and records `trade_side_reversed` in `meta.json`. A Coinbase
+  capture without that key was made before this change: reverse its signs.
+  `coinbaseexchange` needs no change, because ccxt already reverses its side.
 - **`audit` no longer reports lost messages on cryptofeed captures that lost
   none** (#309). On Bitfinex and Blockchain.com cryptofeed's sequence number
   counts every message on the connection, trades and heartbeats too, and on
