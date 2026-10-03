@@ -13,7 +13,7 @@ import json
 import time
 from collections.abc import AsyncIterator
 from decimal import Decimal
-from itertools import pairwise
+from itertools import pairwise, takewhile
 from pathlib import Path
 from typing import Any, cast
 from uuid import UUID
@@ -272,6 +272,26 @@ def _every_order_closed(orders: Path) -> bool:
     return not open_ids
 
 
+def _rolled_then_finished(segments: list[Segment]) -> list[Segment]:
+    """Check that a rolling capture rolled, then finished; return what streamed.
+
+    The capture's end can arrive while a roll is still waiting for its new
+    segment to stream.  The old segment then ends with the capture, and the
+    new one, which never streamed, ends with it too.  So the end reasons are
+    one or more time rolls, then one FINISHED, or two when the last segment
+    never streamed.  On a slow runner the end lands there often enough to
+    fail a check that only allows one FINISHED.
+    """
+    reasons = [s.end_reason for s in segments]
+    rolls = len(list(takewhile(lambda r: r is EndReason.ROLLED_TIME, reasons)))
+    assert rolls >= 1, reasons
+    finished = reasons[rolls:]
+    assert finished in ([EndReason.FINISHED], [EndReason.FINISHED] * 2), reasons
+    if len(finished) == 2:
+        assert segments[-1].stream_started is None
+    return [s for s in segments if s.stream_started is not None]
+
+
 # ---------------------------------------------------------------------------
 # Disconnects
 # ---------------------------------------------------------------------------
@@ -371,10 +391,9 @@ class TestRoll:
 
         segments = run.manifest.segments
         assert len(segments) >= 3
-        assert {s.end_reason for s in segments[:-1]} == {EndReason.ROLLED_TIME}
-        assert segments[-1].end_reason is EndReason.FINISHED
+        streamed = _rolled_then_finished(segments)
         assert run.manifest.gaps == []
-        for earlier, later in pairwise(segments):
+        for earlier, later in pairwise(streamed):
             assert later.stream_started is not None
             assert earlier.stream_ended is not None
             assert later.stream_started <= earlier.stream_ended
@@ -388,9 +407,8 @@ class TestRoll:
         assert time.monotonic() - started < 10
         segments = run.manifest.segments
         assert len(segments) >= 3
-        assert {s.end_reason for s in segments[:-1]} == {EndReason.ROLLED_TIME}
-        assert segments[-1].end_reason is EndReason.FINISHED
-        for earlier, later in pairwise(segments):
+        streamed = _rolled_then_finished(segments)
+        for earlier, later in pairwise(streamed):
             assert earlier.stream_ended is not None
             assert later.stream_started is not None
             assert earlier.stream_ended - later.stream_started < pd.Timedelta(
@@ -432,15 +450,16 @@ class TestRoll:
         segments = run.manifest.segments
         assert len(segments) >= 2
         # Each stopped when asked, only late: the reason stays, the lateness
-        # is the error, and nothing is recorded as a gap.
-        assert {s.end_reason for s in segments[:-1]} == {EndReason.ROLLED_TIME}
-        assert segments[-1].end_reason is EndReason.FINISHED
+        # is the error, and nothing is recorded as a gap.  A segment cut off
+        # before it streamed may never have reached the stream that hangs.
+        streamed = _rolled_then_finished(segments)
         assert run.manifest.gaps == []
         for segment in segments:
-            assert "did not stop within" in (segment.error or "")
             seg_dir = run.out_dir / segment.name
             assert _every_order_closed(seg_dir / "orders.csv"), segment.name
-            meta = json.loads((seg_dir / "meta.json").read_text())
+        for segment in streamed:
+            assert "did not stop within" in (segment.error or "")
+            meta = json.loads((run.out_dir / segment.name / "meta.json").read_text())
             assert "did not stop within" in meta["capture_error"]
 
     def test_a_segment_covers_the_market_only_until_asked_to_stop(
