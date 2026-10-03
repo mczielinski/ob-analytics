@@ -232,7 +232,7 @@ Whether the book can show a bid at or above an ask.
   [Data quality](data-quality.md) for more, and for `uncross=`, which removes
   a crossing for display.
 
-Two cryptofeed L3 captures failed the crossing check in testing:
+Three cryptofeed L3 captures failed the crossing check in testing:
 
 - **Bitstamp:** crossed for 0.125% of the time, above the 0.05% allowed.
   Bitstamp's own snapshots can show a bid at the price of a resting ask for a
@@ -242,6 +242,17 @@ Two cryptofeed L3 captures failed the crossing check in testing:
   a Bitfinex order, of price or of size, as a delete and a create with the same
   id, so the capture holds ids that are created more than once. The cause of
   the crossing was not found.
+- **Independent Reserve:** crossed for 58% of a 20-minute capture on 1 October
+  2026. `audit` reported 321 stale resting orders. 223 of them were still in
+  the venue's book a day later: trades from the venue's other markets, at
+  prices in another currency, made them look stale (see the note under
+  [Trades](#trades)). Without the other 98, the book was never crossed. Of
+  those 98:
+  - 52 came from the opening book, which cryptofeed fetches from the venue's
+    REST interface, and the stream never mentioned them again.
+  - 7 had a change, and cryptofeed then ignored their cancel (see the note
+    under [Timing and integrity](#timing-and-integrity)).
+  - 39 were deleted more than a second after a trade at a price past them.
 
 ### Trade sides named
 
@@ -249,9 +260,9 @@ Which orders of a trade the order events can name: the maker, which was
 resting, and the taker, which arrived.
 
 - **Values:** both; maker only; neither.
-- **Sources:** native Bitstamp names both. cryptofeed's Bitstamp L3 book,
-  LOBSTER and Databento name the maker only. cryptofeed's Bitfinex,
-  Blockchain.com and Independent Reserve captures name neither, although the
+- **Sources:** native Bitstamp names both. cryptofeed's Bitstamp and
+  Independent Reserve L3 captures, LOBSTER and Databento name the maker only.
+  cryptofeed's Bitfinex and Blockchain.com captures name neither, although the
   cryptofeed source declares maker only for all four venues. So `audit`
   reports every Bitfinex trade as unmatched. L2 names neither.
 - **Lets you conclude:** with both, maker–taker links and order types.
@@ -271,8 +282,10 @@ guesses the taker; see [LOBSTER](howto/lobster.md#takers-are-guessed).
 **Why Bitstamp publishes both ids.** Bitstamp's trade messages carry
 `buy_order_id` and `sell_order_id`, and its `live_orders` channel reports every
 order the venue accepts, takers included. So both orders of a trade can be
-found. Independent Reserve's trade messages also carry both ids, but the
-cryptofeed source does not read them yet.
+found. Independent Reserve's trade messages also carry both ids, `BidGuid` and
+`OfferGuid`, and the cryptofeed source writes them to `trades.csv`. But its
+book does not show every taker: some takers appear as new limit orders, and
+most never do. So the source declares maker only.
 
 ### Taker side
 
@@ -301,9 +314,9 @@ Where the capture learns that an order was filled rather than cancelled.
 - **Values:** per fill, from the order feed; from execution rows; from the trade
   tape; not linked.
 - **Sources:** native Bitstamp reports each fill. LOBSTER has execution rows,
-  Databento fill records. cryptofeed's Bitstamp L3 capture takes fills from the
-  trade tape. On cryptofeed's other L3 venues an order's size drops, and nothing
-  links that to the trade.
+  Databento fill records. cryptofeed's Bitstamp and Independent Reserve L3
+  captures take fills from the trade tape. On Bitfinex and Blockchain.com an
+  order's size drops, and nothing links that to the trade.
 - **Lets you conclude:** where fills are linked, filled against cancelled, and
   order lifetimes.
 - **Stops you concluding:** where they are not, whether an order that went away
@@ -412,7 +425,7 @@ What you need to capture the feed.
 | cryptofeed, Bitstamp | snapshots, about 10 a second | orders that come and go between snapshots | the next snapshot corrects it | none | venue + receive | matched book; failed the check in testing |
 | cryptofeed, Bitfinex | opening book, then every change | nothing | cryptofeed reconnects and takes a new opening book | counts every message on the connection; only rises | receive only | matched book; failed the check in testing |
 | cryptofeed, Blockchain.com | opening book, then every change | nothing | cryptofeed reconnects and takes a new opening book | counts every message on the connection; only rises | receive only | matched book |
-| cryptofeed, Independent Reserve | REST book, then every change | a second change to one order, which cryptofeed ignores | cryptofeed reconnects and takes a new opening book | skips the changes cryptofeed ignores; only rises | venue + receive; the opening book receive only | matched book |
+| cryptofeed, Independent Reserve | REST book, then every change | any change or cancel after an order's first change, which cryptofeed ignores; the trades restore the fills | cryptofeed reconnects and takes a new opening book | skips the changes cryptofeed ignores; only rises | venue + receive; the opening book receive only | matched book; failed the check in testing (58% crossed) |
 | `lobster` | every change | nothing (a file) | — | none | venue only | matched book |
 | `databento` | every change | nothing (a file) | — | venue's where sent; only rises | venue + Databento receive | matched book |
 | cryptofeed, Bitstamp L2 | REST book after 5 s, then changes | a lost message | drifts until the level changes again | none | venue + receive | price levels |
@@ -434,10 +447,12 @@ Notes on this table:
   on.
 - **Polymarket:** each snapshot carries a hash of the book, which ccxt does not
   check.
-- **cryptofeed, Independent Reserve:** read in cryptofeed 2.4.1's code. After an
-  order's first change, cryptofeed forgets the order, so it ignores any later
-  change or cancel, and the order stays in the book. It did not happen in 13
-  minutes of capture, where no order changed twice.
+- **cryptofeed, Independent Reserve:** after an order's first change,
+  cryptofeed 2.4.1 forgets the order, so it ignores any later change or cancel.
+  In 10 minutes of the venue's own messages on 1 October 2026, 14 orders
+  changed, and 10 of them had a later message that cryptofeed ignored: 9
+  cancels and 3 changes. The source takes the fills from the trades, so it does
+  not lose them. A cancelled order stays in the book until the capture ends.
 - **cryptofeed, Bitstamp L2:** cryptofeed waits 5 seconds, then fetches the REST
   book. It drops changes stamped in any second before the REST book's second,
   and applies those from the same second, even ones older than the book.
@@ -452,7 +467,7 @@ Notes on this table:
 | cryptofeed, Bitstamp | yes, from the tape | never | venue | from the tape | a few trades from the 5 s before the first snapshot |
 | cryptofeed, Bitfinex | never (the venue's trades carry no order ids) | never | venue | not linked | starts with the last 30 trades before the capture |
 | cryptofeed, Blockchain.com | never (the venue's trades carry no order ids) | never | venue (not checked: 1 trade in 20 minutes) | not linked | not checked (1 trade in 20 minutes) |
-| cryptofeed, Independent Reserve | not read (the venue sends it) | not read (the venue sends it) | venue | not linked | none found |
+| cryptofeed, Independent Reserve | yes, from the tape | only when the book shows it (6 of 26 takers) | venue | from the tape | none found |
 | `lobster` | yes | guessed | from the execution row | execution rows | — |
 | `databento` | yes | never | venue | fill records | — |
 | cryptofeed, Bitstamp L2 | — | — | venue | — | a few trades from the 5 s before the REST book |
@@ -465,6 +480,17 @@ Notes on this table:
 | ccxt, Kalshi | — | — | venue (buy = the taker bought Yes) | — | polled; trades from before the opening book dropped |
 | ccxt, Polymarket | — | — | venue | — | repeated trades removed |
 | `depth_csv` | — | — | the `side` column, or Lee–Ready | — | as recorded |
+
+Note on this table:
+
+- **cryptofeed, Independent Reserve:** the trade channel for one market also
+  carries trades from the venue's other markets for the same coin, at prices in
+  their own currency. In 40 minutes of BTC-AUD on 1 October 2026, 3 of 26
+  trades came from BTC-NZD or BTC-SGD, at about 148,700 and 107,000, while
+  BTC-AUD traded near 120,000. The venue keeps one book for all its currencies,
+  so these trades name orders in the capture, and their fills are right. Their
+  prices are not: `audit` reads them as trades through the book and reports
+  orders that are still resting as stale.
 
 ## Venue rules
 
@@ -517,7 +543,7 @@ the code.
 | cryptofeed, Bitstamp | crossing, clocks, tape gaps, price grid | the window and fills: this package's code and tests |
 | cryptofeed, Bitfinex | depth, repeated ids, crossing, sequence skips, clocks, taker side, tape gaps, price grid | why ids repeat: cryptofeed's code |
 | cryptofeed, Blockchain.com | number of orders and trades | — |
-| cryptofeed, Independent Reserve | opening-book size, sequence skips, clocks, taker side, price grid | the ignored second change and the unread trade ids: code only |
+| cryptofeed, Independent Reserve | opening-book size, sequence skips, clocks, taker side, price grid; on 1 October 2026, crossing and trades linked to their maker | the ignored changes and cancels, and which takers the book shows: a recording of Independent Reserve's websocket messages |
 | `lobster`, `databento` | — | this package's code, tests and docs |
 | cryptofeed, Bitstamp L2 | depth, taker side, clocks, tape gaps, price grid, crossing | — |
 | cryptofeed, Kraken L2 | depth, taker side, clocks, tape gaps, price grid, crossing | — |
@@ -541,6 +567,12 @@ The measurements:
   was crossed for any measurable time; see
   [Data quality](data-quality.md#price-level-l2-feeds).
 - **Sequence:** skipped numbers counted in `orders.csv`.
+- **Trades linked:** trades that `audit` matched to their maker in
+  `orders.csv`. On Independent Reserve, all 13 trades of a 20-minute capture on
+  1 October 2026 were matched.
+- **Takers the book shows:** in 40 minutes of Independent Reserve's own
+  messages on 1 October 2026, 6 of 26 takers appeared in the book, each as a
+  new limit order. The other 20 never did.
 
 Blockchain.com's BTC-USD market held at most 34 orders and traded once in 20
 minutes, so its depth and trade values are not checked. cryptofeed's other L2

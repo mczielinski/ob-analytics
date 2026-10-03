@@ -873,6 +873,28 @@ class TestStaleOrdersInSummary:
         assert payload["direction"] == "ask"
         assert payload["touch_seconds"] == pytest.approx(90.0)
 
+    def test_reports_a_uuid_order_id_as_written(self):
+        """Independent Reserve's order ids are UUID strings (#311)."""
+        uuids = {
+            1: "0430e003-c35e-410e-85f5-f0bb5c40193b",
+            2: "559c1dd2-e681-4efc-b49b-14a07c069de4",
+            3: "6d1c2e90-592a-409c-a8d8-58b2d25e0b0b",
+            4: "fee7094c-1921-44b7-8d8d-8b6e1cedb270",
+        }
+        events = _book_with_stale_ask()
+        events["id"] = events["id"].map(uuids).astype(object)
+        s = data_quality_summary(
+            events, _through_trade(), feed_type=FeedType.MATCHED_BOOK
+        )
+        assert [o.id for o in s.stale_orders] == [uuids[2]]
+        assert f"worst: ask {uuids[2]} at 101" in s.render()
+        (payload,) = json.loads(json.dumps(s.to_dict()))["stale_orders"]
+        assert payload["id"] == uuids[2]
+
+    def test_an_integer_id_stays_a_plain_int(self):
+        (stale,) = detect_stale_orders(_book_with_stale_ask(), _through_trade())
+        assert type(stale.id) is int
+
     def test_names_the_opening_snapshot_ask_on_the_bitstamp_sample(
         self, bitstamp_sample_dir
     ):
