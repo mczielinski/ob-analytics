@@ -107,6 +107,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   reported it as a stale resting order. The cryptofeed source now uses a
   subclass of cryptofeed's Independent Reserve feed that keeps the order while
   it rests. cryptofeed 3.0 fixes this too, but needs Python 3.13.
+- **`audit` no longer stops on UUID order ids** (#311). A stale resting order
+  from an Independent Reserve capture made `audit` raise `ValueError`.
+  `StaleOrder.id` now holds the id as the feed writes it (`int | str`), and the
+  text and JSON reports print it.
+- **cryptofeed's Independent Reserve trades are linked to their orders**
+  (#311). The trades now carry both order ids (`BidGuid` and `OfferGuid`) in
+  `buy_order_id` and `sell_order_id`, and each fill is recorded from the trade,
+  as on Bitstamp. On a per-change book, a fill that the trade and the book both
+  report is recorded once, and a book message that repeats an order's size
+  writes no row.
 - **`audit` no longer reports lost messages on cryptofeed captures that lost
   none** (#309). On Bitfinex and Blockchain.com cryptofeed's sequence number
   counts every message on the connection, trades and heartbeats too, and on

@@ -32,7 +32,7 @@ import asyncio
 import functools
 import time
 from collections.abc import AsyncIterator
-from typing import Any, TypeGuard
+from typing import Any, NamedTuple, TypeGuard
 
 import pandas as pd
 from loguru import logger
@@ -104,21 +104,127 @@ def _clocks(venue: Any, receipt: Any) -> dict[str, pd.Timestamp]:
     }
 
 
+class _TradeFrame(NamedTuple):
+    """Where a venue's raw trade message holds what cryptofeed's ``Trade`` omits.
+
+    Attributes
+    ----------
+    body : str
+        The key of the message's body.
+    buy_order_id, sell_order_id : str
+        The keys, in the body, of the ids of the orders on each side.
+    sent_ms : str or None
+        The key, in the message, of the time the venue sent it, in epoch
+        milliseconds.  ``None`` where the trade's own time is on the clock of
+        the venue's books.
+    """
+
+    body: str
+    buy_order_id: str
+    sell_order_id: str
+    sent_ms: str | None
+
+
+#: The venues whose trade messages name the orders on each side of a print.
+_TRADE_FRAMES: tuple[_TradeFrame, ...] = (
+    # Bitstamp's ``live_trades``.
+    _TradeFrame("data", "buy_order_id", "sell_order_id", None),
+    # Independent Reserve's ``ticker`` channel: the bid and the offer.
+    _TradeFrame("Data", "BidGuid", "OfferGuid", "Time"),
+)
+
+
+def _trade_frame(
+    trade: Any,
+) -> tuple[_TradeFrame, dict[str, Any], dict[str, Any]] | None:
+    """Return the trade's frame description, raw message and body, if one matches."""
+    raw = getattr(trade, "raw", None)
+    if not isinstance(raw, dict):
+        return None
+    for frame in _TRADE_FRAMES:
+        body = raw.get(frame.body)
+        if isinstance(body, dict) and (
+            frame.buy_order_id in body or frame.sell_order_id in body
+        ):
+            return frame, raw, body
+    return None
+
+
 def _trade_order_ids(trade: Any) -> tuple[Any, Any]:
     """Return ``(buy_order_id, sell_order_id)`` from a trade's raw frame.
 
     cryptofeed's ``Trade`` has no field for the orders on each side of a
-    print, but some venues send them: Bitstamp's ``live_trades`` frame carries
-    ``buy_order_id`` and ``sell_order_id`` in its ``data``.  They are read from
-    the raw frame so the trade can be matched to the orders in the book.  A
-    venue that does not send them gets empty strings, never invented ids.
+    print, but some venues send them (see ``_TRADE_FRAMES``): Bitstamp as
+    integers, Independent Reserve as UUID strings.  They are read from the raw
+    frame so the trade can be matched to the orders in the book.  A venue that
+    does not send them gets empty strings, never invented ids.
     """
-    raw = getattr(trade, "raw", None)
-    data = raw.get("data") if isinstance(raw, dict) else None
-    if not isinstance(data, dict):
+    match = _trade_frame(trade)
+    if match is None:
         return "", ""
-    buy, sell = data.get("buy_order_id"), data.get("sell_order_id")
+    frame, _, body = match
+    buy, sell = body.get(frame.buy_order_id), body.get(frame.sell_order_id)
     return ("" if buy is None else buy), ("" if sell is None else sell)
+
+
+class _TradeTime(NamedTuple):
+    """A trade's two times, in epoch seconds.
+
+    Attributes
+    ----------
+    traded_at : float or None
+        The time cryptofeed reports for the trade.  A fill row carries it as
+        its venue time.
+    book_at : float or None
+        The trade's time on the clock of the venue's books.  The capture
+        compares it with the time of the last book that showed an order, to
+        tell whether that book already includes the fill.
+    """
+
+    traded_at: float | None
+    book_at: float | None
+
+
+def _trade_time(trade: Any) -> _TradeTime:
+    """Return the trade's time, and its time on the clock of the venue's books.
+
+    Most venues stamp trades and books on one clock, so the two are the same.
+    Independent Reserve does not.  cryptofeed reports a trade at its
+    ``TradeDate``, the matching engine's time, but stamps the book at each
+    message's ``Time``, when the venue sent it.  The book message that
+    reports a fill carries the same ``Time`` as the trade message, and the
+    ``TradeDate`` is up to about 130 ms earlier: earlier even than the
+    ``NewOrder`` of an order that trades as it arrives.  So the trade
+    message's ``Time`` is its book time there.
+    """
+    traded_at = getattr(trade, "timestamp", None)
+    traded_at = None if traded_at is None else float(traded_at)
+    match = _trade_frame(trade)
+    if match is not None:
+        frame, raw, _ = match
+        sent = raw.get(frame.sent_ms) if frame.sent_ms is not None else None
+        if isinstance(sent, int | float):
+            return _TradeTime(traded_at, float(sent) / 1000)
+    return _TradeTime(traded_at, traded_at)
+
+
+def _order_event(
+    order_id: Any,
+    price: float,
+    volume: float,
+    action: str,
+    direction: str,
+    common: dict[str, Any],
+) -> EventDict:
+    """One ``orders.csv`` row, with the fields its book callback shares."""
+    return {
+        "id": order_id,
+        "price": price,
+        "volume": volume,
+        "action": action,
+        "direction": direction,
+        **common,
+    }
 
 
 def _has_entries(delta: Any) -> TypeGuard[dict[str, Any]]:
@@ -703,52 +809,87 @@ class CryptofeedSource:
         """
         common = self._book_common(book, receipt_timestamp)
         delta = getattr(book, "delta", None)
-        if _has_entries(delta):
-            return self._l3_events_from_delta(delta, common)
         shown_at = getattr(book, "timestamp", None)
+        shown_at = None if shown_at is None else float(shown_at)
+        if _has_entries(delta):
+            return self._l3_events_from_delta(delta, common, shown_at=shown_at)
         return self._l3_events_from_full_book(
-            _book_levels(book),
-            common,
-            shown_at=None if shown_at is None else float(shown_at),
+            _book_levels(book), common, shown_at=shown_at
         )
 
     def _l3_events_from_delta(
-        self, delta: dict[str, Any], common: dict[str, Any]
+        self,
+        delta: dict[str, Any],
+        common: dict[str, Any],
+        *,
+        shown_at: float | None,
     ) -> list[EventDict]:
-        """Map ``(order_id, price, quantity)`` triples to order events."""
-        # Applied to a copy and committed only once the whole delta has
-        # parsed.  A malformed entry half-way through would otherwise leave the
-        # tracked orders reflecting changes whose events were discarded, and
-        # every later diff would be wrong in a way nothing reports.
-        staged = dict(self._open_orders)
+        """Map ``(order_id, price, quantity)`` triples to order events.
+
+        A delta gives each order's size after the change.  Where the trade
+        tape names orders (Independent Reserve does), a trade usually reaches
+        the order before the delta that reports its fill (see
+        ``_fill_events``).  The delta then matches the tracked order and emits
+        nothing, and a delta older than the order's last fill from the tape is
+        skipped.
+
+        *shown_at* is the venue time of the delta.  It is recorded for every
+        order the delta shows, so a trade no later than it, which the delta
+        already includes, is not applied again.
+
+        A removal is reported at once, at the size the order last had.  It is
+        not held for a late trade, as the full-book path holds one: that would
+        write it after rows from later messages.  So a full fill whose removal
+        comes before its trade reads as a cancel.
+        """
+        # Every entry is parsed before anything is applied.  A malformed entry
+        # half-way through would otherwise leave the tracked orders reflecting
+        # changes whose events were discarded, and every later diff would be
+        # wrong in a way nothing reports.
+        entries = [
+            (direction, order_id, float(price), float(quantity))
+            for direction in ("bid", "ask")
+            for order_id, price, quantity in delta.get(direction) or ()
+        ]
         events: list[EventDict] = []
-        for direction in ("bid", "ask"):
-            for entry in delta.get(direction) or ():
-                order_id, price, quantity = entry
-                price = float(price)
-                quantity = float(quantity)
-                if quantity <= 0:
-                    # A removal: report the size the order last rested at,
-                    # since the delta only carries the zero.
-                    known = staged.pop(order_id, None)
-                    volume = known[2] if known is not None else 0.0
-                    action = "deleted"
-                else:
-                    action = "changed" if order_id in staged else "created"
-                    volume = quantity
-                    staged[order_id] = (price, direction, quantity)
+        for direction, order_id, price, quantity in entries:
+            if quantity <= 0:
+                # The delta only carries the zero, so the row reports the size
+                # the order last rested at.
+                known = self._open_orders.pop(order_id, None)
+                self._forget(order_id)
+                volume = known[2] if known is not None else 0.0
                 events.append(
-                    {
-                        "id": order_id,
-                        "price": price,
-                        "volume": volume,
-                        "action": action,
-                        "direction": direction,
-                        **common,
-                    }
+                    _order_event(order_id, price, volume, "deleted", direction, common)
                 )
-        self._open_orders = staged
+                continue
+            previous = self._open_orders.get(order_id)
+            if previous is not None and self._filled_since(order_id, shown_at):
+                continue
+            self._open_orders[order_id] = (price, direction, quantity)
+            if shown_at is not None:
+                self._shown_at[order_id] = shown_at
+            if previous == (price, direction, quantity):
+                continue
+            action = "created" if previous is None else "changed"
+            events.append(
+                _order_event(order_id, price, quantity, action, direction, common)
+            )
         return events
+
+    def _forget(self, order_id: Any) -> float | None:
+        """Drop a removed order's times; return when a book last showed it."""
+        self._filled_at.pop(order_id, None)
+        return self._shown_at.pop(order_id, None)
+
+    def _filled_since(self, order_id: Any, shown_at: float | None) -> bool:
+        """Has a trade filled the order after the book stamped *shown_at*?
+
+        Such a book is older than the order's size, so it says nothing about
+        the order.
+        """
+        filled_at = self._filled_at.get(order_id)
+        return shown_at is not None and filled_at is not None and filled_at > shown_at
 
     def _window_edges(
         self, levels: dict[str, dict[float, Any]]
@@ -805,12 +946,6 @@ class CryptofeedSource:
                 return False
             return price <= edge if direction == "bid" else price >= edge
 
-        def filled_since(order_id: Any) -> bool:
-            filled_at = self._filled_at.get(order_id)
-            return (
-                shown_at is not None and filled_at is not None and filled_at > shown_at
-            )
-
         events: list[EventDict] = []
         kept: dict[Any, tuple[float, str, float]] = {}
         for order_id, (price, direction, volume) in list(current.items()):
@@ -821,7 +956,7 @@ class CryptofeedSource:
                 # all, so the held ``deleted`` is dropped, not reported.
                 event = held[0]
                 previous = (event["price"], event["direction"], event["volume"])
-            if previous is not None and filled_since(order_id):
+            if previous is not None and self._filled_since(order_id, shown_at):
                 kept[order_id] = previous
                 del current[order_id]
                 continue
@@ -829,32 +964,20 @@ class CryptofeedSource:
                 self._shown_at[order_id] = shown_at
             if previous == (price, direction, volume):
                 continue
+            action = "created" if previous is None else "changed"
             events.append(
-                {
-                    "id": order_id,
-                    "price": price,
-                    "volume": volume,
-                    "action": "created" if previous is None else "changed",
-                    "direction": direction,
-                    **common,
-                }
+                _order_event(order_id, price, volume, action, direction, common)
             )
         for order_id, (price, direction, volume) in self._open_orders.items():
             if order_id in current or order_id in kept:
                 continue
-            if out_of_view(price, direction) or filled_since(order_id):
+            if out_of_view(price, direction) or self._filled_since(order_id, shown_at):
                 kept[order_id] = (price, direction, volume)
                 continue
-            last_shown = self._shown_at.pop(order_id, None)
-            self._filled_at.pop(order_id, None)
-            deleted = {
-                "id": order_id,
-                "price": price,
-                "volume": volume,
-                "action": "deleted",
-                "direction": direction,
-                **common,
-            }
+            last_shown = self._forget(order_id)
+            deleted = _order_event(
+                order_id, price, volume, "deleted", direction, common
+            )
             if self._tape_names_orders and shown_at is not None:
                 self._held_deletes[order_id] = (
                     deleted,
@@ -900,7 +1023,10 @@ class CryptofeedSource:
         return spelled if spelled in self._held_deletes else None
 
     def _fill_held(
-        self, order_id: Any, amount: float, traded_at: float | None
+        self,
+        order_id: Any,
+        amount: float,
+        trade_time: _TradeTime,
     ) -> EventDict | None:
         """Report a fill of an order a book has already left out.
 
@@ -909,12 +1035,17 @@ class CryptofeedSource:
         time and the trade's venue time, and the held ``deleted`` now reports
         the size left after the fill, 0 for a full fill.
 
-        A trade no later than the last book that showed the order is already
-        in that book's size, so it returns ``None`` rather than counting the
-        fill a second time.
+        A trade no later than the last book that showed the order, on the
+        clock of the venue's books (see ``_trade_time``), is already in that
+        book's size, so it returns ``None`` rather than counting the fill a
+        second time.
         """
         deleted, due_at, last_shown = self._held_deletes[order_id]
-        if traded_at is not None and last_shown is not None and traded_at <= last_shown:
+        if (
+            trade_time.book_at is not None
+            and last_shown is not None
+            and trade_time.book_at <= last_shown
+        ):
             self.tape_fills_already_shown += 1
             return None
         remaining = max(round(deleted["volume"] - amount, 12), 0.0)
@@ -928,8 +1059,8 @@ class CryptofeedSource:
             **deleted,
             "exchange_timestamp": (
                 deleted["exchange_timestamp"]
-                if traded_at is None
-                else _epoch_s_to_ts(traded_at)
+                if trade_time.traded_at is None
+                else _epoch_s_to_ts(trade_time.traded_at)
             ),
             "volume": remaining,
             "action": "changed",
@@ -951,19 +1082,20 @@ class CryptofeedSource:
         The order is never deleted here.  A fully filled order drops to size
         0 and stays tracked until a book leaves it out; that book reports it
         ``deleted`` at size 0, which is how the native Bitstamp feed reports a
-        fill.  When the book comes first and has already left the order out,
-        its ``deleted`` is held for ``_FILL_GRACE_S`` of venue time (once the
-        tape is known to name orders), and the late trade reports its fill
-        against it (see ``_fill_held``).
+        fill.  When a whole book comes first and has already left the order
+        out, its ``deleted`` is held for ``_FILL_GRACE_S`` of venue time (once
+        the tape is known to name orders), and the late trade reports its fill
+        against it (see ``_fill_held``).  A delta's removal is not held (see
+        ``_l3_events_from_delta``).
 
         Books and trades arrive on separate channels, in either order, so a
-        trade is applied only when it is later, on the venue's clock, than the
-        last book that showed the order.  A book as late as the trade already
-        includes it, and applying it again would count the fill twice; the
-        book's own size change stands for it instead.
+        trade is applied only when it is later, on the clock the venue stamps
+        its books with (see ``_trade_time``), than the last book that
+        showed the order.  A book as late as the trade already includes it,
+        and applying it again would count the fill twice; the book's own size
+        change stands for it instead.
         """
-        traded_at = getattr(trade, "timestamp", None)
-        traded_at = None if traded_at is None else float(traded_at)
+        trade_time = _trade_time(trade)
         amount = float(trade.amount)
         events: list[EventDict] = []
         for named in _trade_order_ids(trade):
@@ -972,7 +1104,7 @@ class CryptofeedSource:
             self._tape_names_orders = True
             held_id = self._held_id(named)
             if held_id is not None:
-                fill = self._fill_held(held_id, amount, traded_at)
+                fill = self._fill_held(held_id, amount, trade_time)
                 if fill is not None:
                     events.append(fill)
                 continue
@@ -980,7 +1112,11 @@ class CryptofeedSource:
             if order_id is None:
                 continue
             shown_at = self._shown_at.get(order_id)
-            if traded_at is not None and shown_at is not None and traded_at <= shown_at:
+            if (
+                trade_time.book_at is not None
+                and shown_at is not None
+                and trade_time.book_at <= shown_at
+            ):
                 self.tape_fills_already_shown += 1
                 continue
             price, direction, volume = self._open_orders[order_id]
@@ -988,13 +1124,13 @@ class CryptofeedSource:
             # difference on the same float a book would report it as.
             remaining = max(round(volume - amount, 12), 0.0)
             self._open_orders[order_id] = (price, direction, remaining)
-            if traded_at is not None:
-                self._filled_at[order_id] = traded_at
+            if trade_time.book_at is not None:
+                self._filled_at[order_id] = trade_time.book_at
             self.tape_fills += 1
             events.append(
                 {
                     "id": order_id,
-                    **_clocks(traded_at, receipt_timestamp),
+                    **_clocks(trade_time.traded_at, receipt_timestamp),
                     "sequence": None,
                     "price": price,
                     "volume": remaining,
