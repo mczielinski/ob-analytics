@@ -35,6 +35,7 @@ import pandas as pd
 from ob_analytics._utils import validate_columns, validate_non_empty
 from ob_analytics.trade_sign import (
     bulk_volume_classification,
+    check_bucket_count,
     resolve_direction,
 )
 
@@ -237,9 +238,13 @@ def compute_vpin(
         ``direction`` column (``"buy"`` / ``"sell"``, the taker side) is used
         when present; otherwise it is inferred — see *sign_method*.
     bucket_volume : float, optional
-        Total volume per bucket.  This is highly instrument-specific.  When
-        left out, it is picked by :func:`vpin_bucket_volume` (average daily
-        volume ÷ 50, with a 24-hour trading day).
+        Total volume per bucket, in the units of ``trades["volume"]``: integer
+        lots on a pipeline result (the base-asset size is ``lots * lot_size``,
+        see :class:`~ob_analytics.config.PipelineConfig`).  This is highly
+        instrument-specific, so size it from the data, for example
+        ``trades["volume"].sum() / 60``.  When left out, it is picked by
+        :func:`vpin_bucket_volume` (average daily volume ÷ 50, with a 24-hour
+        trading day).
     n_buckets : int, optional
         Window length (in buckets) for the trailing VPIN average.
         Default is 50, following the original paper.  Fewer complete buckets
@@ -295,17 +300,27 @@ def compute_vpin(
     ObAnalyticsError
         If *trades* is empty.
     ValueError
-        If *bucket_volume* is not positive, or it is left out and the trades
-        span no time (see :func:`vpin_bucket_volume`).
+        If *bucket_volume* is not positive, would make more than
+        :data:`~ob_analytics.trade_sign.MAX_VOLUME_BUCKETS` buckets, or is
+        left out and the trades span no time (see :func:`vpin_bucket_volume`).
     """
     validate_columns(trades, {"timestamp", "price", "volume"}, "compute_vpin")
     validate_non_empty(trades, "compute_vpin")
     rule = "given"
+    advice: str | None = None
     if bucket_volume is None:
         bucket_volume = vpin_bucket_volume(trades)
         rule = f"adv/{VPIN_BUCKETS_PER_DAY}"
+        # The default rule makes about 50 buckets per day the trades span, so
+        # only a span of decades trips the cap: a timestamp problem, not units.
+        span = trades["timestamp"].max() - trades["timestamp"].min()
+        advice = (
+            f"vpin_bucket_volume sized the bucket from the trades' time span "
+            f"of {span}; check the timestamps, or pass bucket_volume."
+        )
     if bucket_volume <= 0:
         raise ValueError(f"bucket_volume must be positive, got {bucket_volume}")
+    check_bucket_count(trades, bucket_volume, "compute_vpin", advice=advice)
 
     if sign_method == "bvc":
         result = _vpin_from_bvc(trades, bucket_volume, n_buckets)

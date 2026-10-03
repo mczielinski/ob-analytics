@@ -20,8 +20,8 @@ ob-analytics.
 Metrics run on demand, not during `Pipeline.run`: use
 [`PipelineResult.metric`](pipeline.md) for one, `PipelineResult.metrics()` for
 every metric that applies to the run's resolution. Settings are keyword
-arguments: `result.metric("vpin", bucket_volume=5.0)`, or
-`result.plot("vpin", bucket_volume=5.0, threshold=0.8)`, where each keyword
+arguments: `result.metric("vpin", n_buckets=20)`, or
+`result.plot("vpin", n_buckets=20, threshold=0.8)`, where each keyword
 goes to `compute` or `prepare`, whichever names it.
 
 ## Built-in metrics

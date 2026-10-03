@@ -12,16 +12,19 @@ change without notice.
 
 ## Schema version
 
-The current version is **`3.0`** (the constant
-[`ob_analytics.schemas.SCHEMA_VERSION`](api/schemas.md)). Version `3.0`
-(issue #155) stores every `price` column as `int64` ticks (see
-[Price policy](#price-policy)); `2.0` and `1.0` stored `price` as a `double` in
-the quote currency. Version `2.0` (issue #154) also makes both timestamp clocks
-tz-aware UTC nanoseconds; `1.0` wrote them tz-naive in each venue's native clock.
-All three still read — Parquet is self-describing, so a `1.0` / `2.0` file loads
-as the float-price frame it stored (a pre-tick file, whose prices are not
-directly comparable to a `3.0` file's ticks); re-save it with this build to move
-it onto the tick model.
+The current version is **`4.0`** (the constant
+[`ob_analytics.schemas.SCHEMA_VERSION`](api/schemas.md)). Version `4.0`
+(issue #226) stores every `volume` and `fill` column as `int64` lots (see
+[Size policy](#size-policy)); `3.0` and earlier stored them as a `double` in the
+base asset. Version `3.0` (issue #155) stores every `price` column as `int64`
+ticks (see [Price policy](#price-policy)); `2.0` and `1.0` stored `price` as a
+`double` in the quote currency. Version `2.0` (issue #154) makes both timestamp
+clocks tz-aware UTC nanoseconds; `1.0` wrote them tz-naive in each venue's
+native clock. All four still read. Parquet is self-describing, so an older file
+loads as the frame it stored: float prices and sizes from a `1.0` / `2.0` file,
+float sizes from a `3.0` file. Those are not directly comparable to a `4.0`
+file's ticks and lots. Re-save an older file with this build to move it onto the
+current model.
 
 `save_data(..., fmt="parquet")` writes the version into each file's Arrow
 key-value metadata under the key `ob_analytics_schema_version` (bytes, because
@@ -44,7 +47,7 @@ Read the version from another tool through pyarrow:
 import pyarrow.parquet as pq
 
 metadata = pq.read_schema("out/events.parquet").metadata
-version = metadata[b"ob_analytics_schema_version"].decode()  # "2.0"
+version = metadata[b"ob_analytics_schema_version"].decode()  # "4.0"
 ```
 
 ## The tables

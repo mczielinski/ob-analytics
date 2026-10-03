@@ -31,4 +31,8 @@ quantifying price impact.
 
 ::: ob_analytics.flow_toxicity.VPIN_BUCKETS_PER_DAY
 
+`compute_vpin` refuses a bucket size that would make more than
+[`MAX_VOLUME_BUCKETS`](trade_sign.md#ob_analytics.trade_sign.MAX_VOLUME_BUCKETS)
+buckets.
+
 ::: ob_analytics.flow_toxicity.OFI_HORIZONS
