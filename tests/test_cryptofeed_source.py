@@ -2524,3 +2524,143 @@ class TestIndependentReserveKeepsChangedOrders:
         )
         assert books[-1] == {"bid": [(self._ORDER, 100000, 0)], "ask": []}
         assert len(feed._l3_book["BTC-AUD"].book.bids) == 0
+
+
+class TestOtherMarketTrades:
+    """A trade from another of the venue's markets stays out of trades.csv (#316).
+
+    Independent Reserve's BTC-AUD trade channel also carries its BTC-NZD and
+    BTC-SGD trades, priced in NZD and SGD.  The venue keeps one book for all
+    its markets, so such a trade still fills an order in the BTC-AUD book.
+    """
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def capture(cls, tmp_path_factory):
+        import asyncio
+        import json
+        from decimal import Decimal
+
+        from ob_analytics.live._runner import run_capturer
+
+        aud = _tape_trade(99, "s1", timestamp=1_700_000_010.0)
+        aud.symbol, aud.id, aud.price = "BTC-AUD", "aud-1", Decimal("120217.99")
+        sgd = _tape_trade(98, "s1", timestamp=1_700_000_011.0)
+        sgd.symbol, sgd.id, sgd.price = "BTC-SGD", "sgd-1", Decimal("107241.74")
+        sgd.raw = {**sgd.raw, "market": "xbt-sgd"}
+        script = [
+            (
+                "l3_book",
+                _l3_book(
+                    {"bid": {}, "ask": {120217.99: {"s1": 2.0}}},
+                    symbol="BTC-AUD",
+                    delta=None,
+                ),
+            ),
+            ("trades", aud),
+            ("trades", sgd),
+        ]
+        src = _source_with(_l3_venue(), script)
+        tmp_path = tmp_path_factory.mktemp("other_market")
+        asyncio.run(run_capturer(src, _capture_cfg(tmp_path, pair="BTC-AUD")))
+        cap = tmp_path / "cap"
+        return cap, json.loads((cap / "meta.json").read_text())
+
+    def test_trades_csv_leaves_the_other_market_out(self, capture):
+        cap, _ = capture
+        trades = pd.read_csv(cap / "trades.csv")
+        assert trades["trade_id"].tolist() == ["aud-1"]
+        assert trades["price"].tolist() == [120217.99]
+
+    def test_its_fill_is_still_recorded(self, capture):
+        cap, _ = capture
+        orders = pd.read_csv(cap / "orders.csv")
+        fills = orders[orders["action"] == "changed"]
+        assert fills["volume"].tolist() == [1.5, 1.0]
+        # The fill is of an order in the BTC-AUD book, at its AUD price.
+        assert fills["price"].unique().tolist() == [120217.99]
+
+    def test_meta_counts_it(self, capture):
+        _, meta = capture
+        assert meta["trade_events"] == 1
+        assert meta["other_market_trades"] == 1
+        assert meta["tape_fills"] == 2
+
+    def test_its_raw_frame_is_kept(self, capture):
+        cap, _ = capture
+        assert "xbt-sgd" in (cap / "raw.jsonl").read_text()
+
+    def test_an_l2_capture_leaves_it_out_too(self, tmp_path):
+        import asyncio
+        import json
+
+        from ob_analytics.live._runner import run_capturer
+
+        script = [
+            ("l2_book", _FakeBook({"bid": {100.0: 1.0}, "ask": {}}, symbol="BTC-AUD")),
+            ("trades", _FakeTrade(symbol="BTC-AUD", trade_id="aud-1")),
+            ("trades", _FakeTrade(symbol="BTC-SGD", trade_id="sgd-1")),
+        ]
+        src = _source_with(_l2_venue(), script)
+        asyncio.run(run_capturer(src, _capture_cfg(tmp_path, pair="BTC-AUD")))
+        cap = tmp_path / "cap"
+        trades = pd.read_csv(cap / "trades.csv")
+        assert trades["trade_id"].tolist() == ["aud-1"]
+        meta = json.loads((cap / "meta.json").read_text())
+        assert (meta["trade_events"], meta["other_market_trades"]) == (1, 1)
+
+    def test_its_fill_carries_the_capture_symbol(self, tmp_path):
+        from ob_analytics.live.cryptofeed_source import (
+            CryptofeedSettings,
+            CryptofeedSource,
+        )
+
+        src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
+        src._resolve_symbol(_capture_cfg(tmp_path, pair="BTC-AUD"))
+        src._l3_events(
+            _l3_book({"bid": {}, "ask": {101.0: {"s1": 2.0}}}, symbol="BTC-AUD")
+        )
+        trade = _tape_trade(99, "s1")
+        trade.symbol = "BTC-SGD"
+        (fill,) = src._fill_events(trade)
+        assert fill["symbol"] == "BTC-AUD"
+
+    def test_an_independent_reserve_sgd_trade_on_an_aud_capture(self, tmp_path):
+        """The venue's own frames: a BTC-SGD trade names an order in the AUD book."""
+        import asyncio
+        import json
+        from decimal import Decimal
+
+        from ob_analytics.live._runner import run_capturer
+
+        sent = 1_700_000_010.05
+        sgd = _ir_trade("t1", "m1", amount="0.3")
+        sgd.symbol, sgd.price = "BTC-SGD", Decimal("107241.74")
+        sgd.raw["Channel"] = "ticker-xbt-aud"
+        sgd.raw["Data"]["Pair"] = "xbt-sgd"
+        book = _ir_delta("ask", "m1", 120217.99, 1.0, 1_700_000_000.0)
+        filled = _ir_delta("ask", "m1", 120217.99, 0.7, sent)
+        for message in (book, filled):
+            message.symbol = "BTC-AUD"
+        script = [("l3_book", book), ("trades", sgd), ("l3_book", filled)]
+        src = _source_with(_l3_venue(), script)
+        asyncio.run(run_capturer(src, _capture_cfg(tmp_path, pair="BTC-AUD")))
+        cap = tmp_path / "cap"
+
+        assert pd.read_csv(cap / "trades.csv").empty
+        orders = pd.read_csv(cap / "orders.csv")
+        # The trade reports the fill once; the book's matching change adds none.
+        fills = orders[orders["action"] == "changed"]
+        assert (fills["id"].tolist(), fills["volume"].tolist()) == (["m1"], [0.7])
+        assert fills["price"].tolist() == [120217.99]
+        meta = json.loads((cap / "meta.json").read_text())
+        assert (meta["trade_events"], meta["other_market_trades"]) == (0, 1)
+
+    def test_without_a_run_symbol_every_trade_is_kept(self):
+        from ob_analytics.live.cryptofeed_source import (
+            CryptofeedSettings,
+            CryptofeedSource,
+        )
+
+        src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
+        assert not src._other_market(_FakeTrade(symbol="BTC-SGD"))
