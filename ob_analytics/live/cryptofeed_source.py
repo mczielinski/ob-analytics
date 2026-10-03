@@ -368,9 +368,21 @@ def _independent_reserve(base: Any) -> Any:
     return IndependentReserve
 
 
+def _independent_reserve_fixed(base: Any) -> Any:
+    """Return Independent Reserve's feed with both of its fixes.
+
+    The opening book no older than the stream (see
+    :mod:`ob_analytics.live._cryptofeed_venues`, imported here because it needs
+    cryptofeed), and changed orders kept (see ``_independent_reserve``).
+    """
+    from ob_analytics.live._cryptofeed_venues import with_newer_opening_book
+
+    return _independent_reserve(with_newer_opening_book(base))
+
+
 #: Feeds whose cryptofeed class loses data, keyed by cryptofeed's exchange id,
 #: each mapped to a function that returns a fixed subclass.
-_FIXED_FEEDS = {"INDEPENDENT_RESERVE": _independent_reserve}
+_FIXED_FEEDS = {"INDEPENDENT_RESERVE": _independent_reserve_fixed}
 
 
 def _fixed_feed(feed: Any) -> Any:

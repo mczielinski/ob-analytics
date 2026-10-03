@@ -250,7 +250,11 @@ Three cryptofeed L3 captures failed the crossing check in testing:
   other 98, the book was never crossed. Of
   those 98:
   - 52 came from the opening book, which cryptofeed fetches from the venue's
-    REST interface, and the stream never mentioned them again.
+    REST interface, and the stream never mentioned them again. Those files
+    are gone, but captures on 3 October 2026 showed the cause: an opening book
+    older than the stream (see the note under
+    [Timing and integrity](#timing-and-integrity)). The source now fetches a
+    newer book.
   - 7 had a change, and cryptofeed then ignored their cancel. The source now
     passes such cancels on (see the note under
     [Timing and integrity](#timing-and-integrity)).
@@ -431,7 +435,7 @@ What you need to capture the feed.
 | cryptofeed, Bitstamp | snapshots, about 10 a second | orders that come and go between snapshots | the next snapshot corrects it | none | venue + receive | matched book; failed the check in testing |
 | cryptofeed, Bitfinex | opening book, then every change | nothing | cryptofeed reconnects and takes a new opening book | counts every message on the connection; only rises | receive only | matched book; failed the check in testing |
 | cryptofeed, Blockchain.com | opening book, then every change | nothing | cryptofeed reconnects and takes a new opening book | counts every message on the connection; only rises | receive only | matched book |
-| cryptofeed, Independent Reserve | REST book, then every change | the cancel of some orders in the REST book: in 20 minutes, the stream never mentioned 52 of them again | cryptofeed reconnects and takes a new opening book | skips messages for orders cryptofeed does not hold; only rises | venue + receive; the opening book receive only | matched book; failed the check in testing (58% crossed) |
+| cryptofeed, Independent Reserve | REST book newer than the stream, then every change | nothing found in testing | cryptofeed reconnects and takes a new opening book | skips messages for orders cryptofeed does not hold; only rises | venue + receive; the opening book receive only | matched book; failed the check in testing (58% crossed) |
 | `lobster` | every change | nothing (a file) | — | none | venue only | matched book |
 | `databento` | every change | nothing (a file) | — | venue's where sent; only rises | venue + Databento receive | matched book |
 | cryptofeed, Bitstamp L2 | REST book after 5 s, then changes | a lost message | drifts until the level changes again | none | venue + receive | price levels |
@@ -461,6 +465,18 @@ Notes on this table:
   cryptofeed's feed that keeps the order while it rests, so those messages
   reach the capture. In a 12-minute capture on 3 October 2026, one order was
   changed and then cancelled, and the capture recorded the cancel.
+- **cryptofeed, Independent Reserve, opening book:** the venue serves its REST
+  book from a cache, and the book's orders are older than the book's own
+  `CreatedTimestampUtc`: by 0.5 to 0.75 s, and once by 2 s, in 48 books
+  compared with the stream. cryptofeed fetches the book when the first stream
+  message arrives, so the book could be older than the stream. An order
+  cancelled between the two stayed in the book until the capture ended: 13
+  orders in a 12-minute capture on 3 October 2026, two of them at the best ask.
+  The cryptofeed source now fetches the book again, once a second, until it was
+  created at least 3 s after the first message. This takes about 3 to 6 s, and
+  the stream waits meanwhile, losing nothing. It does the same after each
+  reconnect. In an 8-minute capture made this way, none of the 2,530 orders in
+  the opening book stayed after the venue removed them.
 - **cryptofeed, Bitstamp L2:** cryptofeed waits 5 seconds, then fetches the REST
   book. It drops changes stamped in any second before the REST book's second,
   and applies those from the same second, even ones older than the book.
@@ -553,7 +569,7 @@ the code.
 | cryptofeed, Bitstamp | crossing, clocks, tape gaps, price grid | the window and fills: this package's code and tests |
 | cryptofeed, Bitfinex | depth, repeated ids, crossing, sequence skips, clocks, taker side, tape gaps, price grid | why ids repeat: cryptofeed's code |
 | cryptofeed, Blockchain.com | number of orders and trades | — |
-| cryptofeed, Independent Reserve | opening-book size, sequence skips, clocks, taker side, price grid; on 1 October 2026, crossing and trades linked to their maker; on 3 October 2026, a cancel after a change, with the fix | the ignored changes and cancels, and which takers the book shows: a recording of Independent Reserve's websocket messages |
+| cryptofeed, Independent Reserve | opening-book size, sequence skips, clocks, taker side, price grid; on 1 October 2026, crossing and trades linked to their maker; on 3 October 2026, a cancel after a change, with the fix, and the opening book's age, against REST books taken every 15 s for 12 minutes | the ignored changes and cancels, and which takers the book shows: a recording of Independent Reserve's websocket messages |
 | `lobster`, `databento` | — | this package's code, tests and docs |
 | cryptofeed, Bitstamp L2 | depth, taker side, clocks, tape gaps, price grid, crossing | — |
 | cryptofeed, Kraken L2 | depth, taker side, clocks, tape gaps, price grid, crossing | — |

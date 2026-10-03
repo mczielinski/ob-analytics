@@ -99,6 +99,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **An Independent Reserve capture no longer keeps orders cancelled before
+  it started** (#315). cryptofeed takes the opening book from the venue's REST
+  interface when the first stream message arrives. The venue serves that book
+  from a cache, and its orders are older than its `CreatedTimestampUtc`, so the
+  book could be a few seconds older than the stream. An order cancelled in
+  between stayed in the book until the capture ended, and a trade at a price
+  past it made the book crossed: 13 orders in a 12-minute capture, two of them
+  at the best ask. The cryptofeed source now uses its own Independent Reserve
+  feed, which fetches the book again, once a second, until it was created at
+  least 3 s after the first message. The stream waits meanwhile and loses
+  nothing. After 15 tries it uses the last book and logs a warning.
 - **Coinbase captures through ccxt record the taker's side** (#308). Coinbase
   reports each trade with the side of the maker, and ccxt passes it on
   unchanged, so every Coinbase capture had its trade signs reversed, and so did
