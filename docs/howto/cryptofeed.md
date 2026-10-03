@@ -19,29 +19,27 @@ venues that publish it — the feed the reconstruction engine was built for.
     | Depth shown | top 100 orders a side | top 100 orders a side | not checked (the book held 1 to 34 orders) | whole book | Bitstamp: whole book. Kraken: top 1,000 levels a side, and levels that leave it are kept |
     | Orders shown | resting only | resting only | resting only | resting only | — |
     | Update form | snapshots, about 10 a second | opening book, then every change | opening book, then every change | REST book, then every change | Bitstamp: REST book after 5 s, then changes. Kraken: changes |
-    | What can be missed | orders that come and go between snapshots | nothing | nothing | a second change to one order, which cryptofeed ignores (read in the code; not seen in 13 minutes) | a lost message |
+    | What can be missed | orders that come and go between snapshots | nothing | nothing | any change or cancel after an order's first change, which cryptofeed ignores; the trades restore the fills | a lost message |
     | After a lost message | the next snapshot corrects it | reconnects; new opening book | reconnects; new opening book | reconnects; new opening book | drifts until the level changes again |
     | Sequence | none | counts every message on the connection, so book rows skip numbers; only rises | counts every message on the connection, so book rows skip numbers; only rises | skips the changes cryptofeed ignores; only rises | none |
-    | Clocks | venue + receive | receive only | receive only | venue + receive; the opening book's rows carry a venue time later than their receive time | Bitstamp: venue + receive. Kraken: receive only |
-    | Crossing | matched book; failed the check in testing (0.125% crossed): Bitstamp's own snapshots can briefly show a bid at a resting ask's price | matched book; failed the check in testing (58% crossed; cause not found) | matched book | matched book | price levels |
-    | Trade sides named | maker only, from the tape | neither | neither | neither (the venue sends both ids; the capture does not read them yet) | — |
+    | Clocks | venue + receive | receive only | receive only | venue + receive; the opening book receive only | Bitstamp: venue + receive. Kraken: receive only |
+    | Crossing | matched book; failed the check in testing (0.125% crossed): Bitstamp's own snapshots can briefly show a bid at a resting ask's price | matched book; failed the check in testing (58% crossed; cause not found) | matched book | matched book; failed the check in testing (58% crossed): orders that stayed in the book after they had gone | price levels |
+    | Trade sides named | maker only, from the tape | neither | neither | maker only, from the tape | — |
     | Taker side | venue | venue | venue (not checked) | venue | venue |
-    | Fills | from the tape | not linked | not linked | not linked | — |
+    | Fills | from the tape | not linked | not linked | from the tape | — |
     | Trade tape gaps | a few trades from before the first snapshot | starts with the last 30 trades before the capture | not checked | none found | Bitstamp: a few trades from before the REST book |
     | Price grid | fixed (0.01 on BTC/USD) | five significant figures | fixed (0.01 on BTC/USD) | fixed (0.01 on BTC/AUD); some trade prices are off it | fixed (Bitstamp 0.01, Kraken 0.1 on BTC/USD) |
     | What the book means | normal | normal | normal | normal | normal |
     | Access | public | public | public | public | public; Coinbase needs an API key in cryptofeed 2.4.1; other venues not checked |
 
     Use it for an independent check of the top of the Bitstamp book, and for the
-    per-order book on Independent Reserve. Independent Reserve trades are not
-    yet linked to their orders, and `audit` can stop with an error on a capture
-    with stale orders
-    ([#311](https://github.com/mczielinski/ob-analytics/issues/311)). Don't use
-    it for Bitstamp order analysis (use the native [`bitstamp`](live-capture.md)
-    source) or for Bitfinex order lifetimes. On Bitfinex, Blockchain.com and
-    Independent Reserve the book rows skip sequence numbers without losing any,
-    so `audit` checks only that the numbers never go back; a lost message shows
-    as a `book_resyncs` warning instead (see
+    per-order book on Independent Reserve. There, the book can keep orders that
+    have gone ([see below](#independent-reserve-both-orders-of-a-trade)).
+    Don't use it for Bitstamp order analysis (use the native
+    [`bitstamp`](live-capture.md) source) or for Bitfinex order lifetimes. On
+    Bitfinex, Blockchain.com and Independent Reserve the book rows skip sequence
+    numbers without losing any, so `audit` checks only that the numbers never
+    go back; a lost message shows as a `book_resyncs` warning instead (see
     [Dropped messages and reconnects](#dropped-messages-and-reconnects)).
     [What each feed shows](../feeds.md) explains each property and compares
     every source.
@@ -153,6 +151,43 @@ capture is still useful as a check on the top of the native book. Each snapshot
 states the top 100 in full, so an error there is corrected within a tenth of a
 second, where a stream of changes keeps a lost message until the capture ends.
 
+### Independent Reserve: both orders of a trade
+
+Independent Reserve's trade messages name the bid and the offer of each trade
+(`BidGuid` and `OfferGuid`), and the source writes them to `trades.csv` as
+`buy_order_id` and `sell_order_id`. Its book reports every change, a fill
+included, so a fill reaches the capture twice: from the trade and from the
+book. The source records each fill once. The one exception is a full fill that
+the book reports before its trade: it reads as a cancel (see below). The two
+messages are compared on the time Independent Reserve sent them, which is the
+same for a trade and the book change it causes.
+
+- **The maker is always named.** It was resting, so the book shows it.
+- **A full fill that the book reports before its trade reads as a cancel.**
+  The book's removal is written at once, at the order's last size. Unlike on
+  Bitstamp, it is not held for the trade, because that would write it after
+  rows from later messages. In every capture so far, each trade arrived before
+  the book change it caused.
+- **The taker is named only when the book shows it.** Some takers appear in
+  the book as new limit orders, and most never do: in 40 minutes, 6 of 26
+  takers appeared. So the source declares `trade_attribution = maker_only`. In
+  a 20-minute capture, all 13 trades were linked to their maker.
+- **Later fills are not lost.** cryptofeed forgets an order after its first
+  change (see [What each feed shows](../feeds.md#timing-and-integrity)), so the
+  book does not report a second fill. The trade does, and the source records
+  it. A cancel after a change is still lost: the order stays in the book until
+  the capture ends. Once a trade happens at a price past it, `audit` reports
+  it as a [stale resting order](../data-quality.md#stale-resting-orders).
+- **Trades from the venue's other markets are left out of `trades.csv`.** A
+  BTC-AUD capture also gets BTC-NZD and BTC-SGD trades, at prices in those
+  currencies: 3 of 26 trades in 40 minutes. The source writes a trade to
+  `trades.csv` only when it is for the capture's pair, and `meta.json` counts
+  the others as `other_market_trades`. Their raw frames are still in
+  `raw.jsonl`. The venue keeps one book for all currencies, so these trades
+  name orders in the capture, and the source still records their fills, at the
+  order's price in the capture's currency. See [What each feed
+  shows](../feeds.md#trades).
+
 Order IDs are the venue's own throughout, exactly as published — integers on
 bitstamp, bitfinex and blockchain, UUID strings on independent_reserve. The
 shared schema keys orders by identity rather than by integer, so nothing is
@@ -160,22 +195,6 @@ re-labelled on the way through.
 
 At shutdown every order still resting is closed out with a synthetic
 `deleted`, so each ID in `orders.csv` has a complete lifecycle.
-
-### Independent Reserve: trades from other markets
-
-Independent Reserve sends a market's trade channel the trades of its other
-markets for the same coin. A BTC-AUD capture also gets BTC-NZD and BTC-SGD
-trades, priced in NZD and SGD: on 1 October 2026, 3 of 26 trades in 40 minutes.
-The source writes a trade to `trades.csv` only when it is for the capture's
-pair, and `meta.json` counts the others as `other_market_trades`. Their raw
-frames are still in `raw.jsonl`.
-
-The venue keeps one book for all its markets, so a trade from another market
-can fill an order in the capture's book. A trade left out of `trades.csv` still
-reports the fill of any order it names, at the order's price in the capture's
-currency. The source does not read the order ids in Independent Reserve trades
-yet ([#311](https://github.com/mczielinski/ob-analytics/issues/311)), so for
-now these fills show only in the next book.
 
 ## Dropped messages and reconnects
 

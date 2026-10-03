@@ -99,6 +99,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`audit` no longer stops on UUID order ids** (#311). A stale resting order
+  from an Independent Reserve capture made `audit` raise `ValueError`.
+  `StaleOrder.id` now holds the id as the feed writes it (`int | str`), and the
+  text and JSON reports print it.
+- **cryptofeed's Independent Reserve trades are linked to their orders**
+  (#311). The trades now carry both order ids (`BidGuid` and `OfferGuid`) in
+  `buy_order_id` and `sell_order_id`, and each fill is recorded from the trade,
+  as on Bitstamp. On a per-change book, a fill that the trade and the book both
+  report is recorded once, and a book message that repeats an order's size
+  writes no row.
 - **An Independent Reserve capture's `trades.csv` no longer holds other
   markets' trades** (#316). The venue sends a market's trade channel the
   trades of its other markets for the same coin, so a BTC-AUD capture also got
