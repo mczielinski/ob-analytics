@@ -142,7 +142,8 @@ What happens to the capture's book when a message is lost.
   still there. It shows up as stale orders, or as a price level the venue
   removed long ago.
 - **In the package:** `audit`'s `stale_orders` check at L3 and the crossing
-  check at L2. `meta.json` counts ccxt's `book_resyncs`.
+  check at L2. `meta.json` counts ccxt's and cryptofeed's `book_resyncs`, and
+  `audit` warns about them for a capture of several segments.
 
 **Why snapshots correct themselves and change streams drift.** A snapshot states
 the whole book, or the whole window, so it replaces whatever the capture held.
@@ -157,8 +158,8 @@ Whether the venue numbers its messages, and what a skipped number means.
 
 - **Values:** contiguous, where every message adds one and a skip is a lost
   message; only rises, where skips are normal; none.
-- **Sources:** cryptofeed's per-change L3 venues are contiguous, but see the
-  note below. ccxt's Binance book only rises. Databento only rises within one
+- **Sources:** cryptofeed's per-change L3 venues only rise; see the note
+  below. ccxt's Binance book only rises. Databento only rises within one
   instrument. Most other feeds send no number.
 - **Lets you conclude:** with a contiguous number, whether a message was lost.
 - **Stops you concluding:** with none, anything about lost messages. `audit`
@@ -170,9 +171,13 @@ cryptofeed's numbers on Bitfinex and Blockchain.com count every message on the
 connection, trades and heartbeats included. On Independent Reserve, cryptofeed
 passes on no row for a change to an order it does not hold. So the book rows
 skip numbers although nothing was lost: 60 skips in 5 minutes on Bitfinex, 20
-in 13 minutes on Independent Reserve. The cryptofeed source still declares these
-numbers contiguous, so `audit` reports the skips as gaps. Read those gaps with
-this in mind.
+in 13 minutes on Independent Reserve. The cryptofeed source declares these
+numbers as only rising, so `audit` checks only that they never go back.
+cryptofeed itself checks every message on the connection, and on a lost one it
+reconnects and takes a new opening book, which the capture counts as a
+`book_resyncs`. On Bitfinex and Blockchain.com the count starts again on the
+new connection; the capture records that step back as a `sequence_restarts`,
+and `audit` does not count it as out of order.
 
 ### Clocks
 
@@ -418,9 +423,9 @@ What you need to capture the feed.
 |---|---|---|---|---|---|---|
 | `bitstamp` | every change | a lost message | drifts: the order stays until the capture ends ([stale orders](data-quality.md#stale-resting-orders)) | none | venue + receive | diff feed |
 | cryptofeed, Bitstamp | snapshots, about 10 a second | orders that come and go between snapshots | the next snapshot corrects it | none | venue + receive | matched book; failed the check in testing |
-| cryptofeed, Bitfinex | opening book, then every change | nothing | cryptofeed reconnects and takes a new opening book | counts every message on the connection | receive only | matched book; failed the check in testing |
-| cryptofeed, Blockchain.com | opening book, then every change | nothing | cryptofeed reconnects and takes a new opening book | counts every message on the connection | receive only | matched book |
-| cryptofeed, Independent Reserve | REST book, then every change | any change or cancel after an order's first change, which cryptofeed ignores; the trades restore the fills | cryptofeed reconnects and takes a new opening book | contiguous, with skips cryptofeed makes itself | venue + receive; the opening book receive only | matched book; failed the check in testing (58% crossed) |
+| cryptofeed, Bitfinex | opening book, then every change | nothing | cryptofeed reconnects and takes a new opening book | counts every message on the connection; only rises | receive only | matched book; failed the check in testing |
+| cryptofeed, Blockchain.com | opening book, then every change | nothing | cryptofeed reconnects and takes a new opening book | counts every message on the connection; only rises | receive only | matched book |
+| cryptofeed, Independent Reserve | REST book, then every change | any change or cancel after an order's first change, which cryptofeed ignores; the trades restore the fills | cryptofeed reconnects and takes a new opening book | skips the changes cryptofeed ignores; only rises | venue + receive; the opening book receive only | matched book; failed the check in testing (58% crossed) |
 | `lobster` | every change | nothing (a file) | — | none | venue only | matched book |
 | `databento` | every change | nothing (a file) | — | venue's where sent; only rises | venue + Databento receive | matched book |
 | cryptofeed, Bitstamp L2 | REST book after 5 s, then changes | a lost message | drifts until the level changes again | none | venue + receive | price levels |

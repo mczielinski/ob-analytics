@@ -104,8 +104,7 @@ class SequenceKind(str, Enum):
     A source declares it so a gap check knows what a skipped number means:
 
     * :attr:`CONTIGUOUS` — every message adds exactly one.  A skipped number
-      is a dropped message.  This is the default, and what a per-message
-      counter (cryptofeed's L3 channels) gives.
+      is a dropped message.  This is the default.
     * :attr:`MONOTONIC` — the number only rises.  A skip is normal and says
       nothing about loss; only a step that does not rise is a fault.  CCXT's
       book ``nonce`` is this kind: on Binance it is the last update ID of a
@@ -113,7 +112,10 @@ class SequenceKind(str, Enum):
       several diffs before it returns a book.  Databento's ``sequence`` is
       too: it numbers every message on the venue's channel, but a file
       usually holds one instrument of that channel, and the trade and fill
-      records it carries become trades rather than book events.
+      records it carries become trades rather than book events.  So is
+      cryptofeed's: on Bitfinex and Blockchain.com it numbers every message
+      on the connection, trades and heartbeats too, and on Independent
+      Reserve cryptofeed passes on no change to an order it does not hold.
 
     Mixes in ``str`` so members compare and serialise as their value, as
     :class:`FeedType` does.

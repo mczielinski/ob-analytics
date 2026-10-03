@@ -53,6 +53,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `--source` names another: a cryptofeed L3 capture is read with
   `--source bitstamp`, whose feed shows more. Read the record with
   `recorded_source`, `recorded_feed_type` and `recorded_trade_attribution`.
+- **A cryptofeed reconnect is counted** (#309). cryptofeed reconnects by
+  itself when it loses a message and starts again from a new opening book. The
+  capture counts each new opening book as `book_resyncs` in `meta.json`, as the
+  ccxt source already did. On Bitfinex and Blockchain.com the venue's count
+  starts again too; the capture counts that step back as `sequence_restarts`,
+  and `audit` leaves it out of `sequence_out_of_order`, so a reconnect is
+  scored the same on every venue. Read it with `recorded_sequence_restarts`
+  and pass it to `data_quality_summary(sequence_restarts=...)`.
 
 ### Changed
 
@@ -82,6 +90,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `reconnects` count (now removed) recorded it. The ccxt source stopped its
   book or trade loop on a network error and ran on with half its feed. Both now
   end the stream with the error, and the capture starts a new segment.
+- **`manifest.json` counts resyncs, not missing sequence numbers** (#309).
+  Each segment, and the capture as a whole, records `book_resyncs` in place of
+  `sequence_missing`, and `audit` warns about them in a new `book_resyncs`
+  check. `dropped` now counts only the messages a source could not use.
+  `recorded_sequence_kind` returns `None` when a capture records no kind, as
+  `recorded_feed_type` does, in place of taking a `default`.
 
 ### Fixed
 
@@ -95,6 +109,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   as on Bitstamp. On a per-change book, a fill that the trade and the book both
   report is recorded once, and a book message that repeats an order's size
   writes no row.
+- **`audit` no longer reports lost messages on cryptofeed captures that lost
+  none** (#309). On Bitfinex and Blockchain.com cryptofeed's sequence number
+  counts every message on the connection, trades and heartbeats too, and on
+  Independent Reserve cryptofeed passes on no change to an order it does not
+  hold. So the book rows skip numbers, and `audit` reported each skip as a
+  `sequence_gaps` error. The cryptofeed source now declares
+  `sequence_kind = SequenceKind.MONOTONIC` and records it in `meta.json`, so
+  `audit` checks only that the number never goes back. `meta.json` reports
+  `sequence_out_of_order` in place of `sequence_gaps` and `sequence_missing`,
+  so a long capture's manifest no longer counts the skips as dropped messages.
+  A capture whose `meta.json` records no `sequence_kind`, such as one made
+  before this change, is checked the way the source that made it declares now,
+  not the way `--source` does.
 - **A quiet book no longer gives a blank depth heatmap** (#303). The heatmap
   leaves out each price level that does not change in the window. When no
   level changed, as in a short capture of a quiet prediction market, that left
@@ -203,8 +230,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   declares `sequence_kind = SequenceKind.MONOTONIC`, so `audit` checks only
   that the numbers never go back. `audit` reads a source's declared
   `sequence_kind` when no capture `meta.json` records one; read it with the
-  new `sequence_kind_of`, and pass it to `recorded_sequence_kind` as its new
-  `default`.
+  new `sequence_kind_of`. `recorded_sequence_kind` returns `None` when the
+  capture records none, as `recorded_feed_type` does.
 
 - **A Bitstamp L3 capture through cryptofeed passes `audit`** (#284).
   cryptofeed's Bitstamp L3 channel is `detail_order_book`: a picture of the top

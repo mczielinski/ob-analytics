@@ -57,6 +57,8 @@ STUCK_SNAPSHOT = "stuck_snapshot"
 # Streams like OK, but each raw frame holds a UUID value and a Decimal key,
 # and every third one refers to itself, which JSON cannot hold.
 ODD_RAW = "odd_raw"
+# Streams like OK, and reports that it took a new opening book twice.
+RESYNCED = "resynced"
 ODD_GUID = UUID("b3cb9a0f-8db9-4965-ba74-9400530797a8")
 
 
@@ -218,7 +220,8 @@ class _ScriptedSource:
         self._open.clear()
 
     def diagnostics(self) -> dict[str, Any]:
-        return {"closed_cleanly": self._closed}
+        resyncs = 2 if self._behaviour == RESYNCED else 0
+        return {"closed_cleanly": self._closed, "book_resyncs": resyncs}
 
 
 def _factory(plan: list[str]):
@@ -789,6 +792,20 @@ class TestManifest:
         failed = {c.name for c in gappy.manifest.checks() if not c.passed}
         assert failed == {"capture_gaps"}
         assert "Capture summary" in gappy.manifest.render()
+
+    def test_resyncs_are_counted_and_flagged(self, tmp_path):
+        run = _capture(tmp_path, [RESYNCED], seconds=0.4)
+        manifest = run.manifest
+        assert manifest.segments[0].book_resyncs == 2
+        assert manifest.book_resyncs == 2
+        assert manifest.dropped == 0
+        (check,) = [c for c in manifest.checks() if not c.passed]
+        assert check.name == "book_resyncs"
+        assert check.severity.value == "warning"
+        assert "book resyncs          : 2" in manifest.render()
+        read = read_manifest(run.out_dir)
+        assert read is not None
+        assert read.to_dict() == manifest.to_dict()
 
 
 # ---------------------------------------------------------------------------
