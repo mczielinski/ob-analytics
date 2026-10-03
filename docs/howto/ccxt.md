@@ -32,9 +32,8 @@ becomes an ob-analytics source by passing a venue id — no per-venue code.
     open their own pages with them; Kraken has no page, so its values are above.
     Use the ccxt source for depth, spread and trades on the widest range of
     venues, prediction markets included. Don't use it for single orders (it is
-    L2), for events shorter than one update, or for Coinbase trade signs, which
-    are reversed. [What each feed shows](../feeds.md) explains each property and
-    compares every source.
+    L2) or for events shorter than one update. [What each feed
+    shows](../feeds.md) explains each property and compares every source.
 
 Install the optional `[ccxt]` extra (CCXT Pro ships inside `ccxt`) and use the
 `capture` verb with `--exchange`:

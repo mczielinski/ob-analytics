@@ -303,11 +303,15 @@ Whether a trade's buy or sell comes from the venue or is worked out.
 - **In the package:** the trades `direction` column, and
   [trade signs](api/trade_sign.md) when there is no side.
 
-**ccxt's Coinbase sides are reversed.** Coinbase reports the side of the
-**maker**, and ccxt passes it on as the taker's side. In a test capture, 93% of
-trades marked `buy` printed at or below the best bid, and 96% of trades marked
-`sell` at or above the best ask. Every other source's side named the taker.
-Reverse the signs of a Coinbase capture before you use them.
+**The ccxt source reverses Coinbase's sides.** Coinbase reports the side of
+the **maker**, and ccxt passes it on unchanged. In a test capture that recorded
+ccxt's side, 93% of trades marked `buy` printed at or below the best bid, and
+96% of trades marked `sell` at or above the best ask. So the ccxt source
+reverses the side of each Coinbase trade, and `trades.csv` names the taker, as
+for every other source. `meta.json` records `"trade_side_reversed": true`. A
+Coinbase capture whose `meta.json` has no `trade_side_reversed` was made before
+this change and still holds the maker's side: reverse its signs before you use
+them.
 
 ### Fills
 
@@ -479,7 +483,7 @@ Notes on this table:
 | cryptofeed, Coinbase L2 | — | — | not checked | — | not checked |
 | cryptofeed, other L2 venues | — | — | not checked | — | not checked |
 | ccxt, Binance | — | — | venue (the `m` flag) | — | none |
-| ccxt, Coinbase | — | — | **reversed**: Coinbase names the maker's side; reverse the signs before use | — | starts with trades from before the capture |
+| ccxt, Coinbase | — | — | venue; Coinbase names the maker's side, so the capture reverses it | — | starts with trades from before the capture |
 | ccxt, Kraken | — | — | venue | — | none |
 | ccxt, Kalshi | — | — | venue (buy = the taker bought Yes) | — | polled; trades from before the opening book dropped |
 | ccxt, Polymarket | — | — | venue | — | repeated trades removed |
