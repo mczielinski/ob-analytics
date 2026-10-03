@@ -37,8 +37,11 @@ it to a self-contained HTML page.
 
 ## Extra panels
 
-Build optional bar, flow-toxicity, transaction-cost and LOBSTER panels and
-append them to `model.analytics` before rendering:
+The built-in [metrics](metrics.md) (VPIN, Kyle's λ, order flow imbalance, the
+OFI horizon graph and the L1 quote) already have cards, with their default
+settings. Build a panel yourself to add bars, transaction costs, LOBSTER
+trading halts, or a flow-toxicity face from a frame you computed with other
+settings, and append it to `model.analytics` before rendering:
 
 ```python
 model = build_gallery_model(result)

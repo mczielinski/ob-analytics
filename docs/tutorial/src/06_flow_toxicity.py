@@ -329,12 +329,22 @@ for reason in vpin_real.attrs["diagnostics"]:
 #     you must *guess* the side (the tick rule, Lee–Ready), and the
 #     guess's errors flow straight into every metric on this page.
 #
-# ## There is no metrics registry
+# ## Metrics from a result, and metrics of your own
 #
-# Unlike loaders or plot backends, a flow metric is not a plugin — it is
-# just a function over a trades DataFrame. To add your own, write the
-# function. Here is Amihud's (2002) illiquidity, |return| per unit
-# volume, in four lines:
+# Everything above called the functions directly on a trades table. From
+# a pipeline result, the same measurements are also *registered metrics*:
+# each has a name, runs over the result, and draws as a plot.
+# `result.metric(name)` returns the table and `result.plot(name)` draws
+# it, with the function's defaults unless you pass a setting:
+
+# %%
+fig = result.plot("kyle_lambda")  # the same fit as kyle_real above
+
+# %% [markdown]
+# The registered names are `vpin`, `kyle_lambda`, `order_flow_imbalance`
+# and `ofi_horizon`, plus `l1_ticker`, the quote from chapter 1.
+# A flow metric is still just a function over a trades table. Here is
+# Amihud's (2002) illiquidity, |return| per unit volume, in four lines:
 
 
 # %%
@@ -348,11 +358,12 @@ amihud(tape).dropna().round(5)
 
 # %% [markdown]
 # It rises in the accumulation windows for the same reason λ does —
-# price moving on volume — and it plugs into the same plotting and
-# gallery machinery as the built-ins (wrap it in a panel builder; see
-# [Extending ob-analytics](../extending.md)). The point of the whole
-# chapter: these are ordinary functions over a trades table, and on a
-# small tape you can check every number by hand.
+# price moving on volume. To make it a metric like the built-ins, wrap it
+# in a small class and register it with `register_metric`; it then shows
+# in `available_concepts`, draws with `result.plot("amihud")` and gets a
+# gallery card (see [Extending ob-analytics](../extending.md#4-a-new-metric)).
+# The point of the whole chapter: these are ordinary functions over a
+# trades table, and on a small tape you can check every number by hand.
 #
 # **Next:** [The visualization system](07_visualization_system.md) — the
 # concepts, levels and backends behind every figure in this tutorial, and

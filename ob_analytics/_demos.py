@@ -25,7 +25,6 @@ from ob_analytics.visualization.gallery import (
     build_gallery_model,
     display_result,
     generate_gallery,
-    ofi_horizon_panel,
     trading_halts_panel,
     transaction_costs_panel,
 )
@@ -113,20 +112,16 @@ def _bars_panels(trades: pd.DataFrame) -> list[PlotSpec]:
 def _lobster_analytics_panels(
     result: PipelineResult, halts: pd.DataFrame | None
 ) -> list[PlotSpec]:
-    """Build the LOBSTER-only analytic panels: trading halts and OFI horizon.
+    """Build the LOBSTER-only analytic panel: trading halts.
 
     Trading halts draws trade price as a line with halt bands overlaid, so it
     needs the same display-unit trades as every other panel in the gallery
-    (see :func:`display_result`). The OFI horizon panel instead plots a
-    buy/sell volume ratio in ``[-1, 1]``; the lot-to-base-asset scale factor
-    cancels in that ratio, so raw-tick trades give the same numbers there.
+    (see :func:`display_result`).
     """
     panels: list[PlotSpec] = []
     if halts is not None and not halts.empty:
         display_trades = display_result(result).trades
         panels.append(trading_halts_panel(display_trades, halts))
-    if not result.trades.empty:
-        panels.append(ofi_horizon_panel(result.trades))
     return panels
 
 

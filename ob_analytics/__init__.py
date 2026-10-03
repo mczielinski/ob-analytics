@@ -104,6 +104,7 @@ from ob_analytics.flow_toxicity import (
     KyleLambdaResult,
     compute_kyle_lambda,
     compute_vpin,
+    ofi_by_horizon,
     order_flow_imbalance,
     vpin_bucket_volume,
 )
@@ -283,6 +284,7 @@ __all__ = [
     "load_data",
     "load_metric_plugins",
     "load_source_plugins",
+    "ofi_by_horizon",
     "order_flow_imbalance",
     "register_bar_rule",
     "register_feature",

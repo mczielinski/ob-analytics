@@ -126,8 +126,7 @@ for ax, (concept, level, make_payload) in zip(axes.ravel(), catalogue):
 fig.tight_layout()
 
 # %% [markdown]
-# Six of the fourteen concepts, one capture, one loop. The full set,
-# organised:
+# Six of the concepts, one capture, one loop. The full set, organised:
 #
 # | Question | Concepts | Introduced |
 # |---|---|---|
@@ -135,12 +134,20 @@ fig.tight_layout()
 # | What traded? | `trade_tape`, `trade_size`, `events_histogram` | [1](01_from_price_to_book.md) |
 # | How much liquidity, and where? | `volume_percentiles`, `liquidity_at_touch`, `price_view` | [5](05_depth.md) |
 # | Who placed, waited, cancelled, filled? | `order_activity`, `order_outcome`, `queue_position`, `cancellations` | [2](02_three_resolutions.md), [4](04_lifecycles.md) |
+# | What do measurements of the run show? | `l1_ticker`, `vpin`, `kyle_lambda`, `order_flow_imbalance`, `ofi_horizon` | [1](01_from_price_to_book.md), [6](06_flow_toxicity.md) |
 #
-# A fifth family — the **flow-toxicity** faces `vpin`, `kyle_lambda`,
-# `order_flow_imbalance`, `ofi_horizon` from [chapter 6](06_flow_toxicity.md)
-# — sits slightly apart: they plot a *computed metric*, not the result
-# directly, so they do not appear in `available_concepts` and are drawn
-# the long way (next section).
+# The last row is the **metrics**. A metric is computed from the
+# finished run, not read straight off it, and it has no resolution:
+# `available_concepts` lists each one with an empty level list. They
+# draw with the same one-liner as the rest:
+
+# %%
+fig = result.plot("l1_ticker")
+
+# %% [markdown]
+# `l1_ticker` draws the best bid, best ask and last trade over time. Give
+# it an instant, `result.plot("l1_ticker", at=...)`, and it draws the
+# quote card from chapter 1 for that instant instead.
 #
 # ## Under the one-liner: `plot` and `prepare`
 #
@@ -158,7 +165,7 @@ fig = plot("trade_tape", level="L2", **payload)
 # renders it. `result.plot("trade_tape", "L2")` is precisely these two
 # lines with the arguments filled in for you.
 #
-# Reach past the one-liner for three things, all of which appeared
+# Reach past the one-liner for two things, both of which appeared
 # earlier in this tutorial:
 #
 # 1. **Custom arguments** to a face — the `col_bias`, `start_time`,
@@ -166,13 +173,16 @@ fig = plot("trade_tape", level="L2", **payload)
 # 2. **`ax=`** to place a face in a multi-panel figure — every keyframe
 #    strip and story composite in this tutorial is `plot(..., ax=...)`
 #    into a grid.
-# 3. **Concepts that need a computed input** — the toxicity faces:
+#
+# A metric's settings do not need either step. A keyword to the one-liner
+# goes to the calculation or to the picture, whichever names it. Here
+# `bucket_volume` sizes the VPIN buckets (twenty of them across this
+# capture, not the default one) and `threshold` places the alert line:
 
 # %%
-from ob_analytics.flow_toxicity import compute_vpin
-
-vpin = compute_vpin(result.trades, bucket_volume=result.trades["volume"].sum() / 20)
-fig = plot("vpin", **prepare.vpin(vpin, threshold=0.7))
+fig = result.plot(
+    "vpin", bucket_volume=result.trades["volume"].sum() / 20, threshold=0.7
+)
 
 # %% [markdown]
 # The progression across this whole tutorial has been exactly this

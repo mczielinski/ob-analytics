@@ -179,7 +179,7 @@ class PipelineResult:
 
         return {name: pl.from_arrow(table) for name, table in self.to_arrow().items()}
 
-    def metric(self, name: str) -> pd.DataFrame:
+    def metric(self, name: str, **settings: Any) -> pd.DataFrame:
         """Compute the registered metric *name* over this result.
 
         Metrics are computed on demand, not stored: a run pays for a metric
@@ -191,6 +191,11 @@ class PipelineResult:
         name : str
             Registered metric name (case-insensitive), e.g. ``"amihud"``.
             See :func:`~ob_analytics.metrics.list_metrics`.
+        **settings
+            Keyword arguments for the metric's
+            :meth:`~ob_analytics.protocols.Metric.compute`, e.g.
+            ``result.metric("vpin", bucket_volume=5.0)``.  Leave them out to
+            use the metric's defaults.
 
         Returns
         -------
@@ -206,7 +211,7 @@ class PipelineResult:
         """
         from ob_analytics.metrics import get_metric
 
-        return get_metric(name).compute(self)
+        return get_metric(name).compute(self, **settings)
 
     def metrics(self) -> dict[str, pd.DataFrame]:
         """Compute every registered metric that applies to this run.
