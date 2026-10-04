@@ -24,6 +24,7 @@ from ob_analytics._utils import (
     validate_non_empty,
 )
 from ob_analytics.config import PipelineConfig
+from ob_analytics.schemas import time_order_keys
 
 if TYPE_CHECKING:
     from ob_analytics.analytics import OrderBookSnapshot
@@ -299,13 +300,18 @@ class DepthMetricsEngine:
         )
         validate_non_empty(depth, "DepthMetricsEngine.compute")
 
-        # Deterministic playback order (issue #154): a stable sort on the
-        # receive clock.  The documented same-instant total order
-        # (``schemas.time_order_keys``: timestamp, then sequence / event_id) is
-        # applied by the per-order reconstructions today; the price-level engine
-        # will adopt the full key when it is separated and re-implemented
-        # (#136 / #104 / #138), validated against the alternate backend.
-        ordered = depth.sort_values(by="timestamp", kind="stable")
+        # Replay in the canonical event order (``schemas.time_order_keys``:
+        # timestamp, then sequence / event_id / ingest_seq where present), the
+        # order the per-order reconstructions use.  Each output row is then the
+        # book after the event it names, which is what a reader looking for
+        # "the book just before this event" relies on.  Sorting on the
+        # timestamp alone replayed one instant's rows bids first, then asks,
+        # by price.  The crossed-level eviction in ``PriceLevelBook.update``
+        # depends on replay order, so the two orders can end an instant on
+        # different books.  A frame with no tie-break column (a hand-built
+        # frame, or an L2 frame loaded without ``track_sequence``) keeps its
+        # own order within an instant, as before.
+        ordered = depth.sort_values(by=time_order_keys(depth), kind="stable")
 
         # Price is already an integer tick count (issue #155), so the engine
         # bins and compares levels on exact integers — no multiply-and-round.
@@ -464,7 +470,12 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
     Returns
     -------
     pandas.DataFrame
-        A pandas DataFrame with the cumulative volume for each price level.
+        A pandas DataFrame with the cumulative volume for each price level:
+        one row per change to a level, holding the level's volume after the
+        event named by ``event_id``.  Rows are in the canonical event order
+        (:func:`~ob_analytics.schemas.time_order_keys`), and the ``sequence``
+        and ``ingest_seq`` columns are carried over from *events* when it has
+        them, so the depth rows sort the same way the events do.
     """
     validate_columns(
         events,
@@ -484,6 +495,13 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
     )
     validate_non_empty(events, "price_level_volume")
 
+    # The tie-break columns of the event order other than ``event_id``.  They
+    # travel with each row so the depth rows can be put in the same order as
+    # the events.
+    order_keys = [
+        k for k in time_order_keys(events) if k not in ("timestamp", "event_id")
+    ]
+
     def directional_price_level_volume(dir_events: pd.DataFrame) -> pd.DataFrame:
         cols = [
             "event_id",
@@ -494,6 +512,7 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
             "volume",
             "direction",
             "action",
+            *order_keys,
         ]
 
         added_volume = dir_events[
@@ -568,6 +587,7 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
                 "fill",
                 "direction",
                 "action",
+                *order_keys,
             ]
         ]
         filled_volume = filled_volume.copy()
@@ -629,21 +649,28 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
         volume_deltas = pd.concat(
             [added_volume, cancelled_volume, filled_volume, reduced_volume, *amended]
         )
+        # Each level's running total is taken in event order, so every row
+        # holds the level's volume after its own event.  Sorting on timestamp
+        # alone would leave the changes one instant makes to a level in the
+        # order the frames were joined above, and a replay in event order
+        # would then end the instant on the wrong volume.
         volume_deltas = volume_deltas.sort_values(
-            by=["price", "timestamp"], kind="stable"
+            by=["price", *time_order_keys(volume_deltas)], kind="stable"
         )
 
         volume_deltas["volume"] = volume_deltas.groupby("price")["volume"].cumsum()
         volume_deltas["volume"] = volume_deltas["volume"].clip(lower=0)
 
-        return volume_deltas[["event_id", "timestamp", "price", "volume", "direction"]]
+        return volume_deltas[
+            ["event_id", "timestamp", "price", "volume", "direction", *order_keys]
+        ]
 
     bids = events[events["direction"] == "bid"]
     depth_bid = directional_price_level_volume(bids)
     asks = events[events["direction"] == "ask"]
     depth_ask = directional_price_level_volume(asks)
     depth_data = pd.concat([depth_bid, depth_ask])
-    return depth_data.sort_values(by="timestamp", kind="stable")
+    return depth_data.sort_values(by=time_order_keys(depth_data), kind="stable")
 
 
 def filter_depth(
@@ -766,9 +793,10 @@ def price_level_snapshots(
     )
     instants = [_engine_frames.instant_ns(t, like=depth["timestamp"]) for t in times]
 
-    # The same playback order as DepthMetricsEngine.compute: a stable sort on
-    # the receive clock.
-    ordered = depth.sort_values(by="timestamp", kind="stable")
+    # The same playback order as DepthMetricsEngine.compute: the canonical
+    # event order, so the book at the end of an instant is the one the depth
+    # summary ends that instant on.
+    ordered = depth.sort_values(by=time_order_keys(depth), kind="stable")
     stamps = _engine_frames.nanoseconds(ordered["timestamp"])
     price_values = ordered["price"].to_numpy()
     volume_values = ordered["volume"].to_numpy()

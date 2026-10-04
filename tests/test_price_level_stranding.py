@@ -326,6 +326,37 @@ class TestUnaffectedCases:
         assert _final_volume(depth, 10_000, "ask") == 500.0
 
 
+class TestSameInstantOrder:
+    """Each row holds the level's volume after its own event.
+
+    The changes one instant makes to a level are summed in event order, so a
+    replay in that order ends the instant on the level's true volume.
+    """
+
+    # Order 1 rests 500 at 10_000.  At t=1 it is deleted (event 2) and order 2
+    # joins the level with 400 (event 3).
+    ROWS: ClassVar[list[tuple]] = [
+        (1, 1, 0.0, 10_000, 500, "bid", "created", 0),
+        (2, 1, 1.0, 10_000, 500, "bid", "deleted", 0),
+        (3, 2, 1.0, 10_000, 400, "bid", "created", 0),
+    ]
+
+    def test_rows_hold_the_level_after_each_event(self):
+        depth = price_level_volume(_events(self.ROWS))
+        assert list(depth["event_id"]) == [1, 2, 3]
+        assert list(depth["volume"]) == [500, 0, 400]
+
+    def test_the_rebuilds_agree(self):
+        _assert_rebuilds_agree(self.ROWS)
+
+    def test_the_venue_sequence_travels_with_the_rows(self):
+        events = _events(self.ROWS).assign(
+            sequence=pd.array([10, 11, 12], dtype="Int64")
+        )
+        depth = price_level_volume(events)
+        assert list(depth["sequence"]) == [10, 11, 12]
+
+
 class TestAgainstTheBundledSample:
     """No level may hold volume that no order is resting on."""
 

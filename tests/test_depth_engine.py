@@ -300,6 +300,90 @@ def test_interval_sums_sparse_matches_dense():
         )
 
 
+class TestSameInstantOrder:
+    """Rows that share an instant are replayed in the canonical event order.
+
+    The order is ``schemas.time_order_keys``: the timestamp, then the
+    ``event_id`` between rows at one instant.  Each depth_summary row is then
+    the book after the event it names, as the per-order rebuild sees it.
+    """
+
+    def test_rows_at_one_instant_replay_by_event_id(self):
+        # Listed bid first, but the ask (event 1) came first.  In event order
+        # the later bid crosses the ask and evicts it; replayed as listed, the
+        # ask would evict the bid instead.
+        depth = pd.DataFrame(
+            {
+                "event_id": [2, 1],
+                "timestamp": pd.to_datetime(["2015-01-01 00:00:01"] * 2),
+                "price": [100, 99],
+                "volume": [5, 3],
+                "direction": ["bid", "ask"],
+            }
+        )
+        result = DepthMetricsEngine().compute(depth)
+        assert list(result["event_id"]) == [1, 2]
+        last = result.iloc[-1]
+        assert (last["best_bid_price"], last["best_ask_price"]) == (100, 0)
+
+    def test_every_row_matches_the_per_order_rebuild(self):
+        """On a feed that is never crossed, the two rebuilds agree after every event."""
+        import dataclasses
+
+        from ob_analytics import engine
+        from ob_analytics._engine_frames import to_order_events
+        from ob_analytics.pipeline import Pipeline
+        from ob_analytics.schemas import time_order_keys
+        from ob_analytics.synth import (
+            SynthConfig,
+            SyntheticLoader,
+            SyntheticTradeSource,
+            generate_session,
+        )
+
+        session = generate_session(SynthConfig(seed=3, duration=60.0))
+        result = Pipeline(
+            loader=SyntheticLoader(session),
+            trade_source=SyntheticTradeSource(session),
+        ).run(source=None)
+        events = result.events.sort_values(
+            time_order_keys(result.events), kind="stable"
+        ).reset_index(drop=True)
+        stream = to_order_events(events, market=True)
+        position = pd.Series(np.arange(len(events)), index=events["event_id"])
+
+        def best_after(event_id: int) -> tuple[int, int]:
+            # The per-order book after every event up to and including this one.
+            end = int(position[event_id]) + 1
+            upto = dataclasses.replace(
+                stream,
+                **{
+                    f.name: getattr(stream, f.name)[:end]
+                    for f in dataclasses.fields(stream)
+                    if getattr(stream, f.name) is not None
+                },
+            )
+            book = engine.book_state(upto, at=int(stream.timestamp[end - 1]))
+            bid = stream.price[book.bids.row[0]] if book.bids.row.size else 0
+            ask = stream.price[book.asks.row[0]] if book.asks.row.size else 0
+            return int(bid), int(ask)
+
+        # An event can write more than one depth row; its last row is the book
+        # once the whole event is applied.
+        per_event = result.depth_summary.groupby("event_id", sort=False).tail(1)
+        assert len(per_event) > 500
+        disagree = [
+            event_id
+            for event_id, bid, ask in zip(
+                per_event["event_id"].tolist(),
+                per_event["best_bid_price"].tolist(),
+                per_event["best_ask_price"].tolist(),
+            )
+            if (bid, ask) != best_after(event_id)
+        ]
+        assert disagree == []
+
+
 class TestPriceLevelBook:
     """The book at L2 that DepthMetricsEngine and the book replay share (#117)."""
 
@@ -365,6 +449,24 @@ class TestPriceLevelSnapshots:
             assert (bids["volume"].iloc[0] if len(bids) else 0) == row["best_bid_vol"]
             assert (asks["price"].iloc[-1] if len(asks) else 0) == row["best_ask_price"]
             assert (asks["volume"].iloc[-1] if len(asks) else 0) == row["best_ask_vol"]
+
+    def test_rows_at_one_instant_replay_in_event_order(self):
+        # Listed bid first, but the ask (event 1) came first, so the bid
+        # evicts it -- as in the depth summary.
+        t = pd.Timestamp("2026-01-01 00:00:01Z")
+        depth = pd.DataFrame(
+            {
+                "event_id": [2, 1],
+                "timestamp": [t, t],
+                "price": [100, 99],
+                "volume": [5, 3],
+                "direction": ["bid", "ask"],
+            }
+        )
+        (snap,) = price_level_snapshots(depth, [t])
+        last = depth_metrics(depth).iloc[-1]
+        assert snap["bids"]["price"].tolist() == [last["best_bid_price"]] == [100]
+        assert snap["asks"].empty and last["best_ask_price"] == 0
 
     def test_crossed_level_is_evicted(self):
         depth = _replay_depth()
