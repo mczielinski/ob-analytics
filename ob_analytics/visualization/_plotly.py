@@ -841,6 +841,18 @@ def _book_replay_figure_class() -> type:
         def _repr_mimebundle_(self, *args: Any, **kwargs: Any) -> dict[str, str]:
             return {"text/html": self._repr_html_()}
 
+        def _ipython_display_(self) -> None:
+            # IPython calls this before _repr_mimebundle_, and Plotly's own
+            # version sends the figure through its renderer, without the
+            # script.  Outside a notebook (terminal IPython) there is no HTML
+            # to draw into, so show() opens the browser instead, as Plotly does.
+            if not _in_notebook():
+                self.show()
+                return
+            from IPython.display import display
+
+            display(self._repr_mimebundle_(), raw=True)
+
         def show(self, *args: Any, **kwargs: Any) -> None:
             if not args and "renderer" not in kwargs and _in_notebook():
                 from IPython.display import display

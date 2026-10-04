@@ -378,6 +378,57 @@ pd.DataFrame(
 #     `pre-existing` nor `unknown` is a bug; both are the classifier
 #     refusing to invent evidence it does not have.
 #
+# ## Exercise: what if Eve had not flashed?
+#
+# Eve posts a bid of 1 lot at 100 at t=45 and cancels it 800 ms later.
+# Suppose she leaves it in the book. Before you run anything, predict:
+#
+# 1. Which orders does Sam's sell of 3 lots at t=56 fill, and at which
+#    prices?
+# 2. Eve's outcome and type.
+# 3. Ivy's outcome, and how much of her bid fills.
+#
+# Write the session with `toy_orders()` and `match_toy_orders` (see
+# [Change the script](00_toy_session.md#change-the-script));
+# `dataclasses.replace(orders["Eve"], cancel_at=None)` removes the
+# cancellation. Then check your predictions with `set_order_types` and
+# `order_lifecycles`, as at the start of the chapter.
+
+# %% tags=["solution"]
+from dataclasses import replace
+
+from ob_analytics import match_toy_orders, toy_orders
+
+orders = toy_orders()
+orders["Eve"] = replace(orders["Eve"], cancel_at=None)
+eve_events, eve_trades = match_toy_orders(orders)
+eve_events = set_order_types(eve_events, eve_trades)
+sweep = eve_trades[eve_trades["taker_actor"] == "Sam"]
+print(sweep[["price", "volume", "maker_actor"]].to_string(index=False))
+print()
+eve_lc = order_lifecycles(eve_events)
+eve_lc.insert(
+    0, "actor", eve_lc["id"].map(dict(zip(eve_events["id"], eve_events["actor"])))
+)
+eve_lc = eve_lc.set_index("actor").loc[["Eve", "Alice", "Ivy"]]
+print(eve_lc[["placed_vol", "filled_vol", "outcome", "type"]].to_string())
+assert list(sweep["maker_actor"]) == ["Eve", "Alice"]
+assert eve_lc.loc["Eve", "type"] == "resting-limit"
+assert eve_lc.loc["Ivy", "filled_vol"] == 0
+
+# %% [markdown] tags=["solution"]
+# When Sam arrives, Eve's bid at 100 is the best bid: Hana's last lot at
+# 101 was taken by Iris at t=52. So Sam fills Eve first, at 100, then
+# Alice's 2 lots at 99, and his 3 lots are gone before Ivy's turn.
+#
+# Eve's outcome becomes `filled` and her type `resting-limit`: the same
+# order, placed at the same time, changes class because of how it ended.
+# `flashed-limit` describes what happened to an order, not what its
+# owner meant to do. Ivy, half-filled in the original session, now ends
+# `resting` with nothing filled: one order that stayed in the book
+# changed the outcome of an order behind it in the queue.
+
+# %% [markdown]
 # **Next:** [Depth, spread and liquidity](05_depth.md) — from individual
 # orders to aggregate depth.
 #

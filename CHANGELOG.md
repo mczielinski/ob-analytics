@@ -10,6 +10,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Exercises and an editable toy book in the tutorial** (#121). Chapters 2,
+  4 and 6 end with exercises: where a new order queues and which order keeps
+  the Bitstamp book crossed (chapter 2), what happens if Eve does not cancel
+  (chapter 4), and how the VPIN bucket size changes the result (chapter 6).
+  Each solution is collapsed until the reader opens it, and runs when the
+  documentation is built, so a wrong answer fails the build. The toy session
+  page now has a book replay to step through, and shows how to rewrite the
+  session: `toy_orders()` returns its twelve orders as `ToyOrder`s keyed by
+  actor, and `match_toy_orders(orders)` matches an edited script by
+  price–time priority and returns its events and trades in the layout of
+  `toy_events()` and `toy_trades()`.
 - **Run a large input one time window at a time** (#116).
   `Pipeline.run_windows(source, boundaries, output)` cuts one input at the
   given times and runs the depth stages on one window at a time, so their peak
@@ -141,6 +152,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The book replay keeps its click script in a notebook** (#121). IPython
+  displayed a `BookReplayFigure` through Plotly's own renderer, which drops
+  the script that makes trades clickable, and the tutorial build dropped the
+  figure entirely. The figure now displays as HTML in a notebook, as
+  documented.
 - **`aggressiveness_bps` is measured against the book at the order's own
   time.** `order_aggressiveness` found the book standing before each order by
   taking the `depth_summary` row with the next-lower `event_id`. That is only

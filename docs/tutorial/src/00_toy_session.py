@@ -108,6 +108,75 @@ for axk in key_axes[1:]:
 classified.groupby("actor", observed=True)["type"].first().sort_values()
 
 # %% [markdown]
+# ## Step through it yourself
+#
+# The keyframes above show the book every five seconds. The replay below
+# shows it every second, and you control it: drag the slider, or press a
+# play button (`Play 1×` is real time, so the whole minute takes a
+# minute). The ladder on the left is the L3 book, one segment per order,
+# queued in arrival order. The panel on the right is the trade tape, with
+# a line at the time on screen. Click a trade to jump to the book just
+# before it, with the price level it took marked.
+
+# %%
+replay = prepare.book_replay(
+    events=classified, trades=trades, per_order=True, price_levels=3
+)
+plot("book_replay", level="L3", backend="plotly", **replay)
+
+# %% [markdown]
+# Things to look for: Eve's bid at 100 exists for exactly one frame
+# (t=45); Hana's order at 101 takes Bob's last two lots and rests one lot
+# for four seconds (t=48–51); and after Sam's sweep (t=56–57), only half
+# of Ivy is left at 99.
+#
+# ## Change the script
+#
+# The toy session is a script of twelve orders, and you can rewrite it.
+# `toy_orders()` returns the script as a dictionary of `ToyOrder`s keyed
+# by actor. Add an order, remove one, or change when an order is
+# cancelled, then `match_toy_orders` matches the new script by
+# price–time priority and returns its events and trades, in the same
+# layout as `toy_events()` and `toy_trades()`. A market order is a limit
+# order priced through the touch, as Frank's bid at 101 is.
+#
+# Here a new trader, Jo, posts a bid of 1 lot at 100 at t=10, and Dana
+# never places her order:
+
+# %%
+from ob_analytics import ToyOrder, match_toy_orders, toy_orders
+
+orders = toy_orders()
+orders["Jo"] = ToyOrder(at=10, direction="bid", price=100, volume=1)
+del orders["Dana"]
+edited_events, edited_trades = match_toy_orders(orders)
+edited_trades[["timestamp", "price", "volume", "maker_actor", "taker_actor"]]
+
+# %% [markdown]
+# Jo's bid is now the best bid from t=10, so Sam's sell at t=56 fills Jo
+# first, at 100, and only then Alice at 99. Ivy, who was half-filled in
+# the original session, is not reached at all. The same two lines that
+# drew the first replay draw the edited one:
+
+# %%
+edited = set_order_types(edited_events, edited_trades)
+replay = prepare.book_replay(
+    events=edited, trades=edited_trades, per_order=True, price_levels=3
+)
+plot("book_replay", level="L3", backend="plotly", **replay)
+
+# %% [markdown]
+# One difference from the hand-written session: `match_toy_orders` fills
+# all of Sam's sell at t=56, as a matching engine would, where the
+# hand-written session prints Ivy's fill a second later so the keyframes
+# can show the book between the two fills. Every other event is the
+# same: `match_toy_orders(toy_orders())` rebuilds the toy session.
+#
+# Chapters 2, 4 and 6 end with exercises. In chapters 2 and 4 you change
+# this script, predict what happens, and check your prediction against
+# the library; each exercise has a solution you can open after you try
+# it.
+#
 # ## The same mechanics at full scale
 #
 # Everything above transfers unchanged to real data. The bundled sample

@@ -216,6 +216,42 @@ class TestFigure:
         assert "replay-trades:" in (tmp_path / "replay.html").read_text()
         assert "replay-trades:" in fig._repr_mimebundle_()["text/html"]
 
+    def test_notebook_display_carries_the_click_script(self, faces, level, monkeypatch):
+        # IPython calls _ipython_display_ before _repr_mimebundle_; Plotly's
+        # own one renders without the script (and the tutorial build, which
+        # keeps only the HTML, would lose the figure).
+        import IPython.display
+
+        from ob_analytics.visualization import _plotly
+
+        shown = []
+        monkeypatch.setattr(_plotly, "_in_notebook", lambda: True)
+        monkeypatch.setattr(
+            IPython.display, "display", lambda obj, **kw: shown.append((obj, kw))
+        )
+        _, fig = faces[level]
+        fig._ipython_display_()
+        ((bundle, kwargs),) = shown
+        assert kwargs == {"raw": True}
+        assert "replay-trades:" in bundle["text/html"]
+
+    def test_terminal_ipython_display_opens_the_browser(
+        self, faces, level, monkeypatch
+    ):
+        # Terminal IPython cannot draw HTML, so the figure is shown through
+        # Plotly's renderer, with the script, rather than as an HTML bundle.
+        import plotly.graph_objects as go
+
+        from ob_analytics.visualization import _plotly
+
+        shown = []
+        monkeypatch.setattr(_plotly, "_in_notebook", lambda: False)
+        monkeypatch.setattr(go.Figure, "show", lambda self, **kw: shown.append(kw))
+        _, fig = faces[level]
+        fig._ipython_display_()
+        (kwargs,) = shown
+        assert BOOK_REPLAY_SCRIPT in kwargs["post_script"]
+
 
 def test_frame_names_are_unique_below_a_second(tiny_result):
     data = _replay(tiny_result, interval="250ms")
