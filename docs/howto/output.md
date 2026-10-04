@@ -137,6 +137,18 @@ streaming views:
 fig = result.plot("depth_heatmap", backend="bokeh", col_bias=0.1)
 ```
 
+To step through the book over part of a run, draw the `book_replay`
+concept on Plotly. Drag the slider or press a play button, and click a trade
+to see the book just before it:
+
+```python
+fig = result.plot("book_replay", "L2", backend="plotly")
+fig.write_html("replay.html")
+```
+
+See [Book replay](../api/visualization.md#book-replay) for the speeds, the
+price range and the L3 face.
+
 Whole new backends can be registered by module path:
 
 ```python

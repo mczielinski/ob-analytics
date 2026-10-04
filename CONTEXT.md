@@ -98,7 +98,9 @@ _Avoid_: raw, unmodified, as-is
 
 **Uncross**:
 Remove crossed resting orders so a book reads `best_bid < best_ask`. A display
-choice, never the default.
+choice, never the default, with one exception: the L3 face of a book replay
+uncrosses by default, so that it shows the same market as the L2 face, which
+the depth table already uncrosses.
 
 ## The book
 
@@ -146,6 +148,12 @@ _Avoid_: ghost order, zombie order
 **Book snapshot**:
 The resting book at one point in time, as separate bid and ask tables.
 _Avoid_: state, image, frame
+
+**Book replay**:
+Book snapshots at one instant per interval across part of a run, shown one
+after another beside the trades. Named `book_replay`. Each step on screen is a
+frame, which holds one book snapshot.
+_Avoid_: animation, movie, playback (for the plot)
 
 ## Order events
 

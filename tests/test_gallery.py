@@ -684,15 +684,16 @@ class TestBuildGalleryModel:
             "order_outcome",
             "queue_position",
         } <= keys
-        # The five concepts that ship both an aggregate (L2/MBP) and a per-order
-        # (L3/MBO) face are the comparable ones: book_snapshot + depth_chart
-        # (aggregate vs per-order), cancellations (volume map vs age x distance),
-        # order_activity (event map vs lifecycle Gantt) and trade_tape (price tape
-        # vs executions + maker lifecycles).
+        # The six concepts that ship both an aggregate (L2/MBP) and a per-order
+        # (L3/MBO) face are the comparable ones: book_snapshot, depth_chart and
+        # book_replay (aggregate vs per-order), cancellations (volume map vs age x
+        # distance), order_activity (event map vs lifecycle Gantt) and trade_tape
+        # (price tape vs executions + maker lifecycles).
         comparable = {c.key for c in model.concepts if c.comparable}
         assert comparable == {
             "book_snapshot",
             "depth_chart",
+            "book_replay",
             "cancellations",
             "order_activity",
             "trade_tape",
