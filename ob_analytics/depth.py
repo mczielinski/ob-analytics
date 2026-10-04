@@ -1,22 +1,33 @@
 """Order book depth computation and metrics.
 
-Contains :class:`DepthMetricsEngine` for computing limit order book depth
-metrics, along with :func:`price_level_volume`, :func:`filter_depth`,
-:func:`depth_metrics` (backward-compatible wrapper), and :func:`get_spread`.
+Contains :class:`PriceLevelBook`, the book at L2 kept one depth row at a
+time; :class:`DepthMetricsEngine` for computing limit order book depth
+metrics on it, along with :func:`price_level_volume`, :func:`filter_depth`,
+:func:`depth_metrics` (backward-compatible wrapper), :func:`get_spread`, and
+:func:`price_level_snapshots`.
 """
 
+from __future__ import annotations
+
 import re
+from collections.abc import Iterable
+from datetime import datetime
 from functools import lru_cache
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
+from ob_analytics import _engine_frames
 from ob_analytics._utils import (
     validate_columns,
     validate_non_empty,
 )
 from ob_analytics.config import PipelineConfig
 from ob_analytics.schemas import time_order_keys
+
+if TYPE_CHECKING:
+    from ob_analytics.analytics import OrderBookSnapshot
 
 
 @lru_cache(maxsize=256)
@@ -87,6 +98,113 @@ def _interval_sums_sparse(
     return _interval_sums_sorted(idxs, vols, range_len, breaks)
 
 
+class PriceLevelBook:
+    """The book at L2: the size resting at each price level, kept one row at a time.
+
+    Each side is a pair of parallel numpy arrays sorted ascending by price, so
+    the best ask is the first entry of its side and the best bid the last.
+    Lookups are a ``searchsorted``, and evicting crossed levels is one slice.
+
+    :meth:`update` applies one row of the depth table: a positive volume sets
+    the size at that price, and zero removes the price level.  A positive
+    update also evicts every opposing price level it strictly crosses.  The
+    fresh quote is trusted over the older opposing level, whose delete is most
+    likely missing from the feed.  Equal prices are left alone, so a locked
+    book is kept.
+
+    :class:`DepthMetricsEngine` builds the depth summary on this class, so a
+    book kept here holds the depth summary's touch after every row.
+
+    Parameters
+    ----------
+    price_dtype : numpy dtype, optional
+        The dtype prices are held in: ``int64`` ticks (the default), or
+        ``float64`` for a depth table already converted to the quote currency.
+
+    Attributes
+    ----------
+    bid_prices, bid_volumes : numpy.ndarray
+        The bid side, ascending by price.
+    ask_prices, ask_volumes : numpy.ndarray
+        The ask side, ascending by price.
+    """
+
+    __slots__ = ("ask_prices", "ask_volumes", "bid_prices", "bid_volumes")
+
+    def __init__(self, price_dtype: type | np.dtype = np.int64) -> None:
+        self.ask_prices: np.ndarray = np.empty(0, dtype=price_dtype)
+        self.ask_volumes: np.ndarray = np.empty(0, dtype=np.float64)
+        self.bid_prices: np.ndarray = np.empty(0, dtype=price_dtype)
+        self.bid_volumes: np.ndarray = np.empty(0, dtype=np.float64)
+
+    def update(self, price: float, volume: float, side: int) -> bool:
+        """Apply one depth row and return whether it evicted opposing levels.
+
+        Parameters
+        ----------
+        price : int or float
+            The price level, in the book's price units.
+        volume : float
+            The size now resting at *price*; ``0`` removes the level.
+        side : int
+            ``0`` for a bid, ``1`` for an ask (the codes of
+            :class:`ob_analytics.engine.Direction`).
+
+        Returns
+        -------
+        bool
+            ``True`` when the update evicted crossed levels from the other
+            side, so that side changed too.
+        """
+        if side == 1:
+            prices, vols = self.ask_prices, self.ask_volumes
+        else:
+            prices, vols = self.bid_prices, self.bid_volumes
+
+        evicted = False
+        if volume > 0:
+            i = int(np.searchsorted(prices, price))
+            if i < prices.size and prices[i] == price:
+                vols[i] = volume
+            else:
+                prices = np.insert(prices, i, price)
+                vols = np.insert(vols, i, volume)
+            # A resting bid and ask coexist only when bid_price < ask_price.
+            # Trust the fresh quote: evict any *stale* opposing levels it
+            # strictly crosses (e.g. an orphaned best whose delete event is
+            # missing from the feed).  Equal-price touches are left intact,
+            # so genuine locked books are still tolerated.  Crossed levels
+            # are contiguous at the opposing array's best end, so eviction
+            # is a single slice.
+            if side == 1:
+                opp_p, opp_v = self.bid_prices, self.bid_volumes
+                if opp_p.size and opp_p[-1] > price:
+                    # new ask -> bids strictly above it are crossed
+                    k = int(np.searchsorted(opp_p, price, side="right"))
+                    self.bid_prices = opp_p[:k].copy()
+                    self.bid_volumes = opp_v[:k].copy()
+                    evicted = True
+            else:
+                opp_p, opp_v = self.ask_prices, self.ask_volumes
+                if opp_p.size and opp_p[0] < price:
+                    # new bid -> asks strictly below it are crossed
+                    k = int(np.searchsorted(opp_p, price, side="left"))
+                    self.ask_prices = opp_p[k:].copy()
+                    self.ask_volumes = opp_v[k:].copy()
+                    evicted = True
+        else:
+            i = int(np.searchsorted(prices, price))
+            if i < prices.size and prices[i] == price:
+                prices = np.delete(prices, i)
+                vols = np.delete(vols, i)
+
+        if side == 1:
+            self.ask_prices, self.ask_volumes = prices, vols
+        else:
+            self.bid_prices, self.bid_volumes = prices, vols
+        return evicted
+
+
 class DepthMetricsEngine:
     """Incrementally compute order book depth metrics.
 
@@ -95,13 +213,11 @@ class DepthMetricsEngine:
     frame; internally each event is applied via :meth:`update_side`,
     which writes one metrics row into a pre-allocated numpy buffer.
 
-    Each book side is held as a pair of parallel numpy arrays sorted
-    ascending by integer price: best lookup is O(1) (asks at index 0, bids
-    at index -1), membership is O(log L) via ``searchsorted``, crossed-level
-    eviction is a contiguous slice, and BPS-bin sums vectorize over the
-    in-window slice instead of iterating every active level in Python
-    (levels average ~1.8k per side on the bundled sample, making that
-    iteration the pipeline's former hot loop).
+    The book itself is a :class:`PriceLevelBook`, which holds each side as
+    parallel numpy arrays sorted ascending by integer price.  BPS-bin sums
+    vectorize over the in-window slice of those arrays instead of iterating
+    every active level in Python (levels average ~1.8k per side on the
+    bundled sample, making that iteration the pipeline's former hot loop).
 
     Output is written into a pre-allocated numpy matrix and converted to a
     DataFrame once at the end; bin boundaries are ``@lru_cache``-d.
@@ -118,42 +234,45 @@ class DepthMetricsEngine:
     ) -> None:
         self._config = config or PipelineConfig()
 
-        self._ask_prices: np.ndarray = np.empty(0, dtype=np.int64)
-        self._ask_vols: np.ndarray = np.empty(0, dtype=np.float64)
-        self._bid_prices: np.ndarray = np.empty(0, dtype=np.int64)
-        self._bid_vols: np.ndarray = np.empty(0, dtype=np.float64)
+        self._book = PriceLevelBook()
 
         self._bps = self._config.depth_bps
         self._bins = self._config.depth_bins
         self._row_len = 2 * (2 + self._bins)
 
-    # ── Diagnostic views (state lives in the sorted arrays) ──────────
+    # ── Diagnostic views (state lives in the PriceLevelBook) ─────────
 
     @property
     def _ask_levels(self) -> dict[int, float]:
         """Active ask levels as ``{price: volume}`` (diagnostic view)."""
-        return dict(zip(self._ask_prices.tolist(), self._ask_vols.tolist()))
+        book = self._book
+        return dict(zip(book.ask_prices.tolist(), book.ask_volumes.tolist()))
 
     @property
     def _bid_levels(self) -> dict[int, float]:
         """Active bid levels as ``{price: volume}`` (diagnostic view)."""
-        return dict(zip(self._bid_prices.tolist(), self._bid_vols.tolist()))
+        book = self._book
+        return dict(zip(book.bid_prices.tolist(), book.bid_volumes.tolist()))
 
     @property
     def _best_ask(self) -> int | None:
-        return int(self._ask_prices[0]) if self._ask_prices.size else None
+        prices = self._book.ask_prices
+        return int(prices[0]) if prices.size else None
 
     @property
     def _best_ask_vol(self) -> float:
-        return float(self._ask_vols[0]) if self._ask_vols.size else 0.0
+        vols = self._book.ask_volumes
+        return float(vols[0]) if vols.size else 0.0
 
     @property
     def _best_bid(self) -> int | None:
-        return int(self._bid_prices[-1]) if self._bid_prices.size else None
+        prices = self._book.bid_prices
+        return int(prices[-1]) if prices.size else None
 
     @property
     def _best_bid_vol(self) -> float:
-        return float(self._bid_vols[-1]) if self._bid_vols.size else 0.0
+        vols = self._book.bid_volumes
+        return float(vols[-1]) if vols.size else 0.0
 
     def compute(self, depth: pd.DataFrame) -> pd.DataFrame:
         """Process an entire depth DataFrame and return metrics.
@@ -187,11 +306,11 @@ class DepthMetricsEngine:
         # book after the event it names, which is what a reader looking for
         # "the book just before this event" relies on.  Sorting on the
         # timestamp alone replayed one instant's rows bids first, then asks,
-        # by price.  The crossed-level eviction in ``update_side`` depends on
-        # replay order, so the two orders can end an instant on different
-        # books.  A frame with no tie-break column (a hand-built frame, or an
-        # L2 frame loaded without ``track_sequence``) keeps its own order
-        # within an instant, as before.
+        # by price.  The crossed-level eviction in ``PriceLevelBook.update``
+        # depends on replay order, so the two orders can end an instant on
+        # different books.  A frame with no tie-break column (a hand-built
+        # frame, or an L2 frame loaded without ``track_sequence``) keeps its
+        # own order within an instant, as before.
         ordered = depth.sort_values(by=time_order_keys(depth), kind="stable")
 
         # Price is already an integer tick count (issue #155), so the engine
@@ -272,53 +391,7 @@ class DepthMetricsEngine:
         out : np.ndarray
             Pre-allocated 1-D array of length ``row_len`` to fill.
         """
-        if side == 1:
-            prices, vols = self._ask_prices, self._ask_vols
-        else:
-            prices, vols = self._bid_prices, self._bid_vols
-
-        evicted = False
-        if volume > 0:
-            i = int(np.searchsorted(prices, price))
-            if i < prices.size and prices[i] == price:
-                vols[i] = volume
-            else:
-                prices = np.insert(prices, i, price)
-                vols = np.insert(vols, i, volume)
-            # A resting bid and ask coexist only when bid_price < ask_price.
-            # Trust the fresh quote: evict any *stale* opposing levels it
-            # strictly crosses (e.g. an orphaned best whose delete event is
-            # missing from the feed).  Equal-price touches are left intact,
-            # so genuine locked books are still tolerated.  Crossed levels
-            # are contiguous at the opposing array's best end, so eviction
-            # is a single slice.
-            if side == 1:
-                opp_p, opp_v = self._bid_prices, self._bid_vols
-                if opp_p.size and opp_p[-1] > price:
-                    # new ask -> bids strictly above it are crossed
-                    k = int(np.searchsorted(opp_p, price, side="right"))
-                    self._bid_prices = opp_p[:k].copy()
-                    self._bid_vols = opp_v[:k].copy()
-                    evicted = True
-            else:
-                opp_p, opp_v = self._ask_prices, self._ask_vols
-                if opp_p.size and opp_p[0] < price:
-                    # new bid -> asks strictly below it are crossed
-                    k = int(np.searchsorted(opp_p, price, side="left"))
-                    self._ask_prices = opp_p[k:].copy()
-                    self._ask_vols = opp_v[k:].copy()
-                    evicted = True
-        else:
-            i = int(np.searchsorted(prices, price))
-            if i < prices.size and prices[i] == price:
-                prices = np.delete(prices, i)
-                vols = np.delete(vols, i)
-
-        if side == 1:
-            self._ask_prices, self._ask_vols = prices, vols
-        else:
-            self._bid_prices, self._bid_vols = prices, vols
-
+        evicted = self._book.update(price, volume, side)
         if evicted:
             # Eviction mutated the opposing book; emit its metrics too,
             # otherwise compute() carries the stale opposing columns over.
@@ -328,10 +401,10 @@ class DepthMetricsEngine:
     def _write_side_metrics(self, side: int, out: np.ndarray) -> None:
         if side == 1:
             offset = 2 + self._bins
-            prices, vols = self._ask_prices, self._ask_vols
+            prices, vols = self._book.ask_prices, self._book.ask_volumes
         else:
             offset = 0
-            prices, vols = self._bid_prices, self._bid_vols
+            prices, vols = self._book.bid_prices, self._book.bid_volumes
 
         if not prices.size:
             out[offset] = 0
@@ -669,6 +742,101 @@ def depth_metrics(depth: pd.DataFrame, bps: int = 25, bins: int = 20) -> pd.Data
     """
     config = PipelineConfig(depth_bps=bps, depth_bins=bins)
     return DepthMetricsEngine(config).compute(depth)
+
+
+def price_level_snapshots(
+    depth: pd.DataFrame,
+    times: Iterable[datetime | pd.Timestamp],
+    max_levels: int | None = None,
+) -> list[OrderBookSnapshot]:
+    """Return the book at L2 at each of *times*, replayed from the depth table.
+
+    One pass over *depth* drives a :class:`PriceLevelBook`, the book
+    :class:`DepthMetricsEngine` builds the depth summary on, and copies it out
+    at each instant.  So the touch of each snapshot equals the depth summary's
+    last row at or before that instant, and a stale level that a fresher
+    opposing quote crossed is evicted here as it is there.  This is the L2
+    counterpart of :func:`ob_analytics.analytics.order_book`, which rebuilds
+    the per-order book at one instant from the events.
+
+    Parameters
+    ----------
+    depth : pandas.DataFrame
+        The depth table: ``timestamp``, ``price``, ``volume`` and
+        ``direction``.  Prices are integer ticks, or floats in the quote
+        currency when the table was converted for display; both are kept as
+        given.
+    times : iterable of datetime.datetime or pandas.Timestamp
+        The instants to take a snapshot at, in any order.  A row counts at an
+        instant when its timestamp is at or before it.
+    max_levels : int, optional
+        Keep only this many price levels per side, nearest the touch first.
+        ``None`` keeps every level.
+
+    Returns
+    -------
+    list of OrderBookSnapshot
+        One per entry of *times*, in the same order.  Each has the shape
+        :func:`~ob_analytics.analytics.order_book` returns, with one row per
+        price level: ``bids`` best first and ``asks`` best last, each with
+        ``price``, ``volume`` and ``liquidity`` (cumulative volume from the
+        touch).
+
+    Raises
+    ------
+    TypeError
+        If an instant and the depth timestamps disagree about being
+        time-zone aware.
+    """
+    validate_columns(
+        depth, {"timestamp", "price", "volume", "direction"}, "price_level_snapshots"
+    )
+    instants = [_engine_frames.instant_ns(t, like=depth["timestamp"]) for t in times]
+
+    # The same playback order as DepthMetricsEngine.compute: the canonical
+    # event order, so the book at the end of an instant is the one the depth
+    # summary ends that instant on.
+    ordered = depth.sort_values(by=time_order_keys(depth), kind="stable")
+    stamps = _engine_frames.nanoseconds(ordered["timestamp"])
+    price_values = ordered["price"].to_numpy()
+    volume_values = ordered["volume"].to_numpy()
+    volume_dtype = volume_values.dtype
+    is_float = np.issubdtype(price_values.dtype, np.floating)
+    book = PriceLevelBook(price_dtype=np.float64 if is_float else np.int64)
+    prices = price_values.tolist()
+    volumes = volume_values.tolist()
+    sides = (ordered["direction"].to_numpy() != "bid").astype(int).tolist()
+
+    def side_frame(side_prices: np.ndarray, side_volumes: np.ndarray) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "price": side_prices,
+                "volume": side_volumes.astype(volume_dtype),
+                "liquidity": np.cumsum(side_volumes).astype(volume_dtype),
+            }
+        )
+
+    snapshots: list[OrderBookSnapshot | None] = [None] * len(instants)
+    row = 0
+    for k in np.argsort(instants, kind="stable"):
+        stop = int(np.searchsorted(stamps, instants[k], side="right"))
+        for i in range(row, stop):
+            book.update(prices[i], volumes[i], sides[i])
+        row = max(row, stop)
+        # Both sides best first; a slice of None keeps every level.
+        bids = side_frame(
+            book.bid_prices[::-1][:max_levels], book.bid_volumes[::-1][:max_levels]
+        )
+        asks = side_frame(book.ask_prices[:max_levels], book.ask_volumes[:max_levels])
+        snapshots[k] = {
+            "timestamp": _engine_frames.timestamps(
+                np.array([instants[k]]), like=depth["timestamp"]
+            )[0],
+            "bids": bids,
+            # order_book's convention: asks best last.
+            "asks": asks.iloc[::-1].reset_index(drop=True),
+        }
+    return [s for s in snapshots if s is not None]
 
 
 def get_spread(depth_summary: pd.DataFrame) -> pd.DataFrame:

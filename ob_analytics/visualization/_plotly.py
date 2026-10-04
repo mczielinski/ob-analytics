@@ -14,11 +14,13 @@ from functools import lru_cache
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.visualization._data import (
     NO_DEPTH_NOTICE,
     biased_color_norm,
+    book_bar_thickness,
     book_mid,
     check_book_payload_level,
     l1_card_texts,
@@ -453,6 +455,40 @@ def _rgba(hex_color: str, alpha: float) -> str:
     return f"rgba({r},{g},{b},{alpha})"
 
 
+def _book_bar_traces(
+    go: Any,
+    data: dict,
+    *,
+    per_order: bool,
+    pal: Palette,
+    width: float | None = None,
+) -> list:
+    """The bid and ask bars of one book-snapshot payload, in that order.
+
+    A side with no orders still gets its (empty) trace, so a replay's frames
+    all carry the same traces.  *width* fixes the bar thickness in price
+    units; ``None`` lets Plotly size it from the gaps between prices.
+    """
+    # White per-order separators (dark ones vanished against the fill).
+    line = {"color": "white", "width": 1.0} if per_order else {"width": 0}
+    return [
+        go.Bar(
+            y=side["price"],
+            x=side["seg_hi"] - side["seg_lo"],
+            base=side["seg_lo"],
+            orientation="h",
+            width=width,
+            marker={"color": color, "line": line},
+            name=label,
+            hovertemplate="Price: %{y:.2f}<br>Size: %{x:.4f}<extra></extra>",
+        )
+        for side, color, label in (
+            (data["bids"], pal.bid, "Bid"),
+            (data["asks"], pal.ask, "Ask"),
+        )
+    ]
+
+
 def _plotly_book_bars(
     data: dict, *, per_order: bool, theme: PlotTheme = DEFAULT_THEME
 ) -> Any:
@@ -469,25 +505,9 @@ def _plotly_book_bars(
         go, theme, title=data["timestamp"].strftime("%Y-%m-%d %H:%M:%S UTC")
     )
 
-    # White per-order separators (dark ones vanished against the fill).
-    line = {"color": "white", "width": 1.0} if per_order else {"width": 0}
-    for side, color, label in (
-        (data["bids"], pal.bid, "Bid"),
-        (data["asks"], pal.ask, "Ask"),
-    ):
-        if side.empty:
-            continue
-        fig.add_trace(
-            go.Bar(
-                y=side["price"],
-                x=side["seg_hi"] - side["seg_lo"],
-                base=side["seg_lo"],
-                orientation="h",
-                marker={"color": color, "line": line},
-                name=label,
-                hovertemplate="Price: %{y:.2f}<br>Size: %{x:.4f}<extra></extra>",
-            )
-        )
+    for trace in _book_bar_traces(go, data, per_order=per_order, pal=pal):
+        if len(trace.y):
+            fig.add_trace(trace)
 
     mid = book_mid(data["bids"], data["asks"])
     if mid is not None:
@@ -542,6 +562,531 @@ def _plotly_depth_curve(
     fig.update_xaxes(title_text="Price")
     fig.update_yaxes(title_text="Cumulative liquidity")
     return fig
+
+
+def _replay_frame(
+    go: Any,
+    snapshot: dict,
+    *,
+    per_order: bool,
+    size_max: float,
+    bar_width: float,
+    price_range: list[float] | None,
+    bar_slots: tuple[int, int],
+    pad_price: float,
+    pal: Palette,
+) -> list:
+    """The traces one replay frame changes: the ladder and the time line.
+
+    Always the same four, in the same order -- bid bars, ask bars, the mid, the
+    line marking the frame's time on the trades panel -- because a Plotly
+    animation matches each frame's traces to the figure's by position.
+
+    Each side also always has the same number of bars, *bar_slots*: a frame
+    with fewer price levels is filled out with zero-length bars at
+    *pad_price*, below the visible range.  Stepping between frames without a
+    full redraw, Plotly updates the bars it has but draws any extra bar
+    without its colour, which shows as black.
+    """
+    t = snapshot["timestamp"]
+    mid = book_mid(snapshot["bids"], snapshot["asks"])
+    padded = {
+        **snapshot,
+        **{
+            name: _pad_bars(snapshot[name], slots, pad_price)
+            for name, slots in zip(("bids", "asks"), bar_slots, strict=True)
+        },
+    }
+    traces = _book_bar_traces(go, padded, per_order=per_order, pal=pal, width=bar_width)
+    traces.append(
+        go.Scatter(
+            x=[0, size_max] if mid is not None else [],
+            y=[mid, mid] if mid is not None else [],
+            mode="lines",
+            line={"color": pal.rule, "dash": "dash", "width": 1},
+            name="Mid",
+            hoverinfo="skip",
+        )
+    )
+    traces.append(
+        go.Scatter(
+            x=[t, t] if price_range else [],
+            y=price_range or [],
+            mode="lines",
+            line={"color": pal.price_line, "width": 1.5},
+            name="Book time",
+            xaxis="x2",
+            yaxis="y2",
+            hoverinfo="skip",
+        )
+    )
+    # The legend comes from fixed entries (see _replay_legend): Plotly drops an
+    # empty trace's entry, so a frame with an empty side would reflow it.
+    for trace in traces:
+        trace.update(showlegend=False, legendgroup=trace.name)
+    return traces
+
+
+def _pad_bars(side: Any, slots: int, pad_price: float) -> Any:
+    """Fill *side* out to *slots* rows with zero-length bars at *pad_price*."""
+    missing = slots - len(side)
+    if missing <= 0:
+        return side
+    filler = pd.DataFrame(
+        {
+            "price": [pad_price] * missing,
+            "seg_lo": [0.0] * missing,
+            "seg_hi": [0.0] * missing,
+        }
+    )
+    return pd.concat([side[["price", "seg_lo", "seg_hi"]], filler], ignore_index=True)
+
+
+def _replay_timeline(
+    go: Any, snapshots: list[dict], labels: list[str], trades: Any, pal: Palette
+) -> list:
+    """The trades panel, which stays still for the whole replay.
+
+    The mid at each frame as a step line, every trade of the replay as a
+    marker coloured by aggressor side, and an empty ring that marks the trade
+    last clicked.
+
+    Each trade carries the name of the last frame at or before it, and its
+    trace the side of the book it traded against, for the click handler in
+    :data:`BOOK_REPLAY_SCRIPT`.
+    """
+    mids = [
+        (s["timestamp"], book_mid(s["bids"], s["asks"]))
+        for s in snapshots
+        if book_mid(s["bids"], s["asks"]) is not None
+    ]
+    frame_times = pd.DatetimeIndex([s["timestamp"] for s in snapshots])
+    traces = [
+        go.Scatter(
+            x=[t for t, _ in mids],
+            y=[m for _, m in mids],
+            mode="lines",
+            line={"color": pal.rule, "dash": "dash", "width": 1, "shape": "hv"},
+            name="Mid",
+            legendgroup="Mid",
+            showlegend=False,
+            xaxis="x2",
+            yaxis="y2",
+            hoverinfo="skip",
+        )
+    ]
+    # A buy lifts the ask and a sell hits the bid.
+    for direction, book_side, color, label in (
+        ("buy", "ask", pal.buy, "Buy (lifts ask)"),
+        ("sell", "bid", pal.sell, "Sell (hits bid)"),
+    ):
+        side = trades[trades["direction"] == direction]
+        position = frame_times.searchsorted(
+            pd.DatetimeIndex(side["timestamp"]), "right"
+        )
+        frame = [labels[max(int(k) - 1, 0)] for k in position]
+        traces.append(
+            go.Scatter(
+                x=side["timestamp"],
+                y=side["price"],
+                customdata=list(zip(side["volume"], frame, strict=True)),
+                mode="markers",
+                marker={"color": color, "size": 8, "line": {"width": 0}},
+                name=label,
+                meta=f"replay-trades:{book_side}",
+                xaxis="x2",
+                yaxis="y2",
+                hovertemplate=(
+                    "%{x}<br>Price: %{y:.2f}<br>Size: %{customdata[0]:.4f}"
+                    "<br>Click to see the book here<extra></extra>"
+                ),
+            )
+        )
+    traces.append(
+        go.Scatter(
+            x=[None],
+            y=[None],
+            mode="markers",
+            marker={
+                "symbol": "circle-open",
+                "size": 18,
+                "line": {"width": 3},
+                "color": pal.price_line,
+            },
+            name="Selected trade",
+            meta="replay-selected",
+            showlegend=False,
+            xaxis="x2",
+            yaxis="y2",
+            hoverinfo="skip",
+        )
+    )
+    return traces
+
+
+def _replay_legend(go: Any, pal: Palette) -> list:
+    """Fixed legend entries for the traces the frames change.
+
+    Each holds a single empty point, which keeps it in the legend whatever the
+    frame shows.  It shares its trace's legend group, so clicking it still
+    hides or shows that trace.
+    """
+    entries = [
+        ("Bid", {"mode": "markers", "marker": {"color": pal.bid, "symbol": "square"}}),
+        ("Ask", {"mode": "markers", "marker": {"color": pal.ask, "symbol": "square"}}),
+        ("Mid", {"mode": "lines", "line": {"color": pal.rule, "dash": "dash"}}),
+    ]
+    return [
+        go.Scatter(
+            x=[None], y=[None], name=name, legendgroup=name, hoverinfo="skip", **style
+        )
+        for name, style in entries
+    ]
+
+
+def _frame_labels(snapshots: list[dict]) -> list[str]:
+    """One unique name per frame: the time to the second, or to the millisecond.
+
+    Plotly finds a frame by its name, so two frames in one second need the
+    finer form.
+    """
+    times = [s["timestamp"] for s in snapshots]
+    labels = [t.strftime("%H:%M:%S") for t in times]
+    if len(set(labels)) < len(labels):
+        labels = [t.strftime("%H:%M:%S.%f")[:-3] for t in times]
+    return labels
+
+
+#: The script that makes a book replay's trades clickable, for
+#: ``post_script=`` of :meth:`plotly.graph_objects.Figure.write_html` or
+#: ``to_html``.  Clicking a trade moves the replay to the last frame at or
+#: before it, rings the trade, and marks the price level it traded against
+#: (the ask for a buy, the bid for a sell) in the trade's colour.
+BOOK_REPLAY_SCRIPT = """
+(function () {
+  var gd = document.getElementById('{plot_id}');
+  var replay = (gd.layout.meta || {}).book_replay;
+  if (!replay) { return; }
+  var ring = gd.data.findIndex(function (t) { return t.meta === 'replay-selected'; });
+  gd.on('plotly_click', function (event) {
+    var point = event.points[0];
+    var tag = point.data.meta;
+    if (typeof tag !== 'string' || tag.indexOf('replay-trades:') !== 0) { return; }
+    var side = tag.split(':')[1];
+    var color = replay.colors[side];
+    var half = replay.band / 2;
+    Plotly.animate(gd, [point.customdata[1]], {
+      mode: 'immediate',
+      frame: {duration: 0, redraw: false},
+      transition: {duration: 0}
+    }).then(function () {
+      Plotly.restyle(gd, {
+        x: [[point.x]], y: [[point.y]], 'marker.color': color
+      }, [ring]);
+      Plotly.relayout(gd, {shapes: [{
+        type: 'rect', layer: 'below',
+        xref: 'x domain', x0: 0, x1: 1,
+        yref: 'y', y0: point.y - half, y1: point.y + half,
+        fillcolor: color, opacity: 0.35,
+        line: {color: color, width: 2}
+      }]});
+    });
+  });
+})();
+"""
+
+
+def _with_replay_script(post_script: Any) -> list[str]:
+    """*post_script* (none, one script or a list) with the replay script added."""
+    if post_script is None:
+        scripts = []
+    elif isinstance(post_script, str):
+        scripts = [post_script]
+    else:
+        scripts = list(post_script)
+    return [*scripts, BOOK_REPLAY_SCRIPT]
+
+
+@lru_cache(maxsize=1)
+def _book_replay_figure_class() -> type:
+    """The Figure subclass a book replay is drawn on (see BookReplayFigure).
+
+    Built on first use, so this module still imports without plotly.
+    """
+    go = _import_plotly()
+
+    class BookReplayFigure(go.Figure):
+        """A Plotly figure that adds :data:`BOOK_REPLAY_SCRIPT` to its HTML.
+
+        Plotly keeps no script inside a figure, so the replay's click handling
+        is added each time the figure becomes HTML: :meth:`to_html`,
+        :meth:`write_html`, :meth:`show`, and display in a notebook.  In a
+        notebook the figure displays as HTML, which runs the script in a
+        trusted notebook, rather than through Plotly's own renderer, which
+        runs none.  ``plotly.graph_objects.Figure(fig)`` makes a plain copy
+        without the clicking.
+        """
+
+        def to_html(self, *args: Any, **kwargs: Any) -> str:
+            kwargs["post_script"] = _with_replay_script(kwargs.get("post_script"))
+            return super().to_html(*args, **kwargs)
+
+        def write_html(self, *args: Any, **kwargs: Any) -> Any:
+            kwargs["post_script"] = _with_replay_script(kwargs.get("post_script"))
+            return super().write_html(*args, **kwargs)
+
+        def _repr_html_(self) -> str:
+            return self.to_html(full_html=False, include_plotlyjs="cdn")
+
+        def _repr_mimebundle_(self, *args: Any, **kwargs: Any) -> dict[str, str]:
+            return {"text/html": self._repr_html_()}
+
+        def show(self, *args: Any, **kwargs: Any) -> None:
+            if not args and "renderer" not in kwargs and _in_notebook():
+                from IPython.display import display
+
+                display(self)
+                return
+            kwargs["post_script"] = _with_replay_script(kwargs.get("post_script"))
+            super().show(*args, **kwargs)
+
+    return BookReplayFigure
+
+
+def _in_notebook() -> bool:
+    """Whether this runs inside a Jupyter kernel."""
+    try:
+        from IPython import get_ipython
+    except ImportError:
+        return False
+    shell = get_ipython()
+    return shell is not None and hasattr(shell, "kernel")
+
+
+def _plotly_book_replay(
+    data: dict, *, per_order: bool, theme: PlotTheme = DEFAULT_THEME
+) -> Any:
+    """Animated book ladder beside the trades, with a time slider.
+
+    Each frame is the ``book_snapshot`` ladder at one instant (one bar per
+    price level at L2, one segment per order at L3).  Beside it, the trades
+    panel shows the whole replay at once, and a vertical line marks the
+    frame's time.  A slider steps through the frames, and one play button per
+    speed in the payload plays them, each frame shown for the market time it
+    covers divided by the speed.
+    No axis moves: the price, size and time axes are fixed for the whole
+    replay, so the book changes against a still scale and bar lengths compare
+    across frames.
+    """
+    pal = theme.palette
+    check_book_payload_level(data, per_order=per_order)
+    go = _import_plotly()
+    from plotly.subplots import make_subplots
+
+    snapshots = data["snapshots"]
+    size_max = max(
+        (
+            float(side["seg_hi"].max())
+            for snapshot in snapshots
+            for side in (snapshot["bids"], snapshot["asks"])
+            if not side.empty
+        ),
+        default=1.0,
+    )
+    # One thickness for every frame: Plotly would otherwise size each frame's
+    # bars from that frame's own price gaps, and the bars would change height.
+    bar_width = 0.9 * min(
+        book_bar_thickness(snapshot["bids"], snapshot["asks"]) for snapshot in snapshots
+    )
+    # The prepare step fixed one price range for every frame; pad it by a bar
+    # so the bars at its edges are drawn whole.
+    price_range = data.get("price_range")
+    if price_range is not None:
+        price_range = [price_range[0] - bar_width, price_range[1] + bar_width]
+    # The most bars either side has in any frame, and a price for the filler
+    # bars that make up the rest: below the visible range, so they are never
+    # seen or hovered.
+    bar_slots = (
+        max(len(s["bids"]) for s in snapshots),
+        max(len(s["asks"]) for s in snapshots),
+    )
+    lowest = min(
+        (
+            float(side["price"].min())
+            for s in snapshots
+            for side in (s["bids"], s["asks"])
+            if not side.empty
+        ),
+        default=0.0,
+    )
+    pad_price = min(lowest, price_range[0] if price_range else lowest) - 100 * bar_width
+    built = [
+        _replay_frame(
+            go,
+            snapshot,
+            per_order=per_order,
+            size_max=size_max,
+            bar_width=bar_width,
+            price_range=price_range,
+            bar_slots=bar_slots,
+            pad_price=pad_price,
+            pal=pal,
+        )
+        for snapshot in snapshots
+    ]
+    labels = _frame_labels(snapshots)
+
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        shared_yaxes=True,
+        column_widths=[0.6, 0.4],
+        horizontal_spacing=0.03,
+        subplot_titles=("Book", "Trades"),
+        figure=_book_replay_figure_class()(),
+    )
+    # The frames update the first traces by position; the still trades panel
+    # and the legend entries come after them, so no frame touches them.
+    for trace in [
+        *built[0],
+        *_replay_timeline(go, snapshots, labels, data["trades"], pal),
+        *_replay_legend(go, pal),
+    ]:
+        fig.add_trace(trace)
+    fig.update_layout(template=_template(go, theme))
+    fig.update_layout(
+        title={
+            "text": "Book replay "
+            + snapshots[0]["timestamp"].strftime("%Y-%m-%d (UTC)")
+        },
+        barmode="overlay",
+        hovermode="closest",
+        height=700,
+        margin={"b": 200},
+        legend={
+            "orientation": "h",
+            "x": 1,
+            "xanchor": "right",
+            "y": 1.06,
+            "yanchor": "bottom",
+        },
+        # Keep the viewer's own zoom while the frames play.
+        uirevision="book_replay",
+        # Read by BOOK_REPLAY_SCRIPT: the height of one price level, and the
+        # colour to mark each side with when a trade against it is clicked.
+        meta={
+            "book_replay": {
+                "band": bar_width / 0.9,
+                "colors": {"ask": pal.buy, "bid": pal.sell},
+            }
+        },
+    )
+    fig.update_xaxes(
+        title_text="Size (per order)" if per_order else "Size",
+        range=[0, size_max * 1.05],
+        row=1,
+        col=1,
+    )
+    fig.update_xaxes(
+        title_text="Time",
+        range=[snapshots[0]["timestamp"], snapshots[-1]["timestamp"]],
+        row=1,
+        col=2,
+    )
+    fig.update_yaxes(title_text="Price", range=price_range, row=1, col=1)
+    fig.frames = [
+        go.Frame(name=label, data=traces, traces=list(range(len(traces))))
+        for label, traces in zip(labels, built, strict=True)
+    ]
+
+    # A frame is shown for the market time it covers divided by the speed, so
+    # a play button at speed 1 replays in real time.
+    interval_ms = pd.Timedelta(data.get("interval", "1s")).total_seconds() * 1000
+    # Each frame is drawn as it is, with no transition: Plotly would otherwise
+    # animate every bar's length between frames.  No frame changes the layout,
+    # so none needs a full redraw; updating the traces in place is what keeps
+    # dragging the slider smooth.
+    step = {"mode": "immediate", "transition": {"duration": 0}}
+    fig.update_layout(
+        updatemenus=[
+            {
+                "type": "buttons",
+                "direction": "left",
+                "x": 0,
+                "y": 0,
+                "xanchor": "left",
+                "yanchor": "top",
+                "pad": {"t": 160},
+                "showactive": False,
+                "buttons": [
+                    *(
+                        {
+                            "label": f"Play {speed:g}×",
+                            "method": "animate",
+                            "args": [
+                                None,
+                                {
+                                    **step,
+                                    "frame": {
+                                        "duration": interval_ms / speed,
+                                        "redraw": False,
+                                    },
+                                    "fromcurrent": True,
+                                },
+                            ],
+                        }
+                        for speed in data.get("speeds", (1,))
+                    ),
+                    {
+                        "label": "Pause",
+                        "method": "animate",
+                        "args": [
+                            [None],
+                            {**step, "frame": {"duration": 0, "redraw": False}},
+                        ],
+                    },
+                ],
+            }
+        ],
+        sliders=[
+            {
+                "active": 0,
+                "x": 0,
+                "len": 1,
+                "y": 0,
+                "xanchor": "left",
+                "yanchor": "top",
+                "pad": {"t": 75},
+                "currentvalue": {"prefix": "Book at "},
+                "steps": [
+                    {
+                        "label": label,
+                        "method": "animate",
+                        "args": [
+                            [label],
+                            {**step, "frame": {"duration": 0, "redraw": False}},
+                        ],
+                    }
+                    for label in labels
+                ],
+            }
+        ],
+    )
+    return fig
+
+
+def plotly_book_replay_aggregate(
+    data: dict, *, theme: PlotTheme = DEFAULT_THEME
+) -> Any:
+    """L2 (MBP) book replay: the price-level ladder through time."""
+    return _plotly_book_replay(data, per_order=False, theme=theme)
+
+
+def plotly_book_replay_per_order(
+    data: dict, *, theme: PlotTheme = DEFAULT_THEME
+) -> Any:
+    """L3 (MBO) book replay: the per-order ladder through time."""
+    return _plotly_book_replay(data, per_order=True, theme=theme)
 
 
 def plotly_book_snapshot_aggregate(
@@ -2157,6 +2702,8 @@ for _concept, _level, _fn in [
     ("book_snapshot", _L3, plotly_book_snapshot_per_order),
     ("depth_chart", _L2, plotly_depth_chart_aggregate),
     ("depth_chart", _L3, plotly_depth_chart_per_order),
+    ("book_replay", _L2, plotly_book_replay_aggregate),
+    ("book_replay", _L3, plotly_book_replay_per_order),
     ("volume_percentiles", _L2, plotly_volume_percentiles),
     ("events_histogram", _L2, plotly_events_histogram),
     ("hidden_executions", _L2, plotly_hidden_executions),
