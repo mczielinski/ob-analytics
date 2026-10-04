@@ -213,6 +213,7 @@ class TestFigureLayout:
         # still narrow the caller's panel; that is not a layout.)
         from ob_analytics.bitstamp import BitstampSource
         from ob_analytics.pipeline import Pipeline
+        from ob_analytics.visualization import RENDERERS
         from ob_analytics.visualization.gallery import (
             _metric_panels,
             build_gallery_model,
@@ -225,6 +226,13 @@ class TestFigureLayout:
             (spec, level) for c in model.concepts for level, spec in c.variants.items()
         ]
         faces += [(spec, None) for spec in _metric_panels(display_result(result))]
+        # Only matplotlib lays out a figure; a face drawn by other backends
+        # alone (such as the plotly book replay) has nothing to check here.
+        faces = [
+            (spec, level)
+            for spec, level in faces
+            if (spec.plot_name, level, "matplotlib") in RENDERERS
+        ]
 
         def subplot_params(fig: Figure) -> tuple[float, ...]:
             p = fig.subplotpars
