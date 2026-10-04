@@ -28,6 +28,7 @@ from typing import Any
 
 import pandas as pd
 
+from ob_analytics._secrets import redact
 from ob_analytics.analytics import QualityCheck, Severity
 
 MANIFEST_NAME = "manifest.json"
@@ -337,7 +338,7 @@ class CaptureManifest:
         """
         root = Path(root)
         tmp = root / (MANIFEST_NAME + ".tmp")
-        tmp.write_text(json.dumps(self.to_dict(), indent=2))
+        tmp.write_text(redact(json.dumps(self.to_dict(), indent=2)))
         os.replace(tmp, root / MANIFEST_NAME)
 
     # -- building -----------------------------------------------------------

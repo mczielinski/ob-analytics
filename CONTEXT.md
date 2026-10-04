@@ -316,6 +316,12 @@ settings. It replays stored files (`OfflineSource`), captures a running venue
 (`LiveSource`), or both.
 _Avoid_: format, connector, adapter, driver, backend
 
+**Credential**:
+A key a source needs to read a venue's data, such as an API key or a private
+key file. Declared on the source's settings with `Credential`, read from an
+environment variable, and never written to a capture's files.
+_Avoid_: secret, token, auth
+
 **Loader**:
 The component that turns one source's stored files into a canonical table —
 `EventLoader` at L3, `DepthSource` at L2.

@@ -41,6 +41,7 @@ from typing import Any, Literal
 import pandas as pd
 from loguru import logger
 
+from ob_analytics._secrets import redact
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.live._base import (
     CaptureConfig,
@@ -63,6 +64,7 @@ from ob_analytics.live._runner import (
     FileCaptureSink,
     _FirstEvent,
     _source_declarations,
+    check_credentials,
     install_stop_signals,
     run_capturer,
 )
@@ -165,6 +167,14 @@ async def run_capture(make_source: SourceFactory, config: CaptureConfig) -> Capt
 
     SIGINT/SIGTERM stop the capture: the running segment is closed with its
     closing rows and the manifest is finished.
+
+    A source whose settings declare a :class:`~ob_analytics.config.Credential`
+    that is not set raises :class:`~ob_analytics.exceptions.ConfigError`
+    before ``out_dir`` is created, naming the environment variable to set.
+    Build such settings once and pass them to each source
+    (``lambda: VenueSource(settings=settings)``): a factory that builds new
+    settings reads the key again for every segment, and fails at the next one
+    if the key file has gone.
     """
     for name in ("roll_minutes", "roll_mb"):
         value = getattr(config, name)
@@ -173,6 +183,7 @@ async def run_capture(make_source: SourceFactory, config: CaptureConfig) -> Capt
     source = make_source()
     if isinstance(source, SupportsPreflight):
         source.preflight()
+    check_credentials(source)
     root = Path(config.out_dir)
     root.mkdir(parents=True, exist_ok=True)
     lock = _lock_capture_dir(root)
@@ -310,10 +321,10 @@ class _Supervisor:
             for running, outcome in zip(stopping, outcomes, strict=True):
                 if isinstance(outcome, BaseException):
                     logger.error(
-                        "Capture '{}': stopping {} failed: {!r}",
+                        "Capture '{}': stopping {} failed: {}",
                         self._manifest.source,
                         running.segment.name,
-                        outcome,
+                        redact(repr(outcome)),
                     )
             heartbeat.cancel()
             stop_task.cancel()
@@ -475,7 +486,7 @@ class _Supervisor:
             except Exception as exc:  # noqa: BLE001 - recorded in the manifest
                 # run_capturer keeps errors from its phases; one that escapes
                 # it happened before any of them (the preflight, say).
-                segment.error = repr(exc)
+                segment.error = redact(repr(exc))
         elif _finished_normally(running.task):
             # Late, but it ended by itself before the cancel took: its own
             # closing rows and meta.json are complete.
@@ -571,13 +582,14 @@ class _Supervisor:
                     running.sink.raw_diagnostics(),
                 )
             except Exception as exc:  # noqa: BLE001 - the capture must go on
+                failure = redact(repr(exc))
                 logger.error(
-                    "Capture '{}': closing the files of {} failed: {!r}",
+                    "Capture '{}': closing the files of {} failed: {}",
                     self._manifest.source,
                     segment.name,
-                    exc,
+                    failure,
                 )
-                error = f"{limit}; closing its files failed: {exc!r}"
+                error = f"{limit}; closing its files failed: {failure}"
             else:
                 _apply_closed_files(segment, closed, error)
                 segment.ended = pd.Timestamp.now(tz="UTC")
@@ -754,7 +766,7 @@ def _record_coverage(seg_dir: Path, segment: Segment) -> None:
     try:
         meta = json.loads(meta_path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
-        logger.warning("Could not update {}: {!r}", meta_path, exc)
+        logger.warning("Could not update {}: {}", meta_path, redact(repr(exc)))
         return
     for key in ("stream_started", "stream_ended"):
         value = getattr(segment, key)
@@ -1094,5 +1106,5 @@ def _write_provisional_meta(running: _Running) -> None:
 
 def _write_json_atomic(path: Path, data: dict[str, Any]) -> None:
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, default=str))
+    tmp.write_text(redact(json.dumps(data, indent=2, default=str)))
     os.replace(tmp, path)

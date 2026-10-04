@@ -32,8 +32,12 @@ def _setup_logging(verbose: bool) -> None:
 
     from loguru import logger
 
+    from ob_analytics._secrets import redact_log_record
+
     logger.enable("ob_analytics")
     logger.remove()
+    # No API key a source holds is logged, even inside an error message.
+    logger.configure(patcher=redact_log_record)
     logger.add(sys.stderr, level="DEBUG" if verbose else "INFO")
 
 
@@ -490,11 +494,17 @@ def _cmd_bitstamp_demo(args: argparse.Namespace) -> None:
 
 
 def _cmd_sources(args: argparse.Namespace) -> None:
-    """List the registered sources: capability (offline/live) and required context."""
+    """List the registered sources: capability, required context and API keys."""
+    from ob_analytics.config import SourceSettings
+    from ob_analytics.exceptions import ConfigError
     from ob_analytics.sources import SOURCES, list_sources
 
     for name in list_sources():
-        source = SOURCES.get(name)()
+        try:
+            source = SOURCES.get(name)()
+        except ConfigError as exc:  # a key file that cannot be read, say
+            print(f"{name}  [cannot be built: {exc}]")
+            continue
         caps = []
         if hasattr(source, "create_loader"):
             caps.append("offline")
@@ -503,7 +513,14 @@ def _cmd_sources(args: argparse.Namespace) -> None:
         cap_str = "/".join(caps) if caps else "?"
         required = getattr(source, "required_context", list)()
         req_str = f", requires: {', '.join(required)}" if required else ""
-        print(f"{name}  [{cap_str}{req_str}]")
+        settings = getattr(source, "settings", None)
+        keys = (
+            [c.env for c in type(settings).credentials().values()]
+            if isinstance(settings, SourceSettings)
+            else []
+        )
+        key_str = f", key: {', '.join(keys)}" if keys else ""
+        print(f"{name}  [{cap_str}{req_str}{key_str}]")
 
 
 def _cmd_lobster_demo(args: argparse.Namespace) -> None:
@@ -518,9 +535,11 @@ def _cmd_capture(args: argparse.Namespace) -> None:
     """Run a live market-data capture."""
     _setup_logging(args.verbose)
     import asyncio
+    import inspect
 
     from loguru import logger
 
+    from ob_analytics.config import SourceSettings
     from ob_analytics.exceptions import ConfigError
     from ob_analytics.live import (
         CaptureConfig,
@@ -592,7 +611,24 @@ def _cmd_capture(args: argparse.Namespace) -> None:
             return source_cls()
         return source_cls(settings=settings)  # ty: ignore[unknown-argument]
 
-    source = make_source()
+    # Building the settings reads any API key from the environment; a key
+    # file that cannot be read is user error, not a crash.
+    try:
+        source = make_source()
+    except ConfigError as exc:
+        logger.error(str(exc))
+        sys.exit(1)
+    # Every later segment reuses these settings, so a key file moved or
+    # rotated during a long capture does not end it at the next roll.  Only
+    # for a source that takes them: the protocol does not require it to.
+    first_settings = getattr(source, "settings", None)
+    if (
+        settings is None
+        and isinstance(first_settings, SourceSettings)
+        and first_settings.credentials()
+        and "settings" in inspect.signature(source_cls).parameters
+    ):
+        settings = first_settings
 
     # A venue that cannot supply the requested resolution is user error, not a
     # crash: report the explanation and stop.  (Reading ``level`` is what

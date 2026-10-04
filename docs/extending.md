@@ -200,6 +200,53 @@ source = CoinbaseSource(settings=CoinbaseSettings(depth_limit=50))
 The built-in `CcxtSource` is the worked example
 (`CcxtSettings(exchange=..., depth_limit=..., poll_interval=...)`).
 
+### API keys
+
+A source that needs an API key declares it as a settings field, marked with
+`Credential`. The field must be typed `SecretStr | None` with a default of
+`None`; any other type or default raises `TypeError` when the class is defined.
+
+```python
+from typing import Annotated
+
+from pydantic import SecretStr
+
+from ob_analytics import Credential, SourceSettings
+
+
+class CoinbaseSettings(SourceSettings):
+    channel: str = "full"
+    api_key: Annotated[
+        SecretStr | None,
+        Credential(
+            env="COINBASE_API_KEY",
+            issued_at="the API page of your Coinbase account",
+        ),
+    ] = None
+    private_key: Annotated[
+        SecretStr | None,
+        Credential(
+            env="COINBASE_PRIVATE_KEY_PATH",
+            issued_at="the API page of your Coinbase account",
+            from_file=True,
+        ),
+    ] = None
+```
+
+What the declaration gives you:
+
+- An unset field is read from its environment variable. With `from_file=True`,
+  the variable holds a file path and the field holds the file's contents.
+- `run_capture` checks every credential before it creates any output. A
+  missing one stops the capture with the variable to set and `issued_at`.
+- `ob-analytics sources` lists the variables.
+- The key is removed from every file the capture writes and from the CLI log.
+
+In the source, read the key with `self.settings.api_key.get_secret_value()`
+only where you sign or send it. Do not yield your login message as a raw
+frame: it holds no market data, and the runner would only mask the key in it.
+[Use an API key](howto/api-keys.md) is the page for users.
+
 ### The live capability
 
 A `LiveSource` translates a venue's WebSocket (or REST-poll) feed into the same

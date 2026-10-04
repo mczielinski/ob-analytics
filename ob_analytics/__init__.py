@@ -75,7 +75,7 @@ from ob_analytics.bars import (
 # Importing the source modules fires their register_source(...) self-registration
 # at import time; the Source classes are also the public per-venue entry points.
 from ob_analytics.bitstamp import BitstampSource
-from ob_analytics.config import PipelineConfig, SourceSettings
+from ob_analytics.config import Credential, PipelineConfig, SourceSettings
 from ob_analytics.cost import (
     CostSummary,
     amihud,
@@ -220,6 +220,7 @@ __all__ = [
     "Clocks",
     "ConfigError",
     "CostSummary",
+    "Credential",
     "DataQualitySummary",
     "DataWriter",
     "DatabentoSettings",
