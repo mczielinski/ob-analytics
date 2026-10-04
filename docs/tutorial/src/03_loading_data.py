@@ -176,13 +176,17 @@ import tempfile
 from pathlib import Path
 
 from ob_analytics import PipelineConfig, RunContext, save_data
+from ob_analytics.datasets import LOT_SIZE, TICK_SIZE
 
+toy_config = PipelineConfig(
+    price_divisor=10_000, tick_size=TICK_SIZE, lot_size=LOT_SIZE
+)
 outdir = Path(tempfile.mkdtemp())
 save_data(
     {"events": lob, "trades": toy_trades()},
     outdir,
     fmt="lobster",
-    config=PipelineConfig(price_divisor=10_000, tick_size=1.0, lot_size=1.0),
+    config=toy_config,
     ctx=RunContext(trading_date="2026-01-05"),
     ticker="TOY",
     num_levels=2,
@@ -230,20 +234,26 @@ print((outdir / "TOY_2026-01-05_2_orderbook.csv").read_text().splitlines()[5])
 # Now the trip home. `LobsterSource` bundles the matching loader, trade
 # reader, and config defaults (that `price_divisor`, among others), and
 # needs the same date anchor to turn seconds-after-midnight back into
-# timestamps:
+# timestamps. Its default `tick_size` is a cent, the equity grid, so it
+# would read $99.00 back as 9900 ticks; passing the same `toy_config`
+# that wrote the files keeps the toy's whole-dollar ticks:
 
 # %%
-rt = Pipeline.from_source("lobster", ctx=RunContext(trading_date="2026-01-05")).run(
-    outdir
-)
+from ob_analytics import LobsterSource
+
+rt = Pipeline(
+    source=LobsterSource(),
+    config=toy_config,
+    ctx=RunContext(trading_date="2026-01-05"),
+).run(outdir)
 print("executed units, original frames :", events["fill"].sum())
 print("executed units, after round trip:", rt.events["fill"].sum())
 
 # %% [markdown]
-# (`Pipeline(source=LobsterSource(), ctx=...)` is the explicit spelling
-# of the same thing.) The toy's five trades total 7 units; counted from
-# both sides — maker fills plus taker fills — that is 14 units of
-# executions, and all 14 survive the round trip.
+# (With the source's own defaults, `Pipeline.from_source("lobster",
+# ctx=...)` is the short spelling.) The toy's five trades total 7 units;
+# counted from both sides — maker fills plus taker fills — that is 14
+# units of executions, and all 14 survive the round trip.
 #
 # One honest wrinkle: the message file we wrote contains *ten* type-4
 # rows for those five trades, because our canonical stream records

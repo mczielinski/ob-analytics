@@ -5,7 +5,10 @@ Chapters live as jupytext py:percent scripts in ``docs/tutorial/src/``
 top-to-bottom (any error fails the build — the guarantee that the tutorial
 can never drift from the API), and renders the result to
 ``docs/tutorial/NN_slug.md`` plus extracted figure PNGs in
-``docs/tutorial/NN_slug_files/``. The generated files are gitignored;
+``docs/tutorial/NN_slug_files/``. A warning printed by any cell would be
+rendered into the page, and so would a traceback raised while a figure is
+displayed (the cell itself succeeds), so both fail the build too, once every
+chapter has been built. The generated files are gitignored;
 CI runs this before ``zensical build`` (see .github/workflows/docs.yml),
 and locally you do the same:
 
@@ -35,6 +38,9 @@ from nbconvert import MarkdownExporter
 REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "docs" / "tutorial" / "src"
 OUT = REPO / "docs" / "tutorial"
+
+# The first line of a printed warning: "path:line: UserWarning: message".
+_WARNING_LINE = re.compile(r"^.*?:\d+: (\w*Warning): .*$", flags=re.MULTILINE)
 
 
 def _title_of(markdown: str, fallback: str) -> str:
@@ -89,7 +95,27 @@ def _fold_solutions(body: str) -> str:
     return pattern.sub(fold, body)
 
 
-def build_chapter(path: Path) -> str:
+def _rendered_problems(nb) -> list[str]:
+    """The warnings and tracebacks in an executed notebook's outputs.
+
+    One ``cell N: ...`` line each.  These outputs would be rendered into the
+    page as they are.
+    """
+    found = []
+    for n, cell in enumerate(nb.cells):
+        for output in cell.get("outputs", []):
+            kind = output.get("output_type")
+            if kind == "error":
+                found.append(f"cell {n}: {output['ename']}: {output['evalue']}")
+            elif kind == "stream" and output.get("name") == "stderr":
+                found += [
+                    f"cell {n}: {m.group(0).strip()}"
+                    for m in _WARNING_LINE.finditer(output.get("text", ""))
+                ]
+    return found
+
+
+def build_chapter(path: Path) -> tuple[str, list[str]]:
     stem = path.stem
     nb = jupytext.read(path)
 
@@ -119,6 +145,7 @@ def build_chapter(path: Path) -> str:
     )
     client.execute()
     nb.cells.pop(0)  # drop the bootstrap cell before rendering
+    problems = _rendered_problems(nb)
     _mark_solutions(nb)
 
     exporter = MarkdownExporter()
@@ -145,7 +172,8 @@ def build_chapter(path: Path) -> str:
     (OUT / f"{stem}.md").write_text(
         f"---\ntitle: {title}\n---\n\n{body}", encoding="utf-8"
     )
-    return f"{stem}: {len(outputs)} figure(s), {time.perf_counter() - t0:.1f}s"
+    summary = f"{stem}: {len(outputs)} figure(s), {time.perf_counter() - t0:.1f}s"
+    return summary, problems
 
 
 def main(argv: list[str]) -> int:
@@ -158,9 +186,19 @@ def main(argv: list[str]) -> int:
     if not chapters:
         print(f"no chapter sources matching {prefixes} under {SRC}", file=sys.stderr)
         return 1
+    failed: dict[str, list[str]] = {}
     for chapter in chapters:
         print(f"building {chapter.relative_to(REPO)} ...", flush=True)
-        print(f"  {build_chapter(chapter)}")
+        summary, problems = build_chapter(chapter)
+        print(f"  {summary}")
+        if problems:
+            failed[chapter.name] = problems
+    if failed:
+        print("\nwarnings or errors rendered into the pages:", file=sys.stderr)
+        for name, lines in failed.items():
+            for line in lines:
+                print(f"  {name} {line}", file=sys.stderr)
+        return 1
     return 0
 
 

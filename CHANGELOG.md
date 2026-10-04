@@ -112,6 +112,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **A plot drawn on your own axes leaves your figure's layout alone** (#120).
+  With `ax=`, a matplotlib face used to call `tight_layout()` on the figure
+  that holds the axes. That moved panels you had placed, and warned when the
+  figure held axes `tight_layout` cannot place, such as a gridspec strip or a
+  colorbar. A face now lays out only a figure it creates. **If you draw
+  panels with `ax=`, call `fig.tight_layout()` yourself once every panel is
+  drawn.** On your axes, the `cancellations` colorbar now shares your
+  gridspec, so your `tight_layout()` can place it.
+
 - **A metric is computed when its plot is drawn** (#118). Building the gallery
   model, `available_concepts` and `result.plot` of another concept no longer
   run every registered metric. A metric that raises now keeps its gallery card,
@@ -157,6 +166,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the script that makes trades clickable, and the tutorial build dropped the
   figure entirely. The figure now displays as HTML in a notebook, as
   documented.
+- **The price-level depth is replayed in event order.** `price_level_volume`
+  and `depth_metrics` sorted rows on the timestamp alone, so the rows of one
+  instant were replayed bids first, then asks, by price, and a
+  `depth_summary` row was not always the book after the event it names. On
+  the bundled Bitstamp sample, for 44,043 of 156,719 new limit orders the last
+  row before the order was replayed after it, so "the book before the order"
+  already held the order. Both now use the order the per-order rebuild uses
+  (`schemas.time_order_keys`: the timestamp, then `sequence`, `event_id` and
+  `ingest_seq` where present). Each level's running total is also taken in
+  that order, so every `depth` row holds the level's volume after its own
+  event, and `depth` carries the `sequence` and `ingest_seq` columns over from
+  the events when they have them. The book replay (`price_level_snapshots`)
+  uses the same order, so its touch still equals the depth summary's. On the
+  sample, the book at the end of an
+  instant changes at 2,634 of 130,244 instants (the best bid or ask at 2,453),
+  because removing crossed levels depends on the order rows arrive in, and
+  `aggressiveness_bps` changes on 28,898 of 314,057 events. On a synthetic
+  session, which is never crossed, every event's last `depth_summary` row now
+  matches the per-order rebuild.
 - **`aggressiveness_bps` is measured against the book at the order's own
   time.** `order_aggressiveness` found the book standing before each order by
   taking the `depth_summary` row with the next-lower `event_id`. That is only
@@ -182,6 +210,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   pages say timestamps are tz-aware UTC. Tutorial chapter 3's LOBSTER round
   trip now passes `lot_size=1.0`; without it every size was written as a
   fraction of a lot, and the round trip read back no executed volume.
+- **The tutorial pages show no warnings** (#120). Chapter 3 now reads its
+  LOBSTER files back with the toy's tick size. With LOBSTER's one-cent
+  default, $99 came back as 9900 ticks against the original 99, so the
+  books before and after the round trip did not match. An empty book
+  snapshot no longer draws an empty legend. The docs build now fails when a
+  tutorial cell prints a warning or a figure fails to draw, and when a
+  gallery recipe raises a warning.
 - **An Independent Reserve capture no longer keeps orders cancelled before
   it started** (#315). cryptofeed takes the opening book from the venue's REST
   interface when the first stream message arrives. The venue serves that book
