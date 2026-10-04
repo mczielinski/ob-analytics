@@ -91,7 +91,15 @@ from ob_analytics.data import (
     save_data,
 )
 from ob_analytics.databento import DatabentoSettings, DatabentoSource
-from ob_analytics.datasets import toy_events, toy_l2_depth, toy_l2_trades, toy_trades
+from ob_analytics.datasets import (
+    ToyOrder,
+    match_toy_orders,
+    toy_events,
+    toy_l2_depth,
+    toy_l2_trades,
+    toy_orders,
+    toy_trades,
+)
 from ob_analytics.depth_l2 import DepthCsvSource
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
 from ob_analytics.features import (
@@ -250,6 +258,7 @@ __all__ = [
     "Source",
     "SourceSettings",
     "StaleOrder",
+    "ToyOrder",
     "TradeAttribution",
     "TradeSource",
     "__version__",
@@ -285,6 +294,7 @@ __all__ = [
     "load_data",
     "load_metric_plugins",
     "load_source_plugins",
+    "match_toy_orders",
     "ofi_by_horizon",
     "order_flow_imbalance",
     "register_bar_rule",
@@ -303,6 +313,7 @@ __all__ = [
     "toy_events",
     "toy_l2_depth",
     "toy_l2_trades",
+    "toy_orders",
     "toy_trades",
     "transaction_costs",
     "vpin_bucket_volume",

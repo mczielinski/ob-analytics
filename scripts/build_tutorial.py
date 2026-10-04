@@ -14,6 +14,11 @@ and locally you do the same:
 
     uv run python scripts/build_tutorial.py            # all chapters
     uv run python scripts/build_tutorial.py 00         # chapters matching a prefix
+
+An exercise's answer is written as ordinary cells tagged ``solution``
+(``# %% tags=["solution"]`` or ``# %% [markdown] tags=["solution"]``). They run
+like every other cell, so an answer that stops being true fails the build, and
+each run of them renders as one collapsed "Solution" block.
 """
 
 from __future__ import annotations
@@ -22,6 +27,7 @@ import json
 import re
 import shutil
 import sys
+import textwrap
 import time
 from pathlib import Path
 
@@ -40,6 +46,53 @@ _WARNING_LINE = re.compile(r"^.*?:\d+: (\w*Warning): .*$", flags=re.MULTILINE)
 def _title_of(markdown: str, fallback: str) -> str:
     m = re.search(r"^# (.+)$", markdown, flags=re.MULTILINE)
     return m.group(1).strip() if m else fallback
+
+
+_SOLUTION_START = "<!-- solution-start -->"
+_SOLUTION_END = "<!-- solution-end -->"
+
+
+def _mark_solutions(nb) -> None:
+    """Put marker cells around each run of cells tagged ``solution``.
+
+    An exercise's answer is written as ordinary cells (``# %% tags=["solution"]``
+    in the chapter source), so it runs in the build like every other cell. The
+    markers let :func:`_fold_solutions` find the rendered answer afterwards.
+    """
+    import nbformat
+
+    cells = []
+    in_solution = False
+    for cell in nb.cells:
+        tagged = "solution" in cell.get("metadata", {}).get("tags", [])
+        if tagged and not in_solution:
+            cells.append(nbformat.v4.new_markdown_cell(_SOLUTION_START))
+        elif in_solution and not tagged:
+            cells.append(nbformat.v4.new_markdown_cell(_SOLUTION_END))
+        cells.append(cell)
+        in_solution = tagged
+    if in_solution:
+        cells.append(nbformat.v4.new_markdown_cell(_SOLUTION_END))
+    nb.cells = cells
+
+
+def _fold_solutions(body: str) -> str:
+    """Render each marked answer as a collapsed "Solution" block.
+
+    The block is a ``???`` admonition (pymdownx.details), so the reader sees a
+    closed "Solution" bar and opens it after trying the exercise. Everything
+    inside, code and outputs, is indented to sit in the block.
+    """
+    pattern = re.compile(
+        re.escape(_SOLUTION_START) + r"\n(.*?)\n?" + re.escape(_SOLUTION_END),
+        flags=re.DOTALL,
+    )
+
+    def fold(match: re.Match[str]) -> str:
+        answer = textwrap.indent(match.group(1).strip("\n"), "    ")
+        return f'??? success "Solution"\n\n{answer}\n'
+
+    return pattern.sub(fold, body)
 
 
 def _rendered_problems(nb) -> list[str]:
@@ -93,12 +146,14 @@ def build_chapter(path: Path) -> tuple[str, list[str]]:
     client.execute()
     nb.cells.pop(0)  # drop the bootstrap cell before rendering
     problems = _rendered_problems(nb)
+    _mark_solutions(nb)
 
     exporter = MarkdownExporter()
     body, resources = exporter.from_notebook_node(
         nb,
         resources={"output_files_dir": f"{stem}_files", "unique_key": stem},
     )
+    body = _fold_solutions(body)
 
     files_dir = OUT / f"{stem}_files"
     if files_dir.exists():

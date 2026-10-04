@@ -221,8 +221,9 @@ fig = plot("queue_position", level="L3", **payload)
 #     own engine guarantees bids never cross asks. The Bitstamp public
 #     feed reconstructed here is a **placement/cancellation diff
 #     stream** — and it genuinely contains crossed *resting* orders
-#     (we've verified a bid resting above an ask for ~1.5 minutes,
-#     neither ever filling). `order_book()` replays such feeds
+#     (on the bundled sample, most of the crossed time comes from one
+#     order that stays in the book long after it has left the venue;
+#     the second exercise below finds it). `order_book()` replays such feeds
 #     faithfully rather than silently "fixing" them: a crossed book in
 #     your output is a property of the feed, not a reconstruction bug.
 #     Know which kind of feed you're holding before you trust an
@@ -230,6 +231,98 @@ fig = plot("queue_position", level="L3", **payload)
 #     [Data quality explainer](../data-quality.md) shows how to measure
 #     the crossing (`validate`) and, if you must, uncross it for display.
 #
+# ## Exercises
+#
+# Try each one before you open its solution. Each solution runs when the
+# documentation is built, so the answers are checked against this
+# version of the library.
+#
+# ### Exercise 1: where does a new order queue?
+#
+# A new trader, Jo, posts a bid of 1 lot at 99 at t=10. Before you run
+# anything, answer:
+#
+# 1. What is Jo's queue rank at 99 when the bid arrives, and how many lots
+#    are ahead of it?
+# 2. Sam sells 3 lots at t=56. How much of Jo's bid fills?
+# 3. Now move Jo's bid to 100. What changes in Sam's sweep?
+#
+# Write the session with `toy_orders()` and `match_toy_orders` (see
+# [Change the script](00_toy_session.md#change-the-script)), then check
+# your answers with `queue_positions(events, levels="all")` from
+# `ob_analytics.queue` and the trades.
+
+# %% tags=["solution"]
+from ob_analytics import ToyOrder, match_toy_orders, toy_orders
+from ob_analytics.queue import queue_positions
+
+orders = toy_orders()
+orders["Jo"] = ToyOrder(at=10, direction="bid", price=99, volume=1)
+jo_events, jo_trades = match_toy_orders(orders)
+jo_id = jo_events.loc[jo_events["actor"] == "Jo", "id"].iloc[0]
+queue = queue_positions(jo_events, levels="all")
+jo_queue = queue[queue["id"] == jo_id]
+print(jo_queue[["price", "rank", "ahead_volume"]].to_string(index=False))
+print()
+sweep = jo_trades[jo_trades["taker_actor"] == "Sam"]
+print(sweep[["price", "volume", "maker_actor"]].to_string(index=False))
+assert jo_queue["rank"].iloc[0] == 3 and jo_queue["ahead_volume"].iloc[0] == 4
+assert "Jo" not in set(sweep["maker_actor"])
+
+# %% [markdown] tags=["solution"]
+# Jo joins the **back** of the 99 queue: rank 3, behind Alice and Ivy,
+# with their 4 lots ahead. Sam's 3 lots fill Alice's 2 and 1 of Ivy's,
+# and stop before they reach Jo, so nothing of Jo's bid fills.
+
+# %% tags=["solution"]
+orders["Jo"] = ToyOrder(at=10, direction="bid", price=100, volume=1)
+jo_events, jo_trades = match_toy_orders(orders)
+sweep = jo_trades[jo_trades["taker_actor"] == "Sam"]
+print(sweep[["price", "volume", "maker_actor"]].to_string(index=False))
+assert list(sweep["maker_actor"]) == ["Jo", "Alice"]
+
+# %% [markdown] tags=["solution"]
+# At 100 Jo's bid is alone at a better price, so it is first in line from
+# t=10, although Alice and Ivy arrived earlier: price comes before time.
+# Sam fills Jo at 100, then Alice's 2 lots at 99, and Ivy gets nothing.
+# One tick bought Jo the front of the queue, which is the trade-off Hana
+# faced: pay more, or wait.
+
+# %% [markdown]
+# ### Exercise 2: find the order that crosses the book
+#
+# The pitfall above says the Bitstamp sample's book is crossed. Find the
+# order responsible: which side it rests on, at what price, and how long
+# it holds the touch after the venue no longer has it.
+#
+# Hint: a matching engine fills the better price first, so a trade that
+# prints *through* a resting order shows that the order has already
+# left the venue. `detect_stale_orders` from `ob_analytics.analytics`
+# lists the orders the feed never removed after such a trade, worst
+# first.
+
+# %% tags=["solution"]
+from ob_analytics.analytics import detect_stale_orders
+
+worst = detect_stale_orders(result.events, result.trades)[0]
+print(f"side:            {worst.direction}")
+print(f"price:           {worst.price:,.2f}")
+print(f"disproved at:    {worst.disproved_at:%H:%M:%S}")
+print(f"held the touch:  {worst.touch_seconds / 60:.1f} minutes")
+assert worst.direction == "ask" and worst.touch_seconds > 20 * 60
+
+# %% [markdown] tags=["solution"]
+# One ask, at 78,333.00. It came from the opening snapshot of the book.
+# Trades printed above it about two and a half minutes into the
+# capture, so it had already gone from the venue, but the feed never
+# reported it again. It then held the ask touch for about 27 minutes,
+# nearly the whole capture, and that one order is why the faithful book
+# is crossed for most of the session. The
+# [Data quality explainer](../data-quality.md#stale-resting-orders)
+# shows the crossed share of the session falling from about 92% to
+# about 1% once it is removed.
+
+# %% [markdown]
 # **Next:** [Loading order data](03_loading_data.md) — where these feed
 # differences become practical.
 #

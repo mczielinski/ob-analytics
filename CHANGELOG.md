@@ -22,6 +22,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   error, is replaced with `**********`. `ob-analytics sources` lists the
   variables each source needs. No built-in source needs a key yet. See "Use an
   API key".
+- **Exercises and an editable toy book in the tutorial** (#121). Chapters 2,
+  4 and 6 end with exercises: where a new order queues and which order keeps
+  the Bitstamp book crossed (chapter 2), what happens if Eve does not cancel
+  (chapter 4), and how the VPIN bucket size changes the result (chapter 6).
+  Each solution is collapsed until the reader opens it, and runs when the
+  documentation is built, so a wrong answer fails the build. The toy session
+  page now has a book replay to step through, and shows how to rewrite the
+  session: `toy_orders()` returns its twelve orders as `ToyOrder`s keyed by
+  actor, and `match_toy_orders(orders)` matches an edited script by
+  price–time priority and returns its events and trades in the layout of
+  `toy_events()` and `toy_trades()`.
 - **Run a large input one time window at a time** (#116).
   `Pipeline.run_windows(source, boundaries, output)` cuts one input at the
   given times and runs the depth stages on one window at a time, so their peak
@@ -162,6 +173,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The book replay keeps its click script in a notebook** (#121). IPython
+  displayed a `BookReplayFigure` through Plotly's own renderer, which drops
+  the script that makes trades clickable, and the tutorial build dropped the
+  figure entirely. The figure now displays as HTML in a notebook, as
+  documented.
+- **Stale orders and crossing are measured correctly on display tables.**
+  `display_result` converts sizes to base-asset floats. `price_level_volume`
+  summed those floats, and a level whose last order left could keep a
+  remainder such as `3e-17` in place of `0`. The level then stayed in the
+  faithful book. On the bundled sample, 22,915 depth rows kept a remainder.
+  `detect_stale_orders` reported a `touch_seconds` of `0.0` for the stale ask
+  at 78,333, which holds the touch for 1,645.7 s, and `data_quality_summary`
+  reported the book crossed 92.03% of the time against 91.61%.
+  `price_level_volume` now sums float sizes that sit on a decimal grid as
+  whole multiples of that grid, the way it sums integer lots, so the display
+  tables give the same results as the pipeline's own tables. Float sizes on no
+  decimal grid, such as a size worked out by float subtraction, are still
+  summed as floats, and `price_level_volume` now warns when it does that.
 - **The price-level depth is replayed in event order.** `price_level_volume`
   and `depth_metrics` sorted rows on the timestamp alone, so the rows of one
   instant were replayed bids first, then asks, by price, and a

@@ -365,6 +365,54 @@ amihud(tape).dropna().round({"amihud": 5})
 # The point of the whole chapter: these are ordinary functions over a
 # trades table, and on a small tape you can check every number by hand.
 #
+# ## Exercise: move the VPIN bucket
+#
+# The pitfall says `bucket_volume` is not a neutral setting. Test that on
+# the constructed tape, which holds 36 units of volume. Keep
+# `n_buckets=3` and, before you run anything, predict for
+# `bucket_volume=4` and `bucket_volume=16`:
+#
+# 1. How many buckets does the tape fill?
+# 2. Does the peak `vpin_avg` rise above or fall below the 0.833 it
+#    reaches with 8-unit buckets, and why?
+
+# %% tags=["solution"]
+rows = {}
+for size in (4.0, 8.0, 16.0):
+    # 16-unit buckets fill fewer than n_buckets, and compute_vpin warns.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        v = compute_vpin(tape, bucket_volume=size, n_buckets=3)
+    rows[f"bucket_volume={size:g}"] = {
+        "buckets": len(v),
+        "one-sided buckets": int((v["vpin"] == 1).sum()),
+        "peak vpin_avg": round(v["vpin_avg"].max(), 3),
+    }
+by_size = pd.DataFrame(rows).T
+print(by_size.to_string())
+assert by_size["buckets"].tolist() == [9, 4, 2]
+assert by_size["peak vpin_avg"].tolist() == [1.0, 0.833, 0.625]
+
+# %% [markdown] tags=["solution"]
+# **4 units: nine buckets, and the peak rises to 1.0.** Each calm pair
+# of trades fills one balanced bucket (VPIN 0), and the five 4-unit buys
+# of the accumulation fill five buckets of pure buying (VPIN 1). Three of
+# those in a row put the trailing average at 1.0, where it stays for
+# three buckets before it falls back.
+#
+# **16 units: two buckets, and the peak falls to 0.625.** Each bucket
+# mixes calm trading with part of the accumulation, so neither is
+# one-sided (0.5 and 0.75), and the informed run is diluted. With only
+# two buckets, the average also covers fewer buckets than the three it
+# was asked for.
+#
+# The tape did not change; only the clock did. Smaller buckets show a
+# short burst sharply, but each holds fewer trades, so on a real tape
+# they are noisier. Larger buckets are steadier but can hide the burst.
+# That is why a VPIN number means little without the bucket size beside
+# it.
+
+# %% [markdown]
 # **Next:** [The visualization system](07_visualization_system.md) — the
 # concepts, levels and backends behind every figure in this tutorial, and
 # how to compose your own.
