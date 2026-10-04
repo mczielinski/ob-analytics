@@ -1,9 +1,19 @@
-"""Tests for DepthMetricsEngine — crossed-book guards, deletions, event_id passthrough."""
+"""Tests for DepthMetricsEngine — crossed-book guards, deletions, event_id passthrough.
+
+Also the price-level book it is built on (:class:`PriceLevelBook`) and the
+replay of that book at many instants (:func:`price_level_snapshots`).
+"""
 
 import numpy as np
 import pandas as pd
+import pytest
 
-from ob_analytics.depth import DepthMetricsEngine
+from ob_analytics.depth import (
+    DepthMetricsEngine,
+    PriceLevelBook,
+    depth_metrics,
+    price_level_snapshots,
+)
 
 
 def _depth(*rows):
@@ -288,3 +298,103 @@ def test_interval_sums_sparse_matches_dense():
             f"mismatch: side={side} range_len={range_len} bins={bins} "
             f"levels={levels} got={got} ref={ref}"
         )
+
+
+class TestPriceLevelBook:
+    """The book at L2 that DepthMetricsEngine and the book replay share (#117)."""
+
+    def test_sets_replaces_and_removes_levels(self):
+        book = PriceLevelBook()
+        book.update(100, 5.0, 0)
+        book.update(99, 2.0, 0)
+        book.update(102, 3.0, 1)
+        book.update(100, 4.0, 0)  # a new size for an existing level
+        assert book.bid_prices.tolist() == [99, 100]
+        assert book.bid_volumes.tolist() == [2.0, 4.0]
+        book.update(100, 0, 0)  # zero removes the level
+        assert book.bid_prices.tolist() == [99]
+        assert book.ask_prices.tolist() == [102]
+
+    def test_fresh_quote_evicts_the_levels_it_crosses(self):
+        book = PriceLevelBook()
+        book.update(100, 1.0, 0)
+        book.update(103, 1.0, 0)
+        # A new ask at 102 crosses the stale bid at 103 only.
+        assert book.update(102, 1.0, 1) is True
+        assert book.bid_prices.tolist() == [100]
+        assert book.ask_prices.tolist() == [102]
+
+    def test_locked_book_is_kept(self):
+        book = PriceLevelBook()
+        book.update(100, 1.0, 0)
+        assert book.update(100, 1.0, 1) is False
+        assert book.bid_prices.tolist() == [100]
+        assert book.ask_prices.tolist() == [100]
+
+    def test_float_prices_are_not_rounded(self):
+        book = PriceLevelBook(price_dtype=np.float64)
+        book.update(100.25, 1.0, 0)
+        book.update(100.75, 1.0, 1)
+        assert book.bid_prices.tolist() == [100.25]
+        assert book.ask_prices.tolist() == [100.75]
+
+
+def _replay_depth():
+    """Six depth rows; the 00:00:04 ask at 101 crosses the stale bid at 102."""
+    return _depth(
+        ("2026-01-01 00:00:01", 100, 5, "bid"),
+        ("2026-01-01 00:00:01", 103, 4, "ask"),
+        ("2026-01-01 00:00:02", 102, 2, "bid"),
+        ("2026-01-01 00:00:03", 104, 1, "ask"),
+        ("2026-01-01 00:00:04", 101, 3, "ask"),
+        ("2026-01-01 00:00:05", 100, 0, "bid"),
+    ).assign(timestamp=lambda df: df["timestamp"].dt.tz_localize("UTC"))
+
+
+class TestPriceLevelSnapshots:
+    """The L2 book at many instants, in one pass over the depth table (#117)."""
+
+    def test_touch_matches_depth_summary_at_every_row(self):
+        depth = _replay_depth()
+        summary = depth_metrics(depth)
+        times = depth["timestamp"].drop_duplicates()
+        for t, snap in zip(times, price_level_snapshots(depth, times), strict=True):
+            row = summary[summary["timestamp"] <= t].iloc[-1]
+            bids, asks = snap["bids"], snap["asks"]
+            assert (bids["price"].iloc[0] if len(bids) else 0) == row["best_bid_price"]
+            assert (bids["volume"].iloc[0] if len(bids) else 0) == row["best_bid_vol"]
+            assert (asks["price"].iloc[-1] if len(asks) else 0) == row["best_ask_price"]
+            assert (asks["volume"].iloc[-1] if len(asks) else 0) == row["best_ask_vol"]
+
+    def test_crossed_level_is_evicted(self):
+        depth = _replay_depth()
+        (snap,) = price_level_snapshots(depth, [pd.Timestamp("2026-01-01 00:00:04Z")])
+        assert snap["bids"]["price"].tolist() == [100]
+        # order_book's convention: asks best last.
+        assert snap["asks"]["price"].tolist() == [104, 103, 101]
+        assert snap["asks"]["liquidity"].tolist() == [8, 7, 3]
+
+    def test_keeps_the_order_of_times_and_their_units(self):
+        depth = _replay_depth()
+        times = [
+            pd.Timestamp("2026-01-01 00:00:05Z"),
+            pd.Timestamp("2026-01-01 00:00:02Z"),
+        ]
+        late, early = price_level_snapshots(depth, times)
+        assert late["timestamp"] == times[0] and early["timestamp"] == times[1]
+        assert early["bids"]["price"].tolist() == [102, 100]
+        assert late["bids"]["price"].tolist() == []
+        assert early["bids"]["volume"].dtype == depth["volume"].dtype
+
+    def test_max_levels(self):
+        depth = _replay_depth()
+        (snap,) = price_level_snapshots(
+            depth, [pd.Timestamp("2026-01-01 00:00:04Z")], max_levels=2
+        )
+        assert snap["asks"]["price"].tolist() == [103, 101]
+
+    def test_naive_instant_on_aware_table_is_refused(self):
+        with pytest.raises(TypeError, match="tz-naive"):
+            price_level_snapshots(
+                _replay_depth(), [pd.Timestamp("2026-01-01 00:00:04")]
+            )

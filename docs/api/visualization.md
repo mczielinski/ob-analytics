@@ -42,13 +42,51 @@ a single level resolves it automatically, so you pass only the concept name;
 `level=`.
 
 Concepts with both L2 and L3 faces: `trade_tape`, `order_activity`,
-`cancellations`, `book_snapshot`, `depth_chart`, `liquidity_at_touch`. L2-only:
+`cancellations`, `book_snapshot`, `depth_chart`, `book_replay`,
+`liquidity_at_touch`. L2-only:
 `time_series`, `depth_heatmap`, `volume_percentiles`, `events_histogram`,
 `hidden_executions`, `price_view`, `trade_size`. L3-only: `order_outcome`,
 `queue_position`. Level-less analytics: `vpin`, `order_flow_imbalance`,
 `kyle_lambda`, `ofi_horizon`, `l1_ticker`, `book_signals`, `bars`,
 `transaction_costs`, `trading_halts`. The first five are also registered
 [metrics](metrics.md), so `result.plot("vpin")` computes and draws them.
+
+## Book replay
+
+`book_replay` steps through the book over part of a run. The ladder shows the
+book at one instant per `interval` (1 s by default). Beside it, the trades
+panel shows every trade of the replay and the mid, with a line at the time
+on screen. Drag the slider, or press a play button: `Play 1×` is real time,
+and each speed in `speeds` gets a button. A speed is smooth only when a frame
+lasts about 50 ms or less, so at 1 s per frame, `Play 20×` glides and the
+slower speeds step. For smoother slow playback, pass a shorter `interval`.
+The file grows with the number of frames, which `max_frames` caps at 600.
+
+Click a trade to move the replay to the last frame at or before it. The price
+level the trade took is marked in the trade's colour: the ask for a buy, the
+bid for a sell.
+
+The L2 face replays the depth table, so its touch equals the depth summary's
+at every frame. The L3 face rebuilds the per-order book from the events at
+each frame, with stale crossed orders removed (`uncross=True`, the default
+here) so that both faces show the same market. Pass `uncross=False` for the
+faithful L3 book. Every frame keeps one price range: the mid's path, wide
+enough for about `price_levels` price levels per side.
+
+```python
+from ob_analytics.visualization import plot_result
+
+fig = plot_result(result, "book_replay", "L3", backend="plotly")
+fig.write_html("replay.html")
+```
+
+The replay is drawn by Plotly only. The clicking needs a script, which Plotly
+cannot store inside a figure, so the replay is a `BookReplayFigure`: a Plotly
+figure that adds the script whenever it becomes HTML (`write_html`,
+`to_html`, `show`, and display in a notebook). In a notebook it displays as
+HTML, so the notebook must be trusted for the clicking to work.
+
+::: ob_analytics.visualization.prepare.book_replay
 
 ## Dispatcher
 
