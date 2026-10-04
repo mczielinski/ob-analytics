@@ -90,7 +90,12 @@ def _create_axes(
     ax: Axes | None,
     figsize: tuple[float, float] = (10, 6),
 ) -> tuple[Figure, Axes]:
-    """Return ``(fig, ax)``, creating a new figure only when *ax* is ``None``."""
+    """Return ``(fig, ax)``, creating a new figure only when *ax* is ``None``.
+
+    A renderer lays out only a figure it created here.  A caller's figure may
+    hold axes that ``tight_layout`` cannot place (a spanning colorbar, a
+    gridspec strip), so its layout stays the caller's.
+    """
     if ax is not None:
         fig = ax.get_figure()
         assert isinstance(fig, Figure)
@@ -137,7 +142,7 @@ def save_figure(
         ``bbox_inches="tight"`` explicitly to crop to artist extents —
         it is not the default because it forces a second full draw
         (roughly doubling save time on dense figures), and every
-        renderer already applies ``tight_layout``.
+        renderer already lays out the figures it creates.
     """
     fig.savefig(path, dpi=dpi, **kwargs)  # type: ignore
 
@@ -153,6 +158,7 @@ def mpl_time_series(
 ) -> Figure:
     """Render a time-series step plot."""
     df = data["df"]
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(10, 6))
     sns.lineplot(data=df, x="ts", y="val", drawstyle="steps-post", ax=ax)
     ax.set_title(data["title"])
@@ -160,7 +166,8 @@ def mpl_time_series(
     ax.set_ylabel(data["y_label"])
     format_time_axis(ax)
     ax.grid(True)
-    fig.tight_layout()
+    if own_figure:
+        fig.tight_layout()
     return fig
 
 
@@ -210,6 +217,7 @@ def mpl_trades(
     the full data extent (no quantile clip), so spike prints stay visible.
     """
     pal = theme.palette
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(10, 6))
 
     mid_line = data.get("mid_line")
@@ -247,7 +255,8 @@ def mpl_trades(
     ax.grid(True)
     if any_pts:
         ax.legend(loc="upper right")
-    fig.tight_layout()
+    if own_figure:
+        fig.tight_layout()
     return fig
 
 
@@ -519,6 +528,7 @@ def mpl_price_levels(
     col_bias = data["col_bias"]
     price_by = data["price_by"]
 
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(12, 7))
 
     # The depth heatmap reads best on a neutral background: a gray facecolor so
@@ -638,7 +648,8 @@ def mpl_price_levels(
             by_label[h.get_label()] = h
     ax.legend(by_label.values(), by_label.keys())
 
-    fig.tight_layout()
+    if own_figure:
+        fig.tight_layout()
     return fig
 
 
@@ -655,6 +666,7 @@ def mpl_event_map(
 
     col_pal = {"bid": pal.bid, "ask": pal.ask}
 
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(10, 6))
     if events.empty:
         ax.set_title("Limit Order Event Map (no data)")
@@ -750,7 +762,8 @@ def mpl_event_map(
     ]
     ax.legend(handles=legend_handles, loc="upper right", framealpha=0.9)
     format_time_axis(ax)
-    fig.tight_layout()
+    if own_figure:
+        fig.tight_layout()
     return fig
 
 
@@ -764,6 +777,7 @@ def mpl_volume_map(
     log_scale = data["log_scale"]
     col_pal = {"bid": pal.bid, "ask": pal.ask}
 
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(10, 6))
     if log_scale:
         ax.set_yscale("log")
@@ -781,7 +795,8 @@ def mpl_volume_map(
     ax.set_ylabel("Volume")
     ax.set_title("Volume Map of Flashed Limit Orders")
     format_time_axis(ax)
-    fig.tight_layout()
+    if own_figure:
+        fig.tight_layout()
     return fig
 
 
@@ -817,6 +832,7 @@ def _mpl_book_bars(
     check_book_payload_level(data, per_order=per_order)
     bids = data["bids"]
     asks = data["asks"]
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(11, 8))
 
     thickness = book_bar_thickness(bids, asks) * 0.9
@@ -857,8 +873,10 @@ def _mpl_book_bars(
     ax.set_xlabel("Size (per order)" if per_order else "Size (aggregate per level)")
     ax.set_ylabel("Price")
     ax.set_xlim(left=0)
-    ax.legend(loc="best")
-    fig.tight_layout()
+    if not (bids.empty and asks.empty):
+        ax.legend(loc="best")
+    if own_figure:
+        fig.tight_layout()
     return fig
 
 
@@ -888,6 +906,7 @@ def _mpl_depth_curve(
     """
     pal = theme.palette
     check_book_payload_level(data, per_order=per_order)
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(12, 7))
     for side, color, label in (
         (data["bids"], pal.bid, "bid"),
@@ -912,7 +931,8 @@ def _mpl_depth_curve(
     ax.set_xlabel("Price")
     ax.set_ylabel("Cumulative liquidity")
     ax.legend(loc="upper center")
-    fig.tight_layout()
+    if own_figure:
+        fig.tight_layout()
     return fig
 
 
@@ -1011,7 +1031,12 @@ def mpl_cancellations_per_order(
         panel_ax.set_ylabel("Distance from touch (bps, log)")
 
     if last_hb is not None:
-        cbar = fig.colorbar(last_hb, ax=[p[0] for p in panels])
+        # One panel (the caller's ax) takes a single Axes, not a list: the
+        # colorbar then shares the caller's gridspec, so the caller's
+        # tight_layout can place it.  The two-panel colorbar is placed by the
+        # constrained engine.
+        cbar_ax = panels[0][0] if len(panels) == 1 else [p[0] for p in panels]
+        cbar = fig.colorbar(last_hb, ax=cbar_ax)
         cbar.set_label("Cancelled orders per bin")
     # Layout is managed by the constrained engine (ax is None) or the caller
     # (ax provided); tight_layout cannot handle the multi-axes colorbar.
@@ -1029,6 +1054,7 @@ def mpl_order_activity_per_order(
     (see :func:`prepare_order_activity_l3_data`) and annotated "showing n of N".
     """
     pal = theme.palette
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(11, 7))
     show_markers = data.get("show_markers", False)
     drew_any = False
@@ -1105,7 +1131,8 @@ def mpl_order_activity_per_order(
         handles.extend(_hidden_trade_legend_handles(hidden_trades_df, pal))
     if handles:
         ax.legend(handles=handles, loc="upper right")
-    fig.tight_layout()
+    if own_figure:
+        fig.tight_layout()
     return fig
 
 
@@ -1120,6 +1147,7 @@ def mpl_queue_position_per_order(
     × (filled) / ○ (cancelled) at the order's last seen rank when sparse.
     """
     pal = theme.palette
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(11, 7))
     show_markers = data.get("show_markers", False)
     drew_any = False
@@ -1171,7 +1199,8 @@ def mpl_queue_position_per_order(
             Line2D([0], [0], color=pal.partial, label="still resting"),
         ]
         ax.legend(handles=handles, loc="upper right")
-    fig.tight_layout()
+    if own_figure:
+        fig.tight_layout()
     return fig
 
 
@@ -1181,6 +1210,7 @@ def mpl_liquidity_at_touch(
 ) -> Figure:
     """L2 (MBP) liquidity at the touch: best bid/ask resting size over time."""
     pal = theme.palette
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(10, 6))
     ts = data["timestamp"]
     # Thin, semi-transparent step lines so the bid and ask series stay legible
@@ -1232,7 +1262,8 @@ def mpl_liquidity_at_touch(
     if len(ts) > 0:
         ax.legend(loc="upper right")
     ax.grid(True)
-    fig.tight_layout()
+    if own_figure:
+        fig.tight_layout()
     return fig
 
 
@@ -1245,6 +1276,7 @@ def mpl_liquidity_at_touch_per_order(
     A ``pcolormesh`` of order age over time (x) x FIFO rank (y, 1 = front at the
     bottom); pale = recent churn, dark = sticky liquidity.
     """
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(12, 6))
     ages = data["ages"]
     times = data["times"]
@@ -1271,7 +1303,8 @@ def mpl_liquidity_at_touch_per_order(
     ax.set_xlabel("Time")
     ax.set_ylabel(f"Queue rank (1 = front, {side})")
     ax.set_title(f"Queue composition at the touch ({side})")
-    fig.tight_layout()
+    if own_figure:
+        fig.tight_layout()
     return fig
 
 
@@ -1281,6 +1314,7 @@ def mpl_price_view(
 ) -> Figure:
     """L2 price view: spread ribbon + volume-weighted microprice over time."""
     pal = theme.palette
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(11, 6))
     if len(data["timestamp"]) == 0:
         ax.set_title("Price view (no data)")
@@ -1340,7 +1374,8 @@ def mpl_price_view(
     ax.set_ylabel("Price")
     ax.set_title("Price view — spread ribbon + microprice")
     ax.legend(loc="upper right")
-    fig.tight_layout()
+    if own_figure:
+        fig.tight_layout()
     return fig
 
 
@@ -1357,6 +1392,7 @@ def mpl_l1_ticker(
     if "bid" in data:
         return _mpl_l1_card(data, ax, theme)
     pal = theme.palette
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(11, 5))
     if len(data["timestamp"]) == 0:
         ax.set_title("Level 1 quote (no data)")
@@ -1378,7 +1414,8 @@ def mpl_l1_ticker(
     ax.set_xlabel("Time")
     ax.set_ylabel("Price")
     ax.set_title("Level 1 quote — best bid, best ask, last trade")
-    fig.tight_layout()
+    if own_figure:
+        fig.tight_layout()
     return fig
 
 
@@ -1431,6 +1468,7 @@ def mpl_book_signals(
     them.
     """
     pal = theme.palette
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(11, 6))
     x = mdates.date2num(data["timestamp"])
 
@@ -1494,7 +1532,8 @@ def mpl_book_signals(
     handles_l, labels_l = ax.get_legend_handles_labels()
     handles_r, labels_r = ax2.get_legend_handles_labels()
     ax.legend(handles_l + handles_r, labels_l + labels_r, loc="upper right", fontsize=9)
-    fig.tight_layout()
+    if own_figure:
+        fig.tight_layout()
     return fig
 
 
@@ -1504,6 +1543,7 @@ def mpl_trade_size(
 ) -> Figure:
     """Trade-size strip: jittered execution dots on a log size axis, by side."""
     pal = theme.palette
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(11, 4.5))
     drew = False
     for side, color, base, label in (
@@ -1532,7 +1572,8 @@ def mpl_trade_size(
     ax.grid(True, axis="x", which="both", alpha=0.3)  # round-number decades
     if drew:
         ax.legend(loc="upper right")
-    fig.tight_layout()
+    if own_figure:
+        fig.tight_layout()
     return fig
 
 
@@ -1542,6 +1583,7 @@ def mpl_order_outcome_per_order(
 ) -> Figure:
     """L3 (MBO) order outcome: each order as placement distance x size, by fate."""
     pal = theme.palette
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(12, 7))
     any_pts = False
     # Draw the dominant 'cancelled' class first (underneath) so the rarer
@@ -1574,7 +1616,8 @@ def mpl_order_outcome_per_order(
     ax.set_ylabel("Order size")
     if any_pts:
         ax.legend(loc="upper right")
-    fig.tight_layout()
+    if own_figure:
+        fig.tight_layout()
     return fig
 
 
@@ -1590,6 +1633,7 @@ def mpl_trade_tape_per_order(
     threshold the lollipops are per-second VWAPs.
     """
     pal = theme.palette
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(12, 7))
     dense = data.get("dense", False)
     # Maker resting spans: faint underneath the lollipops.  Thinner/fainter when
@@ -1647,7 +1691,8 @@ def mpl_trade_tape_per_order(
     ax.set_title("Trade tape with maker order lifecycles")
     if any_pts:
         ax.legend(loc="upper right")
-    fig.tight_layout()
+    if own_figure:
+        fig.tight_layout()
     return fig
 
 
@@ -1671,6 +1716,7 @@ def mpl_volume_percentiles(
 
     pl = 0.1 if perc_line else 0
 
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(12, 8))
     if asks_cumsum.empty:
         ax.set_title("Volume Percentiles (no data)")
@@ -1733,7 +1779,8 @@ def mpl_volume_percentiles(
         ncol=1,
         borderaxespad=0.0,
     )
-    fig.tight_layout(rect=(0.0, 0.0, 0.85, 1.0))
+    if own_figure:
+        fig.tight_layout(rect=(0.0, 0.0, 0.85, 1.0))
     return fig
 
 
@@ -1747,6 +1794,7 @@ def mpl_events_histogram(
     val = data["val"]
     bw = data["bw"]
 
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(12, 7))
     if events.empty:
         ax.set_title(f"Events {val} distribution (no data)")
@@ -1770,7 +1818,8 @@ def mpl_events_histogram(
     ax.set_title(f"Events {val} distribution")
     ax.set_xlabel(val.capitalize())
     ax.set_ylabel("Count")
-    fig.tight_layout()
+    if own_figure:
+        fig.tight_layout()
     return fig
 
 
@@ -1784,6 +1833,7 @@ def mpl_vpin(
     threshold = data["threshold"]
     bar_width = data["bar_width"]
 
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(12, 5))
     if vpin_df.empty:
         # A capture shorter than one bucket fills none; an empty datetime
@@ -1839,7 +1889,8 @@ def mpl_vpin(
     ax.set_title("Volume-Synchronized Probability of Informed Trading")
     format_time_axis(ax)
     ax.legend(loc="upper left", fontsize=9)
-    fig.tight_layout()
+    if own_figure:
+        fig.tight_layout()
     return fig
 
 
@@ -1861,6 +1912,7 @@ def mpl_transaction_costs(
     realized = data["realized"]
     horizon = data["horizon"]
 
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(12, 5))
 
     ax.scatter(
@@ -1911,7 +1963,8 @@ def mpl_transaction_costs(
     ax.set_title(f"Transaction costs (realized spread at {horizon})")
     format_time_axis(ax)
     ax.legend(loc="upper left", fontsize=9)
-    fig.tight_layout()
+    if own_figure:
+        fig.tight_layout()
     return fig
 
 
@@ -1947,6 +2000,7 @@ def mpl_order_flow_imbalance(
     else:
         bar_width = 0.001
 
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(12, 5))
 
     ax.bar(
@@ -1979,7 +2033,8 @@ def mpl_order_flow_imbalance(
         ax2.set_ylabel("Price", color=pal.secondary_axis)
         ax2.tick_params(axis="y", labelcolor=pal.secondary_axis)
 
-    fig.tight_layout()
+    if own_figure:
+        fig.tight_layout()
     return fig
 
 
@@ -2001,6 +2056,7 @@ def mpl_ofi_horizon(
     smooth (persistent pressure), readable in a single compact panel.
     """
     pal = theme.palette
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(11, 4.2))
     ofi = data["ofi"]
     horizons = data["horizons"]
@@ -2053,7 +2109,8 @@ def mpl_ofi_horizon(
     format_time_axis(ax)
     ax.set_xlabel("Time")
     ax.set_title("Order flow imbalance — horizon graph (buy + / sell −)")
-    fig.tight_layout()
+    if own_figure:
+        fig.tight_layout()
     return fig
 
 
@@ -2068,6 +2125,7 @@ def mpl_kyle_lambda(
     r_squared = data["r_squared"]
     t_stat = data["t_stat"]
 
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(8, 6))
 
     ax.scatter(
@@ -2110,7 +2168,8 @@ def mpl_kyle_lambda(
     ax.set_title(title)
     if not np.isnan(lambda_):  # the fit line is the only labelled artist
         ax.legend(loc="upper left")
-    fig.tight_layout()
+    if own_figure:
+        fig.tight_layout()
     return fig
 
 
@@ -2129,6 +2188,7 @@ def mpl_hidden_executions(
     hidden = data["hidden"]
     has_hidden = data["has_hidden"]
 
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(12, 6))
 
     if has_hidden and not hidden.empty:
@@ -2201,7 +2261,8 @@ def mpl_hidden_executions(
             )
     if handles:
         ax.legend(handles=handles, loc="upper left")
-    fig.tight_layout()
+    if own_figure:
+        fig.tight_layout()
     return fig
 
 
@@ -2215,6 +2276,7 @@ def mpl_trading_halts(
     halt_periods = data["halt_periods"]
     has_halts = data["has_halts"]
 
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(12, 6))
 
     if not trades.empty:
@@ -2250,7 +2312,8 @@ def mpl_trading_halts(
     ax.set_ylabel("Price")
     format_time_axis(ax)
     ax.legend(loc="upper left")
-    fig.tight_layout()
+    if own_figure:
+        fig.tight_layout()
     return fig
 
 
@@ -2282,6 +2345,7 @@ def mpl_bars(
     rising = np.asarray(data["rising"])
     on_clock = data["x_axis"] == "time"
 
+    own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(12, 6))
     if on_clock:
         x = mdates.date2num(data["x"])
@@ -2351,7 +2415,8 @@ def mpl_bars(
         loc="upper left",
         fontsize=9,
     )
-    fig.tight_layout()
+    if own_figure:
+        fig.tight_layout()
     return fig
 
 

@@ -4,8 +4,10 @@ Runs every spec in ``docs/examples/gallery_examples.py`` on the bundled
 sample, saves each figure, and writes ``docs/gallery/index.md``: a
 thumbnail grid grouped by category, then one section per example showing
 the full figure, its caption, and the exact function that produced it.
-The generated page and images are gitignored; CI runs this before
-``zensical build`` (see .github/workflows/docs.yml), and locally:
+A warning raised while rendering an example fails the build: a reader who
+copies the recipe would see it. The generated page and images are
+gitignored; CI runs this before ``zensical build`` (see
+.github/workflows/docs.yml), and locally:
 
     uv run python scripts/build_gallery.py
 """
@@ -14,14 +16,16 @@ from __future__ import annotations
 
 import inspect
 import os
+import sys
 import tempfile
 import textwrap
+import warnings
 from pathlib import Path
 
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
+import matplotlib.pyplot as plt
 
 REPO = Path(__file__).resolve().parent.parent
 OUT = REPO / "docs" / "gallery"
@@ -47,8 +51,6 @@ def _source_of(fn) -> str:
 def main() -> int:
     from ob_analytics import Pipeline, sample_csv_path
 
-    import sys
-
     sys.path.insert(0, str(REPO / "docs" / "examples"))
     from gallery_examples import GALLERY  # type: ignore[import-not-found]
 
@@ -60,13 +62,23 @@ def main() -> int:
     os.chdir(tempfile.mkdtemp())
     try:
         rendered = []
+        warned = []
         for ex in GALLERY:
-            fig = ex.render(result)
-            # Full figure: enlarge ~40% (preserving aspect) so the per-example
-            # render on the page is big and legible, saved at a crisp dpi.
-            w, h = fig.get_size_inches()
-            fig.set_size_inches(w * 1.4, h * 1.4)
-            fig.savefig(IMAGES / f"{ex.name}.png", dpi=130, bbox_inches="tight")
+            # Record warnings through the first save too: some are raised only
+            # when the figure is drawn.
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                fig = ex.render(result)
+                # Full figure: enlarge ~40% (preserving aspect) so the
+                # per-example render on the page is big and legible, saved at
+                # a crisp dpi.
+                w, h = fig.get_size_inches()
+                fig.set_size_inches(w * 1.4, h * 1.4)
+                fig.savefig(IMAGES / f"{ex.name}.png", dpi=130, bbox_inches="tight")
+            warned += [
+                f"{ex.name}: {warning.category.__name__}: {warning.message}"
+                for warning in caught
+            ]
             # Thumbnail: reduce to just the primary graphic — a visual
             # impression, like the seaborn example gallery. Drop colorbars,
             # keep only the largest panel (so small-multiple faces like
@@ -101,6 +113,12 @@ def main() -> int:
             print(f"  {ex.name}: {ex.title}")
     finally:
         os.chdir(prev_cwd)
+
+    if warned:
+        print("\nwarnings raised by the gallery recipes:", file=sys.stderr)
+        for line in warned:
+            print(f"  {line}", file=sys.stderr)
+        return 1
 
     # Group by category, preserving first-seen order.
     categories: dict[str, list] = {}
