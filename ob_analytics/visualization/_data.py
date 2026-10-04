@@ -19,7 +19,12 @@ import pandas as pd
 from loguru import logger
 
 from ob_analytics._utils import validate_columns
-from ob_analytics.depth import book_imbalance, filter_depth, micro_price
+from ob_analytics.depth import (
+    book_imbalance,
+    filter_depth,
+    micro_price,
+    price_level_snapshots,
+)
 from ob_analytics.exceptions import ConfigError
 
 
@@ -1678,6 +1683,243 @@ def prepare_book_snapshot_data(
         "show_quantiles": show_quantiles,
         "per_order": per_order,
         "timestamp": timestamp,
+        "volume_scale": volume_scale,
+    }
+
+
+def _replay_price_range(
+    books: list[Any], price_levels: int
+) -> tuple[float, float] | None:
+    """One price range for every frame of a replay, or ``None`` if none has a mid.
+
+    It covers the path of the mid, widened on each side by the median distance
+    from the mid to the *price_levels*-th price level of the further side.  So
+    a typical frame shows about *price_levels* price levels per side, and the
+    range does not move while the replay plays.
+    """
+    mids: list[float] = []
+    reach: list[float] = []
+    for book in books:
+        bids, asks = book["bids"], book["asks"]
+        if bids.empty or asks.empty:
+            continue
+        bid_prices = np.unique(bids["price"].to_numpy())[::-1]
+        ask_prices = np.unique(asks["price"].to_numpy())
+        mid = (float(bid_prices[0]) + float(ask_prices[0])) / 2
+        far_bid = float(bid_prices[min(price_levels, bid_prices.size) - 1])
+        far_ask = float(ask_prices[min(price_levels, ask_prices.size) - 1])
+        mids.append(mid)
+        reach.append(max(mid - far_bid, far_ask - mid))
+    if not mids:
+        return None
+    half = float(np.median(reach))
+    return min(mids) - half, max(mids) + half
+
+
+def prepare_book_replay_data(
+    depth: pd.DataFrame | None = None,
+    trades: pd.DataFrame | None = None,
+    events: pd.DataFrame | None = None,
+    per_order: bool = False,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+    interval: str | timedelta = "1s",
+    max_frames: int = 600,
+    price_levels: int = 20,
+    speeds: tuple[float, ...] = (1, 5, 20),
+    volume_scale: float | None = None,
+    uncross: bool = True,
+) -> dict[str, Any]:
+    """Prepare the book at one instant per *interval*, for a replay.
+
+    Each frame is a :func:`prepare_book_snapshot_data` payload, so a replay
+    frame draws exactly as a ``book_snapshot`` does at that instant.
+
+    ``per_order=False`` (L2) replays *depth* with
+    :func:`~ob_analytics.depth.price_level_snapshots`: one bar per price level,
+    and a touch equal to the depth summary's at every frame.  ``per_order=True``
+    (L3) rebuilds the book from *events* at each frame with
+    :func:`~ob_analytics.analytics.order_book`: one segment per order.  The
+    L3 rebuild reads the whole event table once per frame, so it is the slower
+    of the two.
+
+    Both faces show the book with stale crossed orders removed.  The L2 face
+    gets this from the depth table, where a fresher quote evicts the opposing
+    price levels it crosses.  The L3 face gets it from ``uncross=True``, the
+    default here, which applies the same rule order by order.  The two faces
+    then show the same market, and the trades sit around the mid on both.
+    Pass ``uncross=False`` to replay the faithful L3 book instead; on a diff
+    feed with stale orders, its touch can sit far from the trades.
+
+    Every frame keeps the same price range: the path of the mid, widened so a
+    typical frame shows about *price_levels* price levels per side.  Each
+    frame holds every price level inside that range, so a bar leaves the plot
+    only when its price level leaves the book or the range.
+
+    Parameters
+    ----------
+    depth : pandas.DataFrame, optional
+        The depth table.  Required when ``per_order=False``.
+    trades : pandas.DataFrame, optional
+        The trades table; the replay shows every trade between the first and
+        last frame.  ``None`` shows none.
+    events : pandas.DataFrame, optional
+        The events table, classified (it needs the ``type`` column).  Required
+        when ``per_order=True``.
+    per_order : bool
+        ``False`` for the L2 face, ``True`` for the L3 face.
+    start_time, end_time : pandas.Timestamp, optional
+        The first and last frame.  Default to the first and last timestamp of
+        the table the face replays.
+    interval : str or datetime.timedelta
+        The time between frames, as a pandas offset string or a duration.
+    max_frames : int
+        The most frames to build, at least 1.  Each frame is a book snapshot
+        held in the payload and in the figure, so this caps their size.  When
+        *interval* would need more, the interval is widened to fit, and a
+        warning says so.
+    price_levels : int
+        About how many price levels per side a typical frame shows; it sets
+        the width of the price range.
+    speeds : tuple of float
+        The playback speeds offered, as multiples of real time; each gets a
+        play button.  A frame is shown for *interval* divided by the speed, so
+        a speed is smooth only when that is short (about 50 ms or less) and
+        steps visibly otherwise.  The fastest speeds run a little slower than
+        stated, by the time the browser takes to draw each frame.
+    volume_scale : float or None
+        Size display scale.  ``None`` infers one scale from every frame, so
+        bar lengths compare across frames.
+    uncross : bool
+        L3 only: evict crossed resting orders before the price range is
+        chosen, as ``order_book(uncross=True)`` does.  ``True`` by default, to
+        match the L2 face; the L2 face is uncrossed by the depth table and
+        ignores it.
+
+    Returns
+    -------
+    dict
+        ``snapshots`` (one book-snapshot payload per frame, in time order),
+        ``price_range`` (the ``(low, high)`` price range every frame shares,
+        or ``None`` when no frame has both sides), ``interval`` (the time
+        between frames, as a :class:`pandas.Timedelta`), ``speeds``,
+        ``trades`` (``timestamp``, ``price``, ``volume`` and ``direction``,
+        sizes scaled, from the first frame to the last), ``per_order`` and
+        ``volume_scale``.
+
+    Raises
+    ------
+    ConfigError
+        If the table the face replays is missing or empty, *interval* is not
+        positive, *max_frames* or *price_levels* is less than 1, *speeds* is
+        empty or holds a speed that is not positive, or *end_time* is before
+        *start_time*.
+    """
+    step = pd.Timedelta(interval)
+    if step <= pd.Timedelta(0):
+        raise ConfigError(f"The replay interval must be positive, got {interval!r}.")
+    if max_frames < 1 or price_levels < 1:
+        raise ConfigError(
+            "A book replay needs max_frames and price_levels of at least 1, got "
+            f"{max_frames} and {price_levels}."
+        )
+    if not speeds or any(speed <= 0 for speed in speeds):
+        raise ConfigError(
+            f"A book replay needs one or more positive speeds, got {speeds!r}."
+        )
+    table, name = (events, "events") if per_order else (depth, "depth")
+    if table is None or table.empty:
+        level = "L3" if per_order else "L2"
+        raise ConfigError(
+            f"The {level} book replay needs the {name} table, and it is "
+            f"{'missing' if table is None else 'empty'}."
+        )
+    start_time, end_time = _default_start_end(table, start_time, end_time)
+    span = pd.Timestamp(end_time) - pd.Timestamp(start_time)
+    if span < pd.Timedelta(0):
+        raise ConfigError(
+            f"The replay ends ({end_time}) before it starts ({start_time})."
+        )
+    needed = span // step + 1
+    if needed > max_frames:
+        widened = span / max(max_frames - 1, 1)
+        logger.warning(
+            "A replay of {} at one frame per {} needs {} frames, more than "
+            "max_frames={}; using one frame per {} instead.",
+            span,
+            step,
+            needed,
+            max_frames,
+            widened,
+        )
+        step = widened
+    instants = (
+        pd.DatetimeIndex([start_time])
+        if max_frames == 1
+        else pd.date_range(start_time, end_time, freq=step)
+    )
+
+    if per_order:
+        from ob_analytics.analytics import order_book
+
+        # Uncross before the price range is chosen, so the range follows the
+        # mid of the book the frames show.
+        books = [order_book(table, tp=t, uncross=uncross) for t in instants]
+    else:
+        books = price_level_snapshots(table, instants)
+
+    price_range = _replay_price_range(books, price_levels)
+    if price_range is not None:
+        low, high = price_range
+        books = [
+            {
+                **book,
+                "bids": book["bids"][book["bids"]["price"].between(low, high)],
+                "asks": book["asks"][book["asks"]["price"].between(low, high)],
+            }
+            for book in books
+        ]
+
+    if volume_scale is None:
+        volume_scale = infer_volume_scale(
+            np.concatenate(
+                [
+                    np.asarray(book[side]["volume"], dtype=float)
+                    for book in books
+                    for side in ("bids", "asks")
+                ]
+            )
+        )
+
+    if trades is None:
+        shown = pd.DataFrame(columns=["timestamp", "price", "volume", "direction"])
+    else:
+        validate_columns(
+            trades,
+            {"timestamp", "price", "volume", "direction"},
+            "prepare_book_replay_data",
+        )
+        in_range = trades["timestamp"].between(instants[0], instants[-1])
+        shown = trades.loc[
+            in_range, ["timestamp", "price", "volume", "direction"]
+        ].sort_values("timestamp", kind="stable")
+        shown = shown.assign(volume=shown["volume"] * volume_scale)
+
+    return {
+        "snapshots": [
+            prepare_book_snapshot_data(
+                book,
+                per_order=per_order,
+                volume_scale=volume_scale,
+                top_n=None,
+            )
+            for book in books
+        ],
+        "price_range": price_range,
+        "interval": step,
+        "speeds": tuple(speeds),
+        "trades": shown.reset_index(drop=True),
+        "per_order": per_order,
         "volume_scale": volume_scale,
     }
 

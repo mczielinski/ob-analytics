@@ -164,6 +164,25 @@ def _window_over(
     return ts.min(), ts.max()
 
 
+#: The most frames the gallery's book replay holds: enough to scrub the zoom
+#: window smoothly, few enough to keep the page small and quick to build.
+_REPLAY_FRAMES = 300
+
+_REPLAY_NOTE = (
+    "The book through the zoom window. Drag the slider or press a play "
+    "button (1x is real time); the line on the trades panel marks the time "
+    "shown. Click a trade to move there: its price level is marked in the "
+    "trade's colour. L2: one bar per price level, from the depth table. L3: "
+    "one segment per order. Both remove stale crossed orders, so the trades "
+    "sit around the mid. Drawn by Plotly only."
+)
+
+
+def _replay_interval(start: pd.Timestamp, end: pd.Timestamp) -> pd.Timedelta:
+    """The time between the gallery replay's frames: 1 s, or wider to fit."""
+    return max(pd.Timedelta("1s"), (end - start) / _REPLAY_FRAMES)
+
+
 def _l2(
     key: str,
     title: str,
@@ -378,6 +397,25 @@ def _build_l2_gallery_model(
                     "in bps bands: asks above zero, bids below; band thickness = "
                     "resting volume in that bps ring."
                 ),
+            )
+        )
+
+    if not depth.empty:
+        concepts.append(
+            _l2(
+                "book_replay",
+                "Book Replay",
+                "book_replay",
+                _viz_data.prepare_book_replay_data,
+                {
+                    "depth": depth,
+                    "trades": trades,
+                    "start_time": zoom_start,
+                    "end_time": zoom_end,
+                    "interval": _replay_interval(zoom_start, zoom_end),
+                    "volume_scale": volume_scale,
+                },
+                note=_REPLAY_NOTE,
             )
         )
 
@@ -778,6 +816,24 @@ def build_gallery_model(
                 ),
             )
         )
+        if not depth.empty:
+            concepts.append(
+                _comparable(
+                    "book_replay",
+                    "Book Replay",
+                    _viz_data.prepare_book_replay_data,
+                    {
+                        "depth": depth,
+                        "events": events,
+                        "trades": trades,
+                        "start_time": zoom_start,
+                        "end_time": zoom_end,
+                        "interval": _replay_interval(zoom_start, zoom_end),
+                        "volume_scale": volume_scale,
+                    },
+                    note=_REPLAY_NOTE,
+                )
+            )
 
     # Order outcome is L3-only: it asks where each *order* was placed (distance
     # from the touch, from order_aggressiveness) and how it ended (competing-risks
@@ -1458,6 +1514,13 @@ def generate_gallery(
                 if panel.reason not in logged:
                     logger.warning("Gallery: {}", panel.reason)
                     logged.add(panel.reason)
+                continue
+            if (panel.concept, panel.level, panel.backend) not in RENDERERS and any(
+                (panel.concept, panel.level, other) in RENDERERS for other in loaded
+            ):
+                # Another backend draws this plot and this one does not, by
+                # design (the book replay is Plotly only): the panel shows a
+                # bare "Not available" without a failed render to warn about.
                 continue
             if panel.backend not in rendered_dirs:
                 (out / panel.backend).mkdir(parents=True, exist_ok=True)

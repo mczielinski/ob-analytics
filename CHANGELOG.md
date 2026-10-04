@@ -10,6 +10,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **A book replay** (#117). The `book_replay` concept steps through the book
+  over part of a run, on Plotly: the ladder at one instant per second beside
+  the trades and the mid, with a slider and play buttons at 1×, 5× and 20×
+  real time. Click a trade to move to it: the price level it took is marked
+  in the trade's colour. The L2 face replays the depth table, so its touch
+  equals the depth summary's at every frame; the L3 face shows each order,
+  with stale crossed orders removed so both faces show the same market. The
+  gallery shows it for the zoom window, and `prepare.book_replay` builds it
+  directly. The price-level book the depth summary is built on is now its
+  own class, `ob_analytics.depth.PriceLevelBook`, and
+  `price_level_snapshots` returns that book at many instants in one pass.
+
 - **A page on what each feed shows** (#288). "What each feed shows" describes
   16 properties that decide what a capture can tell you, such as depth shown,
   what can be missed, sequence, clocks and taker side. It gives each property's
