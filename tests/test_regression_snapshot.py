@@ -112,8 +112,20 @@ def test_demo_fingerprints(demo_result):
     # against the per-order rebuild, which tracks orders by id and never had
     # this problem: the two now agree on how long this book is crossed, 91.61%
     # of session time against 91.59%, where the price-level path read 92.02%.
+    # 2026-10-03 (aggressiveness read at the order's own time): only `events`
+    # moved, and only in `aggressiveness_bps`. `order_aggressiveness` took the
+    # book before each order from the depth_summary row with the next-lower
+    # `event_id`, but the Bitstamp loader numbers events after sorting by order
+    # id, so that row could be from any time in the session: 51,805 of 156,718
+    # new orders were read against a later book, 7,399 against one more than a
+    # minute away (up to 30 minutes). The lookup now follows
+    # `schemas.time_order_keys` (timestamp, then event_id at one instant), and
+    # the value changes on 45,087 of 314,057 rows. Checked against a
+    # brute-force search for the last row before each order in that order.
+    # `trades`, `depth` and `depth_summary` are unchanged, as is the synthetic
+    # golden, whose event ids are already in time order.
     EXPECTED: dict[str, str] = {
-        "events": "e4b60598d811b5519492986de2700f615fc5422e10a8829ebc84ddab0e01c189",
+        "events": "2e85e8b1aa729ca22ee913e7fc95abf003cd7fa3067d696f91483907b6cbdb02",
         "trades": "c893ffed15f497a7796cb92cdde37a81b841fbfa49a89b4dc6868c59a06405b5",
         "depth": "4f364130c44553239d9b7c9884190d43a744e4cdd5ce4ecf0c75f76c4224f008",
         "depth_summary": "f89c31146e81d4bba50e0e2683686c11995edadbbe67604271f92d7f4cc88743",

@@ -130,6 +130,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`aggressiveness_bps` is measured against the book at the order's own
+  time.** `order_aggressiveness` found the book standing before each order by
+  taking the `depth_summary` row with the next-lower `event_id`. That is only
+  correct when event ids are in time order. The Bitstamp loader numbers events
+  after sorting them by order id, so on Bitstamp that row could come from any
+  time in the session. On the bundled sample, 51,805 of 156,718 new orders
+  were measured against a book from after the order, and 7,399 against a book
+  more than a minute away, up to 30 minutes. The lookup now uses the
+  documented event order (`time_order_keys`): the last `depth_summary` row
+  with an earlier `timestamp`, or with the same `timestamp` and a lower
+  `event_id`. `aggressiveness_bps` changes on 45,087 of the sample's 314,057
+  event rows (14.4%). Databento, LOBSTER and the synthetic generator number
+  events in time order, so their values do not change.
 - **`compute_vpin` refuses a bucket size in the wrong units.** Sizes are
   integer lots, so `bucket_volume=5.0` on the Bitstamp sample means 5e-8 BTC
   and asked for about 300 million buckets, enough to run the machine out of

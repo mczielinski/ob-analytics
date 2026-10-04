@@ -1,4 +1,4 @@
-"""Tests for order_aggressiveness — event_id merge_asof boundary conditions."""
+"""Tests for order_aggressiveness — which book stands before each order."""
 
 import pandas as pd
 
@@ -25,7 +25,7 @@ def _make_events_and_depth(event_rows, depth_rows):
 
 
 class TestOrderAggressiveness:
-    """Unit tests for the event_id-based order_aggressiveness function."""
+    """Unit tests for the standing-quote lookup in order_aggressiveness."""
 
     def test_bid_more_aggressive_than_best(self):
         """A bid priced above the best bid → positive aggressiveness."""
@@ -133,7 +133,7 @@ class TestOrderAggressiveness:
         assert pd.isna(row2["aggressiveness_bps"])
 
     def test_missing_timestamps_handled_gracefully(self):
-        """Missing depth_summary timestamps don't crash -- merge_asof handles gaps."""
+        """Missing depth_summary timestamps don't crash -- the last earlier row is used."""
         events, depth = _make_events_and_depth(
             [
                 (1, "bid", "created", "resting-limit", "2015-01-01 00:00:01", 100),
@@ -146,3 +146,79 @@ class TestOrderAggressiveness:
         )
         result = order_aggressiveness(events, depth)
         assert "aggressiveness_bps" in result.columns
+
+    def test_event_ids_out_of_time_order(self):
+        """The standing quote is found by time, not by event_id.
+
+        Bitstamp numbers its events after sorting by order id, so the event
+        with the next-lower id can be much later in time.  The order must be
+        read against the book at its own time, not at that event's time.
+        """
+        events, depth = _make_events_and_depth(
+            [
+                (1, "bid", "created", "resting-limit", "2015-01-01 00:00:01", 100),
+                (3, "bid", "created", "resting-limit", "2015-01-01 00:00:02", 101),
+                # Next-lower event id than 3's would-be neighbour, but later.
+                (2, "bid", "deleted", "resting-limit", "2015-01-01 00:30:00", 100),
+            ],
+            [
+                (1, "2015-01-01 00:00:01", 100, 110),
+                (3, "2015-01-01 00:00:02", 101, 110),
+                (2, "2015-01-01 00:30:00", 50, 110),
+            ],
+        )
+        result = order_aggressiveness(events, depth)
+        agg3 = result[result["event_id"] == 3]["aggressiveness_bps"].iloc[0]
+        # Against best bid 100 at 00:00:01, not 50 from the 00:30:00 row.
+        assert abs(agg3 - 100) < 1e-9
+
+    def test_same_instant_ties_broken_by_event_id(self):
+        """At one instant, rows with a lower event_id stand before the order."""
+        events, depth = _make_events_and_depth(
+            [
+                (1, "bid", "created", "resting-limit", "2015-01-01 00:00:01", 100),
+                (5, "bid", "created", "resting-limit", "2015-01-01 00:00:02", 104),
+            ],
+            [
+                (1, "2015-01-01 00:00:01", 100, 110),
+                # Same instant as event 5; rows are not in event_id order.
+                (6, "2015-01-01 00:00:02", 103, 110),
+                (4, "2015-01-01 00:00:02", 102, 110),
+                (5, "2015-01-01 00:00:02", 104, 110),
+            ],
+        )
+        result = order_aggressiveness(events, depth)
+        agg5 = result[result["event_id"] == 5]["aggressiveness_bps"].iloc[0]
+        # Event 4 (best bid 102) is the last row before event 5.
+        assert abs(agg5 - 10000 * 2 / 102) < 1e-9
+
+    def test_depth_summary_without_event_id(self):
+        """Without event_id, only rows at an earlier timestamp stand before."""
+        events, depth = _make_events_and_depth(
+            [
+                (1, "bid", "created", "resting-limit", "2015-01-01 00:00:01", 100),
+                (2, "bid", "created", "resting-limit", "2015-01-01 00:00:02", 105),
+            ],
+            [
+                (1, "2015-01-01 00:00:01", 100, 110),
+                (2, "2015-01-01 00:00:02", 105, 110),
+            ],
+        )
+        result = order_aggressiveness(events, depth.drop(columns="event_id"))
+        agg = result.set_index("event_id")["aggressiveness_bps"]
+        assert pd.isna(agg[1])
+        assert abs(agg[2] - 500) < 1e-9
+
+    def test_missing_order_timestamp_has_no_standing_book(self):
+        """An order with no timestamp is not read against the last book."""
+        events, depth = _make_events_and_depth(
+            [
+                (1, "bid", "created", "resting-limit", "2015-01-01 00:00:01", 100),
+                (2, "bid", "created", "resting-limit", None, 105),
+            ],
+            [
+                (1, "2015-01-01 00:00:01", 100, 110),
+            ],
+        )
+        result = order_aggressiveness(events, depth)
+        assert pd.isna(result.set_index("event_id")["aggressiveness_bps"][2])
