@@ -1089,6 +1089,12 @@ def detect_stale_orders(
     test needs to know what the feed said *after* the trade, which a live
     capture cannot know in time.
 
+    The tables can be the pipeline's own (prices in integer ticks, sizes in
+    integer lots; pass ``tick_size``) or the tables
+    :func:`~ob_analytics.visualization.display_result` converts for display
+    (prices in the quote currency, sizes in the base asset; leave
+    ``tick_size`` at ``1.0``).  Both give the same orders and the same times.
+
     Parameters
     ----------
     events : pandas.DataFrame
@@ -1109,7 +1115,8 @@ def detect_stale_orders(
     tick_size : float, optional
         Quote-currency size of one price tick, so the reported prices read in
         the quote currency.  Leave at ``1.0`` to report them in the units of
-        ``events["price"]``.
+        ``events["price"]``: ticks for the pipeline's tables, the quote
+        currency for display tables.
 
     Returns
     -------
@@ -1728,6 +1735,11 @@ def data_quality_summary(
     importantly how crossed the resting book is, which distinguishes a matched
     book from a diff feed (see :class:`~ob_analytics.protocols.FeedType`).
 
+    Like :func:`detect_stale_orders`, this takes either the pipeline's own
+    tables or the tables :func:`~ob_analytics.visualization.display_result`
+    converts for display, and measures the same crossing and the same stale
+    orders on both.
+
     Parameters
     ----------
     events : pandas.DataFrame
@@ -1751,7 +1763,8 @@ def data_quality_summary(
     tick_size : float, optional
         Quote-currency size of one price tick (``PipelineResult.config.tick_size``),
         so the prices in ``stale_orders`` read in the quote currency.  Leave at
-        ``1.0`` to report them in ticks.
+        ``1.0`` to report them in the units of ``events["price"]``: ticks for
+        the pipeline's tables, the quote currency for display tables.
     sequence_kind : SequenceKind, optional
         What the venue ``sequence`` promises, passed to
         :func:`detect_sequence_gaps`.  A capture records it in ``meta.json``

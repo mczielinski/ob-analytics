@@ -150,6 +150,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Stale orders and crossing are measured correctly on display tables.**
+  `display_result` converts sizes to base-asset floats. `price_level_volume`
+  summed those floats, and a level whose last order left could keep a
+  remainder such as `3e-17` in place of `0`. The level then stayed in the
+  faithful book. On the bundled sample, 22,915 depth rows kept a remainder.
+  `detect_stale_orders` reported a `touch_seconds` of `0.0` for the stale ask
+  at 78,333, which holds the touch for 1,645.7 s, and `data_quality_summary`
+  reported the book crossed 92.03% of the time against 91.61%.
+  `price_level_volume` now sums float sizes that sit on a decimal grid as
+  whole multiples of that grid, the way it sums integer lots, so the display
+  tables give the same results as the pipeline's own tables. Float sizes on no
+  decimal grid, such as a size worked out by float subtraction, are still
+  summed as floats, and `price_level_volume` now warns when it does that.
 - **The price-level depth is replayed in event order.** `price_level_volume`
   and `depth_metrics` sorted rows on the timestamp alone, so the rows of one
   instant were replayed bids first, then asks, by price, and a

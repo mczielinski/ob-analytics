@@ -201,6 +201,39 @@ def lots_to_size(
     return size if decimals is None else np.round(size, decimals)
 
 
+def decimal_places(values: object) -> int | None:
+    """Return the fewest decimal places that put every float in *values* on a grid.
+
+    A float size read from a decimal quantity (``0.12345678``) is the float
+    nearest that decimal, and ``rint(size * 10**d) / 10**d`` gives the same
+    float back exactly when ``d`` is at least its number of decimal places.
+    The column can then be converted to whole multiples of ``10**-d`` with
+    :func:`size_to_lots` and summed exactly, the way the integer-lot schema
+    sums lots.  This is what a table converted for display has: sizes in the
+    base asset, ``lots * lot_size`` rounded to the lot's decimals.
+
+    The test is exact, so no size is moved to make it fit: a size worked out
+    by float arithmetic (``1000.1 - 1000.0`` is ``0.10000000000002274``) is on
+    no grid.  Returns ``None`` then, when no ``d`` up to the 15 decimal digits
+    a ``float64`` holds exactly fits every value, when the whole numbers grow
+    too large to sum exactly in ``int64``, or when a value is not finite.
+    """
+    arr = np.asarray(values, dtype=np.float64)
+    if arr.size == 0:
+        return 0
+    for decimals in range(np.finfo(np.float64).precision + 1):
+        scale = 10**decimals
+        whole = np.rint(arr * scale)
+        magnitude = np.abs(whole)
+        # Past 2**53 a float no longer holds every whole number, and a sum of
+        # them must still fit in int64.  A NaN or an infinity fails here too.
+        if not magnitude.max() <= 2**53 or magnitude.sum() >= 2**62:
+            return None
+        if np.array_equal(whole / scale, arr):
+            return decimals
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Trades schema
 # ---------------------------------------------------------------------------
