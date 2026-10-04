@@ -61,9 +61,11 @@
 
 # %%
 # %matplotlib inline
-from _docs_theme import plot_l1_ticker
+from _docs_theme import DOCS_THEME
 
-fig = plot_l1_ticker(bid=99, ask=101, last=None)
+from ob_analytics.visualization import plot
+
+fig = plot("l1_ticker", bid=99, ask=101, last=None, symbol="TOY", theme=DOCS_THEME)
 
 # %% [markdown]
 # - the **best bid** — the highest standing buy offer (someone will pay
@@ -165,7 +167,7 @@ trades.head(1)[
 # And the L1 card updates: `LAST` is finally a number.
 
 # %%
-fig = plot_l1_ticker(bid=99, ask=101, last=101)
+fig = plot("l1_ticker", bid=99, ask=101, last=101, symbol="TOY", theme=DOCS_THEME)
 
 # %% [markdown]
 # ## A cancellation, and a flash

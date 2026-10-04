@@ -1,7 +1,7 @@
 """Order flow toxicity and imbalance metrics.
 
-Implements three market microstructure measures for detecting informed
-trading and quantifying price impact:
+Implements market microstructure measures for detecting informed trading and
+quantifying price impact:
 
 * :func:`compute_vpin` — Volume-Synchronized Probability of Informed
   Trading (Easley, López de Prado & O'Hara, 2012).
@@ -9,6 +9,8 @@ trading and quantifying price impact:
   (Kyle, 1985).
 * :func:`order_flow_imbalance` — Normalised buy/sell volume imbalance
   per time window.
+* :func:`ofi_by_horizon` — the same imbalance over several trailing horizons
+  on one time grid.
 
 All functions accept a trades DataFrame from the pipeline (or any
 DataFrame with the required columns).
@@ -33,6 +35,7 @@ import pandas as pd
 from ob_analytics._utils import validate_columns, validate_non_empty
 from ob_analytics.trade_sign import (
     bulk_volume_classification,
+    check_bucket_count,
     resolve_direction,
 )
 
@@ -235,9 +238,13 @@ def compute_vpin(
         ``direction`` column (``"buy"`` / ``"sell"``, the taker side) is used
         when present; otherwise it is inferred — see *sign_method*.
     bucket_volume : float, optional
-        Total volume per bucket.  This is highly instrument-specific.  When
-        left out, it is picked by :func:`vpin_bucket_volume` (average daily
-        volume ÷ 50, with a 24-hour trading day).
+        Total volume per bucket, in the units of ``trades["volume"]``: integer
+        lots on a pipeline result (the base-asset size is ``lots * lot_size``,
+        see :class:`~ob_analytics.config.PipelineConfig`).  This is highly
+        instrument-specific, so size it from the data, for example
+        ``trades["volume"].sum() / 60``.  When left out, it is picked by
+        :func:`vpin_bucket_volume` (average daily volume ÷ 50, with a 24-hour
+        trading day).
     n_buckets : int, optional
         Window length (in buckets) for the trailing VPIN average.
         Default is 50, following the original paper.  Fewer complete buckets
@@ -293,17 +300,27 @@ def compute_vpin(
     ObAnalyticsError
         If *trades* is empty.
     ValueError
-        If *bucket_volume* is not positive, or it is left out and the trades
-        span no time (see :func:`vpin_bucket_volume`).
+        If *bucket_volume* is not positive, would make more than
+        :data:`~ob_analytics.trade_sign.MAX_VOLUME_BUCKETS` buckets, or is
+        left out and the trades span no time (see :func:`vpin_bucket_volume`).
     """
     validate_columns(trades, {"timestamp", "price", "volume"}, "compute_vpin")
     validate_non_empty(trades, "compute_vpin")
     rule = "given"
+    advice: str | None = None
     if bucket_volume is None:
         bucket_volume = vpin_bucket_volume(trades)
         rule = f"adv/{VPIN_BUCKETS_PER_DAY}"
+        # The default rule makes about 50 buckets per day the trades span, so
+        # only a span of decades trips the cap: a timestamp problem, not units.
+        span = trades["timestamp"].max() - trades["timestamp"].min()
+        advice = (
+            f"vpin_bucket_volume sized the bucket from the trades' time span "
+            f"of {span}; check the timestamps, or pass bucket_volume."
+        )
     if bucket_volume <= 0:
         raise ValueError(f"bucket_volume must be positive, got {bucket_volume}")
+    check_bucket_count(trades, bucket_volume, "compute_vpin", advice=advice)
 
     if sign_method == "bvc":
         result = _vpin_from_bvc(trades, bucket_volume, n_buckets)
@@ -700,3 +717,80 @@ def order_flow_imbalance(
     grouped["ofi"] = grouped["net_volume"] / total.replace(0, np.nan)
 
     return grouped
+
+
+#: Trailing horizons :func:`ofi_by_horizon` measures by default, shortest first.
+OFI_HORIZONS: tuple[str, ...] = ("5s", "15s", "60s", "300s")
+
+
+def ofi_by_horizon(
+    trades: pd.DataFrame,
+    horizons: tuple[str, ...] = OFI_HORIZONS,
+    grid: str = "5s",
+    sign_method: str | None = None,
+    quotes: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Compute order flow imbalance over several trailing horizons on one grid.
+
+    :func:`order_flow_imbalance` measures one window at a time.  This measures
+    each of *horizons* at every step of a common time *grid*, so short- and
+    long-horizon pressure can be compared at the same instant.  Each value is
+    a *trailing* window ending at the grid step, not a block of the grid, so a
+    long horizon changes slowly and a short one changes quickly.
+
+    Parameters
+    ----------
+    trades : pandas.DataFrame
+        Trades with ``timestamp`` and ``volume``.  A ``direction`` column is
+        used when present; otherwise it is inferred — see *sign_method*.
+    horizons : tuple of str, optional
+        Pandas offset strings, one per horizon.  Each is rounded to a whole
+        number of *grid* steps, with a minimum of one.  Default
+        :data:`OFI_HORIZONS`.
+    grid : str, optional
+        Pandas offset string for the time grid.  Default ``"5s"``.
+    sign_method, quotes : optional
+        How to obtain the buy/sell split, as for :func:`order_flow_imbalance`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per grid step, with ``timestamp`` and one column per horizon,
+        named by its offset string.  Each value is OFI in ``[-1, +1]`` (buy
+        pressure positive), or ``NaN`` when nothing traded in that window.
+
+    Raises
+    ------
+    ConfigError
+        If required columns are missing.
+    ObAnalyticsError
+        If *trades* is empty.
+    """
+    validate_columns(trades, {"timestamp", "volume"}, "ofi_by_horizon")
+    validate_non_empty(trades, "ofi_by_horizon")
+    trades = resolve_direction(trades, sign_method, quotes, "ofi_by_horizon")
+
+    step = pd.Timedelta(grid)
+    timestamps = trades["timestamp"]
+    index = pd.date_range(
+        timestamps.min().floor(grid), timestamps.max().ceil(grid), freq=grid
+    )
+    # Signed volume binned onto the fine grid, then trailing-summed per horizon.
+    floored = timestamps.dt.floor(grid)
+    is_buy = trades["direction"] == "buy"
+    volume = trades["volume"]
+    buy = (
+        volume.where(is_buy, 0.0).groupby(floored).sum().reindex(index, fill_value=0.0)
+    )
+    sell = (
+        volume.where(~is_buy, 0.0).groupby(floored).sum().reindex(index, fill_value=0.0)
+    )
+
+    out = pd.DataFrame({"timestamp": index})
+    for horizon in horizons:
+        k = max(round(pd.Timedelta(horizon).total_seconds() / step.total_seconds()), 1)
+        b = buy.rolling(k, min_periods=1).sum()
+        s = sell.rolling(k, min_periods=1).sum()
+        total = (b + s).replace(0.0, np.nan)
+        out[horizon] = ((b - s) / total).to_numpy()
+    return out

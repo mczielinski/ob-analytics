@@ -19,7 +19,37 @@ ob-analytics.
 
 Metrics run on demand, not during `Pipeline.run`: use
 [`PipelineResult.metric`](pipeline.md) for one, `PipelineResult.metrics()` for
-every metric that applies to the run's resolution.
+every metric that applies to the run's resolution. Settings are keyword
+arguments: `result.metric("vpin", n_buckets=20)`, or
+`result.plot("vpin", n_buckets=20, threshold=0.8)`, where each keyword
+goes to `compute` or `prepare`, whichever names it.
+
+## Built-in metrics
+
+| Name | Measures | Wraps |
+|---|---|---|
+| `l1_ticker` | Best bid, best ask and last trade. Draws the three over time, or the quote card at `at=`. | the depth summary and the trades |
+| `vpin` | VPIN per volume bucket | [`compute_vpin`](flow_toxicity.md) |
+| `kyle_lambda` | Kyle's λ regression | [`compute_kyle_lambda`](flow_toxicity.md) |
+| `order_flow_imbalance` | Order flow imbalance per window | [`order_flow_imbalance`](flow_toxicity.md) |
+| `ofi_horizon` | Order flow imbalance over several horizons | [`ofi_by_horizon`](flow_toxicity.md) |
+
+Each uses the defaults of the function it wraps. The gallery and `result.plot`
+give a metric the result in display units (quote currency, base asset);
+`result.metric` gives it the result as stored (integer ticks and lots), so a
+size setting such as `bucket_volume` is in those units there.
+
+::: ob_analytics.metrics.L1TickerMetric
+
+::: ob_analytics.metrics.VpinMetric
+
+::: ob_analytics.metrics.KyleLambdaMetric
+
+::: ob_analytics.metrics.OrderFlowImbalanceMetric
+
+::: ob_analytics.metrics.OfiHorizonMetric
+
+## Registry
 
 ::: ob_analytics.metrics.register_metric
 

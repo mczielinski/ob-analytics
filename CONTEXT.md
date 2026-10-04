@@ -342,6 +342,17 @@ The parameters that change per run rather than per source — trading date,
 session time zone, symbol and venue. Typed `RunContext`, named `ctx`.
 _Avoid_: options, params
 
+**Window**:
+One stretch of time a windowed run (`Pipeline.run_windows`) cuts its input
+into, from one boundary up to, but not including, the next. The windows cover
+the whole input. Not a segment, which is a part of a capture.
+_Avoid_: chunk, slice, batch
+
+**Carry**:
+Starting a window from the book the previous window ended with, so that the
+cut does not show in the output. Named `carry`.
+_Avoid_: warm start, state transfer
+
 **Capture**:
 Recording a live venue to files the pipeline can later replay.
 _Avoid_: stream, ingest, collect, record

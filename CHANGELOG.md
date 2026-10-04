@@ -10,6 +10,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Run a large input one time window at a time** (#116).
+  `Pipeline.run_windows(source, boundaries, output)` cuts one input at the
+  given times and runs the depth stages on one window at a time, so their peak
+  memory is set by the largest window. Each window is written to `output` as it
+  finishes, as one Parquet file per table, the same folder `save_data` writes;
+  `load_data` reads it back. With `carry=True`, the default, each window starts
+  from the book the previous one ended with, and the output matches a single
+  run row for row. The exceptions are `aggressiveness_bps` on a Bitstamp
+  input, and depth where the Databento loader already warns that it is off. A
+  run that fails part-way leaves the output folder as it was. On 1.26M events, eight windows peak at 771 MiB against 1,507 MiB for
+  a single run. The loader still reads the whole input. See "Scale and
+  chunking".
+- **The flow-toxicity faces and the L1 quote are built-in metrics** (#118).
+  `vpin`, `kyle_lambda`, `order_flow_imbalance` and `ofi_horizon` are now
+  registered metrics, so `available_concepts` lists them and
+  `result.plot("vpin")` computes and draws VPIN with the defaults of
+  `compute_vpin`. A keyword goes to the calculation or to the picture,
+  whichever names it: `result.plot("vpin", n_buckets=20, threshold=0.8)`.
+  `result.metric(name, **settings)` takes the calculation's settings too. The
+  new `l1_ticker` metric is the Level 1 quote — best bid, best ask and last
+  trade. It draws the three prices over time, or the quote card for one
+  instant with `at=`; `plot("l1_ticker", bid=99, ask=101, last=100)` draws a
+  card from plain numbers. Each built-in metric gets a gallery card.
+  `ofi_by_horizon` is the multi-horizon order flow imbalance that the
+  `ofi_horizon` face draws, now a function in `flow_toxicity`.
 - **A book replay** (#117). The `book_replay` concept steps through the book
   over part of a run, on Plotly: the ladder at one instant per second beside
   the trades and the mid, with a slider and play buttons at 1×, 5× and 20×
@@ -76,6 +101,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **A metric is computed when its plot is drawn** (#118). Building the gallery
+  model, `available_concepts` and `result.plot` of another concept no longer
+  run every registered metric. A metric that raises now keeps its gallery card,
+  which says why it has no plot, instead of being left out.
+
 - **A plot concept is level-less or drawn at a level, on every backend**
   (#302). Registering a concept at `None` when it is registered at a level on
   any backend, or the reverse, raises a `ValueError` that says which to use.
@@ -111,6 +141,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`aggressiveness_bps` is measured against the book at the order's own
+  time.** `order_aggressiveness` found the book standing before each order by
+  taking the `depth_summary` row with the next-lower `event_id`. That is only
+  correct when event ids are in time order. The Bitstamp loader numbers events
+  after sorting them by order id, so on Bitstamp that row could come from any
+  time in the session. On the bundled sample, 51,805 of 156,718 new orders
+  were measured against a book from after the order, and 7,399 against a book
+  more than a minute away, up to 30 minutes. The lookup now uses the
+  documented event order (`time_order_keys`): the last `depth_summary` row
+  with an earlier `timestamp`, or with the same `timestamp` and a lower
+  `event_id`. `aggressiveness_bps` changes on 45,087 of the sample's 314,057
+  event rows (14.4%). Databento, LOBSTER and the synthetic generator number
+  events in time order, so their values do not change.
+- **`compute_vpin` refuses a bucket size in the wrong units.** Sizes are
+  integer lots, so `bucket_volume=5.0` on the Bitstamp sample means 5e-8 BTC
+  and asked for about 300 million buckets, enough to run the machine out of
+  memory. `compute_vpin` and `bulk_volume_classification` now raise
+  `ValueError` when a bucket would make more than `MAX_VOLUME_BUCKETS` (one
+  million) buckets, and say which units `bucket_volume` is in. The how-to
+  pages that passed `bucket_volume=5.0` now size the bucket from the trades.
+- **Docs written before lots and UTC timestamps are corrected.** The schema
+  page gives the current version, `4.0`. The step-by-step and synthetic-data
+  pages say timestamps are tz-aware UTC. Tutorial chapter 3's LOBSTER round
+  trip now passes `lot_size=1.0`; without it every size was written as a
+  fraction of a lot, and the round trip read back no executed volume.
+- **An Independent Reserve capture no longer keeps orders cancelled before
+  it started** (#315). cryptofeed takes the opening book from the venue's REST
+  interface when the first stream message arrives. The venue serves that book
+  from a cache, and its orders are older than its `CreatedTimestampUtc`, so the
+  book could be a few seconds older than the stream. An order cancelled in
+  between stayed in the book until the capture ended, and a trade at a price
+  past it made the book crossed: 13 orders in a 12-minute capture, two of them
+  at the best ask. The cryptofeed source now uses its own Independent Reserve
+  feed, which fetches the book again, once a second, until it was created at
+  least 3 s after the first message. The stream waits meanwhile and loses
+  nothing. After 15 tries it uses the last book and logs a warning.
 - **Coinbase captures through ccxt record the taker's side** (#308). Coinbase
   reports each trade with the side of the maker, and ccxt passes it on
   unchanged, so every Coinbase capture had its trade signs reversed, and so did
@@ -137,6 +203,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   as on Bitstamp. On a per-change book, a fill that the trade and the book both
   report is recorded once, and a book message that repeats an order's size
   writes no row.
+- **An Independent Reserve capture's `trades.csv` no longer holds other
+  markets' trades** (#316). The venue sends a market's trade channel the
+  trades of its other markets for the same coin, so a BTC-AUD capture also got
+  BTC-NZD and BTC-SGD trades, priced in NZD and SGD. `audit` read them as
+  trades through the book and reported resting orders as stale. The cryptofeed
+  source now writes a trade to `trades.csv` only when it is for the capture's
+  pair, and counts the others as `other_market_trades` in `meta.json`. The
+  venue keeps one book for all its markets, so a trade left out still reports
+  the fill of any order it names in the capture, at the order's price.
 - **`audit` no longer reports lost messages on cryptofeed captures that lost
   none** (#309). On Bitfinex and Blockchain.com cryptofeed's sequence number
   counts every message on the connection, trades and heartbeats too, and on

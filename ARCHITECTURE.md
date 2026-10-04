@@ -265,7 +265,8 @@ ob_analytics/
 │   ├── _runner.py        # Generic asyncio driver + FileCaptureSink
 │   ├── bitstamp.py       # Bitstamp WebSocket engine (driven by BitstampSource)
 │   ├── ccxt_source.py    # CcxtSource, CcxtSettings (any CCXT venue, L2)
-│   └── cryptofeed_source.py  # CryptofeedSource, CryptofeedSettings (L2 or native L3)
+│   ├── cryptofeed_source.py  # CryptofeedSource, CryptofeedSettings (L2 or native L3)
+│   └── _cryptofeed_venues.py # corrected cryptofeed venue feeds (Independent Reserve)
 │
 └── visualization/        # Plotting subsystem
     ├── __init__.py       # plot() dispatcher + RENDERERS registry, PlotTheme, save_figure

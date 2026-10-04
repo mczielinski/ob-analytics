@@ -29,13 +29,14 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from matplotlib.font_manager import FontProperties
 from matplotlib.lines import Line2D
-from matplotlib.patches import Patch
+from matplotlib.patches import FancyBboxPatch, Patch
 
 from ob_analytics.visualization._data import (
     NO_DEPTH_NOTICE,
     book_bar_thickness,
     book_mid,
     check_book_payload_level,
+    l1_card_texts,
 )
 from ob_analytics.visualization._palette import Palette
 from ob_analytics.visualization._theme import DEFAULT_THEME, PlotTheme
@@ -1344,6 +1345,81 @@ def mpl_price_view(
 
 
 @_themed
+def mpl_l1_ticker(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """Level 1 quote: a quote card for one instant, or the prices over time.
+
+    The payload decides which (see
+    :func:`~ob_analytics.visualization._data.prepare_l1_ticker_data`): one with
+    ``bid`` is a card, one with ``timestamp`` is the prices over time.
+    """
+    if "bid" in data:
+        return _mpl_l1_card(data, ax, theme)
+    pal = theme.palette
+    fig, ax = _create_axes(ax, figsize=(11, 5))
+    if len(data["timestamp"]) == 0:
+        ax.set_title("Level 1 quote (no data)")
+        return fig
+    x = mdates.date2num(data["timestamp"])
+    ax.step(x, data["best_ask_price"], where="post", color=pal.ask, lw=1.0)
+    ax.step(x, data["best_bid_price"], where="post", color=pal.bid, lw=1.0)
+    ax.step(x, data["last_price"], where="post", color=pal.price_line, lw=1.4)
+    # Legend entries in the order the lines sit on the chart: ask on top.
+    ax.legend(
+        [Line2D([], [], color=c) for c in (pal.ask, pal.price_line, pal.bid)],
+        ["best ask", "last trade", "best bid"],
+        loc="upper right",
+    )
+    format_time_axis(ax)
+    y_range = data.get("y_range")
+    if y_range is not None and y_range[0] < y_range[1]:
+        ax.set_ylim(y_range)
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Price")
+    ax.set_title("Level 1 quote — best bid, best ask, last trade")
+    fig.tight_layout()
+    return fig
+
+
+def _mpl_l1_card(data: dict, ax: Axes | None, theme: PlotTheme) -> Figure:
+    """The Level 1 quote card: best bid, best ask and last trade at one time."""
+    pal = theme.palette
+    own_figure = ax is None
+    fig, ax = _create_axes(ax, figsize=(4.6, 2.0))
+    if own_figure:
+        ax.set_position((0, 0, 1, 1))  # the card is the whole figure
+    ax.set_axis_off()
+    ax.add_patch(
+        FancyBboxPatch(
+            (0.02, 0.04),
+            0.96,
+            0.92,
+            boxstyle="round,pad=0,rounding_size=0.04",
+            transform=ax.transAxes,
+            facecolor=pal.neutral,
+            alpha=0.08,
+            edgecolor=pal.rule,
+            linewidth=1.0,
+            zorder=0,
+        )
+    )
+    for t in l1_card_texts(data):
+        ax.text(
+            t.x,
+            t.y,
+            t.text,
+            transform=ax.transAxes,
+            fontsize=t.size,
+            fontweight="bold" if t.bold else "normal",
+            color=getattr(pal, t.color),
+            ha=t.align,
+            va="center",
+        )
+    return fig
+
+
+@_themed
 def mpl_book_signals(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -2032,7 +2108,8 @@ def mpl_kyle_lambda(
     if not np.isnan(r_squared):
         title += f"\nR² = {r_squared:.3f}, t = {t_stat:.2f}"
     ax.set_title(title)
-    ax.legend(loc="upper left")
+    if not np.isnan(lambda_):  # the fit line is the only labelled artist
+        ax.legend(loc="upper left")
     fig.tight_layout()
     return fig
 
@@ -2295,6 +2372,7 @@ for _concept, _level, _fn in [
     ("liquidity_at_touch", _L2, mpl_liquidity_at_touch),
     ("liquidity_at_touch", _L3, mpl_liquidity_at_touch_per_order),
     ("price_view", _L2, mpl_price_view),
+    ("l1_ticker", None, mpl_l1_ticker),
     ("book_signals", None, mpl_book_signals),
     ("trade_size", _L2, mpl_trade_size),
     ("cancellations", _L2, mpl_volume_map),

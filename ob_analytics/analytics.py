@@ -38,46 +38,66 @@ from ob_analytics.schemas import (
 )
 
 
-def _event_diff_bps(
-    events: pd.DataFrame, depth_summary: pd.DataFrame, direction: int
-) -> pd.DataFrame:
-    """Per-event aggressiveness in BPS vs the contemporaneous best price.
+def _row_standing_before(
+    orders: pd.DataFrame, depth_summary: pd.DataFrame
+) -> np.ndarray:
+    """Find the last ``depth_summary`` row strictly before each order.
 
-    *direction* is ``1`` for bids, ``-1`` for asks. Helper for
-    :func:`order_aggressiveness`.
+    "Before" is the canonical total order
+    (:func:`~ob_analytics.schemas.time_order_keys`): ``timestamp`` first, then
+    the tie-break keys that both frames carry.  ``event_id`` is not a clock --
+    a loader may number its events in another order, such as by order id -- so
+    it only decides between rows at the same instant.  The ``depth_summary``
+    row that carries the order's own keys is the book *after* the order, so it
+    does not count.  The result holds a row position in *depth_summary* for
+    each row of *orders*, in the same order, and ``-1`` for an order with no
+    earlier row or no timestamp.
+    """
+    keys = [k for k in time_order_keys(depth_summary) if k in orders.columns]
+    n_quotes = len(depth_summary)
+    # At equal keys an order sorts ahead of the depth_summary rows, so the
+    # rows written by its own event are not read as standing before it.
+    both = pd.concat(
+        [
+            depth_summary[keys].assign(_is_order=1),
+            orders[keys].assign(_is_order=0),
+        ],
+        ignore_index=True,
+    )
+    both = both.sort_values([*keys, "_is_order"], kind="stable")
+    source = both.index.to_numpy()
+    is_order = source >= n_quotes
+
+    # For each position in the merged order, the source row of the last
+    # depth_summary row at or before it (-1 while there is none yet).
+    last_quote = np.maximum.accumulate(np.where(is_order, -1, np.arange(len(both))))
+    last_quote = np.where(last_quote >= 0, source[last_quote], -1)
+
+    standing = np.full(len(orders), -1, dtype=np.int64)
+    standing[source[is_order] - n_quotes] = last_quote[is_order]
+    # A missing timestamp sorts after every row; it has no book before it.
+    standing[orders["timestamp"].isna().to_numpy()] = -1
+    return standing
+
+
+def _event_diff_bps(
+    orders: pd.DataFrame,
+    standing: np.ndarray,
+    depth_summary: pd.DataFrame,
+    direction: int,
+) -> pd.DataFrame:
+    """Per-order aggressiveness in BPS vs the best price standing before it.
+
+    *standing* is :func:`_row_standing_before` for *orders*.  *direction* is
+    ``1`` for bids, ``-1`` for asks. Helper for :func:`order_aggressiveness`.
     """
     side = "bid" if direction == 1 else "ask"
-    orders = events[
-        (events["direction"] == side)
-        & (events["action"] != "changed")
-        & events["type"].isin(["flashed-limit", "resting-limit"])
-    ].sort_values(by="timestamp", kind="stable")
-
-    missing = ~orders["timestamp"].isin(depth_summary["timestamp"])
-    if missing.any():
-        logger.debug(
-            "order_aggressiveness: {}/{} {} order timestamps not in "
-            "depth_summary (merge_asof will handle gracefully)",
-            missing.sum(),
-            len(orders),
-            side,
-        )
-
     best_price_col = f"best_{side}_price"
-
-    depth_summary_sorted = depth_summary.sort_values("event_id")
-    orders = orders.sort_values("event_id")
-
-    merged = pd.merge_asof(
-        orders,
-        depth_summary_sorted[["event_id", best_price_col]],
-        on="event_id",
-        direction="backward",
-        allow_exact_matches=False,
+    has_quote = (orders["direction"] == side).to_numpy() & (standing >= 0)
+    merged = orders[has_quote]
+    best = (
+        depth_summary[best_price_col].iloc[standing[has_quote]].set_axis(merged.index)
     )
-
-    merged = merged.dropna(subset=[best_price_col]).copy()
-    best = merged[best_price_col]
 
     diff_price = direction * (merged["price"] - best)
     # A distance from the touch has no meaning when the touch is not a
@@ -96,14 +116,22 @@ def order_aggressiveness(
 ) -> pd.DataFrame:
     """Calculate order aggressiveness with respect to the best bid or ask in BPS.
 
+    Each new limit order is measured against the best price on its own side of
+    the book as it stood just before the order arrived: the last
+    ``depth_summary`` row strictly earlier in the canonical event order
+    (:func:`~ob_analytics.schemas.time_order_keys` -- ``timestamp``, then
+    ``event_id`` between rows at the same instant).  A positive value means the
+    order improved on that price, a negative one sat behind it.
+
     Parameters
     ----------
     events : pandas.DataFrame
         The events DataFrame (must contain ``direction``, ``action``, ``type``,
         ``timestamp``, ``event_id``, ``price`` columns).
     depth_summary : pandas.DataFrame
-        The order book summary statistics DataFrame (must contain ``timestamp``
-        and ``event_id`` columns).
+        The order book summary statistics DataFrame (must contain
+        ``timestamp`` and the ``best_bid_price`` / ``best_ask_price`` columns;
+        an ``event_id`` column orders rows that share a timestamp).
 
     Returns
     -------
@@ -121,8 +149,21 @@ def order_aggressiveness(
         "order_aggressiveness(depth_summary)",
     )
 
-    bid_diff = _event_diff_bps(events, depth_summary, 1)
-    ask_diff = _event_diff_bps(events, depth_summary, -1)
+    orders = events[
+        (events["action"] != "changed")
+        & events["type"].isin(["flashed-limit", "resting-limit"])
+    ]
+    missing = ~orders["timestamp"].isin(depth_summary["timestamp"])
+    if missing.any():
+        logger.debug(
+            "order_aggressiveness: {}/{} order timestamps not in "
+            "depth_summary (each is read against the last earlier row)",
+            missing.sum(),
+            len(orders),
+        )
+    standing = _row_standing_before(orders, depth_summary)
+    bid_diff = _event_diff_bps(orders, standing, depth_summary, 1)
+    ask_diff = _event_diff_bps(orders, standing, depth_summary, -1)
     # Work on a copy: the caller's frame must not grow columns as a side
     # effect (the merges below already produce new frames).
     events = events.copy()

@@ -632,10 +632,19 @@ the other surfaces use:
 - `prepare(frame)` — turns that table into the payload the renderer takes,
   exactly as a `prepare_*` function does for a plot (§3).
 
-The built-in measurements ([`compute_vpin`](api/flow_toxicity.md),
+Both methods can take keyword-only settings after their first argument, each
+with a default. Put the settings of the measurement (a window, a bucket size)
+on `compute` and the settings of the picture (a threshold line, a time window)
+on `prepare`. `result.plot(name, **kwargs)` sends each keyword to the method
+that names it, so the two must not share a name.
+
+Five metrics ship registered: `l1_ticker`, `vpin`, `kyle_lambda`,
+`order_flow_imbalance` and `ofi_horizon`. Each wraps a plain function you can
+still call directly ([`compute_vpin`](api/flow_toxicity.md),
 [`compute_kyle_lambda`](api/flow_toxicity.md),
-[`order_flow_imbalance`](api/flow_toxicity.md)) are plain functions you can
-still call directly. Registering wraps one so it runs and plots from a result.
+[`order_flow_imbalance`](api/flow_toxicity.md),
+[`ofi_by_horizon`](api/flow_toxicity.md)). Registering is what makes a
+function run and plot from a result.
 
 ```python
 from __future__ import annotations
@@ -664,11 +673,8 @@ class AmihudMetric:
     title = "Amihud Illiquidity"
     levels = (Level.L2, Level.L3)  # trades only: both resolutions have them
 
-    def __init__(self, freq: str = "1min") -> None:
-        self.freq = freq
-
-    def compute(self, result: PipelineResult) -> pd.DataFrame:
-        return amihud_illiquidity(result.trades, freq=self.freq)
+    def compute(self, result: PipelineResult, *, freq: str = "1min") -> pd.DataFrame:
+        return amihud_illiquidity(result.trades, freq=freq)
 
     def prepare(self, frame: pd.DataFrame) -> dict:
         return {"series": frame.reset_index()}
@@ -685,13 +691,13 @@ def mpl_amihud(data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT
     return ax.figure
 
 
-register_metric(AmihudMetric(freq="5min"))
+register_metric(AmihudMetric())
 RENDERERS.register(("amihud", None, "matplotlib"), mpl_amihud)  # None = level-less
 ```
 
 Note what is registered: an *instance*, not a class. A metric needs no per-run
-construction, so the object registered is the object called — which is also how
-it carries settings of its own, such as `freq` above.
+construction, so the object registered is the object called. Its settings, such
+as `freq` above, are keyword arguments with defaults.
 
 Using it:
 
@@ -701,10 +707,12 @@ from ob_analytics.visualization import available_concepts
 
 result = Pipeline().run("orders.csv")
 
-result.metric("amihud")        # the table
-result.metrics()               # every metric that applies to this run
-result.plot("amihud")          # the face, through the renderer above
-available_concepts(result)     # lists "amihud" with an empty level list
+result.metric("amihud")              # the table
+result.metric("amihud", freq="5min") # the table, with a setting changed
+result.metrics()                     # every metric that applies to this run
+result.plot("amihud")                # the face, through the renderer above
+result.plot("amihud", freq="5min")   # freq goes to compute
+available_concepts(result)           # lists "amihud" with an empty level list
 ```
 
 Metrics run when asked for, not during `Pipeline.run`, so a run pays only for
@@ -714,8 +722,16 @@ run's resolution.
 
 **In the gallery.** A registered metric becomes a gallery card on its own —
 `generate_gallery(result, ...)` draws it beside the built-in faces with no
-extra step needed. A metric that raises is logged and its card dropped, so
-one broken metric does not stop the gallery being built.
+extra step needed. A metric is computed when its card is drawn, so listing
+concepts or plotting another face does not run it. A metric that raises is
+logged and its card says why, so one broken metric does not stop the gallery
+being built.
+
+The gallery and `result.plot` give a metric the display-unit result: prices in
+the quote currency and sizes in the base asset. `result.metric` gives it the
+result as it is, with prices in integer ticks and sizes in integer lots (see
+[the schema](schema.md)). A size setting such as VPIN's `bucket_volume` is in
+the units of the result the metric is given.
 
 **Shipping a metric as its own package.** Advertise it under the
 `ob_analytics.metrics` entry-point group and `load_metric_plugins()` finds it at

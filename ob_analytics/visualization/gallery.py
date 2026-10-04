@@ -18,8 +18,10 @@ Usage::
 from __future__ import annotations
 
 import html as html_mod
+import inspect
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -251,6 +253,28 @@ def _paired(
     return PlotConcept(key, title, {Level.L2: l2, Level.L3: l3}, note=note)
 
 
+def _compute_settings(metric: Any) -> frozenset[str]:
+    """The keyword names *metric*'s ``compute`` takes after the result."""
+    params = list(inspect.signature(metric.compute).parameters.values())[1:]
+    return frozenset(
+        p.name for p in params if p.kind in (p.KEYWORD_ONLY, p.POSITIONAL_OR_KEYWORD)
+    )
+
+
+def _metric_payload(metric: Any, result: PipelineResult, **settings: Any) -> dict:
+    """Compute *metric* over *result* and prepare its payload.
+
+    Each keyword in *settings* goes to the method that names it: to
+    ``compute`` when its signature has it, otherwise to ``prepare``, so
+    ``plot_result(result, "vpin", bucket_volume=5.0, threshold=0.8)`` sets
+    the bucket size of the measurement and the alert line of the picture.
+    """
+    names = _compute_settings(metric)
+    compute = {k: v for k, v in settings.items() if k in names}
+    prepare = {k: v for k, v in settings.items() if k not in names}
+    return metric.prepare(metric.compute(result, **compute), **prepare)
+
+
 def _metric_panels(result: PipelineResult) -> list[PlotSpec]:
     """Build one analytic panel per registered metric that applies to *result*.
 
@@ -259,8 +283,12 @@ def _metric_panels(result: PipelineResult) -> list[PlotSpec]:
     concept the panel dispatches on, so a renderer registered at
     ``(name, None, backend)`` draws it.  A metric whose
     :attr:`~ob_analytics.protocols.Metric.levels` exclude this run's level is
-    skipped, and so is one that raises: it is logged and its panel dropped, so
-    a single broken metric cannot stop the gallery being built.
+    skipped.
+
+    The metric is computed when its panel is prepared, not here, so building
+    the model (which every :func:`plot_result` call does) costs nothing for
+    the metrics it does not draw.  A metric that raises fails only its own
+    card, which says why.
 
     The metric sees the display-unit *result* the faces render, so its numbers
     and the axes beside them are in the same units (see :func:`display_result`).
@@ -272,14 +300,12 @@ def _metric_panels(result: PipelineResult) -> list[PlotSpec]:
         metric = METRICS.get(name)
         if result.level not in metric.levels:
             continue
-        try:
-            frame = metric.compute(result)
-        except Exception as e:  # noqa: BLE001 -- one bad metric must not sink the gallery
-            logger.warning("Gallery: metric {!r} failed: {}", name, e)
-            continue
         panels.append(
             PlotSpec(
-                metric.name, metric.title, metric.name, metric.prepare, {"frame": frame}
+                metric.name,
+                metric.title,
+                metric.name,
+                partial(_metric_payload, metric, result),
             )
         )
     return panels
@@ -608,7 +634,7 @@ def build_gallery_model(
     # than depth_heatmap/order_activity's own (unclipped) time axis, per the
     # issue's own instruction to restrict the overlay, not the base plot.
     # A single bad detector run, unit conversion, or clip must not sink the
-    # gallery (the same trade-off _metric_panels makes for a bad metric), so
+    # gallery (just as a bad metric fails only its own card), so
     # any failure here just drops the overlay and logs a warning.
     hidden_liquidity_overlay: dict[str, pd.DataFrame] = {}
     try:
@@ -1068,7 +1094,9 @@ def plot_result(
         :data:`~ob_analytics.visualization.DEFAULT_THEME`.
     **overrides
         Extra keyword arguments merged over the prepare call (e.g.
-        ``col_bias=0.1`` for the depth heatmap).
+        ``col_bias=0.1`` for the depth heatmap).  For a metric, each goes to
+        its ``compute`` when that names it and to its ``prepare`` otherwise,
+        e.g. ``bucket_volume=5.0, threshold=0.8`` for ``"vpin"``.
 
     Returns
     -------
@@ -1507,7 +1535,7 @@ def generate_gallery(
         logger.info("Gallery: generating {}", card.title)
         # The backend columns of a card share one prepared payload, so the
         # prepare step runs (and logs) once per face, not once per backend.
-        prepared: dict[tuple[int, int], dict] = {}
+        prepared: dict[tuple[int, int], dict | Exception] = {}
         for panel in card.panels:
             panel.reason = unloaded.get(panel.backend) or _misplaced(panel, loaded)
             if panel.reason:
@@ -1573,20 +1601,34 @@ def _misplaced(panel: _Panel, backends: frozenset[str]) -> str:
 
 
 def _render_and_save(
-    panel: _Panel, out: Path, plt: Any, prepared: dict[tuple[int, int], dict]
+    panel: _Panel,
+    out: Path,
+    plt: Any,
+    prepared: dict[tuple[int, int], dict | Exception],
 ) -> bool:
     """Render one panel to a figure and persist it; return success.
 
     *prepared* caches payloads by (prepare function, keyword arguments) so
     panels of one card that differ only by backend prepare once.  Renderers
-    do not modify their payload, so sharing it is safe.
+    do not modify their payload, so sharing it is safe.  A prepare that
+    raises is cached as its error, so it is not run again for the next
+    backend.
     """
     key = (id(panel.prepare), id(panel.prep_kwargs))
-    try:
-        if key not in prepared:
+    if key not in prepared:
+        try:
             prepared[key] = panel.prepare(**panel.prep_kwargs)
-        fig = plot(panel.concept, panel.level, backend=panel.backend, **prepared[key])
-    except Exception as e:  # noqa: BLE001 -- one bad panel must not sink the gallery
+        except Exception as e:  # noqa: BLE001 -- one bad panel must not sink the gallery
+            logger.warning("Gallery: {} {} failed: {}", panel.backend, panel.stem, e)
+            prepared[key] = e
+    payload = prepared[key]
+    if isinstance(payload, Exception):
+        # Where a metric is computed, so the card says why it has no plot.
+        panel.reason = f"Preparing the data failed: {payload}"
+        return False
+    try:
+        fig = plot(panel.concept, panel.level, backend=panel.backend, **payload)
+    except Exception as e:  # noqa: BLE001
         logger.warning("Gallery: {} {} failed: {}", panel.backend, panel.stem, e)
         return False
 

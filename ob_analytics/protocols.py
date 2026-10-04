@@ -403,6 +403,13 @@ class Metric(Protocol):
     metric draws under, so a renderer registered at ``(name, None, backend)``
     is the metric's face.
 
+    Both methods may take keyword-only settings after their first argument,
+    each with a default: :meth:`compute` the settings of the measurement (a
+    window, a bucket size) and :meth:`prepare` the settings of the picture (a
+    threshold line, a time window).
+    :func:`~ob_analytics.visualization.plot_result` sends each keyword it is
+    given to the method that names it, so the two must not share a name.
+
     Attributes
     ----------
     name : str

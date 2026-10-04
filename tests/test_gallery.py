@@ -710,8 +710,11 @@ class TestBuildGalleryModel:
         order_outcome = next(c for c in model.concepts if c.key == "order_outcome")
         assert order_outcome.at(Level.L2) is None
         assert order_outcome.at(Level.L3) is not None
-        # Analytics are appended by callers, not derived here.
-        assert model.analytics == []
+        # The level-less analytics are the registered metrics; callers
+        # append any other panel themselves.
+        from ob_analytics.metrics import list_metrics
+
+        assert sorted(p.name for p in model.analytics) == list_metrics()
 
     def test_no_built_in_card_is_misplaced(self, tiny_bitstamp_orders_csv) -> None:
         from ob_analytics.bitstamp import BitstampSource

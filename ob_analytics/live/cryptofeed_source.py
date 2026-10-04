@@ -368,9 +368,21 @@ def _independent_reserve(base: Any) -> Any:
     return IndependentReserve
 
 
+def _independent_reserve_fixed(base: Any) -> Any:
+    """Return Independent Reserve's feed with both of its fixes.
+
+    The opening book no older than the stream (see
+    :mod:`ob_analytics.live._cryptofeed_venues`, imported here because it needs
+    cryptofeed), and changed orders kept (see ``_independent_reserve``).
+    """
+    from ob_analytics.live._cryptofeed_venues import with_newer_opening_book
+
+    return _independent_reserve(with_newer_opening_book(base))
+
+
 #: Feeds whose cryptofeed class loses data, keyed by cryptofeed's exchange id,
 #: each mapped to a function that returns a fixed subclass.
-_FIXED_FEEDS = {"INDEPENDENT_RESERVE": _independent_reserve}
+_FIXED_FEEDS = {"INDEPENDENT_RESERVE": _independent_reserve_fixed}
 
 
 def _fixed_feed(feed: Any) -> Any:
@@ -439,6 +451,7 @@ class CryptofeedSource:
         self.order_events = 0
         self.depth_rows = 0
         self.trade_events = 0
+        self.other_market_trades = 0
         self.tape_fills = 0
         self.tape_fills_already_shown = 0
         self.errors = 0
@@ -583,6 +596,28 @@ class CryptofeedSource:
             "venue": str(getattr(payload, "exchange", "") or "") or self._venue,
             "symbol": self._symbol_of(payload),
         }
+
+    def _other_market(self, trade: Any) -> bool:
+        """Whether a trade is from another of the venue's markets.
+
+        Independent Reserve sends a market's trade channel the trades of every
+        market for the same coin: a BTC-AUD capture also gets BTC-NZD and
+        BTC-SGD trades, priced in NZD and SGD.  cryptofeed names the market in
+        the trade's ``symbol``.  The venue keeps one book for all its markets,
+        so these trades still fill orders in the capture's book.
+        """
+        return bool(self._symbol) and self._symbol_of(trade) != self._symbol
+
+    def _fill_identity(self, trade: Any) -> dict[str, str]:
+        """Venue + symbol for a fill: the market of the book, not of the trade.
+
+        A trade from another market (see ``_other_market``) fills an order in
+        the capture's book, so its fill carries the capture's symbol.
+        """
+        identity = self._payload_identity(trade)
+        if self._symbol:
+            identity["symbol"] = self._symbol
+        return identity
 
     def _book_common(
         self, book: Any, receipt_timestamp: float | None = None
@@ -1136,7 +1171,7 @@ class CryptofeedSource:
                     "volume": remaining,
                     "action": "changed",
                     "direction": direction,
-                    **self._payload_identity(trade),
+                    **self._fill_identity(trade),
                 }
             )
         return events
@@ -1210,6 +1245,7 @@ class CryptofeedSource:
             "order_events": self.order_events,
             "depth_rows": self.depth_rows,
             "trade_events": self.trade_events,
+            "other_market_trades": self.other_market_trades,
             "tape_fills": self.tape_fills,
             "tape_fills_already_shown": self.tape_fills_already_shown,
             "sequence_out_of_order": self.sequence_out_of_order,
@@ -1346,6 +1382,10 @@ class CryptofeedSource:
                 raw = None
 
         async def on_trade(trade: Any, receipt_timestamp: float) -> None:
+            # A trade from another market is left out of trades.csv: its
+            # price is in another currency.  Its fills are still recorded,
+            # since the venue's markets share one book (see ``_other_market``).
+            other_market = self._other_market(trade)
             try:
                 event = self._map_trade(trade, receipt_timestamp)
                 fills = (
@@ -1363,8 +1403,13 @@ class CryptofeedSource:
             for fill in fills:
                 await queue.put(("order", fill, None))
             self.order_events += len(fills)
+            raw = getattr(trade, "raw", None)
+            if other_market:
+                self.other_market_trades += 1
+                await queue.put(("raw", {}, raw))
+                return
             self.trade_events += 1
-            await queue.put(("trade", event, getattr(trade, "raw", None)))
+            await queue.put(("trade", event, raw))
 
         handler.add_feed(
             exchange_cls(
