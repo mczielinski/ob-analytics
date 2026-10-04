@@ -54,13 +54,31 @@ Concepts with both L2 and L3 faces: `trade_tape`, `order_activity`,
 ## Book replay
 
 `book_replay` steps through the book over part of a run. The ladder shows the
-book at one instant per `interval` (1 s by default). Beside it, the trades
-panel shows every trade of the replay and the mid, with a line at the time
-on screen. Drag the slider, or press a play button: `Play 1×` is real time,
-and each speed in `speeds` gets a button. A speed is smooth only when a frame
-lasts about 50 ms or less, so at 1 s per frame, `Play 20×` glides and the
-slower speeds step. For smoother slow playback, pass a shorter `interval`.
-The file grows with the number of frames, which `max_frames` caps at 600.
+book at one instant per `interval`. Beside it, the trades panel shows every
+trade of the replay and the mid, with a line at the time on screen. Drag the
+slider, or press a play button: `Play 1×` is real time, and each speed in
+`speeds` gets a button. A speed is smooth only when a frame lasts about 50 ms
+or less, so at 1 s per frame, `Play 20×` glides and the slower speeds step.
+For smoother slow playback, pass a shorter `interval`. The file grows with the
+number of frames, which `max_frames` caps at 600. When `interval` would need
+more frames, the replay uses a longer interval and logs a warning.
+
+`result.plot()` and the gallery replay the gallery's zoom window: the middle
+half of a run shorter than two hours, or the second quarter of a longer run.
+They set `interval` to 1 s, or longer so that the window fits in about 300
+frames. On the sample data the window is about 15 minutes, so each frame is
+about 3 s and every speed steps. To choose the window and the interval
+yourself, pass `start_time`, `end_time` and `interval`:
+
+```python
+import pandas as pd
+
+start = result.trades["timestamp"].iloc[100]
+fig = result.plot(
+    "book_replay", "L2", backend="plotly",
+    start_time=start, end_time=start + pd.Timedelta("5min"), interval="1s",
+)
+```
 
 Click a trade to move the replay to the last frame at or before it. The price
 level the trade took is marked in the trade's colour: the ask for a buy, the
