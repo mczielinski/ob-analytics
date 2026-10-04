@@ -10,6 +10,7 @@ metrics on it, along with :func:`price_level_volume`, :func:`filter_depth`,
 from __future__ import annotations
 
 import re
+import warnings
 from collections.abc import Iterable
 from datetime import datetime
 from functools import lru_cache
@@ -20,6 +21,9 @@ import pandas as pd
 
 from ob_analytics import _engine_frames
 from ob_analytics._utils import (
+    decimal_places,
+    lots_to_size,
+    size_to_lots,
     validate_columns,
     validate_non_empty,
 )
@@ -465,7 +469,12 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
     Parameters
     ----------
     events : pandas.DataFrame
-        A pandas DataFrame containing limit order events.
+        A pandas DataFrame containing limit order events.  Sizes are the
+        pipeline's integer lots, or floats such as the base-asset sizes of a
+        table converted for display.  Float sizes on a decimal grid are summed
+        exactly on that grid, so a level that empties reads exactly ``0`` in
+        either case.  Float sizes on no such grid are summed as floats, with
+        a warning.
 
     Returns
     -------
@@ -475,7 +484,8 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
         event named by ``event_id``.  Rows are in the canonical event order
         (:func:`~ob_analytics.schemas.time_order_keys`), and the ``sequence``
         and ``ingest_seq`` columns are carried over from *events* when it has
-        them, so the depth rows sort the same way the events do.
+        them, so the depth rows sort the same way the events do.  The volume
+        is in the units and dtype family of ``events["volume"]``.
     """
     validate_columns(
         events,
@@ -494,6 +504,32 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
         "price_level_volume",
     )
     validate_non_empty(events, "price_level_volume")
+
+    # A float sum of a level's adds, cancels and fills need not return to
+    # exactly zero when the last order leaves: 0.1 + 0.02 - 0.1 - 0.02 is
+    # 3.5e-18, even in pandas' compensated cumsum.  The level then reads as
+    # resting volume no order is on.  Float sizes on a decimal grid (the
+    # base-asset sizes of a table converted for display) are therefore summed
+    # as whole multiples of the grid, as integer lots are, and converted back
+    # at the end.
+    decimals = None
+    if not all(pd.api.types.is_integer_dtype(events[c]) for c in ("volume", "fill")):
+        volume = events["volume"].to_numpy(dtype=np.float64)
+        fill = events["fill"].to_numpy(dtype=np.float64)
+        decimals = decimal_places(np.concatenate([volume, fill]))
+        if decimals is None:
+            warnings.warn(
+                "price_level_volume: the sizes are floats with no common "
+                "decimal grid, so they are summed as floats and a level that "
+                "empties can keep a remainder near zero.  Pass integer sizes, "
+                "such as the pipeline's own tables.",
+                stacklevel=2,
+            )
+        else:
+            grid = 10.0**-decimals
+            events = events.assign(
+                volume=size_to_lots(volume, grid), fill=size_to_lots(fill, grid)
+            )
 
     # The tie-break columns of the event order other than ``event_id``.  They
     # travel with each row so the depth rows can be put in the same order as
@@ -670,6 +706,10 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
     asks = events[events["direction"] == "ask"]
     depth_ask = directional_price_level_volume(asks)
     depth_data = pd.concat([depth_bid, depth_ask])
+    if decimals is not None:
+        depth_data["volume"] = lots_to_size(
+            depth_data["volume"].to_numpy(), 10.0**-decimals, decimals=decimals
+        )
     return depth_data.sort_values(by=time_order_keys(depth_data), kind="stable")
 
 

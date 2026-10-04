@@ -264,6 +264,9 @@ class TestFaithfulBestSeries:
     def test_matches_order_book_on_crossed(self):
         self._assert_matches_order_book(crossed_events())
 
+    def test_matches_order_book_with_float_sizes(self):
+        self._assert_matches_order_book(_classified(_FLOAT_SIZE_ROWS))
+
 
 # ---------------------------------------------------------------------------
 # data_quality_summary
@@ -752,6 +755,23 @@ def _through_trade() -> pd.DataFrame:
     return _trades([(10.0, 102.0)])
 
 
+# The book of :func:`_book_with_stale_ask` plus two asks of 0.1 and 0.02 at
+# 100 that leave at t=5, before the trade.  Summed in floats, even with
+# pandas' compensated cumsum, 0.1 + 0.02 - 0.1 - 0.02 is 3.5e-18, not 0, so
+# the level would stay live at 100 and hold the ask touch in place of the stale
+# ask at 101.
+_FLOAT_SIZE_ROWS = [
+    (1, 1, 0.0, 99.0, 2.0, "bid", "created", 0.0),
+    (2, 2, 0.0, 101.0, 2.0, "ask", "created", 0.0),
+    (3, 3, 0.0, 103.0, 2.0, "ask", "created", 0.0),
+    (4, 5, 0.0, 100.0, 0.1, "ask", "created", 0.0),
+    (5, 6, 0.0, 100.0, 0.02, "ask", "created", 0.0),
+    (6, 5, 5.0, 100.0, 0.1, "ask", "deleted", 0.0),
+    (7, 6, 5.0, 100.0, 0.02, "ask", "deleted", 0.0),
+    (8, 4, 100.0, 98.0, 1.0, "bid", "created", 0.0),
+]
+
+
 class TestStaleOrders:
     def test_finds_an_ask_a_trade_printed_through(self):
         (stale,) = detect_stale_orders(_book_with_stale_ask(), _through_trade())
@@ -824,6 +844,22 @@ class TestStaleOrders:
     def test_toy_feed_has_none(self):
         assert detect_stale_orders(_classified_toy(), toy_trades()) == ()
 
+    def test_float_sizes_empty_a_level_exactly(self):
+        depth = price_level_volume(_classified(_FLOAT_SIZE_ROWS))
+        at_100 = depth[depth["price"] == 100.0]
+        assert at_100["volume"].iloc[-1] == 0.0
+
+    def test_float_sizes_on_no_grid_warn(self):
+        rows = [list(r) for r in _FLOAT_SIZE_ROWS]
+        rows[3][4] = rows[5][4] = 1 / 3
+        with pytest.warns(UserWarning, match="no common decimal grid"):
+            price_level_volume(_classified([tuple(r) for r in rows]))
+
+    def test_an_emptied_float_level_does_not_hold_the_touch(self):
+        (stale,) = detect_stale_orders(_classified(_FLOAT_SIZE_ROWS), _through_trade())
+        assert stale.id == 2
+        assert stale.touch_seconds == pytest.approx(90.0)
+
     def test_does_not_change_the_book(self):
         events = _book_with_stale_ask()
         before = order_book(events)
@@ -831,6 +867,16 @@ class TestStaleOrders:
         after = order_book(events)
         assert 2 in set(after["asks"]["id"])
         assert before["asks"].equals(after["asks"])
+
+
+@pytest.fixture(scope="module")
+def bitstamp_sample_result(bitstamp_sample_dir):
+    """The bundled Bitstamp sample through the pipeline, once per module."""
+    from ob_analytics.pipeline import Pipeline
+
+    return Pipeline(source=BitstampSource()).run(
+        str(bitstamp_sample_dir / "orders.csv.gz")
+    )
 
 
 class TestStaleOrdersInSummary:
@@ -896,15 +942,11 @@ class TestStaleOrdersInSummary:
         assert type(stale.id) is int
 
     def test_names_the_opening_snapshot_ask_on_the_bitstamp_sample(
-        self, bitstamp_sample_dir
+        self, bitstamp_sample_result
     ):
         """The two orders the opening snapshot reported and the venue never
         mentioned again, and nothing else (#234)."""
-        from ob_analytics.pipeline import Pipeline
-
-        result = Pipeline(source=BitstampSource()).run(
-            str(bitstamp_sample_dir / "orders.csv.gz")
-        )
+        result = bitstamp_sample_result
         s = data_quality_summary(
             result.events,
             result.trades,
@@ -924,6 +966,30 @@ class TestStaleOrdersInSummary:
         assert "ask 2002347646152704 at 78,333 held the ask touch for 27.4 min" in (
             s.render()
         )
+
+    def test_display_tables_give_the_same_report_on_the_bitstamp_sample(
+        self, bitstamp_sample_result
+    ):
+        """Prices in the quote currency and sizes in the base asset, as
+        ``display_result`` converts them, measure what the pipeline's own
+        integer tables do."""
+        from ob_analytics.visualization import display_result
+
+        result = bitstamp_sample_result
+        shown = display_result(result)
+        expected = data_quality_summary(
+            result.events,
+            result.trades,
+            feed_type=FeedType.DIFF_FEED,
+            tick_size=result.config.tick_size,
+        )
+        got = data_quality_summary(
+            shown.events, shown.trades, feed_type=FeedType.DIFF_FEED
+        )
+        assert got.crossed_pct == expected.crossed_pct
+        assert got.crossed_episodes == expected.crossed_episodes
+        assert got.stale_orders == expected.stale_orders
+        assert detect_stale_orders(shown.events, shown.trades) == got.stale_orders
 
 
 # ---------------------------------------------------------------------------

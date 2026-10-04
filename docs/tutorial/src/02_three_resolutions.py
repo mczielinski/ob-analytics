@@ -177,9 +177,9 @@ fig = plot_queue_story(events, toy_trades(), at_s=[6, 45, 56, 57])
 from ob_analytics import Pipeline, sample_csv_path
 from ob_analytics.visualization import available_concepts, display_result
 
-raw = Pipeline().run(sample_csv_path())
+result = Pipeline().run(sample_csv_path())
 # Canonical prices are integer ticks (issue #155); show quote currency.
-result = display_result(raw)
+result = display_result(result)
 available_concepts(result)
 
 # %% [markdown]
@@ -299,14 +299,12 @@ assert list(sweep["maker_actor"]) == ["Jo", "Alice"]
 # prints *through* a resting order shows that the order has already
 # left the venue. `detect_stale_orders` from `ob_analytics.analytics`
 # lists the orders the feed never removed after such a trade, worst
-# first. Give it the pipeline's own tables, `raw` above, before
-# `display_result` converted them, and pass
-# `tick_size=raw.config.tick_size` to read the price in dollars.
+# first.
 
 # %% tags=["solution"]
 from ob_analytics.analytics import detect_stale_orders
 
-worst = detect_stale_orders(raw.events, raw.trades, tick_size=raw.config.tick_size)[0]
+worst = detect_stale_orders(result.events, result.trades)[0]
 print(f"side:            {worst.direction}")
 print(f"price:           {worst.price:,.2f}")
 print(f"disproved at:    {worst.disproved_at:%H:%M:%S}")
