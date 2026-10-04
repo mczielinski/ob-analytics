@@ -96,14 +96,12 @@ defines a **total order**: `timestamp`, then — as tie-breaks, when the frame
 carries them — the venue `sequence`, then `event_id` (the dense per-order key on
 the L3 path), then the local `ingest_seq`.
 [`ob_analytics.schemas.time_order_keys`](api/schemas.md) returns this key list
-for a frame; the per-order reconstructions (`queue_positions`) sort by it, and
-every loader builds its frame with fixed, stable sorts, so a rebuild is
-deterministic run-to-run. On a price-level (L2) feed there is no `event_id`;
-ties there fall to `sequence` / `ingest_seq` when tracked, otherwise to the
-loader's stable arrival order. Enforcing the full key inside the price-level
-depth engine — so an alternate engine reproduces it bit-for-bit — lands with the
-engine separation and rewrite (#136 / #104 / #138), when it can be checked
-against that second backend.
+for a frame. The per-order reconstructions (`queue_positions`, `order_book`)
+and the price-level depth engine (`price_level_volume`, `depth_metrics`) all
+replay events in this order, and every loader builds its frame with fixed,
+stable sorts, so a rebuild is deterministic run-to-run. On a price-level (L2)
+feed there is no `event_id`; ties there fall to `sequence` / `ingest_seq` when
+tracked, otherwise to the loader's stable arrival order.
 
 ## Price policy
 
@@ -249,7 +247,10 @@ materialize on disk.
 ## depth
 
 Output of `price_level_volume`. Required columns are the
-[`DEPTH_COLUMNS`](api/schemas.md) contract; the L3 path adds `event_id`.
+[`DEPTH_COLUMNS`](api/schemas.md) contract; the L3 path adds `event_id`. Rows
+are in the [same-instant order](#same-instant-order), and the optional
+`sequence` and `ingest_seq` columns are carried over from the events when they
+are present.
 
 | Column | Arrow type | Unit | Null? | Meaning |
 |---|---|---|---|---|
@@ -266,7 +267,9 @@ loader yields this frame directly with the same four required columns.
 
 Output of `depth_metrics`. One row per depth event, holding the reconstructed
 best bid and offer plus cumulative resting volume in basis-point bins on each
-side. This is the reconstructed book state over time.
+side. This is the reconstructed book state over time. Rows are in the
+[same-instant order](#same-instant-order), and each row is the book after the
+event it names.
 
 | Column | Arrow type | Unit | Null? | Meaning |
 |---|---|---|---|---|
@@ -459,12 +462,11 @@ implemented: sequence numbers (#146), instrument identity (#147), the time model
 - **Comparable across venues.** Because every frame is on one UTC clock, frames
   from different venues can be joined or concatenated directly — the earlier
   "not comparable across venues" rule is gone.
-- **Deferred.** Enforcing the full same-instant key inside the price-level depth
-  engine (so an alternate backend reproduces the rebuild bit-for-bit) lands with
-  the engine separation and rewrite (#136 / #104 / #138), validated against that
-  second backend. Today the per-order reconstructions sort by the total order and
-  the engine plays events back in a stable receive-clock order, deterministic
-  run-to-run.
+- **One order for every rebuild.** The per-order reconstructions and the
+  price-level depth engine both replay events in this total order, so a
+  `depth_summary` row is the book after the event it names, and the row before
+  it is the book before that event. (Until 2026-10 the depth engine sorted on
+  `timestamp` alone and replayed one instant's bid rows before its ask rows.)
 
 ### 2. Source sequence numbers — implemented (#146)
 
