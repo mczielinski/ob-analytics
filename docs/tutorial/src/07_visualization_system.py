@@ -177,11 +177,16 @@ fig = plot("trade_tape", level="L2", **payload)
 # A metric's settings do not need either step. A keyword to the one-liner
 # goes to the calculation or to the picture, whichever names it. Here
 # `bucket_volume` sizes the VPIN buckets (twenty of them across this
-# capture, not the default one) and `threshold` places the alert line:
+# capture, not the default one), `n_buckets` averages them ten at a time
+# (the default window of fifty would never fill), and `threshold` places
+# the alert line:
 
 # %%
 fig = result.plot(
-    "vpin", bucket_volume=result.trades["volume"].sum() / 20, threshold=0.7
+    "vpin",
+    bucket_volume=result.trades["volume"].sum() / 20,
+    n_buckets=10,
+    threshold=0.7,
 )
 
 # %% [markdown]

@@ -105,11 +105,23 @@ _GOLDEN_CONFIG = SynthConfig(seed=143, duration=60.0)
 # from a touch that is not a tradeable price has no value, and an infinity
 # poisons every mean taken over the column. ``order_lifecycles`` follows
 # because it carries the placement row's ``aggressiveness_bps``.
+# 2026-10-03 (depth replayed in event order): ``price_level_volume`` and the
+# depth engine now order rows by ``schemas.time_order_keys`` (timestamp, then
+# ``event_id`` at one instant) instead of the timestamp alone, which replayed
+# one instant's bid rows before its ask rows. 21 of 719 ``depth`` rows move, at
+# the 42 instants with more than one row; no volume changes, because no level
+# here changes twice in one instant. The same 21 ``depth_summary`` rows change,
+# and the book at the end of every instant is unchanged. Each depth_summary row
+# is now the book after the event it names: the last row of every event
+# matches the per-order rebuild (``engine.book_state``) on the best bid and ask,
+# where before 16 rows did not. ``events`` follows through
+# ``aggressiveness_bps`` on 4 of 970 rows. ``trades``, ``order_book``,
+# ``order_lifecycles`` and ``queue_positions`` are unchanged.
 EXPECTED: dict[str, str] = {
-    "events": "7d39ed81b48d7f1c0fd05b2777d5d98341cdf64bb8911e0f41e03b6f877c550c",
+    "events": "099cab88568a9f81c98a6b8cbd610d4c74a276e2bd25e5437b5fa5755ff6fd76",
     "trades": "dfe87849f18a11294965564e23374563676aafadfb735df832737a33cdaba92e",
-    "depth": "14259329e7614036e5aa8f642d2a903229c184f19cf665678dab2d71d417ea05",
-    "depth_summary": "da5ff1da836e631cdf7fd985f388e5f70b35b443acf2d1ab4303f690910e39c6",
+    "depth": "ff29441ebf00d611150d9abafee49a562c8dd98352002b291ab55118a6e0d2f6",
+    "depth_summary": "e801e79063fcea5384ba76ca51c48d0c5304b0fa512a036ca5a86c64e6253be5",
     "order_book": (
         "e4552ba2ff12c89af4ec608273d564364266c13446f361da53239581e6fdbb95:"
         "7902c4f9eabe3a88f35b989809ebf878cd092f9c24300e21a955f036142fb32e"

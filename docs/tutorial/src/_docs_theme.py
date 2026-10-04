@@ -35,7 +35,10 @@ def _link_keyframes(fig, ax_top, key_axes, t0, at_s) -> None:
 
     y_bottom = ax_top.get_ylim()[0]
     for axk, k in zip(key_axes, at_s):
-        t = t0 + pd.Timedelta(seconds=k)
+        # UTC as np.datetime64: matplotlib's date converter drops a tz-aware
+        # Timestamp's zone with a warning, and reads a date2num float as
+        # microseconds once the axis has a date converter.
+        t = (t0 + pd.Timedelta(seconds=k)).tz_convert(None).to_datetime64()
         ax_top.axvline(t, color="#aaaaaa", ls=":", lw=1.1, zorder=1)
         fig.add_artist(
             ConnectionPatch(

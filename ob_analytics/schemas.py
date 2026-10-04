@@ -74,14 +74,13 @@ instant, so the deterministic **total order** is ``timestamp``, then — as
 tie-breaks when present — the venue ``sequence`` (:data:`SEQUENCE_COLUMN`), then
 ``event_id`` (the dense per-order key on the L3 path), then the local
 ``ingest_seq`` (:data:`INGEST_SEQ_COLUMN`).  :func:`time_order_keys` returns that
-key list for a frame, and the per-order reconstructions (``queue_positions``)
-sort by it.  Every loader-built frame is produced by fixed, stable sorts, so the
-rebuild is deterministic run-to-run.  On a price-level (L2) feed there is no
-``event_id``; ties there fall to ``sequence`` / ``ingest_seq`` when tracked,
-otherwise to the loader's stable arrival order.  Enforcing the full key inside
-the price-level depth engine — so an alternate engine reproduces it bit-for-bit
-— lands with the engine separation and rewrite, when it can be checked against
-that second backend.
+key list for a frame.  The per-order reconstructions (``queue_positions``,
+``order_book``) and the price-level depth engine (``price_level_volume``,
+``depth_metrics``) all replay events in this order.  Every loader-built frame is
+produced by fixed, stable sorts, so the rebuild is deterministic run-to-run.  On
+a price-level (L2) feed there is no ``event_id``; ties there fall to
+``sequence`` / ``ingest_seq`` when tracked, otherwise to the loader's stable
+arrival order.
 
 Ordering keys (both **optional**, so neither is in :data:`EVENT_COLUMNS`;
 consumers read them when present):

@@ -1,6 +1,7 @@
 """Tests for ob_analytics.visualization."""
 
 import re
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -178,6 +179,104 @@ class TestCreateAxes:
         fig, ax = _create_axes(ax_orig)
         assert fig is fig_orig
         assert ax is ax_orig
+
+
+class TestFigureLayout:
+    """A face lays out a figure it creates and leaves a caller's figure alone."""
+
+    @staticmethod
+    def _time_series() -> dict:
+        ts = pd.Series(pd.date_range("2020-01-01", periods=5, freq="s", tz="UTC"))
+        return _data.prepare_time_series_data(ts, pd.Series([1, 2, 3, 2, 1]))
+
+    def test_own_figure_is_laid_out(self):
+        fig = plot("time_series", **self._time_series())
+        default_left = plt.rcParams["figure.subplot.left"]
+        assert fig.axes[0].get_position().x0 != pytest.approx(default_left)
+
+    def test_caller_figure_layout_is_untouched(self):
+        # An axes placed by hand is one tight_layout cannot handle: laying out
+        # this figure warns, and would move the caller's panel.
+        fig = plt.figure()
+        ax = fig.add_subplot(2, 1, 1)
+        fig.add_axes((0.1, 0.05, 0.8, 0.1))
+        before = ax.get_position().bounds
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            plot("time_series", ax=ax, **self._time_series())
+        assert ax.get_position().bounds == pytest.approx(before)
+
+    def test_no_face_lays_out_a_caller_figure(self, tiny_bitstamp_orders_csv):
+        # Every matplotlib face the gallery draws, each on a caller's figure
+        # that tight_layout cannot handle.  A face that lays the figure out
+        # warns and changes its subplot parameters.  (A face's colorbar may
+        # still narrow the caller's panel; that is not a layout.)
+        from ob_analytics.bitstamp import BitstampSource
+        from ob_analytics.pipeline import Pipeline
+        from ob_analytics.visualization import RENDERERS
+        from ob_analytics.visualization.gallery import (
+            _metric_panels,
+            build_gallery_model,
+            display_result,
+        )
+
+        result = Pipeline(source=BitstampSource()).run(str(tiny_bitstamp_orders_csv))
+        model = build_gallery_model(result)
+        faces: list[tuple[Any, Level | None]] = [
+            (spec, level) for c in model.concepts for level, spec in c.variants.items()
+        ]
+        faces += [(spec, None) for spec in _metric_panels(display_result(result))]
+        # Only matplotlib lays out a figure; a face drawn by other backends
+        # alone (such as the plotly book replay) has nothing to check here.
+        faces = [
+            (spec, level)
+            for spec, level in faces
+            if (spec.plot_name, level, "matplotlib") in RENDERERS
+        ]
+
+        def subplot_params(fig: Figure) -> tuple[float, ...]:
+            p = fig.subplotpars
+            return (p.left, p.right, p.bottom, p.top, p.wspace, p.hspace)
+
+        drawn, unfed = [], []
+        for spec, level in faces:
+            try:
+                payload = spec.prepare(**spec.prep_kwargs)
+            except Exception as e:  # noqa: BLE001 -- a face the tiny run cannot feed
+                unfed.append((spec.plot_name, e))
+                continue
+            fig = plt.figure()
+            ax = fig.add_subplot(2, 1, 1)
+            fig.add_axes((0.1, 0.05, 0.8, 0.1))
+            before = subplot_params(fig)
+            with warnings.catch_warnings():
+                warnings.filterwarnings("error", message=".*tight_layout")
+                plot(spec.plot_name, level, ax=ax, **payload)
+            assert subplot_params(fig) == pytest.approx(before), spec.plot_name
+            drawn.append(spec.plot_name)
+            plt.close(fig)
+        # The check means little unless most faces were actually drawn.
+        assert len(drawn) >= 15, (drawn, unfed)
+
+    def test_caller_can_lay_out_a_cancellations_panel(self, sample_cancellation_events):
+        # The colorbar must share the caller's gridspec, or the caller's own
+        # tight_layout cannot place it and warns.
+        fig, axes = plt.subplots(1, 2)
+        data = _data.prepare_cancellations_l3_data(sample_cancellation_events)
+        plot("cancellations", Level.L3, ax=axes[0], **data)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            fig.tight_layout()
+
+    def test_empty_book_draws_no_legend(self):
+        empty = pd.DataFrame({"price": [], "volume": [], "liquidity": []})
+        book = {"bids": empty, "asks": empty, "timestamp": 1430438400}
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            fig = plot(
+                "book_snapshot", Level.L2, **_data.prepare_book_snapshot_data(book)
+            )
+        assert fig.axes[0].get_legend() is None
 
 
 class TestSaveFigure:
