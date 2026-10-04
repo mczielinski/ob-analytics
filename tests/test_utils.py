@@ -1,9 +1,12 @@
 """Tests for ob_analytics._utils."""
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from ob_analytics._utils import (
+    decimal_places,
+    lots_to_size,
     ticks_to_price_if_integer,
     validate_columns,
     validate_non_empty,
@@ -27,6 +30,45 @@ class TestTicksToPriceIfInteger:
     def test_empty_integer_series_is_safe(self):
         out = ticks_to_price_if_integer(pd.Series([], dtype="int64"), 0.01)
         assert len(out) == 0
+
+
+class TestDecimalPlaces:
+    def test_whole_numbers_need_no_decimals(self):
+        assert decimal_places([1.0, 2.0, 300.0]) == 0
+
+    def test_satoshi_sizes_sit_on_eight_decimals(self):
+        sizes = lots_to_size(np.array([1, 12345678, 250000000]), 1e-8, decimals=8)
+        assert decimal_places(sizes) == 8
+
+    def test_the_fewest_decimals_win(self):
+        assert decimal_places([0.1, 0.02, 0.5]) == 2
+
+    def test_float_arithmetic_is_on_no_grid(self):
+        # 1000.1 - 1000.0 is 0.10000000000002274; it is not moved to 0.1.
+        assert decimal_places([1000.1 - 1000.0, 0.25]) is None
+
+    def test_a_large_size_stays_on_the_grid(self):
+        # 138,800 BTC (the largest size in the bundled sample) is 1.388e13
+        # satoshis, still inside the whole numbers a float holds exactly.
+        sizes = lots_to_size(np.array([13880000000000, 3]), 1e-8, decimals=8)
+        assert decimal_places(sizes) == 8
+
+    def test_a_tiny_size_keeps_its_decimals(self):
+        assert decimal_places([2.0, 3e-8]) == 8
+
+    def test_no_decimal_grid_returns_none(self):
+        assert decimal_places([1 / 3]) is None
+
+    def test_a_value_that_is_not_finite_returns_none(self):
+        assert decimal_places([0.1, np.nan]) is None
+        assert decimal_places([0.1, np.inf]) is None
+
+    def test_a_value_past_exact_float_integers_returns_none(self):
+        assert decimal_places([2.0**60]) is None
+
+    def test_a_sum_past_int64_returns_none(self):
+        # Each value is exact, but together they do not fit in int64.
+        assert decimal_places(np.full(1024, 2.0**52)) is None
 
 
 class TestValidateColumns:
