@@ -13,7 +13,9 @@ you need — `OfflineSource` for file replay (`Pipeline(source=...)`), `LiveSour
 for live capture.
 
 Per-source configuration is a typed `SourceSettings` (a frozen pydantic model),
-not an untyped dict — subclass it per source, e.g. `CcxtSettings`.
+not an untyped dict — subclass it per source, e.g. `CcxtSettings`. A source
+that needs an API key marks the field with `Credential` (see
+[Use an API key](../howto/api-keys.md)).
 
 ::: ob_analytics.sources.register_source
 
@@ -24,3 +26,5 @@ not an untyped dict — subclass it per source, e.g. `CcxtSettings`.
 ::: ob_analytics.sources.load_source_plugins
 
 ::: ob_analytics.config.SourceSettings
+
+::: ob_analytics.config.Credential

@@ -276,4 +276,5 @@ and every order changed while it was disconnected stays wrong.
 ## Related
 
 - [Command-line interface](cli.md) — all `capture` flags
+- [Use an API key](api-keys.md) — for a source that needs one
 - [Extending ob-analytics](../extending.md) — the `Source` / `LiveSource` protocols in depth

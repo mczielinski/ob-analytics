@@ -145,8 +145,8 @@ the rate with `--poll-interval`. Because it polls:
 
 Kalshi's WebSocket feed sends every change with a sequence number, but it needs
 an API key. Capturing from it is
-[#240](https://github.com/mczielinski/ob-analytics/issues/240), and using API
-keys is [#239](https://github.com/mczielinski/ob-analytics/issues/239).
+[#240](https://github.com/mczielinski/ob-analytics/issues/240). [Use an API
+key](api-keys.md) explains how a source takes a key.
 
 ## See also
 

@@ -10,6 +10,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **A source can take an API key** (#239). A source declares each key it
+  needs as a `SecretStr | None` field of its settings, marked with
+  `Credential(env=..., issued_at=...)`. The settings read an unset key from
+  that environment variable; with `from_file=True` the variable holds the path
+  of a key file. A key is never a command-line option. `run_capture` stops
+  before it writes anything when a key is missing, and names the variable and
+  where the venue issues keys; a key shorter than eight characters is
+  refused. No file a capture writes holds a key, and
+  neither does the CLI log: a key that reaches one, in a venue's message or an
+  error, is replaced with `**********`. `ob-analytics sources` lists the
+  variables each source needs. No built-in source needs a key yet. See "Use an
+  API key".
 - **Run a large input one time window at a time** (#116).
   `Pipeline.run_windows(source, boundaries, output)` cuts one input at the
   given times and runs the depth stages on one window at a time, so their peak

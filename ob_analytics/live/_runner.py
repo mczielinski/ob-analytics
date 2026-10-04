@@ -16,6 +16,8 @@ from typing import Any
 import pandas as pd
 from loguru import logger
 
+from ob_analytics._secrets import RedactingFile, any_known, redact
+from ob_analytics.config import SourceSettings
 from ob_analytics.live._base import (
     CaptureConfig,
     CaptureResult,
@@ -93,6 +95,11 @@ class FileCaptureSink(CaptureSink):
     **L3** -> ``orders.csv`` (per-order lifecycle, BitstampLoader schema);
     **L2** -> ``depth.csv`` (price-level updates, L2DepthLoader schema).
     ``trades.csv`` is written for both.
+
+    When a source's settings hold an API key, every file passes through
+    :func:`ob_analytics._secrets.redact`, so the key is not written even if a
+    frame or an error message carries it.  The keys are registered before the
+    sink is built (:func:`check_credentials`); with none, the files are plain.
     """
 
     def __init__(
@@ -115,25 +122,25 @@ class FileCaptureSink(CaptureSink):
         self._depth_fp: Any = None
         self._depth: csv.DictWriter[str] | None = None
         if level is Level.L2:
-            self._depth_fp = (self.out_dir / "depth.csv").open("w", newline="")
+            self._depth_fp = _open_redacting(self.out_dir / "depth.csv")
             self._depth = csv.DictWriter(
                 self._depth_fp, fieldnames=_DEPTH_COLS, extrasaction="ignore"
             )
             self._depth.writeheader()
         else:
-            self._orders_fp = (self.out_dir / "orders.csv").open("w", newline="")
+            self._orders_fp = _open_redacting(self.out_dir / "orders.csv")
             self._orders = csv.DictWriter(
                 self._orders_fp, fieldnames=_ORDER_COLS, extrasaction="ignore"
             )
             self._orders.writeheader()
 
-        self._trades_fp = (self.out_dir / "trades.csv").open("w", newline="")
+        self._trades_fp = _open_redacting(self.out_dir / "trades.csv")
         self._trades = csv.DictWriter(
             self._trades_fp, fieldnames=_TRADE_COLS, extrasaction="ignore"
         )
         self._trades.writeheader()
 
-        self._raw_fp = (self.out_dir / "raw.jsonl").open("w") if keep_raw else None
+        self._raw_fp = _open_redacting(self.out_dir / "raw.jsonl") if keep_raw else None
         # raw.jsonl is a record for debugging, so what it cannot hold never
         # stops the capture. The types it wrote as str(value) and the frames it
         # skipped go to meta.json. The warnings already logged are shared by
@@ -344,7 +351,26 @@ class FileCaptureSink(CaptureSink):
             meta["capture_error"] = result.capture_error
             meta["capture_error_phase"] = result.capture_error_phase
             meta["errors"] = int(meta.get("errors") or 0) + 1
-        (self.out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
+        (self.out_dir / "meta.json").write_text(redact(json.dumps(meta, indent=2)))
+
+
+def _open_redacting(path: Path) -> Any:
+    """Open *path* for writing text, redacting every write when a key is loaded."""
+    fp = path.open("w", newline="")
+    return RedactingFile(fp) if any_known() else fp
+
+
+def check_credentials(source: Any) -> None:
+    """Raise :class:`~ob_analytics.exceptions.ConfigError` if *source* lacks a key.
+
+    Reads the credentials the source's settings declare (see
+    :class:`~ob_analytics.config.Credential`); a source with none passes.  Also
+    registers the keys that are set for redaction, so it must run before the
+    capture's files are opened.
+    """
+    settings = getattr(source, "settings", None)
+    if isinstance(settings, SourceSettings):
+        settings.check_credentials(source.name)
 
 
 def _iso_or_none(ts: pd.Timestamp | None) -> str | None:
@@ -420,9 +446,14 @@ async def run_capturer(
     recorded in :attr:`CaptureResult.capture_error` (with the phase in
     :attr:`CaptureResult.capture_error_phase`) and in ``meta.json``. A failed
     snapshot skips the stream; the shutdown events still run.
+
+    A source whose settings declare a :class:`~ob_analytics.config.Credential`
+    that is not set raises :class:`~ob_analytics.exceptions.ConfigError` here,
+    also before any output is created.
     """
     if isinstance(capturer, SupportsPreflight):
         capturer.preflight()
+    check_credentials(capturer)
     # The source declares its granularity; the runner routes book events to
     # the matching writer. Fall back to L3 for sources predating the attr.
     level = getattr(capturer, "level", Level.L3)
@@ -436,10 +467,11 @@ async def run_capturer(
 
     def _record_error(phase: str, exc: BaseException) -> None:
         nonlocal capture_error, capture_error_phase
-        logger.error("Capturer '{}' {} raised: {!r}", capturer.name, phase, exc)
+        error = redact(repr(exc))
+        logger.error("Capturer '{}' {} raised: {}", capturer.name, phase, error)
         # Keep the first error: a later one is usually a consequence of it.
         if capture_error is None:
-            capture_error = repr(exc)
+            capture_error = error
             capture_error_phase = phase
 
     loop = asyncio.get_event_loop()

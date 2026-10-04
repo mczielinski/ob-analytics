@@ -41,6 +41,7 @@ nav = [
     { "Capture Kalshi prediction markets" = "howto/kalshi.md" },
     { "Capture Polymarket prediction markets" = "howto/polymarket.md" },
     { "Capture cryptofeed venues (native L3 crypto)" = "howto/cryptofeed.md" },
+    { "Use an API key" = "howto/api-keys.md" },
     { "Run from the command line" = "howto/cli.md" },
     { "Check data quality" = "howto/audit.md" },
     { "Extending ob-analytics" = "extending.md" },

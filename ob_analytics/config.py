@@ -4,9 +4,55 @@ Centralises the numeric thresholds and parameters that were previously
 scattered as literals across multiple modules.
 """
 
-from typing import Literal
+import os
+import types
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Literal, Self, Union, get_args, get_origin
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr, model_validator
+
+from ob_analytics._secrets import MIN_SECRET_LENGTH, remember
+from ob_analytics.exceptions import ConfigError
+
+
+@dataclass(frozen=True)
+class Credential:
+    """Marks a :class:`SourceSettings` field as a key the user supplies.
+
+    Put it on a ``SecretStr | None`` field with ``typing.Annotated``.  When the
+    field is not given, the settings read it from the environment variable
+    *env*.  A key is never a command-line option, because a command line stays
+    in the shell history::
+
+        class VenueSettings(SourceSettings):
+            api_key: Annotated[
+                SecretStr | None,
+                Credential(env="VENUE_API_KEY", issued_at="https://venue.example/keys"),
+            ] = None
+
+    An empty value counts as unset.  A value shorter than eight characters is
+    refused, since no venue issues a key that short.  A capture checks that
+    every credential is set before it writes anything
+    (:meth:`SourceSettings.check_credentials`).
+
+    Attributes
+    ----------
+    env : str
+        The environment variable the key is read from.
+    issued_at : str
+        Where the venue issues keys, usually a URL.  The error for a missing
+        key names it.
+    from_file : bool
+        The variable holds the path of a file, and the field holds the file's
+        contents.  For a private key, which lives in a file.  From Python, pass
+        a :class:`~pathlib.Path` to read a file, or a ``str`` that is the key
+        itself.
+    """
+
+    env: str
+    issued_at: str
+    from_file: bool = False
 
 
 class SourceSettings(BaseModel):
@@ -22,9 +68,139 @@ class SourceSettings(BaseModel):
 
     Frozen so a source's settings are fixed for the run, matching
     :class:`PipelineConfig`.
+
+    A source that needs an API key declares it as a field marked with
+    :class:`Credential`.  The settings read an unset credential from its
+    environment variable, and every credential's value is removed from the
+    files a capture writes.
     """
 
     model_config = {"frozen": True}
+
+    @classmethod
+    def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
+        super().__pydantic_init_subclass__(**kwargs)
+        for name, field in cls.model_fields.items():
+            if not any(isinstance(m, Credential) for m in field.metadata):
+                continue
+            # A key in a plain str would print in a repr or a log line, and a
+            # field with a default other than None would fail to build when
+            # the key is not set, which is every run that does not capture.
+            if not _is_optional_secret(field.annotation) or field.default is not None:
+                raise TypeError(
+                    f"{cls.__name__}.{name} is a Credential, so it must be typed "
+                    "'SecretStr | None' with a default of None"
+                )
+
+    @classmethod
+    def credentials(cls) -> dict[str, Credential]:
+        """The fields marked with :class:`Credential`, by field name."""
+        return {
+            name: marker
+            for name, field in cls.model_fields.items()
+            for marker in field.metadata
+            if isinstance(marker, Credential)
+        }
+
+    @model_validator(mode="before")
+    @classmethod
+    def _read_credentials(cls, data: Any) -> Any:
+        credentials = cls.credentials()
+        if not credentials or not isinstance(data, dict):
+            return data
+        data = dict(data)
+        for name, credential in credentials.items():
+            value = data.get(name)
+            if isinstance(value, SecretStr):
+                value = value.get_secret_value()
+            if value is None or value == "":
+                data[name] = _from_environment(credential)
+            elif credential.from_file and isinstance(value, Path):
+                data[name] = _read_key_file(value, f"{cls.__name__}.{name}")
+        return data
+
+    @model_validator(mode="after")
+    def _check_and_remember(self) -> Self:
+        for name, credential in type(self).credentials().items():
+            value = getattr(self, name)
+            if value is not None and len(value.get_secret_value()) < MIN_SECRET_LENGTH:
+                raise ConfigError(
+                    f"{type(self).__name__}.{name} is shorter than "
+                    f"{MIN_SECRET_LENGTH} characters, which is not a venue key; "
+                    f"check the value given, or {credential.env} if it came "
+                    "from the environment"
+                )
+        self.remember_secrets()
+        return self
+
+    def remember_secrets(self) -> None:
+        """Register every ``SecretStr`` value held here for redaction.
+
+        Validation does this already.  A capture does it again as it starts,
+        for settings built without validation (``model_copy(update=...)``).
+        """
+        for name in type(self).model_fields:
+            value = getattr(self, name)
+            if isinstance(value, SecretStr):
+                remember(value.get_secret_value())
+
+    def check_credentials(self, source: str) -> None:
+        """Raise :class:`~ob_analytics.exceptions.ConfigError` if a credential is unset.
+
+        The message names each missing key's environment variable and where
+        the venue issues keys.  *source* is the source's name, for the message.
+        The keys that are set are registered for redaction.
+        """
+        self.remember_secrets()
+        missing = [
+            (name, credential)
+            for name, credential in type(self).credentials().items()
+            if getattr(self, name) is None
+        ]
+        if not missing:
+            return
+        lines = [f"Source {source!r} needs a key that is not set:"]
+        for name, credential in missing:
+            what = (
+                f"set {credential.env} to the path of the key file"
+                if credential.from_file
+                else f"set the environment variable {credential.env}"
+            )
+            lines.append(f"  {name}: {what}. Get a key at {credential.issued_at}")
+        lines.append('See "Use an API key" in the ob-analytics documentation.')
+        raise ConfigError("\n".join(lines))
+
+
+def _is_optional_secret(annotation: Any) -> bool:
+    """Whether *annotation* is ``SecretStr | None``."""
+    if get_origin(annotation) not in (Union, types.UnionType):
+        return False
+    return set(get_args(annotation)) == {SecretStr, type(None)}
+
+
+def _from_environment(credential: Credential) -> str | None:
+    """The credential's value from its environment variable, or ``None``."""
+    value = os.environ.get(credential.env, "")
+    if not value:
+        return None
+    if credential.from_file:
+        return _read_key_file(Path(value), credential.env)
+    return value
+
+
+def _read_key_file(path: Path, named_by: str) -> str:
+    """The text of the key file at *path*; *named_by* says where the path came from."""
+    path = path.expanduser()
+    try:
+        text = path.read_text()
+    except OSError as exc:
+        raise ConfigError(
+            f"{named_by} names the key file {path}, which cannot be read: "
+            f"{exc.strerror or exc}"
+        ) from None
+    if not text.strip():
+        raise ConfigError(f"{named_by} names the key file {path}, which is empty")
+    return text
 
 
 class PipelineConfig(BaseModel):
