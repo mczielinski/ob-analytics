@@ -14,13 +14,18 @@ from loguru import logger
 from ob_analytics._registry import Registry
 from ob_analytics.protocols import DataWriter
 from ob_analytics.schemas import (
+    _DEFAULT_LOT_KEY,
     _DEFAULT_TICK_KEY,
+    LOT_SIZE_KEY,
     SCHEMA_VERSION,
     SCHEMA_VERSION_KEY,
     TICK_SIZE_KEY,
     check_schema_version,
+    decode_lot_sizes,
     decode_tick_sizes,
+    encode_lot_sizes,
     encode_tick_sizes,
+    resolve_lot_size,
     resolve_tick_size,
 )
 
@@ -57,7 +62,7 @@ def list_writers() -> list[str]:
 
 
 def _tick_sizes_from_config(config: Any) -> dict[str, float] | None:
-    """Build the tick-size metadata map from a run's *config* (issue #155).
+    """Build the tick-size metadata map from a run's *config*.
 
     Returns ``{"default": config.tick_size}`` when *config* carries a
     ``tick_size``, so ``save_data(config=...)`` tags each Parquet file with the
@@ -73,29 +78,199 @@ def _tick_sizes_from_config(config: Any) -> dict[str, float] | None:
     return {_DEFAULT_TICK_KEY: float(tick_size)}
 
 
+def _lot_sizes_from_config(config: Any) -> dict[str, float] | None:
+    """Return the lot-size metadata map for *config*, or ``None``.
+
+    The size counterpart of :func:`_tick_sizes_from_config`:
+    ``{"default": config.lot_size}`` when *config* carries a ``lot_size``, so a
+    saved Parquet file records the grid its integer sizes sit on.
+    """
+    lot_size = getattr(config, "lot_size", None)
+    if lot_size is None:
+        return None
+    return {_DEFAULT_LOT_KEY: float(lot_size)}
+
+
 def _write_versioned_parquet(
     df: pd.DataFrame,
     path: Path,
     *,
     tick_sizes: dict[str, float] | None = None,
+    lot_sizes: dict[str, float] | None = None,
 ) -> None:
-    """Write *df* to *path* as Parquet, tagging the schema version and tick size.
+    """Write *df* to *path* as Parquet, tagging the version, tick and lot size.
 
     Goes through pyarrow so the file carries :data:`SCHEMA_VERSION` under
     :data:`SCHEMA_VERSION_KEY` in its key-value metadata, alongside the pandas
     metadata that preserves dtypes on read.  When *tick_sizes* is given (a
     ``{instrument_key: tick_size}`` map) it is written under
     :data:`TICK_SIZE_KEY` so a reader can recover the float price from the
-    integer ticks (issue #155).  The index is dropped, matching the previous
-    ``df.to_parquet(..., index=False)`` behaviour.
+    integer ticks.  *lot_sizes* does the same for the integer sizes under
+    :data:`LOT_SIZE_KEY`.  The index is dropped,
+    matching the previous ``df.to_parquet(..., index=False)`` behaviour.
+    """
+    pq.write_table(
+        _to_arrow_table(df, tick_sizes=tick_sizes, lot_sizes=lot_sizes), path
+    )
+
+
+class OutputTables(dict[str, pd.DataFrame]):
+    """A run's output tables, as pandas, that a writer can also ask for in Arrow.
+
+    ``DataWriter.write`` takes a mapping of pandas frames, and this **is** that
+    mapping — every existing writer treats it as the dict it is, and the
+    protocol's annotation stays honest.  What it adds is :meth:`arrow`, for a
+    writer whose target is columnar: Parquet here, and the Nautilus catalogue.
+
+    Without it such a writer would call ``pa.Table.from_pandas`` itself and
+    silently drop the schema version and tick size that make the output
+    canonical, because the function that attaches them is private.  The frame
+    type therefore stays out of the protocol: a writer asks for the shape it
+    wants rather than the pipeline guessing which one every writer needs.
+
+    Parameters
+    ----------
+    tables : mapping of str to pandas.DataFrame
+        The run's tables, keyed by name.
+    tick_sizes : dict of str to float, optional
+        Tick sizes to record in :meth:`arrow`'s metadata.  ``None`` when the
+        caller declared no config, which writes no tick metadata rather than a
+        default one.
+    """
+
+    def __init__(
+        self,
+        tables: dict[str, pd.DataFrame],
+        *,
+        tick_sizes: dict[str, float] | None = None,
+        lot_sizes: dict[str, float] | None = None,
+    ) -> None:
+        super().__init__(tables)
+        self._tick_sizes = tick_sizes
+        self._lot_sizes = lot_sizes
+
+    def arrow(self) -> dict[str, pa.Table]:
+        """Return the same tables as canonical Arrow, keyed the same way.
+
+        Each table carries the schema version and, when the run declared one,
+        the tick size — the same key-value metadata a canonical Parquet file
+        carries, so a writer building one is no worse off than
+        :class:`ParquetWriter`.
+        """
+        return {
+            name: _to_arrow_table(
+                df, tick_sizes=self._tick_sizes, lot_sizes=self._lot_sizes
+            )
+            for name, df in self.items()
+        }
+
+
+class ParquetWriter:
+    """Write a run's frames as one canonical Parquet file per key.
+
+    The library's default output format, and a registered writer like any other
+    rather than a branch inside :func:`save_data`, so a user can register their
+    own under ``"parquet"`` and replace it.
+
+    Satisfies the :class:`~ob_analytics.protocols.DataWriter` protocol.
+    """
+
+    def __init__(self, config: Any = None) -> None:
+        self._tick_sizes = _tick_sizes_from_config(config)
+        self._lot_sizes = _lot_sizes_from_config(config)
+
+    def write(
+        self,
+        data: dict[str, pd.DataFrame],
+        dest: str | Path,
+        **kwargs: Any,
+    ) -> Path:
+        """Write each frame in *data* to ``<dest>/<key>.parquet``.
+
+        *dest* is a directory and is created when missing.  Each file carries
+        the schema version and, when the run's config named one, the tick size,
+        so :func:`load_data` can check the first and restore prices with the
+        second.
+        """
+        p = Path(dest)
+        p.mkdir(parents=True, exist_ok=True)
+        for name, df in data.items():
+            _write_versioned_parquet(
+                df,
+                p / f"{name}.parquet",
+                tick_sizes=self._tick_sizes,
+                lot_sizes=self._lot_sizes,
+            )
+        return p
+
+
+class PickleWriter:
+    """Write a run's frames as one pickle file.
+
+    Kept for backward compatibility and warned about on every call: a pickle
+    executes code on load, so it is unsafe for data you did not write.  A
+    registered writer like any other.
+
+    Satisfies the :class:`~ob_analytics.protocols.DataWriter` protocol.
+    """
+
+    def write(
+        self,
+        data: dict[str, pd.DataFrame],
+        dest: str | Path,
+        **kwargs: Any,
+    ) -> Path:
+        """Write *data* whole to *dest* with :func:`pandas.to_pickle`."""
+        logger.warning(
+            "Saving as pickle. Consider using fmt='parquet' for "
+            "portability and security."
+        )
+        p = Path(dest)
+        # ``dict(data)``, not *data*: the payload is a dict subclass (#216) and
+        # pickling it whole would write ob-analytics' own class into the file,
+        # so the file would only load where that class exists.
+        pd.to_pickle(dict(data), p)  # type: ignore
+        return p
+
+
+def _to_arrow_table(
+    df: pd.DataFrame,
+    *,
+    tick_sizes: dict[str, float] | None = None,
+    lot_sizes: dict[str, float] | None = None,
+) -> pa.Table:
+    """Convert *df* to an Arrow table tagged with the canonical metadata.
+
+    The table carries :data:`SCHEMA_VERSION` under :data:`SCHEMA_VERSION_KEY`
+    and, when *tick_sizes* is given, the ``{instrument_key: tick_size}`` map
+    under :data:`TICK_SIZE_KEY` — the same key-value metadata a canonical
+    Parquet file carries, so a reader handed a table from memory is no worse off
+    than one reading a file.  The pandas index is dropped.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        A canonical pipeline frame.
+    tick_sizes : dict of str to float, optional
+        Tick sizes to record, keyed by instrument.  Omitted
+        metadata means a reader sees the integer prices as-is.
+    lot_sizes : dict of str to float, optional
+        Lot sizes to record, keyed by instrument.  Omitted
+        metadata means a reader sees the integer sizes as-is.
+
+    Returns
+    -------
+    pyarrow.Table
+        *df* as Arrow, with the metadata attached.
     """
     table = pa.Table.from_pandas(df, preserve_index=False)
     metadata = dict(table.schema.metadata or {})
     metadata[SCHEMA_VERSION_KEY] = SCHEMA_VERSION.encode()
     if tick_sizes is not None:
         metadata[TICK_SIZE_KEY] = encode_tick_sizes(tick_sizes)
-    table = table.replace_schema_metadata(metadata)
-    pq.write_table(table, path)
+    if lot_sizes is not None:
+        metadata[LOT_SIZE_KEY] = encode_lot_sizes(lot_sizes)
+    return table.replace_schema_metadata(metadata)
 
 
 def _read_versioned_parquet(path: Path) -> pd.DataFrame:
@@ -104,10 +279,11 @@ def _read_versioned_parquet(path: Path) -> pd.DataFrame:
     Raises :class:`~ob_analytics.exceptions.ConfigError` on an unsupported
     version; a file with no version key loads as legacy data with a warning
     (see :func:`ob_analytics.schemas.check_schema_version`).  The tick size
-    stored under :data:`TICK_SIZE_KEY` (issue #155) is surfaced on the returned
-    frame's ``attrs``: ``df.attrs["tick_sizes"]`` holds the full instrument map
-    and ``df.attrs["tick_size"]`` the resolved default, so ``price * tick_size``
-    recovers the quote currency.  A legacy (pre-#155) file has neither.
+    stored under :data:`TICK_SIZE_KEY` is surfaced on the returned frame's
+    ``attrs``: ``df.attrs["tick_sizes"]`` holds the full instrument map and
+    ``df.attrs["tick_size"]`` the resolved default, so ``price * tick_size``
+    recovers the quote currency.  An older file that stored float
+    quote-currency prices has neither.
     """
     table = pq.read_table(path)
     metadata = table.schema.metadata or {}
@@ -121,6 +297,12 @@ def _read_versioned_parquet(path: Path) -> pd.DataFrame:
         resolved = resolve_tick_size(tick_sizes)
         if resolved is not None:
             df.attrs["tick_size"] = resolved
+    lot_sizes = decode_lot_sizes(metadata.get(LOT_SIZE_KEY))
+    if lot_sizes is not None:
+        df.attrs["lot_sizes"] = lot_sizes
+        resolved_lot = resolve_lot_size(lot_sizes)
+        if resolved_lot is not None:
+            df.attrs["lot_size"] = resolved_lot
     return df
 
 
@@ -209,33 +391,23 @@ def save_data(
         Extra keyword arguments forwarded to ``writer.write()``.
     """
     p = Path(path)
+    # Every writer is handed the same payload: a mapping of pandas frames that
+    # can also produce canonical Arrow (#216).  It is a dict, so a writer that
+    # ignores the extra sees exactly what it saw before.
+    tables = OutputTables(lob_data, tick_sizes=_tick_sizes_from_config(config))
 
     if writer is not None:
-        writer.write(lob_data, p, **write_kwargs)
-        return
-
-    if fmt == "parquet":
-        tick_sizes = _tick_sizes_from_config(config)
-        p.mkdir(parents=True, exist_ok=True)
-        for name, df in lob_data.items():
-            _write_versioned_parquet(df, p / f"{name}.parquet", tick_sizes=tick_sizes)
-        return
-    if fmt == "pickle":
-        logger.warning(
-            "Saving as pickle. Consider using fmt='parquet' for "
-            "portability and security."
-        )
-        pd.to_pickle(lob_data, p)  # type: ignore
+        writer.write(tables, p, **write_kwargs)
         return
 
     resolved = _named_writer(fmt, config, ctx)
     if resolved is not None:
-        resolved.write(lob_data, p, **write_kwargs)
+        resolved.write(tables, p, **write_kwargs)
         return
 
     from ob_analytics.sources import SOURCES
 
-    available = ["parquet", "pickle", *WRITERS.list(), *SOURCES.list()]
+    available = [*WRITERS.list(), *SOURCES.list()]
     raise ValueError(f"Unsupported format: {fmt!r}. Available: {', '.join(available)}")
 
 
@@ -247,11 +419,16 @@ def _named_writer(fmt: str, config: Any, ctx: Any) -> DataWriter | None:
     lives on the source, not in a parallel registry).  Returns ``None`` when
     *fmt* names neither.
     """
-    from ob_analytics.config import PipelineConfig
     from ob_analytics.protocols import RunContext
     from ob_analytics.sources import SOURCES
 
-    cfg = config if config is not None else PipelineConfig()
+    # *config* is passed through as given, ``None`` included: every writer
+    # defaults for itself, and a writer that records what the caller declared
+    # must be able to tell "no config" from a default one.  Substituting a
+    # ``PipelineConfig()`` here would tag a file with its default tick size
+    # (#155) that the caller never asked for.  *ctx* is different: an empty
+    # ``RunContext`` is an absence, not an invented value.
+    cfg = config
     rctx = ctx if ctx is not None else RunContext()
 
     if fmt in WRITERS:
@@ -261,3 +438,9 @@ def _named_writer(fmt: str, config: Any, ctx: Any) -> DataWriter | None:
         if make_writer is not None:
             return make_writer(cfg, rctx)
     return None
+
+
+# Built-in output formats self-register, the way sources and metrics do, so
+# ``save_data(fmt=...)`` has one resolution path and no special cases (#216).
+register_writer("parquet", lambda config, ctx: ParquetWriter(config))
+register_writer("pickle", lambda config, ctx: PickleWriter())

@@ -25,10 +25,15 @@ from hypothesis import given, settings, strategies as st
 
 from ob_analytics import (
     BitstampSource,
+    Clocks,
     DataQualitySummary,
     FeedType,
     LobsterSource,
+    Severity,
+    StaleOrder,
+    TradeAttribution,
     data_quality_summary,
+    detect_stale_orders,
 )
 from ob_analytics.analytics import (
     _faithful_best_series,
@@ -39,6 +44,7 @@ from ob_analytics.analytics import (
 from ob_analytics.datasets import toy_events, toy_trades
 from ob_analytics.depth import price_level_volume
 from ob_analytics.engine import crossed_prefix_counts
+from ob_analytics.protocols import clocks_of, trade_attribution_of
 
 # ---------------------------------------------------------------------------
 # Builders
@@ -299,6 +305,84 @@ class TestDataQualitySummary:
         # 2 of 3 trades miss a maker or taker.
         assert s.unmatched_trades_pct == pytest.approx(200.0 / 3.0)
 
+    # -- trade attribution (#284) -------------------------------------------
+
+    @staticmethod
+    def _no_takers() -> pd.DataFrame:
+        """Three trades: makers resolved on two, takers resolved on none."""
+        return pd.DataFrame(
+            {
+                "maker_event_id": np.array([1, 2, np.nan], dtype=object),
+                "taker_event_id": np.array([np.nan, np.nan, np.nan], dtype=object),
+            }
+        )
+
+    def test_maker_only_feed_counts_makers_only(self):
+        """A feed that shows resting orders only is not faulted for takers."""
+        s = data_quality_summary(
+            crossed_events(),
+            self._no_takers(),
+            trade_attribution=TradeAttribution.MAKER_ONLY,
+        )
+        assert s.unmatched_trades_pct == pytest.approx(100.0 / 3.0)
+        assert s.trade_attribution is TradeAttribution.MAKER_ONLY
+
+    def test_both_sides_feed_still_counts_takers(self):
+        s = data_quality_summary(crossed_events(), self._no_takers())
+        assert s.unmatched_trades_pct == 100.0
+        assert s.trade_attribution is TradeAttribution.BOTH
+
+    def test_feed_naming_no_orders_is_not_checked(self):
+        s = data_quality_summary(
+            crossed_events(),
+            self._no_takers(),
+            trade_attribution=TradeAttribution.NONE,
+        )
+        assert s.unmatched_trades_pct == 0.0
+
+    def test_the_check_says_which_orders_it_looked_for(self):
+        s = data_quality_summary(
+            crossed_events(),
+            self._no_takers(),
+            trade_attribution=TradeAttribution.MAKER_ONLY,
+        )
+        (check,) = [c for c in s.checks if c.name == "unmatched_trades"]
+        assert "no resolvable maker order" in check.detail
+        assert "does not show takers" in check.detail
+        assert "maker only" in s.render()
+        assert s.to_dict()["trade_attribution"] == "maker_only"
+
+
+class TestTradeAttributionDeclarations:
+    """Each source says which orders of a trade its order events can name."""
+
+    def test_native_bitstamp_names_both(self):
+        assert BitstampSource().trade_attribution is TradeAttribution.BOTH
+
+    def test_lobster_names_the_maker_only(self):
+        """ITCH does not identify the aggressor; the taker columns are a guess."""
+        assert LobsterSource().trade_attribution is TradeAttribution.MAKER_ONLY
+
+    def test_databento_names_the_maker_only(self):
+        from ob_analytics.databento import DatabentoSource
+
+        assert DatabentoSource().trade_attribution is TradeAttribution.MAKER_ONLY
+
+    def test_price_level_sources_name_neither(self):
+        from ob_analytics.depth_l2 import DepthCsvSource
+        from ob_analytics.live.ccxt_source import CcxtSource
+
+        assert DepthCsvSource().trade_attribution is TradeAttribution.NONE
+        assert CcxtSource().trade_attribution is TradeAttribution.NONE
+
+    def test_an_undeclared_source_is_read_as_both(self):
+        """A plug-in written before the declaration keeps today's check."""
+
+        class _OldPlugin:
+            name = "old"
+
+        assert trade_attribution_of(_OldPlugin()) is TradeAttribution.BOTH
+
     def test_duplicate_event_ids_counted(self):
         # Two rows share event_id 2 (event_id must be globally unique).
         ev = _classified(
@@ -358,6 +442,488 @@ class TestDataQualitySummary:
         assert "crossed resting book" in text
         assert "diff feed" in text  # the interpretation note
         assert "pre-existing orders" in text
+
+
+# ---------------------------------------------------------------------------
+# The audit checks (issue #108)
+# ---------------------------------------------------------------------------
+
+
+class TestQualityChecks:
+    """The pass/fail verdicts ``ob-analytics audit`` exits on."""
+
+    def test_clean_run_passes_every_check(self):
+        s = data_quality_summary(
+            _classified_toy(), toy_trades(), feed_type=FeedType.MATCHED_BOOK
+        )
+        assert s.ok
+        assert s.errors == ()
+        assert s.warnings == ()
+        assert "all passed" in s.render()
+
+    def test_checks_are_ordered_errors_first(self):
+        s = data_quality_summary(crossed_events(), _empty_trades())
+        severities = [c.severity for c in s.checks]
+        assert severities == sorted(
+            severities, key=[Severity.ERROR, Severity.WARNING, Severity.INFO].index
+        )
+
+    def test_orphan_orders_counted(self):
+        # Order 5 is changed and deleted with no created row.
+        ev = _classified(
+            [
+                (1, 1, 0.0, 99.0, 2.0, "bid", "created", 0.0),
+                (2, 5, 1.0, 98.0, 2.0, "bid", "changed", 0.0),
+                (3, 5, 2.0, 98.0, 0.0, "bid", "deleted", 2.0),
+            ]
+        )
+        s = data_quality_summary(ev, _empty_trades())
+        assert s.orphan_orders == 1
+        assert s.orphan_events == 2
+        # Soft: an order resting before the capture began looks the same.
+        assert s.ok
+        assert [c.name for c in s.warnings] == ["orphan_orders"]
+
+    def test_negative_volume_is_an_error(self):
+        ev = _classified(
+            [
+                (1, 1, 0.0, 99.0, 2.0, "bid", "created", 0.0),
+                (2, 2, 1.0, 101.0, -1.0, "ask", "created", 0.0),
+            ]
+        )
+        s = data_quality_summary(ev, _empty_trades())
+        assert s.negative_volume_rows == 1
+        assert not s.ok
+        assert "negative_volume" in {c.name for c in s.errors}
+
+    def test_nonpositive_price_is_a_warning(self):
+        ev = _classified(
+            [
+                (1, 1, 0.0, 99.0, 2.0, "bid", "created", 0.0),
+                (2, 2, 1.0, 0.0, 2.0, "bid", "created", 0.0),
+            ]
+        )
+        s = data_quality_summary(ev, _empty_trades())
+        assert s.nonpositive_price_rows == 1
+        assert s.ok  # reported, but not a failure
+        assert "nonpositive_price" in {c.name for c in s.warnings}
+
+    def test_venue_clock_after_receive_is_an_error(self):
+        ev = _classified(
+            [
+                (1, 1, 0.0, 99.0, 2.0, "bid", "created", 0.0),
+                (2, 2, 1.0, 101.0, 2.0, "ask", "created", 0.0),
+            ]
+        )
+        # The venue stamped the second event a second after we received it.
+        ev.loc[ev.index[1], "exchange_timestamp"] += pd.Timedelta(seconds=1)
+        s = data_quality_summary(ev, _empty_trades())
+        assert s.exchange_time_after_receive == 1
+        assert not s.ok
+        assert "exchange_time_after_receive" in {c.name for c in s.errors}
+
+    def test_reordered_venue_clock_is_a_warning(self):
+        ev = _classified(
+            [
+                (1, 1, 0.0, 99.0, 2.0, "bid", "created", 0.0),
+                (2, 2, 1.0, 101.0, 2.0, "ask", "created", 0.0),
+                (3, 3, 2.0, 98.0, 2.0, "bid", "created", 0.0),
+            ]
+        )
+        # Each event reaches the capture 0.1 s after the venue stamped it,
+        # except the middle one, stamped by the venue before the first one:
+        # the two reached the capture out of order.
+        ev["exchange_timestamp"] -= pd.Timedelta(seconds=0.1)
+        ev.loc[ev.index[1], "exchange_timestamp"] -= pd.Timedelta(seconds=10)
+        s = data_quality_summary(ev, _empty_trades())
+        assert s.exchange_time_reordered == 1
+        assert s.exchange_time_after_receive == 0
+        assert s.ok
+        assert "exchange_time_reordered" in {c.name for c in s.warnings}
+
+    @pytest.mark.parametrize(
+        ("clocks", "why"),
+        [
+            (Clocks.RECEIVE_ONLY, "exchange_timestamp copies the receive time"),
+            (Clocks.VENUE_ONLY, "timestamp copies the venue time"),
+        ],
+    )
+    def test_one_clock_skips_the_clock_checks_and_says_why(self, clocks, why):
+        """With one clock the columns are copies: the checks say so, not pass (#310)."""
+        ev = _classified(
+            [
+                (1, 1, 0.0, 99.0, 2.0, "bid", "created", 0.0),
+                (2, 2, 1.0, 101.0, 2.0, "ask", "created", 0.0),
+            ]
+        )
+        ev.loc[ev.index[1], "exchange_timestamp"] += pd.Timedelta(seconds=1)
+        s = data_quality_summary(ev, _empty_trades(), clocks=clocks)
+        assert s.exchange_time_after_receive == 0
+        assert s.ok
+        names = {c.name for c in s.checks}
+        assert "exchange_time_after_receive" not in names
+        assert "exchange_time_reordered" not in names
+        (note,) = [c for c in s.checks if c.name == "clocks"]
+        assert note.severity is Severity.INFO
+        assert why in note.detail
+        assert f"clock order           : {note.detail}" in s.render()
+        assert s.to_dict()["clocks"] == clocks.value
+
+    @staticmethod
+    def _opening_book_then_messages() -> pd.DataFrame:
+        """Row 1 is an opening book with a copied clock; rows 2 and 3 are
+        messages stamped by the venue 0.5 s before receipt."""
+        ev = _classified(
+            [
+                (1, 1, 1.0, 99.0, 2.0, "bid", "created", 0.0),
+                (2, 2, 1.2, 101.0, 2.0, "ask", "created", 0.0),
+                (3, 3, 2.0, 98.0, 2.0, "bid", "created", 0.0),
+            ]
+        )
+        venue = ev["exchange_timestamp"] - pd.Timedelta(seconds=0.5)
+        ev["exchange_timestamp"] = venue.where(ev["id"] != 1, ev["timestamp"])
+        ev["origin"] = ["snapshot", "stream", "stream"]
+        return ev
+
+    def test_the_opening_books_clocks_are_not_checked(self):
+        """Its venue time is a copy, later than the next message's (#310)."""
+        s = data_quality_summary(self._opening_book_then_messages(), _empty_trades())
+        assert s.exchange_time_reordered == 0
+
+    def test_a_row_with_no_origin_is_still_checked(self):
+        """Only rows marked as the opening book are left out."""
+        ev = self._opening_book_then_messages()
+        ev["origin"] = pd.array(["snapshot", None, None], dtype="string")
+        ev.loc[ev.index[2], "exchange_timestamp"] += pd.Timedelta(seconds=1)
+        s = data_quality_summary(ev, _empty_trades())
+        assert s.exchange_time_after_receive == 1
+
+    def test_equal_clocks_on_a_message_are_still_checked(self):
+        """Only the opening book is left out, not every row whose clocks match."""
+        ev = self._opening_book_then_messages()
+        ev["origin"] = "stream"
+        s = data_quality_summary(ev, _empty_trades())
+        assert s.exchange_time_reordered == 1
+
+    def test_an_empty_frame_keeps_the_declared_clocks(self):
+        from ob_analytics._utils import empty_events
+
+        s = data_quality_summary(
+            empty_events().assign(type=pd.Series(dtype=object)),
+            _empty_trades(),
+            depth=pd.DataFrame(
+                {
+                    "timestamp": pd.Series(dtype="datetime64[ns, UTC]"),
+                    "price": pd.Series(dtype="int64"),
+                    "volume": pd.Series(dtype="int64"),
+                    "direction": pd.Series(dtype=object),
+                }
+            ),
+        )
+        assert s.clocks is Clocks.BOTH
+        assert "not checked" not in s.render()
+
+    def test_two_clocks_are_checked(self):
+        s = data_quality_summary(crossed_events(), _empty_trades())
+        assert s.clocks is Clocks.BOTH
+        names = {c.name for c in s.checks}
+        assert {"exchange_time_after_receive", "exchange_time_reordered"} <= names
+        assert "clocks" not in names
+
+    def test_sequence_gap_is_an_error(self):
+        ev = _classified(
+            [
+                (1, 1, 0.0, 99.0, 2.0, "bid", "created", 0.0),
+                (2, 2, 1.0, 101.0, 2.0, "ask", "created", 0.0),
+                (3, 3, 2.0, 98.0, 2.0, "bid", "created", 0.0),
+            ]
+        )
+        ev["sequence"] = pd.array([1, 2, 7], dtype="Int64")  # 3-6 never arrived
+        s = data_quality_summary(ev, _empty_trades())
+        assert s.sequence_gaps == 4
+        assert not s.ok
+        assert "sequence_gaps" in {c.name for c in s.errors}
+
+    @pytest.mark.parametrize(
+        ("feed_type", "severity", "ok"),
+        [
+            (FeedType.MATCHED_BOOK, Severity.ERROR, False),
+            (FeedType.PRICE_LEVELS, Severity.ERROR, False),
+            (FeedType.DIFF_FEED, Severity.INFO, True),
+            (FeedType.UNKNOWN, Severity.WARNING, True),
+        ],
+    )
+    def test_crossing_severity_follows_the_feed_type(self, feed_type, severity, ok):
+        """The same crossed book is a defect or a faithful replay by feed type."""
+        s = data_quality_summary(crossed_events(), _empty_trades(), feed_type=feed_type)
+        crossed = next(c for c in s.checks if c.name == "crossed_book")
+        assert not crossed.passed
+        assert crossed.severity is severity
+        assert s.ok is ok
+
+    def test_a_crossed_price_level_book_names_the_cause(self):
+        """A price-level book should not cross; the note says what went wrong."""
+        s = data_quality_summary(
+            crossed_events(), _empty_trades(), feed_type=FeedType.PRICE_LEVELS
+        )
+        crossed = next(c for c in s.checks if c.name == "crossed_book")
+        assert "kept a level the venue removed" in crossed.detail
+
+    def test_to_dict_carries_the_verdict(self):
+        s = data_quality_summary(crossed_events(), _empty_trades())
+        payload = json.loads(json.dumps(s.to_dict()))
+        assert payload["ok"] is True
+        assert {"name", "passed", "severity", "detail"} == set(payload["checks"][0])
+        assert "orphan_orders" in {c["name"] for c in payload["checks"]}
+
+    def test_render_lists_failed_checks_only(self):
+        ev = _classified(
+            [
+                (1, 1, 0.0, 99.0, 2.0, "bid", "created", 0.0),
+                (2, 2, 1.0, 101.0, -1.0, "ask", "created", 0.0),
+            ]
+        )
+        text = data_quality_summary(ev, _empty_trades()).render()
+        assert "ERROR   negative_volume" in text
+        # INFO checks are context, not findings: they stay out of the verdict.
+        assert "INFO" not in text
+
+
+class TestClocksDeclarations:
+    """Each source says which clocks its book rows carry (#310)."""
+
+    def test_lobster_has_the_venue_time_only(self):
+        assert clocks_of(LobsterSource()) is Clocks.VENUE_ONLY
+
+    def test_sources_with_two_clocks(self):
+        from ob_analytics.databento import DatabentoSource
+        from ob_analytics.depth_l2 import DepthCsvSource
+
+        for source in (BitstampSource(), DatabentoSource(), DepthCsvSource()):
+            assert clocks_of(source) is Clocks.BOTH
+
+    def test_an_undeclared_source_is_read_as_both(self):
+        class _OldPlugin:
+            name = "old"
+
+        assert clocks_of(_OldPlugin()) is Clocks.BOTH
+
+
+# ---------------------------------------------------------------------------
+# Stale resting orders (issue #234)
+# ---------------------------------------------------------------------------
+
+
+def _trades(rows: list[tuple[float, float]]) -> pd.DataFrame:
+    """Trades at ``(t_seconds, price)``, with the id columns the summary needs."""
+    ts = pd.Series([_BASE + pd.Timedelta(seconds=t) for t, _ in rows]).astype(
+        "datetime64[ns]"
+    )
+    return pd.DataFrame(
+        {
+            "timestamp": ts,
+            "price": np.array([p for _, p in rows], dtype=np.float64),
+            "maker_event_id": np.arange(len(rows), dtype=np.int64),
+            "taker_event_id": np.arange(len(rows), dtype=np.int64) + 100,
+        }
+    )
+
+
+def _book_with_stale_ask(delete_ask_at: float | None = None) -> pd.DataFrame:
+    """A bid at 99, an ask at 101, and an ask at 103, all from t=0.
+
+    A trade prints at 102 at t=10 (see :func:`_through_trade`), which the
+    ask at 101 cannot survive.  By default the venue never reports that ask
+    again; *delete_ask_at* reports its delete at that time instead.  A bid
+    at t=100 marks the end of the capture.
+    """
+    rows = [
+        (1, 1, 0.0, 99.0, 2.0, "bid", "created", 0.0),
+        (2, 2, 0.0, 101.0, 2.0, "ask", "created", 0.0),
+        (3, 3, 0.0, 103.0, 2.0, "ask", "created", 0.0),
+        (5, 4, 100.0, 98.0, 1.0, "bid", "created", 0.0),
+    ]
+    if delete_ask_at is not None:
+        rows.append((4, 2, delete_ask_at, 101.0, 2.0, "ask", "deleted", 0.0))
+    return _classified(sorted(rows, key=lambda r: r[2]))
+
+
+def _through_trade() -> pd.DataFrame:
+    return _trades([(10.0, 102.0)])
+
+
+class TestStaleOrders:
+    def test_finds_an_ask_a_trade_printed_through(self):
+        (stale,) = detect_stale_orders(_book_with_stale_ask(), _through_trade())
+        assert isinstance(stale, StaleOrder)
+        assert stale.id == 2
+        assert stale.direction == "ask"
+        assert stale.price == 101.0
+        assert stale.disproved_at == (_BASE + pd.Timedelta(seconds=10)).tz_localize(
+            "UTC"
+        )
+        # From the trade at t=10 to the end of the capture at t=100, all of it
+        # as the best ask.
+        assert stale.stale_seconds == pytest.approx(90.0)
+        assert stale.touch_seconds == pytest.approx(90.0)
+
+    def test_finds_a_bid_a_trade_printed_through(self):
+        events = _classified(
+            [
+                (1, 1, 0.0, 100.0, 2.0, "bid", "created", 0.0),
+                (2, 2, 0.0, 102.0, 2.0, "ask", "created", 0.0),
+                (3, 3, 60.0, 97.0, 1.0, "bid", "created", 0.0),
+            ]
+        )
+        (stale,) = detect_stale_orders(events, _trades([(5.0, 98.0)]))
+        assert (stale.id, stale.direction) == (1, "bid")
+        assert stale.stale_seconds == pytest.approx(55.0)
+        assert stale.touch_seconds == pytest.approx(55.0)
+
+    def test_a_prompt_report_is_not_stale(self):
+        # The venue reports the ask 200 ms after the trade: the normal lag of
+        # a diff feed, well inside the one-second grace.
+        events = _book_with_stale_ask(delete_ask_at=10.2)
+        assert detect_stale_orders(events, _through_trade()) == ()
+
+    def test_grace_sets_how_late_is_stale(self):
+        events = _book_with_stale_ask(delete_ask_at=10.2)
+        (stale,) = detect_stale_orders(
+            events, _through_trade(), grace=pd.Timedelta(milliseconds=100)
+        )
+        assert stale.id == 2
+        assert stale.stale_seconds == pytest.approx(0.2)
+
+    def test_a_trade_at_the_same_instant_does_not_count(self):
+        # A trade stamped in the same instant as the order's row cannot be
+        # put before or after it, so it proves nothing.
+        assert (
+            detect_stale_orders(_book_with_stale_ask(), _trades([(0.0, 102.0)])) == ()
+        )
+
+    def test_a_trade_at_the_resting_price_does_not_count(self):
+        # A print at the ask's own price is the ask trading, not a trade
+        # through it.
+        assert (
+            detect_stale_orders(_book_with_stale_ask(), _trades([(10.0, 101.0)])) == ()
+        )
+
+    def test_the_worst_is_the_longest_at_the_touch(self):
+        # Both asks sit below the trade at 104; only the one at 101 is the
+        # best ask, so it comes first.
+        stale = detect_stale_orders(_book_with_stale_ask(), _trades([(10.0, 104.0)]))
+        assert [o.id for o in stale] == [2, 3]
+        assert stale[1].touch_seconds == 0.0
+
+    def test_tick_size_reports_quote_prices(self):
+        (stale,) = detect_stale_orders(
+            _book_with_stale_ask(), _through_trade(), tick_size=0.01
+        )
+        assert stale.price == pytest.approx(1.01)
+
+    def test_toy_feed_has_none(self):
+        assert detect_stale_orders(_classified_toy(), toy_trades()) == ()
+
+    def test_does_not_change_the_book(self):
+        events = _book_with_stale_ask()
+        before = order_book(events)
+        detect_stale_orders(events, _through_trade())
+        after = order_book(events)
+        assert 2 in set(after["asks"]["id"])
+        assert before["asks"].equals(after["asks"])
+
+
+class TestStaleOrdersInSummary:
+    def test_summary_names_the_worst(self):
+        s = data_quality_summary(
+            _book_with_stale_ask(), _through_trade(), feed_type=FeedType.DIFF_FEED
+        )
+        assert [o.id for o in s.stale_orders] == [2]
+        check = next(c for c in s.checks if c.name == "stale_orders")
+        assert not check.passed
+        assert check.severity is Severity.WARNING
+        assert s.ok  # a warning: reported, but it does not fail the run
+        text = s.render()
+        assert "stale resting orders  : 1 (worst: ask 2 at 101" in text
+        assert "for 1.5 min" in text
+
+    def test_crossing_note_stops_saying_not_a_bug(self):
+        s = data_quality_summary(
+            _book_with_stale_ask(), _through_trade(), feed_type=FeedType.DIFF_FEED
+        )
+        crossed = next(c for c in s.checks if c.name == "crossed_book")
+        assert "not a bug" not in crossed.detail
+        assert "stale resting order" in crossed.detail
+
+    def test_clean_diff_feed_keeps_the_note(self):
+        s = data_quality_summary(
+            crossed_events(), _empty_trades(), feed_type=FeedType.DIFF_FEED
+        )
+        assert s.stale_orders == ()
+        assert "not a bug" in s.render()
+        assert "stale resting orders  : 0" in s.render()
+        assert next(c for c in s.checks if c.name == "stale_orders").passed
+
+    def test_to_dict_carries_the_orders(self):
+        s = data_quality_summary(
+            _book_with_stale_ask(), _through_trade(), feed_type=FeedType.DIFF_FEED
+        )
+        (payload,) = json.loads(json.dumps(s.to_dict()))["stale_orders"]
+        assert payload["id"] == 2
+        assert payload["direction"] == "ask"
+        assert payload["touch_seconds"] == pytest.approx(90.0)
+
+    def test_reports_a_uuid_order_id_as_written(self):
+        """Independent Reserve's order ids are UUID strings (#311)."""
+        uuids = {
+            1: "0430e003-c35e-410e-85f5-f0bb5c40193b",
+            2: "559c1dd2-e681-4efc-b49b-14a07c069de4",
+            3: "6d1c2e90-592a-409c-a8d8-58b2d25e0b0b",
+            4: "fee7094c-1921-44b7-8d8d-8b6e1cedb270",
+        }
+        events = _book_with_stale_ask()
+        events["id"] = events["id"].map(uuids).astype(object)
+        s = data_quality_summary(
+            events, _through_trade(), feed_type=FeedType.MATCHED_BOOK
+        )
+        assert [o.id for o in s.stale_orders] == [uuids[2]]
+        assert f"worst: ask {uuids[2]} at 101" in s.render()
+        (payload,) = json.loads(json.dumps(s.to_dict()))["stale_orders"]
+        assert payload["id"] == uuids[2]
+
+    def test_an_integer_id_stays_a_plain_int(self):
+        (stale,) = detect_stale_orders(_book_with_stale_ask(), _through_trade())
+        assert type(stale.id) is int
+
+    def test_names_the_opening_snapshot_ask_on_the_bitstamp_sample(
+        self, bitstamp_sample_dir
+    ):
+        """The two orders the opening snapshot reported and the venue never
+        mentioned again, and nothing else (#234)."""
+        from ob_analytics.pipeline import Pipeline
+
+        result = Pipeline(source=BitstampSource()).run(
+            str(bitstamp_sample_dir / "orders.csv.gz")
+        )
+        s = data_quality_summary(
+            result.events,
+            result.trades,
+            feed_type=FeedType.DIFF_FEED,
+            depth=result.depth,
+            tick_size=result.config.tick_size,
+        )
+        assert [o.id for o in s.stale_orders] == [
+            2002347646152704,
+            2002347642003458,
+        ]
+        worst = s.stale_orders[0]
+        assert (worst.direction, worst.price) == ("ask", pytest.approx(78333.0))
+        # It holds the ask touch for about 27 minutes after the first trade
+        # that printed above it.
+        assert worst.touch_seconds == pytest.approx(1645.7, abs=1.0)
+        assert "ask 2002347646152704 at 78,333 held the ask touch for 27.4 min" in (
+            s.render()
+        )
 
 
 # ---------------------------------------------------------------------------

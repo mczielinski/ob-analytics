@@ -2,11 +2,16 @@
 
 Live sources register into the one unified registry with every other source
 (:mod:`ob_analytics.sources`) — look them up there with ``get_source`` /
-``list_sources``, and drive one with :func:`ob_analytics.live._runner.run_capturer`.
+``list_sources``.  :func:`run_capture` drives one for as long as asked, into a
+directory of segments recorded in ``manifest.json`` (read it back with
+:func:`read_manifest`); :func:`ob_analytics.live._runner.run_capturer` is one
+segment.
 
 Public API:
     CaptureConfig, CaptureResult, CaptureSink, EventDict
-    LiveSource, SupportsDiagnostics
+    LiveSource, SupportsDiagnostics, SupportsPreflight
+    run_capture, CaptureRun
+    read_manifest, CaptureManifest, Segment, Gap, EndReason
 
 Importing this package registers the built-in ccxt and cryptofeed live sources.  The bitstamp
 live capability rides on :class:`ob_analytics.bitstamp.BitstampSource`, so it is
@@ -30,13 +35,30 @@ from ob_analytics.live._base import (
     EventDict,
     LiveSource,
     SupportsDiagnostics,
+    SupportsPreflight,
 )
+from ob_analytics.live._manifest import (
+    CaptureManifest,
+    EndReason,
+    Gap,
+    Segment,
+    read_manifest,
+)
+from ob_analytics.live._supervisor import CaptureRun, run_capture
 
 __all__ = [
     "CaptureConfig",
+    "CaptureManifest",
     "CaptureResult",
+    "CaptureRun",
     "CaptureSink",
+    "EndReason",
     "EventDict",
+    "Gap",
     "LiveSource",
+    "Segment",
     "SupportsDiagnostics",
+    "SupportsPreflight",
+    "read_manifest",
+    "run_capture",
 ]

@@ -249,6 +249,38 @@ class TestPlotlyPriceLevels:
             trace = next(tr for tr in fig.data if tr.name == name)
             assert trace.line.shape == "hv"
 
+    def test_hidden_liquidity_overlay_adds_traces(
+        self, sample_events: pd.DataFrame, hidden_liquidity_overlay: dict
+    ) -> None:
+        depth = sample_events[["timestamp", "price", "volume"]].copy()
+        depth["direction"] = "bid"
+        overlay = hidden_liquidity_overlay
+        fig = plotly_price_levels(
+            prepare_price_levels_data(
+                depth,
+                iceberg_lines=overlay["iceberg_lines"],
+                iceberg_refills=overlay["iceberg_refills"],
+                hidden_trades=overlay["hidden_trades"],
+            )
+        )
+        names = {tr.name for tr in fig.data}
+        assert {
+            "Iceberg chain",
+            "Iceberg refill",
+            "Hidden-order trade",
+            "Trade to check (maker not confirmed hidden)",
+        } <= names
+
+    def test_no_overlay_adds_no_hidden_liquidity_traces(
+        self, sample_events: pd.DataFrame
+    ) -> None:
+        depth = sample_events[["timestamp", "price", "volume"]].copy()
+        depth["direction"] = "bid"
+        fig = plotly_price_levels(prepare_price_levels_data(depth))
+        names = {tr.name for tr in fig.data}
+        assert "Iceberg refill" not in names
+        assert "Hidden-order trade" not in names
+
 
 class TestPlotlyEventMap:
     def test_returns_plotly_figure(self, sample_events: pd.DataFrame) -> None:
@@ -256,6 +288,15 @@ class TestPlotlyEventMap:
         fig = plotly_event_map(data)
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 1
+
+    def test_empty_window_draws_no_data(self, sample_events: pd.DataFrame) -> None:
+        data = prepare_event_map_data(
+            sample_events,
+            start_time=pd.Timestamp("2015-05-01 00:00:00"),
+            end_time=pd.Timestamp("2015-05-01 00:30:00"),
+        )
+        fig = plotly_event_map(data)
+        assert "no data" in fig.layout.title.text
 
 
 class TestPlotlyVolumeMap:
@@ -304,6 +345,36 @@ class TestPlotlyOrderActivityL3:
         data = prepare_order_activity_l3_data(sample_order_lifecycle_events)
         fig = plotly_order_activity_per_order(data)
         assert all(trace.type == "scattergl" for trace in fig.data)
+
+    def test_hidden_liquidity_overlay_adds_traces(
+        self,
+        sample_order_lifecycle_events: pd.DataFrame,
+        hidden_liquidity_overlay: dict,
+    ) -> None:
+        overlay = hidden_liquidity_overlay
+        data = prepare_order_activity_l3_data(
+            sample_order_lifecycle_events,
+            iceberg_lines=overlay["iceberg_lines"],
+            iceberg_refills=overlay["iceberg_refills"],
+            hidden_trades=overlay["hidden_trades"],
+        )
+        fig = plotly_order_activity_per_order(data)
+        names = {tr.name for tr in fig.data}
+        assert {
+            "Iceberg chain",
+            "Iceberg refill",
+            "Hidden-order trade",
+            "Trade to check (maker not confirmed hidden)",
+        } <= names
+
+    def test_no_overlay_adds_no_hidden_liquidity_traces(
+        self, sample_order_lifecycle_events: pd.DataFrame
+    ) -> None:
+        data = prepare_order_activity_l3_data(sample_order_lifecycle_events)
+        fig = plotly_order_activity_per_order(data)
+        names = {tr.name for tr in fig.data}
+        assert "Iceberg refill" not in names
+        assert "Hidden-order trade" not in names
 
 
 class TestPlotlyLiquidityAtTouch:
@@ -520,6 +591,16 @@ class TestPlotlyEventsHistogram:
         fig = plotly_events_histogram(data)
         assert isinstance(fig, go.Figure)
 
+    def test_empty_window_draws_no_data(self, sample_events: pd.DataFrame) -> None:
+        data = prepare_events_histogram_data(
+            sample_events,
+            start_time=pd.Timestamp("2015-05-01 00:00:00"),
+            end_time=pd.Timestamp("2015-05-01 00:30:00"),
+            val="price",
+        )
+        fig = plotly_events_histogram(data)
+        assert "no data" in fig.layout.title.text
+
 
 class TestPlotlyVpin:
     def test_returns_plotly_figure(self) -> None:
@@ -546,6 +627,19 @@ class TestPlotlyVpin:
         bar = next(tr for tr in fig.data if tr.type == "bar")
         # 0.6 * 60s bucket = 36s = 36_000 ms.
         assert bar.width == pytest.approx(36_000.0)
+
+    def test_empty_draws_no_buckets(self) -> None:
+        # A capture shorter than one bucket gives compute_vpin zero rows.
+        vpin_df = pd.DataFrame(
+            {
+                "timestamp_end": pd.Series(dtype="datetime64[ns, UTC]"),
+                "vpin": pd.Series(dtype="float64"),
+                "vpin_avg": pd.Series(dtype="float64"),
+            }
+        )
+        fig = plotly_vpin(prepare_vpin_data(vpin_df))
+        assert "no complete buckets" in fig.layout.title.text
+        assert len(fig.data) == 0
 
 
 class TestPlotlyOfi:

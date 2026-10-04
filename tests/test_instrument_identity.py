@@ -237,6 +237,7 @@ class _FakeExchange:
 
     def __init__(self) -> None:
         self.has = {"watchOrderBook": False, "watchTrades": False}
+        self.options: dict = {}
 
     async def fetch_order_book(self, symbol, limit=None):
         return {"bids": [[100.0, 5.0]], "asks": [[101.0, 4.0]], "timestamp": _BASE_MS}

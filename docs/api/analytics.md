@@ -22,6 +22,8 @@ output of any format's pipeline run (Bitstamp, LOBSTER, or custom).
 The reconstructions themselves live in the
 [order-book engine](engine.md); these are their frame-level faces.
 
+::: ob_analytics.analytics.OrderBookSnapshot
+
 ::: ob_analytics.analytics.order_book
 
 ::: ob_analytics.analytics.order_lifecycles
@@ -30,9 +32,21 @@ The reconstructions themselves live in the
 
 ## Data Quality
 
-See [Data quality: matched book vs diff feed](../data-quality.md) for the
-concepts and the [`validate` how-to](../howto/validate.md) for the CLI.
+See [Data quality: matched book, diff feed and price levels](../data-quality.md) for the
+concepts and the [`audit` how-to](../howto/audit.md) for the CLI.
 
 ::: ob_analytics.analytics.data_quality_summary
 
 ::: ob_analytics.analytics.DataQualitySummary
+
+::: ob_analytics.analytics.QualityCheck
+
+::: ob_analytics.analytics.Severity
+
+::: ob_analytics.analytics.detect_sequence_gaps
+
+::: ob_analytics.analytics.SequenceGapReport
+
+::: ob_analytics.analytics.detect_stale_orders
+
+::: ob_analytics.analytics.StaleOrder

@@ -29,7 +29,11 @@ fig = plot("trade_tape", level="L2", **prepare.trades(trades))
 
 `backend="matplotlib"` (default) returns a Matplotlib figure;
 `backend="plotly"` returns an interactive Plotly figure (requires
-`pip install ob-analytics[interactive]`). Renderers never call `plt.show()`.
+`pip install ob-analytics[interactive]`); `backend="bokeh"` returns a Bokeh
+figure (requires `pip install ob-analytics[bokeh]`), covering the core
+concepts — `trade_tape`, `depth_heatmap`, `book_snapshot`, `depth_chart` —
+for Bokeh / Panel server dashboards and streaming views. Renderers never
+call `plt.show()`.
 
 Every concept declares a resolution **level** — `Level.L2` (Market-By-Price
 aggregate) or `Level.L3` (Market-By-Order, per order). A concept registered at
@@ -42,7 +46,9 @@ Concepts with both L2 and L3 faces: `trade_tape`, `order_activity`,
 `time_series`, `depth_heatmap`, `volume_percentiles`, `events_histogram`,
 `hidden_executions`, `price_view`, `trade_size`. L3-only: `order_outcome`,
 `queue_position`. Level-less analytics: `vpin`, `order_flow_imbalance`,
-`kyle_lambda`, `ofi_horizon`, `trading_halts`.
+`kyle_lambda`, `ofi_horizon`, `l1_ticker`, `book_signals`, `bars`,
+`transaction_costs`, `trading_halts`. The first five are also registered
+[metrics](metrics.md), so `result.plot("vpin")` computes and draws them.
 
 ## Dispatcher
 
@@ -51,11 +57,15 @@ Concepts with both L2 and L3 faces: `trade_tape`, `order_activity`,
 ## Theme and Saving
 
 Pass `theme=PlotTheme(...)` to `plot()` to override `DEFAULT_THEME` for a
-single call (matplotlib backend only); there is no global theme to set.
+single call, on any backend; there is no global theme to set.
 
 ::: ob_analytics.visualization.PlotTheme
 
 ::: ob_analytics.visualization.DEFAULT_THEME
+
+::: ob_analytics.visualization.Palette
+
+::: ob_analytics.visualization.DEFAULT_PALETTE
 
 ::: ob_analytics.visualization.save_figure
 
@@ -65,10 +75,16 @@ single call (matplotlib backend only); there is no global theme to set.
 
 Backends self-register their renderers into `RENDERERS`, keyed by the
 coordinate `(concept, level, backend)` (where *level* is a `Level` or `None`
-for level-less analytics). Register a whole new backend module with
+for level-less analytics). A concept is level-less or drawn at a level, and the
+same kind on every backend: registering it the other way raises `ValueError`.
+Register a whole new backend module with
 `register_plot_backend`, or a single renderer directly with
-`RENDERERS.register((concept, level, backend), fn)`.
+`RENDERERS.register((concept, level, backend), fn)`. To see how a concept is
+registered before adding to it, list its `(level, backend)` pairs with
+`RENDERERS.placements(concept)`.
 
 ::: ob_analytics.visualization.register_plot_backend
 
 ::: ob_analytics.visualization.RENDERERS
+
+::: ob_analytics.visualization.RendererRegistry

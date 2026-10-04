@@ -10,7 +10,7 @@ the interactive Plotly backend.
 ## Themes and saving
 
 There is no global theme to set. Pass a `PlotTheme` to `plot()` and it
-applies only to that call (matplotlib backend only):
+applies only to that call, on any backend:
 
 ```python
 from ob_analytics.visualization import plot, save_figure, prepare, PlotTheme
@@ -24,6 +24,39 @@ theme = PlotTheme(
 
 fig = plot("trade_tape", level="L2", theme=theme, **prepare.trades(result.trades))
 save_figure(fig, "trades_hires.png", dpi=300)
+```
+
+The same theme styles the Plotly and Bokeh backends. Each backend reads
+what it can from the shared fields and ignores the other backends'
+overrides:
+
+| Field | Matplotlib | Plotly | Bokeh |
+|---|---|---|---|
+| `palette` | every mark's colour | every mark's colour | every mark's colour |
+| `context`, `font_scale` | Seaborn text sizes | template font size | title, axis, and tick text |
+| `style` | Seaborn style | `plotly_white`, or `seaborn` for `dark`/`darkgrid` | white, or Seaborn's gray for `dark`/`darkgrid` |
+| `rc` | applied last | — | — |
+| `plotly_layout` | — | applied last to the template | — |
+| `bokeh_figure` | — | — | passed to `bokeh.plotting.figure` |
+
+To change colours, pass a `Palette`. Its fields name what each colour
+means, such as `bid`/`ask` (side), `buy`/`sell` (aggressor), and
+`price_line`/`reference_line` (neutral marks):
+
+```python
+from ob_analytics.visualization import Palette, PlotTheme
+
+theme = PlotTheme(
+    palette=Palette(buy="#1f77b4", sell="#d62728"),
+    plotly_layout={"font": {"family": "Georgia"}},
+)
+fig = plot(
+    "trade_tape",
+    level="L2",
+    backend="plotly",
+    theme=theme,
+    **prepare.trades(result.trades),
+)
 ```
 
 ## Serialisation
@@ -47,6 +80,18 @@ save_data(
 data = load_data("output/my_analysis")
 ```
 
+To hand the tables to another tool without writing files first, convert the
+result in memory:
+
+```python
+tables = result.to_arrow()    # dict[str, pyarrow.Table]
+frames = result.to_polars()   # dict[str, polars.DataFrame], needs polars
+```
+
+Both give the same four keys as the dict above. The Arrow tables carry the
+schema version and tick size in their metadata, the same as the Parquet files.
+See [Frame types: pandas in, pandas out](../schema.md#frame-types-pandas-in-pandas-out).
+
 For LOBSTER round-trip output (back to message + orderbook CSVs), pass
 `fmt="lobster"` and a `RunContext` so the registered writer factory can
 pick up `trading_date`:
@@ -61,7 +106,7 @@ save_data(
 )
 ```
 
-## Plotly (interactive)
+## Plotly and Bokeh (interactive)
 
 `plot()` accepts `backend="plotly"` for interactive figures with
 zoom, pan, and hover tooltips. Plotly is an optional dependency:
@@ -83,11 +128,20 @@ fig.show()
 fig.write_html("depth.html")
 ```
 
+`backend="bokeh"` (with the `[bokeh]` extra: `pip install "ob-analytics[bokeh]"`)
+renders the core concepts — `trade_tape`, `depth_heatmap`, `book_snapshot`,
+`depth_chart` — the same way, for Bokeh / Panel server dashboards and
+streaming views:
+
+```python
+fig = result.plot("depth_heatmap", backend="bokeh", col_bias=0.1)
+```
+
 Whole new backends can be registered by module path:
 
 ```python
 from ob_analytics.visualization import register_plot_backend
-register_plot_backend("bokeh", "my_package._bokeh_backend")
+register_plot_backend("altair", "my_package._altair_backend")
 ```
 
 ## Related

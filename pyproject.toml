@@ -32,12 +32,18 @@ dependencies = [
 
 [project.optional-dependencies]
 interactive = ["plotly>=6.8.0"]
+bokeh = ["bokeh>=3"]
 live = ["websockets>=12"]
 ccxt = [
     "ccxt>=4",
 ]
 cryptofeed = [
     "cryptofeed>=2",
+]
+# The floor is the version this adapter was written and tested against; the
+# DBN record constructors the writer uses are newer than the reader's API.
+databento = [
+    "databento>=0.86",
 ]
 
 [project.scripts]
@@ -75,12 +81,42 @@ dev = [
     "pandas-stubs>=3.0.3.260530",
     "types-seaborn>=0.13.2.20260518",
     "plotly>=6.8.0",
+    "bokeh>=3",
     "hypothesis>=6.155.7",
+    # Dev-only, and deliberately not a runtime dependency or an extra: it is
+    # here so the tests for PipelineResult.to_polars() can run. See
+    # adr/0002-dataframe-library.md.
+    "polars>=1.20",
     "nbmake>=1.5",
     "ipykernel>=6.29",
     "jupytext>=1.16",
     "nbconvert>=7.16",
 ]
+
+# The two backtesting engines, installed only to cross-check our reconstruction
+# against theirs (issue #224).  Deliberately a group of its own rather than part
+# of ``dev``: the writers in ob_analytics.interop need neither engine present,
+# so only the parity tests pay for these, and CI can leave them out.
+backtest-engines = [
+    "hftbacktest>=2.4",
+    # hftbacktest declares numba as an optional extra but imports it
+    # unconditionally in its ``__init__``, so it has to be named here or
+    # ``import hftbacktest`` fails.  Its own ``numpy`` extra caps numpy below
+    # 2.3 and is therefore not usable here; numba 0.67 takes numpy 2.4.
+    "numba>=0.67",
+    # Nautilus publishes no build that takes both Python 3.11 and pandas 3, so
+    # on 3.11 it is left out and the Nautilus half of the cross-check skips,
+    # the same way the ccxt and cryptofeed tests skip without their extra.
+    "nautilus-trader>=1.222; python_version >= '3.12'",
+]
+
+[tool.ruff.lint]
+extend-select = ["TID251"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+# On Python 3.11 it drops a cancel that arrives with the result it awaits, and
+# a live capture then cannot stop a segment (issue #296).
+"asyncio.wait_for".msg = "Use `async with asyncio.timeout(...)`: on Python 3.11 wait_for can drop a cancel."
 
 [tool.ruff.lint.isort]
 # Keep aliased re-exports in a single grouped ``from x import (a as b, ...)``
@@ -92,6 +128,17 @@ combine-as-imports = true
 # last line is the idiomatic way to render its value as the cell output, not
 # dead code (B018) -- both by design.
 "docs/tutorial/src/*.py" = ["E402", "B018"]
+
+# The parity tests import hftbacktest and nautilus-trader, which live in the
+# ``backtest-engines`` group rather than ``dev``, so the type check runs with
+# neither installed.  Stated once here instead of on every import, because an
+# inline suppression would itself become an unused-suppression error for a
+# contributor who does install the group.
+[[tool.ty.overrides]]
+include = ["tests/test_backtest_parity.py"]
+
+[tool.ty.overrides.rules]
+unresolved-import = "ignore"
 
 [tool.hatch.build.targets.sdist]
 include = ["ob_analytics", "tests"]

@@ -8,8 +8,8 @@ its **age** — the inputs to the ``queue_position`` and ``liquidity_at_touch`` 
 faces.
 
 What lives here is the pandas face of that engine: the canonical same-instant
-sort (issue #154), the display-level filter, the sampling window, and the frames
-the plotting layer consumes.
+sort, the display-level filter, the sampling window, and the frames the
+plotting layer consumes.
 
 Visible-only caveat: hidden orders (LOBSTER ``id == 0`` / type-5 executions)
 never join the visible queue and are excluded, so reconstructed touch volume
@@ -42,9 +42,9 @@ def _in_canonical_order(events: pd.DataFrame) -> pd.DataFrame:
 
     A timestamp alone cannot order events that share an instant, so the frame is
     sorted by the total order :func:`~ob_analytics.schemas.time_order_keys`
-    defines (issue #154) before the engine replays it — the replay order *is*
-    the queue's priority, so this is what makes the reconstruction reproducible
-    run to run and engine to engine.
+    defines before the engine replays it — the replay order *is* the queue's
+    priority, so this is what makes the reconstruction reproducible run to run
+    and engine to engine.
     """
     ev = events[_ENGINE_COLUMNS]
     return ev.sort_values(time_order_keys(ev), kind="stable")

@@ -17,14 +17,24 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import pandas as pd
 import pytest
 
-from ob_analytics.visualization import RENDERERS, Level
+from ob_analytics.visualization import (
+    _BACKEND_MODULES,
+    RENDERERS,
+    Level,
+    _load_backend,
+    register_plot_backend,
+)
 from ob_analytics.visualization.gallery import (
+    VIEWS,
     GalleryModel,
     PlotConcept,
     PlotSpec,
+    _auto_zoom_window,
     _Card,
+    _misplaced,
     _Panel,
     _project,
     _render_panel,
@@ -32,6 +42,7 @@ from ob_analytics.visualization.gallery import (
     build_gallery_model,
     generate_gallery,
 )
+from tests._logging import warnings_logged
 
 # ---------------------------------------------------------------------------
 # Stub renderers
@@ -65,15 +76,31 @@ def _stub_fail_plotly(data):
     raise RuntimeError("deliberate plotly failure")
 
 
+def _stub_bokeh(data):
+    from bokeh.plotting import figure
+
+    fig = figure()
+    fig.scatter(x=[0, 1], y=[0, 1])
+    return fig
+
+
+def _stub_fail_bokeh(data):
+    raise RuntimeError("deliberate bokeh failure")
+
+
 _STUB_RENDERERS = {
     ("stub", Level.L2, "matplotlib"): _stub_mpl,
     ("stub", Level.L2, "plotly"): _stub_plotly,
+    ("stub", Level.L2, "bokeh"): _stub_bokeh,
     ("stub", Level.L3, "matplotlib"): _stub_mpl,
     ("stub", Level.L3, "plotly"): _stub_plotly,
+    ("stub", Level.L3, "bokeh"): _stub_bokeh,
     ("stubfail", Level.L2, "matplotlib"): _stub_fail_mpl,
     ("stubfail", Level.L2, "plotly"): _stub_fail_plotly,
+    ("stubfail", Level.L2, "bokeh"): _stub_fail_bokeh,
     ("stubmetric", None, "matplotlib"): _stub_mpl,
     ("stubmetric", None, "plotly"): _stub_plotly,
+    ("stubmetric", None, "bokeh"): _stub_bokeh,
 }
 
 
@@ -136,7 +163,7 @@ class TestPlotConcept:
     def test_frozen(self) -> None:
         c = _l2_concept()
         with pytest.raises(dataclasses.FrozenInstanceError):
-            c.key = "other"
+            c.key = "other"  # ty: ignore[invalid-assignment]
 
 
 class TestGalleryModel:
@@ -263,6 +290,19 @@ class TestRenderPanel:
         assert "mpl-panel" in html
         assert "panel-secondary" in html
 
+    def test_bokeh_rendered_uses_iframe(self) -> None:
+        html = _render_panel(_panel("bokeh", "01.L2"), "Demo")
+        assert "<iframe" in html
+        assert 'src="bokeh/01.L2.html"' in html
+        assert "bokeh-panel" in html
+
+    def test_reason_is_shown_and_escaped(self) -> None:
+        panel = _panel("matplotlib", "x", rendered=False)
+        panel.reason = "<b>moved</b>"
+        html = _render_panel(panel, "x")
+        assert "Not available" in html
+        assert '<p class="na-reason">&lt;b&gt;moved&lt;/b&gt;</p>' in html
+
     def test_not_rendered_shows_na(self) -> None:
         html = _render_panel(_panel("plotly", "x", rendered=False), "x")
         assert "Not available" in html
@@ -335,6 +375,44 @@ class TestGenerateGallery:
         body = path.read_text().split("<body>", 1)[1]
         assert body.index("mpl-panel") < body.index("plotly-panel")
 
+    def test_bokeh_backend_writes_standalone_html(self, tmp_path: Path) -> None:
+        # Bokeh figures have no matplotlib-style .savefig(); this exercises the
+        # real persist path (not the "custom backend: best-effort PNG"
+        # fallback, which raises AttributeError for a bokeh figure).
+        path = generate_gallery(
+            result=None,
+            output_dir=tmp_path,
+            model=self._model(),
+            backends=["bokeh"],
+        )
+        bokeh_html = tmp_path / "bokeh" / "stub.L2.html"
+        assert bokeh_html.exists()
+        assert "bokeh" in bokeh_html.read_text().lower()
+        body = path.read_text().split("<body>", 1)[1]
+        assert "bokeh-panel" in body
+        assert "Not available" not in body
+
+    def test_backend_columns_share_one_prepare(self, tmp_path: Path) -> None:
+        # One prepare per face, not per backend: it runs (and logs) once.
+        calls: list[dict] = []
+
+        def prepare(**kw):
+            calls.append(kw)
+            return {}
+
+        spec = PlotSpec("stub", "Stub", "stub", prepare, {"x": 1})
+        model = GalleryModel(concepts=[PlotConcept("stub", "Stub", {Level.L2: spec})])
+        generate_gallery(
+            result=None,
+            output_dir=tmp_path,
+            model=model,
+            view="l2",
+            backends=["matplotlib", "plotly"],
+        )
+        assert (tmp_path / "matplotlib" / "stub.L2.png").exists()
+        assert (tmp_path / "plotly" / "stub.L2.html").exists()
+        assert calls == [{"x": 1}]
+
     def test_view_comparison_single_backend_both_faces(self, tmp_path: Path) -> None:
         model = GalleryModel(concepts=[_comparable_concept()])
         path = generate_gallery(
@@ -375,6 +453,209 @@ class TestGenerateGallery:
     def test_requires_result_or_model(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="requires either"):
             generate_gallery(result=None, output_dir=tmp_path)
+
+
+class TestMisplacedCard:
+    """A card that does not match its renderers says how to fix it (#312)."""
+
+    def test_levelless_plot_added_as_concept(self, tmp_path: Path) -> None:
+        model = GalleryModel(concepts=[_l2_concept("stubmetric", "Metric")])
+        path = generate_gallery(
+            result=None, output_dir=tmp_path, model=model, backends=["matplotlib"]
+        )
+        html = path.read_text()
+        assert "Metric -- L2" in html
+        assert "Not available" in html
+        assert (
+            "&#x27;stubmetric&#x27; is registered level-less, but the gallery "
+            "model has it in concepts, which is drawn at a level. Add it to "
+            "GalleryModel.analytics as a PlotSpec instead."
+        ) in html
+        assert not (tmp_path / "matplotlib" / "stubmetric.L2.png").exists()
+
+    def test_leveled_plot_added_to_analytics(self, tmp_path: Path) -> None:
+        model = GalleryModel(concepts=[], analytics=[_spec("stub", "Leveled", "stub")])
+        path = generate_gallery(
+            result=None, output_dir=tmp_path, model=model, backends=["matplotlib"]
+        )
+        html = path.read_text()
+        assert "Not available" in html
+        assert (
+            "&#x27;stub&#x27; is registered at L2 and L3, but the gallery model "
+            "has it in analytics, which is drawn level-less. Add it to "
+            "GalleryModel.concepts as a PlotConcept instead."
+        ) in html
+
+    def test_single_level_plot_added_to_analytics(self, tmp_path: Path) -> None:
+        model = GalleryModel(
+            concepts=[], analytics=[_spec("stubfail", "One Level", "stubfail")]
+        )
+        path = generate_gallery(
+            result=None, output_dir=tmp_path, model=model, backends=["matplotlib"]
+        )
+        assert (
+            "&#x27;stubfail&#x27; is registered at L2, but the gallery model has "
+            "it in analytics"
+        ) in path.read_text()
+
+    def test_variant_at_an_unregistered_level(self, tmp_path: Path) -> None:
+        concept = PlotConcept("stubfail", "Wrong Level", {Level.L3: _spec()})
+        path = generate_gallery(
+            result=None,
+            output_dir=tmp_path,
+            model=GalleryModel(concepts=[concept]),
+            backends=["matplotlib"],
+        )
+        assert (
+            "&#x27;stubfail&#x27; is registered at L2, but its PlotConcept has a "
+            "variant at L3. Remove that variant, or register a renderer at L3."
+        ) in path.read_text()
+
+    def test_reason_on_every_backend(self, tmp_path: Path) -> None:
+        model = GalleryModel(concepts=[_l2_concept("stubmetric", "Metric")])
+        path = generate_gallery(
+            result=None,
+            output_dir=tmp_path,
+            model=model,
+            backends=["plotly", "matplotlib"],
+        )
+        html = path.read_text()
+        assert html.count("Not available") == 2
+        assert html.count('class="na-reason"') == 2
+
+    def test_comparison_view_shows_the_reason(self, tmp_path: Path) -> None:
+        model = GalleryModel(concepts=[_comparable_concept("stubmetric", "Metric")])
+        path = generate_gallery(
+            result=None, output_dir=tmp_path, model=model, view="comparison"
+        )
+        html = path.read_text()
+        assert html.count('class="na-reason"') == 2  # the L2 and L3 columns
+        assert "Add it to GalleryModel.analytics as a PlotSpec instead." in html
+
+    def test_one_mistake_logs_one_warning(self, tmp_path: Path) -> None:
+        model = GalleryModel(concepts=[_comparable_concept("stubmetric", "Metric")])
+        with warnings_logged() as messages:
+            generate_gallery(
+                result=None,
+                output_dir=tmp_path,
+                model=model,
+                view="both",
+                backends=["plotly", "matplotlib"],
+            )
+        assert len(messages) == 1  # four panels, one reason
+        assert "is registered level-less" in messages[0]
+
+    def test_unloadable_backend_says_so_once(self, tmp_path: Path) -> None:
+        register_plot_backend("nosuch", "ob_analytics_no_such_backend_module")
+        try:
+            model = GalleryModel(concepts=[_comparable_concept()])
+            with warnings_logged() as messages:
+                path = generate_gallery(
+                    result=None,
+                    output_dir=tmp_path,
+                    model=model,
+                    view="both",
+                    backends=["matplotlib", "nosuch"],
+                )
+        finally:
+            _BACKEND_MODULES.pop("nosuch", None)
+        html = path.read_text()
+        assert html.count("The &#x27;nosuch&#x27; backend could not be loaded") == 2
+        assert (tmp_path / "matplotlib" / "stub.L2.png").exists()
+        assert not (tmp_path / "nosuch").exists()
+        assert len(messages) == 1
+        assert "'nosuch' backend could not be loaded" in messages[0]
+
+    def test_unknown_backend_names_the_typo(self, tmp_path: Path) -> None:
+        path = generate_gallery(
+            result=None,
+            output_dir=tmp_path,
+            model=GalleryModel(concepts=[_l2_concept()]),
+            backends=["matplotib"],
+        )
+        html = path.read_text()
+        assert "Unknown backend &#x27;matplotib&#x27;. Available:" in html
+        assert "could not be loaded" not in html
+
+    def test_value_error_on_import_names_the_backend(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A registered backend whose import raises ValueError (as a numpy
+        # binary mismatch does) is a load failure, not an unknown name.
+        (tmp_path / "ob_bad_backend.py").write_text("raise ValueError('bad build')\n")
+        monkeypatch.syspath_prepend(str(tmp_path))
+        register_plot_backend("badbuild", "ob_bad_backend")
+        try:
+            path = generate_gallery(
+                result=None,
+                output_dir=tmp_path / "out",
+                model=GalleryModel(concepts=[_l2_concept()]),
+                backends=["badbuild"],
+            )
+        finally:
+            _BACKEND_MODULES.pop("badbuild", None)
+        assert (
+            "The &#x27;badbuild&#x27; backend could not be loaded: bad build"
+        ) in path.read_text()
+
+    def test_comparison_view_loads_only_its_backend(self, tmp_path: Path) -> None:
+        # The comparison view draws plotly alone, so a broken second backend
+        # is never loaded and never reported.
+        register_plot_backend("nosuch", "ob_analytics_no_such_backend_module")
+        try:
+            with warnings_logged() as messages:
+                generate_gallery(
+                    result=None,
+                    output_dir=tmp_path,
+                    model=GalleryModel(concepts=[_comparable_concept()]),
+                    view="comparison",
+                    backends=["plotly", "nosuch"],
+                )
+        finally:
+            _BACKEND_MODULES.pop("nosuch", None)
+        assert messages == []
+
+    def test_other_backends_do_not_change_the_answer(self, tmp_path: Path) -> None:
+        # bokeh draws the plot at L3, but the gallery draws matplotlib only,
+        # which has no L3 renderer: the L3 variant is reported either way.
+        RENDERERS.register(("stubfail", Level.L3, "bokeh"), _stub_bokeh)
+        try:
+            concept = PlotConcept("stubfail", "Wrong Level", {Level.L3: _spec()})
+            path = generate_gallery(
+                result=None,
+                output_dir=tmp_path,
+                model=GalleryModel(concepts=[concept]),
+                backends=["matplotlib"],
+            )
+        finally:
+            RENDERERS._items.pop(("stubfail", Level.L3, "bokeh"), None)
+        assert "its PlotConcept has a variant at L3" in path.read_text()
+
+    def test_missing_backend_shows_bare_na(self, tmp_path: Path) -> None:
+        # A plot with no renderer on one backend is not a mismatch: that
+        # backend shows a bare "Not available", the other draws.
+        RENDERERS.register(("stubmplonly", Level.L2, "matplotlib"), _stub_mpl)
+        try:
+            model = GalleryModel(concepts=[_l2_concept("stubmplonly", "Mpl Only")])
+            path = generate_gallery(
+                result=None,
+                output_dir=tmp_path,
+                model=model,
+                backends=["plotly", "matplotlib"],
+            )
+        finally:
+            RENDERERS._items.pop(("stubmplonly", Level.L2, "matplotlib"), None)
+        html = path.read_text()
+        assert html.count("Not available") == 1
+        assert "na-reason" not in html.split("<body>", 1)[1]
+        assert (tmp_path / "matplotlib" / "stubmplonly.L2.png").exists()
+
+    def test_matching_kinds_have_no_reason(self, tmp_path: Path) -> None:
+        model = GalleryModel(concepts=[_l2_concept()], analytics=[_metric_spec()])
+        path = generate_gallery(
+            result=None, output_dir=tmp_path, model=model, backends=["matplotlib"]
+        )
+        assert "Not available" not in path.read_text()
 
 
 # ---------------------------------------------------------------------------
@@ -428,8 +709,28 @@ class TestBuildGalleryModel:
         order_outcome = next(c for c in model.concepts if c.key == "order_outcome")
         assert order_outcome.at(Level.L2) is None
         assert order_outcome.at(Level.L3) is not None
-        # Analytics are appended by callers, not derived here.
-        assert model.analytics == []
+        # The level-less analytics are the registered metrics; callers
+        # append any other panel themselves.
+        from ob_analytics.metrics import list_metrics
+
+        assert sorted(p.name for p in model.analytics) == list_metrics()
+
+    def test_no_built_in_card_is_misplaced(self, tiny_bitstamp_orders_csv) -> None:
+        from ob_analytics.bitstamp import BitstampSource
+        from ob_analytics.pipeline import Pipeline
+
+        result = Pipeline(source=BitstampSource()).run(str(tiny_bitstamp_orders_csv))
+        model = build_gallery_model(result)
+        backends = ["plotly", "matplotlib", "bokeh"]
+        for backend in backends:
+            _load_backend(backend)
+        for view in VIEWS:
+            for card in _project(model, view, backends):
+                for panel in card.panels:
+                    assert _misplaced(panel, frozenset(backends)) == "", (
+                        view,
+                        card.title,
+                    )
 
     def test_order_activity_l3_shares_depth_heatmap_window(
         self, tiny_bitstamp_orders_csv
@@ -499,3 +800,271 @@ class TestBuildGalleryModel:
             activity_l2.prep_kwargs["price_from"] == heatmap.prep_kwargs["price_from"]
         )
         assert activity_l2.prep_kwargs["price_to"] == heatmap.prep_kwargs["price_to"]
+
+    def test_depth_heatmap_and_order_activity_carry_hidden_liquidity_overlay(
+        self, tiny_bitstamp_orders_csv
+    ) -> None:
+        # #272: the depth heatmap and the L3 order-activity Gantt both receive
+        # the (possibly empty) iceberg/hidden-trade overlay -- this tiny fixture
+        # is too small to contain either, so this checks the wiring, not the
+        # detection.
+        from ob_analytics.bitstamp import BitstampSource
+        from ob_analytics.pipeline import Pipeline
+        from ob_analytics.visualization import plot_result
+
+        result = Pipeline(source=BitstampSource()).run(str(tiny_bitstamp_orders_csv))
+        model = build_gallery_model(result)
+
+        heatmap = next(c for c in model.concepts if c.key == "depth_heatmap").at(
+            Level.L2
+        )
+        activity_l3 = next(c for c in model.concepts if c.key == "order_activity").at(
+            Level.L3
+        )
+        assert heatmap is not None and activity_l3 is not None
+        for spec in (heatmap, activity_l3):
+            assert {"iceberg_lines", "iceberg_refills", "hidden_trades"} <= set(
+                spec.prep_kwargs
+            )
+
+        # No icebergs / no hidden trades on this fixture -- draws without error
+        # (#272 acceptance: a run with neither must not raise).
+        plot_result(result, "depth_heatmap", backend="matplotlib")
+        plot_result(result, "order_activity", level="L3", backend="matplotlib")
+
+    def test_hidden_liquidity_overlay_is_clipped_to_the_zoom_and_price_window(
+        self, sample_csv_path
+    ) -> None:
+        # #272: a full day can have hundreds of icebergs / thousands of hidden
+        # trades; the overlay handed to the faces must be the subset inside the
+        # shared zoom window and mid-anchored price band, not the raw detection.
+        from ob_analytics.hidden_liquidity import hidden_trades as find_hidden_trades
+        from ob_analytics.pipeline import Pipeline
+
+        result = Pipeline().run(sample_csv_path)
+        model = build_gallery_model(result)
+        heatmap = next(c for c in model.concepts if c.key == "depth_heatmap").at(
+            Level.L2
+        )
+        assert heatmap is not None
+        overlay_hidden = heatmap.prep_kwargs["hidden_trades"]
+
+        full_hidden = find_hidden_trades(
+            result.events, result.trades, result.depth_summary
+        )
+        if full_hidden.empty:
+            pytest.skip("bundled sample has no hidden trades to check clipping against")
+
+        # Every overlaid row's maker_event_id is one of the full detection's --
+        # the overlay is a genuine subset, not independently derived data.
+        assert set(overlay_hidden["maker_event_id"]) <= set(
+            full_hidden["maker_event_id"]
+        )
+        assert {"hidden", "check"} >= set(overlay_hidden["category"].unique())
+
+        # ... and it really is clipped: strictly fewer rows than the raw
+        # detection, all inside the zoom window and the shared price band.
+        assert 0 < len(overlay_hidden) < len(full_hidden)
+        zoom_start, zoom_end = _auto_zoom_window(result.events)
+        assert overlay_hidden["timestamp"].between(zoom_start, zoom_end).all()
+        assert (
+            overlay_hidden["price"]
+            .between(heatmap.prep_kwargs["price_from"], heatmap.prep_kwargs["price_to"])
+            .all()
+        )
+
+        for frame in (
+            heatmap.prep_kwargs["iceberg_lines"],
+            heatmap.prep_kwargs["iceberg_refills"],
+        ):
+            assert frame["timestamp"].between(zoom_start, zoom_end).all()
+
+    def test_hidden_liquidity_overlay_is_not_rescaled_on_a_legacy_float_result(
+        self,
+    ) -> None:
+        # #272: display_result() only scales an *integer* price column, so a
+        # pre-tick result already carrying display-unit floats is returned
+        # unchanged (see its own "legacy-safe" docstring). The hidden-liquidity
+        # overlay must honour the same rule -- applying ticks_to_price to an
+        # already-float price would land icebergs/hidden trades off the axes
+        # they are drawn on (236.50 -> 2.3650 at the default tick_size=0.01).
+        from ob_analytics.config import PipelineConfig
+        from ob_analytics.engine import HIDDEN_ORDER_ID
+        from ob_analytics.pipeline import PipelineResult
+
+        ts = pd.Timestamp("2015-05-01 01:00:00", tz="UTC")
+
+        def _at(**offset):
+            return ts + pd.Timedelta(**offset)
+
+        events = pd.DataFrame(
+            [
+                # Padding events set a 100s span so the auto zoom window's
+                # middle half (25s-75s) covers the story below, at ~50s.
+                {
+                    "event_id": 900,
+                    "id": 900,
+                    "timestamp": ts,
+                    "price": 300.0,
+                    "volume": 1.0,
+                    "action": "created",
+                    "direction": "ask",
+                    "fill": 0.0,
+                },
+                {
+                    "event_id": 901,
+                    "id": 901,
+                    "timestamp": _at(seconds=100),
+                    "price": 300.0,
+                    "volume": 1.0,
+                    "action": "created",
+                    "direction": "ask",
+                    "fill": 0.0,
+                },
+                # A 2-slice iceberg (bid @236.50) at ~50s.
+                {
+                    "event_id": 1,
+                    "id": 10,
+                    "timestamp": _at(seconds=50),
+                    "price": 236.50,
+                    "volume": 100.0,
+                    "action": "created",
+                    "direction": "bid",
+                    "fill": 0.0,
+                },
+                {
+                    "event_id": 2,
+                    "id": 10,
+                    "timestamp": _at(seconds=50, milliseconds=100),
+                    "price": 236.50,
+                    "volume": 0.0,
+                    "action": "changed",
+                    "direction": "bid",
+                    "fill": 100.0,
+                },
+                {
+                    "event_id": 3,
+                    "id": 11,
+                    "timestamp": _at(seconds=50, milliseconds=100, microseconds=200),
+                    "price": 236.50,
+                    "volume": 100.0,
+                    "action": "created",
+                    "direction": "bid",
+                    "fill": 0.0,
+                },
+                # A hidden maker fill at ~51s.
+                {
+                    "event_id": 100,
+                    "id": HIDDEN_ORDER_ID,
+                    "timestamp": _at(seconds=51),
+                    "price": 236.60,
+                    "volume": 0.0,
+                    "action": "changed",
+                    "direction": "ask",
+                    "fill": 5.0,
+                },
+            ]
+        )
+        events["action"] = pd.Categorical(
+            events["action"], categories=["created", "changed", "deleted"], ordered=True
+        )
+        events["direction"] = pd.Categorical(
+            events["direction"], categories=["bid", "ask"]
+        )
+
+        trades = pd.DataFrame(
+            {
+                "timestamp": [_at(seconds=50, milliseconds=100), _at(seconds=51)],
+                "price": [236.50, 236.60],
+                "volume": [100.0, 5.0],
+                "direction": pd.Categorical(
+                    ["sell", "buy"], categories=["buy", "sell"]
+                ),
+                "maker_event_id": [2, 100],
+                "taker_event_id": [50, 51],
+            }
+        )
+        depth_summary = pd.DataFrame(
+            {
+                "timestamp": [ts],
+                "best_bid_price": [236.50],
+                "best_bid_vol": [100.0],
+                "best_ask_price": [237.00],
+                "best_ask_vol": [50.0],
+            }
+        )
+        depth = pd.DataFrame(columns=["timestamp", "price", "volume", "direction"])
+
+        result = PipelineResult(
+            events=events,
+            trades=trades,
+            depth=depth,
+            depth_summary=depth_summary,
+            config=PipelineConfig(),  # tick_size=0.01: any re-scaling is obvious
+            level=Level.L3,
+        )
+
+        model = build_gallery_model(result)
+        heatmap = next(c for c in model.concepts if c.key == "depth_heatmap").at(
+            Level.L2
+        )
+        assert heatmap is not None
+        refills = heatmap.prep_kwargs["iceberg_refills"]
+        hidden = heatmap.prep_kwargs["hidden_trades"]
+
+        assert not refills.empty
+        assert refills["price"].iloc[0] == pytest.approx(236.50)
+        assert not hidden.empty
+        assert hidden["price"].iloc[0] == pytest.approx(236.60)
+        assert hidden["best_bid_price"].iloc[0] == pytest.approx(236.50)
+
+
+class TestDisplayUnitsPreserveFaces:
+    """``display_result`` changes units, and must change nothing else.
+
+    ``build_gallery_model`` converts a whole result to display units once, so
+    every face sees base-asset floats rather than the canonical integer lots.
+    An analytic that reads sizes therefore has to give the same answer in both
+    unit systems.  ``order_activity``'s L3 face is the one that failed: a
+    lifecycle total cast to ``int64`` sent every sub-unit fill to zero, so the
+    face drew a book of nothing but cancellations.
+    """
+
+    @staticmethod
+    def _result(orders_csv):
+        from ob_analytics.bitstamp import BitstampSource
+        from ob_analytics.pipeline import Pipeline
+
+        return Pipeline(source=BitstampSource()).run(str(orders_csv))
+
+    def test_lifecycle_outcomes_survive_the_conversion(
+        self, fractional_bitstamp_orders_csv
+    ) -> None:
+        from ob_analytics.analytics import order_lifecycles
+        from ob_analytics.visualization.gallery import display_result
+
+        result = self._result(fractional_bitstamp_orders_csv)
+        canonical = order_lifecycles(result.events)
+        displayed = order_lifecycles(display_result(result).events)
+
+        # The fixture has to contain the outcome the bug erased, or this
+        # passes for the wrong reason.
+        assert (canonical["outcome"] == "filled").any()
+        assert list(displayed["id"]) == list(canonical["id"])
+        assert list(displayed["outcome"]) == list(canonical["outcome"])
+
+    def test_order_activity_l3_draws_the_same_spans(
+        self, fractional_bitstamp_orders_csv
+    ) -> None:
+        from ob_analytics.visualization import prepare
+        from ob_analytics.visualization.gallery import display_result
+
+        result = self._result(fractional_bitstamp_orders_csv)
+        canonical = prepare.order_activity_l3(result.events)
+        displayed = prepare.order_activity_l3(display_result(result).events)
+
+        assert len(canonical["filled"]) > 0
+        for fate in ("filled", "cancelled", "resting"):
+            assert list(displayed[fate]["id"]) == list(canonical[fate]["id"]), (
+                f"{fate} spans differ between canonical and display units"
+            )

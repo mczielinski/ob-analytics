@@ -20,11 +20,13 @@ protocol to :class:`~ob_analytics.pipeline.Pipeline`, or register a whole new
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+import numpy.typing as npt
 import pandas as pd
 
 from ob_analytics.config import SourceSettings
@@ -77,6 +79,11 @@ class FeedType(str, Enum):
       ask, neither filling); :func:`~ob_analytics.analytics.order_book`
       replays this faithfully — a crossed book in the output is a property of
       the feed, not a reconstruction bug.
+    * :attr:`PRICE_LEVELS` — an L2 feed: the venue's total size at each price,
+      as a stream of changes, merged changes, repeated snapshots or polls.  The
+      venue does not publish a crossed book, so a crossed one means the
+      capture's copy is wrong: most often, the capture kept a level the venue
+      removed.
     * :attr:`UNKNOWN` — a source that does not declare its feed type (the
       structural default for third-party sources predating this attribute).
 
@@ -87,7 +94,126 @@ class FeedType(str, Enum):
 
     MATCHED_BOOK = "matched_book"
     DIFF_FEED = "diff_feed"
+    PRICE_LEVELS = "price_levels"
     UNKNOWN = "unknown"
+
+
+class SequenceKind(str, Enum):
+    """What a feed's venue ``sequence`` number promises.
+
+    A source declares it so a gap check knows what a skipped number means:
+
+    * :attr:`CONTIGUOUS` — every message adds exactly one.  A skipped number
+      is a dropped message.  This is the default.
+    * :attr:`MONOTONIC` — the number only rises.  A skip is normal and says
+      nothing about loss; only a step that does not rise is a fault.  CCXT's
+      book ``nonce`` is this kind: on Binance it is the last update ID of a
+      diff that covers a range of IDs, and ``watch_order_book`` can apply
+      several diffs before it returns a book.  Databento's ``sequence`` is
+      too: it numbers every message on the venue's channel, but a file
+      usually holds one instrument of that channel, and the trade and fill
+      records it carries become trades rather than book events.  So is
+      cryptofeed's: on Bitfinex and Blockchain.com it numbers every message
+      on the connection, trades and heartbeats too, and on Independent
+      Reserve cryptofeed passes on no message about an order it does not
+      hold.
+
+    Mixes in ``str`` so members compare and serialise as their value, as
+    :class:`FeedType` does.
+    """
+
+    CONTIGUOUS = "contiguous"
+    MONOTONIC = "monotonic"
+
+
+class TradeAttribution(str, Enum):
+    """Which orders of a trade a feed's order events can name.
+
+    Every trade has a maker, the order that was resting in the book, and a
+    taker, the order that arrived and traded against it.  Whether the order
+    events show both depends on the feed, not on the reconstruction:
+
+    * :attr:`BOTH` — the feed reports every order the venue accepts, takers
+      included, so both orders of a trade can be found.  Bitstamp's
+      ``live_orders`` channel does this.
+    * :attr:`MAKER_ONLY` — the feed shows resting orders only.  A taker trades
+      on arrival and never rests, so it never appears.  Exchange order-by-order
+      feeds (Nasdaq ITCH, from which LOBSTER is built, and Databento MBO) do
+      not identify the aggressor, and a feed made of book snapshots cannot
+      show it.
+    * :attr:`NONE` — the feed has no order identity (L2), so neither order can
+      be named.
+
+    A source declares it so the unmatched-trades check in
+    :func:`~ob_analytics.analytics.data_quality_summary` counts only the orders
+    the feed can show.  A source that does not declare it is read as
+    :attr:`BOTH`, the check's behaviour before this declaration existed.
+
+    Mixes in ``str`` so members compare and serialise as their value, as
+    :class:`FeedType` does.
+    """
+
+    BOTH = "both"
+    MAKER_ONLY = "maker_only"
+    NONE = "none"
+
+
+class Clocks(str, Enum):
+    """Which clocks a feed's book rows carry.
+
+    The schema has two clock columns: ``exchange_timestamp``, the time the
+    venue stamped on the message, and ``timestamp``, the time the capture
+    received it.  Not every feed has both.  Where one is missing, the other is
+    copied into its column, so the two columns are equal and comparing them
+    says nothing:
+
+    * :attr:`BOTH` — the venue stamps each message and the capture stamps its
+      receipt.  The two clocks can be checked against each other.  This is the
+      default.
+    * :attr:`RECEIVE_ONLY` — the venue sends no time with its book, so
+      ``exchange_timestamp`` copies ``timestamp``.  The cryptofeed Bitfinex,
+      Blockchain.com and Kraken books are like this.
+    * :attr:`VENUE_ONLY` — the data holds the venue's time only, so
+      ``timestamp`` copies ``exchange_timestamp``.  LOBSTER files are like
+      this.
+
+    A source declares it so :func:`~ob_analytics.analytics.data_quality_summary`
+    runs its clock checks only when there are two clocks to compare, and says
+    why when it does not.  A live capture finds out from the venue's messages
+    and records it in ``meta.json``.
+
+    Mixes in ``str`` so members compare and serialise as their value, as
+    :class:`FeedType` does.
+    """
+
+    BOTH = "both"
+    RECEIVE_ONLY = "receive_only"
+    VENUE_ONLY = "venue_only"
+
+
+def trade_attribution_of(source: Any) -> TradeAttribution:
+    """Return what *source* declares as its :class:`TradeAttribution`.
+
+    A source that does not declare one is read as :attr:`TradeAttribution.BOTH`.
+    """
+    return TradeAttribution(getattr(source, "trade_attribution", TradeAttribution.BOTH))
+
+
+def sequence_kind_of(source: Any) -> SequenceKind:
+    """Return what *source* declares as its :class:`SequenceKind`.
+
+    A source that does not declare one is read as
+    :attr:`SequenceKind.CONTIGUOUS`.
+    """
+    return SequenceKind(getattr(source, "sequence_kind", SequenceKind.CONTIGUOUS))
+
+
+def clocks_of(source: Any) -> Clocks:
+    """Return what *source* declares as its :class:`Clocks`.
+
+    A source that does not declare one is read as :attr:`Clocks.BOTH`.
+    """
+    return Clocks(getattr(source, "clocks", Clocks.BOTH))
 
 
 @dataclass(frozen=True)
@@ -104,14 +230,14 @@ class RunContext:
         trading do not).
     session_tz : str, optional
         The venue's local time zone for a session-relative feed (LOBSTER),
-        used to place its seconds-after-midnight on the shared UTC clock
-        (issue #154).  ``None`` lets the loader use its own default
+        used to place its seconds-after-midnight on the shared UTC clock.
+        ``None`` lets the loader use its own default
         (``ob_analytics.lobster.LOBSTER_DEFAULT_TZ``).  Ignored by venues that
         already carry an absolute clock (Bitstamp, CCXT).
     symbol : str, optional
         The instrument this run covers (e.g. ``"BTC/USD"``).  When supplied,
         loaders tag each row with an optional ``symbol`` column so cross-venue
-        frames can be told apart (issue #147).  ``None`` leaves it untagged.
+        frames can be told apart.  ``None`` leaves it untagged.
     venue : str, optional
         The source venue this run covers (e.g. ``"bitstamp"``).  When supplied,
         it overrides the loader's own source name in the optional ``venue``
@@ -162,10 +288,11 @@ class TradeSource(Protocol):
 
     Returned DataFrame columns:
 
-    * ``timestamp``        — pandas datetime64[ns]
+    * ``timestamp``        — pandas datetime64[ns, UTC]
     * ``price``            — int64 (integer ticks; × ``tick_size`` for the
-      quote currency — issue #155)
-    * ``volume``           — float
+      quote currency)
+    * ``volume``           — int64 (integer lots; × ``lot_size`` for the base
+      asset)
     * ``direction``        — categorical ``buy``/``sell`` (taker side)
     * ``maker_event_id``   — integer event id of the resting order
     * ``taker_event_id``   — integer event id of the aggressing order
@@ -211,11 +338,12 @@ class DepthSource(Protocol):
     Returned DataFrame columns (see
     :data:`~ob_analytics.schemas.DEPTH_COLUMNS`):
 
-    * ``timestamp``  — pandas datetime64[ns]
+    * ``timestamp``  — pandas datetime64[ns, UTC]
     * ``price``      — int64, the price level in integer ticks (× ``tick_size``
-      for the quote currency — issue #155)
-    * ``volume``     — float, the level's **new absolute** resting size after
-      the update (``0`` removes the level); *not* a signed delta
+      for the quote currency)
+    * ``volume``     — int64, the level's **new absolute** resting size in
+      integer lots (× ``lot_size`` for the base asset) after the update (``0``
+      removes the level); *not* a signed delta
     * ``direction``  — categorical ``bid``/``ask``
     """
 
@@ -262,6 +390,174 @@ class DataWriter(Protocol):
 
 
 @runtime_checkable
+class Metric(Protocol):
+    """Structural contract for a measurement taken from a finished run.
+
+    A metric reads a run's tables and returns one table of its own, then says
+    how to turn that table into a renderer payload.  There is **no base class
+    to inherit**: any object providing these members satisfies the contract
+    (structural typing), and registering it in
+    :data:`~ob_analytics.metrics.METRICS` is what makes it run and plot.
+
+    :attr:`name` is both the registry key and the level-less plot concept the
+    metric draws under, so a renderer registered at ``(name, None, backend)``
+    is the metric's face.
+
+    Both methods may take keyword-only settings after their first argument,
+    each with a default: :meth:`compute` the settings of the measurement (a
+    window, a bucket size) and :meth:`prepare` the settings of the picture (a
+    threshold line, a time window).
+    :func:`~ob_analytics.visualization.plot_result` sends each keyword it is
+    given to the method that names it, so the two must not share a name.
+
+    Attributes
+    ----------
+    name : str
+        Short lowercase identifier registered in
+        :data:`~ob_analytics.metrics.METRICS`, e.g. ``"amihud"``.
+    title : str
+        Human-readable title for the metric's gallery card.
+    levels : tuple of Level
+        The resolutions the metric applies to.  A metric that reads per-order
+        events declares ``(Level.L3,)`` only, so it is skipped on an L2 run
+        rather than failing on an empty ``events`` table.
+    """
+
+    name: str
+    title: str
+    levels: tuple[Level, ...]
+
+    def compute(self, result: Any) -> pd.DataFrame:
+        """Return this metric's table for *result* (a ``PipelineResult``)."""
+        ...
+
+    def prepare(self, frame: pd.DataFrame) -> dict[str, Any]:
+        """Turn :meth:`compute`'s table into the payload the renderer takes."""
+        ...
+
+
+@runtime_checkable
+class BarRule(Protocol):
+    """Structural contract for a rule that cuts a trade stream into bars.
+
+    A bar rule answers one question: where do the bar boundaries fall?  It is
+    handed the normalized trade frame :func:`~ob_analytics.bars.bars` builds —
+    sorted by ``timestamp``, with ``price``, ``volume`` and a ``sign`` column
+    of ``+1`` (buyer-initiated) / ``-1`` (seller-initiated) — and returns the
+    bar each trade belongs to.  Everything else (the OHLCV columns, VWAP, the
+    signed-volume split) is shared, so a new rule is the boundary decision and
+    nothing more.
+
+    There is **no base class to inherit**: any object providing these members
+    satisfies the contract, and registering it in
+    :data:`~ob_analytics.bars.BAR_RULES` is what makes ``bars(trades,
+    rule=name)`` find it.
+
+    Attributes
+    ----------
+    name : str
+        Short lowercase identifier registered in
+        :data:`~ob_analytics.bars.BAR_RULES`, e.g. ``"volume"``.
+    """
+
+    name: str
+
+    def default_threshold(self, frame: pd.DataFrame, target_bars: int) -> Any:
+        """Return the threshold that cuts *frame* into about *target_bars* bars.
+
+        Used when the caller passes no threshold of its own.  The unit is the
+        rule's own: a :class:`pandas.Timedelta` for a clock rule, a count of
+        trades for a tick rule, an amount for a volume rule.
+        """
+        ...
+
+    def normalize(self, threshold: Any) -> Any:
+        """Return *threshold* in this rule's own type, or say why it cannot.
+
+        Called once before :meth:`assign`, so a rule reads and checks its
+        threshold in one place and cuts in another — and so the caller can
+        report the value the bars were actually cut with, whatever spelling it
+        arrived in.  Raises
+        :class:`~ob_analytics.exceptions.ConfigError` for a threshold the rule
+        cannot use.
+        """
+        ...
+
+    def assign(self, frame: pd.DataFrame, threshold: Any) -> npt.ArrayLike:
+        """Return the 0-based bar index of each row of *frame*.
+
+        One whole number per trade, non-decreasing in trade order — an
+        ndarray, a Series, or any sequence :func:`numpy.asarray` reads.  Index
+        values need not be contiguous: an index no trade carries is an empty
+        bar, and empty bars are dropped.
+        """
+        ...
+
+
+@runtime_checkable
+class Feature(Protocol):
+    """Structural contract for one measured column set of a feature table.
+
+    A feature answers one question: given the bars a run has been cut into,
+    what does this measurement read on each of them?  It is handed the frame
+    :func:`~ob_analytics.features.features` prepares — one row per bar, in
+    time order, carrying the bar's own columns and the state of the book as
+    of the bar's close — and returns one array per column it declares.
+
+    There is **no base class to inherit**: any object providing these members
+    satisfies the contract, and registering it in
+    :data:`~ob_analytics.features.FEATURES` is what puts its columns in the
+    table.
+
+    A feature reads only the row it is on and the rows before it.  The
+    prepared frame holds nothing from after a row's close, so a feature that
+    works row by row is past-only already; one that looks along the frame has
+    to look backwards — ``shift(1)``, a trailing ``rolling`` window — for the
+    table to stay free of look-ahead.
+
+    Attributes
+    ----------
+    name : str
+        Short lowercase identifier registered in
+        :data:`~ob_analytics.features.FEATURES`, e.g. ``"micro_price"``.
+    columns : tuple of str
+        The columns :meth:`compute` returns, in the order they are written.
+        Declared rather than discovered, so the table's shape is known before
+        anything is measured and a caller can be told what it asked for.
+    requires : frozenset of str
+        The columns of the prepared frame :meth:`compute` reads.  A feature
+        named explicitly whose requirement is missing raises; one selected by
+        default is skipped, which is how book features drop out of a run with
+        no quotes.
+
+    Both are read, never written, so a plain class attribute satisfies them:
+    ``columns = ("spread", "spread_bps")`` needs no annotation, and a
+    :func:`~dataclasses.dataclass` field works just as well.
+    """
+
+    name: str
+
+    @property
+    def columns(self) -> tuple[str, ...]:
+        """The columns :meth:`compute` returns, in the order they are written."""
+        ...
+
+    @property
+    def requires(self) -> frozenset[str]:
+        """The columns of the prepared frame :meth:`compute` reads."""
+        ...
+
+    def compute(self, frame: pd.DataFrame) -> Mapping[str, npt.ArrayLike]:
+        """Return this feature's columns for *frame*, keyed by column name.
+
+        Every name in :attr:`columns` must be present, each holding one value
+        per row of *frame*, in row order.  Values are read positionally, so a
+        :class:`pandas.Series` need not carry the frame's index.
+        """
+        ...
+
+
+@runtime_checkable
 class Source(Protocol):
     """Structural contract shared by every data source, file or live.
 
@@ -288,15 +584,43 @@ class Source(Protocol):
     feed_type : FeedType
         The source's crossing invariant (:class:`FeedType`), so downstream code
         reasons about crossed books by coordinate, not by source name.
+    trade_attribution : TradeAttribution
+        Which orders of a trade the source's order events can name
+        (:class:`TradeAttribution`).  Every source in this package declares
+        it.  It is not a required member, so a plug-in written before it
+        existed still satisfies the contract; read it with
+        :func:`trade_attribution_of`, which treats a missing one as
+        :attr:`TradeAttribution.BOTH`.
+    sequence_kind : SequenceKind
+        What the venue ``sequence`` the source records promises
+        (:class:`SequenceKind`), so a gap check knows whether a skipped number
+        is a lost message.  Optional: read it with :func:`sequence_kind_of`,
+        which treats a missing one as :attr:`SequenceKind.CONTIGUOUS`.
+    clocks : Clocks
+        Which clocks the source's book rows carry (:class:`Clocks`), so the
+        clock checks run only when there are two to compare.  Optional: read
+        it with :func:`clocks_of`, which treats a missing one as
+        :attr:`Clocks.BOTH`.
     settings : SourceSettings
         Typed per-source configuration.  The empty base for a source that needs
         none; a typed subclass (e.g. ``CcxtSettings``) for one with venue knobs.
     """
 
     name: str
-    level: Level
-    feed_type: FeedType
     settings: SourceSettings
+
+    # The two coordinates are read-only: a source declares them, and nothing
+    # downstream sets them.  A class attribute satisfies them, and so does a
+    # property that works one out, as the cryptofeed source does from its venue.
+    @property
+    def level(self) -> Level:
+        """The source's resolution (:class:`Level`)."""
+        ...
+
+    @property
+    def feed_type(self) -> FeedType:
+        """The source's crossing invariant (:class:`FeedType`)."""
+        ...
 
 
 @runtime_checkable

@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
       - run: uv sync --group dev
@@ -25,16 +25,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
-      - run: uv sync --group dev --extra interactive --extra live --extra ccxt
+      - run: uv sync --group dev --extra interactive --extra live --extra ccxt --extra databento
       # Pass --extra to `uv run` too: its implicit sync would otherwise
       # re-resolve to the project default (no extras) and uninstall plotly /
       # websockets / ccxt, leaving imports in visualization/ and live/
       # (incl. live/ccxt_source.py's `import ccxt.pro` and
       # live/cryptofeed_source.py's `import cryptofeed`) unresolvable.
-      - run: uv run --group dev --extra interactive --extra live --extra ccxt --extra cryptofeed ty check ob_analytics/
+      - run: uv run --group dev --extra interactive --extra live --extra ccxt --extra cryptofeed --extra databento ty check ob_analytics/ tests/
 
   test:
     runs-on: ubuntu-latest
@@ -44,17 +44,17 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
       - run: uv python install ${{ matrix.python-version }}
-      - run: uv sync --group dev --extra interactive --extra live --extra ccxt --extra cryptofeed --python ${{ matrix.python-version }}
+      - run: uv sync --group dev --extra interactive --extra live --extra ccxt --extra cryptofeed --extra databento --python ${{ matrix.python-version }}
       # Pass --extra to `uv run` too: its implicit sync would otherwise
       # re-resolve to the project default (no extras) and uninstall plotly /
       # websockets / ccxt / cryptofeed, which causes test_plotly_backend.py to
       # skip and any test_live_protocol / test_ccxt_source /
       # test_cryptofeed_source tests that need those to break.
-      - run: uv run --group dev --extra interactive --extra live --extra ccxt --extra cryptofeed --python ${{ matrix.python-version }} pytest tests/ --cov=ob_analytics --cov-report=xml -q --durations=15
+      - run: uv run --group dev --extra interactive --extra live --extra ccxt --extra cryptofeed --extra databento --python ${{ matrix.python-version }} pytest tests/ --cov=ob_analytics --cov-report=xml -q --durations=15
       - name: Upload coverage
         if: matrix.python-version == '3.11' && github.event_name == 'push'
         uses: codecov/codecov-action@v7
@@ -70,7 +70,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
       - run: uv python install 3.12
@@ -83,7 +83,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
       - run: uv sync --group dev --extra interactive

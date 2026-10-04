@@ -10,6 +10,758 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Run a large input one time window at a time** (#116).
+  `Pipeline.run_windows(source, boundaries, output)` cuts one input at the
+  given times and runs the depth stages on one window at a time, so their peak
+  memory is set by the largest window. Each window is written to `output` as it
+  finishes, as one Parquet file per table, the same folder `save_data` writes;
+  `load_data` reads it back. With `carry=True`, the default, each window starts
+  from the book the previous one ended with, and the output matches a single
+  run row for row. The exceptions are `aggressiveness_bps` on a Bitstamp
+  input, and depth where the Databento loader already warns that it is off. A
+  run that fails part-way leaves the output folder as it was. On 1.26M events, eight windows peak at 771 MiB against 1,507 MiB for
+  a single run. The loader still reads the whole input. See "Scale and
+  chunking".
+- **The flow-toxicity faces and the L1 quote are built-in metrics** (#118).
+  `vpin`, `kyle_lambda`, `order_flow_imbalance` and `ofi_horizon` are now
+  registered metrics, so `available_concepts` lists them and
+  `result.plot("vpin")` computes and draws VPIN with the defaults of
+  `compute_vpin`. A keyword goes to the calculation or to the picture,
+  whichever names it: `result.plot("vpin", n_buckets=20, threshold=0.8)`.
+  `result.metric(name, **settings)` takes the calculation's settings too. The
+  new `l1_ticker` metric is the Level 1 quote — best bid, best ask and last
+  trade. It draws the three prices over time, or the quote card for one
+  instant with `at=`; `plot("l1_ticker", bid=99, ask=101, last=100)` draws a
+  card from plain numbers. Each built-in metric gets a gallery card.
+  `ofi_by_horizon` is the multi-horizon order flow imbalance that the
+  `ofi_horizon` face draws, now a function in `flow_toxicity`.
+
+- **A page on what each feed shows** (#288). "What each feed shows" describes
+  16 properties that decide what a capture can tell you, such as depth shown,
+  what can be missed, sequence, clocks and taker side. It gives each property's
+  value for every source and venue, checked with live captures. Every source's
+  how-to page now opens with its values and when to use it.
+- **`FeedType.PRICE_LEVELS`, the crossing value for L2 feeds** (#288). The ccxt
+  source, cryptofeed at L2 and `depth_csv` declare it instead of
+  `MATCHED_BOOK`. The venue does not publish a crossed price-level book, so
+  `audit` scores a crossed one as an error, as for a matched book: most often,
+  the capture kept a level the venue removed. Captures made before this record
+  `matched_book` and are scored the same way. In the `Source` protocol, `level`
+  and `feed_type` are now read-only, so a source can work either one out, as
+  the cryptofeed source does from its venue.
+- **A live capture can run for days** (#150). `ob-analytics capture` now
+  writes a directory of segments with a `manifest.json`. A lost connection ends
+  the segment; the capture waits (1 s, doubling to 60 s) and starts a new one
+  from a fresh snapshot. `--roll-minutes` and `--roll-mb` start a new segment
+  by time or size, and the new segment is streaming before the old one stops,
+  so a roll loses nothing. Running the same command again continues the
+  capture, and closes a segment a crashed process left open; a lock on the
+  directory stops a second process from writing to it at once. The manifest
+  records every segment, why it ended, and every gap with its cause.
+  `process` and `audit` read the whole capture, and `audit` adds the checks
+  `capture_gaps`, `unfinished_segments` and `dropped_messages`. From Python:
+  `ob_analytics.live.run_capture` and `read_manifest`.
+
+- **Each source declares which orders of a trade it can name** (#284). The
+  new `Source.trade_attribution` (`TradeAttribution.BOTH`, `MAKER_ONLY` or
+  `NONE`) says whether a feed's order events show the trade's maker, its taker,
+  or neither. `bitstamp` names both. `lobster`, `databento` and `cryptofeed` at
+  L3 name the maker only: their feeds show resting orders, and a taker trades on
+  arrival. The L2 sources name neither. The `unmatched_trades` check now counts
+  only the orders the feed can name, and says which. Before, a Databento run
+  could only report every trade as unmatched, and LOBSTER's guessed takers
+  counted as matches. A source that does not declare it is read as `BOTH`, the
+  old check.
+- **A capture records what its source declares, and `audit` holds it to that**
+  (#284). `meta.json` now records `source`, `feed_type` and `trade_attribution`.
+  `ob-analytics process` copies `meta.json` into its output. `audit` checks a
+  capture against the declarations of the source that made it, even when
+  `--source` names another: a cryptofeed L3 capture is read with
+  `--source bitstamp`, whose feed shows more. Read the record with
+  `recorded_source`, `recorded_feed_type` and `recorded_trade_attribution`.
+- **A cryptofeed reconnect is counted** (#309). cryptofeed reconnects by
+  itself when it loses a message and starts again from a new opening book. The
+  capture counts each new opening book as `book_resyncs` in `meta.json`, as the
+  ccxt source already did. On Bitfinex and Blockchain.com the venue's count
+  starts again too; the capture counts that step back as `sequence_restarts`,
+  and `audit` leaves it out of `sequence_out_of_order`, so a reconnect is
+  scored the same on every venue. Read it with `recorded_sequence_restarts`
+  and pass it to `data_quality_summary(sequence_restarts=...)`.
+
+### Changed
+
+- **A metric is computed when its plot is drawn** (#118). Building the gallery
+  model, `available_concepts` and `result.plot` of another concept no longer
+  run every registered metric. A metric that raises now keeps its gallery card,
+  which says why it has no plot, instead of being left out.
+
+- **A plot concept is level-less or drawn at a level, on every backend**
+  (#302). Registering a concept at `None` when it is registered at a level on
+  any backend, or the reverse, raises a `ValueError` that says which to use.
+  So does a renderer key that is not `(concept, level, backend)`.
+  `RENDERERS.placements(concept)` lists how a concept is registered. This can
+  break code that worked before:
+  - Code that registered one plot both ways fails at the second registration.
+  - A metric plug-in that does so is skipped when `ob_analytics` is imported,
+    with a logged warning.
+  - A backend module loaded with `register_plot_backend` that registers a
+    built-in concept as the other kind fails to load, so no plot on that
+    backend draws until it is fixed.
+  - A metric named like a built-in plot drawn at a level, such as
+    `trade_size`, cannot register its level-less renderer; give it another
+    name.
+- **The capture directory layout** (#150). A capture's files are now in
+  `seg-0001/`, `seg-0002/`, ... under `--out`, next to `manifest.json`. Read
+  one segment as before, from its `orders.csv` or `depth.csv`; give `process`
+  and `audit` the capture directory to read them all. `--out` must be new,
+  empty, or a capture of the same venue and pair.
+- **Live sources no longer reconnect by themselves** (#150). The Bitstamp
+  source reconnected without a new snapshot, so an order deleted while it was
+  disconnected stayed on the book to the end of the run, and only a
+  `reconnects` count (now removed) recorded it. The ccxt source stopped its
+  book or trade loop on a network error and ran on with half its feed. Both now
+  end the stream with the error, and the capture starts a new segment.
+- **`manifest.json` counts resyncs, not missing sequence numbers** (#309).
+  Each segment, and the capture as a whole, records `book_resyncs` in place of
+  `sequence_missing`, and `audit` warns about them in a new `book_resyncs`
+  check. `dropped` now counts only the messages a source could not use.
+  `recorded_sequence_kind` returns `None` when a capture records no kind, as
+  `recorded_feed_type` does, in place of taking a `default`.
+
+### Fixed
+
+- **`aggressiveness_bps` is measured against the book at the order's own
+  time.** `order_aggressiveness` found the book standing before each order by
+  taking the `depth_summary` row with the next-lower `event_id`. That is only
+  correct when event ids are in time order. The Bitstamp loader numbers events
+  after sorting them by order id, so on Bitstamp that row could come from any
+  time in the session. On the bundled sample, 51,805 of 156,718 new orders
+  were measured against a book from after the order, and 7,399 against a book
+  more than a minute away, up to 30 minutes. The lookup now uses the
+  documented event order (`time_order_keys`): the last `depth_summary` row
+  with an earlier `timestamp`, or with the same `timestamp` and a lower
+  `event_id`. `aggressiveness_bps` changes on 45,087 of the sample's 314,057
+  event rows (14.4%). Databento, LOBSTER and the synthetic generator number
+  events in time order, so their values do not change.
+- **`compute_vpin` refuses a bucket size in the wrong units.** Sizes are
+  integer lots, so `bucket_volume=5.0` on the Bitstamp sample means 5e-8 BTC
+  and asked for about 300 million buckets, enough to run the machine out of
+  memory. `compute_vpin` and `bulk_volume_classification` now raise
+  `ValueError` when a bucket would make more than `MAX_VOLUME_BUCKETS` (one
+  million) buckets, and say which units `bucket_volume` is in. The how-to
+  pages that passed `bucket_volume=5.0` now size the bucket from the trades.
+- **Docs written before lots and UTC timestamps are corrected.** The schema
+  page gives the current version, `4.0`. The step-by-step and synthetic-data
+  pages say timestamps are tz-aware UTC. Tutorial chapter 3's LOBSTER round
+  trip now passes `lot_size=1.0`; without it every size was written as a
+  fraction of a lot, and the round trip read back no executed volume.
+- **An Independent Reserve capture no longer keeps orders cancelled before
+  it started** (#315). cryptofeed takes the opening book from the venue's REST
+  interface when the first stream message arrives. The venue serves that book
+  from a cache, and its orders are older than its `CreatedTimestampUtc`, so the
+  book could be a few seconds older than the stream. An order cancelled in
+  between stayed in the book until the capture ended, and a trade at a price
+  past it made the book crossed: 13 orders in a 12-minute capture, two of them
+  at the best ask. The cryptofeed source now uses its own Independent Reserve
+  feed, which fetches the book again, once a second, until it was created at
+  least 3 s after the first message. The stream waits meanwhile and loses
+  nothing. After 15 tries it uses the last book and logs a warning.
+- **Coinbase captures through ccxt record the taker's side** (#308). Coinbase
+  reports each trade with the side of the maker, and ccxt passes it on
+  unchanged, so every Coinbase capture had its trade signs reversed, and so did
+  order flow imbalance, VPIN and everything else built on them. The ccxt source
+  now reverses the side for the `coinbase` venue, on both its websocket and
+  REST trades, and records `trade_side_reversed` in `meta.json`. A Coinbase
+  capture without that key was made before this change: reverse its signs.
+  `coinbaseexchange` needs no change, because ccxt already reverses its side.
+- **An Independent Reserve order no longer stays in the book after its cancel**
+  (#313). Before 3.0, cryptofeed forgets an Independent Reserve order after its
+  first change, even when the order still has size, and skips every later
+  message for it. So the cancel after a partial fill never reached the
+  capture, the order stayed in the book until the capture ended, and `audit`
+  reported it as a stale resting order. The cryptofeed source now uses a
+  subclass of cryptofeed's Independent Reserve feed that keeps the order while
+  it rests. cryptofeed 3.0 fixes this too, but needs Python 3.13.
+- **`audit` no longer stops on UUID order ids** (#311). A stale resting order
+  from an Independent Reserve capture made `audit` raise `ValueError`.
+  `StaleOrder.id` now holds the id as the feed writes it (`int | str`), and the
+  text and JSON reports print it.
+- **cryptofeed's Independent Reserve trades are linked to their orders**
+  (#311). The trades now carry both order ids (`BidGuid` and `OfferGuid`) in
+  `buy_order_id` and `sell_order_id`, and each fill is recorded from the trade,
+  as on Bitstamp. On a per-change book, a fill that the trade and the book both
+  report is recorded once, and a book message that repeats an order's size
+  writes no row.
+- **An Independent Reserve capture's `trades.csv` no longer holds other
+  markets' trades** (#316). The venue sends a market's trade channel the
+  trades of its other markets for the same coin, so a BTC-AUD capture also got
+  BTC-NZD and BTC-SGD trades, priced in NZD and SGD. `audit` read them as
+  trades through the book and reported resting orders as stale. The cryptofeed
+  source now writes a trade to `trades.csv` only when it is for the capture's
+  pair, and counts the others as `other_market_trades` in `meta.json`. The
+  venue keeps one book for all its markets, so a trade left out still reports
+  the fill of any order it names in the capture, at the order's price.
+- **`audit` no longer reports lost messages on cryptofeed captures that lost
+  none** (#309). On Bitfinex and Blockchain.com cryptofeed's sequence number
+  counts every message on the connection, trades and heartbeats too, and on
+  Independent Reserve cryptofeed passes on no change to an order it does not
+  hold. So the book rows skip numbers, and `audit` reported each skip as a
+  `sequence_gaps` error. The cryptofeed source now declares
+  `sequence_kind = SequenceKind.MONOTONIC` and records it in `meta.json`, so
+  `audit` checks only that the number never goes back. `meta.json` reports
+  `sequence_out_of_order` in place of `sequence_gaps` and `sequence_missing`,
+  so a long capture's manifest no longer counts the skips as dropped messages.
+  A capture whose `meta.json` records no `sequence_kind`, such as one made
+  before this change, is checked the way the source that made it declares now,
+  not the way `--source` does.
+- **A quiet book no longer gives a blank depth heatmap** (#303). The heatmap
+  leaves out each price level that does not change in the window. When no
+  level changed, as in a short capture of a quiet prediction market, that left
+  out every level and drew blank axes, with only `Not enough data for any price
+  level` in the log. Now the heatmap draws every level in that case, with a
+  note under the title that no level changed. When the heatmap really is
+  empty, the note says why: no depth data, no level between two named prices,
+  no level in the chosen volume range, or no resting orders in the time
+  window. All three backends put the note on its own line under the title and
+  write it to the log. An empty heatmap still draws the midprice and trades. A
+  spread or trades frame with no rows in the window no longer sets a NaN price
+  range that left out every level. The gallery's depth-heatmap card names
+  `plot_result(result, "depth_heatmap", show_all_depth=True)`, and the Kalshi
+  and Polymarket how-tos describe the case. The matplotlib heatmap also no
+  longer goes blank when one level has a single row in the window.
+
+- **The gallery prepares each card's data once** (#303). The backend columns
+  of a card now share one prepared payload, so the prepare step runs, and logs,
+  once per card instead of once per backend.
+
+- **The clock checks compare two real clocks, and run on L2** (#310). Where a
+  venue sent no time, the cryptofeed and ccxt sources wrote the time they
+  handled the message into `exchange_timestamp`, which is later than the
+  receive time. On cryptofeed's Bitfinex and Blockchain.com books, and on the
+  Independent Reserve opening book, `audit` then failed the capture on
+  `exchange_time_after_receive`. Such rows now copy the receive time, as
+  LOBSTER's one clock fills both columns. The new `Clocks` declaration
+  (`BOTH`, `RECEIVE_ONLY` or `VENUE_ONLY`) says which clocks a source's rows
+  carry. LOBSTER declares `VENUE_ONLY`. A live capture records `clocks` and
+  `books_without_venue_time` in `meta.json`; read it with `recorded_clocks`.
+  With one clock, `audit` does not run the two clock checks and says why. The
+  L2 depth frame now keeps `exchange_timestamp` when `depth.csv` has it, so the
+  clock checks run on L2 captures, which before were never checked.
+  The clock checks leave out the opening book's rows (`origin` `snapshot`),
+  whose clocks the capture may not have measured; the L2 depth frame now keeps
+  `origin` for this.
+- **A cryptofeed REST opening book replays before the message that changed
+  it** (#310). On Binance and Independent Reserve, cryptofeed fetches the
+  opening book while it handles the first live message, and hands the book
+  over first with a later receipt time. On Binance (L2), replay applied the
+  message and then the book's older size. On Independent Reserve (L3), with
+  sequences tracked, the numbered message sorted before the book. The capture
+  now holds a book with no delta until the next one arrives, and places it
+  1 ms before a message received earlier. The message keeps its own receipt
+  time, and the book's rows are marked as the opening book.
+- **A Bitstamp capture no longer keeps trades from before its snapshot**
+  (#301). It already skipped order messages from before the REST snapshot, but
+  kept the trades from the same time. The orders those trades filled are not in
+  the capture, so `audit` counted the trades as unmatched: up to 52% of a
+  segment's trades with 30-second segments. The trades are now skipped and
+  counted as `pre_snapshot_trades_skipped` in `meta.json`. At a roll, the
+  previous segment already has these trades.
+- **`raw.jsonl` no longer stops a cryptofeed capture of independent_reserve
+  or blockchain.** cryptofeed reads these venues' date and time strings as
+  `datetime`, `date` and `time` values, which `raw.jsonl` could not write, so
+  every segment failed unless `--no-raw` was passed. They are now written as
+  ISO 8601 strings. Any other value or dict key that JSON cannot hold is
+  written as text (`str(value)`), and a frame JSON cannot hold at all, such as
+  one that refers to itself, is skipped. Neither stops the capture. Each
+  segment's `meta.json` names the types written as text (`raw_text_types`) and
+  counts the skipped frames (`n_raw_frames_skipped`); the manifest adds up
+  `raw_frames_skipped`, and the capture logs each kind of warning once.
+- **A custom plot keeps working after it is added to the gallery** (#302).
+  The "A new plot" guide registered a plot at `Level.L2`, then registered it
+  again at `None` to put it in the gallery. After the second step,
+  `plot("cumvol")` raised and told you to pass `Level.L3`, which was not
+  registered. The guide now registers its example once, at `None`, draws the
+  gallery on the one backend it registered, and shows how a plot drawn at a
+  level goes into the gallery as a `PlotConcept`. A test runs the guide's plot
+  section as written. See Changed for the rule that replaces the second
+  registration.
+- **A gallery card added the wrong way says how to fix it** (#312). A
+  level-less plot added to `GalleryModel.concepts`, a plot drawn at a level
+  added to `GalleryModel.analytics`, or a `PlotConcept` variant at a level no
+  renderer is registered at, showed a bare "Not available", the same as a
+  renderer that raised. The gallery now checks each card against the levels
+  its renderers are registered at. When they disagree, the card says how the
+  plot is registered and how to change the model, and the log has the same
+  text once. A backend that cannot be loaded says so on its cards, and is
+  tried once instead of once for each card. A backend with no renderer for a
+  plot that other backends draw still shows a bare "Not available".
+- **On Python 3.11, a capture stops each segment when asked** (#296). The
+  live sources waited for messages with `asyncio.wait_for`, which on Python
+  3.11 can drop a cancel that arrives with a message. A roll then left the old
+  segment streaming next to the new one to the end of the capture, with no
+  further rolls, and SIGTERM or Ctrl-C did nothing. The sources now use
+  `asyncio.timeout`, and ruff bans `asyncio.wait_for` in this repository. The
+  runner cancels a stream again while it keeps yielding items, so a plug-in
+  source with the same pattern cannot block a stop; a stream that is closing
+  its connection is left to finish. Python 3.12 and later were not affected.
+- **A segment that does not stop cannot hold up the capture** (#296). A
+  segment asked to stop has 20 seconds to close. After that it is cancelled
+  and closed from its files, like a segment a crash left open. The manifest
+  keeps why it was stopped and records the delay as its error, not as a gap.
+  If closing its files fails, the error says so and the capture carries on.
+  A segment covers the market only until it is asked to stop, and one asked
+  to stop before its first live event covers nothing, so it no longer adds a
+  second gap next to the real one.
+  At the end of a capture all running segments are stopped together, so
+  SIGTERM ends a capture in under a minute even when a source hangs.
+- **`audit` no longer fails a complete Databento file** (#298). Databento
+  numbers every message on the venue's channel, so the numbers in one
+  instrument's events skip the other instruments' messages and the trade and
+  fill records, which become trades. `audit` read every skip as a lost message
+  and failed a sound file with a `sequence_gaps` error. `DatabentoSource` now
+  declares `sequence_kind = SequenceKind.MONOTONIC`, so `audit` checks only
+  that the numbers never go back. `audit` reads a source's declared
+  `sequence_kind` when no capture `meta.json` records one; read it with the
+  new `sequence_kind_of`. `recorded_sequence_kind` returns `None` when the
+  capture records none, as `recorded_feed_type` does.
+
+- **A Bitstamp L3 capture through cryptofeed passes `audit`** (#284).
+  cryptofeed's Bitstamp L3 channel is `detail_order_book`: a picture of the top
+  100 bids and top 100 asks about 10 times a second, not every order. Four
+  defects followed from that:
+  - An order that dropped past the 100th place was recorded as deleted, and
+    as created again when it came back. It now stays tracked at its last size
+    until the book shows its price again. This removes the duplicate created
+    ids, and the clock errors the Bitstamp reader made from them.
+  - Book rows carried the venue's time in both clock columns. `timestamp` is
+    now the time the capture received the message, like the trades.
+  - Trades dropped the maker and taker order ids that Bitstamp sends. They are
+    now read from the raw message.
+  - A fill showed only as a size change between two pictures, so a fully
+    filled order read as cancelled. A trade that names a tracked order now
+    reports its fill as it arrives, and a filled order is deleted at size 0,
+    as the native Bitstamp feed reports it. A picture that shows an order gone
+    before its trade arrives holds the delete for up to 2 seconds for it.
+
+  On a 90-second capture, makers now link on 40 of 42 trades, up from 16. For
+  analysis, the native `bitstamp` source still shows more: every order,
+  takers included.
+
+- **A capture that fails now exits non-zero and says why** (#283).
+  `ob-analytics capture` used to exit 0 and write `"errors": 0` to
+  `meta.json` when the stream raised, or when the source's optional extra was
+  missing. A source is now checked before the capture starts: a missing
+  extra, or an unknown ccxt or cryptofeed venue, stops the run with status 1
+  and creates no output directory. An error in the snapshot, the stream or
+  the shutdown events keeps the rows already written, is recorded in
+  `meta.json` as `capture_error` and `capture_error_phase` and counted in
+  `errors`, and makes the command exit 1. A source can take part in the early
+  check by adding a `preflight()` method (`SupportsPreflight`).
+- **A Binance capture no longer loses price levels near the top of the book**
+  (#101). ccxt deletes the levels of a Binance book that fall past the depth
+  it is given, and Binance sends a level again only when it changes. After
+  the price moved away and back, the captured book had holes in its top 20
+  levels. The ccxt source now asks for the whole Binance book (see #275
+  below for what it does with that book) and never gives ccxt less than
+  1,000 levels a side to track, so a level rarely falls out of what ccxt
+  itself knows. ccxt's opening snapshot is now as deep as `--depth-limit`
+  (never less than 1,000 levels), so a Binance capture can record up to the
+  5,000 levels a side that Binance sends, about 1% from the price. A deeper
+  `--depth-limit` is refused.
+- **`audit` no longer fails every ccxt capture with missing sequence
+  numbers** (#101). The ccxt `nonce` only rises: a Binance diff covers a range
+  of update IDs, and ccxt can apply several diffs before it returns a book. A
+  capture now records `"sequence_kind": "monotonic"` in `meta.json`, and
+  `audit` then checks only that the number never goes back. Captures made
+  before this change record no kind and are still read as contiguous.
+- **ccxt book rows are stamped with the time they arrived** (#101). The
+  `timestamp` of a ccxt `depth.csv` row was the venue's book time, while its
+  trades used the receive time. ccxt stamps its first Binance book with its
+  own snapshot's time and then applies older diffs, so sorting on that time
+  swapped two updates and left a stale level: `audit` reported the book
+  crossed for 90% of a session. `timestamp` is now the receive time, and the
+  venue's time is kept in a new `exchange_timestamp` column.
+- **A ccxt book that loses sync is fetched again** (#101). When ccxt finds a
+  missing Binance diff it drops its book and raises an error, which used to
+  end the book for the rest of the capture while trades went on. The capture
+  now asks for the book again (up to 10 times) and counts it as
+  `book_resyncs` in `meta.json`.
+- **A venue that refuses your location gives a one-line error.** Binance
+  answers HTTP 451 from some countries. `capture ccxt` now says so and names
+  `--exchange binanceus` and `--market-data-mirror`, instead of printing a
+  traceback.
+- **A level that only left `--depth-limit`, not the book, is no longer
+  recorded as cancelled** (#275). Every ccxt capture used to crop
+  `depth.csv`/`raw.jsonl` to the top `--depth-limit` levels a side, so a
+  level that was still resting just outside that crop read as a `0` row when
+  the price moved, the same as a real cancel — 28% of the removals in a
+  five-minute Binance BTC/USDT capture. The capture now records whatever
+  ccxt reports, uncropped: Coinbase, Bitstamp and OKX ignore `--depth-limit`
+  and always hand ccxt their whole book (over 20,000 levels a side on
+  Coinbase); Binance and its family are asked for their whole book too (see
+  #101 above). Kraken is unaffected, because it subscribes at exactly
+  `--depth-limit` levels and drops a level from its own book once the price
+  moves it out of that window — a `0` row there can still be either a real
+  cancel or Kraken's own window exit, which is inherent to how Kraken
+  reports its book. `docs/howto/ccxt.md` now says what a `0` row means, per
+  venue.
+- **`compute_vpin` now warns when its default bucket size is too big for the
+  capture** (#274). The default `bucket_volume` (average daily volume ÷ 50)
+  scales a short capture up to a full day, so the bundled sample fills only
+  one bucket and the trailing `vpin_avg` never covers a full window. That was
+  already recorded in `attrs["diagnostics"]`, easy to miss on a frame that
+  otherwise looks fine — `compute_vpin` now also raises a `UserWarning` when
+  there are fewer complete buckets than `n_buckets`, naming a smaller
+  `bucket_volume` or `n_buckets` as the fix. The flow-toxicity how-to gains a
+  short-captures section with a working example on the sample.
+
+### Changed
+
+- **The price-level depth follows an order that moves or grows.**
+  `price_level_volume` used to count every one of an order's rows on the price
+  of its first row, and ignored a rise in its size. It now reads a `changed`
+  row that reports no execution and carries a new price as a move: the order's
+  volume leaves the old level and joins the new one. A `changed` row that
+  reports no execution and a larger size adds the difference where the order
+  rests. Deletes and rows that report an execution are still taken off where
+  the order rests, whatever price they carry, so the fix for Bitstamp's
+  deletes at the wrong price is kept. The price-level rebuild now agrees with
+  the per-order rebuild (`book_state`) on these orders. This matters for
+  Databento, whose modify can move an order or make it bigger. The Bitstamp and
+  LOBSTER outputs are unchanged: neither feed moves or grows an order this way.
+
+- **A trade the venue left unlabelled is now classified on the L3 path too.**
+  `Pipeline.run` labels any trade with no aggressor side against the
+  reconstructed quotes, filling one subset at a time instead of all or nothing,
+  and never overwriting a side the venue did state. This was already what the
+  price-level path did; it now also covers a per-order feed that states the
+  aggressor on most trades but not all, which is what Databento does for
+  auctions, non-displayed orders and off-exchange prints. No change for a feed
+  that labels every trade, which is every other source in the package.
+
+### Added
+
+- **A Bokeh plot backend** (#123). `result.plot(concept, backend="bokeh")`
+  renders the core concepts — `trade_tape`, `depth_heatmap`, `book_snapshot`,
+  `depth_chart` — as interactive Bokeh figures, alongside the static
+  Matplotlib default and the Plotly backend. Suited to Bokeh / Panel server
+  dashboards and streaming views. Ships in the new `bokeh` extra:
+  `pip install "ob-analytics[bokeh]"`.
+
+- **Binance venue notes and a market-data mirror** (#101). A new how-to page
+  covers capturing Binance spot through ccxt: the location block, the
+  `binanceus` alternative, the depth a 100-level book reaches, and trade
+  sides. `capture ccxt --market-data-mirror` (`CcxtSettings.market_data_mirror`)
+  reads Binance spot from Binance's market-data-only endpoints. New
+  `SequenceKind` and `recorded_sequence_kind()`, a `kind` argument on
+  `detect_sequence_gaps()`, and a `sequence_kind` argument on
+  `data_quality_summary()`.
+
+- **Find hidden liquidity** (#111). `detect_icebergs(events, trades)` finds
+  iceberg orders from their refills: a resting order filled out, then a new
+  order at the same side and price within one millisecond. It chains refills
+  into one suspected iceberg and gives each a `confidence`.
+  `hidden_trades(events, trades, depth_summary)` returns the trades that
+  printed strictly inside the visible spread. On one day of LOBSTER AAPL it
+  finds 85% of the type-5 hidden executions, with no false ones. The
+  synthetic generator now labels its iceberg slices in
+  `SynthSession.icebergs`, so the detector can be scored exactly. See the
+  [hidden liquidity
+  how-to](https://mczielinski.github.io/ob-analytics/howto/hidden-liquidity/).
+
+- **Iceberg refills and hidden trades drawn on the depth heatmap and order
+  activity map** (#272). Both L3 faces now overlay `detect_icebergs` and
+  `hidden_trades`: a diamond marks each refill, joined by a line per iceberg
+  (opacity = `confidence`); a star marks a hidden trade, with a thin line to
+  the standing best bid and best ask so the print reads as inside that
+  spread. A filled star is a confirmed hidden order; an open star is a trade
+  to check, where the maker order was actually visible or its maker
+  identity did not resolve at all — the diff-feed case the how-to guide
+  describes. Both overlays clip to the gallery's zoom window, and are absent
+  without error when a run has neither. New `prepare.hidden_liquidity_overlay`
+  builds the same overlay for a custom plot. `hidden_trades` now returns
+  `best_bid_price`/`best_ask_price` in `depth_summary`'s own dtype instead of
+  always casting to `int64`, so a caller already holding display-unit floats
+  gets floats back rather than a silently truncated value.
+
+- **A feature table for models** (#149). `features(trades, quotes)` returns one
+  tidy table: a point in time on each row and a microstructure feature in each
+  column — the shape a model or a study wants. It replaces a join per
+  measurement.
+
+  Two decisions make the table, and they are separate. Where the rows fall is
+  a bar rule, so `features()` takes the same sampling arguments `bars()` does
+  and the same arguments give the same cut in both; a time grid is the `time`
+  rule. What each column measures is a `Feature`, and ten ship: `price`,
+  `returns`, `flow`, `spread`, `mid_price`, `micro_price`, `imbalance`,
+  `depth`, `vpin` and `kyle_lambda`, writing 20 columns between them.
+  `register_feature` adds one of your own, usable by name with no edit to the
+  package.
+
+  Every row is stated as of the close of its bar. The trade columns hold what
+  happened inside the bar, and the book columns hold the book as it stood at
+  the close, a backward as-of join. Nothing from after that instant reaches
+  the row, so the table carries no look-ahead — which is tested by truncating
+  the inputs and checking that the rows that survive are unchanged, for every
+  rule and every feature. The table holds no target either: a target looks
+  forward, and building one is a shift the caller makes deliberately.
+
+  Two quote states are not books anything could have traded against, and both
+  would otherwise arrive as ordinary numbers: a side with nothing resting on
+  it, which the depth engine marks with a price of `0`, and a crossed book,
+  which a diff feed can genuinely hold. `readable_quotes()` drops them from
+  the reference series, so a row reaches back to the last quote it could read
+  — the same test `transaction_costs` already applied before measuring against
+  a mid. A locked book, bid equal to ask, is a real state at a spread of zero
+  and is kept.
+
+  Without a quotes frame the five book features are skipped and the table
+  holds the trade features alone; naming one explicitly raises instead. Two
+  features that would write the same column are an error rather than a silent
+  overwrite, and so is a name listed twice in `include`; a trailing window a
+  feature cannot use is refused when the feature is built. See the ["Build a feature table"
+  how-to](https://mczielinski.github.io/ob-analytics/howto/feature-table/),
+  which ends in a baseline model.
+
+- **Databento market-by-order files** (#100). `DatabentoSource` reads
+  Databento's DBN files in the MBO schema, which is a per-order feed: every
+  record carries an order id, so a file replays through the full L3 path with
+  order lifetimes, queue position and order classification. It reaches many
+  venues that no other source in the package does, US equities and futures
+  among them.
+
+  Databento reports an execution as a fill record that does not change the
+  book, followed by the cancel or modify that takes the size off it. The loader
+  pairs the two, so `fill` tells an execution apart from a cancel the trader
+  asked for, and each trade names the resting order it hit. The aggressor's
+  side comes from the venue rather than a classifier. A book clear deletes the
+  orders still resting, and the record's two clocks are kept apart: Databento's
+  receive time orders the events, the venue's own becomes
+  `exchange_timestamp`.
+
+  A modify that moves an order to another price or makes it bigger is recorded
+  as a `changed` event with the new price and size, and the depth follows it
+  (see Changed). The loss of queue priority is not modelled. The one modify the
+  depth still cannot follow is one that carries a fill and also moves the order
+  or changes its size by more than the fill; the loader says how many rows the
+  depth will be off by.
+
+  A feed the loader does not understand is refused: a publisher that only sends
+  top-of-book or price-level data, because its order ids mean nothing; a
+  price-level schema; a file covering more than one book; an action outside
+  DBN's own alphabet; an order id too big for the schema's signed 64-bit id. A
+  malformed record inside a feed it does understand — no price, or no side on a
+  book action — is dropped and counted in a warning, because refusing a whole
+  session over a handful of them would be worse.
+
+  Trades are built from the fill records by default, so each names the resting
+  order it hit. A trade the publisher sent no fill for — an auction, a trade
+  against a non-displayed order, an off-exchange print — is then left out, and
+  the loader warns with the volume. `DatabentoSettings(trades_from="prints")`
+  builds the trades from the whole tape instead, without makers; use it for
+  VWAP, bars, flow toxicity and costs. `DatabentoWriter`
+  writes an events frame back out as DBN. `scripts/databento_window.py` sizes a
+  query against the in-memory envelope before downloading it, then runs one
+  window at a time. `databento` is an optional extra
+  (`pip install "ob-analytics[databento]"`). See the ["Process Databento MBO
+  files"
+  how-to](https://mczielinski.github.io/ob-analytics/howto/databento/).
+
+- **Flow-toxicity results say when they rest on too little data** (#119). VPIN
+  and Kyle's λ were designed for markets that trade thousands of times a
+  minute, and on a thin tape they used to return a number with no sign that it
+  meant little. `KyleLambdaResult` now has `significant` and `diagnostics`:
+  λ is flagged when there are fewer than 30 regression windows
+  (`KYLE_MIN_WINDOWS`), when `|t|` is below 2 (`KYLE_MIN_T_STAT`), or when the
+  fit is undefined. It also carries a confidence interval, `ci_low` /
+  `ci_high`, from a block bootstrap over the windows (1000 resamples by
+  default, under a millisecond on the bundled sample, seeded with `seed=0` so
+  the same trades give the same interval; `n_boot=0` skips it).
+
+  `compute_vpin` records how it ran in the frame's `attrs`: `bucket_volume`,
+  `bucket_volume_rule`, `n_buckets`, and `diagnostics`, which flags a result
+  with fewer complete buckets than `n_buckets`. `bucket_volume` is now
+  optional. Left out, it is picked by the new `vpin_bucket_volume(trades)`,
+  which applies the common rule of average daily volume ÷ 50; a session
+  shorter than a day is scaled up to a day at the rate it traded
+  (`trading_day="24h"` by default). Existing calls are unchanged.
+
+  On the bundled sample, λ at 5-minute windows is flagged on both counts (7
+  windows, t = 1.45) and its interval spans zero; VPIN with the default bucket
+  fills one bucket and says so. Tutorial chapter 6 and the flow-toxicity
+  how-to now show these checks in place of the hand-written caveats.
+
+- **Bars: the trade stream resampled into OHLCV rows** (#148). `bars(trades,
+  rule, threshold)` cuts a trades frame into bars and returns one row each with
+  open, high, low, close, volume, turnover, VWAP, and the buy/sell split of
+  that volume. Five rules ship with it: `time` (a fixed span of the clock),
+  `tick` (a fixed number of trades), `volume` and `dollar` (a fixed amount of
+  size, or of price × size), and `imbalance` (signed size drifting a set amount
+  from where the bar opened). Leave the threshold out and the rule picks one
+  aiming at about 50 bars.
+
+  What differs between bar types is only where the boundaries fall, so that is
+  all a rule decides: `BarRule` states a `name`, how it reads its `threshold`,
+  and which bar each trade belongs to. `register_bar_rule` adds one of your
+  own, usable by name with no edit to the package. Feeds that don't label the
+  aggressor are classified the same way the flow-toxicity metrics do.
+
+  Bars draw as a `"bars"` plot face on both backends — candles over a strip of
+  volume coloured by the net aggressor — and `bars_panel()` puts them in a
+  gallery. The demos show a clock cut and a volume cut side by side. See the
+  ["Build bars from trades"
+  how-to](https://mczielinski.github.io/ob-analytics/howto/bars/).
+
+- **Transaction cost and price impact** (#110). A new `cost` module answers
+  what trading cost, rather than what the book advertised.
+  `transaction_costs(trades, quotes)` returns one row per trade with the
+  effective spread — what the taker paid to cross — split into the realized
+  spread the liquidity provider kept and the price impact the trade caused,
+  in price units and in basis points. The three add up exactly, trade by
+  trade. `cost_summary()` reduces that to volume-weighted session figures and
+  reports how many trades each one could be measured on.
+
+  `amihud()` and `roll_spread()` read liquidity from the trade prices alone,
+  so they run on a tape with no quotes and no aggressor side: the price move a
+  unit of turnover buys, and the spread implied by bid-ask bounce. Roll also
+  returns the lag-1 `autocorrelation` of the price changes, which its model
+  puts at exactly `-0.5`; how far the number sits from that is how little of
+  the price movement the bounce explains. On the bundled capture it is
+  `+0.197` and the estimate has no real root, so it is `NaN` rather than a
+  number the model does not support. The diagnostic matters in the other
+  direction too: when the autocovariance lands negative by chance Roll returns
+  a spread that is not there, and the autocorrelation is what catches it.
+
+  The mid a trade is measured against is the last quote *strictly before* it,
+  skipping crossed quotes: on a frame built from the same event stream, the
+  quote sharing a trade's instant is the book after that trade took the touch,
+  and a crossed book has no midpoint at all. A trade in the last horizon of
+  the capture has no future mid, so its realized spread is `NaN` rather than
+  the final quote reused.
+
+  `transaction_costs` takes `mid_column` to measure against a reference other
+  than the plain mid — `"micro_price"` for the size-weighted mid, which on the
+  bundled capture reads 1.24 bps against the plain mid's 1.45.
+
+  The decomposition draws as a level-less `transaction_costs` face on both
+  backends — two lines with the impact as the band between them — and
+  `transaction_costs_panel()` puts it in a gallery. Both demos now include it.
+  See the ["Measure transaction costs"
+  how-to](https://mczielinski.github.io/ob-analytics/howto/transaction-costs/).
+
+- **Polymarket prediction markets, through the ccxt source** (#103).
+  `ob-analytics capture ccxt --exchange polymarket --pair <token id>` streams
+  one outcome's order book and trades over Polymarket's public websocket, with
+  no account or API key. `--pair` is Polymarket's token id for the outcome,
+  which the Gamma API lists as `clobTokenIds`. Each outcome is its own book,
+  and its trades are priced in that outcome.
+
+  Polymarket makes a market's tick finer as the price nears 0 or 1, so a ccxt
+  capture now makes its recorded tick size finer when a price arrives between
+  two ticks, and counts each change in `tick_size_changes` in `meta.json`. The
+  replay then reads every price exactly. See the ["Capture Polymarket
+  prediction markets"
+  how-to](https://mczielinski.github.io/ob-analytics/howto/polymarket/).
+
+- **Kalshi prediction markets, through the ccxt source** (#102).
+  `ob-analytics capture ccxt --exchange kalshi --pair <market ticker>` records
+  a Kalshi market's order book and trades from Kalshi's public API, with no
+  account or API key, and `ob-analytics process` replays it through the L2
+  path. The ccxt source now looks up CCXT's prediction markets
+  (`ccxt.prediction`: Kalshi, Polymarket and others) as well as its crypto
+  exchanges; before, `--exchange kalshi` failed with "Unknown CCXT exchange".
+  `binance` and `hyperliquid` are in both lists, so the plain id keeps meaning
+  the crypto exchange and `prediction/<id>` picks the prediction market.
+
+  The captured book is the market's Yes book: a bid to buy No at `p` is
+  recorded as an offer to sell Yes at `1 - p`, and a trade is priced in Yes
+  and signed from the Yes side. A ccxt capture also records its market's tick
+  size in `meta.json`, which `process` and `audit` use. See the ["Capture
+  Kalshi prediction markets"
+  how-to](https://mczielinski.github.io/ob-analytics/howto/kalshi/).
+
+- **A capture records which rows came from its opening snapshot** (#237).
+  `orders.csv` and `depth.csv` gain an `origin` column: `snapshot` for the
+  opening book, `stream` for a live message, `shutdown` for a synthetic
+  close-out. The capture runner fills it in, so every live source gets it
+  without a change, and the loaders carry it through to `events`. Before this,
+  the only way to tell a snapshot row from a live one was to compare its
+  `exchange_timestamp` with `snapshot_microtimestamp` in `meta.json`.
+
+  `meta.json` also reports `n_snapshot_unconfirmed`: how many orders in the
+  opening book no later order event or trade mentioned. The bundled Bitstamp
+  sample has 6,294 of 6,512. Almost all of them sit far from the touch and did
+  not trade, but two stale asks among them held the best ask for most of the
+  session. See ["Capture live
+  data"](https://mczielinski.github.io/ob-analytics/howto/live-capture/).
+
+- **`audit` names stale resting orders** (#234). A trade above a resting ask,
+  or below a resting bid, shows that the order has gone. An order the venue
+  then does not report again within one second is now reported as a
+  `stale_orders` warning, and the worst one is named with its id, side, price
+  and how long it held the touch. On the bundled Bitstamp sample this names
+  ask `2002347646152704`, which held the ask touch for 27 minutes and causes
+  almost all of the 91.6% crossed time. The crossing note no longer calls a
+  diff feed's crossing normal when the run has stale orders. Nothing is
+  removed: `order_book()` still replays what the feed said. New public names:
+  `detect_stale_orders`, `StaleOrder`, `DataQualitySummary.stale_orders`, and a
+  `tick_size=` argument on `data_quality_summary`.
+
+- **A metric registry, so a user metric runs and plots with no core edit**
+  (#140). A metric is a plain object with a `name`, a `title`, the `levels` it
+  applies to, `compute(result)` and `prepare(frame)` — no base class to
+  inherit, the same structural typing sources and writers use. Register it with
+  `register_metric(metric)`, or ship it in your own package under the
+  `ob_analytics.metrics` entry-point group and `load_metric_plugins()` finds it
+  at `import ob_analytics`.
+
+  A registered metric is a level-less plot concept under its own name, so a
+  renderer at `(name, None, backend)` is its face. It then appears in
+  `available_concepts(result)`, renders through `result.plot(name)`, and gets
+  its own gallery card with no `extra_panels=`. Metrics run when asked for, not
+  during `Pipeline.run`: `result.metric(name)` computes one and
+  `result.metrics()` computes every metric whose `levels` include the run's
+  resolution — so an L3-only metric is skipped on an L2 run instead of failing
+  on its empty `events` table, and a metric that raises is logged and its card
+  dropped, so one broken metric cannot stop the gallery being built. New public
+  names: `Metric`,
+  `register_metric`, `list_metrics`, `get_metric`, `load_metric_plugins`,
+  `PipelineResult.metric` / `.metrics`. See the ["A new metric"
+  how-to](https://mczielinski.github.io/ob-analytics/extending/#4-a-new-metric).
+
+- **`ob-analytics audit`, a data-quality gate** (#108). The old `validate` verb
+  is now `audit` (the old name still works), it scores the run against named
+  checks, and it **exits non-zero when one fails** — so a script can stop before
+  trusting a feed. Five checks are new: orphan orders (changed or deleted with
+  no `created` row), non-positive prices, negative volumes or fills, and the two
+  clock-order defects — a venue timestamp later than the receive timestamp, and
+  messages that arrived out of venue order. `audit` also loads with
+  `track_sequence` on, so the dropped-message check (#146) reads a venue
+  sequence whenever the feed carries one.
+
+  Each check carries a `Severity`: an **error** fails the run, a **warning**
+  fails it only under `--strict`, and **info** never does. A crossed resting
+  book is scored by feed type, not by size — an error on a matched book, a
+  faithful replay on a diff feed. `--json` emits every check plus an `ok`
+  verdict; `--from-parquet` audits a saved `process` output without re-running
+  the pipeline. New public names: `Severity`, `QualityCheck`, and
+  `DataQualitySummary.ok` / `.errors` / `.warnings` / `.checks`. See the
+  ["Check data quality with `audit`" how-to](https://mczielinski.github.io/ob-analytics/howto/audit/).
+
+- **`PipelineResult.to_arrow()` and `PipelineResult.to_polars()`** (#104). Both
+  return the run's four tables — `events`, `trades`, `depth`, `depth_summary` —
+  keyed by name, with the same keys on every run: on an L2 run `events` is an
+  empty table, not a missing key. The Arrow tables carry the schema version and
+  tick size in their metadata, the same key-value metadata the Parquet files
+  carry, so a reader handed tables in memory is no worse off than one reading
+  files. Polars is not a dependency and is not installed; `to_polars()` raises
+  `ImportError` with an install hint when it is missing, and Polars keeps no
+  schema metadata, so the version and tick size do not survive that conversion.
+- **The frame-type contract is written down** in
+  [Frame types: pandas in, pandas out](https://mczielinski.github.io/ob-analytics/schema/#frame-types-pandas-in-pandas-out):
+  public functions take and return pandas, plug-ins are handed pandas, and the
+  versioned Parquet is how other tools read the output. The reasoning is in
+  `adr/0002-dataframe-library.md`.
 - **cryptofeed source for live L2 *and* L3 capture** (`ob-analytics capture
   cryptofeed --exchange <venue> --pair <symbol>`). The per-order complement to
   the CCXT source: venues publishing an order-by-order book record `orders.csv`
@@ -70,7 +822,153 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   "Data quality: matched book vs diff feed" explanation page and a `validate`
   how-to document the distinction.
 
+### Fixed
+
+- **The VPIN chart draws an empty panel when no bucket is complete.** A
+  capture with less volume than one bucket gives `compute_vpin` zero rows, and
+  `plot("vpin", ...)` then raised: a `TypeError` with matplotlib, a `KeyError`
+  with both backends when the frame had no columns. Both backends now draw the
+  axes with "(no complete buckets)" in the title. `compute_vpin` now returns
+  its usual columns and dtypes when it has no rows, where before it returned a
+  frame with no columns (or, with `sign_method="bvc"`, columns of object
+  dtype).
+- **A price-level file no longer has its prices rounded to the tick size.**
+  `L2DepthLoader` and `L2TradeReader` converted each price to the nearest
+  whole number of ticks, so a price finer than `tick_size` moved without a
+  warning: a Kalshi price of 0.036 loaded as 0.04 at the default 0.01 tick,
+  and the most traded Kalshi markets quote in tenths of a cent. Both now raise
+  `ConfigError` when a price is not a whole number of ticks, and say which
+  tick size to set. A ccxt capture records its market's tick size in
+  `meta.json`, and `ob-analytics process` and `ob-analytics audit` read it
+  from there (`recorded_tick_size`), so a CLI replay needs no extra option.
+
+- **A streamed ccxt capture no longer writes a trade twice.** ccxt's
+  Polymarket websocket handed back a trade it had already delivered, together
+  with the next new one, and only a polled capture skipped repeats. Every ccxt
+  capture now skips a trade identical to one it has written: same id, time,
+  price, size and side. Two fills that share a Polymarket id (the settling
+  transaction) are both kept. `meta.json` counts the skipped repeats in
+  `duplicate_trades`.
+
+- **A polled ccxt capture no longer records trades from before it started.**
+  On a venue without websockets, the first poll of the trade tape returns the
+  venue's recent history, which on Kalshi reached back nine hours. Those trades
+  were written with the capture's receive time, as if they had just happened.
+  The capture now drops trades older than its opening book.
+
+- **A Bitstamp capture no longer starts from a snapshot older than its stream**
+  (#237). The capturer subscribes to the WebSocket, then fetches the REST book.
+  It assumed the stream already covered the moment the book describes, but it
+  often does not: in a live test the first order message came 0.7 s after the
+  snapshot's `microtimestamp`, and the bundled sample shows the same 0.74 s gap.
+  An order deleted in that gap stayed in the capture until the synthetic
+  `deleted` at shutdown. In the bundled sample, one such ask was the best ask for
+  89% of the session.
+
+  The capturer now fetches the book again, a second apart and up to 10 times,
+  until some buffered order message is at or before the snapshot's
+  `microtimestamp`. `meta.json` gains `snapshot_fetches` and
+  `snapshot_overlap`. In the live test, the second fetch no longer listed any
+  of the 15 orders that were gone. Eight of those were orders that trades
+  printed through.
+
+- **A price level now empties when the order resting on it goes away.**
+  `price_level_volume` added an order's volume at the price on its `created`
+  row and subtracted it at the price on whichever later row removed it. Those
+  two prices are not always the same: Bitstamp reports a `deleted` carrying a
+  price the order never rested at for 1.3% of orders, and the subtraction then
+  landed on a level the volume was never added to, leaving the created level
+  holding it for the rest of the session. Every later row now subtracts at the
+  order's created price, so `+v` and `-v` always cancel on one level.
+
+  On the bundled Bitstamp sample this removed 104 price levels holding 29.95
+  BTC that no order was resting on. They were the reported touch on both sides
+  — best bid $78,495.00 against a real best bid of $78,350.00, and best ask
+  $78,324.00 against a real best ask of $78,333.00 — so `best_bid_price` moves
+  on 35.7% of `depth_summary` rows and `best_ask_vol` on 68.9%. The per-order
+  rebuild (`engine.book_state`) tracks orders by id and never had this problem;
+  the two rebuilds now agree on how long that book is crossed.
+
+- **`aggressiveness_bps` is NaN, not an infinity, against a zero touch.** The
+  depth engine reports a zero price for an empty side, and the Bitstamp sample
+  also carries orders priced at zero (`audit` reports these as
+  `nonpositive_price`). Dividing by that produced a signed infinity that
+  travelled through every downstream mean. A distance from a price that is not
+  tradeable has no value, so it is now NaN.
+
 ### Changed
+
+- `depth.bin_volume_columns()` is public. It returns the per-bps depth-bin
+  volume columns a depth summary carries, ordered from the touch outward, and
+  it was already the answer `book_imbalance` and `depth_signals` needed. The
+  feature table needs the same answer, and so does anyone writing a depth
+  feature of their own, so it is no longer private. Behaviour is unchanged.
+
+- `trade_sign.resolve_direction()` now makes the guarantee its docstring
+  already claimed: the `direction` column it returns holds only `"buy"` and
+  `"sell"`. A native column was previously passed back untouched however it
+  was filled, and every consumer reads it as `== "buy"` and takes the rest as
+  a sell — so a partly-labelled feed did not lose its unlabelled trades, it
+  counted them on the wrong side. `compute_vpin`, `order_flow_imbalance`,
+  `bars` and the cost metrics were all affected. Rows that are neither side
+  are now inferred the same way a wholly unlabelled feed is, with a warning
+  saying how many. A feed that labels every trade is passed through unchanged.
+  `compute_kyle_lambda` reaches the same guarantee: it still *requires* a
+  `direction` column rather than inferring one, but a column being present no
+  longer means every row in it is trusted.
+
+- `trade_sign.prevailing_mid()` is now public, and takes `allow_exact`,
+  `skip_crossed`, `mid_column` and `require_covered` — the last quote strictly
+  before an instant, crossed books skipped, a named reference column such as
+  `micro_price`, and `NaN` rather than the final quote reused once the quotes
+  stop reaching. All four default to the previous behaviour, so
+  `classify_trade_sign` is unchanged. An empty quote frame now returns all
+  `NaN` instead of raising a pandas `MergeError`.
+
+- **Sizes are integer lots plus a `lot_size`, not floats** (issue #226).
+  **Breaking: the on-disk schema goes 3.0 → 4.0.** Every `volume` and `fill`
+  column is now a whole number of lots (`int64`) instead of a `double` in the
+  base asset. The base-asset size is `lots * lot_size`, where `lot_size` is the
+  instrument's minimum size increment (`PipelineConfig.lot_size`, default
+  `1e-8`; LOBSTER sets `1`, whole shares). This is the size half of the
+  integer-tick decision (issue #155) and it fixes a real defect rather than
+  only re-expressing the data.
+
+  A price level is a running sum of adds, cancels and fills. A float sum does
+  not return to exactly zero when the last order leaves, so a level landed on
+  residue such as `5.55e-17`, stayed live, and was reported as the best bid or
+  ask ahead of the real one. On the bundled Bitstamp sample that corrupted the
+  reported best bid on 25,611 of 313,565 rows (8.2%) and the best ask on 30,096
+  (9.6%) — the spread on about one row in eleven. Integer lots cancel exactly,
+  so a level empties or it does not, and those counts are now zero.
+
+  It was found by the new cross-check against hftbacktest (issue #224), and
+  that is what confirms the fix: replaying an exported session through
+  hftbacktest's own L3 reconstruction now agrees with `depth_summary` on the
+  best bid and ask for every row across five synthetic seeds, and Nautilus'
+  book agrees too. Before the fix the two disagreed on up to 78 rows a seed.
+
+  The change reaches every size-valued column — `depth_summary`'s per-bin
+  volumes, `placed_vol` and `filled_vol`, the book snapshot's `liquidity`, and
+  the queue's `ahead_volume` and `remaining` — so their sums are exact as well.
+  Three float-era workarounds went with it: the Kahan compensation behind
+  `filled_vol`, the simulator's `_vol_eps` exhaustion tolerance, and the
+  LOBSTER book replay's `1e-12` level cutoff. Loaders convert on the way in;
+  the plots and the round-trip and export writers convert back, so what a user
+  sees and what another tool reads are unchanged. `lot_size` travels in each
+  Parquet file's key-value metadata under `ob_analytics_lot_size`, next to
+  `ob_analytics_tick_size`, and `load_data` surfaces it as
+  `df.attrs["lot_size"]`. Files written at `1.0`–`3.0` still read, as the
+  float-size frames they are. Golden outputs were re-baselined on purpose.
+
+- **The export writers leave out orders that never rested** (issue #224). A
+  marketable order is recorded as a transient add on its own side at the touch,
+  then the fill, then a delete; `ob_analytics.depth` has always excluded these
+  from the book, but the hftbacktest and Nautilus writers were sending them.
+  A backtesting engine reads an add as real liquidity, so its book crossed at
+  the touch and dropped the resting level the order traded against — its
+  reconstruction drifted permanently thinner than ours. Both writers now
+  exclude them, which is what makes the two books agree.
 
 - **The order-book engine is its own module** (issue #136). The rebuild
   (`order_book`), the per-order lifecycles, and the FIFO queue reconstruction
@@ -189,6 +1087,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   re-save it to move it onto the UTC clock). Consumers that compared pipeline
   timestamps against tz-naive `pandas.Timestamp`s must now use tz-aware (UTC)
   ones.
+
+### Fixed
+
+- **Order lifecycles read every filled order as cancelled when sizes were
+  floats** (#226 regression). `order_lifecycles` summed each order's fills and
+  cast the total to `int64`. On integer lots that is exact, but the function
+  also accepts base-asset floats, and it is handed them on every gallery run:
+  `display_result` converts a whole result to display units before any face
+  builds. Base-asset sizes are mostly below 1, so a 0.121 BTC fill truncated to
+  `0`, the order read as never executed, and the three lifecycle-derived L3
+  faces — **Order Activity**, **Order Outcome** and **Queue Position** — drew a
+  book of nothing but cancellations. On the bundled Bitstamp sample the Order
+  Activity face lost 224 of its 226 filled spans. The sum now keeps the units it
+  was given, integer lots summing exactly and base-asset floats with the
+  compensation that was dropped as part of #226.
+
+  LOBSTER was never affected: its lot size is 1, so a truncated size equals the
+  size. Every LOBSTER face is pixel-identical across the change.
+
+- **LOBSTER's `fill` column was `float64`, not integer lots** (#226). A `0.0`
+  literal in the expression that built it widened the whole column, so a
+  schema-4.0 LOBSTER run wrote base-asset-looking floats that were really lot
+  counts. Nothing raised; the values only differ from the correct ones once the
+  lot size is not 1.
 
 ---
 

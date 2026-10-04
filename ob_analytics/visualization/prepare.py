@@ -18,12 +18,14 @@ arguments to a single face.
 from __future__ import annotations
 
 from ob_analytics.visualization._data import (
+    prepare_bars_data as bars,
     prepare_book_signals_data as book_signals,
     prepare_book_snapshot_data as book_snapshot,
     prepare_cancellations_l3_data as cancellations_l3,
     prepare_event_map_data as event_map,
     prepare_events_histogram_data as events_histogram,
     prepare_hidden_executions_data as hidden_executions,
+    prepare_hidden_liquidity_overlay as hidden_liquidity_overlay,
     prepare_kyle_lambda_data as kyle_lambda,
     prepare_liquidity_at_touch_data as liquidity_at_touch,
     prepare_liquidity_at_touch_l3_data as liquidity_at_touch_l3,
@@ -39,18 +41,21 @@ from ob_analytics.visualization._data import (
     prepare_trade_tape_l3_data as trade_tape_l3,
     prepare_trades_data as trades,
     prepare_trading_halts_data as trading_halts,
+    prepare_transaction_costs_data as transaction_costs,
     prepare_volume_map_data as volume_map,
     prepare_volume_percentiles_data as volume_percentiles,
     prepare_vpin_data as vpin,
 )
 
 __all__ = [
+    "bars",
     "book_signals",
     "book_snapshot",
     "cancellations_l3",
     "event_map",
     "events_histogram",
     "hidden_executions",
+    "hidden_liquidity_overlay",
     "kyle_lambda",
     "liquidity_at_touch",
     "liquidity_at_touch_l3",
@@ -66,6 +71,7 @@ __all__ = [
     "trade_tape_l3",
     "trades",
     "trading_halts",
+    "transaction_costs",
     "volume_map",
     "volume_percentiles",
     "vpin",

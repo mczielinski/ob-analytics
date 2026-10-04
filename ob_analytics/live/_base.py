@@ -16,7 +16,7 @@ from typing import Any, Protocol, runtime_checkable
 
 import pandas as pd
 
-from ob_analytics.protocols import Source
+from ob_analytics.protocols import Clocks, Source
 
 # ---------------------------------------------------------------------------
 # Data shapes
@@ -38,6 +38,15 @@ class CaptureConfig:
     out_dir: Path
     minutes: float = 10.0
     keep_raw: bool = True  # write raw.jsonl alongside parsed CSVs
+    #: Start a new segment after the current one has been current for this
+    #: many minutes (``None``: never on time).
+    #: Used by :func:`~ob_analytics.live.run_capture` only.
+    roll_minutes: float | None = None
+    #: Start a new segment once the current one has written this many
+    #: megabytes since its first live event, so the opening snapshot does not
+    #: count (``None``: never on size).  Both limits must be above 0.  Used by
+    #: :func:`~ob_analytics.live.run_capture` only.
+    roll_mb: float | None = None
 
 
 @dataclass(frozen=True)
@@ -52,6 +61,23 @@ class CaptureResult:
     ended: pd.Timestamp
     extras: dict[str, Any] = field(default_factory=dict)
     n_depth_events: int = 0
+    #: L3 only: orders in the opening book that no later order event or trade
+    #: mentioned. Most are far from the touch and simply never traded; one at
+    #: the touch is an order the venue's snapshot listed after it had gone.
+    #: ``None`` on an L2 run, where a price level has no id to confirm.
+    n_snapshot_unconfirmed: int | None = None
+    #: ``repr`` of the first exception raised once output existed, or ``None``
+    #: for a run that ended normally or was stopped by a signal. The rows
+    #: written before the error stay on disk, so a failed run is still readable.
+    capture_error: str | None = None
+    #: Where :attr:`capture_error` was raised: ``"snapshot"``, ``"stream"`` or
+    #: ``"shutdown"``; ``None`` when there was no error.
+    capture_error_phase: str | None = None
+    #: When the first live event arrived, and when the stream stopped: the
+    #: stretch of time the run covers.  ``stream_started`` is ``None`` when the
+    #: stream delivered nothing.
+    stream_started: pd.Timestamp | None = None
+    stream_ended: pd.Timestamp | None = None
 
 
 # Single canonical event dict shape, mirroring BitstampLoader's CSV columns.
@@ -65,6 +91,39 @@ EventDict = dict[str, Any]
 # Required keys for a trade event:   trade_id, timestamp, exchange_timestamp,
 #                                    price, amount, buy_order_id,
 #                                    sell_order_id, side
+
+
+@dataclass
+class VenueClockCount:
+    """How many of a capture's books carried the venue's own time.
+
+    A venue that sends no time with its book gives a capture one clock, the
+    receive time, and ``exchange_timestamp`` copies it.  Some venues send a
+    time on every message but none on the opening book (cryptofeed's
+    Independent Reserve and Coinbase); those books count as without, and the
+    capture still has two clocks.  :attr:`clocks` says which the capture had.
+    """
+
+    with_venue_time: int = 0
+    without_venue_time: int = 0
+
+    def note(self, venue_time: Any) -> None:
+        """Count one book, given the venue time it carried (``None`` for none)."""
+        if venue_time is None:
+            self.without_venue_time += 1
+        else:
+            self.with_venue_time += 1
+
+    @property
+    def clocks(self) -> Clocks:
+        """:attr:`Clocks.RECEIVE_ONLY` when books came and none had a venue time.
+
+        Before any book, and when any book had one, the capture has both
+        clocks.
+        """
+        if self.without_venue_time and not self.with_venue_time:
+            return Clocks.RECEIVE_ONLY
+        return Clocks.BOTH
 
 
 # ---------------------------------------------------------------------------
@@ -113,8 +172,13 @@ class LiveSource(Source, Protocol):
     depth updates to ``depth.csv``.
 
     Implementors only worry about parsing. Persistence, raw-frame archival,
-    rate-limiting reconnects, and signal handling all live in
-    ``ob_analytics.live._runner``.
+    and signal handling live in ``ob_analytics.live._runner``.
+
+    A source does not reconnect on its own.  When it loses its connection it
+    raises from :meth:`stream`: a book carried across a disconnect misses
+    every change made while it was down.  :func:`~ob_analytics.live.run_capture`
+    then closes the segment, waits, and starts a new one from a fresh snapshot,
+    recording the time between them as a gap in ``manifest.json``.
 
     A live source MAY additionally implement :class:`SupportsDiagnostics` to
     surface per-run counters in ``meta.json``; that hook is a separate,
@@ -172,4 +236,23 @@ class SupportsDiagnostics(Protocol):
 
     def diagnostics(self) -> dict[str, Any]:
         """Return a JSON-serialisable mapping of per-run counters."""
+        ...
+
+
+@runtime_checkable
+class SupportsPreflight(Protocol):
+    """Optional source capability: check the source can run before it starts.
+
+    A source whose venue library is an optional extra imports it lazily, so a
+    missing extra would otherwise surface only once the stream starts, after
+    the output files exist. The runner calls :meth:`preflight` before it
+    creates any output, so such a run stops with the install hint instead.
+    """
+
+    def preflight(self) -> None:
+        """Raise :class:`ImportError` (with the install hint) if the source cannot run.
+
+        May also raise :class:`ValueError` for settings that cannot work (no
+        venue chosen, an unknown venue id).
+        """
         ...

@@ -21,8 +21,9 @@
 #   `queue_position`, …);
 # - **level** — at what *resolution*, `L2` (aggregated) or `L3`
 #   (per-order), the distinction from [chapter 2](02_three_resolutions.md);
-# - **backend** — with which *renderer*, Matplotlib (static, default) or
-#   Plotly (interactive).
+# - **backend** — with which *renderer*: Matplotlib (static, default),
+#   Plotly (interactive), or Bokeh (interactive, suited to Bokeh / Panel
+#   server dashboards and streaming views).
 #
 # Name a concept and a level; the system finds the data preparation and
 # the renderer for you.
@@ -136,8 +137,7 @@ with warnings.catch_warnings():
     fig.tight_layout()
 
 # %% [markdown]
-# Six of the fourteen concepts, one capture, one loop. The full set,
-# organised:
+# Six of the concepts, one capture, one loop. The full set, organised:
 #
 # | Question | Concepts | Introduced |
 # |---|---|---|
@@ -145,12 +145,20 @@ with warnings.catch_warnings():
 # | What traded? | `trade_tape`, `trade_size`, `events_histogram` | [1](01_from_price_to_book.md) |
 # | How much liquidity, and where? | `volume_percentiles`, `liquidity_at_touch`, `price_view` | [5](05_depth.md) |
 # | Who placed, waited, cancelled, filled? | `order_activity`, `order_outcome`, `queue_position`, `cancellations` | [2](02_three_resolutions.md), [4](04_lifecycles.md) |
+# | What do measurements of the run show? | `l1_ticker`, `vpin`, `kyle_lambda`, `order_flow_imbalance`, `ofi_horizon` | [1](01_from_price_to_book.md), [6](06_flow_toxicity.md) |
 #
-# A fifth family — the **flow-toxicity** faces `vpin`, `kyle_lambda`,
-# `order_flow_imbalance`, `ofi_horizon` from [chapter 6](06_flow_toxicity.md)
-# — sits slightly apart: they plot a *computed metric*, not the result
-# directly, so they do not appear in `available_concepts` and are drawn
-# the long way (next section).
+# The last row is the **metrics**. A metric is computed from the
+# finished run, not read straight off it, and it has no resolution:
+# `available_concepts` lists each one with an empty level list. They
+# draw with the same one-liner as the rest:
+
+# %%
+fig = result.plot("l1_ticker")
+
+# %% [markdown]
+# `l1_ticker` draws the best bid, best ask and last trade over time. Give
+# it an instant, `result.plot("l1_ticker", at=...)`, and it draws the
+# quote card from chapter 1 for that instant instead.
 #
 # ## Under the one-liner: `plot` and `prepare`
 #
@@ -168,7 +176,7 @@ fig = plot("trade_tape", level="L2", **payload)
 # renders it. `result.plot("trade_tape", "L2")` is precisely these two
 # lines with the arguments filled in for you.
 #
-# Reach past the one-liner for three things, all of which appeared
+# Reach past the one-liner for two things, both of which appeared
 # earlier in this tutorial:
 #
 # 1. **Custom arguments** to a face — the `col_bias`, `start_time`,
@@ -176,13 +184,16 @@ fig = plot("trade_tape", level="L2", **payload)
 # 2. **`ax=`** to place a face in a multi-panel figure — every keyframe
 #    strip and story composite in this tutorial is `plot(..., ax=...)`
 #    into a grid.
-# 3. **Concepts that need a computed input** — the toxicity faces:
+#
+# A metric's settings do not need either step. A keyword to the one-liner
+# goes to the calculation or to the picture, whichever names it. Here
+# `bucket_volume` sizes the VPIN buckets (twenty of them across this
+# capture, not the default one) and `threshold` places the alert line:
 
 # %%
-from ob_analytics.flow_toxicity import compute_vpin
-
-vpin = compute_vpin(result.trades, bucket_volume=result.trades["volume"].sum() / 20)
-fig = plot("vpin", **prepare.vpin(vpin, threshold=0.7))
+fig = result.plot(
+    "vpin", bucket_volume=result.trades["volume"].sum() / 20, threshold=0.7
+)
 
 # %% [markdown]
 # The progression across this whole tutorial has been exactly this
@@ -191,7 +202,7 @@ fig = plot("vpin", **prepare.vpin(vpin, threshold=0.7))
 # envelope — the pre-slicing you met in chapter 3. Convenience, control,
 # scale — the same three levels seaborn and similar libraries offer.
 #
-# ## Two backends
+# ## Three backends
 #
 # Everything so far rendered with Matplotlib. Pass `backend="plotly"`
 # for an interactive figure — zoom, pan, hover — from the *same* concept
@@ -204,16 +215,30 @@ type(fig).__module__.split(".")[0], type(fig).__name__
 # %% [markdown]
 # The call returns a Plotly figure instead of a Matplotlib one; in a
 # notebook `fig.show()` renders it live, and `fig.write_html("depth.html")`
-# saves a standalone interactive file. The rule of thumb:
+# saves a standalone interactive file.
+#
+# `backend="bokeh"` renders the same concept a third way (Bokeh ships in
+# the `[bokeh]` extra) — it covers the core concepts (`trade_tape`,
+# `depth_heatmap`, `book_snapshot`, `depth_chart`), and is the one to
+# reach for when the figure is going into a Bokeh or Panel server app
+# rather than a notebook or a static page:
+
+# %%
+fig = result.plot("depth_heatmap", backend="bokeh", col_bias=0.4)
+type(fig).__module__.split(".")[0], type(fig).__name__
+
+# %% [markdown]
+# The rule of thumb:
 #
 # | You want… | Backend |
 # |---|---|
 # | A figure for a paper, README, or the docs | `matplotlib` (default) |
 # | To explore — zoom into a burst, read exact values on hover | `plotly` |
-# | A third renderer (Bokeh, …) | register your own (below) |
+# | A figure embedded in a Bokeh / Panel server app or streaming view | `bokeh` |
+# | A fourth renderer | register your own (below) |
 #
 # Backends live in a registry, so a new one is a module path away —
-# `register_plot_backend("bokeh", "my_package._bokeh_backend")` — the
+# `register_plot_backend("altair", "my_package._altair_backend")` — the
 # same structural-typing story as loaders and formats from
 # [chapter 3](03_loading_data.md). See
 # [Extending ob-analytics](../extending.md).
@@ -238,9 +263,26 @@ fig = plot(
 save_figure(fig, "trades_talk.png", dpi=200)
 
 # %% [markdown]
-# `PlotTheme` bundles a Seaborn style, context, font scale, and any
-# Matplotlib `rc` overrides; `save_figure` writes at the DPI you ask for.
-# Theming is Matplotlib-only — Plotly figures carry their own styling.
+# `PlotTheme` bundles a Seaborn style, context, font scale, and a
+# `Palette` of named colours; `save_figure` writes at the DPI you ask for.
+# The same theme works on every backend, so one concept looks the same in
+# each: the palette colours every backend's marks, the context and font
+# scale size its text, and the dark styles give Plotly and Bokeh
+# Seaborn's gray background. Each backend also takes its own overrides:
+# `rc` for Matplotlib, `plotly_layout` for Plotly, and `bokeh_figure` for
+# Bokeh.
+#
+# ```python
+# from ob_analytics.visualization import Palette
+#
+# theme = PlotTheme(
+#     context="talk",
+#     palette=Palette(buy="#1f77b4", sell="#d62728"),
+#     plotly_layout={"font": {"family": "Georgia"}},
+# )
+# plot("trade_tape", level="L2", theme=theme, **payload)
+# plot("trade_tape", level="L2", backend="plotly", theme=theme, **payload)
+# ```
 #
 # ## Wrapping up
 #

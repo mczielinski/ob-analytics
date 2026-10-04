@@ -36,17 +36,21 @@ from ob_analytics._utils import (
     attach_ingest_seq,
     datetime_to_seconds_after_midnight,
     empty_trades,
+    lots_to_size,
     price_to_ticks,
     seconds_after_midnight_to_datetime,
+    size_to_lots,
     ticks_to_price,
 )
 from ob_analytics.config import PipelineConfig, SourceSettings
 from ob_analytics.protocols import (
+    Clocks,
     DataWriter,
     EventLoader,
     FeedType,
     Level,
     RunContext,
+    TradeAttribution,
     TradeSource,
 )
 from ob_analytics.schemas import attach_instrument_identity
@@ -99,16 +103,16 @@ class LobsterLoader:
         seconds after midnight and need a date anchor).
     session_tz : str, optional
         The venue's local time zone, used to place the session's seconds after
-        midnight on the shared UTC clock (issue #154).  Defaults to
-        :data:`LOBSTER_DEFAULT_TZ` (``"America/New_York"``), correct for
-        LOBSTER's US equity data.
+        midnight on the shared UTC clock.  Defaults to
+        :data:`LOBSTER_DEFAULT_TZ` (``"America/New_York"``), correct for LOBSTER's
+        US equity data.
     venue, symbol : str, optional
-        Optional instrument identity (issue #147).  When either is supplied,
-        the loaded frame gains per-row ``venue`` / ``symbol`` columns; ``venue``
-        falls back to ``"lobster"`` when only ``symbol`` is given.  Both
-        ``None`` (the default) leaves the frame untagged.  The instrument ticker
-        lives in the LOBSTER filename, so pass it as ``symbol`` when you want it
-        on the rows.
+        Optional instrument identity.  When either is supplied, the loaded
+        frame gains per-row ``venue`` / ``symbol`` columns; ``venue`` falls
+        back to ``"lobster"`` when only ``symbol`` is given.  Both ``None``
+        (the default) leaves the frame untagged.  The instrument ticker lives
+        in the LOBSTER filename, so pass it as ``symbol`` when you want it on
+        the rows.
     """
 
     #: The source venue used to fill the ``venue`` column when identity tagging
@@ -166,7 +170,10 @@ class LobsterLoader:
         # integer in ten-thousandths of a dollar, so divide by the feed's
         # encoding scale to reach the quote currency, then quantise to ticks.
         raw["price"] = price_to_ticks(raw["price"] / divisor, cfg.tick_size)
-        raw["volume"] = raw["volume"].astype(float).round(cfg.volume_decimals)
+        # Canonical size is integer lots (issue #226).  LOBSTER's Size column is
+        # already a whole share count and its ``lot_size`` default is 1, so this
+        # keeps the venue's own integer rather than routing it through a float.
+        raw["volume"] = size_to_lots(raw["volume"], cfg.lot_size)
 
         raw["timestamp"] = seconds_after_midnight_to_datetime(
             raw["time"], self._trading_date, self._session_tz
@@ -225,10 +232,13 @@ class LobsterLoader:
         )
         events["volume"] = np.where(derivable, derived, sizes)
 
+        # Integer lots, like ``volume`` and ``raw_size`` it is taken from: a
+        # ``0.0`` here would widen the whole column to float and hand every
+        # consumer base-asset-looking floats that are really lot counts.
         events["fill"] = np.where(
             events["event_type"].isin([4, 5]),
             events["raw_size"],
-            0.0,
+            0,
         )
 
         # ``original_number`` captures the 1-based row in the source message
@@ -481,7 +491,7 @@ class LobsterWriter:
         Calendar date of the session.
     session_tz : str, optional
         The venue's local time zone, used to convert the shared UTC clock back
-        to LOBSTER's seconds after local midnight (issue #154).  Defaults to
+        to LOBSTER's seconds after local midnight.  Defaults to
         :data:`LOBSTER_DEFAULT_TZ`; must match the value used on load.
     price_divisor : int
         Multiplier to convert decimal prices back to LOBSTER integers.
@@ -589,6 +599,12 @@ class LobsterWriter:
             if "raw_size" in events.columns and events["raw_size"].notna().any()
             else events["volume"]
         )
+        # Restore the venue's own share count from integer lots (issue #226).
+        # LOBSTER's ``lot_size`` is 1, so this is the identity on a LOBSTER
+        # round-trip; it matters for a frame loaded from another venue's grid.
+        size = lots_to_size(
+            size, self._config.lot_size, decimals=self._config.volume_decimals
+        )
 
         return pd.DataFrame(
             {
@@ -633,10 +649,12 @@ class LobsterWriter:
         # Book replay needs per-event deltas: ``raw_size`` on loader-produced
         # frames (``volume`` is outstanding size there); ``volume`` equals the
         # delta on legacy/synthetic frames without it.
+        # Integer lots (issue #226), so a level's running total is exact and
+        # empties to precisely zero rather than to float residue.
         if "raw_size" in events.columns and events["raw_size"].notna().any():
-            volumes = events["raw_size"].to_numpy(dtype=np.float64)
+            volumes = events["raw_size"].to_numpy(dtype=np.int64)
         else:
-            volumes = events["volume"].to_numpy(dtype=np.float64)
+            volumes = events["volume"].to_numpy(dtype=np.int64)
         if "raw_event_type" in events.columns:
             raw_types = events["raw_event_type"].to_numpy(dtype=np.float64)
         else:
@@ -654,17 +672,17 @@ class LobsterWriter:
             side = book[direction]
 
             if action == "created":
-                side[price] = side.get(price, 0.0) + volume
+                side[price] = side.get(price, 0) + volume
             elif action == "deleted":
                 if price in side:
                     side[price] -= volume
-                    if side[price] <= 1e-12:
+                    if side[price] <= 0:
                         del side[price]
             elif action == "changed":
                 raw_type = raw_types[i]
                 if raw_type in decrement_raw_types and price in side:
                     side[price] -= volume
-                    if side[price] <= 1e-12:
+                    if side[price] <= 0:
                         del side[price]
 
             rows.append(self._snapshot_row(book, num_levels))
@@ -733,9 +751,9 @@ def _side_level_changes(
     *p*/*v* are the side's ``(n_rows, n_levels)`` price/size arrays.  A level
     is active when its price is not the *dummy* sentinel and its size is
     positive.  Each unique raw price is converted to an integer tick count
-    (``round((price / divisor) / tick_size)``, issue #155) before keying, and
-    duplicate tick prices within a row are summed in level order — both matching
-    the dict-diff this replaces bit-for-bit.
+    (``round((price / divisor) / tick_size)``) before keying, and duplicate
+    tick prices within a row are summed in level order — both matching the
+    dict-diff this replaces bit-for-bit.
 
     Returns ``(row_indices, prices, volumes_after)`` for every (row, price)
     whose volume differs from the previous row (missing level = 0.0), the
@@ -951,6 +969,15 @@ class LobsterSource:
     # LOBSTER is a venue matched book (exchange matching engine): bids can
     # never rest above asks, so the reconstructed book is never crossed.
     feed_type: FeedType = field(default=FeedType.MATCHED_BOOK, init=False, repr=False)
+    # Nasdaq ITCH names only the resting order of an execution.  The taker
+    # columns are filled by a guess (LobsterTradeReader._find_takers), which
+    # the order types use, but the feed itself shows the maker only.
+    trade_attribution: TradeAttribution = field(
+        default=TradeAttribution.MAKER_ONLY, init=False, repr=False
+    )
+    # A LOBSTER message file holds the exchange's time only; the loader copies
+    # it into ``timestamp``, so there is no receive time to check it against.
+    clocks: Clocks = field(default=Clocks.VENUE_ONLY, init=False, repr=False)
     # Per-order (market-by-order) feed — the full reconstruction model.
     level: Level = field(default=Level.L3, init=False, repr=False)
     # LOBSTER needs no per-source knobs; empty typed settings keep the
@@ -975,7 +1002,9 @@ class LobsterSource:
     ) -> TradeSource:
         return LobsterTradeReader(config)
 
-    def create_writer(self, config: PipelineConfig, ctx: RunContext) -> DataWriter:
+    def create_writer(
+        self, config: PipelineConfig | None, ctx: RunContext
+    ) -> DataWriter:
         return _make_lobster_writer(config, ctx)
 
     def compute_depth(
@@ -1001,6 +1030,9 @@ class LobsterSource:
             "tick_size": 0.01,
             "price_decimals": 2,
             "price_divisor": 10_000,
+            # LOBSTER quotes whole shares, so one lot is one share and the
+            # canonical integer size (issue #226) is the venue's own count.
+            "lot_size": 1.0,
             "volume_decimals": 0,
         }
 

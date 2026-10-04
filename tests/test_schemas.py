@@ -137,3 +137,51 @@ def test_check_schema_version_none_is_legacy():
 def test_check_schema_version_unknown_raises():
     with pytest.raises(ConfigError, match="unsupported schema version"):
         check_schema_version("99.0", source="test")
+
+
+class TestCanonicalSizeDtype:
+    """Schema 4.0 stores every size as a whole number of lots (``int64``).
+
+    A float slipping into one of these columns does not raise anywhere: it
+    reads as a base-asset size, sums like one, and only shows up much later as
+    a wrong number in a face.  That is how ``fill`` stayed ``float64`` on the
+    LOBSTER path -- a ``0.0`` literal in the expression that built it widened
+    the whole column -- through a full run and out to Parquet.
+    """
+
+    SIZE_COLUMNS = ("volume", "fill")
+
+    def _assert_lots(self, events: pd.DataFrame, who: str) -> None:
+        for column in self.SIZE_COLUMNS:
+            assert events[column].dtype == "int64", (
+                f"{who}: {column!r} is {events[column].dtype}, not integer lots"
+            )
+
+    def test_bitstamp_loader_emits_integer_lots(self, tiny_bitstamp_orders_csv):
+        from ob_analytics.bitstamp import BitstampSource
+        from ob_analytics.pipeline import Pipeline
+
+        result = Pipeline(source=BitstampSource()).run(str(tiny_bitstamp_orders_csv))
+        self._assert_lots(result.events, "bitstamp")
+        assert result.trades["volume"].dtype == "int64"
+
+    def test_lobster_loader_emits_integer_lots(self, tmp_path):
+        from ob_analytics.lobster import LobsterLoader
+
+        # time,event_type,id,volume,price,direction — a creation, an
+        # execution against it, and a delete on the other side.
+        msg = tmp_path / "AAPL_2024-01-01_34200000_57600000_message_1.csv"
+        msg.write_text(
+            "34200.0,1,1,100,1000000,1\n"
+            "34200.2,1,2,100,1010000,-1\n"
+            "34200.3,4,1,50,1000000,1\n"
+            "34200.5,3,2,100,1010000,-1\n"
+        )
+        events = LobsterLoader(trading_date="2024-01-01").load(msg)
+        self._assert_lots(events, "lobster")
+
+    def test_synthetic_stream_emits_integer_lots(self):
+        from ob_analytics.synth import SynthConfig, generate_session
+
+        session = generate_session(SynthConfig(seed=0))
+        self._assert_lots(session.events, "synth")

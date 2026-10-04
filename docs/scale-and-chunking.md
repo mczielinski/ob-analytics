@@ -5,21 +5,24 @@ title: Scale and chunking
 # Scale and chunking
 
 !!! info "Decision record"
-    **Status:** Accepted · **Date:** 2026-07-11 · **Context:** WS-8.4b,
-    gating the Databento adapter (WS-6.1).
+    **Status:** Accepted, amended · **Date:** 2026-07-11, amended
+    2026-10-03 · **Context:** WS-8.4b, gating the Databento adapter (WS-6.1).
 
-    **Decision:** ob-analytics stays single-shot and in-memory. For data
-    beyond the session-scale envelope, **pre-slice by time window** and process
-    each slice independently. We do **not** build streaming or chunking
-    infrastructure now.
+    **Decision:** ob-analytics stays in-memory. For data beyond the
+    session-scale envelope, **cut the input into time windows**.
+
+    **Amendment:** `Pipeline.run_windows` now does the cutting for one input.
+    It runs the depth stages one window at a time, carries the book across
+    each cut, and writes each window to disk as it finishes. See
+    [Windowed runs](#windowed-runs).
 
 ob-analytics keeps the full event, depth, and trade tables in memory (pandas).
 The [scale envelope](architecture.md#scale-envelope) puts the comfortable
 ceiling at **~5M events (~5 GiB peak RSS)** — a few hours of a single liquid
-instrument. The Databento adapter (WS-6.1) opens the door to venue market-by-order
-(MBO) feeds whose *full* volume is far larger, so before building it we have to
-decide whether the in-memory model needs a chunked execution mode, or whether a
-documented pre-slicing workflow suffices.
+instrument. The [Databento adapter](howto/databento.md) opens the door to venue
+market-by-order (MBO) feeds whose *full* volume is far larger, so before
+building it we had to decide whether the in-memory model needs a chunked
+execution mode, or whether a documented pre-slicing workflow suffices.
 
 ## The criterion
 
@@ -40,7 +43,7 @@ smaller, and a session-length window is a fraction of that instrument's day.
 ### What fits — the supply side
 
 From the measured [scale envelope](architecture.md#scale-envelope) (WS-8.4a,
-`scripts/bench_scale.py`): peak RSS grows roughly linearly at **~1 GiB per 1M
+`scripts/bench_scale.py --envelope`): peak RSS grows roughly linearly at **~1 GiB per 1M
 events**, dominated by the depth stages.
 
 | events | peak RSS | depth stages |
@@ -52,7 +55,7 @@ events**, dominated by the depth stages.
 
 The **comfortable ceiling ≈ 5M events / ~5 GiB** on a typical 16 GB machine.
 (That 5M point is a linear *extrapolation* from the measured rows above, not a
-direct measurement — see `bench_scale.py`. It is conservative: tiling adds
+direct measurement — see `bench_scale.py --envelope`. It is conservative: tiling adds
 transient overhead the extrapolation carries forward.)
 
 ### What a job needs — the demand side
@@ -91,6 +94,10 @@ streaming infrastructure.** The in-memory, single-shot model remains the whole
 design. This keeps the memory profile simple and predictable and matches the
 guidance already on the [scale envelope](architecture.md#scale-envelope) page.
 
+The 2026-10-03 amendment adds one piece of infrastructure, a windowed run, and
+keeps the rest of this decision. Nothing streams: the loader still reads the
+whole input, and each window is an ordinary in-memory run of the depth stages.
+
 ## Recommended workflow
 
 ### 1. Size the job before you run it
@@ -128,11 +135,31 @@ n = sum(1 for _ in store)                        # total records in the file
 print(n)  # compare against the ~5M envelope
 ```
 
-### 2. Slice, run each window, concatenate
+### 2. Run one window at a time
 
-Split the input at time-window boundaries, run the pipeline on each window, and
-concatenate the per-slice outputs. Peak memory is bounded by the **largest
-single window**, not by the whole day:
+Give `run_windows` the input, the times to cut it at, and a folder for the
+output:
+
+```python
+from ob_analytics import Pipeline
+from ob_analytics.data import load_data
+from ob_analytics.databento import DatabentoSource
+
+cuts = ["2024-02-12T16:00", "2024-02-12T17:30", "2024-02-12T19:00"]  # UTC
+out = Pipeline(source=DatabentoSource()).run_windows("aapl.mbo.dbn.zst", cuts, "out/")
+
+tables = load_data(out)  # events, trades, depth, depth_summary
+```
+
+Three cuts make four windows, which together cover the whole input. Each window
+starts from the book the previous one ended with, so the output is the same as a
+single run's. [Windowed runs](#windowed-runs) gives the details and the limits.
+
+### 3. Files already split by window
+
+If the input is already one file per window, for example the files
+`scripts/databento_window.py` downloads, run each file and concatenate the
+results:
 
 ```python
 import pandas as pd
@@ -157,34 +184,107 @@ depth  = pd.concat([r.depth  for r in results], ignore_index=True)
     - **Does *not* span slices:** whole-book, per-order questions — queue
       position, order lifetimes, `order_outcome`.
 
-    Slice at natural low-activity boundaries, or treat each slice as an
-    independent session. The Databento adapter (WS-6.1) softens the boundary by
-    seeding each window from the feed's periodic snapshot (DBN `F_SNAPSHOT`);
-    WS-6.0's *pre-existing order* class labels the carried-in orders.
+    `run_windows` has none of these limits, because it cuts one input and
+    carries the book across each cut. With separate files, slice at natural
+    low-activity boundaries, or treat each slice as an independent session. A Databento window that includes the feed's periodic
+    snapshot softens the boundary: those records are ordinary adds, so they
+    seed the window's book, and the *pre-existing order* class labels whatever
+    the window carried in without one.
 
-## When we would revisit this
+## Windowed runs
 
-The decision flips only if a workflow needs **whole-day, single-instrument
-outputs that a concatenation of independent slices cannot reconstruct** — for
-example continuous per-order queue trajectories across an entire session at a
-volume no single window can hold.
+`Pipeline.run_windows(source, boundaries, output)` cuts one input at the
+`boundaries` and runs the depth stages on one window at a time. The depth
+stages hold most of a run's memory, so their peak is set by the largest window,
+not by the whole input.
 
-If that workload appears (and is *measured*, not assumed), the minimal response
-is a `chunked_run(source, boundaries)` helper: slice → run each window → carry
-the resting book (or a snapshot) into the next window's input → concatenate into
-one merged `PipelineResult`. Its peak memory stays bounded by the largest
-window; its real cost is boundary-state carry — the same pre-existing-order
-handling described above — which is exactly why it is not worth building
-speculatively. Until such a workload exists, pre-slicing is sufficient and
-simpler.
+### What it writes
+
+One Parquet file per table in `output`: `events`, `trades`, `depth` and
+`depth_summary`. The tests check this against a single run on the bundled
+Bitstamp sample, a synthetic session, a Databento record set and an L2 file. This is the same folder `save_data` writes for a single run,
+and `load_data` reads it back. Each window is written as soon as it finishes.
+
+The output goes to disk, not into a `PipelineResult`, because the finished
+tables are themselves large. On the bundled sample a run peaks at 456 MiB, and
+its result alone takes 164 MiB, 110 MiB of that in `depth_summary`. A merged
+result held in memory would grow with the whole input and save about half the
+memory at best.
+
+### How the book crosses a cut
+
+With `carry=True`, the default, each window starts from the book the previous
+window ended with:
+
+- The orders still resting at the cut are put back as `created` rows stamped
+  one nanosecond before the window starts. The price-level rebuild then changes
+  each level from its right size. These rows are not written out.
+- The depth summary keeps one engine for the whole run, so its book, including
+  the crossed levels it has removed, carries on into the next window.
+- Order types and trade signs are decided once, over the whole input, as in a
+  single run.
+
+The result matches a single run row for row in every table. There are three
+differences:
+
+- `events` is written in window order, not in the loader's order.
+- `aggressiveness_bps` looks up the quote standing before each order by
+  `event_id`. Bitstamp numbers its events by order, not by time, so on a
+  Bitstamp input the lookup can find a quote from another window. Sources that
+  number events in time order (Databento, the synthetic generator) match
+  exactly.
+- Where the Databento loader warns that the depth is off (a modify that
+  carries a fill and also moves the order), the carried order goes onto its new
+  price level, so the windowed depth can differ by the same amount.
+
+A run that fails part-way leaves the output folder as it was: the files are
+moved into place only once every window is done.
+
+With `carry=False`, each window starts from an empty book, as if it were a
+separate input.
+
+An L2 input needs no seed rows. Each depth row states its level's whole size,
+so the summary engine alone carries the book.
+
+### Memory, measured
+
+The bundled sample tiled four times (1.26M events), with no trades, one process
+per row. "Load only" is the loaded events table and nothing else.
+
+| windows | peak RSS | time |
+|--------:|---------:|-----:|
+| load only | 386 MiB | — |
+| 1 (a single run) | 1,507 MiB | 70 s |
+| 2 | 1,259 MiB | 71 s |
+| 4 | 953 MiB | 70 s |
+| 8 | 771 MiB | 71 s |
+
+More windows bring the peak down toward the load-only floor at almost no cost in
+time.
+
+### Limits
+
+- **The loader still reads the whole input.** The `events` and `trades` tables
+  are held for the whole run, because order types and trade signs depend on
+  every row. These are the fixed part of the memory above. A loader that reads
+  one window at a time, for example Databento's `DBNStore.to_df(count=...)`,
+  would remove it. Build that when a measured input's events table does not
+  fit.
+- **A source's own depth is not used.** LOBSTER's order book file states the
+  book after each message of the whole session, so it cannot be cut. A windowed
+  LOBSTER run rebuilds its depth from the messages instead.
 
 ## References
 
-- Scale envelope and benchmark: [Architecture → Scale envelope](architecture.md#scale-envelope); `scripts/bench_scale.py`.
+- Scale envelope and benchmark: [Architecture → Scale envelope](architecture.md#scale-envelope);
+  `scripts/bench_scale.py --envelope`. The per-stage speed test that CI runs is
+  the same script with no arguments.
 - [LOBSTER sample files][lobster] — per-symbol daily event counts.
 - [Nasdaq TotalView-ITCH on Databento][xnas] — whole-feed daily message volume.
 - [Databento Python API demo][apidemo] — a concrete single-instrument record count.
 - [`metadata.get_record_count`][getcount] — size any query before downloading it.
+- [Process Databento MBO files](howto/databento.md) and
+  `scripts/databento_window.py` — this workflow as runnable code.
 
 [lobster]: https://lobsterdata.com/info/DataSamples.php
 [xnas]: https://databento.com/datasets/XNAS.ITCH

@@ -33,9 +33,13 @@ column  meaning
 ======  ==================================================================
 timestamp   receive time — integer epoch (``config.timestamp_unit``) or any
             string :func:`pandas.to_datetime` understands
+exchange_timestamp  optional: the venue's time, in the same form as
+            ``timestamp``.  Kept in the depth frame when present, so the
+            clock checks can compare the two clocks.
 side        ``bid`` / ``ask`` (``buy`` / ``sell`` and ``b`` / ``a`` accepted)
 price       price level (divided by ``config.price_divisor`` to the quote
-            currency, then stored as integer ``tick_size`` counts — issue #155)
+            currency, then stored as integer ``tick_size`` counts; a price
+            that is not a whole number of ticks raises ``ConfigError``)
 volume      new absolute resting size at that level (``0`` = level removed)
 ======  ==================================================================
 
@@ -45,6 +49,7 @@ Column names are flexible: ``side`` / ``direction`` and ``volume`` / ``size``
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -59,7 +64,10 @@ from ob_analytics._utils import (
     datetime_to_epoch,
     empty_trades,
     epoch_to_datetime,
+    lots_to_size,
+    off_tick_grid,
     price_to_ticks,
+    size_to_lots,
     ticks_to_price,
     validate_columns,
     validate_non_empty,
@@ -67,18 +75,28 @@ from ob_analytics._utils import (
 from ob_analytics.config import PipelineConfig, SourceSettings
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import (
+    Clocks,
     DataWriter,
     DepthSource,
     FeedType,
     Level,
     RunContext,
+    SequenceKind,
+    TradeAttribution,
     TradeSource,
 )
-from ob_analytics.schemas import SEQUENCE_COLUMN, attach_instrument_identity
+from ob_analytics.schemas import (
+    ORIGIN_COLUMN,
+    SEQUENCE_COLUMN,
+    attach_instrument_identity,
+)
 
 # ── Column-spelling tolerance ─────────────────────────────────────────
 
 _TIMESTAMP_COLUMNS: tuple[str, ...] = ("timestamp", "time", "ts")
+# The venue's own time, when the capture recorded one (every live capture
+# does).  Optional: a price-level CSV with one clock has only ``timestamp``.
+_EXCHANGE_TIMESTAMP_COLUMNS: tuple[str, ...] = ("exchange_timestamp",)
 _SIDE_COLUMNS: tuple[str, ...] = ("side", "direction")
 _VOLUME_COLUMNS: tuple[str, ...] = ("volume", "size", "amount", "quantity")
 # Venue per-event sequence, when the capture recorded one (CCXT persists its
@@ -112,12 +130,125 @@ def _first_present(columns: pd.Index, candidates: tuple[str, ...]) -> str | None
     return None
 
 
+def _to_ticks_on_grid(
+    raw_price: pd.Series, cfg: PipelineConfig, where: str
+) -> np.ndarray:
+    """Convert a raw feed price column to integer ticks, refusing off-grid prices.
+
+    :func:`~ob_analytics._utils.price_to_ticks` rounds to the nearest tick, so a
+    price finer than ``tick_size`` would be moved with no warning: 0.036 on the
+    default 0.01 grid becomes 0.04.  A price-level CSV does not carry its own
+    tick size, so a wrong one is easy to pass and cannot be seen afterwards.
+    """
+    quote = raw_price.astype(float) / cfg.price_divisor
+    off_grid = off_tick_grid(quote.to_numpy(), cfg.tick_size)
+    if off_grid.any():
+        example = float(quote.to_numpy()[off_grid][0])
+        raise ConfigError(
+            f"{where}: {int(off_grid.sum())} price(s) are not whole multiples "
+            f"of tick_size={cfg.tick_size!r} (for example {example!r}). Set the "
+            "instrument's real tick size, e.g. PipelineConfig(tick_size=0.001, "
+            "price_decimals=3). A ccxt capture records it as tick_size in "
+            "meta.json, and `ob-analytics process` reads it from there."
+        )
+    return price_to_ticks(quote, cfg.tick_size)
+
+
+def recorded_tick_size(source: str | Path) -> float | None:
+    """Return the tick size a live capture recorded in its ``meta.json``.
+
+    *source* is the capture directory or a file inside it.  ``None`` when there
+    is no ``meta.json`` or it records no tick size: a capture from a venue whose
+    metadata gives none, or one written before captures recorded it.
+    """
+    value = _recorded_meta(source).get("tick_size")
+    return float(value) if value else None
+
+
+def recorded_sequence_kind(source: str | Path) -> SequenceKind | None:
+    """Return what the venue ``sequence`` of a live capture promises.
+
+    *source* is the capture directory or a file inside it.  ``None`` when the
+    capture records no ``sequence_kind``: no ``meta.json``, a source that does
+    not declare one, or a capture written before captures recorded it.  Then
+    use what the source declares
+    (:func:`~ob_analytics.protocols.sequence_kind_of`).
+    """
+    value = _recorded_meta(source).get("sequence_kind")
+    return SequenceKind(value) if value else None
+
+
+def recorded_sequence_restarts(source: str | Path) -> int:
+    """Return how many times a live capture's venue sequence started again.
+
+    *source* is the capture directory or a file inside it.  A source that
+    finds a lost message itself starts again from a new opening book, and on
+    some venues the sequence starts again too.  The source counts those steps
+    back as ``sequence_restarts`` in ``meta.json``, so
+    :func:`~ob_analytics.analytics.data_quality_summary` does not count them
+    as out of order.  ``0`` when the capture records none.
+    """
+    return int(_recorded_meta(source).get("sequence_restarts") or 0)
+
+
+def recorded_source(source: str | Path) -> str | None:
+    """Return the name of the source that made a live capture.
+
+    *source* is the capture directory, a file inside it, or the output of
+    ``ob-analytics process``, which keeps the capture's ``meta.json``.
+    ``None`` when there is no record: a file that is not a capture, or a
+    capture written before captures recorded it.
+    """
+    value = _recorded_meta(source).get("source")
+    return str(value) if value else None
+
+
+def recorded_feed_type(source: str | Path) -> FeedType | None:
+    """Return the :class:`~ob_analytics.protocols.FeedType` a capture's source declared.
+
+    ``None`` when the capture records none (see :func:`recorded_source`).
+    """
+    value = _recorded_meta(source).get("feed_type")
+    return FeedType(value) if value else None
+
+
+def recorded_trade_attribution(source: str | Path) -> TradeAttribution | None:
+    """Return the :class:`~ob_analytics.protocols.TradeAttribution` a capture's source declared.
+
+    ``None`` when the capture records none (see :func:`recorded_source`).
+    """
+    value = _recorded_meta(source).get("trade_attribution")
+    return TradeAttribution(value) if value else None
+
+
+def recorded_clocks(source: str | Path) -> Clocks | None:
+    """Return the :class:`~ob_analytics.protocols.Clocks` a live capture recorded.
+
+    A live source learns it from the venue's books, so it is written when the
+    capture closes.  ``None`` when the capture records none (see
+    :func:`recorded_source`).
+    """
+    value = _recorded_meta(source).get("clocks")
+    return Clocks(value) if value else None
+
+
+def _recorded_meta(source: str | Path) -> dict[str, Any]:
+    """The ``meta.json`` beside *source*, or ``{}`` when there is none."""
+    p = Path(source)
+    meta = (p.parent if p.is_file() else p) / "meta.json"
+    try:
+        data = json.loads(meta.read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def _to_datetime(series: pd.Series, unit: str) -> pd.Series:
     """Parse a timestamp column onto the shared tz-aware UTC nanosecond clock.
 
     Integer-epoch columns go through :func:`epoch_to_datetime`; string columns
     are parsed with ``utc=True``, so a zone-carrying string is converted to UTC
-    and a zone-less one is read as UTC (issue #154).
+    and a zone-less one is read as UTC.
     """
     if pd.api.types.is_numeric_dtype(series):
         return epoch_to_datetime(series, unit)
@@ -136,14 +267,14 @@ class L2DepthLoader:
     ----------
     config : PipelineConfig, optional
         Pipeline configuration.  ``price_divisor`` scales the raw feed price to
-        the quote currency and ``tick_size`` quantises it to integer ticks
-        (issue #155); ``volume_decimals`` rounds size; ``timestamp_unit``
-        interprets integer-epoch timestamps.
+        the quote currency and ``tick_size`` quantises it to integer ticks;
+        ``volume_decimals`` rounds size; ``timestamp_unit`` interprets
+        integer-epoch timestamps.
     venue, symbol : str, optional
-        Optional instrument identity (issue #147).  When either is supplied,
-        the loaded depth frame gains per-row ``venue`` / ``symbol`` columns.
-        A generic price-level CSV carries no venue of its own, so ``venue`` is
-        left NA unless supplied.  Both ``None`` (the default) leaves the frame
+        Optional instrument identity.  When either is supplied, the loaded
+        depth frame gains per-row ``venue`` / ``symbol`` columns.  A generic
+        price-level CSV carries no venue of its own, so ``venue`` is left NA
+        unless supplied.  Both ``None`` (the default) leaves the frame
         untagged.
     """
 
@@ -175,7 +306,9 @@ class L2DepthLoader:
             Columns ``timestamp``, ``price``, ``volume`` (absolute level
             size), ``direction`` (categorical ``bid``/``ask``), sorted by
             ``timestamp`` — a :func:`~ob_analytics.schemas.validate_depth_df`
-            frame.
+            frame.  ``exchange_timestamp`` follows ``timestamp`` when the file
+            has it, and ``origin`` (which part of a capture wrote the row) is
+            kept when the file has it.
         """
         path = self._resolve_depth_file(source)
         logger.info("L2DepthLoader: reading {}", path)
@@ -204,23 +337,34 @@ class L2DepthLoader:
         cfg = self._config
         timestamp = _to_datetime(raw[ts_col], cfg.timestamp_unit)
         # Canonical price is integer ticks (issue #155): scale the raw feed
-        # price to the quote currency, then quantise to ticks.
-        price = price_to_ticks(
-            raw[price_col].astype(float) / cfg.price_divisor, cfg.tick_size
-        )
-        volume = raw[vol_col].astype(float).round(cfg.volume_decimals)
+        # price to the quote currency, then convert to ticks.
+        price = _to_ticks_on_grid(raw[price_col], cfg, "L2DepthLoader.load")
+        # Canonical size is integer lots (issue #226); the raw feed carries a
+        # base-asset float, so convert on the way in.
+        volume = pd.Series(size_to_lots(raw[vol_col], cfg.lot_size), index=raw.index)
         direction = (
             raw[side_col].astype(str).str.strip().str.lower().map(_SIDE_TO_DIRECTION)
         )
 
+        clocks = {"timestamp": timestamp.array}
+        venue_col = _first_present(raw.columns, _EXCHANGE_TIMESTAMP_COLUMNS)
+        if venue_col is not None:
+            clocks["exchange_timestamp"] = _to_datetime(
+                raw[venue_col], cfg.timestamp_unit
+            ).array
         depth = pd.DataFrame(
             {
-                "timestamp": timestamp.array,
+                **clocks,
                 "price": price,
                 "volume": volume.to_numpy(),
                 "direction": direction.to_numpy(),
             }
         )
+        # Carry which part of a capture wrote each row, when the file says: the
+        # clock checks leave out the opening book's rows (see ORIGIN_COLUMN).
+        origin_col = _first_present(raw.columns, (ORIGIN_COLUMN,))
+        if origin_col is not None:
+            depth[ORIGIN_COLUMN] = raw[origin_col].astype("string")
         # Carry the venue sequence (nullable Int64) when the capture recorded
         # one and tracking is on; ``raw`` shares ``depth``'s row index, so the
         # column stays aligned through the filter/sort below.
@@ -326,10 +470,10 @@ class L2TradeReader:
         cfg = self._config
         timestamp = _to_datetime(raw[ts_col], cfg.timestamp_unit)
         # Trade prints share the depth grid: integer ticks (issue #155).
-        price = price_to_ticks(
-            raw[price_col].astype(float) / cfg.price_divisor, cfg.tick_size
-        )
-        volume = raw[vol_col].astype(float).round(cfg.volume_decimals)
+        price = _to_ticks_on_grid(raw[price_col], cfg, "L2TradeReader.load")
+        # Canonical size is integer lots (issue #226); the raw feed carries a
+        # base-asset float, so convert on the way in.
+        volume = pd.Series(size_to_lots(raw[vol_col], cfg.lot_size), index=raw.index)
         direction = self._read_direction(raw)
 
         n = len(raw)
@@ -435,15 +579,33 @@ class DepthCsvWriter:
         )
         # datetime_to_epoch accepts the canonical tz-aware UTC column directly
         # (and reads a tz-naive one as UTC), so the round-trip is exact.
+        clocks = {
+            "timestamp": datetime_to_epoch(depth["timestamp"], cfg.timestamp_unit)
+        }
+        if "exchange_timestamp" in depth.columns:
+            clocks["exchange_timestamp"] = datetime_to_epoch(
+                depth["exchange_timestamp"], cfg.timestamp_unit
+            )
+        origin = (
+            {ORIGIN_COLUMN: depth[ORIGIN_COLUMN].to_numpy()}
+            if ORIGIN_COLUMN in depth.columns
+            else {}
+        )
         depth_out = pd.DataFrame(
             {
-                "timestamp": datetime_to_epoch(depth["timestamp"], cfg.timestamp_unit),
+                **clocks,
                 "side": depth["direction"].astype(str),
                 # Restore the raw feed price from integer ticks (issue #155).
                 "price": (
                     ticks_to_price(depth["price"], cfg.tick_size) * cfg.price_divisor
                 ).round(cfg.price_decimals),
-                "volume": depth["volume"],
+                # Restore the base-asset float from integer lots (#226).
+                "volume": lots_to_size(
+                    depth["volume"],
+                    self._config.lot_size,
+                    decimals=self._config.volume_decimals,
+                ),
+                **origin,
             }
         )
         depth_path = out_dir / "depth.csv"
@@ -464,7 +626,11 @@ class DepthCsvWriter:
                 "price": (
                     ticks_to_price(trades["price"], cfg.tick_size) * cfg.price_divisor
                 ).round(cfg.price_decimals),
-                "amount": trades["volume"],
+                "amount": lots_to_size(
+                    trades["volume"],
+                    self._config.lot_size,
+                    decimals=self._config.volume_decimals,
+                ),
                 "side": trades["direction"]
                 .astype("object")
                 .where(trades["direction"].notna(), other=pd.NA),
@@ -493,9 +659,10 @@ class DepthCsvSource:
 
     name: str = "depth_csv"
     level: Level = Level.L2
-    # A price-level feed is the venue's own aggregated view: bids never rest
-    # above asks, so the reconstructed book is not crossed.
-    feed_type: FeedType = FeedType.MATCHED_BOOK
+    # A price-level feed: the venue's total size at each price.
+    feed_type: FeedType = FeedType.PRICE_LEVELS
+    # Price levels carry no order identity, so no order of a trade is named.
+    trade_attribution: TradeAttribution = TradeAttribution.NONE
     # No per-source knobs; empty typed settings keep construction uniform.
     settings: SourceSettings = field(default_factory=SourceSettings)
 
@@ -507,7 +674,9 @@ class DepthCsvSource:
     ) -> TradeSource:
         return L2TradeReader(config)
 
-    def create_writer(self, config: PipelineConfig, ctx: RunContext) -> DataWriter:
+    def create_writer(
+        self, config: PipelineConfig | None, ctx: RunContext
+    ) -> DataWriter:
         return DepthCsvWriter(config)
 
     def compute_depth(
@@ -527,6 +696,7 @@ class DepthCsvSource:
         return {
             "tick_size": 0.01,
             "price_decimals": 2,
+            "lot_size": 1e-8,
             "volume_decimals": 8,
             "timestamp_unit": "ms",
         }

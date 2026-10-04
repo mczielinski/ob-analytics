@@ -22,3 +22,18 @@ as an automatic fallback.
 ::: ob_analytics.trade_sign.lee_ready
 
 ::: ob_analytics.trade_sign.bulk_volume_classification
+
+## Shared helpers
+
+The signed-flow analytics reach the quotes and the aggressor side through these
+two, rather than each re-deriving them.
+
+::: ob_analytics.trade_sign.resolve_direction
+
+::: ob_analytics.trade_sign.prevailing_mid
+
+The volume-bucket analytics check their bucket size through this one.
+
+::: ob_analytics.trade_sign.check_bucket_count
+
+::: ob_analytics.trade_sign.MAX_VOLUME_BUCKETS

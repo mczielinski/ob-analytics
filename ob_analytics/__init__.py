@@ -23,9 +23,31 @@ The package exposes two layers:
     :class:`BitstampWriter`, :class:`BitstampSource`
   - LOBSTER: :class:`LobsterLoader`, :class:`LobsterTradeReader`,
     :class:`LobsterWriter`, :class:`LobsterSource`
+  - Databento: :class:`~ob_analytics.databento.DatabentoLoader`,
+    :class:`~ob_analytics.databento.DatabentoTradeReader`,
+    :class:`~ob_analytics.databento.DatabentoWriter`, :class:`DatabentoSource`
 
 All processing stages are pluggable via :mod:`~ob_analytics.protocols`; a whole
-new data source registers via :func:`~ob_analytics.sources.register_source`.
+new data source registers via :func:`~ob_analytics.sources.register_source`, and
+a measurement of your own via :func:`~ob_analytics.metrics.register_metric`,
+which is what makes it run from a result and draw as a plot.  :func:`bars`
+resamples the trade stream into OHLCV rows, by the clock or by traded
+activity, and takes a rule of your own through
+:func:`~ob_analytics.bars.register_bar_rule`.
+
+:mod:`~ob_analytics.cost` measures what trading cost: :func:`transaction_costs`
+splits a taker's effective spread into the part the liquidity provider kept and
+the part the market moved, and :func:`amihud` / :func:`roll_spread` read
+liquidity from the trade prices alone.
+
+:func:`detect_icebergs` and :func:`hidden_trades` find liquidity the visible
+book did not show: the refills of an iceberg order, and trades that printed
+inside the visible spread.
+
+:func:`features` puts those measurements side by side: one row per bar, one
+column per microstructure feature, each row stated as of the bar's close and so
+free of look-ahead.  A column of your own registers via
+:func:`~ob_analytics.features.register_feature`.
 """
 
 from importlib.metadata import PackageNotFoundError, version
@@ -35,24 +57,67 @@ from loguru import logger
 
 from ob_analytics.analytics import (
     DataQualitySummary,
+    QualityCheck,
     SequenceGapReport,
+    Severity,
+    StaleOrder,
     data_quality_summary,
     detect_sequence_gaps,
+    detect_stale_orders,
+)
+from ob_analytics.bars import (
+    bars,
+    get_bar_rule,
+    list_bar_rules,
+    register_bar_rule,
 )
 
 # Importing the source modules fires their register_source(...) self-registration
 # at import time; the Source classes are also the public per-venue entry points.
 from ob_analytics.bitstamp import BitstampSource
 from ob_analytics.config import PipelineConfig, SourceSettings
-from ob_analytics.data import load_data, save_data
+from ob_analytics.cost import (
+    CostSummary,
+    amihud,
+    cost_summary,
+    roll_spread,
+    transaction_costs,
+)
+from ob_analytics.data import (
+    OutputTables,
+    ParquetWriter,
+    PickleWriter,
+    load_data,
+    save_data,
+)
+from ob_analytics.databento import DatabentoSettings, DatabentoSource
 from ob_analytics.datasets import toy_events, toy_l2_depth, toy_l2_trades, toy_trades
 from ob_analytics.depth_l2 import DepthCsvSource
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
+from ob_analytics.features import (
+    features,
+    get_feature,
+    list_features,
+    register_feature,
+)
 from ob_analytics.flow_toxicity import (
     KyleLambdaResult,
     compute_kyle_lambda,
     compute_vpin,
+    ofi_by_horizon,
     order_flow_imbalance,
+    vpin_bucket_volume,
+)
+from ob_analytics.hidden_liquidity import (
+    IcebergDetection,
+    detect_icebergs,
+    hidden_trades,
+)
+from ob_analytics.interop import (
+    HftbacktestWriter,
+    NautilusWriter,
+    to_hftbacktest_array,
+    to_nautilus_deltas,
 )
 
 # Importing the live package registers the ccxt and cryptofeed live sources
@@ -61,16 +126,28 @@ from ob_analytics.flow_toxicity import (
 # entry-point group.
 from ob_analytics.live import LiveSource
 from ob_analytics.lobster import LobsterSource
+from ob_analytics.metrics import (
+    get_metric,
+    list_metrics,
+    load_metric_plugins,
+    register_metric,
+)
 from ob_analytics.pipeline import Pipeline, PipelineResult
 from ob_analytics.protocols import (
+    BarRule,
+    Clocks,
     DataWriter,
     DepthSource,
     EventLoader,
+    Feature,
     FeedType,
     Level,
+    Metric,
     OfflineSource,
     RunContext,
+    SequenceKind,
     Source,
+    TradeAttribution,
     TradeSource,
 )
 from ob_analytics.schemas import (
@@ -92,6 +169,7 @@ from ob_analytics.trade_sign import (
 )
 
 load_source_plugins()
+load_metric_plugins()
 
 logger.disable("ob_analytics")
 
@@ -129,57 +207,102 @@ __all__ = [
     "SYMBOL_COLUMN",
     "VENUE_COLUMN",
     # ── Sources (per-venue entry points) ─────────────────────────────
+    "BarRule",
     "BitstampSource",
+    "Clocks",
     "ConfigError",
+    "CostSummary",
     "DataQualitySummary",
     "DataWriter",
+    "DatabentoSettings",
+    "DatabentoSource",
     "DepthCsvSource",
     "DepthSource",
     "EventLoader",
+    "Feature",
     "FeedType",
+    "HftbacktestWriter",
+    # ── Hidden liquidity ─────────────────────────────────────────────
+    "IcebergDetection",
     "KyleLambdaResult",
     "Level",
     "LiveSource",
     "LobsterSource",
+    "Metric",
+    "NautilusWriter",
     # ── Exceptions ───────────────────────────────────────────────────
     "ObAnalyticsError",
     # ── Protocols / extension points ─────────────────────────────────
     "OfflineSource",
+    "OutputTables",
+    "ParquetWriter",
+    "PickleWriter",
     # ── Pipeline orchestration ───────────────────────────────────────
     "Pipeline",
     "PipelineConfig",
     "PipelineResult",
+    "QualityCheck",
     "RunContext",
     "SequenceGapReport",
+    "SequenceKind",
+    "Severity",
     "Source",
     "SourceSettings",
+    "StaleOrder",
+    "TradeAttribution",
     "TradeSource",
     "__version__",
+    # ── Transaction cost and liquidity ───────────────────────────────
+    "amihud",
+    # ── Bars ─────────────────────────────────────────────────────────
+    "bars",
     # ── Trade-sign classification ────────────────────────────────────
     "bulk_volume_classification",
     "classify_trade_sign",
     "compute_kyle_lambda",
     # ── Flow toxicity ────────────────────────────────────────────────
     "compute_vpin",
+    "cost_summary",
     # ── Data quality ─────────────────────────────────────────────────
     "data_quality_summary",
+    "detect_icebergs",
     "detect_sequence_gaps",
+    "detect_stale_orders",
+    # ── Feature table ────────────────────────────────────────────────
+    "features",
+    "get_bar_rule",
+    "get_feature",
+    "get_metric",
     "get_source",
     "group_by_instrument",
+    "hidden_trades",
     "lee_ready",
+    "list_bar_rules",
+    "list_features",
+    "list_metrics",
     "list_sources",
     "load_data",
+    "load_metric_plugins",
     "load_source_plugins",
+    "ofi_by_horizon",
     "order_flow_imbalance",
+    "register_bar_rule",
+    "register_feature",
+    "register_metric",
     "register_source",
+    "roll_spread",
     # ── Sample data ──────────────────────────────────────────────────
     "sample_csv_path",
     "sample_data_dir",
     # ── Data I/O ─────────────────────────────────────────────────────
     "save_data",
     "tick_rule",
+    "to_hftbacktest_array",
+    "to_nautilus_deltas",
     "toy_events",
     "toy_l2_depth",
     "toy_l2_trades",
     "toy_trades",
+    "transaction_costs",
+    "vpin_bucket_volume",
 ]

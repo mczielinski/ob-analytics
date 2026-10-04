@@ -9,15 +9,19 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
 import numpy as np
 import pandas as pd
+from loguru import logger
 
+from ob_analytics._utils import validate_columns
 from ob_analytics.depth import book_imbalance, filter_depth, micro_price
 from ob_analytics.exceptions import ConfigError
+from ob_analytics.flow_toxicity import OFI_HORIZONS, ofi_by_horizon
 
 
 @dataclass(frozen=True)
@@ -154,6 +158,67 @@ def mpl_marker_area_to_plotly_size(area: np.ndarray) -> np.ndarray:
     return np.sqrt(np.maximum(area, 0.0)) * 0.8
 
 
+def format_volume_tick(value: float) -> str:
+    """Compact label for a depth-heatmap colorbar volume tick."""
+    if not math.isfinite(value):
+        return ""
+    a = abs(value)
+    if a != 0 and (a < 1e-3 or a >= 1e6):
+        return f"{value:.1e}"
+    if a >= 1000:
+        return f"{value:,.0f}"
+    if a >= 1:
+        return f"{value:.1f}"
+    return f"{value:.3g}"
+
+
+def biased_color_norm(
+    volume: np.ndarray, col_bias: float, n_ticks: int = 5
+) -> tuple[np.ndarray, list[float], list[str]]:
+    """Map volumes to [0, 1] color positions under a power/log bias.
+
+    Shared by the plotly and bokeh depth-heatmap backends (matplotlib's
+    ``_volume_norm`` stays independent, since it returns a matplotlib
+    ``Normalize`` object rather than a plain array). ``col_bias`` of ``1.0``
+    is linear, ``0 < col_bias < 1`` is a power-law gamma that brightens
+    low-volume levels, and ``col_bias <= 0`` selects log10. Returns the
+    normalized color array plus colorbar tick positions (in ``[0, 1]``) and
+    labels (in original volume units) -- empty lists when no volume is
+    finite (and positive, under a log bias).
+    """
+    v = np.asarray(volume, dtype=float)
+    if col_bias <= 0:
+        finite = v[np.isfinite(v) & (v > 0)]
+    else:
+        finite = v[np.isfinite(v)]
+    if finite.size == 0:
+        return np.zeros_like(v), [], []
+    vmin = float(finite.min())
+    vmax = float(finite.max())
+    if vmax <= vmin:
+        vmax = vmin + 1.0
+
+    if col_bias <= 0:
+        lo, hi = math.log(vmin), math.log(vmax)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            t = (np.log(np.clip(v, vmin, vmax)) - lo) / (hi - lo)
+
+        def inv(tt: float) -> float:
+            return math.exp(lo + tt * (hi - lo))
+    else:
+        gamma = col_bias
+        base = (np.clip(v, vmin, vmax) - vmin) / (vmax - vmin)
+        t = base**gamma
+
+        def inv(tt: float) -> float:
+            return vmin + (tt ** (1.0 / gamma)) * (vmax - vmin)
+
+    t = np.nan_to_num(t, nan=0.0)
+    tickvals = [i / (n_ticks - 1) for i in range(n_ticks)]
+    ticktext = [format_volume_tick(inv(tv)) for tv in tickvals]
+    return t, tickvals, ticktext
+
+
 # Per-side (dark touch anchor, pale far anchor) for the depth ramp.  The two
 # anchors of each family sit at near-identical luminance to their counterpart
 # in the other family (Δlum ≤ 0.02 across the whole ramp), so the *luminance*
@@ -253,7 +318,8 @@ def _price_axis_breaks(
 ) -> tuple[float, np.ndarray]:
     """Compute tick step and break array for a price axis."""
     price_range = price_max - price_min
-    if price_range <= 0:
+    # ``not > 0`` (rather than ``<= 0``) also catches NaN, the range of zero rows.
+    if not price_range > 0:
         return 1.0, np.array([price_min])
     price_by = 10 ** round(np.log10(price_range) - 1)
     y_breaks = np.arange(
@@ -373,6 +439,32 @@ def prepare_trades_data(
     }
 
 
+#: What the depth heatmap shows when it is given no depth rows at all.
+NO_DEPTH_NOTICE = "No depth data to draw."
+
+
+def _price_bound(value: float) -> float | None:
+    """Return *value*, or ``None`` when it is NaN.
+
+    A bound taken from the spread or trades of an empty window is NaN, and
+    filtering on NaN would drop every price level.
+    """
+    return None if pd.isna(value) else float(value)
+
+
+def _price_range_notice(price_from: float | None, price_to: float | None) -> str:
+    """Name the price range that left the depth heatmap with no level.
+
+    Only called after the price filter emptied the frame, so at least one
+    bound is set.
+    """
+    if price_from is not None and price_to is not None:
+        return f"No price level between {price_from:.6g} and {price_to:.6g}."
+    if price_from is not None:
+        return f"No price level at or above {price_from:.6g}."
+    return f"No price level at or below {price_to:.6g}."
+
+
 def prepare_price_levels_data(
     depth: pd.DataFrame,
     spread: pd.DataFrame | None = None,
@@ -388,6 +480,9 @@ def prepare_price_levels_data(
     volume_to: float | None = None,
     volume_scale: float | None = None,
     price_by: float | None = None,
+    iceberg_lines: pd.DataFrame | None = None,
+    iceberg_refills: pd.DataFrame | None = None,
+    hidden_trades: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """Prepare data for the price-level depth heatmap.
 
@@ -402,37 +497,57 @@ def prepare_price_levels_data(
     When ``volume_scale`` is ``None`` (the default), an order-of-magnitude
     scale is auto-inferred from the input depth via
     :func:`infer_volume_scale`.
+
+    By default a price level that does not change in the window is left
+    out: it would be one flat line from start to end. When no level changes
+    at all, every level is kept instead, so a quiet book still draws.
+    ``show_all_depth=True`` keeps every level in all cases.
+
+    The payload's ``notice`` is ``None`` or a short sentence for the
+    renderer to show on the chart: why the heatmap is empty, or that no
+    level changed.
+
+    ``iceberg_lines``, ``iceberg_refills`` and ``hidden_trades`` are the
+    optional hidden-liquidity overlay (see :func:`prepare_hidden_liquidity_overlay`,
+    issue #272), already clipped to the caller's display window. ``None``
+    (the default) draws the heatmap with no overlay.
     """
     depth_local = depth.copy()
     if volume_scale is None:
         volume_scale = infer_volume_scale(depth_local["volume"])
     depth_local["volume"] = depth_local["volume"] * volume_scale
 
-    if start_time is None:
-        start_time = depth_local["timestamp"].iloc[0]
-    if end_time is None:
-        end_time = depth_local["timestamp"].iloc[-1]
+    # The first step that leaves no rows names the reason the heatmap is empty.
+    notice: str | None = NO_DEPTH_NOTICE if depth_local.empty else None
+
+    if not depth_local.empty:
+        if start_time is None:
+            start_time = depth_local["timestamp"].iloc[0]
+        if end_time is None:
+            end_time = depth_local["timestamp"].iloc[-1]
 
     if spread is not None:
-        spread = spread[
-            (spread["timestamp"] >= start_time) & (spread["timestamp"] <= end_time)
-        ]
+        if start_time is not None and end_time is not None:
+            spread = spread[
+                (spread["timestamp"] >= start_time) & (spread["timestamp"] <= end_time)
+            ]
         spread = _sanitize_spread(spread)
         if price_from is None:
-            price_from = 0.995 * spread["best_bid_price"].min()
+            price_from = _price_bound(0.995 * spread["best_bid_price"].min())
         if price_to is None:
-            price_to = 1.005 * spread["best_ask_price"].max()
+            price_to = _price_bound(1.005 * spread["best_ask_price"].max())
 
     if trades is not None:
-        trades = trades[
-            (trades["timestamp"] >= start_time) & (trades["timestamp"] <= end_time)
-        ]
+        if start_time is not None and end_time is not None:
+            trades = trades[
+                (trades["timestamp"] >= start_time) & (trades["timestamp"] <= end_time)
+            ]
         if price_from is None:
-            price_from = 0.995 * trades["price"].min()
+            price_from = _price_bound(0.995 * trades["price"].min())
         else:
             trades = trades[trades["price"] >= price_from]
         if price_to is None:
-            price_to = 1.005 * trades["price"].max()
+            price_to = _price_bound(1.005 * trades["price"].max())
         else:
             trades = trades[trades["price"] <= price_to]
 
@@ -440,16 +555,26 @@ def prepare_price_levels_data(
         depth_local = depth_local[depth_local["price"] >= price_from]
     if price_to is not None:
         depth_local = depth_local[depth_local["price"] <= price_to]
+    if notice is None and depth_local.empty:
+        notice = _price_range_notice(price_from, price_to)
     if volume_from is not None:
         depth_local = depth_local[
             (depth_local["volume"] >= volume_from) | (depth_local["volume"] == 0)
         ]
     if volume_to is not None:
         depth_local = depth_local[depth_local["volume"] <= volume_to]
+    if notice is None and depth_local.empty:
+        notice = "No price level in the chosen volume range."
 
-    depth_filtered = filter_depth(depth_local, start_time, end_time)
+    if depth_local.empty or start_time is None or end_time is None:
+        # Only an empty depth frame leaves the window unset.
+        depth_filtered = depth_local
+    else:
+        depth_filtered = filter_depth(depth_local, start_time, end_time)
+    if notice is None and depth_filtered.empty:
+        notice = "No resting orders in this time window."
 
-    if not show_all_depth:
+    if not show_all_depth and not depth_filtered.empty:
         counts = depth_filtered.groupby("price", as_index=False)["timestamp"].agg(
             count="size",
             first_ts="min",
@@ -460,11 +585,29 @@ def prepare_price_levels_data(
             & (counts["first_ts"] == start_time)
             & (counts["last_ts"] == end_time)
         ]
-        depth_filtered = depth_filtered[
-            ~depth_filtered["price"].isin(unchanged["price"])
-        ]
+        if len(unchanged) == len(counts):
+            # Leaving out every level would draw an empty chart; the flat
+            # lines are what a quiet book has to show.
+            notice = "No price level changed in this window, so every level is drawn."
+        else:
+            depth_filtered = depth_filtered[
+                ~depth_filtered["price"].isin(unchanged["price"])
+            ]
 
     depth_filtered.loc[depth_filtered["volume"] == 0, "volume"] = np.nan
+
+    if notice is not None:
+        log = logger.warning if depth_filtered.empty else logger.info
+        log("Depth heatmap: {}", notice)
+
+    y_range = price_y_range(depth_filtered["price"])
+    if y_range is None:
+        # Nothing to draw from the book: frame the midprice and trades instead.
+        y_range = price_y_range(
+            spread["best_bid_price"] if spread is not None else None,
+            spread["best_ask_price"] if spread is not None else None,
+            trades["price"] if trades is not None else None,
+        )
 
     return {
         "depth": depth_filtered,
@@ -473,7 +616,110 @@ def prepare_price_levels_data(
         "show_mp": show_mp,
         "col_bias": col_bias,
         "price_by": price_by,
-        "y_range": price_y_range(depth_filtered["price"]),
+        "y_range": y_range,
+        "notice": notice,
+        "iceberg_lines": iceberg_lines,
+        "iceberg_refills": iceberg_refills,
+        "hidden_trades": hidden_trades,
+    }
+
+
+def prepare_hidden_liquidity_overlay(
+    icebergs: pd.DataFrame,
+    slices: pd.DataFrame,
+    hidden: pd.DataFrame,
+    events: pd.DataFrame,
+    *,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+    price_from: float | None = None,
+    price_to: float | None = None,
+) -> dict[str, pd.DataFrame]:
+    """Clip iceberg refills and hidden trades to a face's display window (#272).
+
+    Joins :func:`~ob_analytics.hidden_liquidity.detect_icebergs`'s two frames
+    into one row per slice (``iceberg``, ``timestamp``, ``price``,
+    ``direction``, ``confidence``), then clips it and
+    :func:`~ob_analytics.hidden_liquidity.hidden_trades`'s output to
+    *start_time*/*end_time*/*price_from*/*price_to* -- the same window the
+    depth heatmap and order-activity map already clip to, so a full day's
+    ~900 icebergs / ~9,600 hidden trades do not flood a face meant to show a
+    few minutes.
+
+    Each hidden trade is also split into ``category``: ``"hidden"`` when its
+    maker event's order ``id`` is
+    :data:`~ob_analytics.engine.HIDDEN_ORDER_ID` (a genuinely unseen order),
+    or ``"check"`` otherwise -- the maker order *was* visible, or its
+    ``maker_event_id`` did not resolve at all. A diff feed's depth summary can
+    drop a resting level a later quote crosses, which makes a trade against a
+    real order print as if it were inside the spread; a ``"check"`` row is a
+    trade to verify, not a confirmed hidden order, and renderers style the
+    two apart.
+
+    Parameters
+    ----------
+    icebergs, slices : pandas.DataFrame
+        :attr:`~ob_analytics.hidden_liquidity.IcebergDetection.icebergs` and
+        ``.slices``.
+    hidden : pandas.DataFrame
+        Output of :func:`~ob_analytics.hidden_liquidity.hidden_trades`.
+    events : pandas.DataFrame
+        The run's L3 events, used to look up each hidden trade's maker order
+        ``id``.
+
+    Returns
+    -------
+    dict of str to pandas.DataFrame
+        ``"iceberg_lines"`` -- one row per surviving slice, for icebergs with
+        at least two slices left in the window (draw as a joining line).
+        ``"iceberg_refills"`` -- one row per refill slice (``slice > 1``) in
+        the window (draw as a marker).
+        ``"hidden_trades"`` -- hidden-trade rows in the window, with
+        ``category`` added.
+    """
+    from ob_analytics.engine import HIDDEN_ORDER_ID
+
+    def _clip(df: pd.DataFrame, price_col: str) -> pd.DataFrame:
+        if start_time is not None:
+            df = df[df["timestamp"] >= start_time]
+        if end_time is not None:
+            df = df[df["timestamp"] <= end_time]
+        if price_from is not None:
+            df = df[df[price_col] >= price_from]
+        if price_to is not None:
+            df = df[df[price_col] <= price_to]
+        return df
+
+    chain = _clip(
+        slices.merge(
+            icebergs[["iceberg", "direction", "price", "confidence"]],
+            on="iceberg",
+            how="left",
+            # icebergs has exactly one row per iceberg id by construction; a
+            # detect_icebergs regression that broke that would otherwise fan
+            # out rows silently instead of raising.
+            validate="many_to_one",
+        ),
+        "price",
+    )
+    counts = chain.groupby("iceberg")["slice"].transform("size")
+    iceberg_lines = chain[counts >= 2].sort_values(["iceberg", "timestamp"])
+    iceberg_refills = chain[chain["slice"] > 1]
+
+    hidden = _clip(hidden, "price")
+    maker = pd.to_numeric(hidden["maker_event_id"], errors="coerce")
+    order_id = maker.map(events.drop_duplicates("event_id").set_index("event_id")["id"])
+    # NaN here means either a genuinely visible maker or a maker_event_id that
+    # does not resolve at all (hidden_trades() keeps such trades, read at
+    # their own timestamp) -- both are unconfirmed, not confirmed hidden, so
+    # both fall to "check" rather than a false-positive "hidden".
+    is_hidden = order_id.eq(HIDDEN_ORDER_ID).fillna(False)
+    hidden = hidden.assign(category=np.where(is_hidden, "hidden", "check"))
+
+    return {
+        "iceberg_lines": iceberg_lines,
+        "iceberg_refills": iceberg_refills,
+        "hidden_trades": hidden,
     }
 
 
@@ -510,9 +756,9 @@ def prepare_event_map_data(
         events = events[events["volume"] <= volume_to]
 
     if price_from is None:
-        price_from = events["price"].quantile(0.01)
+        price_from = float(events["price"].quantile(0.01))
     if price_to is None:
-        price_to = events["price"].quantile(0.99)
+        price_to = float(events["price"].quantile(0.99))
 
     events = events[(events["price"] >= price_from) & (events["price"] <= price_to)]
 
@@ -538,6 +784,9 @@ def prepare_order_activity_l3_data(
     price_to: float | None = None,
     max_spans: int = 2000,
     marker_threshold: int = 300,
+    iceberg_lines: pd.DataFrame | None = None,
+    iceberg_refills: pd.DataFrame | None = None,
+    hidden_trades: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """Per-order lifecycle Gantt: each order one span place -> outcome, by fate.
 
@@ -566,6 +815,11 @@ def prepare_order_activity_l3_data(
     order ends when it is deleted **or fully executed** (LOBSTER fills never
     emit a delete); only genuinely still-resting orders extend to the window
     end.  Lifecycles overlapping the window are clipped to it.
+
+    ``iceberg_lines``, ``iceberg_refills`` and ``hidden_trades`` are the
+    optional hidden-liquidity overlay (see :func:`prepare_hidden_liquidity_overlay`,
+    issue #272), already clipped to the caller's display window. ``None``
+    (the default) draws the Gantt with no overlay.
     """
     from ob_analytics.analytics import order_lifecycles
 
@@ -591,9 +845,9 @@ def prepare_order_activity_l3_data(
 
     if not spans.empty:
         if price_from is None:
-            price_from = spans["price"].quantile(0.01)
+            price_from = float(spans["price"].quantile(0.01))
         if price_to is None:
-            price_to = spans["price"].quantile(0.99)
+            price_to = float(spans["price"].quantile(0.99))
         spans = spans[(spans["price"] >= price_from) & (spans["price"] <= price_to)]
 
     # Three terminal fates; filled/partial collapse to "filled".  Colour and the
@@ -645,6 +899,9 @@ def prepare_order_activity_l3_data(
         "y_range": y_range,
         "shown_of": shown_of,
         "show_markers": n_total <= marker_threshold,
+        "iceberg_lines": iceberg_lines,
+        "iceberg_refills": iceberg_refills,
+        "hidden_trades": hidden_trades,
     }
 
 
@@ -829,6 +1086,163 @@ def prepare_price_view_data(
         "trades": out_trades,
         "y_range": price_y_range(win["best_bid_price"], win["best_ask_price"]),
     }
+
+
+def prepare_l1_ticker_data(
+    l1: pd.DataFrame,
+    *,
+    at: pd.Timestamp | str | None = None,
+    symbol: str = "",
+    start_time: pd.Timestamp | str | None = None,
+    end_time: pd.Timestamp | str | None = None,
+) -> dict[str, Any]:
+    """The Level 1 quote: best bid, best ask and last trade.
+
+    *l1* is the ``l1_ticker`` metric's table (see
+    :class:`~ob_analytics.metrics.L1TickerMetric`).  The face draws one of two
+    pictures:
+
+    * With *at*, the quote card for that instant: the last row at or before
+      *at*.  *symbol* names the instrument on the card.
+    * Without *at*, the three prices over time, from *start_time* to
+      *end_time* (default: the whole table).  The price axis covers every
+      trade and the 1st to 99th percentile of the quotes.
+
+    A time with no time zone (*at*, *start_time*, *end_time*) is read in the
+    data's time zone.  The card's payload is plain numbers, so a card can also
+    be drawn without a result: ``plot("l1_ticker", bid=99, ask=101, last=100)``.
+
+    Returns
+    -------
+    dict
+        For the card: ``bid`` / ``ask`` / ``last`` (prices),
+        ``bid_size`` / ``ask_size`` / ``last_size``, ``at`` and ``symbol``;
+        a value the table does not have yet is ``None``.  For the prices over
+        time: ``timestamp``, ``best_bid_price``, ``best_ask_price``,
+        ``last_price`` and ``y_range``, with only the rows where a price
+        changes.
+    """
+    tz = getattr(l1["timestamp"].dtype, "tz", None)
+
+    def in_data_tz(t: pd.Timestamp | str | None) -> pd.Timestamp | None:
+        """Read *t* as a time, in the data's time zone when it names none."""
+        if t is None:
+            return None
+        t = pd.Timestamp(t)
+        return t.tz_localize(tz) if t.tzinfo is None and tz is not None else t
+
+    if at is not None:
+        at = in_data_tz(at)
+        before = l1[l1["timestamp"] <= at]
+        row = before.iloc[-1] if not before.empty else pd.Series(dtype=float)
+
+        def value(column: str) -> float | None:
+            v = row.get(column)
+            return None if v is None or pd.isna(v) else float(v)
+
+        return {
+            "bid": value("best_bid_price"),
+            "ask": value("best_ask_price"),
+            "last": value("last_price"),
+            "bid_size": value("best_bid_vol"),
+            "ask_size": value("best_ask_vol"),
+            "last_size": value("last_volume"),
+            "at": at,
+            "symbol": symbol,
+        }
+
+    start_time, end_time = _default_start_end(
+        l1, in_data_tz(start_time), in_data_tz(end_time)
+    )
+    win = l1[(l1["timestamp"] >= start_time) & (l1["timestamp"] <= end_time)]
+    prices = win[["best_bid_price", "best_ask_price", "last_price"]]
+    # The table also changes when only a size changes; the lines do not.
+    # Two missing values count as the same (last_price before the first trade).
+    previous = prices.shift()
+    same = prices.eq(previous) | (prices.isna() & previous.isna())
+    lines = win[~same.all(axis=1)]
+    return {
+        "timestamp": lines["timestamp"].reset_index(drop=True),
+        "best_bid_price": lines["best_bid_price"].to_numpy(dtype=float),
+        "best_ask_price": lines["best_ask_price"].to_numpy(dtype=float),
+        "last_price": lines["last_price"].to_numpy(dtype=float),
+        # From every row, not just the changes: one far quote is one change.
+        "y_range": _l1_y_range(win),
+    }
+
+
+@dataclass(frozen=True)
+class CardText:
+    """One piece of text on the L1 quote card, placed in axes fractions.
+
+    *color* names a :class:`~ob_analytics.visualization.Palette` field, so
+    each backend colours the card from the theme it is given.
+    """
+
+    x: float
+    y: float
+    text: str
+    size: float
+    color: str
+    align: str = "center"
+    bold: bool = False
+
+
+def _card_number(value: float | None, digits: int) -> str:
+    """Format a card number; a missing one is a dash."""
+    return "—" if value is None else f"{value:,.{digits}g}"
+
+
+def l1_card_texts(data: Mapping[str, Any]) -> list[CardText]:
+    """Lay out the L1 quote card: the heading row, then bid, ask and last.
+
+    *data* is the card payload of :func:`prepare_l1_ticker_data`.  Sizes are
+    in points for a card about 4.6 inches wide; a long price gets a smaller
+    font so the three columns do not run into each other.
+    """
+    symbol = data.get("symbol") or ""
+    at = data.get("at")
+    heading = symbol or "Level 1 quote"
+    note = "Level 1 quote" if symbol else ""
+    if at is not None:
+        stamp = pd.Timestamp(at).strftime("%Y-%m-%d %H:%M:%S")
+        note = f"{note} · {stamp}" if note else stamp
+    texts = [CardText(0.06, 0.80, heading, 12, "price_line", "left", bold=True)]
+    if note:
+        texts.append(CardText(0.94, 0.80, note, 7.5, "label", "right"))
+
+    columns = (
+        ("BID", "bid", "bid_size", "bid"),
+        ("ASK", "ask", "ask_size", "ask"),
+        ("LAST", "last", "last_size", "price_line"),
+    )
+    prices = [_card_number(data.get(key), 10) for _, key, _, _ in columns]
+    # About 0.7 em per bold digit; each column is about 95 pt wide.
+    longest = max(len(p) for p in prices)
+    price_size = min(16.0, 90.0 / (0.7 * longest))
+    for x, (label, _, size_key, color), price in zip(
+        (0.20, 0.50, 0.80), columns, prices
+    ):
+        texts.append(CardText(x, 0.60, label, 8, "label"))
+        texts.append(CardText(x, 0.38, price, price_size, color, bold=True))
+        size = data.get(size_key)
+        if size is not None:
+            texts.append(CardText(x, 0.17, f"× {_card_number(size, 6)}", 7.5, "label"))
+    return texts
+
+
+def _l1_y_range(l1: pd.DataFrame) -> tuple[float, float] | None:
+    """The price axis for the L1 lines: every trade and most of the quotes.
+
+    A few resting orders far from the market can be the best quote when the
+    book is thin, for example as a capture's book empties at its end.  Taking
+    the quotes' 1st to 99th percentile keeps them from flattening the lines;
+    every trade price stays in view.
+    """
+    quotes = pd.concat([l1["best_bid_price"], l1["best_ask_price"]]).dropna()
+    if not quotes.empty:
+        quotes = quotes.quantile([0.01, 0.99])
+    return price_y_range(quotes, l1["last_price"])
 
 
 def prepare_book_signals_data(
@@ -1139,10 +1553,10 @@ def prepare_volume_map_data(
     if price_to:
         events = events[events["price"] <= price_to]
     if volume_from is None:
-        volume_from = events["volume"].quantile(0.0001)
+        volume_from = float(events["volume"].quantile(0.0001))
     events = events[events["volume"] >= volume_from]
     if volume_to is None:
-        volume_to = events["volume"].quantile(0.9999)
+        volume_to = float(events["volume"].quantile(0.9999))
     events = events[events["volume"] <= volume_to]
 
     return {"events": events, "log_scale": log_scale}
@@ -1313,6 +1727,22 @@ def book_mid(bids: pd.DataFrame, asks: pd.DataFrame) -> float | None:
     return (float(bids["price"].max()) + float(asks["price"].min())) / 2
 
 
+def book_bar_thickness(*sides: pd.DataFrame) -> float:
+    """Smallest positive gap between distinct prices across *sides*.
+
+    Used as the ``book_snapshot`` ladder's bar thickness (price units) by
+    every backend; windowing to the touch keeps this gap roughly the tick
+    size, so bars stay tall and contiguous.
+    """
+    arrays = [s["price"].to_numpy() for s in sides if not s.empty]
+    if not arrays:
+        return 1.0
+    uniq = np.unique(np.concatenate(arrays))
+    diffs = np.diff(uniq)
+    diffs = diffs[diffs > 0]
+    return float(np.min(diffs)) if diffs.size else 1.0
+
+
 def check_book_payload_level(data: dict[str, Any], *, per_order: bool) -> None:
     """Reject a book payload whose resolution contradicts the renderer's level.
 
@@ -1335,7 +1765,7 @@ def check_book_payload_level(data: dict[str, Any], *, per_order: bool) -> None:
 
 
 def prepare_book_snapshot_data(
-    order_book: dict,
+    order_book: Mapping[str, Any],
     per_order: bool = False,
     volume_scale: float | None = None,
     show_quantiles: bool = False,
@@ -1424,7 +1854,9 @@ def prepare_volume_percentiles_data(
     *depth_summary*, so any ``depth_bps`` / ``depth_bins`` configuration works
     (the previous hardcoded 25–500 bps range raised ``KeyError`` for anything
     else).  ``volume_scale=None`` auto-infers a power-of-10 scale from the
-    aggregated bin volumes (after the time-window filter is applied).
+    aggregated bin volumes (after the time-window filter is applied).  A
+    window with no rows gives empty ``asks_cumsum`` / ``bids_cumsum_neg``
+    frames that keep the bin columns; the renderers draw a "no data" figure.
     """
     if start_time is None:
         start_time = depth_summary["timestamp"].iloc[0]
@@ -1525,9 +1957,10 @@ def prepare_volume_percentiles_data(
         values="liquidity",
     )
     # Touch -> far ordering: cumsum then stacks the near-touch bin first
-    # (adjacent to y=0) and accumulates outward.
-    asks_pivot = asks_pivot[ask_names_fmt]
-    bids_pivot = bids_pivot[bid_names_fmt]
+    # (adjacent to y=0) and accumulates outward.  reindex (not []) keeps the
+    # columns when the window holds no rows: pivoting an empty frame gives none.
+    asks_pivot = asks_pivot.reindex(columns=ask_names_fmt)
+    bids_pivot = bids_pivot.reindex(columns=bid_names_fmt)
 
     asks_cumsum = asks_pivot.cumsum(axis=1)
     bids_cumsum = bids_pivot.cumsum(axis=1)
@@ -1611,28 +2044,111 @@ def prepare_vpin_data(
     return {"vpin_df": vpin_df, "threshold": threshold, "bar_width": bar_width}
 
 
+def prepare_transaction_costs_data(
+    costs: pd.DataFrame,
+    *,
+    window: str = "1min",
+) -> dict[str, Any]:
+    """Prepare the transaction-cost decomposition for plotting.
+
+    The face shows where a taker's cost went: the effective spread is the
+    whole of it, the realized spread is the part the liquidity provider kept,
+    and the gap between the two lines is the price impact.  Because they add
+    up row by row, drawing them as two lines makes the third readable as the
+    band between them, with no third line to follow.
+
+    Per-trade costs are far too noisy to read directly, so they are averaged
+    onto *window*, weighted by trade size the same way
+    :func:`~ob_analytics.cost.cost_summary` weights the session figure.  The
+    raw per-trade effective spread is passed through as well, for a faint
+    scatter behind the lines that shows the spread of what was averaged.
+
+    Parameters
+    ----------
+    costs : pandas.DataFrame
+        A :func:`~ob_analytics.cost.transaction_costs` frame.
+    window : str, optional
+        Pandas offset string for the averaging window.  Default ``"1min"``.
+
+    Returns
+    -------
+    dict
+        ``times`` / ``effective`` / ``realized`` / ``impact`` (the windowed
+        series, in basis points), ``trade_times`` / ``trade_effective`` (the
+        raw per-trade scatter), and ``horizon`` (the realized-spread horizon
+        the costs were measured at, for the title).  ``impact`` is carried for
+        a backend that wants to draw it outright; the two shipped faces read
+        it off the chart as the band between the other two lines.
+    """
+    validate_columns(
+        costs,
+        {
+            "timestamp",
+            "volume",
+            "effective_spread_bps",
+            "realized_spread_bps",
+            "price_impact_bps",
+        },
+        "prepare_transaction_costs_data",
+    )
+    weight = costs["volume"].to_numpy(dtype=np.float64)
+    frame = costs.assign(_weight=weight)
+    for column in ("effective_spread_bps", "realized_spread_bps", "price_impact_bps"):
+        values = frame[column].to_numpy(dtype=np.float64)
+        # NaN * weight stays NaN, which would poison the window's sum; a
+        # missing measure must drop out of both numerator and denominator.
+        frame["_w_" + column] = values * weight
+        frame["_d_" + column] = np.where(np.isnan(values), 0.0, weight)
+
+    grouped = frame.groupby(pd.Grouper(key="timestamp", freq=window))
+    binned = grouped.agg(
+        w_effective=("_w_effective_spread_bps", "sum"),
+        d_effective=("_d_effective_spread_bps", "sum"),
+        w_realized=("_w_realized_spread_bps", "sum"),
+        d_realized=("_d_realized_spread_bps", "sum"),
+        w_impact=("_w_price_impact_bps", "sum"),
+        d_impact=("_d_price_impact_bps", "sum"),
+        n_trades=("_weight", "size"),
+    )
+    binned = binned[binned["n_trades"] > 0].reset_index()
+
+    def ratio(numerator: str, denominator: str) -> np.ndarray:
+        num = binned[numerator].to_numpy(dtype=np.float64)
+        den = binned[denominator].to_numpy(dtype=np.float64)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            return np.where(den > 0, num / den, np.nan)
+
+    return {
+        "times": binned["timestamp"].to_numpy(),
+        "effective": ratio("w_effective", "d_effective"),
+        "realized": ratio("w_realized", "d_realized"),
+        "impact": ratio("w_impact", "d_impact"),
+        "trade_times": costs["timestamp"].to_numpy(),
+        "trade_effective": costs["effective_spread_bps"].to_numpy(dtype=np.float64),
+        "horizon": str(costs.attrs.get("horizon", "")),
+    }
+
+
 def prepare_ofi_data(
     ofi_df: pd.DataFrame,
     trades: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """Prepare data for an order-flow-imbalance bar chart.
 
-    Bar colours are a backend-agnostic green/red split on the sign of the
-    OFI.  Bar *width* depends on the renderer's x-axis units (matplotlib
-    uses date numbers), so it is computed by each backend rather than here.
+    Bar colours (the theme's buy / sell split on the sign of the OFI) and bar
+    *width* (which depends on the renderer's x-axis units; matplotlib uses
+    date numbers) are chosen by each backend rather than here.
     """
-    colors = ["#27ae60" if v >= 0 else "#e74c3c" for v in ofi_df["ofi"]]
     return {
         "ofi_df": ofi_df,
         "trades": trades,
-        "colors": colors,
     }
 
 
 def prepare_ofi_horizon_data(
     trades: pd.DataFrame,
     *,
-    horizons: tuple[str, ...] = ("5s", "15s", "60s", "300s"),
+    horizons: tuple[str, ...] = OFI_HORIZONS,
     grid: str = "5s",
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
@@ -1640,15 +2156,11 @@ def prepare_ofi_horizon_data(
     """Multi-horizon order-flow-imbalance grid for the OFI horizon graph.
 
     A single OFI line shows one lookback; this computes OFI at several
-    *horizons* and aligns them onto one *grid* so short- vs long-horizon
-    pressure can be compared at a glance.  Each row is a horizon; the value is
-    OFI in ``[-1, +1]`` (buy pressure positive), rendered as a stacked
-    horizon-graph band per row.
-
-    Each horizon is a *trailing rolling window* evaluated at every grid step
-    (not a coarse non-overlapping resample), so long horizons read as smooth
-    curves and short ones as jumpy -- the persistent-vs-fleeting contrast --
-    rather than wide forward-filled blocks.
+    *horizons* on one *grid* (:func:`~ob_analytics.flow_toxicity.ofi_by_horizon`)
+    from the trades between *start_time* and *end_time*, so short- vs
+    long-horizon pressure can be compared at a glance.  Each row is a horizon;
+    the value is OFI in ``[-1, +1]`` (buy pressure positive), rendered as a
+    stacked horizon-graph band per row.
 
     Returns ``ofi`` (a ``len(horizons)`` x ``n_grid`` array, longest horizon
     last so it plots at the top), ``times`` (grid timestamps) and ``horizons``.
@@ -1661,39 +2173,31 @@ def prepare_ofi_horizon_data(
             "times": np.array([], dtype="datetime64[ns]"),
             "horizons": list(horizons),
         }
+    return prepare_ofi_horizon_grid_data(
+        ofi_by_horizon(tr, horizons=horizons, grid=grid)
+    )
 
-    step = pd.Timedelta(grid)
-    gidx = pd.date_range(
-        tr["timestamp"].min().floor(grid), tr["timestamp"].max().ceil(grid), freq=grid
-    )
-    # Signed volume binned onto the fine grid, then trailing-summed per horizon.
-    floored = tr["timestamp"].dt.floor(grid)
-    is_buy = tr["direction"] == "buy"
-    buy = (
-        tr["volume"]
-        .where(is_buy, 0.0)
-        .groupby(floored)
-        .sum()
-        .reindex(gidx, fill_value=0.0)
-    )
-    sell = (
-        tr["volume"]
-        .where(~is_buy, 0.0)
-        .groupby(floored)
-        .sum()
-        .reindex(gidx, fill_value=0.0)
-    )
-    rows = []
-    for h in horizons:
-        k = max(round(pd.Timedelta(h).total_seconds() / step.total_seconds()), 1)
-        b = buy.rolling(k, min_periods=1).sum()
-        s = sell.rolling(k, min_periods=1).sum()
-        total = (b + s).replace(0.0, np.nan)
-        rows.append(((b - s) / total).to_numpy())
+
+def prepare_ofi_horizon_grid_data(
+    grid: pd.DataFrame,
+    *,
+    start_time: pd.Timestamp | None = None,
+    end_time: pd.Timestamp | None = None,
+) -> dict[str, Any]:
+    """The OFI horizon graph payload from an already computed grid.
+
+    *grid* is a :func:`~ob_analytics.flow_toxicity.ofi_by_horizon` table:
+    ``timestamp`` and one column per horizon.  Returns the same payload as
+    :func:`prepare_ofi_horizon_data`, for the grid steps between *start_time*
+    and *end_time*.
+    """
+    start_time, end_time = _default_start_end(grid, start_time, end_time)
+    rows = grid[(grid["timestamp"] >= start_time) & (grid["timestamp"] <= end_time)]
+    horizons = [c for c in grid.columns if c != "timestamp"]
     return {
-        "ofi": np.vstack(rows),
-        "times": gidx.to_numpy(),
-        "horizons": list(horizons),
+        "ofi": rows[horizons].to_numpy(dtype=float).T.reshape(len(horizons), -1),
+        "times": pd.DatetimeIndex(rows["timestamp"]).to_numpy(),
+        "horizons": horizons,
     }
 
 
@@ -1825,4 +2329,91 @@ def prepare_trading_halts_data(
         "trades": trades_f,
         "halt_periods": halt_periods,
         "has_halts": has_halts,
+    }
+
+
+def bars_label(bars: pd.DataFrame) -> str:
+    """Describe the rule and threshold :func:`~ob_analytics.bars.bars` recorded.
+
+    Returns an empty string for a frame that carries neither, e.g. one rebuilt
+    by hand.
+    """
+    rule = bars.attrs.get("bar_rule")
+    threshold = bars.attrs.get("bar_threshold")
+    if rule is None:
+        return ""
+    if isinstance(threshold, pd.Timedelta):
+        return f"{rule}, {threshold.total_seconds():.4g}s"
+    if isinstance(threshold, (int, float)):
+        return f"{rule}, {threshold:,.4g}"
+    return str(rule)
+
+
+def _bar_tick_labels(closes: pd.Series, count: int = 8) -> tuple[list[int], list[str]]:
+    """Pick about *count* evenly spaced bars and format their closing times.
+
+    The format follows the span: a capture of minutes gets seconds, one of
+    hours gets minutes, one of days gets the date too.
+    """
+    n = len(closes)
+    step = max(1, n // count)
+    positions = list(range(0, n, step))
+    span = closes.iloc[-1] - closes.iloc[0] if n > 1 else pd.Timedelta(0)
+    if span >= pd.Timedelta(days=1):
+        fmt = "%m-%d %H:%M"
+    elif span >= pd.Timedelta(hours=1):
+        fmt = "%H:%M"
+    else:
+        fmt = "%H:%M:%S"
+    return positions, [closes.iloc[i].strftime(fmt) for i in positions]
+
+
+def prepare_bars_data(
+    bars: pd.DataFrame,
+    label: str = "",
+) -> dict[str, Any]:
+    """Prepare data for a candlestick chart with a signed-volume strip.
+
+    *bars* is a table from :func:`ob_analytics.bars.bars`.  *label* names the
+    rule and threshold it was cut with; the default reads them off the frame.
+
+    **The x axis follows the rule.**  Clock bars occupy equal spans of time, so
+    they are drawn on a real time axis, each centred in its own span: a stretch
+    with no trading shows as the gap it was.  Bars cut by trading activity
+    (tick, volume, dollar, imbalance) occupy wildly unequal spans — a burst can
+    close several inside a second — so a time axis would pile them on top of
+    one another.  They are drawn one to a slot instead, evenly spaced, with
+    their closing times as the tick labels.  That even spacing *is* the point
+    of an activity bar: it is what puts the same amount of market in each one.
+
+    The payload says which axis it built in ``x_axis`` (``"time"`` or
+    ``"ordinal"``); ``x`` and ``bar_width`` are in that axis's own units, and
+    ``ticks`` carries the ``(positions, labels)`` an ordinal axis needs.
+    """
+    label = label or bars_label(bars)
+    closes = bars["timestamp_end"]
+    payload: dict[str, Any] = {
+        "bars": bars,
+        "label": label,
+        "rising": (bars["close"] >= bars["open"]).to_numpy(),
+    }
+
+    step = bars.attrs.get("bar_threshold")
+    if bars.attrs.get("bar_rule") == "time" and isinstance(step, pd.Timedelta):
+        return {
+            **payload,
+            "x_axis": "time",
+            # The span's midpoint, so a candle sits over the span it covers
+            # rather than at the last trade inside it.
+            "x": closes.dt.floor(step) + step / 2,
+            "bar_width": step * 0.8,
+            "ticks": None,
+        }
+
+    return {
+        **payload,
+        "x_axis": "ordinal",
+        "x": np.arange(len(bars), dtype=float),
+        "bar_width": 0.8,
+        "ticks": _bar_tick_labels(closes),
     }

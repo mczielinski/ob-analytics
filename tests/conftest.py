@@ -250,6 +250,90 @@ def tiny_bitstamp_orders_csv(
     return d / "orders.csv"
 
 
+@pytest.fixture(scope="session")
+def fractional_bitstamp_orders_csv(
+    tmp_path_factory: pytest.TempPathFactory,
+    tiny_bitstamp_orders_csv: Path,
+) -> Path:
+    """The tiny Bitstamp fixture with every size scaled below one unit.
+
+    The tiny fixture trades in whole units (2.0, 1.5, 0.5), and so does every
+    hand-built events frame in the suite.  That is what let a bug that
+    truncated base-asset sizes to whole numbers pass: 2.0 truncates to 2 and
+    nothing looks wrong, while a real crypto size of 0.2 truncates to zero and
+    the order reads as though it never traded.
+
+    Sizes here are a tenth of the tiny fixture's, so the whole self-consistent
+    micro-book is preserved and every size is a fraction.
+    """
+    scale = 0.1
+    d = tmp_path_factory.mktemp("fractional_bitstamp")
+    src = tiny_bitstamp_orders_csv.parent
+
+    orders = pd.read_csv(src / "orders.csv")
+    orders["volume"] = orders["volume"] * scale
+    orders.to_csv(d / "orders.csv", index=False)
+
+    trades = pd.read_csv(src / "trades.csv")
+    trades["amount"] = trades["amount"] * scale
+    trades.to_csv(d / "trades.csv", index=False)
+
+    return d / "orders.csv"
+
+
+@pytest.fixture
+def corrupt_bitstamp_orders_csv(tmp_path, tiny_bitstamp_orders_csv) -> Path:
+    """The tiny Bitstamp fixture with three deliberate defects.
+
+    Used to prove ``ob-analytics audit`` refuses a corrupted feed:
+
+    * order 3's ``created`` row is dropped, so its later events are orphans;
+    * one venue ``sequence`` number is skipped — a dropped message;
+    * the last row carries a venue timestamp later than its receive timestamp.
+
+    The trades file is copied unchanged, so the events and trades still
+    describe the same session.
+    """
+    import shutil
+
+    src = tiny_bitstamp_orders_csv.parent
+    dest = tmp_path / "corrupt"
+    dest.mkdir()
+
+    orders = pd.read_csv(src / "orders.csv")
+    orders["sequence"] = range(1, len(orders) + 1)
+    orders = orders[~((orders["id"] == 3) & (orders["action"] == "created"))]
+    orders.loc[orders["sequence"] > 8, "sequence"] += 3
+    last = orders.index[-1]
+    orders.loc[last, "exchange_timestamp"] = orders.loc[last, "timestamp"] + 5_000
+    orders.to_csv(dest / "orders.csv", index=False)
+
+    shutil.copy(src / "trades.csv", dest / "trades.csv")
+    return dest / "orders.csv"
+
+
+@pytest.fixture
+def dropped_created_orders_csv(tmp_path, tiny_bitstamp_orders_csv) -> Path:
+    """The tiny Bitstamp fixture with order 3's ``created`` row dropped.
+
+    One defect only, and a soft one: an order changed and deleted with no
+    ``created`` row looks exactly like an order that was already resting when
+    the capture began, so it is a warning rather than an error.
+    """
+    import shutil
+
+    src = tiny_bitstamp_orders_csv.parent
+    dest = tmp_path / "orphan"
+    dest.mkdir()
+
+    orders = pd.read_csv(src / "orders.csv")
+    orders = orders[~((orders["id"] == 3) & (orders["action"] == "created"))]
+    orders.to_csv(dest / "orders.csv", index=False)
+
+    shutil.copy(src / "trades.csv", dest / "trades.csv")
+    return dest / "orders.csv"
+
+
 @pytest.fixture(scope="module")
 def bitstamp_sample_dir() -> Path:
     """Path to the bundled Bitstamp sample directory (orders.csv.gz + trades.csv).
@@ -684,4 +768,114 @@ def tiny_depth() -> pd.DataFrame:
                 ordered=True,
             ),
         }
+    )
+
+
+# ---------------------------------------------------------------------------
+# Hidden-liquidity overlay (#272): one iceberg + trades against hidden orders,
+# shared by the prepare, matplotlib and plotly tests.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def iceberg_events_and_trades() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """One 2-slice iceberg (bid @236.50) plus an unrelated lone order (ask @237.00)."""
+    ts = pd.Timestamp("2015-05-01 01:00:00", tz="UTC")
+    events = pd.DataFrame(
+        [
+            {
+                "event_id": 1,
+                "id": 10,
+                "timestamp": ts,
+                "price": 236.50,
+                "volume": 100,
+                "action": "created",
+                "direction": "bid",
+                "fill": 0,
+            },
+            {
+                "event_id": 2,
+                "id": 10,
+                "timestamp": ts + pd.Timedelta(milliseconds=100),
+                "price": 236.50,
+                "volume": 0,
+                "action": "changed",
+                "direction": "bid",
+                "fill": 100,
+            },
+            {
+                "event_id": 3,
+                "id": 11,
+                "timestamp": ts + pd.Timedelta(milliseconds=100, microseconds=200),
+                "price": 236.50,
+                "volume": 100,
+                "action": "created",
+                "direction": "bid",
+                "fill": 0,
+            },
+            {
+                "event_id": 4,
+                "id": 20,
+                "timestamp": ts + pd.Timedelta(seconds=5),
+                "price": 237.00,
+                "volume": 50,
+                "action": "created",
+                "direction": "ask",
+                "fill": 0,
+            },
+        ]
+    )
+    events["action"] = pd.Categorical(
+        events["action"], categories=["created", "changed", "deleted"], ordered=True
+    )
+    events["direction"] = pd.Categorical(events["direction"], categories=["bid", "ask"])
+    trades = pd.DataFrame({"maker_event_id": [2]})
+    return events, trades
+
+
+@pytest.fixture
+def hidden_trades_and_events() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """``hidden_trades()`` output for a truly-hidden maker and a visible one.
+
+    Returns the hidden-trade rows and the maker events they were read against.
+    """
+    from ob_analytics.engine import HIDDEN_ORDER_ID
+    from ob_analytics.hidden_liquidity import hidden_trades
+
+    ts = pd.Timestamp("2015-05-01 01:00:00", tz="UTC")
+    maker_events = pd.DataFrame(
+        [
+            {
+                "event_id": 100,
+                "id": HIDDEN_ORDER_ID,
+                "timestamp": ts + pd.Timedelta(seconds=1),
+            },
+            {"event_id": 200, "id": 55, "timestamp": ts + pd.Timedelta(seconds=2)},
+        ]
+    )
+    depth_summary = pd.DataFrame(
+        {"timestamp": [ts], "best_bid_price": [236.50], "best_ask_price": [237.00]}
+    )
+    trades = pd.DataFrame(
+        {
+            "timestamp": [ts + pd.Timedelta(seconds=1), ts + pd.Timedelta(seconds=2)],
+            "price": [236.60, 236.70],
+            "maker_event_id": [100, 200],
+        }
+    )
+    return hidden_trades(maker_events, trades, depth_summary), maker_events
+
+
+@pytest.fixture
+def hidden_liquidity_overlay(
+    iceberg_events_and_trades, hidden_trades_and_events
+) -> dict[str, pd.DataFrame]:
+    """The overlay frames for the two fixtures above, unclipped."""
+    from ob_analytics.hidden_liquidity import detect_icebergs
+    from ob_analytics.visualization._data import prepare_hidden_liquidity_overlay
+
+    detection = detect_icebergs(*iceberg_events_and_trades)
+    hidden, maker_events = hidden_trades_and_events
+    return prepare_hidden_liquidity_overlay(
+        detection.icebergs, detection.slices, hidden, maker_events
     )

@@ -14,7 +14,8 @@ them):
 
 * ``volume`` — the order's **outstanding size after the event** for
   ``created``/``changed`` rows, and the **size removed** (outstanding
-  immediately before the delete) for ``deleted`` rows.
+  immediately before the delete) for ``deleted`` rows.  A whole number of lots
+  (``int64``); see the size policy below.
 * ``fill`` — the **executed** delta at this event (0 when nothing traded).
   A ``changed`` row is either an execution (``fill > 0``, outstanding drops
   by exactly ``fill``) or a non-executed reduction (``fill == 0``, e.g. a
@@ -27,7 +28,25 @@ them):
   ``raw_size`` column for round-trip writers.  The classifier labels these
   orders ``pre-existing`` — structurally unclassifiable, not failures.
 
-Price policy (issue #155): every ``price`` column is a whole number of ticks
+Size policy: every ``volume`` and ``fill`` column is a whole number
+of lots (``int64``), not a float in the base asset.  The base-asset size is
+``lots * lot_size``, where ``lot_size`` is the instrument's minimum size
+increment (:class:`~ob_analytics.config.PipelineConfig.lot_size`, default
+``1e-8``).  Loaders convert a raw size to lots on load; the display layer and the
+export writers convert back.  This is the size half of the price policy below,
+and it exists for the same reason.  A float size is not closed under the
+arithmetic the depth engine does to it: a price level is a running sum of adds,
+cancels and fills, and a float sum does not return to exactly zero when the last
+order leaves.  It lands on residue such as ``5.55e-17``, the level stays live,
+and it is reported as the best bid or ask ahead of the real one — which it was,
+on 8.2% of the bundled Bitstamp sample's rows for the bid and 9.6% for the ask.
+Integer lots cancel exactly, so a level empties or it does not.  ``lot_size`` is
+written to each Parquet file's key-value metadata (:data:`LOT_SIZE_KEY`) so an
+external reader can recover the float size without this library; like
+``tick_size`` it is per-instrument, so a multi-instrument file carries a map
+keyed by ``venue|symbol``.
+
+Price policy: every ``price`` column is a whole number of ticks
 (``int64``), not a float in the quote currency.  The quote-currency price is
 ``ticks * tick_size``, where ``tick_size`` is the instrument's minimum price
 increment (:class:`~ob_analytics.config.PipelineConfig.tick_size`, default
@@ -37,10 +56,10 @@ float rounding that made small-tick and 0-1 instruments show crossed levels that
 were not real, and lets the depth engine bin and compare levels on exact
 integers.  ``tick_size`` is written to each Parquet file's key-value metadata
 (:data:`TICK_SIZE_KEY`) so an external reader can recover the float price without
-this library; it is per-instrument, so a multi-instrument file (issue #147)
-carries a map keyed by ``venue|symbol``.
+this library; it is per-instrument, so a multi-instrument file carries a map
+keyed by ``venue|symbol``.
 
-Timestamp policy (issue #154): both clocks are **tz-aware UTC nanoseconds**
+Timestamp policy: both clocks are **tz-aware UTC nanoseconds**
 (``datetime64[ns, UTC]``, Arrow ``timestamp[ns, tz=UTC]``).  ``timestamp`` is
 the local receive time and ``exchange_timestamp`` the venue's matching-engine
 time (identical for LOBSTER, where only exchange time exists).  Because every
@@ -61,8 +80,8 @@ rebuild is deterministic run-to-run.  On a price-level (L2) feed there is no
 ``event_id``; ties there fall to ``sequence`` / ``ingest_seq`` when tracked,
 otherwise to the loader's stable arrival order.  Enforcing the full key inside
 the price-level depth engine — so an alternate engine reproduces it bit-for-bit
-— lands with the engine separation and rewrite (#136 / #104 / #138), when it can
-be checked against that second backend.
+— lands with the engine separation and rewrite, when it can be checked against
+that second backend.
 
 Ordering keys (both **optional**, so neither is in :data:`EVENT_COLUMNS`;
 consumers read them when present):
@@ -72,9 +91,10 @@ consumers read them when present):
   CCXT ``nonce`` on the price-level path; a ``sequence`` column in a Bitstamp or
   L2 capture when the file recorded one).  It is **absent** for sources that do
   not number their events (LOBSTER, and the public Bitstamp diff feed, which
-  publishes a microtimestamp rather than a sequence).  Consecutive values on one
-  channel should rise by exactly one; a skip means a dropped message and a step
-  that does not rise means a reordered one — see
+  publishes a microtimestamp rather than a sequence).  A step that does not rise
+  means a reordered message.  Whether a skip means a dropped one depends on the
+  source's :class:`~ob_analytics.protocols.SequenceKind`: yes for a contiguous
+  counter, no for a number that only rises (the CCXT ``nonce``) — see
   :func:`ob_analytics.analytics.detect_sequence_gaps`.
 * ``ingest_seq`` (:data:`INGEST_SEQ_COLUMN`) — a local monotonic ingest counter,
   a 0-based ``int64`` index in the order the rows were read from the source
@@ -122,16 +142,19 @@ if TYPE_CHECKING:
 # column.  List every version this build can still read in
 # ``_SUPPORTED_SCHEMA_VERSIONS``.
 
-SCHEMA_VERSION: str = "3.0"
+SCHEMA_VERSION: str = "4.0"
 """Version of the canonical Parquet/Arrow schema written to file metadata.
 
-``3.0`` (issue #155) stores every ``price`` column as ``int64`` ticks (the
+``4.0`` stores every ``volume`` and ``fill`` column as ``int64``
+lots (the base-asset size is ``lots * lot_size``; see :data:`LOT_SIZE_KEY`);
+``3.0`` and earlier stored them as a ``double`` in the base asset.  ``3.0``
+stores every ``price`` column as ``int64`` ticks (the
 quote-currency price is ``ticks * tick_size``; see :data:`TICK_SIZE_KEY`); ``2.0``
 and ``1.0`` stored ``price`` as a ``double`` in the quote currency.  ``2.0``
-(issue #154) also makes both timestamp clocks tz-aware UTC nanoseconds
-(``timestamp[ns, tz=UTC]``); ``1.0`` wrote them tz-naive.  All three still read
-(Parquet is self-describing, so a ``1.0`` / ``2.0`` file loads as the float-price
-frame it stored — a pre-tick file, not directly comparable to a ``3.0`` one)."""
+also makes both timestamp clocks tz-aware UTC nanoseconds
+(``timestamp[ns, tz=UTC]``); ``1.0`` wrote them tz-naive.  All four still read
+(Parquet is self-describing, so an older file loads as the float-price or
+float-size frame it stored — not directly comparable to a ``4.0`` one)."""
 
 SCHEMA_VERSION_KEY: bytes = b"ob_analytics_schema_version"
 """Parquet metadata key under which :data:`SCHEMA_VERSION` is stored.
@@ -143,21 +166,36 @@ TICK_SIZE_KEY: bytes = b"ob_analytics_tick_size"
 
 The value is a JSON object mapping an instrument key to its ``tick_size`` (a
 float in the quote currency), so an external reader can recover the float price
-as ``ticks * tick_size`` without this library (issue #155).  The single-instrument
-pipeline writes one entry under :data:`_DEFAULT_TICK_KEY` (``{"default": 0.01}``);
-a multi-instrument file (issue #147) adds entries keyed by ``"venue|symbol"``.
+as ``ticks * tick_size`` without this library.  The single-instrument pipeline
+writes one entry under :data:`_DEFAULT_TICK_KEY` (``{"default": 0.01}``); a
+multi-instrument file adds entries keyed by ``"venue|symbol"``.
 Bytes, because Arrow file-metadata keys and values are raw bytes."""
 
 _DEFAULT_TICK_KEY: str = "default"
 """Key for the tick size that applies to rows with no ``(venue, symbol)`` match
 in the :data:`TICK_SIZE_KEY` metadata map."""
 
-_SUPPORTED_SCHEMA_VERSIONS: frozenset[str] = frozenset({"1.0", "2.0", "3.0"})
+LOT_SIZE_KEY: bytes = b"ob_analytics_lot_size"
+"""Parquet metadata key under which the per-instrument lot size is stored.
+
+The size counterpart of :data:`TICK_SIZE_KEY`.  The value is a JSON
+object mapping an instrument key to its ``lot_size`` (a float in the base
+asset), so an external reader can recover the float size as ``lots * lot_size``
+without this library.  The single-instrument pipeline writes one entry under
+:data:`_DEFAULT_LOT_KEY` (``{"default": 1e-08}``); a multi-instrument file
+adds entries keyed by ``"venue|symbol"``.  Bytes, because Arrow file-metadata
+keys and values are raw bytes."""
+
+_DEFAULT_LOT_KEY: str = "default"
+"""Key for the lot size that applies to rows with no ``(venue, symbol)`` match
+in the :data:`LOT_SIZE_KEY` metadata map."""
+
+_SUPPORTED_SCHEMA_VERSIONS: frozenset[str] = frozenset({"1.0", "2.0", "3.0", "4.0"})
 """Schema versions this build can read.  A file tagged with anything else
 raises; an untagged (legacy) file loads with a warning.  ``1.0`` / ``2.0``
-(pre-#155, float quote-currency prices) still read: Parquet is self-describing,
-so pyarrow returns the exact dtype the file stored — the caller sees float
-prices, not ticks, and must scale them itself."""
+(float quote-currency prices) and ``3.0`` (float base-asset sizes) still read: Parquet is self-describing, so pyarrow returns the exact
+dtype the file stored — the caller sees float prices or float sizes, not ticks
+and lots, and must scale them itself."""
 
 
 def check_schema_version(version: str | None, *, source: str = "<parquet>") -> None:
@@ -217,8 +255,8 @@ def encode_tick_sizes(tick_sizes: dict[str, float]) -> bytes:
 def decode_tick_sizes(raw: bytes | None) -> dict[str, float] | None:
     """Parse the :data:`TICK_SIZE_KEY` metadata value, or ``None`` when absent.
 
-    ``None`` marks a legacy (pre-#155) file that stored float quote-currency
-    prices and carries no tick size.
+    ``None`` marks an older file that stored float quote-currency prices and
+    carries no tick size.
     """
     if raw is None:
         return None
@@ -252,6 +290,56 @@ def resolve_tick_size(
     return default
 
 
+# ── Lot-size metadata (issue #226) ────────────────────────────────────
+#
+# The same three helpers for sizes.  ``volume`` and ``fill`` are integer lots;
+# the lot size that scales them back to the base asset travels in Parquet
+# key-value metadata under :data:`LOT_SIZE_KEY`, as a JSON map from an
+# instrument key to its lot size.
+
+
+def encode_lot_sizes(lot_sizes: dict[str, float]) -> bytes:
+    """Serialise a ``{instrument_key: lot_size}`` map for Parquet metadata."""
+    return json.dumps(lot_sizes).encode()
+
+
+def decode_lot_sizes(raw: bytes | None) -> dict[str, float] | None:
+    """Parse the :data:`LOT_SIZE_KEY` metadata value, or ``None`` when absent.
+
+    ``None`` marks an older file that stored float base-asset sizes and
+    carries no lot size.
+    """
+    if raw is None:
+        return None
+    return {key: float(value) for key, value in json.loads(raw.decode()).items()}
+
+
+def resolve_lot_size(
+    lot_sizes: dict[str, float] | None,
+    *,
+    venue: str | None = None,
+    symbol: str | None = None,
+    default: float | None = None,
+) -> float | None:
+    """Look up the lot size for one instrument in a decoded metadata map.
+
+    Resolves exactly as :func:`resolve_tick_size` does: the per-instrument key
+    ``"venue|symbol"`` first, then the shared :data:`_DEFAULT_LOT_KEY` entry,
+    then — for a one-entry map whose sole key is neither — that lone value.
+    Returns *default* when *lot_sizes* is empty or ``None`` (an older file).
+    """
+    if not lot_sizes:
+        return default
+    key = f"{venue}|{symbol}"
+    if key in lot_sizes:
+        return lot_sizes[key]
+    if _DEFAULT_LOT_KEY in lot_sizes:
+        return lot_sizes[_DEFAULT_LOT_KEY]
+    if len(lot_sizes) == 1:
+        return next(iter(lot_sizes.values()))
+    return default
+
+
 # Optional ordering-key columns (never in EVENT_COLUMNS — see the module
 # docstring). `sequence` is the venue's per-event number (nullable Int64) and
 # `ingest_seq` the local monotonic ingest counter (int64).
@@ -277,7 +365,7 @@ _TIME_ORDER_TIEBREAKS: tuple[str, ...] = (
 
 
 def time_order_keys(df: pd.DataFrame) -> list[str]:
-    """Return the canonical same-instant sort keys present in *df* (issue #154).
+    """Return the canonical same-instant sort keys present in *df*.
 
     The deterministic total order is ``timestamp`` followed by whichever of the
     tie-break keys (:data:`SEQUENCE_COLUMN`, ``event_id``,
@@ -350,6 +438,17 @@ DEPTH_COLUMNS: tuple[str, ...] = (
 # Both are held as the pandas nullable ``string`` dtype: it carries NA cleanly
 # and concatenates across venues without dtype surprises.  A Parquet writer may
 # dictionary-encode either column for near-zero storage.
+
+ORIGIN_COLUMN: str = "origin"
+"""Name of the optional per-row column saying which part of a capture wrote it.
+
+A live capture writes ``snapshot`` (the opening book), ``stream`` or
+``shutdown``.  A row from the opening book may carry a clock the capture did
+not measure, so the clock checks leave those rows out.
+"""
+
+SNAPSHOT_ORIGIN: str = "snapshot"
+"""The :data:`ORIGIN_COLUMN` value of a row from a capture's opening book."""
 
 VENUE_COLUMN: str = "venue"
 """Name of the optional per-row source-venue column."""

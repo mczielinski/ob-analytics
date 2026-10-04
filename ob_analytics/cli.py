@@ -6,6 +6,7 @@ Usage::
 
     ob-analytics process orders.csv --output results/
     ob-analytics process data/ --source lobster --trading-date 2012-06-21
+    ob-analytics audit orders.csv --strict
     ob-analytics gallery results/parquet/ --output my_gallery/
     ob-analytics bitstamp-demo --input /path/to/dir_with_orders_and_trades/ --output demo_out/
     ob-analytics bitstamp-demo --view comparison   # L2-vs-L3 counterparts side by side
@@ -18,7 +19,10 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ob_analytics.protocols import SequenceKind
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -34,16 +38,97 @@ def _setup_logging(verbose: bool) -> None:
 
 
 def _cmd_process(args: argparse.Namespace) -> None:
-    """Run the pipeline on a data source and save results."""
+    """Run the pipeline on a data source and save results.
+
+    A segmented live capture (a directory with ``manifest.json``) is
+    processed one segment at a time, each into the folder of the same name
+    under the output, and the manifest is copied alongside.
+    """
     _setup_logging(args.verbose)
+    root = Path(args.path)
+    manifest = _read_capture_manifest(root)
+    if manifest is None:
+        _process_one(args, args.path, Path(args.output))
+        return
+    output = Path(args.output)
+    seg_dirs = manifest.segment_dirs(root)
+    _note_open_segments(manifest, "processed")
+    if not seg_dirs:
+        _no_segment_data(root, manifest)
+    for seg_dir in seg_dirs:
+        _process_one(args, str(_segment_input(seg_dir)), output / seg_dir.name)
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "manifest.json").write_bytes((root / "manifest.json").read_bytes())
+
+
+def _note_open_segments(manifest: Any, verb: str) -> None:
+    """Say which segments are left out because they are not closed yet."""
     from loguru import logger
 
+    for segment in manifest.open_segments:
+        logger.warning(
+            "{} was not {}: it is still being captured (or its capture process "
+            "died and has not been restarted), so it has no closing rows yet",
+            segment.name,
+            verb,
+        )
+
+
+def _no_segment_data(root: Path, manifest: Any) -> None:
+    """Stop: a segmented capture in which no closed segment holds book rows."""
+    from loguru import logger
+
+    if manifest.open_segments:
+        logger.error(
+            "No closed segment of the capture in {} holds data yet. Check it "
+            "once a segment has rolled or the capture has stopped.",
+            root,
+        )
+    else:
+        logger.error(
+            "No segment of the capture in {} holds data: see its manifest.json "
+            "for why each one ended.",
+            root,
+        )
+    sys.exit(1)
+
+
+def _segment_input(seg_dir: Path) -> Path:
+    """What to read for one segment: its book file, or a saved result's folder.
+
+    Some loaders take a directory and some only the file, so a capture
+    segment is read through its ``orders.csv`` (L3) or ``depth.csv`` (L2), as
+    a single capture is.  A ``process`` output has neither and is read whole.
+    """
+    for name in ("orders.csv", "depth.csv"):
+        if (seg_dir / name).is_file():
+            return seg_dir / name
+    return seg_dir
+
+
+def _read_capture_manifest(path: Path) -> Any:
+    """The manifest of a segmented capture at *path*, or ``None``."""
+    from loguru import logger
+
+    from ob_analytics.live import read_manifest
+
+    try:
+        return read_manifest(path) if path.is_dir() else None
+    except ValueError as exc:
+        logger.error(str(exc))
+        sys.exit(1)
+
+
+def _process_one(args: argparse.Namespace, data_path: str, output: Path) -> None:
+    """Run the pipeline on one capture (or file) and save the results."""
+    from loguru import logger
+
+    from ob_analytics.config import PipelineConfig
     from ob_analytics.data import save_data
     from ob_analytics.pipeline import Pipeline
     from ob_analytics.protocols import RunContext
     from ob_analytics.sources import get_source
 
-    data_path = args.path
     source_name = args.source
 
     try:
@@ -63,8 +148,13 @@ def _cmd_process(args: argparse.Namespace) -> None:
         else RunContext()
     )
 
+    # Only the recorded fields are set explicitly, so the source's own config
+    # defaults still apply to the rest.
+    recorded = _recorded_instrument(Path(data_path))
+    config = PipelineConfig(**recorded) if recorded else None
+
     try:
-        pipeline = Pipeline(source=source, ctx=ctx)
+        pipeline = Pipeline(config, source=source, ctx=ctx)
     except TypeError as exc:  # e.g. a live-only source cannot replay files
         logger.error(str(exc))
         sys.exit(1)
@@ -76,7 +166,6 @@ def _cmd_process(args: argparse.Namespace) -> None:
     logger.info("Trades: {:,}", len(result.trades))
     logger.info("Depth:  {:,}", len(result.depth))
 
-    output = Path(args.output)
     result_dict = {
         "events": result.events,
         "trades": result.trades,
@@ -86,6 +175,7 @@ def _cmd_process(args: argparse.Namespace) -> None:
     # Pass the config so each Parquet file is tagged with its tick size
     # (issue #155), letting a reader recover the quote-currency price.
     save_data(result_dict, output, config=result.config)
+    _keep_capture_record(Path(data_path), output)
     logger.info("Saved to: {}", output.resolve())
 
     if args.gallery:
@@ -94,25 +184,186 @@ def _cmd_process(args: argparse.Namespace) -> None:
         )
 
 
-def _cmd_validate(args: argparse.Namespace) -> None:
-    """Run the pipeline and print a per-run data-quality summary."""
+def _cmd_audit(args: argparse.Namespace) -> None:
+    """Audit a run's data quality and exit non-zero when a check fails.
+
+    A segmented live capture (a directory with ``manifest.json``, or the
+    ``process`` output made from one) is audited one segment at a time, and
+    the manifest adds the capture's own checks: gaps between segments,
+    segments a dead process left open, dropped messages, and resyncs.
+    """
     _setup_logging(args.verbose)
+    import json
+
+    from loguru import logger
+
+    root = Path(args.path)
+    manifest = _read_capture_manifest(root)
+    if manifest is None:
+        summary = _audit_one(args, root)
+        print(
+            json.dumps(summary.to_dict(), indent=2) if args.json else summary.render()
+        )
+        named = [("", summary)]
+        capture_checks: tuple[Any, ...] = ()
+    else:
+        seg_dirs = manifest.segment_dirs(root)
+        _note_open_segments(manifest, "checked")
+        named = [(d.name, _audit_one(args, _segment_input(d))) for d in seg_dirs]
+        capture_checks = manifest.checks()
+        if args.json:
+            report = {
+                "capture": {
+                    **manifest.to_dict(),
+                    "checks": [c.to_dict() for c in capture_checks],
+                },
+                "segments": {name: summary.to_dict() for name, summary in named},
+            }
+            print(json.dumps(report, indent=2))
+        else:
+            for name, summary in named:
+                print(f"== {name} ==\n{summary.render()}\n")
+            print(manifest.render())
+        if not seg_dirs:
+            # Nothing to check is not a pass.
+            _no_segment_data(root, manifest)
+
+    failed = [
+        f"{name + ': ' if name else ''}{c.name} — {c.detail}"
+        for name, summary in named
+        for c in summary.errors + (summary.warnings if args.strict else ())
+    ]
+    if args.strict:
+        failed += [f"{c.name} — {c.detail}" for c in capture_checks if not c.passed]
+    if failed:
+        logger.error("Audit failed: {}", "; ".join(failed))
+        sys.exit(1)
+
+
+def _audit_one(args: argparse.Namespace, path: Path) -> Any:
+    """Audit one capture, file or saved result; return its quality summary."""
     from loguru import logger
 
     from ob_analytics.analytics import data_quality_summary
-    from ob_analytics.pipeline import Pipeline
-    from ob_analytics.protocols import FeedType, RunContext
+    from ob_analytics.depth_l2 import (
+        recorded_clocks,
+        recorded_feed_type,
+        recorded_sequence_kind,
+        recorded_sequence_restarts,
+        recorded_source,
+        recorded_trade_attribution,
+    )
+    from ob_analytics.protocols import (
+        Clocks,
+        FeedType,
+        SequenceKind,
+        TradeAttribution,
+        clocks_of,
+        sequence_kind_of,
+        trade_attribution_of,
+    )
+
+    # Running the pipeline needs a source, so it falls back to the default one.
+    # Reading a saved result does not: the feed type is a property of the
+    # *source*, not of the data, so without --source it stays undeclared rather
+    # than guessed, which keeps the crossing check honest (see FeedType).
+    source_name = args.source
+    if source_name is None and not args.from_parquet:
+        source_name = "bitstamp"
+
+    feed_type = FeedType.UNKNOWN
+    trade_attribution = TradeAttribution.BOTH
+    sequence_kind = SequenceKind.CONTIGUOUS
+    clocks = Clocks.BOTH
+    if source_name is not None:
+        from ob_analytics.sources import get_source
+
+        try:
+            source = get_source(source_name)()
+        except KeyError as exc:
+            logger.error(str(exc))
+            sys.exit(1)
+        feed_type = getattr(source, "feed_type", feed_type)
+        trade_attribution = trade_attribution_of(source)
+        sequence_kind = sequence_kind_of(source)
+        clocks = clocks_of(source)
+
+    # A live capture records what its own source declares, and that describes
+    # this data exactly.  --source may name a different source because it also
+    # says how to read the files: a cryptofeed L3 capture is read as bitstamp,
+    # whose feed shows more.  So the record, when there is one, sets what the
+    # checks expect.
+    made_by = recorded_source(path)
+    if made_by is not None:
+        feed_type = recorded_feed_type(path) or feed_type
+        trade_attribution = recorded_trade_attribution(path) or trade_attribution
+        clocks = recorded_clocks(path) or clocks
+        # A capture written before captures recorded the sequence kind is
+        # checked the way the source that made it declares it now.
+        if made_by != source_name and recorded_sequence_kind(path) is None:
+            sequence_kind = _declared_sequence_kind(made_by, default=sequence_kind)
+        if source_name is not None and made_by != source_name:
+            logger.info(
+                "Checking against what the {} source declares (recorded in "
+                "meta.json when it made this capture), not {}",
+                made_by,
+                source_name,
+            )
+
+    if args.from_parquet:
+        result = _load_saved_result(path)
+    else:
+        result = _run_for_audit(args, path, source_name or "bitstamp")
+
+    return data_quality_summary(
+        result.events,
+        result.trades,
+        feed_type=feed_type,
+        depth=result.depth,
+        tick_size=result.config.tick_size,
+        sequence_kind=recorded_sequence_kind(path) or sequence_kind,
+        sequence_restarts=recorded_sequence_restarts(path),
+        trade_attribution=trade_attribution,
+        clocks=clocks,
+    )
+
+
+def _declared_sequence_kind(source_name: str, default: SequenceKind) -> SequenceKind:
+    """What the source called *source_name* declares as its sequence kind.
+
+    *default* when the source cannot be built here: not installed, or a
+    plug-in that needs settings to start.  The check must not stop ``audit``.
+    """
+    from loguru import logger
+
+    from ob_analytics.protocols import sequence_kind_of
     from ob_analytics.sources import get_source
 
     try:
-        source = get_source(args.source)()
+        return sequence_kind_of(get_source(source_name)())
+    except Exception as exc:  # noqa: BLE001 - fall back, never stop audit
+        logger.debug("Cannot read what {} declares: {!r}", source_name, exc)
+        return default
+
+
+def _run_for_audit(args: argparse.Namespace, path: Path, source_name: str) -> Any:
+    """Run the pipeline for ``audit`` and return the result."""
+    from loguru import logger
+
+    from ob_analytics.config import PipelineConfig
+    from ob_analytics.pipeline import Pipeline
+    from ob_analytics.protocols import RunContext
+    from ob_analytics.sources import get_source
+
+    try:
+        source = get_source(source_name)()
     except KeyError as exc:
         logger.error(str(exc))
         sys.exit(1)
 
     required = getattr(source, "required_context", list)()
     if "trading_date" in required and args.trading_date is None:
-        logger.error("--trading-date is required for the {} source", args.source)
+        logger.error("--trading-date is required for the {} source", source_name)
         sys.exit(1)
     ctx = (
         RunContext(trading_date=args.trading_date)
@@ -120,28 +371,90 @@ def _cmd_validate(args: argparse.Namespace) -> None:
         else RunContext()
     )
 
+    # Load the ordering keys: dropped-message detection reads the venue
+    # sequence, and it is off by default elsewhere.  Only this field is set
+    # explicitly, with the instrument a capture recorded, so the source's own
+    # config defaults still apply to the rest.
+    config = PipelineConfig(track_sequence=True, **_recorded_instrument(path))
+
     try:
-        pipeline = Pipeline(source=source, ctx=ctx)
+        pipeline = Pipeline(config, source=source, ctx=ctx)
     except TypeError as exc:  # e.g. a live-only source cannot replay files
         logger.error(str(exc))
         sys.exit(1)
 
-    logger.info("Validating {} (source={})...", args.path, args.source)
-    result = pipeline.run(args.path)
+    logger.info("Auditing {} (source={})...", path, source_name)
+    return pipeline.run(path)
 
-    summary = data_quality_summary(
-        result.events,
-        result.trades,
-        feed_type=getattr(source, "feed_type", FeedType.UNKNOWN),
-        depth=result.depth,
-    )
 
-    if args.json:
-        import json
+def _keep_capture_record(data_path: Path, output: Path) -> None:
+    """Copy a live capture's ``meta.json`` into the processed output.
 
-        print(json.dumps(summary.to_dict(), indent=2))
+    The record says which source made the capture and what that source
+    declares about its feed.  ``audit --from-parquet`` on the output reads it
+    from there; without the copy, the output would be audited against the
+    expectations of whichever source read the files.
+
+    Input without a record removes any ``meta.json`` an earlier run left in
+    *output*, so a reused output directory never carries another capture's
+    record.
+    """
+    meta = (data_path.parent if data_path.is_file() else data_path) / "meta.json"
+    dest = output / "meta.json"
+    if meta.is_file() and meta.resolve() == dest.resolve():
+        return
+    if meta.is_file():
+        dest.write_bytes(meta.read_bytes())
     else:
-        print(summary.render())
+        dest.unlink(missing_ok=True)
+
+
+def _recorded_instrument(data_path: Path) -> dict[str, Any]:
+    """Config fields a live capture recorded about its instrument.
+
+    A ccxt capture writes the market's tick size to ``meta.json``.  Replaying
+    it at the source's default tick size would round finer prices onto that
+    grid, which the L2 loaders refuse, so the recorded value is used instead,
+    with the display precision set to match.  Empty when nothing is recorded.
+    """
+    from decimal import Decimal
+
+    from ob_analytics.depth_l2 import recorded_tick_size
+
+    tick_size = recorded_tick_size(data_path)
+    if tick_size is None:
+        return {}
+    exponent = Decimal(str(tick_size)).normalize().as_tuple().exponent
+    decimals = max(0, -exponent) if isinstance(exponent, int) else 0
+    return {"tick_size": tick_size, "price_decimals": decimals}
+
+
+def _load_saved_result(data_path: Path) -> Any:
+    """Rebuild a :class:`PipelineResult` from a saved Parquet directory."""
+    from loguru import logger
+
+    from ob_analytics.config import PipelineConfig
+    from ob_analytics.data import load_data
+    from ob_analytics.pipeline import PipelineResult
+
+    logger.info("Loading data from {}...", data_path)
+    data = load_data(data_path)
+
+    # Recover the tick size the data was written with (issue #155), surfaced by
+    # load_data on each frame's ``attrs``, so a reader gets quote-currency
+    # prices.  A legacy (pre-#155) file has no tick size and already stores float
+    # prices, so fall back to 1.0 (prices read as-is).
+    tick_size = next(
+        (df.attrs["tick_size"] for df in data.values() if "tick_size" in df.attrs),
+        1.0,
+    )
+    return PipelineResult(
+        events=data["events"],
+        trades=data["trades"],
+        depth=data["depth"],
+        depth_summary=data["depth_summary"],
+        config=PipelineConfig(tick_size=tick_size),
+    )
 
 
 def _cmd_gallery(args: argparse.Namespace) -> None:
@@ -149,33 +462,12 @@ def _cmd_gallery(args: argparse.Namespace) -> None:
     _setup_logging(args.verbose)
     from loguru import logger
 
-    from ob_analytics.config import PipelineConfig
-    from ob_analytics.data import load_data
-    from ob_analytics.pipeline import PipelineResult
     from ob_analytics.visualization.gallery import generate_gallery
 
     data_path = Path(args.data)
     output = Path(args.output)
 
-    logger.info("Loading data from {}...", data_path)
-    data = load_data(data_path)
-
-    # Recover the tick size the data was written with (issue #155), surfaced by
-    # load_data on each frame's ``attrs``, so the gallery renders quote-currency
-    # prices.  A legacy (pre-#155) file has no tick size and already stores float
-    # prices, so fall back to 1.0 (prices shown as-is).
-    tick_size = next(
-        (df.attrs["tick_size"] for df in data.values() if "tick_size" in df.attrs),
-        1.0,
-    )
-
-    result = PipelineResult(
-        events=data["events"],
-        trades=data["trades"],
-        depth=data["depth"],
-        depth_summary=data["depth_summary"],
-        config=PipelineConfig(tick_size=tick_size),
-    )
+    result = _load_saved_result(data_path)
 
     gallery_path = generate_gallery(
         result,
@@ -229,8 +521,13 @@ def _cmd_capture(args: argparse.Namespace) -> None:
 
     from loguru import logger
 
-    from ob_analytics.live import CaptureConfig, LiveSource
-    from ob_analytics.live._runner import run_capturer
+    from ob_analytics.exceptions import ConfigError
+    from ob_analytics.live import (
+        CaptureConfig,
+        LiveSource,
+        SupportsPreflight,
+        run_capture,
+    )
     from ob_analytics.live.ccxt_source import CcxtSettings
     from ob_analytics.live.cryptofeed_source import CryptofeedSettings
     from ob_analytics.protocols import Level
@@ -262,6 +559,7 @@ def _cmd_capture(args: argparse.Namespace) -> None:
 
     # Build typed per-source settings. ccxt and cryptofeed take venue knobs; a
     # source with no knobs is constructed with its empty default settings.
+    settings: Any = None
     if args.venue.lower() == "ccxt":
         ccxt_kwargs: dict[str, Any] = {}
         if getattr(args, "exchange", None):
@@ -270,19 +568,31 @@ def _cmd_capture(args: argparse.Namespace) -> None:
             ccxt_kwargs["depth_limit"] = args.depth_limit
         if getattr(args, "poll_interval", None) is not None:
             ccxt_kwargs["poll_interval"] = args.poll_interval
+        if getattr(args, "market_data_mirror", False):
+            ccxt_kwargs["market_data_mirror"] = True
         # The registry is typed as `type[Source]`; the core protocol declares
         # no constructor, so passing settings is a checked-at-runtime dynamic
         # call (every built-in source accepts an optional `settings`).
-        source = source_cls(settings=CcxtSettings(**ccxt_kwargs))  # ty: ignore[unknown-argument]
+        settings = CcxtSettings(**ccxt_kwargs)
     elif args.venue.lower() == "cryptofeed":
         cf_kwargs: dict[str, Any] = {}
         if getattr(args, "exchange", None):
             cf_kwargs["exchange"] = args.exchange
         if getattr(args, "level", None):
             cf_kwargs["level"] = Level(args.level.upper())
-        source = source_cls(settings=CryptofeedSettings(**cf_kwargs))  # ty: ignore[unknown-argument]
-    else:
-        source = source_cls()
+        settings = CryptofeedSettings(**cf_kwargs)
+
+    def make_source() -> Any:
+        # A source holds one run's connection and book, so each segment of the
+        # capture gets a fresh one.  The registry is typed as `type[Source]`;
+        # the core protocol declares no constructor, so passing settings is a
+        # checked-at-runtime dynamic call (every built-in source accepts an
+        # optional `settings`).
+        if settings is None:
+            return source_cls()
+        return source_cls(settings=settings)  # ty: ignore[unknown-argument]
+
+    source = make_source()
 
     # A venue that cannot supply the requested resolution is user error, not a
     # crash: report the explanation and stop.  (Reading ``level`` is what
@@ -298,14 +608,44 @@ def _cmd_capture(args: argparse.Namespace) -> None:
         logger.error("Source %r has no live capture; it is offline-only.", args.venue)
         sys.exit(1)
 
+    # A missing optional extra or an unusable venue stops the run here, before
+    # the output directory exists (run_capture checks again for library use).
+    if isinstance(source, SupportsPreflight):
+        try:
+            source.preflight()
+        except (ImportError, ValueError) as exc:
+            logger.error(str(exc))
+            sys.exit(1)
+
     config = CaptureConfig(
         pair=args.pair,
         out_dir=Path(args.out),
         minutes=args.minutes,
         keep_raw=not args.no_raw,
+        roll_minutes=getattr(args, "roll_minutes", None),
+        roll_mb=getattr(args, "roll_mb", None),
     )
-    result = asyncio.run(run_capturer(source, config))
-    logger.info("Capture complete: {}", result.out_dir)
+    try:
+        run = asyncio.run(run_capture(make_source, config))
+    except ConfigError as exc:  # an --out that holds something else
+        logger.error(str(exc))
+        sys.exit(1)
+    if run.error is not None:
+        # The capture never streamed. The rows written before the error are
+        # kept and the error is in the manifest; the run is still a failure.
+        # This includes the venue or its settings being wrong for this run (a
+        # location the venue refuses, a mirror it does not have).
+        logger.error("Capture failed: {}; partial output in {}", run.error, run.out_dir)
+        sys.exit(1)
+    manifest = run.manifest
+    if manifest.gaps:
+        logger.warning(
+            "Capture has {} gap(s), {:.1f} s in total: see {}",
+            len(manifest.gaps),
+            manifest.gap_seconds,
+            run.out_dir / "manifest.json",
+        )
+    logger.info("Capture complete: {}", run.out_dir)
 
 
 def _generate_gallery_from_result(
@@ -397,31 +737,48 @@ def main() -> None:
     _add_view_arg(p_process)
     p_process.set_defaults(func=_cmd_process)
 
-    # -- validate --
-    p_validate = subparsers.add_parser(
-        "validate",
-        help="Report per-run data-quality metrics for a data source",
+    # -- audit --
+    p_audit = subparsers.add_parser(
+        "audit",
+        aliases=["validate"],
+        help="Check a run's data quality; exit non-zero when a check fails",
     )
-    p_validate.add_argument("path", help="Path to data file or directory")
-    p_validate.add_argument(
+    p_audit.add_argument("path", help="Path to data file or directory")
+    p_audit.add_argument(
         "-s",
         "--source",
-        default="bitstamp",
+        default=None,
         choices=sources,
-        help=f"Data source (default: bitstamp; registered: {', '.join(sources)})",
+        help=(
+            "Data source (default: bitstamp when running the pipeline). "
+            "With --from-parquet it only declares the feed type; omit it to "
+            f"leave the feed type undeclared. Registered: {', '.join(sources)}"
+        ),
     )
-    p_validate.add_argument(
+    p_audit.add_argument(
         "--trading-date",
         default=None,
         help="Trading date for the LOBSTER source (YYYY-MM-DD)",
     )
-    p_validate.add_argument(
+    p_audit.add_argument(
+        "--from-parquet",
+        action="store_true",
+        default=False,
+        help="Read a saved 'process' output directory instead of running the pipeline",
+    )
+    p_audit.add_argument(
+        "--strict",
+        action="store_true",
+        default=False,
+        help="Fail on warnings too, not only on errors",
+    )
+    p_audit.add_argument(
         "--json",
         action="store_true",
         default=False,
         help="Emit the summary as JSON instead of text",
     )
-    p_validate.set_defaults(func=_cmd_validate)
+    p_audit.set_defaults(func=_cmd_audit)
 
     # -- gallery --
     p_gallery = subparsers.add_parser(
@@ -542,13 +899,25 @@ def main() -> None:
         "--depth-limit",
         type=int,
         default=None,
-        help="ccxt: order-book depth (levels per side) to request",
+        help=(
+            "ccxt: order-book depth (levels per side) to request -- a floor, "
+            "not a cap: most venues record more than this (see the ccxt "
+            "how-to page)"
+        ),
     )
     p_cap.add_argument(
         "--poll-interval",
         type=float,
         default=None,
         help="ccxt: seconds between REST polls (REST-only venues)",
+    )
+    p_cap.add_argument(
+        "--market-data-mirror",
+        action="store_true",
+        help=(
+            "ccxt: read from the venue's market-data-only endpoints "
+            "(binance spot). Check the venue's terms allow it where you are"
+        ),
     )
     p_cap.add_argument(
         "--minutes",
@@ -560,8 +929,25 @@ def main() -> None:
         "--out",
         default=None,
         help=(
-            "Output directory (orders.csv for L3 or depth.csv for L2, plus "
-            "trades.csv, raw.jsonl, meta.json). Required unless --list."
+            "Capture directory: manifest.json plus one folder per segment "
+            "(orders.csv for L3 or depth.csv for L2, plus trades.csv, "
+            "raw.jsonl, meta.json). A directory that already holds a capture "
+            "of the same venue and pair is continued. Required unless --list."
+        ),
+    )
+    p_cap.add_argument(
+        "--roll-minutes",
+        type=float,
+        default=None,
+        help="Start a new segment every this many minutes (default: never)",
+    )
+    p_cap.add_argument(
+        "--roll-mb",
+        type=float,
+        default=None,
+        help=(
+            "Start a new segment once one has written this many MB since its "
+            "first live event (default: never)"
         ),
     )
     p_cap.add_argument(

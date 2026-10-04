@@ -1,0 +1,259 @@
+---
+title: Check data quality with audit
+---
+
+# Check data quality with `audit`
+
+`ob-analytics audit <source>` runs the pipeline, prints a per-run data-quality
+summary, and **exits non-zero when a check fails** — so it works both as a
+thing to read and as a gate in a script. Point it at the same source you would
+pass to `process`:
+
+```bash
+ob-analytics audit orders.csv
+ob-analytics audit data/ --source lobster --trading-date 2012-06-21
+ob-analytics audit orders.csv --json           # machine-readable, for CI
+ob-analytics audit results/ --from-parquet     # a saved 'process' output
+ob-analytics audit orders.csv --strict         # warnings fail too
+```
+
+`validate` is the old name for this verb and still works.
+
+Text output looks like this (bundled Bitstamp sample):
+
+```text
+Data quality summary
+  feed type             : diff_feed
+  events / orders       : 314,057 / 156,902
+  trades                : 284
+  crossed resting book  : 91.61% of session (7238 episode(s)) [diff feed, but 2 stale resting order(s) stay in the book — see stale resting orders]
+  stale resting orders  : 2 (worst: ask 2002347646152704 at 78,333 held the ask touch for 27.4 min after a trade printed through it)
+  unmatched trades      : 0.70% [maker and taker]
+  duplicate event ids   : 0
+  duplicate created ids : 0
+  pre-existing orders   : 13
+  orphan orders         : 13 (13 event(s), no created row)
+  impossible values     : 49 non-positive price(s) / 0 negative volume(s)
+  clock order           : 0 venue-after-receive / 11 reordered
+  venue sequence        : 0 missing / 0 out-of-order (0 row(s) numbered)
+Checks: 0 error(s), 4 warning(s)
+  WARNING orphan_orders: 13 order(s) are changed or deleted with no created event ...
+  WARNING stale_orders: 2 resting order(s) a trade printed through and the venue did not report again within 1 s ...
+  WARNING nonpositive_price: 49 row(s) are priced at or below zero: not a tradeable level
+  WARNING exchange_time_reordered: 11 message(s) arrived out of venue order ...
+```
+
+## Reading the metrics
+
+| Field | Read it as |
+|---|---|
+| **feed type** | `matched_book` (LOBSTER/MBO), `diff_feed` (Bitstamp) or `price_levels` (any L2 feed) — sets expectations for the next line |
+| **crossed resting book** | Share of session *time* with `best_bid > best_ask`. ~0% for a matched book or price levels; can be high and faithful for a diff feed, unless stale resting orders cause it |
+| **stale resting orders** | Resting orders a trade printed through that the venue did not report again within 1 s. The worst is named with its side, price and how long it held the touch |
+| **unmatched trades** | Trades whose maker or taker order could not be found among the order events. Only the orders the feed can show are looked for: the note in brackets says which |
+| **duplicate event ids / created ids** | Should be `0`; anything else is a feed defect worth chasing |
+| **pre-existing orders** | Orders already resting when the capture began (no `created` row) — structurally unclassifiable, not errors |
+| **orphan orders** | Orders changed or deleted with no `created` row at all. The opening book is the honest source of these; a rise mid-session is the stream losing messages |
+| **impossible values** | Levels priced at or below zero, and negative volumes or fills |
+| **clock order** | Rows the venue stamped *after* we received them, and messages that reached the capture out of venue order. The opening book's rows are left out; `not checked` when the data has one clock |
+| **venue sequence** | Skipped and non-advancing sequence numbers: dropped and reordered messages ([gap detection](../api/analytics.md)) |
+
+A high **crossed resting book** number on a `diff_feed` can be expected — see
+[Data quality: matched book, diff feed and price levels](../data-quality.md) for why, and for
+the `uncross=` option that cleans the book up *for display* without touching
+the data you analyse. On a `matched_book` or `price_levels`, a non-zero figure
+is a red flag.
+
+Read it together with **stale resting orders**. On the bundled sample one
+stale order holds the ask touch for 27 minutes, and it causes almost all of the
+91.61%. When the run has stale orders, the crossing note says so instead of
+calling the crossing normal.
+
+## What fails a run
+
+Every metric above is scored by a named check carrying a severity, and the exit
+code follows the severities rather than the numbers:
+
+| Severity | Meaning | Exit code |
+|---|---|---|
+| **error** | The data contradicts something that must hold | non-zero |
+| **warning** | Worth reading, but a sound capture can show it | `0`, or non-zero with `--strict` |
+| **info** | Context; never fails a run | `0` |
+
+Errors: `duplicate_event_ids`, `duplicate_created_ids`, `sequence_gaps`,
+`sequence_out_of_order`, `negative_volume`, `exchange_time_after_receive`, and
+`crossed_book` **on a matched book or price levels only**.
+
+Warnings: `orphan_orders`, `stale_orders`, `nonpositive_price`,
+`exchange_time_reordered`, `unmatched_trades` (above 5%), and `crossed_book`
+when no feed type was declared.
+
+Two of these are judgement calls worth stating plainly:
+
+- **A crossed book is scored by feed type, not by size.** A crossed book is
+  always a defect in a matched book or a price-level book, but can be a
+  faithful replay of a diff feed. Only the source's declared [`FeedType`](../api/protocols.md) can tell
+  them apart. Size alone says little: on the bundled sample, almost all of the
+  92% comes from two stale orders, which `stale_orders` reports. With
+  `--from-parquet` and no `--source`, the feed type is undeclared and crossing
+  drops to a warning rather than being guessed.
+- **A dropped `created` message cannot be told apart from an order that was
+  already resting** when the capture began — both leave an order that is only
+  ever changed or deleted. So `orphan_orders` is a warning, and the hard
+  evidence for dropped messages is `sequence_gaps`, which needs a feed that
+  carries a venue sequence. `audit` always loads with sequence tracking on.
+  A skipped number is a dropped message only when the venue adds one per
+  message. A [ccxt](ccxt.md) or [cryptofeed](cryptofeed.md) capture records
+  in `meta.json` that its sequence only rises, and `audit` then checks only
+  that it never goes back, and prints `gaps not checked`. When a cryptofeed
+  capture reconnects, some venues start the count again; the capture records
+  each such step back as `sequence_restarts`, and `audit` leaves those out of
+  `sequence_out_of_order`.
+
+  Most sources carry no sequence that can prove a message was lost. On those,
+  `audit` prints `0 row(s) numbered` for the venue sequence, and a dropped
+  message shows only indirectly, as orphan or stale orders:
+
+  | Source | Venue sequence | What `audit` can check |
+  |---|---|---|
+  | `bitstamp` (files and live capture) | none: the feed has a timestamp only | nothing |
+  | `lobster` | none | nothing |
+  | `cryptofeed` | one number per message, on venues that publish one | gaps and order |
+  | `ccxt`, including Binance | rises, but skips on its own | order only |
+  | `ccxt` for Kalshi and Polymarket | none | nothing |
+  | `databento` | rises, but skips on its own | order only |
+
+  Databento numbers every message on the venue's channel. A file usually holds
+  one instrument of that channel, and its trade and fill records become
+  trades rather than book events, so the numbers left in the events skip even
+  when nothing was lost. The source declares this, and `audit` then prints
+  `gaps not checked`. Audit a saved Databento output with
+  `--from-parquet --source databento`: without `--source`, nothing says what
+  the numbers promise, and every skip counts as a lost message.
+- **Unmatched trades count only the orders the feed can show.** Every trade
+  has a maker, the order that was resting, and a taker, the order that
+  arrived and traded against it. Only a feed that reports every order shows
+  the taker. Each source declares which it can show, as its
+  [`TradeAttribution`](../api/protocols.md):
+
+  | Source | Shows | What `unmatched_trades` counts |
+  |---|---|---|
+  | `bitstamp` | maker and taker | trades missing either |
+  | `lobster`, `databento`, `cryptofeed` at L3 | maker only: a taker trades on arrival and never rests | trades missing the maker |
+  | `ccxt`, `depth_csv`, `cryptofeed` at L2 | neither: price levels have no order identity | nothing |
+
+  LOBSTER's trades do carry a taker, but it is a guess: Nasdaq ITCH names only
+  the resting order of an execution, and the reader picks the most recent new
+  order on the other side that could have traded. So the check does not count
+  it.
+- **The clock checks need two clocks.** They compare the venue's time,
+  `exchange_timestamp`, with the receive time, `timestamp`. Some data has only
+  one, and the schema copies it into both columns: LOBSTER has the venue's
+  time only, and some live venues send no time with their book. Each source
+  declares its [`Clocks`](../api/protocols.md), and a live capture records
+  what the venue sent in `meta.json`. With one clock, `audit` prints
+  `clock order : not checked` and the reason, and the two checks do not run.
+  With two clocks, the checks still leave out a capture's opening book (rows
+  whose `origin` is `snapshot`): a REST book's receive time is when the
+  capture asked for it, and some venues send it with no venue time. See
+  [Clocks](../feeds.md#clocks) for which feeds have which.
+- **A capture is checked against the source that made it.** A live capture
+  records its source and that source's declarations in `meta.json`, and
+  `ob-analytics process` copies `meta.json` into its output. `audit` uses the
+  record even when `--source` names another source. `--source` also says how
+  to read the files, and a [cryptofeed](cryptofeed.md) L3 capture can only be
+  read as `bitstamp`, whose feed shows more. The log says when the record
+  overrides `--source`.
+- **A capture of several segments is audited one segment at a time.** Given a
+  capture directory (or the `process` output made from one), `audit` prints a
+  report for each segment and then the capture's own checks from
+  `manifest.json`: `capture_gaps` (time no segment covered),
+  `unfinished_segments` (segments a dead capture process left open),
+  `dropped_messages` (messages a source could not use), and `book_resyncs`
+  (times a source lost the venue's stream and started again from a new opening
+  book). All four are warnings, so `--strict` fails on them. See
+  [Running for days](live-capture.md#running-for-days).
+- **A stale order is reported, not removed.** A trade above a resting ask (or
+  below a resting bid) shows the order has gone, because a matching engine
+  fills the better price first. The venue normally reports that order within
+  milliseconds, so `stale_orders` waits one second before it counts one. The
+  test needs to know what the feed said after the trade, which a live capture
+  cannot know in time, so `order_book()` keeps the order.
+  [`detect_stale_orders`](../api/analytics.md) runs the same test from Python.
+
+## In CI
+
+```bash
+ob-analytics audit orders.csv --json > quality.json || exit 1
+```
+
+`--json` writes the whole summary, including `ok` and every check, so a build
+can read the verdict instead of parsing the text block:
+
+```json
+{
+  "feed_type": "diff_feed",
+  "orphan_orders": 13,
+  "ok": true,
+  "checks": [
+    {
+      "name": "duplicate_event_ids",
+      "passed": true,
+      "severity": "error",
+      "detail": "0 event_id value(s) occur more than once; ..."
+    }
+  ]
+}
+```
+
+## From Python
+
+```python
+from ob_analytics import Pipeline, BitstampSource, FeedType, data_quality_summary
+
+result = Pipeline().run("orders.csv")
+summary = data_quality_summary(
+    result.events, result.trades,
+    feed_type=BitstampSource().feed_type,   # or getattr(source, "feed_type", FeedType.UNKNOWN)
+    depth=result.depth,                      # faithful depth; not depth_summary
+    tick_size=result.config.tick_size,       # stale-order prices in the quote currency
+)
+print(summary.render())
+summary.ok            # False when an error-severity check failed
+summary.errors        # the failed error checks, each with a one-line detail
+summary.warnings      # the failed warning checks
+summary.stale_orders  # StaleOrder records, worst first
+summary.to_dict()     # JSON-serialisable, including every check
+```
+
+The sequence checks need the venue's numbers, which a run keeps only with
+`PipelineConfig(track_sequence=True)`; `audit` turns this on for you. Pass the
+source's `sequence_kind` too, or a source whose numbers skip on their own,
+such as `databento` or `ccxt`, is read as losing messages:
+
+```python
+from ob_analytics import DatabentoSource, Pipeline, PipelineConfig, data_quality_summary
+from ob_analytics.protocols import sequence_kind_of, trade_attribution_of
+
+source = DatabentoSource()
+result = Pipeline(PipelineConfig(track_sequence=True), source=source).run("aapl.mbo.dbn.zst")
+summary = data_quality_summary(
+    result.events, result.trades,
+    feed_type=source.feed_type,
+    depth=result.depth,
+    sequence_kind=sequence_kind_of(source),
+    trade_attribution=trade_attribution_of(source),
+)
+```
+
+!!! note "Pass `depth`, not `depth_summary`"
+    Crossing is measured from the *faithful* resting book. `depth_summary` is
+    already uncrossed by the depth engine, so passing it would always report
+    ~0%. Omit `depth` and it is recomputed from `events`.
+
+## Related
+
+- [Data quality: matched book, diff feed and price levels](../data-quality.md) — the concepts behind these numbers
+- [What each feed shows](../feeds.md) — what each source can and cannot show, so which checks can fire on it
+- [Run from the command line](cli.md) — every CLI verb
+- [`data_quality_summary` reference](../api/analytics.md)

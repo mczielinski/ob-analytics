@@ -313,6 +313,9 @@ class TestPrepareOrderActivityL3:
             "y_range",
             "shown_of",
             "show_markers",
+            "iceberg_lines",
+            "iceberg_refills",
+            "hidden_trades",
         }
         for fate in (data["filled"], data["cancelled"], data["resting"]):
             assert isinstance(fate, pd.DataFrame)
@@ -605,6 +608,22 @@ class TestPrepareVolumePercentiles:
         assert len(data["asks_cols"]) == 20
         assert len(data["bids_cols"]) == 20
 
+    def test_empty_window_keeps_the_bin_columns(
+        self, sample_depth_summary: pd.DataFrame
+    ) -> None:
+        # A window before the data: pivoting the empty frame used to drop the
+        # bin columns, so selecting them raised KeyError.
+        t0 = sample_depth_summary["timestamp"].min()
+        data = prepare_volume_percentiles_data(
+            sample_depth_summary,
+            start_time=t0 - pd.Timedelta(hours=2),
+            end_time=t0 - pd.Timedelta(hours=1),
+        )
+        assert data["asks_cumsum"].empty
+        assert data["bids_cumsum_neg"].empty
+        assert data["asks_cumsum"].columns.tolist() == data["asks_cols"]
+        assert len(data["asks_cols"]) == 20
+
     def test_palette_is_sequential_luminance(self) -> None:
         from ob_analytics.visualization._data import _volume_percentile_palette
 
@@ -697,7 +716,7 @@ class TestPrepareVpin:
 
 
 class TestPrepareOfi:
-    def test_returns_colors_and_bar_width(self) -> None:
+    def test_leaves_colours_to_the_renderer(self) -> None:
         ts = pd.date_range("2015-01-01", periods=5, freq="min")
         ofi_df = pd.DataFrame(
             {
@@ -706,10 +725,9 @@ class TestPrepareOfi:
             }
         )
         data = prepare_ofi_data(ofi_df)
-        assert "colors" in data
-        assert len(data["colors"]) == 5
-        assert data["colors"][0] == "#27ae60"  # positive → green
-        assert data["colors"][1] == "#e74c3c"  # negative → red
+        # Bar colours come from the theme's palette at render time.
+        assert "colors" not in data
+        assert data["ofi_df"] is ofi_df
 
 
 class TestPrepareOfiHorizon:

@@ -9,6 +9,8 @@ outstanding volume; every ``changed`` / ``deleted`` references a previously
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -33,7 +35,7 @@ from ob_analytics.synth import (
 
 # A short session keeps the tests fast while still producing a rich book
 # (hundreds of orders, a mix of every produced order type).
-_FAST = {"seed": 42, "duration": 90.0}
+_FAST: dict[str, Any] = {"seed": 42, "duration": 90.0}
 
 
 def _session(**overrides) -> SynthSession:
@@ -174,21 +176,27 @@ def test_outstanding_never_negative_and_consistent():
         assert head["fill"] == 0.0
         placed = head["volume"]
         cum_fill = 0.0
-        for row in rows.iloc[1:].itertuples(index=False):
-            cum_fill += row.fill
+        tail = rows.iloc[1:]
+        for action, fill, volume in zip(
+            tail["action"],
+            tail["fill"].to_numpy(dtype=float),
+            tail["volume"].to_numpy(dtype=float),
+            strict=True,
+        ):
+            cum_fill += fill
             outstanding = placed - cum_fill
             assert outstanding >= -1e-9
-            if row.action == "changed":
+            if action == "changed":
                 # A partial execution leaves a positive outstanding remainder.
-                assert row.fill > 0
-                assert abs(row.volume - outstanding) < 1e-6
-                assert row.volume > 0
+                assert fill > 0
+                assert abs(volume - outstanding) < 1e-6
+                assert volume > 0
             else:  # deleted: full fill (fill>0, volume 0) or cancel (fill 0)
-                if row.fill > 0:
-                    assert abs(row.volume) < 1e-9
+                if fill > 0:
+                    assert abs(volume) < 1e-9
                     assert abs(outstanding) < 1e-6
                 else:
-                    assert abs(row.volume - outstanding) < 1e-6
+                    assert abs(volume - outstanding) < 1e-6
         assert cum_fill <= placed + 1e-6
 
 
@@ -319,7 +327,7 @@ def test_config_is_frozen():
     cfg = SynthConfig()
     # A frozen dataclass raises FrozenInstanceError, a subclass of AttributeError.
     with pytest.raises(AttributeError):
-        cfg.seed = 5  # type: ignore[misc]
+        cfg.seed = 5  # ty: ignore[invalid-assignment]
 
 
 @pytest.mark.parametrize(

@@ -15,6 +15,7 @@ and locally you do the same:
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import sys
@@ -81,7 +82,11 @@ def build_chapter(path: Path) -> str:
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(payload)
 
-    title = _title_of(body, stem)
+    # Quote the title: chapter headings contain colons ("L1 -> L2 -> L3: three
+    # resolutions ..."), and an unquoted YAML scalar with ": " in it is a parse
+    # error. json.dumps writes a double-quoted scalar, which YAML reads with the
+    # same escapes, so any character in a heading survives the round trip.
+    title = json.dumps(_title_of(body, stem), ensure_ascii=False)
     (OUT / f"{stem}.md").write_text(
         f"---\ntitle: {title}\n---\n\n{body}", encoding="utf-8"
     )

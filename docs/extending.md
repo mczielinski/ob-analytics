@@ -7,9 +7,9 @@ title: Extending
 Every pluggable surface in ob-analytics follows the same shape: implement a
 small **Protocol** by structural typing (no base class to inherit), then
 **register** it under a name. Things that are genuinely swappable at runtime —
-data sources, export formats, plot backends, live capturers — live in
-name-keyed registries. Things that aren't — metrics, themes — are plain
-functions and values you call directly.
+data sources, metrics, export formats, plot backends, live capturers — live
+in name-keyed registries. Things that aren't — themes — are plain values you
+pass directly.
 
 ## How extension works
 
@@ -17,8 +17,10 @@ functions and values you call directly.
 |---|---|---|---|
 | **A data source** (new venue, file and/or live) | `Source` + `OfflineSource` and/or `LiveSource` | `register_source(name, cls)` (or an entry point) | `Pipeline.from_source(name)` · CLI `process --source name` / `capture name` |
 | **An export format** | `DataWriter` | `register_writer(name, factory)` | `save_data(data, path, fmt=name)` |
-| **A plot** | a `prepare_*` function + a renderer | `RENDERERS.register((name, backend), fn)` | `plot(name, backend=...)` |
-| **A metric** | a plain function | — *(no registry)* | `my_metric(result.trades, ...)` |
+| **A plot** | a `prepare_*` function + a renderer | `RENDERERS.register((name, level, backend), fn)` | `plot(name, backend=...)` |
+| **A metric** | `Metric` | `register_metric(metric)` (or an entry point) | `result.metric(name)` · `result.plot(name)` · its own gallery card |
+| **A bar rule** | `BarRule` | `register_bar_rule(rule)` | `bars(trades, rule=name)` |
+| **A feature** | `Feature` | `register_feature(feature)` | a column of `features(trades, quotes)` |
 
 Registration is an import side-effect: the module that calls
 `register_*` must be imported before the name is looked up. Built-ins register
@@ -28,6 +30,10 @@ themselves when `ob_analytics` is imported — see
 The Protocol contracts referenced below are documented on the
 [Protocols](api/protocols.md) page; the DataFrame column contracts are on
 [Data Contracts](api/schemas.md).
+
+Every protocol here takes and returns `pandas.DataFrame` — see
+[Frame types: pandas in, pandas out](schema.md#frame-types-pandas-in-pandas-out)
+for the contract and what to use when you want Arrow or Polars.
 
 ---
 
@@ -75,10 +81,9 @@ class CoinbaseLoader:
         self.config = config
 
     def load(self, source: Any) -> pd.DataFrame:
-        # Parse the venue feed into the canonical event columns
-        # (event_id, timestamp, price, volume, action, direction, ...).
-        # See ob_analytics.bitstamp.BitstampLoader for a full implementation
-        # and docs/api/schemas.md for the column contract.
+        # Parse the venue feed into the canonical event columns (listed
+        # below this example). See ob_analytics.bitstamp.BitstampLoader for
+        # a full implementation.
         raw = pd.read_json(source)
         ...
         return events
@@ -92,7 +97,8 @@ class CoinbaseTradeReader:
 
     def load(self, events: pd.DataFrame, source: Any) -> pd.DataFrame:
         # Project explicit trade records into the canonical trades schema
-        # (timestamp, price, volume, direction, maker/taker ids, ...).
+        # (listed below this example). Return a frame, never None: a run
+        # with no trades returns an empty frame with those columns.
         ...
         return trades
 
@@ -128,6 +134,26 @@ class CoinbaseSource:
 
 register_source("coinbase", CoinbaseSource)
 ```
+
+The pipeline checks both frames on the way in and names any column that is
+missing. The loader's events need these columns:
+
+| Column | Type | What it holds |
+|---|---|---|
+| `event_id` | `int64` | A unique id for each row, in the order the rows happened |
+| `id` | `int64` | The order's id, the same on every row of one order |
+| `timestamp` | `datetime64[ns, UTC]` | When you received the message |
+| `exchange_timestamp` | `datetime64[ns, UTC]` | The venue's own time; repeat `timestamp` if the feed has none |
+| `price` | `int64` | Integer ticks: the price divided by `config.tick_size` |
+| `volume` | `int64` | Integer lots: the size divided by `config.lot_size` |
+| `action` | categorical | `created`, `changed` or `deleted` |
+| `direction` | categorical | `bid` or `ask` |
+| `fill` | `int64` | The size executed at this event, in lots; `0` when nothing traded |
+
+The pipeline adds `type` itself. The trade source's frame needs `timestamp`,
+`price`, `volume`, `direction` (`buy` or `sell`, the taker's side),
+`maker_event_id` and `taker_event_id`. [The schema](schema.md) says what each
+column means, including how `volume` and `fill` change over an order's life.
 
 !!! warning "`compute_depth` must be defined"
     The pipeline calls `source.compute_depth(...)` unconditionally. **Return
@@ -178,10 +204,14 @@ The built-in `CcxtSource` is the worked example
 
 A `LiveSource` translates a venue's WebSocket (or REST-poll) feed into the same
 event dicts the pipeline reads. It only **parses**: persistence, raw-frame
-archival, reconnect/rate-limiting, signal handling, and `meta.json`
-finalisation are all handled generically by the runner
-(`ob_analytics.live._runner.run_capturer`). Add the three async methods to your
-source (alongside the offline factories, if it does both):
+archival, signal handling, and `meta.json` finalisation are handled by the
+runner (`ob_analytics.live._runner.run_capturer`, one segment), and
+reconnecting, rolling and restarting by `ob_analytics.live.run_capture`. So
+`stream` does not reconnect: when the connection drops it raises, and
+`run_capture` starts a new segment from a fresh snapshot (see
+[Running for days](howto/live-capture.md#running-for-days)). Add the three
+async methods to your source (alongside the offline factories, if it does
+both):
 
 ```python
 from collections.abc import AsyncIterator
@@ -222,7 +252,12 @@ class CoinbaseSource:  # ... plus the offline members above
 
     # Optional — satisfies SupportsDiagnostics; merged into meta.json.
     def diagnostics(self) -> dict[str, Any]:
-        return {"reconnects": self._reconnects}
+        return {"dropped": self._dropped}
+
+    # Optional — satisfies SupportsPreflight; runs before any output exists.
+    # Raise ImportError with the install hint when an optional extra is missing.
+    def preflight(self) -> None:
+        import websockets  # noqa: F401
 ```
 
 Capturing from the CLI (requires the `[live]` extra):
@@ -232,9 +267,9 @@ ob-analytics capture coinbase --pair btcusd --minutes 10 --out capture/
 ob-analytics capture --list   # show live-capable sources
 ```
 
-The runner writes `orders.csv` (L3) or `depth.csv` (L2) plus `trades.csv`, in
-the same schema the pipeline reads, so a capture feeds straight back in:
-`Pipeline.from_source("coinbase").run("capture/")`.
+Each segment of the capture holds `orders.csv` (L3) or `depth.csv` (L2) plus
+`trades.csv`, in the same schema the pipeline reads, so a segment feeds
+straight back in: `Pipeline.from_source("coinbase").run("capture/seg-0001/orders.csv")`.
 
 ### Shipping a source as its own package
 
@@ -314,8 +349,131 @@ save_data(
 )
 ```
 
-The built-in `"parquet"` and `"pickle"` formats need no registration; named
-formats become available as soon as their factory is registered.
+The built-in `"parquet"` and `"pickle"` formats are registered writers too, so
+they appear in `list_writers()` and follow exactly these rules. Registering your
+own under one of those names **replaces** the built-in one — there is no special
+case in `save_data` for either.
+
+### Asking for Arrow instead of pandas
+
+`data` is a mapping of pandas frames, and every writer above treats it as one.
+It also offers `.arrow()`, for a writer whose target is columnar:
+
+```python
+class ArrowIpcWriter:
+    """Satisfies the DataWriter Protocol."""
+
+    def write(
+        self, data: dict[str, pd.DataFrame], dest: str | Path, **kwargs: Any
+    ) -> Path:
+        import pyarrow.feather as feather
+
+        dest = Path(dest)
+        dest.mkdir(parents=True, exist_ok=True)
+        for name, table in data.arrow().items():
+            feather.write_feather(table, dest / f"{name}.arrow")
+        return dest
+```
+
+Each table from `.arrow()` carries the schema version and, when the run declared
+a `tick_size`, the tick-size metadata — the same key-value metadata a canonical
+Parquet file carries. Calling `pyarrow.Table.from_pandas` yourself instead
+drops both, and a reader then treats the result as legacy data with prices left
+as raw integer ticks.
+
+The frame type is therefore not fixed in the protocol: the CSV writers want
+pandas, a Parquet or Arrow writer wants Arrow, and each asks for what it needs.
+
+### Exporting to a backtesting engine
+
+Two formats ship for the engines next door (issue #113). Neither needs its
+engine installed:
+
+```python
+from ob_analytics import Pipeline, save_data
+from ob_analytics.config import PipelineConfig
+
+config = PipelineConfig(tick_size=0.01, lot_size=1e-8)
+result = Pipeline(config=config).run("orders.csv")
+data = {"events": result.events, "trades": result.trades}
+
+save_data(data, "out/session.npz", fmt="hftbacktest", config=config)
+save_data(data, "out/deltas.parquet", fmt="nautilus", config=config)
+```
+
+Both scale the integer tick prices back to the quote currency using the run's
+`tick_size`, **and** the integer lot sizes back to the base asset using its
+`lot_size`, so pass the same `config` the run used. Both matter: a `config`
+whose `lot_size` does not match the data writes sizes that are wrong by that
+ratio. hftbacktest takes the file without complaint, and Nautilus'
+`OrderBookDeltaDataWrangler` raises `ValueError: 'size' not a positive integer,
+was 0` once the sizes round to zero at the instrument's `size_precision`.
+
+Exporting the bundled toy data therefore means passing both toy constants, not
+the `PipelineConfig` defaults — whose `lot_size` of `1e-8` would turn a size of
+2 into `2e-08`:
+
+```python
+from ob_analytics import save_data
+from ob_analytics.config import PipelineConfig
+from ob_analytics.datasets import LOT_SIZE, TICK_SIZE, toy_events, toy_trades
+
+config = PipelineConfig(tick_size=TICK_SIZE, lot_size=LOT_SIZE)
+data = {"events": toy_events(), "trades": toy_trades()}
+
+save_data(data, "out/toy.npz", fmt="hftbacktest", config=config)
+save_data(data, "out/toy-deltas.parquet", fmt="nautilus", config=config)
+```
+
+The toy book's prices and sizes are already whole ticks and whole lots, so both
+constants are `1.0` and the export carries the same numbers the toy script
+lists. A Nautilus book built from `out/toy-deltas.parquet` then reproduces our
+own touch at the end of the stream: best bid 99, best ask 102.
+
+**hftbacktest** gets its feed-event array under the `data` member of the npz,
+which is what `np.load(path)["data"]` and `BacktestAsset.data([...])` read. The
+engine replays two clocks, an exchange one and a local one, and requires each to
+run forwards. Those two orders are not the same order — on the bundled Bitstamp
+sample the exchange stamp leads the receive stamp by 0.08 to 2.7 seconds, and
+they disagree about 14,966 of 314,057 events — so an event whose clocks disagree
+is written twice, once per timeline, exactly as the engine's own
+`correct_event_order` would. hftbacktest's `validate_event_order` accepts the
+result.
+
+**Nautilus** gets a Parquet file holding the frame its
+`OrderBookDeltaDataWrangler` takes: a UTC index and the columns `action`,
+`side`, `price`, `size`, `order_id`, `flags`, `sequence`.
+
+```python
+import pandas as pd
+from nautilus_trader.persistence.wranglers import OrderBookDeltaDataWrangler
+
+deltas = OrderBookDeltaDataWrangler(instrument).process(
+    pd.read_parquet("out/deltas.parquet")
+)
+```
+
+Writing the file does not need Nautilus, but reading it back does, and
+nautilus-trader publishes no build for Python 3.11 that works with pandas 3,
+which ob-analytics uses. Read the export from a Python 3.12 or later
+environment. The tests that compare our book with Nautilus' run there for the
+same reason:
+
+```bash
+UV_PROJECT_ENVIRONMENT=$HOME/.cache/ob-analytics-py312 uv run --python 3.12 --group backtest-engines pytest tests/test_backtest_parity.py
+```
+
+The `instrument` you pass must declare a `size_precision` fine enough for your
+data. Nautilus converts each size to a fixed-point `Quantity` and rejects one
+that rounds to zero, so a BTC feed carrying single-satoshi orders needs
+`size_precision=8`; the bundled `TestInstrumentProvider.btcusdt_binance()`, at
+6, refuses them.
+
+An order that was fully filled leaves a `deleted` event whose canonical volume
+is zero, because the volume on a delete is the size *removed* and a filled order
+had nothing left to cancel. Nautilus rejects a zero-size delta, so the export
+gives that delete the size the order last rested at. An order that never rested
+at a positive size is dropped: there is nothing truthful to say about it.
 
 ---
 
@@ -328,14 +486,24 @@ plotting library:
 2. a **renderer** registered under the coordinate `(concept, level, backend)`.
 
 The **level** is the order-book resolution the plot renders at: `Level.L2`
-(Market-By-Price aggregate) or `Level.L3` (Market-By-Order, per order), or
-`None` for a level-less plot such as a derived metric. A concept registered at
-a single level dispatches without naming it; registering the *same* concept at
-both `L2` and `L3` makes it *comparable*, and callers then pass `level=`.
+(Market-By-Price aggregate) or `Level.L3` (Market-By-Order, per order). A plot
+with no L2 and L3 variants of its own can instead be **level-less**, registered
+at `None`: a metric's chart is, and so is the example below, which reads only
+trades. The kind decides how the plot is called and where the gallery shows it,
+not what data it reads: the built-in `trade_size` reads only trades and is
+registered at `L2`. A concept is one kind or the other, on every backend:
+registering it both at `None` and at a level raises `ValueError`.
 
-The matplotlib backend calls `renderer(data, ax)` (or
-`renderer(data, ax, theme=theme)` when a theme is passed); other backends call
-`renderer(data)`.
+A concept registered at a single level dispatches without naming it;
+registering the *same* concept at both `L2` and `L3` makes it *comparable*, and
+callers then pass `level=`.
+
+The matplotlib backend calls `renderer(data, ax)`; other backends call
+`renderer(data)`. When the caller passes a theme, `plot()` adds `theme=theme`
+for any renderer that accepts it, so a renderer should take a keyword-only
+`theme: PlotTheme = DEFAULT_THEME` and read its colours from `theme.palette`.
+A renderer without a `theme` parameter still works; `plot()` logs a warning
+and draws it without the theme.
 
 ```python
 from __future__ import annotations
@@ -343,7 +511,7 @@ from __future__ import annotations
 import pandas as pd
 from matplotlib.axes import Axes
 
-from ob_analytics.visualization import RENDERERS, DEFAULT_THEME, Level, PlotTheme, plot
+from ob_analytics.visualization import RENDERERS, DEFAULT_THEME, PlotTheme, plot
 
 
 def prepare_cumvol_data(trades: pd.DataFrame) -> dict:
@@ -361,13 +529,14 @@ def mpl_cumvol(data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT
     if ax is None:
         _, ax = plt.subplots()
     df = data["series"]
-    ax.plot(df["timestamp"], df["signed_cumvol"])
-    ax.axhline(0, lw=0.5)
+    ax.plot(df["timestamp"], df["signed_cumvol"], color=theme.palette.series)
+    ax.axhline(0, lw=0.5, color=theme.palette.rule)
     ax.set_ylabel("signed cumulative volume")
     return ax.figure
 
 
-RENDERERS.register(("cumvol", Level.L2, "matplotlib"), mpl_cumvol)  # None = level-less metric
+# Level-less: it has no L2 and L3 variants of its own.
+RENDERERS.register(("cumvol", None, "matplotlib"), mpl_cumvol)
 ```
 
 Using it:
@@ -380,7 +549,7 @@ result = Pipeline().run("orders.csv")
 
 fig = plot("cumvol", backend="matplotlib", **prepare_cumvol_data(result.trades))
 
-# Override the theme per call (matplotlib only):
+# Override the theme per call:
 fig = plot(
     "cumvol",
     theme=PlotTheme(style="darkgrid"),
@@ -394,30 +563,98 @@ the dispatcher at the module so it imports lazily on first use:
 ```python
 from ob_analytics.visualization import register_plot_backend
 
-# In your package, e.g. my_pkg/_bokeh.py, call at import time:
-#     RENDERERS.register(("cumvol", Level.L2, "bokeh"), bokeh_cumvol)  # def bokeh_cumvol(data): ...
-register_plot_backend("bokeh", "my_pkg._bokeh")
+# In your package, e.g. my_pkg/_altair.py, call at import time:
+#     RENDERERS.register(("cumvol", None, "altair"), altair_cumvol)
+#     # def altair_cumvol(data, *, theme=DEFAULT_THEME): ...
+register_plot_backend("altair", "my_pkg._altair")
 
-fig = plot("cumvol", backend="bokeh", **prepare_cumvol_data(result.trades))
+fig = plot("cumvol", backend="altair", **prepare_cumvol_data(result.trades))
 ```
 
-**In the gallery.** There is no panel registry. To put a custom plot in the
-HTML gallery, pass it through `extra_panels=` — see the
-[Gallery API](api/gallery.md).
+Matplotlib (static, default), Plotly, and Bokeh already ship first-party this
+way — `backend="bokeh"` covers the core concepts (`trade_tape`,
+`depth_heatmap`, `book_snapshot`, `depth_chart`) for Bokeh / Panel server
+dashboards and streaming views (`pip install ob-analytics[bokeh]`).
+
+**In the gallery.** There is no panel registry. Build the model, add a card
+for the plot, and render that model instead of a bare result — see the
+[Gallery API](api/gallery.md). The gallery draws the plot through the renderers
+already registered, so nothing is registered a second time. It draws each
+backend in `backends=`, by default Plotly (when it is installed) and Matplotlib.
+A backend with no renderer for the plot shows "Not available" on its card.
+The example registers only a Matplotlib renderer, so it asks for that backend
+alone. A level-less plot is a `PlotSpec` appended to the model's `analytics`
+list. If it goes in the wrong list, its card shows "Not available" and says
+which list it belongs in:
+
+```python
+from ob_analytics.visualization.gallery import (
+    PlotSpec,
+    build_gallery_model,
+    generate_gallery,
+)
+
+model = build_gallery_model(result)
+model.analytics.append(
+    PlotSpec("cumvol", "Cumulative Volume", "cumvol", prepare_cumvol_data, {"trades": result.trades})
+)
+generate_gallery(result, "output/gallery/", model=model, backends=["matplotlib"])
+```
+
+A plot registered at a level is a `PlotConcept` appended to the model's
+`concepts` list instead, before `generate_gallery` is called. Its `variants` map
+each level it is registered at to a `PlotSpec`, and the gallery gives it one
+card per level:
+
+```python
+from ob_analytics.visualization import Level
+from ob_analytics.visualization.gallery import PlotConcept
+
+spec = PlotSpec("my_face", "My Face", "my_face", prepare_my_face, {"depth": result.depth})
+model.concepts.append(PlotConcept("my_face", "My Face", {Level.L2: spec}))
+```
 
 ---
 
 ## 4. A new metric
 
-Metrics are not swapped at runtime, so they have no registry, no Protocol, and
-no wrapper class. A metric is a plain function over a DataFrame — almost always
-`result.trades`. The built-ins
-([`compute_vpin`](api/flow_toxicity.md), [`compute_kyle_lambda`](api/flow_toxicity.md),
-[`order_flow_imbalance`](api/flow_toxicity.md)) follow exactly this convention.
+A metric measures a finished run and draws as a level-less plot. It is a plain
+object with four members — no base class to inherit, the same structural typing
+the other surfaces use:
+
+- `name` — the registry key, and the plot concept the metric draws under.
+- `title` — the title of its gallery card.
+- `levels` — the resolutions it applies to. A metric that reads per-order
+  events declares `(Level.L3,)` and is skipped on an L2 run instead of failing
+  on the empty `events` table.
+- `compute(result)` — the measurement: takes a `PipelineResult`, returns a
+  `pandas.DataFrame`.
+- `prepare(frame)` — turns that table into the payload the renderer takes,
+  exactly as a `prepare_*` function does for a plot (§3).
+
+Both methods can take keyword-only settings after their first argument, each
+with a default. Put the settings of the measurement (a window, a bucket size)
+on `compute` and the settings of the picture (a threshold line, a time window)
+on `prepare`. `result.plot(name, **kwargs)` sends each keyword to the method
+that names it, so the two must not share a name.
+
+Five metrics ship registered: `l1_ticker`, `vpin`, `kyle_lambda`,
+`order_flow_imbalance` and `ofi_horizon`. Each wraps a plain function you can
+still call directly ([`compute_vpin`](api/flow_toxicity.md),
+[`compute_kyle_lambda`](api/flow_toxicity.md),
+[`order_flow_imbalance`](api/flow_toxicity.md),
+[`ofi_by_horizon`](api/flow_toxicity.md)). Registering is what makes a
+function run and plot from a result.
 
 ```python
+from __future__ import annotations
+
 import numpy as np
 import pandas as pd
+from matplotlib.axes import Axes
+
+from ob_analytics import Level, PipelineResult, register_metric
+from ob_analytics.visualization import DEFAULT_THEME, RENDERERS, PlotTheme
 
 
 def amihud_illiquidity(trades: pd.DataFrame, freq: str = "1min") -> pd.DataFrame:
@@ -427,19 +664,251 @@ def amihud_illiquidity(trades: pd.DataFrame, freq: str = "1min") -> pd.DataFrame
     value = (df["price"] * df["volume"]).resample(freq).sum()
     illiq = (abs_ret / value.replace(0, np.nan)).rename("amihud")
     return illiq.to_frame()
+
+
+class AmihudMetric:
+    """Satisfies the Metric Protocol."""
+
+    name = "amihud"
+    title = "Amihud Illiquidity"
+    levels = (Level.L2, Level.L3)  # trades only: both resolutions have them
+
+    def compute(self, result: PipelineResult, *, freq: str = "1min") -> pd.DataFrame:
+        return amihud_illiquidity(result.trades, freq=freq)
+
+    def prepare(self, frame: pd.DataFrame) -> dict:
+        return {"series": frame.reset_index()}
+
+
+def mpl_amihud(data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME):
+    import matplotlib.pyplot as plt
+
+    if ax is None:
+        _, ax = plt.subplots()
+    df = data["series"]
+    ax.plot(df["timestamp"], df["amihud"])
+    ax.set_ylabel("illiquidity")
+    return ax.figure
+
+
+register_metric(AmihudMetric())
+RENDERERS.register(("amihud", None, "matplotlib"), mpl_amihud)  # None = level-less
 ```
+
+Note what is registered: an *instance*, not a class. A metric needs no per-run
+construction, so the object registered is the object called. Its settings, such
+as `freq` above, are keyword arguments with defaults.
 
 Using it:
 
 ```python
 from ob_analytics import Pipeline
+from ob_analytics.visualization import available_concepts
 
 result = Pipeline().run("orders.csv")
-illiq = amihud_illiquidity(result.trades, freq="5min")
+
+result.metric("amihud")              # the table
+result.metric("amihud", freq="5min") # the table, with a setting changed
+result.metrics()                     # every metric that applies to this run
+result.plot("amihud")                # the face, through the renderer above
+result.plot("amihud", freq="5min")   # freq goes to compute
+available_concepts(result)           # lists "amihud" with an empty level list
 ```
 
-To visualise a metric, prepare its data and register a renderer (§3), or pass a
-panel to the gallery via `extra_panels=`.
+Metrics run when asked for, not during `Pipeline.run`, so a run pays only for
+the metrics it uses and a metric that raises cannot break the pipeline.
+`result.metrics()` runs every registered metric whose `levels` include the
+run's resolution.
+
+**In the gallery.** A registered metric becomes a gallery card on its own —
+`generate_gallery(result, ...)` draws it beside the built-in faces with no
+extra step needed. A metric is computed when its card is drawn, so listing
+concepts or plotting another face does not run it. A metric that raises is
+logged and its card says why, so one broken metric does not stop the gallery
+being built.
+
+The gallery and `result.plot` give a metric the display-unit result: prices in
+the quote currency and sizes in the base asset. `result.metric` gives it the
+result as it is, with prices in integer ticks and sizes in integer lots (see
+[the schema](schema.md)). A size setting such as VPIN's `bucket_volume` is in
+the units of the result the metric is given.
+
+**Shipping a metric as its own package.** Advertise it under the
+`ob_analytics.metrics` entry-point group and `load_metric_plugins()` finds it at
+`import ob_analytics`, the same as a source:
+
+```toml
+# pyproject.toml of your package
+[project.entry-points."ob_analytics.metrics"]
+amihud = "my_pkg.amihud:AmihudMetric"
+```
+
+The entry point names the metric *class*; discovery constructs it with no
+arguments and registers it under its own `name`. A metric with required
+settings should either default them or register itself on import instead.
+
+---
+
+## 5. A new bar rule
+
+[`bars()`](api/bars.md) resamples a trade stream into open/high/low/close rows.
+Everything a bar carries — the OHLCV columns, VWAP, the signed-volume split —
+is shared, so what a bar *type* actually decides is one thing: where the
+boundaries fall. That decision is a **`BarRule`**, and a rule of your own is
+the boundary decision and nothing else.
+
+A rule states three members:
+
+- `name` — what `bars(trades, rule=name)` looks it up by.
+- `normalize(threshold)` — read the threshold in the rule's own type, or raise
+  `ConfigError`. Called once before `assign`, so reading and checking the
+  threshold live in one place and cutting in another.
+- `assign(frame, threshold)` — return the 0-based bar index of each trade.
+
+`assign` is handed a normalized frame in trade order, with `timestamp`,
+`price`, `volume`, `turnover` (price × size) and `sign` (`+1` buyer-initiated,
+`-1` seller-initiated) — so a rule never has to sort trades or work out the
+aggressor side itself.
+
+`default_threshold(frame, target_bars)` supplies a threshold when the caller
+passes none, aiming at about `target_bars` bars.
+
+Here is a rule that starts a new bar whenever price moves a set distance from
+where the bar opened — a "range bar":
+
+```python
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+from ob_analytics import register_bar_rule
+from ob_analytics.exceptions import ConfigError
+
+
+class RangeRule:
+    """A new bar every time price travels `threshold` from the bar's open."""
+
+    name = "range"
+
+    def default_threshold(self, frame: pd.DataFrame, target_bars: int) -> float:
+        span = frame["price"].max() - frame["price"].min()
+        return float(span) / target_bars or 1.0
+
+    def normalize(self, threshold: object) -> float:
+        size = float(threshold)
+        if not size > 0:
+            raise ConfigError(f"bars: the 'range' rule needs a positive move, got {threshold!r}")
+        return size
+
+    def assign(self, frame: pd.DataFrame, threshold: float) -> np.ndarray:
+        price = frame["price"].to_numpy(dtype=float)
+        index = np.empty(price.size, dtype=np.int64)
+        bar, opened_at = 0, price[0]
+        for i, p in enumerate(price):
+            index[i] = bar
+            if abs(p - opened_at) >= threshold:
+                bar += 1
+                opened_at = p
+        return index
+
+
+register_bar_rule(RangeRule())
+```
+
+```python
+bars(result.trades, "range", 25)
+```
+
+The bar table, the gallery face and the plot all work unchanged: they never
+knew which rule cut the bars.
+
+---
+
+## 6. A new feature
+
+[`features()`](api/features.md) builds one tidy table: a point in time on each
+row, a microstructure feature in each column. Where the rows fall is a bar
+rule, decided before any measuring starts, so what a **`Feature`** decides is
+one thing: what its columns read on each row.
+
+A feature states four members:
+
+- `name` — what `features(..., include=[name])` looks it up by.
+- `columns` — the columns it writes, in order. Declared rather than
+  discovered, so the table's shape is known before anything is measured.
+- `requires` — the columns of the prepared frame it reads. A feature named
+  explicitly whose requirement is missing raises; one selected by default is
+  skipped, which is how the book features drop out of a run with no quotes.
+- `compute(frame)` — return one array per declared column, in row order.
+
+`compute` is handed one row per bar, in time order, carrying the bar's own
+columns — `open`, `high`, `low`, `close`, `volume`, `turnover`, `n_trades`,
+`vwap`, `buy_volume`, `sell_volume`, `signed_volume` — and the book as it
+stood at the bar's close, joined on from the quotes frame. **That frame holds
+nothing from after a row's close**, so a feature that works row by row is
+free of look-ahead already. One that looks along the frame has to look
+backwards: `shift(1)`, or a trailing `rolling` window.
+
+Here is a feature that measures how far the bar's close sits inside its own
+range — a "close location value":
+
+```python
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+from ob_analytics import features, register_feature
+
+
+class CloseLocationFeature:
+    """Where the close fell in the bar's range: -1 at the low, +1 at the high."""
+
+    name = "close_location"
+    columns = ("close_location",)
+    requires = frozenset({"high", "low", "close"})
+
+    def compute(self, frame: pd.DataFrame) -> dict[str, np.ndarray]:
+        high = frame["high"].to_numpy(dtype=float)
+        low = frame["low"].to_numpy(dtype=float)
+        close = frame["close"].to_numpy(dtype=float)
+        span = high - low
+        with np.errstate(invalid="ignore", divide="ignore"):
+            located = np.where(span > 0, (2 * close - high - low) / span, 0.0)
+        return {"close_location": located}
+
+
+register_feature(CloseLocationFeature())
+```
+
+```python
+features(trades, quotes, "volume", 0.5)["close_location"]
+```
+
+It is measured with the built-in ten and its column lands after theirs. Name
+it in `include` to get it on its own, or to put its column somewhere else.
+
+### Changing a built-in
+
+The features that look back over a window carry that window on the instance,
+so a different one is a second registration, not an argument to thread through
+`features()`. Registering under the same name replaces the built-in; under a
+new name, both run:
+
+```python
+from ob_analytics.features import VpinFeature
+
+register_feature(VpinFeature(window=50))                # the paper's 50 buckets
+register_feature(VpinFeature(name="vpin_5", window=5))  # and a fast one beside it
+```
+
+The two one-column features name their column after themselves, so the second
+registration above writes `vpin_5` and leaves `vpin` alone. Elsewhere the
+columns are fixed, and two features that would write the same one are an
+error rather than a silent overwrite — so a second `ReturnsFeature` under a
+new name is refused, and the way to change that one is to register it under
+`returns` and replace it.
 
 ---
 

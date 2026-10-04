@@ -75,12 +75,20 @@ spread to consume it. See the `maker_event_id` / `taker_event_id` columns
 documented in [Data Contracts](api/schemas.md).
 
 **Spread**
-: Best ask price minus best bid price. Extracted from the depth summary
-via [`get_spread`](api/depth.md#ob_analytics.depth.get_spread).
+: Best ask price minus best bid price, in ticks — see *Tick size* below.
+Extracted from the depth summary via
+[`get_spread`](api/depth.md#ob_analytics.depth.get_spread).
 
 **Mid-price**
-: `(best_bid + best_ask) / 2`. Reference price for measuring order
-aggressiveness in basis points.
+: `(best_bid + best_ask) / 2`, in ticks — see *Tick size* below. Reference
+price for measuring order aggressiveness in basis points.
+
+**Tick size**
+: The instrument's minimum price increment, in quote currency. Every
+`price` column is stored as a whole number of ticks (`int64`), not a float
+in the quote currency; multiply by
+[`PipelineConfig.tick_size`](api/config.md#ob_analytics.config.PipelineConfig)
+to recover the quote-currency price.
 
 **Basis point (BPS)**
 : 1/100 of a percent. The depth summary bins liquidity into rings of
@@ -89,7 +97,20 @@ aggressiveness in basis points.
 
 ## Order classifications
 
-Produced by [`set_order_types`](api/analytics.md#ob_analytics.analytics.set_order_types).
+Produced by [`set_order_types`](api/analytics.md#ob_analytics.analytics.set_order_types),
+which assigns one of six categories.
+
+**Unknown**
+: The initial, unclassified state. Remains on any order that fits none of
+the other categories once classification finishes; `set_order_types` logs a
+warning when this happens, since it signals a classification gap rather
+than a normal outcome.
+
+**Pre-existing**
+: An order first seen part-way through the stream, with no `created` row —
+the opening book at capture start, or a hidden execution. Structurally
+unclassifiable rather than a classification failure, so it gets its own
+category instead of falling back to *unknown*.
 
 **Resting limit**
 : A passive limit order that sits in the book and is eventually filled or
@@ -106,6 +127,30 @@ to rest as a passive order at a price inside the book.
 : A limit order that is created and cancelled within a very short window
 without ever filling. Common in HFT quote-stuffing patterns.
 
+## Hidden liquidity
+
+Implemented in [`hidden_liquidity`](api/hidden_liquidity.md).
+
+**Hidden order**
+: An order the venue will match but does not show in the visible book.
+LOBSTER marks an execution against one as event type 5, with order id `0`.
+
+**Iceberg order**
+: An order that shows a small displayed *peak* and keeps the rest in
+reserve. Each visible part is a *slice*. When a slice is filled out, the venue
+shows the next one as a new order at the same price and side.
+
+**Refill**
+: The new slice that appears after an iceberg's slice is filled out.
+[`detect_icebergs`](api/hidden_liquidity.md#ob_analytics.hidden_liquidity.detect_icebergs)
+looks for refills within `max_delay` (one millisecond by default) and chains
+them into one suspected iceberg.
+
+**Trade against a hidden order**
+: A trade that printed strictly inside the visible spread, so no visible order
+rested at its price. Found by
+[`hidden_trades`](api/hidden_liquidity.md#ob_analytics.hidden_liquidity.hidden_trades).
+
 ## Flow toxicity
 
 Implemented in [`flow_toxicity`](api/flow_toxicity.md).
@@ -114,16 +159,148 @@ Implemented in [`flow_toxicity`](api/flow_toxicity.md).
 : Easley, López de Prado, & O'Hara (2012). Bucket trades by equal volume,
 classify each bucket as buy- or sell-driven, and report the rolling
 absolute imbalance. High values (≳0.7) signal informed-trader pressure.
+The usual bucket size is average daily volume ÷ 50
+([`vpin_bucket_volume`](api/flow_toxicity.md#ob_analytics.flow_toxicity.vpin_bucket_volume)).
 
 **Kyle's lambda (λ)**
 : Kyle (1985). Slope of `Δprice ~ signed_volume` regression over a rolling
 window. Higher λ → less liquid market (more adverse-selection cost per unit
 of order flow). Returned as a [`KyleLambdaResult`](api/flow_toxicity.md#ob_analytics.flow_toxicity.KyleLambdaResult)
-with the regression DataFrame attached.
+with the regression DataFrame, a bootstrap confidence interval, and a
+`significant` flag that is `False` on too few windows or `|t| < 2`.
 
 **Order flow imbalance (OFI)**
 : Per-window net buy-minus-sell volume normalised by total traded volume.
 A short-horizon proxy for directional pressure.
+
+## Bars
+
+Implemented in [`bars`](api/bars.md).
+
+**Bar**
+: A summary of a run of consecutive trades: open, high, low, close, volume,
+and the microstructure columns that go with them. The boundaries come from a
+**bar rule**.
+
+**Clock bar (OHLCV)**
+: A bar covering a fixed span of the clock — the familiar 1-minute or daily
+candle.
+
+**Tick bar**
+: A bar covering a fixed number of trades. "Tick" here is the market-data
+sense of one printed trade, not the price increment.
+
+**Volume bar / dollar bar**
+: A bar covering a fixed amount of traded size, or of price × size. Sampling
+by activity rather than by the clock puts the same amount of market in each
+bar, which brings bar returns much closer to being independent and
+identically distributed.
+
+**Imbalance bar**
+: A bar that ends when signed size drifts a set amount away from where the bar
+opened, in either direction (López de Prado). A burst of one-sided flow closes
+a bar; balanced trading stays inside one.
+
+**VWAP**
+: Volume-weighted average price — a bar's turnover divided by its volume. The
+average price actually paid, rather than the average of the prices printed.
+
+**Turnover**
+: Price × size summed over a bar: the value that changed hands, in the quote
+currency. Also called notional or dollar volume.
+
+**Signed volume**
+: Buyer-initiated volume minus seller-initiated volume. The net direction of
+the flow in a bar, and what an imbalance bar accumulates.
+## Transaction cost
+
+Implemented in [`cost`](api/cost.md).
+
+**Effective spread**
+: What a taker actually paid to cross, measured from the mid-price the trade
+crossed: `2 * D * (price - mid)`, where `D` is `+1` for a buy and `-1` for a
+sell. Doubled so it compares with a quoted spread, which also spans both
+sides of the mid. Unlike the quoted spread it is a property of trades, not of
+the book, so it reflects where in the book people actually traded.
+
+**Realized spread**
+: The part of the effective spread the liquidity provider kept, measured one
+horizon after the trade: `2 * D * (price - mid_later)`. A negative realized
+spread means the provider lost money on the trade — the flow was informed.
+
+**Price impact**
+: The rest of the effective spread: how far the trade moved the market,
+`2 * D * (mid_later - mid)`. Effective spread = realized spread + price
+impact, exactly, trade by trade.
+
+**Horizon**
+: The wait between a trade and the mid-price the realized spread is read
+against. Five minutes is the equity convention; a fast tape needs less,
+because unrelated price moves are charged to the trade as impact. There is no
+neutral value, so the horizon is reported with the number.
+
+**Amihud illiquidity**
+: Amihud (2002). The price move a unit of turnover buys, `|return| / turnover`
+over a window. High means thin: a small amount of trading swings the price.
+Needs no quotes and no aggressor side.
+
+**Roll's implied spread**
+: Roll (1984). The spread implied by bid-ask bounce, `2 * sqrt(-cov)` over the
+lag-1 autocovariance of trade price changes. It assumes the bounce is the only
+thing moving the price, which fixes the lag-1 **autocorrelation** of those
+changes at `-0.5` — the diagnostic returned beside the estimate. On a tape
+that is sparse relative to how fast the instrument moves, the price change
+between trades is mostly efficient-price movement rather than bounce; the
+autocovariance then comes out positive, the estimate does not exist, and it is
+reported as `NaN` rather than hidden. When it lands negative by chance the
+estimate exists but means nothing, which is why the autocorrelation matters
+more than the root.
+
+## Feature table
+
+Implemented in [`features`](api/features.md).
+
+**Feature table**
+: One tidy table for a model or a study: a point in time on each row, a
+microstructure feature in each column. Every row is stated as of one instant,
+and everything in it was known at that instant.
+
+**Feature**
+: One measured column set of that table. Registered under a name, so a
+measurement of your own becomes a column with no edit to the package.
+
+**Look-ahead**
+: Using data from after a row's instant to compute that row. It flatters a
+model in testing and cannot be repeated in trading, which is the most common
+way a backtest comes out wrong. The feature table has none by construction:
+the trade columns cover the bar only, and the book columns are a backward
+as-of join.
+: The test for it is truncation. Cut the inputs short and recompute; a table
+free of look-ahead reproduces the rows that survive exactly, because none of
+them ever read the data that was removed.
+
+**As-of join**
+: Matching each row to the last observation at or before its instant, rather
+than to one sharing its key. How the book state reaches a row whose instant
+falls between two book snapshots.
+
+**Target**
+: What a model predicts, usually the return over the bar after the row. It
+looks forward, so it is not a feature and the table does not hold one: build
+one with a negative shift.
+
+**Trade imbalance**
+: The signed share of a bar's volume, `signed_volume / volume`, from `-1`
+(every trade a sell) to `+1` (every trade a buy).
+
+**Realized volatility**
+: The standard deviation of returns over a trailing window. Per bar rather
+than annualized: only clock bars span equal amounts of time, so there is no
+one factor that would scale it to a year.
+
+**Close location**
+: Where a bar's close fell within its own high-low range. Not a built-in
+feature; the worked example of writing one.
 
 ## Pipeline concepts
 
@@ -134,12 +311,22 @@ Once frames pass the validators, downstream code cannot tell which
 venue they came from.
 
 **Loader**
-: Any object whose `load()` returns a validator-passing events frame —
-the [`EventLoader`](api/protocols.md) protocol. One per venue dialect.
+: Produces the canonical frame for a source, via `create_loader`. An L3
+source's `create_loader` returns an [`EventLoader`](api/protocols.md),
+whose `load()` returns a validator-passing events frame; an L2 source
+returns a [`DepthSource`](api/protocols.md), whose `load()` returns the
+depth frame directly, since a price-level feed has no per-order events to
+fold. One per venue dialect.
 
 **Trade source**
 : The companion protocol for executions: `load(events, source)` returns
 the canonical trades frame with maker/taker attribution.
+
+**Metric**
+: A measurement taken from a finished run — registered under a name in
+`METRICS`, computed on demand by `result.metric(name)`, and drawn as a
+level-less plot under that same name. See
+[Metrics](api/metrics.md) and [Extending](extending.md#4-a-new-metric).
 
 ## Data formats
 
@@ -156,7 +343,14 @@ crossed book in the output is a property of the feed, not a
 reconstruction bug. See the pitfall note in
 [L1 → L2 → L3](tutorial/02_three_resolutions.md) and the
 [Data quality explainer](data-quality.md), which shows how to measure the
-crossing (`validate`) and uncross it for display (`uncross=`).
+crossing (`audit`) and uncross it for display (`uncross=`).
+
+**Price levels**
+: An L2 feed: the venue's total size at each price, with no order identity
+(Binance, Coinbase, Kraken, Kalshi, Polymarket, and cryptofeed at L2). The
+venue does not publish a crossed book, so a crossed one means the capture's copy
+is wrong: most often, the capture kept a level the venue removed. See
+[What each feed shows](feeds.md).
 
 **Bitstamp CSV**
 : One row per order event with columns `id, timestamp, exchange_timestamp,

@@ -203,28 +203,52 @@ class DepthMetricsEngine:
         n = len(ordered)
         result = np.zeros((n, self._row_len), dtype=np.float64)
 
+        # The first row starts from the book the engine already holds, so a
+        # second call carries on from where the first left off.  Each row
+        # writes only the side it changes, and a fresh engine's empty book
+        # writes zeros, so a single call is unaffected.
+        self._write_side_metrics(0, result[0])
+        self._write_side_metrics(1, result[0])
         for i in range(n):
             if i > 0:
                 result[i] = result[i - 1]
             self.update_side(int(prices_int[i]), volumes[i], int(sides[i]), result[i])
 
         col_names = self._column_names()
-        metrics = pd.DataFrame(result, columns=col_names)
+
+        # Which columns are exact counts rather than measurements: the two best
+        # prices are always tick counts, and every volume column is a lot count
+        # when the input carried lot counts.  A frame still holding float sizes
+        # in the base asset -- one built by hand, or read from a file written
+        # before sizes were integers -- is left alone, because rounding it onto
+        # a lot grid would truncate a sub-lot size such as 0.5 to zero and lose
+        # the level rather than report it.
+        exact = {"best_bid_price", "best_ask_price"}
+        if np.issubdtype(np.asarray(volumes).dtype, np.integer):
+            exact |= {name for name in col_names if "vol" in name}
+
+        # Each column is converted as it is lifted out of the row buffer, which
+        # is one float64 matrix because it also holds the scale-free bps
+        # columns.  Slicing the assembled frame and casting that instead would
+        # hold a float copy and an int copy of every volume column at the same
+        # time -- about 100 MiB on a 300k-event session, and the reason the
+        # scale benchmark guards this.
+        columns: dict[str, np.ndarray] = {
+            name: (
+                result[:, index].astype(np.int64)
+                if name in exact
+                else result[:, index].copy()
+            )
+            for index, name in enumerate(col_names)
+        }
+        del result
+        metrics = pd.DataFrame(columns, copy=False)
 
         if "event_id" in ordered.columns:
             timestamps = ordered.reset_index(drop=True)[["timestamp", "event_id"]]
         else:
             timestamps = ordered.reset_index(drop=True)["timestamp"]
-        res = pd.concat([timestamps, metrics], axis=1)
-
-        # Best prices stay integer ticks (issue #155); the pre-allocated metrics
-        # buffer is float64 (it also holds volumes), so cast the two price
-        # columns back to int64.  A best price is a resting level, always an
-        # exact integer tick, so the cast is lossless.
-        price_cols = ["best_bid_price", "best_ask_price"]
-        res[price_cols] = res[price_cols].astype(np.int64)
-
-        return res
+        return pd.concat([timestamps, metrics], axis=1)
 
     def update_side(
         self, price: int, volume: float, side: int, out: np.ndarray
@@ -234,7 +258,7 @@ class DepthMetricsEngine:
         Parameters
         ----------
         price : int
-            Price as an integer tick count (issue #155).
+            Price as an integer tick count.
         volume : float
             Volume at this price level (0 means deletion).
         side : int
@@ -403,11 +427,57 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
             (dir_events["action"] == "created") & (dir_events["type"] != "market")
         ][cols]
 
+        # The level each order's volume actually sits on.  It is set by the
+        # order's first row -- its `created` row, whenever the feed delivers
+        # rows in order -- and moved only by a `changed` row that reports no
+        # execution; every other row is subtracted at the level the order sits
+        # on rather than at whatever price the row itself carries, so an
+        # order's `+v` and `-v` always cancel on one level and a level can only
+        # empty to exactly zero.
+        #
+        # The two can differ.  Bitstamp reports a `deleted` whose price is not
+        # the price the order rested at for 1.3% of orders, and reports an
+        # execution at the price it traded at, which need not be the order's
+        # own.  Subtracting at the reported price strands the volume on the
+        # resting level for the rest of the session, where it is read back as a
+        # resting level that no order is on.  A `changed` row with no execution
+        # and a new price is different: the order really has moved (Databento's
+        # modify), so its volume leaves the old level and joins the new one.
+        # The per-order rebuild (`engine.book_state`) tracks orders by id and
+        # reads each one at the price of its latest row; this keeps the
+        # price-level rebuild consistent with it.
+        order_key = dir_events["id"]
+        sets_level = ~order_key.duplicated() | (
+            (dir_events["action"] == "changed") & (dir_events["fill"] == 0)
+        )
+        resting_price = (
+            dir_events["price"]
+            .where(sets_level)
+            .groupby(order_key)
+            .ffill()
+            .astype(dir_events["price"].dtype)
+        )
+        previous_price = resting_price.groupby(order_key).shift()
+        previous_volume = dir_events.groupby(order_key)["volume"].shift()
+        # A move or a growth can only happen to an order that is still on the
+        # book: one that was submitted here and whose previous row did not
+        # delete it.  A stray row after the delete must not bring it back.
+        amendable = (
+            (dir_events["action"] == "changed")
+            & (dir_events["fill"] == 0)
+            & previous_price.notna()
+            & (dir_events.groupby(order_key)["action"].shift() != "deleted")
+            & (dir_events["type"] != "market")
+            & dir_events["id"].isin(added_volume["id"])
+        )
+        moved = amendable & (resting_price != previous_price)
+
         cancelled_volume = dir_events[
             (dir_events["action"] == "deleted")
             & (dir_events["volume"] > 0)
             & (dir_events["type"] != "market")
-        ][cols]
+        ][cols].copy()
+        cancelled_volume["price"] = resting_price[cancelled_volume.index]
         cancelled_volume["volume"] = -cancelled_volume["volume"]
         cancelled_volume = cancelled_volume[
             cancelled_volume["id"].isin(added_volume["id"])
@@ -427,6 +497,8 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
                 "action",
             ]
         ]
+        filled_volume = filled_volume.copy()
+        filled_volume["price"] = resting_price[filled_volume.index]
         filled_volume["fill"] = -filled_volume["fill"]
         filled_volume = filled_volume[filled_volume["id"].isin(added_volume["id"])]
         filled_volume.columns = pd.Index(cols)
@@ -435,24 +507,54 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
         # size without an execution (LOBSTER partial cancels).  Bitstamp has
         # none by construction — `fill` covers every Bitstamp volume drop —
         # so this frame is empty there.  The drop is read off the canonical
-        # outstanding-size column (schemas.py).
-        outstanding_drop = (
-            dir_events.groupby("id")["volume"].shift() - dir_events["volume"]
-        )
-        reduced_volume = dir_events[
+        # outstanding-size column (schemas.py).  A move is left out: its size
+        # change is part of the move below.
+        outstanding_drop = previous_volume - dir_events["volume"]
+        resized = (
             (dir_events["action"] == "changed")
             & (dir_events["fill"] == 0)
-            & (outstanding_drop > 0)
+            & ~moved
             & (dir_events["type"] != "market")
-        ][cols].copy()
+        )
+        reduced_volume = dir_events[resized & (outstanding_drop > 0)][cols].copy()
         if not reduced_volume.empty:
+            reduced_volume["price"] = resting_price[reduced_volume.index]
             reduced_volume["volume"] = -outstanding_drop[reduced_volume.index]
             reduced_volume = reduced_volume[
                 reduced_volume["id"].isin(added_volume["id"])
             ]
 
+        # Growth and moves are reported only by a venue that amends orders in
+        # place.  Neither LOBSTER nor Bitstamp does, so these frames are
+        # empty there and are left out of the concatenation altogether, which
+        # keeps the output for those feeds exactly as it was.
+        volume_dtype = dir_events["volume"].dtype
+        grown_volume = dir_events[amendable & ~moved & (outstanding_drop < 0)][
+            cols
+        ].copy()
+        grown_volume["price"] = resting_price[grown_volume.index]
+        grown_volume["volume"] = (-outstanding_drop[grown_volume.index]).astype(
+            volume_dtype
+        )
+
+        # A move takes the order's previous outstanding size off the level it
+        # left and puts its new size on the level it joined.
+        left_volume = dir_events[moved & (previous_volume > 0)][cols].copy()
+        left_volume["price"] = previous_price[left_volume.index].astype(
+            resting_price.dtype
+        )
+        left_volume["volume"] = (-previous_volume[left_volume.index]).astype(
+            volume_dtype
+        )
+        joined_volume = dir_events[moved & (dir_events["volume"] > 0)][cols]
+
+        amended = [
+            frame
+            for frame in (grown_volume, left_volume, joined_volume)
+            if not frame.empty
+        ]
         volume_deltas = pd.concat(
-            [added_volume, cancelled_volume, filled_volume, reduced_volume]
+            [added_volume, cancelled_volume, filled_volume, reduced_volume, *amended]
         )
         volume_deltas = volume_deltas.sort_values(
             by=["price", "timestamp"], kind="stable"
@@ -593,7 +695,7 @@ def get_spread(depth_summary: pd.DataFrame) -> pd.DataFrame:
 # and OBI can also cumulate the per-bps depth-bin volume columns.
 
 
-def _bin_volume_columns(depth_summary: pd.DataFrame, side: str) -> list[str]:
+def bin_volume_columns(depth_summary: pd.DataFrame, side: str) -> list[str]:
     """Return the per-bps depth-bin volume columns for *side*, touch outward.
 
     These are the ``{side}_vol{N}bps`` aggregates written by
@@ -733,8 +835,8 @@ def book_imbalance(depth_summary: pd.DataFrame, levels: int = 1) -> pd.Series:
         bid_vol = depth_summary["best_bid_vol"].to_numpy(dtype=float)
         ask_vol = depth_summary["best_ask_vol"].to_numpy(dtype=float)
     else:
-        bid_cols = _bin_volume_columns(depth_summary, "bid")
-        ask_cols = _bin_volume_columns(depth_summary, "ask")
+        bid_cols = bin_volume_columns(depth_summary, "bid")
+        ask_cols = bin_volume_columns(depth_summary, "ask")
         take = levels - 1
         available = min(len(bid_cols), len(ask_cols))
         if take > available:
@@ -797,8 +899,8 @@ def depth_signals(
     )
 
     available = min(
-        len(_bin_volume_columns(depth_summary, "bid")),
-        len(_bin_volume_columns(depth_summary, "ask")),
+        len(bin_volume_columns(depth_summary, "bid")),
+        len(bin_volume_columns(depth_summary, "ask")),
     )
     effective_levels = max(1, min(depth_levels, available + 1))
 

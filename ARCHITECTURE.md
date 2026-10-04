@@ -61,9 +61,30 @@ the working set scales with the event count. Peak RSS grows roughly **linearly a
 | 942 k   | ~1.02 GiB | ~38 s |
 | 1.26 M  | ~1.32 GiB | ~51 s |
 
-*(Measured with [`scripts/bench_scale.py`](https://github.com/mczielinski/ob-analytics/blob/main/scripts/bench_scale.py): the bundled
+*(Measured with [`scripts/bench_scale.py --envelope`](https://github.com/mczielinski/ob-analytics/blob/main/scripts/bench_scale.py): the bundled
 ~314k-event sample tiled to each size, each size run in its own process, peak RSS
 via `getrusage`. Slightly conservative — tiling adds some transient overhead.)*
+
+### Where the time goes
+
+Per stage, on the bundled 314k-event sample (`scripts/bench_scale.py`, one
+Linux x86_64 machine — the shape holds, the seconds do not travel):
+
+| stage | seconds | share |
+|-------|--------:|------:|
+| `load` | 0.80 | 7% |
+| `set_order_types` | 0.33 | 3% |
+| `price_level_volume` | 0.15 | 1% |
+| `depth_metrics` | 9.36 | 79% |
+| `order_aggressiveness` | 0.34 | 3% |
+| `queue_positions` | 0.86 | 7% |
+
+One numpy kernel is four fifths of the run. The stateful FIFO loop is 7%, and
+everything the loader and the frames do together is under 15% — which is the
+number [ADR 0002](https://github.com/mczielinski/ob-analytics/blob/main/adr/0002-dataframe-library.md)
+asks for before a second
+dataframe library could pay for itself, and it falls well short of the 30% gate
+that record sets. CI checks these numbers on every pull request (issue #144).
 
 **Comfortable ceiling ≈ 5M events (~5 GiB)** on a typical 16 GB machine — i.e.
 session-scale data, a few hours of a single liquid instrument. For larger inputs
@@ -129,6 +150,7 @@ classDiagram
 
     class BitstampSource
     class LobsterSource
+    class DatabentoSource
 
     class EventLoader {
         <<Protocol>>
@@ -164,6 +186,7 @@ classDiagram
     OfflineSource <|.. BitstampSource
     LiveSource <|.. BitstampSource
     OfflineSource <|.. LobsterSource
+    OfflineSource <|.. DatabentoSource
 ```
 
 ---
@@ -174,6 +197,7 @@ classDiagram
 |--------|-------|-------------|--------|
 | **Bitstamp** (CSV replay + live capture) | L3 | `Pipeline()` (default) · `capture bitstamp` | Companion `trades.csv` next to `orders.csv` (e.g. `scripts/collect_bitstamp_btcusd.py`) |
 | **LOBSTER** | L3 | `Pipeline(source=LobsterSource(), ctx=RunContext(trading_date=...))` | Embedded execution rows (types 4/5) in the message file |
+| **Databento** (DBN market-by-order) | L3 | `Pipeline(source=DatabentoSource())` · `process --source databento` | Fill records, paired with the book event that took the size off |
 | **L2 depth CSV** | L2 | `Pipeline.from_source("depth_csv").run(...)` | Optional companion `trades.csv` (signed via trade-sign classification) |
 | **CCXT** (live L2 capture) | L2 | `capture ccxt --exchange <venue>` | Public trade tape (taker side) |
 | **cryptofeed** (live capture) | L2 or L3, discovered from the venue | `capture cryptofeed --exchange <venue>` | Public trade tape (taker side) |
@@ -216,6 +240,7 @@ ob_analytics/
 │
 ├── bitstamp.py           # BitstampLoader, BitstampTradeReader, BitstampWriter, BitstampSource (offline + live)
 ├── lobster.py            # LobsterLoader, LobsterTradeReader, LobsterWriter, LobsterSource
+├── databento.py          # DatabentoLoader, DatabentoTradeReader, DatabentoWriter, DatabentoSource (DBN MBO)
 ├── depth_l2.py           # L2DepthLoader, L2TradeReader, DepthCsvWriter, DepthCsvSource (price-level)
 ├── engine/               # Order-book engine: events in, book states + lifecycles out
 │   ├── __init__.py       # the interface: book_state, order_lifecycles, queue_positions, queue_age_grid
@@ -229,6 +254,9 @@ ob_analytics/
 ├── depth.py              # DepthMetricsEngine, price_level_volume, depth_metrics, get_spread
 ├── data.py               # save_data, load_data, writer registry
 ├── flow_toxicity.py      # compute_vpin, compute_kyle_lambda, order_flow_imbalance, KyleLambdaResult
+├── bars.py               # bars, BAR_RULES registry, register_bar_rule
+├── cost.py               # transaction_costs, cost_summary, amihud, roll_spread, CostSummary
+├── features.py           # features, FEATURES registry, register_feature
 ├── _utils.py             # Validation, numerics, timestamp conversion helpers
 │
 ├── live/                 # Optional live-capture machinery ([live] / [ccxt] / [cryptofeed] extras)
@@ -237,14 +265,16 @@ ob_analytics/
 │   ├── _runner.py        # Generic asyncio driver + FileCaptureSink
 │   ├── bitstamp.py       # Bitstamp WebSocket engine (driven by BitstampSource)
 │   ├── ccxt_source.py    # CcxtSource, CcxtSettings (any CCXT venue, L2)
-│   └── cryptofeed_source.py  # CryptofeedSource, CryptofeedSettings (L2 or native L3)
+│   ├── cryptofeed_source.py  # CryptofeedSource, CryptofeedSettings (L2 or native L3)
+│   └── _cryptofeed_venues.py # corrected cryptofeed venue feeds (Independent Reserve)
 │
 └── visualization/        # Plotting subsystem
     ├── __init__.py       # plot() dispatcher + RENDERERS registry, PlotTheme, save_figure
     ├── gallery.py        # HTML gallery generation
     ├── _data.py          # Shared data prep for plot backends
     ├── _matplotlib.py    # Matplotlib renderers
-    └── _plotly.py        # Plotly renderers
+    ├── _plotly.py        # Plotly renderers
+    └── _bokeh.py         # Bokeh renderers (core concepts)
 ```
 
 **Live capture** is optional (install with `pip install "ob-analytics[live]"`,
@@ -254,3 +284,7 @@ ob_analytics/
 it; a source can add the offline factories too and do both. The runner
 (`run_capturer`) handles persistence, raw-frame archival, signal handling, and
 `meta.json` finalisation so source authors only write the per-venue parser.
+`run_capture` runs it once per **segment** of a long capture: a disconnect, a
+time or size roll, or a restart closes the current segment and starts the next
+from a fresh snapshot, and `manifest.json` records the segments and the gaps
+between them.

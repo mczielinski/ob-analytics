@@ -99,13 +99,13 @@ class TestProcessSubcommand:
 
 
 # ---------------------------------------------------------------------------
-# validate
+# audit
 # ---------------------------------------------------------------------------
 
 
-class TestValidateSubcommand:
-    def test_validate_reports_summary(self, cli_runner, tiny_bitstamp_orders_csv):
-        r = cli_runner("validate", str(tiny_bitstamp_orders_csv))
+class TestAuditSubcommand:
+    def test_audit_reports_summary(self, cli_runner, tiny_bitstamp_orders_csv):
+        r = cli_runner("audit", str(tiny_bitstamp_orders_csv))
         assert r.returncode == 0, r.stderr
         assert "Data quality summary" in r.stdout
         assert "feed type" in r.stdout
@@ -113,31 +113,185 @@ class TestValidateSubcommand:
         # crossing.
         assert "diff_feed" in r.stdout
 
-    def test_validate_json(self, cli_runner, tiny_bitstamp_orders_csv):
+    def test_audit_json(self, cli_runner, tiny_bitstamp_orders_csv):
         import json
 
-        r = cli_runner("validate", str(tiny_bitstamp_orders_csv), "--json")
+        r = cli_runner("audit", str(tiny_bitstamp_orders_csv), "--json")
         assert r.returncode == 0, r.stderr
         payload = json.loads(r.stdout)
         assert payload["feed_type"] == "diff_feed"
         assert 0.0 <= payload["crossed_pct"] <= 100.0
+        assert payload["ok"] is True
         assert set(payload) >= {
             "crossed_pct",
             "unmatched_trades_pct",
             "duplicate_event_ids",
             "pre_existing_orders",
+            "orphan_orders",
+            "negative_volume_rows",
+            "checks",
+        }
+        assert {c["name"] for c in payload["checks"]} >= {
+            "duplicate_event_ids",
+            "sequence_gaps",
+            "orphan_orders",
         }
 
-    def test_validate_lobster_requires_trading_date(
+    def test_audit_lobster_requires_trading_date(
         self, cli_runner, tiny_bitstamp_orders_csv
     ):
-        r = cli_runner("validate", str(tiny_bitstamp_orders_csv), "--source", "lobster")
+        r = cli_runner("audit", str(tiny_bitstamp_orders_csv), "--source", "lobster")
         assert r.returncode != 0
         assert "trading" in (r.stderr + r.stdout).lower()
 
-    def test_validate_listed_in_help(self, cli_runner):
+    def test_audit_listed_in_help(self, cli_runner):
         r = cli_runner("--help")
-        assert "validate" in r.stdout
+        assert "audit" in r.stdout
+
+    def test_validate_is_still_accepted(self, cli_runner, tiny_bitstamp_orders_csv):
+        """``validate`` is the old name for ``audit``; it must keep working."""
+        r = cli_runner("validate", str(tiny_bitstamp_orders_csv))
+        assert r.returncode == 0, r.stderr
+        assert "Data quality summary" in r.stdout
+
+    def test_audit_fails_on_corrupted_feed(
+        self, cli_runner, corrupt_bitstamp_orders_csv
+    ):
+        """A corrupted feed exits non-zero and names the checks that failed."""
+        r = cli_runner("audit", str(corrupt_bitstamp_orders_csv))
+        assert r.returncode != 0
+        assert "Data quality summary" in r.stdout
+        combined = r.stdout + r.stderr
+        assert "sequence_gaps" in combined
+        assert "exchange_time_after_receive" in combined
+
+    def test_audit_corrupted_feed_json_reports_not_ok(
+        self, cli_runner, corrupt_bitstamp_orders_csv
+    ):
+        import json
+
+        r = cli_runner("audit", str(corrupt_bitstamp_orders_csv), "--json")
+        assert r.returncode != 0
+        payload = json.loads(r.stdout)
+        assert payload["ok"] is False
+        assert payload["sequence_gaps"] > 0
+        assert payload["orphan_orders"] > 0
+        failed = {c["name"] for c in payload["checks"] if not c["passed"]}
+        assert "sequence_gaps" in failed
+
+    def test_dropped_created_is_a_warning_until_strict(
+        self, cli_runner, dropped_created_orders_csv
+    ):
+        """An order with no ``created`` row warns; --strict makes it fail."""
+        lenient = cli_runner("audit", str(dropped_created_orders_csv))
+        assert lenient.returncode == 0, lenient.stderr
+        assert "orphan_orders" in lenient.stdout
+
+        strict = cli_runner("audit", str(dropped_created_orders_csv), "--strict")
+        assert strict.returncode != 0
+        assert "orphan_orders" in (strict.stdout + strict.stderr)
+
+    def test_audit_from_parquet(self, cli_runner, tmp_path, tiny_bitstamp_orders_csv):
+        """A saved 'process' output can be audited without re-running it."""
+        out = tmp_path / "out"
+        r = cli_runner("process", str(tiny_bitstamp_orders_csv), "--output", str(out))
+        assert r.returncode == 0, r.stderr
+
+        r = cli_runner("audit", str(out), "--from-parquet")
+        assert r.returncode == 0, r.stderr
+        assert "Data quality summary" in r.stdout
+        # No --source, so the feed type stays undeclared rather than guessed.
+        assert "unknown" in r.stdout
+
+        r = cli_runner("audit", str(out), "--from-parquet", "--source", "bitstamp")
+        assert r.returncode == 0, r.stderr
+        assert "diff_feed" in r.stdout
+
+    @staticmethod
+    def _capture_by_cryptofeed(tmp_path, tiny_bitstamp_orders_csv):
+        """The tiny capture, with the meta.json a cryptofeed capture writes."""
+        import json
+        import shutil
+
+        cap = tmp_path / "cap"
+        cap.mkdir()
+        for name in ("orders.csv", "trades.csv"):
+            shutil.copy(tiny_bitstamp_orders_csv.parent / name, cap / name)
+        (cap / "meta.json").write_text(
+            json.dumps(
+                {
+                    "source": "cryptofeed",
+                    "feed_type": "matched_book",
+                    "trade_attribution": "maker_only",
+                }
+            )
+        )
+        return cap
+
+    def test_process_keeps_the_capture_record(
+        self, cli_runner, tmp_path, tiny_bitstamp_orders_csv
+    ):
+        """meta.json travels into the output, so a later audit can read it (#284)."""
+        cap = self._capture_by_cryptofeed(tmp_path, tiny_bitstamp_orders_csv)
+        out = tmp_path / "out"
+        r = cli_runner("process", str(cap / "orders.csv"), "--output", str(out))
+        assert r.returncode == 0, r.stderr
+        assert (out / "meta.json").read_text() == (cap / "meta.json").read_text()
+
+    def test_process_removes_a_record_an_earlier_run_left(
+        self, cli_runner, tmp_path, tiny_bitstamp_orders_csv
+    ):
+        """A reused output directory never keeps another capture's record."""
+        cap = self._capture_by_cryptofeed(tmp_path, tiny_bitstamp_orders_csv)
+        out = tmp_path / "out"
+        r = cli_runner("process", str(cap / "orders.csv"), "--output", str(out))
+        assert r.returncode == 0, r.stderr
+        assert (out / "meta.json").exists()
+
+        r = cli_runner("process", str(tiny_bitstamp_orders_csv), "--output", str(out))
+        assert r.returncode == 0, r.stderr
+        assert not (out / "meta.json").exists()
+        r = cli_runner("audit", str(out), "--from-parquet", "--source", "bitstamp")
+        assert r.returncode == 0, r.stderr
+        assert "diff_feed" in r.stdout
+
+    def test_audit_checks_against_the_source_that_made_the_capture(
+        self, cli_runner, tmp_path, tiny_bitstamp_orders_csv
+    ):
+        """--source bitstamp reads the files; the record sets the expectations.
+
+        A cryptofeed L3 capture can only be read as bitstamp, whose feed shows
+        takers and may cross.  Checking it against bitstamp's declarations
+        would fault the capture for what its feed cannot show (#284).
+        """
+        cap = self._capture_by_cryptofeed(tmp_path, tiny_bitstamp_orders_csv)
+        out = tmp_path / "out"
+        r = cli_runner("process", str(cap / "orders.csv"), "--output", str(out))
+        assert r.returncode == 0, r.stderr
+
+        for target, extra in ((out, ["--from-parquet"]), (cap / "orders.csv", [])):
+            r = cli_runner("audit", str(target), *extra, "--source", "bitstamp")
+            assert r.returncode == 0, r.stderr
+            assert "matched_book" in r.stdout
+            assert "maker only" in r.stdout
+            assert "declares" in r.stderr
+
+    @pytest.mark.parametrize(
+        "error", [KeyError("not installed"), TypeError("needs settings")]
+    )
+    def test_a_recording_source_that_cannot_be_built_keeps_the_default(
+        self, monkeypatch, error
+    ):
+        """Reading what the capture's source declares never stops ``audit``."""
+        from ob_analytics import cli
+        from ob_analytics.protocols import SequenceKind
+
+        def get_source(name):
+            raise error
+
+        monkeypatch.setattr("ob_analytics.sources.get_source", get_source)
+        kind = cli._declared_sequence_kind("plugin", default=SequenceKind.CONTIGUOUS)
+        assert kind is SequenceKind.CONTIGUOUS
 
 
 # ---------------------------------------------------------------------------
@@ -327,7 +481,7 @@ class TestCaptureSubcommand:
 
         captured: dict = {}
 
-        async def _fake_run(source, config, sink=None):
+        async def _fake_run(source, config, sink=None, **_kwargs):
             captured["source"] = source
             captured["config"] = config
             now = pd.Timestamp.now(tz="UTC")
@@ -340,7 +494,11 @@ class TestCaptureSubcommand:
                 ended=now,
             )
 
-        monkeypatch.setattr("ob_analytics.live._runner.run_capturer", _fake_run)
+        monkeypatch.setattr("ob_analytics.live._supervisor.run_capturer", _fake_run)
+        # This test checks the flag wiring, not the extra: skip the check for it.
+        monkeypatch.setattr(
+            "ob_analytics.live.ccxt_source.CcxtSource.preflight", lambda self: None
+        )
 
         args = argparse.Namespace(
             verbose=False,
@@ -368,3 +526,76 @@ class TestCaptureSubcommand:
         assert isinstance(cfg, CaptureConfig)
         assert cfg.pair == "BTC/USDT"
         assert not hasattr(cfg, "extras")  # the untyped dict is gone
+
+    def _capture_args(self, tmp_path, venue, **extra):
+        import argparse
+
+        base = {
+            "verbose": False,
+            "list": False,
+            "venue": venue,
+            "pair": "BTC/USD",
+            "exchange": None,
+            "level": None,
+            "depth_limit": None,
+            "poll_interval": None,
+            "minutes": 0.001,
+            "out": str(tmp_path / "o"),
+            "no_raw": True,
+        }
+        return argparse.Namespace(**{**base, **extra})
+
+    def test_missing_extra_exits_nonzero_before_output(self, monkeypatch, tmp_path):
+        """Without the cryptofeed extra the capture stops before it starts (#283)."""
+        import sys
+
+        from ob_analytics import cli
+
+        # A None entry in sys.modules makes the import raise ImportError.
+        for mod in ("cryptofeed", "cryptofeed.exchanges"):
+            monkeypatch.setitem(sys.modules, mod, None)
+
+        args = self._capture_args(tmp_path, "cryptofeed", exchange="bitstamp")
+        with pytest.raises(SystemExit) as exc:
+            cli._cmd_capture(args)
+        assert exc.value.code == 1
+        assert not (tmp_path / "o").exists()
+
+    @pytest.mark.skipif(not _CCXT_INSTALLED, reason="ccxt extra not installed")
+    def test_unknown_ccxt_exchange_exits_nonzero_before_output(self, tmp_path):
+        """A misspelt --exchange stops the capture before it starts (#283)."""
+        from ob_analytics import cli
+
+        args = self._capture_args(tmp_path, "ccxt", exchange="binanse")
+        with pytest.raises(SystemExit) as exc:
+            cli._cmd_capture(args)
+        assert exc.value.code == 1
+        assert not (tmp_path / "o").exists()
+
+    def test_capture_error_exits_nonzero(self, monkeypatch, tmp_path):
+        """A capture that fails part way through fails the command (#283)."""
+        import pandas as pd
+
+        from ob_analytics import cli
+        from ob_analytics.live._base import CaptureResult
+
+        async def _failed_run(source, config, sink=None, **_kwargs):
+            now = pd.Timestamp.now(tz="UTC")
+            return CaptureResult(
+                out_dir=config.out_dir,
+                n_order_events=0,
+                n_trade_events=0,
+                n_raw_frames=0,
+                started=now,
+                ended=now,
+                capture_error="ValueError('boom')",
+                capture_error_phase="stream",
+            )
+
+        monkeypatch.setattr("ob_analytics.live._supervisor.run_capturer", _failed_run)
+        monkeypatch.setattr(
+            "ob_analytics.bitstamp.BitstampSource.preflight", lambda self: None
+        )
+        with pytest.raises(SystemExit) as exc:
+            cli._cmd_capture(self._capture_args(tmp_path, "bitstamp"))
+        assert exc.value.code == 1

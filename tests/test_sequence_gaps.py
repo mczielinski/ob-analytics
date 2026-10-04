@@ -17,6 +17,7 @@ import pandas as pd
 from ob_analytics import (
     FeedType,
     SequenceGapReport,
+    SequenceKind,
     data_quality_summary,
     detect_sequence_gaps,
 )
@@ -24,7 +25,12 @@ from ob_analytics._utils import empty_trades
 from ob_analytics.analytics import set_order_types
 from ob_analytics.bitstamp import BitstampLoader
 from ob_analytics.config import PipelineConfig
+from ob_analytics.depth_l2 import (
+    recorded_sequence_kind,
+    recorded_sequence_restarts,
+)
 from ob_analytics.lobster import LobsterLoader
+from ob_analytics.protocols import sequence_kind_of
 from ob_analytics.schemas import INGEST_SEQ_COLUMN, SEQUENCE_COLUMN
 
 # ---------------------------------------------------------------------------
@@ -223,6 +229,61 @@ class TestDetectSequenceGaps:
         assert payload["n_missing"] == 1
 
 
+class TestMonotonicSequence:
+    """A sequence that only promises to rise (CCXT's book nonce, #101)."""
+
+    def test_skips_are_not_dropped_messages(self):
+        # Binance diffs span a range of update IDs, so the nonce jumps.
+        report = detect_sequence_gaps(
+            _framed([100, 117, 117, 250]), kind=SequenceKind.MONOTONIC
+        )
+        assert report.n_missing == 0
+        assert report.max_gap == 0
+        assert report.clean
+        assert report.first_break_seq is None
+
+    def test_a_step_back_is_still_out_of_order(self):
+        report = detect_sequence_gaps(
+            _framed([100, 250, 117]), kind=SequenceKind.MONOTONIC
+        )
+        assert report.n_missing == 0
+        assert report.n_out_of_order == 1
+        assert report.first_break_seq == 250
+
+    def test_contiguous_is_the_default(self):
+        assert detect_sequence_gaps(_framed([100, 117])).n_missing == 16
+
+
+class TestDeclaredSequenceKind:
+    """A source states what its sequence promises; a capture records it."""
+
+    def test_a_source_that_declares_nothing_is_contiguous(self):
+        class _OldPlugin:
+            name = "old"
+
+        assert sequence_kind_of(_OldPlugin()) is SequenceKind.CONTIGUOUS
+
+    def test_a_declared_kind_is_read(self):
+        class _Declares:
+            sequence_kind = "monotonic"
+
+        assert sequence_kind_of(_Declares()) is SequenceKind.MONOTONIC
+
+    def test_with_no_record_none_is_returned(self, tmp_path):
+        orders = tmp_path / "orders.csv"
+        orders.write_text("id\n")
+        assert recorded_sequence_kind(orders) is None
+
+    def test_the_record_is_returned(self, tmp_path):
+        (tmp_path / "meta.json").write_text('{"sequence_kind": "contiguous"}')
+        assert recorded_sequence_kind(tmp_path) is SequenceKind.CONTIGUOUS
+
+    def test_restarts_are_read_from_the_record(self, tmp_path):
+        assert recorded_sequence_restarts(tmp_path) == 0
+        (tmp_path / "meta.json").write_text('{"sequence_restarts": 2}')
+        assert recorded_sequence_restarts(tmp_path) == 2
+
+
 # ---------------------------------------------------------------------------
 # Loader integration — columns present / absent / opt-in
 # ---------------------------------------------------------------------------
@@ -360,3 +421,45 @@ class TestDataQualitySummary:
         assert summary.sequence_gaps == 0
         # The report still renders the (zeroed) line.
         assert "venue sequence" in summary.render()
+
+    def test_a_monotonic_sequence_reports_no_gaps_and_says_so(self):
+        events = self._classified_with_sequence([1, 5, 9, 20])
+        summary = data_quality_summary(
+            events, empty_trades(), sequence_kind=SequenceKind.MONOTONIC
+        )
+        assert summary.sequence_gaps == 0
+        assert summary.ok
+        assert "gaps not checked" in summary.render()
+        assert summary.to_dict()["sequence_kind"] == "monotonic"
+
+    def test_restarts_the_source_counted_are_not_out_of_order(self):
+        events = self._classified_with_sequence([40, 41, 1, 2])
+        summary = data_quality_summary(
+            events,
+            empty_trades(),
+            sequence_kind=SequenceKind.MONOTONIC,
+            sequence_restarts=1,
+        )
+        assert summary.sequence_out_of_order == 0
+        assert summary.sequence_restarts == 1
+        assert summary.ok
+        assert "1 restart(s) at a resync" in summary.render()
+
+    def test_restarts_are_capped_and_the_rest_are_out_of_order(self):
+        # Two steps back: 40 -> 1 and 2 -> 1.
+        seqs = [40, 1, 2, 1]
+        summary = data_quality_summary(
+            self._classified_with_sequence(seqs),
+            empty_trades(),
+            sequence_kind=SequenceKind.MONOTONIC,
+            sequence_restarts=5,
+        )
+        assert (summary.sequence_restarts, summary.sequence_out_of_order) == (2, 0)
+        summary = data_quality_summary(
+            self._classified_with_sequence(seqs),
+            empty_trades(),
+            sequence_kind=SequenceKind.MONOTONIC,
+            sequence_restarts=1,
+        )
+        assert (summary.sequence_restarts, summary.sequence_out_of_order) == (1, 1)
+        assert not summary.ok

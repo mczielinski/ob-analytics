@@ -12,17 +12,21 @@ from pathlib import Path
 import pandas as pd
 from loguru import logger
 
+from ob_analytics.bars import bars
 from ob_analytics.bitstamp import BitstampSource, BitstampWriter
+from ob_analytics.cost import transaction_costs
 from ob_analytics.data import save_data
 from ob_analytics.lobster import LobsterSource
 from ob_analytics.pipeline import Pipeline, PipelineResult
 from ob_analytics.protocols import RunContext
 from ob_analytics.visualization.gallery import (
     PlotSpec,
+    bars_panel,
     build_gallery_model,
+    display_result,
     generate_gallery,
-    ofi_horizon_panel,
     trading_halts_panel,
+    transaction_costs_panel,
 )
 
 # ---------------------------------------------------------------------------
@@ -39,6 +43,18 @@ def _result_dict(result: PipelineResult) -> dict[str, pd.DataFrame]:
     }
 
 
+def _cost_panels(result: PipelineResult) -> list[PlotSpec]:
+    """The transaction-cost panel, when the run has trades and quotes to use.
+
+    The face reads the basis-point columns, which are ratios to the mid, so
+    the raw tick-price result gives the same picture as a display-unit one.
+    """
+    if result.trades.empty or result.depth_summary.empty:
+        return []
+    costs = transaction_costs(result.trades, result.depth_summary)
+    return [transaction_costs_panel(costs)]
+
+
 def _save_and_gallery(
     result: PipelineResult,
     output_dir: Path,
@@ -50,17 +66,21 @@ def _save_and_gallery(
     """Save Parquet + generate gallery; return the gallery HTML path.
 
     *analytics* are level-less panels (built with the ``*_panel`` helpers)
-    appended to the model's :attr:`~...gallery.GalleryModel.analytics`.
+    appended to the model's :attr:`~...gallery.GalleryModel.analytics`, on top
+    of the bars panel every demo shows.
     """
     parquet_dir = output_dir / "parquet"
     # Tag each Parquet file with the run's tick size (issue #155).
     save_data(_result_dict(result), parquet_dir, config=result.config)
     logger.info("Parquet saved to: {}", parquet_dir)
 
+    panels = list(analytics or [])
+    panels.extend(_bars_panels(display_result(result).trades))
+
     model = None
-    if analytics:
+    if panels:
         model = build_gallery_model(result)
-        model.analytics.extend(analytics)
+        model.analytics.extend(panels)
 
     gallery_dir = output_dir / "gallery"
     gallery_path = generate_gallery(
@@ -69,6 +89,40 @@ def _save_and_gallery(
     logger.info("Gallery: {}", gallery_path.resolve())
     logger.info("Open in browser: file://{}", gallery_path.resolve())
     return gallery_path
+
+
+def _bars_panels(trades: pd.DataFrame) -> list[PlotSpec]:
+    """Build the demo's bar faces: one cut by the clock, one by traded volume.
+
+    The pair is the point of the card — the same trades cut two ways. *trades*
+    must already be in display units (see :func:`display_result`) so bar
+    prices read in the quote currency, like every other face in the gallery.
+    """
+    if trades.empty:
+        return []
+    panels: list[PlotSpec] = []
+    for rule in ("time", "volume"):
+        try:
+            panels.append(bars_panel(bars(trades, rule)))
+        except Exception as e:  # noqa: BLE001 -- a demo face must not sink the run
+            logger.warning("Demo: {} bars failed: {}", rule, e)
+    return panels
+
+
+def _lobster_analytics_panels(
+    result: PipelineResult, halts: pd.DataFrame | None
+) -> list[PlotSpec]:
+    """Build the LOBSTER-only analytic panel: trading halts.
+
+    Trading halts draws trade price as a line with halt bands overlaid, so it
+    needs the same display-unit trades as every other panel in the gallery
+    (see :func:`display_result`).
+    """
+    panels: list[PlotSpec] = []
+    if halts is not None and not halts.empty:
+        display_trades = display_result(result).trades
+        panels.append(trading_halts_panel(display_trades, halts))
+    return panels
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +215,7 @@ def run_bitstamp_demo(
         result,
         out,
         title=f"Bitstamp ({orders_path.name}) -- ob-analytics",
+        analytics=_cost_panels(result),
         view=view,
     )
 
@@ -204,11 +259,8 @@ def run_lobster_demo(
     # LOBSTER halts are not part of the slim PipelineResult; read them off the
     # loader and append them to the gallery model's analytics.
     halts = getattr(pipeline.loader, "trading_halts", None)
-    analytics: list[PlotSpec] = []
-    if halts is not None and not halts.empty:
-        analytics.append(trading_halts_panel(result.trades, halts))
-    if not result.trades.empty:
-        analytics.append(ofi_horizon_panel(result.trades))
+    analytics = _lobster_analytics_panels(result, halts)
+    analytics.extend(_cost_panels(result))
 
     return _save_and_gallery(
         result,

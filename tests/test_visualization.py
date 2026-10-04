@@ -1,5 +1,9 @@
 """Tests for ob_analytics.visualization."""
 
+import re
+from pathlib import Path
+from typing import Any
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -10,6 +14,7 @@ import pandas as pd
 import pytest
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
+from matplotlib.text import Text
 
 from ob_analytics.visualization import (
     Level,
@@ -109,14 +114,41 @@ class TestPlotTheme:
     def test_frozen(self):
         theme = PlotTheme()
         with pytest.raises(AttributeError):
-            theme.style = "whitegrid"  # type: ignore[misc]
+            theme.style = "whitegrid"  # ty: ignore[invalid-assignment]
 
-    def test_theme_kwarg_threads_through_create_axes(self):
-        # A per-call theme is applied when _create_axes builds a new figure;
-        # there is no global theme to set or restore.
-        custom = PlotTheme(style="white", font_scale=2.0)
-        fig, _ = _create_axes(None, theme=custom)
-        assert isinstance(fig, Figure)
+    def test_theme_does_not_leak_into_rcparams(self, sample_trades):
+        # The theme is scoped to the figure plot() creates: matplotlib's
+        # global rcParams are the same before and after the call.
+        before = dict(matplotlib.rcParams)
+        plot(
+            "trade_tape",
+            Level.L2,
+            theme=PlotTheme(style="darkgrid", context="talk"),
+            **_data.prepare_trades_data(sample_trades),
+        )
+        assert dict(matplotlib.rcParams) == before
+
+    def test_themed_figure_keeps_theme_after_call(self, sample_trades):
+        # The returned figure still shows the theme when drawn after the
+        # call, when tick artists are built outside the theme's rc_context.
+        fig = plot(
+            "trade_tape",
+            Level.L2,
+            theme=PlotTheme(style="darkgrid", context="talk", font_scale=1.0),
+            **_data.prepare_trades_data(sample_trades),
+        )
+        fig.canvas.draw()
+        ax = fig.axes[0]
+        # darkgrid background; talk context ticks (11 * 1.5 = 16.5 pt).
+        assert matplotlib.colors.to_hex(ax.get_facecolor()) == "#eaeaf2"
+        for tick in ax.xaxis.get_major_ticks():
+            assert tick.label1.get_fontsize() == pytest.approx(16.5)
+        # A plain figure made afterwards gets matplotlib's own settings.
+        plain_fig, plain_ax = plt.subplots()
+        plain_fig.canvas.draw()
+        assert matplotlib.colors.to_hex(plain_ax.get_facecolor()) != "#eaeaf2"
+        plain_tick = plain_ax.xaxis.get_major_ticks()[0]
+        assert plain_tick.label1.get_fontsize() != pytest.approx(16.5)
 
     def test_plot_accepts_theme_kwarg(self, sample_trades):
         # plot() pops theme= from kwargs and forwards it to the renderer.
@@ -243,6 +275,19 @@ class TestPlotEventMap:
         )
         assert fig is fig_orig
 
+    def test_empty_window_draws_no_data(self, sample_events):
+        # A window before the data: the price-axis step used to raise
+        # ValueError on the NaN price range of zero rows.
+        data = _data.prepare_event_map_data(
+            sample_events,
+            start_time=pd.Timestamp("2015-05-01 00:00:00"),
+            end_time=pd.Timestamp("2015-05-01 00:30:00"),
+        )
+        ax = plot("order_activity", Level.L2, **data).axes[0]
+        # The theme places titles on the left; read every slot.
+        title = " ".join(ax.get_title(loc=s) for s in ("left", "center", "right"))
+        assert "no data" in title
+
 
 class TestPlotOrderActivityL3:
     def test_returns_figure(self, sample_order_lifecycle_events):
@@ -285,7 +330,7 @@ class TestPlotOrderActivityL3:
                 "linewidth": [1.5],
             }
         )
-        data = {
+        data: dict[str, Any] = {
             "filled": one,
             "cancelled": empty,
             "resting": empty,
@@ -297,6 +342,36 @@ class TestPlotOrderActivityL3:
         fig = plot("order_activity", Level.L3, **data)
         ax = fig.axes[0]
         assert 0 < len(ax.get_yticks()) <= 13
+
+    def test_hidden_liquidity_overlay_draws_and_legends(
+        self, sample_order_lifecycle_events, hidden_liquidity_overlay
+    ) -> None:
+        overlay = hidden_liquidity_overlay
+
+        data = _data.prepare_order_activity_l3_data(
+            sample_order_lifecycle_events,
+            iceberg_lines=overlay["iceberg_lines"],
+            iceberg_refills=overlay["iceberg_refills"],
+            hidden_trades=overlay["hidden_trades"],
+        )
+        fig = plot("order_activity", Level.L3, **data)
+        labels = {h.get_label() for h in fig.axes[0].get_legend().legend_handles}
+        assert {
+            "Iceberg chain",
+            "Iceberg refill",
+            "Hidden-order trade",
+            "Trade to check (maker not confirmed hidden)",
+        } <= labels
+
+    def test_no_overlay_draws_no_extra_legend_entries(
+        self, sample_order_lifecycle_events
+    ) -> None:
+        data = _data.prepare_order_activity_l3_data(sample_order_lifecycle_events)
+        fig = plot("order_activity", Level.L3, **data)
+        legend = fig.axes[0].get_legend()
+        labels = {h.get_label() for h in legend.legend_handles} if legend else set()
+        assert "Iceberg refill" not in labels
+        assert "Hidden-order trade" not in labels
 
 
 class TestPlotVolumeMap:
@@ -445,7 +520,7 @@ class TestPlotLiquidityAtTouchL3:
         assert "rank" in ax.get_ylabel().lower()
 
     def test_empty_grid_is_safe(self) -> None:
-        data = {
+        data: dict[str, Any] = {
             "ages": np.empty((0, 0)),
             "times": np.array([], dtype="datetime64[ns]"),
             "max_rank": 0,
@@ -484,7 +559,7 @@ class TestPlotOfiHorizon:
         assert set(data["horizons"]) <= labels
 
     def test_empty_is_safe(self) -> None:
-        data = {
+        data: dict[str, Any] = {
             "ofi": np.empty((0, 0)),
             "times": np.array([], dtype="datetime64[ns]"),
             "horizons": ["5s", "60s"],
@@ -516,7 +591,7 @@ class TestPlotOrderOutcomeL3:
     def test_draws_cancelled_underneath(self, sample_executed_orders):
         import matplotlib.colors as mcolors
 
-        from ob_analytics.visualization._matplotlib import _CANCELLED_COLOR
+        from ob_analytics.visualization import DEFAULT_PALETTE
 
         events, _trades = sample_executed_orders
         data = _data.prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
@@ -525,7 +600,9 @@ class TestPlotOrderOutcomeL3:
         # The dominant cancelled class must be drawn first (underneath) so the
         # rarer fills/partials are not buried; first collection == cancelled.
         first_rgb = ax.collections[0].get_facecolor()[0][:3]
-        assert np.allclose(first_rgb, mcolors.to_rgba(_CANCELLED_COLOR)[:3], atol=0.01)
+        assert np.allclose(
+            first_rgb, mcolors.to_rgba(DEFAULT_PALETTE.cancelled)[:3], atol=0.01
+        )
 
 
 class TestPlotBookSnapshot:
@@ -712,6 +789,21 @@ class TestPlotEventsHistogram:
         )
         assert fig is fig_orig
 
+    def test_empty_window_draws_no_data(self, sample_events):
+        # A window before the data: seaborn's histplot used to raise
+        # ValueError while working out bin edges for zero rows.
+        data = _data.prepare_events_histogram_data(
+            sample_events,
+            start_time=pd.Timestamp("2015-05-01 00:00:00"),
+            end_time=pd.Timestamp("2015-05-01 00:30:00"),
+            val="price",
+            bw=0.25,
+        )
+        ax = plot("events_histogram", **data).axes[0]
+        # The theme places titles on the left; read every slot.
+        title = " ".join(ax.get_title(loc=s) for s in ("left", "center", "right"))
+        assert "no data" in title
+
 
 class TestVolumeNorm:
     """col_bias selects the depth-heatmap color normalization."""
@@ -795,6 +887,359 @@ class TestPriceLevelsColBias:
         )
         mid = next(ln for ln in fig.axes[0].get_lines() if ln.get_label() == "Midprice")
         assert mid.get_drawstyle() == "steps-post"
+
+
+# ---------------------------------------------------------------------------
+# Hidden-liquidity overlay (#272): iceberg refills + trades against hidden
+# orders, on the depth heatmap and the L3 order-activity map.
+# ---------------------------------------------------------------------------
+
+
+class TestPrepareHiddenLiquidityOverlay:
+    @staticmethod
+    def _overlay(iceberg_events_and_trades, hidden_trades_and_events, **window):
+        from ob_analytics.hidden_liquidity import detect_icebergs
+
+        detection = detect_icebergs(*iceberg_events_and_trades)
+        hidden, hidden_events = hidden_trades_and_events
+        return _data.prepare_hidden_liquidity_overlay(
+            detection.icebergs, detection.slices, hidden, hidden_events, **window
+        )
+
+    def test_lines_need_two_surviving_slices(
+        self, iceberg_events_and_trades, hidden_trades_and_events
+    ):
+        out = self._overlay(iceberg_events_and_trades, hidden_trades_and_events)
+        assert len(out["iceberg_lines"]) == 2
+        assert sorted(out["iceberg_refills"]["slice"]) == [2]
+
+    def test_price_window_drops_icebergs_outside_it(
+        self, iceberg_events_and_trades, hidden_trades_and_events
+    ):
+        out = self._overlay(
+            iceberg_events_and_trades,
+            hidden_trades_and_events,
+            price_from=300.0,
+            price_to=400.0,
+        )
+        assert out["iceberg_lines"].empty
+        assert out["iceberg_refills"].empty
+
+    def test_time_window_clips_slices(
+        self, iceberg_events_and_trades, hidden_trades_and_events
+    ):
+        events, _ = iceberg_events_and_trades
+        ts = events["timestamp"].iloc[0]
+
+        out = self._overlay(
+            iceberg_events_and_trades,
+            hidden_trades_and_events,
+            start_time=ts,
+            end_time=ts + pd.Timedelta(milliseconds=50),
+        )
+        # Only the first slice survives -- no line, no refill.
+        assert out["iceberg_lines"].empty
+        assert out["iceberg_refills"].empty
+
+    def test_hidden_trade_categorized_by_maker_visibility(
+        self, hidden_liquidity_overlay
+    ):
+        by_maker = hidden_liquidity_overlay["hidden_trades"].set_index(
+            "maker_event_id"
+        )["category"]
+        assert by_maker.loc[100] == "hidden"  # maker order id was HIDDEN_ORDER_ID
+        assert by_maker.loc[200] == "check"  # maker order id was a real, visible order
+
+    def test_unresolved_maker_is_check_not_hidden(
+        self, iceberg_events_and_trades, hidden_trades_and_events
+    ):
+        # A maker_event_id that matches no event is unconfirmed, so it must not
+        # be drawn as a confirmed hidden order.
+        hidden, hidden_events = hidden_trades_and_events
+        unresolved = hidden.assign(maker_event_id=[9998, 9999])
+
+        from ob_analytics.hidden_liquidity import detect_icebergs
+
+        detection = detect_icebergs(*iceberg_events_and_trades)
+        out = _data.prepare_hidden_liquidity_overlay(
+            detection.icebergs, detection.slices, unresolved, hidden_events
+        )
+        assert set(out["hidden_trades"]["category"]) == {"check"}
+
+    def test_no_icebergs_or_hidden_trades_is_safe(self, hidden_trades_and_events):
+        empty_icebergs = pd.DataFrame(
+            columns=[
+                "iceberg",
+                "direction",
+                "price",
+                "start",
+                "end",
+                "slices",
+                "refills",
+                "same_size_refills",
+                "peak",
+                "executed",
+                "median_delay_s",
+                "confidence",
+            ]
+        )
+        empty_slices = pd.DataFrame(
+            columns=["iceberg", "slice", "id", "timestamp", "volume", "fill", "delay_s"]
+        )
+        hidden, hidden_events = hidden_trades_and_events
+
+        out = _data.prepare_hidden_liquidity_overlay(
+            empty_icebergs, empty_slices, hidden.iloc[0:0], hidden_events
+        )
+        assert out["iceberg_lines"].empty
+        assert out["iceberg_refills"].empty
+        assert out["hidden_trades"].empty
+
+
+class TestPriceLevelsHiddenLiquidityOverlay:
+    """Depth heatmap draws the #272 overlay when given, and skips it when not."""
+
+    def _depth(self, sample_events):
+        depth = sample_events[["timestamp", "price", "volume"]].copy()
+        depth["direction"] = "bid"
+        return depth
+
+    def test_no_overlay_draws_no_extra_legend_entries(self, sample_events):
+        depth = self._depth(sample_events)
+        fig = plot("depth_heatmap", **_data.prepare_price_levels_data(depth))
+        labels = {t.get_text() for t in fig.axes[0].get_legend().get_texts()}
+        assert "Iceberg refill" not in labels
+        assert "Hidden-order trade" not in labels
+
+    def test_iceberg_and_hidden_trade_overlay_draws_and_legends(
+        self, sample_events, hidden_liquidity_overlay
+    ):
+        overlay = hidden_liquidity_overlay
+
+        depth = self._depth(sample_events)
+        fig = plot(
+            "depth_heatmap",
+            **_data.prepare_price_levels_data(
+                depth,
+                iceberg_lines=overlay["iceberg_lines"],
+                iceberg_refills=overlay["iceberg_refills"],
+                hidden_trades=overlay["hidden_trades"],
+            ),
+        )
+        labels = {t.get_text() for t in fig.axes[0].get_legend().get_texts()}
+        assert {
+            "Iceberg chain",
+            "Iceberg refill",
+            "Hidden-order trade",
+            "Trade to check (maker not confirmed hidden)",
+        } <= labels
+
+
+class TestPriceLevelsNotice:
+    """The depth heatmap says why it is empty, or that no level changed (#303).
+
+    Unchanged levels are left out by default, so a quiet book used to leave
+    every level out and draw blank axes with no reason given.
+    """
+
+    T0 = pd.Timestamp("2026-09-01 12:00", tz="UTC")
+
+    @classmethod
+    def _quiet_depth(cls) -> pd.DataFrame:
+        # One row per level at the opening book and nothing after it: the
+        # shape of a short capture of a market whose book never moved.
+        return pd.DataFrame(
+            {
+                "timestamp": [cls.T0] * 3,
+                "price": [0.04, 0.05, 0.09],
+                "volume": [30.0, 12.0, 306.0],
+                "direction": ["bid", "bid", "ask"],
+            }
+        )
+
+    @classmethod
+    def _one_change(cls) -> pd.DataFrame:
+        # Level 0.04 grows after 30s; the other two never change.
+        moved = pd.DataFrame(
+            {
+                "timestamp": [cls.T0 + pd.Timedelta(seconds=30)],
+                "price": [0.04],
+                "volume": [40.0],
+                "direction": ["bid"],
+            }
+        )
+        return pd.concat([cls._quiet_depth(), moved], ignore_index=True)
+
+    @classmethod
+    def _spread(cls) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "timestamp": [cls.T0, cls.T0 + pd.Timedelta(seconds=60)],
+                "best_bid_price": [0.05, 0.05],
+                "best_bid_vol": [12.0, 12.0],
+                "best_ask_price": [0.09, 0.09],
+                "best_ask_vol": [306.0, 306.0],
+            }
+        )
+
+    def _prepare(self, depth: pd.DataFrame, **kwargs: Any) -> dict:
+        kwargs.setdefault("end_time", self.T0 + pd.Timedelta(seconds=60))
+        return _data.prepare_price_levels_data(depth, **kwargs)
+
+    def test_no_level_changed_draws_every_level(self):
+        data = self._prepare(self._quiet_depth())
+        assert set(data["depth"]["price"]) == {0.04, 0.05, 0.09}
+        assert data["notice"] == (
+            "No price level changed in this window, so every level is drawn."
+        )
+
+    def test_unchanged_levels_left_out_when_one_changes(self):
+        data = self._prepare(self._one_change())
+        assert set(data["depth"]["price"]) == {0.04}
+        assert data["notice"] is None
+
+    def test_show_all_depth_keeps_every_level(self):
+        data = self._prepare(self._one_change(), show_all_depth=True)
+        assert set(data["depth"]["price"]) == {0.04, 0.05, 0.09}
+        assert data["notice"] is None
+
+    def test_empty_depth_frame_says_so(self):
+        data = _data.prepare_price_levels_data(self._quiet_depth().iloc[0:0])
+        assert data["depth"].empty
+        assert data["notice"] == _data.NO_DEPTH_NOTICE
+
+    def test_price_range_with_no_level_names_the_range(self):
+        data = self._prepare(self._quiet_depth(), price_from=0.5)
+        assert data["notice"] == "No price level at or above 0.5."
+        data = self._prepare(self._quiet_depth(), price_from=0.1, price_to=0.2)
+        assert data["notice"] == "No price level between 0.1 and 0.2."
+
+    def test_spread_outside_window_sets_no_price_range(self):
+        # The spread's only row is before the window, so it gives no price
+        # bounds; NaN bounds used to drop every level.
+        spread = self._spread()
+        spread["timestamp"] = self.T0 - pd.Timedelta(hours=1)
+        data = self._prepare(self._quiet_depth(), spread=spread.iloc[:1])
+        assert set(data["depth"]["price"]) == {0.04, 0.05, 0.09}
+        assert data["notice"] == (
+            "No price level changed in this window, so every level is drawn."
+        )
+
+    def test_volume_range_with_no_level_says_so(self):
+        data = self._prepare(self._quiet_depth(), volume_from=1000)
+        assert data["notice"] == "No price level in the chosen volume range."
+
+    def test_time_window_with_no_orders_says_so(self):
+        data = self._prepare(
+            self._quiet_depth(),
+            start_time=self.T0 - pd.Timedelta(hours=2),
+            end_time=self.T0 - pd.Timedelta(hours=1),
+        )
+        assert data["notice"] == "No resting orders in this time window."
+
+    def test_notice_is_logged(self):
+        from loguru import logger
+
+        messages: list[str] = []
+        logger.enable("ob_analytics")
+        sink = logger.add(lambda m: messages.append(m.record["message"]))
+        try:
+            self._prepare(self._quiet_depth(), price_from=0.5)
+        finally:
+            logger.remove(sink)
+            logger.disable("ob_analytics")
+        assert messages == ["Depth heatmap: No price level at or above 0.5."]
+
+    def test_empty_window_frames_the_spread(self):
+        data = self._prepare(self._quiet_depth(), spread=self._spread(), price_from=0.1)
+        assert data["depth"].empty
+        assert data["y_range"] == (0.05, 0.09)
+
+    @staticmethod
+    def _title_and_notice(ax: Axes) -> tuple[Text, Text]:
+        (notice,) = ax.texts
+        title = next(
+            t
+            for t in ax.get_children()
+            if isinstance(t, Text) and t.get_text() == "Price Levels Over Time"
+        )
+        return title, notice
+
+    def test_matplotlib_draws_flat_levels_with_notice(self):
+        data = self._prepare(self._quiet_depth())
+        ax = plot("depth_heatmap", **data).axes[0]
+        assert ax.collections
+        title, notice = self._title_and_notice(ax)
+        assert title.get_text() == "Price Levels Over Time"
+        assert notice.get_text() == data["notice"]
+
+    @pytest.mark.parametrize("width", [12, 6, 4])
+    def test_matplotlib_notice_sits_under_the_title(self, width):
+        # Between the title and the plot, even in a narrow subplot, where a
+        # notice beside the title used to print over it.
+        data = self._prepare(self._quiet_depth())
+        fig, axes = plt.subplots(2, 2, figsize=(width, 8))
+        ax = axes[0, 0]
+        plot("depth_heatmap", ax=ax, **data)
+        fig.draw_without_rendering()
+        title, notice = self._title_and_notice(ax)
+        title_box = title.get_window_extent()
+        notice_box = notice.get_window_extent()
+        plot_box = ax.get_window_extent()
+        assert notice_box.y1 <= title_box.y0
+        assert notice_box.y0 >= plot_box.y1
+
+    def test_matplotlib_empty_still_draws_midprice(self):
+        data = self._prepare(self._quiet_depth(), spread=self._spread(), price_from=0.1)
+        ax = plot("depth_heatmap", **data).axes[0]
+        _, notice = self._title_and_notice(ax)
+        assert notice.get_text() == data["notice"]
+        assert [line.get_label() for line in ax.get_lines()] == ["Midprice"]
+
+    def test_matplotlib_hand_built_empty_payload_says_no_depth(self):
+        data = self._prepare(self._quiet_depth(), price_from=0.5)
+        data["notice"] = None
+        ax = plot("depth_heatmap", **data).axes[0]
+        _, notice = self._title_and_notice(ax)
+        assert notice.get_text() == _data.NO_DEPTH_NOTICE
+
+    def test_matplotlib_draws_a_level_with_one_row(self):
+        # A level whose only row in the window is a removal draws no segment,
+        # but it no longer blanks the whole heatmap.
+        removed = pd.DataFrame(
+            {
+                "timestamp": [self.T0 + pd.Timedelta(seconds=30)],
+                "price": [0.07],
+                "volume": [0.0],
+                "direction": ["ask"],
+            }
+        )
+        data = self._prepare(pd.concat([self._one_change(), removed]))
+        assert data["depth"].groupby("price").size().min() == 1
+        ax = plot("depth_heatmap", **data).axes[0]
+        assert ax.collections
+        assert not ax.texts
+
+    @pytest.mark.parametrize("price_from", [None, 0.5])
+    def test_plotly_puts_the_notice_under_the_title(self, price_from):
+        # A second title line, on top of the plot area: clear of the data and
+        # of the hover toolbar, whether the chart has levels or not.
+        pytest.importorskip("plotly")
+        data = self._prepare(self._quiet_depth(), price_from=price_from)
+        fig = plot("depth_heatmap", backend="plotly", **data)
+        title = fig.layout.title
+        first, second = title.text.split("<br>")
+        assert first == "Price Levels Over Time"
+        assert data["notice"] in second
+        assert (title.yref, title.y, title.yanchor) == ("paper", 1.0, "bottom")
+        assert title.automargin
+        assert not fig.layout.annotations
+
+    def test_bokeh_draws_the_notice(self):
+        pytest.importorskip("bokeh")
+        data = self._prepare(self._quiet_depth())
+        fig = plot("depth_heatmap", backend="bokeh", **data)
+        assert [getattr(obj, "text", "") for obj in fig.above] == [data["notice"]]
 
 
 # ---------------------------------------------------------------------------
@@ -902,6 +1347,133 @@ class TestRegisterBackend:
             # Registry has no public removal; the inert (trade_tape, L2, dummy)
             # entry is dropped here so the dummy module's renderer doesn't linger.
             RENDERERS._items.pop(("trade_tape", Level.L2, "dummy"), None)
+
+
+class TestRendererKinds:
+    """A concept is level-less or leveled on every backend, never both (#302)."""
+
+    def test_kind_text(self) -> None:
+        from ob_analytics.visualization import _kind_text
+
+        assert _kind_text([None]) == "level-less"
+        assert _kind_text([Level.L3, Level.L2, Level.L3]) == "at L2 and L3"
+        with pytest.raises(ValueError, match="No levels"):
+            _kind_text([])
+
+    @pytest.fixture(autouse=True)
+    def _drop_probe_renderers(self):
+        from ob_analytics.visualization import RENDERERS
+
+        yield
+        probes = ("kind_probe", "cumvol")
+        for key in [k for k in RENDERERS._items if k[0] in probes]:
+            RENDERERS._items.pop(key)
+
+    @staticmethod
+    def _renderer(data, ax=None):
+        return _create_axes(ax)[0]
+
+    @pytest.mark.parametrize(
+        ("first", "second"),
+        [(Level.L2, None), (None, Level.L2), (Level.L3, None), (None, Level.L3)],
+    )
+    def test_mixing_kinds_raises(self, first, second):
+        from ob_analytics.visualization import RENDERERS
+
+        RENDERERS.register(("kind_probe", first, "matplotlib"), self._renderer)
+        with pytest.raises(ValueError, match="already registered"):
+            RENDERERS.register(("kind_probe", second, "matplotlib"), self._renderer)
+        assert ("kind_probe", second, "matplotlib") not in RENDERERS
+
+    def test_mixing_kinds_across_backends_raises(self):
+        from ob_analytics.visualization import RENDERERS
+
+        RENDERERS.register(("kind_probe", Level.L2, "matplotlib"), self._renderer)
+        with pytest.raises(ValueError, match="at L2 on 'matplotlib'"):
+            RENDERERS.register(("kind_probe", None, "plotly"), self._renderer)
+        assert ("kind_probe", None, "plotly") not in RENDERERS
+
+    def test_same_key_and_both_levels_still_register(self):
+        from ob_analytics.visualization import RENDERERS
+
+        RENDERERS.register(("kind_probe", Level.L2, "matplotlib"), self._renderer)
+        RENDERERS.register(("kind_probe", Level.L2, "matplotlib"), self._renderer)
+        RENDERERS.register(("kind_probe", Level.L3, "matplotlib"), self._renderer)
+        RENDERERS.register(("kind_probe", Level.L2, "plotly"), self._renderer)
+        with pytest.raises(ValueError, match="comparable"):
+            plot("kind_probe")
+
+    def test_placements_can_be_looped_over_while_registering(self):
+        from ob_analytics.visualization import RENDERERS
+
+        RENDERERS.register(("kind_probe", Level.L2, "matplotlib"), self._renderer)
+        RENDERERS.register(("kind_probe", Level.L3, "matplotlib"), self._renderer)
+        for level, _ in RENDERERS.placements("kind_probe"):
+            RENDERERS.register(("kind_probe", level, "plotly"), self._renderer)
+        assert RENDERERS.placements("kind_probe") == (
+            (Level.L2, "matplotlib"),
+            (Level.L3, "matplotlib"),
+            (Level.L2, "plotly"),
+            (Level.L3, "plotly"),
+        )
+
+    def test_text_level_is_stored_as_a_level(self):
+        from ob_analytics.visualization import RENDERERS
+
+        key = ("kind_probe", "L2", "matplotlib")  # text, not Level.L2
+        RENDERERS.register(key, self._renderer)  # ty: ignore[invalid-argument-type]
+        ((level, _),) = RENDERERS.placements("kind_probe")
+        assert level is Level.L2
+        assert isinstance(plot("kind_probe"), Figure)
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            ("kind_probe", "matplotlib"),  # no level
+            ("kind_probe", "matplotlib", None),  # level and backend swapped
+            ("kind_probe", "L4", "matplotlib"),  # not a level
+            (7, Level.L2, "matplotlib"),  # concept not text
+        ],
+    )
+    def test_malformed_key_raises(self, key):
+        from ob_analytics.visualization import RENDERERS
+
+        with pytest.raises(ValueError, match=r"\(concept, level, backend\)"):
+            RENDERERS.register(key, self._renderer)
+        assert not [k for k in RENDERERS._items if k[0] in ("kind_probe", 7)]
+
+    def test_the_guide_plot_section_runs_as_written(
+        self, tiny_bitstamp_orders_csv, tmp_path
+    ):
+        """Section 3 of extending.md: register, plot, gallery, plot again."""
+        text = (Path(__file__).parents[1] / "docs" / "extending.md").read_text()
+        section = text[
+            text.index("## 3. A new plot") : text.index("## 4. A new metric")
+        ]
+        blocks = re.findall(r"```python\n(.*?)```", section, flags=re.DOTALL)
+        gallery = tmp_path / "gallery"
+        replaced = {'"orders.csv"': 0, '"output/gallery/"': 0}
+        namespace: dict[str, Any] = {}
+        for block in blocks:
+            # The custom backend and the leveled face name modules and
+            # functions the guide leaves to the reader.
+            if "my_pkg" in block or "my_face" in block:
+                continue
+            for old in replaced:
+                replaced[old] += block.count(old)
+            block = block.replace('"orders.csv"', repr(str(tiny_bitstamp_orders_csv)))
+            block = block.replace('"output/gallery/"', repr(str(gallery)))
+            exec(compile(block, "extending.md", "exec"), namespace)  # noqa: S102 - the guide's own code
+        assert all(replaced.values()), replaced
+
+        assert (gallery / "matplotlib" / "cumvol.png").exists()
+        html = (gallery / "gallery.html").read_text()
+        start = html.index('<div class="card-title">Cumulative Volume<')
+        end = html.find('<div class="card">', start)
+        assert "Not available" not in html[start : end if end != -1 else None]
+        trades = namespace["result"].trades
+        fig = plot("cumvol", **namespace["prepare_cumvol_data"](trades))
+        assert isinstance(fig, Figure)
 
 
 class TestPlotPriceView:

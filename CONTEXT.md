@@ -63,7 +63,7 @@ The matching rule that gives the queue its order: better prices execute first,
 and at one price, earlier arrivals execute first.
 
 **Feed type**:
-Whether an L3 feed's resting book can be crossed. Named `feed_type` and typed
+Whether a feed's resting book can be crossed. Named `feed_type` and typed
 `FeedType`, with the values below; it is a property of the source, not of the
 rebuild.
 
@@ -75,8 +75,22 @@ crossed. `FeedType.MATCHED_BOOK`.
 An L3 feed rebuilt from a public placement and cancellation stream. It can hold
 genuinely crossed resting orders. `FeedType.DIFF_FEED`.
 
+**Price levels**:
+An L2 feed: the venue's total size at each price. The venue does not publish a
+crossed book, so a crossed one means the capture's copy is wrong: most often,
+the capture kept a level the venue removed. `FeedType.PRICE_LEVELS`.
+
 **Unknown feed type**:
 A source that does not declare a feed type. `FeedType.UNKNOWN`, the default.
+
+**Trade attribution**:
+Which orders of a trade a feed's order events can name: the maker, the order
+that was resting, and the taker, the order that arrived and traded against it.
+Named `trade_attribution` and typed `TradeAttribution`; a property of the
+source. `BOTH` when the feed reports every order, takers included (Bitstamp's
+`live_orders`). `MAKER_ONLY` when it shows resting orders only, so a taker never
+appears (LOBSTER, Databento, cryptofeed). `NONE` for L2, which has no order
+identity. The unmatched-trades check counts only the orders the feed can name.
 
 **Faithful**:
 Replayed exactly as the feed states it, crossed resting orders included.
@@ -121,6 +135,13 @@ _Avoid_: mid market, fair value
 **Crossed book**:
 A state where the best bid is at or above the best ask. Expected in a diff
 feed; a fault in a matched book.
+
+**Stale order**:
+A resting order that a trade printed through, and that the venue did not report
+again within a grace period (one second by default). The trade shows the order
+has gone, but the faithful book still holds it. Reported by `audit`, never
+removed. Found by `detect_stale_orders`.
+_Avoid_: ghost order, zombie order
 
 **Book snapshot**:
 The resting book at one point in time, as separate bid and ask tables.
@@ -183,6 +204,30 @@ How an order's life ended: `filled`, `partial`, `cancelled` or `resting`.
 Named `outcome`.
 _Avoid_: status, state, result
 
+## Hidden liquidity
+
+**Hidden order**:
+An order the venue will match but does not show in the visible book. LOBSTER
+gives every execution against one the order id `0` (`HIDDEN_ORDER_ID`).
+_Avoid_: dark order, invisible order
+
+**Iceberg order** (**iceberg**):
+An order that shows a displayed **peak** and keeps the rest in reserve. Each
+visible order it shows is a **slice**.
+_Avoid_: reserve order, hidden-size order
+
+**Filled out**:
+A slice whose last fill as a maker left nothing outstanding.
+
+**Refill**:
+A new slice at the same side and price, within `max_delay` of a slice being
+filled out. Found by `detect_icebergs`.
+_Avoid_: replenishment, reload
+
+**Trade against a hidden order**:
+A trade that printed strictly inside the visible spread standing before its
+maker's fill. Found by `hidden_trades`.
+
 ## Order classification
 
 **Order type**:
@@ -198,8 +243,11 @@ the spread to take it. Named `maker` / `taker` for the order ids and
 
 **Trade direction**:
 The taker's side of a trade: `buy` or `sell`. Named `direction` on the trades
-table — the same column name as the book side, but different values.
-_Avoid_: aggressor, sign, initiator
+table — the same column name as the book side, but different values. Because
+one name carries both meanings, prose may call it the **aggressor side** where
+a bare "direction" would be read as the book side; the identifier stays
+`direction`.
+_Avoid_: `aggressor` as an identifier, sign, initiator
 
 **Trade sign**:
 A direction worked out after the fact for a feed that does not label the taker
@@ -286,9 +334,37 @@ The parameters that change per run rather than per source — trading date,
 session time zone, symbol and venue. Typed `RunContext`, named `ctx`.
 _Avoid_: options, params
 
+**Window**:
+One stretch of time a windowed run (`Pipeline.run_windows`) cuts its input
+into, from one boundary up to, but not including, the next. The windows cover
+the whole input. Not a segment, which is a part of a capture.
+_Avoid_: chunk, slice, batch
+
+**Carry**:
+Starting a window from the book the previous window ended with, so that the
+cut does not show in the output. Named `carry`.
+_Avoid_: warm start, state transfer
+
 **Capture**:
 Recording a live venue to files the pipeline can later replay.
 _Avoid_: stream, ingest, collect, record
+
+**Segment**:
+One part of a capture, from a snapshot to its close-out, in its own folder
+(`seg-0001`, ...). A disconnect, a roll or a restart ends one segment and
+starts the next, so every segment replays alone.
+_Avoid_: chunk, part, file, shard
+
+**Capture gap**:
+A stretch of a capture that no segment covers, recorded in `manifest.json`
+with its cause. Not a sequence gap, which is a message missing inside a
+segment.
+
+**Origin**:
+Which part of a capture wrote a row: `snapshot` (the opening book), `stream`
+(a live message) or `shutdown` (a synthetic close-out at the end). Named
+`origin`.
+_Avoid_: provenance, phase, source (a source is a venue)
 
 ## Ordering and data quality
 
@@ -317,6 +393,11 @@ duplicate ids, pre-existing orders and sequence faults.
 
 ## Plots
 
+**Metric**:
+A measurement taken from a finished run, registered under a name so it runs
+from a result and draws as a level-less plot. Its name is also its concept.
+_Avoid_: signal, indicator, statistic, analytic
+
 **Concept**:
 What a plot shows, independent of resolution — for example `depth_heatmap` or
 `trade_tape`. A concept holds up to one variant per resolution.
@@ -333,8 +414,8 @@ _Avoid_: panel for a face, or for a level-less analytic plot
 A concept with both an L2 and an L3 variant, so the two can sit side by side.
 
 **Backend**:
-The drawing library a face is rendered with: matplotlib or plotly. A renderer
-is the registered function, not the library.
+The drawing library a face is rendered with: matplotlib, plotly, or bokeh. A
+renderer is the registered function, not the library.
 _Avoid_: engine, renderer library
 
 **View**:
@@ -342,3 +423,105 @@ Which faces a gallery shows: `l2`, `l3`, `both` or `comparison`.
 
 **Gallery**:
 The generated HTML page holding a run's faces.
+
+## Bars
+
+**Bar**:
+One row summarising a run of consecutive trades. Produced by `bars()`.
+_Avoid_: candle, OHLC row, sample
+
+**Bar rule**:
+What decides where the bar boundaries fall — `time`, `tick`, `volume`,
+`dollar` or `imbalance`. Named `rule`, typed `BarRule`, and a coordinate in
+the `BAR_RULES` registry, never a name suffix.
+_Avoid_: bar type, sampling scheme
+
+**Threshold**:
+How much of the rule's own quantity closes a bar. Named `threshold`; the unit
+is the rule's (a duration, a trade count, an amount).
+_Avoid_: bucket size, window, step
+
+**Turnover**:
+Price multiplied by size, summed. Named `turnover`.
+_Avoid_: notional, dollar volume, value
+
+**VWAP**:
+Turnover divided by volume. Named `vwap`.
+
+**Signed volume**:
+Buyer-initiated volume minus seller-initiated volume. Named `signed_volume`,
+with `buy_volume` / `sell_volume` for the two halves.
+_Avoid_: net volume, order flow
+
+## Transaction cost
+
+**Effective spread**:
+What a taker paid to cross, measured from the mid the trade crossed. Named
+`effective_spread`, with `effective_spread_bps` for the same in basis points.
+_Avoid_: realised cost, slippage, execution cost
+
+**Realized spread**:
+The part of the effective spread the liquidity provider kept, read one horizon
+later. Named `realized_spread`. Spelled the American way throughout, matching
+the literature.
+
+**Price impact**:
+The rest of the effective spread — how far the trade moved the market. Named
+`price_impact`.
+_Avoid_: adverse selection, permanent impact, market impact
+
+**Horizon**:
+The wait between a trade and the mid the realized spread is read against.
+Named `horizon`, and its unit is a pandas offset string.
+_Avoid_: lag, delay, window (a window is a span, a horizon is a single wait)
+
+**Amihud illiquidity**:
+The price move a unit of turnover buys. Named `amihud`.
+_Avoid_: ILLIQ, price impact (that is the measure above)
+
+**Roll's implied spread**:
+The spread implied by bid-ask bounce in the trade prices. Named `roll_spread`,
+computed from `autocovariance`.
+_Avoid_: implied spread on its own, serial covariance estimator
+
+## Feature table
+
+**Feature table**:
+One row per bar and one column per measurement, for a model or a study.
+Produced by `features()`.
+_Avoid_: design matrix, dataset, panel (a panel is a gallery column)
+
+**Feature**:
+One measured column set of that table. Named `name`, typed `Feature`, and a
+key in the `FEATURES` registry. It declares the columns it writes and the
+columns it reads.
+_Avoid_: signal, predictor, variable, factor
+
+**Look-ahead**:
+Reading data from after a row's instant to compute that row. The feature table
+has none: the word names the fault, not a setting.
+_Avoid_: leakage, peeking, future bias
+
+**As-of join**:
+Matching each row to the last observation at or before its instant. How the
+book reaches a row whose instant falls between two snapshots.
+_Avoid_: backward merge, point-in-time join
+
+**Target**:
+What a model predicts. It looks forward, so the feature table does not hold
+one.
+_Avoid_: label, response, y
+
+**Trade imbalance**:
+The signed share of a bar's volume, from `-1` to `+1`. Named
+`trade_imbalance`, and not the same as book imbalance, which measures resting
+size.
+
+**Realized volatility**:
+The standard deviation of returns over a trailing window, per bar rather than
+annualized. Named `realized_vol`.
+
+**Trailing window**:
+How many bars back a feature looks, the row's own included. Named `window`,
+and its unit is bars.
+_Avoid_: lookback, span, period

@@ -1,15 +1,20 @@
 """Tests for flow_toxicity.py — VPIN, Kyle's Lambda, and OFI."""
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
 from ob_analytics.flow_toxicity import (
+    KYLE_MIN_T_STAT,
+    KYLE_MIN_WINDOWS,
     KyleLambdaResult,
     compute_kyle_lambda,
     compute_vpin,
     order_flow_imbalance,
+    vpin_bucket_volume,
 )
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -38,7 +43,15 @@ def _trades(directions, volumes=None, prices=None, base_sec_offsets=None):
 # ── VPIN ─────────────────────────────────────────────────────────────
 
 
+@pytest.mark.filterwarnings("ignore::UserWarning")
 class TestComputeVpin:
+    """VPIN computation correctness; not about the too-few-buckets warning.
+
+    bucket_volume is small on purpose here to keep the fixtures readable, so
+    most of these trip compute_vpin's too-few-buckets warning as a side
+    effect. TestVpinDiagnostics covers that warning directly.
+    """
+
     def test_uniform_buys_vpin_one(self):
         """All-buy trades → VPIN = 1.0 for every bucket."""
         trades = _trades(["buy"] * 10, volumes=[1.0] * 10)
@@ -96,6 +109,23 @@ class TestComputeVpin:
         with pytest.raises(ObAnalyticsError):
             compute_vpin(empty, bucket_volume=1.0)
 
+    @pytest.mark.parametrize("sign_method", [None, "bvc"])
+    def test_no_full_bucket_returns_typed_empty_frame(self, sign_method):
+        """Too little volume for one bucket gives zero rows, standard dtypes."""
+        trades = _trades(["buy", "sell", "buy"], prices=[100.0, 101.0, 100.5])
+        trades["timestamp"] = trades["timestamp"].dt.tz_localize("UTC")
+        result = compute_vpin(trades, bucket_volume=100.0, sign_method=sign_method)
+        assert result.empty
+        assert result.dtypes.to_dict() == {
+            "bucket": np.dtype("int64"),
+            "timestamp_start": trades["timestamp"].dtype,
+            "timestamp_end": trades["timestamp"].dtype,
+            "buy_volume": np.dtype("float64"),
+            "sell_volume": np.dtype("float64"),
+            "vpin": np.dtype("float64"),
+            "vpin_avg": np.dtype("float64"),
+        }
+
     def test_missing_columns_raises(self):
         """Missing required columns raises ConfigError."""
         bad = pd.DataFrame({"timestamp": [1], "price": [100]})
@@ -107,6 +137,27 @@ class TestComputeVpin:
         trades = _trades(["buy"])
         with pytest.raises(ValueError, match="positive"):
             compute_vpin(trades, bucket_volume=-1.0)
+
+    @pytest.mark.parametrize("sign_method", [None, "bvc"])
+    def test_bucket_volume_in_the_wrong_units_raises(self, sign_method):
+        """A bucket far smaller than the volume is refused before any bucket is built.
+
+        Sizes are integer lots, so a bucket of 1.0 against 0.01 BTC trades
+        (1e6 lots each at a lot size of 1e-8) asks for two million buckets.
+        """
+        trades = _trades(["buy", "sell"], volumes=[1_000_000, 1_000_000])
+        with pytest.raises(ValueError, match="MAX_VOLUME_BUCKETS.*lots"):
+            compute_vpin(trades, bucket_volume=1.0, sign_method=sign_method)
+
+    def test_default_bucket_over_a_bad_time_span_blames_the_timestamps(self):
+        """The default rule makes ~50 buckets a day, so decades trip the cap.
+
+        The bucket was not passed in, so the error points at the time span,
+        not at bucket_volume's units.
+        """
+        trades = _trades(["buy", "sell"], base_sec_offsets=[0, 100 * 365 * 86_400])
+        with pytest.raises(ValueError, match="MAX_VOLUME_BUCKETS.*time span"):
+            compute_vpin(trades)
 
 
 # ── Kyle's Lambda ────────────────────────────────────────────────────
@@ -217,6 +268,271 @@ class TestComputeKyleLambda:
             compute_kyle_lambda(bad)
 
 
+# ── Robustness diagnostics (#119) ────────────────────────────────────
+
+
+def _busy_tape(n_windows: int = 200, seed: int = 1) -> pd.DataFrame:
+    """A tape with many 1-minute windows and a real λ = 0.5 plus noise.
+
+    Each window holds two trades: the first sets the window's opening price,
+    the second closes it at ``open + 0.5 * signed_volume + noise``.  Both
+    trades share one side, so the window's signed volume is their summed size.
+    """
+    rng = np.random.default_rng(seed)
+    base = pd.Timestamp("2026-01-05 00:00:00")
+    rows = []
+    price = 1000.0
+    for w in range(n_windows):
+        side = "buy" if rng.random() < 0.5 else "sell"
+        sizes = rng.uniform(1.0, 5.0, size=2)
+        signed = sizes.sum() * (1.0 if side == "buy" else -1.0)
+        close = price + 0.5 * signed + rng.normal(0.0, 1.0)
+        t0 = base + pd.Timedelta(minutes=w)
+        rows.append((t0, price, sizes[0], side))
+        rows.append((t0 + pd.Timedelta(seconds=30), close, sizes[1], side))
+        price = close
+    return pd.DataFrame(rows, columns=["timestamp", "price", "volume", "direction"])
+
+
+def _thin_tape() -> pd.DataFrame:
+    """Five 1-minute windows: a fit exists, but it cannot mean much."""
+    return _busy_tape(n_windows=5, seed=3)
+
+
+class TestKyleLambdaDiagnostics:
+    def test_thin_tape_is_flagged(self):
+        result = compute_kyle_lambda(_thin_tape(), window="1min")
+        assert result.n_windows == 5
+        assert not result.significant
+        assert any("windows" in d for d in result.diagnostics)
+
+    def test_busy_tape_is_not_flagged(self):
+        result = compute_kyle_lambda(_busy_tape(), window="1min")
+        assert result.n_windows == 200
+        assert abs(result.t_stat) > KYLE_MIN_T_STAT
+        assert result.significant
+        assert result.diagnostics == ()
+
+    def test_low_t_stat_is_flagged(self):
+        """Enough windows but no relationship: flagged on |t| alone."""
+        trades = _busy_tape()
+        rng = np.random.default_rng(9)
+        # Shuffle closes against flow so the slope carries no signal.
+        closes = trades["price"].to_numpy().copy()
+        closes[1::2] = closes[0::2] + rng.normal(0.0, 1.0, size=len(closes) // 2)
+        trades["price"] = closes
+        result = compute_kyle_lambda(trades, window="1min")
+        assert result.n_windows >= KYLE_MIN_WINDOWS
+        assert abs(result.t_stat) < KYLE_MIN_T_STAT
+        assert not result.significant
+        assert len(result.diagnostics) == 1
+        assert "|t|" in result.diagnostics[0]
+
+    def test_undefined_fit_is_flagged(self):
+        result = compute_kyle_lambda(_trades(["buy"]), window="5min")
+        assert np.isnan(result.lambda_)
+        assert not result.significant
+        assert any("undefined" in d for d in result.diagnostics)
+
+    def test_hand_built_result_reports_diagnostics(self):
+        """The flag is derived from the fields, so a hand-built result has it."""
+        weak = KyleLambdaResult(lambda_=1.0, t_stat=1.2, r_squared=0.1, n_windows=5)
+        assert not weak.significant
+        strong = KyleLambdaResult(lambda_=1.0, t_stat=8.0, r_squared=0.6, n_windows=100)
+        assert strong.significant
+
+
+class TestKyleLambdaBootstrap:
+    def test_ci_contains_estimate_on_busy_tape(self):
+        result = compute_kyle_lambda(_busy_tape(), window="1min")
+        assert result.ci_low < result.lambda_ < result.ci_high
+        # The true slope is 0.5; the interval should sit around it.
+        assert result.ci_low < 0.5 < result.ci_high
+
+    def test_ci_is_deterministic_under_a_seed(self):
+        a = compute_kyle_lambda(_busy_tape(), window="1min", seed=42)
+        b = compute_kyle_lambda(_busy_tape(), window="1min", seed=42)
+        c = compute_kyle_lambda(_busy_tape(), window="1min", seed=43)
+        assert (a.ci_low, a.ci_high) == (b.ci_low, b.ci_high)
+        assert (a.ci_low, a.ci_high) != (c.ci_low, c.ci_high)
+
+    def test_accepts_a_generator(self):
+        a = compute_kyle_lambda(
+            _busy_tape(), window="1min", seed=np.random.default_rng(5)
+        )
+        b = compute_kyle_lambda(
+            _busy_tape(), window="1min", seed=np.random.default_rng(5)
+        )
+        assert (a.ci_low, a.ci_high) == (b.ci_low, b.ci_high)
+
+    def test_wider_level_gives_wider_interval(self):
+        narrow = compute_kyle_lambda(_busy_tape(), window="1min", ci_level=0.5)
+        wide = compute_kyle_lambda(_busy_tape(), window="1min", ci_level=0.99)
+        assert wide.ci_low < narrow.ci_low
+        assert wide.ci_high > narrow.ci_high
+
+    def test_bootstrap_can_be_turned_off(self):
+        result = compute_kyle_lambda(_busy_tape(), window="1min", n_boot=0)
+        assert np.isnan(result.ci_low) and np.isnan(result.ci_high)
+        assert np.isfinite(result.lambda_)
+
+    def test_undefined_fit_has_no_interval(self):
+        result = compute_kyle_lambda(_trades(["buy"]), window="5min")
+        assert np.isnan(result.ci_low) and np.isnan(result.ci_high)
+
+    def test_bad_ci_level_raises(self):
+        with pytest.raises(ValueError, match="ci_level"):
+            compute_kyle_lambda(_busy_tape(), window="1min", ci_level=1.5)
+
+
+class TestVpinBucketVolume:
+    def test_hand_built_one_day(self):
+        """Exactly one day of trading: average daily volume is the total."""
+        trades = pd.DataFrame(
+            {
+                "timestamp": pd.to_datetime(
+                    ["2026-01-05 00:00", "2026-01-05 12:00", "2026-01-06 00:00"]
+                ),
+                "price": [100.0, 100.0, 100.0],
+                "volume": [100.0, 200.0, 200.0],
+            }
+        )
+        assert vpin_bucket_volume(trades) == pytest.approx(500.0 / 50)
+
+    def test_short_session_scales_to_a_day(self):
+        """Six hours of trading at 60 units: 240 units a day, /50 = 4.8."""
+        trades = pd.DataFrame(
+            {
+                "timestamp": pd.to_datetime(["2026-01-05 00:00", "2026-01-05 06:00"]),
+                "price": [100.0, 100.0],
+                "volume": [30.0, 30.0],
+            }
+        )
+        assert vpin_bucket_volume(trades) == pytest.approx(4.8)
+
+    def test_trading_day_and_buckets_per_day(self):
+        """A 6-hour session on a 6-hour trading day is one full day."""
+        trades = pd.DataFrame(
+            {
+                "timestamp": pd.to_datetime(["2026-01-05 09:00", "2026-01-05 15:00"]),
+                "price": [100.0, 100.0],
+                "volume": [30.0, 30.0],
+            }
+        )
+        got = vpin_bucket_volume(trades, buckets_per_day=10, trading_day="6h")
+        assert got == pytest.approx(6.0)
+
+    def test_zero_span_raises(self):
+        with pytest.raises(ValueError, match="span"):
+            vpin_bucket_volume(_trades(["buy", "sell"], base_sec_offsets=[0, 0]))
+
+
+class TestVpinDiagnostics:
+    def test_explicit_bucket_is_recorded(self):
+        vpin = compute_vpin(_trades(["buy"] * 10), bucket_volume=2.0, n_buckets=3)
+        assert vpin.attrs["bucket_volume"] == 2.0
+        assert vpin.attrs["bucket_volume_rule"] == "given"
+        assert vpin.attrs["n_buckets"] == 3
+        assert vpin.attrs["diagnostics"] == ()
+
+    def test_too_few_buckets_is_flagged(self):
+        with pytest.warns(UserWarning):
+            vpin = compute_vpin(_trades(["buy"] * 10), bucket_volume=2.0)
+        assert len(vpin) == 5
+        (message,) = vpin.attrs["diagnostics"]
+        assert "5 complete buckets" in message
+
+    def test_too_few_buckets_warns_with_given_bucket_volume(self):
+        with pytest.warns(UserWarning, match="5 complete buckets"):
+            vpin = compute_vpin(_trades(["buy"] * 10), bucket_volume=2.0)
+        assert len(vpin) == 5
+
+    def test_too_few_buckets_warns_to_shrink_default_bucket_volume(self):
+        trades = _busy_tape()
+        with pytest.warns(UserWarning, match="Pass a smaller bucket_volume"):
+            compute_vpin(trades, n_buckets=10**9)
+
+    def test_warning_names_no_cause_it_cannot_know(self):
+        """A big n_buckets, not a short capture, can trigger this (#276).
+
+        The default bucket_volume is sized from a fixed 50-buckets-per-day
+        rule, independent of n_buckets, so a multi-day capture can still
+        produce fewer buckets than a caller-chosen n_buckets. The warning
+        must not claim the capture ran "well under a day" when it didn't.
+        """
+        trades = _trades(
+            ["buy", "sell"] * 100,
+            base_sec_offsets=[i * 900 for i in range(200)],  # 2-day span
+        )
+        with pytest.warns(UserWarning) as records:
+            vpin = compute_vpin(trades, n_buckets=200)
+        assert len(vpin) < 200
+        message = str(records[0].message)
+        assert "day" not in message
+
+    def test_full_window_raises_no_warning(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            vpin = compute_vpin(_trades(["buy"] * 10), bucket_volume=2.0, n_buckets=3)
+        assert vpin.attrs["diagnostics"] == ()
+
+    def test_bvc_path_is_recorded_and_flagged(self):
+        with pytest.warns(UserWarning):
+            vpin = compute_vpin(
+                _trades(["buy"] * 10, prices=[100.0 + i for i in range(10)]),
+                bucket_volume=2.0,
+                sign_method="bvc",
+            )
+        assert vpin.attrs["bucket_volume"] == 2.0
+        assert vpin.attrs["diagnostics"]
+
+    def test_no_complete_bucket_keeps_the_columns(self):
+        """A short tape under the default rule fills no bucket (#119)."""
+        for sign_method in (None, "bvc"):
+            trades = _trades(["buy", "sell"] * 3, prices=[100.0, 101.0] * 3)
+            with pytest.warns(UserWarning):
+                vpin = compute_vpin(trades, sign_method=sign_method)
+            assert vpin.empty
+            assert "vpin_avg" in vpin.columns
+            assert vpin.attrs["diagnostics"]
+
+    def test_bucket_volume_defaults_to_adv_rule(self):
+        trades = _busy_tape()
+        with pytest.warns(UserWarning):
+            vpin = compute_vpin(trades)
+        assert vpin.attrs["bucket_volume"] == pytest.approx(vpin_bucket_volume(trades))
+        assert vpin.attrs["bucket_volume_rule"] == "adv/50"
+
+    def test_busy_tape_is_not_flagged(self):
+        trades = _busy_tape()
+        vpin = compute_vpin(trades, bucket_volume=trades["volume"].sum() / 120)
+        assert len(vpin) >= 50
+        assert vpin.attrs["diagnostics"] == ()
+
+
+@pytest.fixture(scope="module")
+def sample_trades(sample_csv_path) -> pd.DataFrame:
+    from ob_analytics import Pipeline
+
+    return Pipeline().run(sample_csv_path).trades
+
+
+class TestBundledSampleDiagnostics:
+    def test_kyle_lambda_not_significant(self, sample_trades):
+        trades = sample_trades
+        result = compute_kyle_lambda(trades, window="5min")
+        assert not result.significant
+        assert len(result.diagnostics) == 2  # too few windows, and |t| < 2
+        assert result.ci_low < result.lambda_ < result.ci_high
+
+    def test_vpin_reports_bucket_and_diagnostic(self, sample_trades):
+        trades = sample_trades
+        with pytest.warns(UserWarning, match="only 1 complete bucket"):
+            vpin = compute_vpin(trades)
+        assert vpin.attrs["bucket_volume"] == pytest.approx(vpin_bucket_volume(trades))
+        assert vpin.attrs["diagnostics"]
+
+
 # ── Order Flow Imbalance ─────────────────────────────────────────────
 
 
@@ -272,7 +588,14 @@ from matplotlib.figure import Figure
 
 from ob_analytics.visualization import _data, plot
 
+# Built at import time (parametrize arguments are evaluated on collection,
+# where a pytest mark does not apply), so the warning is silenced inline.
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", UserWarning)
+    _NO_BUCKET_VPIN = compute_vpin(_trades(["buy"]), bucket_volume=100.0)
 
+
+@pytest.mark.filterwarnings("ignore::UserWarning")
 class TestFlowToxicityPlots:
     def test_plot_vpin_returns_figure(self):
         """plot_vpin returns a Figure."""
@@ -280,6 +603,24 @@ class TestFlowToxicityPlots:
         vpin_df = compute_vpin(trades, bucket_volume=2.0)
         fig = plot("vpin", **_data.prepare_vpin_data(vpin_df))
         assert isinstance(fig, Figure)
+
+    @pytest.mark.parametrize(
+        "vpin_df",
+        [
+            # What compute_vpin returns when the trades fill no bucket.
+            _NO_BUCKET_VPIN,
+            # An untyped empty frame: every column is object dtype.
+            pd.DataFrame(columns=["timestamp_end", "vpin", "vpin_avg"]),
+        ],
+        ids=["typed", "object"],
+    )
+    def test_plot_vpin_empty_draws_no_buckets(self, vpin_df):
+        """Zero buckets draws an empty panel instead of raising."""
+        ax = plot("vpin", **_data.prepare_vpin_data(vpin_df)).axes[0]
+        # The theme places titles on the left; read every slot.
+        title = " ".join(ax.get_title(loc=s) for s in ("left", "center", "right"))
+        assert "no complete buckets" in title
+        assert not ax.patches and not ax.lines
 
     def test_plot_ofi_returns_figure(self):
         """plot_order_flow_imbalance returns a Figure."""

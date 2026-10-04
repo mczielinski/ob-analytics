@@ -18,21 +18,33 @@ Usage::
 from __future__ import annotations
 
 import html as html_mod
+import inspect
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 from loguru import logger
 
-from ob_analytics._utils import ticks_to_price
+from ob_analytics._utils import (
+    lots_to_size,
+    ticks_to_price,
+    ticks_to_price_if_integer,
+)
 from ob_analytics.analytics import order_book
 from ob_analytics.depth import get_spread
 from ob_analytics.pipeline import PipelineResult
 from ob_analytics.visualization import (
+    _BACKEND_MODULES,
+    RENDERERS,
     Level,
+    PlotTheme,
     _data as _viz_data,
+    _kind_text,
+    _load_backend,
+    _same_kind,
     infer_volume_scale,
     plot,
     save_figure,
@@ -40,6 +52,13 @@ from ob_analytics.visualization import (
 
 #: Views recognised by :func:`generate_gallery` / :func:`_project`.
 VIEWS = ("l2", "l3", "both", "comparison")
+
+# How the depth heatmap picks its levels (#303), shared by its L2 and L3 notes.
+_HIDDEN_LEVELS_NOTE = (
+    "Levels that do not change in the window are left out unless no level "
+    'changes; plot_result(result, "depth_heatmap", show_all_depth=True) '
+    "keeps them all."
+)
 
 
 @dataclass
@@ -126,6 +145,27 @@ def _auto_zoom_window(
     return (t_min + quarter, t_min + 2 * quarter)
 
 
+def _window_over(
+    frame: pd.DataFrame,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """Return (*start*, *end*) if it holds a row of *frame*, else *frame*'s span.
+
+    The shared zoom window comes from one clock (events or depth), but some
+    faces are given the depth summary with its first minute dropped.  On a
+    short or sparse capture the two need not overlap, and a window with no
+    rows leaves the face nothing to draw.  A zoom window derived from *frame*
+    alone would not fix that: its middle half can fall between two sparse
+    rows.  So the face keeps the shared window when it can, and otherwise
+    shows all of *frame*.  An empty *frame* returns the window unchanged.
+    """
+    ts = frame["timestamp"]
+    if ts.empty or ts.between(start, end).any():
+        return start, end
+    return ts.min(), ts.max()
+
+
 def _l2(
     key: str,
     title: str,
@@ -194,6 +234,64 @@ def _paired(
     return PlotConcept(key, title, {Level.L2: l2, Level.L3: l3}, note=note)
 
 
+def _compute_settings(metric: Any) -> frozenset[str]:
+    """The keyword names *metric*'s ``compute`` takes after the result."""
+    params = list(inspect.signature(metric.compute).parameters.values())[1:]
+    return frozenset(
+        p.name for p in params if p.kind in (p.KEYWORD_ONLY, p.POSITIONAL_OR_KEYWORD)
+    )
+
+
+def _metric_payload(metric: Any, result: PipelineResult, **settings: Any) -> dict:
+    """Compute *metric* over *result* and prepare its payload.
+
+    Each keyword in *settings* goes to the method that names it: to
+    ``compute`` when its signature has it, otherwise to ``prepare``, so
+    ``plot_result(result, "vpin", bucket_volume=5.0, threshold=0.8)`` sets
+    the bucket size of the measurement and the alert line of the picture.
+    """
+    names = _compute_settings(metric)
+    compute = {k: v for k, v in settings.items() if k in names}
+    prepare = {k: v for k, v in settings.items() if k not in names}
+    return metric.prepare(metric.compute(result, **compute), **prepare)
+
+
+def _metric_panels(result: PipelineResult) -> list[PlotSpec]:
+    """Build one analytic panel per registered metric that applies to *result*.
+
+    A metric registered in :data:`~ob_analytics.metrics.METRICS` becomes a
+    gallery card without any edit here: its ``name`` is the level-less plot
+    concept the panel dispatches on, so a renderer registered at
+    ``(name, None, backend)`` draws it.  A metric whose
+    :attr:`~ob_analytics.protocols.Metric.levels` exclude this run's level is
+    skipped.
+
+    The metric is computed when its panel is prepared, not here, so building
+    the model (which every :func:`plot_result` call does) costs nothing for
+    the metrics it does not draw.  A metric that raises fails only its own
+    card, which says why.
+
+    The metric sees the display-unit *result* the faces render, so its numbers
+    and the axes beside them are in the same units (see :func:`display_result`).
+    """
+    from ob_analytics.metrics import METRICS
+
+    panels: list[PlotSpec] = []
+    for name in METRICS.list():
+        metric = METRICS.get(name)
+        if result.level not in metric.levels:
+            continue
+        panels.append(
+            PlotSpec(
+                metric.name,
+                metric.title,
+                metric.name,
+                partial(_metric_payload, metric, result),
+            )
+        )
+    return panels
+
+
 def _build_l2_gallery_model(
     result: PipelineResult,
     *,
@@ -229,6 +327,9 @@ def _build_l2_gallery_model(
 
     offset = depth["timestamp"].min() + pd.Timedelta(minutes=1)
     depth_summary_offset = depth_summary[depth_summary["timestamp"] >= offset]
+    summary_start, summary_end = _window_over(
+        depth_summary_offset, zoom_start, zoom_end
+    )
 
     concepts: list[PlotConcept] = [
         _l2(
@@ -248,7 +349,8 @@ def _build_l2_gallery_model(
                 "Resting liquidity through time: one horizontal line per price "
                 "level, colored by available volume; the pale line is the "
                 "midprice. Triangles mark executions (aggressor side). The "
-                "native L2 view — aggregate size per price, no order identity."
+                "native L2 view — aggregate size per price, no order identity. "
+                f"{_HIDDEN_LEVELS_NOTE}"
             ),
         ),
     ]
@@ -275,8 +377,8 @@ def _build_l2_gallery_model(
                 {
                     "depth_summary": depth_summary_offset,
                     "trades": trades,
-                    "start_time": zoom_start,
-                    "end_time": zoom_end,
+                    "start_time": summary_start,
+                    "end_time": summary_end,
                 },
                 note=(
                     "The spread as a ribbon (best bid to best ask) with the "
@@ -293,8 +395,8 @@ def _build_l2_gallery_model(
                 _viz_data.prepare_volume_percentiles_data,
                 {
                     "depth_summary": depth_summary_offset,
-                    "start_time": zoom_start,
-                    "end_time": zoom_end,
+                    "start_time": summary_start,
+                    "end_time": summary_end,
                     "volume_scale": volume_scale,
                 },
                 note=(
@@ -320,12 +422,13 @@ def _build_l2_gallery_model(
             )
         )
 
-    return GalleryModel(concepts=concepts, analytics=[])
+    return GalleryModel(concepts=concepts, analytics=_metric_panels(result))
 
 
 #: Price-valued columns per frame, converted from integer ticks to a
-#: quote-currency float for display (issue #155).  Bps and volume columns are
-#: scale-free or size-valued, so they are left as ticks-agnostic numbers.
+#: quote-currency float for display (issue #155).  Bps columns are scale-free
+#: and are left alone; size-valued columns are handled by
+#: :data:`_DISPLAY_SIZE_COLUMNS`.
 _DISPLAY_PRICE_COLUMNS: dict[str, tuple[str, ...]] = {
     "events": ("price",),
     "trades": ("price",),
@@ -333,26 +436,50 @@ _DISPLAY_PRICE_COLUMNS: dict[str, tuple[str, ...]] = {
     "depth_summary": ("best_bid_price", "best_ask_price"),
 }
 
+#: Size-valued columns per frame, converted from integer lots to a base-asset
+#: float for display (issue #226).  ``depth_summary`` carries one volume column
+#: per bps bin and the bin count is configurable, so that frame is matched by
+#: name rather than listed.
+_DISPLAY_SIZE_COLUMNS: dict[str, tuple[str, ...]] = {
+    "events": ("volume", "fill"),
+    "trades": ("volume",),
+    "depth": ("volume",),
+}
+
+
+def _size_columns(df: pd.DataFrame) -> tuple[str, ...]:
+    """Return the size-valued ``depth_summary`` columns present in *df*.
+
+    Every one is named ``..._vol`` or ``..._volNNNbps`` — the per-bin depth
+    columns, whose count follows ``depth_bins``, plus the two at the touch.
+    """
+    return tuple(c for c in df.columns if "vol" in c)
+
 
 def display_result(result: PipelineResult) -> PipelineResult:
-    """Return *result* with price columns converted from ticks to quote currency.
+    """Return *result* with prices and sizes converted to display units.
 
-    Canonical prices are integer ticks (:mod:`ob_analytics.schemas`, issue #155);
-    the plots show the quote currency, so this converts each price column to the
+    Canonical prices are integer ticks (:mod:`ob_analytics.schemas`); the plots
+    show the quote currency, so this converts each price column to the
     ``ticks * tick_size`` float the faces render, reading ``tick_size`` from
     ``result.config``.  :func:`build_gallery_model` calls it once so every face —
     the ``prepare`` helpers, ``order_book`` / ``queue_positions`` called inside
     them, the axes — works in display units; call it yourself before the
     low-level ``prepare.*`` builders when you plot straight from a result.
 
-    Idempotent and legacy-safe: only integer price columns are scaled, so a
-    result whose prices are already floats (a pre-tick file, or a result already
-    passed through here) is returned unchanged.
+    Sizes are converted the same way, from integer lots to the base-asset
+    ``lots * lot_size`` float.
+
+    Idempotent and legacy-safe: only integer columns are scaled, so a result
+    whose prices or sizes are already floats (a pre-tick or pre-lot file, or a
+    result already passed through here) is returned unchanged.
     """
     tick_size = getattr(result.config, "tick_size", 1.0)
     decimals = getattr(result.config, "price_decimals", None)
+    lot_size = getattr(result.config, "lot_size", 1.0)
+    size_decimals = getattr(result.config, "volume_decimals", None)
 
-    def to_display(df: pd.DataFrame, columns: tuple[str, ...]) -> pd.DataFrame:
+    def _scale(df: pd.DataFrame, columns: tuple[str, ...], convert) -> pd.DataFrame:
         present = [
             c
             for c in columns
@@ -362,18 +489,44 @@ def display_result(result: PipelineResult) -> PipelineResult:
             return df
         out = df.copy()
         for column in present:
-            out[column] = ticks_to_price(
-                out[column].to_numpy(), tick_size, decimals=decimals
-            )
+            out[column] = convert(out[column].to_numpy())
         return out
+
+    def to_display(
+        df: pd.DataFrame, price_columns: tuple[str, ...], size_columns: tuple[str, ...]
+    ) -> pd.DataFrame:
+        df = _scale(
+            df,
+            price_columns,
+            lambda a: ticks_to_price(a, tick_size, decimals=decimals),
+        )
+        return _scale(
+            df,
+            size_columns,
+            lambda a: lots_to_size(a, lot_size, decimals=size_decimals),
+        )
 
     return replace(
         result,
-        events=to_display(result.events, _DISPLAY_PRICE_COLUMNS["events"]),
-        trades=to_display(result.trades, _DISPLAY_PRICE_COLUMNS["trades"]),
-        depth=to_display(result.depth, _DISPLAY_PRICE_COLUMNS["depth"]),
+        events=to_display(
+            result.events,
+            _DISPLAY_PRICE_COLUMNS["events"],
+            _DISPLAY_SIZE_COLUMNS["events"],
+        ),
+        trades=to_display(
+            result.trades,
+            _DISPLAY_PRICE_COLUMNS["trades"],
+            _DISPLAY_SIZE_COLUMNS["trades"],
+        ),
+        depth=to_display(
+            result.depth,
+            _DISPLAY_PRICE_COLUMNS["depth"],
+            _DISPLAY_SIZE_COLUMNS["depth"],
+        ),
         depth_summary=to_display(
-            result.depth_summary, _DISPLAY_PRICE_COLUMNS["depth_summary"]
+            result.depth_summary,
+            _DISPLAY_PRICE_COLUMNS["depth_summary"],
+            _size_columns(result.depth_summary),
         ),
     )
 
@@ -403,6 +556,11 @@ def build_gallery_model(
     -------
     GalleryModel
     """
+    # Kept for the hidden-liquidity overlay below, which needs canonical
+    # integer-tick prices (exact equality, and hidden_trades()'s int64 output)
+    # rather than the converted display floats.
+    raw_result = result
+
     # Convert integer-tick prices to the quote currency once, here, so every
     # face renders display prices (issue #155).
     result = display_result(result)
@@ -430,8 +588,70 @@ def build_gallery_model(
     price_from = focus.price_from
     price_to = focus.price_to
 
+    # Iceberg refills and trades against hidden orders (#111), overlaid on the
+    # depth heatmap and per-order activity map so hidden liquidity is visible
+    # without reading the tables (#272). Clipped to the zoom window: a full
+    # LOBSTER day has ~900 suspected icebergs and ~9,600 hidden trades, which
+    # would flood a face meant to show a few minutes -- deliberately narrower
+    # than depth_heatmap/order_activity's own (unclipped) time axis, per the
+    # issue's own instruction to restrict the overlay, not the base plot.
+    # A single bad detector run, unit conversion, or clip must not sink the
+    # gallery (just as a bad metric fails only its own card), so
+    # any failure here just drops the overlay and logs a warning.
+    hidden_liquidity_overlay: dict[str, pd.DataFrame] = {}
+    try:
+        from ob_analytics.hidden_liquidity import (
+            detect_icebergs,
+            hidden_trades as find_hidden_trades,
+        )
+
+        # Detected on raw ticks (exact price equality), then its own price
+        # columns are converted to display units the same way display_result()
+        # converted the core frames -- the overlay must land on the axes it
+        # draws over. Legacy-safe like display_result()'s own _scale: only an
+        # integer (tick) column is converted, so a pre-tick result whose
+        # events/trades already carry display-unit floats is not scaled twice.
+        detection = detect_icebergs(raw_result.events, raw_result.trades)
+        hidden = find_hidden_trades(
+            raw_result.events, raw_result.trades, raw_result.depth_summary
+        )
+        tick_size = getattr(raw_result.config, "tick_size", 1.0)
+        decimals = getattr(raw_result.config, "price_decimals", None)
+
+        icebergs_display = detection.icebergs.assign(
+            price=ticks_to_price_if_integer(
+                detection.icebergs["price"], tick_size, decimals=decimals
+            )
+        )
+        hidden_display = hidden.assign(
+            price=ticks_to_price_if_integer(
+                hidden["price"], tick_size, decimals=decimals
+            ),
+            best_bid_price=ticks_to_price_if_integer(
+                hidden["best_bid_price"], tick_size, decimals=decimals
+            ),
+            best_ask_price=ticks_to_price_if_integer(
+                hidden["best_ask_price"], tick_size, decimals=decimals
+            ),
+        )
+        hidden_liquidity_overlay = _viz_data.prepare_hidden_liquidity_overlay(
+            icebergs_display,
+            detection.slices,
+            hidden_display,
+            raw_result.events,
+            start_time=zoom_start,
+            end_time=zoom_end,
+            price_from=price_from,
+            price_to=price_to,
+        )
+    except Exception as e:  # noqa: BLE001 -- one bad overlay must not sink the gallery
+        logger.warning("Gallery: hidden-liquidity overlay failed: {}", e)
+
     offset = events["timestamp"].min() + pd.Timedelta(minutes=1)
     depth_summary_offset = depth_summary[depth_summary["timestamp"] >= offset]
+    summary_start, summary_end = _window_over(
+        depth_summary_offset, zoom_start, zoom_end
+    )
 
     concepts: list[PlotConcept] = [
         _paired(
@@ -469,13 +689,18 @@ def build_gallery_model(
                 "volume_scale": volume_scale,
                 "price_from": price_from,
                 "price_to": price_to,
+                **hidden_liquidity_overlay,
             },
             note=(
                 "Resting liquidity through time: one horizontal line per "
                 "price level, colored by available volume; the pale line is "
                 "the midprice. Triangles mark executions (aggressor side). "
                 "Gaps mean the level emptied. Pass col_bias<1 to brighten "
-                "thin levels and reveal near-touch structure."
+                "thin levels and reveal near-touch structure. Diamonds mark "
+                "suspected iceberg refills (joined by a line per iceberg) "
+                "and stars mark trades against hidden orders, from #111's "
+                "detectors, inside the zoom window. "
+                f"{_HIDDEN_LEVELS_NOTE}"
             ),
         ),
         _paired(
@@ -509,13 +734,15 @@ def build_gallery_model(
                     "volume_scale": volume_scale,
                     "price_from": price_from,
                     "price_to": price_to,
+                    **hidden_liquidity_overlay,
                 },
             ),
             note=(
                 "Order placement and removal. L2: created/deleted events "
                 "scattered at their price. L3: each order is one lifespan "
                 "from placement to outcome - orange = pulled (flashed), "
-                "green = rested/filled."
+                "green = rested/filled. L3 also overlays iceberg refills "
+                "and trades against hidden orders, from #111's detectors."
             ),
         ),
         _paired(
@@ -636,8 +863,8 @@ def build_gallery_model(
                     {
                         "depth_summary": depth_summary_offset,
                         "events": events,
-                        "start_time": zoom_start,
-                        "end_time": zoom_end,
+                        "start_time": summary_start,
+                        "end_time": summary_end,
                         "volume_scale": volume_scale,
                     },
                 ),
@@ -666,8 +893,8 @@ def build_gallery_model(
                 _viz_data.prepare_volume_percentiles_data,
                 {
                     "depth_summary": depth_summary_offset,
-                    "start_time": zoom_start,
-                    "end_time": zoom_end,
+                    "start_time": summary_start,
+                    "end_time": summary_end,
                     "volume_scale": volume_scale,
                 },
                 note=(
@@ -686,8 +913,8 @@ def build_gallery_model(
                 {
                     "depth_summary": depth_summary_offset,
                     "trades": trades,
-                    "start_time": zoom_start,
-                    "end_time": zoom_end,
+                    "start_time": summary_start,
+                    "end_time": summary_end,
                 },
                 note=(
                     "The spread as a ribbon (best bid to best ask) with the "
@@ -746,7 +973,11 @@ def build_gallery_model(
         )
     )
 
-    # Hidden executions are LOBSTER-only (raw_event_type == 5).
+    # Hidden executions are LOBSTER-only (raw_event_type == 5) -- kept
+    # alongside the general hidden_trades() overlay on depth_heatmap /
+    # order_activity (#272) rather than replaced: the venue's own type-5
+    # label is ground truth where it exists, while hidden_trades() is an
+    # inference that works on any L3 feed.
     if "raw_event_type" in events.columns:
         hidden = events[events["raw_event_type"] == 5]
         if not hidden.empty:
@@ -765,7 +996,7 @@ def build_gallery_model(
                 )
             )
 
-    return GalleryModel(concepts=concepts, analytics=[])
+    return GalleryModel(concepts=concepts, analytics=_metric_panels(result))
 
 
 def plot_result(
@@ -775,6 +1006,7 @@ def plot_result(
     *,
     backend: str = "matplotlib",
     volume_scale: float | None = None,
+    theme: PlotTheme | None = None,
     **overrides: Any,
 ) -> Any:
     """Render one plot *concept* straight from a :class:`PipelineResult`.
@@ -792,16 +1024,23 @@ def plot_result(
         Pipeline output (``events`` / ``trades`` / ``depth`` / ``depth_summary``).
     concept : str
         Concept key, e.g. ``"trade_tape"`` (see :data:`available_concepts`).
+        The name of a registered metric works too; a metric is level-less, so
+        *level* does not apply to it.
     level : Level or str or None
         ``"L2"`` / ``"L3"`` (or a :class:`Level`).  ``None`` picks the concept's
         only level, preferring L2 when both exist.
     backend : str
-        ``"matplotlib"`` (default) or ``"plotly"``.
+        ``"matplotlib"`` (default), ``"plotly"``, or ``"bokeh"``.
     volume_scale : float or None
         Display volume scale; ``None`` auto-infers (as the gallery does).
+    theme : PlotTheme or None
+        Theme for this call, on any backend; ``None`` uses
+        :data:`~ob_analytics.visualization.DEFAULT_THEME`.
     **overrides
         Extra keyword arguments merged over the prepare call (e.g.
-        ``col_bias=0.1`` for the depth heatmap).
+        ``col_bias=0.1`` for the depth heatmap).  For a metric, each goes to
+        its ``compute`` when that names it and to its ``prepare`` otherwise,
+        e.g. ``bucket_volume=5.0, threshold=0.8`` for ``"vpin"``.
 
     Returns
     -------
@@ -815,11 +1054,20 @@ def plot_result(
     """
     model = build_gallery_model(result, volume_scale=volume_scale)
     concept_map = {c.key: c for c in model.concepts}
+    metric_map = {spec.name: spec for spec in model.analytics}
     pc = concept_map.get(concept)
     if pc is None:
+        # A registered metric (issue #140) is a level-less concept: it has no
+        # L2/L3 variants, so it renders straight from its panel.
+        metric_spec = metric_map.get(concept)
+        if metric_spec is not None:
+            data = metric_spec.prepare(**{**metric_spec.prep_kwargs, **overrides})
+            if theme is not None:
+                data["theme"] = theme
+            return plot(concept, None, backend=backend, **data)
         raise KeyError(
             f"Unknown concept {concept!r} for this result. "
-            f"Available: {sorted(concept_map)}"
+            f"Available: {sorted(concept_map) + sorted(metric_map)}"
         )
 
     if level is None:
@@ -836,6 +1084,8 @@ def plot_result(
         )
 
     data = spec.prepare(**{**spec.prep_kwargs, **overrides})
+    if theme is not None:
+        data["theme"] = theme
     return plot(concept, resolved, backend=backend, **data)
 
 
@@ -845,9 +1095,35 @@ def available_concepts(result: PipelineResult) -> dict[str, list[str]]:
     A discoverability companion to :func:`plot_result`: shows what
     ``plot_result(result, concept, level=...)`` can render for this dataset
     (which varies by format -- e.g. ``hidden_executions`` is LOBSTER-only).
+
+    A registered metric is listed too, with an empty level list: a metric is
+    level-less, so ``plot_result(result, "amihud")`` takes no ``level=``.
     """
     model = build_gallery_model(result)
-    return {c.key: sorted(lvl.value for lvl in c.variants) for c in model.concepts}
+    concepts = {c.key: sorted(lvl.value for lvl in c.variants) for c in model.concepts}
+    return {**concepts, **{spec.name: [] for spec in model.analytics}}
+
+
+def bars_panel(bars_df: pd.DataFrame, *, label: str = "") -> PlotSpec:
+    """Build a bars analytic panel for :attr:`GalleryModel.analytics`.
+
+    *bars_df* is a table from :func:`ob_analytics.bars.bars`.  *label* names
+    the rule and threshold it was cut with and is shown in the chart title;
+    the default reads them off the frame.  Prices are drawn as they arrive, so
+    cut the bars from a display-unit trades frame (see :func:`display_result`)
+    when the rest of the gallery is in the quote currency.
+    """
+    label = label or _viz_data.bars_label(bars_df)
+    rule = bars_df.attrs.get("bar_rule")
+    return PlotSpec(
+        # The file stem, so two cuts of the same trades do not overwrite each
+        # other's image; the concept both of them draw under is "bars".
+        f"bars_{rule}" if rule else "bars",
+        f"Bars ({label})" if label else "Bars",
+        "bars",
+        _viz_data.prepare_bars_data,
+        {"bars": bars_df, "label": label},
+    )
 
 
 def vpin_panel(vpin_df: pd.DataFrame, *, threshold: float = 0.7) -> PlotSpec:
@@ -912,6 +1188,21 @@ def ofi_horizon_panel(
     )
 
 
+def transaction_costs_panel(costs: pd.DataFrame, *, window: str = "1min") -> PlotSpec:
+    """Build a transaction-cost panel: effective and realized spread, and impact.
+
+    *costs* is a :func:`~ob_analytics.cost.transaction_costs` frame; *window*
+    is the span the per-trade costs are volume-weighted onto for the lines.
+    """
+    return PlotSpec(
+        "transaction_costs",
+        "Transaction Costs (effective, realized, impact)",
+        "transaction_costs",
+        _viz_data.prepare_transaction_costs_data,
+        {"costs": costs, "window": window},
+    )
+
+
 def kyle_panel(kyle_result: Any) -> PlotSpec:
     """Build a Kyle's-Lambda analytic panel."""
     return PlotSpec(
@@ -950,8 +1241,8 @@ class _Panel:
 
     The render coordinate (``concept``/``level``/``prepare``) drives
     :func:`ob_analytics.visualization.plot`; the display fields
-    (``backend``/``stem``/``label``/...) drive the HTML.  ``rendered`` is set by
-    the render loop and consumed by :func:`_render_panel`.
+    (``backend``/``stem``/``label``/...) drive the HTML.  ``rendered`` and
+    ``reason`` are set by the render loop and consumed by :func:`_render_panel`.
     """
 
     concept: str
@@ -964,6 +1255,7 @@ class _Panel:
     panel_cls: str
     role: str  # "primary" | "secondary" | "equal"
     rendered: bool = False
+    reason: str = ""  # why the panel was not drawn, shown on the card
 
 
 @dataclass
@@ -1125,9 +1417,13 @@ def generate_gallery(
     backends : list of str, optional
         Backends to render.  Defaults to ``["plotly", "matplotlib"]`` when
         plotly is installed (plotly is the primary column), else
-        ``["matplotlib"]``.  In ``comparison`` view the backend axis collapses
-        to a single backend (plotly if available) so the two columns carry
-        L2 vs L3.
+        ``["matplotlib"]``.  Pass ``"bokeh"`` explicitly to add a Bokeh
+        column -- it is not auto-detected like plotly since it only covers
+        the core concepts (``trade_tape``, ``depth_heatmap``,
+        ``book_snapshot``, ``depth_chart``); other concepts render as "Not
+        available" in that column.  In ``comparison`` view the backend axis
+        collapses to a single backend (plotly if available) so the two
+        columns carry L2 vs L3.
     title : str
         Gallery page title.
 
@@ -1161,15 +1457,40 @@ def generate_gallery(
 
     cards = _project(model, view, backends)
 
+    # Load each backend the cards draw once, before the placement check reads
+    # the registry.  The comparison view draws one backend, so it loads one.
+    drawn = list(dict.fromkeys(p.backend for card in cards for p in card.panels))
+    unloaded: dict[str, str] = {}
+    for backend in drawn:
+        try:
+            _load_backend(backend)
+        except Exception as e:  # noqa: BLE001 -- the other backends still draw
+            unloaded[backend] = (
+                str(e)  # a name that was never registered: the error names it
+                if backend not in _BACKEND_MODULES
+                else f"The {backend!r} backend could not be loaded: {e}"
+            )
+    loaded = frozenset(drawn) - unloaded.keys()
+
     # Render each panel once and persist it under <backend>/<stem>.{png,html}.
     rendered_dirs: set[str] = set()
+    logged: set[str] = set()
     for card in cards:
         logger.info("Gallery: generating {}", card.title)
+        # The backend columns of a card share one prepared payload, so the
+        # prepare step runs (and logs) once per face, not once per backend.
+        prepared: dict[tuple[int, int], dict | Exception] = {}
         for panel in card.panels:
+            panel.reason = unloaded.get(panel.backend) or _misplaced(panel, loaded)
+            if panel.reason:
+                if panel.reason not in logged:
+                    logger.warning("Gallery: {}", panel.reason)
+                    logged.add(panel.reason)
+                continue
             if panel.backend not in rendered_dirs:
                 (out / panel.backend).mkdir(parents=True, exist_ok=True)
                 rendered_dirs.add(panel.backend)
-            panel.rendered = _render_and_save(panel, out, plt)
+            panel.rendered = _render_and_save(panel, out, plt, prepared)
 
     html_path = out / "gallery.html"
     _write_gallery_html(html_path, cards, title)
@@ -1177,12 +1498,74 @@ def generate_gallery(
     return html_path
 
 
-def _render_and_save(panel: _Panel, out: Path, plt: Any) -> bool:
-    """Render one panel to a figure and persist it; return success."""
+def _misplaced(panel: _Panel, backends: frozenset[str]) -> str:
+    """Say why *panel* does not match its registered renderers, or return ``""``.
+
+    The model decides how a panel is drawn: a :class:`PlotConcept` in
+    :attr:`GalleryModel.concepts` is drawn at the level of each variant, and a
+    :class:`PlotSpec` in :attr:`GalleryModel.analytics` is drawn level-less.
+    The renderer registry decides it separately, from the level each renderer
+    is registered at.  Only the renderers on *backends*, the gallery's own
+    loaded backends, are read, so the answer does not depend on what else was
+    imported.  The panel does not match when it is the other kind, or when
+    none of *backends* has a renderer at its level.  The text says how to fix
+    the model.  A plot drawn by another of *backends* but not by this one is
+    not a mismatch, and neither is a plot none of them draws, so both return
+    ``""``.
+    """
+    levels = {lvl for lvl, b in RENDERERS.placements(panel.concept) if b in backends}
+    if not levels:
+        return ""
+    registered = f"{panel.concept!r} is registered {_kind_text(levels)}"
+    if not _same_kind(next(iter(levels)), panel.level):
+        if panel.level is None:
+            return (
+                f"{registered}, but the gallery model has it in analytics, which "
+                "is drawn level-less. Add it to GalleryModel.concepts as a "
+                "PlotConcept instead."
+            )
+        return (
+            f"{registered}, but the gallery model has it in concepts, which is "
+            "drawn at a level. Add it to GalleryModel.analytics as a PlotSpec "
+            "instead."
+        )
+    if panel.level is not None and panel.level not in levels:
+        return (
+            f"{registered}, but its PlotConcept has a variant at {panel.level}. "
+            f"Remove that variant, or register a renderer at {panel.level}."
+        )
+    return ""
+
+
+def _render_and_save(
+    panel: _Panel,
+    out: Path,
+    plt: Any,
+    prepared: dict[tuple[int, int], dict | Exception],
+) -> bool:
+    """Render one panel to a figure and persist it; return success.
+
+    *prepared* caches payloads by (prepare function, keyword arguments) so
+    panels of one card that differ only by backend prepare once.  Renderers
+    do not modify their payload, so sharing it is safe.  A prepare that
+    raises is cached as its error, so it is not run again for the next
+    backend.
+    """
+    key = (id(panel.prepare), id(panel.prep_kwargs))
+    if key not in prepared:
+        try:
+            prepared[key] = panel.prepare(**panel.prep_kwargs)
+        except Exception as e:  # noqa: BLE001 -- one bad panel must not sink the gallery
+            logger.warning("Gallery: {} {} failed: {}", panel.backend, panel.stem, e)
+            prepared[key] = e
+    payload = prepared[key]
+    if isinstance(payload, Exception):
+        # Where a metric is computed, so the card says why it has no plot.
+        panel.reason = f"Preparing the data failed: {payload}"
+        return False
     try:
-        data = panel.prepare(**panel.prep_kwargs)
-        fig = plot(panel.concept, panel.level, backend=panel.backend, **data)
-    except Exception as e:  # noqa: BLE001 -- one bad panel must not sink the gallery
+        fig = plot(panel.concept, panel.level, backend=panel.backend, **payload)
+    except Exception as e:  # noqa: BLE001
         logger.warning("Gallery: {} {} failed: {}", panel.backend, panel.stem, e)
         return False
 
@@ -1193,6 +1576,12 @@ def _render_and_save(panel: _Panel, out: Path, plt: Any) -> bool:
             plt.close(fig)
         elif panel.backend == "plotly":
             fig.write_html(f"{target}.html", include_plotlyjs="cdn")
+        elif panel.backend == "bokeh":
+            from bokeh.io import save as bokeh_save
+
+            bokeh_save(
+                fig, filename=f"{target}.html", resources="cdn", title=panel.stem
+            )
         else:  # custom backend: best-effort PNG
             save_figure(fig, f"{target}.png")
         return True
@@ -1214,6 +1603,7 @@ class _BackendStyle:
 _BACKEND_STYLES: dict[str, _BackendStyle] = {
     "plotly": _BackendStyle("Plotly", "plotly-panel"),
     "matplotlib": _BackendStyle("Matplotlib", "mpl-panel"),
+    "bokeh": _BackendStyle("Bokeh", "bokeh-panel"),
 }
 
 
@@ -1223,9 +1613,16 @@ def _render_panel(panel: _Panel, escaped_title: str) -> str:
 
     if not panel.rendered:
         body = '<p class="na">Not available</p>'
+        if panel.reason:
+            body += f'<p class="na-reason">{html_mod.escape(panel.reason)}</p>'
     elif panel.backend == "plotly":
         body = (
             f'<iframe src="plotly/{panel.stem}.html" loading="lazy" '
+            f'title="{escaped_title} ({panel.label})"></iframe>'
+        )
+    elif panel.backend == "bokeh":
+        body = (
+            f'<iframe src="bokeh/{panel.stem}.html" loading="lazy" '
             f'title="{escaped_title} ({panel.label})"></iframe>'
         )
     elif panel.backend == "matplotlib":
@@ -1297,6 +1694,7 @@ h1{{text-align:center;margin-bottom:24px;color:#e94560}}
 .panel h3{{margin-bottom:8px;font-size:.85em;text-transform:uppercase;letter-spacing:1px}}
 .mpl-panel h3{{color:#81c784}}
 .plotly-panel h3{{color:#ffb74d}}
+.bokeh-panel h3{{color:#4fc3f7}}
 .panel img{{max-width:100%;height:auto;border-radius:4px;cursor:pointer;transition:transform .2s}}
 .panel img:hover{{transform:scale(1.02)}}
 .panel iframe{{width:100%;border:none;border-radius:4px;background:#1e1e1e}}
@@ -1304,6 +1702,7 @@ h1{{text-align:center;margin-bottom:24px;color:#e94560}}
 .panel-secondary iframe{{height:300px}}
 .panel-equal iframe{{height:500px}}
 .panel .na{{color:#666;font-style:italic;margin-top:40px}}
+.panel .na-reason{{color:#9fb3c8;font-size:.9em;margin:8px 16px 0}}
 .empty{{text-align:center;color:#888;font-style:italic;margin-top:40px}}
 .overlay{{display:none;position:fixed;top:0;left:0;width:100%;height:100%;
   background:rgba(0,0,0,.9);z-index:1000;justify-content:center;

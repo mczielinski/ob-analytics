@@ -89,6 +89,22 @@ def price_to_ticks(price: object, tick_size: float) -> np.ndarray:
     return ticks.astype(np.int64)
 
 
+# How far a price may sit from a whole number of ticks, in ticks, and still
+# count as on the grid.  Large enough to absorb float division noise
+# (0.036 / 0.001 is 35.99999999999999), far below any real price difference.
+TICK_GRID_TOLERANCE = 1e-6
+
+
+def off_tick_grid(price: object, tick_size: float) -> np.ndarray:
+    """Return a boolean mask of the prices that are not a whole number of ticks.
+
+    :func:`price_to_ticks` rounds to the nearest tick, so it would move every
+    price this mask marks.  *price* is a scalar or any array-like of floats.
+    """
+    in_ticks = np.asarray(price, dtype=np.float64) / tick_size
+    return np.abs(in_ticks - np.round(in_ticks)) > TICK_GRID_TOLERANCE
+
+
 def ticks_to_price(
     ticks: object, tick_size: float, *, decimals: int | None = None
 ) -> np.ndarray:
@@ -101,6 +117,88 @@ def ticks_to_price(
     """
     price = np.asarray(ticks, dtype=np.float64) * tick_size
     return price if decimals is None else np.round(price, decimals)
+
+
+def ticks_to_price_if_integer(
+    prices: pd.Series, tick_size: float, *, decimals: int | None = None
+) -> pd.Series | np.ndarray:
+    """Convert *prices* from ticks to a quote-currency price, only if they are ticks.
+
+    A column of integer dtype is a whole number of ticks and is converted with
+    :func:`ticks_to_price`.  Any other dtype is already a quote-currency price
+    (a pre-tick file, or a frame already converted) and is returned unchanged,
+    so converting twice never rescales a price by ``tick_size`` again.
+    """
+    if not pd.api.types.is_integer_dtype(prices):
+        return prices
+    return ticks_to_price(prices.to_numpy(), tick_size, decimals=decimals)
+
+
+# ---------------------------------------------------------------------------
+# Size / lot conversions (issue #226)
+# ---------------------------------------------------------------------------
+#
+# Sizes follow prices: a canonical ``volume`` or ``fill`` is a whole number of
+# lots (``int64``) plus a per-instrument ``lot_size``, the same shape #155 gave
+# prices.  The reason is the same one, and it was found the same way.  A float
+# size is not closed under the arithmetic the depth engine does to it: the
+# per-level volume is a running sum of adds, cancels and fills, and when the
+# last order leaves a level the float sum does not return to exactly zero.  It
+# lands on dust such as ``5.55e-17``, the level stays "live", and the level is
+# reported as the best bid or ask ahead of the real one.  On the bundled
+# Bitstamp sample that corrupted the best bid on 8.2% of rows and the best ask
+# on 9.6%.  Integer lots cancel exactly, so the level empties or it does not.
+#
+# This is also what the conventions the schema already follows do: Databento
+# carries ``size`` as an integer and rejects a fractional one outright, and a
+# Nautilus ``Quantity`` is fixed-point with an integer ``raw``.
+
+
+def lot_multiplier(lot_size: float) -> int | None:
+    """Return ``round(1 / lot_size)`` when the lot is a reciprocal integer.
+
+    The size counterpart of :func:`tick_multiplier`, and exact for the same
+    reason: a lot such as ``1e-8`` (a satoshi), ``0.001`` or ``1`` (whole
+    shares) has an exact integer inverse, so a size converts by an integer
+    multiply-and-round rather than a float divide.  A lot with no integer
+    inverse returns ``None``; :func:`size_to_lots` then divides.
+    """
+    inv = 1.0 / lot_size
+    nearest = round(inv)
+    if nearest > 0 and abs(inv - nearest) <= 1e-9 * nearest:
+        return int(nearest)
+    return None
+
+
+def size_to_lots(size: object, lot_size: float) -> np.ndarray:
+    """Convert a base-asset *size* to an ``int64`` whole number of lots.
+
+    ``lots = round(size / lot_size)``, through an exact integer multiplier when
+    the lot has one (:func:`lot_multiplier`).  *size* is any array-like of
+    finite non-negative floats (a volume column is non-null and non-negative by
+    contract).
+    """
+    arr = np.asarray(size, dtype=np.float64)
+    multiplier = lot_multiplier(lot_size)
+    lots = (
+        np.round(arr * multiplier)
+        if multiplier is not None
+        else np.round(arr / lot_size)
+    )
+    return lots.astype(np.int64)
+
+
+def lots_to_size(
+    lots: object, lot_size: float, *, decimals: int | None = None
+) -> np.ndarray:
+    """Convert integer *lots* back to a base-asset ``float64`` size.
+
+    ``size = lots * lot_size``.  Pass *decimals* to round the result, which the
+    display layer and the round-trip writers do so a reconstructed size reads as
+    the venue's own quantity rather than ``0.30000000000000004``.
+    """
+    size = np.asarray(lots, dtype=np.float64) * lot_size
+    return size if decimals is None else np.round(size, decimals)
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +318,7 @@ def epoch_to_datetime(series: pd.Series, unit: str) -> pd.Series:
 
     Epoch integers count from the Unix epoch in UTC, so the values are already
     on the shared clock; this attaches the UTC zone and fixes the unit at
-    nanoseconds (see the canonical time model, issue #154).
+    nanoseconds, which is the canonical time model.
 
     Parameters
     ----------
@@ -274,7 +372,7 @@ def seconds_after_midnight_to_datetime(
     the start of the trading day (midnight *local* time), with no receive clock
     and no time zone.  Placing them on the shared UTC clock therefore needs both
     the session date and the venue's time zone: the seconds are anchored to
-    *date* in *tz*, then converted to UTC (see issue #154).
+    *date* in *tz*, then converted to UTC.
 
     Parameters
     ----------

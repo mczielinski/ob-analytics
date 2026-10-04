@@ -18,61 +18,95 @@ import heapq
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from enum import Enum
+from typing import Any, TypedDict
 
 import numpy as np
 import pandas as pd
 from loguru import logger
 
 from ob_analytics import _engine_frames, engine
-from ob_analytics._utils import validate_columns, validate_non_empty
+from ob_analytics._utils import ticks_to_price, validate_columns, validate_non_empty
 from ob_analytics.depth import price_level_volume
-from ob_analytics.protocols import FeedType
-from ob_analytics.schemas import INGEST_SEQ_COLUMN, SEQUENCE_COLUMN
+from ob_analytics.protocols import Clocks, FeedType, SequenceKind, TradeAttribution
+from ob_analytics.schemas import (
+    INGEST_SEQ_COLUMN,
+    ORIGIN_COLUMN,
+    SEQUENCE_COLUMN,
+    SNAPSHOT_ORIGIN,
+    time_order_keys,
+)
+
+
+def _row_standing_before(
+    orders: pd.DataFrame, depth_summary: pd.DataFrame
+) -> np.ndarray:
+    """Find the last ``depth_summary`` row strictly before each order.
+
+    "Before" is the canonical total order
+    (:func:`~ob_analytics.schemas.time_order_keys`): ``timestamp`` first, then
+    the tie-break keys that both frames carry.  ``event_id`` is not a clock --
+    a loader may number its events in another order, such as by order id -- so
+    it only decides between rows at the same instant.  The ``depth_summary``
+    row that carries the order's own keys is the book *after* the order, so it
+    does not count.  The result holds a row position in *depth_summary* for
+    each row of *orders*, in the same order, and ``-1`` for an order with no
+    earlier row or no timestamp.
+    """
+    keys = [k for k in time_order_keys(depth_summary) if k in orders.columns]
+    n_quotes = len(depth_summary)
+    # At equal keys an order sorts ahead of the depth_summary rows, so the
+    # rows written by its own event are not read as standing before it.
+    both = pd.concat(
+        [
+            depth_summary[keys].assign(_is_order=1),
+            orders[keys].assign(_is_order=0),
+        ],
+        ignore_index=True,
+    )
+    both = both.sort_values([*keys, "_is_order"], kind="stable")
+    source = both.index.to_numpy()
+    is_order = source >= n_quotes
+
+    # For each position in the merged order, the source row of the last
+    # depth_summary row at or before it (-1 while there is none yet).
+    last_quote = np.maximum.accumulate(np.where(is_order, -1, np.arange(len(both))))
+    last_quote = np.where(last_quote >= 0, source[last_quote], -1)
+
+    standing = np.full(len(orders), -1, dtype=np.int64)
+    standing[source[is_order] - n_quotes] = last_quote[is_order]
+    # A missing timestamp sorts after every row; it has no book before it.
+    standing[orders["timestamp"].isna().to_numpy()] = -1
+    return standing
 
 
 def _event_diff_bps(
-    events: pd.DataFrame, depth_summary: pd.DataFrame, direction: int
+    orders: pd.DataFrame,
+    standing: np.ndarray,
+    depth_summary: pd.DataFrame,
+    direction: int,
 ) -> pd.DataFrame:
-    """Per-event aggressiveness in BPS vs the contemporaneous best price.
+    """Per-order aggressiveness in BPS vs the best price standing before it.
 
-    *direction* is ``1`` for bids, ``-1`` for asks. Helper for
-    :func:`order_aggressiveness`.
+    *standing* is :func:`_row_standing_before` for *orders*.  *direction* is
+    ``1`` for bids, ``-1`` for asks. Helper for :func:`order_aggressiveness`.
     """
     side = "bid" if direction == 1 else "ask"
-    orders = events[
-        (events["direction"] == side)
-        & (events["action"] != "changed")
-        & events["type"].isin(["flashed-limit", "resting-limit"])
-    ].sort_values(by="timestamp", kind="stable")
-
-    missing = ~orders["timestamp"].isin(depth_summary["timestamp"])
-    if missing.any():
-        logger.debug(
-            "order_aggressiveness: {}/{} {} order timestamps not in "
-            "depth_summary (merge_asof will handle gracefully)",
-            missing.sum(),
-            len(orders),
-            side,
-        )
-
     best_price_col = f"best_{side}_price"
-
-    depth_summary_sorted = depth_summary.sort_values("event_id")
-    orders = orders.sort_values("event_id")
-
-    merged = pd.merge_asof(
-        orders,
-        depth_summary_sorted[["event_id", best_price_col]],
-        on="event_id",
-        direction="backward",
-        allow_exact_matches=False,
+    has_quote = (orders["direction"] == side).to_numpy() & (standing >= 0)
+    merged = orders[has_quote]
+    best = (
+        depth_summary[best_price_col].iloc[standing[has_quote]].set_axis(merged.index)
     )
 
-    merged = merged.dropna(subset=[best_price_col]).copy()
-    best = merged[best_price_col]
-
     diff_price = direction * (merged["price"] - best)
+    # A distance from the touch has no meaning when the touch is not a
+    # tradeable price, and dividing by it yields a signed infinity that then
+    # travels through every downstream mean.  The bundled Bitstamp snapshot
+    # carries orders priced at zero (``audit`` reports them as
+    # ``nonpositive_price``), and the crossed-level eviction can leave one of
+    # them as the reported best, so this is reachable on real data.
+    best = best.where(best > 0)
     diff_bps = 10000 * diff_price / best
     return pd.DataFrame({"event_id": merged["event_id"], "diff_bps": diff_bps})
 
@@ -82,14 +116,22 @@ def order_aggressiveness(
 ) -> pd.DataFrame:
     """Calculate order aggressiveness with respect to the best bid or ask in BPS.
 
+    Each new limit order is measured against the best price on its own side of
+    the book as it stood just before the order arrived: the last
+    ``depth_summary`` row strictly earlier in the canonical event order
+    (:func:`~ob_analytics.schemas.time_order_keys` -- ``timestamp``, then
+    ``event_id`` between rows at the same instant).  A positive value means the
+    order improved on that price, a negative one sat behind it.
+
     Parameters
     ----------
     events : pandas.DataFrame
         The events DataFrame (must contain ``direction``, ``action``, ``type``,
         ``timestamp``, ``event_id``, ``price`` columns).
     depth_summary : pandas.DataFrame
-        The order book summary statistics DataFrame (must contain ``timestamp``
-        and ``event_id`` columns).
+        The order book summary statistics DataFrame (must contain
+        ``timestamp`` and the ``best_bid_price`` / ``best_ask_price`` columns;
+        an ``event_id`` column orders rows that share a timestamp).
 
     Returns
     -------
@@ -107,8 +149,21 @@ def order_aggressiveness(
         "order_aggressiveness(depth_summary)",
     )
 
-    bid_diff = _event_diff_bps(events, depth_summary, 1)
-    ask_diff = _event_diff_bps(events, depth_summary, -1)
+    orders = events[
+        (events["action"] != "changed")
+        & events["type"].isin(["flashed-limit", "resting-limit"])
+    ]
+    missing = ~orders["timestamp"].isin(depth_summary["timestamp"])
+    if missing.any():
+        logger.debug(
+            "order_aggressiveness: {}/{} order timestamps not in "
+            "depth_summary (each is read against the last earlier row)",
+            missing.sum(),
+            len(orders),
+        )
+    standing = _row_standing_before(orders, depth_summary)
+    bid_diff = _event_diff_bps(orders, standing, depth_summary, 1)
+    ask_diff = _event_diff_bps(orders, standing, depth_summary, -1)
     # Work on a copy: the caller's frame must not grow columns as a side
     # effect (the merges below already produce new frames).
     events = events.copy()
@@ -151,8 +206,8 @@ def trade_impacts(trades: pd.DataFrame) -> pd.DataFrame:
         ``id``, ``min_price``, ``max_price``, ``vwap``, ``hits``, ``vol``,
         ``start_time``, ``end_time``, ``dir``.  The price-valued columns
         (``min_price``, ``max_price``, ``vwap``) are in the same integer-tick
-        units as ``trades["price"]`` (issue #155); multiply by ``tick_size`` for
-        the quote currency.
+        units as ``trades["price"]``; multiply by ``tick_size`` for the quote
+        currency.
     """
     validate_columns(
         trades,
@@ -203,6 +258,13 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
     Classifies each order as one of: *market*, *resting-limit*,
     *flashed-limit*, or *market-limit*, based on how the order interacts
     with the book over its lifetime.
+
+    *market* and *market-limit* mark takers, so they need the trades' taker
+    ids.  A feed that shows resting orders only (see
+    :class:`~ob_analytics.protocols.TradeAttribution`) has none, and no order
+    is labelled either; that is the feed, not a session without market orders.
+    LOBSTER fills its taker ids with a guess, so its labels are only as good
+    as the guess.
 
     Parameters
     ----------
@@ -400,6 +462,27 @@ def uncross_book_sides(
     return bids, asks
 
 
+class OrderBookSnapshot(TypedDict):
+    """The order book at one instant, as :func:`order_book` returns it.
+
+    A plain dictionary at run time; the type names its three fixed keys so
+    that callers indexing it get a DataFrame rather than a wide union.
+
+    Attributes
+    ----------
+    timestamp : datetime.datetime or pandas.Timestamp
+        The instant the book was evaluated at.
+    bids : pandas.DataFrame
+        Active bid orders, best first.
+    asks : pandas.DataFrame
+        Active ask orders, best last.
+    """
+
+    timestamp: datetime | pd.Timestamp
+    bids: pd.DataFrame
+    asks: pd.DataFrame
+
+
 def order_book(
     events: pd.DataFrame,
     tp: datetime | None = None,
@@ -408,7 +491,7 @@ def order_book(
     min_bid: float = 0,
     max_ask: float = np.inf,
     uncross: bool = False,
-) -> dict[str, datetime | pd.Timestamp | pd.DataFrame]:
+) -> OrderBookSnapshot:
     """Reconstruct the order book at a specific point in time.
 
     The reconstruction itself is :func:`ob_analytics.engine.book_state`; this
@@ -442,7 +525,7 @@ def order_book(
 
     Returns
     -------
-    dict[str, datetime.datetime or pandas.DataFrame]
+    OrderBookSnapshot
         A dictionary containing:
         - 'timestamp': The evaluation timestamp.
         - 'asks': DataFrame of active ask orders.
@@ -570,6 +653,7 @@ def detect_sequence_gaps(
     sequence_col: str = SEQUENCE_COLUMN,
     order_col: str = INGEST_SEQ_COLUMN,
     group_cols: Sequence[str] = _SEQUENCE_GROUP_COLUMNS,
+    kind: SequenceKind = SequenceKind.CONTIGUOUS,
 ) -> SequenceGapReport:
     """Report missing or out-of-order venue sequence numbers in *frame*.
 
@@ -588,6 +672,11 @@ def detect_sequence_gaps(
         present in *frame* are used; with none present the whole frame is one
         channel.  Sequences from different channels are not comparable, so each
         group is scored on its own.
+    kind : SequenceKind
+        What the sequence promises.  With
+        :attr:`~ob_analytics.protocols.SequenceKind.MONOTONIC` a skipped number
+        is normal, so nothing is counted as missing and only steps that do not
+        rise are reported.
 
     Returns
     -------
@@ -636,16 +725,20 @@ def detect_sequence_gaps(
             continue
 
         diffs = np.diff(uniq)
-        gap_steps = diffs[diffs > 1] - 1
-        if gap_steps.size:
-            n_missing += int(gap_steps.sum())
-            max_gap = max(max_gap, int(gap_steps.max()))
-        n_out_of_order += int(np.count_nonzero(diffs <= 0))
+        broken = diffs <= 0
+        n_out_of_order += int(np.count_nonzero(broken))
+        # A skip is a dropped message only when every message adds one.
+        if kind is SequenceKind.CONTIGUOUS:
+            gap_steps = diffs[diffs > 1] - 1
+            if gap_steps.size:
+                n_missing += int(gap_steps.sum())
+                max_gap = max(max_gap, int(gap_steps.max()))
+            broken |= diffs > 1
 
         if first_break is None:
-            broken = np.nonzero((diffs > 1) | (diffs <= 0))[0]
-            if broken.size:
-                first_break = int(uniq[broken[0]])
+            where = np.nonzero(broken)[0]
+            if where.size:
+                first_break = int(uniq[where[0]])
 
     return SequenceGapReport(
         n_sequenced, n_updates, n_missing, n_out_of_order, max_gap, first_break
@@ -752,11 +845,392 @@ def _crossed_time_fraction(best: pd.DataFrame) -> tuple[float, int]:
     return crossed_time / total, episodes
 
 
+# ---------------------------------------------------------------------------
+# Stale resting orders
+# ---------------------------------------------------------------------------
+
+# How long a venue may take to report an order after a trade shows it is gone.
+# A diff feed lags: a filled or cancelled order keeps resting until its own
+# report arrives.  On the bundled Bitstamp sample that report comes a median
+# 23 ms and a 95th percentile 234 ms after the trade, and the two orders it never
+# arrives for outlive the trade by more than 25 minutes.  One second sits well
+# clear of both, so the threshold does not need tuning per feed.
+STALE_GRACE: pd.Timedelta = pd.Timedelta(seconds=1)
+
+
+@dataclass(frozen=True)
+class StaleOrder:
+    """A resting order a trade printed through, which the venue did not report.
+
+    A matching engine cannot print a trade at a price worse than a resting order
+    on the other side of it.  So a trade above a resting ask, or below a resting
+    bid, shows that the order had already left the book.  When the venue then
+    does not report the order again within a grace period, the rebuilt book goes
+    on holding an order that is not there.
+
+    Attributes
+    ----------
+    id : int or str
+        The order id, as the feed writes it: an integer on most venues, a UUID
+        string on Independent Reserve.
+    direction : str
+        ``"bid"`` or ``"ask"``.
+    price : float
+        The price the order rests at, in the quote currency
+        (``ticks * tick_size``).
+    disproved_at : pandas.Timestamp
+        The time of the first trade that printed through it.
+    stale_seconds : float
+        Seconds from that trade to the order's next event row, or to the end of
+        the capture when it has none.
+    touch_seconds : float
+        Seconds of that span in which the order's price was the best price on
+        its side of the faithful book: how long it held the touch after the
+        trade showed it was gone.
+    """
+
+    id: int | str
+    direction: str
+    price: float
+    disproved_at: pd.Timestamp
+    stale_seconds: float
+    touch_seconds: float
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the order as a plain, JSON-serialisable dict."""
+        return {
+            "id": self.id,
+            "direction": self.direction,
+            "price": self.price,
+            "disproved_at": self.disproved_at.isoformat(),
+            "stale_seconds": self.stale_seconds,
+            "touch_seconds": self.touch_seconds,
+        }
+
+
+def _capture_end_ns(events: pd.DataFrame, trades: pd.DataFrame) -> int:
+    """The last instant either frame covers, in UTC nanoseconds."""
+    ends = [
+        int(frame["timestamp"].astype("int64").max())
+        for frame in (events, trades)
+        if not frame.empty
+    ]
+    return max(ends)
+
+
+def _range_extreme(
+    values: np.ndarray, lo: np.ndarray, hi: np.ndarray, *, highest: bool
+) -> np.ndarray:
+    """Max (or min) of ``values[lo[i]:hi[i]]`` for every ``i``; needs ``hi > lo``.
+
+    A sparse table answers every range in constant time, so the cost does not
+    grow with how many trades an order rests across.
+    """
+    reduce = np.maximum if highest else np.minimum
+    length = hi - lo
+    level = np.floor(np.log2(length)).astype(np.int64)
+    table = [values]
+    width = 1
+    while 2 * width <= int(length.max()):
+        prev = table[-1]
+        table.append(reduce(prev[:-width], prev[width:]))
+        width *= 2
+    out = np.empty(lo.size, dtype=values.dtype)
+    for k in np.unique(level):
+        rows = level == k
+        span = 1 << int(k)
+        out[rows] = reduce(table[k][lo[rows]], table[k][hi[rows] - span])
+    return out
+
+
+def _stale_spans(
+    events: pd.DataFrame, trades: pd.DataFrame, grace: pd.Timedelta, end_ns: int
+) -> pd.DataFrame:
+    """Each order's earliest resting span that a trade printed through.
+
+    A span runs from a ``created`` or ``changed`` row that leaves size on the
+    book to the order's next row, or to *end_ns*.  It is stale when a trade
+    prints through its price more than *grace* before the span ends.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns ``id``, ``is_ask``, ``price`` (ticks), ``disproved_ns`` and
+        ``end_ns``; one row per stale order.
+    """
+    empty = pd.DataFrame(
+        {
+            "id": pd.Series(dtype=np.int64),
+            "is_ask": pd.Series(dtype=bool),
+            "price": pd.Series(dtype=np.float64),
+            "disproved_ns": pd.Series(dtype=np.int64),
+            "end_ns": pd.Series(dtype=np.int64),
+        }
+    )
+    rows = events
+    if "type" in rows.columns:
+        # Market orders never rest; the price-level rebuild skips them too.
+        rows = rows[rows["type"] != "market"]
+    if rows.empty or trades.empty:
+        return empty
+    rows = rows.sort_values(["id", *time_order_keys(rows)], kind="stable")
+
+    ids = rows["id"].to_numpy()
+    ts = rows["timestamp"].astype("int64").to_numpy()
+    ends = np.full(ts.size, end_ns, dtype=np.int64)
+    same_order = ids[1:] == ids[:-1]
+    ends[:-1] = np.where(same_order, ts[1:], end_ns)
+
+    # A non-positive price is not a tradeable level, so no trade can print
+    # through it.
+    resting = (
+        (rows["action"] != "deleted").to_numpy()
+        & (rows["volume"] > 0).to_numpy()
+        & (rows["price"] > 0).to_numpy()
+    )
+    ids, ts, ends = ids[resting], ts[resting], ends[resting]
+    prices = rows["price"].to_numpy(dtype=np.float64)[resting]
+    is_ask = (rows["direction"] == "ask").to_numpy()[resting]
+
+    ordered = trades.sort_values("timestamp", kind="stable")
+    t_ns = ordered["timestamp"].astype("int64").to_numpy()
+    t_px = ordered["price"].to_numpy(dtype=np.float64)
+
+    # Only trades strictly after the row count: a trade stamped in the same
+    # instant as the row cannot be put before or after it.  And only trades
+    # more than *grace* before the span ends, so an order the venue reports
+    # promptly is never flagged.
+    lo = np.searchsorted(t_ns, ts, side="right")
+    hi = np.searchsorted(t_ns, ends - int(grace.value), side="left")
+    has_trades = hi > lo
+    if not has_trades.any():
+        return empty
+    lo, hi = lo[has_trades], hi[has_trades]
+    ids, ends = ids[has_trades], ends[has_trades]
+    prices, is_ask = prices[has_trades], is_ask[has_trades]
+
+    highest = _range_extreme(t_px, lo, hi, highest=True)
+    lowest = _range_extreme(t_px, lo, hi, highest=False)
+    through = np.where(is_ask, highest > prices, lowest < prices)
+    if not through.any():
+        return empty
+
+    disproved = []
+    for i in np.nonzero(through)[0]:
+        window = t_px[lo[i] : hi[i]]
+        hit = window > prices[i] if is_ask[i] else window < prices[i]
+        disproved.append(t_ns[lo[i] + int(np.argmax(hit))])
+
+    spans = pd.DataFrame(
+        {
+            "id": ids[through],
+            "is_ask": is_ask[through],
+            "price": prices[through],
+            "disproved_ns": np.asarray(disproved, dtype=np.int64),
+            "end_ns": ends[through],
+        }
+    )
+    first = spans.groupby("id", sort=False)["disproved_ns"].idxmin()
+    return spans.loc[first].reset_index(drop=True)
+
+
+def _stale_orders(
+    spans: pd.DataFrame, best: pd.DataFrame, end_ns: int, tick_size: float
+) -> tuple[StaleOrder, ...]:
+    """Measure how long each stale span held the touch, worst first."""
+    bt = best["timestamp"].astype("int64").to_numpy()
+    held_until = np.append(bt[1:], end_ns)
+    touch = {True: best["best_ask"].to_numpy(), False: best["best_bid"].to_numpy()}
+    found = []
+    for oid, is_ask, price, disproved, end in zip(
+        spans["id"].to_numpy(),
+        spans["is_ask"].to_numpy(),
+        spans["price"].to_numpy(),
+        spans["disproved_ns"].to_numpy(),
+        spans["end_ns"].to_numpy(),
+        strict=True,
+    ):
+        overlap = np.minimum(held_until, end) - np.maximum(bt, disproved)
+        at_touch = (touch[bool(is_ask)] == price) & (overlap > 0)
+        found.append(
+            StaleOrder(
+                # A NumPy scalar becomes the plain Python value, so the
+                # report serialises to JSON.
+                id=oid.item() if isinstance(oid, np.generic) else oid,
+                direction="ask" if is_ask else "bid",
+                price=float(ticks_to_price(price, tick_size)),
+                disproved_at=pd.Timestamp(int(disproved), tz="UTC"),
+                stale_seconds=int(end - disproved) / 1e9,
+                touch_seconds=float(overlap[at_touch].sum()) / 1e9,
+            )
+        )
+    found.sort(key=lambda o: (o.touch_seconds, o.stale_seconds), reverse=True)
+    return tuple(found)
+
+
+def detect_stale_orders(
+    events: pd.DataFrame,
+    trades: pd.DataFrame,
+    *,
+    grace: pd.Timedelta = STALE_GRACE,
+    depth: pd.DataFrame | None = None,
+    tick_size: float = 1.0,
+) -> tuple[StaleOrder, ...]:
+    """Find resting orders a trade printed through that the venue left in place.
+
+    A trade above a resting ask, or below a resting bid, shows that the order
+    had already left the book: a matching engine fills the better price first.
+    The venue normally reports the order within milliseconds.  An order it does
+    not report again within *grace* stays in the rebuilt book although it is no
+    longer at the venue, and distorts the spread, the depth and the queue from
+    then on.
+
+    This only reports.  It does not change what :func:`order_book` returns: the
+    test needs to know what the feed said *after* the trade, which a live
+    capture cannot know in time.
+
+    Parameters
+    ----------
+    events : pandas.DataFrame
+        Order events with ``id``, ``timestamp``, ``price``, ``volume``,
+        ``direction`` and ``action``.  Rows typed ``market`` (see
+        :func:`set_order_types`) are skipped when a ``type`` column is present.
+    trades : pandas.DataFrame
+        Trades with ``timestamp`` and ``price``, in the same price units as
+        *events*.
+    grace : pandas.Timedelta, optional
+        How long after the trade the venue may take to report the order.
+        Defaults to :data:`STALE_GRACE` (one second).
+    depth : pandas.DataFrame, optional
+        The faithful price-level-volume frame, used to measure how long each
+        stale order held the touch.  Computed from *events* with
+        :func:`~ob_analytics.depth.price_level_volume` when ``None`` and an
+        order is found.
+    tick_size : float, optional
+        Quote-currency size of one price tick, so the reported prices read in
+        the quote currency.  Leave at ``1.0`` to report them in the units of
+        ``events["price"]``.
+
+    Returns
+    -------
+    tuple of StaleOrder
+        Worst first: the longest time at the touch, then the longest time
+        stale.  Empty when the venue reported every order in time.
+    """
+    validate_columns(
+        events,
+        {"id", "timestamp", "price", "volume", "direction", "action"},
+        "detect_stale_orders(events)",
+    )
+    validate_columns(trades, {"timestamp", "price"}, "detect_stale_orders(trades)")
+    if events.empty or trades.empty:
+        return ()
+    end_ns = _capture_end_ns(events, trades)
+    spans = _stale_spans(events, trades, grace, end_ns)
+    if spans.empty:
+        return ()
+    if depth is None:
+        depth = price_level_volume(events)
+    return _stale_orders(spans, _faithful_best_series(depth), end_ns, tick_size)
+
+
+class Severity(str, Enum):
+    """How much a failed data-quality check matters.
+
+    A check carries its severity so the policy — what fails a run — lives with
+    the measurement rather than in each caller.  The enum mixes in ``str``
+    (``Severity.ERROR == "error"``), which keeps CLI and JSON output plain.
+
+    Attributes
+    ----------
+    ERROR
+        The data contradicts something that must hold (a duplicate
+        ``event_id``, a dropped venue message, a negative volume).  Any failing
+        error check fails the run.
+    WARNING
+        A signal worth reading before trusting the feed, but one a sound
+        capture can legitimately show (orders resting before the capture
+        began, zero-priced levels, messages reordered in transit).  Fails the
+        run only under ``ob-analytics audit --strict``.
+    INFO
+        Reported for context; never fails a run.
+    """
+
+    ERROR = "error"
+    WARNING = "warning"
+    INFO = "info"
+
+
+@dataclass(frozen=True)
+class QualityCheck:
+    """One named data-quality check and how it read on this run.
+
+    Attributes
+    ----------
+    name : str
+        Stable identifier, matching the summary field it reads
+        (e.g. ``"duplicate_event_ids"``).
+    passed : bool
+        Whether the data satisfied the check.
+    severity : Severity
+        What a failure means (see :class:`Severity`).
+    detail : str
+        One line saying what was found and how to read it.
+    """
+
+    name: str
+    passed: bool
+    severity: Severity
+    detail: str
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the check as a plain, JSON-serialisable dict."""
+        return {
+            "name": self.name,
+            "passed": self.passed,
+            "severity": str(self.severity.value),
+            "detail": self.detail,
+        }
+
+
+# A matched book that is crossed for less than this share of session time is
+# treated as uncrossed: floating-point ties at the touch, not a defect.
+CROSSED_TOLERANCE_PCT: float = 0.05
+
+# How much a crossed book matters, by feed type.  A matched book and a
+# price-level book must not cross; a diff feed can, faithfully.  An undeclared
+# feed type is scored between the two.
+_CROSSED_SEVERITY: dict[FeedType, Severity] = {
+    FeedType.MATCHED_BOOK: Severity.ERROR,
+    FeedType.PRICE_LEVELS: Severity.ERROR,
+    FeedType.DIFF_FEED: Severity.INFO,
+}
+
+# For the feed types that must not cross: their name in the crossing note, and
+# the most likely cause of a crossing.
+_MUST_NOT_CROSS: dict[FeedType, tuple[str, str]] = {
+    FeedType.MATCHED_BOOK: ("a matched book", "check reconstruction/data"),
+    FeedType.PRICE_LEVELS: (
+        "price levels",
+        "most often the capture kept a level the venue removed",
+    ),
+}
+
+# Above this share, unresolved maker/taker attribution stops being incidental
+# (trades against orders that were resting before the capture began) and starts
+# suggesting the trades and events do not describe the same session.
+UNMATCHED_TRADES_WARN_PCT: float = 5.0
+
+
 @dataclass(frozen=True)
 class DataQualitySummary:
     """Per-run data-quality metrics for a reconstructed session.
 
     Built by :func:`data_quality_summary`.  All percentages are 0–100 floats.
+
+    The fields are the measurements; :attr:`checks` turns them into pass/fail
+    verdicts with a :class:`Severity` each, and :attr:`ok` is the one-line
+    answer to "is this feed trustworthy?" that ``ob-analytics audit`` exits on.
 
     Attributes
     ----------
@@ -768,13 +1242,16 @@ class DataQualitySummary:
         Row / distinct-order / trade counts.
     crossed_pct : float
         Percentage of session *time* the faithful book is crossed
-        (``best_bid > best_ask``).  Expected ``~0`` for a matched book; a
-        genuine, faithfully-replayed property of a diff feed.
+        (``best_bid > best_ask``).  Expected ``~0`` for a matched book or a
+        price-level book; a genuine, faithfully-replayed property of a diff
+        feed.
     crossed_episodes : int
         Number of distinct crossed intervals.
     unmatched_trades_pct : float
-        Percentage of trades missing a resolved ``maker_event_id`` or
-        ``taker_event_id`` (could not be tied to a resting order).
+        Percentage of trades with an order the feed can name left unresolved:
+        a missing ``maker_event_id`` or ``taker_event_id`` when the feed names
+        both, a missing ``maker_event_id`` when it names the maker only, and
+        ``0`` when it names neither (see ``trade_attribution``).
     duplicate_event_ids : int
         Count of ``event_id`` values occurring more than once (``event_id``
         should be globally unique — any non-zero value is suspect).
@@ -789,9 +1266,58 @@ class DataQualitySummary:
         ``track_sequence`` was off at load — the sequence metrics below are then
         trivially zero.
     sequence_gaps : int
-        Dropped-message count: skipped venue sequence numbers.
+        Dropped-message count: skipped venue sequence numbers.  Always ``0``
+        when ``sequence_kind`` is ``MONOTONIC``, where a skip is normal.
     sequence_out_of_order : int
-        Reordered or duplicated messages: sequence steps that did not advance.
+        Reordered or duplicated messages: sequence steps that did not advance,
+        leaving out ``sequence_restarts``.
+    sequence_restarts : int
+        Steps back where the source started again from a new opening book
+        and the venue's count started again with it.  The source reports them
+        (``sequence_restarts`` in ``meta.json``); they are not faults of the
+        sequence, and the resync is reported by the capture's own checks.
+    sequence_kind : SequenceKind
+        What the venue sequence promises, and so whether ``sequence_gaps`` was
+        checked (see :class:`~ob_analytics.protocols.SequenceKind`).
+    orphan_orders : int
+        Distinct order ids with a ``changed`` or ``deleted`` event but no
+        ``created`` one.  Every order resting before the capture began is an
+        orphan, so a capture that starts mid-stream reports a small, stable
+        count; this is also the signal a live capture's stream drifting from
+        its opening snapshot shows up as.
+    orphan_events : int
+        Rows belonging to those orphan orders.
+    nonpositive_price_rows : int
+        Rows priced at or below zero.  Legal in the schema (prices are signed
+        integer ticks) but not a tradeable level.
+    negative_volume_rows : int
+        Rows with a negative ``volume`` (or negative ``fill``): impossible size.
+    exchange_time_after_receive : int
+        Rows whose venue clock (``exchange_timestamp``) is later than the local
+        receive clock (``timestamp``) — an event received before it happened.
+        Always ``0`` when ``clocks`` is not ``BOTH``.  Rows from a capture's
+        opening book (``origin`` ``snapshot``) are not counted: the capture
+        may not have measured their clocks.
+    exchange_time_reordered : int
+        Steps where the venue clock goes backwards while the receive clock
+        moves forward: messages that reached the capture out of order.
+        Always ``0`` when ``clocks`` is not ``BOTH``; the opening book's rows
+        are left out, as for ``exchange_time_after_receive``.
+    clocks : Clocks
+        Which clocks the data carries (see
+        :class:`~ob_analytics.protocols.Clocks`).  The two clock checks run
+        only when it is ``BOTH``; with one clock there is nothing to compare,
+        and the report says so.
+    stale_orders : tuple of StaleOrder
+        Resting orders a trade printed through that the venue did not report
+        again within :data:`STALE_GRACE`, worst first (see
+        :func:`detect_stale_orders`).  Each one stays in the rebuilt book after
+        it has gone, so a diff feed's crossing is then partly this defect
+        rather than the feed's normal lag.
+    trade_attribution : TradeAttribution
+        Which orders of a trade the feed can name (see
+        :class:`~ob_analytics.protocols.TradeAttribution`); sets which sides
+        ``unmatched_trades_pct`` counts.
     """
 
     feed_type: FeedType
@@ -807,6 +1333,17 @@ class DataQualitySummary:
     events_with_sequence: int = 0
     sequence_gaps: int = 0
     sequence_out_of_order: int = 0
+    sequence_restarts: int = 0
+    sequence_kind: SequenceKind = SequenceKind.CONTIGUOUS
+    orphan_orders: int = 0
+    orphan_events: int = 0
+    nonpositive_price_rows: int = 0
+    negative_volume_rows: int = 0
+    exchange_time_after_receive: int = 0
+    exchange_time_reordered: int = 0
+    clocks: Clocks = Clocks.BOTH
+    stale_orders: tuple[StaleOrder, ...] = ()
+    trade_attribution: TradeAttribution = TradeAttribution.BOTH
 
     def to_dict(self) -> dict[str, Any]:
         """Return the summary as a plain, JSON-serialisable dict."""
@@ -824,22 +1361,241 @@ class DataQualitySummary:
             "events_with_sequence": self.events_with_sequence,
             "sequence_gaps": self.sequence_gaps,
             "sequence_out_of_order": self.sequence_out_of_order,
+            "sequence_restarts": self.sequence_restarts,
+            "sequence_kind": str(self.sequence_kind.value),
+            "orphan_orders": self.orphan_orders,
+            "orphan_events": self.orphan_events,
+            "nonpositive_price_rows": self.nonpositive_price_rows,
+            "negative_volume_rows": self.negative_volume_rows,
+            "exchange_time_after_receive": self.exchange_time_after_receive,
+            "exchange_time_reordered": self.exchange_time_reordered,
+            "clocks": str(self.clocks.value),
+            "stale_orders": [o.to_dict() for o in self.stale_orders],
+            "trade_attribution": str(self.trade_attribution.value),
+            "ok": self.ok,
+            "checks": [c.to_dict() for c in self.checks],
         }
 
     def _crossed_note(self) -> str:
         """One-line reading of ``crossed_pct`` given the feed type."""
-        if self.feed_type == FeedType.MATCHED_BOOK:
-            return (
-                "as expected for a matched book"
-                if self.crossed_pct <= 0.05
-                else "UNEXPECTED for a matched book — check reconstruction/data"
-            )
+        if self.feed_type in _MUST_NOT_CROSS:
+            name, cause = _MUST_NOT_CROSS[self.feed_type]
+            if self.crossed_pct <= CROSSED_TOLERANCE_PCT:
+                return f"as expected for {name}"
+            return f"UNEXPECTED for {name} — {cause}"
         if self.feed_type == FeedType.DIFF_FEED:
+            if self.stale_orders:
+                return (
+                    f"diff feed, but {len(self.stale_orders)} stale resting "
+                    "order(s) stay in the book — see stale resting orders"
+                )
             return "expected for a diff feed — faithful replay, not a bug"
         return "feed type undeclared"
 
+    def _unmatched_sides(self) -> str:
+        """The order(s) a trade must resolve, in words, for the check's text."""
+        if self.trade_attribution == TradeAttribution.BOTH:
+            return "maker or taker"
+        return "maker"
+
+    def _unmatched_note(self) -> str:
+        """Which orders of a trade ``unmatched_trades_pct`` looked for."""
+        if self.trade_attribution == TradeAttribution.MAKER_ONLY:
+            return "maker only: this feed does not show takers"
+        if self.trade_attribution == TradeAttribution.NONE:
+            return "not checked: this feed names no orders"
+        return "maker and taker"
+
+    def _clocks_note(self) -> str:
+        """Why the clock checks did not run, or ``""`` when they did."""
+        if self.clocks is Clocks.RECEIVE_ONLY:
+            return (
+                "not checked: the data has no venue time, so exchange_timestamp "
+                "copies the receive time"
+            )
+        if self.clocks is Clocks.VENUE_ONLY:
+            return (
+                "not checked: the data has no receive time, so timestamp copies "
+                "the venue time"
+            )
+        return ""
+
+    def _worst_stale(self) -> str:
+        """The worst stale order: its id, side, price and time at the touch."""
+        worst = self.stale_orders[0]
+        return (
+            f"{worst.direction} {worst.id} at {_format_price(worst.price)} held "
+            f"the {worst.direction} touch for "
+            f"{_format_duration(worst.touch_seconds)} after a trade printed "
+            "through it"
+        )
+
+    @property
+    def checks(self) -> tuple[QualityCheck, ...]:
+        """Every check this run was scored against, errors first.
+
+        The crossing check reads its severity off :attr:`feed_type`: a crossed
+        resting book is a defect in a matched book or a price-level book and a
+        faithful property of a diff feed, so the same number means opposite
+        things and only the declared feed type can tell them apart.
+        """
+        crossed = self.crossed_pct > CROSSED_TOLERANCE_PCT
+        crossed_severity = _CROSSED_SEVERITY.get(self.feed_type, Severity.WARNING)
+
+        checks = [
+            QualityCheck(
+                "duplicate_event_ids",
+                self.duplicate_event_ids == 0,
+                Severity.ERROR,
+                f"{self.duplicate_event_ids} event_id value(s) occur more than "
+                "once; event_id is the unique key of an event",
+            ),
+            QualityCheck(
+                "duplicate_created_ids",
+                self.duplicate_created_ids == 0,
+                Severity.ERROR,
+                f"{self.duplicate_created_ids} order id(s) have more than one "
+                "created event; an order is created once",
+            ),
+            QualityCheck(
+                "sequence_gaps",
+                self.sequence_gaps == 0,
+                Severity.ERROR,
+                f"{self.sequence_gaps} venue sequence number(s) missing: "
+                "dropped messages, so the book is rebuilt from an incomplete feed",
+            ),
+            QualityCheck(
+                "sequence_out_of_order",
+                self.sequence_out_of_order == 0,
+                Severity.ERROR,
+                f"{self.sequence_out_of_order} venue sequence step(s) did not "
+                "advance: repeated or reordered messages",
+            ),
+            QualityCheck(
+                "negative_volume",
+                self.negative_volume_rows == 0,
+                Severity.ERROR,
+                f"{self.negative_volume_rows} row(s) carry a negative volume "
+                "or fill: an impossible size",
+            ),
+            QualityCheck(
+                "crossed_book",
+                not crossed,
+                crossed_severity,
+                f"the resting book is crossed for {self.crossed_pct:.2f}% of "
+                f"session time ({self.crossed_episodes} episode(s)) "
+                f"[{self._crossed_note()}]",
+            ),
+            QualityCheck(
+                "unmatched_trades",
+                self.unmatched_trades_pct <= UNMATCHED_TRADES_WARN_PCT,
+                Severity.WARNING,
+                f"{self.unmatched_trades_pct:.2f}% of trades have no resolvable "
+                f"{self._unmatched_sides()} order "
+                f"[{self._unmatched_note()}]; above "
+                f"{UNMATCHED_TRADES_WARN_PCT:.0f}% the trades and events may not "
+                "describe the same session",
+            ),
+            QualityCheck(
+                "orphan_orders",
+                self.orphan_orders == 0,
+                Severity.WARNING,
+                f"{self.orphan_orders} order(s) are changed or deleted with no "
+                f"created event ({self.orphan_events} row(s)); expected for the "
+                "book already resting when the capture began, but a rise "
+                "mid-session means the stream lost messages",
+            ),
+            QualityCheck(
+                "stale_orders",
+                not self.stale_orders,
+                Severity.WARNING,
+                f"{len(self.stale_orders)} resting order(s) a trade printed "
+                "through and the venue did not report again within "
+                f"{STALE_GRACE.total_seconds():g} s; each stays in the rebuilt "
+                "book after it has gone"
+                + (f". Worst: {self._worst_stale()}" if self.stale_orders else ""),
+            ),
+            QualityCheck(
+                "nonpositive_price",
+                self.nonpositive_price_rows == 0,
+                Severity.WARNING,
+                f"{self.nonpositive_price_rows} row(s) are priced at or below "
+                "zero: not a tradeable level",
+            ),
+            QualityCheck(
+                "pre_existing_orders",
+                True,
+                Severity.INFO,
+                f"{self.pre_existing_orders} order(s) were resting before the "
+                "capture window: structurally unclassifiable, not failures",
+            ),
+            QualityCheck(
+                "venue_sequence",
+                True,
+                Severity.INFO,
+                f"{self.events_with_sequence} row(s) carry a venue sequence"
+                if self.events_with_sequence
+                else "no venue sequence in this feed, so gaps cannot be detected",
+            ),
+            *self._clock_checks(),
+        ]
+        order = {Severity.ERROR: 0, Severity.WARNING: 1, Severity.INFO: 2}
+        return tuple(sorted(checks, key=lambda c: order[c.severity]))
+
+    def _clock_checks(self) -> list[QualityCheck]:
+        """The two clock checks, or one note saying why they did not run."""
+        skipped = self._clocks_note()
+        if skipped:
+            return [QualityCheck("clocks", True, Severity.INFO, skipped)]
+        return [
+            QualityCheck(
+                "exchange_time_after_receive",
+                self.exchange_time_after_receive == 0,
+                Severity.ERROR,
+                f"{self.exchange_time_after_receive} row(s) have a venue "
+                "timestamp later than the receive timestamp: an event received "
+                "before it happened (clock skew, or the two clocks swapped)",
+            ),
+            QualityCheck(
+                "exchange_time_reordered",
+                self.exchange_time_reordered == 0,
+                Severity.WARNING,
+                f"{self.exchange_time_reordered} message(s) arrived out of venue "
+                "order (the venue clock goes back while the receive clock moves "
+                "forward)",
+            ),
+        ]
+
+    @property
+    def errors(self) -> tuple[QualityCheck, ...]:
+        """Failed checks whose severity is :attr:`Severity.ERROR`."""
+        return tuple(
+            c for c in self.checks if not c.passed and c.severity == Severity.ERROR
+        )
+
+    @property
+    def warnings(self) -> tuple[QualityCheck, ...]:
+        """Failed checks whose severity is :attr:`Severity.WARNING`."""
+        return tuple(
+            c for c in self.checks if not c.passed and c.severity == Severity.WARNING
+        )
+
+    @property
+    def ok(self) -> bool:
+        """True when no error-severity check failed (warnings may still stand)."""
+        return not self.errors
+
     def render(self) -> str:
         """Return a fixed-width, human-readable report block."""
+        missing = (
+            f"{self.sequence_gaps} missing"
+            if self.sequence_kind is SequenceKind.CONTIGUOUS
+            else "gaps not checked (sequence only rises)"
+        )
+        clock_order = self._clocks_note() or (
+            f"{self.exchange_time_after_receive} venue-after-receive / "
+            f"{self.exchange_time_reordered} reordered"
+        )
         lines = [
             "Data quality summary",
             f"  feed type             : {self.feed_type.value}",
@@ -849,17 +1605,109 @@ class DataQualitySummary:
                 f"  crossed resting book  : {self.crossed_pct:.2f}% of session "
                 f"({self.crossed_episodes} episode(s)) [{self._crossed_note()}]"
             ),
-            f"  unmatched trades      : {self.unmatched_trades_pct:.2f}%",
+            (
+                f"  stale resting orders  : {len(self.stale_orders)}"
+                + (f" (worst: {self._worst_stale()})" if self.stale_orders else "")
+            ),
+            (
+                f"  unmatched trades      : {self.unmatched_trades_pct:.2f}% "
+                f"[{self._unmatched_note()}]"
+            ),
             f"  duplicate event ids   : {self.duplicate_event_ids}",
             f"  duplicate created ids : {self.duplicate_created_ids}",
             f"  pre-existing orders   : {self.pre_existing_orders}",
             (
-                f"  venue sequence        : {self.sequence_gaps} missing / "
+                f"  orphan orders         : {self.orphan_orders} "
+                f"({self.orphan_events} event(s), no created row)"
+            ),
+            (
+                f"  impossible values     : {self.nonpositive_price_rows} "
+                f"non-positive price(s) / {self.negative_volume_rows} "
+                "negative volume(s)"
+            ),
+            f"  clock order           : {clock_order}",
+            (
+                f"  venue sequence        : {missing} / "
                 f"{self.sequence_out_of_order} out-of-order "
-                f"({self.events_with_sequence} row(s) numbered)"
+                + (
+                    f"/ {self.sequence_restarts} restart(s) at a resync "
+                    if self.sequence_restarts
+                    else ""
+                )
+                + f"({self.events_with_sequence} row(s) numbered)"
             ),
         ]
+
+        # INFO checks never fail a run and their numbers are already in the
+        # block above, so the verdict lists only what a reader must act on.
+        failed = self.errors + self.warnings
+        if failed:
+            lines.append(
+                f"Checks: {len(self.errors)} error(s), {len(self.warnings)} warning(s)"
+            )
+            lines += [
+                f"  {c.severity.value.upper():<7} {c.name}: {c.detail}" for c in failed
+            ]
+        else:
+            lines.append("Checks: all passed")
         return "\n".join(lines)
+
+
+def _format_price(price: float) -> str:
+    """A price with thousands separators and only the decimals it needs."""
+    decimals = next((d for d in range(9) if round(price, d) == price), 8)
+    return f"{price:,.{decimals}f}"
+
+
+def _format_duration(seconds: float) -> str:
+    """A duration in the largest unit that keeps it readable."""
+    if seconds >= 60:
+        return f"{seconds / 60:.1f} min"
+    return f"{seconds:.1f} s"
+
+
+def _clock_order_counts(frame: pd.DataFrame) -> tuple[int, int]:
+    """Count the two clock-order defects in *frame*: ``(after_receive, reordered)``.
+
+    The schema carries two clocks: ``exchange_timestamp``, stamped by the
+    venue, and ``timestamp``, stamped on receipt.  Two things follow from that,
+    and neither depends on how the frame happens to be sorted:
+
+    * an event cannot be received before the venue stamped it, so
+      ``exchange_timestamp > timestamp`` is impossible;
+    * read in canonical time order (:func:`~ob_analytics.schemas.time_order_keys`),
+      the venue clock should not go backwards while the receive clock moves
+      forward — where it does, those messages reached the capture out of order.
+
+    Rows from a capture's opening book (``origin`` ``snapshot``) are left
+    out of both counts: the capture may not have measured their clocks (an
+    opening book sent without a venue time copies the receive time).  Rows
+    sharing a receive instant are skipped for the second count: their relative
+    order is set by the tie-break key, not by arrival, so a venue-clock step
+    across them says nothing.  A frame without both columns scores zero on
+    both counts.
+    """
+    if "exchange_timestamp" not in frame.columns or "timestamp" not in frame.columns:
+        return 0, 0
+    if frame.empty:
+        return 0, 0
+
+    both = frame[["timestamp", "exchange_timestamp"]].notna().all(axis=1)
+    if ORIGIN_COLUMN in frame.columns:
+        # Only rows marked as the opening book; a blank origin is checked.
+        opening = frame[ORIGIN_COLUMN].eq(SNAPSHOT_ORIGIN).fillna(False)
+        both &= ~opening.astype(bool)
+    after_receive = int(
+        (frame.loc[both, "exchange_timestamp"] > frame.loc[both, "timestamp"]).sum()
+    )
+
+    ordered = frame.loc[both].sort_values(time_order_keys(frame), kind="stable")
+    if len(ordered) < 2:
+        return after_receive, 0
+    receive = np.diff(ordered["timestamp"].astype("int64").to_numpy())
+    venue = np.diff(ordered["exchange_timestamp"].astype("int64").to_numpy())
+    reordered = int(np.count_nonzero((venue < 0) & (receive > 0)))
+    return after_receive, reordered
 
 
 def data_quality_summary(
@@ -868,6 +1716,11 @@ def data_quality_summary(
     *,
     feed_type: FeedType = FeedType.UNKNOWN,
     depth: pd.DataFrame | None = None,
+    tick_size: float = 1.0,
+    sequence_kind: SequenceKind = SequenceKind.CONTIGUOUS,
+    sequence_restarts: int = 0,
+    trade_attribution: TradeAttribution = TradeAttribution.BOTH,
+    clocks: Clocks = Clocks.BOTH,
 ) -> DataQualitySummary:
     """Summarise the data quality of one reconstructed session.
 
@@ -895,6 +1748,35 @@ def data_quality_summary(
         When ``None`` it is computed from *events* via
         :func:`~ob_analytics.depth.price_level_volume`.  **Do not** pass
         ``depth_summary`` — that is already uncrossed and would report ~0%.
+    tick_size : float, optional
+        Quote-currency size of one price tick (``PipelineResult.config.tick_size``),
+        so the prices in ``stale_orders`` read in the quote currency.  Leave at
+        ``1.0`` to report them in ticks.
+    sequence_kind : SequenceKind, optional
+        What the venue ``sequence`` promises, passed to
+        :func:`detect_sequence_gaps`.  A capture records it in ``meta.json``
+        (read it with :func:`~ob_analytics.depth_l2.recorded_sequence_kind`).
+    sequence_restarts : int, optional
+        How many of the sequence's steps back the source counted as the count
+        starting again at a new opening book.  That many are left out of
+        ``sequence_out_of_order``.  A capture records it in ``meta.json``
+        (read it with
+        :func:`~ob_analytics.depth_l2.recorded_sequence_restarts`).
+    trade_attribution : TradeAttribution, optional
+        Which orders of a trade the feed can name, so the unmatched-trades
+        check looks only for those.  Read it off the source with
+        :func:`~ob_analytics.protocols.trade_attribution_of`; a capture records
+        it in ``meta.json``.
+    clocks : Clocks, optional
+        Which clocks the data carries, so the clock checks run only when there
+        are two to compare.  With two, the checks still leave out rows from a
+        capture's opening book (``origin`` ``snapshot``).  Read it off the source with
+        :func:`~ob_analytics.protocols.clocks_of`; a live capture records it in
+        ``meta.json`` (read it with
+        :func:`~ob_analytics.depth_l2.recorded_clocks`).  Data with no venue
+        time at all (a price-level file without ``exchange_timestamp``) is
+        read as :attr:`~ob_analytics.protocols.Clocks.RECEIVE_ONLY` whatever
+        is declared; an empty frame keeps the declaration.
 
     Returns
     -------
@@ -920,23 +1802,38 @@ def data_quality_summary(
     if depth is None:
         depth = events if l2 else price_level_volume(events)
 
-    if depth.empty:
+    best = None if depth.empty else _faithful_best_series(depth)
+    if best is None:
         crossed_pct, crossed_episodes = 0.0, 0
     else:
-        crossed_frac, crossed_episodes = _crossed_time_fraction(
-            _faithful_best_series(depth)
-        )
+        crossed_frac, crossed_episodes = _crossed_time_fraction(best)
         crossed_pct = 100.0 * crossed_frac
 
+    # Stale resting orders need per-order events and priced, timed trades.  An
+    # L2 run has neither, and a trades frame without prices has nothing to
+    # print through a resting order.
+    stale_orders: tuple[StaleOrder, ...] = ()
+    if (
+        best is not None
+        and not l2
+        and not trades.empty
+        and {"timestamp", "price"} <= set(trades.columns)
+    ):
+        end_ns = _capture_end_ns(events, trades)
+        spans = _stale_spans(events, trades, STALE_GRACE, end_ns)
+        if not spans.empty:
+            stale_orders = _stale_orders(spans, best, end_ns, tick_size)
+
+    # Look only for the orders the feed can name: a feed that shows resting
+    # orders only never shows a taker, so a missing taker there is the feed,
+    # not a match failure.  L2 trades carry no attribution at all.
     n_trades = len(trades)
-    if n_trades and not l2:
-        unmatched = (
-            trades["maker_event_id"].isna() | trades["taker_event_id"].isna()
-        ).sum()
-        unmatched_pct = 100.0 * float(unmatched) / n_trades
+    if n_trades and not l2 and trade_attribution != TradeAttribution.NONE:
+        unmatched = trades["maker_event_id"].isna()
+        if trade_attribution == TradeAttribution.BOTH:
+            unmatched = unmatched | trades["taker_event_id"].isna()
+        unmatched_pct = 100.0 * float(unmatched.sum()) / n_trades
     else:
-        # L2 trades carry no maker/taker attribution — there is nothing to
-        # resolve, so a missing id is not a "match failure".
         unmatched_pct = 0.0
 
     event_id_counts = events["event_id"].value_counts()
@@ -953,7 +1850,40 @@ def data_quality_summary(
     # Venue sequence gaps: read from events on the L3 path, or from the
     # price-level depth on the L2 path (where sequence, when present, rides on
     # depth rather than the empty events frame).  Absent columns score zero.
-    gaps = detect_sequence_gaps(depth if l2 else events)
+    gaps = detect_sequence_gaps(depth if l2 else events, kind=sequence_kind)
+    # Steps back the source accounts for: never more than the data shows.
+    restarts = min(max(sequence_restarts, 0), gaps.n_out_of_order)
+
+    # Orders changed or deleted with no created row.  On the L2 path there are
+    # no per-order events, so there is nothing to orphan.
+    if l2:
+        orphan_orders = orphan_events = 0
+    else:
+        created_ids = set(events.loc[events["action"] == "created", "id"])
+        after = events.loc[events["action"] != "created", "id"]
+        orphaned = after[~after.isin(created_ids)]
+        orphan_events = int(orphaned.size)
+        orphan_orders = int(orphaned.nunique())
+
+    # Impossible values, read from whichever frame carries the price levels.
+    levels = depth if l2 else events
+    nonpositive_price_rows = int((levels["price"] <= 0).sum())
+    negative_volume_rows = int((levels["volume"] < 0).sum())
+    if not l2 and "fill" in events.columns:
+        negative_volume_rows += int((events["fill"] < 0).sum())
+
+    # Rows with no venue time have one clock, whatever the source declares.
+    # An empty frame has no rows to say so, and keeps the declaration.
+    clocks = Clocks(clocks)
+    no_venue_time = "exchange_timestamp" not in levels.columns or bool(
+        levels["exchange_timestamp"].isna().all()
+    )
+    if clocks is Clocks.BOTH and not levels.empty and no_venue_time:
+        clocks = Clocks.RECEIVE_ONLY
+    if clocks is Clocks.BOTH:
+        after_receive, reordered = _clock_order_counts(levels)
+    else:
+        after_receive, reordered = 0, 0
 
     return DataQualitySummary(
         feed_type=feed_type,
@@ -968,5 +1898,16 @@ def data_quality_summary(
         pre_existing_orders=pre_existing_orders,
         events_with_sequence=gaps.n_sequenced,
         sequence_gaps=gaps.n_missing,
-        sequence_out_of_order=gaps.n_out_of_order,
+        sequence_out_of_order=gaps.n_out_of_order - restarts,
+        sequence_restarts=restarts,
+        sequence_kind=sequence_kind,
+        orphan_orders=orphan_orders,
+        orphan_events=orphan_events,
+        nonpositive_price_rows=nonpositive_price_rows,
+        negative_volume_rows=negative_volume_rows,
+        exchange_time_after_receive=after_receive,
+        exchange_time_reordered=reordered,
+        clocks=clocks,
+        stale_orders=stale_orders,
+        trade_attribution=trade_attribution,
     )

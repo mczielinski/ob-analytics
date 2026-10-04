@@ -1,4 +1,4 @@
-# Data quality: matched book vs diff feed
+# Data quality: matched book, diff feed and price levels
 
 Before you trust a reconstructed order book, you need to know **what kind of
 feed produced it**. The single most important property is the book's
@@ -8,8 +8,11 @@ how you read every downstream plot and metric.
 
 This page explains the distinction, why a crossed book is often *faithful*
 rather than a bug, and the two tools `ob-analytics` gives you to work with it:
-the [`validate`](howto/validate.md) command that **measures** data quality,
+the [`audit`](howto/audit.md) command that **measures** data quality,
 and the `uncross=` option that **cleans the book up for display**.
+
+Crossing is one of several properties that decide what a capture can tell you.
+[What each feed shows](feeds.md) sets them all out, source by source.
 
 ## Two kinds of L3 feed
 
@@ -40,11 +43,36 @@ FeedType.DIFF_FEED == "diff_feed"   # True — the enum mixes in str
 A format that predates the attribute reads back as `FeedType.UNKNOWN`, so you
 can always do `getattr(fmt, "feed_type", FeedType.UNKNOWN)` without special-casing.
 
+## Price-level (L2) feeds
+
+An L2 feed has no orders, only the venue's total size at each price. Every L2
+source declares `FeedType.PRICE_LEVELS`: the ccxt source, cryptofeed at L2, and
+`depth_csv`. The venue does not publish a crossed book, so a crossed capture
+means the capture's copy is wrong, most often because it kept a level that the
+venue removed. `audit` scores it as an error, as for a matched book.
+
+In test captures of nine L2 feeds (Binance, Coinbase, Kraken, two Kalshi and two
+Polymarket markets, and cryptofeed's Bitstamp and Kraken books), none was
+crossed for any measurable time. Some showed crossings that lasted no time at
+all: one venue update is written as several rows, and between those rows the
+book can briefly be half old, half new.
+
+Captures made before this value existed record `matched_book` in `meta.json`.
+`audit` reads the record, so it scores them the same way.
+
 ## A crossed book is faithful, not a bug
 
-We have **verified** a bid resting above an ask on the bundled Bitstamp
-sample for about 1.5 minutes, neither order ever filling. That is a real
-property of the public feed, not a defect in the reconstruction.
+A diff feed does carry real crossings. An aggressive order can rest for a few
+events until the venue reports its execution, and on the bundled Bitstamp
+sample there are about 100,000 such crossings, each shorter than a
+millisecond. That is a property of the public feed, not a defect in the
+reconstruction.
+
+A crossing that lasts is a different matter. On the same sample, almost all of
+the crossed time comes from one order: an ask at $78,333.00 that the opening
+snapshot reported and the venue never reported again. Trades print above it
+for 27 minutes while it holds the ask touch. It is a
+[stale resting order](#stale-resting-orders), and `audit` names it.
 
 [`order_book()`](api/analytics.md) therefore replays a diff feed **as-is**: a
 crossed book in the output is a property of the feed, not a reconstruction
@@ -57,34 +85,92 @@ error. The tutorial meets this pitfall twice — once in
     The crossing *is the signal* for a diff feed — it tells you the feed is
     unmatched and that spreads, mid-prices, and depth near the touch need care.
     Uncrossing (below) is a **display** convenience; never bake it into the
-    data an analysis runs on, or you erase the very property `validate` is
+    data an analysis runs on, or you erase the very property `audit` is
     there to surface.
 
-## Measuring it: `validate`
+## Measuring it: `audit`
 
-The [`ob-analytics validate`](howto/validate.md) command runs the pipeline and
-prints a per-run data-quality summary. On the bundled Bitstamp sample:
+The [`ob-analytics audit`](howto/audit.md) command runs the pipeline, prints a
+per-run data-quality summary, and exits non-zero when a check fails. On the
+bundled Bitstamp sample:
 
 ```text
 Data quality summary
   feed type             : diff_feed
   events / orders       : 314,057 / 156,902
   trades                : 284
-  crossed resting book  : 92.02% of session (6348 episode(s)) [expected for a diff feed — faithful replay, not a bug]
+  crossed resting book  : 91.61% of session (7238 episode(s)) [diff feed, but 2 stale resting order(s) stay in the book — see stale resting orders]
+  stale resting orders  : 2 (worst: ask 2002347646152704 at 78,333 held the ask touch for 27.4 min after a trade printed through it)
   unmatched trades      : 0.70%
   duplicate event ids   : 0
   duplicate created ids : 0
   pre-existing orders   : 13
+  orphan orders         : 13 (13 event(s), no created row)
+  impossible values     : 49 non-positive price(s) / 0 negative volume(s)
+  clock order           : 0 venue-after-receive / 11 reordered
+  venue sequence        : 0 missing / 0 out-of-order (0 row(s) numbered)
+Checks: 0 error(s), 4 warning(s)
+  WARNING orphan_orders: 13 order(s) are changed or deleted with no created event ...
+  WARNING stale_orders: 2 resting order(s) a trade printed through and the venue did not report again within 1 s ...
+  WARNING nonpositive_price: 49 row(s) are priced at or below zero: not a tradeable level
+  WARNING exchange_time_reordered: 11 message(s) arrived out of venue order ...
 ```
 
 A matched book (LOBSTER) reports **~0%** crossed on the same metric — the
-number is the cleanest single discriminator between the two families.
+number is the cleanest single discriminator between the two families. On a
+diff feed, read it together with the stale-order line below it.
 
-The four headline metrics:
+## Stale resting orders
+
+A matching engine fills the better price first. So a trade above a resting
+ask, or below a resting bid, shows that the order has already left the book.
+The venue normally reports it a few milliseconds later: on the bundled sample,
+a median of 23 ms after the trade and 234 ms at the 95th percentile.
+
+An order the venue does not report again within one second is **stale**. The
+rebuilt book goes on holding it, and it distorts the spread, the depth and the
+queue from then on. On the bundled sample two orders are stale, and both came
+from the opening REST snapshot. Removing each one at the moment a trade proved
+it gone takes the crossed share of session time from 91.6% to 1.3%.
+
+Stale orders distort the book that `order_book()` rebuilds, and everything
+read from it, such as the crossed share above. They reach the depth summary
+much less, because the depth engine already drops a level that a newer quote
+crosses. On the bundled sample, without the two stale orders the depth
+summary's best ask changes on 0.6% of rows, the transaction costs and the
+count of hidden trades do not change, and the table the
+[feature-table how-to](howto/feature-table.md) builds changes by a small
+amount on 14 of its 127 rows.
+
+`audit` reports stale orders as a warning and names the worst one: its id,
+side, price, and how long it held the touch after the trade. From Python,
+[`detect_stale_orders`](api/analytics.md) returns every one. Neither removes
+anything:
+
+- The test needs to know what the feed said *after* the trade. A live capture
+  cannot know that in time, so a repair would make offline and live
+  reconstruction differ.
+- Without the grace period the test is wrong most of the time: it catches
+  orders whose delete is already on its way.
+- `order_book()` replays what the feed said. Changing that to what we think the
+  feed meant is a different promise.
+
+Stale orders are not dropped messages: this capture records none. Nor can
+sequence-gap detection find them: Bitstamp publishes a timestamp, not a
+sequence number.
+
+Each metric is scored by a named check with a severity, and the exit code
+follows the severities: an **error** fails the run, a **warning** only fails it
+under `--strict`. Which severity crossing gets is decided by the feed type —
+the whole point of this page. The [`audit` how-to](howto/audit.md) lists every
+check and what trips it.
+
+The headline metrics:
 
 | Metric | What it measures | Matched book | Diff feed |
 |---|---|---|---|
-| **crossed resting book %** | Share of session *time* the faithful book has `best_bid > best_ask` | ~0% | often high (92% here) |
+| **crossed resting book %** | Share of session *time* the faithful book has `best_bid > best_ask` | ~0% | often high (~92% here, almost all of it from one stale order) |
+| **stale resting orders** | Resting orders a trade printed through that the venue did not report again within 1 s | 0 | 0 (else a feed defect) |
 | **unmatched trades %** | Trades with no resolvable maker/taker resting order | low | low–moderate |
 | **duplicate ids** | `event_id`s seen twice, or order ids created twice | 0 | 0 (else a feed defect) |
 | **pre-existing orders** | Orders already resting when the capture began (no `created` row) | a few | a few |
@@ -127,14 +213,14 @@ cumulative depth against the surviving touch.
 |---|---|
 | "What did the feed actually contain?" | **`uncross=False`** (default) — faithful |
 | "Draw me a clean ladder / depth curve for a slide" | `uncross=True` — display only |
-| "How crossed is this feed?" | [`validate`](howto/validate.md) — never uncross first |
+| "How crossed is this feed?" | [`audit`](howto/audit.md) — never uncross first |
 
 On a matched book `uncross=True` is a no-op (there is nothing to evict), so it
 is always safe to leave on in a display helper that must handle both families.
 
 ## See also
 
-- **How-to:** [Check data quality with `validate`](howto/validate.md)
+- **How-to:** [Check data quality with `audit`](howto/audit.md)
 - **Tutorial:** [Chapter 2 · L1 → L2 → L3](tutorial/02_three_resolutions.md),
   [Chapter 3 · Loading order data](tutorial/03_loading_data.md)
 - **Reference:** [`FeedType`](api/protocols.md),

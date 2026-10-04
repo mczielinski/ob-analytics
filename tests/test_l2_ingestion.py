@@ -25,7 +25,7 @@ from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
 from ob_analytics.depth import depth_metrics, get_spread
 from ob_analytics.depth_l2 import DepthCsvWriter, L2DepthLoader, L2TradeReader
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.protocols import DepthSource, FeedType
+from ob_analytics.protocols import Clocks, DepthSource, FeedType
 from ob_analytics.schemas import (
     validate_depth_df,
     validate_events_df,
@@ -66,6 +66,34 @@ def toy_l2_result(toy_l2_dir):
     return Pipeline.from_source("depth_csv").run(toy_l2_dir)
 
 
+@pytest.fixture
+def sparse_l2_result(tmp_path):
+    """A short, sparse price-level capture: a snapshot, then 6 updates in 70 s.
+
+    The gallery's summary faces drop the first minute of the depth summary,
+    so they get only the rows at 68-70 s, while the zoom window from the
+    depth clock ends at 52.5 s.
+    """
+    snapshot = [
+        row
+        for i in range(80)
+        for row in (
+            (_BASE_MS, "bid", 50.0 - i * 0.01, 10.0 + i),
+            (_BASE_MS, "ask", 50.01 + i * 0.01, 10.0 + i),
+        )
+    ]
+    updates = [
+        (_BASE_MS + 10_000, "bid", 50.0, 25.0),
+        (_BASE_MS + 25_000, "ask", 50.01, 5.0),
+        (_BASE_MS + 40_000, "bid", 49.99, 0.0),
+        (_BASE_MS + 68_000, "ask", 50.02, 30.0),
+        (_BASE_MS + 69_000, "bid", 50.0, 12.0),
+        (_BASE_MS + 70_000, "ask", 50.01, 8.0),
+    ]
+    _write_l2_dir(tmp_path, snapshot + updates)
+    return Pipeline.from_source("depth_csv").run(tmp_path)
+
+
 # ---------------------------------------------------------------------------
 # Source descriptor + registration
 # ---------------------------------------------------------------------------
@@ -76,8 +104,7 @@ class TestDepthCsvSource:
         source = DepthCsvSource()
         assert source.level is Level.L2
         assert source.name == "depth_csv"
-        # A price-level feed is the venue's own aggregated (matched) view.
-        assert source.feed_type is FeedType.MATCHED_BOOK
+        assert source.feed_type is FeedType.PRICE_LEVELS
 
     def test_registered(self):
         assert "depth_csv" in list_sources()
@@ -112,8 +139,9 @@ class TestL2DepthLoader:
         validate_depth_df(depth)
         assert list(depth["direction"].cat.categories) == ["bid", "ask"]
         assert len(depth) == 3
-        # volumes are the absolute level sizes, not signed deltas
-        assert depth["volume"].tolist() == [2.0, 3.0, 1.0]
+        # volumes are the absolute level sizes, not signed deltas, and are
+        # stored as integer lots on the default 1e-8 grid (issue #226)
+        assert depth["volume"].tolist() == [200_000_000, 300_000_000, 100_000_000]
 
     def test_accepts_flexible_column_spellings(self, tmp_path):
         # `direction` instead of `side`, `size` instead of `volume`, `time`
@@ -134,7 +162,7 @@ class TestL2DepthLoader:
             [(_BASE_MS, "bid", 99.0, 2.0), (_BASE_MS + 1, "bid", 99.0, 0.0)],
         )
         depth = L2DepthLoader().load(tmp_path)
-        assert depth["volume"].tolist() == [2.0, 0.0]
+        assert depth["volume"].tolist() == [200_000_000, 0]
 
     def test_negative_volume_dropped(self, tmp_path):
         _write_l2_dir(
@@ -155,6 +183,29 @@ class TestL2DepthLoader:
         )
         with pytest.raises(ConfigError, match="missing required columns"):
             L2DepthLoader().load(tmp_path)
+
+    def test_off_grid_price_raises(self, tmp_path):
+        # 0.036 is not a whole number of the default 0.01 ticks; rounding it
+        # to 0.04 would move the level without a word.
+        _write_l2_dir(tmp_path, [(_BASE_MS, "bid", 0.036, 1.0)])
+        with pytest.raises(ConfigError, match="not whole multiples of tick_size"):
+            L2DepthLoader().load(tmp_path)
+
+    def test_finer_tick_keeps_the_price(self, tmp_path):
+        from ob_analytics.config import PipelineConfig
+
+        _write_l2_dir(tmp_path, [(_BASE_MS, "bid", 0.036, 1.0)])
+        depth = L2DepthLoader(PipelineConfig(tick_size=0.001)).load(tmp_path)
+        assert depth["price"].tolist() == [36]
+
+    def test_off_grid_trade_price_raises(self, tmp_path):
+        _write_l2_dir(
+            tmp_path,
+            [(_BASE_MS, "bid", 0.03, 1.0)],
+            [{"timestamp": _BASE_MS, "price": 0.037, "volume": 1.0}],
+        )
+        with pytest.raises(ConfigError, match="L2TradeReader"):
+            L2TradeReader().load(pd.DataFrame(), tmp_path)
 
     def test_missing_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
@@ -314,6 +365,66 @@ class TestDepthCsvWriter:
         assert len(trades) == len(toy_l2_trades())
 
 
+class TestVenueClock:
+    """The L2 depth frame keeps the venue's time, so audit can check it (#310)."""
+
+    @staticmethod
+    def _write(directory, venue_ms: list[int | None]) -> None:
+        """Two depth rows received 1 s apart, with the given venue times."""
+        pd.DataFrame(
+            {
+                "timestamp": [_BASE_MS, _BASE_MS + 1_000],
+                "exchange_timestamp": venue_ms,
+                "side": ["bid", "ask"],
+                "price": [100.0, 101.0],
+                "volume": [1.0, 1.0],
+            }
+        ).to_csv(directory / "depth.csv", index=False)
+
+    def test_the_loader_keeps_exchange_timestamp(self, tmp_path):
+        self._write(tmp_path, [_BASE_MS - 5, _BASE_MS + 990])
+        depth = L2DepthLoader().load(tmp_path)
+        validate_depth_df(depth)
+        assert list(depth.columns[:2]) == ["timestamp", "exchange_timestamp"]
+        assert str(depth["exchange_timestamp"].dtype) == "datetime64[ns, UTC]"
+        assert depth["exchange_timestamp"].iloc[0] == pd.Timestamp(
+            _BASE_MS - 5, unit="ms", tz="UTC"
+        )
+
+    def test_a_file_with_one_clock_has_no_exchange_timestamp(self, tmp_path):
+        _write_l2_dir(tmp_path, [(_BASE_MS, "bid", 100.0, 1.0)])
+        assert "exchange_timestamp" not in L2DepthLoader().load(tmp_path).columns
+
+    def test_the_writer_round_trips_it(self, tmp_path):
+        self._write(tmp_path, [_BASE_MS - 5, _BASE_MS + 990])
+        depth_in = L2DepthLoader().load(tmp_path)
+        out = tmp_path / "out"
+        DepthCsvWriter().write({"depth": depth_in}, out)
+        depth_out = L2DepthLoader().load(out)
+        pd.testing.assert_series_equal(
+            depth_in["exchange_timestamp"], depth_out["exchange_timestamp"]
+        )
+
+    def test_audit_checks_the_clocks_on_an_l2_capture(self, tmp_path):
+        # The second row's venue time is after the time it was received.
+        self._write(tmp_path, [_BASE_MS - 5, _BASE_MS + 1_500])
+        r = Pipeline.from_source("depth_csv").run(tmp_path)
+        summary = data_quality_summary(
+            r.events, r.trades, feed_type=FeedType.PRICE_LEVELS, depth=r.depth
+        )
+        assert summary.exchange_time_after_receive == 1
+        assert "exchange_time_after_receive" in {c.name for c in summary.errors}
+
+    def test_audit_says_why_a_file_with_one_clock_is_not_checked(self, tmp_path):
+        _write_l2_dir(tmp_path, [(_BASE_MS, "bid", 100.0, 1.0)])
+        r = Pipeline.from_source("depth_csv").run(tmp_path)
+        summary = data_quality_summary(
+            r.events, r.trades, feed_type=FeedType.PRICE_LEVELS, depth=r.depth
+        )
+        assert summary.clocks is Clocks.RECEIVE_ONLY
+        assert "not checked" in summary.render()
+
+
 # ---------------------------------------------------------------------------
 # Graceful degradation: data quality + gallery
 # ---------------------------------------------------------------------------
@@ -323,18 +434,18 @@ class TestL2DataQuality:
     def test_summary_on_l2_result(self, toy_l2_result):
         r = toy_l2_result
         summary = data_quality_summary(
-            r.events, r.trades, feed_type=FeedType.MATCHED_BOOK, depth=r.depth
+            r.events, r.trades, feed_type=FeedType.PRICE_LEVELS, depth=r.depth
         )
         # Per-order metrics degrade to zero; the report still renders.
         assert summary.n_events == 0
         assert summary.n_orders == 0
         assert summary.pre_existing_orders == 0
         assert summary.n_trades == len(r.trades)
-        # A matched aggregated book is not crossed, and unlabelled attribution
+        # The toy price-level book is not crossed, and unlabelled attribution
         # is not counted as a failure.
         assert summary.crossed_pct == pytest.approx(0.0)
         assert summary.unmatched_trades_pct == pytest.approx(0.0)
-        assert "matched_book" in summary.render()
+        assert "price_levels" in summary.render()
 
 
 class TestL2Gallery:
@@ -371,6 +482,73 @@ class TestL2Gallery:
         )
         assert out.exists()
 
+    @pytest.mark.parametrize("concept", ["price_view", "volume_percentiles"])
+    def test_summary_faces_render_on_sparse_capture(self, sparse_l2_result, concept):
+        """A short, sparse capture still draws the depth-summary faces.
+
+        Before the fix both faces got zero rows (the zoom window ended before
+        their data started) and raised, and the gallery dropped them.
+        """
+        import matplotlib.pyplot as plt
+
+        from ob_analytics.visualization import plot_result
+
+        fig = plot_result(sparse_l2_result, concept, backend="matplotlib")
+        plt.close(fig)
+
+    @pytest.mark.parametrize("backend", ["matplotlib", "plotly"])
+    @pytest.mark.parametrize("concept", ["price_view", "volume_percentiles"])
+    def test_summary_faces_draw_no_data_on_an_empty_window(
+        self, sparse_l2_result, concept, backend
+    ):
+        """A window the caller passes that holds no rows gives a "no data" figure.
+
+        Before the fix, price_view raised a TypeError (matplotlib) and
+        volume_percentiles raised a KeyError (both backends).
+        """
+        import matplotlib.pyplot as plt
+
+        from ob_analytics.visualization import plot_result
+
+        if backend == "plotly":
+            pytest.importorskip("plotly")
+        t0 = sparse_l2_result.depth["timestamp"].min()
+        fig = plot_result(
+            sparse_l2_result,
+            concept,
+            backend=backend,
+            start_time=t0 - pd.Timedelta(hours=2),
+            end_time=t0 - pd.Timedelta(hours=1),
+        )
+        if backend == "matplotlib":
+            # The theme places titles on the left; read every slot.
+            ax = fig.axes[0]
+            title = " ".join(ax.get_title(loc=s) for s in ("left", "center", "right"))
+            plt.close(fig)
+        else:
+            title = fig.layout.title.text
+        assert "no data" in title
+
+
+class TestRecordedTickSize:
+    def test_reads_meta_json(self, tmp_path):
+        from ob_analytics.depth_l2 import recorded_tick_size
+
+        (tmp_path / "meta.json").write_text('{"tick_size": 0.001}')
+        assert recorded_tick_size(tmp_path) == 0.001
+        # A file inside the capture directory finds it too.
+        (tmp_path / "depth.csv").write_text("")
+        assert recorded_tick_size(tmp_path / "depth.csv") == 0.001
+
+    def test_none_without_a_recorded_value(self, tmp_path):
+        from ob_analytics.depth_l2 import recorded_tick_size
+
+        assert recorded_tick_size(tmp_path) is None  # no meta.json
+        (tmp_path / "meta.json").write_text('{"tick_size": null}')
+        assert recorded_tick_size(tmp_path) is None
+        (tmp_path / "meta.json").write_text("not json")
+        assert recorded_tick_size(tmp_path) is None
+
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -401,13 +579,33 @@ class TestL2CLI:
         assert (out / "depth_summary.parquet").exists()
         assert (out / "events.parquet").exists()  # empty but written
 
+    def test_process_uses_the_recorded_tick_size(self, cli_runner, tmp_path):
+        import json
+
+        from ob_analytics.data import load_data
+
+        src = tmp_path / "src"
+        src.mkdir()
+        _write_l2_dir(
+            src, [(_BASE_MS, "bid", 0.036, 1.0), (_BASE_MS, "ask", 0.039, 2.0)]
+        )
+        (src / "meta.json").write_text(json.dumps({"tick_size": 0.001}))
+        out = tmp_path / "out"
+        r = cli_runner(
+            "process", str(src), "--source", "depth_csv", "--output", str(out)
+        )
+        assert r.returncode == 0, r.stderr
+        depth = load_data(out)["depth"]
+        assert depth.attrs["tick_size"] == 0.001
+        assert sorted(depth["price"].tolist()) == [36, 39]
+
     def test_validate_runs(self, cli_runner, tmp_path):
         src = tmp_path / "src"
         src.mkdir()
         self._write_cli_fixture(src)
         r = cli_runner("validate", str(src), "--source", "depth_csv")
         assert r.returncode == 0, r.stderr
-        assert "matched_book" in r.stdout
+        assert "price_levels" in r.stdout
 
 
 # ---------------------------------------------------------------------------

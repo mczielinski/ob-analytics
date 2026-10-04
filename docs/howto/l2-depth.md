@@ -11,6 +11,28 @@ all depend on that identity. Many venues — **Binance, Kalshi, Polymarket**, an
 most CCXT sources — publish only **L2 aggregated** data: price-level
 `[price, quantity]` snapshots and diffs with **no order IDs**.
 
+!!! info "What this feed shows"
+
+    | Property | Value |
+    |---|---|
+    | Level | L2 |
+    | Depth shown | what the file holds |
+    | Update form | as recorded |
+    | What can be missed | as recorded |
+    | After a lost message | — |
+    | Sequence | if present |
+    | Clocks | as recorded |
+    | Crossing | price levels |
+    | Taker side | the `side` column, or Lee–Ready |
+    | Trade tape gaps | as recorded |
+    | Price grid | you supply it |
+    | What the book means | as recorded |
+    | Access | — |
+
+    Use it for any price-level data you already have. Don't use it for anything
+    about single orders: an L2 file has none. [What each feed
+    shows](../feeds.md) explains each property and compares every source.
+
 This guide covers the **L2 depth-native ingestion path**: those feeds produce
 valid depth / spread / trade analytics without faking per-order state. It is
 the counterpart to the L3 [Bitstamp](your-own-data.md) / [LOBSTER](lobster.md)
@@ -51,7 +73,7 @@ timestamp,side,price,volume
 |--------|---------|
 | `timestamp` | receive time — integer epoch (`config.timestamp_unit`) or any string pandas can parse |
 | `side` | `bid` / `ask` (`buy` / `sell` and `b` / `a` are also accepted) |
-| `price` | the price level (scaled by `config.price_divisor`, rounded to `price_decimals`) |
+| `price` | the price level (divided by `config.price_divisor`, then stored as a whole number of `tick_size` ticks; a price between two ticks raises `ConfigError` instead of being rounded) |
 | `volume` | the level's **new absolute** resting size (`0` = removed) |
 
 Column names are flexible: `side` / `direction` and `volume` / `size` /
@@ -118,9 +140,11 @@ sorted(available_concepts(result))    # only the L2-supported concepts
 
 ## Checking data quality
 
-`ob-analytics validate <source> --source depth_csv` (and
+`ob-analytics audit <source> --source depth_csv` (and
 `data_quality_summary`) work on an L2 result: the crossed-book % is read from
-the price-level book, and the per-order metrics report zero.
+the price-level book, and the per-order metrics report zero. Every L2 source
+declares `FeedType.PRICE_LEVELS`, so a crossed book fails the run: the venue's
+own book does not cross.
 
 ## Try it on the synthetic fixture
 
@@ -139,11 +163,12 @@ get_spread(summary)
 
 - [Trade signs](../api/trade_sign.md) — Lee–Ready / tick / BVC for unlabelled feeds
 - [Custom components](custom-components.md) — write a loader for any other format
-- [Data quality](../data-quality.md) — matched book vs diff feed
+- [What each feed shows](../feeds.md) — depth, gaps, clocks and trade sides, source by source
+- [Data quality](../data-quality.md) — matched book, diff feed and price levels
 - [L2 API reference](../api/depth_l2.md) — `L2DepthLoader`, `DepthCsvSource`, …
 
 !!! note "Live L2 capture"
-    This path is for **offline** L2 files. A live depth-update event kind for
-    the [capture runner](live-capture.md) — so `LiveSource`s for L2 venues
-    (Binance, Kalshi, Polymarket) can stream straight into this schema — is a
-    planned follow-up.
+    A live L2 capture writes this schema directly: the [ccxt source](ccxt.md)
+    records `depth.csv` and `trades.csv` for any CCXT venue, including
+    [Kalshi](kalshi.md). It also records the market's tick size in
+    `meta.json`, and `ob-analytics process` uses it.

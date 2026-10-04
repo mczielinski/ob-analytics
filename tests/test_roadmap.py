@@ -1,7 +1,7 @@
 """Tests for the roadmap generator, ``scripts/roadmap.py``.
 
 The generator reads GitHub's issue graph and writes the generated blocks in
-epic #124 and the sixteen goal issues.  Tests run against
+epic #124 and in each goal issue.  Tests run against
 ``tests/fixtures/roadmap_graph.json``, a snapshot of the real 60-node graph
 taken on 2026-08-30, so nothing here touches the network.
 
@@ -23,10 +23,13 @@ from scripts.roadmap import (
     exit_code,
     load_config,
     load_graph,
+    named_issues,
     render_epic_body,
     render_goal_body,
     run,
     splice_generated_block,
+    stale_mentions,
+    unknown_holds,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -80,13 +83,11 @@ def work_nodes(body: str) -> set[int]:
 CLOSED_WORK = [98, 106, 107, 109, 112, 114, 137, 143, 146, 154, 155]
 
 
-def test_diagram_drops_closed_work_nothing_open_waits_on(graph, tmp_path):
-    """#192: pruning keeps #106, #112, #114, #137, #143 and #146, and drops
-    #98, #107, #109, #154 and #155.
+def test_diagram_draws_every_closed_issue_it_lists(graph, tmp_path):
+    """A group draws its closed issues, including ones nothing open waits on.
 
-    A closed issue stays only while an **open non-goal** issue still depends on
-    it.  #154 and #155 survive only if goal edges count, and because 16 goals
-    depend on nearly everything, counting them turns the rule into a no-op.
+    #98, #107, #109, #154 and #155 are closed in the snapshot with no open
+    non-goal issue behind them; they are drawn all the same.
     """
     config = write_config(
         tmp_path,
@@ -96,25 +97,6 @@ id = "closed"
 title = "Every closed issue"
 prose = "One diagram holding all of them."
 issues = {CLOSED_WORK}
-""",
-    )
-
-    drawn = work_nodes(render_epic_body(graph, config))
-
-    assert drawn == {106, 112, 114, 137, 143, 146}
-
-
-def test_keep_closed_group_prunes_nothing(graph, tmp_path):
-    """``keep_closed`` opts a diagram out, for one recording finished work."""
-    config = write_config(
-        tmp_path,
-        f"""
-[[group]]
-id = "closed"
-title = "Every closed issue"
-prose = "One diagram holding all of them."
-issues = {CLOSED_WORK}
-keep_closed = true
 """,
     )
 
@@ -136,16 +118,16 @@ def test_arrow_runs_from_the_blocker_to_the_work_it_unblocks(graph, config):
 
 
 def test_edge_needs_both_ends_in_the_diagram(graph, tmp_path):
-    """#112 blocks both #146 and #155, but #155 is pruned out, so only the
-    edge with both ends still drawn survives."""
+    """#112 blocks both #146 and #155, but only #146 is in the group, so only
+    the edge with both ends drawn appears."""
     config = write_config(
         tmp_path,
-        f"""
+        """
 [[group]]
-id = "closed"
-title = "Every closed issue"
-prose = "One diagram holding all of them."
-issues = {CLOSED_WORK}
+id = "some"
+title = "Two closed issues"
+prose = "Two of them."
+issues = [112, 146]
 """,
     )
 
@@ -285,8 +267,9 @@ def test_goal_body_lists_prerequisites_and_draws_the_goal(graph, config):
     """A goal issue gets the list of what it needs and its own diagram.
 
     #173 names 8 blockers; #134 and #99 are a declared choice, so the list has
-    7 entries and the diagram draws the choice as one node.  The diagram prunes
-    closed work nothing open still waits on, so #154 goes and #112 stays.
+    7 entries and the diagram draws the choice as one node.  The diagram draws
+    every prerequisite, so closed #154 and #155 stay even though nothing open
+    still waits on them.
     """
     body = render_goal_body(graph, config, 173)
     checkboxes = [ln for ln in body.splitlines() if ln.startswith("- [")]
@@ -299,7 +282,7 @@ def test_goal_body_lists_prerequisites_and_draws_the_goal(graph, config):
     )
     assert 'g173(["see live data on screen"])' in body
     assert "a live source" in body.split("```mermaid")[1]
-    assert work_nodes(body) == {105, 112, 137, 139}
+    assert work_nodes(body) == {105, 112, 137, 139, 154, 155}
 
 
 def test_goal_diagram_stays_small(graph, config):
@@ -345,11 +328,10 @@ issues = [110]
     assert body.index("## What each capability waits on") < body.index("## Ungrouped")
 
 
-def test_pruned_closed_issue_is_not_reported_as_ungrouped(graph, tmp_path):
-    """Membership is read from the config, not from what survived pruning.
+def test_closed_grouped_issue_is_drawn_and_not_ungrouped(graph, tmp_path):
+    """#154 is closed and nothing open still waits on it.
 
-    #154 is closed and nothing open still waits on it, so a diagram naming it
-    draws nothing.  It is still grouped, and reporting it as ungrouped would
+    It is drawn in its group, and it is not listed as ungrouped: that would
     invite someone to add an issue that is already there.
     """
     config = write_config(
@@ -368,7 +350,7 @@ issues = [154, 155]
         int(m) for m in re.findall(r"^- \[[ x]\] #(\d+) ", body, flags=re.MULTILINE)
     ]
 
-    assert "n154" not in body
+    assert "n154" in body
     assert 154 not in listed
 
 
@@ -551,7 +533,7 @@ def test_run_keeps_the_hand_written_half_of_every_body(client, config):
 
 
 def test_run_skips_an_issue_whose_markers_are_missing(client, config):
-    """One broken body does not stop the other sixteen, and does not raise."""
+    """One broken body does not stop the others, and does not raise."""
     client.bodies[180] = "someone deleted the markers"
 
     report = run(client, config, epic=124)
@@ -602,7 +584,7 @@ def test_a_skipped_issue_fails_the_run(client, config):
     """A skip means a view nobody is maintaining is now stale, so the run fails.
 
     The generator carries on past a broken body, because one bad marker pair
-    must not stop the other sixteen.  But the run as a whole has not done its
+    must not stop the others.  But the run as a whole has not done its
     job: the skipped issue still shows whatever the graph said the last time
     anyone could write to it.  A green run there would report success for a
     roadmap that had quietly stopped updating, which is the drift this whole
@@ -642,6 +624,7 @@ def test_epic_sections_run_in_the_order_the_spec_gives(graph, config):
 
     assert [line for line in body.splitlines() if line.startswith("## ")] == [
         "## Where the work stands",
+        "## What to pick up next",
         "## What each capability waits on",
     ]
     assert body.index("### Part 1 - the foundation") < body.index(
@@ -721,12 +704,11 @@ class EditedMidRun(FakeGitHub):
 
 
 def test_a_body_edited_during_a_run_keeps_the_edit(client, config):
-    """Each body is read once, so a run cannot write back what it did not read.
+    """A run with nothing to write reads once, and cannot write back a stale copy.
 
-    Reading twice means splicing one version and comparing against another: a
-    prose edit landing between the two reads makes the comparison differ, and
-    the write then carries the prose from before the edit.  The edit is lost
-    with nothing logged.
+    The comparison is what stops a run on every issue event from churning
+    every edit history, and a run that finds nothing to change never
+    reaches a write at all.
     """
     run(client, config, epic=124)
     stale = client.bodies[180]
@@ -744,3 +726,224 @@ def test_a_body_edited_during_a_run_keeps_the_edit(client, config):
     assert flaky.reads[180] == 1
     assert "revised" in flaky.bodies[180]
     assert report.written == []
+
+
+def test_a_write_carries_the_prose_as_it_is_at_the_write(config):
+    """Runs overlap, so the body a run started with is not the body it writes.
+
+    This is a real revert, not a hypothesis: a run already in flight held #124's
+    prose from before a rewrite and wrote it back afterwards, undoing the
+    rewrite with nothing logged. The write splices into a second read, so the
+    prose that lands is the prose that was there when the write happened.
+    """
+    raw = json.loads(GRAPH_FIXTURE.read_text())["nodes"]
+    goals = [int(k) for k, v in raw.items() if "goal" in v["labels"]]
+    before = EMPTY_BLOCK
+    after = before.replace("Hand-written prose.", "Hand-written prose, revised.")
+    flaky = EditedMidRun(
+        raw,
+        {n: EMPTY_BLOCK for n in [124, *goals]} | {124: after},
+        target=124,
+        stale=before,
+    )
+
+    report = run(flaky, config, epic=124)
+
+    assert 124 in report.written
+    assert "revised" in flaky.bodies[124]
+    assert "## Where the work stands" in flaky.bodies[124]
+
+
+# ---------------------------------------------------------------------------
+# What to pick up next: derived, so that no one has to write it down
+# ---------------------------------------------------------------------------
+
+
+def next_up(body: str) -> str:
+    """The "what to pick up next" section of a rendered epic body."""
+    return (
+        body.split("## What to pick up next")[1]
+        .split("## Where")[0]
+        .split("### Part")[0]
+    )
+
+
+def test_the_goal_one_issue_from_done_is_named_with_that_issue(graph, config):
+    """The strongest thing the graph can say: this issue finishes that goal.
+
+    From the snapshot, four open goals have a single prerequisite left: #177
+    needs #113, #182 needs #150, #184 needs #108, and #179 needs either #102 or
+    #103, which the config declares a choice and which therefore counts as one.
+    """
+    section = next_up(render_epic_body(graph, config))
+
+    assert "#113" in section and "#177" in section
+    assert "#150" in section and "#182" in section
+    assert "#108" in section and "#184" in section
+    assert "#102 or #103" in section and "#179" in section
+
+
+def test_a_goal_several_issues_away_is_not_listed_as_one_away(graph, config):
+    """#173 waits on two things in the snapshot, so it is not in that list."""
+    one_away = next_up(render_epic_body(graph, config)).split("**Frees")[0]
+
+    assert "#173" not in one_away
+
+
+def test_work_that_frees_other_work_is_ranked_by_how_much_it_frees(graph, config):
+    """The one ordering the graph justifies, so it is the one that is printed.
+
+    In the snapshot #136 has three open issues waiting on it, #100 has two, and
+    #105, #144 and #148 have one each.
+    """
+    section = next_up(render_epic_body(graph, config))
+    frees = section.split("**Frees other work.**")[1].split("**")[0]
+    order = [line.split()[1] for line in frees.strip().splitlines()]
+
+    assert order == ["#136", "#100", "#105", "#144", "#148"]
+
+
+def test_a_ready_issue_nothing_waits_on_is_counted_not_listed(graph, config):
+    """Naming twenty-odd independent issues would bury the three that matter."""
+    section = next_up(render_epic_body(graph, config))
+
+    assert "Free to take in any order." in section
+    assert "#117" not in section
+
+
+def test_the_lists_do_not_count_the_same_issue_twice(graph, config):
+    """The four groups partition the open work, which is the sum a reader checks."""
+    section = next_up(render_epic_body(graph, config))
+    free_match = re.search(r"any order\.\*\* (\d+) other issues", section)
+    assert free_match is not None, section
+    free = int(free_match.group(1))
+    named = set(re.findall(r"^- (.+)$", section, re.MULTILINE))
+    listed = {int(n) for line in named for n in re.findall(r"#(\d+)", line)}
+    open_work = {n.number for n in graph.work if not n.is_closed}
+
+    assert free == len(
+        open_work
+        - listed
+        - {n.number for n in graph.work if not n.is_closed and n.open_blockers}
+    )
+
+
+def test_a_hold_is_printed_while_its_issues_are_open(graph, tmp_path):
+    """The judgement the graph cannot make, kept next to the issues it is about."""
+    config = write_config(
+        tmp_path,
+        """
+        [[group]]
+        id = "g"
+        title = "Part 1 - g"
+        prose = "A group."
+        issues = [138, 139]
+
+        [[hold]]
+        issues = [138, 139]
+        reason = "wait for a measurement that asks for them"
+        """,
+    )
+
+    section = next_up(render_epic_body(graph, config))
+
+    assert "wait for a measurement that asks for them" in section
+    assert "#138" in section and "#139" in section
+
+
+def test_a_hold_disappears_when_its_issues_close(graph, tmp_path):
+    """This is why the judgement moved out of the epic's prose.
+
+    #154 and #155 are closed in the snapshot, so a hold on them has nothing
+    left to say and is not printed. The same sentence written into #124 by hand
+    stayed there until someone noticed.
+    """
+    config = write_config(
+        tmp_path,
+        """
+        [[group]]
+        id = "g"
+        title = "Part 1 - g"
+        prose = "A group."
+        issues = [154, 155]
+
+        [[hold]]
+        issues = [154, 155]
+        reason = "no longer true of anything"
+        """,
+    )
+
+    assert "no longer true of anything" not in render_epic_body(graph, config)
+
+
+def test_a_hold_on_an_issue_no_diagram_draws_is_reported(tmp_path):
+    """A hold nothing draws prints nothing, which is the silent kind of wrong."""
+    config = write_config(
+        tmp_path,
+        """
+        [[group]]
+        id = "g"
+        title = "Part 1 - g"
+        prose = "A group."
+        issues = [112]
+
+        [[hold]]
+        issues = [999]
+        reason = "a number nobody checked"
+        """,
+    )
+
+    assert unknown_holds(config) == ["a hold names #999, which no diagram draws"]
+
+
+# ---------------------------------------------------------------------------
+# Guards: prose that says where the work stands goes stale, so it is refused
+# ---------------------------------------------------------------------------
+
+
+def test_an_issue_number_in_hand_written_prose_is_found(graph):
+    """Every such mention is a claim the graph can outrun without a word.
+
+    Prose runs on both sides of the block in #124, so both sides are read.
+    """
+    body = (
+        "The schema (#112) is done.\n\n<!-- ROADMAP:BEGIN -->\n- #999 waits\n"
+        "<!-- ROADMAP:END -->\n\nSee #136 for the split.\n"
+    )
+
+    assert named_issues(body) == [112, 136]
+
+
+def test_a_number_inside_the_block_is_the_generator_own_writing(graph):
+    """The generated block is rewritten on every run, so it cannot go stale."""
+    body = (
+        "Prose with no numbers.\n\n<!-- ROADMAP:BEGIN -->\n- #113 waits\n"
+        "<!-- ROADMAP:END -->\n"
+    )
+
+    assert named_issues(body) == []
+
+
+def test_a_pointer_to_the_epic_or_to_something_off_the_roadmap_is_allowed():
+    """A goal's footer says where it came from, which no graph move can falsify.
+
+    Every goal ends "Part of #124. Decided in #170." The epic is the one fixed
+    point in the whole thing, and #170 is a discussion the roadmap does not
+    track, so neither can be contradicted by it.
+    """
+    body = "Part of #124. Decided in #170.\n"
+
+    # What the run passes: every child of the epic except the epic itself.
+    # #170 was never one of them.
+    assert stale_mentions(body, tracked={112, 113}) == []
+
+
+def test_prose_that_names_an_issue_fails_the_run(client, config):
+    """The run still writes everything it can; the failure is the report."""
+    client.bodies[124] = "The schema (#112) is done.\n\n" + EMPTY_BLOCK
+
+    report = run(client, config, epic=124)
+
+    assert 124 in report.written
+    assert exit_code(report) == 1
+    assert any("#124 names #112" in complaint for complaint in report.stale_prose)
