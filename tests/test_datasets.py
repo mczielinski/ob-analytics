@@ -10,6 +10,8 @@ frames this small.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -19,8 +21,15 @@ import pandas as pd
 import pytest
 
 from ob_analytics.analytics import order_book, order_lifecycles, set_order_types
-from ob_analytics.datasets import toy_events, toy_trades
+from ob_analytics.datasets import (
+    ToyOrder,
+    match_toy_orders,
+    toy_events,
+    toy_orders,
+    toy_trades,
+)
 from ob_analytics.depth import depth_metrics, price_level_volume
+from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import Level
 from ob_analytics.schemas import (
     validate_depth_df,
@@ -249,3 +258,138 @@ class TestFacesRenderAtToyScale:
         assert len(at_99) == 2
         segs = sorted(zip(at_99["seg_lo"], at_99["seg_hi"]))
         assert segs == [(0.0, 2.0), (2.0, 4.0)]
+
+
+class TestMatchToyOrders:
+    """The editable toy book (issue #121): the script matched by price-time priority."""
+
+    @staticmethod
+    def _sam_sweep_at_57(events: pd.DataFrame, trades: pd.DataFrame):
+        """Move the second fill of Sam's sweep to t=57, as the toy session has it."""
+        events, trades = events.copy(), trades.copy()
+        later = events["timestamp"].iloc[0] + pd.Timedelta(seconds=57)
+        events.loc[events["event_id"].isin([23, 24]), "timestamp"] = later
+        events.loc[events["event_id"].isin([23, 24]), "exchange_timestamp"] = later
+        trades.loc[trades.index[-1], "timestamp"] = later
+        return events, trades
+
+    def test_the_toy_script_rebuilds_the_toy_session(self) -> None:
+        events, trades = match_toy_orders(toy_orders())
+        # The one documented difference: a matching engine fills all of
+        # Sam's sell at t=56.
+        assert (
+            events.loc[events["event_id"].isin([23, 24]), "timestamp"].dt.second == 56
+        ).all()
+        events, trades = self._sam_sweep_at_57(events, trades)
+        pd.testing.assert_frame_equal(events, toy_events())
+        pd.testing.assert_frame_equal(trades, toy_trades())
+
+    def test_edited_session_is_canonical(self) -> None:
+        orders = toy_orders()
+        orders["Jo"] = ToyOrder(at=10, direction="bid", price=100, volume=2)
+        del orders["Dana"]
+        events, trades = match_toy_orders(orders)
+        validate_events_df(set_order_types(events, trades))
+        validate_trades_df(trades)
+        # Every fill is a drop in the order's outstanding volume, and each
+        # trade is two fills: the maker's and the taker's.
+        fills = events[events["fill"] > 0].sort_values("event_id")
+        by_id = events.sort_values(["id", "event_id"])
+        drops = by_id.groupby("id")["volume"].diff().abs()
+        assert (drops[fills.index] == fills["fill"]).all()
+        assert trades["volume"].sum() * 2 == events["fill"].sum()
+
+    def test_a_new_actor_gets_the_next_order_id(self) -> None:
+        orders = toy_orders()
+        orders["Jo"] = ToyOrder(at=10, direction="bid", price=97, volume=1)
+        events, _ = match_toy_orders(orders)
+        ids = events.groupby("actor")["id"].first()
+        assert ids["Jo"] == 13
+        assert ids["Alice"] == 1 and ids["Sam"] == 12
+
+    def test_a_better_price_goes_ahead_of_an_earlier_order(self) -> None:
+        orders = toy_orders()
+        orders["Jo"] = ToyOrder(at=10, direction="bid", price=100, volume=1)
+        _, trades = match_toy_orders(orders)
+        sweep = trades[trades["taker_actor"] == "Sam"]
+        assert list(sweep["maker_actor"]) == ["Jo", "Alice"]
+        assert list(sweep["price"]) == [100, 99]
+
+    def test_an_earlier_order_goes_first_at_one_price(self) -> None:
+        orders = toy_orders()
+        orders["Jo"] = ToyOrder(at=10, direction="bid", price=99, volume=1)
+        _, trades = match_toy_orders(orders)
+        sweep = trades[trades["taker_actor"] == "Sam"]
+        assert list(sweep["maker_actor"]) == ["Alice", "Ivy"]
+
+    def test_unfilled_remainder_rests_at_the_limit_price(self) -> None:
+        orders = {
+            "Ann": ToyOrder(at=0, direction="ask", price=101, volume=1),
+            "Ben": ToyOrder(at=1, direction="bid", price=102, volume=3),
+        }
+        events, trades = match_toy_orders(orders)
+        assert list(trades["price"]) == [101]
+        ben = events[events["actor"] == "Ben"]
+        assert list(ben["action"]) == ["created", "changed"]
+        assert ben["volume"].iloc[-1] == 2 and ben["price"].iloc[-1] == 102
+
+    def test_cancel_removes_what_still_rests(self) -> None:
+        orders = toy_orders()
+        orders["Alice"] = replace(orders["Alice"], cancel_at=30.0)
+        events, trades = match_toy_orders(orders)
+        alice = events[events["actor"] == "Alice"]
+        assert list(alice["action"]) == ["created", "deleted"]
+        assert alice["volume"].iloc[-1] == 2 and alice["fill"].iloc[-1] == 0
+        assert "Alice" not in set(trades["maker_actor"])
+
+    def test_cancel_after_a_full_fill_does_nothing(self) -> None:
+        orders = toy_orders()
+        orders["Alice"] = replace(orders["Alice"], cancel_at=58.0)
+        events, _ = match_toy_orders(orders)
+        alice = events[events["actor"] == "Alice"]
+        assert list(alice["action"]) == ["created", "deleted"]
+        assert alice["fill"].iloc[-1] == 2
+
+    def test_arrivals_come_before_cancellations_at_one_time(self) -> None:
+        # Ann is listed first, but Ben's arrival at t=10 still comes before
+        # Ann's cancellation at t=10, so they trade.
+        orders = {
+            "Ann": ToyOrder(at=0, direction="ask", price=101, volume=1, cancel_at=10),
+            "Ben": ToyOrder(at=10, direction="bid", price=101, volume=1),
+        }
+        events, trades = match_toy_orders(orders)
+        assert list(trades["maker_actor"]) == ["Ann"]
+        assert list(events["action"]) == ["created", "created", "deleted", "deleted"]
+
+    def test_arrivals_at_one_time_follow_the_script_order(self) -> None:
+        # Two bids arrive at once; the one listed first is first in the queue.
+        orders = {
+            "Cy": ToyOrder(at=1, direction="bid", price=99, volume=1),
+            "Di": ToyOrder(at=1, direction="bid", price=99, volume=1),
+            "Ed": ToyOrder(at=2, direction="ask", price=99, volume=1),
+        }
+        _, trades = match_toy_orders(orders)
+        assert list(trades["maker_actor"]) == ["Cy"]
+
+    def test_toy_orders_returns_a_fresh_copy(self) -> None:
+        orders = toy_orders()
+        del orders["Alice"]
+        assert "Alice" in toy_orders()
+
+    @pytest.mark.parametrize(
+        ("order", "match"),
+        [
+            (ToyOrder(0, "buy", 100, 1), "direction"),  # ty: ignore[invalid-argument-type]
+            (ToyOrder(0, "bid", 100.5, 1), "price"),  # ty: ignore[invalid-argument-type]
+            (ToyOrder(0, "bid", 100, 0), "volume"),
+            (ToyOrder(0, "bid", 100, True), "volume"),
+            (ToyOrder(-1, "bid", 100, 1), "at"),
+            (ToyOrder(float("nan"), "bid", 100, 1), "at"),
+            (ToyOrder(5, "bid", 100, 1, cancel_at=5), "cancel_at"),
+            (ToyOrder(5, "bid", 100, 1, cancel_at=float("nan")), "cancel_at"),
+            (ToyOrder(5, "bid", 100, 1, cancel_at=float("inf")), "cancel_at"),
+        ],
+    )
+    def test_bad_orders_are_refused(self, order: ToyOrder, match: str) -> None:
+        with pytest.raises(ConfigError, match=match):
+            match_toy_orders({"Jo": order})

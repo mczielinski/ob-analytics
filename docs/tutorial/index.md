@@ -11,7 +11,10 @@ depth analysis, flow toxicity, and per-order (L3) reconstruction.
 Every chapter is **executed at docs build time**: the code you read produced
 the figures you see, on this exact version of the library. Start with
 **[The toy session](00_toy_session.md)** — the 24-event order-book stream
-every chapter builds its concepts on before showing real data.
+every chapter builds its concepts on before showing real data. There you
+can step through the session in a book replay and rewrite it order by
+order; chapters 2, 4 and 6 end with exercises that do exactly that, each
+with a solution you open after you try it.
 
 Two runnable notebook tutorials cover the core workflow today.
 

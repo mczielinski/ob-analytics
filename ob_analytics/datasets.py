@@ -63,6 +63,12 @@ What it contains, by design:
 * **resting limits** that never trade (Chen, Erin, Gus survive to the
   end of the stream).
 
+:func:`toy_orders` returns the same session as a script of twelve
+:class:`ToyOrder` entries, one per actor, and :func:`match_toy_orders` matches a
+script by price–time priority.  Edit the script — add an order, remove one,
+change when one is cancelled — and match it to get the events and trades of
+the session you wrote.
+
 Under :func:`~ob_analytics.analytics.set_order_types` the twelve orders
 classify with no ``unknown`` leftovers: Alice, Bob, Chen, Ivy, Erin, Gus
 → ``resting-limit``; Frank, Iris, Sam → ``market``; Hana →
@@ -96,15 +102,26 @@ defaults, whose ``lot_size`` of ``1e-8`` would scale a size of 2 to ``2e-08``.
 
 from __future__ import annotations
 
+import math
+from collections.abc import Mapping
+from dataclasses import dataclass
+from numbers import Integral
+from typing import Literal
+
 import numpy as np
 import pandas as pd
+
+from ob_analytics.exceptions import ConfigError
 
 __all__ = [
     "LOT_SIZE",
     "TICK_SIZE",
+    "ToyOrder",
+    "match_toy_orders",
     "toy_events",
     "toy_l2_depth",
     "toy_l2_trades",
+    "toy_orders",
     "toy_trades",
 ]
 
@@ -197,37 +214,49 @@ def toy_events() -> pd.DataFrame:
     >>> sorted(events["type"].unique().dropna().astype(str))  # doctest: +SKIP
     ['flashed-limit', 'market', 'market-limit', 'resting-limit']
     """
-    event_id = np.array([e[0] for e in _EVENTS], dtype=np.int64)
-    seconds = [e[1] for e in _EVENTS]
-    actors = [e[2] for e in _EVENTS]
-    ts = (
+    return _events_frame(_EVENTS, _ACTOR_IDS)
+
+
+def _timestamps(seconds: list[float]) -> pd.Series:
+    """Seconds from the start of the toy session, as tz-aware UTC timestamps."""
+    return (
         pd.Series([_BASE + pd.Timedelta(milliseconds=round(s * 1000)) for s in seconds])
         .astype("datetime64[ns]")
         .dt.tz_localize("UTC")
     )
 
+
+def _events_frame(
+    rows: tuple[tuple[int, float, str, str, str, float, float, float], ...],
+    actor_ids: dict[str, int],
+) -> pd.DataFrame:
+    """Build the canonical events frame from ``_EVENTS``-shaped *rows*."""
+    event_id = np.array([e[0] for e in rows], dtype=np.int64)
+    actors = [e[2] for e in rows]
+    ts = _timestamps([e[1] for e in rows])
+
     return pd.DataFrame(
         {
             "original_number": event_id.copy(),
-            "id": np.array([_ACTOR_IDS[a] for a in actors], dtype=np.int64),
+            "id": np.array([actor_ids[a] for a in actors], dtype=np.int64),
             "timestamp": ts,
             "exchange_timestamp": ts.copy(),
             # Integer ticks (issue #155); TICK_SIZE is 1.0, so ticks == price.
-            "price": np.array([e[5] for e in _EVENTS], dtype=np.int64),
+            "price": np.array([e[5] for e in rows], dtype=np.int64),
             # Integer lots (issue #226); LOT_SIZE is 1.0, so lots == size.
-            "volume": np.array([e[6] for e in _EVENTS], dtype=np.int64),
+            "volume": np.array([e[6] for e in rows], dtype=np.int64),
             "action": pd.Categorical(
-                [e[3] for e in _EVENTS],
+                [e[3] for e in rows],
                 categories=["created", "changed", "deleted"],
                 ordered=True,
             ),
             "direction": pd.Categorical(
-                [e[4] for e in _EVENTS],
+                [e[4] for e in rows],
                 categories=["bid", "ask"],
                 ordered=True,
             ),
             "event_id": event_id,
-            "fill": np.array([e[7] for e in _EVENTS], dtype=np.int64),
+            "fill": np.array([e[7] for e in rows], dtype=np.int64),
             "raw_event_type": pd.NA,
             "actor": actors,
         }
@@ -251,27 +280,34 @@ def toy_trades() -> pd.DataFrame:
         ``taker_event_id``, ``maker``, ``taker``, ``maker_og``,
         ``taker_og``, ``maker_actor``, ``taker_actor``.
     """
-    events = toy_events()
+    return _trades_frame(_TRADES, toy_events())
+
+
+def _trades_frame(
+    rows: tuple[tuple[float, float, float, str, int, int], ...],
+    events: pd.DataFrame,
+) -> pd.DataFrame:
+    """Build the canonical trades frame from ``_TRADES``-shaped *rows*.
+
+    *events* is the events frame the rows' maker and taker event ids point
+    into; it supplies the order ids and actors.
+    """
     eid_to_oid = dict(zip(events["event_id"], events["id"]))
     eid_to_og = dict(zip(events["event_id"], events["original_number"]))
-    oid_to_actor = {v: k for k, v in _ACTOR_IDS.items()}
+    oid_to_actor = dict(zip(events["id"], events["actor"]))
 
-    maker_eid = [t[4] for t in _TRADES]
-    taker_eid = [t[5] for t in _TRADES]
+    maker_eid = [t[4] for t in rows]
+    taker_eid = [t[5] for t in rows]
     maker = [eid_to_oid[e] for e in maker_eid]
     taker = [eid_to_oid[e] for e in taker_eid]
 
     return pd.DataFrame(
         {
-            "timestamp": pd.Series(
-                [_BASE + pd.Timedelta(milliseconds=round(t[0] * 1000)) for t in _TRADES]
-            )
-            .astype("datetime64[ns]")
-            .dt.tz_localize("UTC"),
-            "price": np.array([t[1] for t in _TRADES], dtype=np.int64),
-            "volume": np.array([t[2] for t in _TRADES], dtype=np.int64),
+            "timestamp": _timestamps([t[0] for t in rows]),
+            "price": np.array([t[1] for t in rows], dtype=np.int64),
+            "volume": np.array([t[2] for t in rows], dtype=np.int64),
             "direction": pd.Categorical(
-                [t[3] for t in _TRADES], categories=["buy", "sell"], ordered=True
+                [t[3] for t in rows], categories=["buy", "sell"], ordered=True
             ),
             "maker_event_id": np.array(maker_eid, dtype=object),
             "taker_event_id": np.array(taker_eid, dtype=object),
@@ -283,6 +319,253 @@ def toy_trades() -> pd.DataFrame:
             "taker_actor": [oid_to_actor[o] for o in taker],
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# A toy book you can edit
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ToyOrder:
+    """One order in a toy session script, and when it is cancelled, if it is.
+
+    An order whose price reaches the other side of the book is matched on
+    arrival, so a market order is written as a limit order priced through the
+    touch (Frank's bid at 101 is the toy session's market buy).
+
+    Attributes
+    ----------
+    at : float
+        Seconds from the start of the session when the order arrives.
+    direction : {"bid", "ask"}
+        The side of the book.
+    price : int
+        The limit price, in ticks (the toy book's tick size is ``1.0``).
+    volume : int
+        The size, in lots, at least 1.
+    cancel_at : float, optional
+        Seconds from the start when the owner cancels whatever is still
+        resting.  Nothing happens at that time if the order has already
+        filled.  ``None`` (the default) leaves the order in the book.
+    """
+
+    at: float
+    direction: Literal["bid", "ask"]
+    price: int
+    volume: int
+    cancel_at: float | None = None
+
+
+# The toy session's twelve orders, in arrival order.  match_toy_orders turns
+# these back into _EVENTS and _TRADES (see match_toy_orders for the one
+# difference).
+_ORDERS: dict[str, ToyOrder] = {
+    "Alice": ToyOrder(0.0, "bid", 99, 2),
+    "Bob": ToyOrder(2.0, "ask", 101, 3),
+    "Chen": ToyOrder(5.0, "bid", 98, 1),
+    "Ivy": ToyOrder(6.0, "bid", 99, 2),
+    "Dana": ToyOrder(8.0, "bid", 98, 3, cancel_at=40.0),
+    "Erin": ToyOrder(12.0, "ask", 102, 2),
+    "Frank": ToyOrder(20.0, "bid", 101, 1),
+    "Gus": ToyOrder(35.0, "ask", 103, 2),
+    "Eve": ToyOrder(45.0, "bid", 100, 1, cancel_at=45.8),
+    "Hana": ToyOrder(48.0, "bid", 101, 3),
+    "Iris": ToyOrder(52.0, "ask", 101, 1),
+    "Sam": ToyOrder(56.0, "ask", 99, 3),
+}
+
+
+def toy_orders() -> dict[str, ToyOrder]:
+    """Return the toy session's twelve orders, keyed by actor, in arrival order.
+
+    Change, add or remove entries, then pass the result to
+    :func:`match_toy_orders` to get the events and trades of the session you
+    wrote.  Each call returns a new dictionary, so editing it never changes
+    the toy session itself.
+
+    Returns
+    -------
+    dict of str to ToyOrder
+        ``{"Alice": ToyOrder(...), "Bob": ..., ...}``.
+
+    Examples
+    --------
+    >>> from dataclasses import replace
+    >>> from ob_analytics.datasets import ToyOrder, match_toy_orders, toy_orders
+    >>> orders = toy_orders()
+    >>> orders["Jo"] = ToyOrder(at=10, direction="bid", price=99, volume=1)
+    >>> orders["Eve"] = replace(orders["Eve"], cancel_at=None)  # Eve stays
+    >>> events, trades = match_toy_orders(orders)
+    """
+    return dict(_ORDERS)
+
+
+def _check_order(actor: str, order: ToyOrder) -> None:
+    """Raise ConfigError if *order* cannot be placed in a toy book."""
+
+    def whole(value: object) -> bool:
+        return isinstance(value, Integral) and not isinstance(value, bool)
+
+    problems = []
+    if order.direction not in ("bid", "ask"):
+        problems.append(f"direction must be 'bid' or 'ask', got {order.direction!r}")
+    if not whole(order.price):
+        problems.append(f"price must be a whole number of ticks, got {order.price!r}")
+    if not whole(order.volume) or order.volume < 1:
+        problems.append(
+            f"volume must be a whole number of lots, at least 1, got {order.volume!r}"
+        )
+    if not math.isfinite(order.at) or order.at < 0:
+        problems.append(f"at must be a finite, non-negative time, got {order.at!r}")
+    elif order.cancel_at is not None and not (
+        math.isfinite(order.cancel_at) and order.cancel_at > order.at
+    ):
+        problems.append(
+            f"cancel_at ({order.cancel_at!r}) must be a finite time after at "
+            f"({order.at!r})"
+        )
+    if problems:
+        raise ConfigError(f"Toy order {actor!r}: " + "; ".join(problems) + ".")
+
+
+def match_toy_orders(
+    orders: Mapping[str, ToyOrder],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Match a toy session script and return its events and trades.
+
+    The orders arrive in time order and are matched by price–time priority:
+    an arriving order trades with the best-priced resting order on the other
+    side, the earliest one first, for as long as the prices cross; whatever
+    is left rests at its limit price.  Each trade is at the resting order's
+    price.  A cancellation removes what is still resting.  At any one time,
+    every arrival comes before every cancellation, and arrivals (or
+    cancellations) at the same time are taken in the order of *orders*.
+
+    Each maker fill writes two events, the maker's and then the taker's, as
+    the toy session does.  ``match_toy_orders(toy_orders())`` returns
+    :func:`toy_events` and :func:`toy_trades` exactly, with one difference:
+    here Sam's sell fills Alice and Ivy at the same instant (t=56), as a
+    matching engine would.  The hand-written session puts Ivy's fill one
+    second later, so the tutorial's pictures can show the book between the
+    two fills.
+
+    Parameters
+    ----------
+    orders : mapping of str to ToyOrder
+        The script, keyed by actor.  Start from :func:`toy_orders` to edit the
+        toy session, or write a new one.  The twelve toy actors keep their
+        order ids (Alice is 1, Sam is 12); any other actor gets the next free
+        id, in the order of *orders*.
+
+    Returns
+    -------
+    events : pandas.DataFrame
+        In the layout of :func:`toy_events`, including the ``actor`` column.
+    trades : pandas.DataFrame
+        In the layout of :func:`toy_trades`, including ``maker_actor`` and
+        ``taker_actor``.
+
+    Raises
+    ------
+    ConfigError
+        If an order's direction is not ``"bid"`` or ``"ask"``, its price or
+        volume is not a whole number, its volume is less than 1, a time is
+        not finite, it arrives before the start, or it is cancelled before it
+        arrives.
+    """
+    for actor, order in orders.items():
+        _check_order(actor, order)
+
+    actor_ids: dict[str, int] = {}
+    next_id = max(_ACTOR_IDS.values()) + 1
+    for actor in orders:
+        if actor in _ACTOR_IDS:
+            actor_ids[actor] = _ACTOR_IDS[actor]
+        else:
+            actor_ids[actor] = next_id
+            next_id += 1
+
+    # (time, 0 to place or 1 to cancel, position in the script, actor)
+    steps = sorted(
+        [(o.at, 0, i, a) for i, (a, o) in enumerate(orders.items())]
+        + [
+            (o.cancel_at, 1, i, a)
+            for i, (a, o) in enumerate(orders.items())
+            if o.cancel_at is not None
+        ]
+    )
+
+    events: list[tuple[int, float, str, str, str, float, float, float]] = []
+    trades: list[tuple[float, float, float, str, int, int]] = []
+    # The outstanding volume of each resting order, by actor.  A dict keeps
+    # insertion order, which is arrival order and breaks price ties.
+    resting: dict[str, int] = {}
+
+    def emit(t: float, actor: str, action: str, volume: int, fill: int) -> int:
+        order = orders[actor]
+        event_id = len(events) + 1
+        events.append(
+            (event_id, t, actor, action, order.direction, order.price, volume, fill)
+        )
+        return event_id
+
+    for t, kind, _, actor in steps:
+        if kind == 1:
+            outstanding = resting.pop(actor, None)
+            if outstanding is not None:
+                emit(t, actor, "deleted", outstanding, 0)
+            continue
+
+        order = orders[actor]
+        emit(t, actor, "created", order.volume, 0)
+        remaining = order.volume
+        buying = order.direction == "bid"
+        while remaining:
+            crossing = [
+                other
+                for other in resting
+                if orders[other].direction != order.direction
+                and (
+                    orders[other].price <= order.price
+                    if buying
+                    else orders[other].price >= order.price
+                )
+            ]
+            if not crossing:
+                break
+            # The best price first; min() keeps the earliest of equal prices.
+            maker = min(
+                crossing,
+                key=lambda a: orders[a].price if buying else -orders[a].price,
+            )
+            size = min(remaining, resting[maker])
+            resting[maker] -= size
+            remaining -= size
+            maker_left = resting[maker]
+            maker_event = emit(
+                t, maker, "deleted" if maker_left == 0 else "changed", maker_left, size
+            )
+            taker_event = emit(
+                t, actor, "deleted" if remaining == 0 else "changed", remaining, size
+            )
+            trades.append(
+                (
+                    t,
+                    orders[maker].price,
+                    size,
+                    "buy" if buying else "sell",
+                    maker_event,
+                    taker_event,
+                )
+            )
+            if maker_left == 0:
+                del resting[maker]
+        if remaining:
+            resting[actor] = remaining
+
+    events_frame = _events_frame(tuple(events), actor_ids)
+    return events_frame, _trades_frame(tuple(trades), events_frame)
 
 
 # ---------------------------------------------------------------------------
