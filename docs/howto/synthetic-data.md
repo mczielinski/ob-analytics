@@ -101,7 +101,7 @@ no aggressor rests. This is a deliberate simplification.
 |-----------|---------|---------|
 | `seed` | `0` | Seed for the random generator. Same seed and config give identical output. |
 | `duration` | `300.0` | Length of the simulated session, in seconds. |
-| `start_time` | `2020-01-01 00:00:00` | Wall-clock anchor for the first event. Timestamps are tz-naive. |
+| `start_time` | `2020-01-01 00:00:00+00:00` | Wall-clock anchor for the first event. Timestamps are tz-aware UTC; a tz-naive anchor is read as UTC. |
 
 ### Arrival process
 

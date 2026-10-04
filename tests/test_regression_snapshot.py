@@ -112,6 +112,18 @@ def test_demo_fingerprints(demo_result):
     # against the per-order rebuild, which tracks orders by id and never had
     # this problem: the two now agree on how long this book is crossed, 91.61%
     # of session time against 91.59%, where the price-level path read 92.02%.
+    # 2026-10-03 (aggressiveness read at the order's own time): only `events`
+    # moved, and only in `aggressiveness_bps`. `order_aggressiveness` took the
+    # book before each order from the depth_summary row with the next-lower
+    # `event_id`, but the Bitstamp loader numbers events after sorting by order
+    # id, so that row could be from any time in the session: 51,805 of 156,718
+    # new orders were read against a later book, 7,399 against one more than a
+    # minute away (up to 30 minutes). The lookup now follows
+    # `schemas.time_order_keys` (timestamp, then event_id at one instant), and
+    # the value changes on 45,087 of 314,057 rows. Checked against a
+    # brute-force search for the last row before each order in that order.
+    # `trades`, `depth` and `depth_summary` are unchanged, as is the synthetic
+    # golden, whose event ids are already in time order.
     # 2026-10-03 (depth replayed in event order): the price-level rebuild now
     # follows `schemas.time_order_keys` (timestamp, then event_id at one
     # instant), the order the per-order rebuild uses. It sorted on timestamp
@@ -128,14 +140,15 @@ def test_demo_fingerprints(demo_result):
     # `depth_summary`: the crossed-level eviction depends on replay order, so
     # the book at the end of an instant changes at 2,634 of 130,244 instants,
     # the best bid or ask at 2,453. `events` follows through
-    # `aggressiveness_bps` on 28,270 of 314,057 rows. `trades` is unchanged.
+    # `aggressiveness_bps` (read with the time-order lookup above) on 28,898
+    # of 314,057 rows. `trades` is unchanged.
     # Checked against the per-order rebuild: on 1,500 sampled new orders the
     # best price on the order's side just before it agrees with the uncrossed
     # rebuild for 1,320, against 1,160 before; on five synthetic seeds every
     # event's last depth_summary row now matches the rebuild, against 3-17
     # mismatching rows per seed before.
     EXPECTED: dict[str, str] = {
-        "events": "7b3ca9af0aad2aa32e8334b9125dac0e239dfc2c7959992fc04dda31597463aa",
+        "events": "79ae239c7092d1851c77b1b3bade98e9e884770c46b495d9e9f539f59d1ae486",
         "trades": "c893ffed15f497a7796cb92cdde37a81b841fbfa49a89b4dc6868c59a06405b5",
         "depth": "738c1c2910c82ff8501c5fe0e8df6a05ef6fd1e318254cc3c9122d203336222e",
         "depth_summary": "f61a75a0859f02d0bc6fbd32d731a5bf5caf3d2aab06bb4c9ae2d1ab8f885f7e",

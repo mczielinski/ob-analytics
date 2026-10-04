@@ -25,8 +25,8 @@ Five metrics ship with the package and are registered on import:
 
 Each uses the defaults of the function it wraps.  Pass that function's
 settings as keyword arguments to change them, for example
-``result.metric("vpin", bucket_volume=5.0)`` or
-``result.plot("vpin", bucket_volume=5.0, threshold=0.8)``.
+``result.metric("vpin", n_buckets=20)`` or
+``result.plot("vpin", n_buckets=20, threshold=0.8)``.
 """
 
 from __future__ import annotations

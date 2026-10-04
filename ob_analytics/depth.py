@@ -209,6 +209,12 @@ class DepthMetricsEngine:
         n = len(ordered)
         result = np.zeros((n, self._row_len), dtype=np.float64)
 
+        # The first row starts from the book the engine already holds, so a
+        # second call carries on from where the first left off.  Each row
+        # writes only the side it changes, and a fresh engine's empty book
+        # writes zeros, so a single call is unaffected.
+        self._write_side_metrics(0, result[0])
+        self._write_side_metrics(1, result[0])
         for i in range(n):
             if i > 0:
                 result[i] = result[i - 1]

@@ -351,6 +351,11 @@ class TestBulkVolumeClassification:
         with pytest.raises(ValueError, match="bucket_volume must be positive"):
             bulk_volume_classification(_trades([1.0]), bucket_volume=0.0)
 
+    def test_too_many_buckets(self):
+        trades = _trades([100.0, 101.0], volumes=[1_000_000, 1_000_000])
+        with pytest.raises(ValueError, match="MAX_VOLUME_BUCKETS"):
+            bulk_volume_classification(trades, bucket_volume=1.0)
+
     def test_bad_sigma(self):
         with pytest.raises(ValueError, match="sigma must be positive"):
             bulk_volume_classification(_trades([1.0]), bucket_volume=1.0, sigma=-1.0)
