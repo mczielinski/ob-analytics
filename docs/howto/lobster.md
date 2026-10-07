@@ -91,10 +91,13 @@ executions are detected automatically by the gallery builder
 hidden-execution rows.
 
 !!! note
-    When message files contain cross trades (event type 6) or trading halts
-    (event type 7), filtered rows may not align one-to-one with orderbook
-    rows; the implementation logs a warning and uses the minimum consistent
-    length.
+    The orderbook file has one row for each message row, cross trades (event
+    type 6) and trading halts (event type 7) included. The events keep only
+    types 1 to 5, so each event reads the orderbook row of its own message,
+    named by its `original_number`. An orderbook file with more or fewer
+    rows than the message file raises `ConfigError`. Sizes in the orderbook
+    file are converted to whole lots of `lot_size`, as the message sizes are, so
+    `depth` and `depth_summary` hold `int64` lots.
 
 ## Takers are guessed
 
@@ -114,7 +117,10 @@ and does not count a guessed taker as a match.
 ## LOBSTER round-trip output
 
 To write results back to LOBSTER message + orderbook CSVs, see
-[Save, load, and export](output.md#serialisation).
+[Save, load, and export](output.md#serialisation). The orderbook file is
+written from the run's own depth table, so a run from any source can be
+written. Reading the files back gives the run's book after every event: the
+depth summary read back equals the run's, as far as the written levels reach.
 
 ## Related
 
