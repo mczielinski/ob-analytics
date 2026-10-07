@@ -56,7 +56,7 @@ import pandas as pd
 from pandas.api.typing import DataFrameGroupBy
 
 from ob_analytics._utils import validate_columns, validate_non_empty
-from ob_analytics.trade_sign import prevailing_mid, resolve_direction
+from ob_analytics.trade_sign import mid_before, prevailing_mid, resolve_direction
 
 #: Basis points in one, the scale every ``_bps`` column is written on.
 _BPS = 10_000.0
@@ -168,14 +168,19 @@ def transaction_costs(
     a shrinking horizon as though it were the full one — those rows get
     ``NaN`` realized spread and impact, and keep their effective spread.
 
-    :math:`m_t` is the mid of the last quote **strictly before** the trade.
+    :math:`m_t` is the mid of the quote the trade arrived into: the last
+    quote **strictly before** it (:func:`~ob_analytics.trade_sign.mid_before`).
     When the quote frame is a ``depth_summary`` built from the same event
     stream, the row stamped at the trade's own instant is the book *after*
     the trade took the touch, and measuring against it would charge the taker
     nothing for a move they caused.  Venue timestamps are coarse, so a quote
-    a few events older is the closest honest reference available.  Crossed
-    quotes are skipped for the same reason: a book whose best bid is above
-    its best ask has no midpoint, so the last uncrossed quote is used instead.
+    a few events older is the closest honest reference available.  A quote
+    that is not readable (:func:`~ob_analytics.depth.readable_quotes`) is
+    skipped for the same reason: a crossed book, or one with an empty side,
+    has no midpoint, so the last readable quote is used instead.  Lee-Ready
+    reads the same quote, so with the plain mid a trade it labels from above
+    the mid is a buy with a positive effective spread.  Lee-Ready always reads
+    the plain mid, so with another *mid_column* the two can disagree.
 
     Every number here inherits the quality of the book it is measured
     against.  On a diff feed a trade can print through resting orders the
@@ -255,18 +260,10 @@ def transaction_costs(
     # where it would read as a sell and invert the trade's cost.
     sign = np.where(df["direction"].to_numpy() == "buy", 1.0, -1.0)
 
-    # The contemporaneous mid is the last quote *strictly before* the trade:
-    # on a quote frame built from the same event stream, the row sharing the
-    # trade's instant is the book after that trade took the touch.  The future
-    # mid is read at an arbitrary instant, so an exact match is fine there.
-    mid = prevailing_mid(
-        df["timestamp"].to_numpy(),
-        quotes,
-        "transaction_costs",
-        allow_exact=False,
-        skip_crossed=True,
-        mid_column=mid_column,
-    )
+    # The contemporaneous mid is the quote the trade arrived into, strictly
+    # before it.  The future mid is read at an instant, so a quote stamped at
+    # that instant counts there.
+    mid = mid_before(df, quotes, "transaction_costs", mid_column=mid_column)
     later = df["timestamp"] + pd.Timedelta(horizon)
     # `require_covered` leaves the row unmeasured when the quotes do not reach
     # the future instant, rather than reusing the final quote and reporting a
@@ -275,7 +272,6 @@ def transaction_costs(
         later.to_numpy(),
         quotes,
         "transaction_costs",
-        skip_crossed=True,
         mid_column=mid_column,
         require_covered=True,
     )

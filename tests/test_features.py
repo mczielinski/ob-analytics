@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from ob_analytics.depth import readable_quotes
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
 from ob_analytics.features import (
     DEFAULT_FEATURES,
@@ -23,7 +24,6 @@ from ob_analytics.features import (
     features,
     get_feature,
     list_features,
-    readable_quotes,
     register_feature,
 )
 

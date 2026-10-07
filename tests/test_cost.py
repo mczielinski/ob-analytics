@@ -143,6 +143,30 @@ class TestTransactionCosts:
 
         assert row["mid_price"] == pytest.approx(100.0)
 
+    def test_a_quote_with_an_empty_side_is_skipped(self):
+        """An empty bid side is written as a price of 0, which is not a price.
+
+        Read at face value, its mid is half the ask, and a buy at the ask
+        costs 20,000 bps.  The last quote with both sides is used instead.
+        """
+        quotes = _quotes([99, 0], [101, 101], offsets=[0, 4])
+        trades = _trades([101], ["buy"], offsets=[5])
+
+        row = transaction_costs(trades, quotes, horizon="1s").iloc[0]
+
+        assert row["mid_price"] == pytest.approx(100.0)
+        assert row["effective_spread_bps"] == pytest.approx(200.0)
+
+    def test_crossed_quote_is_skipped_in_every_bid_ask_spelling(self):
+        quotes = _quotes([99, 105], [101, 103], offsets=[0, 4]).rename(
+            columns={"best_bid_price": "bid", "best_ask_price": "ask"}
+        )
+        trades = _trades([101], ["buy"], offsets=[5])
+
+        row = transaction_costs(trades, quotes, horizon="1s").iloc[0]
+
+        assert row["mid_price"] == pytest.approx(100.0)
+
     def test_crossed_guard_survives_a_mid_column(self):
         """A mid column must not quietly switch the crossed-book guard off.
 

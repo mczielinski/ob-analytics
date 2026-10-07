@@ -3,8 +3,8 @@
 Contains :class:`PriceLevelBook`, the book at L2 kept one depth row at a
 time; :class:`DepthMetricsEngine` for computing limit order book depth
 metrics on it, along with :func:`price_level_volume`, :func:`filter_depth`,
-:func:`depth_metrics` (backward-compatible wrapper), :func:`get_spread`, and
-:func:`price_level_snapshots`.
+:func:`depth_metrics` (backward-compatible wrapper), :func:`get_spread`,
+:func:`readable_quotes`, and :func:`price_level_snapshots`.
 """
 
 from __future__ import annotations
@@ -920,6 +920,82 @@ def get_spread(depth_summary: pd.DataFrame) -> pd.DataFrame:
         != 0
     ).any(axis=1)
     return spread[changes]
+
+
+#: The accepted spellings of a quote frame's best bid and best ask, most
+#: specific first.
+_BID_ASK_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("best_bid_price", "best_ask_price"),
+    ("best_bid", "best_ask"),
+    ("bid", "ask"),
+)
+
+
+def _bid_ask_pair(quotes: pd.DataFrame) -> tuple[str, str] | None:
+    """The first bid/ask column pair *quotes* carries, or ``None``.
+
+    :func:`readable_quotes` tests this pair, and
+    :mod:`ob_analytics.trade_sign` averages it into a midpoint.
+    """
+    for bid_column, ask_column in _BID_ASK_COLUMNS:
+        if bid_column in quotes.columns and ask_column in quotes.columns:
+            return bid_column, ask_column
+    return None
+
+
+def readable_quotes(quotes: pd.DataFrame) -> pd.DataFrame:
+    """Return the rows of *quotes* whose book can be read as a price.
+
+    This is the package's one test of a usable quote.  The measurements
+    that read a quote apply it: the mid a trade arrived into
+    (:func:`~ob_analytics.trade_sign.mid_before`, and so Lee-Ready and the
+    effective spread), the mid at an instant
+    (:func:`~ob_analytics.trade_sign.prevailing_mid`), the spread a hidden
+    trade printed inside (:func:`~ob_analytics.hidden_liquidity.hidden_trades`),
+    the book columns of the feature table
+    (:func:`~ob_analytics.features.features`) and the spread line on the depth
+    heatmap.
+
+    Two states get through a depth summary that are not books anything could
+    have traded against, and both would otherwise reach a reader as ordinary
+    numbers:
+
+    **A side with nothing resting on it.**  The depth engine writes a price
+    and a volume of ``0`` for an empty side, which is a marker and not a
+    price.  Taken at face value it makes a spread the width of the whole
+    instrument, a mid at half the other side, and a micro-price of zero:
+    three finite numbers, none of them true, and none of them marked.
+
+    **A crossed book**, where the best bid is above the best ask.  A diff feed
+    can hold genuinely crossed resting orders, so this is an expected state on
+    such a feed rather than a fault, but its midpoint is not a price and its
+    spread is negative.  A *locked* book, bid equal to ask, is a real state at
+    a spread of zero and is kept.
+
+    A reader that drops these rows reaches back to the last quote that could be
+    read, the way it reaches back over any other instant with no quote of its
+    own.  The test reads the first bid/ask pair the frame carries:
+    ``best_bid_price`` / ``best_ask_price``, ``best_bid`` / ``best_ask``, or
+    ``bid`` / ``ask``.  A frame with none of them cannot be tested and is
+    returned unchanged.
+
+    Parameters
+    ----------
+    quotes : pandas.DataFrame
+        Book snapshots: a pipeline ``depth_summary``, or any frame shaped
+        like one.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The readable rows, in their original order.
+    """
+    pair = _bid_ask_pair(quotes)
+    if pair is None:
+        return quotes
+    bid = quotes[pair[0]].to_numpy(dtype=float)
+    ask = quotes[pair[1]].to_numpy(dtype=float)
+    return quotes[(bid > 0) & (ask > 0) & (bid <= ask)]
 
 
 # ── Fair-value / pressure signals ─────────────────────────────────────
