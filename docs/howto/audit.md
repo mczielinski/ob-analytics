@@ -33,7 +33,7 @@ Data quality summary
   duplicate created ids : 0
   pre-existing orders   : 13
   orphan orders         : 13 (13 event(s), no created row)
-  impossible values     : 49 non-positive price(s) / 0 negative volume(s)
+  impossible values     : 49 non-positive price(s) / 0 negative volume(s) / 0 level row(s) below zero
   clock order           : 0 venue-after-receive / 11 reordered
   venue sequence        : 0 missing / 0 out-of-order (0 row(s) numbered)
 Checks: 0 error(s), 4 warning(s)
@@ -54,7 +54,7 @@ Checks: 0 error(s), 4 warning(s)
 | **duplicate event ids / created ids** | Should be `0`; anything else is a feed defect worth chasing |
 | **pre-existing orders** | Orders already resting when the capture began (no `created` row) — structurally unclassifiable, not errors |
 | **orphan orders** | Orders changed or deleted with no `created` row at all. The opening book is the honest source of these; a rise mid-session is the stream losing messages |
-| **impossible values** | Levels priced at or below zero, and negative volumes or fills |
+| **impossible values** | Levels priced at or below zero, negative volumes or fills, and depth rows where the events take more off a price level than they put on (the depth table holds such a level at zero) |
 | **clock order** | Rows the venue stamped *after* we received them, and messages that reached the capture out of venue order. The opening book's rows are left out; `not checked` when the data has one clock |
 | **venue sequence** | Skipped and non-advancing sequence numbers: dropped and reordered messages ([gap detection](../api/analytics.md)) |
 
@@ -85,8 +85,8 @@ Errors: `duplicate_event_ids`, `duplicate_created_ids`, `sequence_gaps`,
 `crossed_book` **on a matched book or price levels only**.
 
 Warnings: `orphan_orders`, `stale_orders`, `nonpositive_price`,
-`exchange_time_reordered`, `unmatched_trades` (above 5%), and `crossed_book`
-when no feed type was declared.
+`negative_level`, `exchange_time_reordered`, `unmatched_trades` (above 5%), and
+`crossed_book` when no feed type was declared.
 
 Two of these are judgement calls worth stating plainly:
 

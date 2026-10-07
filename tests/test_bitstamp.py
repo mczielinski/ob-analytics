@@ -237,6 +237,68 @@ class TestTradeReaderOrderIdTypes:
         assert trades["taker"].iloc[0] == 11
 
 
+class TestInstantOrders:
+    """Bitstamp sends an instant order bought by quote amount as ``created``
+    with size 0 at price 999999999, then the rest of its life.  Its
+    ``created`` row is still its first row."""
+
+    @staticmethod
+    def _capture(tmp_path):
+        ts = 1_777_691_156_000
+        rows = [
+            # A resting bid of 0.5 BTC at 78,360.00.
+            (1, ts, 78360.0, 0.5, "created"),
+            # The instant order: in the raw file its smaller rows come later.
+            (2, ts + 94, 999999999.0, 0.0, "created"),
+            (2, ts + 95, 78360.0, 1e-08, "changed"),
+            (2, ts + 95, 78360.0, 1e-08, "deleted"),
+        ]
+        orders = tmp_path / "orders.csv"
+        pd.DataFrame(
+            [
+                {
+                    "id": i,
+                    "timestamp": t,
+                    "exchange_timestamp": t,
+                    "price": p,
+                    "volume": v,
+                    "action": a,
+                    "direction": "bid",
+                }
+                for i, t, p, v, a in rows
+            ]
+        ).to_csv(orders, index=False)
+        pd.DataFrame(
+            columns=[
+                "trade_id",
+                "timestamp",
+                "exchange_timestamp",
+                "price",
+                "amount",
+                "buy_order_id",
+                "sell_order_id",
+                "side",
+            ]
+        ).to_csv(tmp_path / "trades.csv", index=False)
+        return orders
+
+    def test_the_created_row_comes_first_and_carries_no_fill(self, tmp_path):
+        events = BitstampLoader().load(self._capture(tmp_path))
+        instant = events[events["id"] == 2]
+
+        assert list(instant["action"]) == ["created", "changed", "deleted"]
+        # The size grows from 0 to one lot and is then cancelled: no row
+        # reports an execution.
+        assert list(instant["fill"]) == [0, 0, 0]
+
+    def test_the_other_order_on_the_level_keeps_its_size(self, tmp_path):
+        result = Pipeline(source=BitstampSource()).run(self._capture(tmp_path))
+        depth = result.depth
+        level = depth[(depth["direction"] == "bid") & (depth["price"] == 7836000)]
+
+        assert level["volume"].iloc[-1] == 50_000_000
+
+
 # ---------------------------------------------------------------------------
 # BitstampWriter (round-trip)
 # ---------------------------------------------------------------------------

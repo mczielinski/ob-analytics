@@ -499,6 +499,41 @@ class TestQualityChecks:
         assert not s.ok
         assert "negative_volume" in {c.name for c in s.errors}
 
+    @pytest.mark.parametrize("pass_depth", [False, True])
+    def test_a_level_below_zero_is_counted(self, pass_depth):
+        # The delete reports its 2 as both removed and filled, so the bid
+        # level at 99 loses 4 of the 2 it had.  The depth table holds it at
+        # zero, so the count comes from the events.
+        ev = _classified(
+            [
+                (1, 1, 0.0, 99.0, 2.0, "bid", "created", 0.0),
+                (2, 1, 1.0, 99.0, 2.0, "bid", "deleted", 2.0),
+                (3, 2, 2.0, 101.0, 1.0, "ask", "created", 0.0),
+            ]
+        )
+        depth = None
+        if pass_depth:
+            with pytest.warns(UserWarning, match="below zero"):
+                depth = price_level_volume(ev)
+            assert (depth["volume"] >= 0).all()
+        s = data_quality_summary(ev, _empty_trades(), depth=depth)
+        assert s.negative_level_rows == 1
+        assert s.to_dict()["negative_level_rows"] == 1
+        assert s.ok
+        assert "negative_level" in {c.name for c in s.warnings}
+        assert "1 level row(s) below zero" in s.render()
+
+    def test_events_without_fill_still_score_against_a_given_depth(self):
+        ev = _classified(
+            [
+                (1, 1, 0.0, 99.0, 2.0, "bid", "created", 0.0),
+                (2, 2, 1.0, 101.0, 1.0, "ask", "created", 0.0),
+            ]
+        )
+        depth = price_level_volume(ev)
+        s = data_quality_summary(ev.drop(columns="fill"), _empty_trades(), depth=depth)
+        assert s.negative_level_rows == 0
+
     def test_nonpositive_price_is_a_warning(self):
         ev = _classified(
             [
@@ -966,6 +1001,19 @@ class TestStaleOrdersInSummary:
         assert "ask 2002347646152704 at 78,333 held the ask touch for 27.4 min" in (
             s.render()
         )
+
+    def test_no_level_goes_below_zero_on_the_bitstamp_sample(
+        self, bitstamp_sample_result
+    ):
+        result = bitstamp_sample_result
+        s = data_quality_summary(
+            result.events,
+            result.trades,
+            feed_type=FeedType.DIFF_FEED,
+            depth=result.depth,
+        )
+        assert s.negative_level_rows == 0
+        assert (result.depth["volume"] >= 0).all()
 
     def test_display_tables_give_the_same_report_on_the_bitstamp_sample(
         self, bitstamp_sample_result

@@ -147,11 +147,28 @@ def test_demo_fingerprints(demo_result):
     # rebuild for 1,320, against 1,160 before; on five synthetic seeds every
     # event's last depth_summary row now matches the rebuild, against 3-17
     # mismatching rows per seed before.
+    # 2026-10-04 (the `deleted`-row rule, #341): the Bitstamp loader now puts
+    # each order's `created` row first.  It sorted an order's rows by size,
+    # largest first, and two instant orders bought by quote amount are created
+    # with size 0, so their `created` row came last.  One of them,
+    # 2002354918830080 (`created` 0, `changed` 1 lot, `deleted` 1 lot), then
+    # had its 1-lot `changed` row read as its first row and a phantom 1-lot
+    # fill on its `created` row, so the bid level at 78,360.00 lost 2 lots it
+    # never had, which the old clip to zero hid.  Now its rows are `created`,
+    # `changed`, `deleted` with no fill, and the level holds the 1 lot from
+    # the `changed` row to the `deleted` row.  `events` differs on that
+    # order's 3 rows only (their order, and the fill).  `depth` and
+    # `depth_summary` differ on 3 rows at that instant: the rows move with
+    # the events, and for one row the bid touch is that 1 lot at 78,360.00,
+    # locked against the ask, as the feed reports it.  The other order,
+    # 2002351232385027, is all size 0 and reads the same.  `trades` is
+    # unchanged.  No event overdraws a level, so holding a level at zero
+    # changes nothing here.
     EXPECTED: dict[str, str] = {
-        "events": "79ae239c7092d1851c77b1b3bade98e9e884770c46b495d9e9f539f59d1ae486",
+        "events": "be36c95e86c750de9905f10117f18694be2cc1ec81799879e76ac997ac6d4170",
         "trades": "c893ffed15f497a7796cb92cdde37a81b841fbfa49a89b4dc6868c59a06405b5",
-        "depth": "738c1c2910c82ff8501c5fe0e8df6a05ef6fd1e318254cc3c9122d203336222e",
-        "depth_summary": "f61a75a0859f02d0bc6fbd32d731a5bf5caf3d2aab06bb4c9ae2d1ab8f885f7e",
+        "depth": "40f9dad005e2f5f6e6083c094650da6f3074afd3f46ac999862a19b87ec14fe5",
+        "depth_summary": "3d7eab57f5a6068710e43621fee004518f6df9868905d44508bd5483266dba01",
     }
     if EXPECTED:
         assert fps == EXPECTED

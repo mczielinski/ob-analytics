@@ -12,14 +12,24 @@ Canonical per-order volume semantics (every loader must satisfy these;
 consumers — ``price_level_volume``, ``order_book``, the L3 faces — assume
 them):
 
+* ``fill`` — on any row, the size **executed** at this event (0 when nothing
+  traded).
 * ``volume`` — the order's **outstanding size after the event** for
-  ``created``/``changed`` rows, and the **size removed** (outstanding
-  immediately before the delete) for ``deleted`` rows.  A whole number of lots
+  ``created``/``changed`` rows.  On a ``deleted`` row it is the size
+  **removed without trading**, so ``volume + fill`` is what the order had
+  resting just before the delete.  An order filled in full has a
+  ``deleted`` row with ``fill`` equal to its last outstanding size and
+  ``volume`` 0; an order cancelled with nothing executed has ``fill`` 0 and
+  ``volume`` equal to its last outstanding size.  A whole number of lots
   (``int64``); see the size policy below.
-* ``fill`` — the **executed** delta at this event (0 when nothing traded).
-  A ``changed`` row is either an execution (``fill > 0``, outstanding drops
+* A ``changed`` row is either an execution (``fill > 0``, outstanding drops
   by exactly ``fill``) or a non-executed reduction (``fill == 0``, e.g. a
   LOBSTER partial cancel) — never both in one event.
+* The depth rebuild (``price_level_volume``) takes ``volume`` off a level for
+  a ``deleted`` row, ``fill`` for any row, and the drop in outstanding size
+  for a ``changed`` row with no fill, so each size leaves its level once.  A
+  level that would go below zero is a loader error: the rebuild holds the
+  level at zero and warns, and ``audit`` counts it.
 * Orders first seen mid-stream (a pre-existing opening book, LOBSTER hidden
   executions sharing the native ``id=0``) have no submission to anchor the
   outstanding size; loaders keep the venue's raw per-event quantity for

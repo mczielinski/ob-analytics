@@ -106,7 +106,7 @@ Data quality summary
   duplicate created ids : 0
   pre-existing orders   : 13
   orphan orders         : 13 (13 event(s), no created row)
-  impossible values     : 49 non-positive price(s) / 0 negative volume(s)
+  impossible values     : 49 non-positive price(s) / 0 negative volume(s) / 0 level row(s) below zero
   clock order           : 0 venue-after-receive / 11 reordered
   venue sequence        : 0 missing / 0 out-of-order (0 row(s) numbered)
 Checks: 0 error(s), 4 warning(s)

@@ -486,6 +486,27 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
         and ``ingest_seq`` columns are carried over from *events* when it has
         them, so the depth rows sort the same way the events do.  The volume
         is in the units and dtype family of ``events["volume"]``.
+
+    Warns
+    -----
+    UserWarning
+        When the events would take a level's size below zero.  That means
+        they take more size off the level than they put on it, which a loader
+        that follows the schema's ``volume`` and ``fill`` rule never does.
+        The warning names the level and the first event that overdrew it.
+        The level's running total is held at zero, so it never reads a
+        negative size, and the next order on it starts from zero.  ``audit``
+        counts these rows as ``negative_level``.
+    """
+    depth, overdrawn = _price_level_volume(events)
+    _warn_on_overdrawn_levels(overdrawn)
+    return depth
+
+
+def _price_level_volume(events: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Return the depth table, and its rows where the events overdraw a level.
+
+    The work of :func:`price_level_volume`, which warns about the second.
     """
     validate_columns(
         events,
@@ -513,6 +534,8 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
     # as whole multiples of the grid, as integer lots are, and converted back
     # at the end.
     decimals = None
+    # Float sizes on no grid, whose level totals carry rounding.
+    float_sums = False
     if not all(pd.api.types.is_integer_dtype(events[c]) for c in ("volume", "fill")):
         volume = events["volume"].to_numpy(dtype=np.float64)
         fill = events["fill"].to_numpy(dtype=np.float64)
@@ -523,8 +546,9 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
                 "decimal grid, so they are summed as floats and a level that "
                 "empties can keep a remainder near zero.  Pass integer sizes, "
                 "such as the pipeline's own tables.",
-                stacklevel=2,
+                stacklevel=3,
             )
+            float_sums = True
         else:
             grid = 10.0**-decimals
             events = events.assign(
@@ -645,10 +669,15 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
             & ~moved
             & (dir_events["type"] != "market")
         )
+        # ``groupby().shift()`` gives a float, so each size taken from the
+        # drop is cast back to the events' own size dtype.
+        volume_dtype = dir_events["volume"].dtype
         reduced_volume = dir_events[resized & (outstanding_drop > 0)][cols].copy()
         if not reduced_volume.empty:
             reduced_volume["price"] = resting_price[reduced_volume.index]
-            reduced_volume["volume"] = -outstanding_drop[reduced_volume.index]
+            reduced_volume["volume"] = (-outstanding_drop[reduced_volume.index]).astype(
+                volume_dtype
+            )
             reduced_volume = reduced_volume[
                 reduced_volume["id"].isin(added_volume["id"])
             ]
@@ -657,7 +686,6 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
         # place.  Neither LOBSTER nor Bitstamp does, so these frames are
         # empty there and are left out of the concatenation altogether, which
         # keeps the output for those feeds exactly as it was.
-        volume_dtype = dir_events["volume"].dtype
         grown_volume = dir_events[amendable & ~moved & (outstanding_drop < 0)][
             cols
         ].copy()
@@ -694,11 +722,33 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
             by=["price", *time_order_keys(volume_deltas)], kind="stable"
         )
 
-        volume_deltas["volume"] = volume_deltas.groupby("price")["volume"].cumsum()
-        volume_deltas["volume"] = volume_deltas["volume"].clip(lower=0)
+        # The running total is held at zero: a level the events overdraw
+        # reads 0, not a negative size, and the next order on it starts from
+        # 0 rather than from the shortfall.  ``c - min(0, cummin(c))`` is that
+        # clamped running sum.  A row whose total falls below zero and below
+        # every earlier low overdraws the level; float sums on no grid get a
+        # rounding allowance first.
+        level = volume_deltas["price"]
+        total = volume_deltas.groupby("price")["volume"].cumsum()
+        offset = total.groupby(level).cummin().clip(upper=0)
+        noise = 0.0
+        if float_sums and not total.empty:
+            noise = 1024 * np.finfo(np.float64).eps * float(np.nanmax(np.abs(total)))
+        volume_deltas["volume"] = total - offset
+        volume_deltas["_overdrawn"] = (
+            offset < offset.groupby(level).shift(fill_value=0) - noise
+        )
 
         return volume_deltas[
-            ["event_id", "timestamp", "price", "volume", "direction", *order_keys]
+            [
+                "event_id",
+                "timestamp",
+                "price",
+                "volume",
+                "direction",
+                *order_keys,
+                "_overdrawn",
+            ]
         ]
 
     bids = events[events["direction"] == "bid"]
@@ -706,11 +756,41 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
     asks = events[events["direction"] == "ask"]
     depth_ask = directional_price_level_volume(asks)
     depth_data = pd.concat([depth_bid, depth_ask])
+    is_overdrawn = depth_data["_overdrawn"].to_numpy(dtype=bool)
+    depth_data = depth_data.drop(columns="_overdrawn")
+    overdrawn = depth_data[is_overdrawn]
     if decimals is not None:
         depth_data["volume"] = lots_to_size(
             depth_data["volume"].to_numpy(), 10.0**-decimals, decimals=decimals
         )
-    return depth_data.sort_values(by=time_order_keys(depth_data), kind="stable")
+    depth_data = depth_data.sort_values(by=time_order_keys(depth_data), kind="stable")
+    return depth_data, overdrawn
+
+
+def _warn_on_overdrawn_levels(overdrawn: pd.DataFrame) -> None:
+    """Warn about the depth rows where the events overdraw a price level.
+
+    That happens only when the events take more size off a level than they
+    put on it.  Events that follow the schema's rule for ``volume`` and
+    ``fill`` never do.  The level is held at zero, so the caller is told which
+    level it is and which event first overdrew it.
+    """
+    if overdrawn.empty:
+        return
+    first = overdrawn.sort_values(by=time_order_keys(overdrawn), kind="stable").iloc[0]
+    levels = overdrawn[["direction", "price"]].drop_duplicates()
+    warnings.warn(
+        f"price_level_volume: {len(overdrawn)} depth row(s) on {len(levels)} "
+        "price level(s) would go below zero, because the events take more "
+        "size off those levels than they put on.  The first is "
+        f"the {first['direction']} level at price {first['price']} (in the "
+        "events' own price units: ticks on a pipeline table) at event "
+        f"{first['event_id']}.  Each such level is held at zero, so it reads "
+        "less than the orders the events show resting there.  On a deleted "
+        "row, volume must be the size removed without trading and fill the "
+        "size executed (see ob_analytics.schemas).",
+        stacklevel=3,
+    )
 
 
 def filter_depth(

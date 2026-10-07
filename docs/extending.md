@@ -517,8 +517,8 @@ that rounds to zero, so a BTC feed carrying single-satoshi orders needs
 6, refuses them.
 
 An order that was fully filled leaves a `deleted` event whose canonical volume
-is zero, because the volume on a delete is the size *removed* and a filled order
-had nothing left to cancel. Nautilus rejects a zero-size delta, so the export
+is zero, because the volume on a delete is the size removed without trading and
+a filled order had nothing left to cancel. Nautilus rejects a zero-size delta, so the export
 gives that delete the size the order last rested at. An order that never rested
 at a positive size is dropped: there is nothing truthful to say about it.
 
