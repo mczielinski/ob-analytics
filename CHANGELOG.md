@@ -225,6 +225,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `resolve_direction(..., fallback=None)`, and both write the trades schema's
   ordered `buy`/`sell` categorical. A run with no quotes still leaves the
   unlabelled trades empty, now with a `UserWarning` rather than a log line.
+- **LOBSTER depth is stamped with the right event after a cross trade or a
+  halt** (#340). The orderbook file has a row for every message, type 6
+  (cross trade) and type 7 (halt) included, but the events keep only types 1
+  to 5. `lobster_depth_from_orderbook` paired the two by position, so after
+  the first type 6 or 7 message every book state carried a later event's time
+  and `event_id`, and the last states were lost. Each event now reads the
+  orderbook row of its own message, named by `original_number`. A
+  `LobsterSource` run raises `ConfigError` on an orderbook file with more or
+  fewer rows than the message file, where before it logged a warning a
+  Python user never saw. `lobster_depth_from_orderbook` called on its own
+  checks the count only when given `message_rows`.
+- **LOBSTER depth sizes are `int64` lots** (#340). Sizes read from the
+  orderbook file were `float64` share counts, so `depth.volume` and every
+  size column of `depth_summary` were floats, against the schema, and with a
+  `lot_size` other than 1 they were in different units from the events. They
+  are now converted with `lot_size`, as the message sizes are.
+- **`LobsterWriter` writes the run's own book** (#340). The writer rebuilt the
+  orderbook file from the events with rules of its own that only fitted frames
+  read from LOBSTER. On a frame from any other source it raised `TypeError`
+  (the missing `raw_event_type`), and without that column it wrote a book
+  that differed from the run's depth. It now writes the book after each
+  event from the `depth` table it is given, or from `price_level_volume`
+  when there is none, through `PriceLevelBook`, the book the depth summary is
+  built on. Reading the files back gives the run's book after every event:
+  the depth summary read back equals the run's, as far as the written levels
+  reach. Both files are written in time order, and an empty level's dummy
+  price is no longer multiplied by the price divisor. The writer refuses,
+  with `ConfigError`, a run with no events, repeated `event_id`s, events or
+  depth in display units, and a `price_divisor` too coarse for the tick (with
+  a cent tick, a divisor of 1 wrote 100.01 and 100.02 as the same price).
+  Events with no `depth` table now need the `type` column that
+  `set_order_types` adds, so events straight from `LobsterLoader.load` are
+  refused: pass the run's `depth`, or run `set_order_types` first. Prices are encoded as exact
+  integers, and a writer built with no config uses LOBSTER's own grid
+  (`price_divisor=10_000`, whole shares) instead of the general defaults.
 - **One rule for a `deleted` row, and the loaders and writer that broke it**
   (#341). The schema now says what a `deleted` row holds when its order also
   traded: `fill` is the executed part, `volume` the part removed without
