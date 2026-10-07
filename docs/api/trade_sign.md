@@ -25,10 +25,23 @@ as an automatic fallback.
 
 ## Shared helpers
 
-The signed-flow analytics reach the quotes and the aggressor side through these
-two, rather than each re-deriving them.
+The pipeline and the signed-flow analytics fill a missing aggressor side
+through `resolve_direction`, rather than each with its own rule.
 
 ::: ob_analytics.trade_sign.resolve_direction
+
+A trade, or an order, is measured against the quote it arrived into: the last
+quote strictly before it. On a feed whose trades and book share one clock, the
+quote stamped at a trade's own instant is the book after the trade, so it does
+not count. `quote_before` is that rule, and `mid_before` reads the mid of that
+quote, skipping quotes that are not
+[readable](depth.md#ob_analytics.depth.readable_quotes). `prevailing_mid` is
+the mid at an instant, the instant included, such as the mid one horizon after
+a trade.
+
+::: ob_analytics.trade_sign.quote_before
+
+::: ob_analytics.trade_sign.mid_before
 
 ::: ob_analytics.trade_sign.prevailing_mid
 

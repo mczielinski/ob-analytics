@@ -25,3 +25,5 @@ snapshot's touch always equals the depth summary's at that instant.
 ::: ob_analytics.depth.filter_depth
 
 ::: ob_analytics.depth.get_spread
+
+::: ob_analytics.depth.readable_quotes

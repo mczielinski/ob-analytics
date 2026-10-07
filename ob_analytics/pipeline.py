@@ -51,7 +51,12 @@ from ob_analytics._windows import (
 )
 from ob_analytics.analytics import order_aggressiveness, set_order_types
 from ob_analytics.config import PipelineConfig
-from ob_analytics.depth import DepthMetricsEngine, depth_metrics, price_level_volume
+from ob_analytics.depth import (
+    DepthMetricsEngine,
+    depth_metrics,
+    price_level_volume,
+    readable_quotes,
+)
 from ob_analytics.protocols import (
     DataWriter,
     EventLoader,
@@ -67,7 +72,16 @@ from ob_analytics.schemas import (
     validate_trades_df,
 )
 from ob_analytics.sources import get_source
-from ob_analytics.trade_sign import classify_trade_sign, prevailing_mid
+from ob_analytics.trade_sign import (
+    _SIDES,
+    classify_trade_sign,
+    quote_before,
+    resolve_direction,
+)
+
+#: The quote columns a windowed run keeps for labelling trades after the
+#: last window: what Lee-Ready reads, and nothing else.
+_ARRIVAL_COLUMNS = ["timestamp", "best_bid_price", "best_ask_price"]
 
 
 @dataclass(frozen=True)
@@ -441,7 +455,7 @@ class Pipeline:
         # A no-op for a feed that states the aggressor on every trade, which is
         # every L3 crypto source; Databento leaves auction and off-exchange
         # prints unset.
-        trades = self._ensure_trade_signs(trades, depth_summary)
+        trades = _sign_unlabelled(trades, depth_summary)
         validate_trades_df(trades)  # data contract (schemas.py)
 
         logger.info("Pipeline: computing order aggressiveness")
@@ -487,7 +501,7 @@ class Pipeline:
         # from the venue's own prints, not from reconstructed order lifecycles.
         events = empty_events()
         trades = self.trade_source.load(events, source)
-        trades = self._ensure_trade_signs(trades, depth_summary)
+        trades = _sign_unlabelled(trades, depth_summary)
         validate_trades_df(trades)  # data contract (schemas.py)
 
         logger.info(
@@ -605,10 +619,15 @@ class Pipeline:
             del events
 
         trade_windows = window_positions(trades["timestamp"], windows)
-        mids = np.full(len(trades), np.nan)
+        arrived_into: list[pd.DataFrame] = []
+        # Trades whose own window held no quote before them.
+        no_quote = np.zeros(len(trades), dtype=bool)
+        # The quotes are kept only for trades the venue left unlabelled.
+        unlabelled = ~trades["direction"].isin(_SIDES).to_numpy()
         resting = rows.iloc[:0]
         engine = DepthMetricsEngine(self.config)
-        last_quote = pd.DataFrame()
+        last_quote = last_readable = pd.DataFrame()
+        had_quotes = False
         with ParquetAppender(output, self.config) as out:
             for number, ((start, _), positions, at_trades) in enumerate(
                 zip(
@@ -629,7 +648,8 @@ class Pipeline:
                     len(resting),
                 )
                 if not carry:
-                    engine, last_quote = DepthMetricsEngine(self.config), last_quote[:0]
+                    engine = DepthMetricsEngine(self.config)
+                    last_quote, last_readable = last_quote[:0], last_readable[:0]
 
                 if level is Level.L2:
                     # A price-level row states its level's whole size, so the
@@ -642,7 +662,15 @@ class Pipeline:
 
                 depth_summary = engine.compute(depth) if len(depth) else None
                 quotes = _led_by(last_quote, depth_summary)
-                _note_mids(mids, trades, at_trades, quotes)
+                if unlabelled.any():
+                    readable = _led_by(
+                        last_readable,
+                        None
+                        if depth_summary is None
+                        else readable_quotes(depth_summary[_ARRIVAL_COLUMNS]),
+                    )
+                    _note_quotes(arrived_into, no_quote, trades, at_trades, readable)
+                    last_readable = readable.tail(1)
 
                 if level is Level.L3 and len(window):
                     if quotes.empty:
@@ -651,13 +679,30 @@ class Pipeline:
                         window = order_aggressiveness(window, quotes)
                     out.write("events", window, like=rows)
                 if depth_summary is not None:
+                    had_quotes = had_quotes or not depth_summary.empty
                     out.write("depth", depth)
                     out.write("depth_summary", depth_summary)
                     last_quote = depth_summary.tail(1)
 
             if level is Level.L2:
                 out.write("events", empty_events())
-            out.write("trades", self._signs_from_mids(trades, mids))
+            # The rows the trades arrived into.  When the run had quotes but
+            # none stood before a trade, Lee-Ready signs every trade by the
+            # tick rule, as it would in a single run; a run with no quotes at
+            # all leaves them empty, as a single run does.
+            standing = (
+                pd.concat(arrived_into, ignore_index=True) if arrived_into else None
+            )
+            trades = _sign_unlabelled(
+                trades, standing, fallback="tick" if had_quotes else None
+            )
+            if standing is not None and not carry:
+                # Without carry a window is a separate input: a trade with no
+                # quote in its own window must not read one kept from an
+                # earlier window.  Lee-Ready signs it by the tick rule.
+                trades = _tick_signs(trades, unlabelled & no_quote)
+            validate_trades_df(trades)
+            out.write("trades", trades)
             out.finish(("events", "trades", "depth", "depth_summary"))
 
         logger.info("Pipeline: wrote {} windows to {}", len(windows), output)
@@ -693,91 +738,74 @@ class Pipeline:
             depth = depth[depth["timestamp"] >= start]
         return depth, resting_orders(frame) if carry else frame.iloc[:0]
 
-    def _signs_from_mids(self, trades: pd.DataFrame, mids: np.ndarray) -> pd.DataFrame:
-        """Label the unlabelled trades from the mids the windows recorded.
 
-        The same Lee–Ready pass :meth:`run` makes, given each trade's own mid
-        as its quote.  Trades that share an instant share a mid, so the lookup
-        finds the same value the windows did.
-        """
-        if trades.empty:
-            return trades
-        quotes = pd.DataFrame({"timestamp": trades["timestamp"], "mid": mids})
-        quotes = quotes.sort_values("timestamp", kind="stable").drop_duplicates(
-            "timestamp", keep="last"
-        )
-        signed = self._ensure_trade_signs(trades, quotes)
-        validate_trades_df(signed)
-        return signed
+def _sign_unlabelled(
+    trades: pd.DataFrame,
+    quotes: pd.DataFrame | None,
+    *,
+    fallback: str | None = None,
+) -> pd.DataFrame:
+    """Label the trades the venue left unlabelled, by Lee-Ready against *quotes*.
 
-    @staticmethod
-    def _ensure_trade_signs(
-        trades: pd.DataFrame, depth_summary: pd.DataFrame
-    ) -> pd.DataFrame:
-        """Fill any unlabelled trade ``direction`` via Lee–Ready.
+    *quotes* is ``None`` or empty when the run produced no quotes at all,
+    and the trades then get *fallback* (see
+    :func:`~ob_analytics.trade_sign.resolve_direction`).
 
-        L3 crypto ships the taker side for free; many price-level venues (and
-        CCXT sources) don't.  Where the trade reader left ``direction`` unset,
-        classify the aggressor with Lee–Ready against the reconstructed BBO
-        (``depth_summary``), falling back to the tick rule at the mid — the
-        trade-sign classifiers added for exactly this case (see
-        :mod:`ob_analytics.trade_sign`).  Rows the venue *did* label keep the
-        venue's answer: a classifier is an estimate and the venue's is not.
-
-        Part of a feed can be unlabelled while the rest is not.  Databento
-        states the aggressor on most trades but sends none for an auction, a
-        trade against a non-displayed order, or an off-exchange print, so the
-        unset rows are filled one subset at a time rather than all or nothing.
-        """
-        if trades.empty or "direction" not in trades.columns:
-            return trades
-        unlabelled = trades["direction"].isna()
-        if not unlabelled.any():
-            return trades  # venue labelled every aggressor side
-        if depth_summary is None or depth_summary.empty:
-            logger.warning(
-                "Pipeline: {} trades carry no aggressor side and there are no "
-                "quotes to classify them against; leaving them unset",
-                int(unlabelled.sum()),
-            )
-            return trades
-        logger.info(
-            "Pipeline: classifying {} of {} trade signs (Lee–Ready)",
-            int(unlabelled.sum()),
-            len(trades),
-        )
-        direction = classify_trade_sign(
-            trades, method="lee_ready", quotes=depth_summary
-        )
-        # Through ``object`` and back: assigning one categorical into another
-        # widens the column, and the trades schema wants the ordered
-        # buy/sell categorical.
-        filled = trades["direction"].astype(object)
-        filled[unlabelled] = direction.astype(object)[unlabelled]
-        return trades.assign(
-            direction=pd.Categorical(filled, categories=["buy", "sell"], ordered=True)
-        )
+    L3 crypto states the taker side on every trade; many price-level venues
+    (and CCXT sources) do not, and Databento sends none for an auction, a
+    trade against a non-displayed order, or an off-exchange print.  Those rows
+    are labelled by :func:`~ob_analytics.trade_sign.resolve_direction`, the
+    same rule the signed-flow analytics use, against the quote each trade
+    arrived into.  Rows the venue *did* label keep the venue's answer: a
+    classifier is an estimate and the venue's is not.  A run with no quotes
+    at all leaves the unlabelled trades empty, with a warning, rather than
+    guessing.
+    """
+    if trades.empty:
+        return trades
+    if quotes is not None and quotes.empty:
+        quotes = None
+    return resolve_direction(trades, None, quotes, "Pipeline", fallback=fallback)
 
 
-def _note_mids(
-    mids: np.ndarray,
+def _tick_signs(trades: pd.DataFrame, rows: np.ndarray) -> pd.DataFrame:
+    """Return *trades* with the *rows* signed by the tick rule."""
+    if not rows.any():
+        return trades
+    direction = trades["direction"].copy()
+    direction[rows] = classify_trade_sign(trades, method="tick")[rows]
+    return trades.assign(direction=direction)
+
+
+def _note_quotes(
+    arrived_into: list[pd.DataFrame],
+    no_quote: np.ndarray,
     trades: pd.DataFrame,
     positions: np.ndarray,
     quotes: pd.DataFrame,
 ) -> None:
-    """Record the mid standing at each of one window's trades into *mids*.
+    """Keep the readable quote each of one window's trades arrived into.
 
-    Trade signs are decided once, over every trade, after the last window
-    (see :meth:`Pipeline._signs_from_mids`), because the tick rule they fall
-    back on reads the trades before and after.  The quotes they need are only
-    in memory one window at a time, so each window leaves its mids behind.
-    *positions* are the window's trades, as positions in *trades*.
+    Trade signs are decided once, over every trade, after the last window,
+    because the tick rule they fall back on reads the trades before and after.
+    The quotes they need are only in memory one window at a time, so each
+    window leaves behind the rows its trades will read: at most one per trade.
+    Each trade still finds its own row among them, because no readable quote
+    falls between a trade and the row it arrived into.  *quotes* are the
+    window's readable quotes, led by the last one before the window;
+    *positions* are the window's trades, as positions in *trades*.  The trades
+    with no quote before them in the window are marked in *no_quote*.
     """
-    if quotes.empty or not len(positions):
+    if not len(positions):
         return
-    times = trades["timestamp"].to_numpy()[positions]
-    order = np.argsort(times, kind="stable")
-    mids[positions[order]] = prevailing_mid(times[order], quotes)
+    if quotes.empty:
+        no_quote[positions] = True
+        return
+    standing = quote_before(trades["timestamp"].iloc[positions].to_frame(), quotes)
+    no_quote[positions[standing < 0]] = True
+    rows = np.unique(standing[standing >= 0])
+    if len(rows):
+        arrived_into.append(quotes.iloc[rows])
 
 
 def _led_by(

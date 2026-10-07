@@ -436,7 +436,8 @@ class L2TradeReader:
     columns) are left unset.  ``direction`` (the taker's aggressor side) is
     taken from a native ``side`` column when present; otherwise it is left
     unlabelled and the pipeline classifies it (Lee–Ready against the
-    reconstructed BBO — see :meth:`~ob_analytics.pipeline.Pipeline._ensure_trade_signs`).
+    reconstructed touch — see
+    :func:`~ob_analytics.trade_sign.resolve_direction`).
 
     Trades are optional for an L2 run: a missing / empty ``trades.csv`` yields
     an empty trades frame (depth analytics still run).

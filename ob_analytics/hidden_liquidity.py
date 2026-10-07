@@ -35,8 +35,11 @@ import numpy as np
 import pandas as pd
 
 from ob_analytics._utils import validate_columns
+from ob_analytics.depth import readable_quotes
 from ob_analytics.engine import HIDDEN_ORDER_ID
 from ob_analytics.exceptions import ConfigError
+from ob_analytics.schemas import time_order_keys
+from ob_analytics.trade_sign import quote_before
 
 __all__ = [
     "ICEBERG_MAX_DELAY",
@@ -355,20 +358,24 @@ def hidden_trades(
 ) -> pd.DataFrame:
     """Return the trades that printed strictly inside the visible spread.
 
-    Each trade is compared with the spread standing just before its maker's
-    fill: the depth summary is read by an as-of join at the maker event's
-    timestamp, with that instant itself excluded.  The maker event is used
+    Each trade is compared with the spread its maker's fill arrived into: the
+    last quote strictly before the maker event, in the canonical event order
+    (:func:`~ob_analytics.trade_sign.quote_before`).  The maker event is used
     rather than the trade's own timestamp because some feeds report the fill
     on the order stream before the trade print arrives, and by the print the
-    maker has already left the book.  Excluding the instant stops a sweep that
-    empties a price level from making its own later prints look inside the
-    spread.  A trade with no maker event falls back to its own timestamp.
+    maker has already left the book.  The quote written by the fill itself, or
+    by a later event at the same instant, does not count, so a sweep that
+    empties a price level does not make its own later prints look inside the
+    spread.  A trade with no maker event is read against the last quote
+    strictly before its own timestamp.
 
-    A trade is kept when both sides of the book were present and not crossed,
-    and ``best_bid_price < price < best_ask_price``.  The depth summary holds
-    visible orders only, so such a trade executed against an order the book
-    did not show.  A hidden order resting at or behind the touch is missed: its
-    trades print at a visible price.
+    A trade is kept when that spread can be read
+    (:func:`~ob_analytics.depth.readable_quotes`: both sides present and not
+    crossed) and ``best_bid_price < price < best_ask_price``.  An older spread
+    is not used in place of an unreadable one, because it no longer stood.
+    The depth summary holds visible orders only, so such a trade executed
+    against an order the book did not show.  A hidden order resting at or
+    behind the touch is missed: its trades print at a visible price.
 
     Parameters
     ----------
@@ -378,7 +385,8 @@ def hidden_trades(
         Trades with ``timestamp``, ``price`` and ``maker_event_id``.
     depth_summary : pandas.DataFrame
         The run's depth summary, with ``timestamp``, ``best_bid_price`` and
-        ``best_ask_price``.
+        ``best_ask_price``.  An ``event_id`` column orders rows that share a
+        timestamp.
 
     Returns
     -------
@@ -402,31 +410,34 @@ def hidden_trades(
     unique_events = events.drop_duplicates("event_id")
     maker = pd.to_numeric(trades["maker_event_id"], errors="coerce").astype("float64")
     pos = pd.Index(unique_events["event_id"]).get_indexer(pd.Index(maker))
-    at = trades["timestamp"].copy()
     known = pos >= 0
+    at = trades["timestamp"].copy()
     at.iloc[np.flatnonzero(known)] = unique_events["timestamp"].to_numpy()[pos[known]]
-
-    touch = depth_summary[["timestamp", "best_bid_price", "best_ask_price"]]
-    standing = (
-        pd.merge_asof(
-            pd.DataFrame(
-                # ``.array`` keeps the tz-aware dtype; ``to_numpy()`` would give
-                # an object array, which ``merge_asof`` rejects when empty.
-                {"timestamp": at.array, "row": np.arange(len(trades))}
-            ).sort_values("timestamp", kind="stable"),
-            touch.sort_values("timestamp", kind="stable"),
-            on="timestamp",
-            direction="backward",
-            allow_exact_matches=False,
-        )
-        .sort_values("row")
-        .reset_index(drop=True)
+    # A trade read at its maker event carries that event's id, which places it
+    # among the quotes of its instant; one with no known maker carries none.
+    arrivals = pd.DataFrame(
+        # ``.array`` keeps the tz-aware dtype; ``to_numpy()`` would give an
+        # object array.
+        {"timestamp": at.array, "event_id": np.where(known, maker, np.nan)}
     )
-    # An instant with no book before it has no spread: NaN compares False.
-    bid = standing["best_bid_price"].to_numpy(dtype="float64")
-    ask = standing["best_ask_price"].to_numpy(dtype="float64")
+
+    keys = time_order_keys(depth_summary)
+    touch = depth_summary[[*keys, "best_bid_price", "best_ask_price"]].reset_index(
+        drop=True
+    )
+    standing = quote_before(arrivals, touch)
+    # A trade with no quote before it, or an unreadable one, has no spread:
+    # NaN compares False.
+    readable = np.zeros(len(touch), dtype=bool)
+    readable[readable_quotes(touch).index.to_numpy()] = True
+    found = standing >= 0
+    found[found] = readable[standing[found]]
+    bid = np.full(len(trades), np.nan)
+    ask = np.full(len(trades), np.nan)
+    bid[found] = touch["best_bid_price"].to_numpy(dtype="float64")[standing[found]]
+    ask[found] = touch["best_ask_price"].to_numpy(dtype="float64")[standing[found]]
     price = trades["price"].to_numpy(dtype="float64")
-    inside = (bid > 0) & (ask > 0) & (bid < ask) & (bid < price) & (price < ask)
+    inside = (bid < price) & (price < ask)
     out = trades.iloc[np.flatnonzero(inside)].copy()
     # Cast back to depth_summary's own dtype rather than hardcoding int64: the
     # canonical schema carries integer ticks, but a caller already holding

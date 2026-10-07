@@ -312,6 +312,14 @@ class TestHiddenTrades:
 
         assert hidden_trades(NO_EVENTS, trades, summary).empty
 
+    def test_an_unreadable_spread_is_not_replaced_by_an_older_one(self):
+        # The bid side emptied at t=5.  The spread at t=0 no longer stood, so
+        # a print inside it says nothing about hidden orders.
+        summary = _summary([(0, 100, 104), (5, 0, 104)])
+        trades = _trade_frame([(10, 102)])
+
+        assert hidden_trades(NO_EVENTS, trades, summary).empty
+
     def test_trade_before_any_book_flags_nothing(self):
         summary = _summary([(10, 100, 104)])
         trades = _trade_frame([(5, 102)])
@@ -356,6 +364,18 @@ class TestHiddenTrades:
 
         assert hidden_trades(events, trades, summary).empty
         assert len(hidden_trades(NO_EVENTS, trades, summary)) == 1
+
+    def test_book_is_read_just_before_the_maker_fill_at_one_instant(self):
+        # At t=10 the maker was placed at 104 (event 4) and filled (event 5).
+        # The book just before the fill already showed it, so the print at
+        # 104 met a visible order.  The book before t=10 did not show it.
+        summary = _summary([(0, 100, 106), (10, 100, 104), (10, 100, 106)])
+        summary.insert(1, "event_id", [1, 4, 5])
+        events = pd.DataFrame({"event_id": [4, 5], "timestamp": [_us(10), _us(10)]})
+        trades = _trade_frame([(10, 104)])
+        trades["maker_event_id"] = pd.array([5], dtype="Int64")
+
+        assert hidden_trades(events, trades, summary).empty
 
     def test_no_trades_returns_an_empty_frame(self):
         # Pipeline tables are tz-aware UTC nanoseconds; set both sides to it,
