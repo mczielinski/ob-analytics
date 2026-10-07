@@ -171,6 +171,51 @@ def test_l2_windowed_run_matches_a_single_run(toy_l2_dir, tmp_path):
     _assert_tables_equal(single, load_data(out))
 
 
+def test_l2_trades_at_a_book_instant_read_the_quote_before_it(tmp_path):
+    # Each trade shares its instant with a depth row, which is the book after
+    # it, and one cut falls on a trade's instant: its quote is the last row
+    # of the window before.  The windowed run must read the same quotes.
+    trades = toy_l2_trades()
+    trades["timestamp"] = toy_l2_depth()["timestamp"].to_numpy()[[4, 5, 7, 8]]
+    trades["direction"] = pd.NA
+    DepthCsvWriter().write({"depth": toy_l2_depth(), "trades": trades}, tmp_path)
+    single = _saved_single_run(
+        Pipeline.from_source("depth_csv"), tmp_path, tmp_path / "single"
+    )
+    cuts = [trades["timestamp"].iloc[1]]
+
+    out = Pipeline.from_source("depth_csv").run_windows(tmp_path, cuts, tmp_path / "w")
+
+    _assert_tables_equal(single, load_data(out))
+
+
+def test_without_carry_a_trade_reads_no_quote_from_an_earlier_window(tmp_path):
+    # The book 98/100 (mid 99) stands from t=0.  Trades at 101 (t=1s), a buy
+    # against that mid, and 100 (t=3s).  The second window starts at t=2s from
+    # an empty book and has no quote until t=4s, so its trade has no quote and
+    # takes the tick rule: a down-tick, a sell.  Read against the first
+    # window's mid of 99, it would be a buy.
+    t0 = toy_l2_depth()["timestamp"].iloc[0]
+    depth = toy_l2_depth().iloc[:4].reset_index(drop=True)
+    depth["timestamp"] = [t0, t0, t0 + pd.Timedelta(seconds=4), t0]
+    depth["price"] = [98, 100, 98, 100]
+    depth["direction"] = pd.Categorical(
+        ["bid", "ask", "bid", "ask"], categories=["bid", "ask"], ordered=True
+    )
+    depth = depth.sort_values("timestamp", kind="stable").reset_index(drop=True)
+    trades = toy_l2_trades().iloc[:2].reset_index(drop=True)
+    trades["timestamp"] = [t0 + pd.Timedelta(seconds=s) for s in (1, 3)]
+    trades["price"] = [101, 100]
+    trades["direction"] = pd.NA
+    DepthCsvWriter().write({"depth": depth, "trades": trades}, tmp_path)
+
+    out = Pipeline.from_source("depth_csv").run_windows(
+        tmp_path, [t0 + pd.Timedelta(seconds=2)], tmp_path / "w", carry=False
+    )
+
+    assert load_data(out)["trades"]["direction"].tolist() == ["buy", "sell"]
+
+
 # ── The pieces ────────────────────────────────────────────────────────
 
 

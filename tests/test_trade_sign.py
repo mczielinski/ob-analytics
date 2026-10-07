@@ -190,6 +190,55 @@ class TestClassifyTradeSign:
         assert out.astype(str).tolist() == ["buy", "buy"]
 
 
+class TestTheQuoteATradeArrivedInto:
+    """Lee-Ready reads the quote standing strictly before the trade.
+
+    On a feed whose trades and book events share one clock, the quote stamped
+    at the trade's own instant is the book after the trade took the touch.
+    """
+
+    T0 = pd.Timestamp("2026-01-01", tz="UTC")
+    T1 = T0 + pd.Timedelta(seconds=1)
+
+    def _after_a_buy_took_the_ask(self):
+        # 99/101 stands; a buy at 101 takes the ask, and the book after it
+        # (stamped at the trade's own instant) shows 99/104.
+        quotes = pd.DataFrame(
+            {
+                "timestamp": [self.T0, self.T1],
+                "best_bid_price": [99, 99],
+                "best_ask_price": [101, 104],
+            }
+        )
+        trades = pd.DataFrame({"timestamp": [self.T1], "price": [101], "volume": [1]})
+        return trades, quotes
+
+    def test_lee_ready_labels_the_buy_that_took_the_ask_a_buy(self):
+        trades, quotes = self._after_a_buy_took_the_ask()
+
+        side = classify_trade_sign(trades, method="lee_ready", quotes=quotes)
+
+        assert list(side) == ["buy"]
+
+    def test_a_naive_quote_clock_against_a_utc_trade_clock_is_refused(self):
+        trades, quotes = self._after_a_buy_took_the_ask()
+        naive = quotes.assign(timestamp=quotes["timestamp"].dt.tz_localize(None))
+
+        with pytest.raises(ConfigError, match="time-zone"):
+            classify_trade_sign(trades, method="lee_ready", quotes=naive)
+
+    def test_its_effective_spread_is_positive(self):
+        from ob_analytics.cost import transaction_costs
+
+        trades, quotes = self._after_a_buy_took_the_ask()
+
+        costs = transaction_costs(trades, quotes, horizon="1s")
+
+        assert list(costs["direction"]) == ["buy"]
+        assert costs["mid_price"].iloc[0] == pytest.approx(100.0)
+        assert costs["effective_spread"].iloc[0] == pytest.approx(2.0)
+
+
 # ── Bulk volume classification (BVC) ─────────────────────────────────
 
 
@@ -244,7 +293,11 @@ class TestResolveDirection:
 
     def test_lee_ready_used_for_the_blanks_when_quotes_are_given(self):
         trades = _trades([101, 99]).assign(direction=[None, None])
-        quotes = _trades([100, 100]).rename(columns={"price": "mid"})
+        # Each trade reads the quote strictly before it, so the quotes lead
+        # the trades by a second.
+        quotes = _trades([100, 100], sec_offsets=[-1, 0]).rename(
+            columns={"price": "mid"}
+        )
 
         out = resolve_direction(trades, None, quotes, "ctx")
 
@@ -262,6 +315,63 @@ class TestResolveDirection:
 
         with pytest.raises(ConfigError, match="bvc"):
             resolve_direction(trades, "bvc", None, "ctx")
+
+    def test_the_column_has_the_trades_schema_dtype(self):
+        trades = _trades([100, 101, 102]).assign(direction=["buy", None, "sell"])
+
+        out = resolve_direction(trades, None, None, "ctx")
+
+        assert out["direction"].dtype == pd.CategoricalDtype(
+            ["buy", "sell"], ordered=True
+        )
+
+    def test_without_quotes_and_no_fallback_the_blanks_stay_empty(self):
+        """The pipeline's rule: no quotes means no estimate, and a warning."""
+        trades = _trades([100, 101, 102]).assign(direction=["buy", None, "BUY"])
+
+        with pytest.warns(UserWarning, match="2 of 3 trades"):
+            out = resolve_direction(trades, None, None, "ctx", fallback=None)
+
+        assert out["direction"].tolist()[0] == "buy"
+        assert out["direction"].isna().tolist() == [False, True, True]
+        assert out["direction"].dtype == pd.CategoricalDtype(
+            ["buy", "sell"], ordered=True
+        )
+
+    def test_with_quotes_the_fallback_does_not_apply(self):
+        trades = _trades([101, 99], sec_offsets=[1, 2]).assign(direction=[None, None])
+        quotes = _trades([100], sec_offsets=[0]).rename(columns={"price": "mid"})
+
+        out = resolve_direction(trades, None, quotes, "ctx", fallback=None)
+
+        assert list(out["direction"]) == ["buy", "sell"]
+
+
+class TestThePipelineFillsDirectionsLikeResolveDirection:
+    """The pipeline labels a trade the venue left unlabelled by the same rule."""
+
+    @pytest.fixture
+    def blanked(self, tmp_path):
+        from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
+        from ob_analytics.depth_l2 import DepthCsvWriter
+
+        trades = toy_l2_trades()
+        trades["direction"] = pd.Categorical(
+            ["buy", None, None, "sell"], categories=["buy", "sell"], ordered=True
+        )
+        DepthCsvWriter().write({"depth": toy_l2_depth(), "trades": trades}, tmp_path)
+        return trades, tmp_path
+
+    def test_same_directions_and_dtype(self, blanked):
+        from ob_analytics import Pipeline
+
+        trades, folder = blanked
+        result = Pipeline.from_source("depth_csv").run(folder)
+
+        expected = resolve_direction(trades, None, result.depth_summary, "ctx")
+
+        assert result.trades["direction"].tolist() == expected["direction"].tolist()
+        assert result.trades["direction"].dtype == expected["direction"].dtype
 
 
 class TestPartlyLabelledFeedReachesTheMetrics:

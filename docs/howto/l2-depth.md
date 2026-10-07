@@ -114,9 +114,9 @@ an aggregated feed and is not attempted.
 
 L3 crypto ships the taker side for free; price-level feeds usually don't. When
 `trades.csv` has no `side` column, the pipeline classifies the aggressor with
-**Lee–Ready** against the reconstructed BBO (falling back to the tick rule at
-the mid) — see [trade signs](../api/trade_sign.md). A native `side` column is
-honored as-is.
+**Lee–Ready** against the reconstructed touch: the last quote strictly before
+each trade, falling back to the tick rule at the mid — see
+[trade signs](../api/trade_sign.md). A native `side` column is honored as-is.
 
 ```python
 result.trades["direction"]    # buy / sell taker side, native or classified

@@ -50,7 +50,12 @@ from loguru import logger
 from ob_analytics._registry import Registry
 from ob_analytics._utils import validate_columns
 from ob_analytics.bars import bars
-from ob_analytics.depth import bin_volume_columns, book_imbalance, micro_price
+from ob_analytics.depth import (
+    bin_volume_columns,
+    book_imbalance,
+    micro_price,
+    readable_quotes,
+)
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import Feature
 
@@ -605,7 +610,7 @@ def features(
         measure; both are ``NaN`` rather than a filled-in value.  Two quote
         states are not readable as a book and are skipped rather than taken at
         face value — an empty side, and a crossed one.  See
-        :func:`readable_quotes`.
+        :func:`~ob_analytics.depth.readable_quotes`.
 
         The frame's ``attrs`` carry ``bar_rule`` and ``bar_threshold``, the
         cut the rows were made on; ``features``, the names measured; and
@@ -766,57 +771,16 @@ def _measure(feature: Feature, frame: pd.DataFrame) -> dict[str, np.ndarray]:
     return out
 
 
-def readable_quotes(quotes: pd.DataFrame) -> pd.DataFrame:
-    """Return the rows of *quotes* whose book can be read as a price.
-
-    Two states get through a depth summary that are not books anything could
-    have traded against, and both would otherwise reach a row as ordinary
-    numbers:
-
-    **A side with nothing resting on it.**  The depth engine writes a price
-    and a volume of ``0`` for an empty side, which is a marker and not a
-    price.  Taken at face value it makes a spread the width of the whole
-    instrument, a mid at half the other side, and a micro-price of zero —
-    three finite numbers, none of them true, and none of them marked.
-
-    **A crossed book**, where the best bid is above the best ask.  A diff feed
-    can hold genuinely crossed resting orders, so this is an expected state on
-    such a feed rather than a fault, but its midpoint is not a price and its
-    spread is negative.  The test is ``bid > ask``, the same one
-    :func:`~ob_analytics.trade_sign.prevailing_mid` applies: a *locked* book,
-    bid equal to ask, is a real state at a spread of zero and is kept.
-
-    Dropping these from the reference series is what makes a bar reach back to
-    the last quote that could be read, the way it reaches back over any other
-    instant with no quote of its own.  A frame carrying no
-    ``best_bid_price`` / ``best_ask_price`` pair cannot be tested and is
-    returned unchanged.
-
-    Parameters
-    ----------
-    quotes : pandas.DataFrame
-        Book snapshots — a pipeline ``depth_summary``, or any frame shaped
-        like one.
-
-    Returns
-    -------
-    pandas.DataFrame
-        The readable rows, in their original order.
-    """
-    if not {"best_bid_price", "best_ask_price"} <= set(quotes.columns):
-        return quotes
-    bid = quotes["best_bid_price"].to_numpy(dtype=float)
-    ask = quotes["best_ask_price"].to_numpy(dtype=float)
-    return quotes[(bid > 0) & (ask > 0) & (bid <= ask)]
-
-
 def _join_book(frame: pd.DataFrame, quotes: pd.DataFrame) -> pd.DataFrame:
     """Attach the book as it stood at each bar's close.
 
     A backward as-of join: each bar takes the last *readable* quote published
-    at or before it closed — see :func:`readable_quotes`.  A quote stamped at
-    exactly that instant counts, because it is part of what had already
-    happened when the bar ended.  A bar with no readable quote behind it gets
+    at or before it closed — see :func:`~ob_analytics.depth.readable_quotes`.
+    A quote stamped at exactly that instant counts, because it is part of what
+    had already happened when the bar ended.  A trade, by contrast, is read
+    against the quote strictly before it
+    (:func:`~ob_analytics.trade_sign.mid_before`): a bar's close is an
+    instant, not an arrival.  A bar with no readable quote behind it gets
     ``NaN``, so "nothing to read yet" stays distinguishable from a real
     reading.
     """

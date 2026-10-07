@@ -68,7 +68,12 @@ carries an effective spread but no realized spread.
 ## Which mid to measure against
 
 By default the reference is the plain mid, taken from the last quote
-**strictly before** the trade. Pass `mid_column` to measure against something
+**strictly before** the trade: the quote the trade arrived into. On a feed whose
+trades and book events share one clock, such as LOBSTER or Databento, the quote
+stamped at the trade's own instant is the book after the trade took the touch,
+so it is not used. A quote with an empty side or a crossed book is not a price,
+so it is skipped, and the trade is measured against the last quote before it
+that has both sides and is not crossed. Pass `mid_column` to measure against something
 else — most usefully the micro-price, the size-weighted mid that leans toward
 the side carrying the heavier opposite book:
 
@@ -210,7 +215,11 @@ bitstamp-demo` writes the face without any extra work.
 The effective spread needs to know which side crossed. L3 crypto labels it;
 L2 and aggregated feeds do not, so `transaction_costs` classifies with the
 same machinery the flow-toxicity metrics use — Lee–Ready against the quotes
-you passed in, by default:
+you passed in, by default. Lee–Ready reads the same quote as the effective
+spread, the last one strictly before the trade. So, measured against the plain
+mid, a classified trade above that mid is a buy, and its effective spread is
+positive. (Lee–Ready always reads the plain mid, so with `mid_column` the two
+can disagree.) To use the tick rule instead:
 
 ```python
 costs = transaction_costs(l2_trades, depth_summary, sign_method="tick")
@@ -223,8 +232,8 @@ A native `direction` is honored as-is unless `sign_method` overrides it. See
 
 Every number here inherits the quality of the book it is measured against. A
 *negative* effective spread — the taker apparently paying less than the mid —
-means the mid was not the one the taker faced. Crossed quotes are already
-skipped, because a book whose best bid is above its best ask has no midpoint.
+means the mid was not the one the taker faced. Quotes with a crossed book or an
+empty side are already skipped, because neither has a midpoint.
 
 On the bundled capture, the 72 negative effective spreads do not come from
 stale orders, and at least part of them come from the order in which the feed

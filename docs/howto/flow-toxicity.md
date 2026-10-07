@@ -144,6 +144,14 @@ vpin = compute_vpin(l2_trades, bucket_volume=bucket, sign_method="bvc")
 ofi = order_flow_imbalance(l2_trades, window="1min", sign_method="tick")
 ```
 
+Lee–Ready reads the quote each trade arrived into: the last quote strictly
+before the trade that has both sides and is not crossed. The quote stamped at
+the trade's own instant is not used. On a feed whose trades and book events
+share one clock, such as LOBSTER, that quote is the book after the trade took
+the touch, and reading it flips signs: on a LOBSTER AAPL hour (30 levels),
+Lee–Ready agrees with the feed's own side on 95.9% of trades this way, against
+85.2% with the quote at the trade's instant.
+
 A native `direction` is always honored as-is (`sign_method=None`, the
 default). You can also call
 [`classify_trade_sign`](../api/trade_sign.md#ob_analytics.trade_sign.classify_trade_sign)

@@ -89,10 +89,12 @@ that spread's `best_bid_price` and `best_ask_price` added.
 The spread is the one standing just before the maker's fill, not the one at
 the trade's own timestamp. Some feeds report the fill on the order stream before
 the trade print arrives. On the bundled Bitstamp sample the gap is about 20 ms,
-and by the print the maker has already left the book. The book at the fill's
-own instant is not used either. If it were, a trade that empties a price level
-would read the level as already empty and look like a trade inside the
-spread.
+and by the print the maker has already left the book. "Just before" is in event
+order: the book after the event that came before the fill, even when both
+events share one timestamp. The book after the fill is not used. If it were, a
+trade that empties a price level would read the level as already empty and
+look like a trade inside the spread. If that spread has an empty side or is
+crossed, the trade is not flagged: an older spread no longer stood.
 
 A hidden order that rests at the touch, or behind it, prints at a visible price.
 `hidden_trades` does not flag it.
@@ -116,21 +118,23 @@ The false refills are unrelated orders placed at the same price within the
 delay, and they get `low` confidence because their size differs.
 
 **On LOBSTER data.** LOBSTER does not label icebergs, but it does label every
-execution against a hidden order: event type 5. On the AAPL day there are
-11,332 of them:
+execution against a hidden order: event type 5. On the AAPL day (10 levels)
+there are 11,332 of them. `hidden_trades` flags 11,304 (99.8%) and nothing
+else, so its precision is 100% and its recall 99.8%.
 
-| Where the type-5 execution printed | Executions | Share |
-|---|---:|---:|
-| Strictly inside the visible spread | 9,645 | 85.1% |
-| At a visible peak filled out at the same price and instant | 1,399 | 12.3% |
-| Anywhere else | 288 | 2.5% |
+Reading the spread at the event before the fill matters here. Read before the
+fill's whole instant instead, the spread misses what happened earlier in that
+instant, and `hidden_trades` would flag only 9,645 (85.1%). Of the 1,659 more
+it flags, 1,397 follow a visible order filled out at the same price and
+instant. That is an iceberg's reserve: the trade took the visible peak, then
+continued into the hidden size behind it. Before the instant, the peak was
+visible at that price, so the print looked like a trade at the touch. Just
+before the type-5 execution, the peak was gone and the print was inside the
+spread.
 
-- `hidden_trades` flags all 9,645 in the first row and nothing else, so its
-  precision is 100% and its recall 85%.
-- The second row is an iceberg's reserve: the trade took the visible peak, then
-  continued into the hidden size behind it. Of those 1,399, 408 (29%) belong to
-  an iceberg that `detect_icebergs` found. For the rest, no new order at that
-  price followed within one millisecond.
+- Of 1,399 type-5 executions at a visible peak filled out at the same price and
+  instant, 408 (29%) belong to an iceberg that `detect_icebergs` found. For the
+  rest, no new order at that price followed within one millisecond.
 - A filled-out peak that was refilled has a type-5 execution at the same price
   and instant 24% of the time. A peak that was not refilled has one 9% of the
   time.
@@ -140,11 +144,10 @@ execution against a hidden order: event type 5. On the AAPL day there are
 Both functions trust the book rebuilt from the events. That holds for a
 matched book such as LOBSTER or Databento. A diff feed such as Bitstamp can
 cross, and the depth summary then drops the resting levels a new quote crosses.
-On the bundled Bitstamp sample, `hidden_trades` flags 40 of 284 trades. Every
+On the bundled Bitstamp sample, `hidden_trades` flags 29 of 284 trades. Every
 one of them has a visible maker order at the trade price, so none is a trade
-against a hidden order. In 39 of them the depth table still holds volume at the
-maker's price, but the depth summary had dropped that level after a crossing
-quote.
+against a hidden order. In all 29 the depth table holds volume at the maker's
+price just before the fill, but the depth summary does not show that level.
 
 On a diff feed, run the [data-quality audit](audit.md) first, and read what
 `hidden_trades` returns as trades to look at, not as hidden orders.
