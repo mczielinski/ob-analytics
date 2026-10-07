@@ -94,7 +94,16 @@ See [Frame types: pandas in, pandas out](../schema.md#frame-types-pandas-in-pand
 
 For LOBSTER round-trip output (back to message + orderbook CSVs), pass
 `fmt="lobster"` and a `RunContext` so the registered writer factory can
-pick up `trading_date`:
+pick up `trading_date`. The message file has one row per event, in time
+order. The orderbook file holds the book after each event, taken from the
+`depth` table (or computed from `events` when there is no `depth`), so a run
+from any source can be written. `num_levels` (default 10) sets how many price
+levels per side it holds. A LOBSTER price is a whole number of
+`1 / price_divisor` units, so one tick must be a whole number of them. A run
+from another source has `price_divisor=1`, which cannot hold a cent tick; give
+the writer a config with LOBSTER's divisor, for example
+`result.config.model_copy(update={"price_divisor": 10_000})`. Otherwise the
+writer raises `ConfigError` rather than round the prices:
 
 ```python
 from ob_analytics import save_data

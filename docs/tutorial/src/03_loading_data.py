@@ -196,9 +196,9 @@ sorted(p.name for p in outdir.iterdir())
 # %% [markdown]
 # Ticker, date, and level count baked into the filenames, message and
 # orderbook twins side by side — the same pairing convention real
-# LOBSTER downloads use. (The writer consumes the `events` frame and
-# reconstructs the orderbook file itself.) Here are the first eleven
-# message rows:
+# LOBSTER downloads use. (We passed no `depth` table, so the writer
+# computes the depth from `events` the way the pipeline does, and writes
+# the orderbook file from it.) Here are the first eleven message rows:
 
 # %%
 print(
