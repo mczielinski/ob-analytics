@@ -124,6 +124,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **The quote helpers in `trade_sign` changed** (#345). This can break code
+  that called them directly:
+  - `prevailing_mid` is the mid at an instant, the instant included, from the
+    readable quotes only. Its `allow_exact` and `skip_crossed` settings are
+    gone. For the mid a trade arrived into, use the new `mid_before(rows,
+    quotes)`; for the row position of that quote, `quote_before(rows,
+    quotes)`.
+  - `readable_quotes` moved from `ob_analytics.features` to
+    `ob_analytics.depth`.
+  - `classify_trade_sign` and `resolve_direction` return the ordered
+    `buy`/`sell` categorical of the trades schema.
+  - `resolve_direction` takes `fallback="tick"` (the default) or
+    `fallback=None`, which leaves the unlabelled trades empty when there are
+    no quotes.
+
 - **A plot drawn on your own axes leaves your figure's layout alone** (#120).
   With `ax=`, a matplotlib face used to call `tight_layout()` on the figure
   that holds the axes. That moved panels you had placed, and warned when the
@@ -173,6 +188,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A trade is read against the quote it arrived into, everywhere** (#345).
+  Lee–Ready read the quote stamped at the trade's own instant. On a feed whose
+  trades and book events share one clock (LOBSTER, Databento) that quote is
+  the book after the trade took the touch, which pulls the mid toward the
+  trade price and flips signs. With quotes 99/101, then 99/104 at the trade's
+  instant, an unlabelled buy at 101 was labelled `sell`, and
+  `transaction_costs` then gave it an effective spread of -2.0. It is now a
+  `buy` at +2.0. Lee–Ready, `transaction_costs`, `hidden_trades`,
+  `order_aggressiveness` and the windowed run all use one rule,
+  `trade_sign.quote_before`: the last quote strictly before the row, in event
+  order. On a LOBSTER AAPL hour (30 levels), Lee–Ready now agrees with the
+  feed's own side on 95.9% of trades, against 85.2%; on the bundled Bitstamp
+  sample it is 72.9% against 73.2%. The pipeline's own tables do not change on
+  the bundled Bitstamp sample or the synthetic session, where every trade is
+  labelled by the venue.
+- **`hidden_trades` reads the spread just before the maker's fill in event
+  order** (#345). It read the spread before the fill's whole instant, so a
+  visible order placed or filled earlier in that instant was missed. On the
+  LOBSTER AAPL day (10 levels) it now flags 11,304 of the 11,332 executions
+  against hidden orders, against 9,645, still with none that is not one. On
+  the bundled Bitstamp sample it flags 29 trades, against 41: the 12 it drops
+  each had a visible maker placed at the trade price earlier in the same
+  instant.
+- **One test of a quote that can be read** (#345). `prevailing_mid` and the
+  effective spread kept a quote with an empty side, so a buy at the ask just
+  after the bid side emptied cost 20,000 bps; it is now measured against the
+  last quote with both sides. `depth.readable_quotes` (moved from
+  `features`) is the one test: both sides above zero and the bid not above the
+  ask. `prevailing_mid`, `mid_before`, `hidden_trades`, the feature table and
+  the depth heatmap's spread line all use it.
+- **The pipeline fills a missing trade direction by the same rule as the
+  metrics** (#345). The pipeline and `resolve_direction` disagreed on which
+  trades needed a direction (missing, against neither `buy` nor `sell`) and on
+  the dtype (ordered against unordered). The pipeline now calls
+  `resolve_direction(..., fallback=None)`, and both write the trades schema's
+  ordered `buy`/`sell` categorical. A run with no quotes still leaves the
+  unlabelled trades empty, now with a `UserWarning` rather than a log line.
 - **One rule for a `deleted` row, and the loaders and writer that broke it**
   (#341). The schema now says what a `deleted` row holds when its order also
   traded: `fill` is the executed part, `volume` the part removed without

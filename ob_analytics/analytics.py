@@ -36,48 +36,7 @@ from ob_analytics.schemas import (
     SNAPSHOT_ORIGIN,
     time_order_keys,
 )
-
-
-def _row_standing_before(
-    orders: pd.DataFrame, depth_summary: pd.DataFrame
-) -> np.ndarray:
-    """Find the last ``depth_summary`` row strictly before each order.
-
-    "Before" is the canonical total order
-    (:func:`~ob_analytics.schemas.time_order_keys`): ``timestamp`` first, then
-    the tie-break keys that both frames carry.  ``event_id`` is not a clock --
-    a loader may number its events in another order, such as by order id -- so
-    it only decides between rows at the same instant.  The ``depth_summary``
-    row that carries the order's own keys is the book *after* the order, so it
-    does not count.  The result holds a row position in *depth_summary* for
-    each row of *orders*, in the same order, and ``-1`` for an order with no
-    earlier row or no timestamp.
-    """
-    keys = [k for k in time_order_keys(depth_summary) if k in orders.columns]
-    n_quotes = len(depth_summary)
-    # At equal keys an order sorts ahead of the depth_summary rows, so the
-    # rows written by its own event are not read as standing before it.
-    both = pd.concat(
-        [
-            depth_summary[keys].assign(_is_order=1),
-            orders[keys].assign(_is_order=0),
-        ],
-        ignore_index=True,
-    )
-    both = both.sort_values([*keys, "_is_order"], kind="stable")
-    source = both.index.to_numpy()
-    is_order = source >= n_quotes
-
-    # For each position in the merged order, the source row of the last
-    # depth_summary row at or before it (-1 while there is none yet).
-    last_quote = np.maximum.accumulate(np.where(is_order, -1, np.arange(len(both))))
-    last_quote = np.where(last_quote >= 0, source[last_quote], -1)
-
-    standing = np.full(len(orders), -1, dtype=np.int64)
-    standing[source[is_order] - n_quotes] = last_quote[is_order]
-    # A missing timestamp sorts after every row; it has no book before it.
-    standing[orders["timestamp"].isna().to_numpy()] = -1
-    return standing
+from ob_analytics.trade_sign import quote_before
 
 
 def _event_diff_bps(
@@ -88,8 +47,9 @@ def _event_diff_bps(
 ) -> pd.DataFrame:
     """Per-order aggressiveness in BPS vs the best price standing before it.
 
-    *standing* is :func:`_row_standing_before` for *orders*.  *direction* is
-    ``1`` for bids, ``-1`` for asks. Helper for :func:`order_aggressiveness`.
+    *standing* is :func:`~ob_analytics.trade_sign.quote_before` for *orders*.
+    *direction* is ``1`` for bids, ``-1`` for asks. Helper for
+    :func:`order_aggressiveness`.
     """
     side = "bid" if direction == 1 else "ask"
     best_price_col = f"best_{side}_price"
@@ -120,7 +80,8 @@ def order_aggressiveness(
     the book as it stood just before the order arrived: the last
     ``depth_summary`` row strictly earlier in the canonical event order
     (:func:`~ob_analytics.schemas.time_order_keys` -- ``timestamp``, then
-    ``event_id`` between rows at the same instant).  A positive value means the
+    ``event_id`` between rows at the same instant), found by
+    :func:`~ob_analytics.trade_sign.quote_before`.  A positive value means the
     order improved on that price, a negative one sat behind it.
 
     Parameters
@@ -161,7 +122,7 @@ def order_aggressiveness(
             missing.sum(),
             len(orders),
         )
-    standing = _row_standing_before(orders, depth_summary)
+    standing = quote_before(orders, depth_summary)
     bid_diff = _event_diff_bps(orders, standing, depth_summary, 1)
     ask_diff = _event_diff_bps(orders, standing, depth_summary, -1)
     # Work on a copy: the caller's frame must not grow columns as a side

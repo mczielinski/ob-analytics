@@ -24,6 +24,7 @@ from ob_analytics.depth import (
     filter_depth,
     micro_price,
     price_level_snapshots,
+    readable_quotes,
 )
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.flow_toxicity import OFI_HORIZONS, ofi_by_horizon
@@ -68,20 +69,6 @@ def focus_window(
     return FocusWindow(
         start_time, end_time, max(0.0, mid - k_sigma * std), mid + k_sigma * std
     )
-
-
-def _sanitize_spread(spread: pd.DataFrame) -> pd.DataFrame:
-    """Drop spread rows with non-physical bid/ask (e.g. LOBSTER book warmup)."""
-    if spread.empty:
-        return spread
-    mask = pd.Series(True, index=spread.index)
-    if "best_bid_price" in spread.columns:
-        mask &= spread["best_bid_price"] > 0
-    if "best_ask_price" in spread.columns:
-        mask &= spread["best_ask_price"] > 0
-    if "best_bid_price" in spread.columns and "best_ask_price" in spread.columns:
-        mask &= spread["best_ask_price"] >= spread["best_bid_price"]
-    return spread[mask]
 
 
 def price_y_range(*series: pd.Series | None) -> tuple[float, float] | None:
@@ -536,7 +523,7 @@ def prepare_price_levels_data(
             spread = spread[
                 (spread["timestamp"] >= start_time) & (spread["timestamp"] <= end_time)
             ]
-        spread = _sanitize_spread(spread)
+        spread = readable_quotes(spread)
         if price_from is None:
             price_from = _price_bound(0.995 * spread["best_bid_price"].min())
         if price_to is None:
