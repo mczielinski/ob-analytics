@@ -50,7 +50,8 @@ from ob_analytics._windows import (
     window_positions,
 )
 from ob_analytics.analytics import order_aggressiveness, set_order_types
-from ob_analytics.config import PipelineConfig
+from ob_analytics.capture_record import read_instrument
+from ob_analytics.config import PipelineConfig, instrument_fields
 from ob_analytics.depth import (
     DepthMetricsEngine,
     depth_metrics,
@@ -82,6 +83,14 @@ from ob_analytics.trade_sign import (
 #: The quote columns a windowed run keeps for labelling trades after the
 #: last window: what Lee-Ready reads, and nothing else.
 _ARRIVAL_COLUMNS = ["timestamp", "best_bid_price", "best_ask_price"]
+
+#: The config fields that describe the instrument's grid, each step with its
+#: display precision.  A capture's record sets a pair only when the caller set
+#: neither field of it.
+_GRID_FIELDS = (
+    frozenset(instrument_fields(tick_size=1.0)),
+    frozenset(instrument_fields(lot_size=1.0)),
+)
 
 
 @dataclass(frozen=True)
@@ -138,9 +147,9 @@ class PipelineResult:
         """Return the run's four core tables as Arrow tables.
 
         Each table carries the same key-value metadata a canonical Parquet file
-        carries — the schema version and the run's tick size (see
-        :mod:`ob_analytics.schemas`) — so a reader handed these tables in memory
-        is no worse off than one reading the files.
+        carries — the schema version, the run's tick and lot size, and its
+        config (see :mod:`ob_analytics.schemas`) — so a reader handed these
+        tables in memory is no worse off than one reading the files.
 
         Returns
         -------
@@ -163,7 +172,9 @@ class PipelineResult:
         tick_sizes = _tick_sizes_from_config(self.config)
         lot_sizes = _lot_sizes_from_config(self.config)
         return {
-            name: _to_arrow_table(df, tick_sizes=tick_sizes, lot_sizes=lot_sizes)
+            name: _to_arrow_table(
+                df, tick_sizes=tick_sizes, lot_sizes=lot_sizes, config=self.config
+            )
             for name, df in self._frames().items()
         }
 
@@ -309,6 +320,18 @@ class Pipeline:
         Loads raw events from a data source.  Overrides the source's loader.
     trade_source : TradeSource, optional
         Builds the trades DataFrame.  Overrides the source's trade source.
+
+    Notes
+    -----
+    A live capture records the instrument's tick size and lot size in its
+    ``meta.json`` (see :mod:`ob_analytics.capture_record`).  :meth:`run` and
+    :meth:`run_windows` use them for that capture when *config* does not set
+    them, so a capture replays on its own price and size grid, as
+    ``ob-analytics process`` reads it.  A tick size you set (or a
+    ``price_decimals``) keeps the recorded tick size out, and a lot size (or a
+    ``volume_decimals``) the recorded lot size.  When you pass your own
+    *loader* or *trade_source*, the record is not used: those components hold
+    their own config.
     """
 
     def __init__(
@@ -339,6 +362,9 @@ class Pipeline:
         # LobsterSource()) silently dropped price_divisor=10_000 and produced
         # prices wrong by four orders of magnitude.
         defaults = source.config_defaults()
+        # What the caller set, so a capture's record fills only the rest.
+        self._caller_fields = frozenset(config.model_fields_set if config else ())
+        self._own_components = loader is None and trade_source is None
         if config is None:
             config = PipelineConfig(**defaults)
         else:
@@ -352,9 +378,43 @@ class Pipeline:
         self._writer: DataWriter | None = source.create_writer(config, self._ctx)
         self._source = source
 
+    def _for_run(self, source: Any) -> tuple[PipelineConfig, Any, Any]:
+        """Return the config, loader and trade source for one run on *source*.
+
+        These are the pipeline's own, unless *source* is a capture whose
+        record gives a tick or lot size the caller did not set.  Then the
+        config takes the recorded values and the source's components are
+        built again from it.
+        """
+        if not self._own_components:
+            return self.config, self.loader, self.trade_source
+        recorded = read_instrument(source)
+        fields = {
+            name: value
+            for name, value in recorded.items()
+            for pair in _GRID_FIELDS
+            if name in pair and not pair & self._caller_fields
+        }
+        if not fields:
+            return self.config, self.loader, self.trade_source
+        config = PipelineConfig(**{**self.config.model_dump(), **fields})
+        if config == self.config:
+            return self.config, self.loader, self.trade_source
+        logger.info("Pipeline: using the instrument the capture recorded: {}", fields)
+        return (
+            config,
+            self._source.create_loader(config, self._ctx),
+            self._source.create_trade_source(config, self._ctx),
+        )
+
     @property
     def writer(self) -> DataWriter | None:
-        """The source-provided writer, if any."""
+        """The source-provided writer, if any.
+
+        It is built from the pipeline's own config.  When a run took the tick
+        and lot size from a capture's record, build a writer from that run's
+        config instead: ``source.create_writer(result.config, ctx)``.
+        """
         return self._writer
 
     @classmethod
@@ -414,24 +474,23 @@ class Pipeline:
         on it, and the per-order stages (3, 6) are skipped.
         """
         run_ctx = ctx if ctx is not None else self._ctx
+        config, loader, trade_source = self._for_run(source)
 
         if self._source.level is Level.L2:
-            return self._run_l2(source, run_ctx)
+            return self._run_l2(source, config, loader, trade_source)
 
         logger.info("Pipeline: loading events from {}", source)
-        events = self.loader.load(source)
+        events = loader.load(source)
 
         logger.info("Pipeline: building trades")
-        trades = self.trade_source.load(events, source)
+        trades = trade_source.load(events, source)
         validate_trades_df(trades)  # data contract (schemas.py)
 
         logger.info("Pipeline: classifying order types")
         events = set_order_types(events, trades)
         validate_events_df(events)  # data contract (schemas.py)
 
-        depth_override = self._source.compute_depth(
-            events, self.config, source, run_ctx
-        )
+        depth_override = self._source.compute_depth(events, config, source, run_ctx)
 
         if depth_override is not None:
             depth, depth_summary = depth_override
@@ -447,8 +506,8 @@ class Pipeline:
             logger.info("Pipeline: computing depth metrics")
             depth_summary = depth_metrics(
                 depth,
-                bps=self.config.depth_bps,
-                bins=self.config.depth_bins,
+                bps=config.depth_bps,
+                bins=config.depth_bins,
             )
 
         # Now that the quotes exist, label any trade the venue left unlabelled.
@@ -467,11 +526,13 @@ class Pipeline:
             trades=trades,
             depth=depth,
             depth_summary=depth_summary,
-            config=self.config,
+            config=config,
             level=Level.L3,
         )
 
-    def _run_l2(self, source: Any, run_ctx: RunContext) -> PipelineResult:
+    def _run_l2(
+        self, source: Any, config: PipelineConfig, loader: Any, trade_source: Any
+    ) -> PipelineResult:
         """Run the price-level (L2) path: depth in, per-order stages skipped.
 
         A price-level feed carries ``(price, side, new absolute size)``
@@ -486,21 +547,21 @@ class Pipeline:
         logger.info(
             "Pipeline: L2 resolution — loading price-level depth from {}", source
         )
-        depth = self.loader.load(source)
+        depth = loader.load(source)
         validate_depth_df(depth)  # data contract (schemas.py)
 
         logger.info("Pipeline: computing depth metrics ({} depth rows)", len(depth))
         depth_summary = depth_metrics(
             depth,
-            bps=self.config.depth_bps,
-            bins=self.config.depth_bins,
+            bps=config.depth_bps,
+            bins=config.depth_bins,
         )
 
         logger.info("Pipeline: building trades")
         # The trade source ignores the (empty) events frame for L2 — trades come
         # from the venue's own prints, not from reconstructed order lifecycles.
         events = empty_events()
-        trades = self.trade_source.load(events, source)
+        trades = trade_source.load(events, source)
         trades = _sign_unlabelled(trades, depth_summary)
         validate_trades_df(trades)  # data contract (schemas.py)
 
@@ -514,7 +575,7 @@ class Pipeline:
             trades=trades,
             depth=depth,
             depth_summary=depth_summary,
-            config=self.config,
+            config=config,
             level=Level.L2,
         )
 
@@ -596,21 +657,22 @@ class Pipeline:
         """
         windows = window_bounds(boundaries)
         level = self._source.level
+        config, loader, trade_source = self._for_run(source)
 
         if level is Level.L2:
             logger.info(
                 "Pipeline: L2 resolution — loading price-level depth from {}", source
             )
-            rows = self.loader.load(source)
+            rows = loader.load(source)
             validate_depth_df(rows)
-            trades = self.trade_source.load(empty_events(), source)
+            trades = trade_source.load(empty_events(), source)
             validate_trades_df(trades)
         else:
             logger.info("Pipeline: loading events from {}", source)
-            events = self.loader.load(source)
+            events = loader.load(source)
 
             logger.info("Pipeline: building trades")
-            trades = self.trade_source.load(events, source)
+            trades = trade_source.load(events, source)
             validate_trades_df(trades)
 
             logger.info("Pipeline: classifying order types")
@@ -625,10 +687,10 @@ class Pipeline:
         # The quotes are kept only for trades the venue left unlabelled.
         unlabelled = ~trades["direction"].isin(_SIDES).to_numpy()
         resting = rows.iloc[:0]
-        engine = DepthMetricsEngine(self.config)
+        engine = DepthMetricsEngine(config)
         last_quote = last_readable = pd.DataFrame()
         had_quotes = False
-        with ParquetAppender(output, self.config) as out:
+        with ParquetAppender(output, config) as out:
             for number, ((start, _), positions, at_trades) in enumerate(
                 zip(
                     windows,
@@ -648,7 +710,7 @@ class Pipeline:
                     len(resting),
                 )
                 if not carry:
-                    engine = DepthMetricsEngine(self.config)
+                    engine = DepthMetricsEngine(config)
                     last_quote, last_readable = last_quote[:0], last_readable[:0]
 
                 if level is Level.L2:

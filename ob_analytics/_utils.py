@@ -6,6 +6,7 @@ shared internals.  Nothing in this module is part of the public API.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 
 import numpy as np
@@ -100,9 +101,31 @@ def off_tick_grid(price: object, tick_size: float) -> np.ndarray:
 
     :func:`price_to_ticks` rounds to the nearest tick, so it would move every
     price this mask marks.  *price* is a scalar or any array-like of floats.
+    The same test serves sizes and ``lot_size``.
+
+    A value far from zero counts many steps, and the float division then
+    misses a whole number by more than :data:`TICK_GRID_TOLERANCE` even when
+    the value is on the grid (``1251.81488791 / 1e-8`` is
+    ``125181488790.99998``).  So the tolerance grows with the count, by a few
+    units of float rounding, up to a quarter of a step.  A value that is not
+    finite is not reported: it is on no grid, and the caller decides.
     """
+    if isinstance(price, float | int):
+        # One number, as a live capture tests each price and size it writes:
+        # the same test without numpy's per-call cost.
+        steps = price / tick_size
+        if not math.isfinite(steps):
+            return np.asarray(False)
+        tolerance = min(max(TICK_GRID_TOLERANCE, _FLOAT_SLACK * abs(steps)), 0.25)
+        return np.asarray(abs(steps - round(steps)) > tolerance)
     in_ticks = np.asarray(price, dtype=np.float64) / tick_size
-    return np.abs(in_ticks - np.round(in_ticks)) > TICK_GRID_TOLERANCE
+    tolerance = np.clip(_FLOAT_SLACK * np.abs(in_ticks), TICK_GRID_TOLERANCE, 0.25)
+    with np.errstate(invalid="ignore"):  # inf - inf is NaN: not reported
+        return np.abs(in_ticks - np.round(in_ticks)) > tolerance
+
+
+#: How many units of float rounding a division may miss a whole number by.
+_FLOAT_SLACK = 8 * float(np.finfo(np.float64).eps)
 
 
 def ticks_to_price(
@@ -170,6 +193,10 @@ def lot_multiplier(lot_size: float) -> int | None:
     return None
 
 
+#: Where ``int64`` ends, as a float: ``2**63``.
+_INT64_LIMIT = float(2**63)
+
+
 def size_to_lots(size: object, lot_size: float) -> np.ndarray:
     """Convert a base-asset *size* to an ``int64`` whole number of lots.
 
@@ -177,6 +204,12 @@ def size_to_lots(size: object, lot_size: float) -> np.ndarray:
     the lot has one (:func:`lot_multiplier`).  *size* is any array-like of
     finite non-negative floats (a volume column is non-null and non-negative by
     contract).
+
+    Raises
+    ------
+    ConfigError
+        If a size is too large to count in ``int64`` lots of *lot_size*.  At
+        the default lot of ``1e-8`` the largest size is about ``9.2e10``.
     """
     arr = np.asarray(size, dtype=np.float64)
     multiplier = lot_multiplier(lot_size)
@@ -185,7 +218,32 @@ def size_to_lots(size: object, lot_size: float) -> np.ndarray:
         if multiplier is not None
         else np.round(arr / lot_size)
     )
+    # float(2**63) is exact, and every float below it fits in int64.  A NaN is
+    # left to the caller, as before.
+    # max and min, not abs: no second array the length of the column.
+    if lots.size and (lots.max() >= _INT64_LIMIT or lots.min() <= -_INT64_LIMIT):
+        too_large = np.abs(lots) >= _INT64_LIMIT
+        example = float(arr[too_large].flat[0])
+        raise ConfigError(
+            f"{int(too_large.sum())} size(s) are too large to count in whole "
+            f"lots of lot_size={lot_size!r} (for example {example!r}); the "
+            f"largest size this lot size holds is about {_INT64_LIMIT * lot_size:.3g}. "
+            "Set the instrument's real size step, e.g. "
+            "PipelineConfig(lot_size=1.0, volume_decimals=0)."
+        )
     return lots.astype(np.int64)
+
+
+def step_decimals(step: float) -> int:
+    """Return the decimal places that show one *step* of a price or size grid.
+
+    ``0.01`` gives 2, ``0.25`` gives 2, ``1e-8`` gives 8 and a whole step such
+    as ``1`` or ``10`` gives 0.  This is how the display precision
+    (``price_decimals``, ``volume_decimals``) follows from a tick or lot size.
+    """
+    places = decimal_places([step])
+    # A step on no grid a float holds exactly gets the most a float can show.
+    return np.finfo(np.float64).precision if places is None else places
 
 
 def lots_to_size(

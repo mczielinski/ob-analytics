@@ -45,6 +45,7 @@ import pandas as pd
 from loguru import logger
 
 from ob_analytics._utils import off_tick_grid
+from ob_analytics.capture_record import LOT_SIZE, TICK_SIZE
 from ob_analytics.config import SourceSettings
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.live._base import CaptureConfig, EventDict, VenueClockCount
@@ -66,9 +67,9 @@ _DEFAULT_POLL_INTERVAL = 1.0  # seconds; REST-poll venues only
 _CCXT_DECIMAL_PLACES = 2
 _CCXT_TICK_SIZE = 4
 
-# The finest tick a capture will shrink its recorded tick size to: the default
-# lot grid, finer than any venue quotes a price.
-_FINEST_TICK = 1e-8
+# The finest step a capture will shrink its recorded tick or lot size to: the
+# default lot grid, finer than any venue quotes a price or a size.
+_FINEST_STEP = 1e-8
 
 # How many recent trades a capture remembers to recognise one delivered twice.
 _SEEN_TRADES_LIMIT = 10_000
@@ -385,6 +386,11 @@ class CcxtSource:
         # How many times a price arrived between two ticks and the recorded
         # tick size was made finer to fit it (see _fit_tick).
         self.tick_size_changes = 0
+        # The instrument's size step, when the venue's metadata gives one;
+        # meta.json records it as lot_size so the replay counts sizes in it.
+        self.lot_size: float | None = None
+        # How many times a size arrived between two steps (see _fit_lot).
+        self.lot_size_changes = 0
         self.book_updates = 0
         # Books with and without the venue's own time (see ``clocks``).
         self.venue_clock = VenueClockCount()
@@ -494,8 +500,13 @@ class CcxtSource:
                 raise refused from exc
             raise
         # Fetching the book loads the venue's market metadata, so the tick
-        # size can be read from here on.
-        self.tick_size = self._tick_size()
+        # and lot size can be read from here on.
+        self.tick_size = self._market_step("price")
+        lot = self._market_step("amount")
+        # A finer lot than the default grid counts few units before int64
+        # ends (18 decimals hold only 9.2 units), so it stops there, as
+        # _fit_lot does.
+        self.lot_size = None if lot is None else max(lot, _FINEST_STEP)
         self._opened_ms = book.get("timestamp")
         received = pd.Timestamp.now(tz="UTC").as_unit("ns")
         self.venue_clock.note(book.get("timestamp"))
@@ -509,6 +520,7 @@ class CcxtSource:
                 price = float(row[0])
                 size = float(row[1])
                 self._fit_tick(price)
+                self._fit_lot(size)
                 levels[price] = size
                 if size > 0:
                     yield {
@@ -688,6 +700,7 @@ class CcxtSource:
                     del self._seen_trades[next(iter(self._seen_trades))]
                 self.trade_events += 1
                 self._fit_tick(float(t["price"]))
+                self._fit_lot(float(t["amount"]))
                 await queue.put(("trade", self._map_trade(t), t))
                 if ts_ms is not None:
                     since = int(ts_ms) + 1
@@ -766,6 +779,7 @@ class CcxtSource:
                 seen.add(price)
                 if prev.get(price) != size:
                     self._fit_tick(price)
+                    self._fit_lot(size)
                     changes[side].append((price, size))
                     prev[price] = size
             gone = [price for price in prev if price not in seen]
@@ -846,21 +860,23 @@ class CcxtSource:
 
     # -- internals ----------------------------------------------------------
 
-    def _tick_size(self) -> float | None:
-        """The instrument's price increment, from CCXT's market metadata.
+    def _market_step(self, kind: str) -> float | None:
+        """One step of the instrument's grid, from CCXT's market metadata.
 
-        A prediction-market venue describes an instrument as an outcome, and a
-        crypto exchange as a market.  ``None`` when the venue has no metadata
-        for the symbol, or no fixed price grid (CCXT's significant-digits mode).
+        *kind* is ``"price"`` for the tick size or ``"amount"`` for the size
+        step.  A prediction-market venue describes an instrument as an
+        outcome, and a crypto exchange as a market.  ``None`` when the venue
+        has no metadata for the symbol, or no fixed grid (CCXT's
+        significant-digits mode).
         """
         ex = self._exchange
         lookup = getattr(ex, "outcome", None) or getattr(ex, "market", None)
         if lookup is None:
             return None
         try:
-            step = (lookup(self._symbol).get("precision") or {}).get("price")
+            step = (lookup(self._symbol).get("precision") or {}).get(kind)
         except Exception as exc:  # noqa: BLE001 - metadata is optional; the capture goes on without it
-            logger.debug("[ccxt] no tick size for {}: {!r}", self._symbol, exc)
+            logger.debug("[ccxt] no {} step for {}: {!r}", kind, self._symbol, exc)
             return None
         if step is None:
             return None
@@ -879,11 +895,9 @@ class CcxtSource:
         price sits on, so the tick is divided by ten until *price* does.  A
         venue with no tick size in its metadata records none, and is left so.
         """
-        tick = self.tick_size
-        if tick is None or not off_tick_grid(price, tick):
+        tick = _step_for(price, self.tick_size)
+        if tick == self.tick_size:
             return
-        while tick > _FINEST_TICK and off_tick_grid(price, tick):
-            tick = round(tick / 10, 12)
         logger.info(
             "[ccxt] {}: price {} is between ticks of {}; recording tick size {}",
             self._symbol,
@@ -893,6 +907,27 @@ class CcxtSource:
         )
         self.tick_size = tick
         self.tick_size_changes += 1
+
+    def _fit_lot(self, size: float) -> None:
+        """Make the recorded lot size fine enough for *size*.
+
+        The size counterpart of :meth:`_fit_tick`.  A venue's metadata can
+        give a coarser size step than its book uses, and the replay counts
+        every size in whole lots, so the step is divided by ten until *size*
+        sits on it.  A venue with no size step records none, and is left so.
+        """
+        lot = _step_for(size, self.lot_size)
+        if lot == self.lot_size:
+            return
+        logger.info(
+            "[ccxt] {}: size {} is between steps of {}; recording lot size {}",
+            self._symbol,
+            size,
+            self.lot_size,
+            lot,
+        )
+        self.lot_size = lot
+        self.lot_size_changes += 1
 
     async def _close(self) -> None:
         """Close the exchange connection if open (idempotent)."""
@@ -916,8 +951,10 @@ class CcxtSource:
         return {
             "exchange": self.exchange_id,
             "sequence_kind": self.sequence_kind.value,
-            "tick_size": self.tick_size,
+            TICK_SIZE: self.tick_size,
             "tick_size_changes": self.tick_size_changes,
+            LOT_SIZE: self.lot_size,
+            "lot_size_changes": self.lot_size_changes,
             "trade_side_reversed": self.trade_side_reversed,
             "book_updates": self.book_updates,
             "book_resyncs": self.book_resyncs,
@@ -927,6 +964,19 @@ class CcxtSource:
             "duplicate_trades": self.duplicate_trades,
             "errors": self.errors,
         }
+
+
+def _step_for(value: float, step: float | None) -> float | None:
+    """Return *step*, divided by ten until *value* is a whole number of steps.
+
+    ``None`` stays ``None``, and the step stops shrinking at
+    :data:`_FINEST_STEP`.
+    """
+    if step is None:
+        return None
+    while step > _FINEST_STEP and off_tick_grid(value, step):
+        step = round(step / 10, 12)
+    return step
 
 
 # ── Register this source ──────────────────────────────────────────────

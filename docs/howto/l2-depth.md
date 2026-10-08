@@ -170,5 +170,6 @@ get_spread(summary)
 !!! note "Live L2 capture"
     A live L2 capture writes this schema directly: the [ccxt source](ccxt.md)
     records `depth.csv` and `trades.csv` for any CCXT venue, including
-    [Kalshi](kalshi.md). It also records the market's tick size in
-    `meta.json`, and `ob-analytics process` uses it.
+    [Kalshi](kalshi.md). It also records the market's tick size and size
+    step in `meta.json`, and the pipeline uses them, in Python and in
+    `ob-analytics process`.

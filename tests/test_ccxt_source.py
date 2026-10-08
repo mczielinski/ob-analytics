@@ -587,10 +587,13 @@ class TestPredictionVenues:
 class _FakeWithMetadata(_FakeCcxtExchange):
     """A fake exchange that also answers CCXT's market-metadata lookups."""
 
-    def __init__(self, *args, precision, mode, lookup="market", **kwargs) -> None:
+    def __init__(
+        self, *args, precision, mode, lookup="market", amount=None, **kwargs
+    ) -> None:
         super().__init__(*args, **kwargs)
         self.precisionMode = mode
-        setattr(self, lookup, lambda symbol: {"precision": {"price": precision}})
+        steps = {"price": precision, "amount": amount}
+        setattr(self, lookup, lambda symbol: {"precision": steps})
 
 
 _TICK_SNAPSHOT = {"bids": [[100.0, 5.0]], "asks": [[101.0, 4.0]], "timestamp": 1_000}
@@ -655,6 +658,74 @@ class TestTickSize:
 
     def test_no_metadata_records_none(self, tmp_path):
         assert self._meta_tick(_FakeCcxtExchange(_TICK_SNAPSHOT), tmp_path) is None
+
+
+class TestLotSize:
+    """The venue's size step is recorded as ``lot_size``, as the tick is."""
+
+    def _meta(self, exchange, tmp_path):
+        import json
+
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="X", out_dir=out, minutes=0.05)
+        asyncio.run(run_capturer(_source(exchange, poll_interval=0.0), cfg))
+        return json.loads((out / "meta.json").read_text())
+
+    def test_tick_size_mode_is_the_step(self, tmp_path):
+        ex = _FakeWithMetadata(_TICK_SNAPSHOT, precision=0.01, mode=4, amount=0.001)
+        meta = self._meta(ex, tmp_path)
+        assert meta["lot_size"] == 0.001
+        assert meta["lot_size_changes"] == 0
+
+    def test_decimal_places_mode_is_converted(self, tmp_path):
+        ex = _FakeWithMetadata(_TICK_SNAPSHOT, precision=2, mode=2, amount=3)
+        assert self._meta(ex, tmp_path)["lot_size"] == 0.001
+
+    def test_a_finer_book_size_makes_the_lot_finer(self, tmp_path):
+        later = [{"bids": [[100.0, 4.5]], "asks": [[101.0, 4.0]], "timestamp": 2_000}]
+        ex = _FakeWithMetadata(
+            _TICK_SNAPSHOT, later, precision=0.01, mode=4, amount=1.0
+        )
+        meta = self._meta(ex, tmp_path)
+        assert meta["lot_size"] == 0.1
+        assert meta["lot_size_changes"] == 1
+
+    def test_a_step_finer_than_the_finest_lot_records_the_finest(self, tmp_path):
+        # A token market with 18 decimals would make 9.3 units overflow int64.
+        ex = _FakeWithMetadata(_TICK_SNAPSHOT, precision=2, mode=2, amount=18)
+        assert self._meta(ex, tmp_path)["lot_size"] == 1e-8
+
+    def test_a_large_size_on_the_step_keeps_the_lot(self, tmp_path):
+        # 95603.47115 / 1e-5 is not a whole number in float arithmetic.
+        later = [
+            {"bids": [[100.0, 95603.47115]], "asks": [[101.0, 4.0]], "timestamp": 2_000}
+        ]
+        ex = _FakeWithMetadata(
+            _TICK_SNAPSHOT, later, precision=0.01, mode=4, amount=1e-5
+        )
+        meta = self._meta(ex, tmp_path)
+        assert meta["lot_size"] == 1e-5
+        assert meta["lot_size_changes"] == 0
+
+    def test_a_finer_trade_size_makes_the_lot_finer(self, tmp_path):
+        trade = {"id": "t1", "timestamp": 2_000, "price": 100.0, "amount": 0.25}
+        ex = _FakeWithMetadata(
+            _TICK_SNAPSHOT, [], [[trade]], precision=0.01, mode=4, amount=1.0
+        )
+        assert self._meta(ex, tmp_path)["lot_size"] == 0.01
+
+    def test_no_metadata_records_none(self, tmp_path):
+        meta = self._meta(_FakeCcxtExchange(_TICK_SNAPSHOT), tmp_path)
+        assert meta["lot_size"] is None
+
+    def test_the_capture_replays_on_the_recorded_lot(self, tmp_path):
+        from ob_analytics import Pipeline
+
+        ex = _FakeWithMetadata(_TICK_SNAPSHOT, precision=0.01, mode=4, amount=1.0)
+        self._meta(ex, tmp_path)
+        result = Pipeline.from_source("depth_csv").run(tmp_path / "cap")
+        assert result.config.lot_size == 1.0
+        assert sorted(result.depth["volume"].tolist()) == [4, 5]
 
 
 # ---------------------------------------------------------------------------
@@ -884,7 +955,7 @@ class TestSequenceKind:
     def test_the_nonce_is_declared_monotonic_in_meta(self, tmp_path):
         import json
 
-        from ob_analytics.depth_l2 import recorded_sequence_kind
+        from ob_analytics.capture_record import read_record
         from ob_analytics.protocols import SequenceKind
 
         snap = {"bids": [[100.0, 5.0]], "asks": [[101.0, 4.0]], "timestamp": 1_000}
@@ -894,8 +965,8 @@ class TestSequenceKind:
         assert json.loads((out / "meta.json").read_text())["sequence_kind"] == (
             "monotonic"
         )
-        assert recorded_sequence_kind(out) is SequenceKind.MONOTONIC
-        assert recorded_sequence_kind(out / "depth.csv") is SequenceKind.MONOTONIC
+        assert read_record(out).sequence_kind is SequenceKind.MONOTONIC
+        assert read_record(out / "depth.csv").sequence_kind is SequenceKind.MONOTONIC
 
 
 class TestClocks:
@@ -926,7 +997,7 @@ class TestClocks:
         """No venue time means one clock, not the time the row was written (#310)."""
         import json
 
-        from ob_analytics.depth_l2 import recorded_clocks
+        from ob_analytics.capture_record import read_record
         from ob_analytics.protocols import Clocks
 
         snap = {"bids": [[100.0, 5.0]], "asks": [[101.0, 4.0]], "timestamp": None}
@@ -942,7 +1013,7 @@ class TestClocks:
         meta = json.loads((out / "meta.json").read_text())
         assert meta["clocks"] == "receive_only"
         assert meta["books_without_venue_time"] == 2
-        assert recorded_clocks(out) is Clocks.RECEIVE_ONLY
+        assert read_record(out).clocks is Clocks.RECEIVE_ONLY
 
     def test_a_venue_with_book_time_records_both_clocks(self, tmp_path):
         import json

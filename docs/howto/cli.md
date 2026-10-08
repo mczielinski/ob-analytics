@@ -36,6 +36,13 @@ ob-analytics bitstamp-demo --input orders.csv -o demo_out/
 ob-analytics lobster-demo /path/to/lobster_data --trading-date 2012-06-21 -o demo_out/
 ```
 
+`process` saves each table with the run's config. `gallery` and
+`audit --from-parquet` read the run back with
+[`load_result`](../api/data.md#ob_analytics.data.load_result), so a saved run
+keeps its tick size, lot size and display precision: a LOBSTER run still shows
+whole shares. Given a live capture, `process` and `audit` use the tick size and
+lot size in its `meta.json`, as `Pipeline.run` does in Python.
+
 The `bitstamp-demo` and `lobster-demo` subcommands are equivalent to
 running `scripts/bitstamp_demo.py` / `scripts/lobster_demo.py` from a
 clone — both run the pipeline, save Parquet, verify round-trip I/O, and

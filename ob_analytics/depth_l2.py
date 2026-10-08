@@ -49,7 +49,7 @@ Column names are flexible: ``side`` / ``direction`` and ``volume`` / ``size``
 
 from __future__ import annotations
 
-import json
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -75,13 +75,11 @@ from ob_analytics._utils import (
 from ob_analytics.config import PipelineConfig, SourceSettings
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import (
-    Clocks,
     DataWriter,
     DepthSource,
     FeedType,
     Level,
     RunContext,
-    SequenceKind,
     TradeAttribution,
     TradeSource,
 )
@@ -149,98 +147,33 @@ def _to_ticks_on_grid(
             f"of tick_size={cfg.tick_size!r} (for example {example!r}). Set the "
             "instrument's real tick size, e.g. PipelineConfig(tick_size=0.001, "
             "price_decimals=3). A ccxt capture records it as tick_size in "
-            "meta.json, and `ob-analytics process` reads it from there."
+            "meta.json. A Pipeline given the capture's folder or a file in it "
+            "reads it from there, unless its config sets a tick size or it was "
+            "given its own loader."
         )
     return price_to_ticks(quote, cfg.tick_size)
 
 
-def recorded_tick_size(source: str | Path) -> float | None:
-    """Return the tick size a live capture recorded in its ``meta.json``.
+def _to_lots(raw_size: pd.Series, cfg: PipelineConfig, where: str) -> np.ndarray:
+    """Convert a raw size column to integer lots, warning about off-grid sizes.
 
-    *source* is the capture directory or a file inside it.  ``None`` when there
-    is no ``meta.json`` or it records no tick size: a capture from a venue whose
-    metadata gives none, or one written before captures recorded it.
+    :func:`~ob_analytics._utils.size_to_lots` rounds to the nearest lot.  A
+    capture records its venue's size step as ``lot_size``, so a size between
+    two lots means the recorded step is wrong, and the rounded size is not the
+    venue's.  A size too large for ``int64`` lots raises ``ConfigError``.
     """
-    value = _recorded_meta(source).get("tick_size")
-    return float(value) if value else None
-
-
-def recorded_sequence_kind(source: str | Path) -> SequenceKind | None:
-    """Return what the venue ``sequence`` of a live capture promises.
-
-    *source* is the capture directory or a file inside it.  ``None`` when the
-    capture records no ``sequence_kind``: no ``meta.json``, a source that does
-    not declare one, or a capture written before captures recorded it.  Then
-    use what the source declares
-    (:func:`~ob_analytics.protocols.sequence_kind_of`).
-    """
-    value = _recorded_meta(source).get("sequence_kind")
-    return SequenceKind(value) if value else None
-
-
-def recorded_sequence_restarts(source: str | Path) -> int:
-    """Return how many times a live capture's venue sequence started again.
-
-    *source* is the capture directory or a file inside it.  A source that
-    finds a lost message itself starts again from a new opening book, and on
-    some venues the sequence starts again too.  The source counts those steps
-    back as ``sequence_restarts`` in ``meta.json``, so
-    :func:`~ob_analytics.analytics.data_quality_summary` does not count them
-    as out of order.  ``0`` when the capture records none.
-    """
-    return int(_recorded_meta(source).get("sequence_restarts") or 0)
-
-
-def recorded_source(source: str | Path) -> str | None:
-    """Return the name of the source that made a live capture.
-
-    *source* is the capture directory, a file inside it, or the output of
-    ``ob-analytics process``, which keeps the capture's ``meta.json``.
-    ``None`` when there is no record: a file that is not a capture, or a
-    capture written before captures recorded it.
-    """
-    value = _recorded_meta(source).get("source")
-    return str(value) if value else None
-
-
-def recorded_feed_type(source: str | Path) -> FeedType | None:
-    """Return the :class:`~ob_analytics.protocols.FeedType` a capture's source declared.
-
-    ``None`` when the capture records none (see :func:`recorded_source`).
-    """
-    value = _recorded_meta(source).get("feed_type")
-    return FeedType(value) if value else None
-
-
-def recorded_trade_attribution(source: str | Path) -> TradeAttribution | None:
-    """Return the :class:`~ob_analytics.protocols.TradeAttribution` a capture's source declared.
-
-    ``None`` when the capture records none (see :func:`recorded_source`).
-    """
-    value = _recorded_meta(source).get("trade_attribution")
-    return TradeAttribution(value) if value else None
-
-
-def recorded_clocks(source: str | Path) -> Clocks | None:
-    """Return the :class:`~ob_analytics.protocols.Clocks` a live capture recorded.
-
-    A live source learns it from the venue's books, so it is written when the
-    capture closes.  ``None`` when the capture records none (see
-    :func:`recorded_source`).
-    """
-    value = _recorded_meta(source).get("clocks")
-    return Clocks(value) if value else None
-
-
-def _recorded_meta(source: str | Path) -> dict[str, Any]:
-    """The ``meta.json`` beside *source*, or ``{}`` when there is none."""
-    p = Path(source)
-    meta = (p.parent if p.is_file() else p) / "meta.json"
-    try:
-        data = json.loads(meta.read_text())
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    size = raw_size.astype(float).to_numpy()
+    off_grid = off_tick_grid(size, cfg.lot_size)
+    if off_grid.any():
+        warnings.warn(
+            f"{where}: {int(off_grid.sum())} size(s) are not whole multiples of "
+            f"lot_size={cfg.lot_size!r} (for example {float(size[off_grid][0])!r}) "
+            "and were rounded to the nearest lot. Set the instrument's real "
+            "size step, e.g. PipelineConfig(lot_size=0.001, volume_decimals=3).",
+            UserWarning,
+            stacklevel=4,
+        )
+    return size_to_lots(size, cfg.lot_size)
 
 
 def _to_datetime(series: pd.Series, unit: str) -> pd.Series:
@@ -341,7 +274,9 @@ class L2DepthLoader:
         price = _to_ticks_on_grid(raw[price_col], cfg, "L2DepthLoader.load")
         # Canonical size is integer lots (issue #226); the raw feed carries a
         # base-asset float, so convert on the way in.
-        volume = pd.Series(size_to_lots(raw[vol_col], cfg.lot_size), index=raw.index)
+        volume = pd.Series(
+            _to_lots(raw[vol_col], cfg, "L2DepthLoader.load"), index=raw.index
+        )
         direction = (
             raw[side_col].astype(str).str.strip().str.lower().map(_SIDE_TO_DIRECTION)
         )
@@ -474,7 +409,9 @@ class L2TradeReader:
         price = _to_ticks_on_grid(raw[price_col], cfg, "L2TradeReader.load")
         # Canonical size is integer lots (issue #226); the raw feed carries a
         # base-asset float, so convert on the way in.
-        volume = pd.Series(size_to_lots(raw[vol_col], cfg.lot_size), index=raw.index)
+        volume = pd.Series(
+            _to_lots(raw[vol_col], cfg, "L2TradeReader.load"), index=raw.index
+        )
         direction = self._read_direction(raw)
 
         n = len(raw)

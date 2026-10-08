@@ -98,20 +98,17 @@ A Polymarket market's price step is usually 0.01 or 0.001, and Polymarket makes
 it finer as a price nears 0 or 1. A capture starts from the tick size in ccxt's
 market data and records it as `tick_size` in `meta.json`. If a later price
 arrives between two ticks, the capture divides the tick size by ten until the
-price fits, and counts each change in `tick_size_changes`. `ob-analytics
-process` and `ob-analytics audit` read the final value, so every price in the
-file replays exactly.
-
-From Python, read the recorded value and pass it yourself. Set
-`price_decimals` to the number of decimals in the tick size:
+price fits, and counts each change in `tick_size_changes`. The pipeline reads
+the final value, in Python and in `ob-analytics process` and `ob-analytics
+audit`, so every price in the file replays exactly. Sizes work the same way:
+the capture records the size step as `lot_size`, and makes it finer if a size
+arrives between two steps (`lot_size_changes`).
 
 ```python
-from ob_analytics import DepthCsvSource, Pipeline, PipelineConfig
-from ob_analytics.depth_l2 import recorded_tick_size
+from ob_analytics import Pipeline
 
-tick_size = recorded_tick_size("/tmp/poly")  # 0.001, for example
-config = PipelineConfig(tick_size=tick_size, price_decimals=3)
-result = Pipeline(config, source=DepthCsvSource()).run("/tmp/poly")
+result = Pipeline.from_source("depth_csv").run("/tmp/poly")
+result.config.tick_size  # 0.001, for example
 ```
 
 ## Depth bins

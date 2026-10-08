@@ -83,18 +83,18 @@ Kalshi markets do not all use the same price step. Most use whole cents. Many
 of the most traded markets use tenths of a cent below 0.10 and above 0.90, and
 whole cents in between. A few use tenths of a cent everywhere.
 
-A capture records the market's price step as `tick_size` in `meta.json`.
-`ob-analytics process` and `ob-analytics audit` read it from there. From
-Python, set it yourself:
+A capture records the market's price step as `tick_size` in `meta.json`, and
+its size step as `lot_size`. The pipeline reads both from there, in Python and
+in `ob-analytics process` and `ob-analytics audit`:
 
 ```python
-from ob_analytics import DepthCsvSource, Pipeline, PipelineConfig
+from ob_analytics import Pipeline
 
-config = PipelineConfig(tick_size=0.001, price_decimals=3)
-result = Pipeline(config, source=DepthCsvSource()).run("/tmp/kalshi")
+result = Pipeline.from_source("depth_csv").run("/tmp/kalshi")
+result.config.tick_size  # 0.001, for example
 ```
 
-`recorded_tick_size("/tmp/kalshi")` returns the value the capture recorded. If
+A tick size you set in `PipelineConfig` is used instead of the recorded one. If
 the tick size in use is coarser than the prices in the file, the loader raises
 `ConfigError` instead of rounding the prices to fit.
 

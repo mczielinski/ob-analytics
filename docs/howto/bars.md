@@ -92,7 +92,7 @@ it.
 | `timestamp_start` / `timestamp_end` | first and last trade of the bar |
 | `open` / `high` / `low` / `close` | trade prices |
 | `volume` | total size traded |
-| `turnover` | total price × size |
+| `turnover` | total price × size, as a float (ticks × lots on a raw result can be too large for an integer) |
 | `n_trades` | number of trades |
 | `vwap` | `turnover / volume` |
 | `buy_volume` / `sell_volume` / `signed_volume` | size by aggressor side, and buys minus sells |

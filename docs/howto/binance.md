@@ -79,7 +79,7 @@ matched exactly in every one.
 
 | Field | Where it comes from |
 |-------|--------------------|
-| Tick size | Binance's market list: 0.01 for BTC/USDT. The capture writes it to `meta.json` as `tick_size`, and `process` and `audit` read it from there |
+| Tick size | Binance's market list: 0.01 for BTC/USDT. The capture writes it to `meta.json` as `tick_size`, and the pipeline reads it from there |
 | Trade side | Binance's `m` flag (the buyer was the maker). `m` true means the taker sold, so ccxt writes `sell`. All 7,203 trades in the test agreed with `m` |
 | Trade time | `exchange_timestamp` is Binance's time. `timestamp` is the time the capture received the trade |
 | Book time | The same two clocks. Replay sorts on `timestamp`, the order the updates arrived |

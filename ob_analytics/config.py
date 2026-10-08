@@ -341,3 +341,38 @@ class PipelineConfig(BaseModel):
     def bps_labels(self) -> list[str]:
         """Column suffixes for depth-metric BPS bins (e.g. '25bps', '50bps' …)."""
         return [f"{i * self.depth_bps}bps" for i in range(1, self.depth_bins + 1)]
+
+
+def instrument_fields(
+    *, tick_size: float | None = None, lot_size: float | None = None
+) -> dict[str, Any]:
+    """Return the :class:`PipelineConfig` fields for an instrument's grid.
+
+    Each step that is given comes with the display precision that shows one
+    step: ``tick_size`` with ``price_decimals``, and ``lot_size`` with
+    ``volume_decimals``.  A step that is ``None`` is left out, so the result
+    can be laid over other settings without replacing them.
+
+    Parameters
+    ----------
+    tick_size : float, optional
+        The instrument's price step, in the quote currency.
+    lot_size : float, optional
+        The instrument's size step, in the base asset.
+
+    Returns
+    -------
+    dict of str to Any
+        ``PipelineConfig`` keyword arguments, for example
+        ``{"tick_size": 0.001, "price_decimals": 3}``.
+    """
+    from ob_analytics._utils import step_decimals
+
+    fields: dict[str, Any] = {}
+    if tick_size is not None:
+        fields["tick_size"] = float(tick_size)
+        fields["price_decimals"] = step_decimals(tick_size)
+    if lot_size is not None:
+        fields["lot_size"] = float(lot_size)
+        fields["volume_decimals"] = step_decimals(lot_size)
+    return fields

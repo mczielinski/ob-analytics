@@ -59,6 +59,7 @@ nav = [
     { "Protocols" = "api/protocols.md" },
     { "Sources" = "api/sources.md" },
     { "Live capture" = "api/live.md" },
+    { "Capture record" = "api/capture_record.md" },
     { "Data Contracts" = "api/schemas.md" },
     { "Bitstamp" = "api/bitstamp.md" },
     { "LOBSTER" = "api/lobster.md" },

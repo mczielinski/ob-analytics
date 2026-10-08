@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import asyncio
 import csv
-import json
 import os
 import time
 from collections.abc import Callable
@@ -42,6 +41,11 @@ import pandas as pd
 from loguru import logger
 
 from ob_analytics._secrets import redact
+from ob_analytics.capture_record import (
+    read_fields,
+    source_declarations,
+    write_record,
+)
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.live._base import (
     CaptureConfig,
@@ -63,7 +67,6 @@ from ob_analytics.live._runner import (
     ORIGIN_SHUTDOWN,
     FileCaptureSink,
     _FirstEvent,
-    _source_declarations,
     check_credentials,
     install_stop_signals,
     run_capturer,
@@ -762,16 +765,19 @@ def _covered_until(
 
 def _record_coverage(seg_dir: Path, segment: Segment) -> None:
     """Make the segment's ``meta.json`` agree with the manifest's coverage."""
-    meta_path = seg_dir / "meta.json"
     try:
-        meta = json.loads(meta_path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        logger.warning("Could not update {}: {}", meta_path, redact(repr(exc)))
+        meta = read_fields(seg_dir)
+    except OSError as exc:
+        meta, problem = None, redact(repr(exc))
+    else:
+        problem = "it is missing or not a JSON object"
+    if meta is None:
+        logger.warning("Could not update the meta.json in {}: {}", seg_dir, problem)
         return
     for key in ("stream_started", "stream_ended"):
         value = getattr(segment, key)
         meta[key] = None if value is None else str(value)
-    _write_json_atomic(meta_path, meta)
+    write_record(seg_dir, meta)
 
 
 def _finished_normally(task: asyncio.Task[Any]) -> bool:
@@ -786,7 +792,7 @@ async def _ends_within(task: asyncio.Task[Any], seconds: float) -> bool:
 
 
 def _declarations(source: LiveSource) -> dict[str, Any]:
-    declared = _source_declarations(source)
+    declared = source_declarations(source)
     declared.pop("source", None)
     # A live source learns its clocks from the venue's books, so the value is
     # not known when the manifest is opened.  Each segment's meta.json has it.
@@ -939,13 +945,7 @@ def _close_segment_files(
     n_book = _count_rows(orders) + _count_rows(seg_dir / "depth.csv")
     n_trade = _count_rows(seg_dir / "trades.csv")
 
-    meta_path = seg_dir / "meta.json"
-    meta: dict[str, Any] = {}
-    if meta_path.is_file():
-        try:
-            meta = json.loads(meta_path.read_text())
-        except json.JSONDecodeError:
-            meta = {}
+    meta = read_fields(seg_dir) or {}
     meta.pop("provisional", None)
     meta.update(
         {
@@ -969,7 +969,7 @@ def _close_segment_files(
             **(raw or {}),
         }
     )
-    _write_json_atomic(meta_path, meta)
+    write_record(seg_dir, meta)
     return _ClosedFiles(
         covered_to=covered_to,
         orders_closed=closed,
@@ -1087,7 +1087,7 @@ def _write_provisional_meta(running: _Running) -> None:
     size, say) on disk, so a segment a crash leaves open can still be read.
     """
     meta: dict[str, Any] = {
-        **_source_declarations(running.source),
+        **source_declarations(running.source),
         "out_dir": str(running.sink.out_dir),
         "started": str(running.segment.started),
         "stream_started": None
@@ -1101,10 +1101,4 @@ def _write_provisional_meta(running: _Running) -> None:
         except Exception as exc:  # noqa: BLE001 - a heartbeat must not stop the capture
             logger.debug("diagnostics() raised during heartbeat: {!r}", exc)
     meta.update(running.sink.raw_diagnostics())
-    _write_json_atomic(running.sink.out_dir / "meta.json", meta)
-
-
-def _write_json_atomic(path: Path, data: dict[str, Any]) -> None:
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(redact(json.dumps(data, indent=2, default=str)))
-    os.replace(tmp, path)
+    write_record(running.sink.out_dir, meta)

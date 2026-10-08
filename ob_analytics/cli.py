@@ -127,7 +127,6 @@ def _process_one(args: argparse.Namespace, data_path: str, output: Path) -> None
     """Run the pipeline on one capture (or file) and save the results."""
     from loguru import logger
 
-    from ob_analytics.config import PipelineConfig
     from ob_analytics.data import save_data
     from ob_analytics.pipeline import Pipeline
     from ob_analytics.protocols import RunContext
@@ -152,13 +151,10 @@ def _process_one(args: argparse.Namespace, data_path: str, output: Path) -> None
         else RunContext()
     )
 
-    # Only the recorded fields are set explicitly, so the source's own config
-    # defaults still apply to the rest.
-    recorded = _recorded_instrument(Path(data_path))
-    config = PipelineConfig(**recorded) if recorded else None
-
+    # No config: the source's defaults apply, and the pipeline takes a
+    # capture's tick and lot size from its meta.json.
     try:
-        pipeline = Pipeline(config, source=source, ctx=ctx)
+        pipeline = Pipeline(source=source, ctx=ctx)
     except TypeError as exc:  # e.g. a live-only source cannot replay files
         logger.error(str(exc))
         sys.exit(1)
@@ -170,15 +166,9 @@ def _process_one(args: argparse.Namespace, data_path: str, output: Path) -> None
     logger.info("Trades: {:,}", len(result.trades))
     logger.info("Depth:  {:,}", len(result.depth))
 
-    result_dict = {
-        "events": result.events,
-        "trades": result.trades,
-        "depth": result.depth,
-        "depth_summary": result.depth_summary,
-    }
-    # Pass the config so each Parquet file is tagged with its tick size
-    # (issue #155), letting a reader recover the quote-currency price.
-    save_data(result_dict, output, config=result.config)
+    # Each Parquet file records the run's config, so `gallery` and
+    # `audit --from-parquet` read the run back with its own units.
+    save_data(result, output)
     _keep_capture_record(Path(data_path), output)
     logger.info("Saved to: {}", output.resolve())
 
@@ -249,14 +239,7 @@ def _audit_one(args: argparse.Namespace, path: Path) -> Any:
     from loguru import logger
 
     from ob_analytics.analytics import data_quality_summary
-    from ob_analytics.depth_l2 import (
-        recorded_clocks,
-        recorded_feed_type,
-        recorded_sequence_kind,
-        recorded_sequence_restarts,
-        recorded_source,
-        recorded_trade_attribution,
-    )
+    from ob_analytics.capture_record import read_record
     from ob_analytics.protocols import (
         Clocks,
         FeedType,
@@ -297,14 +280,15 @@ def _audit_one(args: argparse.Namespace, path: Path) -> Any:
     # says how to read the files: a cryptofeed L3 capture is read as bitstamp,
     # whose feed shows more.  So the record, when there is one, sets what the
     # checks expect.
-    made_by = recorded_source(path)
+    record = read_record(path)
+    made_by = record.source
     if made_by is not None:
-        feed_type = recorded_feed_type(path) or feed_type
-        trade_attribution = recorded_trade_attribution(path) or trade_attribution
-        clocks = recorded_clocks(path) or clocks
+        feed_type = record.feed_type or feed_type
+        trade_attribution = record.trade_attribution or trade_attribution
+        clocks = record.clocks or clocks
         # A capture written before captures recorded the sequence kind is
         # checked the way the source that made it declares it now.
-        if made_by != source_name and recorded_sequence_kind(path) is None:
+        if made_by != source_name and record.sequence_kind is None:
             sequence_kind = _declared_sequence_kind(made_by, default=sequence_kind)
         if source_name is not None and made_by != source_name:
             logger.info(
@@ -325,8 +309,8 @@ def _audit_one(args: argparse.Namespace, path: Path) -> Any:
         feed_type=feed_type,
         depth=result.depth,
         tick_size=result.config.tick_size,
-        sequence_kind=recorded_sequence_kind(path) or sequence_kind,
-        sequence_restarts=recorded_sequence_restarts(path),
+        sequence_kind=record.sequence_kind or sequence_kind,
+        sequence_restarts=record.sequence_restarts,
         trade_attribution=trade_attribution,
         clocks=clocks,
     )
@@ -377,9 +361,9 @@ def _run_for_audit(args: argparse.Namespace, path: Path, source_name: str) -> An
 
     # Load the ordering keys: dropped-message detection reads the venue
     # sequence, and it is off by default elsewhere.  Only this field is set
-    # explicitly, with the instrument a capture recorded, so the source's own
-    # config defaults still apply to the rest.
-    config = PipelineConfig(track_sequence=True, **_recorded_instrument(path))
+    # explicitly, so the source's own config defaults still apply to the rest,
+    # and the pipeline takes a capture's tick and lot size from its meta.json.
+    config = PipelineConfig(track_sequence=True)
 
     try:
         pipeline = Pipeline(config, source=source, ctx=ctx)
@@ -403,8 +387,10 @@ def _keep_capture_record(data_path: Path, output: Path) -> None:
     *output*, so a reused output directory never carries another capture's
     record.
     """
-    meta = (data_path.parent if data_path.is_file() else data_path) / "meta.json"
-    dest = output / "meta.json"
+    from ob_analytics.capture_record import RECORD_NAME, record_path
+
+    meta = record_path(data_path)
+    dest = output / RECORD_NAME
     if meta.is_file() and meta.resolve() == dest.resolve():
         return
     if meta.is_file():
@@ -413,52 +399,19 @@ def _keep_capture_record(data_path: Path, output: Path) -> None:
         dest.unlink(missing_ok=True)
 
 
-def _recorded_instrument(data_path: Path) -> dict[str, Any]:
-    """Config fields a live capture recorded about its instrument.
-
-    A ccxt capture writes the market's tick size to ``meta.json``.  Replaying
-    it at the source's default tick size would round finer prices onto that
-    grid, which the L2 loaders refuse, so the recorded value is used instead,
-    with the display precision set to match.  Empty when nothing is recorded.
-    """
-    from decimal import Decimal
-
-    from ob_analytics.depth_l2 import recorded_tick_size
-
-    tick_size = recorded_tick_size(data_path)
-    if tick_size is None:
-        return {}
-    exponent = Decimal(str(tick_size)).normalize().as_tuple().exponent
-    decimals = max(0, -exponent) if isinstance(exponent, int) else 0
-    return {"tick_size": tick_size, "price_decimals": decimals}
-
-
 def _load_saved_result(data_path: Path) -> Any:
-    """Rebuild a :class:`PipelineResult` from a saved Parquet directory."""
+    """Load a saved run (a ``process`` output) for ``gallery`` and ``audit``."""
     from loguru import logger
 
-    from ob_analytics.config import PipelineConfig
-    from ob_analytics.data import load_data
-    from ob_analytics.pipeline import PipelineResult
+    from ob_analytics.data import load_result
+    from ob_analytics.exceptions import ConfigError
 
     logger.info("Loading data from {}...", data_path)
-    data = load_data(data_path)
-
-    # Recover the tick size the data was written with (issue #155), surfaced by
-    # load_data on each frame's ``attrs``, so a reader gets quote-currency
-    # prices.  A legacy (pre-#155) file has no tick size and already stores float
-    # prices, so fall back to 1.0 (prices read as-is).
-    tick_size = next(
-        (df.attrs["tick_size"] for df in data.values() if "tick_size" in df.attrs),
-        1.0,
-    )
-    return PipelineResult(
-        events=data["events"],
-        trades=data["trades"],
-        depth=data["depth"],
-        depth_summary=data["depth_summary"],
-        config=PipelineConfig(tick_size=tick_size),
-    )
+    try:
+        return load_result(data_path)
+    except (ConfigError, FileNotFoundError) as exc:
+        logger.error(str(exc))
+        sys.exit(1)
 
 
 def _cmd_gallery(args: argparse.Namespace) -> None:

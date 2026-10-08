@@ -88,6 +88,7 @@ from ob_analytics.data import (
     ParquetWriter,
     PickleWriter,
     load_data,
+    load_result,
     save_data,
 )
 from ob_analytics.databento import DatabentoSettings, DatabentoSource
@@ -293,6 +294,7 @@ __all__ = [
     "list_sources",
     "load_data",
     "load_metric_plugins",
+    "load_result",
     "load_source_plugins",
     "match_toy_orders",
     "ofi_by_horizon",

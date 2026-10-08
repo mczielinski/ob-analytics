@@ -53,3 +53,17 @@ class TestTradeImpacts:
         bad = pd.DataFrame({"price": [1.0], "volume": [1.0]})
         with pytest.raises(Exception, match="trade_impacts"):
             trade_impacts(bad)
+
+    def test_vwap_does_not_wrap_on_a_large_sweep(self) -> None:
+        """Price in ticks times size in lots can pass int64."""
+        trades = pd.DataFrame(
+            {
+                "timestamp": [TS, TS + pd.Timedelta(seconds=1)],
+                "price": [7_800_000, 7_800_100],
+                "volume": [800_000_000_000, 800_000_000_000],
+                "direction": ["buy", "buy"],
+                "taker": [1, 1],
+            }
+        )
+        out = trade_impacts(trades)
+        assert out["vwap"].iloc[0] == pytest.approx(7_800_050)
