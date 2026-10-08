@@ -151,10 +151,19 @@ class BitstampLoader:
             events["direction"], categories=["bid", "ask"], ordered=True
         )
 
-        events = events.sort_values(
-            by=["id", "volume", "action", "timestamp"],
-            ascending=[True, False, True, True],
-            kind="stable",
+        # Each order's rows in the order they happened: the ``created`` row
+        # first, then the rest by size, largest first, since a Bitstamp order
+        # only shrinks after it is placed.  The ``created`` row is not always
+        # the largest: an instant order bought by quote amount is created with
+        # size 0 and reports its remainder afterwards.
+        events = (
+            events.assign(_later=events["action"] != "created")
+            .sort_values(
+                by=["id", "_later", "volume", "action", "timestamp"],
+                ascending=[True, True, False, True, True],
+                kind="stable",
+            )
+            .drop(columns="_later")
         )
 
         events["event_id"] = np.arange(1, len(events) + 1)
@@ -164,12 +173,13 @@ class BitstampLoader:
         # fill on Bitstamp — the venue does not allow order amendments, so a
         # price change between events is the matching engine reporting the
         # fill price (taker orders) or the order walking the book (aggressors),
-        # not an in-place modification.
+        # not an in-place modification.  A rise is not a fill: only the
+        # zero-size ``created`` row of an instant order is followed by one.
         # Integer lots, so the difference is exact and needs no rounding back
         # onto the size grid (issue #226); ``diff`` still yields a float column
         # because the first row per id is NaN, so cast once it is filled.
         fill_deltas = events.groupby("id")["volume"].diff().fillna(0)
-        events["fill"] = fill_deltas.abs().astype("int64")
+        events["fill"] = (-fill_deltas).clip(lower=0).astype("int64")
 
         # Sort timestamps within each id.  The frame is id-ordered (primary
         # key of the sort above; _remove_duplicates only filters rows), so a

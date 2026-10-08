@@ -17,7 +17,11 @@ import pandas as pd
 import pytest
 
 from ob_analytics import Pipeline, PipelineConfig
-from ob_analytics.analytics import DataQualitySummary, data_quality_summary
+from ob_analytics.analytics import (
+    DataQualitySummary,
+    data_quality_summary,
+    order_book,
+)
 from ob_analytics.databento import (
     DBN_PRICE_DIVISOR,
     F_MBP,
@@ -42,6 +46,12 @@ from ob_analytics.protocols import (
 )
 from ob_analytics.schemas import validate_events_df, validate_trades_df
 from ob_analytics.sources import get_source
+from ob_analytics.synth import (
+    SynthConfig,
+    SyntheticLoader,
+    SyntheticTradeSource,
+    generate_session,
+)
 from tests._logging import warnings_logged
 
 _DATABENTO_INSTALLED = importlib.util.find_spec("databento") is not None
@@ -145,9 +155,10 @@ class TestActionMapping:
     def test_volume_is_the_outstanding_size_after_each_event(self):
         _, events = load(LIFECYCLE)
 
-        # A/M state the new total; a partial cancel leaves 100 - 40 = 60; the
-        # final cancel reports the size it removed.
-        assert list(events["volume"]) == [100, 50, 60, 30, 30]
+        # A/M state the new total; a partial cancel leaves 100 - 40 = 60.  The
+        # final cancel removes 30 that were all executed, so its row carries
+        # them as the fill and no cancelled size.
+        assert list(events["volume"]) == [100, 50, 60, 30, 0]
         # The record's own size field is kept as provenance.
         assert list(events["raw_size"]) == [100, 50, 40, 30, 30]
 
@@ -720,6 +731,101 @@ class TestPipelineRun:
         assert got == expected
 
 
+def bid_level_after_each_row(result, price: int) -> list[int]:
+    """The size of the bid level at *price* after each depth row that touches it."""
+    depth = result.depth
+    rows = depth[(depth["direction"] == "bid") & (depth["price"] == price)]
+    return list(rows["volume"])
+
+
+class TestFullExecution:
+    """An order filled in full comes off its level once, as a fill.
+
+    Databento reports the execution as ``F`` and then a ``C`` that takes the
+    executed size off the book.  The ``deleted`` row then carries the fill,
+    and its ``volume`` is the part removed without trading: nothing.
+    """
+
+    SHARED_LEVEL: ClassVar[list[tuple]] = [
+        (1, "A", "B", px(100.00), 5),  # bid 5 at 100.00
+        (2, "A", "B", px(100.00), 3),  # bid 3 at the same price
+        (0, "T", "A", px(100.00), 5),  # a seller takes 5
+        (1, "F", "B", px(100.00), 5),  # ... all of order 1
+        (1, "C", "B", px(100.00), 5),  # ... which leaves the book
+        (3, "A", "A", px(100.05), 1),  # an ask, so the book has two sides
+    ]
+
+    def test_the_deleted_row_carries_the_fill_and_no_cancelled_size(self):
+        _, events = load(self.SHARED_LEVEL)
+
+        deleted = events[events["action"] == "deleted"]
+        assert list(deleted["fill"]) == [5]
+        assert list(deleted["volume"]) == [0]
+
+    def test_the_other_order_on_the_level_keeps_its_size(self):
+        result = Pipeline(source=DatabentoSource()).run(mbo_frame(self.SHARED_LEVEL))
+
+        assert bid_level_after_each_row(result, 10000) == [5, 8, 3]
+        last = result.depth_summary.iloc[-1]
+        assert (last["best_bid_price"], last["best_bid_vol"]) == (10000, 3)
+
+    def test_a_later_order_on_the_level_adds_to_what_is_left(self):
+        records = [*self.SHARED_LEVEL, (4, "A", "B", px(100.00), 4)]
+        result = Pipeline(source=DatabentoSource()).run(mbo_frame(records))
+
+        assert bid_level_after_each_row(result, 10000) == [5, 8, 3, 7]
+
+    def test_a_cancel_larger_than_the_order_removes_what_was_resting(self):
+        # The records are inconsistent: 8 cancelled from an order of 5.  The
+        # row removes the 5 the order had, so the level empties and does not
+        # go below zero.
+        result = Pipeline(source=DatabentoSource()).run(
+            mbo_frame(
+                [
+                    (1, "A", "B", px(100.00), 5),
+                    (2, "A", "B", px(100.00), 3),
+                    (1, "C", "B", px(100.00), 8),
+                ]
+            )
+        )
+
+        deleted = result.events[result.events["action"] == "deleted"]
+        assert list(deleted["volume"]) == [5]
+        assert bid_level_after_each_row(result, 10000) == [5, 8, 3]
+
+    def test_stray_cancels_after_the_delete_remove_nothing(self):
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            _, events = load(
+                [
+                    (1, "A", "B", px(100.00), 5),
+                    (1, "C", "B", px(100.00), 5),
+                    (1, "C", "B", px(100.00), 3),
+                    (1, "C", "B", px(100.00), 2),
+                ]
+            )
+        assert list(events["volume"]) == [5, 5, 0, 0]
+
+    def test_a_partial_cancel_after_a_partial_fill_removes_only_the_rest(self):
+        # 10 resting, 4 executed, then the trader cancels the 6 left in one
+        # record: the cancel takes 10 off the book, 4 of it the fill.
+        _, events = load(
+            [
+                (1, "A", "B", px(100.00), 10),
+                (1, "F", "B", px(100.00), 4),
+                (1, "C", "B", px(100.00), 10),
+            ]
+        )
+        deleted = events.iloc[-1]
+        assert (deleted["action"], deleted["fill"], deleted["volume"]) == (
+            "deleted",
+            4,
+            6,
+        )
+
+
 def audit_frame(frame: pd.DataFrame) -> DataQualitySummary:
     """Run *frame* through the pipeline and score it the way ``audit`` does."""
     source = DatabentoSource()
@@ -758,6 +864,26 @@ class TestSequenceCheck:
 
 
 # ── Reading and writing real DBN files ────────────────────────────────
+
+
+def final_levels(depth: pd.DataFrame) -> dict[tuple[str, int], int]:
+    """Each non-empty price level's size after the last depth row."""
+    last = depth.drop_duplicates(subset=["direction", "price"], keep="last")
+    last = last[last["volume"] > 0]
+    return {
+        (str(d), int(p)): int(v)
+        for d, p, v in zip(last["direction"], last["price"], last["volume"])
+    }
+
+
+def resting_orders(events: pd.DataFrame) -> set[tuple[int, int, int]]:
+    """``(id, price, volume)`` of every order on the per-order book at the end."""
+    book = order_book(events)
+    return {
+        (int(i), int(p), int(v))
+        for side in ("bids", "asks")
+        for i, p, v in zip(book[side]["id"], book[side]["price"], book[side]["volume"])
+    }
 
 
 def dbn_bytes(records: list[tuple], *, dataset="XNAS.ITCH", symbol="AAPL") -> bytes:
@@ -857,6 +983,199 @@ class TestDbnFiles:
             result.events[columns].reset_index(drop=True),
             reloaded.events[columns].reset_index(drop=True),
         )
+
+    def test_a_synthetic_session_round_trips_with_its_trades_and_book(self, tmp_path):
+        # A frame not read from DBN: the synthetic feed's takers carry fills
+        # too, and a fully filled order's deleted row has no cancelled size.
+        session = generate_session(
+            SynthConfig(
+                seed=11,
+                duration=60.0,
+                lot_size=1.0,
+                min_size=1.0,
+                mean_size=5.0,
+                volume_decimals=0,
+            )
+        )
+        config = PipelineConfig(
+            tick_size=0.01, lot_size=1.0, price_decimals=2, volume_decimals=0
+        )
+        result = Pipeline(
+            config,
+            loader=SyntheticLoader(session),
+            trade_source=SyntheticTradeSource(session),
+        ).run(None)
+        assert len(result.trades) > 50
+
+        path = DatabentoWriter(_config()).write(
+            {"events": result.events}, tmp_path / "synth.dbn"
+        )
+        reloaded = Pipeline(source=DatabentoSource()).run(path)
+
+        trade_columns = ["timestamp", "price", "volume"]
+        pd.testing.assert_frame_equal(
+            result.trades[trade_columns].reset_index(drop=True),
+            reloaded.trades[trade_columns].reset_index(drop=True),
+        )
+        assert final_levels(reloaded.depth) == final_levels(result.depth)
+        assert resting_orders(reloaded.events) == resting_orders(result.events)
+
+    def test_the_toy_session_round_trips_with_its_trades_and_book(self, tmp_path):
+        # The toy session has orders that take liquidity and then rest
+        # (market-limit), so the writer must drop their aggressor fills and
+        # keep them at their own price.
+        from ob_analytics.analytics import set_order_types
+        from ob_analytics.datasets import toy_events, toy_trades
+
+        trades = toy_trades()
+        events = set_order_types(toy_events(), trades)
+        assert (events["type"] == "market-limit").any()
+        config = _config(tick_size=1.0, price_decimals=0)
+
+        path = DatabentoWriter(config).write(
+            {"events": events, "trades": trades}, tmp_path / "toy.dbn"
+        )
+        reloaded = Pipeline(config, source=DatabentoSource()).run(path)
+
+        trade_columns = ["timestamp", "price", "volume"]
+        pd.testing.assert_frame_equal(
+            trades[trade_columns].reset_index(drop=True),
+            reloaded.trades[trade_columns].reset_index(drop=True),
+            check_dtype=False,
+        )
+        assert resting_orders(reloaded.events) == resting_orders(events)
+
+    @staticmethod
+    def _aggressor_that_rests():
+        """Bid 2 for 8 at 102 takes the 5 offered at 101 and rests 3 at 102.
+
+        Bitstamp reports the aggressor's fill at the price it traded at.  The
+        order is never hit afterwards, so it is classed ``market``.
+        """
+        from ob_analytics.analytics import set_order_types
+        from tests.test_price_level_stranding import _events
+
+        events = _events(
+            [
+                (1, 1, 0, 101, 5, "ask", "created", 0),
+                (2, 2, 1, 102, 8, "bid", "created", 0),
+                (3, 2, 2, 101, 3, "bid", "changed", 5),
+                (4, 1, 2, 101, 0, "ask", "deleted", 5),
+            ]
+        )
+        trades = pd.DataFrame(
+            {
+                "timestamp": events["timestamp"].iloc[2:3].to_numpy(),
+                "price": [101],
+                "volume": [5],
+                "maker_event_id": pd.array([4], dtype=object),
+                "taker_event_id": pd.array([3], dtype=object),
+            }
+        )
+        events = set_order_types(events, trades)
+        assert set(events.loc[events["id"] == 2, "type"]) == {"market"}
+        return events, trades
+
+    @pytest.mark.parametrize("with_trades", [True, False])
+    def test_an_aggressor_that_rests_is_written_from_where_it_rests(
+        self, tmp_path, with_trades
+    ):
+        events, trades = self._aggressor_that_rests()
+        data = (
+            {"events": events, "trades": trades} if with_trades else {"events": events}
+        )
+        config = _config(tick_size=1.0, price_decimals=0)
+
+        path = DatabentoWriter(config).write(data, tmp_path / "taker.dbn")
+        reloaded = Pipeline(config, source=DatabentoSource()).run(path)
+
+        assert resting_orders(reloaded.events) == {(2, 102, 3)}
+        assert final_levels(reloaded.depth) == {("bid", 102): 3}
+        assert list(reloaded.trades["volume"]) == [5]
+        # The aggressor joins the book with what it has left.
+        rows = reloaded.events[reloaded.events["id"] == 2]
+        assert list(rows["action"]) == ["created"]
+        assert list(rows["volume"]) == [3]
+
+    def test_the_aggressor_joins_the_book_after_the_makers_it_took(self, tmp_path):
+        # In the events the aggressor's row comes before the maker's at the
+        # same instant.  Written in that order, its A at 102 would rest above
+        # the ask at 101 until the maker's C, a crossed book.
+        events, trades = self._aggressor_that_rests()
+        config = _config(tick_size=1.0, price_decimals=0)
+
+        path = DatabentoWriter(config).write(
+            {"events": events, "trades": trades}, tmp_path / "taker.dbn"
+        )
+        reloaded = Pipeline(config, source=DatabentoSource()).run(path)
+
+        # The ask is added and taken out, then the bid joins.
+        assert list(reloaded.events["id"]) == [1, 1, 2]
+        assert list(reloaded.events["action"]) == ["created", "deleted", "created"]
+
+    def test_an_aggressor_cancelled_at_the_same_instant_leaves_nothing(self, tmp_path):
+        # Bid 2 takes 5 and its remaining 3 is cancelled at that instant.
+        from ob_analytics.analytics import set_order_types
+        from tests.test_price_level_stranding import _events
+
+        events, trades = self._aggressor_that_rests()
+        events = set_order_types(
+            _events(
+                [
+                    (1, 1, 0, 101, 5, "ask", "created", 0),
+                    (2, 2, 1, 102, 8, "bid", "created", 0),
+                    (3, 2, 2, 101, 3, "bid", "changed", 5),
+                    (4, 1, 2, 101, 0, "ask", "deleted", 5),
+                    (5, 2, 2, 102, 3, "bid", "deleted", 0),
+                ]
+            ),
+            trades,
+        )
+        config = _config(tick_size=1.0, price_decimals=0)
+
+        path = DatabentoWriter(config).write(
+            {"events": events, "trades": trades}, tmp_path / "ioc.dbn"
+        )
+        reloaded = Pipeline(config, source=DatabentoSource()).run(path)
+
+        assert resting_orders(reloaded.events) == set()
+        assert final_levels(reloaded.depth) == {}
+        rows = reloaded.events[reloaded.events["id"] == 2]
+        assert list(rows["action"]) == ["created", "deleted"]
+
+    def test_an_empty_trades_table_is_not_reported(self, tmp_path):
+        import warnings
+
+        result = Pipeline(source=DatabentoSource()).run(mbo_frame(LIFECYCLE))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            DatabentoWriter(result.config).write(
+                {"events": result.events, "trades": pd.DataFrame()},
+                tmp_path / "out.dbn",
+            )
+
+    def test_unusable_trades_are_reported(self, tmp_path):
+        events, trades = self._aggressor_that_rests()
+        with pytest.warns(UserWarning, match="taker_event_id"):
+            DatabentoWriter(_config(tick_size=1.0, price_decimals=0)).write(
+                {"events": events, "trades": trades.drop(columns="taker_event_id")},
+                tmp_path / "taker.dbn",
+            )
+
+    def test_the_writer_refuses_sizes_that_are_not_whole_units(self, tmp_path):
+        result = Pipeline(source=DatabentoSource()).run(mbo_frame(LIFECYCLE))
+        # Read with a lot of a hundredth, 100 lots are one unit and 50 are not.
+        with pytest.raises(ValueError, match="whole"):
+            DatabentoWriter(_config(lot_size=0.01)).write(
+                {"events": result.events}, tmp_path / "out.dbn"
+            )
+
+    def test_the_writer_refuses_float_sizes_that_are_not_whole_lots(self, tmp_path):
+        result = Pipeline(source=DatabentoSource()).run(mbo_frame(LIFECYCLE))
+        events = result.events.assign(volume=result.events["volume"].astype(float))
+        events.loc[events.index[0], "volume"] = 99.5
+        with pytest.raises(ValueError, match="whole"):
+            DatabentoWriter(_config()).write({"events": events}, tmp_path / "out.dbn")
 
     def test_the_writer_fills_a_directory(self, tmp_path):
         result = Pipeline(source=DatabentoSource()).run(mbo_frame(LIFECYCLE))

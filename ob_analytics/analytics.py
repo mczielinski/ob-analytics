@@ -27,7 +27,7 @@ from loguru import logger
 
 from ob_analytics import _engine_frames, engine
 from ob_analytics._utils import ticks_to_price, validate_columns, validate_non_empty
-from ob_analytics.depth import price_level_volume
+from ob_analytics.depth import _price_level_volume, price_level_volume
 from ob_analytics.protocols import Clocks, FeedType, SequenceKind, TradeAttribution
 from ob_analytics.schemas import (
     INGEST_SEQ_COLUMN,
@@ -1189,6 +1189,13 @@ _MUST_NOT_CROSS: dict[FeedType, tuple[str, str]] = {
 # suggesting the trades and events do not describe the same session.
 UNMATCHED_TRADES_WARN_PCT: float = 5.0
 
+# The events columns the price-level rebuild reads.  ``data_quality_summary``
+# counts overdrawn levels only when the events carry all of them.
+_LEVEL_COLUMNS = frozenset(
+    {"event_id", "id", "timestamp", "exchange_timestamp", "price", "volume"}
+    | {"direction", "action", "fill", "type"}
+)
+
 
 @dataclass(frozen=True)
 class DataQualitySummary:
@@ -1260,6 +1267,13 @@ class DataQualitySummary:
         integer ticks) but not a tradeable level.
     negative_volume_rows : int
         Rows with a negative ``volume`` (or negative ``fill``): impossible size.
+    negative_level_rows : int
+        Depth rows where the events would take a price level below zero: they
+        took more size off the level than they put on it.  The depth table
+        holds such a level at zero, so it reads less than the orders the
+        events show resting there.  Counted from the events.  Always ``0`` on
+        a price-level (L2) run, whose depth rows ``negative_volume_rows``
+        already counts.
     exchange_time_after_receive : int
         Rows whose venue clock (``exchange_timestamp``) is later than the local
         receive clock (``timestamp``) — an event received before it happened.
@@ -1307,6 +1321,7 @@ class DataQualitySummary:
     orphan_events: int = 0
     nonpositive_price_rows: int = 0
     negative_volume_rows: int = 0
+    negative_level_rows: int = 0
     exchange_time_after_receive: int = 0
     exchange_time_reordered: int = 0
     clocks: Clocks = Clocks.BOTH
@@ -1335,6 +1350,7 @@ class DataQualitySummary:
             "orphan_events": self.orphan_events,
             "nonpositive_price_rows": self.nonpositive_price_rows,
             "negative_volume_rows": self.negative_volume_rows,
+            "negative_level_rows": self.negative_level_rows,
             "exchange_time_after_receive": self.exchange_time_after_receive,
             "exchange_time_reordered": self.exchange_time_reordered,
             "clocks": str(self.clocks.value),
@@ -1484,6 +1500,14 @@ class DataQualitySummary:
                 + (f". Worst: {self._worst_stale()}" if self.stale_orders else ""),
             ),
             QualityCheck(
+                "negative_level",
+                self.negative_level_rows == 0,
+                Severity.WARNING,
+                f"{self.negative_level_rows} depth row(s) would take a price "
+                "level below zero: the events take more size off the level than "
+                "they put on it, so the level, held at zero, reads short",
+            ),
+            QualityCheck(
                 "nonpositive_price",
                 self.nonpositive_price_rows == 0,
                 Severity.WARNING,
@@ -1591,7 +1615,8 @@ class DataQualitySummary:
             (
                 f"  impossible values     : {self.nonpositive_price_rows} "
                 f"non-positive price(s) / {self.negative_volume_rows} "
-                "negative volume(s)"
+                f"negative volume(s) / {self.negative_level_rows} level row(s) "
+                "below zero"
             ),
             f"  clock order           : {clock_order}",
             (
@@ -1773,8 +1798,17 @@ def data_quality_summary(
     # supplied depth frame (the price-level book) rather than reconstructed
     # from events.
     l2 = events.empty
-    if depth is None:
-        depth = events if l2 else price_level_volume(events)
+    # The depth rows where the events overdraw a price level.  The depth table
+    # holds such a level at zero, so they are counted from the events.  An L2
+    # run's depth rows are counted by ``negative_volume_rows`` below.
+    negative_level_rows = 0
+    if depth is None and l2:
+        depth = events
+    elif depth is None:
+        depth, overdrawn = _price_level_volume(events)
+        negative_level_rows = len(overdrawn)
+    elif not l2 and _LEVEL_COLUMNS <= set(events.columns):
+        negative_level_rows = len(_price_level_volume(events)[1])
 
     best = None if depth.empty else _faithful_best_series(depth)
     if best is None:
@@ -1845,7 +1879,6 @@ def data_quality_summary(
     negative_volume_rows = int((levels["volume"] < 0).sum())
     if not l2 and "fill" in events.columns:
         negative_volume_rows += int((events["fill"] < 0).sum())
-
     # Rows with no venue time have one clock, whatever the source declares.
     # An empty frame has no rows to say so, and keeps the declaration.
     clocks = Clocks(clocks)
@@ -1879,6 +1912,7 @@ def data_quality_summary(
         orphan_events=orphan_events,
         nonpositive_price_rows=nonpositive_price_rows,
         negative_volume_rows=negative_volume_rows,
+        negative_level_rows=negative_level_rows,
         exchange_time_after_receive=after_receive,
         exchange_time_reordered=reordered,
         clocks=clocks,

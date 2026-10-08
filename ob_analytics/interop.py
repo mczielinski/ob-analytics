@@ -275,12 +275,13 @@ _DIRECTION_TO_NAUTILUS: dict[str, str] = {"bid": "BUY", "ask": "SELL"}
 def _resting_size_on_delete(events: pd.DataFrame) -> pd.DataFrame:
     """Give every delta a size Nautilus will accept, dropping those that cannot.
 
-    The canonical ``volume`` on a ``deleted`` event is the size *removed*, so an
-    order that was fully filled leaves a delete carrying zero: there was nothing
-    left to cancel.  Nautilus rejects a delta whose size is not positive, and
-    dropping the delete instead would leave the order resting in its book for
-    the rest of the session.  So a zero-size row is given the size that order
-    last rested at, which is what the engine still believes it holds.
+    The canonical ``volume`` on a ``deleted`` event is the size removed without
+    trading, so an order that was fully filled leaves a delete carrying zero:
+    there was nothing left to cancel.  Nautilus rejects a delta whose size is
+    not positive, and dropping the delete instead would leave the order
+    resting in its book for the rest of the session.  So a zero-size row is
+    given the size that order last rested at, which is what the engine still
+    believes it holds.
 
     A row with no earlier size to borrow — an order that never rested — is
     dropped: there is nothing truthful to tell the engine about it.

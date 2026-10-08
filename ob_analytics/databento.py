@@ -36,7 +36,9 @@ A venue reports an execution as a fill and then a separate cancel or modify
 that takes the size off the book, so the two are paired by order: every ``F``
 is charged to the next ``A``/``M``/``C`` record for the same ``order_id``.
 That is what tells a cancel that was really an execution apart from a cancel
-the trader asked for.
+the trader asked for.  When the cancel ends the order, its ``deleted`` row
+keeps the executed part as ``fill`` and only the rest as ``volume``, so an
+order filled in full ends with ``volume`` 0 and leaves its price level once.
 
 Timestamps
 ----------
@@ -85,6 +87,7 @@ and listing sources — never requires it.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -99,6 +102,7 @@ from ob_analytics._utils import (
     empty_trades,
     epoch_to_datetime,
     lots_to_size,
+    off_tick_grid,
     price_to_ticks,
     size_to_lots,
     ticks_to_price,
@@ -690,8 +694,10 @@ def _events_from_book_records(book: pd.DataFrame) -> pd.DataFrame:
     """Map the A / M / C records onto the canonical action and volume.
 
     ``volume`` is the order's outstanding size after the event, except on a
-    ``deleted`` row where it is the size removed — the convention the Bitstamp
-    and LOBSTER loaders already follow (see :mod:`ob_analytics.schemas`).
+    ``deleted`` row where it is, for now, the whole size the cancel removed.
+    Once the fills are charged, :func:`_split_deleted_volume` takes the
+    executed part out of it, which gives the schema's rule (see
+    :mod:`ob_analytics.schemas`).
     """
     if book.empty:
         return _empty_book_events()
@@ -752,7 +758,12 @@ def _events_from_book_records(book: pd.DataFrame) -> pd.DataFrame:
 
     emptied = is_cancel & (orphan_cancel | ~(outstanding > 0))
     canonical = np.where(created, "created", np.where(emptied, "deleted", "changed"))
-    volume = np.where(is_set | emptied, size, outstanding)
+    # A cancel that empties the order removes what it had resting just before:
+    # its own size, or less when it asks to remove more than there was, and
+    # nothing when the order was already gone.  An orphan's resting size is
+    # unknown, so it removes its own size.
+    resting_before = np.where(orphan_cancel, size, np.clip(outstanding + size, 0, size))
+    volume = np.where(is_set, size, np.where(emptied, resting_before, outstanding))
 
     return pd.DataFrame(
         {
@@ -947,9 +958,35 @@ def _charge_fills_to_events(
     else:
         maker_event_id = np.empty(0)
 
+    events = _split_deleted_volume(events)
     trade_records = _trade_records(fills, work, maker_event_id)
     events = events.drop(columns=["epoch", "book_rank"])
     return events, trade_records
+
+
+def _split_deleted_volume(events: pd.DataFrame) -> pd.DataFrame:
+    """Leave on each ``deleted`` row only the size it removes without trading.
+
+    Until the fills are charged, a ``deleted`` row's ``volume`` is the whole
+    size its cancel took off the book.  Part of that size may be the fill the
+    row now carries.  The schema counts that part once, as ``fill``, so
+    ``volume`` keeps the rest: ``0`` when the order was executed in full.
+
+    A fill larger than the size the cancel removed is inconsistent, and the
+    row then keeps ``0`` with a warning.
+    """
+    deleted = (events["action"] == "deleted").to_numpy()
+    rest = events["volume"].to_numpy() - events["fill"].to_numpy()
+    overfilled = int((deleted & (rest < 0)).sum())
+    if overfilled:
+        warnings.warn(
+            f"DatabentoLoader: {overfilled} cancels that end an order remove "
+            "less than the fill charged to them; the records are inconsistent, "
+            "so those rows record the fill and no cancelled size",
+            stacklevel=2,
+        )
+    volume = np.where(deleted, np.maximum(rest, 0), events["volume"].to_numpy())
+    return events.assign(volume=volume.astype("int64"))
 
 
 def _trade_records(
@@ -1159,9 +1196,24 @@ class DatabentoWriter:
 
     Satisfies the :class:`~ob_analytics.protocols.DataWriter` protocol, and
     inverts :class:`DatabentoLoader` record for record: a ``created`` row
-    becomes ``A``, a ``changed`` row ``M``, a ``deleted`` row ``C`` removing
-    the outstanding size, and a non-zero ``fill`` becomes an ``F`` record
-    immediately before the row that carries it.
+    becomes ``A``, a ``changed`` row ``M``, and a ``deleted`` row ``C``.  The
+    ``C`` removes what the order had resting before the row: its ``volume``
+    plus its ``fill`` (see :mod:`ob_analytics.schemas`).  A fill the order
+    took while resting becomes an ``F`` record immediately before the row
+    that carries it.
+
+    DBN shows an order only while it rests.  A fill the order took as the
+    aggressor is not written as an ``F``, and its record keeps the order's own
+    price.  An order that took liquidity when it arrived first appears at its
+    last such fill, as an ``A`` for the size it had left, after the other
+    records of that instant; if nothing was left, it is not written at all.
+    The aggressor's fills are the fills of the orders classed ``market`` and,
+    when ``data`` has a ``"trades"`` table, the events a trade names as
+    ``taker_event_id``.  Each trade then comes back once, from its resting
+    order's ``F``.
+
+    DBN sizes are whole units (shares or contracts), so a size that is not a
+    whole number of units at the config's ``lot_size`` is refused.
 
     The point is a round trip — reading a window, working on it, and writing
     something another DBN reader can open — not re-creating a vendor file byte
@@ -1201,7 +1253,8 @@ class DatabentoWriter:
         Parameters
         ----------
         data : dict of str to DataFrame
-            Must contain ``"events"``.
+            Must contain ``"events"``.  A ``"trades"`` table, when present,
+            names the fills each aggressor took, which are not written.
         dest : str or Path
             Output file.  A directory is filled with ``events.dbn``.
         symbol : str
@@ -1211,6 +1264,12 @@ class DatabentoWriter:
         -------
         pathlib.Path
             The file written.
+
+        Raises
+        ------
+        ValueError
+            If a size is not a whole number of units at the config's
+            ``lot_size``.
         """
         try:
             from databento_dbn import Action, MBOMsg, Metadata, Schema, Side, SType
@@ -1226,7 +1285,7 @@ class DatabentoWriter:
             dest = dest / "events.dbn"
         dest.parent.mkdir(parents=True, exist_ok=True)
 
-        records = self._records(events)
+        records = self._records(events, data.get("trades"))
         start = int(records[0][0]) if records else 0
         # The enums are built with ``from_str`` rather than named as members:
         # databento-dbn's own type stubs declare the members as ``str``, so
@@ -1263,31 +1322,34 @@ class DatabentoWriter:
         logger.info("DatabentoWriter: wrote {} records to {}", len(records), dest)
         return dest
 
-    def _records(self, events: pd.DataFrame) -> list[tuple[Any, ...]]:
+    def _records(
+        self, events: pd.DataFrame, trades: pd.DataFrame | None = None
+    ) -> list[tuple[Any, ...]]:
         """Return the DBN records for *events*, fills before the rows they sit on."""
         cfg = self._config
+        events, fill = _resting_rows(events, trades)
+
         # Back from integer ticks and lots to the feed's own encoding: the
         # quote-currency price re-scaled by Databento's fixed-point divisor,
-        # and the size as the venue's own whole quantity.
+        # and the size as the venue's own whole quantity.  A ``deleted`` row's
+        # ``C`` takes off everything the order had resting: the part removed
+        # without trading and the part executed.
         price_raw = np.round(
             ticks_to_price(events["price"], cfg.tick_size, decimals=cfg.price_decimals)
             * cfg.price_divisor
         ).astype("int64")
-        size_raw = np.round(
-            lots_to_size(events["volume"], cfg.lot_size, decimals=cfg.volume_decimals)
-        ).astype("int64")
-        fill_raw = np.round(
-            lots_to_size(
-                events.get("fill", pd.Series(0, index=events.index)),
-                cfg.lot_size,
-                decimals=cfg.volume_decimals,
-            )
-        ).astype("int64")
+        action = events["action"].astype(str).to_numpy()
+        removed = np.where(
+            action == "deleted",
+            events["volume"].to_numpy() + events["fill"].to_numpy(),
+            events["volume"].to_numpy(),
+        )
+        size_raw = _whole_units(removed, cfg.lot_size, "volume")
+        fill_raw = _whole_units(fill, cfg.lot_size, "fill")
 
         ts_recv = events["timestamp"].astype("int64").to_numpy()
         ts_event = events["exchange_timestamp"].astype("int64").to_numpy()
         order_id = events["id"].to_numpy()
-        action = events["action"].astype(str).to_numpy()
         side = events["direction"].astype(str).map(_DIRECTION_TO_SIDE).to_numpy()
 
         out: list[tuple[Any, ...]] = []
@@ -1320,8 +1382,134 @@ class DatabentoWriter:
         return out
 
 
-#: How a canonical action is written back out.  A ``deleted`` row reports the
-#: size removed, which is exactly what a ``C`` record carries.
+def _resting_rows(
+    events: pd.DataFrame, trades: pd.DataFrame | None
+) -> tuple[pd.DataFrame, np.ndarray]:
+    """Return the rows to write, and the size of the ``F`` before each one.
+
+    A market-by-order feed shows an order only while it rests.  So the rows
+    of an order that first takes liquidity, up to its last fill as the
+    aggressor, are not written.  If something is left after that fill, that
+    row becomes the order's ``A``, with the size left, at the order's own
+    price.  If nothing is left, the order is not written at all.
+
+    A fill the order took as the aggressor is never written as an ``F``, and
+    its row keeps the order's own price: a venue can report it at the price
+    it traded at, and a record at that price would read back as the order
+    moving there.  A fill the order took while resting is written as an
+    ``F``.
+    """
+    fill = events.get("fill", pd.Series(0, index=events.index)).to_numpy()
+    taker = _aggressor_fills(events, trades)
+    if not taker.any():
+        # A table the Databento loader made names no aggressor: nothing to do.
+        return events.assign(fill=fill), fill
+    action = events["action"].astype(str).to_numpy()
+    order = events["id"].to_numpy()
+    by_order = pd.Series(order)
+
+    # The leading run of each order: its first row and the aggressor fills
+    # straight after it.
+    first = ~by_order.duplicated().to_numpy()
+    lead = pd.Series(first | taker).astype("int64").groupby(order).cumprod()
+    in_lead = lead.to_numpy() == 1
+    next_in_lead = (
+        pd.Series(in_lead).groupby(order).shift(-1).fillna(False).to_numpy(bool)
+    )
+    last_lead = in_lead & ~next_in_lead
+    took_first = pd.Series(in_lead & taker).groupby(order).transform("any")
+    left_nothing = pd.Series(
+        last_lead & ((action == "deleted") | (events["volume"].to_numpy() == 0))
+    )
+    gone = (took_first & left_nothing.groupby(order).transform("any")).to_numpy()
+    took_first = took_first.to_numpy()
+    joins = took_first & last_lead & ~gone
+    keep = ~gone & ~(took_first & in_lead & ~last_lead)
+
+    # The price the order rests at: set by its first row and moved only by a
+    # ``changed`` row that reports no execution, as ``price_level_volume``
+    # reads it.
+    sets_level = first | ((action == "changed") & (fill == 0) & ~taker)
+    resting = events["price"].where(sets_level).groupby(order).ffill().to_numpy()
+    price = np.where(taker | joins, resting, events["price"].to_numpy())
+
+    rows = events.assign(
+        price=price.astype(events["price"].dtype),
+        action=np.where(joins, "created", action),
+        fill=np.where(joins, 0, fill),
+    )
+    written_fill = np.where(taker, 0, fill)
+    rows, written_fill, joins = rows[keep], written_fill[keep], joins[keep]
+    # In time order, with each joining aggressor's rows at its instant after
+    # the other orders' rows there: the makers it took must leave the book
+    # before it rests.  Its own rows keep their order, so a cancel of what it
+    # had left still follows its ``A``.
+    when = rows["timestamp"].astype("int64").to_numpy()
+    kept_order = rows["id"].to_numpy()
+    joined_at = (
+        pd.Series(np.where(joins, when, np.nan)).groupby(kept_order).transform("max")
+    ).to_numpy()
+    trails = when == joined_at
+    in_order = np.lexsort((trails, when))
+    return rows.iloc[in_order], written_fill[in_order]
+
+
+def _aggressor_fills(events: pd.DataFrame, trades: pd.DataFrame | None) -> np.ndarray:
+    """Return which rows of *events* carry a fill their order took as the aggressor.
+
+    Those are the fills of the orders
+    :func:`~ob_analytics.analytics.set_order_types` classed ``market``, which
+    only ever took liquidity, and the rows a trade names as its
+    ``taker_event_id``.
+    """
+    if "fill" not in events.columns:
+        return np.zeros(len(events), dtype=bool)
+    filled = (events["fill"] > 0).to_numpy()
+    taker = np.zeros(len(events), dtype=bool)
+    if "type" in events.columns:
+        taker |= filled & (events["type"].astype(str) == "market").to_numpy()
+    if trades is not None and not trades.empty:
+        if "taker_event_id" in trades.columns and "event_id" in events.columns:
+            # A row a trade also names as its maker took that fill resting.
+            taker |= filled & _named(events, trades, "taker_event_id")
+            taker &= ~_named(events, trades, "maker_event_id")
+        else:
+            warnings.warn(
+                "DatabentoWriter: the trades have no taker_event_id, or the "
+                "events no event_id, so the trades cannot say which fills an "
+                "aggressor took; only the market orders' fills are left out",
+                stacklevel=5,
+            )
+    return taker
+
+
+def _named(events: pd.DataFrame, trades: pd.DataFrame, column: str) -> np.ndarray:
+    """Return which rows of *events* a trade names in its *column*."""
+    if column not in trades.columns:
+        return np.zeros(len(events), dtype=bool)
+    named = pd.to_numeric(trades[column], errors="coerce").dropna()
+    return events["event_id"].isin(named.astype("int64")).to_numpy()
+
+
+def _whole_units(lots: Any, lot_size: float, column: str) -> np.ndarray:
+    """Return *lots* as whole units of the instrument, or raise.
+
+    DBN carries sizes as whole shares or contracts.  A size that is a fraction
+    of a unit has no DBN record, and rounding it would change the book.
+    """
+    size = lots_to_size(lots, lot_size)
+    not_whole = off_tick_grid(size, 1.0)
+    if not_whole.any():
+        raise ValueError(
+            f"DatabentoWriter: {int(not_whole.sum())} {column} value(s) are not a "
+            f"whole number of units at lot_size={lot_size:g}, and DBN sizes are "
+            "whole shares or contracts.  Pass the config the events were made "
+            "with; a size finer than one unit cannot be written to DBN."
+        )
+    return np.round(size).astype("int64")
+
+
+#: How a canonical action is written back out.
 _CANONICAL_TO_ACTION: dict[str, str] = {
     "created": ACTION_ADD,
     "changed": ACTION_MODIFY,

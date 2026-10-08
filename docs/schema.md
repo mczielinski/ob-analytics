@@ -143,12 +143,27 @@ already in the quote currency.
 
 Per-order size follows one convention across every loader:
 
+- `fill` is the **executed size at this event**, on any row (`0` when nothing
+  traded).
 - `volume` is the order's **outstanding size after the event** for `created` and
-  `changed` rows, and the **size removed** (the outstanding size just before the
-  delete) for `deleted` rows.
-- `fill` is the **executed size at this event** (`0` when nothing traded). A
-  `changed` row is either an execution (`fill > 0`, outstanding drops by exactly
-  `fill`) or a non-executed reduction (`fill == 0`), never both.
+  `changed` rows. On a `deleted` row it is the **size removed without
+  trading**, so `volume + fill` is what the order had resting just before the
+  delete.
+- A `changed` row is either an execution (`fill > 0`, outstanding drops by
+  exactly `fill`) or a non-executed reduction (`fill == 0`), never both.
+
+Two `deleted` rows show the rule. An order of 5 lots filled in full ends with
+`fill` 5 and `volume` 0. The same order cancelled with nothing executed ends
+with `fill` 0 and `volume` 5.
+
+The depth table is built on this rule: each `deleted` row takes its `volume`
+off the order's price level, each row with a fill takes its `fill` off, and a
+`changed` row with no fill takes off the drop in outstanding size, so every lot
+leaves its level once. If a loader breaks the rule, the events can
+take more off a level than they put on. `price_level_volume` then holds the
+level at zero, so it never shows a negative size and the next order there
+starts from zero. It raises a warning that names the level and the first event,
+and [`audit`](howto/audit.md) counts the rows as `negative_level`.
 
 Sizes are integer lots and prices integer ticks — multiply by `lot_size` and
 `tick_size` respectively (see [Size policy](#size-policy) and
@@ -212,7 +227,7 @@ provenance columns every loader carries.
 | `timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Local receive time. |
 | `exchange_timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Venue matching-engine time (equals `timestamp` for LOBSTER). |
 | `price` | `int64` | ticks | no | Limit price as a whole number of ticks (× `tick_size` for the quote currency — see [Price policy](#price-policy)). |
-| `volume` | `int64` | lots | no | Outstanding size after the event, or size removed on a delete (× `lot_size` for the base asset — see [Size policy](#size-policy)). |
+| `volume` | `int64` | lots | no | Outstanding size after the event, or on a delete the size removed without trading (× `lot_size` for the base asset — see [Size policy](#size-policy)). |
 | `direction` | `dictionary<string>` | — | no | Order side: `bid` or `ask` (ordered categorical). |
 | `action` | `dictionary<string>` | — | no | Event kind: `created`, `changed`, or `deleted` (ordered categorical). |
 | `fill` | `int64` | lots | no | Executed size at this event (`0` when none). |

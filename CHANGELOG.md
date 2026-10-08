@@ -260,6 +260,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   refused: pass the run's `depth`, or run `set_order_types` first. Prices are encoded as exact
   integers, and a writer built with no config uses LOBSTER's own grid
   (`price_divisor=10_000`, whole shares) instead of the general defaults.
+- **One rule for a `deleted` row, and the loaders and writer that broke it**
+  (#341). The schema now says what a `deleted` row holds when its order also
+  traded: `fill` is the executed part, `volume` the part removed without
+  trading, and the two add up to what the order had resting. An order filled
+  in full ends with `volume` 0. See "Volume and fill" in the schema page.
+  - The Databento loader put the size in both columns, so an order filled in
+    full came off its price level twice and other orders at that price lost
+    their size from `depth` and `depth_summary`. Bids of 5 and 3 at 100.00,
+    with the 5 filled, now leave 3 at 100.00, not 0. A cancel that asks to
+    remove more than its order holds now removes only what the order holds.
+  - `DatabentoWriter` is now the inverse of that rule. A `deleted` row is a
+    `C` for everything the order had resting. It writes an `F` only for a fill
+    the order took while resting. An order that took liquidity when it
+    arrived is written from when it rests, as an `A` for the size it had
+    left, or not at all if nothing was left. Pass `"trades"` with the events
+    so the writer knows every fill an aggressor took; without them it knows
+    only the `market` orders' fills. A synthetic session written to DBN and
+    read back now has the same trades and the same final book; before, every
+    trade came back twice and filled orders stayed resting. A size that is
+    not a whole number of units now raises a `ValueError` instead of being
+    rounded.
+  - The Bitstamp loader now puts each order's `created` row first. It sorted
+    an order's rows by size, so an instant order bought by quote amount,
+    created with size 0, had its `created` row last and a phantom 1-lot fill.
+    A rise in size is no longer read as a fill.
+  - `price_level_volume` keeps `int64` sizes after a partial cancel. One
+    LOBSTER type 2 or Databento partial `C` made the whole `depth.volume`
+    column, and the `depth_summary` sizes, `float64`.
+  - `price_level_volume` no longer hides a level the events overdraw. It
+    clipped only the size it reported, so the level stayed short for the
+    rest of the run: overdrawn by 5 and then given an order of 4, it read 0.
+    It now holds the level's running total at zero, so the same level reads
+    4, and it warns with the level and the first event. `audit` counts those
+    rows as `negative_level` (a warning). The bundled sample, the toy
+    session and a synthetic session have none.
 - **The book replay keeps its click script in a notebook** (#121). IPython
   displayed a `BookReplayFigure` through Plotly's own renderer, which drops
   the script that makes trades clickable, and the tutorial build dropped the

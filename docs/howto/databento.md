@@ -132,7 +132,11 @@ executed.
 A venue reports an execution as a fill and then a separate cancel or modify
 that takes the size off the book. The loader charges each `F` to the next
 `A`/`M`/`C` record for the same order, which is what tells a cancel that was
-really an execution apart from a cancel the trader asked for. A modify for an
+really an execution apart from a cancel the trader asked for. When that cancel
+ends the order, its `deleted` row carries the executed part as `fill` and only
+the rest as `volume`, as the [schema](../schema.md#volume-and-fill) says. An
+order filled in full, `F 5` then `C 5`, ends in a `deleted` row with `fill` 5
+and `volume` 0, so its 5 leave the price level once. A modify for an
 order this window never saw added is treated as an add, the same way
 Databento's own reference book builder treats it.
 
@@ -303,8 +307,29 @@ worked on can be handed to another DBN reader:
 ```python
 from ob_analytics.databento import DatabentoWriter
 
-DatabentoWriter(result.config).write({"events": result.events}, "out/window.dbn")
+DatabentoWriter(result.config).write(
+    {"events": result.events, "trades": result.trades}, "out/window.dbn"
+)
 ```
+
+The writer also takes events that did not come from DBN, such as a synthetic
+session in whole units, and the file reads back with the same trades and the
+same book. A DBN file shows an order only while it rests, so:
+
+- a fill is written as an `F` record only when the order took it while
+  resting. A fill it took as the aggressor is left out, and the record keeps
+  the order's own price;
+- an order that took liquidity when it arrived appears from the moment it
+  rests, as an `A` for the size it had left. If nothing was left, it does not
+  appear at all.
+
+The `"trades"` table says which fills an aggressor took (`taker_event_id`).
+Without it, only the fills of the orders classed `market` are known to be the
+aggressor's.
+
+DBN sizes are whole shares or contracts. A size that is not a whole number of
+units at the config's `lot_size`, such as 0.5 BTC, raises a `ValueError`
+rather than being rounded.
 
 The metadata says `OB.ANALYTICS` rather than claiming to be Databento's own
 data, and the fills are written back at the timestamp of the event they were

@@ -184,12 +184,13 @@ _Avoid_: kind, op, message type
 
 **Volume**:
 Size, in the base asset or in shares. Its meaning is per table: outstanding
-size after the event, the size removed on a delete, the level's new resting
-size on the depth table, and the executed size on trades.
+size after the event, the size removed without trading on a delete, the
+level's new resting size on the depth table, and the executed size on trades.
 _Avoid_: size, quantity, amount
 
 **Fill**:
 The size executed at one event, and `0` when nothing traded. Named `fill`.
+On a delete, `volume` plus `fill` is what the order had resting just before.
 
 **Outstanding**:
 The size of an order still resting, after everything executed or cancelled so
