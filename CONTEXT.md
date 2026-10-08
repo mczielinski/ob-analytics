@@ -375,6 +375,14 @@ A stretch of a capture that no segment covers, recorded in `manifest.json`
 with its cause. Not a sequence gap, which is a message missing inside a
 segment.
 
+**Capture record**:
+The `meta.json` a capture writes beside each segment's files. Most of it is
+counters; the part that says how to read the data back is the source that made
+the capture, what that source declares, and the instrument's tick and lot size.
+Typed `CaptureRecord`, read with `read_record`. The pipeline uses its tick and
+lot size when the caller sets none.
+_Avoid_: meta, metadata (that is the Parquet key-value metadata)
+
 **Origin**:
 Which part of a capture wrote a row: `snapshot` (the opening book), `stream`
 (a live message) or `shutdown` (a synthetic close-out at the end). Named

@@ -61,24 +61,23 @@ fig = plot(
 
 ## Serialisation
 
-Pipeline outputs are dict-of-DataFrames; `save_data` writes one Parquet
-file per key, `load_data` reads them back.
+`save_data` writes one Parquet file per table. Pass it the result: each file
+then records the run's config, so the tables keep their tick size, lot size and
+display precision. `load_result` reads the folder back as the same result.
+`load_data` reads the tables alone, as a dict of DataFrames.
 
 ```python
-from ob_analytics import save_data, load_data
+from ob_analytics import load_data, load_result, save_data
 
-save_data(
-    {
-        "events": result.events,
-        "trades": result.trades,
-        "depth": result.depth,
-        "depth_summary": result.depth_summary,
-    },
-    "output/my_analysis",
-)
+save_data(result, "output/my_analysis")
 
-data = load_data("output/my_analysis")
+same = load_result("output/my_analysis")   # a PipelineResult, config included
+data = load_data("output/my_analysis")     # {"events": ..., "trades": ..., ...}
 ```
+
+`load_result` also reads the folders `ob-analytics process` writes. A folder that
+records only the tick and lot size (from `run_windows`, or an older version)
+gets those two, with the display precision that shows one step of each.
 
 To hand the tables to another tool without writing files first, convert the
 result in memory:
@@ -89,7 +88,8 @@ frames = result.to_polars()   # dict[str, polars.DataFrame], needs polars
 ```
 
 Both give the same four keys as the dict above. The Arrow tables carry the
-schema version and tick size in their metadata, the same as the Parquet files.
+schema version, tick size, lot size and config in their metadata, the same as
+the Parquet files.
 See [Frame types: pandas in, pandas out](../schema.md#frame-types-pandas-in-pandas-out).
 
 For LOBSTER round-trip output (back to message + orderbook CSVs), pass

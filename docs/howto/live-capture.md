@@ -61,12 +61,25 @@ complete capture on its own, so it replays alone:
 | `seg-NNNN/orders.csv` | BitstampLoader-compatible event log (`created` / `changed` / `deleted`) |
 | `seg-NNNN/trades.csv` | Venue-reported trades (informational; pipeline infers fills itself) |
 | `seg-NNNN/raw.jsonl` | The raw WebSocket frames, one per line (omit with `--no-raw`). A value or dict key that JSON cannot hold is written as text (`str(value)`). A frame that JSON cannot hold at all, such as one that refers to itself, is skipped. Neither stops the capture |
-| `seg-NNNN/meta.json` | Segment metadata: start/end, counts, per-capturer diagnostics. With `raw.jsonl` on, `raw_text_types` names the types written as text and `n_raw_frames_skipped` counts the skipped frames. `n_raw_frames` counts every frame, skipped ones included, so `raw.jsonl` has `n_raw_frames - n_raw_frames_skipped` lines. The capture logs a warning the first time each happens |
+| `seg-NNNN/meta.json` | Segment metadata, the capture record: start/end, counts, per-capturer diagnostics, the source and what it declares about its feed, and the instrument's `tick_size` and `lot_size` when the venue gives them. With `raw.jsonl` on, `raw_text_types` names the types written as text and `n_raw_frames_skipped` counts the skipped frames. `n_raw_frames` counts every frame, skipped ones included, so `raw.jsonl` has `n_raw_frames - n_raw_frames_skipped` lines. The capture logs a warning the first time each happens |
 
 `process` and `audit` given the capture directory work through each segment.
 `process` writes each segment's results to the folder of the same name under
 `--output` and copies `manifest.json` there. To read one segment in Python,
 pass its book file: `Pipeline().run("/tmp/cap/seg-0001/orders.csv")`.
+
+The pipeline reads the segment's `meta.json` and uses the recorded tick size and
+lot size when your config does not set them, the same as `process` does. So the
+Python API and the CLI give the same result for one folder. To read the record
+yourself, use
+[`read_record`](../api/capture_record.md#ob_analytics.capture_record.read_record):
+
+```python
+from ob_analytics.capture_record import read_record
+
+record = read_record("/tmp/cap/seg-0001")
+record.tick_size, record.lot_size, record.feed_type
+```
 
 The Bitstamp capturer also pulls a REST order-book snapshot at startup
 (emitting synthetic `created` events for every resting order) and emits

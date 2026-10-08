@@ -17,6 +17,7 @@ import pandas as pd
 from loguru import logger
 
 from ob_analytics._secrets import RedactingFile, any_known, redact
+from ob_analytics.capture_record import source_declarations, write_record
 from ob_analytics.config import SourceSettings
 from ob_analytics.live._base import (
     CaptureConfig,
@@ -27,7 +28,7 @@ from ob_analytics.live._base import (
     SupportsDiagnostics,
     SupportsPreflight,
 )
-from ob_analytics.protocols import FeedType, Level, clocks_of, trade_attribution_of
+from ob_analytics.protocols import Level
 from ob_analytics.schemas import SNAPSHOT_ORIGIN
 
 # Which part of the capture wrote a book row: the source's opening book, a live
@@ -351,7 +352,7 @@ class FileCaptureSink(CaptureSink):
             meta["capture_error"] = result.capture_error
             meta["capture_error_phase"] = result.capture_error_phase
             meta["errors"] = int(meta.get("errors") or 0) + 1
-        (self.out_dir / "meta.json").write_text(redact(json.dumps(meta, indent=2)))
+        write_record(self.out_dir, meta)
 
 
 def _open_redacting(path: Path) -> Any:
@@ -375,47 +376,6 @@ def check_credentials(source: Any) -> None:
 
 def _iso_or_none(ts: pd.Timestamp | None) -> str | None:
     return None if ts is None else str(ts)
-
-
-def _source_declarations(capturer: Any) -> dict[str, Any]:
-    """The capturer's declarations about its feed, as ``meta.json`` values.
-
-    ``source`` names the capturer; ``feed_type`` and ``trade_attribution`` are
-    what it declares (see :class:`~ob_analytics.protocols.FeedType` and
-    :class:`~ob_analytics.protocols.TradeAttribution`).  ``sequence_kind`` is
-    written only by a capturer that declares one.  ``clocks`` (see
-    :class:`~ob_analytics.protocols.Clocks`) is read when the capture closes,
-    since a live source learns it from the venue's books.  Read back with
-    :func:`~ob_analytics.depth_l2.recorded_source` and its siblings.
-
-    It runs while a capture is closing, so a declaration that cannot be read
-    (a plug-in's value outside the enum, say) is logged and never stops the
-    files being finished: an unreadable ``feed_type`` is recorded as
-    ``unknown``, and an unreadable ``trade_attribution`` is left out, so
-    ``audit`` falls back to ``--source`` rather than to a guess.
-    """
-    declared: dict[str, Any] = {"source": capturer.name}
-    try:
-        declared["feed_type"] = FeedType(
-            getattr(capturer, "feed_type", FeedType.UNKNOWN)
-        ).value
-    except Exception as exc:  # noqa: BLE001 - never block finalize
-        logger.warning("Capturer '{}' feed_type unreadable: {!r}", capturer.name, exc)
-        declared["feed_type"] = FeedType.UNKNOWN.value
-    try:
-        declared["trade_attribution"] = trade_attribution_of(capturer).value
-    except Exception as exc:  # noqa: BLE001 - never block finalize
-        logger.warning(
-            "Capturer '{}' trade_attribution unreadable: {!r}", capturer.name, exc
-        )
-    sequence_kind = getattr(capturer, "sequence_kind", None)
-    if sequence_kind is not None:
-        declared["sequence_kind"] = str(getattr(sequence_kind, "value", sequence_kind))
-    try:
-        declared["clocks"] = clocks_of(capturer).value
-    except Exception as exc:  # noqa: BLE001 - never block finalize
-        logger.warning("Capturer '{}' clocks unreadable: {!r}", capturer.name, exc)
-    return declared
 
 
 async def run_capturer(
@@ -552,7 +512,7 @@ async def run_capturer(
         # the capture to its own source's expectations.  The capture is read
         # back with a file format's source (a cryptofeed L3 capture replays as
         # bitstamp), which would otherwise supply the wrong ones.
-        extras: dict[str, Any] = _source_declarations(capturer)
+        extras: dict[str, Any] = source_declarations(capturer)
         # Capturers may implement the optional SupportsDiagnostics capability
         # to enrich meta.json with per-run counters.
         if isinstance(capturer, SupportsDiagnostics):

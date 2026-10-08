@@ -142,9 +142,15 @@ class TestDeciCentCapture:
         assert meta["exchange"] == "kalshi"
         assert meta["tick_size"] == 0.001
 
-    def test_default_tick_refuses_instead_of_rounding(self, capture):
+    def test_a_coarser_tick_refuses_instead_of_rounding(self, capture):
+        config = PipelineConfig(tick_size=0.01, price_decimals=2)
         with pytest.raises(ConfigError, match="tick_size"):
-            Pipeline.from_source("depth_csv").run(capture)
+            Pipeline(config, source=DepthCsvSource()).run(capture)
+
+    def test_the_python_api_reads_the_recorded_tick(self, capture):
+        result = Pipeline.from_source("depth_csv").run(capture)
+        assert result.config.tick_size == 0.001
+        assert sorted(set(result.depth["price"])) == [35, 36, 39, 40]
 
     def test_recorded_tick_replays_every_price(self, capture):
         config = PipelineConfig(tick_size=0.001, price_decimals=3)

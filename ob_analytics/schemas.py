@@ -199,6 +199,17 @@ _DEFAULT_LOT_KEY: str = "default"
 """Key for the lot size that applies to rows with no ``(venue, symbol)`` match
 in the :data:`LOT_SIZE_KEY` metadata map."""
 
+CONFIG_KEY: bytes = b"ob_analytics_config"
+"""Parquet metadata key under which a run's whole configuration is stored.
+
+The value is a JSON object of the run's
+:class:`~ob_analytics.config.PipelineConfig` fields, so
+:func:`ob_analytics.data.load_result` can rebuild the run exactly, display
+precision included.  A file without it (written by an older version, or by a
+windowed run) still records the tick and lot size, and the display precision
+is then taken from them.  Bytes, because Arrow file-metadata keys and values
+are raw bytes."""
+
 _SUPPORTED_SCHEMA_VERSIONS: frozenset[str] = frozenset({"1.0", "2.0", "3.0", "4.0"})
 """Schema versions this build can read.  A file tagged with anything else
 raises; an untagged (legacy) file loads with a warning.  ``1.0`` / ``2.0``

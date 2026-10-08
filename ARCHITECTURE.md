@@ -242,6 +242,7 @@ ob_analytics/
 ├── lobster.py            # LobsterLoader, LobsterTradeReader, LobsterWriter, LobsterSource
 ├── databento.py          # DatabentoLoader, DatabentoTradeReader, DatabentoWriter, DatabentoSource (DBN MBO)
 ├── depth_l2.py           # L2DepthLoader, L2TradeReader, DepthCsvWriter, DepthCsvSource (price-level)
+├── capture_record.py     # a capture's meta.json: read_record, write_record, CaptureRecord
 ├── engine/               # Order-book engine: events in, book states + lifecycles out
 │   ├── __init__.py       # the interface: book_state, order_lifecycles, queue_positions, queue_age_grid
 │   ├── _events.py        # OrderEvents -- the shared schema as numpy columns
@@ -252,7 +253,7 @@ ob_analytics/
 ├── analytics.py          # order_aggressiveness, trade_impacts, set_order_types, order_book
 ├── queue.py              # frame faces for the engine's queue reconstruction
 ├── depth.py              # DepthMetricsEngine, price_level_volume, depth_metrics, get_spread
-├── data.py               # save_data, load_data, writer registry
+├── data.py               # save_data, load_data, load_result, writer registry
 ├── flow_toxicity.py      # compute_vpin, compute_kyle_lambda, order_flow_imbalance, KyleLambdaResult
 ├── bars.py               # bars, BAR_RULES registry, register_bar_rule
 ├── cost.py               # transaction_costs, cost_summary, amihud, roll_spread, CostSummary

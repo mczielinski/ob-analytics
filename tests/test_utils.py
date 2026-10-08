@@ -7,6 +7,9 @@ import pytest
 from ob_analytics._utils import (
     decimal_places,
     lots_to_size,
+    off_tick_grid,
+    size_to_lots,
+    step_decimals,
     ticks_to_price_if_integer,
     validate_columns,
     validate_non_empty,
@@ -100,3 +103,43 @@ class TestValidateNonEmpty:
         df = pd.DataFrame({"a": [], "b": []})
         with pytest.raises(ObAnalyticsError, match="empty DataFrame"):
             validate_non_empty(df, "test")
+
+
+class TestSizeToLots:
+    def test_converts_on_the_lot_grid(self):
+        assert size_to_lots([0.5, 2.0], 1e-8).tolist() == [50_000_000, 200_000_000]
+
+    def test_a_size_too_large_for_int64_is_refused(self):
+        # 1.2e11 tokens at a 1e-8 lot is 1.2e19 lots, past int64's 9.2e18.
+        with pytest.raises(ConfigError, match="lot_size"):
+            size_to_lots([5e10, 1.2e11], 1e-8)
+
+    def test_the_largest_size_that_fits_is_kept(self):
+        assert size_to_lots([9.2e10], 1e-8).tolist() == [9_200_000_000_000_000_000]
+
+
+class TestOffTickGrid:
+    def test_a_large_value_on_the_grid_is_on_it(self):
+        # 1251.81488791 / 1e-8 is 125181488790.99998 in float arithmetic.
+        assert not off_tick_grid(1251.81488791, 1e-8)
+        assert not off_tick_grid([1251.81488791], 1e-8).any()
+
+    def test_a_value_between_steps_is_found_far_from_zero(self):
+        # 3e14 lots: a value 0.4 lots off the grid is still off it.
+        value = 3_000_000.000000004
+        assert off_tick_grid(value, 1e-8)
+        assert off_tick_grid([value], 1e-8).all()
+
+    @pytest.mark.parametrize("value", [float("nan"), float("inf")])
+    def test_a_value_that_is_not_finite_is_not_reported(self, value):
+        assert not off_tick_grid(value, 0.01)
+        assert not off_tick_grid([value], 0.01).any()
+
+
+class TestStepDecimals:
+    @pytest.mark.parametrize(
+        ("step", "decimals"),
+        [(0.01, 2), (0.001, 3), (0.25, 2), (1e-8, 8), (1.0, 0), (5.0, 0), (10.0, 0)],
+    )
+    def test_decimals_that_show_one_step(self, step, decimals):
+        assert step_decimals(step) == decimals

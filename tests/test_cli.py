@@ -320,9 +320,60 @@ class TestGallerySubcommand:
         assert r2.returncode == 0, r2.stderr
         assert (gallery / "gallery.html").exists()
 
+    def test_a_lobster_run_reloads_with_its_own_units(
+        self, cli_runner, tmp_path, monkeypatch, lobster_day_dir, lobster_day_pipeline
+    ):
+        """Whole shares stay whole shares when ``gallery`` reads a saved run."""
+        import sys
+
+        from ob_analytics import cli
+        from ob_analytics.visualization import gallery
+        from ob_analytics.visualization.gallery import display_result
+
+        out = tmp_path / "out"
+        r = cli_runner(
+            "process",
+            str(lobster_day_dir),
+            "--source",
+            "lobster",
+            "--trading-date",
+            "2024-01-02",
+            "--output",
+            str(out),
+        )
+        assert r.returncode == 0, r.stderr
+
+        shown = {}
+
+        def generate_gallery(result, output, **kwargs):
+            shown["result"] = result
+            return output / "gallery.html"
+
+        monkeypatch.setattr(gallery, "generate_gallery", generate_gallery)
+        monkeypatch.setattr(cli, "_setup_logging", lambda verbose: None)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["ob-analytics", "gallery", str(out), "--output", str(tmp_path)],
+        )
+        cli.main()
+
+        before = display_result(lobster_day_pipeline.run(lobster_day_dir))
+        after = display_result(shown["result"])
+        assert after.trades["volume"].tolist() == [40.0, 25.0]
+        assert after.trades["price"].tolist() == [101.0, 100.0]
+        for name in ("trades", "depth"):
+            for column in ("price", "volume"):
+                assert (
+                    getattr(after, name)[column].tolist()
+                    == getattr(before, name)[column].tolist()
+                ), (name, column)
+
     def test_gallery_missing_data(self, cli_runner, tmp_path):
         r = cli_runner("gallery", str(tmp_path / "nonexistent"))
         assert r.returncode != 0
+        assert "not a Parquet folder" in r.stderr
+        assert "Traceback" not in r.stderr
 
 
 # ---------------------------------------------------------------------------

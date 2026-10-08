@@ -516,3 +516,19 @@ class TestFace:
 
         assert data["x_axis"] == "ordinal"
         assert data["label"] == ""
+
+
+def test_turnover_does_not_wrap_on_a_large_bar() -> None:
+    """Ticks times lots passes int64 on a busy day: 16,000 BTC at 78,000.00."""
+    trades = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2026-01-01", periods=4, freq="1h", tz="UTC"),
+            "price": np.full(4, 7_800_000, dtype=np.int64),  # cent ticks
+            "volume": np.full(4, 400_000_000_000, dtype=np.int64),  # 4,000 BTC
+            "direction": ["buy", "sell", "buy", "sell"],
+        }
+    )
+    out = bars(trades, "time", "1D")
+    assert len(out) == 1
+    assert out["turnover"].iloc[0] == pytest.approx(1.248e19)
+    assert out["vwap"].iloc[0] == pytest.approx(7_800_000)

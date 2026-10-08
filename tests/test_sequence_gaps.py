@@ -24,11 +24,8 @@ from ob_analytics import (
 from ob_analytics._utils import empty_trades
 from ob_analytics.analytics import set_order_types
 from ob_analytics.bitstamp import BitstampLoader
+from ob_analytics.capture_record import read_record
 from ob_analytics.config import PipelineConfig
-from ob_analytics.depth_l2 import (
-    recorded_sequence_kind,
-    recorded_sequence_restarts,
-)
 from ob_analytics.lobster import LobsterLoader
 from ob_analytics.protocols import sequence_kind_of
 from ob_analytics.schemas import INGEST_SEQ_COLUMN, SEQUENCE_COLUMN
@@ -272,16 +269,16 @@ class TestDeclaredSequenceKind:
     def test_with_no_record_none_is_returned(self, tmp_path):
         orders = tmp_path / "orders.csv"
         orders.write_text("id\n")
-        assert recorded_sequence_kind(orders) is None
+        assert read_record(orders).sequence_kind is None
 
     def test_the_record_is_returned(self, tmp_path):
         (tmp_path / "meta.json").write_text('{"sequence_kind": "contiguous"}')
-        assert recorded_sequence_kind(tmp_path) is SequenceKind.CONTIGUOUS
+        assert read_record(tmp_path).sequence_kind is SequenceKind.CONTIGUOUS
 
     def test_restarts_are_read_from_the_record(self, tmp_path):
-        assert recorded_sequence_restarts(tmp_path) == 0
+        assert read_record(tmp_path).sequence_restarts == 0
         (tmp_path / "meta.json").write_text('{"sequence_restarts": 2}')
-        assert recorded_sequence_restarts(tmp_path) == 2
+        assert read_record(tmp_path).sequence_restarts == 2
 
 
 # ---------------------------------------------------------------------------

@@ -205,6 +205,24 @@ lot_size = lot_sizes["default"]
 is the resolved default and `df.attrs["lot_sizes"]` the full map. A pre-`4.0`
 file carries neither and stores float sizes already in the base asset.
 
+### The run's config
+
+When `save_data` is given the run's config (pass it the result itself, or
+`config=`), each file also records the whole
+[`PipelineConfig`](api/config.md) as a JSON object under `ob_analytics_config`.
+[`load_result`](api/data.md#ob_analytics.data.load_result) reads it, so a saved
+run comes back with the same tick size, lot size and display precision
+(`price_decimals`, `volume_decimals`) it had. A file without the key (a
+windowed run's folder, or one written by an older version) still records the
+tick and lot size; `load_result` then takes the display precision from the
+decimal places of each step (a tick of 0.001 gives `price_decimals=3`). The key is optional, so it does not
+change the schema version, and an older reader ignores it.
+
+A size too large to count in `int64` lots of the run's `lot_size` (about
+9.2e10 units at the default `1e-8`) is refused with `ConfigError` when a
+loader reads it, rather than wrapped to a negative number. Set the instrument's
+real size step as `lot_size`.
+
 ## Nullable integer columns
 
 pandas has no built-in null for a plain `int64` column, so the loaders carry

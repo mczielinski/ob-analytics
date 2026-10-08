@@ -1620,14 +1620,14 @@ class TestClocks:
         return src, cap, json.loads((cap / "meta.json").read_text())
 
     def test_a_venue_with_no_book_time_records_one_clock(self, tmp_path):
-        from ob_analytics.depth_l2 import recorded_clocks
+        from ob_analytics.capture_record import read_record
         from ob_analytics.protocols import Clocks
 
         src, cap, meta = self._capture(tmp_path, [None, None])
         assert src.clocks is Clocks.RECEIVE_ONLY
         assert meta["clocks"] == "receive_only"
         assert meta["books_without_venue_time"] == 2
-        assert recorded_clocks(cap / "orders.csv") is Clocks.RECEIVE_ONLY
+        assert read_record(cap / "orders.csv").clocks is Clocks.RECEIVE_ONLY
         orders = pd.read_csv(cap / "orders.csv")
         book_rows = orders[orders["origin"] == "stream"]
         assert (book_rows["exchange_timestamp"] == book_rows["timestamp"]).all()
@@ -2330,8 +2330,8 @@ class TestCaptureToAudit:
 
         from ob_analytics.analytics import data_quality_summary
         from ob_analytics.bitstamp import BitstampSource
+        from ob_analytics.capture_record import read_record
         from ob_analytics.config import PipelineConfig
-        from ob_analytics.depth_l2 import recorded_trade_attribution
         from ob_analytics.live._runner import run_capturer
         from ob_analytics.pipeline import Pipeline
 
@@ -2364,7 +2364,7 @@ class TestCaptureToAudit:
         meta = json.loads((cap / "meta.json").read_text())
         assert meta["source"] == "cryptofeed"
         assert meta["trade_attribution"] == "maker_only"
-        assert recorded_trade_attribution(cap) == "maker_only"
+        assert read_record(cap).trade_attribution == "maker_only"
 
         result = Pipeline(PipelineConfig(), source=BitstampSource()).run(
             cap / "orders.csv"

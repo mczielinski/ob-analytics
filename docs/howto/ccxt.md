@@ -65,12 +65,15 @@ A capture is a directory of segments with a `manifest.json` (see
 | `depth.csv` | Price-level updates (`timestamp,exchange_timestamp,side,price,volume`; `volume` = new absolute size, `0` removes the level; `timestamp` is when the capture received the update) |
 | `trades.csv` | The trade tape (CCXT taker side; feeds trade-sign) |
 | `raw.jsonl` | The whole book CCXT reported once, then the changed levels of each book update with its timestamp and nonce, plus the trades as CCXT gave them (omit with `--no-raw`) |
-| `meta.json` | Counts + per-run diagnostics (exchange, tick size, book updates, errors) |
+| `meta.json` | Counts + per-run diagnostics (exchange, tick size, lot size, book updates, errors) |
 
-The tick size comes from CCXT's market data. `ob-analytics process` and
-`ob-analytics audit` read it from `meta.json`, so a coin quoted in steps finer
-than a cent keeps its real prices. If a file's prices are finer than the tick
-size in use, the loader raises `ConfigError` instead of rounding them.
+The tick size and the size step (recorded as `lot_size`) come from CCXT's
+market data. The pipeline reads them from `meta.json`, in Python and in
+`ob-analytics process` and `ob-analytics audit`, so a coin quoted in steps finer
+than a cent keeps its real prices, and a token with a very large supply keeps
+its sizes. If a file's prices are finer than the tick size in use, the loader
+raises `ConfigError` instead of rounding them. If a size is too large to count
+in whole lots of the lot size in use, it raises `ConfigError` too.
 
 ## Websockets or REST polling, chosen per venue
 

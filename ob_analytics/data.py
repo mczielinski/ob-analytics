@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import warnings
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -12,10 +14,13 @@ import pyarrow.parquet as pq
 from loguru import logger
 
 from ob_analytics._registry import Registry
+from ob_analytics.config import PipelineConfig, instrument_fields
+from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import DataWriter
 from ob_analytics.schemas import (
     _DEFAULT_LOT_KEY,
     _DEFAULT_TICK_KEY,
+    CONFIG_KEY,
     LOT_SIZE_KEY,
     SCHEMA_VERSION,
     SCHEMA_VERSION_KEY,
@@ -30,6 +35,7 @@ from ob_analytics.schemas import (
 )
 
 if TYPE_CHECKING:
+    from ob_analytics.pipeline import PipelineResult
     from ob_analytics.protocols import RunContext
 
 
@@ -97,6 +103,7 @@ def _write_versioned_parquet(
     *,
     tick_sizes: dict[str, float] | None = None,
     lot_sizes: dict[str, float] | None = None,
+    config: Any = None,
 ) -> None:
     """Write *df* to *path* as Parquet, tagging the version, tick and lot size.
 
@@ -106,11 +113,13 @@ def _write_versioned_parquet(
     ``{instrument_key: tick_size}`` map) it is written under
     :data:`TICK_SIZE_KEY` so a reader can recover the float price from the
     integer ticks.  *lot_sizes* does the same for the integer sizes under
-    :data:`LOT_SIZE_KEY`.  The index is dropped,
+    :data:`LOT_SIZE_KEY`, and *config* records the whole run configuration
+    under :data:`CONFIG_KEY`.  The index is dropped,
     matching the previous ``df.to_parquet(..., index=False)`` behaviour.
     """
     pq.write_table(
-        _to_arrow_table(df, tick_sizes=tick_sizes, lot_sizes=lot_sizes), path
+        _to_arrow_table(df, tick_sizes=tick_sizes, lot_sizes=lot_sizes, config=config),
+        path,
     )
 
 
@@ -136,6 +145,11 @@ class OutputTables(dict[str, pd.DataFrame]):
         Tick sizes to record in :meth:`arrow`'s metadata.  ``None`` when the
         caller declared no config, which writes no tick metadata rather than a
         default one.
+    lot_sizes : dict of str to float, optional
+        Lot sizes to record, in the same way.
+    config : PipelineConfig, optional
+        The run's configuration, recorded whole so
+        :func:`load_result` can rebuild the run.
     """
 
     def __init__(
@@ -144,22 +158,27 @@ class OutputTables(dict[str, pd.DataFrame]):
         *,
         tick_sizes: dict[str, float] | None = None,
         lot_sizes: dict[str, float] | None = None,
+        config: PipelineConfig | None = None,
     ) -> None:
         super().__init__(tables)
         self._tick_sizes = tick_sizes
         self._lot_sizes = lot_sizes
+        self._config = config
 
     def arrow(self) -> dict[str, pa.Table]:
         """Return the same tables as canonical Arrow, keyed the same way.
 
         Each table carries the schema version and, when the run declared one,
-        the tick size — the same key-value metadata a canonical Parquet file
-        carries, so a writer building one is no worse off than
-        :class:`ParquetWriter`.
+        the tick size, the lot size and the configuration — the same key-value
+        metadata a canonical Parquet file carries, so a writer building one is
+        no worse off than :class:`ParquetWriter`.
         """
         return {
             name: _to_arrow_table(
-                df, tick_sizes=self._tick_sizes, lot_sizes=self._lot_sizes
+                df,
+                tick_sizes=self._tick_sizes,
+                lot_sizes=self._lot_sizes,
+                config=self._config,
             )
             for name, df in self.items()
         }
@@ -178,6 +197,7 @@ class ParquetWriter:
     def __init__(self, config: Any = None) -> None:
         self._tick_sizes = _tick_sizes_from_config(config)
         self._lot_sizes = _lot_sizes_from_config(config)
+        self._config = config
 
     def write(
         self,
@@ -188,9 +208,10 @@ class ParquetWriter:
         """Write each frame in *data* to ``<dest>/<key>.parquet``.
 
         *dest* is a directory and is created when missing.  Each file carries
-        the schema version and, when the run's config named one, the tick size,
-        so :func:`load_data` can check the first and restore prices with the
-        second.
+        the schema version and, when the writer was given the run's config,
+        the tick size, the lot size and the config itself, so
+        :func:`load_data` can check the first and restore prices and sizes,
+        and :func:`load_result` can rebuild the run.
         """
         p = Path(dest)
         p.mkdir(parents=True, exist_ok=True)
@@ -200,6 +221,7 @@ class ParquetWriter:
                 p / f"{name}.parquet",
                 tick_sizes=self._tick_sizes,
                 lot_sizes=self._lot_sizes,
+                config=self._config,
             )
         return p
 
@@ -238,6 +260,7 @@ def _to_arrow_table(
     *,
     tick_sizes: dict[str, float] | None = None,
     lot_sizes: dict[str, float] | None = None,
+    config: Any = None,
 ) -> pa.Table:
     """Convert *df* to an Arrow table tagged with the canonical metadata.
 
@@ -257,6 +280,9 @@ def _to_arrow_table(
     lot_sizes : dict of str to float, optional
         Lot sizes to record, keyed by instrument.  Omitted
         metadata means a reader sees the integer sizes as-is.
+    config : PipelineConfig, optional
+        The run's configuration, recorded whole under :data:`CONFIG_KEY`.
+        Anything else is not recorded.
 
     Returns
     -------
@@ -270,6 +296,8 @@ def _to_arrow_table(
         metadata[TICK_SIZE_KEY] = encode_tick_sizes(tick_sizes)
     if lot_sizes is not None:
         metadata[LOT_SIZE_KEY] = encode_lot_sizes(lot_sizes)
+    if isinstance(config, PipelineConfig):
+        metadata[CONFIG_KEY] = config.model_dump_json().encode()
     return table.replace_schema_metadata(metadata)
 
 
@@ -351,7 +379,7 @@ def load_data(path: str | Path) -> dict[str, pd.DataFrame]:
 
 
 def save_data(
-    lob_data: dict[str, pd.DataFrame],
+    lob_data: PipelineResult | dict[str, pd.DataFrame],
     path: str | Path,
     *,
     fmt: str = "parquet",
@@ -364,8 +392,11 @@ def save_data(
 
     Parameters
     ----------
-    lob_data : dict of str to pandas.DataFrame
-        The DataFrames to save (keys become file stems).
+    lob_data : PipelineResult or dict of str to pandas.DataFrame
+        A pipeline result, or the DataFrames to save (keys become file
+        stems).  A result is saved as its four tables, with its own config
+        unless *config* is given.  :func:`load_result` reads a Parquet folder
+        back as the same result.
     path : str or Path
         Destination directory (Parquet) or file (pickle).
     fmt : str
@@ -385,16 +416,29 @@ def save_data(
         configured writer.
     config, ctx
         Forwarded to a registered writer factory when ``fmt`` names one.
+        The ``"parquet"`` writer records *config* in each file, so the files
+        keep the run's tick size, lot size and display precision.
         ``ctx`` defaults to an empty
         :class:`~ob_analytics.protocols.RunContext`.
     **write_kwargs
         Extra keyword arguments forwarded to ``writer.write()``.
     """
+    from ob_analytics.pipeline import PipelineResult
+
     p = Path(path)
+    if isinstance(lob_data, PipelineResult):
+        if config is None:
+            config = lob_data.config
+        lob_data = lob_data._frames()
     # Every writer is handed the same payload: a mapping of pandas frames that
     # can also produce canonical Arrow (#216).  It is a dict, so a writer that
     # ignores the extra sees exactly what it saw before.
-    tables = OutputTables(lob_data, tick_sizes=_tick_sizes_from_config(config))
+    tables = OutputTables(
+        lob_data,
+        tick_sizes=_tick_sizes_from_config(config),
+        lot_sizes=_lot_sizes_from_config(config),
+        config=config if isinstance(config, PipelineConfig) else None,
+    )
 
     if writer is not None:
         writer.write(tables, p, **write_kwargs)
@@ -409,6 +453,152 @@ def save_data(
 
     available = [*WRITERS.list(), *SOURCES.list()]
     raise ValueError(f"Unsupported format: {fmt!r}. Available: {', '.join(available)}")
+
+
+#: The tables a saved run holds, in the order :class:`PipelineResult` lists them.
+_RESULT_TABLES: tuple[str, ...] = ("events", "trades", "depth", "depth_summary")
+
+
+def load_result(path: str | Path) -> PipelineResult:
+    """Load a saved run back into a :class:`~ob_analytics.pipeline.PipelineResult`.
+
+    The inverse of ``save_data(result, path)``: the four tables come back
+    as they were saved, and so does the run's
+    :class:`~ob_analytics.config.PipelineConfig`, which each Parquet file
+    records.  A result rebuilt this way shows the same prices and sizes as
+    the run did, for example in
+    :func:`~ob_analytics.visualization.display_result` or a gallery.
+
+    A folder that records only the tick and lot size (written by
+    :meth:`~ob_analytics.pipeline.Pipeline.run_windows`, or by an older
+    version) gets those two, with the display precision that shows one step
+    of each.  A folder with neither (prices and sizes stored as floats) gets
+    a tick size of 1, so its prices read as they are.
+
+    The resolution comes from the tables: an
+    :attr:`~ob_analytics.protocols.Level.L2` run has an empty ``events``
+    table, and an L3 run never does.
+
+    Parameters
+    ----------
+    path : str or Path
+        A Parquet folder written by :func:`save_data` or by
+        ``ob-analytics process``.
+
+    Returns
+    -------
+    PipelineResult
+        The saved run.
+
+    Raises
+    ------
+    ConfigError
+        If *path* is not a folder (it does not exist, or it is a pickle, which
+        keeps no config, so its prices and sizes could not be read back), if
+        the folder lacks one of the four tables, or if a Parquet file
+        declares a schema version this build does not support.
+    FileNotFoundError
+        If the folder holds no Parquet file at all.
+    """
+    from ob_analytics.pipeline import PipelineResult
+    from ob_analytics.protocols import Level
+
+    p = Path(path)
+    if not p.is_dir():
+        raise ConfigError(
+            f"{p} is not a Parquet folder. load_result reads the folder "
+            "save_data writes in its default Parquet format, which records the "
+            "run's tick size and lot size; use load_data for other files."
+        )
+    data = load_data(p)
+    missing = [name for name in _RESULT_TABLES if name not in data]
+    if missing:
+        raise ConfigError(
+            f"{p} is not a saved run: it has no {', '.join(missing)} table. "
+            f"A saved run holds {', '.join(_RESULT_TABLES)}."
+        )
+    return PipelineResult(
+        events=data["events"],
+        trades=data["trades"],
+        depth=data["depth"],
+        depth_summary=data["depth_summary"],
+        config=_saved_config(p, data),
+        level=Level.L2 if data["events"].empty else Level.L3,
+    )
+
+
+def _saved_config(path: Path, data: dict[str, pd.DataFrame]) -> PipelineConfig:
+    """The config a saved run recorded, or the one its tick and lot size give."""
+    for name in _RESULT_TABLES:
+        file = path / f"{name}.parquet"
+        if not file.is_file():
+            continue
+        raw = (pq.read_schema(file).metadata or {}).get(CONFIG_KEY)
+        if raw is None:
+            continue
+        try:
+            recorded = json.loads(raw.decode())
+            # Only the fields this version knows, so a file from a later
+            # version still loads.
+            known = {
+                k: v for k, v in recorded.items() if k in PipelineConfig.model_fields
+            }
+            return PipelineConfig(**known)
+        except (ValueError, TypeError, AttributeError) as exc:
+            warnings.warn(
+                f"{file}: the saved config cannot be read by this version "
+                f"({exc}); using the file's tick size and lot size instead.",
+                UserWarning,
+                stacklevel=3,
+            )
+            break
+    tick_size, lot_size = (
+        next((df.attrs[key] for df in data.values() if key in df.attrs), None)
+        for key in ("tick_size", "lot_size")
+    )
+    fields = instrument_fields(tick_size=tick_size, lot_size=lot_size)
+    _warn_missing_units(path, data, tick_size=tick_size, lot_size=lot_size)
+    if tick_size is None:
+        # A file from before integer prices has no tick size and float prices:
+        # a tick of 1 shows them as they are.
+        fields["tick_size"] = 1.0
+    return PipelineConfig(**fields)
+
+
+def _warn_missing_units(
+    path: Path,
+    data: dict[str, pd.DataFrame],
+    *,
+    tick_size: float | None,
+    lot_size: float | None,
+) -> None:
+    """Warn when integer prices or sizes were saved with no tick or lot size.
+
+    Such a folder was written by ``save_data`` without a config.  Its prices
+    are ticks and its sizes lots of a step nothing records, so they cannot be
+    turned back into the quote currency and the base asset.
+    """
+    missing = [
+        name
+        for name, step, column in (
+            ("tick_size", tick_size, "price"),
+            ("lot_size", lot_size, "volume"),
+        )
+        if step is None
+        and any(
+            column in df.columns and pd.api.types.is_integer_dtype(df[column])
+            for df in data.values()
+        )
+    ]
+    if missing:
+        warnings.warn(
+            f"{path} holds whole-number prices or sizes but records no "
+            f"{' or '.join(missing)}, so they cannot be shown in the "
+            "instrument's own units. Save the run with save_data(result, path) "
+            "so each file records its config.",
+            UserWarning,
+            stacklevel=4,
+        )
 
 
 def _named_writer(fmt: str, config: Any, ctx: Any) -> DataWriter | None:

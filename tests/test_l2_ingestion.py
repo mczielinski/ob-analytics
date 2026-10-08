@@ -530,26 +530,6 @@ class TestL2Gallery:
         assert "no data" in title
 
 
-class TestRecordedTickSize:
-    def test_reads_meta_json(self, tmp_path):
-        from ob_analytics.depth_l2 import recorded_tick_size
-
-        (tmp_path / "meta.json").write_text('{"tick_size": 0.001}')
-        assert recorded_tick_size(tmp_path) == 0.001
-        # A file inside the capture directory finds it too.
-        (tmp_path / "depth.csv").write_text("")
-        assert recorded_tick_size(tmp_path / "depth.csv") == 0.001
-
-    def test_none_without_a_recorded_value(self, tmp_path):
-        from ob_analytics.depth_l2 import recorded_tick_size
-
-        assert recorded_tick_size(tmp_path) is None  # no meta.json
-        (tmp_path / "meta.json").write_text('{"tick_size": null}')
-        assert recorded_tick_size(tmp_path) is None
-        (tmp_path / "meta.json").write_text("not json")
-        assert recorded_tick_size(tmp_path) is None
-
-
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------

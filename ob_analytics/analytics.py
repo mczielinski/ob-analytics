@@ -177,7 +177,11 @@ def trade_impacts(trades: pd.DataFrame) -> pd.DataFrame:
     )
     validate_non_empty(trades, "trade_impacts")
 
-    trades_pv = trades.assign(_pv=trades["price"] * trades["volume"])
+    # As a float, as in amihud: ticks times lots can pass int64 and wrap.
+    trades_pv = trades.assign(
+        _pv=trades["price"].to_numpy(dtype=np.float64)
+        * trades["volume"].to_numpy(dtype=np.float64)
+    )
     impacts = (
         trades_pv.groupby("taker")
         .agg(
@@ -1754,13 +1758,12 @@ def data_quality_summary(
     sequence_kind : SequenceKind, optional
         What the venue ``sequence`` promises, passed to
         :func:`detect_sequence_gaps`.  A capture records it in ``meta.json``
-        (read it with :func:`~ob_analytics.depth_l2.recorded_sequence_kind`).
+        (read it with :func:`~ob_analytics.capture_record.read_record`).
     sequence_restarts : int, optional
         How many of the sequence's steps back the source counted as the count
         starting again at a new opening book.  That many are left out of
         ``sequence_out_of_order``.  A capture records it in ``meta.json``
-        (read it with
-        :func:`~ob_analytics.depth_l2.recorded_sequence_restarts`).
+        (read it with :func:`~ob_analytics.capture_record.read_record`).
     trade_attribution : TradeAttribution, optional
         Which orders of a trade the feed can name, so the unmatched-trades
         check looks only for those.  Read it off the source with
@@ -1772,7 +1775,7 @@ def data_quality_summary(
         capture's opening book (``origin`` ``snapshot``).  Read it off the source with
         :func:`~ob_analytics.protocols.clocks_of`; a live capture records it in
         ``meta.json`` (read it with
-        :func:`~ob_analytics.depth_l2.recorded_clocks`).  Data with no venue
+        :func:`~ob_analytics.capture_record.read_record`).  Data with no venue
         time at all (a price-level file without ``exchange_timestamp``) is
         read as :attr:`~ob_analytics.protocols.Clocks.RECEIVE_ONLY` whatever
         is declared; an empty frame keeps the declaration.

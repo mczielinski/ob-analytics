@@ -748,6 +748,53 @@ def bitstamp_sample_orders_only(tmp_path, sample_csv_path) -> Path:
     return dest
 
 
+#: A LOBSTER day in brief: a bid of 100 and an ask of 200 shares, two trades
+#: of 40 and 25 shares, then the bid is cancelled.  Prices are in ten-
+#: thousandths of a dollar, sizes in whole shares.
+_LOBSTER_DAY_MESSAGES = (
+    "34200.0,1,1,100,1000000,1\n"
+    "34201.0,1,2,200,1010000,-1\n"
+    "34202.0,4,2,40,1010000,-1\n"
+    "34203.0,4,1,25,1000000,1\n"
+    "34204.0,3,1,75,1000000,1\n"
+)
+_LOBSTER_DAY_ORDERBOOK = (
+    "9999999999,0,1000000,100\n"
+    "1010000,200,1000000,100\n"
+    "1010000,160,1000000,100\n"
+    "1010000,160,1000000,75\n"
+    "1010000,160,-9999999999,0\n"
+)
+#: The trading date the LOBSTER day's file names carry.
+LOBSTER_DAY_DATE = "2024-01-02"
+
+
+@pytest.fixture
+def lobster_day_dir(tmp_path) -> Path:
+    """A folder holding the five-message LOBSTER day above.
+
+    Its two trades are 40 shares at 101.00 and 25 shares at 100.00.
+    """
+    directory = tmp_path / "lobster"
+    directory.mkdir()
+    stem = f"TEST_{LOBSTER_DAY_DATE}_34200000_57600000"
+    (directory / f"{stem}_message_1.csv").write_text(_LOBSTER_DAY_MESSAGES)
+    (directory / f"{stem}_orderbook_1.csv").write_text(_LOBSTER_DAY_ORDERBOOK)
+    return directory
+
+
+@pytest.fixture
+def lobster_day_pipeline():
+    """A LOBSTER pipeline for the trading date of :func:`lobster_day_dir`."""
+    from ob_analytics.lobster import LobsterSource
+    from ob_analytics.pipeline import Pipeline
+    from ob_analytics.protocols import RunContext
+
+    return Pipeline(
+        source=LobsterSource(), ctx=RunContext(trading_date=LOBSTER_DAY_DATE)
+    )
+
+
 @pytest.fixture
 def tiny_depth() -> pd.DataFrame:
     """Minimal depth DataFrame for testing depth_metrics."""

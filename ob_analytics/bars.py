@@ -385,7 +385,8 @@ def bars(
         ``volume``
             Total size traded.
         ``turnover``
-            Total price × size.
+            Total price × size, as a float.  On a pipeline result this is
+            ticks × lots, which can be too large for an integer.
         ``n_trades``
             Number of trades.
         ``vwap``
@@ -466,12 +467,15 @@ def _normalize(
     sign = np.where(np.asarray(ordered["direction"]) == "buy", 1, -1).astype(np.int8)
     price = ordered["price"].to_numpy()
     volume = ordered["volume"].to_numpy()
+    # As a float: ticks times lots passes int64 on a busy day (16,000 BTC at
+    # 78,000.00 is 1.25e19 cent-satoshis) and an integer product would wrap.
+    turnover = price.astype(np.float64) * volume.astype(np.float64)
     return pd.DataFrame(
         {
             "timestamp": ordered["timestamp"].to_numpy(),
             "price": price,
             "volume": volume,
-            "turnover": price * volume,
+            "turnover": turnover,
             "sign": sign,
         }
     )
