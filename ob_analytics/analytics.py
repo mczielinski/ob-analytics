@@ -35,6 +35,7 @@ from ob_analytics.schemas import (
     SEQUENCE_COLUMN,
     SNAPSHOT_ORIGIN,
     time_order_keys,
+    unsized_order_ids,
 )
 from ob_analytics.trade_sign import quote_before
 
@@ -1299,7 +1300,15 @@ class DataQualitySummary:
     trade_attribution : TradeAttribution
         Which orders of a trade the feed can name (see
         :class:`~ob_analytics.protocols.TradeAttribution`); sets which sides
-        ``unmatched_trades_pct`` counts.
+        ``unmatched_trades_pct`` and ``trades_matched_by_order`` count.
+    trades_matched_by_order : int
+        Trades whose taker is an order created with size 0.  Bitstamp creates
+        an instant order bought by quote amount that way and never reports
+        what it executed, so a trade with no row of its size is matched to
+        the order by its id (see
+        :class:`~ob_analytics.bitstamp.BitstampTradeReader`).  The order and
+        its type are right; its rows show less fill than its trades.  Always
+        ``0`` when the feed does not name takers.
     """
 
     feed_type: FeedType
@@ -1327,6 +1336,7 @@ class DataQualitySummary:
     clocks: Clocks = Clocks.BOTH
     stale_orders: tuple[StaleOrder, ...] = ()
     trade_attribution: TradeAttribution = TradeAttribution.BOTH
+    trades_matched_by_order: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         """Return the summary as a plain, JSON-serialisable dict."""
@@ -1356,6 +1366,7 @@ class DataQualitySummary:
             "clocks": str(self.clocks.value),
             "stale_orders": [o.to_dict() for o in self.stale_orders],
             "trade_attribution": str(self.trade_attribution.value),
+            "trades_matched_by_order": self.trades_matched_by_order,
             "ok": self.ok,
             "checks": [c.to_dict() for c in self.checks],
         }
@@ -1389,6 +1400,24 @@ class DataQualitySummary:
         if self.trade_attribution == TradeAttribution.NONE:
             return "not checked: this feed names no orders"
         return "maker and taker"
+
+    def _matched_by_order(self) -> str:
+        """The ``trades_matched_by_order`` count in words, or why it is not."""
+        if self.trade_attribution == TradeAttribution.MAKER_ONLY:
+            return "not checked: this feed does not show takers"
+        if self.trade_attribution == TradeAttribution.NONE:
+            return "not checked: this feed names no orders"
+        return f"{self.trades_matched_by_order} trade(s) [taker created with size 0]"
+
+    def _matched_by_order_detail(self) -> str:
+        """The ``trades_matched_by_order`` check's text."""
+        if not self.trades_matched_by_order:
+            return self._matched_by_order()
+        return (
+            f"{self._matched_by_order()}: these orders do not report what "
+            "they executed, so a trade with no row of its size is matched to "
+            "the order by its id"
+        )
 
     def _clocks_note(self) -> str:
         """Why the clock checks did not run, or ``""`` when they did."""
@@ -1522,6 +1551,12 @@ class DataQualitySummary:
                 "capture window: structurally unclassifiable, not failures",
             ),
             QualityCheck(
+                "trades_matched_by_order",
+                True,
+                Severity.INFO,
+                self._matched_by_order_detail(),
+            ),
+            QualityCheck(
                 "venue_sequence",
                 True,
                 Severity.INFO,
@@ -1605,6 +1640,7 @@ class DataQualitySummary:
                 f"  unmatched trades      : {self.unmatched_trades_pct:.2f}% "
                 f"[{self._unmatched_note()}]"
             ),
+            f"  matched by order      : {self._matched_by_order()}",
             f"  duplicate event ids   : {self.duplicate_event_ids}",
             f"  duplicate created ids : {self.duplicate_created_ids}",
             f"  pre-existing orders   : {self.pre_existing_orders}",
@@ -1701,6 +1737,27 @@ def _clock_order_counts(frame: pd.DataFrame) -> tuple[int, int]:
     venue = np.diff(ordered["exchange_timestamp"].astype("int64").to_numpy())
     reordered = int(np.count_nonzero((venue < 0) & (receive > 0)))
     return after_receive, reordered
+
+
+def _trades_matched_by_order(
+    events: pd.DataFrame,
+    trades: pd.DataFrame,
+    trade_attribution: TradeAttribution,
+) -> int:
+    """Count the trades whose taker is an order created with size 0.
+
+    Such an order (Bitstamp's instant order bought by quote amount) never
+    reports what it executed, so its trades are matched by its order id.
+    Only a feed that names takers is read: a maker always reports its fills.
+    """
+    if trade_attribution != TradeAttribution.BOTH:
+        return 0
+    instant = unsized_order_ids(events)
+    if instant.empty:
+        return 0
+    rows = events.loc[events["id"].isin(instant), "event_id"]
+    taker = pd.to_numeric(trades["taker_event_id"], errors="coerce")
+    return int(taker.isin(rows).sum())
 
 
 def data_quality_summary(
@@ -1841,8 +1898,10 @@ def data_quality_summary(
         if trade_attribution == TradeAttribution.BOTH:
             unmatched = unmatched | trades["taker_event_id"].isna()
         unmatched_pct = 100.0 * float(unmatched.sum()) / n_trades
+        matched_by_order = _trades_matched_by_order(events, trades, trade_attribution)
     else:
         unmatched_pct = 0.0
+        matched_by_order = 0
 
     event_id_counts = events["event_id"].value_counts()
     duplicate_event_ids = int((event_id_counts > 1).sum())
@@ -1918,4 +1977,5 @@ def data_quality_summary(
         clocks=clocks,
         stale_orders=stale_orders,
         trade_attribution=trade_attribution,
+        trades_matched_by_order=matched_by_order,
     )

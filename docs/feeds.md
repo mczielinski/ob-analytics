@@ -288,10 +288,14 @@ guesses the taker; see [LOBSTER](howto/lobster.md#takers-are-guessed).
 **Why Bitstamp publishes both ids.** Bitstamp's trade messages carry
 `buy_order_id` and `sell_order_id`, and its `live_orders` channel reports every
 order the venue accepts, takers included. So both orders of a trade can be
-found. Independent Reserve's trade messages also carry both ids, `BidGuid` and
-`OfferGuid`, and the cryptofeed source writes them to `trades.csv`. But its
-book does not show every taker: some takers appear as new limit orders, and
-most never do. So the source declares maker only.
+found. One kind of order does not report what it executed: an instant order
+bought by quote amount is created with size 0 and then shows 0 or one lot,
+never what it bought. The trade reader then finds the order by its id alone,
+and `audit` counts such trades as `matched by order`. Independent Reserve's
+trade messages also carry both ids, `BidGuid` and `OfferGuid`, and the
+cryptofeed source writes them to `trades.csv`. But its book does not show
+every taker: some takers appear as new limit orders, and most never do. So
+the source declares maker only.
 
 ### Taker side
 

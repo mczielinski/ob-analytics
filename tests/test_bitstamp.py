@@ -299,6 +299,202 @@ class TestInstantOrders:
         assert level["volume"].iloc[-1] == 50_000_000
 
 
+class TestQuoteAmountTaker:
+    """An instant order bought by quote amount never reports the size it
+    executed: its rows are ``created`` 0, ``changed`` 1 lot and ``deleted`` 1
+    lot, while the trade that names it as taker is 6,377 lots.  The trade still
+    names the order, so the reader finds its taker by the order id."""
+
+    TS = 1_777_691_156_000
+
+    @classmethod
+    def _capture(cls, tmp_path, order_rows, trade_rows):
+        ts = cls.TS
+        orders = tmp_path / "orders.csv"
+        pd.DataFrame(
+            [
+                {
+                    "id": i,
+                    "timestamp": ts + dt,
+                    "exchange_timestamp": ts + dt,
+                    "price": p,
+                    "volume": v,
+                    "action": a,
+                    "direction": d,
+                }
+                for i, dt, p, v, a, d in order_rows
+            ]
+        ).to_csv(orders, index=False)
+        pd.DataFrame(
+            [
+                {
+                    "trade_id": n,
+                    "timestamp": ts + dt,
+                    "exchange_timestamp": ts + dt,
+                    "price": p,
+                    "amount": amount,
+                    "buy_order_id": buy,
+                    "sell_order_id": sell,
+                    "side": side,
+                }
+                for n, (dt, p, amount, buy, sell, side) in enumerate(trade_rows)
+            ]
+        ).to_csv(tmp_path / "trades.csv", index=False)
+        return orders
+
+    # A resting ask of 10,000 lots at 78,360.00 that the instant order takes
+    # 6,377 lots from, and the instant buy order itself.
+    ROWS = (
+        (1, 0, 78360.0, 0.0001, "created", "ask"),
+        (1, 93, 78360.0, 0.00003623, "changed", "ask"),
+        (2, 94, 999999999.0, 0.0, "created", "bid"),
+        (2, 95, 78360.0, 1e-08, "changed", "bid"),
+        (2, 95, 78360.0, 1e-08, "deleted", "bid"),
+    )
+    TRADE = (93, 78360.0, 0.00006377, 2, 1, "buy")
+
+    @staticmethod
+    def _event_id(events, order_id, action):
+        row = events[(events["id"] == order_id) & (events["action"] == action)]
+        assert len(row) == 1
+        return int(row["event_id"].iloc[0])
+
+    def test_the_taker_resolves_to_the_orders_deleted_row(self, tmp_path):
+        orders = self._capture(tmp_path, self.ROWS, [self.TRADE])
+        events = BitstampLoader().load(orders)
+        trades = BitstampTradeReader().load(events, orders)
+
+        assert trades["taker_event_id"].iloc[0] == self._event_id(events, 2, "deleted")
+        # The maker shows the size, so it still matches on it.
+        assert trades["maker_event_id"].iloc[0] == self._event_id(events, 1, "changed")
+
+    def test_the_instant_order_is_classed_market(self, tmp_path):
+        orders = self._capture(tmp_path, self.ROWS, [self.TRADE])
+        events = Pipeline(source=BitstampSource()).run(orders).events
+
+        assert set(events.loc[events["id"] == 2, "type"].astype(str)) == {"market"}
+
+    def test_every_trade_of_the_order_names_the_same_row(self, tmp_path):
+        """The instant order takes two makers' asks; both trades name it."""
+        rows = (
+            *self.ROWS,
+            (3, 0, 78361.0, 0.0001, "created", "ask"),
+            (3, 93, 78361.0, 0.00009, "changed", "ask"),
+        )
+        trades_in = [self.TRADE, (93, 78361.0, 1e-05, 2, 3, "buy")]
+        orders = self._capture(tmp_path, rows, trades_in)
+        events = BitstampLoader().load(orders)
+        trades = BitstampTradeReader().load(events, orders)
+
+        deleted = self._event_id(events, 2, "deleted")
+        assert list(trades["taker_event_id"]) == [deleted, deleted]
+
+    def test_an_instant_order_with_no_deleted_row_takes_its_latest(self, tmp_path):
+        rows = self.ROWS[:4]
+        orders = self._capture(tmp_path, rows, [self.TRADE])
+        events = BitstampLoader().load(orders)
+        trades = BitstampTradeReader().load(events, orders)
+
+        assert trades["taker_event_id"].iloc[0] == self._event_id(events, 2, "changed")
+
+    def test_a_lost_fill_of_an_order_that_shows_fills_stays_unmatched(self, tmp_path):
+        """Bid 3 crosses the book and reports its fills: 4 lots, then 6.  A
+        third trade of 5 lots shows on none of its rows, so a message was
+        lost; the trade keeps no taker for ``unmatched_trades`` to report."""
+        rows = (
+            (3, 0, 100.0, 1e-07, "created", "bid"),
+            (3, 10, 100.0, 6e-08, "changed", "bid"),
+            (3, 20, 100.0, 0.0, "deleted", "bid"),
+        )
+        trades_in = [
+            (10, 100.0, 4e-08, 3, 9, "buy"),
+            (15, 100.0, 5e-08, 3, 9, "buy"),
+            (20, 100.0, 6e-08, 3, 9, "buy"),
+        ]
+        orders = self._capture(tmp_path, rows, trades_in)
+        events = BitstampLoader().load(orders)
+        trades = BitstampTradeReader().load(events, orders)
+
+        taker = list(trades["taker_event_id"])
+        assert taker[0] == self._event_id(events, 3, "changed")
+        assert pd.isna(taker[1])
+        assert taker[2] == self._event_id(events, 3, "deleted")
+
+    def test_a_maker_is_never_matched_by_order_id(self, tmp_path):
+        """Ask 4 is created and cancelled whole, so it shows no fill.  A trade
+        that names it as maker contradicts the events and stays unmatched."""
+        rows = (
+            *self.ROWS,
+            (4, 0, 78360.0, 0.0001, "created", "ask"),
+            (4, 99, 78360.0, 0.0001, "deleted", "ask"),
+        )
+        orders = self._capture(tmp_path, rows, [(93, 78360.0, 6.377e-05, 2, 4, "buy")])
+        events = BitstampLoader().load(orders)
+        trades = BitstampTradeReader().load(events, orders)
+
+        assert pd.isna(trades["maker_event_id"].iloc[0])
+        assert trades["taker_event_id"].iloc[0] == self._event_id(events, 2, "deleted")
+
+    def test_an_instant_order_whose_last_row_is_empty_is_matched(self, tmp_path):
+        """``created`` 0, ``changed`` 1 lot, ``deleted`` 0: the loader reads a
+        1-lot fill on the ``deleted`` row, which is still not the trade's
+        size."""
+        rows = (*self.ROWS[:4], (2, 95, 78360.0, 0.0, "deleted", "bid"))
+        orders = self._capture(tmp_path, rows, [self.TRADE])
+        events = BitstampLoader().load(orders)
+        trades = BitstampTradeReader().load(events, orders)
+
+        assert trades["taker_event_id"].iloc[0] == self._event_id(events, 2, "deleted")
+
+    def test_an_order_with_no_created_row_stays_unmatched(self, tmp_path):
+        """Bid 5's ``created`` message was lost, so its rows show no fill.
+        It was not created with size 0, so nothing says it is an instant
+        order: the trade keeps no taker for ``unmatched_trades`` to report."""
+        rows = (
+            *self.ROWS[:2],
+            (5, 95, 78360.0, 0.0001, "changed", "bid"),
+            (5, 99, 78360.0, 0.0001, "deleted", "bid"),
+        )
+        orders = self._capture(tmp_path, rows, [(93, 78360.0, 6.377e-05, 5, 1, "buy")])
+        events = BitstampLoader().load(orders)
+        trades = BitstampTradeReader().load(events, orders)
+
+        assert pd.isna(trades["taker_event_id"].iloc[0])
+
+    def test_text_order_ids_match_by_order_id(self, tmp_path):
+        """Captures from other venues carry text ids such as UUIDs."""
+        rows = tuple(({1: "m-1", 2: "i-2"}[r[0]], *r[1:]) for r in self.ROWS)
+        orders = self._capture(
+            tmp_path, rows, [(93, 78360.0, 6.377e-05, "i-2", "m-1", "buy")]
+        )
+        events = BitstampLoader().load(orders)
+        trades = BitstampTradeReader().load(events, orders)
+
+        assert trades["taker_event_id"].iloc[0] == self._event_id(
+            events, "i-2", "deleted"
+        )
+
+    def test_an_order_with_no_rows_stays_unresolved(self, tmp_path):
+        """The trade names order 9, which the events never mention."""
+        orders = self._capture(
+            tmp_path, self.ROWS, [(93, 78360.0, 6.377e-05, 9, 1, "buy")]
+        )
+        events = BitstampLoader().load(orders)
+        trades = BitstampTradeReader().load(events, orders)
+
+        assert pd.isna(trades["taker_event_id"].iloc[0])
+
+    def test_the_bundled_sample_resolves_every_taker(self, bitstamp_sample_dir):
+        events = BitstampLoader().load(bitstamp_sample_dir / "orders.csv.gz")
+        trades = BitstampTradeReader().load(
+            events, bitstamp_sample_dir / "orders.csv.gz"
+        )
+
+        assert len(trades) == 284
+        assert trades["taker_event_id"].notna().all()
+        assert trades["maker_event_id"].notna().all()
+
+
 # ---------------------------------------------------------------------------
 # BitstampWriter (round-trip)
 # ---------------------------------------------------------------------------

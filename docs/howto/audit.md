@@ -28,7 +28,8 @@ Data quality summary
   trades                : 284
   crossed resting book  : 91.61% of session (7238 episode(s)) [diff feed, but 2 stale resting order(s) stay in the book — see stale resting orders]
   stale resting orders  : 2 (worst: ask 2002347646152704 at 78,333 held the ask touch for 27.4 min after a trade printed through it)
-  unmatched trades      : 0.70% [maker and taker]
+  unmatched trades      : 0.00% [maker and taker]
+  matched by order      : 2 trade(s) [taker created with size 0]
   duplicate event ids   : 0
   duplicate created ids : 0
   pre-existing orders   : 13
@@ -51,6 +52,7 @@ Checks: 0 error(s), 4 warning(s)
 | **crossed resting book** | Share of session *time* with `best_bid > best_ask`. ~0% for a matched book or price levels; can be high and faithful for a diff feed, unless stale resting orders cause it |
 | **stale resting orders** | Resting orders a trade printed through that the venue did not report again within 1 s. The worst is named with its side, price and how long it held the touch |
 | **unmatched trades** | Trades whose maker or taker order could not be found among the order events. Only the orders the feed can show are looked for: the note in brackets says which |
+| **matched by order** | Trades whose taker is an order created with size 0. Bitstamp sends an instant order bought by quote amount that way and never reports what it bought, so a trade with no row of its size is matched to the order by its id. The order and its type are right; its rows show less fill than its trades. Information only; `not checked` when the feed does not show takers |
 | **duplicate event ids / created ids** | Should be `0`; anything else is a feed defect worth chasing |
 | **pre-existing orders** | Orders already resting when the capture began (no `created` row) — structurally unclassifiable, not errors |
 | **orphan orders** | Orders changed or deleted with no `created` row at all. The opening book is the honest source of these; a rise mid-session is the stream losing messages |

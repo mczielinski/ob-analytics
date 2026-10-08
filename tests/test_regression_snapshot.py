@@ -164,11 +164,26 @@ def test_demo_fingerprints(demo_result):
     # 2002351232385027, is all size 0 and reads the same.  `trades` is
     # unchanged.  No event overdraws a level, so holding a level at zero
     # changes nothing here.
+    # 2026-10-07 (taker found by order id, #352): those two instant orders
+    # never report the size they executed, so the trade reader matched no row
+    # of theirs on size and trades 136 and 279 had no taker.  It now falls
+    # back to the order the trade names and takes its `deleted` row.
+    # `trades`: `taker_event_id` and `taker_og` gain a value on those 2 rows
+    # (187402 / 180895 and 310552 / 304035), and `taker_og`, no longer
+    # holding a NaN, is int64 instead of float64.  `events`: the 6 rows of the
+    # two orders change `type` from `unknown` to `market`; nothing else moves.
+    # `depth` and `depth_summary`: a market order never rests, so the price
+    # level rebuild leaves its rows out, and 4 rows go (313,565 -> 313,561):
+    # event 187400 and 310550 (each order's `created` row, 0 lots at the
+    # placeholder price 999,999,999.00), 310551 (+1 lot at bid 78,360.00) and
+    # 310552 (that lot leaving).  The depth_summary row for 310551 was the one
+    # whose best bid was that 1 lot, locked against the ask.  Every other row
+    # of both tables is identical.
     EXPECTED: dict[str, str] = {
-        "events": "be36c95e86c750de9905f10117f18694be2cc1ec81799879e76ac997ac6d4170",
-        "trades": "c893ffed15f497a7796cb92cdde37a81b841fbfa49a89b4dc6868c59a06405b5",
-        "depth": "40f9dad005e2f5f6e6083c094650da6f3074afd3f46ac999862a19b87ec14fe5",
-        "depth_summary": "3d7eab57f5a6068710e43621fee004518f6df9868905d44508bd5483266dba01",
+        "events": "528cfc201d72a71cbc9c8df330f02835953f5feef8bb5b67573da0cbcf6532a1",
+        "trades": "41231911669fec9ca13a769e790a242d91f10680615bf89ac788b95ddc518336",
+        "depth": "f2ddbca30f48004b352fb230e086b66fcb372de840fa87b1289439f1803a5cec",
+        "depth_summary": "166f9cd65f19aa70181d9da92c8df3d909acdbd8e8e364aa57a2041756486a21",
     }
     if EXPECTED:
         assert fps == EXPECTED
