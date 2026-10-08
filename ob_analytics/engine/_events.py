@@ -116,9 +116,16 @@ class OrderEvents:
         the other reconstructions.
     is_market : numpy.ndarray or None
         ``True`` where the classifier labelled the order *market* — an order
-        that crosses rather than rests.  Market rows never join the book, so
-        :func:`~ob_analytics.engine.book_state` excludes them.  ``None`` means
-        "nothing is a market order".
+        that crosses rather than rests.  Market rows never join the book or a
+        queue, so every reconstruction except
+        :func:`~ob_analytics.engine.order_lifecycles` leaves them out.
+        ``None`` means "nothing is a market order".
+    resting_price : numpy.ndarray or None
+        The price the row's order rests at once the row is applied, in the
+        same units as :attr:`price`.  The book and the queues place an order
+        here, never at :attr:`price`, which can be the price a fill traded at.
+        The pandas adapter (``_engine_frames.resting_price``) holds the rule.
+        ``None`` means each row's order rests at the row's own price.
 
     Raises
     ------
@@ -134,6 +141,7 @@ class OrderEvents:
     action: np.ndarray
     fill: np.ndarray | None = None
     is_market: np.ndarray | None = None
+    resting_price: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         lengths = {}
@@ -146,6 +154,7 @@ class OrderEvents:
             "action",
             "fill",
             "is_market",
+            "resting_price",
         ):
             column = getattr(self, name)
             if column is None:
@@ -163,14 +172,15 @@ class OrderEvents:
         return len(self.order_id)
 
     def visible(self, *, side: Direction | None = None) -> np.ndarray:
-        """Rows holding visible orders, optionally on one side only.
+        """Rows of orders that can join the visible queue, optionally on one side.
 
-        Orders sharing :data:`HIDDEN_ORDER_ID` have no public identity, so they
-        never join the visible queue.  Both queue reconstructions select rows
-        through here, and so does any caller that needs to size a window over
-        the same rows the engine will replay — the rule lives in one place.
+        Orders sharing :data:`HIDDEN_ORDER_ID` have no public identity, and
+        market orders never rest, so neither joins the visible queue.  Both
+        queue reconstructions select rows through here, and so does any caller
+        that needs to size a window over the same rows the engine will replay —
+        the rule lives in one place.
         """
-        keep = self.order_id != HIDDEN_ORDER_ID
+        keep = (self.order_id != HIDDEN_ORDER_ID) & ~self.market_mask()
         if side is not None:
             keep = keep & (self.direction == side)
         return np.flatnonzero(keep)
@@ -180,6 +190,12 @@ class OrderEvents:
         if self.fill is None:
             raise ValueError(f"{who}: OrderEvents.fill is required but was not given")
         return self.fill
+
+    def rests_at(self) -> np.ndarray:
+        """Return :attr:`resting_price`, or :attr:`price` when it is absent."""
+        if self.resting_price is None:
+            return self.price
+        return self.resting_price
 
     def market_mask(self) -> np.ndarray:
         """Return :attr:`is_market`, or an all-``False`` mask when it is absent."""

@@ -37,7 +37,11 @@ Time, price, and codes
 Timestamps are **int64 nanoseconds since the epoch, UTC**: a zone is a
 presentation detail, so it is stripped on the way in and re-attached on the way
 out.  Prices are **integer ticks**; the engine only compares and subtracts
-them, so a float column from a pre-tick frame still works.
+them, so a float column from a pre-tick frame still works.  The book and the
+queues place each order at its **resting price**
+(:attr:`OrderEvents.resting_price`), not at the price of its latest row, which
+can be the price a fill traded at.  The rule that sets it is applied once, on
+the pandas side, so the depth table follows the same rule.
 
 Categorical columns arrive as :class:`Direction`, :class:`Action`, and
 :class:`Outcome` codes.  Each is an ``IntEnum`` that derives the schema's string

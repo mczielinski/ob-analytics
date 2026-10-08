@@ -165,6 +165,14 @@ level at zero, so it never shows a negative size and the next order there
 starts from zero. It raises a warning that names the level and the first event,
 and [`audit`](howto/audit.md) counts the rows as `negative_level`.
 
+An order rests at the price of its `created` row (its latest one, if the
+venue places the same id again). After that, only a `changed` row with no fill
+moves it to a new price (a modify). A row that reports a fill, or a
+`deleted` row, never moves it, whatever price the row carries: a venue can
+report a fill at the price it traded at, which need not be the order's own.
+The depth table, the per-order book (`order_book`) and the queue tables
+(`queue_positions`, `queue_age_grid`) all place an order at this price.
+
 Sizes are integer lots and prices integer ticks — multiply by `lot_size` and
 `tick_size` respectively (see [Size policy](#size-policy) and
 [Price policy](#price-policy)).

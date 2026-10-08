@@ -117,6 +117,13 @@ _GOLDEN_CONFIG = SynthConfig(seed=143, duration=60.0)
 # where before 16 rows did not. ``events`` follows through
 # ``aggressiveness_bps`` on 4 of 970 rows. ``trades``, ``order_book``,
 # ``order_lifecycles`` and ``queue_positions`` are unchanged.
+# 2026-10-07 (#342, one resting-price rule): ``queue_positions`` now leaves
+# market orders out, as ``order_book`` does: a market order never rests, so it
+# never joins a queue.  The 251 rows of the session's 92 market orders are gone
+# (970 rows become 719).  The other 719 rows are identical, value for value, to
+# the old table with those rows removed, and so is the touch-only table (714
+# rows become 463).  The engine now also reads each order's resting price, but
+# this session never reports a fill away from it, so nothing else moves.
 EXPECTED: dict[str, str] = {
     "events": "099cab88568a9f81c98a6b8cbd610d4c74a276e2bd25e5437b5fa5755ff6fd76",
     "trades": "dfe87849f18a11294965564e23374563676aafadfb735df832737a33cdaba92e",
@@ -127,7 +134,7 @@ EXPECTED: dict[str, str] = {
         "7902c4f9eabe3a88f35b989809ebf878cd092f9c24300e21a955f036142fb32e"
     ),
     "queue_positions": (
-        "53ec1c0f45d83796a7ce18e7df0b64a13a682e5192b9da66d93e4a3f04000950"
+        "63785e579703c951d9177da4a4b4bdbdc1ec4884c161385cea0136538457c551"
     ),
     # 2026-08-31 (#136, engine separation): added, not re-baselined. Recorded
     # from the pre-#136 implementation and verified to still hold after the

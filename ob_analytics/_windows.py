@@ -31,6 +31,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from ob_analytics import _engine_frames
 from ob_analytics.exceptions import ConfigError
 
 #: How far before a window's start its seed rows are placed.  Strictly before
@@ -125,8 +126,8 @@ def resting_orders(events: pd.DataFrame) -> pd.DataFrame:
     function rebuilds each side of the book separately, so an order is an id on
     one side.  An order counts only when that function puts its volume on a
     level: it has a ``created`` row on its side and is not a ``market`` order.
-    The level is the one its first row, or its latest ``changed`` row with no
-    execution, put it on, which need not be the price on its last row.  The
+    The level is its resting price after its last row, the price every
+    rebuild places it at, which need not be the price on its last row.  The
     volume is its outstanding size after its last row.
 
     Parameters
@@ -148,18 +149,8 @@ def resting_orders(events: pd.DataFrame) -> pd.DataFrame:
         ]
         if on_book.empty:
             continue
-        order = on_book["id"]
-        sets_level = ~order.duplicated() | (
-            (on_book["action"] == "changed") & (on_book["fill"] == 0)
-        )
-        level = (
-            on_book["price"]
-            .where(sets_level)
-            .groupby(order)
-            .ffill()
-            .astype(on_book["price"].dtype)
-        )
-        last = on_book.assign(price=level).groupby(order, sort=False).tail(1)
+        level = _engine_frames.resting_price(on_book)
+        last = on_book.assign(price=level).groupby("id", sort=False).tail(1)
         sides.append(last[(last["action"] != "deleted") & (last["volume"] > 0)])
     return pd.concat(sides) if sides else events.iloc[:0]
 

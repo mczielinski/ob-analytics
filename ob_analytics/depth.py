@@ -579,13 +579,13 @@ def _price_level_volume(events: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFram
             (dir_events["action"] == "created") & (dir_events["type"] != "market")
         ][cols]
 
-        # The level each order's volume actually sits on.  It is set by the
-        # order's first row -- its `created` row, whenever the feed delivers
-        # rows in order -- and moved only by a `changed` row that reports no
-        # execution; every other row is subtracted at the level the order sits
-        # on rather than at whatever price the row itself carries, so an
-        # order's `+v` and `-v` always cancel on one level and a level can only
-        # empty to exactly zero.
+        # The level each order's volume actually sits on: its resting price,
+        # set by its `created` row and moved only by a `changed` row that reports
+        # no execution (`_engine_frames.resting_price` holds the rule).  Every
+        # other row is subtracted at the level the order sits on rather than
+        # at whatever price the row itself carries, so an order's `+v` and
+        # `-v` always cancel on one level and a level can only empty to
+        # exactly zero.
         #
         # The two can differ.  Bitstamp reports a `deleted` whose price is not
         # the price the order rested at for 1.3% of orders, and reports an
@@ -595,20 +595,11 @@ def _price_level_volume(events: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFram
         # resting level that no order is on.  A `changed` row with no execution
         # and a new price is different: the order really has moved (Databento's
         # modify), so its volume leaves the old level and joins the new one.
-        # The per-order rebuild (`engine.book_state`) tracks orders by id and
-        # reads each one at the price of its latest row; this keeps the
-        # price-level rebuild consistent with it.
+        # The per-order rebuild (`engine.book_state`) and the queue rebuilds
+        # read the same resting price, so all of them put an order on the same
+        # level.
         order_key = dir_events["id"]
-        sets_level = ~order_key.duplicated() | (
-            (dir_events["action"] == "changed") & (dir_events["fill"] == 0)
-        )
-        resting_price = (
-            dir_events["price"]
-            .where(sets_level)
-            .groupby(order_key)
-            .ffill()
-            .astype(dir_events["price"].dtype)
-        )
+        resting_price = _engine_frames.resting_price(dir_events)
         previous_price = resting_price.groupby(order_key).shift()
         previous_volume = dir_events.groupby(order_key)["volume"].shift()
         # A move or a growth can only happen to an order that is still on the

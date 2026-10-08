@@ -88,16 +88,21 @@ def crossed_prefix_counts(
 class BookSide:
     """One side of a reconstructed book, **best price first**.
 
-    The identity of each resting order — its id, both clocks, price, and
-    outstanding size — is not copied here: :attr:`row` points at the event that
-    left the order in this state, so a caller reads any column it wants
-    straight off its own event table. Only the two derived quantities travel.
+    The identity of each resting order — its id, both clocks, and outstanding
+    size — is not copied here: :attr:`row` points at the event that left the
+    order in this state, so a caller reads any column it wants straight off its
+    own event table. Only the derived quantities travel.
 
     Attributes
     ----------
     row : numpy.ndarray
         For each resting order, the index in the :class:`OrderEvents` arrays of
         its latest event at the snapshot instant (``int64``).
+    price : numpy.ndarray
+        The price each order rests at: its
+        :attr:`~OrderEvents.resting_price` at :attr:`row`.  This can differ
+        from the price on that row, when the row reports a fill at the price
+        it traded at.
     liquidity : numpy.ndarray
         Cumulative outstanding volume from the touch down to and including this
         order (``float64``).
@@ -107,6 +112,7 @@ class BookSide:
     """
 
     row: np.ndarray
+    price: np.ndarray
     liquidity: np.ndarray
     bps: np.ndarray
 
@@ -133,9 +139,10 @@ class BookState:
     asks: BookSide
 
 
-def _empty_side() -> BookSide:
+def _empty_side(events: OrderEvents) -> BookSide:
     return BookSide(
         row=np.empty(0, dtype=np.int64),
+        price=events.rests_at()[:0],
         liquidity=np.empty(0, dtype=np.float64),
         bps=np.empty(0, dtype=np.float64),
     )
@@ -182,23 +189,21 @@ def _uncross_rows(events: OrderEvents, resting: np.ndarray) -> np.ndarray:
     Static-snapshot mirror of the depth engine's crossed-level eviction: at the
     crossed or locked touch, keep the fresher quote and evict the older opposing
     order, repeating until the book is uncrossed.  Recency uses the receive
-    clock, the same one the depth engine processes in.  Market rows never rest
-    on the book, so they take no part in the crossing test and are always kept.
+    clock, the same one the depth engine processes in.  Orders at one price
+    are walked oldest first.  Market rows never rest on the book, so they take
+    no part in the crossing test and are always kept.
     """
+    price = events.rests_at()
     book = resting[~events.market_mask()[resting]]
     bids = book[events.direction[book] == Direction.BID]
     asks = book[events.direction[book] == Direction.ASK]
-    bids = bids[
-        argsort_keys([(events.price[bids], False), (events.timestamp[bids], True)])
-    ]
-    asks = asks[
-        argsort_keys([(events.price[asks], True), (events.timestamp[asks], True)])
-    ]
+    bids = bids[argsort_keys([(price[bids], False), (events.timestamp[bids], True)])]
+    asks = asks[argsort_keys([(price[asks], True), (events.timestamp[asks], True)])]
 
     n_bid, n_ask = crossed_prefix_counts(
-        events.price[bids],
+        price[bids],
         events.timestamp[bids],
-        events.price[asks],
+        price[asks],
         events.timestamp[asks],
     )
     if n_bid == 0 and n_ask == 0:
@@ -210,28 +215,31 @@ def _uncross_rows(events: OrderEvents, resting: np.ndarray) -> np.ndarray:
 def _side(events: OrderEvents, resting: np.ndarray, direction: Direction) -> BookSide:
     """One side of the book, best price first, with liquidity and bps.
 
-    Orders are ranked by price — the touch first — then by id, which is a total
-    order because at most one row per order id can rest at a time.
+    Each order sits at its resting price.  Orders are ranked by that price —
+    the touch first — then by id, which is a total order because at most one
+    row per order id can rest at a time.
     """
+    price = events.rests_at()
     rows = resting[
         (events.direction[resting] == direction) & ~events.market_mask()[resting]
     ]
     if rows.size == 0:
-        return _empty_side()
+        return _empty_side(events)
 
     rows = rows[
         argsort_keys(
             [
-                (events.price[rows], direction == Direction.ASK),
+                (price[rows], direction == Direction.ASK),
                 (events.order_id[rows], True),
             ]
         )
     ]
-    prices = events.price[rows]
+    prices = price[rows]
     touch = prices[0]
     away = prices - touch if direction == Direction.ASK else touch - prices
     return BookSide(
         row=rows,
+        price=prices,
         liquidity=np.cumsum(events.volume[rows]),
         bps=(away / touch) * 10000,
     )

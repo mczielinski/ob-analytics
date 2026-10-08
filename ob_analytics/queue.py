@@ -13,7 +13,10 @@ plotting layer consumes.
 
 Visible-only caveat: hidden orders (LOBSTER ``id == 0`` / type-5 executions)
 never join the visible queue and are excluded, so reconstructed touch volume
-matches the *visible* book, not the full book.
+matches the *visible* book, not the full book.  Market orders never rest, so
+they are left out as well, as :func:`~ob_analytics.analytics.order_book`
+leaves them out.  Each order is queued at the price ``order_book`` shows it
+at, which need not be the price on its latest row.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ import numpy as np
 import pandas as pd
 
 from ob_analytics import _engine_frames, engine
+from ob_analytics._utils import validate_columns
 from ob_analytics.schemas import time_order_keys
 
 QUEUE_COLUMNS: tuple[str, ...] = _engine_frames.QUEUE_COLUMNS
@@ -34,10 +38,12 @@ _ENGINE_COLUMNS = [
     "volume",
     "direction",
     "action",
+    "fill",
+    "type",
 ]
 
 
-def _in_canonical_order(events: pd.DataFrame) -> pd.DataFrame:
+def _in_canonical_order(events: pd.DataFrame, context: str) -> pd.DataFrame:
     """The columns the queue engine reads, in the canonical same-instant order.
 
     A timestamp alone cannot order events that share an instant, so the frame is
@@ -46,6 +52,7 @@ def _in_canonical_order(events: pd.DataFrame) -> pd.DataFrame:
     priority, so this is what makes the reconstruction reproducible run to run
     and engine to engine.
     """
+    validate_columns(events, set(_ENGINE_COLUMNS), context)
     ev = events[_ENGINE_COLUMNS]
     return ev.sort_values(time_order_keys(ev), kind="stable")
 
@@ -60,8 +67,10 @@ def queue_positions(
     Parameters
     ----------
     events : pandas.DataFrame
-        Canonical events (``event_id``, ``id``, ``timestamp``, ``price``,
-        ``volume`` = outstanding-after-event, ``direction``, ``action``).
+        Classified canonical events (``event_id``, ``id``, ``timestamp``,
+        ``price``, ``volume`` = outstanding-after-event, ``direction``,
+        ``action``, ``fill``, and the ``type`` column of
+        :func:`~ob_analytics.analytics.set_order_types`).
     levels : {"touch", "all"}
         ``"touch"`` (default) keeps only rows where the order rests at the best
         bid/ask at that instant — the input to the touch-queue faces. ``"all"``
@@ -70,24 +79,32 @@ def queue_positions(
     Returns
     -------
     pandas.DataFrame
-        One row per order event with columns :data:`QUEUE_COLUMNS`.  ``rank``
-        is 1-based from the front; ``ahead_volume`` sums the remaining size of
-        the orders ahead; ``age_s`` is seconds since the order's creation.
+        One row per order event (two for a move) with columns
+        :data:`QUEUE_COLUMNS`.  ``price``
+        is the price level the order is queued at.  ``rank`` is 1-based from
+        the front; ``ahead_volume`` sums the remaining size of the orders
+        ahead; ``age_s`` is seconds since the order's creation.
 
     Notes
     -----
     Price-time priority: ``created`` appends to the back of its level; a size
     reduction (partial fill or partial cancel) keeps the order's place; a
-    ``deleted`` (or a reduction to zero) removes it.  Hidden orders (``id == 0``)
-    are skipped.  Within an order's lifetime ``rank`` is monotone non-increasing
-    (FIFO: newcomers join the back), which the tests assert.
+    ``deleted`` (or a reduction to zero) removes it.  A ``changed`` row with no
+    fill and a new price moves the order to the back of its new level.  It is
+    reported twice: as ``deleted`` at the old level, then as ``created`` at the
+    new one, where ``age_s`` still counts from the order's placement.  A row
+    that reports a fill never moves the
+    order, whatever price it carries.  Hidden orders (``id == 0``) and market
+    orders are skipped.  While an order stays at one price, ``rank`` is
+    monotone non-increasing (FIFO: newcomers join the back), which the tests
+    assert.
     """
     if levels not in ("touch", "all"):
         raise ValueError(f"levels must be 'touch' or 'all', got {levels!r}")
 
-    ev = _in_canonical_order(events)
+    ev = _in_canonical_order(events, "queue_positions")
     positions = engine.queue_positions(
-        _engine_frames.to_order_events(ev), touch_only=levels == "touch"
+        _engine_frames.to_order_events(ev, market=True), touch_only=levels == "touch"
     )
     return _engine_frames.queue_frame(ev, positions)
 
@@ -108,8 +125,8 @@ def queue_age_grid(
     Parameters
     ----------
     events : pandas.DataFrame
-        Canonical events (``event_id``/``id``/``timestamp``/``price``/
-        ``volume``/``direction``/``action``).
+        Classified canonical events, with the columns :func:`queue_positions`
+        reads.  Orders are queued as :func:`queue_positions` queues them.
     side : {"bid", "ask"}
         Which touch to compose (default ``"bid"`` -- the front HFT queue-position
         research lives in).
@@ -123,14 +140,14 @@ def queue_age_grid(
         age in **seconds** of the order at rank ``r + 1`` (front = row 0) at
         sample ``t``, or ``NaN`` where the queue is shorter than ``r + 1``.
         ``times`` is the length-``n_time`` array of sample timestamps.
-        Visible-only (hidden orders absent).
+        Visible-only (hidden orders and market orders absent).
     """
     if side not in ("bid", "ask"):
         raise ValueError(f"side must be 'bid' or 'ask', got {side!r}")
 
     touch = engine.Direction[side.upper()]
-    ev = _in_canonical_order(events)
-    arrays = _engine_frames.to_order_events(ev)
+    ev = _in_canonical_order(events, "queue_age_grid")
+    arrays = _engine_frames.to_order_events(ev, market=True)
     # The window spans exactly the rows the engine will replay, so ask the
     # engine which those are rather than restating its visibility rule here.
     replayed = arrays.visible(side=touch)

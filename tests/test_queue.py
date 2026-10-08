@@ -14,7 +14,10 @@ TS = pd.Timestamp("2015-05-01 00:00:00")
 
 
 def _events(rows: list[dict]) -> pd.DataFrame:
-    """Build a canonical events frame from compact (id, t, price, vol, dir, action)."""
+    """Build a classified events frame from compact (id, t, price, vol, dir, action).
+
+    ``fill`` defaults to 0 and ``type`` to ``resting-limit``.
+    """
     recs = []
     for i, r in enumerate(rows):
         recs.append(
@@ -26,6 +29,8 @@ def _events(rows: list[dict]) -> pd.DataFrame:
                 "volume": r["vol"],
                 "direction": r.get("dir", "bid"),
                 "action": r["action"],
+                "fill": r.get("fill", 0),
+                "type": r.get("type", "resting-limit"),
             }
         )
     return pd.DataFrame(
@@ -38,6 +43,8 @@ def _events(rows: list[dict]) -> pd.DataFrame:
             "volume",
             "direction",
             "action",
+            "fill",
+            "type",
         ],
     )
 

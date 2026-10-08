@@ -279,6 +279,21 @@ class TestEngineInterface:
         assert events.visible(side=Direction.BID).tolist() == [1]
         assert events.visible(side=Direction.ASK).tolist() == [3]
 
+    def test_visible_rows_skip_market_orders(self) -> None:
+        # A market order never rests, so it never joins a queue.
+        second = 1_000_000_000
+        events = OrderEvents(
+            order_id=np.array([4, 5, 6], dtype=np.int64),
+            timestamp=np.arange(3, dtype=np.int64) * second,
+            price=np.full(3, 100, dtype=np.int64),
+            volume=np.ones(3, dtype=np.float64),
+            direction=np.full(3, Direction.BID, dtype=np.int8),
+            action=np.full(3, Action.CREATED, dtype=np.int8),
+            is_market=np.array([False, True, False]),
+        )
+        assert events.visible().tolist() == [0, 2]
+        assert events.visible(side=Direction.BID).tolist() == [0, 2]
+
     def test_codes_and_labels_cannot_drift(self) -> None:
         # The schema strings are derived from the code names, so there is no
         # second list to fall out of step.
