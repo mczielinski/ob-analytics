@@ -119,7 +119,8 @@ lc[
 # classification failure — an order already resting when the recording
 # begins is *structurally* unclassifiable, and the classifier says so
 # rather than guessing. `unknown` is the label for the rare event shapes
-# that fit no rule. Real captures have both, as we will see shortly.
+# that fit no rule. Real captures have `pre-existing` orders, as we will
+# see shortly.
 #
 # ## Lifespans as a picture
 #
@@ -184,8 +185,9 @@ summary
 # a percent: **about one order in a thousand arrives intending to trade
 # immediately.** Chapter 1 treated Eve's flash as the exotic case; at
 # scale, Eve is the overwhelming norm, and it is Alice — post, wait,
-# fill — who is rare. The `pre-existing` and `unknown` classes the toy
-# couldn't produce are here too, in tiny numbers.
+# fill — who is rare. The `pre-existing` class the toy couldn't produce
+# is here too, in tiny numbers. `unknown` stays empty: every order in
+# this sample fits one of the rules.
 
 # %%
 import matplotlib.pyplot as plt

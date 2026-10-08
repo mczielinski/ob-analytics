@@ -101,7 +101,8 @@ Data quality summary
   trades                : 284
   crossed resting book  : 91.61% of session (7238 episode(s)) [diff feed, but 2 stale resting order(s) stay in the book — see stale resting orders]
   stale resting orders  : 2 (worst: ask 2002347646152704 at 78,333 held the ask touch for 27.4 min after a trade printed through it)
-  unmatched trades      : 0.70%
+  unmatched trades      : 0.00% [maker and taker]
+  matched by order      : 2 trade(s) [taker created with size 0]
   duplicate event ids   : 0
   duplicate created ids : 0
   pre-existing orders   : 13

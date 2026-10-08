@@ -384,6 +384,18 @@ _TIME_ORDER_TIEBREAKS: tuple[str, ...] = (
 )
 
 
+def unsized_order_ids(events: pd.DataFrame) -> pd.Series:
+    """Return the ids of the orders whose ``created`` row has size 0.
+
+    Such an order does not report the size it executed.  Bitstamp sends an
+    instant order bought by quote amount this way: ``created`` with size 0,
+    then rows of 0 or one lot.  Its trades can only be matched to it by its
+    order id, never by size.
+    """
+    created = events["action"] == "created"
+    return events.loc[created & (events["volume"] == 0), "id"]
+
+
 def time_order_keys(df: pd.DataFrame) -> list[str]:
     """Return the canonical same-instant sort keys present in *df*.
 

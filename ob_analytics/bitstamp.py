@@ -44,7 +44,11 @@ from ob_analytics.protocols import (
     TradeAttribution,
     TradeSource,
 )
-from ob_analytics.schemas import SEQUENCE_COLUMN, attach_instrument_identity
+from ob_analytics.schemas import (
+    SEQUENCE_COLUMN,
+    attach_instrument_identity,
+    unsized_order_ids,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -253,6 +257,23 @@ class BitstampTradeReader:
     resolve ``buy_order_id`` / ``sell_order_id`` into ``event_id`` and
     ``original_number`` references.
 
+    A trade is matched to a row of the order it names whose ``fill`` is the
+    trade's size, the earliest such row first.  Bitstamp does not always
+    report that size: an instant order bought by quote amount is created
+    with size 0 and then shows a size of 0 or one lot, never what it
+    bought.  When no row shows the trade's size and the taker the trade
+    names is such an order (one created with size 0), the trade is matched
+    to that order's ``deleted`` row, else its latest row, and every such
+    trade of that order names the same row.  The order and its type are
+    then right, but its rows show less fill than its trades.
+    :func:`~ob_analytics.analytics.data_quality_summary` counts these trades
+    as ``trades_matched_by_order``.
+
+    Every other trade is matched on size only.  A trade stays unresolved
+    (NaN) when no row of its order shows its size: the events have no row
+    of that order, or a message was lost.  The same rules apply to captures
+    from other venues read through this reader.
+
     Satisfies the :class:`~ob_analytics.protocols.TradeSource` protocol.
     """
 
@@ -294,6 +315,7 @@ class BitstampTradeReader:
 
         maker_event_id = self._resolve_event_ids(maker_id, amounts, ev_lookup)
         taker_event_id = self._resolve_event_ids(taker_id, amounts, ev_lookup)
+        by_order = self._match_quote_amount_takers(events, taker_id, taker_event_id)
 
         id_to_og = dict(zip(events["event_id"], events["original_number"]))
         maker_og = pd.Series(maker_event_id).map(id_to_og)
@@ -323,10 +345,12 @@ class BitstampTradeReader:
 
         logger.info(
             "BitstampTradeReader: {} trades ({} maker_event_id resolved, "
-            "{} taker_event_id resolved)",
+            "{} taker_event_id resolved, {} of them instant orders matched by "
+            "order id)",
             len(trades),
             trades["maker_event_id"].notna().sum(),
             trades["taker_event_id"].notna().sum(),
+            by_order,
         )
         return trades
 
@@ -416,6 +440,47 @@ class BitstampTradeReader:
             result.append(picked)
 
         return np.array(result, dtype=object)
+
+    @classmethod
+    def _match_quote_amount_takers(
+        cls,
+        events: pd.DataFrame,
+        taker_ids: np.ndarray,
+        taker_event_id: np.ndarray,
+    ) -> int:
+        """Match the unresolved takers that are instant orders by order id.
+
+        Fills *taker_event_id* in place and returns how many trades it
+        matched.
+        """
+        # Issue #352: Bitstamp never reports what an instant order bought by
+        # quote amount executed.  Such an order is created with size 0, the
+        # mark this step keys on, and no row of it shows the trade's size.  The
+        # trade still names the order, so the taker is its `deleted` row, else
+        # its latest row.  Any other order with no row of the trade's size has
+        # lost a message, and its trade stays unmatched for `unmatched_trades`
+        # to report.
+        instant_ids = unsized_order_ids(events)
+        if instant_ids.empty:
+            return 0
+        rows = events.loc[
+            events["id"].isin(instant_ids), ["id", "event_id", "action"]
+        ].assign(_deleted=lambda f: f["action"] == "deleted")
+        # Sorted so each order's `deleted` row, else its latest row, is last.
+        chosen = (
+            rows.sort_values(["_deleted", "event_id"], kind="stable")
+            .groupby("id", sort=False, observed=True)["event_id"]
+            .last()
+        )
+        row_of = {cls._order_key(oid): int(eid) for oid, eid in chosen.items()}
+
+        matched = 0
+        for pos in np.flatnonzero(pd.isna(taker_event_id)):
+            key = cls._order_key(taker_ids[pos])
+            if key in row_of:
+                taker_event_id[pos] = row_of[key]
+                matched += 1
+        return matched
 
 
 # ── BitstampWriter ────────────────────────────────────────────────────

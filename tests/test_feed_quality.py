@@ -330,6 +330,97 @@ class TestDataQualitySummary:
         )
         assert s.unmatched_trades_pct == 0.0
 
+    # -- trades matched by order id, not by size (#352) ----------------------
+
+    @staticmethod
+    def _matched_by_order() -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Ask 1 rests 10 and fills 4 (row 2).  Bid 3 is an instant order:
+        created with size 0, and no row shows a fill (rows 3 and 4).  The one
+        trade of 4 names row 2 as maker, which shows its size, and row 4 as
+        taker, which does not."""
+        events = _classified(
+            [
+                (1, 1, 0.0, 101.0, 10.0, "ask", "created", 0.0),
+                (2, 1, 5.0, 101.0, 6.0, "ask", "changed", 4.0),
+                (3, 3, 5.0, 101.0, 0.0, "bid", "created", 0.0),
+                (4, 3, 5.0, 101.0, 0.0, "bid", "deleted", 0.0),
+            ]
+        )
+        trades = pd.DataFrame(
+            {
+                "volume": [4.0],
+                "maker_event_id": np.array([2], dtype=object),
+                "taker_event_id": np.array([4], dtype=object),
+            }
+        )
+        return events, trades
+
+    def test_a_taker_created_with_size_0_is_counted(self):
+        s = data_quality_summary(*self._matched_by_order())
+        assert s.trades_matched_by_order == 1
+        assert s.to_dict()["trades_matched_by_order"] == 1
+        assert "matched by order      : 1 trade(s)" in s.render()
+        check = next(c for c in s.checks if c.name == "trades_matched_by_order")
+        assert check.severity is Severity.INFO
+        assert "by its id" in check.detail
+        assert s.ok
+
+    def test_a_maker_only_feed_does_not_count_the_taker(self):
+        """The taker columns of such a feed are a guess, not the venue's."""
+        s = data_quality_summary(
+            *self._matched_by_order(), trade_attribution=TradeAttribution.MAKER_ONLY
+        )
+        assert s.trades_matched_by_order == 0
+
+    def test_toy_trades_all_show_their_size(self):
+        s = data_quality_summary(_classified_toy(), toy_trades())
+        assert s.trades_matched_by_order == 0
+        check = next(c for c in s.checks if c.name == "trades_matched_by_order")
+        assert "by its id" not in check.detail
+
+    def test_a_maker_is_not_counted(self):
+        """No reader matches a maker by order id: a resting order reports
+        its fills."""
+        events, _ = self._matched_by_order()
+        trades = pd.DataFrame(
+            {
+                "volume": [4.0],
+                "maker_event_id": np.array([4], dtype=object),
+                "taker_event_id": np.array([2], dtype=object),
+            }
+        )
+        assert data_quality_summary(events, trades).trades_matched_by_order == 0
+
+    def test_a_taker_not_created_with_size_0_is_not_counted(self):
+        """Bid 5 has no ``created`` row (a lost message), so nothing says it
+        is an instant order."""
+        events = _classified(
+            [
+                (1, 1, 0.0, 101.0, 10.0, "ask", "created", 0.0),
+                (2, 1, 5.0, 101.0, 6.0, "ask", "changed", 4.0),
+                (3, 5, 5.0, 101.0, 3.0, "bid", "changed", 0.0),
+                (4, 5, 6.0, 101.0, 3.0, "bid", "deleted", 0.0),
+            ]
+        )
+        trades = pd.DataFrame(
+            {
+                "volume": [4.0],
+                "maker_event_id": np.array([2], dtype=object),
+                "taker_event_id": np.array([4], dtype=object),
+            }
+        )
+        assert data_quality_summary(events, trades).trades_matched_by_order == 0
+
+    def test_a_feed_naming_no_orders_says_not_checked(self):
+        s = data_quality_summary(
+            *self._matched_by_order(), trade_attribution=TradeAttribution.NONE
+        )
+        assert s.trades_matched_by_order == 0
+        assert "matched by order      : not checked" in s.render()
+        check = next(c for c in s.checks if c.name == "trades_matched_by_order")
+        assert "not checked" in check.detail
+        assert "by its id" not in check.detail
+
     def test_the_check_says_which_orders_it_looked_for(self):
         s = data_quality_summary(
             crossed_events(),
@@ -1001,6 +1092,25 @@ class TestStaleOrdersInSummary:
         )
         assert s.negative_level_rows == 0
         assert (result.depth["volume"] >= 0).all()
+
+    def test_two_takers_are_matched_by_order_on_the_bitstamp_sample(
+        self, bitstamp_sample_result
+    ):
+        """Trades 136 and 279 name instant orders bought by quote amount,
+        whose rows never show the size they executed (#352)."""
+        result = bitstamp_sample_result
+        s = data_quality_summary(
+            result.events,
+            result.trades,
+            feed_type=FeedType.DIFF_FEED,
+            depth=result.depth,
+        )
+        assert s.unmatched_trades_pct == 0.0
+        assert s.trades_matched_by_order == 2
+        events = result.events
+        for order in (2002354918830080, 2002351232385027):
+            types = set(events.loc[events["id"] == order, "type"].astype(str))
+            assert types == {"market"}
 
     def test_display_tables_give_the_same_report_on_the_bitstamp_sample(
         self, bitstamp_sample_result
