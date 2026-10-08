@@ -28,8 +28,6 @@ The reconstructions themselves live in the
 
 ::: ob_analytics.analytics.order_lifecycles
 
-::: ob_analytics.analytics.uncross_book_sides
-
 ## Data Quality
 
 See [Data quality: matched book, diff feed and price levels](../data-quality.md) for the

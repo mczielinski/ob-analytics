@@ -27,7 +27,7 @@ import pandas as pd
 import pytest
 from hypothesis import given, settings, strategies as st
 
-from ob_analytics.analytics import order_book, uncross_book_sides
+from ob_analytics.analytics import order_book
 from ob_analytics.depth import DepthMetricsEngine, depth_metrics, price_level_volume
 from ob_analytics.synth import SynthConfig, generate_session
 
@@ -86,31 +86,6 @@ def _volume(draw: st.DrawFn, *, allow_zero: bool = False) -> float:
 
 
 @st.composite
-def two_book_sides(draw: st.DrawFn) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """A pair of per-order (bids, asks) frames whose price ranges overlap.
-
-    Both sides draw prices from the same [90, 110] window, so the two are
-    frequently crossed or locked — exactly what the uncross paths must resolve.
-    """
-
-    def side(direction: str) -> pd.DataFrame:
-        n = draw(st.integers(min_value=0, max_value=8))
-        rows = [
-            {
-                "price": _price(draw),
-                "volume": _volume(draw),
-                "timestamp": _T0 + pd.Timedelta(seconds=draw(st.integers(0, 300))),
-                "direction": direction,
-            }
-            for _ in range(n)
-        ]
-        return pd.DataFrame(rows, columns=["price", "volume", "timestamp", "direction"])
-
-    bids, asks = side("bid"), side("ask")
-    return bids, asks
-
-
-@st.composite
 def crossable_events(draw: st.DrawFn) -> pd.DataFrame:
     """Created-only resting orders on both sides, priced to cross frequently."""
     n = draw(st.integers(min_value=2, max_value=16))
@@ -126,6 +101,7 @@ def crossable_events(draw: st.DrawFn) -> pd.DataFrame:
                 "timestamp": _T0 + pd.Timedelta(seconds=draw(st.integers(0, 300))),
                 "price": _price(draw),
                 "volume": _volume(draw),
+                "fill": 0,
             }
         )
     df = pd.DataFrame(rows)
@@ -191,18 +167,6 @@ def test_depth_engine_emits_in_time_order(cfg: SynthConfig) -> None:
 
 
 @settings(max_examples=50, deadline=None)
-@given(sides=two_book_sides())
-def test_uncross_book_sides_leaves_no_cross(
-    sides: tuple[pd.DataFrame, pd.DataFrame],
-) -> None:
-    bids, asks = sides
-    ub, ua = uncross_book_sides(bids, asks)
-    if not ub.empty and not ua.empty:
-        # Returned best-first: best bid / best ask are the extreme prices.
-        assert ub["price"].max() < ua["price"].min()
-
-
-@settings(max_examples=50, deadline=None)
 @given(events=crossable_events())
 def test_order_book_uncross_leaves_no_cross(events: pd.DataFrame) -> None:
     book = order_book(events, uncross=True)
@@ -225,22 +189,37 @@ def test_depth_engine_never_strictly_crosses(depth: pd.DataFrame) -> None:
 def test_uncross_resolves_a_known_crossed_book() -> None:
     # A deterministic crossed book, so the eviction branch is covered even if
     # every random draw happened to be uncrossed.
-    bids = pd.DataFrame(
+    rows = [
+        # (id, direction, price, seconds after _T0)
+        (1, "bid", 103.0, 0),
+        (2, "bid", 101.0, 2),
+        (3, "bid", 99.0, 0),
+        (4, "ask", 100.0, 1),
+        (5, "ask", 102.0, 0),
+        (6, "ask", 104.0, 0),
+    ]
+    events = pd.DataFrame(
         {
-            "price": [103.0, 101.0, 99.0],
-            "volume": [1.0, 1.0, 1.0],
-            "timestamp": [_T0, _T0 + pd.Timedelta(seconds=2), _T0],
+            "event_id": [r[0] for r in rows],
+            "id": [r[0] for r in rows],
+            "action": pd.Categorical(
+                ["created"] * len(rows),
+                categories=["created", "changed", "deleted"],
+                ordered=True,
+            ),
+            "direction": pd.Categorical(
+                [r[1] for r in rows], categories=["bid", "ask"], ordered=True
+            ),
+            "type": "resting-limit",
+            "timestamp": [_T0 + pd.Timedelta(seconds=r[3]) for r in rows],
+            "price": [r[2] for r in rows],
+            "volume": 1,
+            "fill": 0,
         }
-    )
-    asks = pd.DataFrame(
-        {
-            "price": [100.0, 102.0, 104.0],
-            "volume": [1.0, 1.0, 1.0],
-            "timestamp": [_T0 + pd.Timedelta(seconds=1), _T0, _T0],
-        }
-    )
-    ub, ua = uncross_book_sides(bids, asks)
-    assert ub["price"].max() < ua["price"].min()
+    ).sort_values("timestamp", kind="stable")
+    events["exchange_timestamp"] = events["timestamp"]
+    book = order_book(events, tp=_T0 + pd.Timedelta(seconds=10), uncross=True)
+    assert book["bids"]["price"].max() < book["asks"]["price"].min()
 
 
 # ── Rule 3: volume adds up ───────────────────────────────────────────────────

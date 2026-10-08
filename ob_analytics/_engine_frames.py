@@ -113,6 +113,59 @@ def _sizes(values: pd.Series) -> np.ndarray:
     return array.astype(np.float64)
 
 
+def resting_price(events: pd.DataFrame) -> pd.Series:
+    """Return the price each row's order rests at once the row is applied.
+
+    This is the library's one rule for where an order rests.  The order's
+    first row, and any ``created`` row, sets the price.  After that, only a
+    ``changed`` row with no fill moves it: that is a modify to a new price,
+    such as Databento's.  Every other row keeps the price the order already
+    had, whatever price the row carries.  A venue can report a fill at the
+    price it traded at, which need not be the order's own (Bitstamp does this
+    for an order that crosses and then rests), and can report a ``deleted``
+    row at another price.
+
+    An order is an id on one side of the book.  The rows must be in the
+    canonical event order.
+
+    Parameters
+    ----------
+    events : pandas.DataFrame
+        Events with ``id``, ``direction``, ``action``, ``price`` and ``fill``.
+
+    Returns
+    -------
+    pandas.Series
+        One price per row, on *events*' index and in the dtype of its
+        ``price`` column.
+    """
+    price = events["price"].to_numpy()
+    order_id = events["id"].to_numpy()
+    if not np.issubdtype(order_id.dtype, np.number):
+        # Ids that numpy cannot sort quickly, such as UUID strings.
+        order_id = pd.factorize(events["id"])[0]
+    is_bid = (events["direction"] == "bid").to_numpy()
+    # Group each order's rows together, keeping their order within the order.
+    by_order = np.lexsort((is_bid, order_id))
+    grouped_id = order_id[by_order]
+    grouped_bid = is_bid[by_order]
+    first = np.ones(len(by_order), dtype=bool)
+    first[1:] = (grouped_id[1:] != grouped_id[:-1]) | (
+        grouped_bid[1:] != grouped_bid[:-1]
+    )
+    action = events["action"]
+    sets = (action == "created") | ((action == "changed") & (events["fill"] == 0))
+    sets_price = first | sets.to_numpy()[by_order]
+    # Each row reads the price of the latest row at or before it that set one.
+    # An order's first row always sets one, so this never reads across orders.
+    setter = np.maximum.accumulate(np.where(sets_price, np.arange(len(by_order)), 0))
+    rests_at = np.empty_like(price)
+    rests_at[by_order] = price[by_order][setter]
+    return pd.Series(rests_at, index=events.index, name="price").astype(
+        events["price"].dtype
+    )
+
+
 def to_order_events(
     events: pd.DataFrame, *, fill: bool = False, market: bool = False
 ) -> OrderEvents:
@@ -120,22 +173,29 @@ def to_order_events(
 
     Only the columns the engine reads are converted.  Everything else stays in
     the frame and is read back through the row indices the engine returns.
+    The resting price of each row is worked out here, by
+    :func:`resting_price`, so every reconstruction places an order at the
+    same price.
 
     Parameters
     ----------
     events : pandas.DataFrame
         Events satisfying the :mod:`ob_analytics.schemas` contract, already in
-        the caller's canonical order.
+        the caller's canonical order.  The ``fill`` column is always read, to
+        work out the resting price.
     fill : bool
-        Also convert the ``fill`` column (needed for order lifecycles).
+        Also pass the ``fill`` column itself to the engine (needed for order
+        lifecycles).  The column is read either way, for the resting price.
     market : bool
         Also derive the market-order mask from the classifier ``type`` column
-        (needed to keep crossing orders off the reconstructed book).
+        (needed to keep crossing orders off the reconstructed book and out of
+        the queues).
     """
     return OrderEvents(
         order_id=events["id"].to_numpy(),
         timestamp=nanoseconds(events["timestamp"]),
         price=events["price"].to_numpy(),
+        resting_price=resting_price(events).to_numpy(),
         # Sizes cross the boundary as the integer lots the schema stores
         # (issue #226), so the cumulative sums the engine builds from them —
         # ``liquidity`` on a book side, ``ahead_volume`` in the queue — stay
@@ -158,7 +218,7 @@ BOOK_SIDE_ORDER_COLUMNS: tuple[str, ...] = (
     "price",
     "volume",
 )
-"""Per-order columns copied straight off the event that left the order resting."""
+"""Per-order columns of a book side: the order's latest event, with its resting price."""
 
 BOOK_SIDE_COLUMNS: tuple[str, ...] = (*BOOK_SIDE_ORDER_COLUMNS, "liquidity", "bps")
 """Columns of a reconstructed order-book side, in order."""
@@ -169,9 +229,11 @@ def book_side_frame(events: pd.DataFrame, side: BookSide) -> pd.DataFrame:
 
     The per-order columns are taken straight off *events* at the rows the engine
     reported, so every dtype — both clocks, integer tick prices, the id column —
-    survives untouched.
+    survives untouched.  ``price`` is the price the order rests at, which the
+    engine reports, not the price on the order's latest row.
     """
     frame = events.iloc[side.row][list(BOOK_SIDE_ORDER_COLUMNS)].copy()
+    frame["price"] = pd.array(side.price).astype(events["price"].dtype)
     frame["liquidity"] = side.liquidity
     frame["bps"] = side.bps
     return frame
@@ -228,10 +290,17 @@ QUEUE_COLUMNS: tuple[str, ...] = (
 
 
 def queue_frame(events: pd.DataFrame, positions: QueuePositions) -> pd.DataFrame:
-    """Build the queue-position table: one row per surviving order event."""
+    """Build the queue-position table: one row per surviving order event.
+
+    A move to a new price has two rows, leaving and joining.
+
+    ``price`` is the price level the order is queued at, which the engine
+    reports, not the price on the event's own row.
+    """
     frame = events.iloc[positions.row][
         ["timestamp", "id", "direction", "price"]
     ].reset_index(drop=True)
+    frame["price"] = pd.array(positions.price).astype(events["price"].dtype)
     frame["direction"] = frame["direction"].astype(str)
     frame["action"] = np.asarray(ACTIONS)[positions.action]
     frame["rank"] = positions.rank

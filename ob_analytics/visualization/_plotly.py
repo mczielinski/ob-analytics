@@ -1499,7 +1499,7 @@ def _queue_traj_xy(side: Any) -> tuple[list, list]:
     xs: list = []
     ys: list = []
     for _, g in side.groupby("id", sort=False):
-        g = g.sort_values("timestamp")
+        g = g.sort_values("timestamp", kind="stable")
         xs.extend(g["timestamp"].tolist())
         xs.append(None)
         ys.extend(g["rank"].tolist())

@@ -116,6 +116,13 @@ One price rung on one side of the book, and the size resting there. Always
 written in full, because a bare "level" means resolution.
 _Avoid_: rung, bucket, tier, bare "level"
 
+**Resting price**:
+The price an order rests at: the price of its latest `created` row, moved only
+by a `changed` row with no fill. A row that reports a fill never moves it, because a
+venue can report a fill at the price it traded at. The depth table, the
+per-order book and the queues all place an order at its resting price.
+Computed once, by `_engine_frames.resting_price`.
+
 **Touch**:
 The best bid and the best ask — the innermost price level on each side.
 _Avoid_: top of book, BBO, inside market

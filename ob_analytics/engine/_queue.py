@@ -8,6 +8,12 @@ volume ahead of it, the queue length, and its age.
 Visible-only: orders with no public identity never join the visible queue and
 are excluded (see :meth:`~ob_analytics.engine.OrderEvents.visible`), so the
 reconstructed touch volume matches the *visible* book, not the full book.
+Market orders never rest, so they are left out too, as the book leaves them out.
+
+Each order is queued at its resting price
+(:attr:`~ob_analytics.engine.OrderEvents.resting_price`), the price the book
+places it at.  A row that moves the order to a new resting price takes it out
+of its old level and puts it at the back of the new one.
 """
 
 from __future__ import annotations
@@ -39,24 +45,32 @@ def _elapsed_seconds(delta_ns: int) -> float:
 class QueuePositions:
     """One row per order event, reporting that order's place in its level.
 
-    The event's own columns — time, order id, direction, price — are not
-    copied: :attr:`row` points back at the event in the :class:`OrderEvents`
-    arrays.
+    A move to a new price gives two rows for its event: the order leaving its
+    old level, then joining its new one.
+
+    The event's own columns — time, order id, direction — are not copied:
+    :attr:`row` points back at the event in the :class:`OrderEvents` arrays.
 
     Attributes
     ----------
     row : numpy.ndarray
         Index in the :class:`OrderEvents` arrays of the event this row reports
         on (``int64``).
+    price : numpy.ndarray
+        The price level the order is queued at: its resting price, which can
+        differ from the price on the event's row.
     action : numpy.ndarray
         What the event did to the queue, as
         :class:`~ob_analytics.engine.Action` codes: joined the back
-        (``created``), kept its place at a smaller size (``changed``), or left
+        (``created``), kept its place at a new size (``changed``), or left
         (``deleted``).  A reduction to zero is reported as a ``deleted``,
-        whatever the venue called it.
+        whatever the venue called it.  A move to a new price is reported as a
+        ``deleted`` at the old level and a ``created`` at the back of the new
+        one.  The ``created`` row keeps the order's age from its placement.
     rank : numpy.ndarray
-        1-based position from the front of the level (``int64``).  Within one
-        order's life it is monotone non-increasing: newcomers join the back.
+        1-based position from the front of the level (``int64``).  While an
+        order stays at one price it is monotone non-increasing: newcomers join
+        the back.
     queue_len : numpy.ndarray
         Number of orders resting at the level (``int64``).
     ahead_volume : numpy.ndarray
@@ -69,6 +83,7 @@ class QueuePositions:
     """
 
     row: np.ndarray
+    price: np.ndarray
     action: np.ndarray
     rank: np.ndarray
     queue_len: np.ndarray
@@ -104,7 +119,9 @@ def queue_positions(events: OrderEvents, *, touch_only: bool = True) -> QueuePos
 
     Price-time priority: a ``created`` event appends to the back of its level; a
     size reduction (partial fill or partial cancel) keeps the order's place; a
-    ``deleted`` — or a reduction to zero — removes it.
+    ``deleted`` — or a reduction to zero — removes it.  A move to a new resting
+    price takes the order to the back of its new level.  Market orders never
+    join a queue.
 
     Parameters
     ----------
@@ -119,12 +136,12 @@ def queue_positions(events: OrderEvents, *, touch_only: bool = True) -> QueuePos
     Returns
     -------
     QueuePositions
-        One row per surviving order event.
+        One row per surviving order event, two for a move.
     """
     visible = events.visible()
     order_ids = events.order_id[visible].tolist()
     times = events.timestamp[visible].tolist()
-    prices = events.price[visible].tolist()
+    prices = events.rests_at()[visible].tolist()
     volumes = events.volume[visible].tolist()
     directions = events.direction[visible].tolist()
     actions = events.action[visible].tolist()
@@ -144,6 +161,7 @@ def queue_positions(events: OrderEvents, *, touch_only: bool = True) -> QueuePos
         return max(levels) if direction == Direction.BID else min(levels)
 
     rows: list[int] = []
+    out_price: list[object] = []
     out_action: list[int] = []
     out_rank: list[int] = []
     out_len: list[int] = []
@@ -163,6 +181,7 @@ def queue_positions(events: OrderEvents, *, touch_only: bool = True) -> QueuePos
                 break
             ahead += remaining
         rows.append(row)
+        out_price.append(price)
         out_action.append(action)
         out_rank.append(rank)
         out_len.append(len(queue))
@@ -172,44 +191,65 @@ def queue_positions(events: OrderEvents, *, touch_only: bool = True) -> QueuePos
             _elapsed_seconds(when - placed_at[oid]) if oid in placed_at else 0.0
         )
 
+    def leave(oid: int, level: tuple[int, object]) -> None:
+        del order_level[oid]
+        queue = queues[level]
+        del queue[oid]
+        if not queue:
+            live[level[0]].discard(level[1])
+
+    def join(oid: int, level: tuple[int, object], volume: float) -> dict:
+        order_level[oid] = level
+        queue = queues.setdefault(level, {})
+        queue[oid] = float(volume)
+        live[level[0]].add(level[1])
+        return queue
+
     for i, oid in enumerate(order_ids):
         row = visible[i]
         when = times[i]
         action = actions[i]
         volume = volumes[i]
+        level = order_level.get(oid)
 
         if action == Action.CREATED:
-            level = (directions[i], prices[i])
-            order_level[oid] = level
+            if level is not None:
+                # Placed again while still queued: it leaves its old place, as
+                # a cancel does, and rests once, at its latest price.
+                emit(row, when, oid, level, queues[level], Action.DELETED)
+                leave(oid, level)
             placed_at[oid] = when
-            queue = queues.setdefault(level, {})
-            queue[oid] = float(volume)
-            live[level[0]].add(level[1])
-            emit(row, when, oid, level, queue, Action.CREATED)
+            new_level = (directions[i], prices[i])
+            emit(row, when, oid, new_level, join(oid, new_level, volume), action)
             continue
 
-        level = order_level.get(oid)
         if level is None:
-            # Creation never seen (pre-existing / windowed-in): cannot place it.
+            # Creation never seen (pre-existing / windowed-in), or already
+            # gone: cannot place it.
             continue
-        queue = queues.get(level, {})
-        if oid not in queue:
-            continue
+        queue = queues[level]
 
         if action == Action.DELETED or volume <= 0:
-            emit(
-                row, when, oid, level, queue, Action.DELETED
-            )  # last place before removal
-            del queue[oid]
-            if not queue:
-                live[level[0]].discard(level[1])
+            emit(row, when, oid, level, queue, Action.DELETED)  # last place
+            leave(oid, level)
             continue
 
-        queue[oid] = float(volume)  # a size reduction keeps the queue place
+        new_level = (level[0], prices[i])
+        if new_level != level:
+            # A move to a new price: out of the old level, as a cancel leaves
+            # it, then onto the back of the new one.
+            emit(row, when, oid, level, queue, Action.DELETED)
+            leave(oid, level)
+            queue = join(oid, new_level, volume)
+            emit(row, when, oid, new_level, queue, Action.CREATED)
+            continue
+
+        queue[oid] = float(volume)  # a size change keeps the queue place
         emit(row, when, oid, level, queue, Action.CHANGED)
 
     return QueuePositions(
         row=np.array(rows, dtype=np.int64),
+        price=np.asarray(out_price, dtype=events.rests_at().dtype),
         action=np.array(out_action, dtype=np.int8),
         rank=np.array(out_rank, dtype=np.int64),
         queue_len=np.array(out_len, dtype=np.int64),
@@ -226,7 +266,9 @@ def queue_age_grid(events: OrderEvents, *, side: int, at: np.ndarray) -> QueueAg
     """Snapshot one side's touch queue at each of the instants *at*.
 
     Replays the side's events and, at every sample instant, records the age of
-    each order resting at the best price by FIFO rank.
+    each order resting at the best price by FIFO rank.  Orders are queued as
+    :func:`queue_positions` queues them: at their resting price, with market
+    orders left out.
 
     Parameters
     ----------
@@ -252,13 +294,26 @@ def queue_age_grid(events: OrderEvents, *, side: int, at: np.ndarray) -> QueueAg
 
     order_ids = events.order_id[visible].tolist()
     times = events.timestamp[visible].tolist()
-    prices = events.price[visible].tolist()
+    prices = events.rests_at()[visible].tolist()
     volumes = events.volume[visible].tolist()
     actions = events.action[visible].tolist()
 
     queues: dict[object, dict[int, float]] = {}  # price -> {order id: remaining}
+    # Order id -> the price it is queued at, for the orders in a queue now.
+    order_level: dict[int, object] = {}
     placed_at: dict[int, int] = {}
     live: set = set()
+
+    def leave(oid: int, level: object) -> None:
+        del order_level[oid]
+        del queues[level][oid]
+        if not queues[level]:
+            live.discard(level)
+
+    def join(oid: int, level: object, volume: float) -> None:
+        order_level[oid] = level
+        queues.setdefault(level, {})[oid] = float(volume)
+        live.add(level)
 
     def best():
         if not live:
@@ -274,17 +329,22 @@ def queue_age_grid(events: OrderEvents, *, side: int, at: np.ndarray) -> QueueAg
             oid = order_ids[pending]
             when = times[pending]
             price = prices[pending]
+            level = order_level.get(oid)
             if actions[pending] == Action.CREATED:
+                if level is not None:
+                    # Placed again while still queued: it rests once.
+                    leave(oid, level)
                 placed_at[oid] = when
-                queues.setdefault(price, {})[oid] = float(volumes[pending])
-                live.add(price)
-            elif price in queues and oid in queues[price]:
+                join(oid, price, volumes[pending])
+            elif level is not None:
                 if actions[pending] == Action.DELETED or volumes[pending] <= 0:
-                    del queues[price][oid]
-                    if not queues[price]:
-                        live.discard(price)
+                    leave(oid, level)
+                elif price != level:
+                    # A move to a new price: onto the back of the new level.
+                    leave(oid, level)
+                    join(oid, price, volumes[pending])
                 else:
-                    queues[price][oid] = float(volumes[pending])
+                    queues[level][oid] = float(volumes[pending])
             pending += 1
 
         touch = best()

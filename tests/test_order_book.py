@@ -22,6 +22,8 @@ def _events(*rows):
     ).assign(
         timestamp=lambda d: pd.to_datetime(d["timestamp"]),
         exchange_timestamp=lambda d: pd.to_datetime(d["timestamp"]),
+        # No row here reports a fill, so every order rests at its own price.
+        fill=0,
     )
     df["action"] = pd.Categorical(
         df["action"], categories=["created", "changed", "deleted"], ordered=True

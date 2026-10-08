@@ -884,7 +884,7 @@ def build_gallery_model(
 
     # Queue position is L3-only: the FIFO queue engine reconstructs each
     # touch order's rank over time.  No aggregate counterpart (rank is an
-    # MBO notion).  Visible-only (hidden orders absent).
+    # MBO notion).  Visible-only (hidden and market orders absent).
     concepts.append(
         _l3(
             "queue_position",

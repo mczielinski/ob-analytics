@@ -1160,7 +1160,7 @@ def mpl_queue_position_per_order(
             continue
         drew_any = True
         for _, g in side.groupby("id", sort=False):
-            g = g.sort_values("timestamp")
+            g = g.sort_values("timestamp", kind="stable")
             ax.plot(
                 mdates.date2num(g["timestamp"]),
                 g["rank"].to_numpy(),
@@ -1170,7 +1170,11 @@ def mpl_queue_position_per_order(
                 drawstyle="steps-post",
             )
         if show_markers and marker is not None:
-            ends = side.sort_values("timestamp").groupby("id", sort=False).tail(1)
+            ends = (
+                side.sort_values("timestamp", kind="stable")
+                .groupby("id", sort=False)
+                .tail(1)
+            )
             x = mdates.date2num(ends["timestamp"])
             if marker == "o":  # cancelled: open circle
                 ax.scatter(

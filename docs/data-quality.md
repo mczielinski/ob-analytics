@@ -193,14 +193,14 @@ faithful = order_book(events)                 # default: crossed if the feed is
 display  = order_book(events, uncross=True)   # best_bid < best_ask everywhere
 ```
 
-The same flag threads through the visualization prepares that feed the
-`book_snapshot` ladder and the `depth_chart` curve:
+The `book_snapshot` ladder and the `depth_chart` curve draw the book they are
+given, so pass them the uncrossed book:
 
 ```python
 from ob_analytics.visualization import prepare, plot
 
 fig = plot("book_snapshot", level="L3",
-           **prepare.book_snapshot(order_book=book, uncross=True))
+           **prepare.book_snapshot(order_book=display))
 ```
 
 Uncrossing mirrors the depth engine's crossed-level eviction: at the crossed

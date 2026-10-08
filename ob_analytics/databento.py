@@ -96,6 +96,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from ob_analytics import _engine_frames
 from ob_analytics._utils import (
     UTC_NS_DTYPE,
     attach_ingest_seq,
@@ -1426,11 +1427,8 @@ def _resting_rows(
     joins = took_first & last_lead & ~gone
     keep = ~gone & ~(took_first & in_lead & ~last_lead)
 
-    # The price the order rests at: set by its first row and moved only by a
-    # ``changed`` row that reports no execution, as ``price_level_volume``
-    # reads it.
-    sets_level = first | ((action == "changed") & (fill == 0) & ~taker)
-    resting = events["price"].where(sets_level).groupby(order).ffill().to_numpy()
+    # The price the order rests at, which every rebuild places it at.
+    resting = _engine_frames.resting_price(events).to_numpy()
     price = np.where(taker | joins, resting, events["price"].to_numpy())
 
     rows = events.assign(

@@ -910,7 +910,9 @@ def prepare_queue_position_l3_data(
     touch) and joins each order's terminal outcome
     (:func:`~ob_analytics.analytics.order_lifecycles`), so a trajectory traces an
     order marching toward the front (rank 1) as the orders ahead fill or cancel,
-    coloured by how it ended.  Visible-only (hidden orders absent).
+    coloured by how it ended.  Visible-only: hidden orders and market orders
+    are absent.  *events* must be classified (the ``type`` column of
+    :func:`~ob_analytics.analytics.set_order_types`) and carry ``fill``.
 
     Returns one frame per fate (``filled`` / ``cancelled`` / ``resting``) with
     ``timestamp``, ``id``, ``rank``, ``age_s``; ``max_rank`` for the (inverted)
@@ -1018,7 +1020,10 @@ def prepare_liquidity_at_touch_l3_data(
     engine (:func:`ob_analytics.queue.queue_age_grid`) snapshots the touch
     queue at *n_time* instants, and each cell is the age of the order at that
     rank -- pale columns are recent churn, dark are sticky liquidity, the front
-    (rank 1) is the HFT queue-position frontier.  Visible-only.
+    (rank 1) is the HFT queue-position frontier.  Visible-only: hidden orders
+    and market orders are absent.  *events* must be classified (the ``type``
+    column of :func:`~ob_analytics.analytics.set_order_types`) and carry
+    ``fill``.
 
     Returns ``ages`` (a ``max_rank`` x ``n_time`` array, NaN where the queue is
     short), ``times`` (column timestamps), ``max_rank`` and ``side``.
@@ -1762,7 +1767,6 @@ def prepare_book_snapshot_data(
     volume_scale: float | None = None,
     show_quantiles: bool = False,
     top_n: int | None = 40,
-    uncross: bool = False,
 ) -> dict[str, Any]:
     """Prepare an order-book snapshot at one resolution.
 
@@ -1777,13 +1781,9 @@ def prepare_book_snapshot_data(
     that per-order separators read.  ``show_quantiles`` overlays up to three
     heavy-level guide lines per side and is off by default.
 
-    ``uncross`` (default ``False``, i.e. faithful) evicts crossed resting
-    orders *for display* via
-    :func:`~ob_analytics.analytics.uncross_book_sides`, mirroring
-    ``order_book(uncross=True)`` — use it to draw a clean ``best_bid <
-    best_ask`` ladder from a diff feed without re-reconstructing.  It needs the
-    per-order ``timestamp`` column that :func:`~ob_analytics.analytics.order_book`
-    provides; a synthetic/ndarray book without it is left unchanged.
+    The book is drawn as it is given.  To draw a clean ``best_bid <
+    best_ask`` ladder from a diff feed, pass the book
+    ``order_book(..., uncross=True)`` returns.
 
     Returns ``bids``/``asks`` frames ordered best-first with columns ``price,
     volume, liquidity, seg_lo, seg_hi`` (volumes already scaled), plus
@@ -1792,11 +1792,6 @@ def prepare_book_snapshot_data(
     """
     bids = _as_book_side_frame(order_book["bids"])
     asks = _as_book_side_frame(order_book["asks"])
-
-    if uncross and "timestamp" in bids.columns and "timestamp" in asks.columns:
-        from ob_analytics.analytics import uncross_book_sides
-
-        bids, asks = uncross_book_sides(bids, asks)
 
     if volume_scale is None:
         volume_scale = infer_volume_scale(

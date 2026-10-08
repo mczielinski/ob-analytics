@@ -130,9 +130,9 @@ fig = plot_queue_story(events, toy_trades(), at_s=[6, 45, 56, 57])
 #   herself (t=57 ladder: only `Iv 1` remains). Still resting at the
 #   end: pink.
 # - **Bob** holds rank 1 on the ask side for 46 seconds and fills in
-#   two bites. **Frank, Iris, and Sam** pass through rank 1 for a single
-#   instant each — market orders technically join the queue too, for the
-#   moment it takes to match.
+#   two bites. **Frank, Iris, and Sam** never appear: they are market
+#   orders, which take liquidity and never rest, so they never join a
+#   queue.
 # - **Eve** (yellow ○) jumps straight to rank 1 at a brand-new best
 #   price of 100 — front of a queue of one. The t=45 ladder catches
 #   her mid-flash; 800 ms later she cancels.
@@ -250,17 +250,19 @@ fig = plot("queue_position", level="L3", **payload)
 # Write the session with `toy_orders()` and `match_toy_orders` (see
 # [Change the script](00_toy_session.md#change-the-script)), then check
 # your answers with `queue_positions(events, levels="all")` from
-# `ob_analytics.queue` and the trades.
+# `ob_analytics.queue` and the trades. `queue_positions` needs the classified
+# events, as `order_book` does: classify them with `set_order_types` first.
 
 # %% tags=["solution"]
 from ob_analytics import ToyOrder, match_toy_orders, toy_orders
+from ob_analytics.analytics import set_order_types
 from ob_analytics.queue import queue_positions
 
 orders = toy_orders()
 orders["Jo"] = ToyOrder(at=10, direction="bid", price=99, volume=1)
 jo_events, jo_trades = match_toy_orders(orders)
 jo_id = jo_events.loc[jo_events["actor"] == "Jo", "id"].iloc[0]
-queue = queue_positions(jo_events, levels="all")
+queue = queue_positions(set_order_types(jo_events, jo_trades), levels="all")
 jo_queue = queue[queue["id"] == jo_id]
 print(jo_queue[["price", "rank", "ahead_volume"]].to_string(index=False))
 print()

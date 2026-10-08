@@ -5,9 +5,9 @@ Three concerns, kept together because they share the matched-book /
 diff-feed distinction:
 
 * **Classification** — each format declares a :class:`FeedType`.
-* **Uncrossing** — ``order_book(uncross=True)`` (and the frame-level
-  :func:`uncross_book_sides`) evict crossed resting orders for display,
-  mirroring the depth engine; the default stays faithful.
+* **Uncrossing** — ``order_book(uncross=True)`` evicts crossed resting
+  orders for display, mirroring the depth engine; the default stays
+  faithful.
 * **Data quality** — :func:`data_quality_summary` measures crossing,
   unmatched trades, duplicate ids, and pre-existing orders, with a
   ``_faithful_best_series`` that (unlike ``depth_summary``) does not
@@ -39,7 +39,6 @@ from ob_analytics.analytics import (
     _faithful_best_series,
     order_book,
     set_order_types,
-    uncross_book_sides,
 )
 from ob_analytics.datasets import toy_events, toy_trades
 from ob_analytics.depth import price_level_volume
@@ -193,18 +192,6 @@ class TestUncrossOrderBook:
         book = order_book(_classified_toy(), uncross=False)
         assert book["bids"]["price"].max() == 99.0
         assert book["asks"]["price"].min() == 102.0
-
-    def test_uncross_book_sides_helper(self):
-        # The public frame-level helper matches order_book(uncross=True) and
-        # recomputes liquidity on the survivors.
-        book = order_book(crossed_events(), uncross=False)
-        bids, asks = uncross_book_sides(book["bids"], book["asks"])
-        if not bids.empty and not asks.empty:
-            assert bids["price"].max() < asks["price"].min()
-        if not asks.empty:
-            np.testing.assert_allclose(
-                asks["liquidity"].to_numpy(), asks["volume"].cumsum().to_numpy()
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -1041,34 +1028,22 @@ class TestStaleOrdersInSummary:
 
 
 # ---------------------------------------------------------------------------
-# prepare_book_snapshot_data(uncross=...)
+# prepare_book_snapshot_data draws the book it is given
 # ---------------------------------------------------------------------------
 
 
-class TestPrepareUncross:
-    def test_prepare_uncrosses_book(self):
+class TestPrepareDrawsTheGivenBook:
+    def test_prepare_keeps_an_uncrossed_book_uncrossed(self):
         from ob_analytics.visualization._data import prepare_book_snapshot_data
 
-        book = order_book(crossed_events(), uncross=False)
-        faithful = prepare_book_snapshot_data(book, uncross=False)
-        display = prepare_book_snapshot_data(book, uncross=True)
+        faithful = prepare_book_snapshot_data(
+            order_book(crossed_events(), uncross=False)
+        )
+        display = prepare_book_snapshot_data(order_book(crossed_events(), uncross=True))
         # Faithful stays crossed; the uncrossed view does not.
         assert faithful["bids"]["price"].max() > faithful["asks"]["price"].min()
         if not display["bids"].empty and not display["asks"].empty:
             assert display["bids"]["price"].max() < display["asks"]["price"].min()
-
-    def test_prepare_uncross_ignores_timeless_book(self):
-        from ob_analytics.visualization._data import prepare_book_snapshot_data
-
-        # A synthetic ndarray book carries no timestamp; uncross must no-op
-        # rather than raise.
-        book = {
-            "timestamp": _BASE.timestamp(),
-            "bids": np.array([[100.0, 2.0, 2.0]]),
-            "asks": np.array([[99.0, 2.0, 2.0]]),
-        }
-        out = prepare_book_snapshot_data(book, uncross=True)
-        assert not out["bids"].empty
 
 
 # ---------------------------------------------------------------------------

@@ -378,51 +378,6 @@ def order_lifecycles(events: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
-def uncross_book_sides(
-    bids: pd.DataFrame, asks: pd.DataFrame
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Evict crossed levels from two reconstructed book sides *for display*.
-
-    The frame-level counterpart of ``order_book(..., uncross=True)`` for
-    callers that already hold per-order book sides — e.g. the ``book_snapshot``
-    / ``depth_chart`` visualization prepares.  Both frames are returned
-    best-first (bids by descending price, asks by ascending price) with the
-    crossed best-end orders removed so ``best_bid < best_ask``; ``liquidity``
-    is recomputed when present and every other column is preserved.
-
-    Parameters
-    ----------
-    bids, asks : pandas.DataFrame
-        Per-order book sides carrying at least ``price`` and ``timestamp``
-        (as returned in :func:`order_book`'s ``"bids"`` / ``"asks"`` frames).
-
-    Returns
-    -------
-    tuple of (pandas.DataFrame, pandas.DataFrame)
-        The uncrossed ``(bids, asks)`` sides, best-first.
-    """
-    if not bids.empty:
-        bids = bids.sort_values("price", ascending=False, kind="stable")
-    if not asks.empty:
-        asks = asks.sort_values("price", ascending=True, kind="stable")
-    if bids.empty or asks.empty:
-        return bids, asks
-
-    n_bid, n_ask = engine.crossed_prefix_counts(
-        bids["price"].to_numpy(),
-        bids["timestamp"].to_numpy(),
-        asks["price"].to_numpy(),
-        asks["timestamp"].to_numpy(),
-    )
-    bids = bids.iloc[n_bid:]
-    asks = asks.iloc[n_ask:]
-    if "liquidity" in bids.columns:
-        bids = bids.assign(liquidity=bids["volume"].cumsum())
-    if "liquidity" in asks.columns:
-        asks = asks.assign(liquidity=asks["volume"].cumsum())
-    return bids, asks
-
-
 class OrderBookSnapshot(TypedDict):
     """The order book at one instant, as :func:`order_book` returns it.
 
@@ -449,8 +404,6 @@ def order_book(
     tp: datetime | None = None,
     max_levels: int | None = None,
     bps_range: int = 0,
-    min_bid: float = 0,
-    max_ask: float = np.inf,
     uncross: bool = False,
 ) -> OrderBookSnapshot:
     """Reconstruct the order book at a specific point in time.
@@ -470,15 +423,15 @@ def order_book(
         The maximum number of price levels to include for bids and asks.
     bps_range : int, optional
         Basis points range to filter the bids and asks. Default is 0.
-    min_bid : float, optional
-        Minimum bid price. Default is 0.
-    max_ask : float, optional
-        Maximum ask price. Default is infinity.
     uncross : bool, optional
         When ``True``, evict crossed resting orders so the snapshot satisfies
         ``best_bid < best_ask`` — a *display* convenience mirroring the depth
-        engine's crossed-level eviction. The default is ``False``: the
-        reconstruction stays **faithful** to the feed, so a diff feed's
+        engine's crossed-level eviction. At the crossed touch, the order
+        whose latest event is older goes first, and orders at one price are
+        walked in that order. This is the library's only way to uncross a
+        per-order book: to draw an uncrossed ``book_snapshot`` or
+        ``depth_chart``, pass the book it returns. The default is ``False``:
+        the reconstruction stays **faithful** to the feed, so a diff feed's
         genuinely crossed resting orders (see
         :class:`~ob_analytics.protocols.FeedType`) are replayed as-is rather
         than silently uncrossed. Has no effect on a matched-book feed, which is
@@ -491,6 +444,12 @@ def order_book(
         - 'timestamp': The evaluation timestamp.
         - 'asks': DataFrame of active ask orders.
         - 'bids': DataFrame of active bid orders.
+
+        Each order's ``price`` is the price it rests at: the price of its
+        latest ``created`` row, or of a later ``changed`` row with no fill.  A row that
+        reports a fill does not move the order, so ``price`` can differ from
+        the price on the order's latest row.  The depth table and the queue
+        tables place orders at the same price.
     """
     validate_columns(
         events,
@@ -502,6 +461,7 @@ def order_book(
             "type",
             "price",
             "volume",
+            "fill",
             "exchange_timestamp",
         },
         "order_book",

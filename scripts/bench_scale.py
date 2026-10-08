@@ -160,7 +160,7 @@ def _stages(
         state["events"] = order_aggressiveness(state["events"], state["depth_summary"])
 
     def _queue_positions() -> None:
-        queue_positions(to_order_events(state["events"]))
+        queue_positions(to_order_events(state["events"], market=True))
 
     steps = (
         _load,
