@@ -10,6 +10,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`load_result(path)` reads a saved run back as a `PipelineResult`** (#346).
+  It is the inverse of `save_data(result, path)`: the four tables come back,
+  and so does the run's `PipelineConfig`. `save_data` now takes the result
+  itself, and each Parquet file records the run's whole config under the new
+  key `ob_analytics_config`. A folder that records only the tick and lot size
+  (a windowed run, or one saved by an older version) gets those two, with the
+  display precision that shows one step of each; a folder of whole-number
+  prices or sizes that records neither is warned about. `load_result` reads
+  Parquet folders only, and refuses a pickle, which keeps no config. The key is
+  optional, so the schema version stays `4.0` and older readers ignore it.
+- **`ob_analytics.capture_record` owns a capture's `meta.json`** (#346).
+  `read_record(path)` returns a typed `CaptureRecord`: the source that made the
+  capture, its feed type, trade attribution, sequence kind and clocks, the
+  sequence restarts, and the instrument's tick size and lot size.
+  `read_instrument(path)` returns only the tick and lot size, as config fields.
+  `write_record` and `source_declarations` are what the capture runner and the
+  segment supervisor write it with. The module is outside `ob_analytics.live`,
+  so code that only replays files does not import the live package.
+- **A ccxt capture records the venue's size step as `lot_size`** (#346), from
+  ccxt's market data, beside the tick size. If a size arrives between two
+  steps, the capture makes the step finer until the size fits, as it does for
+  the tick, and counts the changes in `lot_size_changes`. The recorded lot is
+  never finer than 1e-8, the default grid.
+
+- **`audit` counts trades matched by order id** (#352). A new summary field,
+  `trades_matched_by_order`, counts the trades whose taker is an order created
+  with size 0. Bitstamp sends an instant order bought by quote amount that way
+  and never reports what it bought, so its trades are matched to it by its
+  order id, not by size. `audit` prints the count as `matched by order` and
+  reports it as information; it never fails a run. A feed that does not show
+  takers prints `not checked`. The bundled Bitstamp sample has 2.
+  `schemas.unsized_order_ids(events)` returns the ids of orders created with
+  size 0; the trade reader and `audit` both use it.
+
 - **A source can take an API key** (#239). A source declares each key it
   needs as a `SecretStr | None` field of its settings, marked with
   `Credential(env=..., issued_at=...)`. The settings read an unset key from
@@ -124,6 +158,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **`Pipeline.run` reads a capture's tick and lot size** (#346). Given a
+  capture folder or a file in one, `Pipeline.run` and `Pipeline.run_windows`
+  use the `tick_size` and `lot_size` in its `meta.json` when the config does
+  not set them. So `Pipeline.from_source("depth_csv").run(capture)` and
+  `ob-analytics process capture --source depth_csv` give the same result; the
+  first used to raise `ConfigError` on a capture with a 0.001 tick. A tick size
+  or lot size you set still wins, and a pipeline given its own loader or trade
+  source does not use the record.
+- **The `recorded_*` readers in `ob_analytics.depth_l2` are gone** (#346).
+  This can break code that imports them. Use
+  `ob_analytics.capture_record.read_record(path)` and its fields instead:
+  `recorded_tick_size(p)` is `read_record(p).tick_size`,
+  `recorded_sequence_kind(p)` is `read_record(p).sequence_kind`, and so on for
+  `source`, `feed_type`, `trade_attribution`, `clocks` and
+  `sequence_restarts`. A declaration with a value this version does not know
+  is now left out with a warning, where the old readers raised `ValueError`.
+- **Bar `turnover` is a float** (#346). It was the integer product of ticks and
+  lots on a pipeline result.
+
 - **The quote helpers in `trade_sign` changed** (#345). This can break code
   that called them directly:
   - `prevailing_mid` is the mid at an instant, the instant included, from the
@@ -186,7 +239,82 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `recorded_sequence_kind` returns `None` when a capture records no kind, as
   `recorded_feed_type` does, in place of taking a `default`.
 
+### Removed
+
+- **`analytics.uncross_book_sides`** (#342). It uncrossed a book a second way
+  and broke a tie at one price differently from `order_book(..., uncross=True)`,
+  so the book snapshot and the book replay could show different books for one
+  instant. `prepare.book_snapshot` loses its `uncross` option with it: it draws
+  the book it is given, so pass it `order_book(..., uncross=True)` for an
+  uncrossed ladder or depth chart.
+- **`order_book(min_bid=, max_ask=)`** (#342). Neither setting was ever
+  applied. Use `bps_range` or `max_levels`, or filter the returned frames.
+
 ### Fixed
+
+- **Every rebuild puts an order at one price** (#342). An order rests at the
+  price of its `created` row, and after that only a `changed` row with no
+  fill moves it. The depth table followed this rule, but the per-order book
+  (`order_book`) and the queue tables put an order at the price of its latest
+  row. Bitstamp reports a taker's fill at the price it traded at, so an order
+  that crossed and then rested showed at one price on the L2 faces and at
+  another on the L3 faces. The rule is now worked out in one place,
+  `_engine_frames.resting_price`, and `order_book`, `queue_positions`,
+  `queue_age_grid`, `price_level_volume`, the windowed run's carry and
+  `DatabentoWriter` all read it. An id that is cancelled and placed again now
+  rests at its new price in every rebuild; the depth table kept it at its
+  first price. A `changed` row with no fill and a new price (a Databento
+  modify) now moves the order to the back of its new queue in
+  `queue_positions` and `queue_age_grid`, as it already moved it in the depth
+  table. `queue_positions` reports the move as a `deleted` row at the old
+  price and a `created` row at the new one. `order_book`, `queue_positions`
+  and `queue_age_grid` now need the `fill` column, and the two queue
+  functions also need `type`: classify the events with `set_order_types`
+  first.
+- **The touch-queue faces leave market orders out** (#342). `queue_age_grid`
+  and `queue_positions` kept market orders, which never rest. A Bitstamp taker
+  is created at its limit and fills at other prices, so the grid added it and
+  never removed it. On the bundled sample one such order was the
+  `liquidity_at_touch` L3 bid queue from 02:36 to the end: the grid's touch
+  queue differed from the book at 184 of 200 bid samples and 173 of 200 ask
+  samples. It now matches the book at every sample. On the synthetic golden
+  session, `queue_positions` loses the 251 rows of its 92 market orders and no
+  other row changes.
+
+- **A saved run reloads with its own units** (#346). `ob-analytics gallery` and
+  `audit --from-parquet` rebuilt a saved run with the default lot size and
+  price decimals, so a LOBSTER or Databento run (lot size 1) showed every size
+  10^8 times too small, and a 0.001 tick was rounded to the cent. They now use
+  `load_result`.
+- **The L2 loaders warn about a size between two lots** (#346). Such a size is
+  rounded to the nearest lot, which is not the venue's size; the warning names
+  `lot_size`.
+- **A large price or size on its grid is no longer read as off it** (#346).
+  The grid test allowed a fixed 1e-6 of a step, but dividing a large value by
+  a small step misses a whole number by more: 1251.81488791 at a lot of 1e-8
+  is 125181488790.99998 lots. The allowance now grows with the number of steps.
+- **A size too large for `int64` lots is refused** (#346). Converting a size to
+  lots wrapped a level above about 9.2e10 units (at the default lot of 1e-8) to
+  a negative number, and the L2 loader then dropped the level. It now raises
+  `ConfigError` that names `lot_size`.
+- **Bar turnover and VWAP, and `trade_impacts`' VWAP, no longer wrap** (#346).
+  Price in ticks times size in lots passed `int64` on a busy day: four trades
+  of 4,000 BTC at 78,000.00 gave a negative turnover and VWAP. They are
+  computed as floats, as `amihud` already was.
+
+- **Every Bitstamp trade finds its taker** (#352). An instant order bought by
+  quote amount is created with size 0 and then shows 0 or one lot, never what
+  it bought. The trade reader matched a trade to a row only by its fill size,
+  so these trades had no taker and their orders were classed `unknown`. When
+  no row shows the trade's size and the taker is an order created with size
+  0, the reader now takes that order's `deleted` row, else its latest row.
+  Every other trade is still matched on size only: an order with no row of the
+  trade's size has lost a message, and the trade stays unmatched so
+  `unmatched_trades` reports it. On the bundled sample all 284 takers resolve
+  (282 before), and orders 2002354918830080 and 2002351232385027 are classed
+  `market`. As market orders they no longer rest in the price-level rebuild,
+  so `depth` and `depth_summary` lose their 4 rows (313,565 to 313,561),
+  including the one row whose best bid was a single lot from one of them.
 
 - **A trade is read against the quote it arrived into, everywhere** (#345).
   Lee–Ready read the quote stamped at the trade's own instant. On a feed whose
