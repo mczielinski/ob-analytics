@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 
 from loguru import logger
 
 
 @contextmanager
-def warnings_logged() -> Iterator[list[str]]:
+def warnings_logged() -> Generator[list[str]]:
     """Collect the messages logged at WARNING or above inside the block."""
     messages: list[str] = []
     # The package disables its own logger on import, as a library should.
