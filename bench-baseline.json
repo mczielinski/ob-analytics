@@ -5,85 +5,85 @@
       "run": "sample",
       "stage": "load",
       "events": 314057,
-      "seconds": 0.795823152999219,
-      "peak_rss_mib": 225.48046875
+      "seconds": 0.8228138369999982,
+      "peak_rss_mib": 248.12890625
     },
     {
       "run": "sample",
       "stage": "set_order_types",
       "events": 314057,
-      "seconds": 0.3255574139984674,
-      "peak_rss_mib": 270.44140625
+      "seconds": 0.31279784499999863,
+      "peak_rss_mib": 294.8671875
     },
     {
       "run": "sample",
       "stage": "price_level_volume",
       "events": 314057,
-      "seconds": 0.15168931800144492,
-      "peak_rss_mib": 270.44140625
+      "seconds": 0.26571327999999994,
+      "peak_rss_mib": 294.8671875
     },
     {
       "run": "sample",
       "stage": "depth_metrics",
       "events": 314057,
-      "seconds": 9.361631794999994,
-      "peak_rss_mib": 454.1640625
+      "seconds": 11.442627367000007,
+      "peak_rss_mib": 426.56640625
     },
     {
       "run": "sample",
       "stage": "order_aggressiveness",
       "events": 314057,
-      "seconds": 0.3368740000005346,
-      "peak_rss_mib": 469.98828125
+      "seconds": 0.14648251699999548,
+      "peak_rss_mib": 426.56640625
     },
     {
       "run": "sample",
       "stage": "queue_positions",
       "events": 314057,
-      "seconds": 0.8621788140007993,
-      "peak_rss_mib": 469.98828125
+      "seconds": 0.8173093370000117,
+      "peak_rss_mib": 461.82421875
     },
     {
       "run": "synth",
       "stage": "load",
       "events": 316634,
-      "seconds": 1.9582052490004571,
-      "peak_rss_mib": 371.015625
+      "seconds": 1.8394341470000057,
+      "peak_rss_mib": 395.18359375
     },
     {
       "run": "synth",
       "stage": "set_order_types",
       "events": 316634,
-      "seconds": 0.2655593070012401,
-      "peak_rss_mib": 371.015625
+      "seconds": 0.24630870800000082,
+      "peak_rss_mib": 395.18359375
     },
     {
       "run": "synth",
       "stage": "price_level_volume",
       "events": 316634,
-      "seconds": 0.13531786399835255,
-      "peak_rss_mib": 371.015625
+      "seconds": 0.2358129699999978,
+      "peak_rss_mib": 395.18359375
     },
     {
       "run": "synth",
       "stage": "depth_metrics",
       "events": 316634,
-      "seconds": 4.762051620004058,
-      "peak_rss_mib": 409.375
+      "seconds": 5.650794314999999,
+      "peak_rss_mib": 395.18359375
     },
     {
       "run": "synth",
       "stage": "order_aggressiveness",
       "events": 316634,
-      "seconds": 0.24407782400521683,
-      "peak_rss_mib": 409.375
+      "seconds": 0.11960998200000006,
+      "peak_rss_mib": 395.18359375
     },
     {
       "run": "synth",
       "stage": "queue_positions",
       "events": 316634,
-      "seconds": 2.829483772002277,
-      "peak_rss_mib": 409.375
+      "seconds": 3.532813372000007,
+      "peak_rss_mib": 395.18359375
     }
   ]
 }
