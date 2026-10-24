@@ -1432,10 +1432,10 @@ def _resting_rows(
     price = np.where(taker | joins, resting, events["price"].to_numpy())
 
     rows = events.assign(
-        price=price.astype(events["price"].dtype),
+        price=price,
         action=np.where(joins, "created", action),
         fill=np.where(joins, 0, fill),
-    )
+    ).astype({"price": events["price"].dtype})
     written_fill = np.where(taker, 0, fill)
     rows, written_fill, joins = rows[keep], written_fill[keep], joins[keep]
     # In time order, with each joining aggressor's rows at its instant after

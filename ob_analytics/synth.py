@@ -72,7 +72,6 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
-from ob_analytics._utils import UTC_NS_DTYPE
 from ob_analytics.analytics import set_order_types
 from ob_analytics.exceptions import ConfigError
 
@@ -687,7 +686,7 @@ class _Simulator:
         # back with ``utc=True`` yields the canonical tz-aware UTC ns clock.
         start_ns = self.cfg.start_time.value
         offsets = np.round(seconds * 1_000_000_000).astype(np.int64)
-        return pd.to_datetime(start_ns + offsets, utc=True).astype(UTC_NS_DTYPE)
+        return pd.to_datetime(start_ns + offsets, utc=True).as_unit("ns")
 
     def _build_events_frame(self) -> pd.DataFrame:
         rows = self.events

@@ -443,6 +443,8 @@ def hidden_trades(
     # canonical schema carries integer ticks, but a caller already holding
     # display-unit floats (or any other future price representation) gets its
     # own dtype back, not a silently truncated one.
-    out["best_bid_price"] = bid[inside].astype(depth_summary["best_bid_price"].dtype)
-    out["best_ask_price"] = ask[inside].astype(depth_summary["best_ask_price"].dtype)
-    return out
+    out["best_bid_price"] = bid[inside]
+    out["best_ask_price"] = ask[inside]
+    return out.astype(
+        depth_summary[["best_bid_price", "best_ask_price"]].dtypes.to_dict()
+    )
