@@ -46,7 +46,7 @@ class Registry(Generic[K, V]):
     def list(self) -> builtins.list[K]:
         """Return registered keys, sorted when orderable."""
         try:
-            return sorted(self._items)
+            return sorted(self._items)  # ty: ignore[invalid-argument-type] -- unorderable keys fall through to the except
         except TypeError:
             return list(self._items)
 
