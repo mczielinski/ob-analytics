@@ -9,10 +9,12 @@
 # with `record` set, download the bench-baseline artifact, and commit it. The
 # script prints which machine a baseline came from whenever it is not this one.
 #
-# The runner image is pinned rather than ubuntu-latest. The machine name the
-# script records does not include the OS release, and peak memory moved by
-# about 40 MiB when ubuntu-latest went from 24.04 to 26.04. Change the image
-# and record a new baseline in the same pull request.
+# The runner image is pinned rather than ubuntu-latest. Peak memory moved by
+# about 40 MiB when ubuntu-latest went from 24.04 to 26.04, so an image change
+# must not arrive unannounced. The machine name the script records includes
+# the OS release (for example ubuntu-24.04), so a baseline from another image
+# is reported, but the report does not fail the job. Change the image and
+# record a new baseline in the same pull request.
 #
 # Its own job rather than a step in the test matrix: a timed run should not
 # share a runner with anything else, and it takes a couple of minutes.
