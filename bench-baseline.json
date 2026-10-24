@@ -1,5 +1,5 @@
 {
-  "machine": "Linux x86_64 python3.11",
+  "machine": "Linux x86_64 ubuntu-24.04 python3.11",
   "measurements": [
     {
       "run": "sample",
