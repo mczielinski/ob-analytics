@@ -80,7 +80,6 @@ from ob_analytics.schemas import (
     EVENT_DTYPES,
     TRADE_DTYPES,
     TRADE_SIDE_DTYPE,
-    UTC_NS_DTYPE,
     cast_columns,
 )
 
