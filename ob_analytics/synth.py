@@ -74,6 +74,15 @@ import pandas as pd
 
 from ob_analytics.analytics import set_order_types
 from ob_analytics.exceptions import ConfigError
+from ob_analytics.schemas import (
+    ACTION_DTYPE,
+    BOOK_SIDE_DTYPE,
+    EVENT_DTYPES,
+    TRADE_DTYPES,
+    TRADE_SIDE_DTYPE,
+    UTC_NS_DTYPE,
+    cast_columns,
+)
 
 __all__ = [
     "SynthConfig",
@@ -706,7 +715,7 @@ class _Simulator:
         # quote-currency and base-asset float.
         price = ticks
 
-        return pd.DataFrame(
+        events = pd.DataFrame(
             {
                 "event_id": event_id,
                 "id": order_id,
@@ -714,19 +723,16 @@ class _Simulator:
                 "exchange_timestamp": timestamp.copy(),
                 "price": price,
                 "volume": volume,
-                "action": pd.Categorical(
-                    actions,
-                    categories=["created", "changed", "deleted"],
-                    ordered=True,
-                ),
-                "direction": pd.Categorical(
-                    directions, categories=["bid", "ask"], ordered=True
-                ),
+                # Built as categoricals of the map's dtypes, so the cast below
+                # does not first materialise a column of strings.
+                "action": pd.Categorical(actions, dtype=ACTION_DTYPE),
+                "direction": pd.Categorical(directions, dtype=BOOK_SIDE_DTYPE),
                 "fill": fill,
                 "original_number": event_id.copy(),
                 "raw_event_type": pd.NA,
             }
         )
+        return cast_columns(events, EVENT_DTYPES)
 
     def _build_trades_frame(self) -> pd.DataFrame:
         rows = self.trades
@@ -743,14 +749,12 @@ class _Simulator:
         # Integer tick counts are the canonical price storage (issue #155).
         price = ticks
 
-        return pd.DataFrame(
+        trades = pd.DataFrame(
             {
                 "timestamp": self._timestamps(seconds),
                 "price": price,
                 "volume": volume,
-                "direction": pd.Categorical(
-                    sides, categories=["buy", "sell"], ordered=True
-                ),
+                "direction": pd.Categorical(sides, dtype=TRADE_SIDE_DTYPE),
                 "maker_event_id": maker_eid,
                 "taker_event_id": taker_eid,
                 "maker": maker,
@@ -761,6 +765,7 @@ class _Simulator:
                 "taker_og": taker_eid.copy(),
             }
         )
+        return cast_columns(trades, TRADE_DTYPES)
 
 
 class SyntheticLoader:

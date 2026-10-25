@@ -179,9 +179,15 @@ def test_demo_fingerprints(demo_result):
     # 310552 (that lot leaving).  The depth_summary row for 310551 was the one
     # whose best bid was that 1 lot, locked against the ask.  Every other row
     # of both tables is identical.
+    # 2026-10-24 (#351, one dtype map): every trade reader casts its output
+    # through `schemas.TRADE_DTYPES`.  `trades` moves in dtypes only:
+    # `maker_event_id` and `taker_event_id` go from object to nullable `Int64`,
+    # `maker_og` and `taker_og` from int64 to `Int64`, and `maker` / `taker`
+    # from int64 to object.  None of the six holds a null on this sample, and
+    # cast back to the old dtypes the frame hashes to the old digest.
     EXPECTED: dict[str, str] = {
         "events": "528cfc201d72a71cbc9c8df330f02835953f5feef8bb5b67573da0cbcf6532a1",
-        "trades": "41231911669fec9ca13a769e790a242d91f10680615bf89ac788b95ddc518336",
+        "trades": "f90ec605bfafe32c1a06cf3d97ee2ade9a5d418a2198af65b1a640ee0dfdf31d",
         "depth": "f2ddbca30f48004b352fb230e086b66fcb372de840fa87b1289439f1803a5cec",
         "depth_summary": "166f9cd65f19aa70181d9da92c8df3d909acdbd8e8e364aa57a2041756486a21",
     }

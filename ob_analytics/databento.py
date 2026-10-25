@@ -120,7 +120,12 @@ from ob_analytics.protocols import (
     TradeAttribution,
     TradeSource,
 )
-from ob_analytics.schemas import SEQUENCE_COLUMN, attach_instrument_identity
+from ob_analytics.schemas import (
+    SEQUENCE_COLUMN,
+    TRADE_DTYPES,
+    attach_instrument_identity,
+    cast_columns,
+)
 
 # ── DBN constants ─────────────────────────────────────────────────────
 #
@@ -1141,7 +1146,10 @@ class DatabentoTradeReader:
                 "taker_og": pd.array([pd.NA] * n, dtype="object"),
             }
         )
-        trades = trades.sort_values("timestamp", kind="stable").reset_index(drop=True)
+        trades = cast_columns(
+            trades.sort_values("timestamp", kind="stable").reset_index(drop=True),
+            TRADE_DTYPES,
+        )
 
         logger.info(
             "DatabentoTradeReader: {} trades from {} records ({} with a maker event)",
