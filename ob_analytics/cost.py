@@ -55,7 +55,7 @@ import numpy as np
 import pandas as pd
 from pandas.api.typing import DataFrameGroupBy
 
-from ob_analytics._utils import validate_columns, validate_non_empty
+from ob_analytics._utils import validate_columns, validate_non_empty, window_start
 from ob_analytics.trade_sign import mid_before, prevailing_mid, resolve_direction
 
 #: Basis points in one, the scale every ``_bps`` column is written on.
@@ -394,8 +394,9 @@ def amihud(trades: pd.DataFrame, *, window: str | None = None) -> pd.DataFrame:
     trades : pandas.DataFrame
         Trades with ``timestamp``, ``price`` and ``volume``.
     window : str or None, optional
-        Pandas offset string for the window, e.g. ``"5min"``.  ``None``
-        (default) measures the whole session as a single window and returns
+        Length of each window, a fixed duration such as ``"5min"``; windows
+        count from the Unix epoch, as time bars do.  ``None`` (default)
+        measures the whole session as a single window and returns
         one row.
 
     Returns
@@ -409,7 +410,8 @@ def amihud(trades: pd.DataFrame, *, window: str | None = None) -> pd.DataFrame:
     Raises
     ------
     ConfigError
-        If a required column is missing.
+        If a required column is missing, or *window* is not a fixed
+        duration.
     ObAnalyticsError
         If *trades* is empty.
     """
@@ -422,13 +424,13 @@ def amihud(trades: pd.DataFrame, *, window: str | None = None) -> pd.DataFrame:
     )
     df = df.assign(_turnover=turnover)
 
-    grouped = _by_window(df, window).agg(
+    grouped = _by_window(df, window, "amihud").agg(
         first_price=("price", "first"),
         last_price=("price", "last"),
         turnover=("_turnover", "sum"),
         n_trades=("price", "size"),
     )
-    grouped = grouped[grouped["n_trades"] > 0].reset_index()
+    grouped = grouped.reset_index()
 
     first = grouped["first_price"].to_numpy(dtype=np.float64)
     last = grouped["last_price"].to_numpy(dtype=np.float64)
@@ -490,8 +492,9 @@ def roll_spread(trades: pd.DataFrame, *, window: str | None = None) -> pd.DataFr
     trades : pandas.DataFrame
         Trades with ``timestamp`` and ``price``, chronological or not.
     window : str or None, optional
-        Pandas offset string for the window, e.g. ``"5min"``.  ``None``
-        (default) estimates over the whole session and returns one row.
+        Length of each window, a fixed duration such as ``"5min"``; windows
+        count from the Unix epoch, as time bars do.  ``None`` (default)
+        estimates over the whole session and returns one row.
 
     Returns
     -------
@@ -508,7 +511,8 @@ def roll_spread(trades: pd.DataFrame, *, window: str | None = None) -> pd.DataFr
     Raises
     ------
     ConfigError
-        If a required column is missing.
+        If a required column is missing, or *window* is not a fixed
+        duration.
     ObAnalyticsError
         If *trades* is empty.
     """
@@ -518,8 +522,7 @@ def roll_spread(trades: pd.DataFrame, *, window: str | None = None) -> pd.DataFr
     df = trades.sort_values("timestamp", kind="stable")
     rows = [
         _roll_window(start, group["price"].to_numpy(dtype=np.float64))
-        for start, group in _by_window(df, window)
-        if len(group) > 0
+        for start, group in _by_window(df, window, "roll_spread")
     ]
     return pd.DataFrame(
         rows,
@@ -535,17 +538,18 @@ def roll_spread(trades: pd.DataFrame, *, window: str | None = None) -> pd.DataFr
     )
 
 
-def _by_window(df: pd.DataFrame, window: str | None) -> DataFrameGroupBy:
+def _by_window(df: pd.DataFrame, window: str | None, context: str) -> DataFrameGroupBy:
     """Group *df* by *window*, or into a single whole-session group.
 
     A ``None`` window groups on the first timestamp, so the session case is
     one group keyed the same way a window is — the caller's aggregation and
-    column layout then do not branch on it.
+    column layout then do not branch on it.  Either way every group holds at
+    least one trade.
     """
     if window is None:
         key = pd.Series(df["timestamp"].iloc[0], index=df.index, name="timestamp")
         return df.groupby(key)
-    return df.groupby(pd.Grouper(key="timestamp", freq=window))
+    return df.groupby(window_start(df["timestamp"], window, f"{context}: window"))
 
 
 def _roll_window(start: pd.Timestamp, prices: np.ndarray) -> dict:

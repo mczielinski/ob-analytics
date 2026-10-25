@@ -32,7 +32,13 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from ob_analytics._utils import validate_columns, validate_non_empty
+from ob_analytics._utils import (
+    fixed_window,
+    validate_columns,
+    validate_non_empty,
+    window_start,
+)
+from ob_analytics.bars import bars
 from ob_analytics.trade_sign import (
     bulk_volume_classification,
     check_bucket_count,
@@ -480,7 +486,10 @@ def compute_kyle_lambda(
         :func:`~ob_analytics.trade_sign.classify_trade_sign`).  Individual
         rows the venue left blank are filled with the tick rule.
     window : str, optional
-        Pandas frequency string for grouping trades.  Default ``"5min"``.
+        Length of each regression window, a fixed duration such as ``"30s"``
+        or ``"5min"``.  Default ``"5min"``.  Windows are the time bars of
+        :func:`~ob_analytics.bars.bars`: they count from the Unix epoch, and a
+        window in which nothing traded is left out.
     n_boot : int, optional
         Number of bootstrap resamples for the confidence interval.  Default
         1000; ``0`` skips the interval.  Each resample draws blocks of
@@ -506,7 +515,8 @@ def compute_kyle_lambda(
     Raises
     ------
     ConfigError
-        If required columns are missing.
+        If required columns are missing, or *window* is not a fixed
+        duration.
     ObAnalyticsError
         If *trades* is empty.
     ValueError
@@ -522,26 +532,22 @@ def compute_kyle_lambda(
         raise ValueError(f"ci_level must be between 0 and 1, got {ci_level}")
     if n_boot < 0:
         raise ValueError(f"n_boot must not be negative, got {n_boot}")
+    step = fixed_window(window, "compute_kyle_lambda: window")
 
     # `direction` is required here, but a column being present does not make
     # every row in it usable: the signed volume below reads it as == "buy" and
     # takes the rest as a sell, so a blank would be counted on the wrong side
     # rather than skipped.  resolve_direction infers those rows instead.
     trades = resolve_direction(trades, None, None, "compute_kyle_lambda")
-    df = trades.sort_values("timestamp").copy()
-    df["signed_volume"] = df["volume"].where(df["direction"] == "buy", -df["volume"])
-
-    # Group by time window
-    grouped = df.groupby(pd.Grouper(key="timestamp", freq=window))
-    rows = []
-    for ts, group in grouped:
-        if group.empty:
-            continue
-        dp = group["price"].iloc[-1] - group["price"].iloc[0]
-        sv = group["signed_volume"].sum()
-        rows.append({"timestamp": ts, "delta_price": dp, "signed_volume": sv})
-
-    reg_df = pd.DataFrame(rows)
+    # One time bar per window: ΔPrice is the bar's close minus its open.
+    windows = bars(trades, "time", step)
+    reg_df = pd.DataFrame(
+        {
+            "timestamp": window_start(windows["timestamp_start"], step),
+            "delta_price": windows["close"] - windows["open"],
+            "signed_volume": windows["signed_volume"],
+        }
+    )
 
     def _nan_result(n: int) -> KyleLambdaResult:
         return KyleLambdaResult(
@@ -663,15 +669,20 @@ def order_flow_imbalance(
     has no ``direction``, it is inferred with a per-trade trade-sign
     classifier (see *sign_method*).
 
+    Each window is one time bar of :func:`~ob_analytics.bars.bars`, so
+    ``ofi`` is that bar's ``signed_volume / volume``.  Windows count from the
+    Unix epoch, and a window in which nothing traded is left out.  A window
+    whose trades all have zero size is kept, with ``ofi`` set to ``NaN``.
+
     Parameters
     ----------
     trades : pandas.DataFrame
-        Trades with ``timestamp`` and ``volume``.  A ``direction`` column
-        (``"buy"`` / ``"sell"``) is used when present; otherwise it is
-        inferred — see *sign_method* (which additionally requires
-        ``price``).
+        Trades with ``timestamp``, ``price`` and ``volume``.  A ``direction``
+        column (``"buy"`` / ``"sell"``) is used when present; otherwise it is
+        inferred — see *sign_method*.
     window : str, optional
-        Pandas frequency string.  Default ``"1min"``.
+        Length of each window, a fixed duration such as ``"7s"`` or
+        ``"1min"``.  Default ``"1min"``.
     sign_method : str, optional
         How to obtain the buy/sell split when there is no native
         ``direction``.  ``None`` (default) uses an existing ``direction`` if
@@ -687,36 +698,47 @@ def order_flow_imbalance(
     Returns
     -------
     pandas.DataFrame
-        Columns: ``timestamp``, ``buy_volume``, ``sell_volume``,
-        ``net_volume``, ``ofi``.
+        Columns: ``timestamp`` (the start of the window), ``buy_volume``,
+        ``sell_volume``, ``net_volume``, ``ofi``.
 
     Raises
     ------
     ConfigError
-        If required columns are missing.
+        If required columns are missing, or *window* is not a fixed
+        duration.
     ObAnalyticsError
         If *trades* is empty.
     """
-    validate_columns(trades, {"timestamp", "volume"}, "order_flow_imbalance")
+    return _ofi_windows(trades, window, sign_method, quotes)[0]
+
+
+def _ofi_windows(
+    trades: pd.DataFrame,
+    window: str,
+    sign_method: str | None,
+    quotes: pd.DataFrame | None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Return the :func:`order_flow_imbalance` table and the time bars it came from.
+
+    The two frames share a row order, so a caller that needs more of each
+    window (its closing price, say) reads it from the bars.
+    """
+    validate_columns(trades, {"timestamp", "price", "volume"}, "order_flow_imbalance")
     validate_non_empty(trades, "order_flow_imbalance")
+    step = fixed_window(window, "order_flow_imbalance: window")
 
     trades = resolve_direction(trades, sign_method, quotes, "order_flow_imbalance")
-    df = trades.sort_values("timestamp").copy()
-    df["buy_vol"] = df["volume"].where(df["direction"] == "buy", 0.0)
-    df["sell_vol"] = df["volume"].where(df["direction"] != "buy", 0.0)
-
-    grouped = df.groupby(pd.Grouper(key="timestamp", freq=window)).agg(
-        buy_volume=("buy_vol", "sum"),
-        sell_volume=("sell_vol", "sum"),
+    windows = bars(trades, "time", step)
+    out = pd.DataFrame(
+        {
+            "timestamp": window_start(windows["timestamp_start"], step),
+            "buy_volume": windows["buy_volume"],
+            "sell_volume": windows["sell_volume"],
+            "net_volume": windows["signed_volume"],
+        }
     )
-    grouped = grouped[(grouped["buy_volume"] > 0) | (grouped["sell_volume"] > 0)]
-    grouped = grouped.reset_index()
-
-    total = grouped["buy_volume"] + grouped["sell_volume"]
-    grouped["net_volume"] = grouped["buy_volume"] - grouped["sell_volume"]
-    grouped["ofi"] = grouped["net_volume"] / total.replace(0, np.nan)
-
-    return grouped
+    out["ofi"] = out["net_volume"] / windows["volume"].replace(0, np.nan)
+    return out, windows
 
 
 #: Trailing horizons :func:`ofi_by_horizon` measures by default, shortest first.
@@ -744,11 +766,13 @@ def ofi_by_horizon(
         Trades with ``timestamp`` and ``volume``.  A ``direction`` column is
         used when present; otherwise it is inferred — see *sign_method*.
     horizons : tuple of str, optional
-        Pandas offset strings, one per horizon.  Each is rounded to a whole
-        number of *grid* steps, with a minimum of one.  Default
+        Fixed durations, one per horizon.  Each is rounded to a whole number
+        of *grid* steps, with a minimum of one.  Default
         :data:`OFI_HORIZONS`.
     grid : str, optional
-        Pandas offset string for the time grid.  Default ``"5s"``.
+        Step of the time grid, a fixed duration.  Default ``"5s"``.  Grid
+        steps count from the Unix epoch, as the windows of
+        :func:`order_flow_imbalance` do.
     sign_method, quotes : optional
         How to obtain the buy/sell split, as for :func:`order_flow_imbalance`.
 
@@ -762,7 +786,8 @@ def ofi_by_horizon(
     Raises
     ------
     ConfigError
-        If required columns are missing.
+        If required columns are missing, or *grid* or a horizon is not a
+        fixed duration.
     ObAnalyticsError
         If *trades* is empty.
     """
@@ -770,13 +795,14 @@ def ofi_by_horizon(
     validate_non_empty(trades, "ofi_by_horizon")
     trades = resolve_direction(trades, sign_method, quotes, "ofi_by_horizon")
 
-    step = pd.Timedelta(grid)
+    step = fixed_window(grid, "ofi_by_horizon: grid")
     timestamps = trades["timestamp"]
-    index = pd.date_range(
-        timestamps.min().floor(grid), timestamps.max().ceil(grid), freq=grid
-    )
     # Signed volume binned onto the fine grid, then trailing-summed per horizon.
-    floored = timestamps.dt.floor(grid)
+    floored = window_start(timestamps, step)
+    # The grid runs to the step at or after the last trade.
+    last = floored.max()
+    end = last if timestamps.max() == last else last + step
+    index = pd.date_range(floored.min(), end, freq=step)
     is_buy = trades["direction"] == "buy"
     volume = trades["volume"]
     buy = (
@@ -788,7 +814,8 @@ def ofi_by_horizon(
 
     out = pd.DataFrame({"timestamp": index})
     for horizon in horizons:
-        k = max(round(pd.Timedelta(horizon).total_seconds() / step.total_seconds()), 1)
+        length = fixed_window(horizon, "ofi_by_horizon: horizon")
+        k = max(round(length / step), 1)
         b = buy.rolling(k, min_periods=1).sum()
         s = sell.rolling(k, min_periods=1).sum()
         total = (b + s).replace(0.0, np.nan)

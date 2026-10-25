@@ -42,10 +42,10 @@ from ob_analytics.depth import get_spread
 from ob_analytics.flow_toxicity import (
     OFI_HORIZONS,
     KyleLambdaResult,
+    _ofi_windows,
     compute_kyle_lambda,
     compute_vpin,
     ofi_by_horizon,
-    order_flow_imbalance,
 )
 from ob_analytics.protocols import Level, Metric
 
@@ -305,15 +305,9 @@ class OrderFlowImbalanceMetric:
         sign_method: str | None = None,
     ) -> pd.DataFrame:
         """Return the per-window table; the settings are ``order_flow_imbalance``'s."""
-        trades = result.trades
-        frame = order_flow_imbalance(trades, window=window, sign_method=sign_method)
-        in_time_order = trades.sort_values("timestamp", kind="stable")
-        last = in_time_order.groupby(pd.Grouper(key="timestamp", freq=window))[
-            "price"
-        ].last()
-        return frame.merge(
-            last.rename("last_price"), left_on="timestamp", right_index=True, how="left"
-        )
+        # The same time bars that cut the windows give each one's last price.
+        frame, windows = _ofi_windows(result.trades, window, sign_method, None)
+        return frame.assign(last_price=windows["close"])
 
     def prepare(self, frame: pd.DataFrame) -> dict[str, Any]:
         """Payload for the bars, with the window prices as the price line."""
