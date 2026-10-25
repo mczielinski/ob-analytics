@@ -646,11 +646,6 @@ class Pipeline:
         are a small part of a run's memory; ``depth_summary`` alone is more
         than twice the size of ``events``.
 
-        Where the loader already warns that the depth is off (a Databento
-        modify that carries a fill and also moves the order), the carried order
-        goes onto its new price level, so the windowed depth can differ from a
-        single run's by the same amount.
-
         A source's own depth is not used.  LOBSTER's order book file states the
         book after each message of the whole session, so it cannot be cut; a
         windowed LOBSTER run rebuilds its depth from the messages instead.
