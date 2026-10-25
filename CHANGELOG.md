@@ -282,6 +282,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Removed
 
+- **The "check" category for hidden trades** (#343). It worked around the
+  depth summary dropping crossed levels, which is fixed.
+  `prepare.hidden_liquidity_overlay` no longer takes `events` (call it as
+  `hidden_liquidity_overlay(icebergs, slices, hidden)`), its output loses the
+  `category` column, and `Palette` loses `check_trade`.
+
 - **`analytics.uncross_book_sides`** (#342). It uncrossed a book a second way
   and broke a tie at one price differently from `order_book(..., uncross=True)`,
   so the book snapshot and the book replay could show different books for one
@@ -292,6 +298,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   applied. Use `bps_range` or `max_levels`, or filter the returned frames.
 
 ### Fixed
+
+- **The depth summary keeps crossed price levels** (#343). When a new quote
+  crossed a level on the other side, `PriceLevelBook` deleted that level for
+  good, so the depth summary lost it for the rest of the run while the depth
+  table kept it. It now keeps every level, as the depth table does, and leaves
+  crossed levels out only of the touch it reports, by the rule of
+  `order_book(..., uncross=True)`: the level updated less recently is left
+  out until the newer quote leaves. A locked touch is uncrossed the same way.
+  `PriceLevelBook.quoted_bids()` and `quoted_asks()` give the levels the touch
+  is read from; the depth summary, `price_level_snapshots` and `LobsterWriter`
+  read them. On the bundled Bitstamp sample the summary's touch now matches
+  `order_book(uncross=True)` at 299 of 300 sampled instants on each side
+  (241 and 165 before), no row is locked (53,498 before), `hidden_trades`
+  flags 0 trades where it flagged 29 that all had a visible maker, and 48
+  trades have a negative effective spread (73 before). A matched book
+  (LOBSTER, Databento) is never crossed and does not change. `depth_metrics`
+  is also faster: 9.35 s against 11.44 s on the sample.
 
 - **The empty `events` and `trades` tables have a loader's dtypes** (#351).
   The empty `events` table of an L2 run had `volume` and `fill` as `float64`
