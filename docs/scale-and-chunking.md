@@ -220,7 +220,8 @@ window ended with:
   one nanosecond before the window starts. The price-level rebuild then changes
   each level from its right size. These rows are not written out.
 - The depth summary keeps one engine for the whole run, so its book, including
-  the crossed levels it has removed, carries on into the next window.
+  which crossed levels it leaves out of the touch, carries on into the next
+  window.
 - Order types and trade signs are decided once, over the whole input, as in a
   single run.
 

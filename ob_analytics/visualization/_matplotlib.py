@@ -287,19 +287,7 @@ def _volume_norm(volume: pd.Series, col_bias: float) -> mcolors.Normalize:
 
 _ICEBERG_CONFIDENCE_ALPHA = {"low": 0.35, "medium": 0.6, "high": 0.9}
 
-# "color" names a Palette field.
-_HIDDEN_TRADE_STYLE = {
-    "hidden": {
-        "marker": "*",
-        "color": "hidden_trade",
-        "label": "Hidden-order trade",
-    },
-    "check": {
-        "marker": "*",
-        "color": "check_trade",
-        "label": "Trade to check (maker not confirmed hidden)",
-    },
-}
+_HIDDEN_TRADE_LABEL = "Hidden-order trade"
 
 
 def _draw_iceberg_overlay(
@@ -372,11 +360,7 @@ def _draw_hidden_trades_overlay(
     """Draw trades ``hidden_trades()`` flagged as printing inside the spread.
 
     An I-beam runs from the standing best bid to the standing best ask, with
-    the trade print marked between them. Style splits on ``category``:
-    ``"hidden"`` (the maker order was genuinely unseen) vs ``"check"`` (the
-    maker order was visible, or its identity did not resolve -- a diff feed's
-    stale depth summary, see PR #271, is one cause -- so this is a trade to
-    verify, not a confirmed hidden order).
+    the trade print marked between them.
     """
     if hidden is None or hidden.empty:
         return False
@@ -390,42 +374,35 @@ def _draw_hidden_trades_overlay(
         alpha=0.5,
         zorder=3,
     )
-    for category, style in _HIDDEN_TRADE_STYLE.items():
-        sub = hidden[hidden["category"] == category]
-        if sub.empty:
-            continue
-        ax.scatter(
-            mdates.date2num(sub["timestamp"]),
-            sub["price"],
-            marker=style["marker"],
-            s=50,
-            color=getattr(pal, style["color"]),
-            edgecolors="black",
-            linewidths=0.4,
-            zorder=6,
-        )
+    ax.scatter(
+        x,
+        hidden["price"],
+        marker="*",
+        s=50,
+        color=pal.hidden_trade,
+        edgecolors="black",
+        linewidths=0.4,
+        zorder=6,
+    )
     return True
 
 
 def _hidden_trade_legend_handles(
     hidden: pd.DataFrame | None, pal: Palette
 ) -> list[Line2D]:
-    if hidden is None:
+    if hidden is None or hidden.empty:
         return []
-    present = set(hidden["category"].unique())
     return [
         Line2D(
             [0],
             [0],
-            marker=style["marker"],
+            marker="*",
             linestyle="none",
-            markerfacecolor=getattr(pal, style["color"]),
+            markerfacecolor=pal.hidden_trade,
             markeredgecolor="black",
             markersize=8,
-            label=style["label"],
+            label=_HIDDEN_TRADE_LABEL,
         )
-        for category, style in _HIDDEN_TRADE_STYLE.items()
-        if category in present
     ]
 
 

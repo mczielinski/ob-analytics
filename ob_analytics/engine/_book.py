@@ -64,8 +64,9 @@ def crossed_prefix_counts(
     *bid_prices* descend from the best bid, *ask_prices* ascend from the best
     ask, each paired with its order timestamp.  Walks the touch: while the top
     bid is priced at or above the top ask (crossed, or locked when equal), evict
-    the older of the two touching orders — the static-snapshot analogue of
-    :class:`~ob_analytics.depth.DepthMetricsEngine` trusting the fresher quote.
+    the older of the two touching orders, so the fresher quote is trusted.
+    :class:`~ob_analytics.depth.PriceLevelBook` applies the same rule to price
+    levels, which is how the depth summary uncrosses its touch.
     The evicted orders are exactly the contiguous best-end prefixes, so the two
     returned counts describe the eviction completely.
     """
@@ -186,7 +187,7 @@ def _resting_rows(events: OrderEvents, at: int) -> np.ndarray:
 def _uncross_rows(events: OrderEvents, resting: np.ndarray) -> np.ndarray:
     """Drop crossed resting orders so the snapshot satisfies ``best_bid < best_ask``.
 
-    Static-snapshot mirror of the depth engine's crossed-level eviction: at the
+    The rule the depth summary uncrosses its touch with, order by order: at the
     crossed or locked touch, keep the fresher quote and evict the older opposing
     order, repeating until the book is uncrossed.  Recency uses the receive
     clock, the same one the depth engine processes in.  Orders at one price
@@ -257,8 +258,8 @@ def book_state(events: OrderEvents, *, at: int, uncross: bool = False) -> BookSt
         (UTC).  Events after it are ignored.
     uncross : bool
         When ``True``, evict crossed resting orders so the snapshot satisfies
-        ``best_bid < best_ask`` — a *display* convenience mirroring the depth
-        engine's crossed-level eviction.  The default is ``False``: the
+        ``best_bid < best_ask`` — a *display* convenience, by the rule the
+        depth summary uncrosses its touch with.  The default is ``False``: the
         reconstruction stays **faithful** to the feed, so a diff feed's
         genuinely crossed resting orders are replayed as they arrived rather
         than silently uncrossed.  It has no effect on a matched-book feed, which

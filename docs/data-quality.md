@@ -136,12 +136,13 @@ it gone takes the crossed share of session time from 91.6% to 1.3%.
 
 Stale orders distort the book that `order_book()` rebuilds, and everything
 read from it, such as the crossed share above. They reach the depth summary
-much less, because the depth engine already drops a level that a newer quote
-crosses. On the bundled sample, without the two stale orders the depth
-summary's best ask changes on 0.6% of rows, the transaction costs and the
-count of hidden trades do not change, and the table the
+much less, because the depth summary leaves a level out of its touch while a
+newer quote on the other side crosses it. On the bundled sample, without the
+two stale orders the depth summary's best ask changes on 0.5% of rows, the
+trades with a negative effective spread go from 48 to 45, no trade is flagged
+as hidden either way, and the table the
 [feature-table how-to](howto/feature-table.md) builds changes by a small
-amount on 14 of its 127 rows.
+amount on 19 of its 127 rows.
 
 `audit` reports stale orders as a warning and names the worst one: its id,
 side, price, and how long it held the touch after the trade. From Python,
@@ -178,7 +179,7 @@ The headline metrics:
 
 The crossing figure is measured from the **faithful** resting book (via
 [`price_level_volume`](api/depth.md)), *not* from `depth_summary` — the depth
-engine already evicts crossed levels, so it would always report ~0%. It is
+summary leaves crossed levels out of its touch, so it would always report ~0%. It is
 duration-weighted, so "crossed for 90 seconds out of a 10-minute capture"
 reads as ~15%, matching intuition.
 
@@ -204,9 +205,10 @@ fig = plot("book_snapshot", level="L3",
            **prepare.book_snapshot(order_book=display))
 ```
 
-Uncrossing mirrors the depth engine's crossed-level eviction: at the crossed
-(or locked) touch it **trusts the fresher quote** and evicts the older, stale
-opposing order, repeating until the sides no longer overlap. It never
+Uncrossing applies to orders the rule the depth summary applies to price
+levels: at the crossed (or locked) touch it **trusts the fresher quote** and
+evicts the older, stale opposing order, repeating until the sides no longer
+overlap. It never
 fabricates liquidity — it only removes orders — and it recomputes each side's
 cumulative depth against the surviving touch.
 

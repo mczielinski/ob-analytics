@@ -137,7 +137,7 @@ def test_demo_fingerprints(demo_result):
     # own event. The level at the end of each instant is unchanged on all
     # 209,536 (instant, level) pairs. (Sorting the replay alone, without the
     # running total, would have ended 3,112 of them on the wrong volume.)
-    # `depth_summary`: the crossed-level eviction depends on replay order, so
+    # `depth_summary`: the crossed-level eviction depended on replay order, so
     # the book at the end of an instant changes at 2,634 of 130,244 instants,
     # the best bid or ask at 2,453. `events` follows through
     # `aggressiveness_bps` (read with the time-order lookup above) on 28,898
@@ -185,11 +185,26 @@ def test_demo_fingerprints(demo_result):
     # `maker_og` and `taker_og` from int64 to `Int64`, and `maker` / `taker`
     # from int64 to object.  None of the six holds a null on this sample, and
     # cast back to the old dtypes the frame hashes to the old digest.
+    # 2026-10-24 (the depth summary keeps crossed levels, #343): when a quote
+    # crossed the other side, `PriceLevelBook` deleted the crossed levels for
+    # good, so a real level crossed by a stale quote never came back unless
+    # its own price was updated again.  It now keeps every level, as `depth`
+    # does, and leaves the crossed levels out of the touch only while they
+    # are crossed, by the rule of `order_book(..., uncross=True)`: the level
+    # updated less recently is left out, so a locked touch is uncrossed too.
+    # `depth_summary` changes on 177,799 of 313,561 rows: the best bid on
+    # 47,185, the best ask on 127,514.  Before, 53,498 rows were locked; now
+    # none is.  `events` follows through `aggressiveness_bps` on 30,156 of
+    # 314,057 rows.  `trades` and `depth` are unchanged.  Checked against the
+    # per-order rebuild: at 300 sampled instants, `order_book(...,
+    # uncross=True)` has the summary's best bid at 299 and best ask at 299,
+    # against 241 and 165 before.  `hidden_trades` now flags none of the 284
+    # trades, where it flagged 29 that all had a visible maker.
     EXPECTED: dict[str, str] = {
-        "events": "528cfc201d72a71cbc9c8df330f02835953f5feef8bb5b67573da0cbcf6532a1",
+        "events": "07a04f64b2b6d573682ff2da821da85d6ca37959d85b500970edf22aab10f1d2",
         "trades": "f90ec605bfafe32c1a06cf3d97ee2ade9a5d418a2198af65b1a640ee0dfdf31d",
         "depth": "f2ddbca30f48004b352fb230e086b66fcb372de840fa87b1289439f1803a5cec",
-        "depth_summary": "166f9cd65f19aa70181d9da92c8df3d909acdbd8e8e364aa57a2041756486a21",
+        "depth_summary": "e2c326fccb02f3af3c0cbf3a974b53c37292664fc8557c0f1759278b0e85df7d",
     }
     if EXPECTED:
         assert fps == EXPECTED

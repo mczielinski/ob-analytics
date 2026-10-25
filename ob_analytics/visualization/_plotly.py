@@ -1305,20 +1305,6 @@ def _plotly_lollipops(fig: Any, go: Any, side: Any, color: str, label: str) -> N
 
 _ICEBERG_CONFIDENCE_OPACITY = {"low": 0.35, "medium": 0.6, "high": 0.9}
 
-# "color" names a Palette field.
-_HIDDEN_TRADE_STYLE = {
-    "hidden": {
-        "symbol": "star",
-        "color": "hidden_trade",
-        "label": "Hidden-order trade",
-    },
-    "check": {
-        "symbol": "star-open",
-        "color": "check_trade",
-        "label": "Trade to check (maker not confirmed hidden)",
-    },
-}
-
 
 def _iceberg_chain_xy(group: Any) -> tuple[list, list]:
     """One ``None``-gapped polyline per iceberg within *group* (>=2 slices)."""
@@ -1385,11 +1371,7 @@ def _add_hidden_trades_overlay(
     """Add trades ``hidden_trades()`` flagged as printing inside the spread.
 
     An I-beam runs from the standing best bid to the standing best ask, with
-    the trade print marked between them. Style splits on ``category``:
-    ``"hidden"`` (the maker order was genuinely unseen) vs ``"check"`` (the
-    maker order was visible, or its identity did not resolve -- a diff feed's
-    stale depth summary, see PR #271, is one cause -- so this is a trade to
-    verify, not a confirmed hidden order).
+    the trade print marked between them.
     """
     if hidden is None or hidden.empty:
         return
@@ -1408,25 +1390,21 @@ def _add_hidden_trades_overlay(
             showlegend=False,
         )
     )
-    for category, style in _HIDDEN_TRADE_STYLE.items():
-        sub = hidden[hidden["category"] == category]
-        if sub.empty:
-            continue
-        fig.add_trace(
-            go.Scatter(
-                x=sub["timestamp"],
-                y=sub["price"],
-                mode="markers",
-                marker={
-                    "symbol": style["symbol"],
-                    "size": 10,
-                    "color": getattr(pal, style["color"]),
-                    "line": {"width": 1, "color": "black"},
-                },
-                name=style["label"],
-                hovertemplate="Price: %{y}<br>Time: %{x}<extra></extra>",
-            )
+    fig.add_trace(
+        go.Scatter(
+            x=hidden["timestamp"],
+            y=hidden["price"],
+            mode="markers",
+            marker={
+                "symbol": "star",
+                "size": 10,
+                "color": pal.hidden_trade,
+                "line": {"width": 1, "color": "black"},
+            },
+            name="Hidden-order trade",
+            hovertemplate="Price: %{y}<br>Time: %{x}<extra></extra>",
         )
+    )
 
 
 def _apply_padded_y_range(fig: Any, y_range: tuple[float, float] | None) -> None:

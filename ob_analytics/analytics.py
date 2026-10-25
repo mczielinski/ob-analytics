@@ -65,8 +65,9 @@ def _event_diff_bps(
     # tradeable price, and dividing by it yields a signed infinity that then
     # travels through every downstream mean.  The bundled Bitstamp snapshot
     # carries orders priced at zero (``audit`` reports them as
-    # ``nonpositive_price``), and the crossed-level eviction can leave one of
-    # them as the reported best, so this is reachable on real data.
+    # ``nonpositive_price``), and the depth summary can report one of them as
+    # the best when it is the more recently updated of two crossed levels, so
+    # this is reachable on real data.
     best = best.where(best > 0)
     diff_bps = 10000 * diff_price / best
     return pd.DataFrame({"event_id": merged["event_id"], "diff_bps": diff_bps})
@@ -430,8 +431,8 @@ def order_book(
         Basis points range to filter the bids and asks. Default is 0.
     uncross : bool, optional
         When ``True``, evict crossed resting orders so the snapshot satisfies
-        ``best_bid < best_ask`` — a *display* convenience mirroring the depth
-        engine's crossed-level eviction. At the crossed touch, the order
+        ``best_bid < best_ask`` — a *display* convenience, by the rule the
+        depth summary uncrosses its touch with. At the crossed touch, the order
         whose latest event is older goes first, and orders at one price are
         walked in that order. This is the library's only way to uncross a
         per-order book: to draw an uncrossed ``book_snapshot`` or
@@ -682,7 +683,7 @@ def _faithful_best_series(depth: pd.DataFrame) -> pd.DataFrame:
     Unlike ``depth_summary`` — which the depth engine already *uncrosses* —
     this reads the raw resting-book depth from
     :func:`~ob_analytics.depth.price_level_volume` and reports the touch
-    without eviction, so a diff feed's crossed intervals (``best_bid >
+    without uncrossing it, so a diff feed's crossed intervals (``best_bid >
     best_ask``) survive to be measured.  One chronological pass; each side
     keeps a lazy-deletion heap, so the running best is amortised ``O(log L)``.
 

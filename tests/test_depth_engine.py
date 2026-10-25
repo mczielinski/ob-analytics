@@ -24,75 +24,76 @@ def _depth(*rows):
 
 
 class TestCrossedBookGuards:
-    """Touching (equal-price) orders are kept; strictly-crossed stale levels are evicted.
+    """Every level is kept; the reported touch leaves out the older crossed level.
 
-    A resting bid and ask can coexist only when ``bid_price < ask_price``.  When a
-    fresh quote strictly crosses the opposing best, the *stale* opposing levels are
-    evicted (the fresh quote is trusted) rather than the fresh quote dropped.  This
-    keeps an orphaned best level (e.g. one whose delete event is missing from the
-    feed) from freezing the touch forever.  Equal-price ``touching`` levels are
-    still permitted (locks are tolerated, matching the original design).
+    A resting bid and ask can coexist only when ``bid_price < ask_price``.  When
+    a quote crosses or locks the other side, the book keeps both levels, as the
+    depth table does, and the touch it reports leaves out the one updated less
+    recently -- the rule of ``order_book(..., uncross=True)``.  So an orphaned
+    best level (one whose delete is missing from the feed) does not freeze the
+    touch, and a real level a stale quote crossed comes back once that quote
+    goes (#343).
     """
 
-    def test_ask_at_best_bid_is_processed(self):
-        """An ask at exactly the best bid should NOT be silently dropped."""
+    def test_ask_at_best_bid_is_kept_and_quoted(self):
+        """An ask at exactly the best bid is kept, and the older bid is not quoted."""
         engine = DepthMetricsEngine()
         out = np.zeros(engine._row_len)
 
-        # Set up: bid at 100
         engine.update_side(100, 5.0, 0, out)
         assert engine._best_bid == 100
 
-        # Ask at exactly 100 — with strict < guard, this IS processed
         engine.update_side(100, 3.0, 1, out)
         assert 100 in engine._ask_levels
+        assert 100 in engine._bid_levels
+        assert (engine._best_bid, engine._best_ask) == (None, 100)
 
-    def test_bid_at_best_ask_is_processed(self):
-        """A bid at exactly the best ask should NOT be silently dropped."""
+    def test_bid_at_best_ask_is_kept_and_quoted(self):
+        """A bid at exactly the best ask is kept, and the older ask is not quoted."""
         engine = DepthMetricsEngine()
         out = np.zeros(engine._row_len)
 
-        # Set up: ask at 110
         engine.update_side(110, 5.0, 1, out)
         assert engine._best_ask == 110
 
-        # Bid at exactly 110 — with strict > guard, this IS processed
         engine.update_side(110, 3.0, 0, out)
         assert 110 in engine._bid_levels
+        assert 110 in engine._ask_levels
+        assert (engine._best_bid, engine._best_ask) == (110, None)
 
-    def test_ask_below_best_bid_evicts_crossed_bid(self):
-        """An ask strictly below the best bid is the fresh truth: evict the stale bid."""
+    def test_ask_below_best_bid_hides_crossed_bid(self):
+        """An ask strictly below the best bid is fresher: the bid is not quoted."""
         engine = DepthMetricsEngine()
         out = np.zeros(engine._row_len)
 
         engine.update_side(100, 5.0, 0, out)  # bid at 100
         engine.update_side(99, 3.0, 1, out)  # ask at 99 < bid 100 (strict cross)
 
-        assert 99 in engine._ask_levels  # fresh ask kept
-        assert 100 not in engine._bid_levels  # stale crossed bid evicted
+        assert 99 in engine._ask_levels
+        assert 100 in engine._bid_levels  # kept, only left out of the touch
         assert engine._best_ask == 99
         assert engine._best_bid is None
 
-    def test_bid_above_best_ask_evicts_crossed_ask(self):
-        """A bid strictly above the best ask is the fresh truth: evict the stale ask."""
+    def test_bid_above_best_ask_hides_crossed_ask(self):
+        """A bid strictly above the best ask is fresher: the ask is not quoted."""
         engine = DepthMetricsEngine()
         out = np.zeros(engine._row_len)
 
         engine.update_side(110, 5.0, 1, out)  # ask at 110
         engine.update_side(111, 3.0, 0, out)  # bid at 111 > ask 110 (strict cross)
 
-        assert 111 in engine._bid_levels  # fresh bid kept
-        assert 110 not in engine._ask_levels  # stale crossed ask evicted
+        assert 111 in engine._bid_levels
+        assert 110 in engine._ask_levels  # kept, only left out of the touch
         assert engine._best_bid == 111
         assert engine._best_ask is None
 
     def test_crossing_bid_unfreezes_orphaned_best_ask(self):
         """Regression: an orphaned ask (missing delete) must not freeze best_ask.
 
-        Reproduces the depth-tracker freeze: two ask orders rest at a price
-        whose delete events never arrive, pinning best_ask.  Once bids climb
-        strictly above that stale level, it must be evicted so best_ask tracks
-        the genuine liquidity above it.
+        Reproduces the depth-tracker freeze: an ask rests at a price whose
+        delete never arrives, pinning best_ask.  Once a fresher bid climbs
+        strictly above that stale level, the touch moves past it to the
+        genuine liquidity above.
         """
         engine = DepthMetricsEngine()
         out = np.zeros(engine._row_len)
@@ -103,15 +104,15 @@ class TestCrossedBookGuards:
 
         engine.update_side(101, 1.0, 0, out)  # bid climbs above the stale ask
 
-        assert 100 not in engine._ask_levels  # stale level evicted
         assert engine._best_ask == 105  # best_ask tracks up, no longer frozen
         assert engine._best_bid == 101
 
-    def test_compute_writes_opposing_side_after_eviction(self):
+    def test_compute_writes_opposing_side_after_a_cross(self):
         """End-to-end: depth_summary best_ask must track, and best_bid be written.
 
-        Eviction touches the *opposing* side, so ``compute`` must refresh and
-        write the opposing metrics columns rather than carry the stale prior row.
+        A cross changes the *opposing* side's touch, so ``compute`` must
+        refresh and write the opposing metrics columns rather than carry the
+        stale prior row.
         """
         engine = DepthMetricsEngine()
         depth = _depth(
@@ -126,6 +127,25 @@ class TestCrossedBookGuards:
         assert last["best_ask_price"] == 105.0  # tracked, not frozen at 100
         assert last["best_bid_price"] == 101.0  # opposing side written
         assert last["best_bid_vol"] == 1.0
+
+    def test_crossed_level_returns_when_the_crossing_quote_leaves(self):
+        """A bid at 100 rests; an ask at 99 arrives and leaves; the bid is quoted again.
+
+        Nothing else touches 100.  The bid must be back in the summary once
+        the ask goes, as it is in the depth table (#343).
+        """
+        depth = _depth(
+            ("2026-01-01T00:00:00", 100, 5, "bid"),
+            ("2026-01-01T00:00:01", 101, 2, "ask"),
+            ("2026-01-01T00:00:02", 99, 3, "ask"),  # crosses the bid
+            ("2026-01-01T00:00:03", 99, 0, "ask"),  # and leaves
+        )
+        summary = DepthMetricsEngine().compute(depth)
+        quotes = list(
+            zip(summary["best_bid_price"], summary["best_ask_price"], strict=True)
+        )
+        assert quotes == [(100, 0), (100, 101), (0, 99), (100, 101)]
+        assert summary["best_bid_vol"].iloc[-1] == 5
 
 
 class TestBestPriceRecalculation:
@@ -310,8 +330,8 @@ class TestSameInstantOrder:
 
     def test_rows_at_one_instant_replay_by_event_id(self):
         # Listed bid first, but the ask (event 1) came first.  In event order
-        # the later bid crosses the ask and evicts it; replayed as listed, the
-        # ask would evict the bid instead.
+        # the later bid crosses the ask and hides it; replayed as listed, the
+        # ask would hide the bid instead.
         depth = pd.DataFrame(
             {
                 "event_id": [2, 1],
@@ -399,21 +419,88 @@ class TestPriceLevelBook:
         assert book.bid_prices.tolist() == [99]
         assert book.ask_prices.tolist() == [102]
 
-    def test_fresh_quote_evicts_the_levels_it_crosses(self):
+    def test_fresher_quote_hides_the_levels_it_crosses(self):
         book = PriceLevelBook()
         book.update(100, 1.0, 0)
         book.update(103, 1.0, 0)
-        # A new ask at 102 crosses the stale bid at 103 only.
+        # A new ask at 102 crosses the older bid at 103 only.
         assert book.update(102, 1.0, 1) is True
-        assert book.bid_prices.tolist() == [100]
-        assert book.ask_prices.tolist() == [102]
+        assert book.bid_prices.tolist() == [100, 103]  # every level kept
+        assert book.quoted_bids()[0].tolist() == [100]
+        assert book.quoted_asks()[0].tolist() == [102]
 
-    def test_locked_book_is_kept(self):
+    def test_the_more_recently_updated_level_wins(self):
+        book = PriceLevelBook()
+        book.update(103, 1.0, 0)
+        book.update(102, 1.0, 1)  # the ask is fresher: the bid is left out
+        assert book.quoted_bids()[0].tolist() == []
+        # A new size refreshes the bid, so now the ask is the older level.
+        assert book.update(103, 2.0, 0) is True
+        assert book.quoted_bids()[1].tolist() == [2.0]
+        assert book.quoted_asks()[0].tolist() == []
+
+    def test_locked_book_quotes_the_newer_level(self):
         book = PriceLevelBook()
         book.update(100, 1.0, 0)
-        assert book.update(100, 1.0, 1) is False
+        assert book.update(100, 1.0, 1) is True
         assert book.bid_prices.tolist() == [100]
         assert book.ask_prices.tolist() == [100]
+        assert book.quoted_bids()[0].tolist() == []
+        assert book.quoted_asks()[0].tolist() == [100]
+
+    def test_crossed_level_is_quoted_again_once_the_cross_goes(self):
+        book = PriceLevelBook()
+        book.update(100, 5.0, 0)
+        book.update(99, 3.0, 1)
+        assert book.quoted_bids()[0].tolist() == []
+        assert book.update(99, 0, 1) is True
+        assert book.quoted_bids()[0].tolist() == [100]
+
+    def test_orphaned_level_is_quoted_whenever_nothing_crosses_it(self):
+        # An ask whose delete never arrives stays in the book, as it does in
+        # the depth table.  It is left out only while a newer bid crosses it.
+        book = PriceLevelBook()
+        book.update(100, 1.0, 1)  # orphaned ask
+        book.update(105, 1.0, 1)
+        book.update(101, 1.0, 0)  # a newer bid crosses it
+        assert book.quoted_asks()[0].tolist() == [105]
+        book.update(101, 0, 0)
+        book.update(99, 1.0, 0)
+        assert book.quoted_asks()[0].tolist() == [100, 105]
+        assert book.quoted_bids()[0].tolist() == [99]
+
+    @pytest.mark.parametrize("seed", range(20))
+    def test_quoted_book_matches_a_walk_after_every_row(self, seed):
+        # A reference that keeps each level's last update and walks the touch
+        # after every row, with no shortcut for rows behind the touch.
+        from ob_analytics.engine import crossed_prefix_counts
+
+        rng = np.random.default_rng(seed)
+        book = PriceLevelBook()
+        levels: list[dict[int, tuple[float, int]]] = [{}, {}]
+        for clock in range(1, 400):
+            side = int(rng.integers(2))
+            price = int(rng.integers(90, 111))
+            volume = float(rng.integers(0, 3))
+            other_before = book.quoted_asks() if side == 0 else book.quoted_bids()
+            changed = book.update(price, volume, side)
+            if volume > 0:
+                levels[side][price] = (volume, clock)
+            else:
+                levels[side].pop(price, None)
+
+            bids = sorted(levels[0].items(), reverse=True)
+            asks = sorted(levels[1].items())
+            n_bid, n_ask = crossed_prefix_counts(
+                np.array([p for p, _ in bids]),
+                np.array([t for _, (_, t) in bids]),
+                np.array([p for p, _ in asks]),
+                np.array([t for _, (_, t) in asks]),
+            )
+            assert book.quoted_bids()[0].tolist() == sorted(p for p, _ in bids[n_bid:])
+            assert book.quoted_asks()[0].tolist() == [p for p, _ in asks[n_ask:]]
+            other_after = book.quoted_asks() if side == 0 else book.quoted_bids()
+            assert changed == (other_before[0].tolist() != other_after[0].tolist())
 
     def test_float_prices_are_not_rounded(self):
         book = PriceLevelBook(price_dtype=np.float64)
@@ -424,7 +511,7 @@ class TestPriceLevelBook:
 
 
 def _replay_depth():
-    """Six depth rows; the 00:00:04 ask at 101 crosses the stale bid at 102."""
+    """Six depth rows; the 00:00:04 ask at 101 crosses the older bid at 102."""
     return _depth(
         ("2026-01-01 00:00:01", 100, 5, "bid"),
         ("2026-01-01 00:00:01", 103, 4, "ask"),
@@ -451,8 +538,8 @@ class TestPriceLevelSnapshots:
             assert (asks["volume"].iloc[-1] if len(asks) else 0) == row["best_ask_vol"]
 
     def test_rows_at_one_instant_replay_in_event_order(self):
-        # Listed bid first, but the ask (event 1) came first, so the bid
-        # evicts it -- as in the depth summary.
+        # Listed bid first, but the ask (event 1) came first, so the fresher
+        # bid hides it -- as in the depth summary.
         t = pd.Timestamp("2026-01-01 00:00:01Z")
         depth = pd.DataFrame(
             {
@@ -468,7 +555,7 @@ class TestPriceLevelSnapshots:
         assert snap["bids"]["price"].tolist() == [last["best_bid_price"]] == [100]
         assert snap["asks"].empty and last["best_ask_price"] == 0
 
-    def test_crossed_level_is_evicted(self):
+    def test_crossed_level_is_left_out(self):
         depth = _replay_depth()
         (snap,) = price_level_snapshots(depth, [pd.Timestamp("2026-01-01 00:00:04Z")])
         assert snap["bids"]["price"].tolist() == [100]
