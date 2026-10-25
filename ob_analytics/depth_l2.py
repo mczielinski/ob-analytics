@@ -86,7 +86,9 @@ from ob_analytics.protocols import (
 from ob_analytics.schemas import (
     ORIGIN_COLUMN,
     SEQUENCE_COLUMN,
+    TRADE_DTYPES,
     attach_instrument_identity,
+    cast_columns,
 )
 
 # ── Column-spelling tolerance ─────────────────────────────────────────
@@ -431,7 +433,10 @@ class L2TradeReader:
                 "taker_og": na.copy(),
             }
         )
-        trades = trades.sort_values("timestamp", kind="stable").reset_index(drop=True)
+        trades = cast_columns(
+            trades.sort_values("timestamp", kind="stable").reset_index(drop=True),
+            TRADE_DTYPES,
+        )
         labelled = int(trades["direction"].notna().sum())
         logger.info(
             "L2TradeReader: {} trades ({})",

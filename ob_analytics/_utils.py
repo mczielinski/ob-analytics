@@ -14,7 +14,13 @@ import numpy as np
 import pandas as pd
 
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
-from ob_analytics.schemas import INGEST_SEQ_COLUMN
+from ob_analytics.schemas import (
+    EVENT_DTYPES,
+    INGEST_SEQ_COLUMN,
+    TRADE_DTYPES,
+    UTC_NS_DTYPE,
+    empty_frame,
+)
 
 # ---------------------------------------------------------------------------
 # DataFrame validation
@@ -294,56 +300,17 @@ def decimal_places(values: object) -> int | None:
 
 
 # ---------------------------------------------------------------------------
-# Trades schema
+# Empty frames
 # ---------------------------------------------------------------------------
-
-# Canonical trades columns shared by the Bitstamp and LOBSTER trade readers:
-# event-id attribution (maker_event_id / taker_event_id, required by
-# analytics.py) plus order-id / original-number provenance.
-EMPTY_TRADES_COLUMNS: tuple[str, ...] = (
-    "timestamp",
-    "price",
-    "volume",
-    "direction",
-    "maker_event_id",
-    "taker_event_id",
-    "maker",
-    "taker",
-    "maker_og",
-    "taker_og",
-)
 
 
 def empty_trades() -> pd.DataFrame:
-    """Return an empty trades DataFrame with the canonical column set.
+    """Return a zero-row trades DataFrame typed as :data:`~ob_analytics.schemas.TRADE_DTYPES`.
 
-    Columns default to ``object`` dtype, matching the inline empty frames
-    this helper replaces in the Bitstamp and LOBSTER trade readers.
+    The trade readers return it when a capture has no trades, so it has the
+    columns and dtypes of a trades frame that has rows.
     """
-    return pd.DataFrame(columns=list(EMPTY_TRADES_COLUMNS))
-
-
-# ---------------------------------------------------------------------------
-# Events schema
-# ---------------------------------------------------------------------------
-
-# The canonical per-order event columns (schemas.EVENT_COLUMNS) plus the
-# provenance columns every loader carries. Typed so a zero-row frame still
-# satisfies ``validate_events_df`` and dtype-sensitive consumers.
-_EMPTY_EVENT_DTYPES: dict[str, str] = {
-    "event_id": "int64",
-    "id": "int64",
-    "timestamp": "datetime64[ns, UTC]",
-    "exchange_timestamp": "datetime64[ns, UTC]",
-    "price": "int64",
-    "volume": "float64",
-    "direction": "object",
-    "action": "object",
-    "fill": "float64",
-    "type": "object",
-    "original_number": "int64",
-    "raw_event_type": "object",
-}
+    return empty_frame(TRADE_DTYPES)
 
 
 def empty_events() -> pd.DataFrame:
@@ -352,16 +319,12 @@ def empty_events() -> pd.DataFrame:
     The L2 (price-level) pipeline path has no per-order events, but the rest
     of the system still expects a :func:`~ob_analytics.schemas.validate_events_df`-valid
     ``events`` frame on the :class:`~ob_analytics.pipeline.PipelineResult`.
-    This is that frame: every canonical event column present, correctly typed,
+    This is that frame: every column of
+    :data:`~ob_analytics.schemas.EVENT_DTYPES`, typed as a loader types it,
     with no rows — the explicit "the per-order stages did not apply here"
     marker (see :class:`~ob_analytics.protocols.Level`).
     """
-    return pd.DataFrame(
-        {
-            name: pd.Series([], dtype=dtype)
-            for name, dtype in _EMPTY_EVENT_DTYPES.items()
-        }
-    )
+    return empty_frame(EVENT_DTYPES)
 
 
 def attach_ingest_seq(frame: pd.DataFrame) -> pd.DataFrame:
@@ -391,9 +354,6 @@ def attach_ingest_seq(frame: pd.DataFrame) -> pd.DataFrame:
 # representation (integer epoch, or session-relative seconds after midnight)
 # and land it on that shared clock; the inverses reverse the process for the
 # round-trip writers.
-
-# The canonical timestamp dtype for every schema timestamp column.
-UTC_NS_DTYPE = "datetime64[ns, UTC]"
 
 # Nanoseconds per unit: ``datetime_to_epoch`` takes a Timedelta's int64 ns
 # count and divides by this to land in the requested unit.

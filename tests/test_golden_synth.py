@@ -124,9 +124,15 @@ _GOLDEN_CONFIG = SynthConfig(seed=143, duration=60.0)
 # the old table with those rows removed, and so is the touch-only table (714
 # rows become 463).  The engine now also reads each order's resting price, but
 # this session never reports a fill away from it, so nothing else moves.
+# 2026-10-24 (#351, one dtype map): the simulator's trades are cast through
+# ``schemas.TRADE_DTYPES``. ``maker_event_id``, ``taker_event_id``,
+# ``maker_og`` and ``taker_og`` are nullable ``Int64`` and ``maker`` /
+# ``taker`` are ``object`` (the venue's order id), instead of ``int64``. Only
+# ``trades`` moves, and only in those dtypes: cast back to ``int64`` the frame
+# hashes to the old digest, and none of the ids is null.
 EXPECTED: dict[str, str] = {
     "events": "099cab88568a9f81c98a6b8cbd610d4c74a276e2bd25e5437b5fa5755ff6fd76",
-    "trades": "dfe87849f18a11294965564e23374563676aafadfb735df832737a33cdaba92e",
+    "trades": "44f0832f89776cb2311145ae2d9bfeb075604f0bcb3128b3b37d685d3e9f7b13",
     "depth": "ff29441ebf00d611150d9abafee49a562c8dd98352002b291ab55118a6e0d2f6",
     "depth_summary": "e801e79063fcea5384ba76ca51c48d0c5304b0fa512a036ca5a86c64e6253be5",
     "order_book": (

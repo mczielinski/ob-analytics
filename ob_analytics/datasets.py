@@ -112,6 +112,7 @@ import numpy as np
 import pandas as pd
 
 from ob_analytics.exceptions import ConfigError
+from ob_analytics.schemas import EVENT_DTYPES, TRADE_DTYPES, cast_columns
 
 __all__ = [
     "LOT_SIZE",
@@ -235,32 +236,25 @@ def _events_frame(
     actors = [e[2] for e in rows]
     ts = _timestamps([e[1] for e in rows])
 
-    return pd.DataFrame(
+    events = pd.DataFrame(
         {
             "original_number": event_id.copy(),
-            "id": np.array([actor_ids[a] for a in actors], dtype=np.int64),
+            "id": [actor_ids[a] for a in actors],
             "timestamp": ts,
             "exchange_timestamp": ts.copy(),
             # Integer ticks (issue #155); TICK_SIZE is 1.0, so ticks == price.
-            "price": np.array([e[5] for e in rows], dtype=np.int64),
+            "price": [e[5] for e in rows],
             # Integer lots (issue #226); LOT_SIZE is 1.0, so lots == size.
-            "volume": np.array([e[6] for e in rows], dtype=np.int64),
-            "action": pd.Categorical(
-                [e[3] for e in rows],
-                categories=["created", "changed", "deleted"],
-                ordered=True,
-            ),
-            "direction": pd.Categorical(
-                [e[4] for e in rows],
-                categories=["bid", "ask"],
-                ordered=True,
-            ),
+            "volume": [e[6] for e in rows],
+            "action": [e[3] for e in rows],
+            "direction": [e[4] for e in rows],
             "event_id": event_id,
-            "fill": np.array([e[7] for e in rows], dtype=np.int64),
+            "fill": [e[7] for e in rows],
             "raw_event_type": pd.NA,
             "actor": actors,
         }
     )
+    return cast_columns(events, EVENT_DTYPES)
 
 
 def toy_trades() -> pd.DataFrame:
@@ -268,9 +262,10 @@ def toy_trades() -> pd.DataFrame:
 
     Five trades consistent with :func:`toy_events`: each trade's
     ``maker_event_id`` / ``taker_event_id`` points at the event row
-    carrying that fill, in the exact column layout of
-    :class:`~ob_analytics.bitstamp.BitstampTradeReader` output (plus
-    non-canonical ``maker_actor`` / ``taker_actor`` columns).
+    carrying that fill, in the column layout of
+    :class:`~ob_analytics.bitstamp.BitstampTradeReader` output and the
+    dtypes of :data:`~ob_analytics.schemas.TRADE_DTYPES` (plus non-canonical
+    ``maker_actor`` / ``taker_actor`` columns).
 
     Returns
     -------
@@ -301,24 +296,23 @@ def _trades_frame(
     maker = [eid_to_oid[e] for e in maker_eid]
     taker = [eid_to_oid[e] for e in taker_eid]
 
-    return pd.DataFrame(
+    trades = pd.DataFrame(
         {
             "timestamp": _timestamps([t[0] for t in rows]),
-            "price": np.array([t[1] for t in rows], dtype=np.int64),
-            "volume": np.array([t[2] for t in rows], dtype=np.int64),
-            "direction": pd.Categorical(
-                [t[3] for t in rows], categories=["buy", "sell"], ordered=True
-            ),
-            "maker_event_id": np.array(maker_eid, dtype=object),
-            "taker_event_id": np.array(taker_eid, dtype=object),
-            "maker": np.array(maker, dtype=np.int64),
-            "taker": np.array(taker, dtype=np.int64),
-            "maker_og": np.array([eid_to_og[e] for e in maker_eid], dtype=np.int64),
-            "taker_og": np.array([eid_to_og[e] for e in taker_eid], dtype=np.int64),
+            "price": [t[1] for t in rows],
+            "volume": [t[2] for t in rows],
+            "direction": [t[3] for t in rows],
+            "maker_event_id": maker_eid,
+            "taker_event_id": taker_eid,
+            "maker": maker,
+            "taker": taker,
+            "maker_og": [eid_to_og[e] for e in maker_eid],
+            "taker_og": [eid_to_og[e] for e in taker_eid],
             "maker_actor": [oid_to_actor[o] for o in maker],
             "taker_actor": [oid_to_actor[o] for o in taker],
         }
     )
+    return cast_columns(trades, TRADE_DTYPES)
 
 
 # ---------------------------------------------------------------------------
@@ -698,21 +692,22 @@ def toy_l2_trades() -> pd.DataFrame:
         .astype("datetime64[ns]")
         .dt.tz_localize("UTC")
     )
-    n = len(_L2_TRADES)
-    na = pd.array([pd.NA] * n, dtype="object")
-    return pd.DataFrame(
+    trades = pd.DataFrame(
         {
             "timestamp": ts,
-            "price": np.array([t[1] for t in _L2_TRADES], dtype=np.int64),
-            "volume": np.array([t[2] for t in _L2_TRADES], dtype=np.int64),
-            "direction": pd.Categorical(
-                [t[3] for t in _L2_TRADES], categories=["buy", "sell"], ordered=True
-            ),
-            "maker_event_id": na,
-            "taker_event_id": na.copy(),
-            "maker": na.copy(),
-            "taker": na.copy(),
-            "maker_og": na.copy(),
-            "taker_og": na.copy(),
+            "price": [t[1] for t in _L2_TRADES],
+            "volume": [t[2] for t in _L2_TRADES],
+            "direction": [t[3] for t in _L2_TRADES],
         }
     )
+    # A price-level feed names no orders, so every id column is null.
+    for col in (
+        "maker_event_id",
+        "taker_event_id",
+        "maker",
+        "taker",
+        "maker_og",
+        "taker_og",
+    ):
+        trades[col] = pd.NA
+    return cast_columns(trades, TRADE_DTYPES)

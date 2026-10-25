@@ -25,6 +25,8 @@ from ob_analytics.schemas import (
     SCHEMA_VERSION,
     SCHEMA_VERSION_KEY,
     TICK_SIZE_KEY,
+    TRADE_DTYPES,
+    cast_columns,
     check_schema_version,
     decode_lot_sizes,
     decode_tick_sizes,
@@ -301,6 +303,17 @@ def _to_arrow_table(
     return table.replace_schema_metadata(metadata)
 
 
+#: Tables whose dtypes ``load_data`` restores from a map when the file is in the
+#: current schema version.  Parquet keeps most dtypes, but an ``object`` column
+#: of ints (the trade ``maker`` and ``taker`` order ids) comes back ``int64``,
+#: so a reloaded trades table would not match one a reader made.  Events are
+#: left as read: their map types the order ``id`` as ``int64``, and a capture
+#: with text order ids stores it as text.
+_RESTORED_DTYPES: dict[str, dict[str, str | pd.CategoricalDtype]] = {
+    "trades": TRADE_DTYPES,
+}
+
+
 def _read_versioned_parquet(path: Path) -> pd.DataFrame:
     """Read a canonical Parquet *path*, checking its schema version first.
 
@@ -319,6 +332,10 @@ def _read_versioned_parquet(path: Path) -> pd.DataFrame:
     version = raw.decode() if raw is not None else None
     check_schema_version(version, source=path.name)
     df = table.to_pandas()
+    # An older version stored float prices and sizes; casting them to integer
+    # ticks and lots would change the numbers, so only a current file is cast.
+    if version == SCHEMA_VERSION and path.stem in _RESTORED_DTYPES:
+        df = cast_columns(df, _RESTORED_DTYPES[path.stem])
     tick_sizes = decode_tick_sizes(metadata.get(TICK_SIZE_KEY))
     if tick_sizes is not None:
         df.attrs["tick_sizes"] = tick_sizes
