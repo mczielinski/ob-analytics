@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -412,6 +413,84 @@ def datetime_to_epoch(series: pd.Series, unit: str) -> pd.Series:
     delta = (utc - epoch).astype("timedelta64[ns]")
     divisor = _EPOCH_DIVISORS[unit]
     return (delta.astype("int64") // divisor).astype("int64")
+
+
+def fixed_window(window: Any, context: str) -> pd.Timedelta:
+    """Read *window* as a positive fixed duration.
+
+    Parameters
+    ----------
+    window : str or pandas.Timedelta
+        A string pandas reads as a duration (``"5s"``, ``"1min"``, ``"1h"``)
+        or a :class:`pandas.Timedelta`.  A calendar step with no fixed length
+        (a month, a business day) is not a duration, and neither is a bare
+        number, which has no unit.
+    context : str
+        What the window is for, at the start of an error message.
+
+    Returns
+    -------
+    pandas.Timedelta
+        The window length.
+
+    Raises
+    ------
+    ConfigError
+        If *window* is not a duration, or is not positive.
+    """
+    if isinstance(window, (int, float, np.number)):
+        # pandas would read 5 as five nanoseconds.
+        raise ConfigError(
+            f"{context} needs a duration with a unit such as '5s' or '1min'; "
+            f"got the bare number {window!r}."
+        )
+    try:
+        step = pd.Timedelta(window)
+    except (ValueError, TypeError) as exc:
+        raise ConfigError(
+            f"{context} needs a fixed duration such as '5s', '1min' or '1h'; "
+            f"got {window!r}."
+        ) from exc
+    if step <= pd.Timedelta(0):
+        raise ConfigError(f"{context} needs a positive duration, got {step}")
+    return step
+
+
+def window_start(
+    timestamps: pd.Series, window: str | pd.Timedelta, context: str = "window"
+) -> pd.Series:
+    """Return the start of the time window each timestamp falls in.
+
+    Every fixed-length time window in the package is cut here: windows count
+    from the Unix epoch, so a ``"7s"`` window starts at the same instants
+    whatever the first trade's timestamp and whichever function cut it.
+    Timestamps in a zone other than UTC are cut in UTC and converted back, so
+    a daylight-saving change does not make a window start ambiguous.
+
+    Parameters
+    ----------
+    timestamps : pandas.Series
+        Datetime series.
+    window : str or pandas.Timedelta
+        A fixed duration; see :func:`fixed_window`.
+    context : str, optional
+        What the window is for, at the start of an error message.
+
+    Returns
+    -------
+    pandas.Series
+        The window start of each timestamp, on the same index.
+
+    Raises
+    ------
+    ConfigError
+        If *window* is not a positive fixed duration.
+    """
+    step = fixed_window(window, context)
+    tz = timestamps.dt.tz
+    if tz is None:
+        return timestamps.dt.floor(step)
+    return timestamps.dt.tz_convert("UTC").dt.floor(step).dt.tz_convert(tz)
 
 
 def seconds_after_midnight_to_datetime(
