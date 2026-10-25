@@ -1,7 +1,8 @@
 """Column contracts for the DataFrames flowing through the pipeline.
 
 This module is the single source of truth for which columns each pipeline
-DataFrame must carry. It replaces the parallel Pydantic models that lived
+DataFrame must carry, and for the dtypes of the events and trades tables
+(:data:`EVENT_DTYPES`, :data:`TRADE_DTYPES`). It replaces the parallel Pydantic models that lived
 in the deleted ``models.py``: the pipeline runs on DataFrames, so the
 contract is a set of required column names plus validators that raise on
 violation — not a row model the pipeline never instantiated.
@@ -443,6 +444,105 @@ TRADE_COLUMNS: tuple[str, ...] = (
     "maker_event_id",
     "taker_event_id",
 )
+
+# ── Column dtypes ─────────────────────────────────────────────────────
+#
+# The dtype of every events and trades column.  Every trade reader, the empty
+# frames, the toy dataset and the simulator cast through these maps, and
+# ``load_data`` casts a saved trades table back through ``TRADE_DTYPES``, so
+# every frame of one table has the same dtypes and a concat of two runs keeps
+# them.  The event loaders are checked against ``EVENT_DTYPES`` by the tests.
+# ``docs/schema.md`` lists the same types as Arrow types.
+
+BOOK_SIDE_DTYPE = pd.CategoricalDtype(["bid", "ask"], ordered=True)
+"""Dtype of an events ``direction`` column: the order's side of the book."""
+
+ACTION_DTYPE = pd.CategoricalDtype(["created", "changed", "deleted"], ordered=True)
+"""Dtype of the events ``action`` column."""
+
+ORDER_TYPE_DTYPE = pd.CategoricalDtype(
+    [
+        "unknown",
+        "pre-existing",
+        "flashed-limit",
+        "resting-limit",
+        "market-limit",
+        "market",
+    ],
+    ordered=True,
+)
+"""Dtype of the events ``type`` column, set by ``set_order_types``."""
+
+TRADE_SIDE_DTYPE = pd.CategoricalDtype(["buy", "sell"], ordered=True)
+"""Dtype of a trades ``direction`` column: the taker's side."""
+
+UTC_NS_DTYPE = "datetime64[ns, UTC]"
+"""Dtype of every timestamp column (see the timestamp policy above)."""
+
+EVENT_DTYPES: dict[str, str | pd.CategoricalDtype] = {
+    "event_id": "int64",
+    # Order ids are int64, except in a Bitstamp-format capture from a venue
+    # with text ids (UUIDs), which keeps them as text.
+    "id": "int64",
+    "timestamp": UTC_NS_DTYPE,
+    "exchange_timestamp": UTC_NS_DTYPE,
+    "price": "int64",
+    "volume": "int64",
+    "direction": BOOK_SIDE_DTYPE,
+    "action": ACTION_DTYPE,
+    "fill": "int64",
+    "type": ORDER_TYPE_DTYPE,
+    "original_number": "int64",
+    # The venue's own code: an int on LOBSTER, a letter on Databento, null on
+    # Bitstamp, so it has no one type.
+    "raw_event_type": "object",
+}
+"""Dtype of each column of the events table: :data:`EVENT_COLUMNS` plus the
+provenance columns every loader carries.  Prices are integer ticks and sizes
+integer lots."""
+
+TRADE_DTYPES: dict[str, str | pd.CategoricalDtype] = {
+    "timestamp": UTC_NS_DTYPE,
+    "price": "int64",
+    "volume": "int64",
+    "direction": TRADE_SIDE_DTYPE,
+    # The event ids and source row numbers are this package's own integers,
+    # null when the feed does not name the order (every L2 feed, and the taker
+    # on LOBSTER and Databento) or the reader cannot match it to an event, so
+    # they are nullable ``Int64``: Arrow writes them as ``int64`` with a null
+    # mask.
+    "maker_event_id": "Int64",
+    "taker_event_id": "Int64",
+    # The order ids are the venue's own, as in the events ``id`` column: an
+    # int on most venues, text on some (UUIDs), or null.
+    "maker": "object",
+    "taker": "object",
+    "maker_og": "Int64",
+    "taker_og": "Int64",
+}
+"""Dtype of each column of the trades table: :data:`TRADE_COLUMNS` plus the
+maker and taker provenance columns.  ``direction`` is null on an L2 feed until
+trade signing fills it."""
+
+
+def cast_columns(
+    df: pd.DataFrame, dtypes: dict[str, str | pd.CategoricalDtype]
+) -> pd.DataFrame:
+    """Return *df* with each column named in *dtypes* cast to its dtype.
+
+    Columns *df* does not have are skipped, and other columns are left as they
+    are, so a frame built before a stage adds its column (``type``, say) still
+    casts.
+    """
+    return df.astype({col: dtype for col, dtype in dtypes.items() if col in df})
+
+
+def empty_frame(dtypes: dict[str, str | pd.CategoricalDtype]) -> pd.DataFrame:
+    """Return a zero-row frame with one column of each dtype in *dtypes*."""
+    return pd.DataFrame(
+        {col: pd.Series([], dtype=dtype) for col, dtype in dtypes.items()}
+    )
+
 
 # Depth uses 'direction' (bid/ask) to match DepthMetricsEngine.compute.
 DEPTH_COLUMNS: tuple[str, ...] = (

@@ -179,6 +179,12 @@ def test_demo_fingerprints(demo_result):
     # 310552 (that lot leaving).  The depth_summary row for 310551 was the one
     # whose best bid was that 1 lot, locked against the ask.  Every other row
     # of both tables is identical.
+    # 2026-10-24 (#351, one dtype map): every trade reader casts its output
+    # through `schemas.TRADE_DTYPES`.  `trades` moves in dtypes only:
+    # `maker_event_id` and `taker_event_id` go from object to nullable `Int64`,
+    # `maker_og` and `taker_og` from int64 to `Int64`, and `maker` / `taker`
+    # from int64 to object.  None of the six holds a null on this sample, and
+    # cast back to the old dtypes the frame hashes to the old digest.
     # 2026-10-24 (the depth summary keeps crossed levels, #343): when a quote
     # crossed the other side, `PriceLevelBook` deleted the crossed levels for
     # good, so a real level crossed by a stale quote never came back unless
@@ -196,7 +202,7 @@ def test_demo_fingerprints(demo_result):
     # trades, where it flagged 29 that all had a visible maker.
     EXPECTED: dict[str, str] = {
         "events": "07a04f64b2b6d573682ff2da821da85d6ca37959d85b500970edf22aab10f1d2",
-        "trades": "41231911669fec9ca13a769e790a242d91f10680615bf89ac788b95ddc518336",
+        "trades": "f90ec605bfafe32c1a06cf3d97ee2ade9a5d418a2198af65b1a640ee0dfdf31d",
         "depth": "f2ddbca30f48004b352fb230e086b66fcb372de840fa87b1289439f1803a5cec",
         "depth_summary": "e2c326fccb02f3af3c0cbf3a974b53c37292664fc8557c0f1759278b0e85df7d",
     }

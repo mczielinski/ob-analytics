@@ -13,3 +13,7 @@ for required columns only; extra columns are allowed.
 ::: ob_analytics.schemas.validate_trades_df
 
 ::: ob_analytics.schemas.validate_depth_df
+
+::: ob_analytics.schemas.EVENT_DTYPES
+
+::: ob_analytics.schemas.TRADE_DTYPES

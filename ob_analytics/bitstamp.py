@@ -46,7 +46,9 @@ from ob_analytics.protocols import (
 )
 from ob_analytics.schemas import (
     SEQUENCE_COLUMN,
+    TRADE_DTYPES,
     attach_instrument_identity,
+    cast_columns,
     unsized_order_ids,
 )
 
@@ -364,7 +366,10 @@ class BitstampTradeReader:
             }
         )
 
-        trades = trades.sort_values("timestamp", kind="stable").reset_index(drop=True)
+        trades = cast_columns(
+            trades.sort_values("timestamp", kind="stable").reset_index(drop=True),
+            TRADE_DTYPES,
+        )
 
         logger.info(
             "BitstampTradeReader: {} trades ({} maker_event_id resolved, "

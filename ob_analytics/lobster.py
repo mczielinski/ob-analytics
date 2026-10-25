@@ -54,7 +54,12 @@ from ob_analytics.protocols import (
     TradeAttribution,
     TradeSource,
 )
-from ob_analytics.schemas import attach_instrument_identity, time_order_keys
+from ob_analytics.schemas import (
+    TRADE_DTYPES,
+    attach_instrument_identity,
+    cast_columns,
+    time_order_keys,
+)
 
 # ── Constants ─────────────────────────────────────────────────────────
 
@@ -427,7 +432,10 @@ class LobsterTradeReader:
                 "taker_og": taker_og,
             }
         )
-        trades = trades.sort_values("timestamp", kind="stable").reset_index(drop=True)
+        trades = cast_columns(
+            trades.sort_values("timestamp", kind="stable").reset_index(drop=True),
+            TRADE_DTYPES,
+        )
 
         logger.info(
             "LobsterTradeReader: {} trades ({} with identified taker)",
