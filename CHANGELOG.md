@@ -10,6 +10,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **One dtype map for the events and trades tables** (#351).
+  `ob_analytics.schemas` now holds `EVENT_DTYPES` and `TRADE_DTYPES`, the
+  pandas dtype of every column, next to the column names, with the four
+  ordered categoricals they use, `UTC_NS_DTYPE`, and two helpers,
+  `cast_columns` and `empty_frame`. The empty frames, the toy datasets and
+  the synthetic session are built from the maps, and every trade reader
+  (Bitstamp, LOBSTER, L2, Databento) casts its output through
+  `TRADE_DTYPES`. `load_data` casts a current-version `trades` file back
+  through it. `_utils._EMPTY_EVENT_DTYPES` and `EMPTY_TRADES_COLUMNS` are
+  removed; `UTC_NS_DTYPE` is still importable from `_utils`.
+
 - **`load_result(path)` reads a saved run back as a `PipelineResult`** (#346).
   It is the inverse of `save_data(result, path)`: the four tables come back,
   and so does the run's `PipelineConfig`. `save_data` now takes the result
@@ -158,6 +169,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Every time window starts from the Unix epoch** (#350).
+  `order_flow_imbalance` and `compute_kyle_lambda` counted their windows from
+  the start of the first day, while time bars and `ofi_by_horizon` counted
+  from the epoch, so a window that does not divide a day cut different
+  windows: on the bundled sample, `"7s"` gave 92 OFI rows against 94 bars.
+  Both are now built on `bars(trades, "time", window)`, and
+  `_utils.fixed_window` and `_utils.window_start` are the one place a window
+  is read and cut. `amihud`, `roll_spread`, the transaction-cost plot data,
+  the clock bar rule and `ofi_by_horizon` use the same helpers. Windows that
+  divide a day (`"30s"`, `"1min"`, `"5min"`) give the same values as before.
+  At `"7s"` on the bundled sample, OFI has 94 rows and Kyle's λ moves from
+  1.0007e-05 to 1.0746e-05. Also:
+  - `order_flow_imbalance` now needs a `price` column.
+  - A window whose trades all have size zero is kept, with `ofi` `NaN`; it
+    was dropped.
+  - `"1W"` is 7 days counted from the epoch, not a calendar week. A calendar
+    step such as `"1ME"`, or a bare number (pandas reads `5` as 5 ns),
+    raises `ConfigError` naming the function.
+  - Windows are cut in UTC, so a frame in a local time zone, or a
+    daylight-saving change, gives the same windows as in UTC.
+  - `amihud`'s `first_price` / `last_price` and the OFI metric's
+    `last_price` stay `int64` ticks; they turned `float64` when a window
+    had no trades.
+- **Trade event ids are nullable `Int64`** (#351). `maker_event_id`,
+  `taker_event_id`, `maker_og` and `taker_og` were `int64`, `float64` or
+  `object` depending on the reader, and a column with a gap could be saved as
+  `double`. They are now `Int64` everywhere and are saved as Arrow `int64`
+  with a null mask. `maker` and `taker` stay `object`, because an order id can
+  be text (Independent Reserve uses UUIDs). No value changed.
+
 - **`Pipeline.run` reads a capture's tick and lot size** (#346). Given a
   capture folder or a file in one, `Pipeline.run` and `Pipeline.run_windows`
   use the `tick_size` and `lot_size` in its `meta.json` when the config does
@@ -251,6 +292,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   applied. Use `bps_range` or `max_levels`, or filter the returned frames.
 
 ### Fixed
+
+- **The empty `events` and `trades` tables have a loader's dtypes** (#351).
+  The empty `events` table of an L2 run had `volume` and `fill` as `float64`
+  and `direction`, `action` and `type` as `object`, so `save_data` wrote
+  `double` size columns for every L2 run, and `pd.concat` of an L3 and an L2
+  run's events turned every L3 size into a float. The empty `trades` table,
+  which a trade reader returns for a capture with no trades, had every column
+  as `object`. Both now match the maps.
+- **The Databento loader writes one row per kind of change** (#353). A cancel
+  or modify that follows a fill and leaves the order resting can also take off
+  more than the fill, move the order, or make it bigger. The loader wrote that
+  as one `changed` row that was both an execution and a reduction, which the
+  schema does not allow, so the depth took off only the fill and kept the rest
+  on the level. On an order of 8, `F 3` then `C 5` left 2 lots on the level
+  after the order had gone. The loader now writes two rows for such a record:
+  one with the fill and the size left after it, at the price where the order
+  rests, then one with no fill and the record's own price and size. Both share
+  the record's `original_number`, and the trade names the first as its maker.
+  The warning that a modify with a fill left the depth off is gone, since the
+  depth now follows it. A cancel that takes off less than the fill charged to
+  it, or a fill larger than the order had resting, is warned about; the book
+  keeps the size the cancel or modify leaves, and an oversized fill is capped
+  on the execution row.
+- **`read_mbo_frame` closes the DBN file it opens** (#353). A store the caller
+  opened is left open. The `run_windows` docstring no longer mentions the
+  removed warning.
 
 - **Every rebuild puts an order at one price** (#342). An order rests at the
   price of its `created` row, and after that only a `changed` row with no
