@@ -54,7 +54,12 @@ from ob_analytics.protocols import (
     TradeAttribution,
     TradeSource,
 )
-from ob_analytics.schemas import attach_instrument_identity, time_order_keys
+from ob_analytics.schemas import (
+    TRADE_DTYPES,
+    attach_instrument_identity,
+    cast_columns,
+    time_order_keys,
+)
 
 # ── Constants ─────────────────────────────────────────────────────────
 
@@ -427,7 +432,10 @@ class LobsterTradeReader:
                 "taker_og": taker_og,
             }
         )
-        trades = trades.sort_values("timestamp", kind="stable").reset_index(drop=True)
+        trades = cast_columns(
+            trades.sort_values("timestamp", kind="stable").reset_index(drop=True),
+            TRADE_DTYPES,
+        )
 
         logger.info(
             "LobsterTradeReader: {} trades ({} with identified taker)",
@@ -789,12 +797,14 @@ class LobsterWriter:
             row = int(stops[i])
             # Each side best first: asks from the lowest price, bids from the
             # highest.
-            k = ask_depth[i] = min(num_levels, book.ask_prices.size)
-            ask_ticks[i, :k] = book.ask_prices[:k]
-            ask_lots[i, :k] = book.ask_volumes[:k]
-            k = bid_depth[i] = min(num_levels, book.bid_prices.size)
-            bid_ticks[i, :k] = book.bid_prices[::-1][:k]
-            bid_lots[i, :k] = book.bid_volumes[::-1][:k]
+            ask_prices, ask_volumes = book.quoted_asks()
+            k = ask_depth[i] = min(num_levels, ask_prices.size)
+            ask_ticks[i, :k] = ask_prices[:k]
+            ask_lots[i, :k] = ask_volumes[:k]
+            bid_prices, bid_volumes = book.quoted_bids()
+            k = bid_depth[i] = min(num_levels, bid_prices.size)
+            bid_ticks[i, :k] = bid_prices[::-1][:k]
+            bid_lots[i, :k] = bid_volumes[::-1][:k]
 
         level = np.arange(num_levels)
         ask_empty = level >= ask_depth[:, None]

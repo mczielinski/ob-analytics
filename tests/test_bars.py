@@ -186,6 +186,11 @@ class TestClockRule:
         # However it was spelled, what cut the bars is reported as a duration.
         assert bars(toy, "time", "30s").attrs["bar_threshold"] == pd.Timedelta("30s")
 
+    def test_a_bare_number_is_not_a_duration(self, toy: pd.DataFrame) -> None:
+        # pandas reads 5 as five nanoseconds, which nobody means.
+        with pytest.raises(ConfigError, match="bare number"):
+            bars(toy, "time", 5)
+
     def test_duration_must_be_positive(self, toy: pd.DataFrame) -> None:
         with pytest.raises(ConfigError, match="positive duration"):
             bars(toy, "time", "0s")

@@ -268,7 +268,6 @@ class TestPlotlyPriceLevels:
             "Iceberg chain",
             "Iceberg refill",
             "Hidden-order trade",
-            "Trade to check (maker not confirmed hidden)",
         } <= names
 
     def test_no_overlay_adds_no_hidden_liquidity_traces(
@@ -364,7 +363,6 @@ class TestPlotlyOrderActivityL3:
             "Iceberg chain",
             "Iceberg refill",
             "Hidden-order trade",
-            "Trade to check (maker not confirmed hidden)",
         } <= names
 
     def test_no_overlay_adds_no_hidden_liquidity_traces(

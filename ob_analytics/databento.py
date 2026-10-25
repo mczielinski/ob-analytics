@@ -39,6 +39,10 @@ That is what tells a cancel that was really an execution apart from a cancel
 the trader asked for.  When the cancel ends the order, its ``deleted`` row
 keeps the executed part as ``fill`` and only the rest as ``volume``, so an
 order filled in full ends with ``volume`` 0 and leaves its price level once.
+When a cancel or modify leaves the order resting but also takes off more than
+the fill, moves the order or makes it bigger, the loader writes two rows for
+it: one with the fill and one with the rest, since a ``changed`` row is either
+an execution or a reduction, never both.
 
 Timestamps
 ----------
@@ -60,10 +64,7 @@ and ``deleted`` and nothing for a move, so the loader records the new price and
 size on a ``changed`` event.  The price-level rebuild
 (:func:`~ob_analytics.depth.price_level_volume`) reads a ``changed`` row that
 reports no execution as the order's new level and size, so the depth follows
-the order.  The loss of queue priority is not modelled.  A modify that also
-carries a fill is read as an execution report; if it also moves the order or
-changes its size by more than the fill, the loader says in a warning how many
-rows the depth will be off by.
+the order.  The loss of queue priority is not modelled.
 
 What is refused and what is dropped
 -----------------------------------
@@ -120,7 +121,12 @@ from ob_analytics.protocols import (
     TradeAttribution,
     TradeSource,
 )
-from ob_analytics.schemas import SEQUENCE_COLUMN, attach_instrument_identity
+from ob_analytics.schemas import (
+    SEQUENCE_COLUMN,
+    TRADE_DTYPES,
+    attach_instrument_identity,
+    cast_columns,
+)
 
 # ── DBN constants ─────────────────────────────────────────────────────
 #
@@ -274,19 +280,15 @@ def read_mbo_frame(source: Any) -> pd.DataFrame:
     if isinstance(source, pd.DataFrame):
         frame = source.reset_index() if source.index.name else source.copy()
     else:
-        store = source if hasattr(source, "to_df") else _open_dbn(source)
-        schema = str(getattr(store.metadata, "schema", "") or "")
-        if schema != "mbo":
-            raise ConfigError(
-                f"DatabentoLoader: file holds the {schema!r} schema, which is "
-                "not per-order data. Request the 'mbo' schema for order-book "
-                "reconstruction; the price-level schemas (mbp-1, mbp-10, "
-                "bbo, tbbo) carry no order ids."
-            )
-        # ``price_type="fixed"`` keeps Databento's raw integer prices, which
-        # convert to ticks exactly; the decimal default would round-trip them
-        # through a float first.
-        frame = store.to_df(price_type="fixed").reset_index()
+        opened = not hasattr(source, "to_df")
+        store = _open_dbn(source) if opened else source
+        try:
+            frame = _mbo_records(store)
+        finally:
+            if opened:
+                # A store has no close of its own; its reader is the open file
+                # (or a decompressor that closes the file with it).
+                store.reader.close()
 
     missing = [c for c in _REQUIRED_MBO_COLUMNS if c not in frame.columns]
     if missing:
@@ -295,6 +297,22 @@ def read_mbo_frame(source: Any) -> pd.DataFrame:
             f"Present: {list(frame.columns)}"
         )
     return frame
+
+
+def _mbo_records(store: Any) -> pd.DataFrame:
+    """Return the records of an open ``DBNStore``, refusing a non-MBO schema."""
+    schema = str(getattr(store.metadata, "schema", "") or "")
+    if schema != "mbo":
+        raise ConfigError(
+            f"DatabentoLoader: file holds the {schema!r} schema, which is "
+            "not per-order data. Request the 'mbo' schema for order-book "
+            "reconstruction; the price-level schemas (mbp-1, mbp-10, "
+            "bbo, tbbo) carry no order ids."
+        )
+    # ``price_type="fixed"`` keeps Databento's raw integer prices, which
+    # convert to ticks exactly; the decimal default would round-trip them
+    # through a float first.
+    return store.to_df(price_type="fixed").reset_index()
 
 
 def _open_dbn(path: Any) -> Any:
@@ -683,12 +701,9 @@ def _book_events_and_fills(
     events = _events_from_book_records(work[is_book])
     events = _add_clear_deletes(events, work[is_clear])
     events = events.sort_values("source_pos", kind="stable").reset_index(drop=True)
-    events["event_id"] = np.arange(1, len(events) + 1, dtype="int64")
 
     fills = work[is_fill]
-    events, trade_records = _charge_fills_to_events(events, fills, work)
-    _warn_on_amend_with_fill(events)
-    return events, trade_records
+    return _charge_fills_to_events(events, fills, work)
 
 
 def _events_from_book_records(book: pd.DataFrame) -> pd.DataFrame:
@@ -696,9 +711,10 @@ def _events_from_book_records(book: pd.DataFrame) -> pd.DataFrame:
 
     ``volume`` is the order's outstanding size after the event, except on a
     ``deleted`` row where it is, for now, the whole size the cancel removed.
-    Once the fills are charged, :func:`_split_deleted_volume` takes the
-    executed part out of it, which gives the schema's rule (see
-    :mod:`ob_analytics.schemas`).
+    ``outstanding`` is the size after the event on every row, ``0`` on a
+    ``deleted`` one.  Once the fills are charged, :func:`_split_deleted_volume`
+    and :func:`_split_mixed_changes` use them to make every row follow the
+    schema's rule (see :mod:`ob_analytics.schemas`).
     """
     if book.empty:
         return _empty_book_events()
@@ -773,6 +789,7 @@ def _events_from_book_records(book: pd.DataFrame) -> pd.DataFrame:
             "exchange_timestamp": book["exchange_timestamp"].array,
             "price": book["price"].to_numpy(),
             "volume": volume.astype("int64"),
+            "outstanding": np.where(emptied, 0, volume).astype("int64"),
             "action": canonical,
             "direction": book["direction"].to_numpy(),
             "original_number": book["original_number"].to_numpy(),
@@ -785,47 +802,6 @@ def _events_from_book_records(book: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def _warn_on_amend_with_fill(events: pd.DataFrame) -> None:
-    """Warn about the one modify the price-level rebuild cannot represent.
-
-    Databento's ``M`` can move an order to another price or make it bigger.
-    Both are recorded on a ``changed`` event with the new price and size, and
-    :func:`~ob_analytics.depth.price_level_volume` follows either: a
-    ``changed`` row that reports no execution moves the order's volume to the
-    price it carries and adds any size it gained.
-
-    A modify that also carries a fill is read as an execution report instead,
-    because some venues report an execution at the price it traded at, not the
-    price the order rests at.  The depth then takes only the fill off, at the
-    level the order was resting on.  If the same modify also moved the order,
-    or left it with a size other than its previous size less the fill, the
-    depth is off by the difference.  The per-order tables — events, lifetimes,
-    trades — are right either way.
-    """
-    order = events.groupby("id", sort=False)
-    prev_price = order["price"].shift()
-    prev_volume = order["volume"].shift()
-    amended = (
-        (events["raw_event_type"] == ACTION_MODIFY)
-        & (events["action"] == "changed")
-        & (events["fill"] > 0)
-        & (
-            (events["price"] != prev_price)
-            | (events["volume"] != prev_volume - events["fill"])
-        )
-    )
-    count = int(amended.sum())
-    if count:
-        logger.warning(
-            "DatabentoLoader: {} modifies carry a fill and also move the "
-            "order or change its size by more than the fill — the price-level "
-            "depth takes off only the fill, at the price the order was resting "
-            "at, so it is off by the rest. The events, order lifetimes and "
-            "trades are unaffected",
-            count,
-        )
-
-
 def _empty_book_events() -> pd.DataFrame:
     """Return the zero-row frame :func:`_events_from_book_records` produces."""
     dtypes = {
@@ -834,6 +810,7 @@ def _empty_book_events() -> pd.DataFrame:
         "exchange_timestamp": UTC_NS_DTYPE,
         "price": "int64",
         "volume": "int64",
+        "outstanding": "int64",
         "action": "object",
         "direction": "object",
         "original_number": "int64",
@@ -871,6 +848,7 @@ def _add_clear_deletes(events: pd.DataFrame, clears: pd.DataFrame) -> pd.DataFra
                     "exchange_timestamp": _repeat_ts(clear["exchange_timestamp"], n),
                     "price": resting["price"].to_numpy(),
                     "volume": resting["volume"].to_numpy(),
+                    "outstanding": 0,
                     "action": "deleted",
                     "direction": resting["direction"].to_numpy(),
                     "original_number": int(clear["original_number"]),
@@ -925,7 +903,9 @@ def _charge_fills_to_events(
     A fill is charged to the next book record for the same order, which is the
     record that takes the executed size off the book.  Several fills can land
     on one book record when a sweep takes an order out in pieces, so the
-    ``fill`` on an event is the sum of them.
+    ``fill`` on an event is the sum of them.  The rows are numbered once the
+    fills have made them final, so ``event_id`` runs 1, 2, 3, ... in event
+    order.
     """
     slot = ["epoch", "id", "book_rank"]
     events = events.copy()
@@ -937,6 +917,11 @@ def _charge_fills_to_events(
         key = pd.MultiIndex.from_frame(events[slot])
         events["fill"] = charged.reindex(key).fillna(0).to_numpy().astype("int64")
 
+    events = _split_deleted_volume(events)
+    events = _split_mixed_changes(events)
+    events["event_id"] = np.arange(1, len(events) + 1, dtype="int64")
+
+    if not fills.empty:
         event_ids = pd.Series(
             events["event_id"].to_numpy(),
             index=pd.MultiIndex.from_frame(events[slot]),
@@ -959,9 +944,8 @@ def _charge_fills_to_events(
     else:
         maker_event_id = np.empty(0)
 
-    events = _split_deleted_volume(events)
     trade_records = _trade_records(fills, work, maker_event_id)
-    events = events.drop(columns=["epoch", "book_rank"])
+    events = events.drop(columns=["epoch", "book_rank", "outstanding"])
     return events, trade_records
 
 
@@ -988,6 +972,90 @@ def _split_deleted_volume(events: pd.DataFrame) -> pd.DataFrame:
         )
     volume = np.where(deleted, np.maximum(rest, 0), events["volume"].to_numpy())
     return events.assign(volume=volume.astype("int64"))
+
+
+def _split_mixed_changes(events: pd.DataFrame) -> pd.DataFrame:
+    """Split each ``changed`` row that both executes and reduces or moves.
+
+    The schema lets a ``changed`` row be an execution (its fill comes off and
+    nothing else changes) or a reduction or move with no fill, never both.  A
+    Databento ``C`` or ``M`` that follows a fill can be both: a fill of 3 and
+    then a cancel of 5 executes 3 and cancels 2, and a fill and then a modify
+    to a new price executes and moves the order.  Such a row becomes two:
+
+    * an execution row with the fill, the order's previous outstanding size
+      less the fill, and the price the order rests at;
+    * then a row with no fill and the record's own price and size, which takes
+      off the rest, adds what the order gained, or moves the order.
+
+    The second row shares the record's ``original_number`` and has no slot a
+    fill can be charged to.  A fill larger than what the order had resting is
+    capped at that size on the execution row.  Rows are in event order and
+    carry ``epoch``, ``book_rank`` and ``outstanding``.
+    """
+    before = (
+        events.groupby(["epoch", "id"], sort=False)["outstanding"]
+        .shift(fill_value=0)
+        .to_numpy()
+    )
+    fill = events["fill"].to_numpy()
+    volume = events["volume"].to_numpy()
+    # A row after the order's delete has nothing resting to execute against,
+    # so it is left alone.
+    candidate = (events["action"] == "changed").to_numpy() & (fill > 0) & (before > 0)
+    if not candidate.any():
+        return events
+
+    executed = np.minimum(fill, before)
+    left = before - executed
+    is_modify = (events["raw_event_type"] == ACTION_MODIFY).to_numpy()
+    # A modify may have moved the order, which is only known once the order's
+    # resting price is worked out, so every modify with a fill is split here
+    # and the second row is dropped below when it changes nothing.
+    split = candidate & (is_modify | (left != volume) | (executed != fill))
+
+    inconsistent = int(
+        (split & (((left < volume) & ~is_modify) | (executed != fill))).sum()
+    )
+    if inconsistent:
+        warnings.warn(
+            f"DatabentoLoader: {inconsistent} cancels or modifies disagree "
+            "with the fill charged to them (a cancel removes less than the "
+            "fill, or the fill is larger than the order had resting); the "
+            "book keeps the size the cancel or modify records leave",
+            stacklevel=2,
+        )
+    if not split.any():
+        return events
+
+    part = np.zeros(len(events), dtype="int64")
+    execution = events.assign(
+        fill=np.where(split, executed, fill),
+        volume=np.where(split, left, volume),
+        part=np.where(split, 1, part),
+    )
+    rest = events[split].assign(
+        fill=0,
+        part=2,
+        book_rank=-1,
+        source_pos=events.loc[split, "source_pos"] + 0.25,
+    )
+    out = pd.concat([execution, rest], ignore_index=True)
+    out = out.sort_values("source_pos", kind="stable").reset_index(drop=True)
+
+    # Only the orders with a split row need their resting price worked out.
+    affected = out["id"].isin(events.loc[split, "id"]).to_numpy()
+    execution_row = affected & (out["part"] == 1).to_numpy()
+    resting = _engine_frames.resting_price(out[affected]).to_numpy()
+    price = out["price"].to_numpy().copy()
+    price[execution_row] = resting[execution_row[affected]]
+    out["price"] = price
+    noop = (
+        (out["part"] == 2)
+        & (out["volume"] == out["volume"].shift())
+        & (out["price"] == out["price"].shift())
+    )
+    return out[~noop].drop(columns=["part"]).reset_index(drop=True)
 
 
 def _trade_records(
@@ -1141,7 +1209,10 @@ class DatabentoTradeReader:
                 "taker_og": pd.array([pd.NA] * n, dtype="object"),
             }
         )
-        trades = trades.sort_values("timestamp", kind="stable").reset_index(drop=True)
+        trades = cast_columns(
+            trades.sort_values("timestamp", kind="stable").reset_index(drop=True),
+            TRADE_DTYPES,
+        )
 
         logger.info(
             "DatabentoTradeReader: {} trades from {} records ({} with a maker event)",
@@ -1196,8 +1267,11 @@ class DatabentoWriter:
     """Write an events frame back out as a DBN file of MBO records.
 
     Satisfies the :class:`~ob_analytics.protocols.DataWriter` protocol, and
-    inverts :class:`DatabentoLoader` record for record: a ``created`` row
-    becomes ``A``, a ``changed`` row ``M``, and a ``deleted`` row ``C``.  The
+    inverts :class:`DatabentoLoader` row for row: a ``created`` row becomes
+    ``A``, a ``changed`` row ``M``, and a ``deleted`` row ``C``.  The file
+    reads back to the same events, but not always to the same records: a
+    cancel the loader wrote as two ``changed`` rows comes back as two ``M``.
+    The
     ``C`` removes what the order had resting before the row: its ``volume``
     plus its ``fill`` (see :mod:`ob_analytics.schemas`).  A fill the order
     took while resting becomes an ``F`` record immediately before the row

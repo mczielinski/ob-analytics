@@ -8,12 +8,19 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
-from ob_analytics.schemas import INGEST_SEQ_COLUMN
+from ob_analytics.schemas import (
+    EVENT_DTYPES,
+    INGEST_SEQ_COLUMN,
+    TRADE_DTYPES,
+    UTC_NS_DTYPE,
+    empty_frame,
+)
 
 # ---------------------------------------------------------------------------
 # DataFrame validation
@@ -293,56 +300,17 @@ def decimal_places(values: object) -> int | None:
 
 
 # ---------------------------------------------------------------------------
-# Trades schema
+# Empty frames
 # ---------------------------------------------------------------------------
-
-# Canonical trades columns shared by the Bitstamp and LOBSTER trade readers:
-# event-id attribution (maker_event_id / taker_event_id, required by
-# analytics.py) plus order-id / original-number provenance.
-EMPTY_TRADES_COLUMNS: tuple[str, ...] = (
-    "timestamp",
-    "price",
-    "volume",
-    "direction",
-    "maker_event_id",
-    "taker_event_id",
-    "maker",
-    "taker",
-    "maker_og",
-    "taker_og",
-)
 
 
 def empty_trades() -> pd.DataFrame:
-    """Return an empty trades DataFrame with the canonical column set.
+    """Return a zero-row trades DataFrame typed as :data:`~ob_analytics.schemas.TRADE_DTYPES`.
 
-    Columns default to ``object`` dtype, matching the inline empty frames
-    this helper replaces in the Bitstamp and LOBSTER trade readers.
+    The trade readers return it when a capture has no trades, so it has the
+    columns and dtypes of a trades frame that has rows.
     """
-    return pd.DataFrame(columns=list(EMPTY_TRADES_COLUMNS))
-
-
-# ---------------------------------------------------------------------------
-# Events schema
-# ---------------------------------------------------------------------------
-
-# The canonical per-order event columns (schemas.EVENT_COLUMNS) plus the
-# provenance columns every loader carries. Typed so a zero-row frame still
-# satisfies ``validate_events_df`` and dtype-sensitive consumers.
-_EMPTY_EVENT_DTYPES: dict[str, str] = {
-    "event_id": "int64",
-    "id": "int64",
-    "timestamp": "datetime64[ns, UTC]",
-    "exchange_timestamp": "datetime64[ns, UTC]",
-    "price": "int64",
-    "volume": "float64",
-    "direction": "object",
-    "action": "object",
-    "fill": "float64",
-    "type": "object",
-    "original_number": "int64",
-    "raw_event_type": "object",
-}
+    return empty_frame(TRADE_DTYPES)
 
 
 def empty_events() -> pd.DataFrame:
@@ -351,16 +319,12 @@ def empty_events() -> pd.DataFrame:
     The L2 (price-level) pipeline path has no per-order events, but the rest
     of the system still expects a :func:`~ob_analytics.schemas.validate_events_df`-valid
     ``events`` frame on the :class:`~ob_analytics.pipeline.PipelineResult`.
-    This is that frame: every canonical event column present, correctly typed,
+    This is that frame: every column of
+    :data:`~ob_analytics.schemas.EVENT_DTYPES`, typed as a loader types it,
     with no rows — the explicit "the per-order stages did not apply here"
     marker (see :class:`~ob_analytics.protocols.Level`).
     """
-    return pd.DataFrame(
-        {
-            name: pd.Series([], dtype=dtype)
-            for name, dtype in _EMPTY_EVENT_DTYPES.items()
-        }
-    )
+    return empty_frame(EVENT_DTYPES)
 
 
 def attach_ingest_seq(frame: pd.DataFrame) -> pd.DataFrame:
@@ -390,9 +354,6 @@ def attach_ingest_seq(frame: pd.DataFrame) -> pd.DataFrame:
 # representation (integer epoch, or session-relative seconds after midnight)
 # and land it on that shared clock; the inverses reverse the process for the
 # round-trip writers.
-
-# The canonical timestamp dtype for every schema timestamp column.
-UTC_NS_DTYPE = "datetime64[ns, UTC]"
 
 # Nanoseconds per unit: ``datetime_to_epoch`` takes a Timedelta's int64 ns
 # count and divides by this to land in the requested unit.
@@ -452,6 +413,84 @@ def datetime_to_epoch(series: pd.Series, unit: str) -> pd.Series:
     delta = (utc - epoch).astype("timedelta64[ns]")
     divisor = _EPOCH_DIVISORS[unit]
     return (delta.astype("int64") // divisor).astype("int64")
+
+
+def fixed_window(window: Any, context: str) -> pd.Timedelta:
+    """Read *window* as a positive fixed duration.
+
+    Parameters
+    ----------
+    window : str or pandas.Timedelta
+        A string pandas reads as a duration (``"5s"``, ``"1min"``, ``"1h"``)
+        or a :class:`pandas.Timedelta`.  A calendar step with no fixed length
+        (a month, a business day) is not a duration, and neither is a bare
+        number, which has no unit.
+    context : str
+        What the window is for, at the start of an error message.
+
+    Returns
+    -------
+    pandas.Timedelta
+        The window length.
+
+    Raises
+    ------
+    ConfigError
+        If *window* is not a duration, or is not positive.
+    """
+    if isinstance(window, (int, float, np.number)):
+        # pandas would read 5 as five nanoseconds.
+        raise ConfigError(
+            f"{context} needs a duration with a unit such as '5s' or '1min'; "
+            f"got the bare number {window!r}."
+        )
+    try:
+        step = pd.Timedelta(window)
+    except (ValueError, TypeError) as exc:
+        raise ConfigError(
+            f"{context} needs a fixed duration such as '5s', '1min' or '1h'; "
+            f"got {window!r}."
+        ) from exc
+    if step <= pd.Timedelta(0):
+        raise ConfigError(f"{context} needs a positive duration, got {step}")
+    return step
+
+
+def window_start(
+    timestamps: pd.Series, window: str | pd.Timedelta, context: str = "window"
+) -> pd.Series:
+    """Return the start of the time window each timestamp falls in.
+
+    Every fixed-length time window in the package is cut here: windows count
+    from the Unix epoch, so a ``"7s"`` window starts at the same instants
+    whatever the first trade's timestamp and whichever function cut it.
+    Timestamps in a zone other than UTC are cut in UTC and converted back, so
+    a daylight-saving change does not make a window start ambiguous.
+
+    Parameters
+    ----------
+    timestamps : pandas.Series
+        Datetime series.
+    window : str or pandas.Timedelta
+        A fixed duration; see :func:`fixed_window`.
+    context : str, optional
+        What the window is for, at the start of an error message.
+
+    Returns
+    -------
+    pandas.Series
+        The window start of each timestamp, on the same index.
+
+    Raises
+    ------
+    ConfigError
+        If *window* is not a positive fixed duration.
+    """
+    step = fixed_window(window, context)
+    tz = timestamps.dt.tz
+    if tz is None:
+        return timestamps.dt.floor(step)
+    return timestamps.dt.tz_convert("UTC").dt.floor(step).dt.tz_convert(tz)
 
 
 def seconds_after_midnight_to_datetime(

@@ -233,18 +233,30 @@ real size step as `lot_size`.
 
 ## Nullable integer columns
 
-pandas has no built-in null for a plain `int64` column, so the loaders carry
-nullable integer ids (order and event ids on trades) as an `object` column
-holding Python ints or `NA`. On write, pyarrow infers the Arrow type from the
-values: a column with no nulls becomes `int64`; a column that contains nulls may
-become `int64` with a null mask or `double`. The tables below name the **logical**
-type (`int64`) and mark the column nullable. Cleaning this up is one of the
-[data-model decisions](#data-model-decisions) below.
+pandas has no null for a plain `int64` column, so the four trade columns that
+point at this package's own integers (`maker_event_id`, `taker_event_id`,
+`maker_og`, `taker_og`) use the nullable `Int64` dtype. A value is null when the
+feed does not name that order (every id on an L2 feed, and the taker on LOBSTER
+and Databento) or when the reader cannot match the order to an event. On write
+they become Arrow `int64` with a null mask, and `load_data` reads them back as
+`Int64`.
+
+The order ids `maker` and `taker` are the venue's own, like the events `id`
+column, so they are `object` columns: Python ints on most feeds, text on a
+Bitstamp-format capture from a venue with text ids (UUIDs), and `NA` when the
+feed does not name the order. pyarrow infers their Arrow type from the values,
+and `load_data` turns them back into `object` columns when it reads a trades
+file of the current schema version.
+
+Every trade reader casts its output to these dtypes (`TRADE_DTYPES`), so a
+column has the same type whether or not it holds a null.
 
 ## events
 
 Required columns (the [`EVENT_COLUMNS`](api/schemas.md) contract) plus the
-provenance columns every loader carries.
+provenance columns every loader carries. The pandas dtype of each column is in
+[`EVENT_DTYPES`](api/schemas.md). The empty events table an L2 run returns has
+the same dtypes, so it can be concatenated with an L3 run's events.
 
 | Column | Arrow type | Unit | Null? | Meaning |
 |---|---|---|---|---|
@@ -270,7 +282,9 @@ present only after the stages that add them.
 ## trades
 
 Required columns (the [`TRADE_COLUMNS`](api/schemas.md) contract) plus maker /
-taker provenance.
+taker provenance. The pandas dtype of each column is in
+[`TRADE_DTYPES`](api/schemas.md); a reader that finds no trades returns an empty
+table with those dtypes.
 
 | Column | Arrow type | Unit | Null? | Meaning |
 |---|---|---|---|---|
@@ -280,8 +294,8 @@ taker provenance.
 | `direction` | `dictionary<string>` | — | yes | Taker's aggressor side: `buy` or `sell`. Null on an L2 feed until Lee–Ready fills it, then set. |
 | `maker_event_id` | `int64` | — | yes | `event_id` of the maker (resting) order's event. Null when the trade is not attributed (L2 feeds have no order identity). |
 | `taker_event_id` | `int64` | — | yes | `event_id` of the taker (aggressing) order's event. Null when not attributed. |
-| `maker` | `int64` | — | yes | Order id of the maker. |
-| `taker` | `int64` | — | yes | Order id of the taker. |
+| `maker` | `int64` / `string` | — | yes | Order id of the maker. |
+| `taker` | `int64` / `string` | — | yes | Order id of the taker. |
 | `maker_og` | `int64` | — | yes | `original_number` of the maker order. |
 | `taker_og` | `int64` | — | yes | `original_number` of the taker order. |
 

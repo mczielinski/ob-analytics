@@ -220,11 +220,12 @@ window ended with:
   one nanosecond before the window starts. The price-level rebuild then changes
   each level from its right size. These rows are not written out.
 - The depth summary keeps one engine for the whole run, so its book, including
-  the crossed levels it has removed, carries on into the next window.
+  which crossed levels it leaves out of the touch, carries on into the next
+  window.
 - Order types and trade signs are decided once, over the whole input, as in a
   single run.
 
-The result matches a single run row for row in every table. There are three
+The result matches a single run row for row in every table. There are two
 differences:
 
 - `events` is written in window order, not in the loader's order.
@@ -233,9 +234,6 @@ differences:
   Bitstamp input the lookup can find a quote from another window. Sources that
   number events in time order (Databento, the synthetic generator) match
   exactly.
-- Where the Databento loader warns that the depth is off (a modify that
-  carries a fill and also moves the order), the carried order goes onto its new
-  price level, so the windowed depth can differ by the same amount.
 
 A run that fails part-way leaves the output folder as it was: the files are
 moved into place only once every window is done.

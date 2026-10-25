@@ -36,15 +36,15 @@ print(f"effective {summary.effective_spread_bps:.2f} bps"
 On the bundled Bitstamp capture:
 
 ```
-effective 1.45 bps = realized -0.41 + impact 1.86
+effective 1.42 bps = realized -0.35 + impact 1.77
 ```
 
-Read that as: the average unit traded paid 1.45 basis points to cross, the
-market then moved 1.86 basis points in the taker's favour, and the liquidity
-provider was left 0.41 basis points down. A *negative* realized spread means
+Read that as: the average unit traded paid 1.42 basis points to cross, the
+market then moved 1.77 basis points in the taker's favour, and the liquidity
+provider was left 0.35 basis points down. A *negative* realized spread means
 the flow was, on average, informed — the same story VPIN and Kyle's λ tell,
 measured in the currency a taker pays. On this capture, read the split with
-care: a quarter of the trades have a negative effective spread, so the mid
+care: a sixth of the trades have a negative effective spread, so the mid
 they are measured from is not the one the taker faced, and every figure here
 carries that error (see [below](#trust-the-book-before-you-trust-the-cost)).
 
@@ -55,7 +55,7 @@ costs["effective_spread_bps"].describe()
 costs[costs["effective_spread_bps"] < 0]      # trades that printed inside the touch
 ```
 
-On this capture 72 of the 284 trades come back with a negative effective
+On this capture 48 of the 284 trades come back with a negative effective
 spread. That is a fact about the capture, not about the market — see
 [below](#trust-the-book-before-you-trust-the-cost).
 
@@ -86,7 +86,7 @@ costs = transaction_costs(
 )
 ```
 
-On the bundled capture that moves the effective spread from 1.45 to 1.24 bps.
+On the bundled capture that moves the effective spread from 1.42 to 1.36 bps.
 The micro-price is the better forecast of where the price is going, so
 measuring against it charges the taker for crossing but not for the move the
 book was already leaning toward. The two answer different questions — what the
@@ -104,11 +104,11 @@ to noise. On the bundled capture:
 
 | horizon | effective | realized | impact | spread of realized |
 | ------- | --------- | -------- | ------ | ------------------ |
-| 1s      | 1.45      | -0.41    | 1.85   | 2.8                |
-| 5s      | 1.45      | -0.41    | 1.86   | 2.4                |
-| 30s     | 1.45      | -2.95    | 4.40   | 4.6                |
-| 1min    | 1.45      | -1.85    | 3.29   | 5.6                |
-| 5min    | 1.45      | -0.26    | 1.74   | 11.6               |
+| 1s      | 1.42      | -0.44    | 1.87   | 2.8                |
+| 5s      | 1.42      | -0.35    | 1.77   | 2.4                |
+| 30s     | 1.42      | -2.91    | 4.33   | 4.6                |
+| 1min    | 1.42      | -1.77    | 3.19   | 5.6                |
+| 5min    | 1.42      | -0.21    | 1.66   | 11.6               |
 
 All in basis points. The effective spread does not depend on the horizon at
 all; the split does, and its noise grows steadily with it. Pick a horizon
@@ -235,21 +235,22 @@ Every number here inherits the quality of the book it is measured against. A
 means the mid was not the one the taker faced. Quotes with a crossed book or an
 empty side are already skipped, because neither has a midpoint.
 
-On the bundled capture, the 72 negative effective spreads do not come from
-stale orders, and at least part of them come from the order in which the feed
-reports things:
+On the bundled capture, few of the 48 negative effective spreads come from
+stale orders, and most of them come from the order in which the feed reports
+things:
 
-- **Stale orders are not the cause.** The capture holds two stale asks (see
+- **Stale orders are a small part.** The capture holds two stale asks (see
   [Check data quality](audit.md)). Moving their deletes back to the moment a
-  trade proved them gone leaves 72 negative spreads and an effective spread of
-  1.45 bps. The depth summary had already dropped the levels they crossed.
-- **Message order explains part of it.** Bitstamp sends order messages and
-  trade prints on separate channels, and either can arrive first. In 40 of the
-  72 trades the taker's own order reaches the order stream before the print,
+  trade proved them gone leaves 45 negative spreads and an effective spread of
+  1.44 bps. The depth summary leaves a stale ask out of its touch while a
+  newer bid crosses it, so the stale asks reach it only while nothing does.
+- **Message order explains most of it.** Bitstamp sends order messages and
+  trade prints on separate channels, and either can arrive first. In 42 of the
+  48 trades the taker's own order reaches the order stream before the print,
   so the book read just before the print can already include it.
 - **The size of the effect.** Measuring each trade from the mid just before
-  its maker's fill, rather than just before the print, leaves 43 negative
-  spreads and gives an effective spread of 0.76 bps instead of 1.45. Neither
+  its maker's fill, rather than just before the print, leaves 11 negative
+  spreads and gives an effective spread of 0.78 bps instead of 1.42. Neither
   instant is exactly the one the taker saw, so on a feed like this the
   effective spread is uncertain by about that much.
 

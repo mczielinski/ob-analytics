@@ -33,6 +33,7 @@ from ob_analytics.databento import (
     DatabentoSource,
     DatabentoTradeReader,
     DatabentoWriter,
+    read_mbo_frame,
 )
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import (
@@ -246,9 +247,9 @@ class TestActionMapping:
         assert list(events["volume"]) == [30, 45]
         assert not logged
 
-    def test_a_modify_that_executes_and_moves_is_reported(self):
-        # The depth reads a modify that carries a fill as an execution report,
-        # so a move on the same record is the one case it still cannot follow.
+    def test_a_modify_that_executes_and_moves_is_two_rows(self):
+        # One record that both executes and moves the order: the fill comes
+        # off where the order rested, then a row with no fill moves the rest.
         with warnings_logged() as logged:
             _, events = load(
                 [
@@ -257,13 +258,58 @@ class TestActionMapping:
                     (1, "M", "B", px(9.98), 20),
                 ]
             )
-        assert list(events["fill"]) == [0, 10]
-        assert any("1 modifies carry a fill" in m for m in logged)
+        assert list(events["action"]) == ["created", "changed", "changed"]
+        assert list(events["fill"]) == [0, 10, 0]
+        assert list(events["volume"]) == [30, 20, 20]
+        assert list(events["price"]) == [999, 999, 998]
+        assert not logged
 
-    def test_a_modify_that_only_executes_is_not_reported(self):
-        with warnings_logged() as logged:
-            load(LIFECYCLE)
-        assert not any("modifies carry a fill" in m for m in logged)
+    def test_the_depth_follows_a_modify_that_executes_and_moves(self):
+        result = Pipeline(source=DatabentoSource()).run(
+            mbo_frame(
+                [
+                    (1, "A", "B", px(9.99), 30),
+                    (2, "A", "A", px(10.01), 5),
+                    (1, "F", "B", px(9.99), 10),
+                    (1, "M", "B", px(9.98), 20),
+                ]
+            )
+        )
+
+        assert bid_level_after_each_row(result, 999) == [30, 20, 0]
+        assert bid_level_after_each_row(result, 998) == [20]
+
+    def test_a_modify_that_executes_and_grows_is_two_rows(self):
+        _, events = load(
+            [
+                (1, "A", "B", px(9.99), 30),
+                (1, "F", "B", px(9.99), 10),
+                (1, "M", "B", px(9.99), 25),
+            ]
+        )
+        assert list(events["fill"]) == [0, 10, 0]
+        assert list(events["volume"]) == [30, 20, 25]
+
+    def test_two_modifies_that_execute_and_move_follow_the_order(self):
+        _, events = load(
+            [
+                (1, "A", "B", px(9.99), 30),
+                (2, "A", "B", px(9.90), 5),
+                (1, "F", "B", px(9.99), 10),
+                (1, "M", "B", px(9.98), 20),
+                (1, "F", "B", px(9.98), 5),
+                (1, "M", "B", px(9.97), 15),
+            ]
+        )
+        order = events[events["id"] == 1]
+        assert list(order["fill"]) == [0, 10, 0, 5, 0]
+        assert list(order["volume"]) == [30, 20, 20, 15, 15]
+        # Each fill comes off where the order rested at the time.
+        assert list(order["price"]) == [999, 999, 998, 998, 997]
+
+    def test_a_modify_that_only_executes_is_one_row(self):
+        _, events = load(LIFECYCLE)
+        assert list(events["raw_event_type"]) == ["A", "A", "C", "M", "C"]
 
     def test_side_becomes_the_resting_direction(self):
         _, events = load([(1, "A", "B", px(9.99), 1), (2, "A", "A", px(10.01), 1)])
@@ -826,6 +872,86 @@ class TestFullExecution:
         )
 
 
+def assert_changed_rows_follow_the_rule(events: pd.DataFrame) -> None:
+    """Each ``changed`` row is an execution or a reduction, never both."""
+    previous = events.groupby("id")["volume"].shift()
+    changed = events[(events["action"] == "changed") & (events["fill"] > 0)]
+    drop = previous[changed.index] - changed["volume"]
+    assert (drop == changed["fill"]).all(), events
+
+
+class TestExecutionThenReduction:
+    """A fill and a larger partial cancel become an execution and a reduction.
+
+    Databento reports the execution as ``F`` and then a ``C`` that takes off
+    more than was executed.  The schema allows a ``changed`` row to be one or
+    the other, so the loader writes two rows for the one ``C``.
+    """
+
+    RECORDS: ClassVar[list[tuple]] = [
+        (1, "A", "B", px(100.00), 8),  # bid 8 at 100.00
+        (0, "T", "A", px(100.00), 3),  # a seller takes 3
+        (1, "F", "B", px(100.00), 3),  # ... from order 1
+        (1, "C", "B", px(100.00), 5),  # 3 executed and 2 cancelled: 3 left
+        (2, "A", "A", px(100.05), 1),  # an ask, so the book has two sides
+        (1, "C", "B", px(100.00), 3),  # the rest is cancelled
+    ]
+
+    def test_the_cancel_becomes_an_execution_row_and_a_reduction_row(self):
+        _, events = load(self.RECORDS[:4])
+
+        assert list(events["action"]) == ["created", "changed", "changed"]
+        assert list(events["fill"]) == [0, 3, 0]
+        assert list(events["volume"]) == [8, 5, 3]
+        assert list(events["raw_event_type"]) == ["A", "C", "C"]
+        assert_changed_rows_follow_the_rule(events)
+
+    def test_the_level_empties_when_the_order_leaves(self):
+        result = Pipeline(source=DatabentoSource()).run(mbo_frame(self.RECORDS))
+
+        assert bid_level_after_each_row(result, 10000) == [8, 5, 3, 0]
+
+    def test_the_trade_names_the_execution_row_as_its_maker(self):
+        result = Pipeline(source=DatabentoSource()).run(mbo_frame(self.RECORDS))
+
+        maker = result.trades["maker_event_id"].iloc[0]
+        row = result.events.set_index("event_id").loc[maker]
+        assert (row["fill"], row["volume"]) == (3, 5)
+
+    def test_event_ids_stay_unique_and_in_order(self):
+        _, events = load(self.RECORDS)
+
+        assert list(events["event_id"]) == list(range(1, len(events) + 1))
+
+    def test_a_cancel_smaller_than_the_fill_is_reported(self):
+        # 3 executed but only 2 taken off the book: the records disagree.
+        with pytest.warns(UserWarning, match="1 cancels or modifies disagree"):
+            _, events = load(
+                [
+                    (1, "A", "B", px(100.00), 8),
+                    (1, "F", "B", px(100.00), 3),
+                    (1, "C", "B", px(100.00), 2),
+                ]
+            )
+        # The book records win: 6 rest, as the venue's own book says.
+        assert list(events["volume"]) == [8, 5, 6]
+        assert_changed_rows_follow_the_rule(events)
+
+    def test_a_fill_larger_than_the_order_is_capped_and_reported(self):
+        # 8 executed from an order of 5, then a cancel of 2 that leaves 3.
+        with pytest.warns(UserWarning, match="1 cancels or modifies disagree"):
+            _, events = load(
+                [
+                    (1, "A", "B", px(100.00), 5),
+                    (1, "F", "B", px(100.00), 8),
+                    (1, "C", "B", px(100.00), 2),
+                ]
+            )
+        assert list(events["fill"]) == [0, 5, 0]
+        assert list(events["volume"]) == [5, 0, 3]
+        assert_changed_rows_follow_the_rule(events)
+
+
 def audit_frame(frame: pd.DataFrame) -> DataQualitySummary:
     """Run *frame* through the pipeline and score it the way ``audit`` does."""
     source = DatabentoSource()
@@ -944,6 +1070,48 @@ class TestDbnFiles:
 
         assert r.returncode == 0, r.stdout + r.stderr
         assert "gaps not checked" in r.stdout
+
+    @pytest.mark.parametrize("name", ["window.mbo.dbn", "window.mbo.dbn.zst"])
+    def test_reading_a_file_closes_it(self, tmp_path, name):
+        import gc
+        import warnings
+
+        import zstandard
+
+        data = dbn_bytes(LIFECYCLE)
+        if name.endswith(".zst"):
+            data = zstandard.ZstdCompressor().compress(data)
+        path = tmp_path / name
+        path.write_bytes(data)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            read_mbo_frame(path)
+            gc.collect()
+        assert not [w for w in caught if issubclass(w.category, ResourceWarning)]
+
+    def test_a_store_the_caller_opened_is_left_open(self):
+        import databento as db
+
+        store = db.DBNStore.from_bytes(dbn_bytes(LIFECYCLE))
+        read_mbo_frame(store)
+        assert len(read_mbo_frame(store)) == len(LIFECYCLE)
+
+    def test_split_rows_round_trip_through_the_writer(self, tmp_path):
+        records = TestExecutionThenReduction.RECORDS
+        result = Pipeline(source=DatabentoSource()).run(mbo_frame(records))
+
+        out = DatabentoWriter(result.config).write(
+            {"events": result.events}, tmp_path / "out.dbn"
+        )
+        reloaded = Pipeline(source=DatabentoSource()).run(out)
+
+        columns = ["id", "price", "volume", "action", "direction", "fill"]
+        pd.testing.assert_frame_equal(
+            result.events[columns].reset_index(drop=True),
+            reloaded.events[columns].reset_index(drop=True),
+        )
+        assert final_levels(reloaded.depth) == final_levels(result.depth)
 
     def test_an_open_store_is_accepted_too(self):
         import databento as db
