@@ -136,9 +136,21 @@ really an execution apart from a cancel the trader asked for. When that cancel
 ends the order, its `deleted` row carries the executed part as `fill` and only
 the rest as `volume`, as the [schema](../schema.md#volume-and-fill) says. An
 order filled in full, `F 5` then `C 5`, ends in a `deleted` row with `fill` 5
-and `volume` 0, so its 5 leave the price level once. A modify for an
-order this window never saw added is treated as an add, the same way
-Databento's own reference book builder treats it.
+and `volume` 0, so its 5 leave the price level once.
+
+A cancel that leaves part of the order resting can also take off more than the
+fill. The schema says a `changed` row is either an execution or a reduction,
+never both, so the loader writes two rows for that one record. Take an order of
+8 with `F 3` then `C 5`: the first row carries `fill` 3 and `volume` 5, and the
+second carries `fill` 0 and `volume` 3. Both rows have the cancel's
+`original_number`. If a cancel takes off less than the fill charged to it, the
+records disagree; the loader warns and keeps the size the cancel leaves. It
+also warns when a fill is larger than the order had resting, and the execution
+row then carries only what was resting as `fill`, while the trade keeps the
+size the fill record states.
+
+A modify for an order this window never saw added is treated as an add, the
+same way Databento's own reference book builder treats it.
 
 ## Trades and the aggressor
 
@@ -205,14 +217,13 @@ joins the new one. A `changed` row that reports no execution and a larger size
 adds the difference at the level where the order rests. The queue priority the
 order loses is not modelled.
 
-One case is still not followed. A row that reports an execution is read as an
-execution report, and only the fill is taken off, at the level where the order
-rests. Some venues report an execution at the price it traded at, not the price
-the order rests at, so the rebuild cannot read that price as a move. If a
-Databento modify carries a fill and also moves the order, or changes its size by
-more than the fill, the depth is off by the difference. The loader warns with
-the number of rows affected. The events, order lifetimes and trades are right in
-every case.
+A row that reports an execution never moves the order, because some venues
+report an execution at the price it traded at, not the price the order rests
+at. So a modify that follows a fill and also moves the order or changes its
+size is written as two rows, as for a cancel above: an execution row at the
+price where the order rests, with the fill and the size left after it, then a
+row with no fill and the modify's own price and size. The depth then follows
+both.
 
 ## What the loader refuses, and what it drops
 
@@ -301,8 +312,10 @@ Pipeline(source=DatabentoSource()).run_windows("aapl.mbo.dbn.zst", cuts, "out/")
 
 ## Write a file back out
 
-`DatabentoWriter` inverts the loader record for record, so a window you have
-worked on can be handed to another DBN reader:
+`DatabentoWriter` inverts the loader row for row, so a window you have worked
+on can be handed to another DBN reader. The file reads back to the same events,
+though not always to the same records: a cancel the loader wrote as two rows
+comes back as two `M` records.
 
 ```python
 from ob_analytics.databento import DatabentoWriter
