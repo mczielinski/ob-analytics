@@ -106,6 +106,17 @@ class BitstampLoader:
             Cleaned events with columns ``id``, ``timestamp``,
             ``exchange_timestamp``, ``price``, ``volume``, ``action``,
             ``direction``, ``event_id``, ``fill``, ``original_number``.
+
+        Notes
+        -----
+        Each order's rows come in the order they happened: the ``created``
+        row first, then the rest by ``timestamp``.  Rows that share an
+        instant follow the file's ``sequence`` column when it has one; a
+        ``deleted`` row then goes last, and the rest keep their order in the
+        file.  A row with no sequence number keeps its place after the row
+        before it in the file.  ``fill`` is the drop in size from the order's
+        previous row.  A row whose size rises (an order changed to a larger
+        amount) has ``fill`` 0.
         """
         events = pd.read_csv(source)
         validate_columns(
@@ -156,42 +167,54 @@ class BitstampLoader:
         )
 
         # Each order's rows in the order they happened: the ``created`` row
-        # first, then the rest by size, largest first, since a Bitstamp order
-        # only shrinks after it is placed.  The ``created`` row is not always
-        # the largest: an instant order bought by quote amount is created with
-        # size 0 and reports its remainder afterwards.
+        # first, then the rest by time.  Size cannot give this order, because
+        # some captures in this format raise an order's size.  Rows that share
+        # an instant follow the venue's sequence when the file has one; a
+        # ``deleted`` row then goes last, since it ends the order, and the
+        # rest keep their file order (the sort is stable).  A row with no
+        # sequence number (a capture can write a fill it took from the trade
+        # tape that way) takes the number of the row before it in the file,
+        # so it stays after the message it arrived after.  Rows before the
+        # first numbered one take the lowest number, so they stay first.
+        sort_columns = {"_later": events["action"] != "created"}
+        order_keys = ["id", "_later", "timestamp"]
+        if SEQUENCE_COLUMN in events.columns:
+            sequence = events[SEQUENCE_COLUMN].ffill()
+            sort_columns["_sequence"] = sequence.fillna(sequence.min())
+            order_keys.append("_sequence")
+        order_keys.append("action")
         events = (
-            events.assign(_later=events["action"] != "created")
-            .sort_values(
-                by=["id", "_later", "volume", "action", "timestamp"],
-                ascending=[True, True, False, True, True],
-                kind="stable",
-            )
-            .drop(columns="_later")
+            events.assign(**sort_columns)
+            .sort_values(by=order_keys, kind="stable")
+            .drop(columns=list(sort_columns))
         )
 
         events["event_id"] = np.arange(1, len(events) + 1)
         events = self._remove_duplicates(events)
 
-        # A volume drop between consecutive events for the same id is always a
-        # fill on Bitstamp — the venue does not allow order amendments, so a
-        # price change between events is the matching engine reporting the
-        # fill price (taker orders) or the order walking the book (aggressors),
-        # not an in-place modification.  A rise is not a fill: only the
-        # zero-size ``created`` row of an instant order is followed by one.
-        # Integer lots, so the difference is exact and needs no rounding back
-        # onto the size grid (issue #226); ``diff`` still yields a float column
-        # because the first row per id is NaN, so cast once it is filled.
+        # A volume drop between consecutive events for the same id is a fill.
+        # Bitstamp does not allow order amendments, so a price change between
+        # events is the matching engine reporting the fill price (taker
+        # orders) or the order walking the book (aggressors), not an in-place
+        # modification.  A rise is never a fill: the zero-size ``created`` row
+        # of an instant order is followed by one, and some captures in this
+        # format raise an order's size.  Integer lots, so the difference is
+        # exact and needs no rounding back onto the size grid; ``diff`` still
+        # yields a float column because the first row per id is NaN, so cast
+        # once it is filled.
         fill_deltas = events.groupby("id")["volume"].diff().fillna(0)
         events["fill"] = (-fill_deltas).clip(lower=0).astype("int64")
 
-        # Sort timestamps within each id.  The frame is id-ordered (primary
-        # key of the sort above; _remove_duplicates only filters rows), so a
-        # stable global (id, timestamp) lexsort gathered back positionally is
-        # equivalent to the per-group sort — without the per-group Python
-        # lambda, which dominated load time (~19s on the bundled sample).  The
-        # lexsort key is the raw UTC-ns int64; the tz-aware column is reordered
-        # through its ExtensionArray so the zone and unit survive (issue #154).
+        # Sort timestamps within each id.  The rows are already in time order
+        # apart from the ``created`` row, which comes first even when a later
+        # row is stamped before it; this gives it the order's earliest time.
+        # The frame is id-ordered (primary key of the sort above;
+        # _remove_duplicates only filters rows), so a stable global (id,
+        # timestamp) lexsort gathered back positionally is equivalent to the
+        # per-group sort — without the per-group Python lambda, which
+        # dominated load time (~19s on the bundled sample).  The lexsort key
+        # is the raw UTC-ns int64; the tz-aware column is reordered through
+        # its ExtensionArray so the zone and unit survive (issue #154).
         ts_i8 = events["timestamp"].astype("int64").to_numpy()
         order = np.lexsort((ts_i8, events["id"].to_numpy()))
         events["timestamp"] = events["timestamp"].array[order]

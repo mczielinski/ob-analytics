@@ -299,6 +299,117 @@ class TestInstantOrders:
         assert level["volume"].iloc[-1] == 50_000_000
 
 
+class TestRowOrder:
+    """An order's rows come in the order they happened, ``created`` first.
+    Some captures in this format raise an order's size, so the rows cannot be
+    put in order by size."""
+
+    TS = 1_777_691_156_000
+
+    @classmethod
+    def _load(cls, tmp_path, rows, *, sequence=None, track_sequence=False):
+        """Load one bid order from ``(ms after TS, size in lots, action)`` rows,
+        written to the file in the order given."""
+        frame = pd.DataFrame(
+            [
+                {
+                    "id": 7,
+                    "timestamp": cls.TS + dt,
+                    "exchange_timestamp": cls.TS + dt,
+                    "price": 78360.0,
+                    "volume": lots * 1e-8,
+                    "action": action,
+                    "direction": "bid",
+                }
+                for dt, lots, action in rows
+            ]
+        )
+        if sequence is not None:
+            frame["sequence"] = sequence
+        orders = tmp_path / "orders.csv"
+        frame.to_csv(orders, index=False)
+        config = PipelineConfig(track_sequence=track_sequence)
+        return BitstampLoader(config).load(orders)
+
+    def test_a_raised_size_keeps_time_order_and_fills_only_the_drop(self, tmp_path):
+        events = self._load(
+            tmp_path, [(0, 5, "created"), (1, 8, "changed"), (2, 3, "changed")]
+        )
+
+        assert list(events["volume"]) == [5, 8, 3]
+        assert list(events["fill"]) == [0, 0, 5]
+
+    def test_a_size_raised_after_a_fill_stays_in_time_order(self, tmp_path):
+        events = self._load(
+            tmp_path,
+            [
+                (0, 5, "created"),
+                (1, 3, "changed"),
+                (2, 8, "changed"),
+                (3, 6, "changed"),
+            ],
+        )
+
+        assert list(events["volume"]) == [5, 3, 8, 6]
+        assert list(events["fill"]) == [0, 2, 0, 2]
+
+    @pytest.mark.parametrize("track_sequence", [False, True])
+    def test_rows_at_one_instant_follow_the_venue_sequence(
+        self, tmp_path, track_sequence
+    ):
+        # The file holds the two changes in the wrong order; the venue's
+        # sequence numbers say which came first.
+        events = self._load(
+            tmp_path,
+            [(0, 5, "created"), (1, 3, "changed"), (1, 8, "changed")],
+            sequence=[1, 3, 2],
+            track_sequence=track_sequence,
+        )
+
+        assert list(events["volume"]) == [5, 8, 3]
+        assert list(events["fill"]) == [0, 0, 5]
+
+    @pytest.mark.parametrize("track_sequence", [False, True])
+    def test_a_row_without_a_sequence_number_keeps_its_place_in_the_file(
+        self, tmp_path, track_sequence
+    ):
+        # A capture can write a fill it took from the trade tape with no
+        # sequence number.  It arrived after the row before it in the file.
+        events = self._load(
+            tmp_path,
+            [(0, 5, "created"), (1, 3, "changed"), (1, 2, "changed")],
+            sequence=[5, None, 8],
+            track_sequence=track_sequence,
+        )
+
+        assert list(events["volume"]) == [5, 3, 2]
+        assert list(events["fill"]) == [0, 2, 1]
+
+    def test_rows_at_one_instant_keep_file_order_without_a_sequence(self, tmp_path):
+        events = self._load(
+            tmp_path, [(0, 5, "created"), (1, 3, "changed"), (1, 8, "changed")]
+        )
+
+        assert list(events["volume"]) == [5, 3, 8]
+        assert list(events["fill"]) == [0, 2, 0]
+
+    def test_a_deleted_row_comes_last_among_rows_at_one_instant(self, tmp_path):
+        events = self._load(
+            tmp_path, [(0, 5, "created"), (1, 2, "deleted"), (1, 2, "changed")]
+        )
+
+        assert list(events["action"]) == ["created", "changed", "deleted"]
+        assert list(events["fill"]) == [0, 3, 0]
+
+    def test_the_created_row_comes_first_even_when_stamped_later(self, tmp_path):
+        events = self._load(
+            tmp_path, [(1, 4, "changed"), (2, 5, "created"), (3, 0, "deleted")]
+        )
+
+        assert list(events["action"]) == ["created", "changed", "deleted"]
+        assert list(events["fill"]) == [0, 1, 4]
+
+
 class TestQuoteAmountTaker:
     """An instant order bought by quote amount never reports the size it
     executed: its rows are ``created`` 0, ``changed`` 1 lot and ``deleted`` 1
