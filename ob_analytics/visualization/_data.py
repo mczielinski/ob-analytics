@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from ob_analytics._utils import validate_columns
+from ob_analytics._utils import validate_columns, window_start
 from ob_analytics.depth import (
     book_imbalance,
     filter_depth,
@@ -2292,7 +2292,8 @@ def prepare_transaction_costs_data(
     costs : pandas.DataFrame
         A :func:`~ob_analytics.cost.transaction_costs` frame.
     window : str, optional
-        Pandas offset string for the averaging window.  Default ``"1min"``.
+        Length of the averaging window, a fixed duration such as ``"1min"``;
+        windows count from the Unix epoch.  Default ``"1min"``.
 
     Returns
     -------
@@ -2324,7 +2325,10 @@ def prepare_transaction_costs_data(
         frame["_w_" + column] = values * weight
         frame["_d_" + column] = np.where(np.isnan(values), 0.0, weight)
 
-    grouped = frame.groupby(pd.Grouper(key="timestamp", freq=window))
+    starts = window_start(
+        frame["timestamp"], window, "prepare_transaction_costs_data: window"
+    )
+    grouped = frame.groupby(starts)
     binned = grouped.agg(
         w_effective=("_w_effective_spread_bps", "sum"),
         d_effective=("_d_effective_spread_bps", "sum"),
@@ -2332,9 +2336,8 @@ def prepare_transaction_costs_data(
         d_realized=("_d_realized_spread_bps", "sum"),
         w_impact=("_w_price_impact_bps", "sum"),
         d_impact=("_d_price_impact_bps", "sum"),
-        n_trades=("_weight", "size"),
     )
-    binned = binned[binned["n_trades"] > 0].reset_index()
+    binned = binned.reset_index()
 
     def ratio(numerator: str, denominator: str) -> np.ndarray:
         num = binned[numerator].to_numpy(dtype=np.float64)

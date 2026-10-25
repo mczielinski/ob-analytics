@@ -6,6 +6,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from ob_analytics._utils import window_start
+from ob_analytics.bars import bars
+from ob_analytics.cost import amihud, roll_spread
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
 from ob_analytics.flow_toxicity import (
     KYLE_MIN_T_STAT,
@@ -13,6 +16,7 @@ from ob_analytics.flow_toxicity import (
     KyleLambdaResult,
     compute_kyle_lambda,
     compute_vpin,
+    ofi_by_horizon,
     order_flow_imbalance,
     vpin_bucket_volume,
 )
@@ -577,6 +581,92 @@ class TestOrderFlowImbalance:
         bad = pd.DataFrame({"timestamp": [1]})
         with pytest.raises(ConfigError):
             order_flow_imbalance(bad)
+
+
+class TestOneWindowAnchor:
+    """Every time window counts from the Unix epoch (#350).
+
+    ``7s`` does not divide a day, so a window counted from the first day's
+    midnight starts somewhere else than one counted from the epoch.
+    """
+
+    def test_ofi_matches_time_bars(self, sample_trades):
+        ofi = order_flow_imbalance(sample_trades, "7s")
+        time_bars = bars(sample_trades, "time", "7s")
+        assert len(ofi) == len(time_bars) == 94
+        starts = time_bars["timestamp_start"].dt.floor("7s")
+        assert (ofi["timestamp"].to_numpy() == starts.to_numpy()).all()
+        np.testing.assert_allclose(
+            ofi["ofi"], time_bars["signed_volume"] / time_bars["volume"]
+        )
+        assert (ofi["net_volume"].to_numpy() == time_bars["signed_volume"]).all()
+
+    def test_ofi_matches_one_step_horizon(self, sample_trades):
+        ofi = order_flow_imbalance(sample_trades, "7s")
+        by_horizon = ofi_by_horizon(sample_trades, horizons=("7s",), grid="7s")
+        traded = by_horizon.dropna(subset=["7s"]).reset_index(drop=True)
+        assert (traded["timestamp"].to_numpy() == ofi["timestamp"].to_numpy()).all()
+        np.testing.assert_allclose(traded["7s"], ofi["ofi"])
+
+    def test_kyle_windows_match_time_bars(self, sample_trades):
+        reg = compute_kyle_lambda(sample_trades, "7s", n_boot=0).regression_df
+        time_bars = bars(sample_trades, "time", "7s")
+        ofi = order_flow_imbalance(sample_trades, "7s")
+        assert (reg["timestamp"].to_numpy() == ofi["timestamp"].to_numpy()).all()
+        assert (
+            reg["delta_price"].to_numpy()
+            == (time_bars["close"] - time_bars["open"]).to_numpy()
+        ).all()
+        assert (
+            reg["signed_volume"].to_numpy() == time_bars["signed_volume"].to_numpy()
+        ).all()
+
+    def test_window_starts_on_the_epoch_grid(self):
+        # Midnight is not on the 7 s epoch grid, so counting from midnight
+        # would open the first window at the first trade instead.
+        start = pd.Timestamp("2026-05-02 00:00:00", tz="UTC")
+        offset = (start - pd.Timestamp(0, tz="UTC")) % pd.Timedelta("7s")
+        assert offset > pd.Timedelta(0)
+        trades = _trades(["buy", "sell"], base_sec_offsets=[0, 1])
+        trades["timestamp"] = [start, start + pd.Timedelta("1s")]
+        ofi = order_flow_imbalance(trades, "7s")
+        assert ofi["timestamp"].iloc[0] == start - offset
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda t: order_flow_imbalance(t, "1ME"),
+            lambda t: compute_kyle_lambda(t, "1ME", n_boot=0),
+            lambda t: ofi_by_horizon(t, grid="1ME"),
+            lambda t: ofi_by_horizon(t, horizons=("1ME",)),
+            lambda t: amihud(t, window="1ME"),
+            lambda t: roll_spread(t, window="1ME"),
+        ],
+        ids=["ofi", "kyle", "horizon_grid", "horizon", "amihud", "roll_spread"],
+    )
+    def test_calendar_window_is_a_config_error(self, call):
+        # A month has no fixed length; the error names the function called.
+        trades = _trades(["buy", "sell"])
+        with pytest.raises(ConfigError, match="fixed duration") as info:
+            call(trades)
+        assert not str(info.value).startswith("bars")
+
+    def test_window_start_survives_a_dst_change(self):
+        # 01:30 happens twice in New York on 2026-11-01; flooring local
+        # times there raises, flooring in UTC does not.
+        utc = pd.Series(
+            pd.date_range("2026-11-01 05:00", periods=4, freq="30min", tz="UTC")
+        )
+        local = utc.dt.tz_convert("America/New_York")
+        starts = window_start(local, "1h")
+        assert (starts.dt.tz_convert("UTC") == utc.dt.floor("1h")).all()
+
+    def test_zero_size_window_is_kept_as_nan(self):
+        trades = _trades(["buy", "sell"], volumes=[0.0, 2.0], base_sec_offsets=[0, 90])
+        ofi = order_flow_imbalance(trades, "1min")
+        assert len(ofi) == 2
+        assert np.isnan(ofi["ofi"].iloc[0])
+        assert ofi["ofi"].iloc[1] == -1.0
 
 
 # ── Visualization ────────────────────────────────────────────────────

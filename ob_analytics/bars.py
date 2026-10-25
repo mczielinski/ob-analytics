@@ -41,7 +41,12 @@ import numpy as np
 import pandas as pd
 
 from ob_analytics._registry import Registry
-from ob_analytics._utils import validate_columns, validate_non_empty
+from ob_analytics._utils import (
+    fixed_window,
+    validate_columns,
+    validate_non_empty,
+    window_start,
+)
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import BarRule
 from ob_analytics.trade_sign import resolve_direction
@@ -121,22 +126,11 @@ class ClockRule:
 
     def normalize(self, threshold: Any) -> pd.Timedelta:
         """Read *threshold* as a fixed duration."""
-        try:
-            step = pd.Timedelta(threshold)
-        except (ValueError, TypeError) as exc:
-            raise ConfigError(
-                f"bars: the 'time' rule needs a fixed duration such as '5s', "
-                f"'1min' or '1h'; got {threshold!r}."
-            ) from exc
-        if step <= pd.Timedelta(0):
-            raise ConfigError(
-                f"bars: the 'time' rule needs a positive duration, got {step}"
-            )
-        return step
+        return fixed_window(threshold, "bars: the 'time' rule")
 
     def assign(self, frame: pd.DataFrame, threshold: pd.Timedelta) -> np.ndarray:
-        """Return the bar index of each trade: its timestamp floored to *threshold*."""
-        floored = frame["timestamp"].dt.floor(threshold)
+        """Return the bar index of each trade: the window its timestamp falls in."""
+        floored = window_start(frame["timestamp"], threshold)
         # `frame` is in trade order, so factorising the floored timestamps
         # numbers the occupied spans 0, 1, 2, ... and drops the empty ones.
         return pd.factorize(floored)[0].astype(np.int64)
