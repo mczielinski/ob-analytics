@@ -299,6 +299,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The Bitstamp-format loader puts an order's rows in time order** (#354).
+  It put the `created` row first and the rest by size, largest first, which
+  assumed an order's size only falls. Some captures in this format raise an
+  order's size, so the rows came out of order and the fills were wrong: an
+  order of 5 lots that fell to 3 and then rose to 8 showed its 8 before its 3.
+  The loader now keeps the `created` row first and puts the rest in order by
+  `timestamp`. Rows that share an instant follow the file's `sequence` column
+  when it has one; a `deleted` row then goes last, and the rest keep their
+  order in the file. A row with no sequence number, such as a fill a
+  cryptofeed capture took from the trade tape, keeps its place after the row
+  before it in the file. `fill` is still taken only from drops in size, so a rise has `fill` 0. The bundled Bitstamp
+  sample gives the same events, trades, `depth` and `depth_summary` as before.
+
 - **The depth summary keeps crossed price levels** (#343). When a new quote
   crossed a level on the other side, `PriceLevelBook` deleted that level for
   good, so the depth summary lost it for the rest of the run while the depth
