@@ -881,24 +881,16 @@ def iceberg_events_and_trades() -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 @pytest.fixture
-def hidden_trades_and_events() -> tuple[pd.DataFrame, pd.DataFrame]:
-    """``hidden_trades()`` output for a truly-hidden maker and a visible one.
-
-    Returns the hidden-trade rows and the maker events they were read against.
-    """
-    from ob_analytics.engine import HIDDEN_ORDER_ID
+def hidden_trade_rows() -> pd.DataFrame:
+    """``hidden_trades()`` output for two trades inside the spread."""
     from ob_analytics.hidden_liquidity import hidden_trades
 
     ts = pd.Timestamp("2015-05-01 01:00:00", tz="UTC")
     maker_events = pd.DataFrame(
-        [
-            {
-                "event_id": 100,
-                "id": HIDDEN_ORDER_ID,
-                "timestamp": ts + pd.Timedelta(seconds=1),
-            },
-            {"event_id": 200, "id": 55, "timestamp": ts + pd.Timedelta(seconds=2)},
-        ]
+        {
+            "event_id": [100, 200],
+            "timestamp": [ts + pd.Timedelta(seconds=1), ts + pd.Timedelta(seconds=2)],
+        }
     )
     depth_summary = pd.DataFrame(
         {"timestamp": [ts], "best_bid_price": [236.50], "best_ask_price": [237.00]}
@@ -910,19 +902,18 @@ def hidden_trades_and_events() -> tuple[pd.DataFrame, pd.DataFrame]:
             "maker_event_id": [100, 200],
         }
     )
-    return hidden_trades(maker_events, trades, depth_summary), maker_events
+    return hidden_trades(maker_events, trades, depth_summary)
 
 
 @pytest.fixture
 def hidden_liquidity_overlay(
-    iceberg_events_and_trades, hidden_trades_and_events
+    iceberg_events_and_trades, hidden_trade_rows
 ) -> dict[str, pd.DataFrame]:
     """The overlay frames for the two fixtures above, unclipped."""
     from ob_analytics.hidden_liquidity import detect_icebergs
     from ob_analytics.visualization._data import prepare_hidden_liquidity_overlay
 
     detection = detect_icebergs(*iceberg_events_and_trades)
-    hidden, maker_events = hidden_trades_and_events
     return prepare_hidden_liquidity_overlay(
-        detection.icebergs, detection.slices, hidden, maker_events
+        detection.icebergs, detection.slices, hidden_trade_rows
     )

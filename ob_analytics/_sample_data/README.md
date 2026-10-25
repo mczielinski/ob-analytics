@@ -27,14 +27,14 @@ change what you see:
   `2002347642003458` at 78,374. The book that `order_book()` rebuilds is
   crossed for 91.6% of the session; with those two orders removed when a trade
   first proves them gone, it is crossed for 1.3%. `audit` names both. The
-  depth summary already drops crossed levels, so they change it much less:
-  the transaction costs and the count of hidden trades come out the same
-  without them. Captures made now fetch the book again until it overlaps the
+  depth summary leaves a crossed level out of its touch, so they change it
+  much less: without them, 45 trades rather than 48 have a negative
+  effective spread, and no trade is flagged as hidden either way. Captures made now fetch the book again until it overlaps the
   stream, so they do not have this fault.
-- **72 of the 284 trades have a negative effective spread.** This is not the
-  stale orders. Bitstamp sends order messages and trade prints separately, and
-  in 40 of those trades the taker's order reaches the order stream before the
-  print does. See the transaction-costs how-to.
+- **48 of the 284 trades have a negative effective spread.** Few of them are
+  the stale orders. Bitstamp sends order messages and trade prints separately,
+  and in 42 of those trades the taker's order reaches the order stream before
+  the print does. See the transaction-costs how-to.
 - **30 minutes is short for VPIN.** The default VPIN bucket is a fiftieth of a
   day's volume. Worked out from this capture, it comes to 96% of all the
   volume the capture traded, so `compute_vpin` fills one bucket and warns.

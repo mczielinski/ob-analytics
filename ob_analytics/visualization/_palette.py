@@ -52,11 +52,8 @@ class Palette:
         Order-outcome fate: fully executed / partly executed with the
         remainder removed / removed without any execution.
     hidden_trade : str
-        A confirmed hidden-order trade.
-    check_trade : str
-        A trade flagged as hidden whose maker order was visible (a diff
-        feed's stale depth summary), which needs checking rather than
-        trusting.
+        A trade that printed inside the visible spread, against an order the
+        book did not show.
     price_line : str
         The main price line (trade price, microprice) and dark markers.
     reference_line : str
@@ -107,7 +104,6 @@ class Palette:
     # Hidden liquidity overlay (depth heatmap / order activity map). Icebergs
     # take their side colour from bid/ask.
     hidden_trade: str = "#F0E442"  # Okabe–Ito yellow
-    check_trade: str = "#999999"
 
     # Neutral marks
     price_line: str = "#222222"

@@ -839,6 +839,9 @@ class TestBuildGalleryModel:
         # #272: a full day can have hundreds of icebergs / thousands of hidden
         # trades; the overlay handed to the faces must be the subset inside the
         # shared zoom window and mid-anchored price band, not the raw detection.
+        # The clipping of hidden trades is checked on the hand-built result of
+        # the next test: the bundled sample has none (below).
+        from ob_analytics.engine import HIDDEN_ORDER_ID
         from ob_analytics.hidden_liquidity import hidden_trades as find_hidden_trades
         from ob_analytics.pipeline import Pipeline
 
@@ -848,32 +851,22 @@ class TestBuildGalleryModel:
             Level.L2
         )
         assert heatmap is not None
-        overlay_hidden = heatmap.prep_kwargs["hidden_trades"]
 
+        # #343: every maker on the bundled Bitstamp sample is a visible order,
+        # so once the depth summary keeps crossed levels no trade prints
+        # inside its spread.  Before, the summary dropped levels a stale quote
+        # had crossed and 29 such trades were flagged.
+        makers = result.trades["maker_event_id"].map(
+            result.events.drop_duplicates("event_id").set_index("event_id")["id"]
+        )
+        assert makers.notna().all() and (makers != HIDDEN_ORDER_ID).all()
         full_hidden = find_hidden_trades(
             result.events, result.trades, result.depth_summary
         )
-        if full_hidden.empty:
-            pytest.skip("bundled sample has no hidden trades to check clipping against")
+        assert full_hidden.empty
+        assert heatmap.prep_kwargs["hidden_trades"].empty
 
-        # Every overlaid row's maker_event_id is one of the full detection's --
-        # the overlay is a genuine subset, not independently derived data.
-        assert set(overlay_hidden["maker_event_id"]) <= set(
-            full_hidden["maker_event_id"]
-        )
-        assert {"hidden", "check"} >= set(overlay_hidden["category"].unique())
-
-        # ... and it really is clipped: strictly fewer rows than the raw
-        # detection, all inside the zoom window and the shared price band.
-        assert 0 < len(overlay_hidden) < len(full_hidden)
         zoom_start, zoom_end = _auto_zoom_window(result.events)
-        assert overlay_hidden["timestamp"].between(zoom_start, zoom_end).all()
-        assert (
-            overlay_hidden["price"]
-            .between(heatmap.prep_kwargs["price_from"], heatmap.prep_kwargs["price_to"])
-            .all()
-        )
-
         for frame in (
             heatmap.prep_kwargs["iceberg_lines"],
             heatmap.prep_kwargs["iceberg_refills"],
@@ -953,6 +946,17 @@ class TestBuildGalleryModel:
                     "direction": "bid",
                     "fill": 0.0,
                 },
+                # A hidden maker fill at 10s, outside the zoom window.
+                {
+                    "event_id": 101,
+                    "id": HIDDEN_ORDER_ID,
+                    "timestamp": _at(seconds=10),
+                    "price": 236.70,
+                    "volume": 0.0,
+                    "action": "changed",
+                    "direction": "ask",
+                    "fill": 5.0,
+                },
                 # A hidden maker fill at ~51s.
                 {
                     "event_id": 100,
@@ -975,14 +979,18 @@ class TestBuildGalleryModel:
 
         trades = pd.DataFrame(
             {
-                "timestamp": [_at(seconds=50, milliseconds=100), _at(seconds=51)],
-                "price": [236.50, 236.60],
-                "volume": [100.0, 5.0],
+                "timestamp": [
+                    _at(seconds=10),
+                    _at(seconds=50, milliseconds=100),
+                    _at(seconds=51),
+                ],
+                "price": [236.70, 236.50, 236.60],
+                "volume": [5.0, 100.0, 5.0],
                 "direction": pd.Categorical(
-                    ["sell", "buy"], categories=["buy", "sell"]
+                    ["buy", "sell", "buy"], categories=["buy", "sell"]
                 ),
-                "maker_event_id": [2, 100],
-                "taker_event_id": [50, 51],
+                "maker_event_id": [101, 2, 100],
+                "taker_event_id": [49, 50, 51],
             }
         )
         depth_summary = pd.DataFrame(
@@ -1015,7 +1023,8 @@ class TestBuildGalleryModel:
 
         assert not refills.empty
         assert refills["price"].iloc[0] == pytest.approx(236.50)
-        assert not hidden.empty
+        # The trade at 10s is outside the zoom window, so only one is left.
+        assert len(hidden) == 1
         assert hidden["price"].iloc[0] == pytest.approx(236.60)
         assert hidden["best_bid_price"].iloc[0] == pytest.approx(236.50)
 

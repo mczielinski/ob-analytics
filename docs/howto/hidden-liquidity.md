@@ -143,14 +143,13 @@ spread.
 
 Both functions trust the book rebuilt from the events. That holds for a
 matched book such as LOBSTER or Databento. A diff feed such as Bitstamp can
-cross, and the depth summary then drops the resting levels a new quote crosses.
-On the bundled Bitstamp sample, `hidden_trades` flags 29 of 284 trades. Every
-one of them has a visible maker order at the trade price, so none is a trade
-against a hidden order. In all 29 the depth table holds volume at the maker's
-price just before the fill, but the depth summary does not show that level.
+cross. The depth summary keeps every price level, as the depth table does, and
+leaves a crossed level out of its touch only while a more recently updated
+quote on the other side crosses it. On the bundled Bitstamp sample, every
+maker order is visible, and `hidden_trades` flags none of the 284 trades.
 
-On a diff feed, run the [data-quality audit](audit.md) first, and read what
-`hidden_trades` returns as trades to look at, not as hidden orders.
+A stale order can still put a wrong price at the touch. On a diff feed, run the
+[data-quality audit](audit.md) first.
 
 ## See it on a plot
 
@@ -166,10 +165,8 @@ plot_result(result, "order_activity", level="L3")
 
 Diamonds mark iceberg refills, joined by a line per iceberg (opacity =
 `confidence`); stars mark `hidden_trades` rows, with a thin line to the
-standing best bid and best ask so a print reads as *inside* that spread. A
-filled star is a confirmed hidden order; an open star is a trade to check --
-the diff-feed case above, where the maker order was actually visible, or one
-where its identity did not resolve at all. Both overlays clip to the
+standing best bid and best ask so a print reads as *inside* that spread. Both
+overlays clip to the
 gallery's zoom window, since a full day can carry hundreds of icebergs and
 thousands of hidden trades.
 
@@ -181,9 +178,7 @@ To draw the same overlay elsewhere, build it with
 ```python
 from ob_analytics.visualization import prepare
 
-overlay = prepare.hidden_liquidity_overlay(
-    found.icebergs, found.slices, inside, result.events,
-)
+overlay = prepare.hidden_liquidity_overlay(found.icebergs, found.slices, inside)
 ```
 
 ## Related

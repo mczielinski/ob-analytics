@@ -27,10 +27,10 @@ print(table[["timestamp", "close", "spread_bps", "obi", "trade_imbalance", "vpin
 ```text
                        timestamp   close  spread_bps       obi  trade_imbalance  vpin
 2026-05-02 02:36:23.889000+00:00 78319.0    0.127684  0.772174              1.0   1.0
-2026-05-02 02:36:23.918000+00:00 78319.0    1.915085 -0.216647              1.0   1.0
-2026-05-02 02:36:23.924000+00:00 78319.0    1.915085 -0.216647              1.0   1.0
-2026-05-02 02:36:23.936000+00:00 78320.0    1.915085 -0.216647              1.0   1.0
-2026-05-02 02:36:23.936000+00:00 78321.0    1.915085 -0.216647              1.0   1.0
+2026-05-02 02:36:23.918000+00:00 78319.0    1.787401 -0.950544              1.0   1.0
+2026-05-02 02:36:23.924000+00:00 78319.0    1.787401 -0.950544              1.0   1.0
+2026-05-02 02:36:23.936000+00:00 78320.0    1.787401 -0.950544              1.0   1.0
+2026-05-02 02:36:23.936000+00:00 78321.0    1.787401 -0.950544              1.0   1.0
 ```
 
 Two decisions make the table, and they are separate: where the rows fall, and
@@ -158,8 +158,10 @@ both would otherwise arrive in the table as ordinary numbers:
 
 Both are dropped from the reference series, so a row reaches back to the last
 quote that could be read — the same thing it does for any other instant with
-no quote of its own. A **locked** book, bid equal to ask, is a real state at a
-spread of zero and is kept. The same test is what
+no quote of its own. A **locked** book, bid equal to ask, passes the test at a
+spread of zero, but the depth summary never holds one: it uncrosses a locked
+touch as it does a crossed one, by leaving out the level updated less
+recently. The same test is what
 [`transaction_costs()`](transaction-costs.md) applies before measuring against
 a mid.
 
@@ -223,8 +225,8 @@ print(f"out of sample  R² {r_squared(test):+.3f}   ({len(test)} rows)")
 ```
 
 ```text
-in sample      R² +0.186   (88 rows)
-out of sample  R² +0.079   (38 rows)
+in sample      R² +0.173   (88 rows)
+out of sample  R² +0.118   (38 rows)
 ```
 
 Read that as a demonstration of the shape, not as a finding. The bundled

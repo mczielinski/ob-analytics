@@ -676,7 +676,6 @@ def build_gallery_model(
             icebergs_display,
             detection.slices,
             hidden_display,
-            raw_result.events,
             start_time=zoom_start,
             end_time=zoom_end,
             price_from=price_from,
