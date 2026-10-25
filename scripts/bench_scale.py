@@ -305,10 +305,26 @@ def exit_code(regressions: list[Regression]) -> int:
     return 1 if regressions else 0
 
 
+def os_release() -> str:
+    """The OS release, such as ``ubuntu-24.04``.
+
+    Two runners with the same kernel family, CPU and Python can still differ in
+    peak memory when the OS release differs, so the release is part of the
+    machine.  Where there is no os-release file (macOS, Windows), the kernel
+    release stands in.
+    """
+    try:
+        info = platform.freedesktop_os_release()
+    except OSError:
+        return platform.release()
+    parts = [info.get("ID", ""), info.get("VERSION_ID", "")]
+    return "-".join(part for part in parts if part) or platform.release()
+
+
 def machine() -> str:
     """What the numbers were measured on, short enough to read in a diff."""
     version = f"{sys.version_info.major}.{sys.version_info.minor}"
-    return f"{platform.system()} {platform.machine()} python{version}"
+    return f"{platform.system()} {platform.machine()} {os_release()} python{version}"
 
 
 def save_baseline(path: Path, measurements: list[Measurement]) -> None:
