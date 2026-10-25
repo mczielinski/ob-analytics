@@ -355,3 +355,77 @@ class TestMachineMismatch:
         main(["--runs", "synth", "--baseline", str(path)])
 
         assert "Nintendo 64 python3.11" in capsys.readouterr().out
+
+    def test_a_baseline_from_another_os_release_is_called_out(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # The case that hid a 40 MiB jump: ubuntu-latest moved from 24.04 to
+        # 26.04 on the same CPU and Python, and the warning stayed silent.
+        path = tmp_path / "bench-baseline.json"
+        _os_release(monkeypatch, {"ID": "ubuntu", "VERSION_ID": "24.04"})
+        save_baseline(path, [_measurement("load", run="synth", seconds=600.0)])
+        _os_release(monkeypatch, {"ID": "ubuntu", "VERSION_ID": "26.04"})
+
+        main(["--runs", "synth", "--baseline", str(path)])
+
+        out = capsys.readouterr().out
+        assert "recorded on" in out
+        assert "ubuntu-24.04" in out
+        assert "ubuntu-26.04" in out
+
+    def test_a_baseline_from_this_machine_is_not_called_out(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        path = tmp_path / "bench-baseline.json"
+        save_baseline(path, [_measurement("load", run="synth", seconds=600.0)])
+
+        main(["--runs", "synth", "--baseline", str(path)])
+
+        assert "recorded on" not in capsys.readouterr().out
+
+
+def _os_release(monkeypatch: pytest.MonkeyPatch, info: dict[str, str] | None) -> None:
+    """Make the os-release file read as *info*, or be missing when ``None``."""
+
+    def read() -> dict[str, str]:
+        if info is None:
+            raise OSError("no os-release file")
+        return info
+
+    monkeypatch.setattr(bench_scale.platform, "freedesktop_os_release", read)
+    monkeypatch.setattr(bench_scale.platform, "release", lambda: "23.6.0")
+
+
+class TestMachine:
+    """The machine string names everything that moves the numbers."""
+
+    def test_names_the_os_release(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _os_release(monkeypatch, {"ID": "ubuntu", "VERSION_ID": "24.04"})
+
+        assert "ubuntu-24.04" in machine()
+
+    def test_names_a_release_without_a_version_by_its_id(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _os_release(monkeypatch, {"ID": "arch"})
+
+        assert " arch " in machine()
+
+    def test_falls_back_to_the_kernel_release_without_an_os_release_file(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _os_release(monkeypatch, None)
+
+        assert " 23.6.0 " in machine()
+
+    def test_still_names_the_system_cpu_and_python(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _os_release(monkeypatch, {"ID": "ubuntu", "VERSION_ID": "24.04"})
+        monkeypatch.setattr(bench_scale.platform, "system", lambda: "Linux")
+        monkeypatch.setattr(bench_scale.platform, "machine", lambda: "x86_64")
+
+        assert machine().startswith("Linux x86_64 ubuntu-24.04 python3.")
