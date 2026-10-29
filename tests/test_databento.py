@@ -1084,11 +1084,18 @@ class TestDbnFiles:
         path = tmp_path / name
         path.write_bytes(data)
 
+        # Collect first, so a file another test left open is not reported
+        # here; then count only warnings about this test's own file.
+        gc.collect()
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             read_mbo_frame(path)
             gc.collect()
-        assert not [w for w in caught if issubclass(w.category, ResourceWarning)]
+        assert not [
+            w
+            for w in caught
+            if issubclass(w.category, ResourceWarning) and name in str(w.message)
+        ]
 
     def test_a_store_the_caller_opened_is_left_open(self):
         import databento as db
