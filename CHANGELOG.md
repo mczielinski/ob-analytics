@@ -167,6 +167,387 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   scored the same on every venue. Read it with `recorded_sequence_restarts`
   and pass it to `data_quality_summary(sequence_restarts=...)`.
 
+- **A Bokeh plot backend** (#123). `result.plot(concept, backend="bokeh")`
+  renders the core concepts — `trade_tape`, `depth_heatmap`, `book_snapshot`,
+  `depth_chart` — as interactive Bokeh figures, alongside the static
+  Matplotlib default and the Plotly backend. Suited to Bokeh / Panel server
+  dashboards and streaming views. Ships in the new `bokeh` extra:
+  `pip install "ob-analytics[bokeh]"`.
+
+- **Binance venue notes and a market-data mirror** (#101). A new how-to page
+  covers capturing Binance spot through ccxt: the location block, the
+  `binanceus` alternative, the depth a 100-level book reaches, and trade
+  sides. `capture ccxt --market-data-mirror` (`CcxtSettings.market_data_mirror`)
+  reads Binance spot from Binance's market-data-only endpoints. New
+  `SequenceKind` and `recorded_sequence_kind()`, a `kind` argument on
+  `detect_sequence_gaps()`, and a `sequence_kind` argument on
+  `data_quality_summary()`.
+
+- **Find hidden liquidity** (#111). `detect_icebergs(events, trades)` finds
+  iceberg orders from their refills: a resting order filled out, then a new
+  order at the same side and price within one millisecond. It chains refills
+  into one suspected iceberg and gives each a `confidence`.
+  `hidden_trades(events, trades, depth_summary)` returns the trades that
+  printed strictly inside the visible spread. On one day of LOBSTER AAPL it
+  finds 85% of the type-5 hidden executions, with no false ones. The
+  synthetic generator now labels its iceberg slices in
+  `SynthSession.icebergs`, so the detector can be scored exactly. See the
+  [hidden liquidity
+  how-to](https://mczielinski.github.io/ob-analytics/howto/hidden-liquidity/).
+
+- **Iceberg refills and hidden trades drawn on the depth heatmap and order
+  activity map** (#272). Both L3 faces now overlay `detect_icebergs` and
+  `hidden_trades`: a diamond marks each refill, joined by a line per iceberg
+  (opacity = `confidence`); a star marks a hidden trade, with a thin line to
+  the standing best bid and best ask so the print reads as inside that
+  spread. A filled star is a confirmed hidden order; an open star is a trade
+  to check, where the maker order was actually visible or its maker
+  identity did not resolve at all — the diff-feed case the how-to guide
+  describes. Both overlays clip to the gallery's zoom window, and are absent
+  without error when a run has neither. New `prepare.hidden_liquidity_overlay`
+  builds the same overlay for a custom plot. `hidden_trades` now returns
+  `best_bid_price`/`best_ask_price` in `depth_summary`'s own dtype instead of
+  always casting to `int64`, so a caller already holding display-unit floats
+  gets floats back rather than a silently truncated value.
+
+- **A feature table for models** (#149). `features(trades, quotes)` returns one
+  tidy table: a point in time on each row and a microstructure feature in each
+  column — the shape a model or a study wants. It replaces a join per
+  measurement.
+
+  Two decisions make the table, and they are separate. Where the rows fall is
+  a bar rule, so `features()` takes the same sampling arguments `bars()` does
+  and the same arguments give the same cut in both; a time grid is the `time`
+  rule. What each column measures is a `Feature`, and ten ship: `price`,
+  `returns`, `flow`, `spread`, `mid_price`, `micro_price`, `imbalance`,
+  `depth`, `vpin` and `kyle_lambda`, writing 20 columns between them.
+  `register_feature` adds one of your own, usable by name with no edit to the
+  package.
+
+  Every row is stated as of the close of its bar. The trade columns hold what
+  happened inside the bar, and the book columns hold the book as it stood at
+  the close, a backward as-of join. Nothing from after that instant reaches
+  the row, so the table carries no look-ahead — which is tested by truncating
+  the inputs and checking that the rows that survive are unchanged, for every
+  rule and every feature. The table holds no target either: a target looks
+  forward, and building one is a shift the caller makes deliberately.
+
+  Two quote states are not books anything could have traded against, and both
+  would otherwise arrive as ordinary numbers: a side with nothing resting on
+  it, which the depth engine marks with a price of `0`, and a crossed book,
+  which a diff feed can genuinely hold. `readable_quotes()` drops them from
+  the reference series, so a row reaches back to the last quote it could read
+  — the same test `transaction_costs` already applied before measuring against
+  a mid. A locked book, bid equal to ask, is a real state at a spread of zero
+  and is kept.
+
+  Without a quotes frame the five book features are skipped and the table
+  holds the trade features alone; naming one explicitly raises instead. Two
+  features that would write the same column are an error rather than a silent
+  overwrite, and so is a name listed twice in `include`; a trailing window a
+  feature cannot use is refused when the feature is built. See the ["Build a feature table"
+  how-to](https://mczielinski.github.io/ob-analytics/howto/feature-table/),
+  which ends in a baseline model.
+
+- **Databento market-by-order files** (#100). `DatabentoSource` reads
+  Databento's DBN files in the MBO schema, which is a per-order feed: every
+  record carries an order id, so a file replays through the full L3 path with
+  order lifetimes, queue position and order classification. It reaches many
+  venues that no other source in the package does, US equities and futures
+  among them.
+
+  Databento reports an execution as a fill record that does not change the
+  book, followed by the cancel or modify that takes the size off it. The loader
+  pairs the two, so `fill` tells an execution apart from a cancel the trader
+  asked for, and each trade names the resting order it hit. The aggressor's
+  side comes from the venue rather than a classifier. A book clear deletes the
+  orders still resting, and the record's two clocks are kept apart: Databento's
+  receive time orders the events, the venue's own becomes
+  `exchange_timestamp`.
+
+  A modify that moves an order to another price or makes it bigger is recorded
+  as a `changed` event with the new price and size, and the depth follows it
+  (see Changed). The loss of queue priority is not modelled. The one modify the
+  depth still cannot follow is one that carries a fill and also moves the order
+  or changes its size by more than the fill; the loader says how many rows the
+  depth will be off by.
+
+  A feed the loader does not understand is refused: a publisher that only sends
+  top-of-book or price-level data, because its order ids mean nothing; a
+  price-level schema; a file covering more than one book; an action outside
+  DBN's own alphabet; an order id too big for the schema's signed 64-bit id. A
+  malformed record inside a feed it does understand — no price, or no side on a
+  book action — is dropped and counted in a warning, because refusing a whole
+  session over a handful of them would be worse.
+
+  Trades are built from the fill records by default, so each names the resting
+  order it hit. A trade the publisher sent no fill for — an auction, a trade
+  against a non-displayed order, an off-exchange print — is then left out, and
+  the loader warns with the volume. `DatabentoSettings(trades_from="prints")`
+  builds the trades from the whole tape instead, without makers; use it for
+  VWAP, bars, flow toxicity and costs. `DatabentoWriter`
+  writes an events frame back out as DBN. `scripts/databento_window.py` sizes a
+  query against the in-memory envelope before downloading it, then runs one
+  window at a time. `databento` is an optional extra
+  (`pip install "ob-analytics[databento]"`). See the ["Process Databento MBO
+  files"
+  how-to](https://mczielinski.github.io/ob-analytics/howto/databento/).
+
+- **Flow-toxicity results say when they rest on too little data** (#119). VPIN
+  and Kyle's λ were designed for markets that trade thousands of times a
+  minute, and on a thin tape they used to return a number with no sign that it
+  meant little. `KyleLambdaResult` now has `significant` and `diagnostics`:
+  λ is flagged when there are fewer than 30 regression windows
+  (`KYLE_MIN_WINDOWS`), when `|t|` is below 2 (`KYLE_MIN_T_STAT`), or when the
+  fit is undefined. It also carries a confidence interval, `ci_low` /
+  `ci_high`, from a block bootstrap over the windows (1000 resamples by
+  default, under a millisecond on the bundled sample, seeded with `seed=0` so
+  the same trades give the same interval; `n_boot=0` skips it).
+
+  `compute_vpin` records how it ran in the frame's `attrs`: `bucket_volume`,
+  `bucket_volume_rule`, `n_buckets`, and `diagnostics`, which flags a result
+  with fewer complete buckets than `n_buckets`. `bucket_volume` is now
+  optional. Left out, it is picked by the new `vpin_bucket_volume(trades)`,
+  which applies the common rule of average daily volume ÷ 50; a session
+  shorter than a day is scaled up to a day at the rate it traded
+  (`trading_day="24h"` by default). Existing calls are unchanged.
+
+  On the bundled sample, λ at 5-minute windows is flagged on both counts (7
+  windows, t = 1.45) and its interval spans zero; VPIN with the default bucket
+  fills one bucket and says so. Tutorial chapter 6 and the flow-toxicity
+  how-to now show these checks in place of the hand-written caveats.
+
+- **Bars: the trade stream resampled into OHLCV rows** (#148). `bars(trades,
+  rule, threshold)` cuts a trades frame into bars and returns one row each with
+  open, high, low, close, volume, turnover, VWAP, and the buy/sell split of
+  that volume. Five rules ship with it: `time` (a fixed span of the clock),
+  `tick` (a fixed number of trades), `volume` and `dollar` (a fixed amount of
+  size, or of price × size), and `imbalance` (signed size drifting a set amount
+  from where the bar opened). Leave the threshold out and the rule picks one
+  aiming at about 50 bars.
+
+  What differs between bar types is only where the boundaries fall, so that is
+  all a rule decides: `BarRule` states a `name`, how it reads its `threshold`,
+  and which bar each trade belongs to. `register_bar_rule` adds one of your
+  own, usable by name with no edit to the package. Feeds that don't label the
+  aggressor are classified the same way the flow-toxicity metrics do.
+
+  Bars draw as a `"bars"` plot face on both backends — candles over a strip of
+  volume coloured by the net aggressor — and `bars_panel()` puts them in a
+  gallery. The demos show a clock cut and a volume cut side by side. See the
+  ["Build bars from trades"
+  how-to](https://mczielinski.github.io/ob-analytics/howto/bars/).
+
+- **Transaction cost and price impact** (#110). A new `cost` module answers
+  what trading cost, rather than what the book advertised.
+  `transaction_costs(trades, quotes)` returns one row per trade with the
+  effective spread — what the taker paid to cross — split into the realized
+  spread the liquidity provider kept and the price impact the trade caused,
+  in price units and in basis points. The three add up exactly, trade by
+  trade. `cost_summary()` reduces that to volume-weighted session figures and
+  reports how many trades each one could be measured on.
+
+  `amihud()` and `roll_spread()` read liquidity from the trade prices alone,
+  so they run on a tape with no quotes and no aggressor side: the price move a
+  unit of turnover buys, and the spread implied by bid-ask bounce. Roll also
+  returns the lag-1 `autocorrelation` of the price changes, which its model
+  puts at exactly `-0.5`; how far the number sits from that is how little of
+  the price movement the bounce explains. On the bundled capture it is
+  `+0.197` and the estimate has no real root, so it is `NaN` rather than a
+  number the model does not support. The diagnostic matters in the other
+  direction too: when the autocovariance lands negative by chance Roll returns
+  a spread that is not there, and the autocorrelation is what catches it.
+
+  The mid a trade is measured against is the last quote *strictly before* it,
+  skipping crossed quotes: on a frame built from the same event stream, the
+  quote sharing a trade's instant is the book after that trade took the touch,
+  and a crossed book has no midpoint at all. A trade in the last horizon of
+  the capture has no future mid, so its realized spread is `NaN` rather than
+  the final quote reused.
+
+  `transaction_costs` takes `mid_column` to measure against a reference other
+  than the plain mid — `"micro_price"` for the size-weighted mid, which on the
+  bundled capture reads 1.24 bps against the plain mid's 1.45.
+
+  The decomposition draws as a level-less `transaction_costs` face on both
+  backends — two lines with the impact as the band between them — and
+  `transaction_costs_panel()` puts it in a gallery. Both demos now include it.
+  See the ["Measure transaction costs"
+  how-to](https://mczielinski.github.io/ob-analytics/howto/transaction-costs/).
+
+- **Polymarket prediction markets, through the ccxt source** (#103).
+  `ob-analytics capture ccxt --exchange polymarket --pair <token id>` streams
+  one outcome's order book and trades over Polymarket's public websocket, with
+  no account or API key. `--pair` is Polymarket's token id for the outcome,
+  which the Gamma API lists as `clobTokenIds`. Each outcome is its own book,
+  and its trades are priced in that outcome.
+
+  Polymarket makes a market's tick finer as the price nears 0 or 1, so a ccxt
+  capture now makes its recorded tick size finer when a price arrives between
+  two ticks, and counts each change in `tick_size_changes` in `meta.json`. The
+  replay then reads every price exactly. See the ["Capture Polymarket
+  prediction markets"
+  how-to](https://mczielinski.github.io/ob-analytics/howto/polymarket/).
+
+- **Kalshi prediction markets, through the ccxt source** (#102).
+  `ob-analytics capture ccxt --exchange kalshi --pair <market ticker>` records
+  a Kalshi market's order book and trades from Kalshi's public API, with no
+  account or API key, and `ob-analytics process` replays it through the L2
+  path. The ccxt source now looks up CCXT's prediction markets
+  (`ccxt.prediction`: Kalshi, Polymarket and others) as well as its crypto
+  exchanges; before, `--exchange kalshi` failed with "Unknown CCXT exchange".
+  `binance` and `hyperliquid` are in both lists, so the plain id keeps meaning
+  the crypto exchange and `prediction/<id>` picks the prediction market.
+
+  The captured book is the market's Yes book: a bid to buy No at `p` is
+  recorded as an offer to sell Yes at `1 - p`, and a trade is priced in Yes
+  and signed from the Yes side. A ccxt capture also records its market's tick
+  size in `meta.json`, which `process` and `audit` use. See the ["Capture
+  Kalshi prediction markets"
+  how-to](https://mczielinski.github.io/ob-analytics/howto/kalshi/).
+
+- **A capture records which rows came from its opening snapshot** (#237).
+  `orders.csv` and `depth.csv` gain an `origin` column: `snapshot` for the
+  opening book, `stream` for a live message, `shutdown` for a synthetic
+  close-out. The capture runner fills it in, so every live source gets it
+  without a change, and the loaders carry it through to `events`. Before this,
+  the only way to tell a snapshot row from a live one was to compare its
+  `exchange_timestamp` with `snapshot_microtimestamp` in `meta.json`.
+
+  `meta.json` also reports `n_snapshot_unconfirmed`: how many orders in the
+  opening book no later order event or trade mentioned. The bundled Bitstamp
+  sample has 6,294 of 6,512. Almost all of them sit far from the touch and did
+  not trade, but two stale asks among them held the best ask for most of the
+  session. See ["Capture live
+  data"](https://mczielinski.github.io/ob-analytics/howto/live-capture/).
+
+- **`audit` names stale resting orders** (#234). A trade above a resting ask,
+  or below a resting bid, shows that the order has gone. An order the venue
+  then does not report again within one second is now reported as a
+  `stale_orders` warning, and the worst one is named with its id, side, price
+  and how long it held the touch. On the bundled Bitstamp sample this names
+  ask `2002347646152704`, which held the ask touch for 27 minutes and causes
+  almost all of the 91.6% crossed time. The crossing note no longer calls a
+  diff feed's crossing normal when the run has stale orders. Nothing is
+  removed: `order_book()` still replays what the feed said. New public names:
+  `detect_stale_orders`, `StaleOrder`, `DataQualitySummary.stale_orders`, and a
+  `tick_size=` argument on `data_quality_summary`.
+
+- **A metric registry, so a user metric runs and plots with no core edit**
+  (#140). A metric is a plain object with a `name`, a `title`, the `levels` it
+  applies to, `compute(result)` and `prepare(frame)` — no base class to
+  inherit, the same structural typing sources and writers use. Register it with
+  `register_metric(metric)`, or ship it in your own package under the
+  `ob_analytics.metrics` entry-point group and `load_metric_plugins()` finds it
+  at `import ob_analytics`.
+
+  A registered metric is a level-less plot concept under its own name, so a
+  renderer at `(name, None, backend)` is its face. It then appears in
+  `available_concepts(result)`, renders through `result.plot(name)`, and gets
+  its own gallery card with no `extra_panels=`. Metrics run when asked for, not
+  during `Pipeline.run`: `result.metric(name)` computes one and
+  `result.metrics()` computes every metric whose `levels` include the run's
+  resolution — so an L3-only metric is skipped on an L2 run instead of failing
+  on its empty `events` table, and a metric that raises is logged and its card
+  dropped, so one broken metric cannot stop the gallery being built. New public
+  names: `Metric`,
+  `register_metric`, `list_metrics`, `get_metric`, `load_metric_plugins`,
+  `PipelineResult.metric` / `.metrics`. See the ["A new metric"
+  how-to](https://mczielinski.github.io/ob-analytics/extending/#4-a-new-metric).
+
+- **`ob-analytics audit`, a data-quality gate** (#108). The old `validate` verb
+  is now `audit` (the old name still works), it scores the run against named
+  checks, and it **exits non-zero when one fails** — so a script can stop before
+  trusting a feed. Five checks are new: orphan orders (changed or deleted with
+  no `created` row), non-positive prices, negative volumes or fills, and the two
+  clock-order defects — a venue timestamp later than the receive timestamp, and
+  messages that arrived out of venue order. `audit` also loads with
+  `track_sequence` on, so the dropped-message check (#146) reads a venue
+  sequence whenever the feed carries one.
+
+  Each check carries a `Severity`: an **error** fails the run, a **warning**
+  fails it only under `--strict`, and **info** never does. A crossed resting
+  book is scored by feed type, not by size — an error on a matched book, a
+  faithful replay on a diff feed. `--json` emits every check plus an `ok`
+  verdict; `--from-parquet` audits a saved `process` output without re-running
+  the pipeline. New public names: `Severity`, `QualityCheck`, and
+  `DataQualitySummary.ok` / `.errors` / `.warnings` / `.checks`. See the
+  ["Check data quality with `audit`" how-to](https://mczielinski.github.io/ob-analytics/howto/audit/).
+
+- **`PipelineResult.to_arrow()` and `PipelineResult.to_polars()`** (#104). Both
+  return the run's four tables — `events`, `trades`, `depth`, `depth_summary` —
+  keyed by name, with the same keys on every run: on an L2 run `events` is an
+  empty table, not a missing key. The Arrow tables carry the schema version and
+  tick size in their metadata, the same key-value metadata the Parquet files
+  carry, so a reader handed tables in memory is no worse off than one reading
+  files. Polars is not a dependency and is not installed; `to_polars()` raises
+  `ImportError` with an install hint when it is missing, and Polars keeps no
+  schema metadata, so the version and tick size do not survive that conversion.
+- **The frame-type contract is written down** in
+  [Frame types: pandas in, pandas out](https://mczielinski.github.io/ob-analytics/schema/#frame-types-pandas-in-pandas-out):
+  public functions take and return pandas, plug-ins are handed pandas, and the
+  versioned Parquet is how other tools read the output. The reasoning is in
+  `adr/0002-dataframe-library.md`.
+- **cryptofeed source for live L2 *and* L3 capture** (`ob-analytics capture
+  cryptofeed --exchange <venue> --pair <symbol>`). The per-order complement to
+  the CCXT source: venues publishing an order-by-order book record `orders.csv`
+  with the venue's own ids and replay through the full reconstruction pipeline;
+  the rest record `depth.csv` for the L2 path. The level is discovered from the
+  venue's declared channels rather than a hardcoded list, and `--level` forces
+  it — except L3 on a venue that publishes none, which raises. Ships as the
+  optional `[cryptofeed]` extra, imported lazily. See the new
+  "Capture cryptofeed venues" how-to.
+- **`sequence` is now written to `orders.csv`.** The capture sink dropped the
+  venue sequence on the L3 path, so `detect_sequence_gaps` had nothing to read;
+  L2 already kept it. cryptofeed captures also report `sequence_gaps` /
+  `sequence_missing` in `meta.json`.
+
+- **L2 (price-level) depth-native ingestion path.** Price-level feeds
+  (Binance, Kalshi, Polymarket, most CCXT sources) publish `[price, quantity]`
+  levels and diffs with no order IDs; ob-analytics now ingests them as a
+  first-class **L2** resolution instead of faking per-order state. A format
+  declares its `resolution` (`Level.L2` / `Level.L3`, exposed as
+  `ob_analytics.Level`); an L2 format's loader is a `DepthSource` that yields
+  the depth frame directly, and `Pipeline.run` takes the price-level path —
+  depth metrics / spread and trade-sign classification run, while the per-order
+  stages (`set_order_types`, `order_aggressiveness`, queue reconstruction) are
+  skipped. `PipelineResult` gains a `resolution` field and, on an L2 run,
+  returns an empty (schema-valid) `events` frame. Ships the `depth_csv` format
+  (`L2DepthLoader`, `L2TradeReader`, `DepthCsvWriter`, `DepthCsvFormat`) for the
+  canonical L2 CSV schema, a `toy_l2_depth()` / `toy_l2_trades()` synthetic
+  snapshot+delta fixture, and `data_quality_summary` + the gallery degrade
+  gracefully (L3-only faces skipped, not errored). `ob-analytics
+  process|validate --format depth_csv` works from the CLI. Unblocks the
+  aggregated venue connectors. Documented in a new "Process L2 feeds" how-to.
+- **Trade-sign classification** (`ob_analytics.trade_sign`) for feeds that
+  don't label the aggressor side. `tick_rule` (last-price-change sign),
+  `lee_ready` (quote-midpoint test with a tick-rule fallback), and
+  `bulk_volume_classification` (BVC — the buy fraction of a volume bar via the
+  standardized-price-change normal CDF). `classify_trade_sign(trades,
+  method=..., quotes=...)` is the per-trade entry point. `compute_vpin` and
+  `order_flow_imbalance` gain `sign_method` / `quotes` arguments and now
+  synthesize `direction` automatically when the trades frame has none — so
+  VPIN and OFI run on L2 / aggregated captures, not just L3. A native
+  `direction` is still honored unchanged (`sign_method=None`). On the bundled
+  Bitstamp L3 sample the classifiers agree with the true maker/taker side
+  ~0.83 (tick) / ~0.79 (Lee–Ready) — validated by a test harness.
+- **Feed classification.** Every format declares a `FeedType`
+  (`matched_book` vs `diff_feed`) through a `feed_type` attribute —
+  `BitstampFormat` → `diff_feed`, `LobsterFormat` → `matched_book` — so
+  downstream code reasons about crossed books by coordinate, not by format
+  name. Exposed as `ob_analytics.FeedType`.
+- **`order_book(..., uncross=True)`** evicts crossed resting orders *for
+  display*, mirroring the depth engine's crossed-level eviction. The default
+  stays faithful, so a diff feed's genuinely crossed resting orders are
+  replayed as-is. Threaded through `prepare.book_snapshot(..., uncross=True)`
+  (also drives `depth_chart`) and available frame-level as
+  `analytics.uncross_book_sides`.
+- **Per-run data-quality summary.** `data_quality_summary()` and the new
+  `ob-analytics validate <source>` CLI verb report the crossed-resting %,
+  unmatched-trades %, duplicate ids, and pre-existing-order count. A new
+  "Data quality: matched book vs diff feed" explanation page and a `validate`
+  how-to document the distinction.
+
 ### Changed
 
 - **Every time window starts from the Unix epoch** (#350).
@@ -279,6 +660,218 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   check. `dropped` now counts only the messages a source could not use.
   `recorded_sequence_kind` returns `None` when a capture records no kind, as
   `recorded_feed_type` does, in place of taking a `default`.
+
+- **The price-level depth follows an order that moves or grows.**
+  `price_level_volume` used to count every one of an order's rows on the price
+  of its first row, and ignored a rise in its size. It now reads a `changed`
+  row that reports no execution and carries a new price as a move: the order's
+  volume leaves the old level and joins the new one. A `changed` row that
+  reports no execution and a larger size adds the difference where the order
+  rests. Deletes and rows that report an execution are still taken off where
+  the order rests, whatever price they carry, so the fix for Bitstamp's
+  deletes at the wrong price is kept. The price-level rebuild now agrees with
+  the per-order rebuild (`book_state`) on these orders. This matters for
+  Databento, whose modify can move an order or make it bigger. The Bitstamp and
+  LOBSTER outputs are unchanged: neither feed moves or grows an order this way.
+
+- **A trade the venue left unlabelled is now classified on the L3 path too.**
+  `Pipeline.run` labels any trade with no aggressor side against the
+  reconstructed quotes, filling one subset at a time instead of all or nothing,
+  and never overwriting a side the venue did state. This was already what the
+  price-level path did; it now also covers a per-order feed that states the
+  aggressor on most trades but not all, which is what Databento does for
+  auctions, non-displayed orders and off-exchange prints. No change for a feed
+  that labels every trade, which is every other source in the package.
+
+- `depth.bin_volume_columns()` is public. It returns the per-bps depth-bin
+  volume columns a depth summary carries, ordered from the touch outward, and
+  it was already the answer `book_imbalance` and `depth_signals` needed. The
+  feature table needs the same answer, and so does anyone writing a depth
+  feature of their own, so it is no longer private. Behaviour is unchanged.
+
+- `trade_sign.resolve_direction()` now makes the guarantee its docstring
+  already claimed: the `direction` column it returns holds only `"buy"` and
+  `"sell"`. A native column was previously passed back untouched however it
+  was filled, and every consumer reads it as `== "buy"` and takes the rest as
+  a sell — so a partly-labelled feed did not lose its unlabelled trades, it
+  counted them on the wrong side. `compute_vpin`, `order_flow_imbalance`,
+  `bars` and the cost metrics were all affected. Rows that are neither side
+  are now inferred the same way a wholly unlabelled feed is, with a warning
+  saying how many. A feed that labels every trade is passed through unchanged.
+  `compute_kyle_lambda` reaches the same guarantee: it still *requires* a
+  `direction` column rather than inferring one, but a column being present no
+  longer means every row in it is trusted.
+
+- `trade_sign.prevailing_mid()` is now public, and takes `allow_exact`,
+  `skip_crossed`, `mid_column` and `require_covered` — the last quote strictly
+  before an instant, crossed books skipped, a named reference column such as
+  `micro_price`, and `NaN` rather than the final quote reused once the quotes
+  stop reaching. All four default to the previous behaviour, so
+  `classify_trade_sign` is unchanged. An empty quote frame now returns all
+  `NaN` instead of raising a pandas `MergeError`.
+
+- **Sizes are integer lots plus a `lot_size`, not floats** (issue #226).
+  **Breaking: the on-disk schema goes 3.0 → 4.0.** Every `volume` and `fill`
+  column is now a whole number of lots (`int64`) instead of a `double` in the
+  base asset. The base-asset size is `lots * lot_size`, where `lot_size` is the
+  instrument's minimum size increment (`PipelineConfig.lot_size`, default
+  `1e-8`; LOBSTER sets `1`, whole shares). This is the size half of the
+  integer-tick decision (issue #155) and it fixes a real defect rather than
+  only re-expressing the data.
+
+  A price level is a running sum of adds, cancels and fills. A float sum does
+  not return to exactly zero when the last order leaves, so a level landed on
+  residue such as `5.55e-17`, stayed live, and was reported as the best bid or
+  ask ahead of the real one. On the bundled Bitstamp sample that corrupted the
+  reported best bid on 25,611 of 313,565 rows (8.2%) and the best ask on 30,096
+  (9.6%) — the spread on about one row in eleven. Integer lots cancel exactly,
+  so a level empties or it does not, and those counts are now zero.
+
+  It was found by the new cross-check against hftbacktest (issue #224), and
+  that is what confirms the fix: replaying an exported session through
+  hftbacktest's own L3 reconstruction now agrees with `depth_summary` on the
+  best bid and ask for every row across five synthetic seeds, and Nautilus'
+  book agrees too. Before the fix the two disagreed on up to 78 rows a seed.
+
+  The change reaches every size-valued column — `depth_summary`'s per-bin
+  volumes, `placed_vol` and `filled_vol`, the book snapshot's `liquidity`, and
+  the queue's `ahead_volume` and `remaining` — so their sums are exact as well.
+  Three float-era workarounds went with it: the Kahan compensation behind
+  `filled_vol`, the simulator's `_vol_eps` exhaustion tolerance, and the
+  LOBSTER book replay's `1e-12` level cutoff. Loaders convert on the way in;
+  the plots and the round-trip and export writers convert back, so what a user
+  sees and what another tool reads are unchanged. `lot_size` travels in each
+  Parquet file's key-value metadata under `ob_analytics_lot_size`, next to
+  `ob_analytics_tick_size`, and `load_data` surfaces it as
+  `df.attrs["lot_size"]`. Files written at `1.0`–`3.0` still read, as the
+  float-size frames they are. Golden outputs were re-baselined on purpose.
+
+- **The export writers leave out orders that never rested** (issue #224). A
+  marketable order is recorded as a transient add on its own side at the touch,
+  then the fill, then a delete; `ob_analytics.depth` has always excluded these
+  from the book, but the hftbacktest and Nautilus writers were sending them.
+  A backtesting engine reads an add as real liquidity, so its book crossed at
+  the touch and dropped the resting level the order traded against — its
+  reconstruction drifted permanently thinner than ours. Both writers now
+  exclude them, which is what makes the two books agree.
+
+- **The order-book engine is its own module** (issue #136). The rebuild
+  (`order_book`), the per-order lifecycles, and the FIFO queue reconstruction
+  moved out of `analytics.py` / `queue.py` into `ob_analytics/engine/`, behind
+  one input and one output: order events in, book states and order lifecycles
+  out, and nothing else. The engine **imports no pandas** — everything crosses
+  its interface as NumPy arrays, with the shared schema (issue #112) as the
+  input, timestamps as int64 UTC nanoseconds (issue #154) and prices as integer
+  ticks (issue #155). Results carry a *row index* back into the caller's event
+  arrays instead of copying columns out, so adding a column to the schema does
+  not widen the interface and the engine never learns a vocabulary — order
+  types, venue names — belonging to the layer above.
+  `ob_analytics/_engine_frames.py` is the one place pandas and the engine meet;
+  `analytics.order_book`, `analytics.order_lifecycles`, and the
+  `ob_analytics.queue` functions are now its frame adapters and keep their exact
+  signatures, dtypes, column order, and index behaviour. Output is **unchanged
+  byte for byte** — the golden-output gates from issue #143 pass on their
+  recorded fingerprints. Two things did move: the display window (`max_levels`,
+  `bps_range`) and the queue sampling window are set by the frame adapters
+  rather than the engine, which reconstructs the whole book and replays to the
+  instants it is given. A new import test (`tests/test_engine_boundary.py`)
+  keeps the engine free of pandas and of every layer above it. This is what lets
+  the inside be replaced with a faster implementation (#138) or fed one event at
+  a time (#139) without touching anything else. `Direction`, `Action`, and
+  `Outcome` are `IntEnum` code vocabularies that derive their schema strings
+  from their own member names, so a code and its label cannot drift apart.
+  Two details of the frame code are reproduced deliberately rather than
+  rewritten: an order's executed total is accumulated with compensated (Kahan)
+  summation, as the pandas aggregation it replaced did, and placement values are
+  taken per column as the first non-null among an order's `created` rows. The
+  lifecycle table is now covered by `tests/test_golden_synth.py`, which it was
+  not before.
+
+- **`BitstampTradeReader` no longer requires integer order ids.** It keyed its
+  maker/taker lookup on `int(order_id)`, which crashed on a public trade tape
+  carrying no ids (`int(NaN)`) and on venues publishing UUIDs. Integer ids
+  behave exactly as before; other ids match on their string form, and a missing
+  id resolves to `NaN` instead of raising.
+
+- **One `Source` shape for every data source, file or live** (issue #137;
+  settled #145 as "optional extras plus entry-point plug-ins"). File loaders
+  and live capturers were two separate designs with two registries; they are
+  now one `Source` protocol with two capability refinements — `OfflineSource`
+  (replay stored files: the loader / trade-source / writer / depth factories)
+  and `LiveSource` (capture a venue: `snapshot` / `stream` /
+  `shutdown_synthetic_events`). A source states its `level` (L2/L3) and
+  `feed_type`, carries typed `settings`, and registers in the single `SOURCES`
+  registry via `register_source`. A source can be both: `BitstampSource` now
+  covers offline replay and live capture in one descriptor. This is a breaking
+  API change with no back-compat shims:
+    - `Format` → `OfflineSource`; `LiveCapturer` → `LiveSource`;
+      `BitstampFormat` / `LobsterFormat` / `DepthCsvFormat` →
+      `BitstampSource` / `LobsterSource` / `DepthCsvSource`;
+      `CcxtCapturer` → `CcxtSource`.
+    - `Pipeline(format=...)` → `Pipeline(source=...)`; `Pipeline.from_format`
+      → `Pipeline.from_source`.
+    - The `FORMATS` / `CAPTURERS` registries and their `register_format` /
+      `register_capturer` / `list_formats` / `list_capturers` /
+      `get_capturer` helpers are replaced by `SOURCES` / `register_source` /
+      `list_sources` / `get_source` (in `ob_analytics.sources`).
+    - `PipelineResult.resolution` → `PipelineResult.level` (one coordinate
+      name across the codebase; `Source.level`, matching the visualization
+      layer).
+    - `CaptureConfig.extras` (the untyped settings dict) is removed. Per-source
+      settings are now typed `SourceSettings` on the source itself, e.g.
+      `CcxtSource(settings=CcxtSettings(exchange="binance", depth_limit=100))`.
+    - CLI: `process` / `validate` take `--source` (was `--format`), and the
+      `formats` verb is now `sources` (it also shows each source's capability
+      and required context).
+- **Third-party sources load through entry points.** A source can ship in its
+  own package and advertise itself under the `ob_analytics.sources`
+  entry-point group; `ob_analytics.sources.load_source_plugins()` discovers and
+  registers it at import time, with no edit to ob-analytics. The built-in
+  sources (bitstamp, lobster, depth_csv, ccxt) self-register on import and stay
+  behind today's `[live]` / `[ccxt]` extras.
+- **Prices are now integer ticks, not floats** (issue #155). Every `price`
+  column — events, trades, depth, depth_summary, book snapshot, and order
+  lifecycles — is a whole number of ticks (`int64`); the quote-currency price is
+  `ticks * tick_size`, where `tick_size` is the instrument's minimum price
+  increment (`PipelineConfig.tick_size`, default `0.01`). Loaders convert a raw
+  price to ticks on load; the plots and the round-trip writers convert back for
+  display, so figures and CSV output are unchanged. Storing the exact integer
+  removes the float rounding that made small-tick and 0-1 instruments show
+  crossed levels that were not real, and the depth engine now bins and compares
+  levels on exact integers instead of multiplying and rounding each event —
+  LOBSTER's `price_divisor` is now just the raw-feed encoding scale.
+  `tick_size` is written to each Parquet file's `ob_analytics_tick_size`
+  key-value metadata (a JSON map keyed by instrument, ready for per-`(venue,
+  symbol)` ticks in #147) and surfaced on `load_data` frames' `attrs`.
+  **Breaking:** the dtype of every `price` column changed from `double` to
+  `int64` and the stored numbers changed (prices re-expressed as ticks;
+  price-valued analytics such as `trade_impacts` VWAP and Kyle's λ are now in
+  tick units — multiply by `tick_size` for the quote currency; scale-free
+  metrics such as bps depth and order-book imbalance are unchanged). The
+  canonical Parquet **schema version is now `3.0`** (a `1.0` / `2.0` file still
+  reads — Parquet is self-describing — as the float-price frame it stored, whose
+  prices are not directly comparable to a `3.0` file's ticks; re-save it to move
+  it onto the tick model). Golden-output baselines were re-recorded behind the
+  correctness gate (#143).
+- **Timestamps are now tz-aware UTC nanoseconds** (`timestamp[ns, tz=UTC]`) on
+  both clocks — `timestamp` (receive) and `exchange_timestamp` (matching
+  engine) — across every table, loader, the synthetic generator, and the toy
+  datasets (issue #154). Before, they were tz-naive and in each venue's native
+  clock (millisecond-resolution UTC for Bitstamp, US/Eastern for LOBSTER), and
+  frames from different venues were declared not comparable. Now every frame sits
+  on one UTC clock, so cross-venue frames can be joined or concatenated directly.
+  LOBSTER's seconds-after-midnight are converted to UTC from the session date and
+  a venue time zone (`RunContext(session_tz=...)`, default `America/New_York`);
+  Bitstamp / CCXT keep their wall-clock instants and only gain the zone and the
+  nanosecond unit, so their values do not move. The schema also documents a
+  same-instant **total order** — `timestamp`, then `sequence`, then `event_id`,
+  then `ingest_seq` (`ob_analytics.schemas.time_order_keys`), which the per-order
+  reconstructions sort by. **Breaking:** the dtype of every timestamp column
+  changed, so the canonical Parquet **schema version is now `2.0`** (a `1.0` file
+  still reads — Parquet is self-describing — as the tz-naive frame it stored;
+  re-save it to move it onto the UTC clock). Consumers that compared pipeline
+  timestamps against tz-naive `pandas.Timestamp`s must now use tz-aware (UTC)
+  ones.
 
 ### Removed
 
@@ -855,415 +1448,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `bucket_volume` or `n_buckets` as the fix. The flow-toxicity how-to gains a
   short-captures section with a working example on the sample.
 
-### Changed
-
-- **The price-level depth follows an order that moves or grows.**
-  `price_level_volume` used to count every one of an order's rows on the price
-  of its first row, and ignored a rise in its size. It now reads a `changed`
-  row that reports no execution and carries a new price as a move: the order's
-  volume leaves the old level and joins the new one. A `changed` row that
-  reports no execution and a larger size adds the difference where the order
-  rests. Deletes and rows that report an execution are still taken off where
-  the order rests, whatever price they carry, so the fix for Bitstamp's
-  deletes at the wrong price is kept. The price-level rebuild now agrees with
-  the per-order rebuild (`book_state`) on these orders. This matters for
-  Databento, whose modify can move an order or make it bigger. The Bitstamp and
-  LOBSTER outputs are unchanged: neither feed moves or grows an order this way.
-
-- **A trade the venue left unlabelled is now classified on the L3 path too.**
-  `Pipeline.run` labels any trade with no aggressor side against the
-  reconstructed quotes, filling one subset at a time instead of all or nothing,
-  and never overwriting a side the venue did state. This was already what the
-  price-level path did; it now also covers a per-order feed that states the
-  aggressor on most trades but not all, which is what Databento does for
-  auctions, non-displayed orders and off-exchange prints. No change for a feed
-  that labels every trade, which is every other source in the package.
-
-### Added
-
-- **A Bokeh plot backend** (#123). `result.plot(concept, backend="bokeh")`
-  renders the core concepts — `trade_tape`, `depth_heatmap`, `book_snapshot`,
-  `depth_chart` — as interactive Bokeh figures, alongside the static
-  Matplotlib default and the Plotly backend. Suited to Bokeh / Panel server
-  dashboards and streaming views. Ships in the new `bokeh` extra:
-  `pip install "ob-analytics[bokeh]"`.
-
-- **Binance venue notes and a market-data mirror** (#101). A new how-to page
-  covers capturing Binance spot through ccxt: the location block, the
-  `binanceus` alternative, the depth a 100-level book reaches, and trade
-  sides. `capture ccxt --market-data-mirror` (`CcxtSettings.market_data_mirror`)
-  reads Binance spot from Binance's market-data-only endpoints. New
-  `SequenceKind` and `recorded_sequence_kind()`, a `kind` argument on
-  `detect_sequence_gaps()`, and a `sequence_kind` argument on
-  `data_quality_summary()`.
-
-- **Find hidden liquidity** (#111). `detect_icebergs(events, trades)` finds
-  iceberg orders from their refills: a resting order filled out, then a new
-  order at the same side and price within one millisecond. It chains refills
-  into one suspected iceberg and gives each a `confidence`.
-  `hidden_trades(events, trades, depth_summary)` returns the trades that
-  printed strictly inside the visible spread. On one day of LOBSTER AAPL it
-  finds 85% of the type-5 hidden executions, with no false ones. The
-  synthetic generator now labels its iceberg slices in
-  `SynthSession.icebergs`, so the detector can be scored exactly. See the
-  [hidden liquidity
-  how-to](https://mczielinski.github.io/ob-analytics/howto/hidden-liquidity/).
-
-- **Iceberg refills and hidden trades drawn on the depth heatmap and order
-  activity map** (#272). Both L3 faces now overlay `detect_icebergs` and
-  `hidden_trades`: a diamond marks each refill, joined by a line per iceberg
-  (opacity = `confidence`); a star marks a hidden trade, with a thin line to
-  the standing best bid and best ask so the print reads as inside that
-  spread. A filled star is a confirmed hidden order; an open star is a trade
-  to check, where the maker order was actually visible or its maker
-  identity did not resolve at all — the diff-feed case the how-to guide
-  describes. Both overlays clip to the gallery's zoom window, and are absent
-  without error when a run has neither. New `prepare.hidden_liquidity_overlay`
-  builds the same overlay for a custom plot. `hidden_trades` now returns
-  `best_bid_price`/`best_ask_price` in `depth_summary`'s own dtype instead of
-  always casting to `int64`, so a caller already holding display-unit floats
-  gets floats back rather than a silently truncated value.
-
-- **A feature table for models** (#149). `features(trades, quotes)` returns one
-  tidy table: a point in time on each row and a microstructure feature in each
-  column — the shape a model or a study wants. It replaces a join per
-  measurement.
-
-  Two decisions make the table, and they are separate. Where the rows fall is
-  a bar rule, so `features()` takes the same sampling arguments `bars()` does
-  and the same arguments give the same cut in both; a time grid is the `time`
-  rule. What each column measures is a `Feature`, and ten ship: `price`,
-  `returns`, `flow`, `spread`, `mid_price`, `micro_price`, `imbalance`,
-  `depth`, `vpin` and `kyle_lambda`, writing 20 columns between them.
-  `register_feature` adds one of your own, usable by name with no edit to the
-  package.
-
-  Every row is stated as of the close of its bar. The trade columns hold what
-  happened inside the bar, and the book columns hold the book as it stood at
-  the close, a backward as-of join. Nothing from after that instant reaches
-  the row, so the table carries no look-ahead — which is tested by truncating
-  the inputs and checking that the rows that survive are unchanged, for every
-  rule and every feature. The table holds no target either: a target looks
-  forward, and building one is a shift the caller makes deliberately.
-
-  Two quote states are not books anything could have traded against, and both
-  would otherwise arrive as ordinary numbers: a side with nothing resting on
-  it, which the depth engine marks with a price of `0`, and a crossed book,
-  which a diff feed can genuinely hold. `readable_quotes()` drops them from
-  the reference series, so a row reaches back to the last quote it could read
-  — the same test `transaction_costs` already applied before measuring against
-  a mid. A locked book, bid equal to ask, is a real state at a spread of zero
-  and is kept.
-
-  Without a quotes frame the five book features are skipped and the table
-  holds the trade features alone; naming one explicitly raises instead. Two
-  features that would write the same column are an error rather than a silent
-  overwrite, and so is a name listed twice in `include`; a trailing window a
-  feature cannot use is refused when the feature is built. See the ["Build a feature table"
-  how-to](https://mczielinski.github.io/ob-analytics/howto/feature-table/),
-  which ends in a baseline model.
-
-- **Databento market-by-order files** (#100). `DatabentoSource` reads
-  Databento's DBN files in the MBO schema, which is a per-order feed: every
-  record carries an order id, so a file replays through the full L3 path with
-  order lifetimes, queue position and order classification. It reaches many
-  venues that no other source in the package does, US equities and futures
-  among them.
-
-  Databento reports an execution as a fill record that does not change the
-  book, followed by the cancel or modify that takes the size off it. The loader
-  pairs the two, so `fill` tells an execution apart from a cancel the trader
-  asked for, and each trade names the resting order it hit. The aggressor's
-  side comes from the venue rather than a classifier. A book clear deletes the
-  orders still resting, and the record's two clocks are kept apart: Databento's
-  receive time orders the events, the venue's own becomes
-  `exchange_timestamp`.
-
-  A modify that moves an order to another price or makes it bigger is recorded
-  as a `changed` event with the new price and size, and the depth follows it
-  (see Changed). The loss of queue priority is not modelled. The one modify the
-  depth still cannot follow is one that carries a fill and also moves the order
-  or changes its size by more than the fill; the loader says how many rows the
-  depth will be off by.
-
-  A feed the loader does not understand is refused: a publisher that only sends
-  top-of-book or price-level data, because its order ids mean nothing; a
-  price-level schema; a file covering more than one book; an action outside
-  DBN's own alphabet; an order id too big for the schema's signed 64-bit id. A
-  malformed record inside a feed it does understand — no price, or no side on a
-  book action — is dropped and counted in a warning, because refusing a whole
-  session over a handful of them would be worse.
-
-  Trades are built from the fill records by default, so each names the resting
-  order it hit. A trade the publisher sent no fill for — an auction, a trade
-  against a non-displayed order, an off-exchange print — is then left out, and
-  the loader warns with the volume. `DatabentoSettings(trades_from="prints")`
-  builds the trades from the whole tape instead, without makers; use it for
-  VWAP, bars, flow toxicity and costs. `DatabentoWriter`
-  writes an events frame back out as DBN. `scripts/databento_window.py` sizes a
-  query against the in-memory envelope before downloading it, then runs one
-  window at a time. `databento` is an optional extra
-  (`pip install "ob-analytics[databento]"`). See the ["Process Databento MBO
-  files"
-  how-to](https://mczielinski.github.io/ob-analytics/howto/databento/).
-
-- **Flow-toxicity results say when they rest on too little data** (#119). VPIN
-  and Kyle's λ were designed for markets that trade thousands of times a
-  minute, and on a thin tape they used to return a number with no sign that it
-  meant little. `KyleLambdaResult` now has `significant` and `diagnostics`:
-  λ is flagged when there are fewer than 30 regression windows
-  (`KYLE_MIN_WINDOWS`), when `|t|` is below 2 (`KYLE_MIN_T_STAT`), or when the
-  fit is undefined. It also carries a confidence interval, `ci_low` /
-  `ci_high`, from a block bootstrap over the windows (1000 resamples by
-  default, under a millisecond on the bundled sample, seeded with `seed=0` so
-  the same trades give the same interval; `n_boot=0` skips it).
-
-  `compute_vpin` records how it ran in the frame's `attrs`: `bucket_volume`,
-  `bucket_volume_rule`, `n_buckets`, and `diagnostics`, which flags a result
-  with fewer complete buckets than `n_buckets`. `bucket_volume` is now
-  optional. Left out, it is picked by the new `vpin_bucket_volume(trades)`,
-  which applies the common rule of average daily volume ÷ 50; a session
-  shorter than a day is scaled up to a day at the rate it traded
-  (`trading_day="24h"` by default). Existing calls are unchanged.
-
-  On the bundled sample, λ at 5-minute windows is flagged on both counts (7
-  windows, t = 1.45) and its interval spans zero; VPIN with the default bucket
-  fills one bucket and says so. Tutorial chapter 6 and the flow-toxicity
-  how-to now show these checks in place of the hand-written caveats.
-
-- **Bars: the trade stream resampled into OHLCV rows** (#148). `bars(trades,
-  rule, threshold)` cuts a trades frame into bars and returns one row each with
-  open, high, low, close, volume, turnover, VWAP, and the buy/sell split of
-  that volume. Five rules ship with it: `time` (a fixed span of the clock),
-  `tick` (a fixed number of trades), `volume` and `dollar` (a fixed amount of
-  size, or of price × size), and `imbalance` (signed size drifting a set amount
-  from where the bar opened). Leave the threshold out and the rule picks one
-  aiming at about 50 bars.
-
-  What differs between bar types is only where the boundaries fall, so that is
-  all a rule decides: `BarRule` states a `name`, how it reads its `threshold`,
-  and which bar each trade belongs to. `register_bar_rule` adds one of your
-  own, usable by name with no edit to the package. Feeds that don't label the
-  aggressor are classified the same way the flow-toxicity metrics do.
-
-  Bars draw as a `"bars"` plot face on both backends — candles over a strip of
-  volume coloured by the net aggressor — and `bars_panel()` puts them in a
-  gallery. The demos show a clock cut and a volume cut side by side. See the
-  ["Build bars from trades"
-  how-to](https://mczielinski.github.io/ob-analytics/howto/bars/).
-
-- **Transaction cost and price impact** (#110). A new `cost` module answers
-  what trading cost, rather than what the book advertised.
-  `transaction_costs(trades, quotes)` returns one row per trade with the
-  effective spread — what the taker paid to cross — split into the realized
-  spread the liquidity provider kept and the price impact the trade caused,
-  in price units and in basis points. The three add up exactly, trade by
-  trade. `cost_summary()` reduces that to volume-weighted session figures and
-  reports how many trades each one could be measured on.
-
-  `amihud()` and `roll_spread()` read liquidity from the trade prices alone,
-  so they run on a tape with no quotes and no aggressor side: the price move a
-  unit of turnover buys, and the spread implied by bid-ask bounce. Roll also
-  returns the lag-1 `autocorrelation` of the price changes, which its model
-  puts at exactly `-0.5`; how far the number sits from that is how little of
-  the price movement the bounce explains. On the bundled capture it is
-  `+0.197` and the estimate has no real root, so it is `NaN` rather than a
-  number the model does not support. The diagnostic matters in the other
-  direction too: when the autocovariance lands negative by chance Roll returns
-  a spread that is not there, and the autocorrelation is what catches it.
-
-  The mid a trade is measured against is the last quote *strictly before* it,
-  skipping crossed quotes: on a frame built from the same event stream, the
-  quote sharing a trade's instant is the book after that trade took the touch,
-  and a crossed book has no midpoint at all. A trade in the last horizon of
-  the capture has no future mid, so its realized spread is `NaN` rather than
-  the final quote reused.
-
-  `transaction_costs` takes `mid_column` to measure against a reference other
-  than the plain mid — `"micro_price"` for the size-weighted mid, which on the
-  bundled capture reads 1.24 bps against the plain mid's 1.45.
-
-  The decomposition draws as a level-less `transaction_costs` face on both
-  backends — two lines with the impact as the band between them — and
-  `transaction_costs_panel()` puts it in a gallery. Both demos now include it.
-  See the ["Measure transaction costs"
-  how-to](https://mczielinski.github.io/ob-analytics/howto/transaction-costs/).
-
-- **Polymarket prediction markets, through the ccxt source** (#103).
-  `ob-analytics capture ccxt --exchange polymarket --pair <token id>` streams
-  one outcome's order book and trades over Polymarket's public websocket, with
-  no account or API key. `--pair` is Polymarket's token id for the outcome,
-  which the Gamma API lists as `clobTokenIds`. Each outcome is its own book,
-  and its trades are priced in that outcome.
-
-  Polymarket makes a market's tick finer as the price nears 0 or 1, so a ccxt
-  capture now makes its recorded tick size finer when a price arrives between
-  two ticks, and counts each change in `tick_size_changes` in `meta.json`. The
-  replay then reads every price exactly. See the ["Capture Polymarket
-  prediction markets"
-  how-to](https://mczielinski.github.io/ob-analytics/howto/polymarket/).
-
-- **Kalshi prediction markets, through the ccxt source** (#102).
-  `ob-analytics capture ccxt --exchange kalshi --pair <market ticker>` records
-  a Kalshi market's order book and trades from Kalshi's public API, with no
-  account or API key, and `ob-analytics process` replays it through the L2
-  path. The ccxt source now looks up CCXT's prediction markets
-  (`ccxt.prediction`: Kalshi, Polymarket and others) as well as its crypto
-  exchanges; before, `--exchange kalshi` failed with "Unknown CCXT exchange".
-  `binance` and `hyperliquid` are in both lists, so the plain id keeps meaning
-  the crypto exchange and `prediction/<id>` picks the prediction market.
-
-  The captured book is the market's Yes book: a bid to buy No at `p` is
-  recorded as an offer to sell Yes at `1 - p`, and a trade is priced in Yes
-  and signed from the Yes side. A ccxt capture also records its market's tick
-  size in `meta.json`, which `process` and `audit` use. See the ["Capture
-  Kalshi prediction markets"
-  how-to](https://mczielinski.github.io/ob-analytics/howto/kalshi/).
-
-- **A capture records which rows came from its opening snapshot** (#237).
-  `orders.csv` and `depth.csv` gain an `origin` column: `snapshot` for the
-  opening book, `stream` for a live message, `shutdown` for a synthetic
-  close-out. The capture runner fills it in, so every live source gets it
-  without a change, and the loaders carry it through to `events`. Before this,
-  the only way to tell a snapshot row from a live one was to compare its
-  `exchange_timestamp` with `snapshot_microtimestamp` in `meta.json`.
-
-  `meta.json` also reports `n_snapshot_unconfirmed`: how many orders in the
-  opening book no later order event or trade mentioned. The bundled Bitstamp
-  sample has 6,294 of 6,512. Almost all of them sit far from the touch and did
-  not trade, but two stale asks among them held the best ask for most of the
-  session. See ["Capture live
-  data"](https://mczielinski.github.io/ob-analytics/howto/live-capture/).
-
-- **`audit` names stale resting orders** (#234). A trade above a resting ask,
-  or below a resting bid, shows that the order has gone. An order the venue
-  then does not report again within one second is now reported as a
-  `stale_orders` warning, and the worst one is named with its id, side, price
-  and how long it held the touch. On the bundled Bitstamp sample this names
-  ask `2002347646152704`, which held the ask touch for 27 minutes and causes
-  almost all of the 91.6% crossed time. The crossing note no longer calls a
-  diff feed's crossing normal when the run has stale orders. Nothing is
-  removed: `order_book()` still replays what the feed said. New public names:
-  `detect_stale_orders`, `StaleOrder`, `DataQualitySummary.stale_orders`, and a
-  `tick_size=` argument on `data_quality_summary`.
-
-- **A metric registry, so a user metric runs and plots with no core edit**
-  (#140). A metric is a plain object with a `name`, a `title`, the `levels` it
-  applies to, `compute(result)` and `prepare(frame)` — no base class to
-  inherit, the same structural typing sources and writers use. Register it with
-  `register_metric(metric)`, or ship it in your own package under the
-  `ob_analytics.metrics` entry-point group and `load_metric_plugins()` finds it
-  at `import ob_analytics`.
-
-  A registered metric is a level-less plot concept under its own name, so a
-  renderer at `(name, None, backend)` is its face. It then appears in
-  `available_concepts(result)`, renders through `result.plot(name)`, and gets
-  its own gallery card with no `extra_panels=`. Metrics run when asked for, not
-  during `Pipeline.run`: `result.metric(name)` computes one and
-  `result.metrics()` computes every metric whose `levels` include the run's
-  resolution — so an L3-only metric is skipped on an L2 run instead of failing
-  on its empty `events` table, and a metric that raises is logged and its card
-  dropped, so one broken metric cannot stop the gallery being built. New public
-  names: `Metric`,
-  `register_metric`, `list_metrics`, `get_metric`, `load_metric_plugins`,
-  `PipelineResult.metric` / `.metrics`. See the ["A new metric"
-  how-to](https://mczielinski.github.io/ob-analytics/extending/#4-a-new-metric).
-
-- **`ob-analytics audit`, a data-quality gate** (#108). The old `validate` verb
-  is now `audit` (the old name still works), it scores the run against named
-  checks, and it **exits non-zero when one fails** — so a script can stop before
-  trusting a feed. Five checks are new: orphan orders (changed or deleted with
-  no `created` row), non-positive prices, negative volumes or fills, and the two
-  clock-order defects — a venue timestamp later than the receive timestamp, and
-  messages that arrived out of venue order. `audit` also loads with
-  `track_sequence` on, so the dropped-message check (#146) reads a venue
-  sequence whenever the feed carries one.
-
-  Each check carries a `Severity`: an **error** fails the run, a **warning**
-  fails it only under `--strict`, and **info** never does. A crossed resting
-  book is scored by feed type, not by size — an error on a matched book, a
-  faithful replay on a diff feed. `--json` emits every check plus an `ok`
-  verdict; `--from-parquet` audits a saved `process` output without re-running
-  the pipeline. New public names: `Severity`, `QualityCheck`, and
-  `DataQualitySummary.ok` / `.errors` / `.warnings` / `.checks`. See the
-  ["Check data quality with `audit`" how-to](https://mczielinski.github.io/ob-analytics/howto/audit/).
-
-- **`PipelineResult.to_arrow()` and `PipelineResult.to_polars()`** (#104). Both
-  return the run's four tables — `events`, `trades`, `depth`, `depth_summary` —
-  keyed by name, with the same keys on every run: on an L2 run `events` is an
-  empty table, not a missing key. The Arrow tables carry the schema version and
-  tick size in their metadata, the same key-value metadata the Parquet files
-  carry, so a reader handed tables in memory is no worse off than one reading
-  files. Polars is not a dependency and is not installed; `to_polars()` raises
-  `ImportError` with an install hint when it is missing, and Polars keeps no
-  schema metadata, so the version and tick size do not survive that conversion.
-- **The frame-type contract is written down** in
-  [Frame types: pandas in, pandas out](https://mczielinski.github.io/ob-analytics/schema/#frame-types-pandas-in-pandas-out):
-  public functions take and return pandas, plug-ins are handed pandas, and the
-  versioned Parquet is how other tools read the output. The reasoning is in
-  `adr/0002-dataframe-library.md`.
-- **cryptofeed source for live L2 *and* L3 capture** (`ob-analytics capture
-  cryptofeed --exchange <venue> --pair <symbol>`). The per-order complement to
-  the CCXT source: venues publishing an order-by-order book record `orders.csv`
-  with the venue's own ids and replay through the full reconstruction pipeline;
-  the rest record `depth.csv` for the L2 path. The level is discovered from the
-  venue's declared channels rather than a hardcoded list, and `--level` forces
-  it — except L3 on a venue that publishes none, which raises. Ships as the
-  optional `[cryptofeed]` extra, imported lazily. See the new
-  "Capture cryptofeed venues" how-to.
-- **`sequence` is now written to `orders.csv`.** The capture sink dropped the
-  venue sequence on the L3 path, so `detect_sequence_gaps` had nothing to read;
-  L2 already kept it. cryptofeed captures also report `sequence_gaps` /
-  `sequence_missing` in `meta.json`.
-
-- **L2 (price-level) depth-native ingestion path.** Price-level feeds
-  (Binance, Kalshi, Polymarket, most CCXT sources) publish `[price, quantity]`
-  levels and diffs with no order IDs; ob-analytics now ingests them as a
-  first-class **L2** resolution instead of faking per-order state. A format
-  declares its `resolution` (`Level.L2` / `Level.L3`, exposed as
-  `ob_analytics.Level`); an L2 format's loader is a `DepthSource` that yields
-  the depth frame directly, and `Pipeline.run` takes the price-level path —
-  depth metrics / spread and trade-sign classification run, while the per-order
-  stages (`set_order_types`, `order_aggressiveness`, queue reconstruction) are
-  skipped. `PipelineResult` gains a `resolution` field and, on an L2 run,
-  returns an empty (schema-valid) `events` frame. Ships the `depth_csv` format
-  (`L2DepthLoader`, `L2TradeReader`, `DepthCsvWriter`, `DepthCsvFormat`) for the
-  canonical L2 CSV schema, a `toy_l2_depth()` / `toy_l2_trades()` synthetic
-  snapshot+delta fixture, and `data_quality_summary` + the gallery degrade
-  gracefully (L3-only faces skipped, not errored). `ob-analytics
-  process|validate --format depth_csv` works from the CLI. Unblocks the
-  aggregated venue connectors. Documented in a new "Process L2 feeds" how-to.
-- **Trade-sign classification** (`ob_analytics.trade_sign`) for feeds that
-  don't label the aggressor side. `tick_rule` (last-price-change sign),
-  `lee_ready` (quote-midpoint test with a tick-rule fallback), and
-  `bulk_volume_classification` (BVC — the buy fraction of a volume bar via the
-  standardized-price-change normal CDF). `classify_trade_sign(trades,
-  method=..., quotes=...)` is the per-trade entry point. `compute_vpin` and
-  `order_flow_imbalance` gain `sign_method` / `quotes` arguments and now
-  synthesize `direction` automatically when the trades frame has none — so
-  VPIN and OFI run on L2 / aggregated captures, not just L3. A native
-  `direction` is still honored unchanged (`sign_method=None`). On the bundled
-  Bitstamp L3 sample the classifiers agree with the true maker/taker side
-  ~0.83 (tick) / ~0.79 (Lee–Ready) — validated by a test harness.
-- **Feed classification.** Every format declares a `FeedType`
-  (`matched_book` vs `diff_feed`) through a `feed_type` attribute —
-  `BitstampFormat` → `diff_feed`, `LobsterFormat` → `matched_book` — so
-  downstream code reasons about crossed books by coordinate, not by format
-  name. Exposed as `ob_analytics.FeedType`.
-- **`order_book(..., uncross=True)`** evicts crossed resting orders *for
-  display*, mirroring the depth engine's crossed-level eviction. The default
-  stays faithful, so a diff feed's genuinely crossed resting orders are
-  replayed as-is. Threaded through `prepare.book_snapshot(..., uncross=True)`
-  (also drives `depth_chart`) and available frame-level as
-  `analytics.uncross_book_sides`.
-- **Per-run data-quality summary.** `data_quality_summary()` and the new
-  `ob-analytics validate <source>` CLI verb report the crossed-resting %,
-  unmatched-trades %, duplicate ids, and pre-existing-order count. A new
-  "Data quality: matched book vs diff feed" explanation page and a `validate`
-  how-to document the distinction.
-
-### Fixed
-
 - **The VPIN chart draws an empty panel when no bucket is complete.** A
   capture with less volume than one bucket gives `compute_vpin` zero rows, and
   `plot("vpin", ...)` then raised: a `TypeError` with matplotlib, a `KeyError`
@@ -1335,200 +1519,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `nonpositive_price`). Dividing by that produced a signed infinity that
   travelled through every downstream mean. A distance from a price that is not
   tradeable has no value, so it is now NaN.
-
-### Changed
-
-- `depth.bin_volume_columns()` is public. It returns the per-bps depth-bin
-  volume columns a depth summary carries, ordered from the touch outward, and
-  it was already the answer `book_imbalance` and `depth_signals` needed. The
-  feature table needs the same answer, and so does anyone writing a depth
-  feature of their own, so it is no longer private. Behaviour is unchanged.
-
-- `trade_sign.resolve_direction()` now makes the guarantee its docstring
-  already claimed: the `direction` column it returns holds only `"buy"` and
-  `"sell"`. A native column was previously passed back untouched however it
-  was filled, and every consumer reads it as `== "buy"` and takes the rest as
-  a sell — so a partly-labelled feed did not lose its unlabelled trades, it
-  counted them on the wrong side. `compute_vpin`, `order_flow_imbalance`,
-  `bars` and the cost metrics were all affected. Rows that are neither side
-  are now inferred the same way a wholly unlabelled feed is, with a warning
-  saying how many. A feed that labels every trade is passed through unchanged.
-  `compute_kyle_lambda` reaches the same guarantee: it still *requires* a
-  `direction` column rather than inferring one, but a column being present no
-  longer means every row in it is trusted.
-
-- `trade_sign.prevailing_mid()` is now public, and takes `allow_exact`,
-  `skip_crossed`, `mid_column` and `require_covered` — the last quote strictly
-  before an instant, crossed books skipped, a named reference column such as
-  `micro_price`, and `NaN` rather than the final quote reused once the quotes
-  stop reaching. All four default to the previous behaviour, so
-  `classify_trade_sign` is unchanged. An empty quote frame now returns all
-  `NaN` instead of raising a pandas `MergeError`.
-
-- **Sizes are integer lots plus a `lot_size`, not floats** (issue #226).
-  **Breaking: the on-disk schema goes 3.0 → 4.0.** Every `volume` and `fill`
-  column is now a whole number of lots (`int64`) instead of a `double` in the
-  base asset. The base-asset size is `lots * lot_size`, where `lot_size` is the
-  instrument's minimum size increment (`PipelineConfig.lot_size`, default
-  `1e-8`; LOBSTER sets `1`, whole shares). This is the size half of the
-  integer-tick decision (issue #155) and it fixes a real defect rather than
-  only re-expressing the data.
-
-  A price level is a running sum of adds, cancels and fills. A float sum does
-  not return to exactly zero when the last order leaves, so a level landed on
-  residue such as `5.55e-17`, stayed live, and was reported as the best bid or
-  ask ahead of the real one. On the bundled Bitstamp sample that corrupted the
-  reported best bid on 25,611 of 313,565 rows (8.2%) and the best ask on 30,096
-  (9.6%) — the spread on about one row in eleven. Integer lots cancel exactly,
-  so a level empties or it does not, and those counts are now zero.
-
-  It was found by the new cross-check against hftbacktest (issue #224), and
-  that is what confirms the fix: replaying an exported session through
-  hftbacktest's own L3 reconstruction now agrees with `depth_summary` on the
-  best bid and ask for every row across five synthetic seeds, and Nautilus'
-  book agrees too. Before the fix the two disagreed on up to 78 rows a seed.
-
-  The change reaches every size-valued column — `depth_summary`'s per-bin
-  volumes, `placed_vol` and `filled_vol`, the book snapshot's `liquidity`, and
-  the queue's `ahead_volume` and `remaining` — so their sums are exact as well.
-  Three float-era workarounds went with it: the Kahan compensation behind
-  `filled_vol`, the simulator's `_vol_eps` exhaustion tolerance, and the
-  LOBSTER book replay's `1e-12` level cutoff. Loaders convert on the way in;
-  the plots and the round-trip and export writers convert back, so what a user
-  sees and what another tool reads are unchanged. `lot_size` travels in each
-  Parquet file's key-value metadata under `ob_analytics_lot_size`, next to
-  `ob_analytics_tick_size`, and `load_data` surfaces it as
-  `df.attrs["lot_size"]`. Files written at `1.0`–`3.0` still read, as the
-  float-size frames they are. Golden outputs were re-baselined on purpose.
-
-- **The export writers leave out orders that never rested** (issue #224). A
-  marketable order is recorded as a transient add on its own side at the touch,
-  then the fill, then a delete; `ob_analytics.depth` has always excluded these
-  from the book, but the hftbacktest and Nautilus writers were sending them.
-  A backtesting engine reads an add as real liquidity, so its book crossed at
-  the touch and dropped the resting level the order traded against — its
-  reconstruction drifted permanently thinner than ours. Both writers now
-  exclude them, which is what makes the two books agree.
-
-- **The order-book engine is its own module** (issue #136). The rebuild
-  (`order_book`), the per-order lifecycles, and the FIFO queue reconstruction
-  moved out of `analytics.py` / `queue.py` into `ob_analytics/engine/`, behind
-  one input and one output: order events in, book states and order lifecycles
-  out, and nothing else. The engine **imports no pandas** — everything crosses
-  its interface as NumPy arrays, with the shared schema (issue #112) as the
-  input, timestamps as int64 UTC nanoseconds (issue #154) and prices as integer
-  ticks (issue #155). Results carry a *row index* back into the caller's event
-  arrays instead of copying columns out, so adding a column to the schema does
-  not widen the interface and the engine never learns a vocabulary — order
-  types, venue names — belonging to the layer above.
-  `ob_analytics/_engine_frames.py` is the one place pandas and the engine meet;
-  `analytics.order_book`, `analytics.order_lifecycles`, and the
-  `ob_analytics.queue` functions are now its frame adapters and keep their exact
-  signatures, dtypes, column order, and index behaviour. Output is **unchanged
-  byte for byte** — the golden-output gates from issue #143 pass on their
-  recorded fingerprints. Two things did move: the display window (`max_levels`,
-  `bps_range`) and the queue sampling window are set by the frame adapters
-  rather than the engine, which reconstructs the whole book and replays to the
-  instants it is given. A new import test (`tests/test_engine_boundary.py`)
-  keeps the engine free of pandas and of every layer above it. This is what lets
-  the inside be replaced with a faster implementation (#138) or fed one event at
-  a time (#139) without touching anything else. `Direction`, `Action`, and
-  `Outcome` are `IntEnum` code vocabularies that derive their schema strings
-  from their own member names, so a code and its label cannot drift apart.
-  Two details of the frame code are reproduced deliberately rather than
-  rewritten: an order's executed total is accumulated with compensated (Kahan)
-  summation, as the pandas aggregation it replaced did, and placement values are
-  taken per column as the first non-null among an order's `created` rows. The
-  lifecycle table is now covered by `tests/test_golden_synth.py`, which it was
-  not before.
-
-- **`BitstampTradeReader` no longer requires integer order ids.** It keyed its
-  maker/taker lookup on `int(order_id)`, which crashed on a public trade tape
-  carrying no ids (`int(NaN)`) and on venues publishing UUIDs. Integer ids
-  behave exactly as before; other ids match on their string form, and a missing
-  id resolves to `NaN` instead of raising.
-
-- **One `Source` shape for every data source, file or live** (issue #137;
-  settled #145 as "optional extras plus entry-point plug-ins"). File loaders
-  and live capturers were two separate designs with two registries; they are
-  now one `Source` protocol with two capability refinements — `OfflineSource`
-  (replay stored files: the loader / trade-source / writer / depth factories)
-  and `LiveSource` (capture a venue: `snapshot` / `stream` /
-  `shutdown_synthetic_events`). A source states its `level` (L2/L3) and
-  `feed_type`, carries typed `settings`, and registers in the single `SOURCES`
-  registry via `register_source`. A source can be both: `BitstampSource` now
-  covers offline replay and live capture in one descriptor. This is a breaking
-  API change with no back-compat shims:
-    - `Format` → `OfflineSource`; `LiveCapturer` → `LiveSource`;
-      `BitstampFormat` / `LobsterFormat` / `DepthCsvFormat` →
-      `BitstampSource` / `LobsterSource` / `DepthCsvSource`;
-      `CcxtCapturer` → `CcxtSource`.
-    - `Pipeline(format=...)` → `Pipeline(source=...)`; `Pipeline.from_format`
-      → `Pipeline.from_source`.
-    - The `FORMATS` / `CAPTURERS` registries and their `register_format` /
-      `register_capturer` / `list_formats` / `list_capturers` /
-      `get_capturer` helpers are replaced by `SOURCES` / `register_source` /
-      `list_sources` / `get_source` (in `ob_analytics.sources`).
-    - `PipelineResult.resolution` → `PipelineResult.level` (one coordinate
-      name across the codebase; `Source.level`, matching the visualization
-      layer).
-    - `CaptureConfig.extras` (the untyped settings dict) is removed. Per-source
-      settings are now typed `SourceSettings` on the source itself, e.g.
-      `CcxtSource(settings=CcxtSettings(exchange="binance", depth_limit=100))`.
-    - CLI: `process` / `validate` take `--source` (was `--format`), and the
-      `formats` verb is now `sources` (it also shows each source's capability
-      and required context).
-- **Third-party sources load through entry points.** A source can ship in its
-  own package and advertise itself under the `ob_analytics.sources`
-  entry-point group; `ob_analytics.sources.load_source_plugins()` discovers and
-  registers it at import time, with no edit to ob-analytics. The built-in
-  sources (bitstamp, lobster, depth_csv, ccxt) self-register on import and stay
-  behind today's `[live]` / `[ccxt]` extras.
-- **Prices are now integer ticks, not floats** (issue #155). Every `price`
-  column — events, trades, depth, depth_summary, book snapshot, and order
-  lifecycles — is a whole number of ticks (`int64`); the quote-currency price is
-  `ticks * tick_size`, where `tick_size` is the instrument's minimum price
-  increment (`PipelineConfig.tick_size`, default `0.01`). Loaders convert a raw
-  price to ticks on load; the plots and the round-trip writers convert back for
-  display, so figures and CSV output are unchanged. Storing the exact integer
-  removes the float rounding that made small-tick and 0-1 instruments show
-  crossed levels that were not real, and the depth engine now bins and compares
-  levels on exact integers instead of multiplying and rounding each event —
-  LOBSTER's `price_divisor` is now just the raw-feed encoding scale.
-  `tick_size` is written to each Parquet file's `ob_analytics_tick_size`
-  key-value metadata (a JSON map keyed by instrument, ready for per-`(venue,
-  symbol)` ticks in #147) and surfaced on `load_data` frames' `attrs`.
-  **Breaking:** the dtype of every `price` column changed from `double` to
-  `int64` and the stored numbers changed (prices re-expressed as ticks;
-  price-valued analytics such as `trade_impacts` VWAP and Kyle's λ are now in
-  tick units — multiply by `tick_size` for the quote currency; scale-free
-  metrics such as bps depth and order-book imbalance are unchanged). The
-  canonical Parquet **schema version is now `3.0`** (a `1.0` / `2.0` file still
-  reads — Parquet is self-describing — as the float-price frame it stored, whose
-  prices are not directly comparable to a `3.0` file's ticks; re-save it to move
-  it onto the tick model). Golden-output baselines were re-recorded behind the
-  correctness gate (#143).
-- **Timestamps are now tz-aware UTC nanoseconds** (`timestamp[ns, tz=UTC]`) on
-  both clocks — `timestamp` (receive) and `exchange_timestamp` (matching
-  engine) — across every table, loader, the synthetic generator, and the toy
-  datasets (issue #154). Before, they were tz-naive and in each venue's native
-  clock (millisecond-resolution UTC for Bitstamp, US/Eastern for LOBSTER), and
-  frames from different venues were declared not comparable. Now every frame sits
-  on one UTC clock, so cross-venue frames can be joined or concatenated directly.
-  LOBSTER's seconds-after-midnight are converted to UTC from the session date and
-  a venue time zone (`RunContext(session_tz=...)`, default `America/New_York`);
-  Bitstamp / CCXT keep their wall-clock instants and only gain the zone and the
-  nanosecond unit, so their values do not move. The schema also documents a
-  same-instant **total order** — `timestamp`, then `sequence`, then `event_id`,
-  then `ingest_seq` (`ob_analytics.schemas.time_order_keys`), which the per-order
-  reconstructions sort by. **Breaking:** the dtype of every timestamp column
-  changed, so the canonical Parquet **schema version is now `2.0`** (a `1.0` file
-  still reads — Parquet is self-describing — as the tz-naive frame it stored;
-  re-save it to move it onto the UTC clock). Consumers that compared pipeline
-  timestamps against tz-naive `pandas.Timestamp`s must now use tz-aware (UTC)
-  ones.
-
-### Fixed
 
 - **Order lifecycles read every filled order as cancelled when sizes were
   floats** (#226 regression). `order_lifecycles` summed each order's fills and
