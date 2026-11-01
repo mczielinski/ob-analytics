@@ -276,13 +276,20 @@ def _import_ccxt_pro() -> Any:
     return ccxtpro
 
 
+# Venues read through their prediction-market class, whose token books and
+# trades this module parses.  ccxt 4.5.90 added a ccxt.pro class for Polymarket
+# with a different interface, so the lookup order alone no longer finds it.
+_PREDICTION_FIRST = frozenset({"kalshi", "polymarket"})
+
+
 def _make_exchange(exchange_id: str) -> Any:
     """Instantiate a CCXT exchange by id (lazy import of ``ccxt``).
 
     A plain id is looked up among the CCXT Pro venues first, then among CCXT's
-    prediction markets (``ccxt.prediction``: Kalshi, Polymarket, ...).  An id
-    with :data:`PREDICTION_PREFIX`
-    is looked up among the prediction markets only.
+    prediction markets (``ccxt.prediction``: Kalshi, Polymarket, ...).  The
+    exception is :data:`_PREDICTION_FIRST`: those ids go to the prediction
+    market even when CCXT Pro has a venue of the same name.  An id with
+    :data:`PREDICTION_PREFIX` is looked up among the prediction markets only.
 
     Raises :class:`ImportError` with an install hint if ccxt is absent, and
     :class:`ValueError` if *exchange_id* is not a known CCXT venue.
@@ -306,7 +313,11 @@ def _exchange_class(exchange_id: str) -> Any:
         prediction = {i: getattr(ccxtprediction, i) for i in ccxtprediction.exchanges}
 
     name = exchange_id.removeprefix(PREDICTION_PREFIX)
-    if name == exchange_id and name in ccxtpro.exchanges:
+    if (
+        name == exchange_id
+        and name in ccxtpro.exchanges
+        and not (name in _PREDICTION_FIRST and name in prediction)
+    ):
         return getattr(ccxtpro, name)
     if name in prediction:
         return prediction[name]
