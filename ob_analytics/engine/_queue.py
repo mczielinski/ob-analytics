@@ -262,7 +262,9 @@ def queue_positions(events: OrderEvents, *, touch_only: bool = True) -> QueuePos
     )
 
 
-def queue_age_grid(events: OrderEvents, *, side: int, at: np.ndarray) -> QueueAgeGrid:
+def queue_age_grid(
+    events: OrderEvents, *, side: Direction, at: np.ndarray
+) -> QueueAgeGrid:
     """Snapshot one side's touch queue at each of the instants *at*.
 
     Replays the side's events and, at every sample instant, records the age of
