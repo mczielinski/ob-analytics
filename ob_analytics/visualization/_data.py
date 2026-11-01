@@ -20,6 +20,7 @@ from loguru import logger
 
 from ob_analytics._utils import validate_columns, window_start
 from ob_analytics.depth import (
+    _readable_mid,
     book_imbalance,
     filter_depth,
     micro_price,
@@ -353,17 +354,18 @@ def _trade_tape_mid(
 
     Lollipop stems hang off a mid/microprice line.  When a *spread* frame is
     available (``best_bid_price`` / ``best_ask_price``), the anchor is the true
-    ``(bid + ask) / 2`` sampled as-of each trade.  Otherwise the tape is
-    self-contained and the anchor is a rolling-median proxy of the trade price
-    itself -- a smooth spine that still lets buys sit above and sells below
-    without pretending to be the book mid.
+    ``(bid + ask) / 2`` sampled as-of each trade, from the quotes that can be
+    read as a price (:func:`~ob_analytics.depth.readable_quotes`).  Otherwise
+    the tape is self-contained and the anchor is a rolling-median proxy of the
+    trade price itself -- a smooth spine that still lets buys sit above and
+    sells below without pretending to be the book mid.
     """
     out = trades[["timestamp"]].copy()
     if spread is not None and not spread.empty:
         sp = spread[["timestamp", "best_bid_price", "best_ask_price"]].dropna()
+        sp = sp.assign(mid=_readable_mid(sp)).dropna(subset=["mid"])
         if not sp.empty:
             sp = sp.sort_values("timestamp", kind="stable")
-            sp["mid"] = (sp["best_bid_price"] + sp["best_ask_price"]) / 2.0
             merged = pd.merge_asof(
                 out.sort_values("timestamp", kind="stable"),
                 sp[["timestamp", "mid"]],
@@ -1023,10 +1025,14 @@ def prepare_price_view_data(
 
     Reads ``best_bid_price`` / ``best_ask_price`` / ``best_bid_vol`` /
     ``best_ask_vol`` from the depth summary and derives the **microprice**
-    ``(bid * ask_vol + ask * bid_vol) / (bid_vol + ask_vol)`` -- which leans
-    toward the side with the heavier *opposite* book, i.e. the direction price
-    is likely to move -- and the plain mid.  Optionally overlays executions
-    (buy/sell dots at trade price) when *trades* is given.
+    ``(bid * ask_vol + ask * bid_vol) / (bid_vol + ask_vol)``
+    (:func:`~ob_analytics.depth.micro_price`) -- which leans toward the side
+    with the heavier *opposite* book, i.e. the direction price is likely to
+    move -- and the plain mid.  A quote that cannot be read as a price
+    (:func:`~ob_analytics.depth.readable_quotes`: an empty side or a crossed
+    book) has no mid of either kind, so neither line is drawn there.
+    Optionally overlays executions (buy/sell dots at trade price) when
+    *trades* is given.
     """
     start_time, end_time = _default_start_end(depth_summary, start_time, end_time)
     win = depth_summary[
@@ -1035,12 +1041,10 @@ def prepare_price_view_data(
     ]
     bid = win["best_bid_price"].to_numpy(dtype=float)
     ask = win["best_ask_price"].to_numpy(dtype=float)
-    bvol = win["best_bid_vol"].to_numpy(dtype=float)
-    avol = win["best_ask_vol"].to_numpy(dtype=float)
-    mid = (bid + ask) / 2.0
-    denom = bvol + avol
-    with np.errstate(invalid="ignore", divide="ignore"):
-        micro = np.where(denom > 0, (bid * avol + ask * bvol) / denom, mid)
+    mid = _readable_mid(win)
+    # A readable quote with no size at the touch draws its plain mid.
+    micro = micro_price(win).to_numpy(dtype=float)
+    micro = np.where(np.isnan(micro), mid, micro)
 
     out_trades = None
     if trades is not None and not trades.empty:
@@ -1231,6 +1235,8 @@ def prepare_book_signals_data(
     touch OBI and the cumulative-depth OBI over *levels*
     (:func:`~ob_analytics.depth.book_imbalance`).  *levels* is clamped to the
     depth bins actually present so a summary with fewer bins does not raise.
+    A quote that cannot be read as a price
+    (:func:`~ob_analytics.depth.readable_quotes`) has no mid of either kind.
     """
     start_time, end_time = _default_start_end(depth_summary, start_time, end_time)
     win = depth_summary[
@@ -1240,7 +1246,7 @@ def prepare_book_signals_data(
 
     bid = win["best_bid_price"].to_numpy(dtype=float)
     ask = win["best_ask_price"].to_numpy(dtype=float)
-    mid = (bid + ask) / 2.0
+    mid = _readable_mid(win)
 
     n_bins = sum(1 for c in win.columns if re.fullmatch(r"bid_vol\d+bps", c))
     levels = max(1, min(levels, n_bins + 1))
