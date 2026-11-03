@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from ob_analytics.config import PipelineConfig
     from ob_analytics.protocols import SequenceKind
 
 
@@ -128,36 +129,9 @@ def _process_one(args: argparse.Namespace, data_path: str, output: Path) -> None
     from loguru import logger
 
     from ob_analytics.data import save_data
-    from ob_analytics.pipeline import Pipeline
-    from ob_analytics.protocols import RunContext
-    from ob_analytics.sources import get_source
 
     source_name = args.source
-
-    try:
-        source = get_source(source_name)()
-    except KeyError as exc:
-        logger.error(str(exc))
-        sys.exit(1)
-
-    # Ask the source what RunContext it needs rather than hard-coding "lobster".
-    required = getattr(source, "required_context", list)()
-    if "trading_date" in required and args.trading_date is None:
-        logger.error("--trading-date is required for the %s source", source_name)
-        sys.exit(1)
-    ctx = (
-        RunContext(trading_date=args.trading_date)
-        if args.trading_date is not None
-        else RunContext()
-    )
-
-    # No config: the source's defaults apply, and the pipeline takes a
-    # capture's tick and lot size from its meta.json.
-    try:
-        pipeline = Pipeline(source=source, ctx=ctx)
-    except TypeError as exc:  # e.g. a live-only source cannot replay files
-        logger.error(str(exc))
-        sys.exit(1)
+    pipeline = _build_pipeline(args, _build_source(source_name), source_name)
 
     logger.info("Processing {} (source={})...", data_path, source_name)
     result = pipeline.run(data_path)
@@ -240,6 +214,7 @@ def _audit_one(args: argparse.Namespace, path: Path) -> Any:
 
     from ob_analytics.analytics import data_quality_summary
     from ob_analytics.capture_record import read_record
+    from ob_analytics.config import PipelineConfig
     from ob_analytics.protocols import (
         Clocks,
         FeedType,
@@ -262,14 +237,9 @@ def _audit_one(args: argparse.Namespace, path: Path) -> Any:
     trade_attribution = TradeAttribution.BOTH
     sequence_kind = SequenceKind.CONTIGUOUS
     clocks = Clocks.BOTH
+    source = None
     if source_name is not None:
-        from ob_analytics.sources import get_source
-
-        try:
-            source = get_source(source_name)()
-        except KeyError as exc:
-            logger.error(str(exc))
-            sys.exit(1)
+        source = _build_source(source_name)
         feed_type = getattr(source, "feed_type", feed_type)
         trade_attribution = trade_attribution_of(source)
         sequence_kind = sequence_kind_of(source)
@@ -301,7 +271,14 @@ def _audit_one(args: argparse.Namespace, path: Path) -> Any:
     if args.from_parquet:
         result = _load_saved_result(path)
     else:
-        result = _run_for_audit(args, path, source_name or "bitstamp")
+        # Dropped-message detection reads the venue sequence, which is off by
+        # default elsewhere.  Only this field is set, so the source's own config
+        # defaults still apply to the rest.
+        pipeline = _build_pipeline(
+            args, source, source_name, PipelineConfig(track_sequence=True)
+        )
+        logger.info("Auditing {} (source={})...", path, source_name)
+        result = pipeline.run(path)
 
     return data_quality_summary(
         result.events,
@@ -334,20 +311,36 @@ def _declared_sequence_kind(source_name: str, default: SequenceKind) -> Sequence
         return default
 
 
-def _run_for_audit(args: argparse.Namespace, path: Path, source_name: str) -> Any:
-    """Run the pipeline for ``audit`` and return the result."""
+def _build_source(source_name: str) -> Any:
+    """The registered source called *source_name*; exit when there is none."""
     from loguru import logger
 
-    from ob_analytics.config import PipelineConfig
-    from ob_analytics.pipeline import Pipeline
-    from ob_analytics.protocols import RunContext
     from ob_analytics.sources import get_source
 
     try:
-        source = get_source(source_name)()
+        return get_source(source_name)()
     except KeyError as exc:
         logger.error(str(exc))
         sys.exit(1)
+
+
+def _build_pipeline(
+    args: argparse.Namespace,
+    source: Any,
+    source_name: str,
+    config: PipelineConfig | None = None,
+) -> Any:
+    """The pipeline that ``process`` and ``audit`` run on *source*.
+
+    The source says which run context it needs, so a missing
+    ``--trading-date`` stops here with a message naming the source.  Without
+    *config* the source's defaults apply, and the pipeline takes a capture's
+    tick and lot size from its ``meta.json``.
+    """
+    from loguru import logger
+
+    from ob_analytics.pipeline import Pipeline
+    from ob_analytics.protocols import RunContext
 
     required = getattr(source, "required_context", list)()
     if "trading_date" in required and args.trading_date is None:
@@ -358,21 +351,11 @@ def _run_for_audit(args: argparse.Namespace, path: Path, source_name: str) -> An
         if args.trading_date is not None
         else RunContext()
     )
-
-    # Load the ordering keys: dropped-message detection reads the venue
-    # sequence, and it is off by default elsewhere.  Only this field is set
-    # explicitly, so the source's own config defaults still apply to the rest,
-    # and the pipeline takes a capture's tick and lot size from its meta.json.
-    config = PipelineConfig(track_sequence=True)
-
     try:
-        pipeline = Pipeline(config, source=source, ctx=ctx)
+        return Pipeline(config, source=source, ctx=ctx)
     except TypeError as exc:  # e.g. a live-only source cannot replay files
         logger.error(str(exc))
         sys.exit(1)
-
-    logger.info("Auditing {} (source={})...", path, source_name)
-    return pipeline.run(path)
 
 
 def _keep_capture_record(data_path: Path, output: Path) -> None:
@@ -594,7 +577,7 @@ def _cmd_capture(args: argparse.Namespace) -> None:
     logger.debug("Source {!r} captures at {}", args.venue, source_level)
 
     if not isinstance(source, LiveSource):
-        logger.error("Source %r has no live capture; it is offline-only.", args.venue)
+        logger.error("Source {!r} has no live capture; it is offline-only.", args.venue)
         sys.exit(1)
 
     # A missing optional extra or an unusable venue stops the run here, before

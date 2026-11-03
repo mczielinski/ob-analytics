@@ -57,15 +57,16 @@ trades = BitstampTradeReader().load(events, sample_data_dir())
 
 ## Regenerating the sample
 
-The `scripts/collect_bitstamp_btcusd.py` collector produces a directory
+`ob-analytics capture bitstamp` writes a segment directory
 matching this layout (it also emits a `raw.jsonl` frame log that is
 intentionally **not bundled** — far larger than orders + trades combined,
 no extra value for pipeline users).
 
 ```bash
-./scripts/collect_bitstamp_btcusd.py --minutes 30 --out /tmp/sample-capture
+OUT=$(mktemp -d)  # a new directory, so the capture is its first segment
+ob-analytics capture bitstamp --pair btcusd --minutes 30 --out "$OUT"
 
-RUN=$(ls -dt /tmp/sample-capture/bitstamp_btcusd_* | head -1)
+RUN="$OUT/seg-0001"
 gzip -9 -c "$RUN/orders.csv" > ob_analytics/_sample_data/orders.csv.gz
 cp "$RUN/trades.csv" "$RUN/meta.json" ob_analytics/_sample_data/
 ```

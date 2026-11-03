@@ -9,7 +9,7 @@ Bitstamp-specific components: event loading, trade reading from companion
 which does both offline CSV replay and live WebSocket capture).
 
 Modern workflows pair `orders.csv` with `trades.csv` (for example from
-`scripts/collect_bitstamp_btcusd.py`). The pipeline resolves
+`ob-analytics capture bitstamp`). The pipeline resolves
 `trades.csv` from the same directory as the `orders.csv` path passed to
 `Pipeline.run`.
 

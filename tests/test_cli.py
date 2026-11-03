@@ -80,6 +80,8 @@ class TestProcessSubcommand:
         assert r.returncode != 0
         combined = (r.stderr + r.stdout).lower()
         assert "trading" in combined  # trading-date / trading_date / "trading date"
+        # The message names the source, not a literal format placeholder.
+        assert "for the lobster source" in combined
 
     def test_process_with_gallery_flag(
         self, cli_runner, tmp_path, tiny_bitstamp_orders_csv
@@ -142,7 +144,7 @@ class TestAuditSubcommand:
     ):
         r = cli_runner("audit", str(tiny_bitstamp_orders_csv), "--source", "lobster")
         assert r.returncode != 0
-        assert "trading" in (r.stderr + r.stdout).lower()
+        assert "for the lobster source" in (r.stderr + r.stdout).lower()
 
     def test_audit_listed_in_help(self, cli_runner):
         r = cli_runner("--help")
@@ -512,6 +514,11 @@ class TestCaptureSubcommand:
         for flag in ("--exchange", "--depth-limit", "--poll-interval"):
             assert flag in r.stdout
         assert "depth.csv" in r.stdout  # L2 output documented
+
+    def test_offline_only_source_is_named(self, cli_runner, tmp_path):
+        r = cli_runner("capture", "lobster", "--out", str(tmp_path / "cap"))
+        assert r.returncode == 1
+        assert "Source 'lobster' has no live capture" in r.stderr
 
     @pytest.mark.skipif(not _CCXT_INSTALLED, reason="ccxt extra not installed")
     def test_list_includes_ccxt(self, cli_runner):

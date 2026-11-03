@@ -9,6 +9,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 
+import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -663,6 +664,46 @@ class TestPlotOfiHorizon:
             "horizons": ["5s", "60s"],
         }
         assert isinstance(plot("ofi_horizon", **data), Figure)
+
+    @staticmethod
+    def _grid(ofi: np.ndarray) -> dict[str, Any]:
+        """A 45-second, 5-second-step payload with the given OFI rows."""
+        times = pd.date_range("2015-05-01 01:00:00", periods=10, freq="5s", tz="UTC")
+        return {"ofi": ofi, "times": times.to_numpy(), "horizons": ["5s", "60s"]}
+
+    @pytest.mark.parametrize(
+        "row",
+        [np.zeros(10), np.where(np.arange(10) == 4, 0.5, 0.0)],
+        ids=["all-zero", "one-value"],
+    )
+    def test_time_axis_spans_the_data(self, row: np.ndarray, tmp_path) -> None:
+        """Rows with few or no bands still save, on the data's own time range."""
+        data = self._grid(np.vstack([row, row]))
+        fig = plot("ofi_horizon", **data)
+        save_figure(fig, tmp_path / "ofi.png")
+
+        x = mdates.date2num(pd.to_datetime(data["times"]))
+        assert fig.axes[0].get_xlim() == pytest.approx((x[0], x[-1]))
+
+    def test_one_time_step_spans_seconds(self, tmp_path) -> None:
+        times = pd.DatetimeIndex(["2015-05-01 01:00:00"], tz="UTC").to_numpy()
+        data: dict[str, Any] = {
+            "ofi": np.array([[0.3], [0.1]]),
+            "times": times,
+            "horizons": ["5s", "60s"],
+        }
+        fig = plot("ofi_horizon", **data)
+        save_figure(fig, tmp_path / "ofi.png")
+
+        lo, hi = fig.axes[0].get_xlim()
+        assert 0 < (hi - lo) * 86_400 <= 10
+
+    def test_all_missing_says_no_data(self, tmp_path) -> None:
+        data = self._grid(np.full((2, 10), np.nan))
+        fig = plot("ofi_horizon", **data)
+        save_figure(fig, tmp_path / "ofi.png")
+
+        assert "no data" in fig.axes[0].get_title("left")
 
 
 class TestPlotOrderOutcomeL3:

@@ -167,8 +167,10 @@ class TestBitstampTradeReader:
         )
         orders.to_csv(tmp_path / "orders.csv", index=False)
         events = BitstampLoader().load(tmp_path / "orders.csv")
-        with pytest.raises(FileNotFoundError, match="trades.csv"):
+        with pytest.raises(FileNotFoundError, match="trades.csv") as exc:
             BitstampTradeReader().load(events, tmp_path)
+        # The message names the command that writes one.
+        assert "ob-analytics capture bitstamp" in str(exc.value)
 
 
 class TestSourceCreateTradeSource:

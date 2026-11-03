@@ -274,8 +274,8 @@ _TRADES_COLUMNS = (
 
 
 class BitstampTradeReader:
-    """Build trades from the companion ``trades.csv`` produced by
-    ``scripts/collect_bitstamp_btcusd.py``.
+    """Build trades from the companion ``trades.csv`` that
+    ``ob-analytics capture bitstamp`` writes next to ``orders.csv``.
 
     Reads each row from ``<source_dir>/trades.csv`` and projects it into
     the canonical trades schema, joining against the events frame to
@@ -392,7 +392,7 @@ class BitstampTradeReader:
             raise FileNotFoundError(
                 f"BitstampTradeReader: no trades.csv next to {source!r} "
                 f"(looked at {candidate}). Capture trades alongside orders "
-                f"with scripts/collect_bitstamp_btcusd.py."
+                f"with `ob-analytics capture bitstamp`."
             )
         return candidate
 

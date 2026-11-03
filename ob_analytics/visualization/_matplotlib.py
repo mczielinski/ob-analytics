@@ -2041,7 +2041,7 @@ def mpl_ofi_horizon(
     fig, ax = _create_axes(ax, figsize=(11, 4.2))
     ofi = data["ofi"]
     horizons = data["horizons"]
-    if ofi.size == 0:
+    if np.isnan(ofi).all():
         ax.set_title("Order flow imbalance — horizon graph (no data)")
         return fig
 
@@ -2086,7 +2086,10 @@ def mpl_ofi_horizon(
 
     ax.set_ylim(-0.2, len(horizons) * (band_h + gap))
     ax.set_yticks([])
-    ax.margins(x=0)
+    # The bands alone cannot set the time range: a row of zeros draws none.
+    # One grid step has no range of its own, so it gets a second each side.
+    pad = 0.0 if x[-1] > x[0] else 1 / 86_400
+    ax.set_xlim(x[0] - pad, x[-1] + pad)
     format_time_axis(ax)
     ax.set_xlabel("Time")
     ax.set_title("Order flow imbalance — horizon graph (buy + / sell −)")

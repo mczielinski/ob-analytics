@@ -10,7 +10,11 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from ob_analytics._demos import _cost_panels, _lobster_analytics_panels
+from ob_analytics._demos import (
+    _cost_panels,
+    _lobster_analytics_panels,
+    run_bitstamp_demo,
+)
 from ob_analytics.bitstamp import BitstampSource
 from ob_analytics.pipeline import Pipeline, PipelineResult
 from ob_analytics.visualization.gallery import display_result
@@ -65,3 +69,9 @@ def test_cost_panel_bps_match_display_units(result: PipelineResult) -> None:
             shown_costs[col].to_numpy(), nan_ok=True
         )
     assert isinstance(_cost_panels(result), list)
+
+
+def test_bitstamp_demo_without_trades_names_the_capture_command(tmp_path) -> None:
+    (tmp_path / "orders.csv").write_text("id\n")
+    with pytest.raises(FileNotFoundError, match="ob-analytics capture bitstamp"):
+        run_bitstamp_demo(tmp_path, tmp_path / "out")
