@@ -60,7 +60,8 @@ How much of the book the feed shows.
   side; whatever each poll returns.
 - **Sources:** most feeds show the whole book. cryptofeed's Bitstamp and
   Bitfinex books show the top 100 orders a side. ccxt's Kraken book shows the
-  top `--depth-limit` levels, and its Binance book 1,000 levels by default.
+  top `--depth-limit` levels, and its Binance book 1,000 levels by default. A
+  LOBSTER file shows the number of levels requested from LOBSTER.
 - **Lets you conclude:** depth, the depth summary's rings and the depth heatmap
   are right out to the edge of what is shown.
 - **Stops you concluding:** anything past that edge. With a window of the top
@@ -119,9 +120,15 @@ What a correct capture can still leave out.
 
 - **Values:** nothing; changes between snapshots or polls; changes merged into
   one; a lost message that goes unnoticed.
-- **Sources:** a file (LOBSTER, Databento) misses nothing. Snapshots and polls
-  miss what happens between them. ccxt's Coinbase and Kraken books, and the
-  native Bitstamp feed, cannot notice a lost message.
+- **Sources:** a Databento file misses nothing. A LOBSTER file misses the
+  events outside the requested price levels: an order that moves outside them
+  and is cancelled or filled there never gets a closing row, so the book
+  rebuilt from the messages keeps it. The per-order views (the L3 book
+  snapshot and depth chart, queue positions, order lifecycles and order
+  outcomes) are then complete only when the requested levels cover every price
+  an order reaches (see [LOBSTER](howto/lobster.md#request-enough-levels)).
+  Snapshots and polls miss what happens between them. ccxt's Coinbase and
+  Kraken books, and the native Bitstamp feed, cannot notice a lost message.
 - **Lets you conclude:** where nothing can be missed, a quiet book was quiet.
 - **Stops you concluding:** elsewhere, that a quiet book was quiet. A lost
   message shows up only later, as a stale order or level, or not at all.
@@ -223,7 +230,10 @@ Whether the book can show a bid at or above an ask.
   still faithful; `price_levels`, an L2 book, which the venue does not publish
   crossed.
 - **Sources:** native Bitstamp is a diff feed. The other L3 sources are matched
-  books. Every L2 source is `price_levels`.
+  books. Every L2 source is `price_levels`. A LOBSTER file with too few levels
+  gives a crossed per-order book, although LOBSTER is a matched book, and the
+  run warns. When the folder has an orderbook file, the depth table is read
+  from it and is not crossed.
 - **Lets you conclude:** in a matched book or price levels, a crossed book is a
   fault in the data or the capture.
 - **Stops you concluding:** in a diff feed, that a crossed book is a fault.
@@ -418,7 +428,7 @@ What you need to capture the feed.
 | cryptofeed, Bitfinex | L3 | top 100 orders a side | resting only |
 | cryptofeed, Blockchain.com | L3 | not checked: the BTC-USD book held between 1 and 34 orders | resting only |
 | cryptofeed, Independent Reserve | L3 | whole book | resting only |
-| `lobster` | L3 | whole displayed book | resting only |
+| `lobster` | L3 | the requested price levels | resting only |
 | `databento` | L3 | whole displayed book | resting only |
 | cryptofeed, Bitstamp L2 | L2 | whole book | — |
 | cryptofeed, Kraken L2 | L2 | top 1,000 levels a side; levels that leave it are kept | — |
@@ -440,7 +450,7 @@ What you need to capture the feed.
 | cryptofeed, Bitfinex | opening book, then every change | nothing | cryptofeed reconnects and takes a new opening book | counts every message on the connection; only rises | receive only | matched book; failed the check in testing |
 | cryptofeed, Blockchain.com | opening book, then every change | nothing | cryptofeed reconnects and takes a new opening book | counts every message on the connection; only rises | receive only | matched book |
 | cryptofeed, Independent Reserve | REST book newer than the stream, then every change | nothing found in testing | cryptofeed reconnects and takes a new opening book | skips messages for orders cryptofeed does not hold; only rises | venue + receive; the opening book receive only | matched book; failed the check in testing (58% crossed) |
-| `lobster` | every change | nothing (a file) | — | none | venue only | matched book |
+| `lobster` | every change | events outside the requested levels ([request enough levels](howto/lobster.md#request-enough-levels)) | — | none | venue only | matched book; the per-order book crosses when the levels are too few |
 | `databento` | every change | nothing (a file) | — | venue's where sent; only rises | venue + Databento receive | matched book |
 | cryptofeed, Bitstamp L2 | REST book after 5 s, then changes | a lost message | drifts until the level changes again | none | venue + receive | price levels |
 | cryptofeed, Kraken L2 | changes | a lost message | drifts until the level changes again | none | receive only | price levels |

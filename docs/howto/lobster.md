@@ -14,14 +14,14 @@ orderbook file (ground-truth) when present.
     | Property | Value |
     |---|---|
     | Level | L3 |
-    | Depth shown | whole displayed book |
+    | Depth shown | the requested price levels |
     | Orders shown | resting only |
     | Update form | every change |
-    | What can be missed | nothing (a file) |
+    | What can be missed | events outside the requested levels |
     | After a lost message | — |
     | Sequence | none |
     | Clocks | venue only |
-    | Crossing | matched book |
+    | Crossing | matched book; the per-order book crosses when the levels are too few |
     | Trade sides named | maker only; the taker is guessed |
     | Taker side | from the execution row |
     | Fills | execution rows |
@@ -30,11 +30,13 @@ orderbook file (ground-truth) when present.
     | What the book means | normal |
     | Access | paid files |
 
-    Use it for order lifetimes, queue position and depth on US equities. Don't
-    use it for anything that depends on the taker (market-order labels, trade
-    impact per taker) or on latency: the taker is guessed and there is one
-    clock. [What each feed shows](../feeds.md) explains each property and
-    compares every source.
+    Use it for depth on US equities, and for order lifetimes and queue
+    position when the file has enough levels (see
+    [Request enough levels](#request-enough-levels)). Don't use it for
+    anything that depends on the taker (market-order labels, trade impact per
+    taker) or on latency: the taker is guessed and there is one clock.
+    [What each feed shows](../feeds.md) explains each property and compares
+    every source.
 
 ```python
 from ob_analytics import LobsterSource, Pipeline
@@ -98,6 +100,38 @@ hidden-execution rows.
     rows than the message file raises `ConfigError`. Sizes in the orderbook
     file are converted to whole lots of `lot_size`, as the message sizes are, so
     `depth` and `depth_summary` hold `int64` lots.
+
+## Request enough levels
+
+A LOBSTER file covers the number of price levels you ask LOBSTER for. The
+message file holds only the events inside those levels. An order that moves
+outside them, because the touch moved away, and is then cancelled or filled
+there gets no closing row. The book rebuilt from the messages keeps that order
+to the end of the file.
+
+When the folder has an orderbook file, the depth table is read from it, so it
+is right at every level the file covers, and so are the L2 book snapshot and
+depth chart, which read the depth table. The per-order views are not: the L3
+book snapshot and depth chart, queue positions, order lifecycles and order
+outcomes. They are complete only when the requested levels cover every price
+an order reaches. Without an orderbook file, the depth table is rebuilt from
+the same messages and keeps the same stale orders.
+
+The AAPL sample of 21 June 2012, at three level counts. The touch of the book
+rebuilt from the messages was compared with the orderbook file at 58 instants:
+
+| Requested levels | Touch matches the file | Book crossed or locked |
+|---|---|---|
+| 50 | 58 of 58 | 0 of 58 |
+| 30 | 28 of 58 | 27 of 58 |
+| 10 | 0 of 58 | 58 of 58 |
+
+When the book rebuilt from the messages is crossed for more than 0.05% of the
+session time, the run warns (a `UserWarning`) and gives the share. On the
+10-level sample it is crossed 99.2% of the time; on the 50-level sample, never.
+Request more levels if the warning appears and you need the per-order views.
+[`audit`](audit.md) reads the depth table, so it does not count this crossing
+when the folder has an orderbook file.
 
 ## Takers are guessed
 

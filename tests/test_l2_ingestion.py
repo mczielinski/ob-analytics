@@ -452,19 +452,35 @@ class TestL2Gallery:
     def test_available_concepts_excludes_l3_only(self, toy_l2_result):
         from ob_analytics.visualization import available_concepts
 
-        concepts = set(available_concepts(toy_l2_result))
+        concepts = available_concepts(toy_l2_result)
         # depth/trades faces are present …
         assert "depth_heatmap" in concepts
-        # … and every per-order (L3) face is skipped, not errored.
+        # … and every per-order (L3) face is skipped, not errored.  The book
+        # snapshot and depth chart used to be skipped too, when both their
+        # faces read the per-order book; their L2 faces now read the depth
+        # table, so an L2 run has them (and only them).
         for l3_only in (
             "queue_position",
             "order_outcome",
             "order_activity",
             "cancellations",
-            "book_snapshot",
             "events_histogram",
         ):
             assert l3_only not in concepts
+        assert concepts["book_snapshot"] == ["L2"]
+        assert concepts["depth_chart"] == ["L2"]
+
+    @pytest.mark.parametrize("key", ["book_snapshot", "depth_chart"])
+    def test_the_book_faces_draw_the_price_level_book(self, toy_l2_result, key):
+        from ob_analytics.visualization.gallery import build_gallery_model
+
+        model = build_gallery_model(toy_l2_result)
+        spec = next(c for c in model.concepts if c.key == key).at(Level.L2)
+        assert spec is not None
+        data = spec.prepare(**spec.prep_kwargs)
+
+        assert not data["bids"].empty and not data["asks"].empty
+        assert data["bids"]["price"].max() < data["asks"]["price"].min()
 
     def test_depth_heatmap_renders(self, toy_l2_result):
         import matplotlib.pyplot as plt

@@ -128,8 +128,10 @@ Because there are no order IDs, the `maker` / `taker` (and event-id) columns are
 ## Visualizing an L2 result
 
 The gallery adapts to the resolution: an L2 result renders the depth/trades
-faces (the depth heatmap, price view, depth percentiles, trade tape, trade
-size) and **skips every per-order face** rather than erroring.
+faces (the depth heatmap, price view, depth percentiles, book snapshot, depth
+chart, book replay, trade tape and trade size) and **skips every per-order
+face** rather than erroring. The book snapshot, depth chart and book replay
+read the depth table.
 
 ```python
 from ob_analytics.visualization import available_concepts

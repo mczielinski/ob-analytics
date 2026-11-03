@@ -42,6 +42,7 @@ from ob_analytics.visualization.gallery import (
     build_gallery_model,
     generate_gallery,
 )
+from tests import _lobster_few_levels as few
 from tests._logging import warnings_logged
 
 # ---------------------------------------------------------------------------
@@ -1027,6 +1028,49 @@ class TestBuildGalleryModel:
         assert len(hidden) == 1
         assert hidden["price"].iloc[0] == pytest.approx(236.60)
         assert hidden["best_bid_price"].iloc[0] == pytest.approx(236.50)
+
+
+class TestBookFacesReadTheirOwnLevel:
+    """The L2 book snapshot and depth chart read the depth table; the L3 faces
+    read the per-order book.  On a LOBSTER file with too few levels the
+    per-order book keeps orders that were cancelled outside those levels and
+    crosses, while the depth table, read from the orderbook file, does not."""
+
+    @staticmethod
+    def _crossing_lobster_result(tmp_path):
+        files = few.write_files(tmp_path, few.CROSSING_MESSAGES, few.CROSSING_ORDERBOOK)
+        with pytest.warns(UserWarning, match="crossed"):
+            return few.run(files)
+
+    @staticmethod
+    def _face(model, key, level):
+        concept = next(c for c in model.concepts if c.key == key)
+        spec = concept.at(level)
+        assert spec is not None, f"{key} has no {level} face"
+        return spec.prepare(**spec.prep_kwargs)
+
+    @pytest.mark.parametrize("key", ["book_snapshot", "depth_chart"])
+    def test_the_l2_face_of_a_few_level_lobster_run_is_not_crossed(
+        self, tmp_path, key
+    ) -> None:
+        model = build_gallery_model(self._crossing_lobster_result(tmp_path))
+
+        data = self._face(model, key, Level.L2)
+
+        # At the snapshot the orderbook file shows bid 101.50 and ask 102.00.
+        assert list(data["bids"]["price"]) == [pytest.approx(101.50)]
+        assert list(data["asks"]["price"]) == [pytest.approx(102.00)]
+
+    @pytest.mark.parametrize("key", ["book_snapshot", "depth_chart"])
+    def test_the_l3_face_still_shows_the_per_order_book(self, tmp_path, key) -> None:
+        model = build_gallery_model(self._crossing_lobster_result(tmp_path))
+
+        data = self._face(model, key, Level.L3)
+
+        # The ask at 101.00 was cancelled outside the one requested level, so
+        # the per-order book still holds it, under the bid at 101.50.
+        assert pytest.approx(101.00) in list(data["asks"]["price"])
+        assert pytest.approx(101.50) in list(data["bids"]["price"])
 
 
 class TestDisplayUnitsPreserveFaces:
