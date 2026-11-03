@@ -238,7 +238,9 @@ Whether the book can show a bid at or above an ask.
   fault in the data or the capture.
 - **Stops you concluding:** in a diff feed, that a crossed book is a fault.
   `audit` reports it as information, not as an error.
-- **In the package:** `Source.feed_type` and the `crossed_book` check. See
+- **In the package:** `Source.feed_type`, the `crossed_book` check, and the
+  `per_order_book_crossed` check for a per-order book crossed longer than the
+  depth table. See
   [Data quality](data-quality.md) for more, and for `uncross=`, which removes
   a crossing for display.
 

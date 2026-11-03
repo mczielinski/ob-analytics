@@ -1119,8 +1119,8 @@ def _warn_if_book_crosses(events: pd.DataFrame, *, from_orderbook: bool) -> None
     if crossed_pct <= CROSSED_TOLERANCE_PCT:
         return
     depth_note = (
-        "The depth table, read from the orderbook file, is not affected, so "
-        "`audit` does not count this."
+        "The depth table, read from the orderbook file, is not affected; "
+        "`audit` reports this as per_order_book_crossed."
         if from_orderbook
         else "There is no orderbook file, so the depth table is rebuilt from "
         "the same messages and keeps the same stale orders."

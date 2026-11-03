@@ -35,6 +35,7 @@ from ob_analytics import (
     data_quality_summary,
     detect_stale_orders,
 )
+from ob_analytics._utils import empty_events
 from ob_analytics.analytics import (
     _faithful_best_series,
     order_book,
@@ -44,6 +45,7 @@ from ob_analytics.datasets import toy_events, toy_trades
 from ob_analytics.depth import price_level_volume
 from ob_analytics.engine import crossed_prefix_counts
 from ob_analytics.protocols import clocks_of, trade_attribution_of
+from tests import _lobster_few_levels as few
 
 # ---------------------------------------------------------------------------
 # Builders
@@ -600,6 +602,49 @@ class TestQualityChecks:
         assert s.ok
         assert "negative_level" in {c.name for c in s.warnings}
         assert "1 level row(s) below zero" in s.render()
+
+    def test_a_crossed_per_order_book_is_scored_beside_a_clean_depth(self, tmp_path):
+        files = few.write_files(tmp_path, few.CROSSING_MESSAGES, few.CROSSING_ORDERBOOK)
+        with pytest.warns(UserWarning, match="crossed"):
+            result = few.run(files)
+
+        s = data_quality_summary(
+            result.events,
+            result.trades,
+            feed_type=FeedType.MATCHED_BOOK,
+            depth=result.depth,
+        )
+
+        assert s.crossed_pct == 0.0
+        assert s.per_order_crossed_pct == pytest.approx(60.0)
+        assert s.per_order_crossed_episodes == 1
+        assert s.to_dict()["per_order_crossed_pct"] == pytest.approx(60.0)
+        # The depth table is sound, so this warns rather than fails the run.
+        assert s.ok
+        assert "per_order_book_crossed" in {c.name for c in s.warnings}
+
+    @pytest.mark.parametrize("feed_type", [FeedType.MATCHED_BOOK, FeedType.DIFF_FEED])
+    def test_a_depth_rebuilt_from_the_events_leaves_it_to_crossed_book(self, feed_type):
+        # Without a depth table, the depth is the per-order book: the same
+        # crossing, which crossed_book already scores.
+        s = data_quality_summary(crossed_events(), _empty_trades(), feed_type=feed_type)
+        check = next(c for c in s.checks if c.name == "per_order_book_crossed")
+        assert s.crossed_pct > 0
+        assert s.per_order_crossed_pct == s.crossed_pct
+        assert s.per_order_crossed_episodes == s.crossed_episodes
+        assert check.passed
+        assert "no more than the depth table" in check.detail
+
+    def test_a_price_level_run_has_no_per_order_book(self):
+        s = data_quality_summary(
+            empty_events().assign(type=pd.Series(dtype=object)),
+            _empty_trades(),
+            feed_type=FeedType.PRICE_LEVELS,
+        )
+        check = next(c for c in s.checks if c.name == "per_order_book_crossed")
+        assert s.per_order_crossed_pct == 0.0
+        assert check.passed
+        assert "no per-order events" in check.detail
 
     def test_events_without_fill_still_score_against_a_given_depth(self):
         ev = _classified(

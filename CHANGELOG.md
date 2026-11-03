@@ -10,6 +10,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`audit` reports how long the per-order book is crossed.** A LOBSTER run
+  with an orderbook file reads its depth table from that file, so the
+  `crossed_book` check passed even when the book rebuilt from the messages
+  was crossed: 99.2% of the time on the 10-level AAPL sample. The summary has
+  two new fields, `per_order_crossed_pct` and `per_order_crossed_episodes`,
+  a **per-order book crossed** line, and a `per_order_book_crossed` warning
+  when that book is crossed for longer than the depth table.
+
 - **One dtype map for the events and trades tables** (#351).
   `ob_analytics.schemas` now holds `EVENT_DTYPES` and `TRADE_DTYPES`, the
   pandas dtype of every column, next to the column names, with the four
