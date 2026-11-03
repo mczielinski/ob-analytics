@@ -107,7 +107,7 @@ class TestLayout:
     def test_shape_and_determinism(self, events: pd.DataFrame) -> None:
         assert len(events) == 24
         assert events["id"].nunique() == 12
-        assert (events["event_id"] == range(1, 25)).all()
+        assert (events["event_id"] == list(range(1, 25))).all()
         pd.testing.assert_frame_equal(toy_events(), toy_events())
 
     def test_trades_layout(self, trades: pd.DataFrame) -> None:

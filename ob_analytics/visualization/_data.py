@@ -2090,7 +2090,7 @@ def prepare_volume_percentiles_data(
     )
     ob = depth_summary.loc[mask, ["timestamp"] + bid_names + ask_names]
     ob = ob.drop_duplicates(subset="timestamp", keep="last")
-    ob.set_index("timestamp", inplace=True)
+    ob = ob.set_index("timestamp")
 
     if frequency == "mins":
         intervals = pd.DatetimeIndex(ob.index).floor("min")
@@ -2099,9 +2099,7 @@ def prepare_volume_percentiles_data(
 
     aggregated = ob.groupby(intervals).mean()
     aggregated.index = aggregated.index + delta
-    aggregated.reset_index(inplace=True)
-    aggregated.rename(columns={"index": "timestamp"}, inplace=True)
-    ob = aggregated
+    ob = aggregated.reset_index().rename(columns={"index": "timestamp"})
 
     pad = max(3, len(str(bps_levels[-1])))
     bid_names_fmt = [f"bid_vol{b:0{pad}d}bps" for b in bps_levels]

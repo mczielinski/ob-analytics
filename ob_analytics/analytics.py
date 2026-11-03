@@ -137,14 +137,14 @@ def order_aggressiveness(
         events["aggressiveness_bps"] = events["aggressiveness_bps"].fillna(
             events["diff_bps"]
         )
-        events.drop(columns=["diff_bps"], inplace=True)
+        events = events.drop(columns=["diff_bps"])
 
     if not ask_diff.empty:
         events = pd.merge(events, ask_diff, on="event_id", how="left")
         events["aggressiveness_bps"] = events["aggressiveness_bps"].fillna(
             events["diff_bps"]
         )
-        events.drop(columns=["diff_bps"], inplace=True)
+        events = events.drop(columns=["diff_bps"])
 
     return events
 
