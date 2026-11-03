@@ -522,8 +522,7 @@ def mpl_price_levels(
         _draw_depth_lines(ax, depth, col_bias)
 
     if spread is not None:
-        spread = spread.copy()
-        spread.sort_values(by="timestamp", inplace=True, kind="stable")
+        spread = spread.sort_values(by="timestamp", kind="stable")
         spread_x = mdates.date2num(spread["timestamp"])
         if show_mp and "best_bid_price" in spread and "best_ask_price" in spread:
             spread["midprice"] = (

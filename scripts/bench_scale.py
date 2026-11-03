@@ -180,7 +180,9 @@ def _peak_rss_mib() -> float:
     after it: what a stage reports is the largest the process has been by the
     time that stage ends, which is the number the scale envelope is written in.
     """
-    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+    maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    # getrusage reports bytes on macOS and KiB on Linux.
+    return maxrss / 1024**2 if sys.platform == "darwin" else maxrss / 1024
 
 
 def _load_malloc_trim() -> Callable[[int], int] | None:
@@ -498,7 +500,7 @@ def _measure(mult: int) -> None:
     t0 = time.perf_counter()
     summary = depth_metrics(price_level_volume(events))
     wall = time.perf_counter() - t0
-    rss_mib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024  # KiB -> MiB
+    rss_mib = _peak_rss_mib()
     assert len(summary) > 0
     print(f"{n}\t{rss_mib:.0f}\t{wall:.1f}")
 
