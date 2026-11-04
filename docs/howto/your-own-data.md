@@ -10,8 +10,8 @@ non-LOBSTER sources, see [Custom components](custom-components.md).
 
 ## Custom Bitstamp-format CSV
 
-Place `orders.csv` and `trades.csv` in the same directory (see
-`scripts/collect_bitstamp_btcusd.py` for the expected `trades.csv` schema).
+Place `orders.csv` and `trades.csv` in the same directory (a capture made with
+`ob-analytics capture bitstamp` shows the expected `trades.csv` schema).
 Point the pipeline at the **orders** path; it resolves sibling `trades.csv`
 automatically.
 

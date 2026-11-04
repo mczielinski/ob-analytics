@@ -1,13 +1,12 @@
 """Bitstamp BTC/USD live capturer.
 
 Subscribes to ``wss://ws.bitstamp.net`` channels ``live_orders_<pair>``
-and ``live_trades_<pair>`` and yields universal-schema events. The
-historical ``scripts/collect_bitstamp_btcusd.py`` is now a thin wrapper
-around this module.
+and ``live_trades_<pair>`` and yields universal-schema events.
+``ob-analytics capture bitstamp`` runs it.
 
 Requires the ``websockets`` package (install via the ``[live]`` extra).
 
-The capturer preserves the rich behaviour of the historical script:
+What the capturer does:
 
 * Pulls a REST order-book snapshot concurrently with WS reads so no
   pre-snapshot frames are lost during the HTTP round-trip.
@@ -110,7 +109,7 @@ class BitstampCapturer:
         # Buffered WS frames received during the REST snapshot fetch.
         self._buffered: list[tuple[dict[str, Any], int]] = []
 
-        # Diagnostic counters (mirror the historical script's meta.json).
+        # Diagnostic counters, written to meta.json.
         self.dropped = 0
         self.pre_snapshot_skipped = 0
         self.pre_snapshot_trades_skipped = 0

@@ -179,7 +179,7 @@ def run_bitstamp_demo(
     if not trades_path.exists():
         raise FileNotFoundError(
             f"Companion trades.csv missing next to {orders_path.name}. "
-            f"Capture both with scripts/collect_bitstamp_btcusd.py."
+            f"Capture both with `ob-analytics capture bitstamp`."
         )
 
     out = Path(output_dir) if output_dir else Path("bitstamp_output")

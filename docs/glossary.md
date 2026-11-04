@@ -356,8 +356,8 @@ is wrong: most often, the capture kept a level the venue removed. See
 : One row per order event with columns `id, timestamp, exchange_timestamp,
 price, volume, action, direction`. The pipeline also expects a sibling
 `trades.csv` with live-trade columns (`trade_id`, `timestamp`, `price`,
-`amount`, `buy_order_id`, `sell_order_id`, `side`, …) — see
-`scripts/collect_bitstamp_btcusd.py`.
+`amount`, `buy_order_id`, `sell_order_id`, `side`, …), as
+`ob-analytics capture bitstamp` writes it.
 
 **LOBSTER**
 : Lim-Order-Book-System-The-Efficient-Reconstructor data set
