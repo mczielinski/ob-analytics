@@ -1897,9 +1897,11 @@ def prepare_book_replay_data(
     feed with stale orders, its touch can sit far from the trades.
 
     Every frame keeps the same price range: the path of the mid, widened so a
-    typical frame shows about *price_levels* price levels per side.  Each
-    frame holds every price level inside that range, so a bar leaves the plot
-    only when its price level leaves the book or the range.
+    typical frame shows about *price_levels* price levels per side.  A crossed
+    frame has no mid; it adds its best bid and best ask to the path instead,
+    so a faithful replay still shows the orders that cross.  Each frame holds
+    every price level inside that range, so a bar leaves the plot only when
+    its price level leaves the book or the range.
 
     Parameters
     ----------

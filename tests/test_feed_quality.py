@@ -1223,6 +1223,21 @@ def _crossing_later_events() -> pd.DataFrame:
     )
 
 
+def _crossing_later_replay() -> dict:
+    """A faithful replay of :func:`_crossing_later_events`, one frame per 5s."""
+    from ob_analytics.visualization._data import prepare_book_replay_data
+
+    return prepare_book_replay_data(
+        events=_crossing_later_events(),
+        per_order=True,
+        uncross=False,
+        start_time=_BASE,
+        end_time=_BASE + pd.Timedelta(seconds=20),
+        interval="5s",
+        price_levels=2,
+    )
+
+
 class TestCrossedBookHasNoMid:
     def test_book_mid_of_a_crossed_book_is_none(self):
         from ob_analytics.visualization._data import book_mid
@@ -1246,20 +1261,9 @@ class TestCrossedBookHasNoMid:
         assert book_mid(*_book([98.0, 100.0], [102.0, 101.0])) == 100.5
 
     def test_faithful_replay_draws_no_mid_in_a_crossed_frame(self):
-        from ob_analytics.visualization._data import (
-            book_mid,
-            prepare_book_replay_data,
-        )
+        from ob_analytics.visualization._data import book_mid
 
-        data = prepare_book_replay_data(
-            events=_crossing_later_events(),
-            per_order=True,
-            uncross=False,
-            start_time=_BASE,
-            end_time=_BASE + pd.Timedelta(seconds=20),
-            interval="5s",
-            price_levels=2,
-        )
+        data = _crossing_later_replay()
         mids = [book_mid(s["bids"], s["asks"]) for s in data["snapshots"]]
         # Frames at 0s and 5s show the 100 / 101 book; from 10s the bid at
         # 101.5 crosses it, and it is still inside the replay's range.
@@ -1267,17 +1271,7 @@ class TestCrossedBookHasNoMid:
         assert mids == [100.5, 100.5, None, None, None]
 
     def test_faithful_replay_range_covers_the_crossed_touch(self):
-        from ob_analytics.visualization._data import prepare_book_replay_data
-
-        data = prepare_book_replay_data(
-            events=_crossing_later_events(),
-            per_order=True,
-            uncross=False,
-            start_time=_BASE,
-            end_time=_BASE + pd.Timedelta(seconds=20),
-            interval="5s",
-            price_levels=2,
-        )
+        data = _crossing_later_replay()
         # The 100 / 101 frames add their mid, 100.5, with the second level of
         # each side 1.5 away.  The crossed frames add no mid: they add their
         # touch, 101 and 101.5, and the second level of each side is 1.0 and
