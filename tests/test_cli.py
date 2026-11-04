@@ -14,8 +14,11 @@ test_pipeline.py.
 from __future__ import annotations
 
 import importlib.util
+import json
 
 import pytest
+
+from tests import _lobster_few_levels as few
 
 _CCXT_INSTALLED = importlib.util.find_spec("ccxt") is not None
 
@@ -294,6 +297,74 @@ class TestAuditSubcommand:
         monkeypatch.setattr("ob_analytics.sources.get_source", get_source)
         kind = cli._declared_sequence_kind("plugin", default=SequenceKind.CONTIGUOUS)
         assert kind is SequenceKind.CONTIGUOUS
+
+
+class TestAuditFewLevels:
+    """A LOBSTER message file holds only the events inside the requested
+    levels, so the book rebuilt from it can cross while the orderbook file
+    does not.  ``audit`` reports that crossing as well as the depth table's."""
+
+    def _audit(self, cli_runner, directory, *extra):
+        return cli_runner(
+            "audit",
+            str(directory),
+            "--source",
+            "lobster",
+            "--trading-date",
+            few.DATE,
+            *extra,
+        )
+
+    def test_a_crossed_per_order_book_is_reported(self, cli_runner, tmp_path):
+        files = few.write_files(tmp_path, few.CROSSING_MESSAGES, few.CROSSING_ORDERBOOK)
+
+        r = self._audit(cli_runner, files, "--json")
+
+        assert r.returncode == 0, r.stderr
+        payload = json.loads(r.stdout)
+        # The depth table, read from the orderbook file, never crosses.
+        assert payload["crossed_pct"] == 0.0
+        # Crossed from 34204 to 34210 of a file spanning 34200 to 34210.
+        assert payload["per_order_crossed_pct"] == pytest.approx(60.0)
+        assert payload["per_order_crossed_episodes"] == 1
+        check = next(
+            c for c in payload["checks"] if c["name"] == "per_order_book_crossed"
+        )
+        assert check["passed"] is False
+        assert check["severity"] == "warning"
+
+    def test_the_report_says_what_the_crossing_means(self, cli_runner, tmp_path):
+        files = few.write_files(tmp_path, few.CROSSING_MESSAGES, few.CROSSING_ORDERBOOK)
+
+        r = self._audit(cli_runner, files)
+
+        assert r.returncode == 0, r.stderr
+        line = next(
+            ln for ln in r.stdout.splitlines() if ln.lstrip().startswith("per-order")
+        )
+        assert "60.00%" in line
+        assert "request more levels" in line
+
+    def test_strict_fails_on_it(self, cli_runner, tmp_path):
+        files = few.write_files(tmp_path, few.CROSSING_MESSAGES, few.CROSSING_ORDERBOOK)
+
+        r = self._audit(cli_runner, files, "--strict")
+
+        assert r.returncode != 0
+        assert "per_order_book_crossed" in r.stdout + r.stderr
+
+    def test_a_book_that_never_crosses_passes(self, cli_runner, tmp_path):
+        files = few.write_files(tmp_path, few.CLEAN_MESSAGES, few.CLEAN_ORDERBOOK)
+
+        r = self._audit(cli_runner, files, "--json", "--strict")
+
+        assert r.returncode == 0, r.stdout + r.stderr
+        payload = json.loads(r.stdout)
+        assert payload["per_order_crossed_pct"] == 0.0
+        check = next(
+            c for c in payload["checks"] if c["name"] == "per_order_book_crossed"
+        )
+        assert check["passed"] is True
 
 
 # ---------------------------------------------------------------------------

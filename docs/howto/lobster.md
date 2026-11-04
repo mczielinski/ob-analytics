@@ -130,8 +130,11 @@ When the book rebuilt from the messages is crossed for more than 0.05% of the
 session time, the run warns (a `UserWarning`) and gives the share. On the
 10-level sample it is crossed 99.2% of the time; on the 50-level sample, never.
 Request more levels if the warning appears and you need the per-order views.
-[`audit`](audit.md) reads the depth table, so it does not count this crossing
-when the folder has an orderbook file.
+
+[`audit`](audit.md) reports the same share on its **per-order book crossed**
+line. When the folder has an orderbook file, the depth table is not crossed,
+so the `crossed_book` check passes and the `per_order_book_crossed` check
+warns. With `--strict`, that warning fails the run.
 
 ## Takers are guessed
 

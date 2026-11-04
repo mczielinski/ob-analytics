@@ -26,7 +26,8 @@ Data quality summary
   feed type             : diff_feed
   events / orders       : 314,057 / 156,902
   trades                : 284
-  crossed resting book  : 91.61% of session (7238 episode(s)) [diff feed, but 2 stale resting order(s) stay in the book — see stale resting orders]
+  crossed resting book  : 91.61% of session (8883 episode(s)) [diff feed, but 2 stale resting order(s) stay in the book — see stale resting orders]
+  per-order book crossed: 91.61% of session (8883 episode(s)) [no more than the depth table — see the crossed resting book]
   stale resting orders  : 2 (worst: ask 2002347646152704 at 78,333 held the ask touch for 27.4 min after a trade printed through it)
   unmatched trades      : 0.00% [maker and taker]
   matched by order      : 2 trade(s) [taker created with size 0]
@@ -50,6 +51,7 @@ Checks: 0 error(s), 4 warning(s)
 |---|---|
 | **feed type** | `matched_book` (LOBSTER/MBO), `diff_feed` (Bitstamp) or `price_levels` (any L2 feed) — sets expectations for the next line |
 | **crossed resting book** | Share of session *time* with `best_bid > best_ask`. ~0% for a matched book or price levels; can be high and faithful for a diff feed, unless stale resting orders cause it |
+| **per-order book crossed** | The same share for the book rebuilt from the per-order events. On most runs that book is the depth table, so the two lines agree. A LOBSTER run with an orderbook file reads its depth table from that file, and the per-order book can then be crossed when the depth table is not: see [LOBSTER: too few levels](lobster.md#request-enough-levels) |
 | **stale resting orders** | Resting orders a trade printed through that the venue did not report again within 1 s. The worst is named with its side, price and how long it held the touch |
 | **unmatched trades** | Trades whose maker or taker order could not be found among the order events. Only the orders the feed can show are looked for: the note in brackets says which |
 | **matched by order** | Trades whose taker is an order created with size 0. Bitstamp sends an instant order bought by quote amount that way and never reports what it bought, so a trade with no row of its size is matched to the order by its id. The order and its type are right; its rows show less fill than its trades. Information only; `not checked` when the feed does not show takers |
@@ -87,8 +89,9 @@ Errors: `duplicate_event_ids`, `duplicate_created_ids`, `sequence_gaps`,
 `crossed_book` **on a matched book or price levels only**.
 
 Warnings: `orphan_orders`, `stale_orders`, `nonpositive_price`,
-`negative_level`, `exchange_time_reordered`, `unmatched_trades` (above 5%), and
-`crossed_book` when no feed type was declared.
+`negative_level`, `exchange_time_reordered`, `unmatched_trades` (above 5%),
+`per_order_book_crossed` when the per-order book is crossed for longer than the
+depth table, and `crossed_book` when no feed type was declared.
 
 Two of these are judgement calls worth stating plainly:
 

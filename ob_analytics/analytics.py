@@ -1204,6 +1204,17 @@ class DataQualitySummary:
         feed.
     crossed_episodes : int
         Number of distinct crossed intervals.
+    per_order_crossed_pct : float
+        Percentage of session time the book rebuilt from the per-order
+        events is crossed.  It differs from ``crossed_pct`` only when the
+        depth table comes from somewhere else: a LOBSTER run reads its depth
+        from the orderbook file, and its message file holds only the events
+        inside the requested price levels, so an order cancelled outside
+        them stays in the per-order book.  The per-order views (order book
+        snapshots, queue positions, order lifecycles) read that book.  ``0``
+        on a price-level (L2) run, which has no per-order events.
+    per_order_crossed_episodes : int
+        Number of distinct intervals the per-order book is crossed.
     unmatched_trades_pct : float
         Percentage of trades with an order the feed can name left unresolved:
         a missing ``maker_event_id`` or ``taker_event_id`` when the feed names
@@ -1318,6 +1329,8 @@ class DataQualitySummary:
     stale_orders: tuple[StaleOrder, ...] = ()
     trade_attribution: TradeAttribution = TradeAttribution.BOTH
     trades_matched_by_order: int = 0
+    per_order_crossed_pct: float = 0.0
+    per_order_crossed_episodes: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         """Return the summary as a plain, JSON-serialisable dict."""
@@ -1328,6 +1341,8 @@ class DataQualitySummary:
             "n_trades": self.n_trades,
             "crossed_pct": self.crossed_pct,
             "crossed_episodes": self.crossed_episodes,
+            "per_order_crossed_pct": self.per_order_crossed_pct,
+            "per_order_crossed_episodes": self.per_order_crossed_episodes,
             "unmatched_trades_pct": self.unmatched_trades_pct,
             "duplicate_event_ids": self.duplicate_event_ids,
             "duplicate_created_ids": self.duplicate_created_ids,
@@ -1367,6 +1382,25 @@ class DataQualitySummary:
                 )
             return "expected for a diff feed — faithful replay, not a bug"
         return "feed type undeclared"
+
+    def _per_order_crosses_more(self) -> bool:
+        """Whether the per-order book is crossed for longer than the depth table."""
+        extra = self.per_order_crossed_pct - self.crossed_pct
+        return extra > CROSSED_TOLERANCE_PCT
+
+    def _per_order_crossed_note(self) -> str:
+        """One-line reading of ``per_order_crossed_pct``."""
+        if self.n_events == 0:
+            return "no per-order events"
+        if self.per_order_crossed_pct <= CROSSED_TOLERANCE_PCT:
+            return "not crossed"
+        if not self._per_order_crosses_more():
+            return "no more than the depth table — see the crossed resting book"
+        return (
+            "orders the events never close stay in it, so the per-order views "
+            "are wrong; for LOBSTER, the message file has too few price "
+            "levels: request more levels"
+        )
 
     def _unmatched_sides(self) -> str:
         """The order(s) a trade must resolve, in words, for the check's text."""
@@ -1479,6 +1513,15 @@ class DataQualitySummary:
                 f"the resting book is crossed for {self.crossed_pct:.2f}% of "
                 f"session time ({self.crossed_episodes} episode(s)) "
                 f"[{self._crossed_note()}]",
+            ),
+            QualityCheck(
+                "per_order_book_crossed",
+                not self._per_order_crosses_more(),
+                Severity.WARNING,
+                f"the book rebuilt from the per-order events is crossed for "
+                f"{self.per_order_crossed_pct:.2f}% of session time "
+                f"({self.per_order_crossed_episodes} episode(s)) "
+                f"[{self._per_order_crossed_note()}]",
             ),
             QualityCheck(
                 "unmatched_trades",
@@ -1612,6 +1655,11 @@ class DataQualitySummary:
             (
                 f"  crossed resting book  : {self.crossed_pct:.2f}% of session "
                 f"({self.crossed_episodes} episode(s)) [{self._crossed_note()}]"
+            ),
+            (
+                f"  per-order book crossed: {self.per_order_crossed_pct:.2f}% of "
+                f"session ({self.per_order_crossed_episodes} episode(s)) "
+                f"[{self._per_order_crossed_note()}]"
             ),
             (
                 f"  stale resting orders  : {len(self.stale_orders)}"
@@ -1839,15 +1887,30 @@ def data_quality_summary(
     # holds such a level at zero, so they are counted from the events.  An L2
     # run's depth rows are counted by ``negative_volume_rows`` below.
     negative_level_rows = 0
+    # The book rebuilt from the per-order events, when the depth table is not
+    # that book: a LOBSTER run reads its depth from the orderbook file.
+    per_order_depth = None
     if depth is None and l2:
         depth = events
     elif depth is None:
         depth, overdrawn = _price_level_volume(events)
         negative_level_rows = len(overdrawn)
     elif not l2 and _LEVEL_COLUMNS <= set(events.columns):
-        negative_level_rows = len(_price_level_volume(events)[1])
+        per_order_depth, overdrawn = _price_level_volume(events)
+        negative_level_rows = len(overdrawn)
 
     best, crossed_pct, crossed_episodes = _book_crossing(depth)
+    if l2:
+        per_order_crossed_pct, per_order_crossed_episodes = 0.0, 0
+    elif per_order_depth is None:
+        per_order_crossed_pct, per_order_crossed_episodes = (
+            crossed_pct,
+            crossed_episodes,
+        )
+    else:
+        _, per_order_crossed_pct, per_order_crossed_episodes = _book_crossing(
+            per_order_depth
+        )
 
     # Stale resting orders need per-order events and priced, timed trades.  An
     # L2 run has neither, and a trades frame without prices has nothing to
@@ -1933,6 +1996,8 @@ def data_quality_summary(
         n_trades=n_trades,
         crossed_pct=crossed_pct,
         crossed_episodes=crossed_episodes,
+        per_order_crossed_pct=per_order_crossed_pct,
+        per_order_crossed_episodes=per_order_crossed_episodes,
         unmatched_trades_pct=unmatched_pct,
         duplicate_event_ids=duplicate_event_ids,
         duplicate_created_ids=duplicate_created_ids,

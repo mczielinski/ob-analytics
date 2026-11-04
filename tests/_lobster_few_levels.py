@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-STEM = "TEST_2024-01-02_34200000_57600000"
+DATE = "2024-01-02"
+STEM = f"TEST_{DATE}_34200000_57600000"
 
 # Ask A @ 101.00, bid B @ 100.00, ask C @ 100.50 pushes A out of the level, C
 # is deleted: A was cancelled out of sight and an ask at 102.00 the messages
@@ -60,6 +61,6 @@ def run(directory: Path):
     from ob_analytics.pipeline import Pipeline
     from ob_analytics.protocols import RunContext
 
-    return Pipeline(
-        source=LobsterSource(), ctx=RunContext(trading_date="2024-01-02")
-    ).run(directory)
+    return Pipeline(source=LobsterSource(), ctx=RunContext(trading_date=DATE)).run(
+        directory
+    )
