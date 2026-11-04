@@ -558,6 +558,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **A price-level (L2) run's gallery has the book snapshot and depth chart**
+  (#344). They were skipped as per-order faces. Their L2 faces now read the
+  depth table, so `build_gallery_model` and `available_concepts` include
+  `book_snapshot` and `depth_chart` at L2 for every L2 source.
+- **The L3 book snapshot and depth chart are cut as the L2 face is** (#344).
+  The L3 face showed only the orders within 150 bps of each side's best price,
+  then the 40 price levels nearest the touch. It now shows the 40 price levels
+  nearest the touch, as the L2 face does, so the two faces of one concept
+  cover the same levels. On a thin book or a coarse tick the L3 face can now
+  reach further than 150 bps.
+
 - **Every time window starts from the Unix epoch** (#350).
   `order_flow_imbalance` and `compute_kyle_lambda` counted their windows from
   the start of the first day, while time bars and `ofi_by_horizon` counted
@@ -883,6 +894,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Removed
 
+- **`scripts/collect_bitstamp_btcusd.py`** (#349). It failed on import since
+  #137. Use `ob-analytics capture bitstamp`; the error messages and documents
+  that named the script now name the command.
+
 - **The "check" category for hidden trades** (#343). It worked around the
   depth summary dropping crossed levels, which is fixed.
   `prepare.hidden_liquidity_overlay` no longer takes `events` (call it as
@@ -899,6 +914,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   applied. Use `bps_range` or `max_levels`, or filter the returned frames.
 
 ### Fixed
+
+- **The L2 book snapshot and depth chart read the depth table** (#344). Both
+  faces of the gallery's `book_snapshot` and `depth_chart` were built from
+  `order_book(events)`, the book rebuilt from the per-order events. The L2
+  face is now built from the depth table with `price_level_snapshots`, as the
+  L2 book replay already was, and only the L3 face reads the per-order book.
+  On a LOBSTER file with few levels the per-order book keeps orders the file
+  lost sight of and is crossed: on the 10-level AAPL sample of 21 June 2012
+  the L2 snapshot showed a best bid of 587.85 over a best ask of 582.39, and
+  now shows 582.28 and 582.39, as the orderbook file does. On a diff feed
+  such as Bitstamp, the L2 face now leaves out a stale crossed level, as the
+  depth summary does.
+- **A LOBSTER run warns when the book rebuilt from its message file is
+  crossed** (#344). A message file holds only the events inside the requested
+  price levels, so an order cancelled or filled outside them keeps resting in
+  that book. When it is crossed for more than 0.05% of the session time,
+  `LobsterSource` warns with `warnings.warn` and gives the share and the
+  cause. The 10-level AAPL sample is crossed 99.2% of the time and warns; the
+  50-level sample is never crossed and does not. The depth table, read from
+  the orderbook file, is not affected, so the `crossed_book` check of `audit`
+  does not count this crossing; `audit` reports it separately as
+  `per_order_crossed_pct`. Without an orderbook file the depth table is
+  rebuilt from the same messages, and the warning says so. The LOBSTER how-to
+  and "What each feed shows" now state the limit: the per-order views are
+  complete only when the requested levels cover every price an order reaches.
+- **The matplotlib OFI horizon face no longer crashes** (#349). Its time axis
+  came only from the filled bands, so a grid of zeros drew none and saving
+  failed with `RuntimeError: ... raster overflow`; one non-zero value widened
+  the axis to about four years. The axis now spans the grid's own times (one
+  second each side when the grid has one step), and an all-missing grid shows
+  the "no data" title.
+- **`process` and `audit` build their pipeline in one place** (#349). The two
+  copies had drifted: `process` printed a literal `%s` instead of the source
+  name when `--trading-date` was missing, and `capture` printed `%r` instead of
+  the source name for an offline-only source. Both messages now name the
+  source.
+- **A quote that cannot be read as a price gives no mid anywhere** (#355).
+  `depth.readable_quotes` decides when a quote can be read: both sides are
+  above zero and the bid is not above the ask. Some readers still used their
+  own test or none. `micro_price`, and so the `micro_price` column of
+  `depth_signals`, gave `0` for a quote with an empty side, and the
+  `mid_price` column gave a mid halfway to zero. The price view and the book
+  signals face drew those mids, and the trade tape hung its stems off them.
+  Now each of these is `NaN` (no line is drawn) for a quote with an empty
+  side or a crossed book, and the trade tape takes its mid from the nearest
+  quote that can be read. A locked book (bid equal to ask) is still read. The
+  imbalance columns are unchanged, since all the volume on one side is a true
+  imbalance. The Level 1 quote table reads an empty side with the same test,
+  and blanks only the empty side. On the bundled Bitstamp sample 16 of the
+  313,561 depth summary rows cannot be read; the transaction-cost numbers are
+  unchanged.
 
 - **The Bitstamp-format loader puts an order's rows in time order** (#354).
   It put the `created` row first and the rest by size, largest first, which
