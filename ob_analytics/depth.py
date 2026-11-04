@@ -1087,8 +1087,11 @@ def readable_quotes(quotes: pd.DataFrame) -> pd.DataFrame:
     (:func:`~ob_analytics.trade_sign.prevailing_mid`), the spread a hidden
     trade printed inside (:func:`~ob_analytics.hidden_liquidity.hidden_trades`),
     the book columns of the feature table
-    (:func:`~ob_analytics.features.features`) and the spread line on the depth
-    heatmap.
+    (:func:`~ob_analytics.features.features`), the micro-price
+    (:func:`micro_price`) and the mids of :func:`depth_signals`, the mids the
+    trade tape, the price view, the book signals and the depth heatmap draw,
+    and the empty sides of the Level 1 quote table
+    (:class:`~ob_analytics.metrics.L1TickerMetric`).
 
     Two states get through a depth summary that are not books anything could
     have traded against, and both would otherwise reach a reader as ordinary
@@ -1124,12 +1127,37 @@ def readable_quotes(quotes: pd.DataFrame) -> pd.DataFrame:
     pandas.DataFrame
         The readable rows, in their original order.
     """
+    if _bid_ask_pair(quotes) is None:
+        return quotes
+    return quotes[_readable_rows(quotes)]
+
+
+def _quoted(prices: pd.Series | np.ndarray) -> np.ndarray:
+    """Where a best price is a quote, and not the ``0`` of an empty side."""
+    return np.asarray(prices, dtype=float) > 0
+
+
+def _bid_ask(quotes: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """The bid and ask prices of *quotes*, from the pair :func:`_bid_ask_pair` finds."""
     pair = _bid_ask_pair(quotes)
     if pair is None:
-        return quotes
-    bid = quotes[pair[0]].to_numpy(dtype=float)
-    ask = quotes[pair[1]].to_numpy(dtype=float)
-    return quotes[(bid > 0) & (ask > 0) & (bid <= ask)]
+        raise ValueError(
+            "quotes need a bid/ask column pair: "
+            + ", ".join(f"{bid} / {ask}" for bid, ask in _BID_ASK_COLUMNS)
+        )
+    return quotes[pair[0]].to_numpy(dtype=float), quotes[pair[1]].to_numpy(dtype=float)
+
+
+def _readable_rows(quotes: pd.DataFrame) -> np.ndarray:
+    """Which rows of *quotes* :func:`readable_quotes` keeps, by position."""
+    bid, ask = _bid_ask(quotes)
+    return _quoted(bid) & _quoted(ask) & (bid <= ask)
+
+
+def _readable_mid(quotes: pd.DataFrame) -> np.ndarray:
+    """The midpoint of each row of *quotes*, ``NaN`` where it is not readable."""
+    bid, ask = _bid_ask(quotes)
+    return np.where(_readable_rows(quotes), (bid + ask) / 2.0, np.nan)
 
 
 # ── Fair-value / pressure signals ─────────────────────────────────────
@@ -1209,9 +1237,10 @@ def micro_price(
     Returns
     -------
     pandas.Series
-        The micro-price per row, indexed like *depth_summary*.  Rows where
-        ``best_bid_vol + best_ask_vol == 0`` are ``NaN`` rather than a
-        divide-by-zero error.
+        The micro-price per row, indexed like *depth_summary*.  A row whose
+        quote cannot be read as a price (:func:`readable_quotes`: an empty
+        side or a crossed book) is ``NaN``, and so is a row with no size at
+        the touch.
     """
     validate_columns(
         depth_summary,
@@ -1227,7 +1256,7 @@ def micro_price(
     denominator = bid_vol + ask_vol
     with np.errstate(invalid="ignore", divide="ignore"):
         weighted = np.where(
-            denominator > 0,
+            (denominator > 0) & _readable_rows(depth_summary),
             (bid_price * ask_vol + ask_price * bid_vol) / denominator,
             np.nan,
         )
@@ -1320,6 +1349,11 @@ def depth_signals(
         Cumulative-depth order-book imbalance over *depth_levels* --
         :func:`book_imbalance` with ``levels=depth_levels``.
 
+    A row whose quote cannot be read as a price (:func:`readable_quotes`: an
+    empty side or a crossed book) has no mid of either kind: both are
+    ``NaN``.  Its imbalance columns are kept, since all the volume resting on
+    one side is a true imbalance.
+
     Parameters
     ----------
     depth_summary : pandas.DataFrame
@@ -1350,10 +1384,7 @@ def depth_signals(
     effective_levels = max(1, min(depth_levels, available + 1))
 
     result = depth_summary.copy()
-    result["mid_price"] = (
-        depth_summary["best_bid_price"].to_numpy(dtype=float)
-        + depth_summary["best_ask_price"].to_numpy(dtype=float)
-    ) / 2.0
+    result["mid_price"] = _readable_mid(depth_summary)
     result["micro_price"] = micro_price(
         depth_summary, stoikov_adjustment=stoikov_adjustment
     )

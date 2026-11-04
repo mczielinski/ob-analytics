@@ -189,3 +189,98 @@ class TestBookSignalsFace:
         spec = book_signals_panel(_summary(), levels=4)
         assert spec.plot_name == "book_signals"
         assert spec.prep_kwargs["levels"] == 4
+
+
+def _unreadable_summary() -> pd.DataFrame:
+    """Four quotes: an empty bid side, a crossed book, a locked book, a good one.
+
+    The depth summary writes a price and size of ``0`` for an empty side.
+    """
+    return pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(
+                [
+                    "2020-01-01 00:00:00",
+                    "2020-01-01 00:00:01",
+                    "2020-01-01 00:00:02",
+                    "2020-01-01 00:00:03",
+                ]
+            ),
+            "best_bid_price": [0.0, 102.0, 101.0, 100.0],
+            "best_bid_vol": [0.0, 3.0, 3.0, 8.0],
+            "best_ask_price": [101.0, 101.0, 101.0, 101.0],
+            "best_ask_vol": [4.0, 4.0, 4.0, 2.0],
+            "bid_vol25bps": [0.0, 3.0, 3.0, 12.0],
+            "ask_vol25bps": [4.0, 4.0, 4.0, 4.0],
+        }
+    )
+
+
+class TestUnreadableQuotesGiveNoMid:
+    """A quote that cannot be read as a price gives no mid of any kind."""
+
+    def test_micro_price_of_an_empty_side_is_nan_not_zero(self) -> None:
+        mp = micro_price(_unreadable_summary())
+        assert np.isnan(mp.iloc[0])
+
+    def test_micro_price_of_a_crossed_book_is_nan(self) -> None:
+        assert np.isnan(micro_price(_unreadable_summary()).iloc[1])
+
+    def test_micro_price_of_a_locked_book_is_its_price(self) -> None:
+        assert micro_price(_unreadable_summary()).iloc[2] == pytest.approx(101.0)
+
+    def test_depth_signals_mids_skip_unreadable_rows(self) -> None:
+        out = depth_signals(_unreadable_summary())
+        # Empty bid side and crossed book: no mid.  Locked and good: a mid.
+        np.testing.assert_allclose(
+            out["mid_price"], [np.nan, np.nan, 101.0, 100.5], equal_nan=True
+        )
+        np.testing.assert_allclose(
+            out["micro_price"], [np.nan, np.nan, 101.0, 100.8], equal_nan=True
+        )
+
+    def test_depth_signals_keeps_the_imbalance_of_an_empty_side(self) -> None:
+        # All the touch volume is on the ask: that is a true imbalance of -1.
+        assert depth_signals(_unreadable_summary())["obi"].iloc[0] == pytest.approx(-1)
+
+    def test_signals_face_draws_no_mid_for_unreadable_rows(self) -> None:
+        from ob_analytics.visualization import _data
+
+        payload = _data.prepare_book_signals_data(_unreadable_summary())
+        np.testing.assert_allclose(
+            payload["mid"], [np.nan, np.nan, 101.0, 100.5], equal_nan=True
+        )
+        np.testing.assert_allclose(
+            payload["microprice"], [np.nan, np.nan, 101.0, 100.8], equal_nan=True
+        )
+
+    def test_price_view_draws_no_mid_for_unreadable_rows(self) -> None:
+        from ob_analytics.visualization import _data
+
+        payload = _data.prepare_price_view_data(_unreadable_summary())
+        np.testing.assert_allclose(
+            payload["mid"], [np.nan, np.nan, 101.0, 100.5], equal_nan=True
+        )
+        np.testing.assert_allclose(
+            payload["microprice"], [np.nan, np.nan, 101.0, 100.8], equal_nan=True
+        )
+
+    def test_trade_tape_mid_skips_unreadable_quotes(self) -> None:
+        from ob_analytics.visualization import _data
+
+        # The trade's nearest quote has an empty bid side; its stem hangs off
+        # the last quote that can be read, not off a mid halfway to zero.
+        spread = _unreadable_summary().iloc[[3, 0]]
+        spread["timestamp"] = pd.to_datetime(
+            ["2020-01-01 00:00:00", "2020-01-01 00:00:01"]
+        )
+        trades = pd.DataFrame(
+            {
+                "timestamp": pd.to_datetime(["2020-01-01 00:00:01"]),
+                "price": [101.0],
+                "volume": [1.0],
+                "direction": ["buy"],
+            }
+        )
+        payload = _data.prepare_trades_data(trades, spread)
+        assert payload["mid_line"]["mid"].tolist() == [100.5]

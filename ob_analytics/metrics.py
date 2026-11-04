@@ -38,7 +38,7 @@ import pandas as pd
 from loguru import logger
 
 from ob_analytics._registry import Registry
-from ob_analytics.depth import get_spread
+from ob_analytics.depth import _quoted, get_spread
 from ob_analytics.flow_toxicity import (
     OFI_HORIZONS,
     KyleLambdaResult,
@@ -165,7 +165,9 @@ class L1TickerMetric:
         Each row carries every value forward from the rows before it, so a
         row is the whole quote at that time.  ``last_price`` is ``NaN`` before
         the first trade, and a side with no orders has a ``NaN`` price and
-        size (the depth summary writes ``0`` there).
+        size (the depth summary writes ``0`` there), read with the same test
+        as :func:`~ob_analytics.depth.readable_quotes`.  The other side is
+        still shown.
         """
         quotes = get_spread(result.depth_summary).astype(
             {
@@ -187,7 +189,7 @@ class L1TickerMetric:
         # After the fill, so an empty side is carried forward as empty rather
         # than filled from the quote before it.
         for side in ("bid", "ask"):
-            empty = frame[f"best_{side}_price"] == 0
+            empty = ~_quoted(frame[f"best_{side}_price"])
             frame.loc[empty, [f"best_{side}_price", f"best_{side}_vol"]] = float("nan")
         return frame.reset_index(drop=True)
 
