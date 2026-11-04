@@ -108,8 +108,9 @@ def test_building_the_model_computes_no_metric(result, monkeypatch) -> None:
 
 
 def test_keywords_go_to_the_method_that_names_them(result) -> None:
-    # Sized from the data: raw volumes are integer lots, not base units.
-    bucket = float(result.trades["volume"].sum()) / 4
+    # Sized from the data, in BTC: raw volumes are integer lots, and a size
+    # setting is in the instrument's units.
+    bucket = float(result.trades["volume"].sum()) * result.config.lot_size / 4
     payload = _metric_payload(
         metrics.get_metric("vpin"), result, bucket_volume=bucket, threshold=0.25
     )
@@ -119,7 +120,7 @@ def test_keywords_go_to_the_method_that_names_them(result) -> None:
 
 
 def test_result_metric_passes_settings_to_compute(result) -> None:
-    bucket = float(result.trades["volume"].sum()) / 4
+    bucket = float(result.trades["volume"].sum()) * result.config.lot_size / 4
     frame = result.metric("vpin", bucket_volume=bucket, n_buckets=3)
 
     expected = compute_vpin(result.trades, bucket_volume=bucket, n_buckets=3)

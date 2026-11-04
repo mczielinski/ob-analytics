@@ -26,7 +26,9 @@ Five metrics ship with the package and are registered on import:
 Each uses the defaults of the function it wraps.  Pass that function's
 settings as keyword arguments to change them, for example
 ``result.metric("vpin", n_buckets=20)`` or
-``result.plot("vpin", n_buckets=20, threshold=0.8)``.
+``result.plot("vpin", n_buckets=20, threshold=0.8)``.  A size setting is in
+the instrument's own units (BTC, shares, contracts) whichever of the two is
+called, so ``bucket_volume=0.5`` means 0.5 BTC in both.
 """
 
 from __future__ import annotations
@@ -215,7 +217,11 @@ class VpinMetric:
         n_buckets: int = 50,
         sign_method: str | None = None,
     ) -> pd.DataFrame:
-        """Return the per-bucket VPIN table; the settings are ``compute_vpin``'s."""
+        """Return the per-bucket VPIN table; the settings are ``compute_vpin``'s.
+
+        *bucket_volume* is in the instrument's own units, as
+        ``compute_vpin`` takes it.
+        """
         return compute_vpin(
             result.trades,
             bucket_volume=bucket_volume,

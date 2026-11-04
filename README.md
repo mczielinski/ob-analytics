@@ -98,18 +98,21 @@ result = Pipeline(
 ### Flow-toxicity metrics
 
 Flow-toxicity metrics are plain functions you call on `result.trades` after
-the run — no pipeline configuration, no plugin registry:
+the run. A size you pass is in the instrument's own units (here BTC), even
+though the run stores sizes as whole lots:
 
 ```python
 from ob_analytics import Pipeline, compute_vpin, compute_kyle_lambda, sample_csv_path
 
 result = Pipeline().run(sample_csv_path())
-vpin = compute_vpin(result.trades, bucket_volume=10.0)
+vpin = compute_vpin(result.trades, bucket_volume=0.25)  # 0.25 BTC buckets
 kyle = compute_kyle_lambda(result.trades)
 ```
 
-Add your own by writing a function over a trades DataFrame — see the
-[Extending guide](docs/extending.md).
+The same metrics are registered by name, so `result.metric("vpin",
+bucket_volume=0.25)` and `result.plot("vpin", bucket_volume=0.25)` give the
+same buckets. Add your own metric to that registry, in your own package if you
+like — see the [Extending guide](docs/extending.md).
 
 ### Live capture (Bitstamp)
 

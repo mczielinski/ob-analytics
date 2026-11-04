@@ -43,7 +43,12 @@ import numpy.typing as npt
 import pandas as pd
 from loguru import logger
 
-from ob_analytics._utils import validate_columns, validate_non_empty
+from ob_analytics._utils import (
+    price_scale,
+    size_scale,
+    validate_columns,
+    validate_non_empty,
+)
 from ob_analytics.depth import _BID_ASK_COLUMNS, _bid_ask_pair, readable_quotes
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.schemas import time_order_keys
@@ -60,10 +65,9 @@ _DIRECTION_DTYPE = pd.CategoricalDtype(list(_SIDES), ordered=True)
 
 #: Most volume buckets :func:`bulk_volume_classification` and
 #: :func:`~ob_analytics.flow_toxicity.compute_vpin` build.  Both hold every
-#: bucket in memory, so a ``bucket_volume`` given in the base asset against
-#: sizes in integer lots (10^8 times too small for BTC) would otherwise ask for
-#: hundreds of millions of buckets and run out of memory.  Fifty buckets a day
-#: for fifty years is under a million.
+#: bucket in memory, so a ``bucket_volume`` far too small for the instrument
+#: would otherwise ask for hundreds of millions of buckets and run out of
+#: memory.  Fifty buckets a day for fifty years is under a million.
 MAX_VOLUME_BUCKETS = 1_000_000
 
 # Accepted mid-column spellings for the Lee–Ready midpoint, most specific
@@ -707,9 +711,8 @@ def resolve_direction(
 
 
 _UNITS_ADVICE = (
-    "bucket_volume is in the units of trades['volume'], which are integer lots "
-    "on a pipeline result (size = lots * lot_size). Size it from the data, "
-    "e.g. trades['volume'].sum() / 60."
+    "bucket_volume is in the instrument's own units (BTC, shares, contracts), "
+    "not lots. Size it from the data, e.g. with vpin_bucket_volume(trades)."
 )
 
 
@@ -718,6 +721,7 @@ def check_bucket_count(
     bucket_volume: float,
     context: str,
     *,
+    scale: float,
     advice: str | None = None,
 ) -> None:
     """Refuse a *bucket_volume* that cuts the trades into too many buckets.
@@ -727,10 +731,12 @@ def check_bucket_count(
     trades : pandas.DataFrame
         Trades with a ``volume`` column.
     bucket_volume : float
-        Volume per bucket, in the units of ``trades["volume"]``.  Must be
-        positive.
+        Volume per bucket, in the instrument's own units.  Must be positive.
     context : str
         Name of the caller, used in the error message.
+    scale : float
+        Units of ``trades["volume"]`` in one unit of the instrument
+        (:func:`~ob_analytics._utils.size_scale`).
     advice : str, optional
         What to do about it, ending the error message.  ``None`` (default)
         says which units *bucket_volume* is in, the usual cause.
@@ -741,7 +747,7 @@ def check_bucket_count(
         If the trades' total volume divided by *bucket_volume* is more than
         :data:`MAX_VOLUME_BUCKETS`.
     """
-    total = float(trades["volume"].sum())
+    total = float(trades["volume"].sum()) / scale
     count = total / bucket_volume
     if count > MAX_VOLUME_BUCKETS:
         raise ValueError(
@@ -780,10 +786,14 @@ def bulk_volume_classification(
     trades : pandas.DataFrame
         Trades with ``timestamp``, ``price``, and ``volume``.
     bucket_volume : float
-        Total volume per bucket (instrument-specific), in the units of
-        ``trades["volume"]``: integer lots on a pipeline result.
+        Total volume per bucket, in the instrument's own units (BTC, shares,
+        contracts), whether ``trades["volume"]`` holds integer lots (with
+        ``trades.attrs["lot_size"]``, as on a pipeline result) or display
+        sizes (see :func:`~ob_analytics.visualization.display_result`).
     sigma : float, optional
-        Standard deviation of bucketed price changes.  Estimated from the
+        Standard deviation of bucketed price changes, in the quote currency
+        whether ``trades["price"]`` holds integer ticks (with
+        ``trades.attrs["tick_size"]``) or display prices.  Estimated from the
         data (sample std of the bucket ΔP series) when omitted.
 
     Returns
@@ -791,13 +801,16 @@ def bulk_volume_classification(
     pandas.DataFrame
         One row per completed bucket with columns ``bucket``,
         ``timestamp_start``, ``timestamp_end``, ``close``, ``delta_price``,
-        ``buy_fraction``, ``buy_volume``, ``sell_volume``.  Empty (no rows)
-        if the trades don't fill a single bucket.
+        ``buy_fraction``, ``buy_volume``, ``sell_volume``.  The two volumes
+        are in the instrument's own units, like *bucket_volume*.  Empty (no
+        rows) if the trades don't fill a single bucket.
 
     Raises
     ------
     ConfigError
-        If required columns are missing.
+        If required columns are missing, the sizes are integer lots and the
+        frame carries no ``lot_size``, or *sigma* is given for integer ticks
+        and the frame carries no ``tick_size``.
     ObAnalyticsError
         If *trades* is empty.
     ValueError
@@ -808,11 +821,14 @@ def bulk_volume_classification(
         trades, {"timestamp", "price", "volume"}, "bulk_volume_classification"
     )
     validate_non_empty(trades, "bulk_volume_classification")
+    scale = size_scale(trades, "bulk_volume_classification")
     if bucket_volume <= 0:
         raise ValueError(f"bucket_volume must be positive, got {bucket_volume}")
-    check_bucket_count(trades, bucket_volume, "bulk_volume_classification")
+    check_bucket_count(trades, bucket_volume, "bulk_volume_classification", scale=scale)
     if sigma is not None and sigma <= 0:
         raise ValueError(f"sigma must be positive, got {sigma}")
+    if sigma is not None:
+        sigma = sigma * price_scale(trades, "bulk_volume_classification")
 
     df = trades.sort_values("timestamp").reset_index(drop=True)
     prices = df["price"].to_numpy(dtype=np.float64)
@@ -821,11 +837,12 @@ def bulk_volume_classification(
 
     # Walk trades, closing a bucket every `bucket_volume` units.  A single
     # trade can fill several buckets; each carries the price at its close.
+    bucket = bucket_volume * scale
     starts: list = []
     ends: list = []
     closes: list[float] = []
     bucket_start_ts = timestamps[0]
-    bucket_remaining = bucket_volume
+    bucket_remaining = bucket
 
     for i in range(len(df)):
         remaining_trade = volumes[i]
@@ -837,7 +854,7 @@ def bulk_volume_classification(
                 starts.append(bucket_start_ts)
                 ends.append(timestamps[i])
                 closes.append(prices[i])
-                bucket_remaining = bucket_volume
+                bucket_remaining = bucket
                 bucket_start_ts = timestamps[i]
 
     if not closes:

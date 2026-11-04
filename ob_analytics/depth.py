@@ -23,6 +23,7 @@ from ob_analytics import _engine_frames
 from ob_analytics._utils import (
     decimal_places,
     lots_to_size,
+    price_scale,
     size_to_lots,
     validate_columns,
     validate_non_empty,
@@ -1232,15 +1233,25 @@ def micro_price(
         Depth summary with ``best_bid_price``, ``best_bid_vol``,
         ``best_ask_price`` and ``best_ask_vol`` columns.
     stoikov_adjustment : pandas.Series, numpy.ndarray, float or None, optional
-        Optional additive Stoikov correction (see above).  Default ``None``.
+        Optional additive Stoikov correction (see above), in the quote
+        currency, whether the prices are integer ticks (with
+        ``depth_summary.attrs["tick_size"]``, as on a pipeline result) or
+        display floats.  Default ``None``.
 
     Returns
     -------
     pandas.Series
-        The micro-price per row, indexed like *depth_summary*.  A row whose
+        The micro-price per row, indexed like *depth_summary*, in the units of
+        its prices.  A row whose
         quote cannot be read as a price (:func:`readable_quotes`: an empty
         side or a crossed book) is ``NaN``, and so is a row with no size at
         the touch.
+
+    Raises
+    ------
+    ConfigError
+        If a required column is missing, or *stoikov_adjustment* is given for
+        integer prices with no ``tick_size`` on the frame's ``attrs``.
     """
     validate_columns(
         depth_summary,
@@ -1262,7 +1273,8 @@ def micro_price(
         )
 
     if stoikov_adjustment is not None:
-        weighted = weighted + np.asarray(stoikov_adjustment, dtype=float)
+        scale = price_scale(depth_summary, "micro_price", "best_bid_price")
+        weighted = weighted + np.asarray(stoikov_adjustment, dtype=float) * scale
 
     return pd.Series(weighted, index=depth_summary.index, name="micro_price")
 

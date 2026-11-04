@@ -410,6 +410,17 @@ class Metric(Protocol):
     :func:`~ob_analytics.visualization.plot_result` sends each keyword it is
     given to the method that names it, so the two must not share a name.
 
+    A size setting is in the instrument's own units (BTC, shares, contracts)
+    and a price setting in the quote currency.  :meth:`compute` is handed a
+    pipeline result whose tables hold integer lots and ticks
+    (``result.metric(...)``) or one already converted to those units
+    (``result.plot(...)`` computes on
+    :func:`~ob_analytics.visualization.display_result`), and the same setting
+    must mean the same amount on both.  Pass it to a function that converts
+    it (such as :func:`~ob_analytics.flow_toxicity.compute_vpin`), or convert
+    it with the scale that ``frame.attrs["lot_size"]`` and
+    ``frame.attrs["tick_size"]`` give.
+
     Attributes
     ----------
     name : str
@@ -458,6 +469,15 @@ class BarRule(Protocol):
     name : str
         Short lowercase identifier registered in
         :data:`~ob_analytics.bars.BAR_RULES`, e.g. ``"volume"``.
+    units : tuple of str, optional
+        The trade columns the rule's threshold is measured in, multiplied
+        together: ``("volume",)`` for a size, ``("volume", "price")`` for a
+        turnover.  A user states such a threshold in the instrument's own
+        units and the quote currency, and
+        :func:`~ob_analytics.bars.bars` converts it to the frame's units
+        before :meth:`assign` sees it, and converts a default threshold back
+        for ``attrs["bar_threshold"]``.  Leave it out (or empty) for a
+        threshold with no units, such as a duration or a trade count.
     """
 
     name: str

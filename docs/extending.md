@@ -777,8 +777,12 @@ being built.
 The gallery and `result.plot` give a metric the display-unit result: prices in
 the quote currency and sizes in the base asset. `result.metric` gives it the
 result as it is, with prices in integer ticks and sizes in integer lots (see
-[the schema](schema.md)). A size setting such as VPIN's `bucket_volume` is in
-the units of the result the metric is given.
+[the schema](schema.md)). A setting is in the instrument's own units either
+way: a size such as VPIN's `bucket_volume` in BTC, shares or contracts, and a
+price in the quote currency. Hand a size setting to a function that converts
+it, such as `compute_vpin` or `bars`, or multiply it by `1 / lot_size`
+yourself when the frame's sizes are integers; each run's tables carry
+`attrs["lot_size"]` and `attrs["tick_size"]` for this.
 
 **Shipping a metric as its own package.** Advertise it under the
 `ob_analytics.metrics` entry-point group and `load_metric_plugins()` finds it at
@@ -812,6 +816,13 @@ A rule states three members:
   threshold live in one place and cutting in another.
 - `assign(frame, threshold)` — return the 0-based bar index of each trade.
 
+A rule may also state `units`, the trade columns its threshold is measured in:
+`("volume",)` for a size, `("volume", "price")` for a turnover, `("price",)`
+for a price distance. A user then gives the threshold in the instrument's own
+units and the quote currency, and `bars()` converts it to the frame's units
+(whole lots and ticks on a pipeline result) before `assign` sees it. Leave it
+out for a threshold with no units, such as a duration or a count.
+
 `assign` is handed a normalized frame in trade order, with `timestamp`,
 `price`, `volume`, `turnover` (price × size) and `sign` (`+1` buyer-initiated,
 `-1` seller-initiated) — so a rule never has to sort trades or work out the
@@ -837,6 +848,7 @@ class RangeRule:
     """A new bar every time price travels `threshold` from the bar's open."""
 
     name = "range"
+    units = ("price",)
 
     def default_threshold(self, frame: pd.DataFrame, target_bars: int) -> float:
         span = frame["price"].max() - frame["price"].min()
@@ -864,7 +876,7 @@ register_bar_rule(RangeRule())
 ```
 
 ```python
-bars(result.trades, "range", 25)
+bars(result.trades, "range", 25)  # a new bar every $25 of price travel
 ```
 
 The bar table, the gallery face and the plot all work unchanged: they never

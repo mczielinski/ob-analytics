@@ -19,13 +19,17 @@ why the quant literature prefers them: a quiet hour and a busy minute produce
 the same number of bars, so bar returns come much closer to being independent
 and identically distributed.
 
+A size threshold is in the instrument's own units (BTC, shares, contracts)
+and a ``"dollar"`` threshold in the quote currency, whether the trades hold
+integer lots and ticks (a pipeline result) or display floats.
+
 Usage::
 
     from ob_analytics import Pipeline, bars, sample_csv_path
 
     result = Pipeline().run(sample_csv_path())
     ohlcv = bars(result.trades, "time", "1min")
-    vol_bars = bars(result.trades, "volume", 50)
+    vol_bars = bars(result.trades, "volume", 0.5)  # every 0.5 BTC
 
 A rule of your own registers with :func:`register_bar_rule` and is then usable
 by name, with no edit to this module.
@@ -43,6 +47,8 @@ import pandas as pd
 from ob_analytics._registry import Registry
 from ob_analytics._utils import (
     fixed_window,
+    price_scale,
+    size_scale,
     validate_columns,
     validate_non_empty,
     window_start,
@@ -183,7 +189,7 @@ class AccumulationRule:
     accumulate and in whether that quantity is signed:
 
     * ``"volume"`` — traded size.
-    * ``"dollar"`` — price × size, in the units of the input frame.
+    * ``"dollar"`` — price × size.
     * ``"imbalance"`` — signed size, ``+`` for buyer-initiated trades and
       ``-`` for seller-initiated ones.
 
@@ -204,11 +210,17 @@ class AccumulationRule:
         Maps the normalized trade frame to the per-trade amount accumulated.
     signed : bool
         Whether that amount carries the aggressor's sign.
+    units : tuple of str
+        The trade columns the amount multiplies together, so
+        :func:`bars` can read a threshold in the instrument's own units:
+        ``("volume",)`` for a size, ``("volume", "price")`` for a turnover.
+        Empty (the default) for an amount with no units, such as a count.
     """
 
     name: str
     quantity: Callable[[pd.DataFrame], np.ndarray] = field(repr=False)
     signed: bool = False
+    units: tuple[str, ...] = ()
 
     def default_threshold(self, frame: pd.DataFrame, target_bars: int) -> float:
         """Return the threshold that cuts *frame* into about *target_bars* bars.
@@ -312,9 +324,9 @@ def _signed_volume(frame: pd.DataFrame) -> np.ndarray:
 for _rule in (
     ClockRule(),
     TickRule(),
-    AccumulationRule("volume", _volume),
-    AccumulationRule("dollar", _turnover),
-    AccumulationRule("imbalance", _signed_volume, signed=True),
+    AccumulationRule("volume", _volume, units=("volume",)),
+    AccumulationRule("dollar", _turnover, units=("volume", "price")),
+    AccumulationRule("imbalance", _signed_volume, signed=True, units=("volume",)),
 ):
     register_bar_rule(_rule)
 
@@ -347,9 +359,11 @@ def bars(
         :func:`list_bar_rules`.
     threshold : optional
         How much of the rule's own quantity closes a bar: a duration for
-        ``"time"``, a trade count for ``"tick"``, an amount for the rest.
-        ``None`` (the default) asks the rule for a threshold that yields about
-        *target_bars* bars.
+        ``"time"``, a trade count for ``"tick"``, an amount for the rest.  A
+        size is in the instrument's own units (BTC, shares, contracts) and a
+        ``"dollar"`` amount in the quote currency, on integer and display
+        frames alike.  ``None`` (the default) asks the rule for a threshold
+        that yields about *target_bars* bars.
     target_bars : int, optional
         How many bars the default threshold aims at.  Ignored when
         *threshold* is given.
@@ -395,13 +409,15 @@ def bars(
 
         The frame's ``attrs`` carry ``bar_rule`` and ``bar_threshold``, so a
         caller that let the threshold default can still report what cut the
-        bars.
+        bars.  ``bar_threshold`` is in the same units as *threshold*, so
+        passing it back cuts the same bars.
 
     Raises
     ------
     ConfigError
-        If required columns are missing, or the threshold does not suit the
-        rule.
+        If required columns are missing, the threshold does not suit the
+        rule, or a size or price rule runs on integer lots or ticks with no
+        ``lot_size`` or ``tick_size`` on the frame's ``attrs``.
     KeyError
         If *rule* is not registered; the message lists the registered names.
     ObAnalyticsError
@@ -409,18 +425,18 @@ def bars(
 
     Notes
     -----
-    Prices and sizes pass through in the units they arrive in.  A pipeline
-    result holds prices as whole ticks and sizes as whole lots, so a
-    ``"dollar"`` threshold there is in ticks × lots, not in the quote
-    currency.  Convert the frame first (see
-    :func:`~ob_analytics.visualization.display_result`) to work in quote-
-    currency amounts.
+    The output columns keep the units the trades arrive in: a pipeline
+    result holds prices as whole ticks and sizes as whole lots, and so do its
+    bars.  Convert the frame first (see
+    :func:`~ob_analytics.visualization.display_result`) for bars in the
+    quote currency and the instrument's units.  The threshold does not
+    depend on this: it means the same amount on either frame.
 
     Examples
     --------
     >>> from ob_analytics import Pipeline, bars, sample_csv_path
     >>> result = Pipeline().run(sample_csv_path())  # doctest: +SKIP
-    >>> bars(result.trades, "volume", 100)[  # doctest: +SKIP
+    >>> bars(result.trades, "volume", 0.5)[  # doctest: +SKIP
     ...     ["timestamp_end", "open", "close", "vwap", "signed_volume"]
     ... ]
     """
@@ -429,10 +445,20 @@ def bars(
     bar_rule = get_bar_rule(rule)
 
     frame = _normalize(trades, sign_method, quotes)
+    # The rule measures the frame's own units; the caller states the
+    # threshold in the instrument's.  A rule with no units (a clock, a count)
+    # needs no conversion.
+    units = tuple(getattr(bar_rule, "units", ()))
+    scale = _threshold_scale(trades, units)
     if threshold is None:
-        threshold = bar_rule.default_threshold(frame, max(1, int(target_bars)))
-    threshold = bar_rule.normalize(threshold)
-    index = np.asarray(bar_rule.assign(frame, threshold), dtype=np.int64)
+        cut = bar_rule.normalize(
+            bar_rule.default_threshold(frame, max(1, int(target_bars)))
+        )
+        threshold = cut / scale if units else cut
+    else:
+        threshold = bar_rule.normalize(threshold)
+        cut = threshold * scale if units else threshold
+    index = np.asarray(bar_rule.assign(frame, cut), dtype=np.int64)
     if index.shape != (len(frame),):
         raise ConfigError(
             f"bars: rule {rule!r} returned {index.shape} bar indices for "
@@ -444,6 +470,25 @@ def bars(
     out.attrs["bar_rule"] = bar_rule.name
     out.attrs["bar_threshold"] = threshold
     return out
+
+
+def _threshold_scale(trades: pd.DataFrame, units: tuple[str, ...]) -> float:
+    """Return how many units of the frame make one unit of the threshold.
+
+    A threshold is stated in the instrument's units and the quote currency.
+    The answer is the product of the scale of each column in *units*:
+    :func:`~ob_analytics._utils.size_scale` for ``"volume"`` and
+    :func:`~ob_analytics._utils.price_scale` for ``"price"``.
+    """
+    readers = {"volume": size_scale, "price": price_scale}
+    scale = 1.0
+    for column in units:
+        if column not in readers:
+            raise ConfigError(
+                f"bars: a rule's units name 'volume' or 'price', got {column!r}"
+            )
+        scale *= readers[column](trades, "bars", column)
+    return scale
 
 
 def _normalize(

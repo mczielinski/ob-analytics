@@ -52,6 +52,7 @@ from ob_analytics._windows import (
 from ob_analytics.analytics import order_aggressiveness, set_order_types
 from ob_analytics.capture_record import read_instrument
 from ob_analytics.config import PipelineConfig, instrument_fields
+from ob_analytics.data import _put_run_units
 from ob_analytics.depth import (
     DepthMetricsEngine,
     depth_metrics,
@@ -521,6 +522,7 @@ class Pipeline:
         events = order_aggressiveness(events, depth_summary)
 
         logger.info("Pipeline: complete")
+        _put_run_units(config, events, trades, depth, depth_summary)
         return PipelineResult(
             events=events,
             trades=trades,
@@ -570,6 +572,7 @@ class Pipeline:
             "order_aggressiveness, queue) skipped: price-level feed has no "
             "order identity"
         )
+        _put_run_units(config, events, trades, depth, depth_summary)
         return PipelineResult(
             events=events,
             trades=trades,

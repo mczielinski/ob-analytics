@@ -289,8 +289,13 @@ def _to_arrow_table(
     Returns
     -------
     pyarrow.Table
-        *df* as Arrow, with the metadata attached.
+        *df* as Arrow, with the metadata attached.  The tick and lot size on
+        *df*'s ``attrs`` are not written a second time with pandas' own
+        metadata: the key-value metadata above is where they are stored.
     """
+    if any(key in df.attrs for key in _UNIT_ATTRS):
+        df = df.copy(deep=False)
+        df.attrs = {k: v for k, v in df.attrs.items() if k not in _UNIT_ATTRS}
     table = pa.Table.from_pandas(df, preserve_index=False)
     metadata = dict(table.schema.metadata or {})
     metadata[SCHEMA_VERSION_KEY] = SCHEMA_VERSION.encode()
@@ -336,19 +341,51 @@ def _read_versioned_parquet(path: Path) -> pd.DataFrame:
     # ticks and lots would change the numbers, so only a current file is cast.
     if version == SCHEMA_VERSION and path.stem in _RESTORED_DTYPES:
         df = cast_columns(df, _RESTORED_DTYPES[path.stem])
-    tick_sizes = decode_tick_sizes(metadata.get(TICK_SIZE_KEY))
+    _put_units(
+        df,
+        tick_sizes=decode_tick_sizes(metadata.get(TICK_SIZE_KEY)),
+        lot_sizes=decode_lot_sizes(metadata.get(LOT_SIZE_KEY)),
+    )
+    return df
+
+
+#: The ``attrs`` keys :func:`_put_units` writes.
+_UNIT_ATTRS = ("tick_sizes", "tick_size", "lot_sizes", "lot_size")
+
+
+def _put_units(
+    df: pd.DataFrame,
+    *,
+    tick_sizes: dict[str, float] | None,
+    lot_sizes: dict[str, float] | None,
+) -> None:
+    """Put the tick and lot size on *df*'s ``attrs``, in place.
+
+    ``attrs["tick_sizes"]`` and ``attrs["lot_sizes"]`` hold the full
+    instrument maps, and ``attrs["tick_size"]`` and ``attrs["lot_size"]`` the
+    resolved defaults, so ``price * tick_size`` and ``volume * lot_size``
+    give the quote currency and the instrument's units.  A map that is
+    ``None`` leaves its keys out.  A frame read from a file and a frame from
+    a run carry the same keys.
+    """
     if tick_sizes is not None:
         df.attrs["tick_sizes"] = tick_sizes
         resolved = resolve_tick_size(tick_sizes)
         if resolved is not None:
             df.attrs["tick_size"] = resolved
-    lot_sizes = decode_lot_sizes(metadata.get(LOT_SIZE_KEY))
     if lot_sizes is not None:
         df.attrs["lot_sizes"] = lot_sizes
         resolved_lot = resolve_lot_size(lot_sizes)
         if resolved_lot is not None:
             df.attrs["lot_size"] = resolved_lot
-    return df
+
+
+def _put_run_units(config: Any, *frames: pd.DataFrame) -> None:
+    """Put the tick and lot size of a run's *config* on each of *frames*."""
+    tick_sizes = _tick_sizes_from_config(config)
+    lot_sizes = _lot_sizes_from_config(config)
+    for df in frames:
+        _put_units(df, tick_sizes=tick_sizes, lot_sizes=lot_sizes)
 
 
 def load_data(path: str | Path) -> dict[str, pd.DataFrame]:

@@ -14,21 +14,24 @@ from ob_analytics import compute_vpin
 from ob_analytics.visualization import plot, save_figure, prepare
 
 # About 60 buckets: enough to fill the 50-bucket trailing window.
-bucket_volume = result.trades["volume"].sum() / 60
-vpin = compute_vpin(result.trades, bucket_volume=bucket_volume)
+# The trades store whole lots; lot_size turns their total into BTC.
+total = result.trades["volume"].sum() * result.config.lot_size
+vpin = compute_vpin(result.trades, bucket_volume=total / 60)
 fig = plot("vpin", **prepare.vpin(vpin, threshold=0.7))
 save_figure(fig, "vpin.png")
 ```
 
-`bucket_volume` is in the units of the trades' `volume` column. On a pipeline
-result those are integer lots: the size in the base asset is
-`lots × lot_size`. The Bitstamp sample uses the default `lot_size` of `1e-8`,
-so there a `bucket_volume` of `5.0` means 5e-8 BTC, not 5 BTC. Size the bucket
-from the trades, as above, rather than typing a number;
-[Short captures](#short-captures) explains the 60. `compute_vpin` raises
-`ValueError` when the bucket would cut the trades into more than
+`bucket_volume` is in the instrument's own units: BTC on the Bitstamp sample,
+shares or contracts elsewhere. A pipeline result stores sizes as whole lots
+(the size is `lots × lot_size`), and `compute_vpin` reads the lot size from
+the trades' `attrs`, so `bucket_volume=0.5` means 0.5 BTC on `result.trades`
+and on [`display_result(result).trades`](../api/gallery.md#ob_analytics.visualization.gallery.display_result) alike.
+Trades with integer sizes and no `attrs["lot_size"]` (a frame you built
+yourself) raise `ConfigError`: set the lot size on the frame, or pass float
+sizes. [Short captures](#short-captures) explains the 60. `compute_vpin`
+raises `ValueError` when the bucket would cut the trades into more than
 [`MAX_VOLUME_BUCKETS`](../api/trade_sign.md#ob_analytics.trade_sign.MAX_VOLUME_BUCKETS)
-(one million) buckets, which is what a bucket in the wrong units does.
+(one million) buckets.
 
 Leave `bucket_volume` out to pick it from the trades with the common rule,
 average daily volume ÷ 50. `vpin_bucket_volume` applies the same rule on its
@@ -75,8 +78,8 @@ so dividing by exactly `n_buckets` can still fall one bucket short) reliably
 fills a whole trailing window:
 
 ```python
-bucket_volume = result.trades["volume"].sum() / 60
-vpin = compute_vpin(result.trades, bucket_volume=bucket_volume)
+total = result.trades["volume"].sum() * result.config.lot_size
+vpin = compute_vpin(result.trades, bucket_volume=total / 60)
 len(vpin)                      # a full series, no warning
 ```
 
@@ -124,8 +127,11 @@ many CCXT sources) don't — so VPIN and OFI infer the buy/sell split with a
 ```python
 from ob_analytics import compute_vpin, order_flow_imbalance
 
-# Sizes are integer lots; size the bucket from the trades.
-bucket = l2_trades["volume"].sum() / 60
+# A trades frame with no aggressor side, such as an L2 capture's.
+l2_trades = result.trades.drop(columns=["direction"])
+
+# About 60 buckets, in BTC: the trades store whole lots.
+bucket = l2_trades["volume"].sum() * result.config.lot_size / 60
 
 # No `direction` column → tick rule by default.
 vpin = compute_vpin(l2_trades, bucket_volume=bucket)
