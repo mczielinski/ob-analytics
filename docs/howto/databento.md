@@ -87,8 +87,9 @@ config = PipelineConfig(tick_size=0.25)
 result = Pipeline(config, source=DatabentoSource()).run("es-20240212.mbo.dbn.zst")
 ```
 
-The fixed-point scale of the raw prices is a property of DBN, not of the
-instrument, and is already set for you (`price_divisor=1_000_000_000`).
+The fixed-point scale of the raw prices (one raw unit is 10⁻⁹ of the quote
+currency) is a property of DBN, not of the instrument, so the loader knows it
+and there is nothing to set.
 
 ## Pick one instrument out of a file
 

@@ -40,10 +40,19 @@ into structured analytics:
   `ob_analytics.sources` entry-point group.
 - **Per-run parameters live on `RunContext`, not `Source`.** Construction-time
   parameters (typed `settings`, fixed venue config) belong on the source;
-  per-session parameters (trading date, write-time level cap) live on
-  `RunContext` and are passed to `Pipeline(source=..., ctx=...)`. This keeps
-  sources reusable across multiple runs without re-instantiation and avoids
-  baking session state into long-lived objects.
+  per-session parameters (trading date, time zone, symbol, venue) live on
+  `RunContext`. Give one to `Pipeline(source=..., ctx=...)` as the default for
+  every run, or to `Pipeline.run(path, ctx=...)` for that run alone. The
+  pipeline builds each run's loader and trade source from that run's config
+  and context, and a source keeps nothing from a run, so one source serves
+  many runs, and many pipelines, at once.
+- **A loader knows its own feed format.** How a file encodes prices and
+  timestamps (LOBSTER's ten-thousandths of a dollar, Databento's fixed-point
+  nanodollars, Bitstamp's millisecond epochs) is a constant of its loader, or
+  a field of the source's typed settings where the format leaves it open
+  (`DepthCsvSettings`). `PipelineConfig` holds the instrument and pipeline
+  settings only. A source states the grid its data is usually on as `grid`
+  (`InstrumentGrid`), and the run's config starts from it.
 
 ---
 
@@ -106,18 +115,15 @@ that bundle venue-specific defaults and capabilities.
 classDiagram
     class Pipeline {
         +config: PipelineConfig
-        +loader: EventLoader
-        +trade_source: TradeSource
-        +writer: DataWriter | None
-        +run(source) PipelineResult
+        +run(source, ctx) PipelineResult
         +from_source(name, **kwargs)$ Pipeline
     }
 
     class PipelineConfig {
+        +tick_size: float
+        +lot_size: float
         +price_decimals: int
         +volume_decimals: int
-        +price_divisor: int
-        +timestamp_unit: str
         +depth_bps: int
         +depth_bins: int
     }
@@ -128,14 +134,14 @@ classDiagram
         +level: Level
         +feed_type: FeedType
         +settings: SourceSettings
+        +grid: InstrumentGrid
     }
     class OfflineSource {
         <<Protocol>>
         +create_loader(config, ctx) EventLoader
-        +create_trade_source(config, ctx) TradeSource
+        +create_trade_source(config, ctx, loader) TradeSource
         +create_writer(config, ctx) DataWriter | None
-        +compute_depth(events, config, source, ctx) tuple | None
-        +config_defaults() dict
+        +compute_depth(events, config, source, ctx, loader) tuple | None
     }
     class LiveSource {
         <<Protocol>>
@@ -146,6 +152,9 @@ classDiagram
 
     class RunContext {
         +trading_date: object | None
+        +session_tz: str | None
+        +symbol: str | None
+        +venue: str | None
     }
 
     class BitstampSource
@@ -175,12 +184,12 @@ classDiagram
     }
 
     Pipeline --> PipelineConfig
-    Pipeline --> EventLoader
-    Pipeline --> TradeSource
-    Pipeline --> DataWriter
+    Pipeline ..> EventLoader : one per run
+    Pipeline ..> TradeSource : one per run
     Pipeline --> PipelineResult
     Pipeline ..> OfflineSource : source=
     Pipeline ..> RunContext : per-run params
+    OfflineSource ..> DataWriter : create_writer
     Source <|-- OfflineSource
     Source <|-- LiveSource
     OfflineSource <|.. BitstampSource

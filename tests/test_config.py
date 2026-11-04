@@ -43,16 +43,12 @@ class TestPipelineConfig:
         with pytest.raises(ValidationError):
             PipelineConfig(depth_bins=0)
 
-    def test_timestamp_unit_default_ms(self):
-        assert PipelineConfig().timestamp_unit == "ms"
-
-    def test_timestamp_unit_accepts_valid(self):
-        assert PipelineConfig(timestamp_unit="us").timestamp_unit == "us"
-        assert PipelineConfig(timestamp_unit="ns").timestamp_unit == "ns"
-
-    def test_timestamp_unit_rejects_invalid(self):
-        with pytest.raises(ValidationError):
-            PipelineConfig(timestamp_unit="s")  # ty: ignore[invalid-argument-type]
+    @pytest.mark.parametrize("name", ["price_divisor", "timestamp_unit"])
+    def test_a_feed_encoding_field_is_refused(self, name):
+        # Each loader reads its own format now; a setting the config no longer
+        # has is refused rather than dropped.
+        with pytest.raises(ValidationError, match=name):
+            PipelineConfig(**{name: 1})
 
 
 class TestExceptionHierarchy:

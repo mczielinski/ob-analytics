@@ -27,7 +27,7 @@ from ob_analytics.bitstamp import (
 from ob_analytics.config import PipelineConfig
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.pipeline import Pipeline
-from ob_analytics.protocols import RunContext
+from ob_analytics.protocols import RunContext, grid_of
 
 # ---------------------------------------------------------------------------
 # Shared Pipeline result for the writer tests
@@ -650,18 +650,16 @@ class TestBitstampSource:
     def test_name(self):
         assert BitstampSource().name == "bitstamp"
 
-    def test_config_defaults_present(self):
-        defaults = BitstampSource().config_defaults()
-        assert "price_decimals" in defaults
-        assert "timestamp_unit" in defaults
-        assert defaults["timestamp_unit"] == "ms"
+    def test_its_grid_is_a_cent_tick_and_satoshi_lots(self):
+        grid = grid_of(BitstampSource())
+        assert (grid.tick_size, grid.lot_size) == (0.01, 1e-8)
 
     def test_constructs_loader_and_trade_source(self):
         source = BitstampSource()
-        cfg = PipelineConfig(**source.config_defaults())
+        cfg = PipelineConfig(**grid_of(source).fields())
         ctx = RunContext()
         loader = source.create_loader(cfg, ctx)
-        ts = source.create_trade_source(cfg, ctx)
+        ts = source.create_trade_source(cfg, ctx, loader)
         writer = source.create_writer(cfg, ctx)
         assert isinstance(loader, BitstampLoader)
         assert isinstance(ts, BitstampTradeReader)

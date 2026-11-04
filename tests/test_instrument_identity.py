@@ -193,7 +193,7 @@ class TestLobsterIdentity:
 
         source = LobsterSource()
         ctx = RunContext(trading_date="2012-06-21", symbol="AMZN", venue="nasdaq")
-        loader = source.create_loader(PipelineConfig(**source.config_defaults()), ctx)
+        loader = source.create_loader(PipelineConfig(**source.grid.fields()), ctx)
         events = loader.load(lobster_message_file)
         _assert_identity(events, venue="nasdaq", symbol="AMZN")
 

@@ -71,13 +71,24 @@ timestamp,side,price,volume
 
 | column | meaning |
 |--------|---------|
-| `timestamp` | receive time — integer epoch (`config.timestamp_unit`) or any string pandas can parse |
+| `timestamp` | receive time — integer epoch (milliseconds by default) or any string pandas can parse |
 | `side` | `bid` / `ask` (`buy` / `sell` and `b` / `a` are also accepted) |
-| `price` | the price level (divided by `config.price_divisor`, then stored as a whole number of `tick_size` ticks; a price between two ticks raises `ConfigError` instead of being rounded) |
+| `price` | the price level, in the quote currency by default (stored as a whole number of `tick_size` ticks; a price between two ticks raises `ConfigError` instead of being rounded) |
 | `volume` | the level's **new absolute** resting size (`0` = removed) |
 
 Column names are flexible: `side` / `direction` and `volume` / `size` /
 `amount` / `quantity` are all accepted.
+
+A file with another timestamp unit, or prices in a smaller unit than the quote
+currency, says so in the source's settings:
+
+```python
+from ob_analytics import DepthCsvSettings, DepthCsvSource, Pipeline
+
+# Microsecond epochs, and prices in hundredths of a cent.
+settings = DepthCsvSettings(timestamp_unit="us", price_divisor=10_000)
+result = Pipeline(source=DepthCsvSource(settings=settings)).run("my_l2_run/")
+```
 
 Point the pipeline at the file (or a directory containing `depth.csv`); a
 companion `trades.csv` next to it is picked up automatically.

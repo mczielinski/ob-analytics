@@ -109,7 +109,7 @@ from ob_analytics._utils import (
     size_to_lots,
     ticks_to_price,
 )
-from ob_analytics.config import PipelineConfig, SourceSettings
+from ob_analytics.config import InstrumentGrid, PipelineConfig, SourceSettings
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import (
     DataWriter,
@@ -135,9 +135,14 @@ from ob_analytics.schemas import (
 
 #: Databento fixed-point price scale: one raw unit is 1e-9 of the quote
 #: currency, so the raw integer divides by this to reach the quote currency.
-#: This is the feed's encoding, not the instrument's tick (see
-#: :attr:`~ob_analytics.config.PipelineConfig.price_divisor`).
+#: This is the feed's encoding, not the instrument's tick.
 DBN_PRICE_DIVISOR = 1_000_000_000
+
+#: The grid a US equity is on: a cent tick and whole shares.  DBN sizes are
+#: whole shares or contracts, so one lot is one unit and the canonical integer
+#: size is the venue's own count.
+DATABENTO_GRID = InstrumentGrid(tick_size=0.01, lot_size=1.0)
+
 
 #: The raw price that means "no price" (``INT64_MAX``).
 UNDEF_PRICE = 9_223_372_036_854_775_807
@@ -346,9 +351,11 @@ class DatabentoLoader:
     Parameters
     ----------
     config : PipelineConfig, optional
-        Pipeline configuration.  ``price_divisor`` is Databento's fixed-point
-        scale (:data:`DBN_PRICE_DIVISOR`) and ``lot_size`` is normally ``1``,
-        both supplied by :meth:`DatabentoSource.config_defaults`.
+        Pipeline configuration: the instrument's ``tick_size`` and
+        ``lot_size``.  A grid field it does not set comes from
+        :data:`DATABENTO_GRID`, a cent tick and whole shares.  The raw prices are in Databento's fixed-point encoding
+        (:data:`DBN_PRICE_DIVISOR`), which is part of the format, not a
+        setting.
     settings : DatabentoSettings, optional
         Which instrument and publisher of a multi-instrument file to read.
     venue, symbol : str, optional
@@ -368,7 +375,7 @@ class DatabentoLoader:
         venue: str | None = None,
         symbol: str | None = None,
     ) -> None:
-        self._config = config or PipelineConfig()
+        self._config = DATABENTO_GRID.config(config)
         self._settings = settings or DatabentoSettings()
         self._venue = venue
         self._symbol = symbol
@@ -523,7 +530,7 @@ class DatabentoLoader:
         # integer, so it divides by the feed's encoding scale to reach the
         # quote currency before it is quantised onto the instrument's tick.
         work["price"] = price_to_ticks(
-            work["raw_price"].to_numpy() / cfg.price_divisor, cfg.tick_size
+            work["raw_price"].to_numpy() / DBN_PRICE_DIVISOR, cfg.tick_size
         )
         work["size_lots"] = size_to_lots(work["raw_size"].to_numpy(), cfg.lot_size)
         work["direction"] = work["side"].map(_SIDE_TO_DIRECTION)
@@ -1147,7 +1154,7 @@ class DatabentoTradeReader:
         loader: DatabentoLoader,
         settings: DatabentoSettings | None = None,
     ) -> None:
-        self._config = config or PipelineConfig()
+        self._config = DATABENTO_GRID.config(config)
         self._loader = loader
         self._settings = settings or DatabentoSettings()
 
@@ -1299,8 +1306,10 @@ class DatabentoWriter:
     Parameters
     ----------
     config : PipelineConfig, optional
-        Pipeline configuration; its ``price_divisor``, ``tick_size`` and
-        ``lot_size`` invert the canonical ticks and lots.
+        Pipeline configuration; its ``tick_size`` and ``lot_size`` invert the
+        canonical ticks and lots, and prices are written in Databento's
+        fixed-point encoding (:data:`DBN_PRICE_DIVISOR`).  It is the config
+        of the run being written; it defaults to :data:`DATABENTO_GRID`.
     settings : DatabentoSettings, optional
         ``dataset``, ``instrument_id`` and ``publisher_id`` to stamp on the
         records (defaulting to ``1`` and ``1`` when unset).
@@ -1312,7 +1321,7 @@ class DatabentoWriter:
         *,
         settings: DatabentoSettings | None = None,
     ) -> None:
-        self._config = config or PipelineConfig()
+        self._config = config if config is not None else DATABENTO_GRID.config()
         self._settings = settings or DatabentoSettings()
 
     def write(
@@ -1411,7 +1420,7 @@ class DatabentoWriter:
         # without trading and the part executed.
         price_raw = np.round(
             ticks_to_price(events["price"], cfg.tick_size, decimals=cfg.price_decimals)
-            * cfg.price_divisor
+            * DBN_PRICE_DIVISOR
         ).astype("int64")
         action = events["action"].astype(str).to_numpy()
         removed = np.where(
@@ -1632,8 +1641,8 @@ class DatabentoSource:
     # Declared as the base type the ``Source`` protocol states, the way every
     # other source declares it; :meth:`dbn_settings` narrows it back.
     settings: SourceSettings = field(default_factory=DatabentoSettings)
-
-    _loader: DatabentoLoader | None = field(default=None, repr=False, init=False)
+    # A cent tick and whole shares: a US equity.
+    grid: InstrumentGrid = field(default=DATABENTO_GRID, init=False, repr=False)
 
     def dbn_settings(self) -> DatabentoSettings:
         """Return :attr:`settings` as :class:`DatabentoSettings`.
@@ -1650,26 +1659,27 @@ class DatabentoSource:
             )
         return self.settings
 
-    def _make_loader(self, config: PipelineConfig, ctx: RunContext) -> DatabentoLoader:
-        """Build the loader for this run and remember it."""
+    def create_loader(self, config: PipelineConfig, ctx: RunContext) -> EventLoader:
         settings = self.dbn_settings()
-        self._loader = DatabentoLoader(
+        return DatabentoLoader(
             config,
             settings=settings,
             venue=ctx.venue,
             symbol=ctx.symbol or settings.raw_symbol,
         )
-        return self._loader
-
-    def create_loader(self, config: PipelineConfig, ctx: RunContext) -> EventLoader:
-        return self._make_loader(config, ctx)
 
     def create_trade_source(
-        self, config: PipelineConfig, ctx: RunContext
+        self, config: PipelineConfig, ctx: RunContext, loader: Any
     ) -> TradeSource:
         # The trades come off the same read as the events, so the reader takes
-        # the loader itself rather than re-reading the file.
-        loader = self._loader or self._make_loader(config, ctx)
+        # the run's loader rather than re-reading the file.
+        if not isinstance(loader, DatabentoLoader):
+            raise ConfigError(
+                "DatabentoSource: the trades come from the DatabentoLoader that "
+                f"reads the events, and this run's loader is a "
+                f"{type(loader).__name__}.  Pass a DatabentoLoader, or a trade "
+                "source of your own."
+            )
         return DatabentoTradeReader(config, loader=loader, settings=self.dbn_settings())
 
     def create_writer(
@@ -1683,23 +1693,11 @@ class DatabentoSource:
         config: Any,
         source: Any,
         ctx: RunContext,
+        loader: Any,
     ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
         # MBO is the book itself: there is no companion depth file to prefer
         # over the reconstruction, so the standard price-level path runs.
         return None
-
-    def config_defaults(self) -> dict[str, Any]:
-        return {
-            # Databento's fixed-point encoding: one raw unit is 1e-9.
-            "price_divisor": DBN_PRICE_DIVISOR,
-            "tick_size": 0.01,
-            "price_decimals": 2,
-            # Sizes are whole shares or contracts, so one lot is one unit and
-            # the canonical integer size (issue #226) is the venue's own count.
-            "lot_size": 1.0,
-            "volume_decimals": 0,
-            "timestamp_unit": "ns",
-        }
 
     def required_context(self) -> list[str]:
         # DBN records carry absolute UTC timestamps, so there is no date to

@@ -31,13 +31,13 @@ to reconstruct.
 ======  ==================================================================
 column  meaning
 ======  ==================================================================
-timestamp   receive time — integer epoch (``config.timestamp_unit``) or any
+timestamp   receive time — integer epoch (``DepthCsvSettings.timestamp_unit``) or any
             string :func:`pandas.to_datetime` understands
 exchange_timestamp  optional: the venue's time, in the same form as
             ``timestamp``.  Kept in the depth frame when present, so the
             clock checks can compare the two clocks.
 side        ``bid`` / ``ask`` (``buy`` / ``sell`` and ``b`` / ``a`` accepted)
-price       price level (divided by ``config.price_divisor`` to the quote
+price       price level (divided by ``DepthCsvSettings.price_divisor`` to the quote
             currency, then stored as integer ``tick_size`` counts; a price
             that is not a whole number of ticks raises ``ConfigError``)
 volume      new absolute resting size at that level (``0`` = level removed)
@@ -52,11 +52,12 @@ from __future__ import annotations
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 from loguru import logger
+from pydantic import Field
 
 from ob_analytics._utils import (
     UTC_NS_DTYPE,
@@ -72,7 +73,7 @@ from ob_analytics._utils import (
     validate_columns,
     validate_non_empty,
 )
-from ob_analytics.config import PipelineConfig, SourceSettings
+from ob_analytics.config import InstrumentGrid, PipelineConfig, SourceSettings
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import (
     DataWriter,
@@ -121,6 +122,42 @@ _TRADE_SIDE_MAP: dict[str, str] = {
 }
 
 
+class DepthCsvSettings(SourceSettings):
+    """How a price-level CSV encodes its timestamps and prices.
+
+    The settings of :class:`DepthCsvSource`, read by :class:`L2DepthLoader`,
+    :class:`L2TradeReader` and :class:`DepthCsvWriter`.  The defaults are what
+    a capture writes: millisecond epochs and prices in the quote currency.
+
+    Attributes
+    ----------
+    timestamp_unit : {"ms", "us", "ns"}
+        The unit of an integer epoch timestamp.  A timestamp written as a
+        string is parsed as it is, whatever this says.
+    price_divisor : int
+        What a price in the file is divided by to reach the quote currency.
+        1 (the default) means it is in the quote currency already.
+    """
+
+    timestamp_unit: Literal["ms", "us", "ns"] = "ms"
+    price_divisor: int = Field(default=1, ge=1)
+
+
+def _csv_settings(settings: SourceSettings | None, where: str) -> DepthCsvSettings:
+    """Return *settings* as :class:`DepthCsvSettings`.
+
+    ``None`` and the empty base :class:`SourceSettings` give the defaults.
+    """
+    if settings is None or type(settings) is SourceSettings:
+        return DepthCsvSettings()
+    if not isinstance(settings, DepthCsvSettings):
+        raise ConfigError(
+            f"{where}: settings must be DepthCsvSettings, got "
+            f"{type(settings).__name__}."
+        )
+    return settings
+
+
 def _first_present(columns: pd.Index, candidates: tuple[str, ...]) -> str | None:
     """Return the first of *candidates* present in *columns* (or ``None``)."""
     lower = {c.lower(): c for c in columns}
@@ -131,7 +168,7 @@ def _first_present(columns: pd.Index, candidates: tuple[str, ...]) -> str | None
 
 
 def _to_ticks_on_grid(
-    raw_price: pd.Series, cfg: PipelineConfig, where: str
+    raw_price: pd.Series, cfg: PipelineConfig, price_divisor: int, where: str
 ) -> np.ndarray:
     """Convert a raw feed price column to integer ticks, refusing off-grid prices.
 
@@ -140,7 +177,7 @@ def _to_ticks_on_grid(
     default 0.01 grid becomes 0.04.  A price-level CSV does not carry its own
     tick size, so a wrong one is easy to pass and cannot be seen afterwards.
     """
-    quote = raw_price.astype(float) / cfg.price_divisor
+    quote = raw_price.astype(float) / price_divisor
     off_grid = off_tick_grid(quote.to_numpy(), cfg.tick_size)
     if off_grid.any():
         example = float(quote.to_numpy()[off_grid][0])
@@ -201,10 +238,10 @@ class L2DepthLoader:
     Parameters
     ----------
     config : PipelineConfig, optional
-        Pipeline configuration.  ``price_divisor`` scales the raw feed price to
-        the quote currency and ``tick_size`` quantises it to integer ticks;
-        ``volume_decimals`` rounds size; ``timestamp_unit`` interprets
-        integer-epoch timestamps.
+        Pipeline configuration.  ``tick_size`` quantises the price to integer
+        ticks and ``lot_size`` the size to integer lots.
+    settings : DepthCsvSettings, optional
+        How the file encodes its timestamps and prices.
     venue, symbol : str, optional
         Optional instrument identity.  When either is supplied, the loaded
         depth frame gains per-row ``venue`` / ``symbol`` columns.  A generic
@@ -220,10 +257,12 @@ class L2DepthLoader:
         self,
         config: PipelineConfig | None = None,
         *,
+        settings: DepthCsvSettings | None = None,
         venue: str | None = None,
         symbol: str | None = None,
     ) -> None:
         self._config = config or PipelineConfig()
+        self._settings = _csv_settings(settings, "L2DepthLoader")
         self._venue = venue
         self._symbol = symbol
 
@@ -269,11 +308,13 @@ class L2DepthLoader:
                 f"Present: {list(raw.columns)}"
             )
 
-        cfg = self._config
-        timestamp = _to_datetime(raw[ts_col], cfg.timestamp_unit)
+        cfg, fmt = self._config, self._settings
+        timestamp = _to_datetime(raw[ts_col], fmt.timestamp_unit)
         # Canonical price is integer ticks (issue #155): scale the raw feed
         # price to the quote currency, then convert to ticks.
-        price = _to_ticks_on_grid(raw[price_col], cfg, "L2DepthLoader.load")
+        price = _to_ticks_on_grid(
+            raw[price_col], cfg, fmt.price_divisor, "L2DepthLoader.load"
+        )
         # Canonical size is integer lots (issue #226); the raw feed carries a
         # base-asset float, so convert on the way in.
         volume = pd.Series(
@@ -287,7 +328,7 @@ class L2DepthLoader:
         venue_col = _first_present(raw.columns, _EXCHANGE_TIMESTAMP_COLUMNS)
         if venue_col is not None:
             clocks["exchange_timestamp"] = _to_datetime(
-                raw[venue_col], cfg.timestamp_unit
+                raw[venue_col], fmt.timestamp_unit
             ).array
         depth = pd.DataFrame(
             {
@@ -380,10 +421,25 @@ class L2TradeReader:
     an empty trades frame (depth analytics still run).
 
     Satisfies the :class:`~ob_analytics.protocols.TradeSource` protocol.
+
+    Parameters
+    ----------
+    config : PipelineConfig, optional
+        Pipeline configuration: the instrument's ``tick_size`` and
+        ``lot_size``.
+    settings : DepthCsvSettings, optional
+        How the file encodes its timestamps and prices, as for
+        :class:`L2DepthLoader`.
     """
 
-    def __init__(self, config: PipelineConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: PipelineConfig | None = None,
+        *,
+        settings: DepthCsvSettings | None = None,
+    ) -> None:
         self._config = config or PipelineConfig()
+        self._settings = _csv_settings(settings, "L2TradeReader")
 
     def load(self, events: pd.DataFrame, source: Any) -> pd.DataFrame:
         path = self._resolve_trades_file(source)
@@ -405,10 +461,12 @@ class L2TradeReader:
                 f"Present: {list(raw.columns)}"
             )
 
-        cfg = self._config
-        timestamp = _to_datetime(raw[ts_col], cfg.timestamp_unit)
+        cfg, fmt = self._config, self._settings
+        timestamp = _to_datetime(raw[ts_col], fmt.timestamp_unit)
         # Trade prints share the depth grid: integer ticks (issue #155).
-        price = _to_ticks_on_grid(raw[price_col], cfg, "L2TradeReader.load")
+        price = _to_ticks_on_grid(
+            raw[price_col], cfg, fmt.price_divisor, "L2TradeReader.load"
+        )
         # Canonical size is integer lots (issue #226); the raw feed carries a
         # base-asset float, so convert on the way in.
         volume = pd.Series(
@@ -484,10 +542,24 @@ class DepthCsvWriter:
     into the *dest* directory.
 
     Satisfies the :class:`~ob_analytics.protocols.DataWriter` protocol.
+
+    Parameters
+    ----------
+    config : PipelineConfig, optional
+        Pipeline configuration: the ``tick_size`` and ``lot_size`` the frames
+        are in.
+    settings : DepthCsvSettings, optional
+        How to encode the timestamps and prices, as the loader reads them.
     """
 
-    def __init__(self, config: PipelineConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: PipelineConfig | None = None,
+        *,
+        settings: DepthCsvSettings | None = None,
+    ) -> None:
         self._config = config or PipelineConfig()
+        self._settings = _csv_settings(settings, "DepthCsvWriter")
 
     def write(
         self,
@@ -512,7 +584,7 @@ class DepthCsvWriter:
         """
         if "depth" not in data:
             raise ConfigError("DepthCsvWriter.write: data has no 'depth' frame.")
-        cfg = self._config
+        cfg, fmt = self._config, self._settings
         out_dir = Path(dest)
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -523,11 +595,11 @@ class DepthCsvWriter:
         # datetime_to_epoch accepts the canonical tz-aware UTC column directly
         # (and reads a tz-naive one as UTC), so the round-trip is exact.
         clocks = {
-            "timestamp": datetime_to_epoch(depth["timestamp"], cfg.timestamp_unit)
+            "timestamp": datetime_to_epoch(depth["timestamp"], fmt.timestamp_unit)
         }
         if "exchange_timestamp" in depth.columns:
             clocks["exchange_timestamp"] = datetime_to_epoch(
-                depth["exchange_timestamp"], cfg.timestamp_unit
+                depth["exchange_timestamp"], fmt.timestamp_unit
             )
         origin = (
             {ORIGIN_COLUMN: depth[ORIGIN_COLUMN].to_numpy()}
@@ -540,7 +612,7 @@ class DepthCsvWriter:
                 "side": depth["direction"].astype(str),
                 # Restore the raw feed price from integer ticks (issue #155).
                 "price": (
-                    ticks_to_price(depth["price"], cfg.tick_size) * cfg.price_divisor
+                    ticks_to_price(depth["price"], cfg.tick_size) * fmt.price_divisor
                 ).round(cfg.price_decimals),
                 # Restore the base-asset float from integer lots (#226).
                 "volume": lots_to_size(
@@ -561,13 +633,13 @@ class DepthCsvWriter:
         return depth_path
 
     def _write_trades(self, trades: pd.DataFrame, dest: Path) -> None:
-        cfg = self._config
+        cfg, fmt = self._config, self._settings
         out = pd.DataFrame(
             {
-                "timestamp": datetime_to_epoch(trades["timestamp"], cfg.timestamp_unit),
+                "timestamp": datetime_to_epoch(trades["timestamp"], fmt.timestamp_unit),
                 # Restore the raw feed price from integer ticks (issue #155).
                 "price": (
-                    ticks_to_price(trades["price"], cfg.tick_size) * cfg.price_divisor
+                    ticks_to_price(trades["price"], cfg.tick_size) * fmt.price_divisor
                 ).round(cfg.price_decimals),
                 "amount": lots_to_size(
                     trades["volume"],
@@ -606,21 +678,33 @@ class DepthCsvSource:
     feed_type: FeedType = FeedType.PRICE_LEVELS
     # Price levels carry no order identity, so no order of a trade is named.
     trade_attribution: TradeAttribution = TradeAttribution.NONE
-    # No per-source knobs; empty typed settings keep construction uniform.
-    settings: SourceSettings = field(default_factory=SourceSettings)
+    # How the files encode timestamps and prices (DepthCsvSettings).  Declared
+    # as the base type the ``Source`` protocol states, as every source does.
+    settings: SourceSettings = field(default_factory=DepthCsvSettings)
+    # A cent tick and satoshi lots; a capture's record gives its own.
+    grid: InstrumentGrid = field(default_factory=InstrumentGrid)
 
     def create_loader(self, config: PipelineConfig, ctx: RunContext) -> DepthSource:
-        return L2DepthLoader(config, venue=ctx.venue, symbol=ctx.symbol)
+        return L2DepthLoader(
+            config,
+            settings=_csv_settings(self.settings, "DepthCsvSource"),
+            venue=ctx.venue,
+            symbol=ctx.symbol,
+        )
 
     def create_trade_source(
-        self, config: PipelineConfig, ctx: RunContext
+        self, config: PipelineConfig, ctx: RunContext, loader: Any
     ) -> TradeSource:
-        return L2TradeReader(config)
+        return L2TradeReader(
+            config, settings=_csv_settings(self.settings, "DepthCsvSource")
+        )
 
     def create_writer(
         self, config: PipelineConfig | None, ctx: RunContext
     ) -> DataWriter:
-        return DepthCsvWriter(config)
+        return DepthCsvWriter(
+            config, settings=_csv_settings(self.settings, "DepthCsvSource")
+        )
 
     def compute_depth(
         self,
@@ -628,21 +712,13 @@ class DepthCsvSource:
         config: Any,
         source: Any,
         ctx: RunContext,
+        loader: Any,
     ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
         # Unused on the L2 path: the loader *is* the depth source, so the
         # pipeline never folds events into depth (there are no events). Present
         # only to satisfy the OfflineSource protocol; returns None like the L3
         # sources that use the standard depth stages.
         return None
-
-    def config_defaults(self) -> dict[str, Any]:
-        return {
-            "tick_size": 0.01,
-            "price_decimals": 2,
-            "lot_size": 1e-8,
-            "volume_decimals": 8,
-            "timestamp_unit": "ms",
-        }
 
     def required_context(self) -> list[str]:
         # Price-level captures carry their own receive timestamps.

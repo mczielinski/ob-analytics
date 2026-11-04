@@ -37,7 +37,7 @@ class FakeSource:
 
         return L2DepthLoader(config)
 
-    def create_trade_source(self, config: PipelineConfig, ctx: RunContext):
+    def create_trade_source(self, config: PipelineConfig, ctx: RunContext, loader):
         from ob_analytics.depth_l2 import L2TradeReader
 
         return L2TradeReader(config)
@@ -45,11 +45,8 @@ class FakeSource:
     def create_writer(self, config: PipelineConfig, ctx: RunContext):
         return None
 
-    def compute_depth(self, events, config, source, ctx):
+    def compute_depth(self, events, config, source, ctx, loader):
         return None
-
-    def config_defaults(self) -> dict:
-        return {}
 
     def required_context(self) -> list[str]:
         return []

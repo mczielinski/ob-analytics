@@ -16,9 +16,8 @@ from ob_analytics.bars import bars
 from ob_analytics.bitstamp import BitstampSource, BitstampWriter
 from ob_analytics.cost import transaction_costs
 from ob_analytics.data import save_data
-from ob_analytics.lobster import LobsterSource
+from ob_analytics.lobster import LobsterLoader, LobsterSource
 from ob_analytics.pipeline import Pipeline, PipelineResult
-from ob_analytics.protocols import RunContext
 from ob_analytics.visualization.gallery import (
     PlotSpec,
     bars_panel,
@@ -247,10 +246,9 @@ def run_lobster_demo(
     logger.info("LOBSTER Demo: {} ({})", src, trading_date)
     logger.info("=" * 60)
 
-    source_desc = LobsterSource()
-    ctx = RunContext(trading_date=trading_date)
-    pipeline = Pipeline(source=source_desc, ctx=ctx)
-    result = pipeline.run(str(src))
+    # The run's own loader, so its trading halts can be read after the run.
+    loader = LobsterLoader(trading_date=trading_date)
+    result = Pipeline(source=LobsterSource(), loader=loader).run(str(src))
 
     logger.info("Events: {:,}", len(result.events))
     logger.info("Trades: {:,}", len(result.trades))
@@ -258,7 +256,7 @@ def run_lobster_demo(
 
     # LOBSTER halts are not part of the slim PipelineResult; read them off the
     # loader and append them to the gallery model's analytics.
-    halts = getattr(pipeline.loader, "trading_halts", None)
+    halts = loader.trading_halts
     analytics = _lobster_analytics_panels(result, halts)
     analytics.extend(_cost_panels(result))
 

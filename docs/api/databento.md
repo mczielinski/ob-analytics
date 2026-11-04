@@ -16,7 +16,8 @@ before downloading it.
 Key differences from LOBSTER:
 
 - **Fixed-point prices** — raw prices are integers where one unit is 1e-9 of
-  the quote currency (`price_divisor=1_000_000_000`).
+  the quote currency (`DBN_PRICE_DIVISOR`). The loader and writer know this
+  scale, so there is nothing to set.
 - **Two clocks per record** — `ts_recv` (Databento's receive time, monotonic)
   becomes `timestamp`; `ts_event` (the venue's own) becomes
   `exchange_timestamp`.

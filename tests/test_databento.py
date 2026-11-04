@@ -132,7 +132,7 @@ def load(source, config=None, **loader_kwargs):
 
 def _config(**overrides) -> PipelineConfig:
     """The config the pipeline would build for a Databento run."""
-    defaults = DatabentoSource().config_defaults()
+    defaults = DatabentoSource().grid.fields()
     return PipelineConfig(**{**defaults, **overrides})
 
 
@@ -696,22 +696,28 @@ class TestSource:
         assert DatabentoSource().sequence_kind is SequenceKind.MONOTONIC
         assert sequence_kind_of(DatabentoSource()) is SequenceKind.MONOTONIC
 
-    def test_its_defaults_carry_the_fixed_point_scale(self):
-        defaults = DatabentoSource().config_defaults()
-        assert defaults["price_divisor"] == DBN_PRICE_DIVISOR
-        assert defaults["lot_size"] == 1.0
-        assert defaults["timestamp_unit"] == "ns"
+    def test_its_grid_is_whole_shares(self):
+        assert DatabentoSource().grid.lot_size == 1.0
 
-    def test_the_pipeline_picks_up_the_defaults(self):
+    def test_the_pipeline_picks_up_the_grid(self):
         pipeline = Pipeline(source=DatabentoSource())
-        assert pipeline.config.price_divisor == DBN_PRICE_DIVISOR
+        assert pipeline.config.lot_size == 1.0
+        assert pipeline.config.volume_decimals == 0
+
+    def test_a_loader_built_by_hand_reads_the_fixed_point_prices(self):
+        # The fixed-point scale is the format's, so a loader needs no config
+        # to read a price of 100.00 as 10 000 cent ticks.
+        by_hand = DatabentoLoader().load(mbo_frame(LIFECYCLE))
+        assert by_hand["price"].iloc[0] == 10_025  # 100.25 on a cent tick
+        run = Pipeline(source=DatabentoSource()).run(mbo_frame(LIFECYCLE))
+        assert by_hand["price"].tolist() == run.events["price"].tolist()
 
     def test_the_trade_reader_shares_the_loaders_records(self):
         source = DatabentoSource()
         config = _config()
         ctx = RunContext()
         loader = source.create_loader(config, ctx)
-        reader = source.create_trade_source(config, ctx)
+        reader = source.create_trade_source(config, ctx, loader)
         events = loader.load(mbo_frame(LIFECYCLE))
         assert len(reader.load(events, None)) == 2
 

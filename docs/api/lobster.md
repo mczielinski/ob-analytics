@@ -17,7 +17,8 @@ Key differences from Bitstamp:
 - **Orderbook-backed depth** — `LobsterSource.compute_depth` reads the official
   orderbook file for ground-truth depth instead of reconstructing from events
 - **Integer prices** — raw prices are in ten-thousandths of a dollar
-  (`price_divisor=10000`)
+  (`LOBSTER_PRICE_DIVISOR`). The loader and writer know this encoding, so a
+  `LobsterLoader` built by hand reads the same prices as a pipeline run.
 
 ::: ob_analytics.lobster.LobsterLoader
 

@@ -312,7 +312,7 @@ class TestWriterOrderbookFile:
         from ob_analytics.config import PipelineConfig
 
         config = PipelineConfig(lot_size=1.0, volume_decimals=0)
-        return LobsterWriter(config, trading_date="2024-01-01", price_divisor=10000)
+        return LobsterWriter(config, trading_date="2024-01-01")
 
     def _book_events(self, rows: list[dict]) -> pd.DataFrame:
         """Canonical events: ``volume`` is the outstanding size after the
@@ -601,9 +601,7 @@ class TestWriterOrderbookFile:
         """Adjacent ticks stay apart even when price_decimals is too coarse."""
         from ob_analytics.config import PipelineConfig
 
-        config = PipelineConfig(
-            tick_size=0.005, price_decimals=2, price_divisor=10_000, lot_size=1.0
-        )
+        config = PipelineConfig(tick_size=0.005, price_decimals=2, lot_size=1.0)
         writer = LobsterWriter(config, trading_date="2024-01-01")
         events = self._book_events(
             [
@@ -638,17 +636,17 @@ class TestWriterOrderbookFile:
             names=["ask_price_1", "ask_size_1", "bid_price_1", "bid_size_1"],
         )
 
-    def test_a_price_divisor_too_coarse_for_the_tick_is_refused(self, tmp_path):
-        """With a cent tick, a divisor of 1 would write 100.01 and 100.02 as
-        the same raw price 100."""
+    def test_a_tick_finer_than_the_format_is_refused(self, tmp_path):
+        """A LOBSTER price is a whole number of ten-thousandths of a dollar,
+        so a tick of a hundred-thousandth would be rounded."""
         from ob_analytics.config import PipelineConfig
         from ob_analytics.exceptions import ConfigError
 
         writer = LobsterWriter(
-            PipelineConfig(tick_size=0.01, price_divisor=1, lot_size=1.0),
+            PipelineConfig(tick_size=0.00001, price_decimals=5, lot_size=1.0),
             trading_date="2024-01-01",
         )
-        with pytest.raises(ConfigError, match="price_divisor"):
+        with pytest.raises(ConfigError, match="1/10000"):
             writer.write({"events": self._one_bid()}, tmp_path)
 
     def test_events_with_repeated_index_labels_are_written(self, tmp_path):
@@ -660,7 +658,7 @@ class TestWriterOrderbookFile:
         events = set_order_types(toy_events(), toy_trades())
         events.index = [0] * len(events)
         writer = LobsterWriter(
-            PipelineConfig(tick_size=1.0, lot_size=1.0, price_divisor=10_000),
+            PipelineConfig(tick_size=1.0, lot_size=1.0),
             trading_date="2026-01-05",
         )
         ob = self._orderbook(writer, events, tmp_path, num_levels=1)
@@ -687,15 +685,15 @@ class TestWriterOrderbookFile:
         with pytest.raises(ConfigError, match="display units"):
             writer.write({"events": shown, "depth": depth}, tmp_path)
 
-    def test_a_coarse_price_divisor_is_refused_for_the_message_file(self):
+    def test_a_tick_finer_than_the_format_is_refused_for_the_message_file(self):
         from ob_analytics.config import PipelineConfig
         from ob_analytics.exceptions import ConfigError
 
         writer = LobsterWriter(
-            PipelineConfig(tick_size=0.01, price_divisor=1, lot_size=1.0),
+            PipelineConfig(tick_size=0.00001, price_decimals=5, lot_size=1.0),
             trading_date="2024-01-01",
         )
-        with pytest.raises(ConfigError, match="price_divisor"):
+        with pytest.raises(ConfigError, match="1/10000"):
             writer._events_to_message(self._one_bid())
 
     def test_events_in_display_units_are_refused(self, writer, tmp_path):
@@ -816,9 +814,7 @@ class TestLobsterDepthFromOrderbook:
 
         # LOBSTER's own lot (one share), so the reference's share counts are
         # the depth's lots.
-        cfg = PipelineConfig(
-            price_decimals=dec, price_divisor=divisor, lot_size=1.0, volume_decimals=0
-        )
+        cfg = PipelineConfig(price_decimals=dec, lot_size=1.0, volume_decimals=0)
         depth, _summary = lobster_depth_from_orderbook(events, ob_path, cfg)
 
         # Dict-diff reference (previous implementation, verbatim semantics).
@@ -878,7 +874,7 @@ class TestLobsterDepthFromOrderbook:
                 "raw_event_type": [1],
             }
         )
-        cfg = PipelineConfig(price_decimals=2, price_divisor=10_000)
+        cfg = PipelineConfig(price_decimals=2)
         depth, _ = lobster_depth_from_orderbook(events, ob_path, cfg)
         assert list(depth["direction"].astype(str)) == ["ask", "ask", "bid", "bid"]
         # Integer ticks at the cent grid (issue #155): 500.1 -> 50010, etc.
@@ -975,7 +971,7 @@ class TestOrderbookRowsFollowMessageRows:
         loader = LobsterLoader(trading_date="2024-01-02")
         events = loader.load(tmp_path)
         assert loader.orderbook_path is not None
-        config = PipelineConfig(price_divisor=10_000, lot_size=1.0)
+        config = PipelineConfig(lot_size=1.0)
 
         depth, summary = lobster_depth_from_orderbook(
             events, loader.orderbook_path, config
@@ -1056,7 +1052,6 @@ class TestOrderbookSizesAreLots:
         config = PipelineConfig(
             tick_size=0.01,
             price_decimals=2,
-            price_divisor=10_000,
             lot_size=100.0,
             volume_decimals=0,
         )
@@ -1140,7 +1135,6 @@ class TestLobsterWriterWritesTheRunsDepth:
             price_decimals=0,
             lot_size=LOT_SIZE,
             volume_decimals=0,
-            price_divisor=10_000,
         )
         # As built: ``raw_event_type`` is all missing, as on every frame that
         # was not read from LOBSTER.
@@ -1179,7 +1173,6 @@ class TestLobsterWriterWritesTheRunsDepth:
             price_decimals=0,
             lot_size=LOT_SIZE,
             volume_decimals=0,
-            price_divisor=10_000,
         )
         events = set_order_types(toy_events(), toy_trades())
         depth = price_level_volume(events)
@@ -1208,7 +1201,6 @@ class TestLobsterWriterWritesTheRunsDepth:
             price_decimals=2,
             lot_size=session.config.lot_size,
             volume_decimals=8,
-            price_divisor=10_000,
         )
         depth = price_level_volume(session.events)
         result = PipelineResult(
@@ -1233,7 +1225,6 @@ class TestLobsterWriterWritesTheRunsDepth:
             price_decimals=2,
             lot_size=1e-8,
             volume_decimals=8,
-            price_divisor=10_000,
         )
         result = Pipeline(config=config).run(tiny_bitstamp_orders_csv)
 

@@ -10,6 +10,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`InstrumentGrid` and `DepthCsvSettings`** (#348). A source states the tick
+  and lot size its data is usually on as `grid`, an `InstrumentGrid`, read
+  with `protocols.grid_of`; a run's config starts from it, and a field the
+  caller sets wins. `DepthCsvSource(settings=DepthCsvSettings(...))` sets the
+  `timestamp_unit` and `price_divisor` of a price-level CSV, which were
+  `PipelineConfig` fields. `Pipeline.run_windows` takes `ctx=`, as `run`
+  does.
+
 - **`audit` reports how long the per-order book is crossed.** A LOBSTER run
   with an orderbook file reads its depth table from that file, so the
   `crossed_book` check passed even when the book rebuilt from the messages
@@ -558,6 +566,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **A loader knows its own feed format** (#348). `PipelineConfig` no longer
+  has `price_divisor` or `timestamp_unit`, and refuses an unknown field rather
+  than dropping it. LOBSTER's ten-thousandths of a dollar
+  (`lobster.LOBSTER_PRICE_DIVISOR`), Databento's fixed-point scale and
+  Bitstamp's millisecond epochs are constants of their loaders and writers.
+  A saved run whose config records either field still loads. A LOBSTER or
+  Databento loader or trade reader takes the grid fields its config does not
+  set from that source's grid, a cent tick and whole shares, as a pipeline
+  run does; a writer built with no config uses that grid. A `LobsterWriter` refuses a
+  tick that is not a whole number of ten-thousandths of a dollar.
+- **The source factories take the run's loader** (#348).
+  `OfflineSource.create_trade_source(config, ctx, loader)` and
+  `compute_depth(events, config, source, ctx, loader)` are handed the loader
+  that read the run's events. A plug-in source adds the parameter.
+
 - **A price-level (L2) run's gallery has the book snapshot and depth chart**
   (#344). They were skipped as per-order faces. Their L2 faces now read the
   depth table, so `build_gallery_model` and `available_concepts` include
@@ -894,6 +917,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Removed
 
+- **`Source.config_defaults()`, `Pipeline.loader`, `Pipeline.trade_source`,
+  `Pipeline.writer` and `LobsterWriter(price_divisor=...)`** (#348). A
+  source's grid replaces `config_defaults()`. The pipeline builds a loader and
+  trade source for each run, so it holds none; to read LOBSTER's trading
+  halts, build a `LobsterLoader`, pass it as `Pipeline(loader=...)` and read
+  it after the run. For a writer, call `source.create_writer(result.config,
+  ctx)`.
+
 - **`scripts/collect_bitstamp_btcusd.py`** (#349). It failed on import since
   #137. Use `ob-analytics capture bitstamp`; the error messages and documents
   that named the script now name the command.
@@ -914,6 +945,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   applied. Use `bps_range` or `max_levels`, or filter the returned frames.
 
 ### Fixed
+
+- **A source keeps nothing from a run, and `run(ctx=...)` reaches the
+  loader** (#348). `LobsterSource` and `DatabentoSource` kept the last loader
+  they built, and LOBSTER read its depth from that loader's orderbook file.
+  With one `LobsterSource()` serving two pipelines, a run near $100 came out
+  with a best bid of 150.0, from the other run's file. The loader and trade
+  source were built when the pipeline was, so a `trading_date`, `symbol` or
+  `venue` given to `run(ctx=...)` was dropped, and the LOBSTER how-to's
+  `Pipeline(source=LobsterSource()).run(path, ctx=ctx)` raised
+  `trading_date is required`. Both are now built for each run, from that
+  run's context. A `LobsterLoader` built by hand read prices 10,000 times too
+  large (100000000 ticks for $100.00); it now reads the prices and sizes a
+  pipeline run reads.
 
 - **The L2 book snapshot and depth chart read the depth table** (#344). Both
   faces of the gallery's `book_snapshot` and `depth_chart` were built from

@@ -19,24 +19,15 @@ def test_run_context_is_frozen():
         ctx.trading_date = "2013-01-01"  # ty: ignore[invalid-assignment]
 
 
-def test_lobster_source_requires_trading_date_via_ctx():
-    source = LobsterSource()
+def test_lobster_source_requires_trading_date_via_ctx(tmp_path):
+    # The loader is built when the run starts, from the run's context, so a
+    # pipeline is built without one and the run with none fails.
+    pipeline = Pipeline(source=LobsterSource())
     with pytest.raises(ValueError, match="trading_date is required"):
-        # ctx defaults to RunContext() with no trading_date — should fail
-        # in create_loader()
-        Pipeline(source=source)
+        pipeline.run(tmp_path)
 
 
-def test_lobster_source_constructs_with_ctx():
-    source = LobsterSource()
-    ctx = RunContext(trading_date="2012-06-21")
-    # Should not raise; we never actually call .run() here.
-    pipeline = Pipeline(source=source, ctx=ctx)
-    assert pipeline is not None
-
-
-def test_lobster_source_rejects_wrong_trading_date_type():
-    source = LobsterSource()
+def test_lobster_source_rejects_wrong_trading_date_type(tmp_path):
     ctx = RunContext(trading_date=12345)  # not str/Timestamp
     with pytest.raises(TypeError, match="trading_date must be str"):
-        Pipeline(source=source, ctx=ctx)
+        Pipeline(source=LobsterSource()).run(tmp_path, ctx=ctx)

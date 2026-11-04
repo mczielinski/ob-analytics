@@ -17,7 +17,7 @@ from ob_analytics.protocols import RunContext
 class TestConfigSourceMerge:
     """WS-1.2: explicit config fields overlay source defaults, never erase them."""
 
-    def test_lobster_price_divisor_survives_explicit_config(self):
+    def test_lobster_grid_survives_explicit_config(self):
         from ob_analytics.lobster import LobsterSource
 
         p = Pipeline(
@@ -25,7 +25,7 @@ class TestConfigSourceMerge:
             source=LobsterSource(),
             ctx=RunContext(trading_date="2012-06-21"),
         )
-        assert p.config.price_divisor == 10_000  # was silently reset to 1
+        assert p.config.lot_size == 1.0  # was silently reset to a satoshi
         assert p.config.depth_bps == 50  # the explicit field wins
         assert p.config.volume_decimals == 0  # other defaults intact
 
