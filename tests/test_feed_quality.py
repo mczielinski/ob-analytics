@@ -1202,6 +1202,120 @@ class TestPrepareDrawsTheGivenBook:
 
 
 # ---------------------------------------------------------------------------
+# A crossed book has no mid to draw (#387)
+# ---------------------------------------------------------------------------
+
+
+def _book(bids: list[float], asks: list[float]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    return pd.DataFrame({"price": bids}), pd.DataFrame({"price": asks})
+
+
+def _crossing_later_events() -> pd.DataFrame:
+    """A book at 100 / 101 until t=10, when a stale bid at 101.5 crosses it."""
+    return _classified(
+        [
+            (1, 1, 0.0, 100.0, 2.0, "bid", "created", 0.0),
+            (2, 2, 0.0, 99.0, 2.0, "bid", "created", 0.0),
+            (3, 3, 0.0, 101.0, 2.0, "ask", "created", 0.0),
+            (4, 4, 0.0, 102.0, 2.0, "ask", "created", 0.0),
+            (5, 5, 10.0, 101.5, 1.0, "bid", "created", 0.0),
+        ]
+    )
+
+
+class TestCrossedBookHasNoMid:
+    def test_book_mid_of_a_crossed_book_is_none(self):
+        from ob_analytics.visualization._data import book_mid
+
+        assert book_mid(*_book([100.0, 98.0], [99.0, 101.0])) is None
+
+    def test_book_mid_of_a_locked_book_is_its_price(self):
+        from ob_analytics.visualization._data import book_mid
+
+        assert book_mid(*_book([100.0, 98.0], [100.0, 101.0])) == 100.0
+
+    def test_book_mid_of_a_one_sided_book_is_none(self):
+        from ob_analytics.visualization._data import book_mid
+
+        assert book_mid(*_book([], [99.0, 101.0])) is None
+        assert book_mid(*_book([100.0], [])) is None
+
+    def test_book_mid_of_a_good_book(self):
+        from ob_analytics.visualization._data import book_mid
+
+        assert book_mid(*_book([98.0, 100.0], [102.0, 101.0])) == 100.5
+
+    def test_faithful_replay_draws_no_mid_in_a_crossed_frame(self):
+        from ob_analytics.visualization._data import (
+            book_mid,
+            prepare_book_replay_data,
+        )
+
+        data = prepare_book_replay_data(
+            events=_crossing_later_events(),
+            per_order=True,
+            uncross=False,
+            start_time=_BASE,
+            end_time=_BASE + pd.Timedelta(seconds=20),
+            interval="5s",
+            price_levels=2,
+        )
+        mids = [book_mid(s["bids"], s["asks"]) for s in data["snapshots"]]
+        # Frames at 0s and 5s show the 100 / 101 book; from 10s the bid at
+        # 101.5 crosses it, and it is still inside the replay's range.
+        assert all(s["bids"]["price"].max() == 101.5 for s in data["snapshots"][2:])
+        assert mids == [100.5, 100.5, None, None, None]
+
+    def test_faithful_replay_range_covers_the_crossed_touch(self):
+        from ob_analytics.visualization._data import prepare_book_replay_data
+
+        data = prepare_book_replay_data(
+            events=_crossing_later_events(),
+            per_order=True,
+            uncross=False,
+            start_time=_BASE,
+            end_time=_BASE + pd.Timedelta(seconds=20),
+            interval="5s",
+            price_levels=2,
+        )
+        # The 100 / 101 frames add their mid, 100.5, with the second level of
+        # each side 1.5 away.  The crossed frames add no mid: they add their
+        # touch, 101 and 101.5, and the second level of each side is 1.0 and
+        # 1.5 from it.  So the range runs from 100.5 - 1.5 to 101.5 + 1.5.
+        # Taking the crossed frames' mid of 101.25 would give (99.25, 102.5).
+        assert data["price_range"] == (99.0, 103.0)
+
+    def test_faithful_replay_of_an_always_crossed_book_keeps_a_range(self):
+        from ob_analytics.visualization._data import (
+            book_mid,
+            prepare_book_replay_data,
+        )
+
+        # From t=10 the bid at 100 rests above the ask at 99, and a bid at 97
+        # joins at t=60.  No frame has a mid.
+        data = prepare_book_replay_data(
+            events=crossed_events(),
+            per_order=True,
+            uncross=False,
+            start_time=_BASE + pd.Timedelta(seconds=10),
+            end_time=_BASE + pd.Timedelta(seconds=70),
+            interval="30s",
+            price_levels=2,
+        )
+        assert [book_mid(s["bids"], s["asks"]) for s in data["snapshots"]] == [
+            None,
+            None,
+            None,
+        ]
+        # The range covers the crossed touch, 99 to 100.  The median reach is
+        # 0: the first two frames have one price level per side.
+        assert data["price_range"] == (99.0, 100.0)
+        for snapshot in data["snapshots"]:
+            assert snapshot["bids"]["price"].max() == 100.0
+            assert snapshot["asks"]["price"].min() == 99.0
+
+
+# ---------------------------------------------------------------------------
 # Property tests — the uncross invariant on arbitrary resting books
 # ---------------------------------------------------------------------------
 

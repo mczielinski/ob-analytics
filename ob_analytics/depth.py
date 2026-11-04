@@ -1090,6 +1090,7 @@ def readable_quotes(quotes: pd.DataFrame) -> pd.DataFrame:
     (:func:`~ob_analytics.features.features`), the micro-price
     (:func:`micro_price`) and the mids of :func:`depth_signals`, the mids the
     trade tape, the price view, the book signals and the depth heatmap draw,
+    the mid line of the book ladder and the price range of the book replay,
     and the empty sides of the Level 1 quote table
     (:class:`~ob_analytics.metrics.L1TickerMetric`).
 

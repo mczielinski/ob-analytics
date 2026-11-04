@@ -1696,14 +1696,22 @@ def _window_levels(side: pd.DataFrame, top_n: int | None) -> pd.DataFrame:
 
 
 def book_mid(bids: pd.DataFrame, asks: pd.DataFrame) -> float | None:
-    """Midprice between the best bid and best ask, or ``None`` if one-sided.
+    """Midprice between the best bid and best ask, or ``None`` if there is none.
 
-    Both sides arrive best-first; the touch is the highest bid and the lowest
-    ask.  Used by both backends to draw the ladder's mid reference line.
+    The touch is the highest bid and the lowest ask.  The book has no mid when
+    it fails :func:`~ob_analytics.depth.readable_quotes`: a side is empty, or
+    the book is crossed.  A locked book, bid equal to ask, has a mid.  Every
+    backend draws this as the ladder's mid line, and the replay sets its price
+    range around it.
     """
-    if bids.empty or asks.empty:
-        return None
-    return (float(bids["price"].max()) + float(asks["price"].min())) / 2
+    touch = pd.DataFrame(
+        {
+            "best_bid_price": [bids["price"].max() if len(bids) else 0.0],
+            "best_ask_price": [asks["price"].min() if len(asks) else 0.0],
+        }
+    )
+    mid = float(_readable_mid(touch)[0])
+    return None if math.isnan(mid) else mid
 
 
 def book_bar_thickness(*sides: pd.DataFrame) -> float:
@@ -1815,14 +1823,20 @@ def prepare_book_snapshot_data(
 def _replay_price_range(
     books: list[Any], price_levels: int
 ) -> tuple[float, float] | None:
-    """One price range for every frame of a replay, or ``None`` if none has a mid.
+    """One price range for every frame of a replay, or ``None`` if none has two sides.
 
     It covers the path of the mid, widened on each side by the median distance
     from the mid to the *price_levels*-th price level of the further side.  So
     a typical frame shows about *price_levels* price levels per side, and the
     range does not move while the replay plays.
+
+    A frame with both sides but no mid (see :func:`book_mid`), such as a
+    crossed book, adds its best bid and best ask to the path in place of a
+    mid, with the distance measured from each side's best price.  So the range still shows
+    the orders that cross, and a replay in which every frame is crossed still
+    has a range.
     """
-    mids: list[float] = []
+    path: list[float] = []
     reach: list[float] = []
     for book in books:
         bids, asks = book["bids"], book["asks"]
@@ -1830,15 +1844,20 @@ def _replay_price_range(
             continue
         bid_prices = np.unique(bids["price"].to_numpy())[::-1]
         ask_prices = np.unique(asks["price"].to_numpy())
-        mid = (float(bid_prices[0]) + float(ask_prices[0])) / 2
+        best_bid, best_ask = float(bid_prices[0]), float(ask_prices[0])
         far_bid = float(bid_prices[min(price_levels, bid_prices.size) - 1])
         far_ask = float(ask_prices[min(price_levels, ask_prices.size) - 1])
-        mids.append(mid)
-        reach.append(max(mid - far_bid, far_ask - mid))
-    if not mids:
+        mid = book_mid(bids, asks)
+        if mid is None:
+            path.extend((best_ask, best_bid))
+            reach.append(max(best_bid - far_bid, far_ask - best_ask))
+        else:
+            path.append(mid)
+            reach.append(max(mid - far_bid, far_ask - mid))
+    if not path:
         return None
     half = float(np.median(reach))
-    return min(mids) - half, max(mids) + half
+    return min(path) - half, max(path) + half
 
 
 def prepare_book_replay_data(
