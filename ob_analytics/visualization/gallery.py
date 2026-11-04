@@ -34,7 +34,7 @@ from ob_analytics._utils import (
     ticks_to_price_if_integer,
 )
 from ob_analytics.analytics import order_book
-from ob_analytics.depth import get_spread
+from ob_analytics.depth import get_spread, price_level_snapshots
 from ob_analytics.pipeline import PipelineResult
 from ob_analytics.visualization import (
     _BACKEND_MODULES,
@@ -253,6 +253,75 @@ def _paired(
     return PlotConcept(key, title, {Level.L2: l2, Level.L3: l3}, note=note)
 
 
+def _book_concepts(
+    depth: pd.DataFrame,
+    events: pd.DataFrame,
+    snap_time: pd.Timestamp,
+    volume_scale: float,
+) -> list[PlotConcept]:
+    """The book snapshot and the depth chart, both at *snap_time*.
+
+    Each face reads the data of its own level.  The L2 face reads the depth
+    table (:func:`~ob_analytics.depth.price_level_snapshots`): one bar per
+    price level, never crossed.  The L3 face reads the per-order book rebuilt
+    from the classified events (:func:`~ob_analytics.analytics.order_book`):
+    one segment per order.  Both faces show the price levels nearest the
+    touch, by the same cut (``top_n`` of
+    :func:`~ob_analytics.visualization._data.prepare_book_snapshot_data`).
+    So a run with no per-order events (a price-level feed) still gets the L2
+    face, and a per-order book with stale orders in it does not change the
+    L2 face.
+    """
+    books: dict[Level, Any] = {}
+    if not depth.empty:
+        books[Level.L2] = price_level_snapshots(depth, [snap_time])[0]
+    if not events.empty and "type" in events.columns:
+        books[Level.L3] = order_book(events, tp=snap_time)
+    label = snap_time.strftime("%H:%M")
+    faces = (
+        (
+            "book_snapshot",
+            "Book Snapshot",
+            (
+                "The resting book at one instant. L2: total size per price "
+                "level, from the depth table. L3: one segment per order, from "
+                "the book rebuilt from the events. One large order and many "
+                "small ones of the same total size look the same on L2 and "
+                "different on L3."
+            ),
+        ),
+        (
+            "depth_chart",
+            "Depth Chart",
+            (
+                "Cumulative size from the touch outwards: how far the price "
+                "moves to fill X units. L2 reads the depth table; L3 marks "
+                "each order along the curve."
+            ),
+        ),
+    )
+    concepts = []
+    for key, name, note in faces:
+        title = f"{name} ({label})"
+        variants = {
+            level: PlotSpec(
+                key,
+                title,
+                key,
+                _viz_data.prepare_book_snapshot_data,
+                {
+                    "order_book": book,
+                    "per_order": level is Level.L3,
+                    "volume_scale": volume_scale,
+                },
+            )
+            for level, book in books.items()
+        }
+        if variants:
+            concepts.append(PlotConcept(key, title, variants, note=note))
+    return concepts
+
+
 def _compute_settings(metric: Any) -> frozenset[str]:
     """The keyword names *metric*'s ``compute`` takes after the result."""
     params = list(inspect.signature(metric.compute).parameters.values())[1:]
@@ -322,7 +391,8 @@ def _build_l2_gallery_model(
     face that needs order identity — the L3 lifecycles, queue position, order
     outcome, the event/cancellation maps, the events histogram — is **skipped
     by construction**.  What remains is the aggregate book: the depth heatmap,
-    the price/spread view, depth percentiles, and the trade faces — exactly the
+    the price/spread view, depth percentiles, the L2 book snapshot, depth
+    chart and book replay, and the trade faces — exactly the
     analytics a price-level feed supports (see
     :class:`~ob_analytics.protocols.Level`).
     """
@@ -425,6 +495,8 @@ def _build_l2_gallery_model(
                 ),
             )
         )
+
+    concepts.extend(_book_concepts(depth, result.events, zoom_end, volume_scale))
 
     if not depth.empty:
         concepts.append(
@@ -807,58 +879,27 @@ def build_gallery_model(
         ),
     ]
 
-    # Book snapshot + depth chart share one order-book slice; each ships an
-    # L2 (aggregate-per-price) and L3 (per-order) face, so both are comparable.
-    # Requires the per-order 'type' column from set_order_types.
-    if "type" in events.columns:
-        snap_time = zoom_end
-        snap_book = order_book(events, tp=snap_time, bps_range=150)
-        snap_label = snap_time.strftime("%H:%M")
+    # Book snapshot + depth chart: an L2 face from the depth table and an L3
+    # face from the per-order book, so both are comparable.
+    concepts.extend(_book_concepts(depth, events, zoom_end, volume_scale))
+    if "type" in events.columns and not depth.empty:
         concepts.append(
             _comparable(
-                "book_snapshot",
-                f"Book Snapshot ({snap_label})",
-                _viz_data.prepare_book_snapshot_data,
-                {"order_book": snap_book, "volume_scale": volume_scale},
-                note=(
-                    "The resting book at one instant. L2: total size per "
-                    "price level. L3: the same bars segmented per order - "
-                    "one whale and a crowd of small orders look identical "
-                    "on L2 and completely different here."
-                ),
+                "book_replay",
+                "Book Replay",
+                _viz_data.prepare_book_replay_data,
+                {
+                    "depth": depth,
+                    "events": events,
+                    "trades": trades,
+                    "start_time": zoom_start,
+                    "end_time": zoom_end,
+                    "interval": _replay_interval(zoom_start, zoom_end),
+                    "volume_scale": volume_scale,
+                },
+                note=_REPLAY_NOTE,
             )
         )
-        concepts.append(
-            _comparable(
-                "depth_chart",
-                f"Depth Chart ({snap_label})",
-                _viz_data.prepare_book_snapshot_data,
-                {"order_book": snap_book, "volume_scale": volume_scale},
-                note=(
-                    "Cumulative liquidity walking away from the touch: the "
-                    "cost to sweep X units. L3 marks each individual order "
-                    "along the curve."
-                ),
-            )
-        )
-        if not depth.empty:
-            concepts.append(
-                _comparable(
-                    "book_replay",
-                    "Book Replay",
-                    _viz_data.prepare_book_replay_data,
-                    {
-                        "depth": depth,
-                        "events": events,
-                        "trades": trades,
-                        "start_time": zoom_start,
-                        "end_time": zoom_end,
-                        "interval": _replay_interval(zoom_start, zoom_end),
-                        "volume_scale": volume_scale,
-                    },
-                    note=_REPLAY_NOTE,
-                )
-            )
 
     # Order outcome is L3-only: it asks where each *order* was placed (distance
     # from the touch, from order_aggressiveness) and how it ended (competing-risks

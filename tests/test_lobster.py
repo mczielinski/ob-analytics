@@ -18,6 +18,7 @@ from ob_analytics.lobster import (
     LobsterTradeReader,
     LobsterWriter,
 )
+from tests import _lobster_few_levels as few
 
 # The reconstruction/depth tests below build canonical events by hand; canonical
 # prices are integer ticks (issue #155), so the fixtures quantise their
@@ -1280,3 +1281,58 @@ class TestLobsterWriterWritesTheRunsDepth:
 
         assert ob_path.read_text() == orderbook
         assert len(msg_path.read_text().splitlines()) == 6
+
+
+# ---------------------------------------------------------------------------
+# A file with too few levels: the per-order book keeps cancelled orders
+# ---------------------------------------------------------------------------
+
+
+class TestFewLevelsWarning:
+    """A message file holds only the events inside the requested levels.  An
+    order cancelled after it moved outside them keeps resting in the book
+    rebuilt from the messages, so that book can cross.  The run warns."""
+
+    def test_a_crossed_per_order_book_warns_with_its_share_and_cause(self, tmp_path):
+        files = few.write_files(tmp_path, few.CROSSING_MESSAGES, few.CROSSING_ORDERBOOK)
+
+        with pytest.warns(UserWarning, match="crossed") as caught:
+            few.run(files)
+
+        warning = next(w for w in caught if "crossed" in str(w.message))
+        message = str(warning.message)
+        # Crossed from 34204 to 34210 of a file spanning 34200 to 34210.
+        assert "60.0%" in message
+        assert "requested levels" in message
+        assert "orderbook file, is not affected" in message
+        # Reported at the caller of Pipeline.run, not inside the package.
+        assert warning.filename.endswith("_lobster_few_levels.py")
+
+    def test_the_depth_table_of_that_run_is_not_crossed(self, tmp_path):
+        files = few.write_files(tmp_path, few.CROSSING_MESSAGES, few.CROSSING_ORDERBOOK)
+
+        with pytest.warns(UserWarning, match="crossed"):
+            result = few.run(files)
+
+        summary = result.depth_summary
+        both = summary["best_bid_vol"].gt(0) & summary["best_ask_vol"].gt(0)
+        assert (
+            summary.loc[both, "best_bid_price"] < summary.loc[both, "best_ask_price"]
+        ).all()
+
+    def test_a_book_that_never_crosses_does_not_warn(self, tmp_path, recwarn):
+        few.run(few.write_files(tmp_path, few.CLEAN_MESSAGES, few.CLEAN_ORDERBOOK))
+
+        assert not [w for w in recwarn if "crossed" in str(w.message)]
+
+    def test_without_an_orderbook_file_the_warning_says_depth_is_crossed_too(
+        self, tmp_path
+    ):
+        files = few.write_files(tmp_path, few.CROSSING_MESSAGES, None)
+
+        with pytest.warns(UserWarning, match="crossed") as caught:
+            few.run(files)
+
+        message = next(str(w.message) for w in caught if "crossed" in str(w.message))
+        assert "no orderbook file" in message
+        assert "not affected" not in message

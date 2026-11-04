@@ -23,6 +23,7 @@ Timestamps are seconds after midnight.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -41,8 +42,14 @@ from ob_analytics._utils import (
     size_to_lots,
     validate_columns,
 )
+from ob_analytics.analytics import CROSSED_TOLERANCE_PCT, _book_crossing
 from ob_analytics.config import PipelineConfig, SourceSettings
-from ob_analytics.depth import DepthMetricsEngine, PriceLevelBook, price_level_volume
+from ob_analytics.depth import (
+    DepthMetricsEngine,
+    PriceLevelBook,
+    _price_level_volume,
+    price_level_volume,
+)
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import (
     Clocks,
@@ -1094,6 +1101,45 @@ def lobster_depth_from_orderbook(
     return depth, depth_summary
 
 
+def _warn_if_book_crosses(events: pd.DataFrame, *, from_orderbook: bool) -> None:
+    """Warn when the book rebuilt from a message file is crossed.
+
+    A LOBSTER message file holds only the events inside the price levels
+    requested from LOBSTER.  An order cancelled or filled after it moved
+    outside them never gets a closing row, so the book rebuilt from the
+    messages keeps it.  When that book is crossed for more than
+    :data:`~ob_analytics.analytics.CROSSED_TOLERANCE_PCT` of the session
+    time, this warns with that share.  *from_orderbook* says whether the
+    depth table is read from the orderbook file, which the stale orders do
+    not reach, or rebuilt from the same messages.
+    """
+    if events.empty:
+        return
+    _, crossed_pct, _ = _book_crossing(_price_level_volume(events)[0])
+    if crossed_pct <= CROSSED_TOLERANCE_PCT:
+        return
+    depth_note = (
+        "The depth table, read from the orderbook file, is not affected, so "
+        "`audit` does not count this."
+        if from_orderbook
+        else "There is no orderbook file, so the depth table is rebuilt from "
+        "the same messages and keeps the same stale orders."
+    )
+    warnings.warn(
+        f"LOBSTER: the book rebuilt from the message file is crossed for "
+        f"{crossed_pct:.1f}% of the session time.  A message file holds only "
+        "the events inside the price levels requested from LOBSTER, so an "
+        "order cancelled or filled after it moved outside them never gets a "
+        f"closing row and stays in that book.  {depth_note}  The per-order "
+        "views (the L3 book snapshot and depth chart, queue positions, order "
+        "lifecycles and order outcomes) are complete only when the requested "
+        "levels cover every price an order reaches: request more levels.",
+        UserWarning,
+        # The caller of Pipeline.run, through compute_depth.
+        stacklevel=4,
+    )
+
+
 # ── LobsterSource descriptor ─────────────────────────────────────────
 
 
@@ -1131,7 +1177,8 @@ class LobsterSource:
 
     name: str = field(default="lobster", init=False, repr=False)
     # LOBSTER is a venue matched book (exchange matching engine): bids can
-    # never rest above asks, so the reconstructed book is never crossed.
+    # never rest above asks.  See _warn_if_book_crosses for when the book
+    # rebuilt from the messages is crossed.
     feed_type: FeedType = field(default=FeedType.MATCHED_BOOK, init=False, repr=False)
     # Nasdaq ITCH names only the resting order of an execution.  The taker
     # columns are filled by a guess (LobsterTradeReader._find_takers), which
@@ -1181,6 +1228,7 @@ class LobsterSource:
         ob_path = self._loader.orderbook_path if self._loader is not None else None
         if ob_path is None:
             ob_path = LobsterLoader._resolve_orderbook_file(Path(source))
+        _warn_if_book_crosses(events, from_orderbook=ob_path is not None)
         if ob_path is None:
             logger.warning(
                 "LobsterSource: no orderbook file found; "

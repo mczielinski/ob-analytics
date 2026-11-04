@@ -772,6 +772,22 @@ def _crossed_time_fraction(best: pd.DataFrame) -> tuple[float, int]:
     return crossed_time / total, episodes
 
 
+def _book_crossing(
+    depth: pd.DataFrame,
+) -> tuple[pd.DataFrame | None, float, int]:
+    """How long the book in a price-level-volume frame is crossed.
+
+    Returns the faithful best bid / best ask series (``None`` for an empty
+    frame), the percentage (0–100) of the time the book is crossed, and the
+    number of crossed intervals.
+    """
+    if depth.empty:
+        return None, 0.0, 0
+    best = _faithful_best_series(depth)
+    share, episodes = _crossed_time_fraction(best)
+    return best, 100.0 * share, episodes
+
+
 # ---------------------------------------------------------------------------
 # Stale resting orders
 # ---------------------------------------------------------------------------
@@ -1831,12 +1847,7 @@ def data_quality_summary(
     elif not l2 and _LEVEL_COLUMNS <= set(events.columns):
         negative_level_rows = len(_price_level_volume(events)[1])
 
-    best = None if depth.empty else _faithful_best_series(depth)
-    if best is None:
-        crossed_pct, crossed_episodes = 0.0, 0
-    else:
-        crossed_frac, crossed_episodes = _crossed_time_fraction(best)
-        crossed_pct = 100.0 * crossed_frac
+    best, crossed_pct, crossed_episodes = _book_crossing(depth)
 
     # Stale resting orders need per-order events and priced, timed trades.  An
     # L2 run has neither, and a trades frame without prices has nothing to

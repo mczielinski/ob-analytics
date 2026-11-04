@@ -1608,8 +1608,10 @@ def _as_book_side_frame(side: pd.DataFrame | np.ndarray) -> pd.DataFrame:
     """Coerce one order-book side to a DataFrame with at least price + volume.
 
     :func:`ob_analytics.analytics.order_book` hands back per-order frames
-    carrying ``id`` and ``bps``; the synthetic/legacy path hands back a
-    3-column ``[price, volume, liquidity]`` ndarray.  Both normalise here.
+    carrying ``id`` and ``bps``, and
+    :func:`ob_analytics.depth.price_level_snapshots` one row per price level.
+    The synthetic/legacy path hands back a 3-column ``[price, volume,
+    liquidity]`` ndarray.  All three normalise here.
     """
     if isinstance(side, np.ndarray):
         return pd.DataFrame(side, columns=["price", "volume", "liquidity"])
@@ -1761,8 +1763,11 @@ def prepare_book_snapshot_data(
     that per-order separators read.  ``show_quantiles`` overlays up to three
     heavy-level guide lines per side and is off by default.
 
-    The book is drawn as it is given.  To draw a clean ``best_bid <
-    best_ask`` ladder from a diff feed, pass the book
+    The book is drawn as it is given.  For the L2 face, a book from
+    :func:`~ob_analytics.depth.price_level_snapshots` reads the depth table
+    and is never crossed.  For the L3 face, a per-order book from
+    :func:`~ob_analytics.analytics.order_book` can be crossed; to draw a
+    clean ``best_bid < best_ask`` ladder from it, pass the book
     ``order_book(..., uncross=True)`` returns.
 
     Returns ``bids``/``asks`` frames ordered best-first with columns ``price,
