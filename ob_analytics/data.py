@@ -18,22 +18,22 @@ from ob_analytics.config import PipelineConfig, instrument_fields
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import DataWriter
 from ob_analytics.schemas import (
-    _DEFAULT_LOT_KEY,
-    _DEFAULT_TICK_KEY,
     CONFIG_KEY,
     LOT_SIZE_KEY,
     SCHEMA_VERSION,
     SCHEMA_VERSION_KEY,
     TICK_SIZE_KEY,
     TRADE_DTYPES,
+    UNIT_ATTRS,
     cast_columns,
     check_schema_version,
     decode_lot_sizes,
     decode_tick_sizes,
     encode_lot_sizes,
     encode_tick_sizes,
-    resolve_lot_size,
-    resolve_tick_size,
+    lot_sizes_from_config,
+    put_units,
+    tick_sizes_from_config,
 )
 
 if TYPE_CHECKING:
@@ -67,36 +67,6 @@ def list_writers() -> list[str]:
 
 
 # ── Canonical Parquet I/O (versioned) ─────────────────────────────────
-
-
-def _tick_sizes_from_config(config: Any) -> dict[str, float] | None:
-    """Build the tick-size metadata map from a run's *config*.
-
-    Returns ``{"default": config.tick_size}`` when *config* carries a
-    ``tick_size``, so ``save_data(config=...)`` tags each Parquet file with the
-    tick that scales its integer prices back to the quote currency.  ``None``
-    when no config is supplied — the file is then written without tick metadata,
-    and a reader falls back to showing ticks as-is.
-    """
-    if config is None:
-        return None
-    tick_size = getattr(config, "tick_size", None)
-    if tick_size is None:
-        return None
-    return {_DEFAULT_TICK_KEY: float(tick_size)}
-
-
-def _lot_sizes_from_config(config: Any) -> dict[str, float] | None:
-    """Return the lot-size metadata map for *config*, or ``None``.
-
-    The size counterpart of :func:`_tick_sizes_from_config`:
-    ``{"default": config.lot_size}`` when *config* carries a ``lot_size``, so a
-    saved Parquet file records the grid its integer sizes sit on.
-    """
-    lot_size = getattr(config, "lot_size", None)
-    if lot_size is None:
-        return None
-    return {_DEFAULT_LOT_KEY: float(lot_size)}
 
 
 def _write_versioned_parquet(
@@ -197,8 +167,8 @@ class ParquetWriter:
     """
 
     def __init__(self, config: Any = None) -> None:
-        self._tick_sizes = _tick_sizes_from_config(config)
-        self._lot_sizes = _lot_sizes_from_config(config)
+        self._tick_sizes = tick_sizes_from_config(config)
+        self._lot_sizes = lot_sizes_from_config(config)
         self._config = config
 
     def write(
@@ -293,9 +263,9 @@ def _to_arrow_table(
         *df*'s ``attrs`` are not written a second time with pandas' own
         metadata: the key-value metadata above is where they are stored.
     """
-    if any(key in df.attrs for key in _UNIT_ATTRS):
+    if any(key in df.attrs for key in UNIT_ATTRS):
         df = df.copy(deep=False)
-        df.attrs = {k: v for k, v in df.attrs.items() if k not in _UNIT_ATTRS}
+        df.attrs = {k: v for k, v in df.attrs.items() if k not in UNIT_ATTRS}
     table = pa.Table.from_pandas(df, preserve_index=False)
     metadata = dict(table.schema.metadata or {})
     metadata[SCHEMA_VERSION_KEY] = SCHEMA_VERSION.encode()
@@ -341,51 +311,12 @@ def _read_versioned_parquet(path: Path) -> pd.DataFrame:
     # ticks and lots would change the numbers, so only a current file is cast.
     if version == SCHEMA_VERSION and path.stem in _RESTORED_DTYPES:
         df = cast_columns(df, _RESTORED_DTYPES[path.stem])
-    _put_units(
+    put_units(
         df,
         tick_sizes=decode_tick_sizes(metadata.get(TICK_SIZE_KEY)),
         lot_sizes=decode_lot_sizes(metadata.get(LOT_SIZE_KEY)),
     )
     return df
-
-
-#: The ``attrs`` keys :func:`_put_units` writes.
-_UNIT_ATTRS = ("tick_sizes", "tick_size", "lot_sizes", "lot_size")
-
-
-def _put_units(
-    df: pd.DataFrame,
-    *,
-    tick_sizes: dict[str, float] | None,
-    lot_sizes: dict[str, float] | None,
-) -> None:
-    """Put the tick and lot size on *df*'s ``attrs``, in place.
-
-    ``attrs["tick_sizes"]`` and ``attrs["lot_sizes"]`` hold the full
-    instrument maps, and ``attrs["tick_size"]`` and ``attrs["lot_size"]`` the
-    resolved defaults, so ``price * tick_size`` and ``volume * lot_size``
-    give the quote currency and the instrument's units.  A map that is
-    ``None`` leaves its keys out.  A frame read from a file and a frame from
-    a run carry the same keys.
-    """
-    if tick_sizes is not None:
-        df.attrs["tick_sizes"] = tick_sizes
-        resolved = resolve_tick_size(tick_sizes)
-        if resolved is not None:
-            df.attrs["tick_size"] = resolved
-    if lot_sizes is not None:
-        df.attrs["lot_sizes"] = lot_sizes
-        resolved_lot = resolve_lot_size(lot_sizes)
-        if resolved_lot is not None:
-            df.attrs["lot_size"] = resolved_lot
-
-
-def _put_run_units(config: Any, *frames: pd.DataFrame) -> None:
-    """Put the tick and lot size of a run's *config* on each of *frames*."""
-    tick_sizes = _tick_sizes_from_config(config)
-    lot_sizes = _lot_sizes_from_config(config)
-    for df in frames:
-        _put_units(df, tick_sizes=tick_sizes, lot_sizes=lot_sizes)
 
 
 def load_data(path: str | Path) -> dict[str, pd.DataFrame]:
@@ -489,8 +420,8 @@ def save_data(
     # ignores the extra sees exactly what it saw before.
     tables = OutputTables(
         lob_data,
-        tick_sizes=_tick_sizes_from_config(config),
-        lot_sizes=_lot_sizes_from_config(config),
+        tick_sizes=tick_sizes_from_config(config),
+        lot_sizes=lot_sizes_from_config(config),
         config=config if isinstance(config, PipelineConfig) else None,
     )
 

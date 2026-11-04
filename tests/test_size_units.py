@@ -9,6 +9,7 @@ bar threshold, a price correction) means the same amount on either frame.
 from __future__ import annotations
 
 import warnings
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -20,8 +21,10 @@ from ob_analytics import (
     bulk_volume_classification,
     compute_vpin,
     features,
+    register_bar_rule,
     vpin_bucket_volume,
 )
+from ob_analytics.bars import BAR_RULES
 from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
 from ob_analytics.depth import micro_price
 from ob_analytics.depth_l2 import DepthCsvWriter
@@ -70,6 +73,12 @@ def test_a_run_puts_its_tick_and_lot_size_on_every_frame(sample) -> None:
         frame = getattr(sample, name)
         assert frame.attrs["tick_size"] == 0.01, name
         assert frame.attrs["lot_size"] == 1e-8, name
+
+
+def test_the_frames_of_a_run_do_not_share_their_units_maps(sample) -> None:
+    maps = [getattr(sample, name).attrs["lot_sizes"] for name in FRAMES]
+
+    assert len({id(m) for m in maps}) == len(FRAMES)
 
 
 def test_a_price_level_run_puts_them_on_every_frame_too(tmp_path) -> None:
@@ -251,3 +260,98 @@ def test_float_sizes_are_used_as_given() -> None:
 
     assert out.attrs["bar_threshold"] == 30.0
     assert out["n_trades"].tolist() == [2, 1, 1]
+
+
+# ── Bar rules of your own ────────────────────────────────────────────
+
+
+class _RecordingRule:
+    """Puts every trade in one bar and records the threshold it was handed."""
+
+    # Any: the tests also hand it values a rule should not hold.
+    def __init__(self, name: str, units: Any = None) -> None:
+        self.name = name
+        if units is not None:
+            self.units: Any = units
+        self.seen: float | None = None
+
+    def default_threshold(self, frame: pd.DataFrame, target_bars: int) -> float:
+        return 1.0
+
+    def normalize(self, threshold: Any) -> float:
+        return float(threshold)
+
+    def assign(self, frame: pd.DataFrame, threshold: float) -> np.ndarray:
+        self.seen = threshold
+        return np.zeros(len(frame), dtype=np.int64)
+
+
+@pytest.fixture
+def _restore_registry():
+    """Snapshot and restore the global bar-rule registry around the test."""
+    before = dict(BAR_RULES._items)
+    yield
+    BAR_RULES._items.clear()
+    BAR_RULES._items.update(before)
+
+
+def _raw_trades() -> pd.DataFrame:
+    trades = _lots_without_units()
+    trades.attrs.update(tick_size=0.25, lot_size=1e-8)
+    return trades
+
+
+@pytest.mark.usefixtures("_restore_registry")
+def test_a_rule_with_no_units_gets_its_threshold_as_given() -> None:
+    rule = _RecordingRule("every_n", units=None)
+    register_bar_rule(rule)
+
+    out = bars(_raw_trades(), "every_n", 7)
+
+    assert rule.seen == 7.0
+    assert out.attrs["bar_threshold"] == 7.0
+
+
+@pytest.mark.usefixtures("_restore_registry")
+def test_units_of_none_mean_no_units() -> None:
+    rule = _RecordingRule("every_n", units=None)
+    rule.units = None
+    register_bar_rule(rule)
+
+    bars(_raw_trades(), "every_n", 7)
+
+    assert rule.seen == 7.0
+
+
+@pytest.mark.usefixtures("_restore_registry")
+def test_a_price_rule_gets_its_threshold_in_ticks() -> None:
+    # A tick of 0.25 has the integer inverse 4: $1.50 is 6 ticks.
+    rule = _RecordingRule("price_move", units=("price",))
+    register_bar_rule(rule)
+
+    out = bars(_raw_trades(), "price_move", 1.5)
+
+    assert rule.seen == 6.0
+    assert out.attrs["bar_threshold"] == 1.5
+
+
+@pytest.mark.usefixtures("_restore_registry")
+def test_a_step_with_no_integer_inverse_divides() -> None:
+    # 0.3 has no integer inverse, so a setting is divided by it: $0.9 is 3
+    # ticks, up to float rounding.
+    rule = _RecordingRule("price_move", units=("price",))
+    register_bar_rule(rule)
+    trades = _raw_trades()
+    trades.attrs["tick_size"] = 0.3
+
+    bars(trades, "price_move", 0.9)
+
+    assert rule.seen == pytest.approx(3.0)
+
+
+@pytest.mark.usefixtures("_restore_registry")
+def test_units_that_are_not_a_tuple_of_columns_are_named_in_the_error() -> None:
+    register_bar_rule(_RecordingRule("price_move", units="price"))
+
+    with pytest.raises(ConfigError, match="got 'price'"):
+        bars(_raw_trades(), "price_move", 1.0)

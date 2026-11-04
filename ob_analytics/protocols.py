@@ -475,8 +475,8 @@ class BarRule(Protocol):
         turnover.  A user states such a threshold in the instrument's own
         units and the quote currency, and
         :func:`~ob_analytics.bars.bars` converts it to the frame's units
-        before :meth:`assign` sees it, and converts a default threshold back
-        for ``attrs["bar_threshold"]``.  Leave it out (or empty) for a
+        before :meth:`assign` sees it (as a float), and converts a default
+        threshold back for ``attrs["bar_threshold"]``.  Leave it out (or empty) for a
         threshold with no units, such as a duration or a trade count.
     """
 

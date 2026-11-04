@@ -448,7 +448,7 @@ def bars(
     # The rule measures the frame's own units; the caller states the
     # threshold in the instrument's.  A rule with no units (a clock, a count)
     # needs no conversion.
-    units = tuple(getattr(bar_rule, "units", ()))
+    units = getattr(bar_rule, "units", ())
     scale = _threshold_scale(trades, units)
     if threshold is None:
         cut = bar_rule.normalize(
@@ -480,13 +480,15 @@ def _threshold_scale(trades: pd.DataFrame, units: tuple[str, ...]) -> float:
     :func:`~ob_analytics._utils.size_scale` for ``"volume"`` and
     :func:`~ob_analytics._utils.price_scale` for ``"price"``.
     """
+    if not units:
+        return 1.0
     readers = {"volume": size_scale, "price": price_scale}
+    if isinstance(units, str) or any(column not in readers for column in units):
+        raise ConfigError(
+            f"bars: a rule's units are a tuple of 'volume' and 'price', got {units!r}"
+        )
     scale = 1.0
     for column in units:
-        if column not in readers:
-            raise ConfigError(
-                f"bars: a rule's units name 'volume' or 'price', got {column!r}"
-            )
         scale *= readers[column](trades, "bars", column)
     return scale
 

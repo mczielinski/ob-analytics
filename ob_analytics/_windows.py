@@ -33,6 +33,7 @@ import pyarrow.parquet as pq
 
 from ob_analytics import _engine_frames
 from ob_analytics.exceptions import ConfigError
+from ob_analytics.schemas import lot_sizes_from_config, tick_sizes_from_config
 
 #: How far before a window's start its seed rows are placed.  Strictly before
 #: the start, so every seed row sorts ahead of every row of the window itself,
@@ -195,12 +196,10 @@ class ParquetAppender:
     """
 
     def __init__(self, dest: str | Path, config: Any) -> None:
-        from ob_analytics.data import _lot_sizes_from_config, _tick_sizes_from_config
-
         self.dest = Path(dest)
         self.dest.mkdir(parents=True, exist_ok=True)
-        self._tick_sizes = _tick_sizes_from_config(config)
-        self._lot_sizes = _lot_sizes_from_config(config)
+        self._tick_sizes = tick_sizes_from_config(config)
+        self._lot_sizes = lot_sizes_from_config(config)
         self._writers: dict[str, pq.ParquetWriter] = {}
 
     def _working(self, name: str) -> Path:

@@ -129,7 +129,7 @@ type, unit, nullability, and meaning for every table — is in ``docs/schema.md`
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 from loguru import logger
@@ -359,6 +359,74 @@ def resolve_lot_size(
     if len(lot_sizes) == 1:
         return next(iter(lot_sizes.values()))
     return default
+
+
+def tick_sizes_from_config(config: Any) -> dict[str, float] | None:
+    """Build the tick-size metadata map from a run's *config*.
+
+    Returns ``{"default": config.tick_size}`` when *config* carries a
+    ``tick_size``, so a saved Parquet file records the tick that scales its
+    integer prices back to the quote currency.  ``None`` when no config is
+    supplied or it has no tick size; the file is then written without tick
+    metadata, and a reader falls back to showing ticks as they are.
+    """
+    tick_size = getattr(config, "tick_size", None)
+    if tick_size is None:
+        return None
+    return {_DEFAULT_TICK_KEY: float(tick_size)}
+
+
+def lot_sizes_from_config(config: Any) -> dict[str, float] | None:
+    """Build the lot-size metadata map from a run's *config*, or ``None``.
+
+    The size counterpart of :func:`tick_sizes_from_config`:
+    ``{"default": config.lot_size}`` when *config* carries a ``lot_size``, so
+    a saved Parquet file records the grid its integer sizes sit on.
+    """
+    lot_size = getattr(config, "lot_size", None)
+    if lot_size is None:
+        return None
+    return {_DEFAULT_LOT_KEY: float(lot_size)}
+
+
+#: The ``attrs`` keys :func:`put_units` writes on a frame.
+UNIT_ATTRS: tuple[str, ...] = ("tick_sizes", "tick_size", "lot_sizes", "lot_size")
+
+
+def put_units(
+    df: pd.DataFrame,
+    *,
+    tick_sizes: dict[str, float] | None,
+    lot_sizes: dict[str, float] | None,
+) -> None:
+    """Put the tick and lot size on *df*'s ``attrs``, in place.
+
+    ``attrs["tick_sizes"]`` and ``attrs["lot_sizes"]`` hold the full
+    instrument maps, and ``attrs["tick_size"]`` and ``attrs["lot_size"]`` the
+    resolved defaults, so ``price * tick_size`` and ``volume * lot_size``
+    give the quote currency and the instrument's units.  A map that is
+    ``None`` leaves its keys out.  A frame read from a file and a frame from
+    a run carry the same keys.
+    """
+    if tick_sizes is not None:
+        # A copy each, so frames given the same map do not share it.
+        df.attrs["tick_sizes"] = dict(tick_sizes)
+        resolved = resolve_tick_size(tick_sizes)
+        if resolved is not None:
+            df.attrs["tick_size"] = resolved
+    if lot_sizes is not None:
+        df.attrs["lot_sizes"] = dict(lot_sizes)
+        resolved_lot = resolve_lot_size(lot_sizes)
+        if resolved_lot is not None:
+            df.attrs["lot_size"] = resolved_lot
+
+
+def put_config_units(config: Any, *frames: pd.DataFrame) -> None:
+    """Put the tick and lot size of a run's *config* on each of *frames*."""
+    tick_sizes = tick_sizes_from_config(config)
+    lot_sizes = lot_sizes_from_config(config)
+    for df in frames:
+        put_units(df, tick_sizes=tick_sizes, lot_sizes=lot_sizes)
 
 
 # Optional ordering-key columns (never in EVENT_COLUMNS — see the module

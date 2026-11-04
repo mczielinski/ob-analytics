@@ -52,7 +52,6 @@ from ob_analytics._windows import (
 from ob_analytics.analytics import order_aggressiveness, set_order_types
 from ob_analytics.capture_record import read_instrument
 from ob_analytics.config import PipelineConfig, instrument_fields
-from ob_analytics.data import _put_run_units
 from ob_analytics.depth import (
     DepthMetricsEngine,
     depth_metrics,
@@ -69,6 +68,9 @@ from ob_analytics.protocols import (
     TradeSource,
 )
 from ob_analytics.schemas import (
+    lot_sizes_from_config,
+    put_config_units,
+    tick_sizes_from_config,
     validate_depth_df,
     validate_events_df,
     validate_trades_df,
@@ -164,14 +166,10 @@ class PipelineResult:
         >>> sorted(tables)  # doctest: +SKIP
         ['depth', 'depth_summary', 'events', 'trades']
         """
-        from ob_analytics.data import (
-            _lot_sizes_from_config,
-            _tick_sizes_from_config,
-            _to_arrow_table,
-        )
+        from ob_analytics.data import _to_arrow_table
 
-        tick_sizes = _tick_sizes_from_config(self.config)
-        lot_sizes = _lot_sizes_from_config(self.config)
+        tick_sizes = tick_sizes_from_config(self.config)
+        lot_sizes = lot_sizes_from_config(self.config)
         return {
             name: _to_arrow_table(
                 df, tick_sizes=tick_sizes, lot_sizes=lot_sizes, config=self.config
@@ -522,7 +520,7 @@ class Pipeline:
         events = order_aggressiveness(events, depth_summary)
 
         logger.info("Pipeline: complete")
-        _put_run_units(config, events, trades, depth, depth_summary)
+        put_config_units(config, events, trades, depth, depth_summary)
         return PipelineResult(
             events=events,
             trades=trades,
@@ -572,7 +570,7 @@ class Pipeline:
             "order_aggressiveness, queue) skipped: price-level feed has no "
             "order identity"
         )
-        _put_run_units(config, events, trades, depth, depth_summary)
+        put_config_units(config, events, trades, depth, depth_summary)
         return PipelineResult(
             events=events,
             trades=trades,
