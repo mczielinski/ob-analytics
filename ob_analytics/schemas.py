@@ -7,7 +7,9 @@ in the deleted ``models.py``: the pipeline runs on DataFrames, so the
 contract is a set of required column names plus validators that raise on
 violation — not a row model the pipeline never instantiated.
 
-Validators check for REQUIRED columns only; extra columns are allowed.
+Validators check that the REQUIRED columns are present, and that each column
+named in :data:`EVENT_DTYPES` or :data:`TRADE_DTYPES` has its dtype; extra
+columns are allowed.
 
 Canonical per-order volume semantics (every loader must satisfy these;
 consumers — ``price_level_volume``, ``order_book``, the L3 faces — assume
@@ -517,9 +519,11 @@ TRADE_COLUMNS: tuple[str, ...] = (
 #
 # The dtype of every events and trades column.  Every trade reader, the empty
 # frames, the toy dataset and the simulator cast through these maps, and
-# ``load_data`` casts a saved trades table back through ``TRADE_DTYPES``, so
+# ``load_data`` casts a saved trades table back through ``TRADE_DTYPES``, and
+# every event loader casts through ``EVENT_DTYPES`` (:func:`cast_events`), so
 # every frame of one table has the same dtypes and a concat of two runs keeps
-# them.  The event loaders are checked against ``EVENT_DTYPES`` by the tests.
+# them.  The validators check the same maps.  A category list for a side, an
+# action or an order type is written only here.
 # ``docs/schema.md`` lists the same types as Arrow types.
 
 BOOK_SIDE_DTYPE = pd.CategoricalDtype(["bid", "ask"], ordered=True)
@@ -603,6 +607,23 @@ def cast_columns(
     casts.
     """
     return df.astype({col: dtype for col, dtype in dtypes.items() if col in df})
+
+
+def cast_events(df: pd.DataFrame) -> pd.DataFrame:
+    """Return the events frame *df* cast through :data:`EVENT_DTYPES`.
+
+    Every event loader builds its output through this.  Text order ids (UUIDs,
+    say) stay text, as ``object``; any other ``id`` column is cast to
+    ``int64``.
+    """
+    dtypes = dict(EVENT_DTYPES)
+    if "id" in df and _is_text(df["id"]):
+        dtypes["id"] = "object"
+    return cast_columns(df, dtypes)
+
+
+def _is_text(col: pd.Series) -> bool:
+    return pd.api.types.is_object_dtype(col) or pd.api.types.is_string_dtype(col)
 
 
 def empty_frame(dtypes: dict[str, str | pd.CategoricalDtype]) -> pd.DataFrame:
@@ -734,14 +755,46 @@ def _require(df: pd.DataFrame, cols: tuple[str, ...], who: str) -> None:
         )
 
 
+def _require_dtypes(
+    df: pd.DataFrame,
+    dtypes: dict[str, str | pd.CategoricalDtype],
+    who: str,
+    text_ok: tuple[str, ...] = (),
+) -> None:
+    # An ``object`` entry has no one type, so any dtype passes; a column in
+    # *text_ok* may also hold text (the events ``id``; see :func:`cast_events`).
+    wrong = [
+        f"{col!r} is {_describe(df[col].dtype)}, expected {_describe(dtype)}"
+        for col, dtype in dtypes.items()
+        if col in df
+        and dtype != "object"
+        and df[col].dtype != dtype
+        and not (col in text_ok and _is_text(df[col]))
+    ]
+    if wrong:
+        raise ConfigError(f"{who}: wrong column dtypes: {'; '.join(wrong)}.")
+
+
+def _describe(dtype: object) -> str:
+    # Every categorical prints as ``category``, which does not say which one.
+    if isinstance(dtype, pd.CategoricalDtype):
+        order = "ordered " if dtype.ordered else ""
+        return f"{order}category {list(dtype.categories)}"
+    return str(dtype)
+
+
 def validate_events_df(df: pd.DataFrame) -> None:
-    """Raise :class:`ConfigError` unless *df* has all :data:`EVENT_COLUMNS`."""
+    """Raise :class:`ConfigError` unless *df* has all :data:`EVENT_COLUMNS`,
+    each column named in :data:`EVENT_DTYPES` with its dtype."""
     _require(df, EVENT_COLUMNS, "validate_events_df")
+    _require_dtypes(df, EVENT_DTYPES, "validate_events_df", text_ok=("id",))
 
 
 def validate_trades_df(df: pd.DataFrame) -> None:
-    """Raise :class:`ConfigError` unless *df* has all :data:`TRADE_COLUMNS`."""
+    """Raise :class:`ConfigError` unless *df* has all :data:`TRADE_COLUMNS`,
+    each column named in :data:`TRADE_DTYPES` with its dtype."""
     _require(df, TRADE_COLUMNS, "validate_trades_df")
+    _require_dtypes(df, TRADE_DTYPES, "validate_trades_df")
 
 
 def validate_depth_df(df: pd.DataFrame) -> None:
