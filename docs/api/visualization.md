@@ -89,7 +89,8 @@ at every frame. The L3 face rebuilds the per-order book from the events at
 each frame, with stale crossed orders removed (`uncross=True`, the default
 here) so that both faces show the same market. Pass `uncross=False` for the
 faithful L3 book. Every frame keeps one price range: the mid's path, wide
-enough for about `price_levels` price levels per side.
+enough for about `price_levels` price levels per side. A crossed frame has no
+mid, so it adds its best bid and best ask to the path instead.
 
 ```python
 from ob_analytics.visualization import plot_result
