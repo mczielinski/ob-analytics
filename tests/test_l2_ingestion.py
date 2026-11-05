@@ -422,7 +422,7 @@ class TestVenueClock:
             r.events, r.trades, feed_type=FeedType.PRICE_LEVELS, depth=r.depth
         )
         assert summary.clocks is Clocks.RECEIVE_ONLY
-        assert "not checked" in summary.render()
+        assert "clock order           : not checked" in summary.render()
 
 
 # ---------------------------------------------------------------------------

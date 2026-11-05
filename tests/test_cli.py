@@ -367,6 +367,92 @@ class TestAuditFewLevels:
         assert check["passed"] is True
 
 
+class TestAuditVenueBook:
+    """``audit`` compares the book rebuilt from the LOBSTER messages with the
+    orderbook file, row by row."""
+
+    @staticmethod
+    def _audit(cli_runner, directory, *extra):
+        return cli_runner(
+            "audit",
+            str(directory),
+            "--source",
+            "lobster",
+            "--trading-date",
+            few.DATE,
+            *extra,
+        )
+
+    @staticmethod
+    def _check(payload):
+        return next(c for c in payload["checks"] if c["name"] == "venue_book")
+
+    def test_the_lobster_sample_matches_its_orderbook_file(
+        self, cli_runner, lobster_day_dir
+    ):
+        r = self._audit(cli_runner, lobster_day_dir)
+
+        assert r.returncode == 0, r.stderr
+        assert "rebuilt book matches the venue's book in all 5 row(s)" in r.stdout
+
+        payload = json.loads(self._audit(cli_runner, lobster_day_dir, "--json").stdout)
+        assert payload["venue_book_rows"] == 5
+        assert payload["venue_book_differing_rows"] == 0
+        assert self._check(payload)["passed"] is True
+
+    def test_one_changed_level_warns_and_fails_strict(
+        self, cli_runner, lobster_day_dir
+    ):
+        (path,) = lobster_day_dir.glob("*_orderbook_*.csv")
+        lines = path.read_text().splitlines()
+        lines[2] = "1010000,160,1000000,90"  # the bid after message 3
+        path.write_text("\n".join(lines) + "\n")
+
+        r = self._audit(cli_runner, lobster_day_dir, "--json")
+        assert r.returncode == 0, r.stderr
+        payload = json.loads(r.stdout)
+        check = self._check(payload)
+        assert check["passed"] is False
+        assert check["severity"] == "warning"
+        assert payload["venue_book_first_difference"]["message_row"] == 3
+
+        strict = self._audit(cli_runner, lobster_day_dir, "--strict")
+        assert strict.returncode != 0
+        assert "venue_book" in strict.stdout + strict.stderr
+
+    def test_a_source_without_a_venue_book_skips_it(
+        self, cli_runner, tiny_bitstamp_orders_csv
+    ):
+        r = cli_runner("audit", str(tiny_bitstamp_orders_csv), "--json")
+
+        assert r.returncode == 0, r.stderr
+        check = self._check(json.loads(r.stdout))
+        assert check["skipped"] is True
+        assert check["passed"] is False
+        assert check["severity"] == "info"
+
+    def test_a_saved_run_skips_it(self, cli_runner, lobster_day_dir, tmp_path):
+        out = tmp_path / "saved"
+        processed = cli_runner(
+            "process",
+            str(lobster_day_dir),
+            "--source",
+            "lobster",
+            "--trading-date",
+            few.DATE,
+            "--output",
+            str(out),
+        )
+        assert processed.returncode == 0, processed.stderr
+
+        r = cli_runner(
+            "audit", str(out), "--from-parquet", "--source", "lobster", "--json"
+        )
+
+        assert r.returncode == 0, r.stderr
+        assert self._check(json.loads(r.stdout))["skipped"] is True
+
+
 # ---------------------------------------------------------------------------
 # gallery
 # ---------------------------------------------------------------------------

@@ -18,6 +18,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `PipelineConfig` fields. `Pipeline.run_windows` takes `ctx=`, as `run`
   does.
 
+- **`audit` compares the rebuilt book with the venue's own book.**
+  The new `venue_book` check rebuilds the book from the LOBSTER messages and
+  compares it with the orderbook file, row by row, on every price and size of
+  the levels the file states. Each event is matched with the row of its own
+  message, by `original_number`. The report gives the number of rows that
+  differ and the first difference (a `BookDifference`); the summary has the
+  fields `venue_book_price_levels`, `venue_book_rows`, `venue_book_differing_rows`
+  and `venue_book_first_difference`. `data_quality_summary` takes the venue's
+  book as `venue_book`, read by `LobsterSource.venue_book` or
+  `lobster_venue_book`. A source with no book of its own shows the check as
+  skipped. `QualityCheck` has a new `skipped` field: a skipped check is info,
+  never fails a run, and is not counted as passed, as the clock checks on
+  data with one clock now are too. On the AAPL samples the two books differ
+  in 99.81% (50 price levels) to 100% (10 price levels) of rows, because the message file
+  does not cover the orders resting before it starts or outside the
+  requested levels; see the LOBSTER how-to (#392).
+
 - **`audit` reports how long the per-order book is crossed.** A LOBSTER run
   with an orderbook file reads its depth table from that file, so the
   `crossed_book` check passed even when the book rebuilt from the messages

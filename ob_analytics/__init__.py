@@ -56,6 +56,7 @@ from pathlib import Path
 from loguru import logger
 
 from ob_analytics.analytics import (
+    BookDifference,
     DataQualitySummary,
     QualityCheck,
     SequenceGapReport,
@@ -223,6 +224,7 @@ __all__ = [
     # ── Sources (per-venue entry points) ─────────────────────────────
     "BarRule",
     "BitstampSource",
+    "BookDifference",
     "Clocks",
     "ConfigError",
     "CostSummary",

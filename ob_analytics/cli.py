@@ -268,6 +268,9 @@ def _audit_one(args: argparse.Namespace, path: Path) -> Any:
                 source_name,
             )
 
+    # A source that supplies its own book (LOBSTER's orderbook file) lets the
+    # rebuilt book be compared with it.  A saved result has no such file.
+    venue_book = None
     if args.from_parquet:
         result = _load_saved_result(path)
     else:
@@ -279,6 +282,9 @@ def _audit_one(args: argparse.Namespace, path: Path) -> Any:
         )
         logger.info("Auditing {} (source={})...", path, source_name)
         result = pipeline.run(path)
+        read_venue_book = getattr(source, "venue_book", None)
+        if read_venue_book is not None:
+            venue_book = read_venue_book(path, result.config)
 
     return data_quality_summary(
         result.events,
@@ -290,6 +296,7 @@ def _audit_one(args: argparse.Namespace, path: Path) -> Any:
         sequence_restarts=record.sequence_restarts,
         trade_attribution=trade_attribution,
         clocks=clocks,
+        venue_book=venue_book,
     )
 
 
