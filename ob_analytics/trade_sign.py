@@ -51,17 +51,9 @@ from ob_analytics._utils import (
 )
 from ob_analytics.depth import _BID_ASK_COLUMNS, _bid_ask_pair, readable_quotes
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.schemas import time_order_keys
+from ob_analytics.schemas import TRADE_SIDE_DTYPE, time_order_keys
 
 _SQRT2 = sqrt(2.0)
-
-#: The two aggressor sides.  Every consumer of a ``direction`` column tests it
-#: as ``== "buy"`` and treats the rest as a sell, so anything else in the
-#: column is not a missing value to them -- it is the wrong side.
-_SIDES: tuple[str, str] = ("buy", "sell")
-
-#: The trades schema's ``direction`` dtype, which every classifier here writes.
-_DIRECTION_DTYPE = pd.CategoricalDtype(list(_SIDES), ordered=True)
 
 #: Most volume buckets :func:`bulk_volume_classification` and
 #: :func:`~ob_analytics.flow_toxicity.compute_vpin` build.  Both hold every
@@ -277,7 +269,7 @@ def classify_trade_sign(
     signs[order] = signs_sorted
     side = np.where(signs > 0, "buy", "sell")
     return pd.Series(
-        pd.Categorical(side, dtype=_DIRECTION_DTYPE),
+        pd.Categorical(side, dtype=TRADE_SIDE_DTYPE),
         index=trades.index,
         name="direction",
     )
@@ -673,7 +665,10 @@ def resolve_direction(
         return out
 
     if "direction" in trades.columns:
-        unlabelled = ~trades["direction"].isin(_SIDES).to_numpy()
+        # Every consumer of a ``direction`` column tests it as ``== "buy"`` and
+        # treats the rest as a sell, so anything but the two sides is the
+        # wrong side to them, not a missing value.
+        unlabelled = ~trades["direction"].isin(TRADE_SIDE_DTYPE.categories).to_numpy()
         if not unlabelled.any():
             return trades
         known = trades["direction"].astype(object).where(~unlabelled)
@@ -691,12 +686,12 @@ def resolve_direction(
             UserWarning,
             stacklevel=2,
         )
-        out["direction"] = pd.Categorical(known, dtype=_DIRECTION_DTYPE)
+        out["direction"] = pd.Categorical(known, dtype=TRADE_SIDE_DTYPE)
         return out
 
     inferred = classify_trade_sign(trades, method=method, quotes=quotes)
     out["direction"] = pd.Categorical(
-        known.where(~unlabelled, inferred.astype(object)), dtype=_DIRECTION_DTYPE
+        known.where(~unlabelled, inferred.astype(object)), dtype=TRADE_SIDE_DTYPE
     )
     if "direction" in trades.columns:
         logger.info(

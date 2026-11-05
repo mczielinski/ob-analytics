@@ -85,9 +85,11 @@ from ob_analytics.protocols import (
     TradeSource,
 )
 from ob_analytics.schemas import (
+    BOOK_SIDE_DTYPE,
     ORIGIN_COLUMN,
     SEQUENCE_COLUMN,
     TRADE_DTYPES,
+    TRADE_SIDE_DTYPE,
     attach_instrument_identity,
     cast_columns,
 )
@@ -361,9 +363,7 @@ class L2DepthLoader:
 
         # Absolute-size semantics: a negative level size is malformed.
         depth = depth[depth["volume"] >= 0]
-        depth["direction"] = pd.Categorical(
-            depth["direction"], categories=["bid", "ask"], ordered=True
-        )
+        depth["direction"] = depth["direction"].astype(BOOK_SIDE_DTYPE)
         depth = depth.sort_values("timestamp", kind="stable").reset_index(drop=True)
 
         # Local monotonic ingest counter over the returned (timestamp-sorted)
@@ -521,7 +521,7 @@ class L2TradeReader:
                 .map(_TRADE_SIDE_MAP)
                 .to_list()
             )
-        return pd.Categorical(values, categories=["buy", "sell"], ordered=True)
+        return pd.Categorical(values, dtype=TRADE_SIDE_DTYPE)
 
     @staticmethod
     def _resolve_trades_file(source: Any) -> Path | None:

@@ -112,7 +112,12 @@ import numpy as np
 import pandas as pd
 
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.schemas import EVENT_DTYPES, TRADE_DTYPES, cast_columns
+from ob_analytics.schemas import (
+    BOOK_SIDE_DTYPE,
+    EVENT_DTYPES,
+    TRADE_DTYPES,
+    cast_columns,
+)
 
 __all__ = [
     "LOT_SIZE",
@@ -658,9 +663,7 @@ def toy_l2_depth() -> pd.DataFrame:
             "price": np.array([r[2] for r in _L2_DEPTH], dtype=np.int64),
             "volume": np.array([r[3] for r in _L2_DEPTH], dtype=np.int64),
             "direction": pd.Categorical(
-                [r[1] for r in _L2_DEPTH],
-                categories=["bid", "ask"],
-                ordered=True,
+                [r[1] for r in _L2_DEPTH], dtype=BOOK_SIDE_DTYPE
             ),
         }
     )

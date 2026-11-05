@@ -7,69 +7,52 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from ob_analytics._utils import empty_trades
 from ob_analytics.config import PipelineConfig
 from ob_analytics.pipeline import Pipeline, PipelineResult
 from ob_analytics.protocols import EventLoader, TradeSource
+from ob_analytics.schemas import TRADE_DTYPES, cast_columns, cast_events
 
 
 def _make_full_events() -> pd.DataFrame:
     """Build a realistic events DataFrame that survives the full pipeline."""
-    ts = pd.Timestamp("2015-05-01 00:00:00")
+    ts = pd.Timestamp("2015-05-01 00:00:00", tz="UTC")
     n = 8
-    return pd.DataFrame(
+    events = pd.DataFrame(
         {
             "event_id": list(range(1, n + 1)),
             "id": [100, 200, 100, 200, 300, 400, 300, 400],
             "timestamp": [ts + pd.Timedelta(seconds=i) for i in range(n)],
             "exchange_timestamp": [ts + pd.Timedelta(seconds=i - 1) for i in range(n)],
-            "price": [236.50, 237.00, 236.50, 237.00, 236.60, 237.10, 236.60, 237.10],
+            "price": [23650, 23700, 23650, 23700, 23660, 23710, 23660, 23710],
             "volume": [10000, 5000, 8000, 3000, 7000, 4000, 5000, 2000],
-            "action": pd.Categorical(
-                [
-                    "created",
-                    "created",
-                    "changed",
-                    "changed",
-                    "created",
-                    "created",
-                    "changed",
-                    "changed",
-                ],
-                categories=["created", "changed", "deleted"],
-                ordered=True,
-            ),
-            "direction": pd.Categorical(
-                ["bid", "ask", "bid", "ask", "bid", "ask", "bid", "ask"],
-                categories=["bid", "ask"],
-                ordered=True,
-            ),
-            "fill": [0.0, 0.0, 2000.0, 2000.0, 0.0, 0.0, 2000.0, 2000.0],
+            "action": [
+                "created",
+                "created",
+                "changed",
+                "changed",
+                "created",
+                "created",
+                "changed",
+                "changed",
+            ],
+            "direction": ["bid", "ask", "bid", "ask", "bid", "ask", "bid", "ask"],
+            "fill": [0, 0, 2000, 2000, 0, 0, 2000, 2000],
             "original_number": list(range(1, n + 1)),
-            "type": pd.Categorical(
-                np.repeat("unknown", n),
-                categories=[
-                    "unknown",
-                    "flashed-limit",
-                    "resting-limit",
-                    "market-limit",
-                    "market",
-                ],
-                ordered=True,
-            ),
+            "type": np.repeat("unknown", n),
         }
     )
+    return cast_events(events)
 
 
 def _make_trades() -> pd.DataFrame:
-    ts = pd.Timestamp("2015-05-01 00:00:02")
-    return pd.DataFrame(
+    ts = pd.Timestamp("2015-05-01 00:00:02", tz="UTC")
+    trades = pd.DataFrame(
         {
             "timestamp": [ts, ts + pd.Timedelta(seconds=4)],
-            "price": [236.50, 236.60],
-            "volume": [2000.0, 2000.0],
-            "direction": pd.Categorical(
-                ["sell", "sell"], categories=["buy", "sell"], ordered=True
-            ),
+            "price": [23650, 23660],
+            "volume": [2000, 2000],
+            "direction": ["sell", "sell"],
             "maker_event_id": [3, 7],
             "taker_event_id": [4, 8],
             "maker": [100, 300],
@@ -78,6 +61,7 @@ def _make_trades() -> pd.DataFrame:
             "taker_og": [4, 8],
         }
     )
+    return cast_columns(trades, TRADE_DTYPES)
 
 
 class TestPipelineResult:
@@ -190,20 +174,7 @@ class TestPipelineFlow:
             def load(self, events, source):
                 captured["called"] = True
                 captured["n_events"] = len(events)
-                return pd.DataFrame(
-                    columns=[
-                        "timestamp",
-                        "price",
-                        "volume",
-                        "direction",
-                        "maker_event_id",
-                        "taker_event_id",
-                        "maker",
-                        "taker",
-                        "maker_og",
-                        "taker_og",
-                    ]
-                )
+                return empty_trades()
 
         result = Pipeline(
             loader=BitstampLoader(),
