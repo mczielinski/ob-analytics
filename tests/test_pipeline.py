@@ -120,11 +120,9 @@ class TestPipelineWithMocks:
         assert isinstance(result.depth, pd.DataFrame)
         assert isinstance(result.depth_summary, pd.DataFrame)
 
-    def test_default_components_created(self):
+    def test_default_config_created(self):
         pipeline = Pipeline()
         assert pipeline.config is not None
-        assert pipeline.loader is not None
-        assert pipeline.trade_source is not None
 
     def test_custom_config_propagated(self):
         config = PipelineConfig(depth_bps=50)

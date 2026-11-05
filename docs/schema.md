@@ -558,8 +558,8 @@ implemented: sequence numbers (#146), instrument identity (#147), the time model
   [`PipelineConfig`](api/config.md) at run time and in each Parquet file's
   `ob_analytics_tick_size` metadata on disk. This matches the depth engine's
   internal integer binning and the backtester-export targets (#113).
-- **Simpler engine, exact comparisons.** LOBSTER's `price_divisor` is now just the
-  raw-feed encoding scale; the loaders quantise to ticks once, so the depth engine
+- **Simpler engine, exact comparisons.** LOBSTER's price divisor is now just the
+  raw-feed encoding scale, which its loader knows; the loaders quantise to ticks once, so the depth engine
   bins and compares levels on exact integers instead of multiplying and rounding
   each event. Crossed-level detection is exact, removing false crosses from float
   rounding.

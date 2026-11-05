@@ -162,8 +162,8 @@ lob[["actor", "action", "volume", "fill", "raw_event_type", "raw_size"]].iloc[6:
 # (These two columns, `raw_event_type` and `raw_size`, are exactly what
 # LOBSTER-born frames carry natively; we just retrofitted them onto a
 # Bitstamp-convention frame.) Now write the pair. Two LOBSTER-isms live
-# in the call: prices become **integers in ten-thousandths of a dollar**
-# (`price_divisor=10_000`), and timestamps become **seconds after
+# in the file: prices become **integers in ten-thousandths of a dollar**
+# (the writer knows that encoding), and timestamps become **seconds after
 # midnight**, so the writer must be told *which* midnight
 # (`trading_date`). The toy book's canonical prices are integer ticks with
 # a `tick_size` of $1 (its levels are whole dollars), and its sizes are
@@ -178,9 +178,7 @@ from pathlib import Path
 from ob_analytics import PipelineConfig, RunContext, save_data
 from ob_analytics.datasets import LOT_SIZE, TICK_SIZE
 
-toy_config = PipelineConfig(
-    price_divisor=10_000, tick_size=TICK_SIZE, lot_size=LOT_SIZE
-)
+toy_config = PipelineConfig(tick_size=TICK_SIZE, lot_size=LOT_SIZE)
 outdir = Path(tempfile.mkdtemp())
 save_data(
     {"events": lob, "trades": toy_trades()},
@@ -231,8 +229,8 @@ print((outdir / "TOY_2026-01-05_2_orderbook.csv").read_text().splitlines()[5])
 # this file is used as ground-truth depth instead of replaying it from
 # the messages.
 #
-# Now the trip home. `LobsterSource` bundles the matching loader, trade
-# reader, and config defaults (that `price_divisor`, among others), and
+# Now the trip home. `LobsterSource` bundles the matching loader and trade
+# reader, whose loader reads the ten-thousandths of a dollar back, and
 # needs the same date anchor to turn seconds-after-midnight back into
 # timestamps. Its default `tick_size` is a cent, the equity grid, so it
 # would read $99.00 back as 9900 ticks; passing the same `toy_config`

@@ -8,7 +8,7 @@ import os
 import types
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Self, Union, get_args, get_origin
+from typing import Any, Self, Union, get_args, get_origin
 
 from pydantic import BaseModel, Field, SecretStr, model_validator
 
@@ -210,9 +210,13 @@ class PipelineConfig(BaseModel):
     with a sensible default matching the original R package behaviour (Bitstamp
     BTC/USD, 2015).  Override individual values for different instruments,
     exchanges, or precision requirements.
+
+    How a feed encodes its prices and timestamps is not set here: each loader
+    reads its own format.  An unknown field is refused, so a setting this
+    version no longer has is not dropped silently.
     """
 
-    model_config = {"frozen": True}
+    model_config = {"frozen": True, "extra": "forbid"}
 
     # ── Price / volume precision ──────────────────────────────────────────
     tick_size: float = Field(
@@ -264,28 +268,6 @@ class PipelineConfig(BaseModel):
             "size grid is ``lot_size``, not this."
         ),
     )
-    timestamp_unit: Literal["ms", "us", "ns"] = Field(
-        default="ms",
-        description=(
-            "Unit of raw integer timestamps in the source data.  "
-            "'ms' (milliseconds, default) matches Bitstamp CSV format; "
-            "'us' for microseconds; 'ns' for nanosecond-precision feeds."
-        ),
-    )
-
-    price_divisor: int = Field(
-        default=1,
-        ge=1,
-        description=(
-            "Raw-feed encoding scale: the divisor that turns a source's raw "
-            "integer price into the quote currency, before it is converted to "
-            "ticks.  1 (default) means the raw price is already in the quote "
-            "currency (Bitstamp).  LOBSTER uses 10 000 (prices are in "
-            "ten-thousandths of a dollar).  This is the feed's encoding, "
-            "separate from the instrument's ``tick_size``."
-        ),
-    )
-
     # ── Sequence / ordering keys ──────────────────────────────────────────
     track_sequence: bool = Field(
         default=False,
@@ -376,3 +358,44 @@ def instrument_fields(
         fields["lot_size"] = float(lot_size)
         fields["volume_decimals"] = step_decimals(lot_size)
     return fields
+
+
+@dataclass(frozen=True)
+class InstrumentGrid:
+    """The price and size grid a source's data is usually on.
+
+    A source declares one as its ``grid`` (see
+    :func:`~ob_analytics.protocols.grid_of`).  The pipeline starts its config
+    from it, and a field the caller sets wins, so LOBSTER runs on whole shares
+    without the caller saying so.
+
+    Attributes
+    ----------
+    tick_size : float
+        The price step, in the quote currency.  The default is a cent.
+    lot_size : float
+        The size step, in the instrument's own units.  The default is a
+        satoshi (``1e-8``), the :class:`PipelineConfig` default.
+    """
+
+    tick_size: float = 0.01
+    lot_size: float = 1e-8
+
+    def fields(self) -> dict[str, Any]:
+        """Return the :class:`PipelineConfig` fields for this grid.
+
+        Each step comes with the display precision that shows one step, as
+        :func:`instrument_fields` gives them.
+        """
+        return instrument_fields(tick_size=self.tick_size, lot_size=self.lot_size)
+
+    def config(self, config: PipelineConfig | None = None) -> PipelineConfig:
+        """Return *config* laid over this grid.
+
+        The fields the caller set in *config* win; every other grid field
+        comes from this grid.  With no *config*, the config is this grid's.
+        """
+        explicit = (
+            {k: getattr(config, k) for k in config.model_fields_set} if config else {}
+        )
+        return PipelineConfig(**{**self.fields(), **explicit})

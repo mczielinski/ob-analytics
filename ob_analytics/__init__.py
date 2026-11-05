@@ -75,7 +75,12 @@ from ob_analytics.bars import (
 # Importing the source modules fires their register_source(...) self-registration
 # at import time; the Source classes are also the public per-venue entry points.
 from ob_analytics.bitstamp import BitstampSource
-from ob_analytics.config import Credential, PipelineConfig, SourceSettings
+from ob_analytics.config import (
+    Credential,
+    InstrumentGrid,
+    PipelineConfig,
+    SourceSettings,
+)
 from ob_analytics.cost import (
     CostSummary,
     amihud,
@@ -101,7 +106,7 @@ from ob_analytics.datasets import (
     toy_orders,
     toy_trades,
 )
-from ob_analytics.depth_l2 import DepthCsvSource
+from ob_analytics.depth_l2 import DepthCsvSettings, DepthCsvSource
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
 from ob_analytics.features import (
     features,
@@ -226,6 +231,7 @@ __all__ = [
     "DataWriter",
     "DatabentoSettings",
     "DatabentoSource",
+    "DepthCsvSettings",
     "DepthCsvSource",
     "DepthSource",
     "EventLoader",
@@ -234,6 +240,7 @@ __all__ = [
     "HftbacktestWriter",
     # ── Hidden liquidity ─────────────────────────────────────────────
     "IcebergDetection",
+    "InstrumentGrid",
     "KyleLambdaResult",
     "Level",
     "LiveSource",

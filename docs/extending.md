@@ -47,7 +47,9 @@ implements one or both **capabilities**:
 - **`OfflineSource`** — replay stored files. The per-venue factories the
   pipeline needs: a loader (`EventLoader` for L3, `DepthSource` for L2), a trade
   source (`TradeSource`), and — optionally — a writer (`DataWriter`), plus
-  `config_defaults()` and `compute_depth(...)`.
+  `compute_depth(...)`. The pipeline calls the factories once for each run,
+  with that run's config and `RunContext`, so a source keeps nothing from one
+  run to the next.
 - **`LiveSource`** — capture a venue's live feed: `snapshot` / `stream` /
   `shutdown_synthetic_events` (see [the live capability](#the-live-capability)).
 
@@ -66,6 +68,7 @@ import pandas as pd
 
 from ob_analytics import (
     FeedType,
+    InstrumentGrid,
     Level,
     PipelineConfig,
     RunContext,
@@ -110,23 +113,24 @@ class CoinbaseSource:
     level = Level.L3  # per-order (Coinbase `full` channel)
     feed_type = FeedType.MATCHED_BOOK  # exchange matching engine: never crossed
     settings = SourceSettings()  # empty: no per-source knobs
+    # The tick and lot size the venue's data is usually on; the run's config
+    # starts from it, and a field the caller sets wins.
+    grid = InstrumentGrid(tick_size=0.01, lot_size=1e-8)
 
     def create_loader(self, config: PipelineConfig, ctx: RunContext) -> CoinbaseLoader:
         return CoinbaseLoader(config)
 
     def create_trade_source(
-        self, config: PipelineConfig, ctx: RunContext
+        self, config: PipelineConfig, ctx: RunContext, loader: Any
     ) -> CoinbaseTradeReader:
+        # loader is this run's loader, for trades that come off the same read.
         return CoinbaseTradeReader(config)
 
     def create_writer(self, config: PipelineConfig, ctx: RunContext):
         return None  # no venue-specific writer; use save_data(fmt="parquet")
 
-    def compute_depth(self, events, config, source, ctx):
+    def compute_depth(self, events, config, source, ctx, loader):
         return None  # use the standard price-level depth pipeline
-
-    def config_defaults(self) -> dict:
-        return {}  # e.g. {"price_decimals": 2, "timestamp_unit": "ms"}
 
     def required_context(self) -> list[str]:
         return []  # e.g. ["trading_date"] if filenames carry no date
@@ -134,6 +138,11 @@ class CoinbaseSource:
 
 register_source("coinbase", CoinbaseSource)
 ```
+
+How the venue's files encode prices and timestamps (a price in hundredths of a
+cent, an epoch in microseconds) is the loader's business: write it into the
+loader as a constant, or, when the format leaves it open, as a field of the
+source's typed settings. `PipelineConfig` has no field for it.
 
 The pipeline checks both frames on the way in and names any column that is
 missing. The loader's events need these columns:
@@ -177,7 +186,8 @@ ob-analytics process coinbase_book.json --source coinbase
 Per-run parameters that vary across runs of the *same* source (LOBSTER's
 `trading_date` is the canonical example) belong on
 [`RunContext`](api/protocols.md), not the constructor:
-`Pipeline.from_source("coinbase", ctx=RunContext(trading_date="2024-01-02"))`.
+`Pipeline.from_source("coinbase", ctx=RunContext(trading_date="2024-01-02"))`
+sets it for every run, and `pipeline.run(path, ctx=...)` for one run.
 
 ### Typed settings
 

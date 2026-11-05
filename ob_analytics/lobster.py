@@ -43,7 +43,7 @@ from ob_analytics._utils import (
     validate_columns,
 )
 from ob_analytics.analytics import CROSSED_TOLERANCE_PCT, _book_crossing
-from ob_analytics.config import PipelineConfig, SourceSettings
+from ob_analytics.config import InstrumentGrid, PipelineConfig, SourceSettings
 from ob_analytics.depth import (
     DepthMetricsEngine,
     PriceLevelBook,
@@ -98,17 +98,13 @@ _DIRECTION_REVERSE: dict[str, int] = {"bid": 1, "ask": -1}
 _DUMMY_BID_PRICE = -9999999999
 _DUMMY_ASK_PRICE = 9999999999
 
-#: The instrument grid of LOBSTER's own data: a cent tick, prices in
-#: ten-thousandths of a dollar, and whole shares.
-_LOBSTER_CONFIG_DEFAULTS: dict[str, Any] = {
-    "tick_size": 0.01,
-    "price_decimals": 2,
-    "price_divisor": 10_000,
-    # LOBSTER quotes whole shares, so one lot is one share and the canonical
-    # integer size is the venue's own count.
-    "lot_size": 1.0,
-    "volume_decimals": 0,
-}
+#: LOBSTER's price encoding: a price in its files is a whole number of
+#: ten-thousandths of a dollar, so it divides by this to reach dollars.
+LOBSTER_PRICE_DIVISOR = 10_000
+
+#: The grid of LOBSTER's own data: a cent tick and whole shares.  One lot is
+#: one share, so the canonical integer size is the venue's own count.
+LOBSTER_GRID = InstrumentGrid(tick_size=0.01, lot_size=1.0)
 
 
 # ── LobsterLoader ────────────────────────────────────────────────────
@@ -122,7 +118,11 @@ class LobsterLoader:
     Parameters
     ----------
     config : PipelineConfig, optional
-        Pipeline configuration.
+        Pipeline configuration: the instrument's ``tick_size`` and
+        ``lot_size``.  A grid field it does not set comes from LOBSTER's own
+        grid (:data:`LOBSTER_GRID`), as in a pipeline run.  The file's price
+        encoding
+        (:data:`LOBSTER_PRICE_DIVISOR`) is part of the format, not a setting.
     trading_date : str or pd.Timestamp
         The calendar date of the trading session (LOBSTER timestamps are
         seconds after midnight and need a date anchor).
@@ -153,7 +153,7 @@ class LobsterLoader:
         venue: str | None = None,
         symbol: str | None = None,
     ) -> None:
-        self._config = config or PipelineConfig()
+        self._config = LOBSTER_GRID.config(config)
         self._trading_date = pd.Timestamp(trading_date).normalize()
         self._session_tz = session_tz
         self._venue = venue
@@ -194,12 +194,13 @@ class LobsterLoader:
         self.message_rows = len(raw)
 
         cfg = self._config
-        divisor = cfg.price_divisor
 
         # Canonical price is integer ticks (issue #155).  LOBSTER stores a raw
         # integer in ten-thousandths of a dollar, so divide by the feed's
         # encoding scale to reach the quote currency, then quantise to ticks.
-        raw["price"] = price_to_ticks(raw["price"] / divisor, cfg.tick_size)
+        raw["price"] = price_to_ticks(
+            raw["price"] / LOBSTER_PRICE_DIVISOR, cfg.tick_size
+        )
         # Canonical size is integer lots (issue #226).  LOBSTER's Size column is
         # already a whole share count and its ``lot_size`` default is 1, so this
         # keeps the venue's own integer rather than routing it through a float.
@@ -370,10 +371,17 @@ class LobsterTradeReader:
     because the data already pairs maker rows with executions.
 
     Satisfies the :class:`~ob_analytics.protocols.TradeSource` protocol.
+
+    Parameters
+    ----------
+    config : PipelineConfig, optional
+        Pipeline configuration.  A grid field it does not set comes from
+        LOBSTER's own grid (:data:`LOBSTER_GRID`), as for
+        :class:`LobsterLoader`.
     """
 
     def __init__(self, config: PipelineConfig | None = None) -> None:
-        self._config = config or PipelineConfig()
+        self._config = LOBSTER_GRID.config(config)
 
     def load(self, events: pd.DataFrame, source: Any) -> pd.DataFrame:
         """Build a trades DataFrame from LOBSTER execution events.
@@ -550,18 +558,17 @@ class LobsterWriter:
     Parameters
     ----------
     config : PipelineConfig, optional
-        The run's configuration: its ``tick_size``, ``lot_size`` and
-        ``price_divisor``.  Defaults to LOBSTER's own grid (a cent tick,
-        ``price_divisor=10_000``, whole shares), as :class:`LobsterSource`
-        sets it.
+        The configuration of the run being written: the ``tick_size`` and
+        ``lot_size`` its frames are in.  Defaults to LOBSTER's own grid
+        (:data:`LOBSTER_GRID`).  Prices are written in LOBSTER's encoding,
+        ten-thousandths of a dollar (:data:`LOBSTER_PRICE_DIVISOR`), so one
+        tick must be a whole number of them.
     trading_date : str or pd.Timestamp
         Calendar date of the session.
     session_tz : str, optional
         The venue's local time zone, used to convert the shared UTC clock back
         to LOBSTER's seconds after local midnight.  Defaults to
         :data:`LOBSTER_DEFAULT_TZ`; must match the value used on load.
-    price_divisor : int
-        Multiplier to convert decimal prices back to LOBSTER integers.
     """
 
     def __init__(
@@ -570,15 +577,10 @@ class LobsterWriter:
         *,
         trading_date: str | pd.Timestamp,
         session_tz: str = LOBSTER_DEFAULT_TZ,
-        price_divisor: int | None = None,
     ) -> None:
-        self._config = config or PipelineConfig(**_LOBSTER_CONFIG_DEFAULTS)
+        self._config = config if config is not None else LOBSTER_GRID.config()
         self._trading_date = pd.Timestamp(trading_date).normalize()
         self._session_tz = session_tz
-        # Explicit price_divisor overrides config (for manual construction)
-        self._price_divisor = (
-            price_divisor if price_divisor is not None else self._config.price_divisor
-        )
 
     def write(
         self,
@@ -621,7 +623,8 @@ class LobsterWriter:
             share an ``event_id``, the depth table names an event the events
             do not have, the prices and sizes of either table are not whole
             ticks and lots, *num_levels* is below 1, or one tick is not a
-            whole number of ``1 / price_divisor`` units.
+            whole number of LOBSTER's price units (ten-thousandths of a
+            dollar).
         """
         if num_levels < 1:
             raise ConfigError(
@@ -729,25 +732,25 @@ class LobsterWriter:
         )
 
     def _price_units(self) -> int:
-        """The number of ``1 / price_divisor`` units in one tick.
+        """The number of LOBSTER price units in one tick.
 
-        A LOBSTER price is a whole number of these units, so a divisor that
-        does not make one tick a whole number of them is refused.
+        A LOBSTER price is a whole number of ten-thousandths of a dollar
+        (:data:`LOBSTER_PRICE_DIVISOR`), so a tick that is not a whole number
+        of them is refused.
         """
-        units = self._config.tick_size * self._price_divisor
+        units = self._config.tick_size * LOBSTER_PRICE_DIVISOR
         if round(units) < 1 or abs(units - round(units)) > 1e-9 * units:
             raise ConfigError(
                 f"LobsterWriter: a tick of {self._config.tick_size} is not a "
-                f"whole number of 1/{self._price_divisor} units, so prices "
-                "would be rounded.  Set price_divisor so that tick_size * "
-                "price_divisor is a whole number (10 000 for LOBSTER's own "
-                "files)."
+                f"whole number of 1/{LOBSTER_PRICE_DIVISOR} units, LOBSTER's "
+                "price unit, so prices would be rounded.  A LOBSTER file "
+                "cannot hold this instrument's prices."
             )
         return round(units)
 
     def _raw_prices(self, ticks: object) -> np.ndarray:
         """Encode integer-tick prices as LOBSTER's raw integer prices."""
-        # One tick is a whole number of 1 / price_divisor units, so the
+        # One tick is a whole number of LOBSTER price units, so the
         # encoding is an exact integer multiply, with no rounding through the
         # quote currency.
         return np.asarray(ticks, dtype=np.int64) * self._price_units()
@@ -962,9 +965,10 @@ def lobster_depth_from_orderbook(
     orderbook_path : Path
         Path to the LOBSTER orderbook CSV.
     config : PipelineConfig
-        Pipeline configuration.  The file's prices are read on
-        ``price_divisor`` and ``tick_size``, and its sizes are converted to
-        whole lots of ``lot_size``, as the message sizes are.
+        Pipeline configuration.  The file's prices are read in LOBSTER's
+        encoding (:data:`LOBSTER_PRICE_DIVISOR`) onto ``tick_size``, and its
+        sizes are converted to whole lots of ``lot_size``, as the message
+        sizes are.
     message_rows : int, optional
         The number of rows in the message file, every event type included.
         When given, the orderbook file must have exactly this many rows.
@@ -1052,7 +1056,7 @@ def lobster_depth_from_orderbook(
     # pair handled by :func:`_side_level_changes`.  Within an event the
     # changes are emitted asks first, then bids, each ascending in price
     # (the previous dict-diff emitted them in unspecified set order).
-    grid = (config.price_divisor, config.tick_size, config.lot_size)
+    grid = (LOBSTER_PRICE_DIVISOR, config.tick_size, config.lot_size)
 
     lv = ob_raw.reshape(n, num_levels, 4)
 
@@ -1169,8 +1173,9 @@ class LobsterSource:
 
     ``trading_date`` is taken from the per-run
     :class:`~ob_analytics.protocols.RunContext`, not the source
-    constructor — so the same ``LobsterSource()`` instance can be reused
-    across runs with different sessions.  Offline only: LOBSTER ships as data
+    constructor, and the source keeps nothing from a run — so the same
+    ``LobsterSource()`` instance can serve many runs, each with its own
+    session.  Offline only: LOBSTER ships as data
     files, so it satisfies :class:`~ob_analytics.protocols.OfflineSource` and
     has no live capability.
     """
@@ -1194,22 +1199,21 @@ class LobsterSource:
     # LOBSTER needs no per-source knobs; empty typed settings keep the
     # construction signature uniform with sources that do.
     settings: SourceSettings = field(default_factory=SourceSettings)
-
-    _loader: LobsterLoader | None = field(default=None, repr=False, init=False)
+    # A cent tick and whole shares, the grid of LOBSTER's own data.
+    grid: InstrumentGrid = field(default=LOBSTER_GRID, init=False, repr=False)
 
     def create_loader(self, config: PipelineConfig, ctx: RunContext) -> EventLoader:
         td = _require_trading_date(ctx.trading_date, "create_loader")
-        self._loader = LobsterLoader(
+        return LobsterLoader(
             config,
             trading_date=td,
             session_tz=ctx.session_tz or LOBSTER_DEFAULT_TZ,
             venue=ctx.venue,
             symbol=ctx.symbol,
         )
-        return self._loader
 
     def create_trade_source(
-        self, config: PipelineConfig, ctx: RunContext
+        self, config: PipelineConfig, ctx: RunContext, loader: Any
     ) -> TradeSource:
         return LobsterTradeReader(config)
 
@@ -1224,8 +1228,12 @@ class LobsterSource:
         config: Any,
         source: Any,
         ctx: RunContext,
+        loader: Any,
     ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
-        ob_path = self._loader.orderbook_path if self._loader is not None else None
+        # The run's own loader found the orderbook file and counted the
+        # message rows; a loader of another kind leaves both to be found here.
+        read = loader if isinstance(loader, LobsterLoader) else None
+        ob_path = read.orderbook_path if read is not None else None
         if ob_path is None:
             ob_path = LobsterLoader._resolve_orderbook_file(Path(source))
         _warn_if_book_crosses(events, from_orderbook=ob_path is not None)
@@ -1235,13 +1243,10 @@ class LobsterSource:
                 "falling back to event-based depth"
             )
             return None
-        message_rows = self._loader.message_rows if self._loader is not None else None
+        message_rows = read.message_rows if read is not None else None
         return lobster_depth_from_orderbook(
             events, ob_path, config, message_rows=message_rows
         )
-
-    def config_defaults(self) -> dict[str, Any]:
-        return dict(_LOBSTER_CONFIG_DEFAULTS)
 
     def required_context(self) -> list[str]:
         # LOBSTER message/orderbook filenames carry no date, so the trading

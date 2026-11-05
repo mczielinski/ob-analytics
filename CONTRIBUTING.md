@@ -151,9 +151,10 @@ source, export format, plot, flow-toxicity metric, or live capturer — see
    structural `Protocol`). The factory methods take
    `(config: PipelineConfig, ctx: RunContext)`:
    - `create_loader(config, ctx) -> EventLoader`
-   - `create_trade_source(config, ctx) -> TradeSource`
+   - `create_trade_source(config, ctx, loader) -> TradeSource` (`loader` is the
+     run's loader, for trades that come off the same read)
    - `create_writer(config, ctx) -> DataWriter`
-   - `compute_depth(events, config, source, ctx) -> tuple[depth, depth_summary] | None`
+   - `compute_depth(events, config, source, ctx, loader) -> tuple[depth, depth_summary] | None`
      (override only if your venue computes depth differently; return `None`
      to fall back to the standard `price_level_volume` → `depth_metrics` path)
 

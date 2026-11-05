@@ -27,7 +27,12 @@ or `price_levels`; see [Data quality](../data-quality.md)) and a `Level` (`L2` v
 sequence number may also declare a `SequenceKind`: whether a skipped number
 means a lost message. A source whose data has one clock declares `Clocks`, so
 the clock checks know there is nothing to compare. It carries typed `settings` and registers in the source
-registry (see [Sources](sources.md)).
+registry (see [Sources](sources.md)). It may state the tick and lot size its
+data is usually on as `grid`, which a run's config starts from.
+
+A source keeps nothing from a run. The pipeline builds each run's loader and
+trade source from that run's config and `RunContext`, so one source can serve
+many runs and many pipelines.
 
 ::: ob_analytics.protocols.Level
 
@@ -45,6 +50,8 @@ registry (see [Sources](sources.md)).
 
 ::: ob_analytics.protocols.clocks_of
 
+::: ob_analytics.protocols.grid_of
+
 ::: ob_analytics.protocols.EventLoader
 
 ::: ob_analytics.protocols.DepthSource
@@ -56,6 +63,8 @@ registry (see [Sources](sources.md)).
 ::: ob_analytics.protocols.Source
 
 ::: ob_analytics.protocols.OfflineSource
+
+::: ob_analytics.protocols.RunContext
 
 ::: ob_analytics.live.LiveSource
 

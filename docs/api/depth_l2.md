@@ -20,5 +20,7 @@ per-order stages (see [`Level`](protocols.md)).
 
 ::: ob_analytics.depth_l2.DepthCsvSource
 
+::: ob_analytics.depth_l2.DepthCsvSettings
+
 A capture's `meta.json` is read by
 [`read_record`](capture_record.md#ob_analytics.capture_record.read_record).

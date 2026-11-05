@@ -59,13 +59,13 @@ from ob_analytics.depth import (
     readable_quotes,
 )
 from ob_analytics.protocols import (
-    DataWriter,
     EventLoader,
     Level,
     OfflineSource,
     RunContext,
     Source,
     TradeSource,
+    grid_of,
 )
 from ob_analytics.schemas import (
     lot_sizes_from_config,
@@ -308,17 +308,23 @@ class Pipeline:
     Parameters
     ----------
     config : PipelineConfig, optional
-        Central configuration.  Passed to default components when they
-        are not explicitly provided.
+        Central configuration.  The fields it sets are laid over the source's
+        instrument grid (``source.grid``), and the result is what each run's
+        loader and trade source are built from.
     source : OfflineSource, optional
-        A source descriptor that provides the default loader, trade source,
-        writer, and config overrides.  Defaults to
-        :class:`~ob_analytics.bitstamp.BitstampSource`.  Explicit component
-        arguments take precedence over the source's factories.
+        A source descriptor that builds each run's loader and trade source, and
+        gives the instrument grid the config starts from (its ``grid``).
+        Defaults to :class:`~ob_analytics.bitstamp.BitstampSource`.  Explicit
+        component arguments take precedence over the source's factories.
     loader : EventLoader, optional
-        Loads raw events from a data source.  Overrides the source's loader.
+        Loads raw events from a data source.  Overrides the source's loader,
+        and is used for every run.
     trade_source : TradeSource, optional
-        Builds the trades DataFrame.  Overrides the source's trade source.
+        Builds the trades DataFrame.  Overrides the source's trade source, and
+        is used for every run.
+    ctx : RunContext, optional
+        The per-run parameters (such as LOBSTER's ``trading_date``) every run
+        uses unless :meth:`run` is given its own.
 
     Notes
     -----
@@ -356,37 +362,34 @@ class Pipeline:
                 "cannot replay stored files (it has no create_loader)."
             )
 
-        # The source's config defaults underlie the fields the caller
-        # explicitly set.  Without this, Pipeline(config=..., source=
-        # LobsterSource()) silently dropped price_divisor=10_000 and produced
-        # prices wrong by four orders of magnitude.
-        defaults = source.config_defaults()
         # What the caller set, so a capture's record fills only the rest.
         self._caller_fields = frozenset(config.model_fields_set if config else ())
-        self._own_components = loader is None and trade_source is None
-        if config is None:
-            config = PipelineConfig(**defaults)
-        else:
-            explicit = {k: getattr(config, k) for k in config.model_fields_set}
-            config = PipelineConfig(**{**defaults, **explicit})
-        self.config = config
-        self.loader = loader or source.create_loader(config, self._ctx)
-        self.trade_source = trade_source or source.create_trade_source(
-            config, self._ctx
-        )
-        self._writer: DataWriter | None = source.create_writer(config, self._ctx)
+        # The source's grid underlies the fields the caller set, so a LOBSTER
+        # run is on whole shares unless the caller says otherwise.
+        self.config = grid_of(source).config(config)
+        self._loader = loader
+        self._trade_source = trade_source
         self._source = source
 
-    def _for_run(self, source: Any) -> tuple[PipelineConfig, Any, Any]:
+    def _for_run(self, source: Any, ctx: RunContext) -> tuple[PipelineConfig, Any, Any]:
         """Return the config, loader and trade source for one run on *source*.
 
-        These are the pipeline's own, unless *source* is a capture whose
-        record gives a tick or lot size the caller did not set.  Then the
-        config takes the recorded values and the source's components are
-        built again from it.
+        The source builds the loader and trade source for each run, from that
+        run's config and *ctx*; a loader or trade source the caller passed is
+        used as it is.  The config is the pipeline's own, unless *source* is a
+        capture whose record gives a tick or lot size the caller did not set.
         """
-        if not self._own_components:
-            return self.config, self.loader, self.trade_source
+        config = self.config
+        if self._loader is None and self._trade_source is None:
+            config = self._recorded_config(source)
+        loader = self._loader or self._source.create_loader(config, ctx)
+        trade_source = self._trade_source or self._source.create_trade_source(
+            config, ctx, loader
+        )
+        return config, loader, trade_source
+
+    def _recorded_config(self, source: Any) -> PipelineConfig:
+        """Return the config with the grid a capture recorded, where unset."""
         recorded = read_instrument(source)
         fields = {
             name: value
@@ -395,26 +398,13 @@ class Pipeline:
             if name in pair and not pair & self._caller_fields
         }
         if not fields:
-            return self.config, self.loader, self.trade_source
+            return self.config
         config = PipelineConfig(**{**self.config.model_dump(), **fields})
-        if config == self.config:
-            return self.config, self.loader, self.trade_source
-        logger.info("Pipeline: using the instrument the capture recorded: {}", fields)
-        return (
-            config,
-            self._source.create_loader(config, self._ctx),
-            self._source.create_trade_source(config, self._ctx),
-        )
-
-    @property
-    def writer(self) -> DataWriter | None:
-        """The source-provided writer, if any.
-
-        It is built from the pipeline's own config.  When a run took the tick
-        and lot size from a capture's record, build a writer from that run's
-        config instead: ``source.create_writer(result.config, ctx)``.
-        """
-        return self._writer
+        if config != self.config:
+            logger.info(
+                "Pipeline: using the instrument the capture recorded: {}", fields
+            )
+        return config
 
     @classmethod
     def from_source(
@@ -473,7 +463,7 @@ class Pipeline:
         on it, and the per-order stages (3, 6) are skipped.
         """
         run_ctx = ctx if ctx is not None else self._ctx
-        config, loader, trade_source = self._for_run(source)
+        config, loader, trade_source = self._for_run(source, run_ctx)
 
         if self._source.level is Level.L2:
             return self._run_l2(source, config, loader, trade_source)
@@ -489,7 +479,9 @@ class Pipeline:
         events = set_order_types(events, trades)
         validate_events_df(events)  # data contract (schemas.py)
 
-        depth_override = self._source.compute_depth(events, config, source, run_ctx)
+        depth_override = self._source.compute_depth(
+            events, config, source, run_ctx, loader
+        )
 
         if depth_override is not None:
             depth, depth_summary = depth_override
@@ -587,6 +579,7 @@ class Pipeline:
         output: str | Path,
         *,
         carry: bool = True,
+        ctx: RunContext | None = None,
     ) -> Path:
         """Run the pipeline one time window at a time and write the result.
 
@@ -627,6 +620,8 @@ class Pipeline:
         carry : bool, optional
             Start each window from the previous window's book.  Default
             ``True``.
+        ctx : RunContext, optional
+            The context for this run, as for :meth:`run`.
 
         Returns
         -------
@@ -653,7 +648,9 @@ class Pipeline:
         """
         windows = window_bounds(boundaries)
         level = self._source.level
-        config, loader, trade_source = self._for_run(source)
+        config, loader, trade_source = self._for_run(
+            source, ctx if ctx is not None else self._ctx
+        )
 
         if level is Level.L2:
             logger.info(

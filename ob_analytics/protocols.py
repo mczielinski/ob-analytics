@@ -29,7 +29,7 @@ from typing import Any, Protocol, runtime_checkable
 import numpy.typing as npt
 import pandas as pd
 
-from ob_analytics.config import SourceSettings
+from ob_analytics.config import InstrumentGrid, SourceSettings
 
 
 class Level(str, Enum):
@@ -216,12 +216,38 @@ def clocks_of(source: Any) -> Clocks:
     return Clocks(getattr(source, "clocks", Clocks.BOTH))
 
 
+def grid_of(source: Any) -> InstrumentGrid:
+    """Return the :class:`~ob_analytics.config.InstrumentGrid` *source* declares.
+
+    A source that does not declare one is read as the default grid: a cent
+    tick and a satoshi lot, the :class:`~ob_analytics.config.PipelineConfig`
+    defaults.
+
+    Raises
+    ------
+    TypeError
+        If *source* declares a ``grid`` that is not an ``InstrumentGrid``.
+    """
+    grid = getattr(source, "grid", None)
+    if grid is None:
+        return InstrumentGrid()
+    if not isinstance(grid, InstrumentGrid):
+        raise TypeError(
+            f"{type(source).__name__}.grid must be an InstrumentGrid, got "
+            f"{type(grid).__name__}."
+        )
+    return grid
+
+
 @dataclass(frozen=True)
 class RunContext:
     """Per-run parameters that don't belong on the Source constructor.
 
-    Passed to ``Pipeline.run(source, ctx=...)`` and forwarded to
-    ``OfflineSource.create_loader/create_trade_source/create_writer``.
+    Give one to ``Pipeline(ctx=...)`` as the default for every run, or to
+    ``Pipeline.run(source, ctx=...)`` for that run alone.  The pipeline builds
+    each run's loader and trade source from that run's context
+    (``OfflineSource.create_loader`` / ``create_trade_source``), so one source
+    serves many runs, each with its own date, symbol and venue.
 
     Attributes
     ----------
@@ -624,6 +650,15 @@ class Source(Protocol):
     settings : SourceSettings
         Typed per-source configuration.  The empty base for a source that needs
         none; a typed subclass (e.g. ``CcxtSettings``) for one with venue knobs.
+    grid : InstrumentGrid
+        The tick and lot size the source's data is usually on
+        (:class:`~ob_analytics.config.InstrumentGrid`), which a pipeline run
+        starts its config from.  Optional: read it with :func:`grid_of`, which
+        treats a missing one as the default grid.
+
+    A source holds no state from one run: the pipeline builds each run's
+    loader and trade source from that run's config and context, so one source
+    can serve many runs.
     """
 
     name: str
@@ -662,8 +697,15 @@ class OfflineSource(Source, Protocol):
         """
         ...
 
-    def create_trade_source(self, config: Any, ctx: RunContext) -> TradeSource:
-        """Return a trade source for this source."""
+    def create_trade_source(
+        self, config: Any, ctx: RunContext, loader: Any
+    ) -> TradeSource:
+        """Return a trade source for this source.
+
+        *loader* is the run's loader, the one that reads the events.  A source
+        whose trades come off the same read (Databento) takes them from it;
+        most sources ignore it.
+        """
         ...
 
     def create_writer(self, config: Any, ctx: RunContext) -> DataWriter | None:
@@ -676,13 +718,14 @@ class OfflineSource(Source, Protocol):
         config: Any,
         source: Any,
         ctx: RunContext,
+        loader: Any,
     ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
         """Return ``(depth, depth_summary)`` to override the standard
-        depth pipeline, or ``None`` to use it."""
-        ...
+        depth pipeline, or ``None`` to use it.
 
-    def config_defaults(self) -> dict[str, Any]:
-        """Return default :class:`PipelineConfig` overrides for this source."""
+        *loader* is the run's loader, after it read *events*.  LOBSTER takes
+        the orderbook file it found from it.
+        """
         ...
 
     def required_context(self) -> list[str]:

@@ -54,16 +54,29 @@ result = Pipeline.from_source(
 ).run("/path/to/extracted_lobster_folder")
 ```
 
+A context given to `Pipeline` is the default for every run. A context given to
+`run` is for that run alone, so one pipeline reads several days:
+
+```python
+pipeline = Pipeline(source=LobsterSource())
+monday = pipeline.run("/data/AAPL_monday", ctx=RunContext(trading_date="2012-06-18"))
+tuesday = pipeline.run("/data/AAPL_tuesday", ctx=RunContext(trading_date="2012-06-19"))
+```
+
+The source keeps nothing from a run, so one `LobsterSource()` can also serve
+several pipelines at once.
+
 ## Per-source extras
 
 Some sources expose auxiliary event tables that don't fit the universal
 events schema — LOBSTER trading halts, cross trades, and hidden
 executions, for example. These no longer ride on `PipelineResult`; a
 `LobsterLoader` splits them out during `load()` and exposes them as a public
-attribute (`None` when absent):
+attribute (`None` when absent). Build the loader yourself and give it to the
+pipeline, and read the tables off it after the run:
 
 ```python
-from ob_analytics import Pipeline, RunContext
+from ob_analytics import Pipeline
 from ob_analytics.lobster import LobsterLoader, LobsterSource
 from ob_analytics.visualization.gallery import (
     build_gallery_model,
@@ -72,11 +85,8 @@ from ob_analytics.visualization.gallery import (
     trading_halts_panel,
 )
 
-ctx = RunContext(trading_date="2015-05-01")
-result = Pipeline(source=LobsterSource()).run(path, ctx=ctx)
-
 loader = LobsterLoader(trading_date="2015-05-01")
-loader.load(path)             # populates loader.trading_halts
+result = Pipeline(source=LobsterSource(), loader=loader).run(path)
 halts = loader.trading_halts  # pd.DataFrame | None
 
 if halts is not None:
@@ -86,6 +96,11 @@ if halts is not None:
     model.analytics.append(trading_halts_panel(display_result(result).trades, halts))
     generate_gallery(result, "out/gallery", model=model)
 ```
+
+A `LobsterLoader` built by hand reads LOBSTER's own grid, a cent tick and whole
+shares, and knows that a price in the file is in ten-thousandths of a dollar.
+So it reads the same prices and sizes as a pipeline run. Give it a
+`PipelineConfig` only for another grid.
 
 Bitstamp runs have no such tables (`loader.trading_halts is None`). Hidden
 executions are detected automatically by the gallery builder

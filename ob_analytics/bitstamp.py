@@ -34,7 +34,7 @@ from ob_analytics._utils import (
     validate_columns,
     validate_non_empty,
 )
-from ob_analytics.config import PipelineConfig, SourceSettings
+from ob_analytics.config import InstrumentGrid, PipelineConfig, SourceSettings
 from ob_analytics.protocols import (
     DataWriter,
     EventLoader,
@@ -156,10 +156,9 @@ class BitstampLoader:
         events["volume"] = size_to_lots(events["volume"], self._config.lot_size)
         events["price"] = price_to_ticks(events["price"], self._config.tick_size)
 
-        ts_unit = self._config.timestamp_unit
-        events["timestamp"] = epoch_to_datetime(events["timestamp"], ts_unit)
+        events["timestamp"] = epoch_to_datetime(events["timestamp"], _TIMESTAMP_UNIT)
         events["exchange_timestamp"] = epoch_to_datetime(
-            events["exchange_timestamp"], ts_unit
+            events["exchange_timestamp"], _TIMESTAMP_UNIT
         )
         events["action"] = pd.Categorical(
             events["action"], categories=["created", "changed", "deleted"], ordered=True
@@ -261,6 +260,10 @@ class BitstampLoader:
 # ── BitstampTradeReader ───────────────────────────────────────────────
 
 
+#: The unit of the integer epoch timestamps in Bitstamp's CSV files, orders
+#: and trades alike.
+_TIMESTAMP_UNIT = "ms"
+
 _TRADES_COLUMNS = (
     "trade_id",
     "timestamp",
@@ -330,7 +333,7 @@ class BitstampTradeReader:
 
         # Capture timestamps are epoch milliseconds; keep them on the shared
         # tz-aware UTC nanosecond clock (issue #154).
-        recv_ms = epoch_to_datetime(raw["timestamp"], "ms")
+        recv_ms = epoch_to_datetime(raw["timestamp"], _TIMESTAMP_UNIT)
         # Trade sizes share the events' integer-lot grid (issue #226), so the
         # fill matching below compares exact integers rather than rounded
         # floats.
@@ -551,13 +554,12 @@ class BitstampWriter:
         """
         events = data["events"]
         p = Path(dest)
-        ts_unit = self._config.timestamp_unit
         out = pd.DataFrame(
             {
                 "id": events["id"],
-                "timestamp": datetime_to_epoch(events["timestamp"], ts_unit),
+                "timestamp": datetime_to_epoch(events["timestamp"], _TIMESTAMP_UNIT),
                 "exchange_timestamp": datetime_to_epoch(
-                    events["exchange_timestamp"], ts_unit
+                    events["exchange_timestamp"], _TIMESTAMP_UNIT
                 ),
                 # Restore the quote-currency float from integer ticks (#155).
                 "price": ticks_to_price(
@@ -659,6 +661,8 @@ class BitstampSource:
     # The live_orders channel reports every order, takers included, and each
     # trade names both orders, so a trade's maker and taker can both be found.
     trade_attribution = TradeAttribution.BOTH
+    # BTC/USD: a cent tick and satoshi lots.
+    grid = InstrumentGrid()
 
     def __init__(self, settings: SourceSettings | None = None) -> None:
         # Bitstamp needs no per-source knobs; the empty typed settings keep the
@@ -674,7 +678,7 @@ class BitstampSource:
         return BitstampLoader(config, venue=ctx.venue, symbol=ctx.symbol)
 
     def create_trade_source(
-        self, config: PipelineConfig, ctx: RunContext
+        self, config: PipelineConfig, ctx: RunContext, loader: Any
     ) -> TradeSource:
         return BitstampTradeReader(config)
 
@@ -689,17 +693,10 @@ class BitstampSource:
         config: Any,
         source: Any,
         ctx: RunContext,
+        loader: Any,
     ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
         # Bitstamp uses the standard price_level_volume -> depth_metrics path.
         return None
-
-    def config_defaults(self) -> dict[str, Any]:
-        return {
-            "tick_size": 0.01,
-            "price_decimals": 2,
-            "volume_decimals": 8,
-            "timestamp_unit": "ms",
-        }
 
     def required_context(self) -> list[str]:
         # Bitstamp captures are self-describing (timestamps carry the date).
