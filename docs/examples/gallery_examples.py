@@ -158,9 +158,9 @@ def vpin(result):
     """Volume-synchronised probability of informed trading over the session."""
     # Twenty buckets over the session, averaged ten at a time: the default
     # 50-bucket window would never fill on a 30-minute sample.
-    v = compute_vpin(
-        result.trades, bucket_volume=result.trades["volume"].sum() / 20, n_buckets=10
-    )
+    # The trades store whole lots; lot_size turns their total into BTC.
+    total = result.trades["volume"].sum() * result.config.lot_size
+    v = compute_vpin(result.trades, bucket_volume=total / 20, n_buckets=10)
     return plot("vpin", **prepare.vpin(v, threshold=0.7))
 
 

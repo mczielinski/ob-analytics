@@ -146,12 +146,14 @@ class TestComputeVpin:
     def test_bucket_volume_in_the_wrong_units_raises(self, sign_method):
         """A bucket far smaller than the volume is refused before any bucket is built.
 
-        Sizes are integer lots, so a bucket of 1.0 against 0.01 BTC trades
-        (1e6 lots each at a lot size of 1e-8) asks for two million buckets.
+        A bucket of one satoshi (1e-8 BTC, the size of one lot) against two
+        0.01 BTC trades asks for two million buckets.  The message says the
+        setting is in the instrument's units, not lots.
         """
         trades = _trades(["buy", "sell"], volumes=[1_000_000, 1_000_000])
-        with pytest.raises(ValueError, match="MAX_VOLUME_BUCKETS.*lots"):
-            compute_vpin(trades, bucket_volume=1.0, sign_method=sign_method)
+        trades.attrs["lot_size"] = 1e-8
+        with pytest.raises(ValueError, match="MAX_VOLUME_BUCKETS.*not lots"):
+            compute_vpin(trades, bucket_volume=1e-8, sign_method=sign_method)
 
     def test_default_bucket_over_a_bad_time_span_blames_the_timestamps(self):
         """The default rule makes ~50 buckets a day, so decades trip the cap.

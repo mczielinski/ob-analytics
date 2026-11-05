@@ -26,7 +26,7 @@ RULES = ("time", "tick", "volume", "dollar", "imbalance")
 @pytest.fixture
 def toy() -> pd.DataFrame:
     """Twelve trades on a 10-second grid, with a known buy/sell pattern."""
-    return pd.DataFrame(
+    trades = pd.DataFrame(
         {
             "timestamp": pd.date_range("2026-01-01", periods=12, freq="10s", tz="UTC"),
             "price": [100, 101, 102, 101, 100, 99, 98, 99, 100, 101, 102, 103],
@@ -50,6 +50,11 @@ def toy() -> pd.DataFrame:
             ),
         }
     )
+    # Whole ticks and lots, like a pipeline result.  A size or "dollar"
+    # threshold is read in the instrument's units through these; steps of 1
+    # keep the thresholds below in the numbers they were written in.
+    trades.attrs.update(tick_size=1.0, lot_size=1.0)
+    return trades
 
 
 @pytest.fixture
@@ -244,6 +249,8 @@ class TestAccumulationRules:
                 "direction": ["buy", "buy", "buy"],
             }
         )
+        # Whole lots of one unit each, so the threshold reads as written.
+        lumpy.attrs["lot_size"] = 1.0
 
         out = bars(lumpy, "volume", 10)
 

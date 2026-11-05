@@ -15,9 +15,16 @@ Five rules ship with the package:
 |---|---|---|
 | `time` | fixed span of the clock | a duration (`"1min"`, `pd.Timedelta`) |
 | `tick` | N trades | a trade count |
-| `volume` | N units of traded size | an amount |
-| `dollar` | N units of price × size | an amount |
-| `imbalance` | N units of drift in signed size | an amount |
+| `volume` | N units of traded size | a size, in the instrument's units |
+| `dollar` | N units of price × size | an amount of the quote currency |
+| `imbalance` | N units of drift in signed size | a size, in the instrument's units |
+
+A threshold means the same amount on a pipeline result (whole ticks and lots)
+and on a display frame: `bars(result.trades, "volume", 0.5)` and
+`bars(display_result(result).trades, "volume", 0.5)` both close a bar every
+0.5 BTC. The integer frame adds whole lots exactly. On the display frame a
+float sum can land just short of a threshold that a run of trades meets
+exactly, so the two can put one trade in a different bar.
 
 The last four sample the market by activity rather than by the clock. That is
 why the quant literature prefers them: a quiet hour and a busy minute produce

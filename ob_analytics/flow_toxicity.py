@@ -34,6 +34,7 @@ import pandas as pd
 
 from ob_analytics._utils import (
     fixed_window,
+    size_scale,
     validate_columns,
     validate_non_empty,
     window_start,
@@ -168,12 +169,15 @@ def vpin_bucket_volume(
     Returns
     -------
     float
-        The bucket volume, in the units of ``trades["volume"]``.
+        The bucket volume, in the instrument's own units (BTC, shares,
+        contracts), ready to pass to :func:`compute_vpin` as
+        ``bucket_volume``.
 
     Raises
     ------
     ConfigError
-        If required columns are missing.
+        If required columns are missing, or the sizes are integer lots and
+        the frame carries no ``lot_size``.
     ObAnalyticsError
         If *trades* is empty.
     ValueError
@@ -182,6 +186,7 @@ def vpin_bucket_volume(
     """
     validate_columns(trades, {"timestamp", "volume"}, "vpin_bucket_volume")
     validate_non_empty(trades, "vpin_bucket_volume")
+    scale = size_scale(trades, "vpin_bucket_volume")
     if buckets_per_day <= 0:
         raise ValueError(f"buckets_per_day must be positive, got {buckets_per_day}")
     day = pd.Timedelta(trading_day)
@@ -193,7 +198,7 @@ def vpin_bucket_volume(
             "vpin_bucket_volume: the trades span no time, so there is no rate "
             "to scale to a day; pass bucket_volume explicitly."
         )
-    daily_volume = float(trades["volume"].sum()) * (day / span)
+    daily_volume = float(trades["volume"].sum()) / scale * (day / span)
     return daily_volume / buckets_per_day
 
 
@@ -244,13 +249,14 @@ def compute_vpin(
         ``direction`` column (``"buy"`` / ``"sell"``, the taker side) is used
         when present; otherwise it is inferred — see *sign_method*.
     bucket_volume : float, optional
-        Total volume per bucket, in the units of ``trades["volume"]``: integer
-        lots on a pipeline result (the base-asset size is ``lots * lot_size``,
-        see :class:`~ob_analytics.config.PipelineConfig`).  This is highly
-        instrument-specific, so size it from the data, for example
-        ``trades["volume"].sum() / 60``.  When left out, it is picked by
-        :func:`vpin_bucket_volume` (average daily volume ÷ 50, with a 24-hour
-        trading day).
+        Total volume per bucket, in the instrument's own units (BTC, shares,
+        contracts).  It means the same amount whether ``trades["volume"]``
+        holds integer lots (with ``trades.attrs["lot_size"]``, as on a
+        pipeline result) or display sizes (see
+        :func:`~ob_analytics.visualization.display_result`).  This is highly
+        instrument-specific, so size it from the data.  When left out, it is
+        picked by :func:`vpin_bucket_volume` (average daily volume ÷ 50, with
+        a 24-hour trading day).
     n_buckets : int, optional
         Window length (in buckets) for the trailing VPIN average.
         Default is 50, following the original paper.  Fewer complete buckets
@@ -280,15 +286,17 @@ def compute_vpin(
         * ``bucket`` — zero-based bucket index
         * ``timestamp_start`` — first trade timestamp in the bucket
         * ``timestamp_end`` — last trade timestamp in the bucket
-        * ``buy_volume`` — total buy volume in the bucket
-        * ``sell_volume`` — total sell volume in the bucket
+        * ``buy_volume`` — total buy volume in the bucket, in the
+          instrument's own units
+        * ``sell_volume`` — total sell volume in the bucket, likewise
         * ``vpin`` — ``|buy_volume - sell_volume| / bucket_volume``
         * ``vpin_avg`` — trailing mean of ``vpin`` over *n_buckets*
 
         The frame's ``attrs`` record how it was computed, so the settings can
         be reported next to the number:
 
-        * ``attrs["bucket_volume"]`` — the bucket size used
+        * ``attrs["bucket_volume"]`` — the bucket size used, in the
+          instrument's own units
         * ``attrs["bucket_volume_rule"]`` — ``"given"`` when passed in,
           ``"adv/50"`` when picked by :func:`vpin_bucket_volume`
         * ``attrs["n_buckets"]`` — the trailing window, in buckets
@@ -302,7 +310,8 @@ def compute_vpin(
     Raises
     ------
     ConfigError
-        If required columns are missing.
+        If required columns are missing, or the sizes are integer lots and
+        the frame carries no ``lot_size``.
     ObAnalyticsError
         If *trades* is empty.
     ValueError
@@ -312,6 +321,7 @@ def compute_vpin(
     """
     validate_columns(trades, {"timestamp", "price", "volume"}, "compute_vpin")
     validate_non_empty(trades, "compute_vpin")
+    scale = size_scale(trades, "compute_vpin")
     rule = "given"
     advice: str | None = None
     if bucket_volume is None:
@@ -326,12 +336,16 @@ def compute_vpin(
         )
     if bucket_volume <= 0:
         raise ValueError(f"bucket_volume must be positive, got {bucket_volume}")
-    check_bucket_count(trades, bucket_volume, "compute_vpin", advice=advice)
+    check_bucket_count(
+        trades, bucket_volume, "compute_vpin", scale=scale, advice=advice
+    )
 
     if sign_method == "bvc":
         result = _vpin_from_bvc(trades, bucket_volume, n_buckets)
     else:
-        result = _vpin_from_signs(trades, bucket_volume, n_buckets, sign_method, quotes)
+        result = _vpin_from_signs(
+            trades, bucket_volume, scale, n_buckets, sign_method, quotes
+        )
 
     diagnostics: tuple[str, ...] = ()
     if len(result) < n_buckets:
@@ -359,11 +373,18 @@ def compute_vpin(
 def _vpin_from_signs(
     trades: pd.DataFrame,
     bucket_volume: float,
+    scale: float,
     n_buckets: int,
     sign_method: str | None,
     quotes: pd.DataFrame | None,
 ) -> pd.DataFrame:
-    """VPIN from a per-trade buy/sell sign (every ``sign_method`` but ``"bvc"``)."""
+    """VPIN from a per-trade buy/sell sign (every ``sign_method`` but ``"bvc"``).
+
+    *bucket_volume* is in the instrument's units and *scale* is the frame's
+    units in one of them (:func:`~ob_analytics._utils.size_scale`): the walk
+    runs in the frame's units and the volumes are reported in the
+    instrument's.
+    """
     trades = resolve_direction(trades, sign_method, quotes, "compute_vpin")
     df = trades.sort_values("timestamp").reset_index(drop=True)
 
@@ -376,11 +397,12 @@ def _vpin_from_signs(
     # Walk through trades, splitting volume into equal-sized buckets.
     # A single trade can be split across two buckets if it straddles a
     # boundary.
+    bucket = bucket_volume * scale
     buckets: list[dict] = []
     bucket_buy = 0.0
     bucket_sell = 0.0
     bucket_start_ts = timestamps[0]
-    bucket_remaining = bucket_volume
+    bucket_remaining = bucket
 
     for i in range(len(df)):
         trade_buy = buy_vol[i]
@@ -406,14 +428,14 @@ def _vpin_from_signs(
                         "bucket": len(buckets),
                         "timestamp_start": bucket_start_ts,
                         "timestamp_end": timestamps[i],
-                        "buy_volume": bucket_buy,
-                        "sell_volume": bucket_sell,
-                        "vpin": abs(bucket_buy - bucket_sell) / bucket_volume,
+                        "buy_volume": bucket_buy / scale,
+                        "sell_volume": bucket_sell / scale,
+                        "vpin": abs(bucket_buy - bucket_sell) / bucket,
                     }
                 )
                 bucket_buy = 0.0
                 bucket_sell = 0.0
-                bucket_remaining = bucket_volume
+                bucket_remaining = bucket
                 # Next bucket starts at the same trade timestamp
                 bucket_start_ts = timestamps[i]
 

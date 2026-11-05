@@ -22,7 +22,8 @@ from ob_analytics.visualization import display_result
 result = Pipeline().run(sample_csv_path())
 
 # Pipeline prices are whole ticks and sizes whole lots; display_result
-# converts both to the quote currency and the base asset.
+# converts both to the quote currency and the base asset. A threshold is in
+# BTC and dollars on either frame; only the bar columns change units.
 trades = display_result(result).trades
 
 ohlcv = bars(trades, "time", "1min")
@@ -105,10 +106,12 @@ threshold. Drop it with `.iloc[:-1]` where an equal-size bar matters.
 `buy_volume` and `sell_volume` need the taker's side. L3 crypto ships it; L2
 and aggregated feeds don't, so `bars()` classifies it the same way the
 [flow-toxicity metrics](flow-toxicity.md) do. Pass book snapshots to use
-Lee–Ready instead of the tick rule:
+Lee–Ready instead of the tick rule. The quotes must be in the same units as
+the trades, so convert them too:
 
 ```python
-bars(trades, "volume", 0.5, sign_method="lee_ready", quotes=result.depth_summary)
+quotes = display_result(result).depth_summary
+bars(trades, "volume", 0.5, sign_method="lee_ready", quotes=quotes)
 ```
 
 ## Plot them

@@ -36,8 +36,11 @@ goes to `compute` or `prepare`, whichever names it.
 
 Each uses the defaults of the function it wraps. The gallery and `result.plot`
 give a metric the result in display units (quote currency, base asset);
-`result.metric` gives it the result as stored (integer ticks and lots), so a
-size setting such as `bucket_volume` is in those units there.
+`result.metric` gives it the result as stored (integer ticks and lots). A
+setting means the same either way: a size such as `bucket_volume` is in the
+instrument's own units (BTC, shares, contracts) and a price in the quote
+currency, so `result.metric("vpin", bucket_volume=0.5)` and
+`result.plot("vpin", bucket_volume=0.5)` use the same 0.5 BTC buckets.
 
 ::: ob_analytics.metrics.L1TickerMetric
 

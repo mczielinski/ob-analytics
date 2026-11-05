@@ -27,6 +27,19 @@ _Avoid_: raw price, float price
 The instrument's smallest price increment, in the quote currency. Named
 `tick_size`, and what a price is multiplied by to get the quote currency.
 
+**Lot size**:
+The instrument's smallest size increment, in the instrument's own units. Named
+`lot_size`; a stored size (`volume`) is a whole number of lots, multiplied by
+`lot_size` to get the instrument's units.
+
+**Instrument units**:
+The units a user states a setting in: BTC, shares or contracts for a size, the
+quote currency for a price. Every size or price setting is in these units,
+whether the frame it applies to holds whole lots and ticks (a run, a saved
+file) or display floats. A frame's `attrs["lot_size"]` and `attrs["tick_size"]`
+say how to convert.
+_Avoid_: lots or ticks for a setting; base units
+
 **Basis point (BPS)**:
 One hundredth of a percent, the unit for distances from the mid-price. Named
 `bps` in identifiers.
@@ -468,7 +481,7 @@ _Avoid_: bar type, sampling scheme
 
 **Threshold**:
 How much of the rule's own quantity closes a bar. Named `threshold`; the unit
-is the rule's (a duration, a trade count, an amount).
+is the rule's (a duration, a trade count, or an amount in instrument units).
 _Avoid_: bucket size, window, step
 
 **Turnover**:

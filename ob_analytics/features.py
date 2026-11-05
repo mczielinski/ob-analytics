@@ -29,7 +29,7 @@ Usage::
     from ob_analytics import Pipeline, features, sample_csv_path
 
     result = Pipeline().run(sample_csv_path())
-    table = features(result.trades, result.depth_summary, "volume", 100)
+    table = features(result.trades, result.depth_summary, "volume", 0.5)
 
 Without a quotes frame the book features drop out and the table holds the
 trade features alone.
@@ -573,9 +573,11 @@ def features(
         default), ``"tick"``, ``"volume"``, ``"dollar"`` or ``"imbalance"``.
         See :func:`~ob_analytics.bars.list_bar_rules`.
     threshold : optional
-        How much of the rule's own quantity closes a bar.  ``None`` (the
-        default) asks the rule for a threshold that yields about *target_bars*
-        rows.
+        How much of the rule's own quantity closes a bar, in the same units
+        as :func:`~ob_analytics.bars.bars` takes it: a size in the
+        instrument's own units and a turnover in the quote currency, on
+        integer and display frames alike.  ``None`` (the default) asks the
+        rule for a threshold that yields about *target_bars* rows.
     target_bars : int, optional
         How many rows the default threshold aims at.  Ignored when *threshold*
         is given.
@@ -652,7 +654,7 @@ def features(
     >>> from ob_analytics import Pipeline, features, sample_csv_path
     >>> result = Pipeline().run(sample_csv_path())  # doctest: +SKIP
     >>> table = features(  # doctest: +SKIP
-    ...     result.trades, result.depth_summary, "volume", 100
+    ...     result.trades, result.depth_summary, "volume", 0.5
     ... )
     >>> table[["timestamp", "close", "spread_bps", "obi", "vpin"]]  # doctest: +SKIP
     """

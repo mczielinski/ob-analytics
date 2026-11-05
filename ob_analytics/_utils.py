@@ -266,6 +266,77 @@ def lots_to_size(
     return size if decimals is None else np.round(size, decimals)
 
 
+# ---------------------------------------------------------------------------
+# Settings in the instrument's own units
+# ---------------------------------------------------------------------------
+#
+# A user states a size in the instrument's units (BTC, shares, contracts) and
+# a price in the quote currency, whichever frame the setting is applied to.
+# A pipeline result stores whole lots and ticks; a display frame stores floats
+# in the instrument's units.  These two functions say how many units of a
+# frame's column make one unit of the instrument, so a setting is multiplied
+# by the result before it is compared with the column.
+
+
+def size_scale(frame: pd.DataFrame, context: str, column: str = "volume") -> float:
+    """Return how many units of ``frame[column]`` make one unit of size.
+
+    Integer sizes are whole lots, so the answer is ``1 / lot_size``, read from
+    ``frame.attrs["lot_size"]`` (a pipeline run and
+    :func:`~ob_analytics.data.load_data` both put it there).  Float sizes are
+    already in the instrument's units, so the answer is ``1.0``.  Multiply a
+    size setting by the result to compare it with the column, and divide a
+    value read from the column by it to report it back.
+
+    Raises
+    ------
+    ConfigError
+        If the sizes are integers and the frame has no ``lot_size``.
+    """
+    return _unit_scale(frame, column, "lot_size", lot_multiplier, context)
+
+
+def price_scale(frame: pd.DataFrame, context: str, column: str = "price") -> float:
+    """Return how many units of ``frame[column]`` make one unit of the quote currency.
+
+    The price counterpart of :func:`size_scale`: ``1 / tick_size`` for integer
+    ticks, read from ``frame.attrs["tick_size"]``, and ``1.0`` for float
+    prices.
+
+    Raises
+    ------
+    ConfigError
+        If the prices are integers and the frame has no ``tick_size``.
+    """
+    return _unit_scale(frame, column, "tick_size", tick_multiplier, context)
+
+
+def _unit_scale(
+    frame: pd.DataFrame,
+    column: str,
+    key: str,
+    multiplier: Any,
+    context: str,
+) -> float:
+    """Shared body of :func:`size_scale` and :func:`price_scale`."""
+    if not pd.api.types.is_integer_dtype(frame[column]):
+        return 1.0
+    step = frame.attrs.get(key)
+    if step is None:
+        raise ConfigError(
+            f"{context}: {column!r} holds whole steps of the instrument, and "
+            f"the frame has no attrs[{key!r}] to say how large one step is, so "
+            f"a setting in the instrument's own units cannot be converted. Set "
+            f"frame.attrs[{key!r}] to the instrument's step, or convert the "
+            f"frame with display_result first."
+        )
+    # An integer inverse where the step has one, as size_to_lots and
+    # price_to_ticks use, so a setting such as 0.5 BTC multiplies to
+    # 50,000,000.0 lots rather than the nearest float to 0.5 / 1e-8.
+    exact = multiplier(float(step))
+    return float(exact) if exact is not None else 1.0 / float(step)
+
+
 def decimal_places(values: object) -> int | None:
     """Return the fewest decimal places that put every float in *values* on a grid.
 

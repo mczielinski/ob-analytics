@@ -612,7 +612,8 @@ class TestBitstampValidationHarness:
         res = sample_pipeline_result
         l2_trades = res.trades.drop(columns=["direction"])
         quotes = res.depth_summary[["timestamp", "best_bid_price", "best_ask_price"]]
-        total_volume = float(res.trades["volume"].sum())
+        # In BTC: a size setting is in the instrument's units.
+        total_volume = float(res.trades["volume"].sum()) * res.config.lot_size
         bucket = total_volume / 10.0
 
         vpin_tick = compute_vpin(l2_trades, bucket_volume=bucket, n_buckets=5)

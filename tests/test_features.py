@@ -49,7 +49,7 @@ def toy_trades() -> pd.DataFrame:
     """Forty trades on a 5-second grid, with a repeating buy/sell pattern."""
     n = 40
     rng = np.random.default_rng(20260917)
-    return pd.DataFrame(
+    trades = pd.DataFrame(
         {
             "timestamp": pd.date_range("2026-01-01", periods=n, freq="5s", tz="UTC"),
             "price": 100 + np.cumsum(rng.integers(-2, 3, size=n)),
@@ -60,6 +60,11 @@ def toy_trades() -> pd.DataFrame:
             ),
         }
     )
+    # The prices are whole ticks, so a "dollar" threshold needs the tick size
+    # to be read in the quote currency.  A tick of 1 keeps the thresholds
+    # below in the numbers they were written in.
+    trades.attrs["tick_size"] = 1.0
+    return trades
 
 
 @pytest.fixture
@@ -770,7 +775,9 @@ class TestBundledSample:
         from ob_analytics import Pipeline
 
         result = Pipeline().run(sample_csv_path)
-        table = features(result.trades, result.depth_summary, "volume", 100)
+        # 1e-6 BTC is 100 satoshi lots, the threshold this test was written
+        # with before thresholds were read in the instrument's units.
+        table = features(result.trades, result.depth_summary, "volume", 1e-6)
 
         assert len(table) > 50
         assert table.attrs["features_skipped"] == []
