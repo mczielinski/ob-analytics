@@ -63,9 +63,13 @@ from ob_analytics.protocols import (
     TradeSource,
 )
 from ob_analytics.schemas import (
+    ACTION_DTYPE,
+    BOOK_SIDE_DTYPE,
     TRADE_DTYPES,
+    TRADE_SIDE_DTYPE,
     attach_instrument_identity,
     cast_columns,
+    cast_events,
     time_order_keys,
 )
 
@@ -224,16 +228,8 @@ class LobsterLoader:
         events = raw[raw["event_type"].isin(_EVENT_TYPE_TO_ACTION)].copy()
         events["action"] = events["event_type"].map(_EVENT_TYPE_TO_ACTION)
 
-        events["action"] = pd.Categorical(
-            events["action"],
-            categories=["created", "changed", "deleted"],
-            ordered=True,
-        )
-        events["direction"] = pd.Categorical(
-            events["direction"],
-            categories=["bid", "ask"],
-            ordered=True,
-        )
+        events["action"] = events["action"].astype(ACTION_DTYPE)
+        events["direction"] = events["direction"].astype(BOOK_SIDE_DTYPE)
 
         # Canonical volume semantics (see schemas.py): ``volume`` is the
         # order's outstanding size after the event (created/changed) or the
@@ -325,7 +321,7 @@ class LobsterLoader:
             default_venue=self._VENUE,
         )
 
-        return events
+        return cast_events(events)
 
     @staticmethod
     def _glob_lobster_file(directory: Path, kind: str) -> Path | None:
@@ -437,9 +433,7 @@ class LobsterTradeReader:
                 # Executed quantity: `fill` carries the raw executed delta
                 # (`volume` is the order's outstanding size after the event).
                 "volume": execs["fill"].values,
-                "direction": pd.Categorical(
-                    trade_direction, categories=["buy", "sell"], ordered=True
-                ),
+                "direction": pd.Categorical(trade_direction, dtype=TRADE_SIDE_DTYPE),
                 "maker_event_id": maker_event_id,
                 "taker_event_id": taker_event_id,
                 "maker": maker_id,
@@ -1083,9 +1077,7 @@ def lobster_depth_from_orderbook(
             columns=["event_id", "timestamp", "price", "volume", "direction"]
         )
 
-    depth["direction"] = pd.Categorical(
-        depth["direction"], categories=["bid", "ask"], ordered=True
-    )
+    depth["direction"] = depth["direction"].astype(BOOK_SIDE_DTYPE)
     depth = depth.sort_values("timestamp", kind="stable").reset_index(drop=True)
 
     logger.info("lobster_depth: {} depth rows from orderbook", len(depth))

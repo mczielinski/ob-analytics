@@ -37,6 +37,7 @@ from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import Clocks, FeedType, SequenceKind, TradeAttribution
 from ob_analytics.schemas import (
     INGEST_SEQ_COLUMN,
+    ORDER_TYPE_DTYPE,
     ORIGIN_COLUMN,
     SEQUENCE_COLUMN,
     SNAPSHOT_ORIGIN,
@@ -267,16 +268,7 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
     # a side effect.
     events = events.copy()
     events["type"] = pd.Categorical(
-        np.repeat("unknown", len(events)),
-        categories=[
-            "unknown",
-            "pre-existing",
-            "flashed-limit",
-            "resting-limit",
-            "market-limit",
-            "market",
-        ],
-        ordered=True,
+        np.repeat("unknown", len(events)), dtype=ORDER_TYPE_DTYPE
     )
 
     created = events[events["action"] == "created"].sort_values(by="id", kind="stable")

@@ -75,6 +75,7 @@ from ob_analytics import (
     SourceSettings,
     register_source,
 )
+from ob_analytics.schemas import cast_events
 
 
 class CoinbaseLoader:
@@ -89,7 +90,7 @@ class CoinbaseLoader:
         # a full implementation.
         raw = pd.read_json(source)
         ...
-        return events
+        return cast_events(events)
 
 
 class CoinbaseTradeReader:
@@ -145,12 +146,15 @@ loader as a constant, or, when the format leaves it open, as a field of the
 source's typed settings. `PipelineConfig` has no field for it.
 
 The pipeline checks both frames on the way in and names any column that is
-missing. The loader's events need these columns:
+missing or has the wrong dtype. Build the events with
+`ob_analytics.schemas.cast_events(events)` and the trades with
+`cast_columns(trades, TRADE_DTYPES)`, as the bundled loaders do, and the dtypes
+come out right. The loader's events need these columns:
 
 | Column | Type | What it holds |
 |---|---|---|
 | `event_id` | `int64` | A unique id for each row, in the order the rows happened |
-| `id` | `int64` | The order's id, the same on every row of one order |
+| `id` | `int64`, or `object` for text ids | The order's id, the same on every row of one order |
 | `timestamp` | `datetime64[ns, UTC]` | When you received the message |
 | `exchange_timestamp` | `datetime64[ns, UTC]` | The venue's own time; repeat `timestamp` if the feed has none |
 | `price` | `int64` | Integer ticks: the price divided by `config.tick_size` |

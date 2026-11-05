@@ -583,6 +583,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Every event loader casts through `EVENT_DTYPES`, and the validators check
+  dtypes** (#379). The Bitstamp, LOBSTER and Databento loaders build their
+  events through the new `schemas.cast_events`, which keeps text order ids
+  (UUIDs) as `object`. `validate_events_df` and `validate_trades_df` now also
+  fail a column whose dtype differs from the map, and the message names the
+  column and both dtypes, so a float `volume` or an `object` `direction` no
+  longer passes. A custom loader must return the canonical dtypes. LOBSTER's
+  `raw_event_type` is now `object`, as the map says. The side, action and
+  order-type category lists are written only in `schemas.py`.
+
 - **A loader knows its own feed format** (#348). `PipelineConfig` no longer
   has `price_divisor` or `timestamp_unit`, and refuses an unknown field rather
   than dropping it. LOBSTER's ten-thousandths of a dollar
@@ -962,6 +972,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   applied. Use `bps_range` or `max_levels`, or filter the returned frames.
 
 ### Fixed
+
+- **"What each feed shows" says why Kraken book drift is not noticed**
+  (#391). Kraken sends a checksum of its book, but the checks in ccxt and
+  cryptofeed are both off by default, and the package turns on neither.
+  Kraken sends no sequence number, so the only sign of drift is a crossed
+  book, which the `crossed_book` check reports.
 
 - **A source keeps nothing from a run, and `run(ctx=...)` reaches the
   loader** (#348). `LobsterSource` and `DatabentoSource` kept the last loader
