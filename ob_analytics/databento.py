@@ -122,11 +122,15 @@ from ob_analytics.protocols import (
     TradeSource,
 )
 from ob_analytics.schemas import (
+    ACTION_DTYPE,
+    BOOK_SIDE_DTYPE,
     MAYBE_BAD_BOOK_ATTR,
     SEQUENCE_COLUMN,
     TRADE_DTYPES,
+    TRADE_SIDE_DTYPE,
     attach_instrument_identity,
     cast_columns,
+    cast_events,
 )
 
 # ── DBN constants ─────────────────────────────────────────────────────
@@ -436,12 +440,8 @@ class DatabentoLoader:
             events = attach_ingest_seq(events)
 
         events = events.drop(columns=["source_pos"])
-        events["action"] = pd.Categorical(
-            events["action"], categories=["created", "changed", "deleted"], ordered=True
-        )
-        events["direction"] = pd.Categorical(
-            events["direction"], categories=["bid", "ask"], ordered=True
-        )
+        events["action"] = events["action"].astype(ACTION_DTYPE)
+        events["direction"] = events["direction"].astype(BOOK_SIDE_DTYPE)
 
         logger.info(
             "DatabentoLoader: {} book events ({} created, {} changed, "
@@ -460,6 +460,7 @@ class DatabentoLoader:
             symbol=self._symbol,
             default_venue=self._VENUE,
         )
+        events = cast_events(events)
         events.attrs[MAYBE_BAD_BOOK_ATTR] = self.maybe_bad_book_records
         return events
 
@@ -1224,9 +1225,7 @@ class DatabentoTradeReader:
                 "price": chosen["price"].to_numpy(),
                 "volume": chosen["volume"].to_numpy(),
                 "direction": pd.Categorical(
-                    chosen["direction"].to_numpy(),
-                    categories=["buy", "sell"],
-                    ordered=True,
+                    chosen["direction"].to_numpy(), dtype=TRADE_SIDE_DTYPE
                 ),
                 "maker_event_id": chosen["maker_event_id"].to_numpy(),
                 # Databento does not identify the aggressing order (see the

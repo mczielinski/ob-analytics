@@ -45,10 +45,14 @@ from ob_analytics.protocols import (
     TradeSource,
 )
 from ob_analytics.schemas import (
+    ACTION_DTYPE,
+    BOOK_SIDE_DTYPE,
     SEQUENCE_COLUMN,
     TRADE_DTYPES,
+    TRADE_SIDE_DTYPE,
     attach_instrument_identity,
     cast_columns,
+    cast_events,
     unsized_order_ids,
 )
 
@@ -160,12 +164,8 @@ class BitstampLoader:
         events["exchange_timestamp"] = epoch_to_datetime(
             events["exchange_timestamp"], _TIMESTAMP_UNIT
         )
-        events["action"] = pd.Categorical(
-            events["action"], categories=["created", "changed", "deleted"], ordered=True
-        )
-        events["direction"] = pd.Categorical(
-            events["direction"], categories=["bid", "ask"], ordered=True
-        )
+        events["action"] = events["action"].astype(ACTION_DTYPE)
+        events["direction"] = events["direction"].astype(BOOK_SIDE_DTYPE)
 
         # Each order's rows in the order they happened: the ``created`` row
         # first, then the rest by time.  Size cannot give this order, because
@@ -231,7 +231,7 @@ class BitstampLoader:
             default_venue=self._VENUE,
         )
 
-        return events
+        return cast_events(events)
 
     @staticmethod
     def _remove_duplicates(events: pd.DataFrame) -> pd.DataFrame:
@@ -358,7 +358,7 @@ class BitstampTradeReader:
                 "price": price_to_ticks(raw["price"], self._config.tick_size),
                 "volume": amounts.values,
                 "direction": pd.Categorical(
-                    raw["side"].astype(str), categories=["buy", "sell"], ordered=True
+                    raw["side"].astype(str), dtype=TRADE_SIDE_DTYPE
                 ),
                 "maker_event_id": maker_event_id,
                 "taker_event_id": taker_event_id,

@@ -566,6 +566,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Every event loader casts through `EVENT_DTYPES`, and the validators check
+  dtypes** (#379). The Bitstamp, LOBSTER and Databento loaders build their
+  events through the new `schemas.cast_events`, which keeps text order ids
+  (UUIDs) as `object`. `validate_events_df` and `validate_trades_df` now also
+  fail a column whose dtype differs from the map, and the message names the
+  column and both dtypes, so a float `volume` or an `object` `direction` no
+  longer passes. A custom loader must return the canonical dtypes. LOBSTER's
+  `raw_event_type` is now `object`, as the map says. The side, action and
+  order-type category lists are written only in `schemas.py`.
+
 - **A loader knows its own feed format** (#348). `PipelineConfig` no longer
   has `price_divisor` or `timestamp_unit`, and refuses an unknown field rather
   than dropping it. LOBSTER's ten-thousandths of a dollar

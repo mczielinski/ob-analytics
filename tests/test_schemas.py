@@ -17,12 +17,43 @@ from ob_analytics.schemas import (
 )
 
 
-def test_validate_events_df_accepts_valid(tiny_events):
-    # tiny_events lacks 'type'/'id' in some fixtures; add the required set.
-    df = tiny_events.assign(type="limit")
-    if "id" not in df.columns:
-        df = df.assign(id=df["event_id"])
-    schemas.validate_events_df(df)  # must not raise
+def test_validate_events_df_accepts_valid():
+    from ob_analytics.analytics import set_order_types
+    from ob_analytics.datasets import toy_events, toy_trades
+
+    schemas.validate_events_df(set_order_types(toy_events(), toy_trades()))
+
+
+def test_validate_events_df_rejects_a_float_volume():
+    from ob_analytics.analytics import set_order_types
+    from ob_analytics.datasets import toy_events, toy_trades
+
+    events = set_order_types(toy_events(), toy_trades())
+    events["volume"] = events["volume"].astype("float64")
+    with pytest.raises(ConfigError, match="'volume' is float64, expected int64"):
+        schemas.validate_events_df(events)
+
+
+def test_validate_events_df_accepts_text_order_ids():
+    from ob_analytics.analytics import set_order_types
+    from ob_analytics.datasets import toy_events, toy_trades
+
+    events = set_order_types(toy_events(), toy_trades())
+    events["id"] = events["id"].map(lambda i: f"uuid-{i}")
+    schemas.validate_events_df(schemas.cast_events(events))
+    assert schemas.cast_events(events)["id"].dtype == object
+
+
+def test_validate_trades_df_rejects_an_object_direction():
+    from ob_analytics.datasets import toy_trades
+
+    trades = toy_trades()
+    trades["direction"] = trades["direction"].astype(object)
+    with pytest.raises(
+        ConfigError,
+        match=r"'direction' is object, expected ordered category \['buy', 'sell'\]",
+    ):
+        schemas.validate_trades_df(trades)
 
 
 def test_validate_events_df_rejects_missing():
@@ -229,14 +260,24 @@ class TestDtypeMaps:
             l3_result.events, schemas.EVENT_DTYPES
         )
 
-    def test_lobster_events_match_the_map(self, lobster_day_dir, lobster_day_pipeline):
-        events = lobster_day_pipeline.run(lobster_day_dir).events
-        # LOBSTER's own event code is an int; the map keeps ``object`` because
-        # the code has a different type on each venue.
-        columns = [c for c in schemas.EVENT_DTYPES if c != "raw_event_type"]
-        assert self._dtypes(events, columns) == self._expected(
-            schemas.EVENT_DTYPES, columns
-        )
+    def test_every_event_loader_matches_the_map(
+        self, l3_result, lobster_day_dir, lobster_day_pipeline
+    ):
+        from ob_analytics.databento import DatabentoSource
+        from ob_analytics.pipeline import Pipeline
+        from tests.test_databento import LIFECYCLE, mbo_frame
+
+        loaders = {
+            "bitstamp": l3_result.events,
+            "lobster": lobster_day_pipeline.run(lobster_day_dir).events,
+            "databento": Pipeline(source=DatabentoSource())
+            .run(mbo_frame(LIFECYCLE))
+            .events,
+        }
+        expected = self._expected(schemas.EVENT_DTYPES, schemas.EVENT_DTYPES)
+        for name, events in loaders.items():
+            assert len(events) > 0, name
+            assert self._dtypes(events, schemas.EVENT_DTYPES) == expected, name
 
     def test_empty_trades_matches_an_l2_trade_reader(self, l2_result):
         from ob_analytics._utils import empty_trades
