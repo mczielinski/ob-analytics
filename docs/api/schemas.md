@@ -17,3 +17,5 @@ for required columns only; extra columns are allowed.
 ::: ob_analytics.schemas.EVENT_DTYPES
 
 ::: ob_analytics.schemas.TRADE_DTYPES
+
+::: ob_analytics.schemas.MAYBE_BAD_BOOK_ATTR
