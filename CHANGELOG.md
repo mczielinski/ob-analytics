@@ -917,6 +917,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Removed
 
+- **The pandas-vs-Polars compare tests** (#390). Three tests in
+  `tests/test_compare_backends.py` waited for a Polars analytics backend and
+  always skipped. ADR 0002 keeps the public API on pandas and does not add
+  Polars, so they could never run. The module docstring now describes only the
+  compiled-engine gate.
+
 - **`Source.config_defaults()`, `Pipeline.loader`, `Pipeline.trade_source`,
   `Pipeline.writer` and `LobsterWriter(price_divisor=...)`** (#348). A
   source's grid replaces `config_defaults()`. The pipeline builds a loader and
