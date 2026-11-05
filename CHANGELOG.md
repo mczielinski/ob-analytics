@@ -956,6 +956,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **"What each feed shows" says why Kraken book drift is not noticed**
+  (#391). Kraken sends a checksum of its book, but the checks in ccxt and
+  cryptofeed are both off by default, and the package turns on neither.
+  Kraken sends no sequence number, so the only sign of drift is a crossed
+  book, which the `crossed_book` check reports.
+
 - **A source keeps nothing from a run, and `run(ctx=...)` reaches the
   loader** (#348). `LobsterSource` and `DatabentoSource` kept the last loader
   they built, and LOBSTER read its depth from that loader's orderbook file.
