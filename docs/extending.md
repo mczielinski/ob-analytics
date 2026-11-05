@@ -147,8 +147,8 @@ source's typed settings. `PipelineConfig` has no field for it.
 
 The pipeline checks both frames on the way in and names any column that is
 missing or has the wrong dtype. Build the events with
-`ob_analytics.schemas.cast_events(events)` and the trades with
-`cast_columns(trades, TRADE_DTYPES)`, as the bundled loaders do, and the dtypes
+`cast_events(events)` and the trades with `cast_columns(trades, TRADE_DTYPES)`,
+all three from `ob_analytics.schemas`, as the bundled loaders do, and the dtypes
 come out right. The loader's events need these columns:
 
 | Column | Type | What it holds |

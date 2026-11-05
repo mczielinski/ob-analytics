@@ -122,8 +122,6 @@ from ob_analytics.protocols import (
     TradeSource,
 )
 from ob_analytics.schemas import (
-    ACTION_DTYPE,
-    BOOK_SIDE_DTYPE,
     SEQUENCE_COLUMN,
     TRADE_DTYPES,
     TRADE_SIDE_DTYPE,
@@ -430,8 +428,6 @@ class DatabentoLoader:
             events = attach_ingest_seq(events)
 
         events = events.drop(columns=["source_pos"])
-        events["action"] = events["action"].astype(ACTION_DTYPE)
-        events["direction"] = events["direction"].astype(BOOK_SIDE_DTYPE)
 
         logger.info(
             "DatabentoLoader: {} book events ({} created, {} changed, "
