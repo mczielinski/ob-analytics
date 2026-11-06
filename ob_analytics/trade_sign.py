@@ -55,6 +55,17 @@ from ob_analytics.schemas import TRADE_SIDE_DTYPE, time_order_keys
 
 _SQRT2 = sqrt(2.0)
 
+
+def _unlabelled_trades(trades: pd.DataFrame) -> np.ndarray:
+    """Return a boolean mask of the trades whose ``direction`` is not a side.
+
+    Every consumer of a ``direction`` column tests it as ``== "buy"`` and
+    treats the rest as a sell, so anything but ``buy`` or ``sell`` is the
+    wrong side to them, not a missing value.
+    """
+    return ~trades["direction"].isin(TRADE_SIDE_DTYPE.categories).to_numpy()
+
+
 #: Most volume buckets :func:`bulk_volume_classification` and
 #: :func:`~ob_analytics.flow_toxicity.compute_vpin` build.  Both hold every
 #: bucket in memory, so a ``bucket_volume`` far too small for the instrument
@@ -665,10 +676,7 @@ def resolve_direction(
         return out
 
     if "direction" in trades.columns:
-        # Every consumer of a ``direction`` column tests it as ``== "buy"`` and
-        # treats the rest as a sell, so anything but the two sides is the
-        # wrong side to them, not a missing value.
-        unlabelled = ~trades["direction"].isin(TRADE_SIDE_DTYPE.categories).to_numpy()
+        unlabelled = _unlabelled_trades(trades)
         if not unlabelled.any():
             return trades
         known = trades["direction"].astype(object).where(~unlabelled)

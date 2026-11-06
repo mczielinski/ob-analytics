@@ -44,6 +44,27 @@ def test_validate_events_df_accepts_text_order_ids():
     assert schemas.cast_events(events)["id"].dtype == object
 
 
+def test_cast_events_casts_an_object_column_of_ints():
+    from ob_analytics.datasets import toy_events
+
+    events = toy_events()
+    events["id"] = events["id"].astype(object)
+    assert schemas.cast_events(events)["id"].dtype == "int64"
+
+
+def test_an_empty_order_id_is_refused_by_name(tmp_path):
+    from ob_analytics.bitstamp import BitstampLoader
+
+    orders = tmp_path / "orders.csv"
+    orders.write_text(
+        "id,timestamp,exchange_timestamp,price,volume,action,direction\n"
+        "10,100,100,100.0,1.0,created,ask\n"
+        ",150,150,100.0,1.0,created,ask\n"
+    )
+    with pytest.raises(ConfigError, match="'id' has 1 empty value"):
+        BitstampLoader().load(orders)
+
+
 def test_validate_trades_df_rejects_an_object_direction():
     from ob_analytics.datasets import toy_trades
 
@@ -348,6 +369,18 @@ class TestDtypeMaps:
             assert combined[col].dtype == "int64", col
         for col in ("direction", "action", "type"):
             assert combined[col].dtype == schemas.EVENT_DTYPES[col], col
+
+    def test_events_keep_their_dtypes_through_a_save(
+        self, lobster_day_dir, lobster_day_pipeline, tmp_path
+    ):
+        # LOBSTER's event code is an int in an ``object`` column, which Parquet
+        # reads back as ``int64`` unless ``load_data`` casts it.
+        events = lobster_day_pipeline.run(lobster_day_dir).events
+        save_data({"events": events}, tmp_path / "out")
+        loaded = load_data(tmp_path / "out")["events"]
+        assert self._dtypes(loaded, schemas.EVENT_DTYPES) == self._dtypes(
+            events, schemas.EVENT_DTYPES
+        )
 
     def test_saved_l2_run_writes_integer_sizes(self, l2_result, tmp_path):
         save_data({"events": l2_result.events}, tmp_path / "out")

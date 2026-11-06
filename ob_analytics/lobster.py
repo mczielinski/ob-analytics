@@ -63,7 +63,6 @@ from ob_analytics.protocols import (
     TradeSource,
 )
 from ob_analytics.schemas import (
-    ACTION_DTYPE,
     BOOK_SIDE_DTYPE,
     TRADE_DTYPES,
     TRADE_SIDE_DTYPE,
@@ -227,9 +226,6 @@ class LobsterLoader:
 
         events = raw[raw["event_type"].isin(_EVENT_TYPE_TO_ACTION)].copy()
         events["action"] = events["event_type"].map(_EVENT_TYPE_TO_ACTION)
-
-        events["action"] = events["action"].astype(ACTION_DTYPE)
-        events["direction"] = events["direction"].astype(BOOK_SIDE_DTYPE)
 
         # Canonical volume semantics (see schemas.py): ``volume`` is the
         # order's outstanding size after the event (created/changed) or the

@@ -19,6 +19,7 @@ from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import DataWriter
 from ob_analytics.schemas import (
     CONFIG_KEY,
+    EVENT_DTYPES,
     LOT_SIZE_KEY,
     SCHEMA_VERSION,
     SCHEMA_VERSION_KEY,
@@ -278,13 +279,15 @@ def _to_arrow_table(
     return table.replace_schema_metadata(metadata)
 
 
-#: Tables whose dtypes ``load_data`` restores from a map when the file is in the
-#: current schema version.  Parquet keeps most dtypes, but an ``object`` column
-#: of ints (the trade ``maker`` and ``taker`` order ids) comes back ``int64``,
-#: so a reloaded trades table would not match one a reader made.  Events are
-#: left as read: their map types the order ``id`` as ``int64``, and a capture
-#: with text order ids stores it as text.
+#: Tables whose dtypes ``load_data`` restores when the file is in the current
+#: schema version.  Parquet keeps most dtypes, but an ``object`` column of ints
+#: (the trade ``maker`` and ``taker`` order ids, LOBSTER's event
+#: ``raw_event_type``) comes back ``int64``, so a reloaded table would not match
+#: one a loader made.  Trades cast through their whole map.  Events cast only
+#: their ``object`` columns: the order ``id`` may be text, and the rest already
+#: come back as they were saved.
 _RESTORED_DTYPES: dict[str, dict[str, str | pd.CategoricalDtype]] = {
+    "events": {col: t for col, t in EVENT_DTYPES.items() if t == "object"},
     "trades": TRADE_DTYPES,
 }
 

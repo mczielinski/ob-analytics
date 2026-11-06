@@ -615,9 +615,17 @@ def cast_columns(
 
     Columns *df* does not have are skipped, and other columns are left as they
     are, so a frame built before a stage adds its column (``type``, say) still
-    casts.
+    casts.  A column cast to ``int64`` that has empty values raises
+    :class:`ConfigError` naming the column.
     """
-    return df.astype({col: dtype for col, dtype in dtypes.items() if col in df})
+    present = {col: dtype for col, dtype in dtypes.items() if col in df}
+    for col, dtype in present.items():
+        if dtype == "int64" and (empty := int(df[col].isna().sum())):
+            raise ConfigError(
+                f"Column {col!r} has {empty} empty value(s) and must hold a "
+                "whole number on every row."
+            )
+    return df.astype(present)
 
 
 def cast_events(df: pd.DataFrame) -> pd.DataFrame:
@@ -634,7 +642,13 @@ def cast_events(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _is_text(col: pd.Series) -> bool:
-    return pd.api.types.is_object_dtype(col) or pd.api.types.is_string_dtype(col)
+    # An ``object`` column counts only when what it holds is text, so a column
+    # of Python ints is still cast to ``int64``.
+    if isinstance(col.dtype, pd.StringDtype):
+        return True
+    return pd.api.types.is_object_dtype(col) and pd.api.types.infer_dtype(
+        col, skipna=True
+    ) in ("string", "empty")
 
 
 def empty_frame(dtypes: dict[str, str | pd.CategoricalDtype]) -> pd.DataFrame:

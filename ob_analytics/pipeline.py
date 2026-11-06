@@ -68,7 +68,6 @@ from ob_analytics.protocols import (
     grid_of,
 )
 from ob_analytics.schemas import (
-    TRADE_SIDE_DTYPE,
     lot_sizes_from_config,
     put_config_units,
     tick_sizes_from_config,
@@ -78,6 +77,7 @@ from ob_analytics.schemas import (
 )
 from ob_analytics.sources import get_source
 from ob_analytics.trade_sign import (
+    _unlabelled_trades,
     classify_trade_sign,
     quote_before,
     resolve_direction,
@@ -683,7 +683,7 @@ class Pipeline:
         # Trades whose own window held no quote before them.
         no_quote = np.zeros(len(trades), dtype=bool)
         # The quotes are kept only for trades the venue left unlabelled.
-        unlabelled = ~trades["direction"].isin(TRADE_SIDE_DTYPE.categories).to_numpy()
+        unlabelled = _unlabelled_trades(trades)
         resting = rows.iloc[:0]
         engine = DepthMetricsEngine(config)
         last_quote = last_readable = pd.DataFrame()
