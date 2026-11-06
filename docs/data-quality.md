@@ -221,6 +221,32 @@ cumulative depth against the surviving touch.
 On a matched book `uncross=True` is a no-op (there is nothing to evict), so it
 is always safe to leave on in a display helper that must handle both families.
 
+## Checked against other engines
+
+A golden file catches a change, but not a mistake that was already there when
+the file was recorded. So the rebuilt book is also checked against two engines
+written by other people. `tests/test_backtest_parity.py` exports a session,
+replays it through hftbacktest's own L3 reconstruction and Nautilus Trader's
+own order book, and compares the best bid and ask with `depth_summary` on every
+row.
+
+The result, on five synthetic L3 sessions (seeds 224, 143, 7, 99 and 1234):
+both engines agree with `depth_summary` on every row. Before a fix to the
+export writers (they exported orders that never rest as resting orders), they
+disagreed on up to 78 rows a seed. The check first ran with hftbacktest
+2.4.2 and Nautilus Trader 1.231.0.
+
+The bundled Bitstamp sample is not compared. It is a diff feed whose book
+crosses (see [A crossed book is faithful](#a-crossed-book-is-faithful-not-a-bug)),
+which this package keeps on purpose. An engine that uncrosses or refuses a
+crossed book would disagree for that reason alone, so a mismatch there would
+not show which side is wrong.
+
+To run it, install the `backtest-engines` dependency group:
+`uv sync --group dev --group backtest-engines`, then
+`uv run pytest tests/test_backtest_parity.py`. Nautilus needs Python 3.12 or
+newer; on 3.11 its half skips.
+
 ## See also
 
 - **How-to:** [Check data quality with `audit`](howto/audit.md)
