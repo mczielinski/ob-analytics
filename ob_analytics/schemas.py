@@ -395,6 +395,17 @@ def lot_sizes_from_config(config: Any) -> dict[str, float] | None:
 UNIT_ATTRS: tuple[str, ...] = ("tick_sizes", "tick_size", "lot_sizes", "lot_size")
 
 
+MAYBE_BAD_BOOK_ATTR: str = "maybe_bad_book_records"
+"""Events ``attrs`` key for the count of records the venue flagged as coming
+after a gap it could not repair, so the book may be wrong from there on.
+
+Databento sets the flag ``F_MAYBE_BAD_BOOK`` on such records;
+:class:`~ob_analytics.databento.DatabentoLoader` puts the count here, and
+:func:`~ob_analytics.analytics.data_quality_summary` reads it.  A frame
+without the key comes from a source that does not flag such records, so the
+count was not checked."""
+
+
 def put_units(
     df: pd.DataFrame,
     *,

@@ -122,6 +122,7 @@ from ob_analytics.protocols import (
     TradeSource,
 )
 from ob_analytics.schemas import (
+    MAYBE_BAD_BOOK_ATTR,
     SEQUENCE_COLUMN,
     TRADE_DTYPES,
     TRADE_SIDE_DTYPE,
@@ -149,10 +150,13 @@ DATABENTO_GRID = InstrumentGrid(tick_size=0.01, lot_size=1.0)
 #: The raw price that means "no price" (``INT64_MAX``).
 UNDEF_PRICE = 9_223_372_036_854_775_807
 
-#: ``flags`` bits this loader reads.  ``F_TOB`` and ``F_MBP`` mark records that
-#: are *not* individual orders — a publisher that only sends top-of-book or
-#: price-level data, normalized into MBO records whose ``order_id`` means
-#: nothing.  ``F_MAYBE_BAD_BOOK`` marks a gap in the channel.
+#: ``flags`` bits.  The loader reads three of them.  ``F_TOB`` and ``F_MBP``
+#: mark records that are *not* individual orders — a publisher that only sends
+#: top-of-book or price-level data, normalized into MBO records whose
+#: ``order_id`` means nothing — and the loader refuses them.
+#: ``F_MAYBE_BAD_BOOK`` marks a record after a gap in the channel that
+#: Databento could not repair; the loader counts those records and warns.
+#: ``F_SNAPSHOT``, which marks a record of a replayed book, is not read.
 F_MAYBE_BAD_BOOK = 1 << 2
 F_MBP = 1 << 4
 F_SNAPSHOT = 1 << 5
@@ -385,6 +389,10 @@ class DatabentoLoader:
         #: :meth:`load`, each already carrying the ``maker_event_id`` of the
         #: book event it was charged to.  ``None`` before the first load.
         self.trade_records: pd.DataFrame | None = None
+        #: How many records of the last :meth:`load` carry
+        #: ``F_MAYBE_BAD_BOOK``: Databento's mark for a record after a gap it
+        #: could not repair.  ``0`` before the first load.
+        self.maybe_bad_book_records: int = 0
 
     def load(self, source: Any) -> pd.DataFrame:
         """Load MBO records from *source* and return the events frame.
@@ -401,12 +409,14 @@ class DatabentoLoader:
             ``price`` (integer ticks), ``volume`` and ``fill`` (integer lots),
             ``action``, ``direction``, ``event_id``, ``original_number``,
             ``raw_event_type`` (the DBN action letter) and ``raw_size`` (the
-            record's own ``size`` field).
+            record's own ``size`` field).  ``attrs[MAYBE_BAD_BOOK_ATTR]``
+            holds :attr:`maybe_bad_book_records`.
         """
         logger.info("DatabentoLoader: reading {}", source)
         raw = read_mbo_frame(source)
         raw = self._select_instrument(raw)
         _reject_aggregated_records(raw)
+        self.maybe_bad_book_records = _count_maybe_bad_book(raw)
 
         work = self._to_working_frame(raw)
         events, fills = _book_events_and_fills(work)
@@ -446,7 +456,9 @@ class DatabentoLoader:
             symbol=self._symbol,
             default_venue=self._VENUE,
         )
-        return cast_events(events)
+        events = cast_events(events)
+        events.attrs[MAYBE_BAD_BOOK_ATTR] = self.maybe_bad_book_records
+        return events
 
     # ── input narrowing ───────────────────────────────────────────────
 
@@ -658,14 +670,25 @@ def _reject_aggregated_records(raw: pd.DataFrame) -> None:
             "ob_analytics.depth_l2)."
         )
 
-    gaps = int((flags & F_MAYBE_BAD_BOOK).astype(bool).sum())
-    if gaps:
-        logger.warning(
-            "DatabentoLoader: {} records carry F_MAYBE_BAD_BOOK — the feed "
-            "reported an unrecoverable gap, so the book may be wrong from "
-            "there on",
-            gaps,
+
+def _count_maybe_bad_book(raw: pd.DataFrame) -> int:
+    """Count the records carrying ``F_MAYBE_BAD_BOOK``, and warn when any do.
+
+    Databento sets the flag on the records after a gap in the channel that it
+    could not repair.  The records are kept: the book rebuilt from them may be
+    wrong from the gap on, but dropping them would not make it right.
+    """
+    flags = raw["flags"].to_numpy(dtype="int64", na_value=0)
+    flagged = int((flags & F_MAYBE_BAD_BOOK).astype(bool).sum())
+    if flagged:
+        warnings.warn(
+            f"DatabentoLoader: {flagged} of {len(raw)} records carry "
+            "F_MAYBE_BAD_BOOK. Databento found a gap in the feed that it "
+            "could not repair, so the book may be wrong from the first of "
+            "these records on",
+            stacklevel=3,
         )
+    return flagged
 
 
 # ── The action mapping ────────────────────────────────────────────────

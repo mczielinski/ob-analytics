@@ -614,12 +614,25 @@ def test_a_run_that_changes_nothing_succeeds(client, config):
     assert exit_code(report) == 0
 
 
-def test_epic_sections_run_in_the_order_the_spec_gives(graph, config):
+def test_epic_sections_run_in_the_order_the_spec_gives(graph, tmp_path):
     """Status count, then the work diagrams, then the goals.
 
-    Every work issue is in a diagram today, so there is no Ungrouped section to
-    order; where that section falls is checked where it is made to appear.
+    The live config no longer groups #105, which is open in the snapshot, so a
+    group for it is added here to leave no Ungrouped section to order; where
+    that section falls is checked where it is made to appear.
     """
+    toml_text = (REPO_ROOT / "roadmap-groups.toml").read_text()
+    config = write_config(
+        tmp_path,
+        toml_text
+        + """
+[[group]]
+id = "live-view"
+title = "The live view"
+prose = "Open in the snapshot."
+issues = [105]
+""",
+    )
     body = render_epic_body(graph, config)
 
     assert [line for line in body.splitlines() if line.startswith("## ")] == [

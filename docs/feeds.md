@@ -167,11 +167,13 @@ Whether the venue numbers its messages, and what a skipped number means.
   message; only rises, where skips are normal; none.
 - **Sources:** cryptofeed's per-change L3 venues only rise; see the note
   below. ccxt's Binance book only rises. Databento only rises within one
-  instrument. Most other feeds send no number.
+  instrument, and instead marks the records after a gap it could not repair
+  with `F_MAYBE_BAD_BOOK`. Most other feeds send no number.
 - **Lets you conclude:** with a contiguous number, whether a message was lost.
 - **Stops you concluding:** with none, anything about lost messages. `audit`
   then reports `0 row(s) numbered` for the venue sequence.
-- **In the package:** `Source.sequence_kind` and the `sequence_gaps` check (see
+- **In the package:** `Source.sequence_kind`, the `sequence_gaps` check, and
+  the `maybe_bad_book` check for Databento's flag (see
   [Check data quality](howto/audit.md)).
 
 cryptofeed's numbers on Bitfinex and Blockchain.com count every message on the
@@ -467,8 +469,13 @@ What you need to capture the feed.
 
 Notes on this table:
 
-- **Kraken:** Kraken sends a checksum of its book, but neither ccxt nor
-  cryptofeed checks it by default, so a lost message is not noticed.
+- **Kraken:** Kraken sends a checksum of its book, but the capture does not
+  check it, so a book that drifts from Kraken's is not noticed. ccxt's check
+  is off by default because the venue's checksum was not reliable.
+  cryptofeed's check (`checksum_validation`) is off by default too. The
+  package turns on neither. Kraken sends no sequence number either, so the
+  only sign of drift is a crossed book, which the `crossed_book` check
+  reports. A book can drift without crossing.
 - **Coinbase:** Coinbase numbers its messages, but ccxt does not pass the number
   on.
 - **Polymarket:** each snapshot carries a hash of the book, which ccxt does not

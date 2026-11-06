@@ -470,6 +470,10 @@ class Pipeline:
 
         logger.info("Pipeline: loading events from {}", source)
         events = loader.load(source)
+        # What the loader records about the data on ``attrs`` (such as the
+        # records the venue flagged after a gap) is kept for the result: the
+        # later stages build new frames, and pandas does not carry it over.
+        loaded_attrs = dict(events.attrs)
 
         logger.info("Pipeline: building trades")
         trades = trade_source.load(events, source)
@@ -512,6 +516,7 @@ class Pipeline:
         events = order_aggressiveness(events, depth_summary)
 
         logger.info("Pipeline: complete")
+        events.attrs.update(loaded_attrs)
         put_config_units(config, events, trades, depth, depth_summary)
         return PipelineResult(
             events=events,

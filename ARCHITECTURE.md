@@ -37,7 +37,11 @@ into structured analytics:
   capabilities — `OfflineSource` (replay stored files) and `LiveSource`
   (capture a venue). Both register in the one `SOURCES` registry
   (`register_source`), and third-party sources load through the
-  `ob_analytics.sources` entry-point group.
+  `ob_analytics.sources` entry-point group. The built-in sources stay in this
+  package, each behind an optional extra (`live`, `ccxt`, `cryptofeed`,
+  `databento`), so a core install pulls in no venue client. A source for
+  another venue can ship as its own package and register through that group,
+  with no change here.
 - **Per-run parameters live on `RunContext`, not `Source`.** Construction-time
   parameters (typed `settings`, fixed venue config) belong on the source;
   per-session parameters (trading date, time zone, symbol, venue) live on

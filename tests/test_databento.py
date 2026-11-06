@@ -10,6 +10,7 @@ one in memory with ``databento_dbn`` and skip without the extra.
 from __future__ import annotations
 
 import importlib.util
+import warnings
 from typing import ClassVar
 
 import numpy as np
@@ -22,8 +23,10 @@ from ob_analytics.analytics import (
     data_quality_summary,
     order_book,
 )
+from ob_analytics.data import load_result, save_data
 from ob_analytics.databento import (
     DBN_PRICE_DIVISOR,
+    F_MAYBE_BAD_BOOK,
     F_MBP,
     F_TOB,
     MAX_ORDER_ID,
@@ -45,7 +48,11 @@ from ob_analytics.protocols import (
     sequence_kind_of,
     trade_attribution_of,
 )
-from ob_analytics.schemas import validate_events_df, validate_trades_df
+from ob_analytics.schemas import (
+    MAYBE_BAD_BOOK_ATTR,
+    validate_events_df,
+    validate_trades_df,
+)
 from ob_analytics.sources import get_source
 from ob_analytics.synth import (
     SynthConfig,
@@ -993,6 +1000,65 @@ class TestSequenceCheck:
         assert summary.sequence_out_of_order == 1
         assert not summary.ok
         assert [check.name for check in summary.errors] == ["sequence_out_of_order"]
+
+
+def flag_one_record(frame: pd.DataFrame, position: int) -> pd.DataFrame:
+    """*frame* with ``F_MAYBE_BAD_BOOK`` set on the record at *position*."""
+    flags = frame["flags"].to_numpy().copy()
+    flags[position] |= F_MAYBE_BAD_BOOK
+    return frame.assign(flags=flags)
+
+
+class TestMaybeBadBook:
+    """Records Databento flags after a gap it could not repair (issue #389)."""
+
+    def test_a_flagged_record_warns_on_load_and_is_counted(self):
+        frame = flag_one_record(mbo_frame(LIFECYCLE), 5)
+        with pytest.warns(UserWarning, match="1 of 9 records carry F_MAYBE_BAD_BOOK"):
+            loader, events = load(frame)
+
+        assert loader.maybe_bad_book_records == 1
+        assert events.attrs[MAYBE_BAD_BOOK_ATTR] == 1
+        # The records are kept.
+        assert len(events) == len(load(mbo_frame(LIFECYCLE))[1])
+
+    def test_a_flagged_record_is_an_audit_warning(self):
+        frame = flag_one_record(mbo_frame(LIFECYCLE), 5)
+        with pytest.warns(UserWarning, match="F_MAYBE_BAD_BOOK"):
+            summary = audit_frame(frame)
+
+        assert summary.maybe_bad_book_records == 1
+        assert summary.to_dict()["maybe_bad_book_records"] == 1
+        # A warning, not an error: the run still passes without --strict.
+        assert summary.ok
+        assert [check.name for check in summary.warnings] == ["maybe_bad_book"]
+        assert "records after a gap   : 1 record(s)" in summary.render()
+
+    def test_a_file_without_the_flag_neither_warns_nor_fails(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            loader, events = load(mbo_frame(LIFECYCLE))
+            summary = audit_frame(mbo_frame(LIFECYCLE))
+
+        assert loader.maybe_bad_book_records == 0
+        assert events.attrs[MAYBE_BAD_BOOK_ATTR] == 0
+        assert summary.maybe_bad_book_records == 0
+        check = next(c for c in summary.checks if c.name == "maybe_bad_book")
+        assert check.passed
+        assert check.severity == "warning"
+
+    def test_the_count_survives_a_saved_result(self, tmp_path):
+        frame = flag_one_record(mbo_frame(LIFECYCLE), 5)
+        with pytest.warns(UserWarning, match="F_MAYBE_BAD_BOOK"):
+            result = Pipeline(source=DatabentoSource()).run(frame)
+        save_data(result, tmp_path / "saved")
+
+        summary = data_quality_summary(
+            load_result(tmp_path / "saved").events,
+            result.trades,
+            feed_type=FeedType.MATCHED_BOOK,
+        )
+        assert summary.maybe_bad_book_records == 1
 
 
 # ── Reading and writing real DBN files ────────────────────────────────

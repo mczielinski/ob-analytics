@@ -29,3 +29,5 @@ Key differences from Bitstamp:
 ::: ob_analytics.lobster.LobsterSource
 
 ::: ob_analytics.lobster.lobster_depth_from_orderbook
+
+::: ob_analytics.lobster.lobster_venue_book

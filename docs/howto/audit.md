@@ -28,6 +28,7 @@ Data quality summary
   trades                : 284
   crossed resting book  : 91.61% of session (8883 episode(s)) [diff feed, but 2 stale resting order(s) stay in the book — see stale resting orders]
   per-order book crossed: 91.61% of session (8883 episode(s)) [no more than the depth table — see the crossed resting book]
+  venue book            : not checked: no venue book to compare with; only a LOBSTER run from its files has one
   stale resting orders  : 2 (worst: ask 2002347646152704 at 78,333 held the ask touch for 27.4 min after a trade printed through it)
   unmatched trades      : 0.00% [maker and taker]
   matched by order      : 2 trade(s) [taker created with size 0]
@@ -37,6 +38,7 @@ Data quality summary
   orphan orders         : 13 (13 event(s), no created row)
   impossible values     : 49 non-positive price(s) / 0 negative volume(s) / 0 level row(s) below zero
   clock order           : 0 venue-after-receive / 11 reordered
+  records after a gap   : not checked: the events carry no count of records flagged after a gap (only Databento flags them)
   venue sequence        : 0 missing / 0 out-of-order (0 row(s) numbered)
 Checks: 0 error(s), 4 warning(s)
   WARNING orphan_orders: 13 order(s) are changed or deleted with no created event ...
@@ -52,6 +54,7 @@ Checks: 0 error(s), 4 warning(s)
 | **feed type** | `matched_book` (LOBSTER/MBO), `diff_feed` (Bitstamp) or `price_levels` (any L2 feed) — sets expectations for the next line |
 | **crossed resting book** | Share of session *time* with `best_bid > best_ask`. ~0% for a matched book or price levels; can be high and faithful for a diff feed, unless stale resting orders cause it |
 | **per-order book crossed** | The same share for the book rebuilt from the per-order events. On most runs that book is the depth table, so the two lines agree. A LOBSTER run with an orderbook file reads its depth table from that file, and the per-order book can then be crossed when the depth table is not: see [LOBSTER: too few levels](lobster.md#request-enough-levels) |
+| **venue book** | Whether the book rebuilt from the per-order events matches the venue's own book, row by row, on every price and size of the levels the venue states. Only LOBSTER supplies one, its orderbook file. Gives the number of rows that differ and the first difference. `not checked` for other sources and for a saved run (`--from-parquet`), which has no orderbook file: see [What fails a run](#what-fails-a-run) |
 | **stale resting orders** | Resting orders a trade printed through that the venue did not report again within 1 s. The worst is named with its side, price and how long it held the touch |
 | **unmatched trades** | Trades whose maker or taker order could not be found among the order events. Only the orders the feed can show are looked for: the note in brackets says which |
 | **matched by order** | Trades whose taker is an order created with size 0. Bitstamp sends an instant order bought by quote amount that way and never reports what it bought, so a trade with no row of its size is matched to the order by its id. The order and its type are right; its rows show less fill than its trades. Information only; `not checked` when the feed does not show takers |
@@ -60,6 +63,7 @@ Checks: 0 error(s), 4 warning(s)
 | **orphan orders** | Orders changed or deleted with no `created` row at all. The opening book is the honest source of these; a rise mid-session is the stream losing messages |
 | **impossible values** | Levels priced at or below zero, negative volumes or fills, and depth rows where the events take more off a price level than they put on (the depth table holds such a level at zero) |
 | **clock order** | Rows the venue stamped *after* we received them, and messages that reached the capture out of venue order. The opening book's rows are left out; `not checked` when the data has one clock |
+| **records after a gap** | Records the venue flagged as coming after a gap in its feed that it could not repair, so the book may be wrong from the first of them on. Only Databento flags these (`F_MAYBE_BAD_BOOK`); `not checked` for every other source |
 | **venue sequence** | Skipped and non-advancing sequence numbers: dropped and reordered messages ([gap detection](../api/analytics.md)) |
 
 A high **crossed resting book** number on a `diff_feed` can be expected — see
@@ -84,6 +88,13 @@ code follows the severities rather than the numbers:
 | **warning** | Worth reading, but a sound capture can show it | `0`, or non-zero with `--strict` |
 | **info** | Context; never fails a run | `0` |
 
+A check that cannot run on the data is **skipped**: it says `not checked` and
+why, its severity is info, and in `--json` it has `"skipped": true` and
+`"passed": false`, so it is not counted as a pass. The clock checks on data
+with one clock, `venue_book` with no venue book to compare (any source but
+LOBSTER, and a saved run), and `maybe_bad_book` on events with no count of
+records flagged after a gap (any source but Databento) are skipped.
+
 Errors: `duplicate_event_ids`, `duplicate_created_ids`, `sequence_gaps`,
 `sequence_out_of_order`, `negative_volume`, `exchange_time_after_receive`, and
 `crossed_book` **on a matched book or price levels only**.
@@ -91,7 +102,9 @@ Errors: `duplicate_event_ids`, `duplicate_created_ids`, `sequence_gaps`,
 Warnings: `orphan_orders`, `stale_orders`, `nonpositive_price`,
 `negative_level`, `exchange_time_reordered`, `unmatched_trades` (above 5%),
 `per_order_book_crossed` when the per-order book is crossed for longer than the
-depth table, and `crossed_book` when no feed type was declared.
+depth table, `venue_book` when the rebuilt book differs from the venue's own
+book in any row, `maybe_bad_book` when the venue flagged records after a gap,
+and `crossed_book` when no feed type was declared.
 
 Two of these are judgement calls worth stating plainly:
 
@@ -135,6 +148,13 @@ Two of these are judgement calls worth stating plainly:
   `gaps not checked`. Audit a saved Databento output with
   `--from-parquet --source databento`: without `--source`, nothing says what
   the numbers promise, and every skip counts as a lost message.
+
+  So Databento's own flag is its only gap signal. When Databento finds a gap
+  it cannot repair, it marks the records after it with `F_MAYBE_BAD_BOOK`.
+  The loader keeps those records, warns, and counts them, and `audit` reports
+  the count as the `maybe_bad_book` warning. It is a warning, not an error,
+  as `negative_level` is: the records are what the venue sent, and dropping
+  them would not make the book right.
 - **Unmatched trades count only the orders the feed can show.** Every trade
   has a maker, the order that was resting, and a taker, the order that
   arrived and traded against it. Only a feed that reports every order shows
@@ -178,6 +198,18 @@ Two of these are judgement calls worth stating plainly:
   (times a source lost the venue's stream and started again from a new opening
   book). All four are warnings, so `--strict` fails on them. See
   [Running for days](live-capture.md#running-for-days).
+- **The rebuilt book against the venue's.** A LOBSTER orderbook file states
+  the best N price levels of each side after every message. `venue_book`
+  rebuilds the book from the messages and compares it with the file, row by
+  row, on every price and size of those N price levels. Each event is matched with
+  the file's row of its own message (its `original_number`), not the row at
+  its position: the file also has rows for cross trades and halts, which are
+  not events. The rebuilt book keeps every price level its orders rest at, crossed
+  or not. The check is a warning because the depth table, which a LOBSTER
+  run reads from the file, is right either way; the per-order views read the
+  rebuilt book. On LOBSTER's own AAPL samples it fails: the message file does
+  not cover every order in the book. See
+  [LOBSTER: request enough levels](lobster.md#request-enough-levels).
 - **A stale order is reported, not removed.** A trade above a resting ask (or
   below a resting bid) shows the order has gone, because a matching engine
   fills the better price first. The venue normally reports that order within
@@ -204,6 +236,7 @@ can read the verdict instead of parsing the text block:
     {
       "name": "duplicate_event_ids",
       "passed": true,
+      "skipped": false,
       "severity": "error",
       "detail": "0 event_id value(s) occur more than once; ..."
     }
@@ -249,6 +282,26 @@ summary = data_quality_summary(
     sequence_kind=sequence_kind_of(source),
     trade_attribution=trade_attribution_of(source),
 )
+```
+
+To compare a LOBSTER run with its orderbook file, pass the venue's book as
+`venue_book`. `LobsterSource().venue_book(folder, config)` reads it, or
+returns `None` when the folder has no orderbook file:
+
+```python
+from ob_analytics import LobsterSource, Pipeline, RunContext, data_quality_summary
+
+source = LobsterSource()
+result = Pipeline(source=source, ctx=RunContext(trading_date="2012-06-21")).run("data/")
+summary = data_quality_summary(
+    result.events, result.trades,
+    feed_type=source.feed_type,
+    depth=result.depth,
+    tick_size=result.config.tick_size,
+    venue_book=source.venue_book("data/", result.config),
+)
+summary.venue_book_differing_rows    # rows where the two books differ
+summary.venue_book_first_difference  # a BookDifference, or None
 ```
 
 !!! note "Pass `depth`, not `depth_summary`"
