@@ -469,8 +469,13 @@ What you need to capture the feed.
 
 Notes on this table:
 
-- **Kraken:** Kraken sends a checksum of its book, but neither ccxt nor
-  cryptofeed checks it by default, so a lost message is not noticed.
+- **Kraken:** Kraken sends a checksum of its book, but the capture does not
+  check it, so a book that drifts from Kraken's is not noticed. ccxt's check
+  is off by default because the venue's checksum was not reliable.
+  cryptofeed's check (`checksum_validation`) is off by default too. The
+  package turns on neither. Kraken sends no sequence number either, so the
+  only sign of drift is a crossed book, which the `crossed_book` check
+  reports. A book can drift without crossing.
 - **Coinbase:** Coinbase numbers its messages, but ccxt does not pass the number
   on.
 - **Polymarket:** each snapshot carries a hash of the book, which ccxt does not

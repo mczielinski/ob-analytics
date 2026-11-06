@@ -26,6 +26,7 @@ from hypothesis import given, settings, strategies as st
 from ob_analytics import (
     BitstampSource,
     Clocks,
+    ConfigError,
     DataQualitySummary,
     FeedType,
     LobsterSource,
@@ -665,6 +666,8 @@ class TestQualityChecks:
         assert s.maybe_bad_book_records is None
         assert s.to_dict()["maybe_bad_book_records"] is None
         check = next(c for c in s.checks if c.name == "maybe_bad_book")
+        assert check.skipped
+        assert not check.passed
         assert check.severity == Severity.INFO
         assert check.detail.startswith("not checked")
         assert "records after a gap   : not checked" in s.render()
@@ -738,6 +741,8 @@ class TestQualityChecks:
         assert "exchange_time_reordered" not in names
         (note,) = [c for c in s.checks if c.name == "clocks"]
         assert note.severity is Severity.INFO
+        assert note.skipped
+        assert not note.passed
         assert why in note.detail
         assert f"clock order           : {note.detail}" in s.render()
         assert s.to_dict()["clocks"] == clocks.value
@@ -846,7 +851,9 @@ class TestQualityChecks:
         s = data_quality_summary(crossed_events(), _empty_trades())
         payload = json.loads(json.dumps(s.to_dict()))
         assert payload["ok"] is True
-        assert {"name", "passed", "severity", "detail"} == set(payload["checks"][0])
+        assert {"name", "passed", "skipped", "severity", "detail"} == set(
+            payload["checks"][0]
+        )
         assert "orphan_orders" in {c["name"] for c in payload["checks"]}
 
     def test_render_lists_failed_checks_only(self):
@@ -1398,3 +1405,181 @@ class TestUncrossProperties:
 
 def _classified_toy() -> pd.DataFrame:
     return set_order_types(toy_events(), toy_trades())
+
+
+# ---------------------------------------------------------------------------
+# The rebuilt book against the venue's own book
+# ---------------------------------------------------------------------------
+
+
+def _audit_against_venue_book(directory) -> DataQualitySummary:
+    """Run LOBSTER on *directory* and compare the rebuilt book with its file."""
+    result = few.run(directory)
+    return data_quality_summary(
+        result.events,
+        result.trades,
+        feed_type=FeedType.MATCHED_BOOK,
+        depth=result.depth,
+        tick_size=result.config.tick_size,
+        venue_book=LobsterSource().venue_book(directory, result.config),
+    )
+
+
+def _change_orderbook_row(directory, row: int, new: str) -> None:
+    """Replace row *row* (1-based) of the orderbook file in *directory*."""
+    (path,) = directory.glob("*_orderbook_*.csv")
+    lines = path.read_text().splitlines()
+    lines[row - 1] = new
+    path.write_text("\n".join(lines) + "\n")
+
+
+class TestVenueBook:
+    """``venue_book`` compares the book rebuilt from the messages with the
+    book the venue states after every message: LOBSTER's orderbook file."""
+
+    def test_the_lobster_sample_matches_its_orderbook_file(self, lobster_day_dir):
+        s = _audit_against_venue_book(lobster_day_dir)
+
+        assert s.venue_book_price_levels == 1
+        assert s.venue_book_rows == 5
+        assert s.venue_book_differing_rows == 0
+        assert s.venue_book_first_difference is None
+        check = next(c for c in s.checks if c.name == "venue_book")
+        assert check.passed
+        assert not check.skipped
+        assert "rebuilt book matches the venue's book in all 5 row(s)" in s.render()
+
+    def test_one_changed_level_fails_the_check(self, lobster_day_dir):
+        # Row 3 is the book after the first trade: bid 100 @ 100.00 becomes 90.
+        _change_orderbook_row(lobster_day_dir, 3, "1010000,160,1000000,90")
+
+        s = _audit_against_venue_book(lobster_day_dir)
+
+        assert s.venue_book_rows == 5
+        assert s.venue_book_differing_rows == 1
+        assert s.venue_book_differing_pct == pytest.approx(20.0)
+        assert s.to_dict()["venue_book_differing_pct"] == pytest.approx(20.0)
+        first = s.venue_book_first_difference
+        assert first is not None
+        assert (first.message_row, first.direction, first.price_level) == (3, "bid", 1)
+        assert (first.price, first.volume) == (100.0, 100)
+        assert (first.venue_price, first.venue_volume) == (100.0, 90)
+        check = next(c for c in s.warnings if c.name == "venue_book")
+        assert "1 of 5 row(s) (20.00%)" in check.detail
+        assert (
+            "after message row 3: bid price level 1 is 100 lot(s) at 100"
+            in check.detail
+        )
+        # The depth table, read from the file, is not at fault: a warning.
+        assert s.ok
+
+    def test_a_changed_price_is_found_too(self, lobster_day_dir):
+        # The ask of row 2 moves from 101.00 to 101.01.
+        _change_orderbook_row(lobster_day_dir, 2, "1010100,200,1000000,100")
+
+        s = _audit_against_venue_book(lobster_day_dir)
+
+        first = s.venue_book_first_difference
+        assert first is not None
+        assert (first.message_row, first.direction) == (2, "ask")
+        assert (first.price, first.venue_price) == (101.0, 101.01)
+
+    def test_rows_are_matched_by_message_row(self, tmp_path):
+        # A cross trade (type 6) and a halt (type 7) have orderbook rows but
+        # no events: matched by position, every later event would differ.
+        messages = (
+            "34200.0,1,1,100,1000000,1\n"
+            "34201.0,6,0,50,1005000,-1\n"
+            "34202.0,1,2,200,1010000,-1\n"
+            "34202.5,7,0,0,-1,-1\n"
+            "34203.0,3,1,100,1000000,1\n"
+        )
+        orderbook = (
+            "9999999999,0,1000000,100\n"
+            "9999999999,0,1000000,100\n"
+            "1010000,200,1000000,100\n"
+            "1010000,200,1000000,100\n"
+            "1010000,200,-9999999999,0\n"
+        )
+        directory = few.write_files(tmp_path, messages, orderbook)
+
+        s = _audit_against_venue_book(directory)
+
+        assert s.venue_book_rows == 3
+        assert s.venue_book_differing_rows == 0
+
+    def test_an_order_cancelled_outside_the_levels_is_found(self, tmp_path):
+        files = few.write_files(tmp_path, few.CROSSING_MESSAGES, few.CROSSING_ORDERBOOK)
+        with pytest.warns(UserWarning, match="crossed"):
+            s = _audit_against_venue_book(files)
+
+        # After message 4 the file's best ask is 102.00, which the messages
+        # never named; the rebuilt book still holds the cancelled ask A.
+        first = s.venue_book_first_difference
+        assert first is not None
+        assert (first.message_row, first.direction, first.price_level) == (4, "ask", 1)
+        assert (first.price, first.venue_price) == (101.0, 102.0)
+        assert s.venue_book_differing_rows == 3
+
+    def test_without_a_venue_book_the_check_is_skipped(self):
+        s = data_quality_summary(crossed_events(), _empty_trades())
+
+        check = next(c for c in s.checks if c.name == "venue_book")
+        assert check.skipped
+        assert not check.passed
+        assert check.severity is Severity.INFO
+        assert "no venue book to compare with" in check.detail
+        assert check not in s.warnings + s.errors
+        assert s.venue_book_price_levels == 0
+        assert s.to_dict()["venue_book_first_difference"] is None
+        assert "venue book            : not checked" in s.render()
+
+    def test_a_price_level_run_skips_it(self, lobster_day_dir):
+        result = few.run(lobster_day_dir)
+        s = data_quality_summary(
+            empty_events().assign(type=pd.Series(dtype=object)),
+            _empty_trades(),
+            feed_type=FeedType.PRICE_LEVELS,
+            depth=result.depth,
+            venue_book=LobsterSource().venue_book(lobster_day_dir, result.config),
+        )
+
+        check = next(c for c in s.checks if c.name == "venue_book")
+        assert check.skipped
+        assert "no per-order events" in check.detail
+
+    def test_a_folder_without_an_orderbook_file_has_no_venue_book(self, tmp_path):
+        directory = few.write_files(tmp_path, few.CLEAN_MESSAGES, None)
+
+        assert LobsterSource().venue_book(directory, few.run(directory).config) is None
+
+    def test_events_without_their_message_row_are_refused(self, lobster_day_dir):
+        result = few.run(lobster_day_dir)
+        book = LobsterSource().venue_book(lobster_day_dir, result.config)
+
+        with pytest.raises(ConfigError, match="original_number"):
+            data_quality_summary(
+                result.events.drop(columns="original_number"),
+                result.trades,
+                depth=result.depth,
+                venue_book=book,
+            )
+
+    def test_the_json_names_the_first_difference(self, lobster_day_dir):
+        _change_orderbook_row(lobster_day_dir, 3, "1010000,160,1000000,90")
+
+        payload = json.loads(
+            json.dumps(_audit_against_venue_book(lobster_day_dir).to_dict())
+        )
+
+        assert payload["venue_book_rows"] == 5
+        assert payload["venue_book_differing_rows"] == 1
+        assert payload["venue_book_first_difference"] == {
+            "message_row": 3,
+            "direction": "bid",
+            "price_level": 1,
+            "price": 100.0,
+            "volume": 100,
+            "venue_price": 100.0,
+            "venue_volume": 90,
+        }

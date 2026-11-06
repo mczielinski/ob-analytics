@@ -67,10 +67,9 @@ library, and the schema change underneath them (issue #143). All run under
   `tests/test_properties_lobster.py` use Hypothesis to hold the schema rules
   over many generated inputs: time goes forward, the book does not cross after
   an uncross, and volume adds up.
-- **Backend compare.** `tests/test_compare_backends.py` checks a rewritten
-  backend against the current one (pandas vs Polars, Python vs compiled). These
-  skip until those backends exist; the module docstring records the activation
-  contract.
+- **Backend compare.** `tests/test_compare_backends.py` checks a compiled
+  depth engine against the pure-Python one. These tests skip until that engine
+  exists; the module docstring records the activation contract.
 - **Boundary.** `tests/test_engine_boundary.py` parses the engine's own sources
   to prove it imports no pandas and nothing from the layers above it, and that
   only `_engine_frames.py` converts frames to engine arrays (issue #136).

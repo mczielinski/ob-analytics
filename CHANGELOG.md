@@ -18,6 +18,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `PipelineConfig` fields. `Pipeline.run_windows` takes `ctx=`, as `run`
   does.
 
+- **`audit` compares the rebuilt book with the venue's own book.**
+  The new `venue_book` check rebuilds the book from the LOBSTER messages and
+  compares it with the orderbook file, row by row, on every price and size of
+  the levels the file states. Each event is matched with the row of its own
+  message, by `original_number`. The report gives the number of rows that
+  differ and the first difference (a `BookDifference`); the summary has the
+  fields `venue_book_price_levels`, `venue_book_rows`, `venue_book_differing_rows`
+  and `venue_book_first_difference`. `data_quality_summary` takes the venue's
+  book as `venue_book`, read by `LobsterSource.venue_book` or
+  `lobster_venue_book`. A source with no book of its own shows the check as
+  skipped. `QualityCheck` has a new `skipped` field: a skipped check is info,
+  never fails a run, and is not counted as passed, as the clock checks on
+  data with one clock now are too. On the AAPL samples the two books differ
+  in 99.81% (50 price levels) to 100% (10 price levels) of rows, because the message file
+  does not cover the orders resting before it starts or outside the
+  requested levels; see the LOBSTER how-to (#392).
+
 - **`audit` reports how long the per-order book is crossed.** A LOBSTER run
   with an orderbook file reads its depth table from that file, so the
   `crossed_book` check passed even when the book rebuilt from the messages
@@ -927,6 +944,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Removed
 
+- **The pandas-vs-Polars compare tests** (#390). Three tests in
+  `tests/test_compare_backends.py` waited for a Polars analytics backend and
+  always skipped. ADR 0002 keeps the public API on pandas and does not add
+  Polars, so they could never run. The module docstring now describes only the
+  compiled-engine gate.
+
 - **`Source.config_defaults()`, `Pipeline.loader`, `Pipeline.trade_source`,
   `Pipeline.writer` and `LobsterWriter(price_divisor=...)`** (#348). A
   source's grid replaces `config_defaults()`. The pipeline builds a loader and
@@ -966,6 +989,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `maybe_bad_book_records`, with a **records after a gap** line and a
   `maybe_bad_book` warning when it is above zero. A source whose feed has no
   such flag shows the check as `not checked` (#389).
+
+- **"What each feed shows" says why Kraken book drift is not noticed**
+  (#391). Kraken sends a checksum of its book, but the checks in ccxt and
+  cryptofeed are both off by default, and the package turns on neither.
+  Kraken sends no sequence number, so the only sign of drift is a crossed
+  book, which the `crossed_book` check reports.
 
 - **A source keeps nothing from a run, and `run(ctx=...)` reaches the
   loader** (#348). `LobsterSource` and `DatabentoSource` kept the last loader

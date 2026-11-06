@@ -1,34 +1,29 @@
-"""Backend-equivalence gates (issue #143), scaffolded ahead of the backends.
+"""Backend-equivalence gate for a compiled depth engine.
 
-Issue #143 asks for compare tests that prove a rewritten backend produces the
-*same numbers* as the current one:
+A faster engine must give the same numbers as the one it replaces. When the
+depth engine gains a compiled backend (numba, then perhaps Rust), it must
+reproduce the pure-Python engine's output, to rounding, on the same input.
 
-* **pandas vs Polars** — when analytics move to Polars behind Narwhals (#104), a
-  function handed a Polars frame must return the same values as the pandas path.
-* **Python vs compiled** — when the depth / order-book engine gains a compiled
-  backend (numba, then maybe Rust) (#138), it must reproduce the pure-Python
-  engine's output bit-for-bit (or within a tight tolerance).
-
-Neither backend exists yet, and Polars is deliberately **not** a dependency of
-ob-analytics (see ``docs/schema.md``). So each gate is guarded twice: the
-optional library must import, and ob-analytics must advertise the backend. Until
-both hold, the gate skips with a message naming the issue that will switch it
-on. The comparison bodies are real, so the day a backend lands the only change
-needed is to make the probe below see it — the assertions already state what
+No compiled backend exists yet, so each test skips with a message saying so.
+The comparison bodies are real: the day the backend lands, the only change
+needed is for the probe below to find it. The assertions already state what
 "same numbers" means.
 
 Activation contract
 -------------------
-When the backends land, satisfy these hooks (adjust the probes here if the final
-design differs; the intent — one input, both backends, identical output — does
-not change):
+The compiled engine is exposed through a factory,
+``ob_analytics.depth.make_engine(backend="compiled")``, that returns an engine
+compatible with :class:`~ob_analytics.depth.DepthMetricsEngine`. Adjust the
+probe if the final design differs; the intent (one input, both engines, the
+same output) does not change.
 
-* **Polars path (#104)** sets ``ob_analytics.analytics.SUPPORTS_POLARS = True``
-  and makes the compared functions Narwhals-native: a pandas frame in returns a
-  pandas frame, a Polars frame in returns a Polars frame, and the values agree.
-* **Compiled engine (#138)** exposes a factory
-  ``ob_analytics.depth.make_engine(backend="compiled")`` returning a
-  :class:`~ob_analytics.depth.DepthMetricsEngine`-compatible engine.
+There is no pandas-vs-Polars gate. The public API takes and returns pandas,
+and Polars is not a dependency (see ``adr/0002-dataframe-library.md``). A
+Polars user converts at the boundary with ``PipelineResult.to_polars()`` or
+reads the Parquet output directly. If analytics code is ever ported to Polars
+inside the package, ADR 0002 requires the golden tests (such as
+``tests/test_golden_synth.py``) to pass byte for byte. That is the check, so
+this module has no Polars test.
 """
 
 from __future__ import annotations
@@ -39,8 +34,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
-from ob_analytics import analytics
-from ob_analytics.depth import DepthMetricsEngine, depth_metrics, price_level_volume
+from ob_analytics.depth import DepthMetricsEngine, price_level_volume
 from ob_analytics.synth import SynthConfig, generate_session
 
 # Tight numeric tolerance: a backend swap may reorder floating-point sums, so
@@ -56,90 +50,6 @@ def _fixed_session(seed: int = 921, duration: float = 45.0):
     runs only after the probe has confirmed the backend is present.
     """
     return generate_session(SynthConfig(seed=seed, duration=duration))
-
-
-# ── pandas vs Polars (#104) ───────────────────────────────────────────────
-
-
-def _require_polars_analytics() -> Any:
-    """Return the ``polars`` module iff the Polars analytics path (#104) is live.
-
-    Two gates, both required: ``polars`` must import (it is not a dependency),
-    and ob-analytics must advertise the Narwhals path via
-    ``analytics.SUPPORTS_POLARS``.
-    """
-    pl = pytest.importorskip("polars", reason="polars is not a dependency (#104)")
-    if not getattr(analytics, "SUPPORTS_POLARS", False):
-        pytest.skip("Polars analytics backend (#104) not implemented yet")
-    return pl
-
-
-def _as_pandas(frame: Any) -> pd.DataFrame:
-    """Return *frame* as pandas, whether it is a pandas or a Polars frame."""
-    to_pandas = getattr(frame, "to_pandas", None)
-    return to_pandas() if callable(to_pandas) else frame
-
-
-class TestPandasVsPolars:
-    """Analytics must return the same values on a Polars frame as on pandas.
-
-    The comparison is exact to :data:`_RTOL` / :data:`_ATOL`; categorical and
-    dtype checks are relaxed because Polars encodes categoricals and integers
-    differently from pandas while carrying the same values.
-    """
-
-    def test_price_level_volume_matches(self) -> None:
-        pl = _require_polars_analytics()
-        events = _fixed_session().events
-
-        reference = price_level_volume(events)
-        polars_out = price_level_volume(pl.from_pandas(events))
-
-        pd.testing.assert_frame_equal(
-            reference.reset_index(drop=True),
-            _as_pandas(polars_out).reset_index(drop=True),
-            check_dtype=False,
-            check_categorical=False,
-            check_exact=False,
-            rtol=_RTOL,
-            atol=_ATOL,
-        )
-
-    def test_depth_metrics_matches(self) -> None:
-        pl = _require_polars_analytics()
-        depth = price_level_volume(_fixed_session().events)
-
-        reference = depth_metrics(depth)
-        polars_out = depth_metrics(pl.from_pandas(depth))
-
-        pd.testing.assert_frame_equal(
-            reference.reset_index(drop=True),
-            _as_pandas(polars_out).reset_index(drop=True),
-            check_dtype=False,
-            check_categorical=False,
-            check_exact=False,
-            rtol=_RTOL,
-            atol=_ATOL,
-        )
-
-    def test_order_flow_imbalance_matches(self) -> None:
-        pl = _require_polars_analytics()
-        from ob_analytics.flow_toxicity import order_flow_imbalance
-
-        trades = _fixed_session().trades
-
-        reference = order_flow_imbalance(trades)
-        polars_out = order_flow_imbalance(pl.from_pandas(trades))
-
-        pd.testing.assert_frame_equal(
-            reference.reset_index(drop=True),
-            _as_pandas(polars_out).reset_index(drop=True),
-            check_dtype=False,
-            check_categorical=False,
-            check_exact=False,
-            rtol=_RTOL,
-            atol=_ATOL,
-        )
 
 
 # ── Python vs compiled engine (#138) ──────────────────────────────────────

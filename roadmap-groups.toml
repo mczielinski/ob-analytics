@@ -48,7 +48,7 @@ residue; and readable symbol and venue columns rather than a numeric id and a
 definitions join. All five stay drawn, closed or not, because together they are
 the data model.
 """
-issues = [112, 146, 147, 154, 155, 226]
+issues = [112, 146, 429, 154, 155, 226]
 
 [[group]]
 id = "sources"
@@ -59,7 +59,7 @@ Every source stays drawn once it is built, which makes this diagram the venue
 list as well: purple is a source you can use today, green is one nobody has
 written yet. A venue neither CCXT nor cryptofeed covers needs its own client.
 """
-issues = [112, 137, 106, 134, 99, 100, 101, 102, 103, 98, 239, 240, 262]
+issues = [112, 137, 106, 134, 99, 100, 101, 102, 103, 98, 240]
 
 [[group]]
 id = "engine"
@@ -69,7 +69,7 @@ Speed and size. The faster engine and the streaming core are built last, and the
 work on data larger than memory sits here too. The diagram shows what each one
 waits on.
 """
-issues = [112, 136, 100, 114, 143, 144, 105, 116, 138, 139, 206]
+issues = [112, 136, 100, 114, 143, 144, 116, 138, 139, 206, 424]
 
 [[group]]
 id = "analytics"
@@ -79,7 +79,7 @@ Measurements taken from a rebuilt book. They read the same input and are mostly
 independent of each other, so any arrow drawn here is the exception rather than
 an order to work in.
 """
-issues = [104, 107, 109, 110, 111, 119, 148, 149, 203]
+issues = [104, 107, 109, 110, 111, 119, 147, 148, 149, 203]
 
 [[group]]
 id = "quality"
@@ -98,25 +98,82 @@ recorded, because the baseline and the code agree by construction. Replaying the
 same events through an engine written by someone else can: if the two books
 disagree, one of them is wrong.
 """
-issues = [108, 114, 143, 146, 150, 224, 282, 283, 284]
+issues = [108, 114, 143, 146, 150, 224, 262, 282, 283, 284, 296, 425]
 
 [[group]]
 id = "viz"
 title = "Part 6 - plots and interactive views"
 prose = """
 The full plot catalogue, one theme across backends, and a second backend. The
-live view and the replay scrubber show a book as it changes.
+live view (the first stage of the streaming core) and the replay scrubber show
+a book as it changes.
 """
-issues = [105, 117, 118, 122, 123, 140, 272, 302, 303]
+issues = [117, 118, 122, 123, 139, 140, 272, 302, 303]
 
 [[group]]
 id = "release"
 title = "Part 7 - packaging, docs and release decisions"
 prose = """
 What a version other projects can depend on needs: the release decisions,
-conda-forge distribution, and the documentation work.
+conda-forge distribution, API-key handling, and the documentation work.
 """
-issues = [115, 120, 121, 141, 142, 145, 216, 288]
+issues = [115, 120, 121, 141, 142, 145, 216, 239, 288]
+
+[[group]]
+id = "audit-a"
+title = "Audit 1 - wrong answers, crashes and security"
+prose = """
+The 2026 audit (#339) found these by reading the whole package. They come first
+because each one can give a user a wrong number, a crash, or a leak.
+"""
+issues = [397, 398, 399, 400, 314, 389, 391, 392]
+
+[[group]]
+id = "audit-b"
+title = "Audit 2 - structure"
+prose = """
+One owner for each job: the capture folder format, the shared helpers, the
+plug-in registries, the plot declarations. The renames wait for this, so names
+are chosen once the shape has settled.
+"""
+issues = [401, 402, 403, 404, 405, 406, 407]
+
+[[group]]
+id = "audit-c"
+title = "Audit 3 - symmetry and names"
+prose = """
+Things with the same job look the same: one error for one mistake, one shape
+for every plot entry point, and one name for each thing. The three renames run
+one after another, because each touches every area.
+"""
+issues = [408, 409, 410, 411, 412, 413, 414]
+
+[[group]]
+id = "audit-d"
+title = "Audit 4 - dead code and dependencies"
+prose = """
+What nothing uses any more: dependencies, scripts and code paths.
+"""
+issues = [415]
+
+[[group]]
+id = "audit-e"
+title = "Audit 5 - tests and CI"
+prose = """
+Checks that would catch these problems next time: required checks on main, a
+core-only install, the dependency floors, Windows, invariants over every source,
+and bad files.
+"""
+issues = [416, 417, 418, 419, 390]
+
+[[group]]
+id = "audit-f"
+title = "Audit 6 - documentation and the 0.2.0 release"
+prose = """
+The docs are written once the names are fixed, and 0.2.0 waits for every audit
+issue, so users learn the settled names once.
+"""
+issues = [420, 421, 422, 423, 426]
 
 # Either/or prerequisites.
 #
@@ -147,7 +204,7 @@ label = "a prediction market"
 # issue numbers: the generator prints the numbers beside it.
 
 [[hold]]
-issues = [138, 139, 203]
+issues = [138, 203]
 reason = """\
 build these only when a measurement asks for them. The speed test put most of \
 the run time in the depth metrics, which is an argument against porting the \
@@ -208,6 +265,52 @@ loaders\
 203 = "Polars port"
 206 = "out-of-core reads"
 216 = "registered writers"
+224 = "engine cross-check"
+226 = "integer lots"
 239 = "API keys"
 240 = "Kalshi WebSocket"
+262 = "price-change depth"
 272 = "iceberg overlay"
+282 = "cryptofeed trades"
+283 = "capture exit code"
+284 = "Bitstamp via cryptofeed"
+288 = "feed guide"
+296 = "3.11 segment roll"
+302 = "custom plot fix"
+303 = "blank heatmap"
+314 = "UUID icebergs"
+389 = "Databento bad-book flag"
+390 = "Polars skips"
+391 = "Kraken checksum"
+392 = "LOBSTER book check"
+397 = "refuse bad input"
+398 = "capture losses"
+399 = "data warnings"
+400 = "measure units"
+401 = "capture format owner"
+402 = "core helpers"
+403 = "plug-in loading"
+404 = "split analytics"
+405 = "concept table"
+406 = "depth 8%"
+407 = "source protocol"
+408 = "one error type"
+409 = "save_data and pickle"
+410 = "plot arguments"
+411 = "CLI options"
+412 = "rename sources"
+413 = "rename plot helpers"
+414 = "rename columns"
+415 = "dead code"
+416 = "CI checks"
+417 = "test fixtures"
+418 = "invariant tests"
+419 = "slow tests"
+420 = "run docs code"
+421 = "docstrings"
+422 = "architecture docs"
+423 = "glossary"
+424 = "windowed loader"
+425 = "Databento BBO check"
+426 = "release 0.2.0"
+429 = "symbol + venue"

@@ -14,7 +14,7 @@ import warnings
 from collections.abc import Iterable
 from datetime import datetime
 from functools import lru_cache
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -30,6 +30,7 @@ from ob_analytics._utils import (
 )
 from ob_analytics.config import PipelineConfig
 from ob_analytics.engine import crossed_prefix_counts
+from ob_analytics.exceptions import ConfigError
 from ob_analytics.schemas import time_order_keys
 
 if TYPE_CHECKING:
@@ -270,6 +271,83 @@ class PriceLevelBook:
         """The quoted ask levels, ascending by price: prices and volumes."""
         k = self.crossed_asks
         return self.ask_prices[k:], self.ask_volumes[k:]
+
+
+class BookLevels(NamedTuple):
+    """The best price levels of each side of a book, one row per book state.
+
+    Each array is ``(rows, levels)``: column 0 is the touch, and each side
+    runs best first (asks from the lowest price, bids from the highest).
+    Prices are integer ticks and volumes integer lots.  A price level the
+    side does not have holds price 0 and volume 0, so an empty one has
+    volume 0.
+    """
+
+    ask_prices: np.ndarray
+    ask_volumes: np.ndarray
+    bid_prices: np.ndarray
+    bid_volumes: np.ndarray
+
+
+def _book_levels(
+    events: pd.DataFrame,
+    depth: pd.DataFrame,
+    num_levels: int,
+    *,
+    quoted: bool = True,
+) -> BookLevels:
+    """The best *num_levels* levels of each side after each event.
+
+    The depth rows are replayed through a :class:`PriceLevelBook`, each with
+    the event it names, the events in the order of *events*; the depth
+    table's own order is kept within one event.  Row ``i`` of the result is
+    the book after ``events.iloc[i]``.
+
+    With *quoted* (the default) each side holds its quoted levels, which
+    leave out the crossed levels at the touch as the depth summary does.
+    Without it, each side holds every level the depth table leaves resting,
+    crossed or not.
+
+    Raises
+    ------
+    ConfigError
+        If the depth table names an event that *events* does not have.
+    """
+    position = pd.Index(events["event_id"]).get_indexer(pd.Index(depth["event_id"]))
+    if (position < 0).any():
+        raise ConfigError(
+            "the depth table names events that are not in the events table.  "
+            "Pass the depth of the same run."
+        )
+    replay = np.argsort(position, kind="stable")
+    position = position[replay]
+    prices = depth["price"].to_numpy()[replay].astype(np.int64).tolist()
+    volumes = depth["volume"].to_numpy()[replay].tolist()
+    sides = (depth["direction"].to_numpy()[replay] != "bid").astype(int).tolist()
+    # The depth rows of event i are rows[stops[i - 1]:stops[i]].
+    stops = np.searchsorted(position, np.arange(len(events)), side="right")
+
+    n = len(events)
+    levels = BookLevels(*(np.zeros((n, num_levels), dtype=np.int64) for _ in range(4)))
+    book = PriceLevelBook()
+    row = 0
+    for i in range(n):
+        for j in range(row, int(stops[i])):
+            book.update(prices[j], volumes[j], sides[j])
+        row = int(stops[i])
+        if quoted:
+            ask_prices, ask_volumes = book.quoted_asks()
+            bid_prices, bid_volumes = book.quoted_bids()
+        else:
+            ask_prices, ask_volumes = book.ask_prices, book.ask_volumes
+            bid_prices, bid_volumes = book.bid_prices, book.bid_volumes
+        k = min(num_levels, ask_prices.size)
+        levels.ask_prices[i, :k] = ask_prices[:k]
+        levels.ask_volumes[i, :k] = ask_volumes[:k]
+        k = min(num_levels, bid_prices.size)
+        levels.bid_prices[i, :k] = bid_prices[::-1][:k]
+        levels.bid_volumes[i, :k] = bid_volumes[::-1][:k]
+    return levels
 
 
 class DepthMetricsEngine:

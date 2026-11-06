@@ -151,6 +151,41 @@ line. When the folder has an orderbook file, the depth table is not crossed,
 so the `crossed_book` check passes and the `per_order_book_crossed` check
 warns. With `--strict`, that warning fails the run.
 
+`audit` also compares the book rebuilt from the messages with the orderbook
+file, row by row, on every price and size of the price levels the file
+states. Its **venue book** line gives the number of rows that differ and the
+first difference, and the `venue_book` check warns when any row differs. Each event
+is matched with the orderbook row of its own message, so the rows of cross
+trades and halts do not shift the comparison.
+
+On the AAPL samples, the two books differ in almost every row, at every
+number of requested levels:
+
+| Requested levels | Rows compared | Rows that differ | Touch differs |
+|---|---|---|---|
+| 50 | 91,997 | 91,821 (99.81%) | 0.49% |
+| 30 | 86,616 | 86,608 (99.99%) | 55.51% |
+| 10 | 400,391 | 400,391 (100.00%) | 99.18% |
+
+The 50- and 30-level samples cover the first hour of the day and the 10-level
+sample the whole day. The rebuilt book is right only for the orders the
+message file covers. Three kinds of order are not covered:
+
+- **Orders resting before the file starts.** The first orderbook row already
+  holds the opening book, but the first message adds one bid, so the rebuilt
+  book starts with that bid only. Those orders appear in the messages only
+  when they are changed or deleted (the orphan orders `audit` counts).
+- **Orders that arrive outside the requested levels.** They have no message
+  when they arrive, so when the touch moves to their prices, the rebuilt book
+  has less size there, or does not have the level.
+- **Orders cancelled or filled outside the requested levels.** They have no
+  closing message, so the rebuilt book keeps them. On the 10-level sample,
+  these cause most of the differences.
+
+On the 50-level sample, the differences are mostly in the deep price levels: 0.49%
+of rows differ at the touch and 9.6% within the first 10 levels. The depth
+table and the L2 views read the orderbook file, so they are not affected.
+
 ## Takers are guessed
 
 A LOBSTER execution row names the resting order it hit. The order that hit it
