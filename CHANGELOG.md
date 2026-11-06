@@ -979,6 +979,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A Databento file with records after an unrepaired gap warns, and `audit`
+  says so.** Databento marks the records after a gap it could not repair with
+  `F_MAYBE_BAD_BOOK`. The loader counted them in a loguru message, which the
+  package switches off, so a user never saw it and `audit` passed the file.
+  The loader now calls `warnings.warn`, keeps the count as
+  `DatabentoLoader.maybe_bad_book_records` and on the events' `attrs` (under
+  `schemas.MAYBE_BAD_BOOK_ATTR`), and `data_quality_summary` reports it as
+  `maybe_bad_book_records`, with a **records after a gap** line and a
+  `maybe_bad_book` warning when it is above zero. A source whose feed has no
+  such flag shows the check as `not checked` (#389).
+
 - **"What each feed shows" says why Kraken book drift is not noticed**
   (#391). Kraken sends a checksum of its book, but the checks in ccxt and
   cryptofeed are both off by default, and the package turns on neither.

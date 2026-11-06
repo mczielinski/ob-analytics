@@ -38,6 +38,7 @@ Data quality summary
   orphan orders         : 13 (13 event(s), no created row)
   impossible values     : 49 non-positive price(s) / 0 negative volume(s) / 0 level row(s) below zero
   clock order           : 0 venue-after-receive / 11 reordered
+  records after a gap   : not checked: the events carry no count of records flagged after a gap (only Databento flags them)
   venue sequence        : 0 missing / 0 out-of-order (0 row(s) numbered)
 Checks: 0 error(s), 4 warning(s)
   WARNING orphan_orders: 13 order(s) are changed or deleted with no created event ...
@@ -62,6 +63,7 @@ Checks: 0 error(s), 4 warning(s)
 | **orphan orders** | Orders changed or deleted with no `created` row at all. The opening book is the honest source of these; a rise mid-session is the stream losing messages |
 | **impossible values** | Levels priced at or below zero, negative volumes or fills, and depth rows where the events take more off a price level than they put on (the depth table holds such a level at zero) |
 | **clock order** | Rows the venue stamped *after* we received them, and messages that reached the capture out of venue order. The opening book's rows are left out; `not checked` when the data has one clock |
+| **records after a gap** | Records the venue flagged as coming after a gap in its feed that it could not repair, so the book may be wrong from the first of them on. Only Databento flags these (`F_MAYBE_BAD_BOOK`); `not checked` for every other source |
 | **venue sequence** | Skipped and non-advancing sequence numbers: dropped and reordered messages ([gap detection](../api/analytics.md)) |
 
 A high **crossed resting book** number on a `diff_feed` can be expected — see
@@ -89,8 +91,9 @@ code follows the severities rather than the numbers:
 A check that cannot run on the data is **skipped**: it says `not checked` and
 why, its severity is info, and in `--json` it has `"skipped": true` and
 `"passed": false`, so it is not counted as a pass. The clock checks on data
-with one clock and `venue_book` with no venue book to compare (any source but
-LOBSTER, and a saved run) are skipped.
+with one clock, `venue_book` with no venue book to compare (any source but
+LOBSTER, and a saved run), and `maybe_bad_book` on events with no count of
+records flagged after a gap (any source but Databento) are skipped.
 
 Errors: `duplicate_event_ids`, `duplicate_created_ids`, `sequence_gaps`,
 `sequence_out_of_order`, `negative_volume`, `exchange_time_after_receive`, and
@@ -100,7 +103,8 @@ Warnings: `orphan_orders`, `stale_orders`, `nonpositive_price`,
 `negative_level`, `exchange_time_reordered`, `unmatched_trades` (above 5%),
 `per_order_book_crossed` when the per-order book is crossed for longer than the
 depth table, `venue_book` when the rebuilt book differs from the venue's own
-book in any row, and `crossed_book` when no feed type was declared.
+book in any row, `maybe_bad_book` when the venue flagged records after a gap,
+and `crossed_book` when no feed type was declared.
 
 Two of these are judgement calls worth stating plainly:
 
@@ -144,6 +148,13 @@ Two of these are judgement calls worth stating plainly:
   `gaps not checked`. Audit a saved Databento output with
   `--from-parquet --source databento`: without `--source`, nothing says what
   the numbers promise, and every skip counts as a lost message.
+
+  So Databento's own flag is its only gap signal. When Databento finds a gap
+  it cannot repair, it marks the records after it with `F_MAYBE_BAD_BOOK`.
+  The loader keeps those records, warns, and counts them, and `audit` reports
+  the count as the `maybe_bad_book` warning. It is a warning, not an error,
+  as `negative_level` is: the records are what the venue sent, and dropping
+  them would not make the book right.
 - **Unmatched trades count only the orders the feed can show.** Every trade
   has a maker, the order that was resting, and a taker, the order that
   arrived and traded against it. Only a feed that reports every order shows

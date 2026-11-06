@@ -260,7 +260,9 @@ than saying how many went, which is why these two are a count rather than an
 error.
 
 The loader also warns when records carry `F_MAYBE_BAD_BOOK`, which means the
-feed reported a gap it could not recover from.
+feed reported a gap it could not recover from. It keeps those records and
+counts them, and [`audit`](audit.md) reports the count as the `maybe_bad_book`
+warning.
 
 ## Size a query before you download it
 

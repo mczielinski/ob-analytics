@@ -37,6 +37,7 @@ from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import Clocks, FeedType, SequenceKind, TradeAttribution
 from ob_analytics.schemas import (
     INGEST_SEQ_COLUMN,
+    MAYBE_BAD_BOOK_ATTR,
     ORDER_TYPE_DTYPE,
     ORIGIN_COLUMN,
     SEQUENCE_COLUMN,
@@ -1382,6 +1383,13 @@ class DataQualitySummary:
         :class:`~ob_analytics.bitstamp.BitstampTradeReader`).  The order and
         its type are right; its rows show less fill than its trades.  Always
         ``0`` when the feed does not name takers.
+    maybe_bad_book_records : int or None
+        Records the venue flagged as coming after a gap in its feed that it
+        could not repair, so the book may be wrong from the first of them on
+        (Databento's ``F_MAYBE_BAD_BOOK``).  Read from the events ``attrs``
+        (:data:`~ob_analytics.schemas.MAYBE_BAD_BOOK_ATTR`).  ``None`` when
+        the events carry no count, as from a source that does not flag such
+        records, and the check does not run.
     """
 
     feed_type: FeedType
@@ -1416,6 +1424,7 @@ class DataQualitySummary:
     venue_book_rows: int = 0
     venue_book_differing_rows: int = 0
     venue_book_first_difference: BookDifference | None = None
+    maybe_bad_book_records: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Return the summary as a plain, JSON-serialisable dict."""
@@ -1457,6 +1466,7 @@ class DataQualitySummary:
             "stale_orders": [o.to_dict() for o in self.stale_orders],
             "trade_attribution": str(self.trade_attribution.value),
             "trades_matched_by_order": self.trades_matched_by_order,
+            "maybe_bad_book_records": self.maybe_bad_book_records,
             "ok": self.ok,
             "checks": [c.to_dict() for c in self.checks],
         }
@@ -1574,6 +1584,28 @@ class DataQualitySummary:
             f"{self._matched_by_order()}: these orders do not report what "
             "they executed, so a trade with no row of its size is matched to "
             "the order by its id"
+        )
+
+    def _maybe_bad_book(self) -> str:
+        """The ``maybe_bad_book_records`` count in words, or why it is not."""
+        if self.maybe_bad_book_records is None:
+            return (
+                "not checked: the events carry no count of records flagged "
+                "after a gap (only Databento flags them)"
+            )
+        return f"{self.maybe_bad_book_records} record(s) flagged after a gap"
+
+    def _maybe_bad_book_check(self) -> QualityCheck:
+        """The flagged-records check, or a skipped one when nothing was counted."""
+        if self.maybe_bad_book_records is None:
+            return QualityCheck.skip("maybe_bad_book", self._maybe_bad_book())
+        return QualityCheck(
+            "maybe_bad_book",
+            self.maybe_bad_book_records == 0,
+            Severity.WARNING,
+            f"{self.maybe_bad_book_records} record(s) carry the venue's flag "
+            "for a gap in its feed that it could not repair, so the book may "
+            "be wrong from the first of them on",
         )
 
     def _clocks_note(self) -> str:
@@ -1732,6 +1764,7 @@ class DataQualitySummary:
                 else "no venue sequence in this feed, so gaps cannot be detected",
             ),
             *self._clock_checks(),
+            self._maybe_bad_book_check(),
         ]
         order = {Severity.ERROR: 0, Severity.WARNING: 1, Severity.INFO: 2}
         return tuple(sorted(checks, key=lambda c: order[c.severity]))
@@ -1828,6 +1861,7 @@ class DataQualitySummary:
                 "below zero"
             ),
             f"  clock order           : {clock_order}",
+            f"  records after a gap   : {self._maybe_bad_book()}",
             (
                 f"  venue sequence        : {missing} / "
                 f"{self.sequence_out_of_order} out-of-order "
@@ -2032,6 +2066,11 @@ def data_quality_summary(
     Surfaces the health signals that matter before trusting a feed — most
     importantly how crossed the resting book is, which distinguishes a matched
     book from a diff feed (see :class:`~ob_analytics.protocols.FeedType`).
+
+    A source whose feed flags records that come after a gap it could not
+    repair (Databento) puts their count on ``events.attrs`` under
+    :data:`~ob_analytics.schemas.MAYBE_BAD_BOOK_ATTR`; the summary reports
+    it as ``maybe_bad_book_records``.
 
     Like :func:`detect_stale_orders`, this takes either the pipeline's own
     tables or the tables :func:`~ob_analytics.visualization.display_result`
@@ -2251,6 +2290,9 @@ def data_quality_summary(
         after_receive, reordered = _clock_order_counts(levels)
     else:
         after_receive, reordered = 0, 0
+    # The source puts the count on the events when its feed can flag records
+    # after a gap; without the key, nothing was checked.
+    maybe_bad_book = events.attrs.get(MAYBE_BAD_BOOK_ATTR)
 
     return DataQualitySummary(
         feed_type=feed_type,
@@ -2285,4 +2327,7 @@ def data_quality_summary(
         venue_book_rows=venue_book_rows,
         venue_book_differing_rows=venue_book_differing_rows,
         venue_book_first_difference=venue_book_first_difference,
+        maybe_bad_book_records=(
+            None if maybe_bad_book is None else int(maybe_bad_book)
+        ),
     )
