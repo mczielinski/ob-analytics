@@ -27,7 +27,13 @@ from loguru import logger
 
 from ob_analytics import _engine_frames, engine
 from ob_analytics._utils import ticks_to_price, validate_columns, validate_non_empty
-from ob_analytics.depth import _price_level_volume, price_level_volume
+from ob_analytics.depth import (
+    BookLevels,
+    _book_levels,
+    _price_level_volume,
+    price_level_volume,
+)
+from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import Clocks, FeedType, SequenceKind, TradeAttribution
 from ob_analytics.schemas import (
     INGEST_SEQ_COLUMN,
@@ -1113,23 +1119,35 @@ class QualityCheck:
         Stable identifier, matching the summary field it reads
         (e.g. ``"duplicate_event_ids"``).
     passed : bool
-        Whether the data satisfied the check.
+        Whether the data satisfied the check.  ``False`` for a skipped check,
+        which did not pass.
     severity : Severity
         What a failure means (see :class:`Severity`).
     detail : str
         One line saying what was found and how to read it.
+    skipped : bool
+        Whether the check did not run, because the data cannot answer it.
+        A skipped check is :attr:`Severity.INFO` and never fails a run;
+        *detail* says why it did not run.
     """
 
     name: str
     passed: bool
     severity: Severity
     detail: str
+    skipped: bool = False
+
+    @classmethod
+    def skip(cls, name: str, why: str) -> QualityCheck:
+        """A check that did not run, and *why*."""
+        return cls(name, False, Severity.INFO, why, skipped=True)
 
     def to_dict(self) -> dict[str, Any]:
         """Return the check as a plain, JSON-serialisable dict."""
         return {
             "name": self.name,
             "passed": self.passed,
+            "skipped": self.skipped,
             "severity": str(self.severity.value),
             "detail": self.detail,
         }
@@ -1172,6 +1190,63 @@ _LEVEL_COLUMNS = frozenset(
 
 
 @dataclass(frozen=True)
+class BookDifference:
+    """The first place the book rebuilt from the events differs from the venue's.
+
+    Attributes
+    ----------
+    message_row : int
+        The ``original_number`` of the event after which the two books
+        differ: the row of the venue's file that states the venue's book.
+    direction : str
+        ``"bid"`` or ``"ask"``.
+    price_level : int
+        The price level, counted from the touch (1 is the best price).
+    price, venue_price : float or None
+        The price of that level in the rebuilt book and in the venue's, in
+        the quote currency (``ticks * tick_size``); ``None`` where that book
+        has no level there.
+    volume, venue_volume : int
+        The size at that level in the rebuilt book and in the venue's, in
+        integer lots; ``0`` where that book has no level there.
+    """
+
+    message_row: int
+    direction: str
+    price_level: int
+    price: float | None
+    volume: int
+    venue_price: float | None
+    venue_volume: int
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the difference as a plain, JSON-serialisable dict."""
+        return {
+            "message_row": self.message_row,
+            "direction": self.direction,
+            "price_level": self.price_level,
+            "price": self.price,
+            "volume": self.volume,
+            "venue_price": self.venue_price,
+            "venue_volume": self.venue_volume,
+        }
+
+    def describe(self) -> str:
+        """The difference in words, for the report."""
+
+        def level(price: float | None, volume: int) -> str:
+            if price is None:
+                return "empty"
+            return f"{volume:,} lot(s) at {_format_price(price)}"
+
+        return (
+            f"after message row {self.message_row}: {self.direction} price "
+            f"level {self.price_level} is {level(self.price, self.volume)}, the venue's is "
+            f"{level(self.venue_price, self.venue_volume)}"
+        )
+
+
+@dataclass(frozen=True)
 class DataQualitySummary:
     """Per-run data-quality metrics for a reconstructed session.
 
@@ -1207,6 +1282,20 @@ class DataQualitySummary:
         on a price-level (L2) run, which has no per-order events.
     per_order_crossed_episodes : int
         Number of distinct intervals the per-order book is crossed.
+    venue_book_price_levels : int
+        How many price levels per side the venue's own book states (the
+        ``venue_book`` passed to :func:`data_quality_summary`; for LOBSTER,
+        the orderbook file).  ``0`` when there is no venue book, or no book
+        rebuilt from per-order events to compare with it: the
+        ``venue_book`` check is then skipped.
+    venue_book_rows : int
+        Book states compared: one per event, each after its own message.
+    venue_book_differing_rows : int
+        Of those, the states where the book rebuilt from the per-order events
+        differs from the venue's in any price or size of the best
+        ``venue_book_price_levels`` levels of either side.
+    venue_book_first_difference : BookDifference or None
+        Where the first of those states differs, or ``None`` when none does.
     unmatched_trades_pct : float
         Percentage of trades with an order the feed can name left unresolved:
         a missing ``maker_event_id`` or ``taker_event_id`` when the feed names
@@ -1323,6 +1412,10 @@ class DataQualitySummary:
     trades_matched_by_order: int = 0
     per_order_crossed_pct: float = 0.0
     per_order_crossed_episodes: int = 0
+    venue_book_price_levels: int = 0
+    venue_book_rows: int = 0
+    venue_book_differing_rows: int = 0
+    venue_book_first_difference: BookDifference | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Return the summary as a plain, JSON-serialisable dict."""
@@ -1335,6 +1428,15 @@ class DataQualitySummary:
             "crossed_episodes": self.crossed_episodes,
             "per_order_crossed_pct": self.per_order_crossed_pct,
             "per_order_crossed_episodes": self.per_order_crossed_episodes,
+            "venue_book_price_levels": self.venue_book_price_levels,
+            "venue_book_rows": self.venue_book_rows,
+            "venue_book_differing_rows": self.venue_book_differing_rows,
+            "venue_book_differing_pct": self.venue_book_differing_pct,
+            "venue_book_first_difference": (
+                self.venue_book_first_difference.to_dict()
+                if self.venue_book_first_difference is not None
+                else None
+            ),
             "unmatched_trades_pct": self.unmatched_trades_pct,
             "duplicate_event_ids": self.duplicate_event_ids,
             "duplicate_created_ids": self.duplicate_created_ids,
@@ -1392,6 +1494,54 @@ class DataQualitySummary:
             "orders the events never close stay in it, so the per-order views "
             "are wrong; for LOBSTER, the message file has too few price "
             "levels: request more levels"
+        )
+
+    @property
+    def venue_book_differing_pct(self) -> float:
+        """Percentage of the compared book states that differ from the venue's."""
+        if not self.venue_book_rows:
+            return 0.0
+        return 100.0 * self.venue_book_differing_rows / self.venue_book_rows
+
+    def _venue_book(self) -> str:
+        """The ``venue_book`` comparison in words, or why it did not run."""
+        if not self.venue_book_price_levels and not self.n_events:
+            return "not checked: no per-order events to rebuild a book from"
+        if not self.venue_book_price_levels:
+            return (
+                "not checked: no venue book to compare with; only a LOBSTER "
+                "run from its files has one"
+            )
+        levels = f"[best {self.venue_book_price_levels} price level(s) per side]"
+        first = self.venue_book_first_difference
+        if first is None:
+            return (
+                "rebuilt book matches the venue's book in all "
+                f"{self.venue_book_rows:,} row(s) {levels}"
+            )
+        return (
+            "rebuilt book differs from the venue's book in "
+            f"{self.venue_book_differing_rows:,} of {self.venue_book_rows:,} "
+            f"row(s) ({self.venue_book_differing_pct:.2f}%) {levels}; first "
+            f"{first.describe()}"
+        )
+
+    def _venue_book_check(self) -> QualityCheck:
+        """The ``venue_book`` check, or a skipped one when there is no venue book."""
+        if not self.venue_book_price_levels:
+            return QualityCheck.skip("venue_book", self._venue_book())
+        detail = self._venue_book()
+        if self.venue_book_first_difference is not None:
+            detail += (
+                ". The per-order views read the rebuilt book. For LOBSTER, the "
+                "usual cause is orders the message file does not cover: those "
+                "resting before it starts, and those outside its price levels"
+            )
+        return QualityCheck(
+            "venue_book",
+            self.venue_book_first_difference is None,
+            Severity.WARNING,
+            detail,
         )
 
     def _unmatched_sides(self) -> str:
@@ -1515,6 +1665,7 @@ class DataQualitySummary:
                 f"({self.per_order_crossed_episodes} episode(s)) "
                 f"[{self._per_order_crossed_note()}]",
             ),
+            self._venue_book_check(),
             QualityCheck(
                 "unmatched_trades",
                 self.unmatched_trades_pct <= UNMATCHED_TRADES_WARN_PCT,
@@ -1589,7 +1740,7 @@ class DataQualitySummary:
         """The two clock checks, or one note saying why they did not run."""
         skipped = self._clocks_note()
         if skipped:
-            return [QualityCheck("clocks", True, Severity.INFO, skipped)]
+            return [QualityCheck.skip("clocks", skipped)]
         return [
             QualityCheck(
                 "exchange_time_after_receive",
@@ -1653,6 +1804,7 @@ class DataQualitySummary:
                 f"session ({self.per_order_crossed_episodes} episode(s)) "
                 f"[{self._per_order_crossed_note()}]"
             ),
+            f"  venue book            : {self._venue_book()}",
             (
                 f"  stale resting orders  : {len(self.stale_orders)}"
                 + (f" (worst: {self._worst_stale()})" if self.stale_orders else "")
@@ -1781,6 +1933,87 @@ def _trades_matched_by_order(
     return int(taker.isin(rows).sum())
 
 
+def _compare_venue_book(
+    events: pd.DataFrame,
+    rebuilt: pd.DataFrame,
+    venue_book: BookLevels,
+    tick_size: float,
+) -> tuple[int, BookDifference | None]:
+    """Compare the book rebuilt from *events* with the venue's, row by row.
+
+    *rebuilt* is the depth table of the per-order events.  Each event is
+    matched with the venue's row of its own message, named by
+    ``original_number``, not with the row at its position: a venue file can
+    state the book after messages the events leave out.  Both books are
+    compared on every price and size of the best price levels the venue
+    states; the rebuilt book keeps every price level its orders rest at,
+    crossed or not.
+
+    Returns the number of events after which the books differ, and the
+    first difference.
+    """
+    validate_columns(
+        events, {"original_number"}, "data_quality_summary(venue_book=...)"
+    )
+    if not pd.api.types.is_integer_dtype(rebuilt["price"]):
+        raise ConfigError(
+            "data_quality_summary: a venue book is compared in integer ticks; "
+            "pass the pipeline's own tables, not the ones display_result "
+            "converts."
+        )
+    ordered = events.sort_values("original_number", kind="stable")
+    rows = ordered["original_number"].to_numpy(dtype=np.int64) - 1
+    n_venue, num_levels = venue_book.ask_prices.shape
+    outside = (rows < 0) | (rows >= n_venue)
+    if outside.any():
+        raise ConfigError(
+            f"data_quality_summary: the venue book has {n_venue} rows, but an "
+            f"event names message row {int(rows[outside][0]) + 1}.  Pass the "
+            "venue book of the same message file."
+        )
+    mine = _book_levels(ordered, rebuilt, num_levels, quoted=False)
+    venue = BookLevels(*(side[rows] for side in venue_book))
+
+    # Per side, which levels of each row differ in price or size.
+    sides = {
+        "ask": (mine.ask_prices != venue.ask_prices)
+        | (mine.ask_volumes != venue.ask_volumes),
+        "bid": (mine.bid_prices != venue.bid_prices)
+        | (mine.bid_volumes != venue.bid_volumes),
+    }
+    differs = sides["ask"].any(axis=1) | sides["bid"].any(axis=1)
+    n_differing = int(differs.sum())
+    if not n_differing:
+        return 0, None
+
+    # The first differing row, at its level nearest the touch (asks first
+    # on a tie).
+    r = int(np.argmax(differs))
+    level, direction = min(
+        (int(np.argmax(diff[r])), name) for name, diff in sides.items() if diff[r].any()
+    )
+
+    def side_level(book: BookLevels) -> tuple[float | None, int]:
+        price = getattr(book, f"{direction}_prices")[r, level]
+        volume = int(getattr(book, f"{direction}_volumes")[r, level])
+        if not volume:
+            return None, 0
+        return float(ticks_to_price(price, tick_size)), volume
+
+    price, volume = side_level(mine)
+    venue_price, venue_volume = side_level(venue)
+    first = BookDifference(
+        message_row=int(rows[r]) + 1,
+        direction=direction,
+        price_level=level + 1,
+        price=price,
+        volume=volume,
+        venue_price=venue_price,
+        venue_volume=venue_volume,
+    )
+    return n_differing, first
+
+
 def data_quality_summary(
     events: pd.DataFrame,
     trades: pd.DataFrame,
@@ -1792,6 +2025,7 @@ def data_quality_summary(
     sequence_restarts: int = 0,
     trade_attribution: TradeAttribution = TradeAttribution.BOTH,
     clocks: Clocks = Clocks.BOTH,
+    venue_book: BookLevels | None = None,
 ) -> DataQualitySummary:
     """Summarise the data quality of one reconstructed session.
 
@@ -1853,10 +2087,26 @@ def data_quality_summary(
         time at all (a price-level file without ``exchange_timestamp``) is
         read as :attr:`~ob_analytics.protocols.Clocks.RECEIVE_ONLY` whatever
         is declared; an empty frame keeps the declaration.
+    venue_book : BookLevels, optional
+        The venue's own book after every message, when the source supplies
+        one: for LOBSTER, the orderbook file read by
+        :func:`~ob_analytics.lobster.lobster_venue_book`.  Row ``i`` is the
+        book after the message whose ``original_number`` is ``i + 1``, so
+        *events* must carry ``original_number`` and be the pipeline's own
+        tables (integer ticks and lots).  The book rebuilt from *events* is
+        then compared with it on every price and size of the levels it
+        states.  Without it, the ``venue_book`` check is skipped.
 
     Returns
     -------
     DataQualitySummary
+
+    Raises
+    ------
+    ConfigError
+        If a *venue_book* is passed with events that lack
+        ``original_number``, are display tables, or name a message row the
+        venue book does not have.
     """
     validate_columns(
         events,
@@ -1881,15 +2131,36 @@ def data_quality_summary(
     negative_level_rows = 0
     # The book rebuilt from the per-order events, when the depth table is not
     # that book: a LOBSTER run reads its depth from the orderbook file.
+    # ``rebuilt_depth`` is the per-order book whichever table holds it.
     per_order_depth = None
+    rebuilt_depth = None
     if depth is None and l2:
         depth = events
     elif depth is None:
         depth, overdrawn = _price_level_volume(events)
         negative_level_rows = len(overdrawn)
+        rebuilt_depth = depth
     elif not l2 and _LEVEL_COLUMNS <= set(events.columns):
         per_order_depth, overdrawn = _price_level_volume(events)
         negative_level_rows = len(overdrawn)
+        rebuilt_depth = per_order_depth
+
+    # The venue's own book against the book rebuilt from the per-order
+    # events.  An L2 run has no such book to compare.
+    venue_book_price_levels = venue_book_rows = venue_book_differing_rows = 0
+    venue_book_first_difference = None
+    if venue_book is not None and not l2:
+        if rebuilt_depth is None:
+            missing = sorted(_LEVEL_COLUMNS - set(events.columns))
+            raise ConfigError(
+                "data_quality_summary: a venue book is compared with the book "
+                f"rebuilt from the events, which needs their columns {missing}."
+            )
+        venue_book_differing_rows, venue_book_first_difference = _compare_venue_book(
+            events, rebuilt_depth, venue_book, tick_size
+        )
+        venue_book_price_levels = int(venue_book.ask_prices.shape[1])
+        venue_book_rows = len(events)
 
     best, crossed_pct, crossed_episodes = _book_crossing(depth)
     if l2:
@@ -2010,4 +2281,8 @@ def data_quality_summary(
         stale_orders=stale_orders,
         trade_attribution=trade_attribution,
         trades_matched_by_order=matched_by_order,
+        venue_book_price_levels=venue_book_price_levels,
+        venue_book_rows=venue_book_rows,
+        venue_book_differing_rows=venue_book_differing_rows,
+        venue_book_first_difference=venue_book_first_difference,
     )

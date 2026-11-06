@@ -165,6 +165,13 @@ has gone, but the faithful book still holds it. Reported by `audit`, never
 removed. Found by `detect_stale_orders`.
 _Avoid_: ghost order, zombie order
 
+**Venue book**:
+The book as the venue itself states it, beside the order events: for LOBSTER,
+the orderbook file, which holds the best N price levels after every message.
+`audit` compares the book rebuilt from the events with it (the `venue_book`
+check). Most sources have none.
+_Avoid_: ground truth (it covers only N price levels)
+
 **Book snapshot**:
 The resting book at one point in time, as separate bid and ask tables.
 _Avoid_: state, image, frame

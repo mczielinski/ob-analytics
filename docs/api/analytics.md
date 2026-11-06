@@ -48,3 +48,5 @@ concepts and the [`audit` how-to](../howto/audit.md) for the CLI.
 ::: ob_analytics.analytics.detect_stale_orders
 
 ::: ob_analytics.analytics.StaleOrder
+
+::: ob_analytics.analytics.BookDifference

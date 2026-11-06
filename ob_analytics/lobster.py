@@ -45,8 +45,9 @@ from ob_analytics._utils import (
 from ob_analytics.analytics import CROSSED_TOLERANCE_PCT, _book_crossing
 from ob_analytics.config import InstrumentGrid, PipelineConfig, SourceSettings
 from ob_analytics.depth import (
+    BookLevels,
     DepthMetricsEngine,
-    PriceLevelBook,
+    _book_levels,
     _price_level_volume,
     price_level_volume,
 )
@@ -769,52 +770,17 @@ class LobsterWriter:
         )
         _require_raw_units(depth, "depth", whole_float_volume=True)
         # Each depth row is applied with the event it names, events in the
-        # order of the files.  The stable sort below keeps the depth table's
-        # own order within one event, the order the depth summary replays.
-        position = pd.Index(events["event_id"]).get_indexer(pd.Index(depth["event_id"]))
-        if (position < 0).any():
-            raise ConfigError(
-                "LobsterWriter: the depth table names events that are not in "
-                "the events table.  Pass the depth of the same run."
-            )
-        replay = np.argsort(position, kind="stable")
-        position = position[replay]
-        prices = depth["price"].to_numpy()[replay].astype(np.int64).tolist()
-        volumes = depth["volume"].to_numpy()[replay].tolist()
-        sides = (depth["direction"].to_numpy()[replay] != "bid").astype(int).tolist()
-        # The depth rows of event i are rows[stops[i - 1]:stops[i]].
-        stops = np.searchsorted(position, np.arange(len(events)), side="right")
+        # order of the files, the depth table's own order kept within one
+        # event: the order the depth summary replays.
+        try:
+            levels = _book_levels(events, depth, num_levels)
+        except ConfigError as exc:
+            raise ConfigError(f"LobsterWriter: {exc}") from None
 
-        n = len(events)
-        ask_ticks = np.zeros((n, num_levels), dtype=np.int64)
-        bid_ticks = np.zeros((n, num_levels), dtype=np.int64)
-        ask_lots = np.zeros((n, num_levels), dtype=np.int64)
-        bid_lots = np.zeros((n, num_levels), dtype=np.int64)
-        ask_depth = np.zeros(n, dtype=np.int64)
-        bid_depth = np.zeros(n, dtype=np.int64)
-
-        book = PriceLevelBook()
-        row = 0
-        for i in range(n):
-            for j in range(row, int(stops[i])):
-                book.update(prices[j], volumes[j], sides[j])
-            row = int(stops[i])
-            # Each side best first: asks from the lowest price, bids from the
-            # highest.
-            ask_prices, ask_volumes = book.quoted_asks()
-            k = ask_depth[i] = min(num_levels, ask_prices.size)
-            ask_ticks[i, :k] = ask_prices[:k]
-            ask_lots[i, :k] = ask_volumes[:k]
-            bid_prices, bid_volumes = book.quoted_bids()
-            k = bid_depth[i] = min(num_levels, bid_prices.size)
-            bid_ticks[i, :k] = bid_prices[::-1][:k]
-            bid_lots[i, :k] = bid_volumes[::-1][:k]
-
-        level = np.arange(num_levels)
-        ask_empty = level >= ask_depth[:, None]
-        bid_empty = level >= bid_depth[:, None]
+        ask_empty = levels.ask_volumes == 0
+        bid_empty = levels.bid_volumes == 0
         cfg = self._config
-        lots = {"ask": ask_lots, "bid": bid_lots}
+        lots = {"ask": levels.ask_volumes, "bid": levels.bid_volumes}
         if float(cfg.lot_size).is_integer():
             # A lot of whole units (one share, for LOBSTER's own data): write
             # whole numbers, as LOBSTER writes its share counts.
@@ -825,8 +791,12 @@ class LobsterWriter:
                 for side, v in lots.items()
             }
         raw = {
-            "ask": np.where(ask_empty, _DUMMY_ASK_PRICE, self._raw_prices(ask_ticks)),
-            "bid": np.where(bid_empty, _DUMMY_BID_PRICE, self._raw_prices(bid_ticks)),
+            "ask": np.where(
+                ask_empty, _DUMMY_ASK_PRICE, self._raw_prices(levels.ask_prices)
+            ),
+            "bid": np.where(
+                bid_empty, _DUMMY_BID_PRICE, self._raw_prices(levels.bid_prices)
+            ),
         }
 
         columns: dict[str, np.ndarray] = {}
@@ -840,6 +810,46 @@ class LobsterWriter:
 # ── LOBSTER depth computation ─────────────────────────────────────────
 
 
+def _side_levels(
+    p: np.ndarray,
+    v: np.ndarray,
+    dummy: float,
+    divisor: int,
+    tick_size: float,
+    lot_size: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """One book side of the orderbook file in integer ticks and lots.
+
+    *p*/*v* are the side's ``(n_rows, n_levels)`` price/size arrays, as the
+    file states them.  Each size is converted to a whole number of lots
+    (:func:`~ob_analytics._utils.size_to_lots`), as the loader converts the
+    message sizes, and each price to an integer tick count (``round((price /
+    divisor) / tick_size)``).  A level is present when its price is not the
+    *dummy* sentinel and its size is at least one lot; a level that is not
+    holds price 0 and size 0.
+
+    Returns ``(ticks, lots)``, both ``int64`` and shaped like *p*.
+    """
+    lots = size_to_lots(v, lot_size)
+    valid = (p != dummy) & (lots > 0)
+    ticks = np.zeros(p.shape, dtype=np.int64)
+    if valid.any():
+        # Each distinct price is converted once.
+        uniq, inverse = np.unique(p[valid], return_inverse=True)
+        ticks[valid] = price_to_ticks(uniq / divisor, tick_size)[inverse]
+    return ticks, np.where(valid, lots, 0).astype(np.int64)
+
+
+def _read_orderbook(orderbook_path: Path) -> np.ndarray:
+    """The LOBSTER orderbook file as a ``(rows, levels, 4)`` float array.
+
+    LOBSTER's columns repeat (ask price, ask size, bid price, bid size) for
+    each level, so the last axis is in that order.
+    """
+    ob_raw = pd.read_csv(orderbook_path, header=None, dtype=np.float64).to_numpy()
+    return ob_raw.reshape(ob_raw.shape[0], ob_raw.shape[1] // 4, 4)
+
+
 def _side_level_changes(
     p: np.ndarray,
     v: np.ndarray,
@@ -851,13 +861,8 @@ def _side_level_changes(
     """Volume changes of one book side across consecutive orderbook rows.
 
     *p*/*v* are the side's ``(n_rows, n_levels)`` price/size arrays, as the
-    file states them.  Each size is converted to a whole number of lots
-    (:func:`~ob_analytics._utils.size_to_lots`), as the loader converts the
-    message sizes.  A level is active when its price is not the *dummy*
-    sentinel and its size is at least one lot.  Each unique raw price is
-    converted to an integer tick count (``round((price / divisor) /
-    tick_size)``) before keying, and duplicate tick prices within a row are
-    summed in level order.
+    file states them, read into ticks and lots by :func:`_side_levels`.
+    Duplicate tick prices within a row are summed in level order.
 
     Returns ``(row_indices, prices, volumes_after)`` for every (row, price)
     whose volume differs from the previous row (missing level = 0), the
@@ -865,17 +870,9 @@ def _side_level_changes(
     by the caller), ascending within each row, and the volumes ``int64`` lots.
     """
     n = p.shape[0]
-    lots = size_to_lots(v, lot_size)
-    valid = (p != dummy) & (lots > 0)
-
-    rp = np.full(p.shape, np.inf)
-    if valid.any():
-        uniq = np.unique(p[valid])
-        rounded = price_to_ticks(uniq / divisor, tick_size).astype(np.float64)
-        idx = np.clip(np.searchsorted(uniq, p), 0, uniq.size - 1)
-        ok = valid & (uniq[idx] == p)
-        rp[ok] = rounded[idx[ok]]
-    vv = np.where(valid, lots, 0)
+    ticks, vv = _side_levels(p, v, dummy, divisor, tick_size, lot_size)
+    valid = vv > 0
+    rp = np.where(valid, ticks.astype(np.float64), np.inf)
 
     # Sort each row by rounded price; inactive levels (+inf) sort last.
     order = np.argsort(rp, axis=1, kind="stable")
@@ -986,8 +983,7 @@ def lobster_depth_from_orderbook(
         {"event_id", "timestamp", "raw_event_type", "original_number"},
         "lobster_depth_from_orderbook",
     )
-    ob_raw = pd.read_csv(orderbook_path, header=None, dtype=np.float64).to_numpy()
-    num_levels = ob_raw.shape[1] // 4
+    ob_raw = _read_orderbook(orderbook_path)
 
     # In message order, so consecutive book states are diffed in the order
     # they happened, whatever order the frame was passed in.
@@ -1037,28 +1033,23 @@ def lobster_depth_from_orderbook(
             "The two files must have one row per message."
         )
     ob_raw = ob_raw[rows]
-    n = len(book_events)
 
     # ``.array`` keeps the tz-aware UTC dtype through the fancy indexing below
     # (``.values`` would drop the zone to a naive numpy datetime64).
     timestamps = book_events["timestamp"].array
     event_ids = book_events["event_id"].values
 
-    # Diff consecutive book states per side.  LOBSTER columns repeat
-    # (ask_price, ask_size, bid_price, bid_size) per level, so each row
-    # reshapes to (levels, 4) and each side becomes an (n, levels) array
-    # pair handled by :func:`_side_level_changes`.  Within an event the
+    # Diff consecutive book states per side.  Each side is an (n, levels)
+    # array pair handled by :func:`_side_level_changes`.  Within an event the
     # changes are emitted asks first, then bids, each ascending in price
     # (the previous dict-diff emitted them in unspecified set order).
     grid = (LOBSTER_PRICE_DIVISOR, config.tick_size, config.lot_size)
 
-    lv = ob_raw.reshape(n, num_levels, 4)
-
     ask_idx, ask_p, ask_v = _side_level_changes(
-        lv[:, :, 0], lv[:, :, 1], _DUMMY_ASK_PRICE, *grid
+        ob_raw[:, :, 0], ob_raw[:, :, 1], _DUMMY_ASK_PRICE, *grid
     )
     bid_idx, bid_p, bid_v = _side_level_changes(
-        lv[:, :, 2], lv[:, :, 3], _DUMMY_BID_PRICE, *grid
+        ob_raw[:, :, 2], ob_raw[:, :, 3], _DUMMY_BID_PRICE, *grid
     )
 
     row_idx = np.concatenate([ask_idx, bid_idx])
@@ -1095,6 +1086,45 @@ def lobster_depth_from_orderbook(
     depth_summary = engine.compute(depth)
 
     return depth, depth_summary
+
+
+def lobster_venue_book(orderbook_path: Path, config: PipelineConfig) -> BookLevels:
+    """Read the LOBSTER orderbook file as the venue's own book.
+
+    The file states the best N price levels of each side after every
+    message.  ``ob-analytics audit`` compares the book rebuilt from the
+    messages with it (see
+    :func:`~ob_analytics.analytics.data_quality_summary`).
+
+    Parameters
+    ----------
+    orderbook_path : Path
+        Path to the LOBSTER orderbook CSV.
+    config : PipelineConfig
+        Pipeline configuration.  Prices are read in LOBSTER's encoding
+        (:data:`LOBSTER_PRICE_DIVISOR`) onto ``tick_size`` and sizes in whole
+        lots of ``lot_size``, as :func:`lobster_depth_from_orderbook` reads
+        them.
+
+    Returns
+    -------
+    BookLevels
+        One row per message row: row ``i`` is the book after the message
+        whose ``original_number`` is ``i + 1``.  Prices are integer ticks and
+        sizes integer lots; a level the file leaves empty holds 0 and 0.
+        Each of the file's levels stays one level, so the book compares
+        level by level with the rebuilt one only when each of the file's
+        prices is a whole number of ticks, as on LOBSTER's own cent grid.
+    """
+    ob_raw = _read_orderbook(orderbook_path)
+    grid = (LOBSTER_PRICE_DIVISOR, config.tick_size, config.lot_size)
+    ask_prices, ask_volumes = _side_levels(
+        ob_raw[:, :, 0], ob_raw[:, :, 1], _DUMMY_ASK_PRICE, *grid
+    )
+    bid_prices, bid_volumes = _side_levels(
+        ob_raw[:, :, 2], ob_raw[:, :, 3], _DUMMY_BID_PRICE, *grid
+    )
+    return BookLevels(ask_prices, ask_volumes, bid_prices, bid_volumes)
 
 
 def _warn_if_book_crosses(events: pd.DataFrame, *, from_orderbook: bool) -> None:
@@ -1239,6 +1269,17 @@ class LobsterSource:
         return lobster_depth_from_orderbook(
             events, ob_path, config, message_rows=message_rows
         )
+
+    def venue_book(self, source: Any, config: PipelineConfig) -> BookLevels | None:
+        """The venue's own book: the orderbook file next to the messages.
+
+        ``ob-analytics audit`` compares the book rebuilt from the messages
+        with it.  ``None`` when *source* has no orderbook file.
+        """
+        ob_path = LobsterLoader._resolve_orderbook_file(Path(source))
+        if ob_path is None:
+            return None
+        return lobster_venue_book(ob_path, config)
 
     def required_context(self) -> list[str]:
         # LOBSTER message/orderbook filenames carry no date, so the trading
