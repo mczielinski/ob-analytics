@@ -216,14 +216,18 @@ class TestL2DepthLoader:
         frame[column] = frame[column].astype(object)
         frame.loc[1, column] = bad
         frame.to_csv(tmp_path / "depth.csv", index=False)
-        with pytest.raises(ConfigError, match="L2DepthLoader.load: 1 of 2 row.*row 2"):
+        with pytest.raises(
+            ConfigError, match=r"L2DepthLoader\.load\(.*depth\.csv\): 1 of 2 row.*row 2"
+        ):
             L2DepthLoader().load(tmp_path)
 
     @pytest.mark.parametrize("column", ["price", "volume"])
     def test_a_trade_value_that_is_not_a_number_raises(self, tmp_path, column):
         trade = {"timestamp": _BASE_MS, "price": 0.03, "volume": 1.0, column: ""}
         _write_l2_dir(tmp_path, [(_BASE_MS, "bid", 0.03, 1.0)], [trade])
-        with pytest.raises(ConfigError, match="L2TradeReader.load: 1 of 1 row"):
+        with pytest.raises(
+            ConfigError, match=r"L2TradeReader\.load\(.*trades\.csv\): 1 of 1 row"
+        ):
             L2TradeReader().load(pd.DataFrame(), tmp_path)
 
     def test_missing_file_raises(self, tmp_path):

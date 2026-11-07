@@ -316,12 +316,12 @@ class L2DepthLoader:
         # Canonical price is integer ticks (issue #155): scale the raw feed
         # price to the quote currency, then convert to ticks.
         price = _to_ticks_on_grid(
-            raw[price_col], cfg, fmt.price_divisor, "L2DepthLoader.load"
+            raw[price_col], cfg, fmt.price_divisor, f"L2DepthLoader.load({path})"
         )
         # Canonical size is integer lots (issue #226); the raw feed carries a
         # base-asset float, so convert on the way in.
         volume = pd.Series(
-            _to_lots(raw[vol_col], cfg, "L2DepthLoader.load"), index=raw.index
+            _to_lots(raw[vol_col], cfg, f"L2DepthLoader.load({path})"), index=raw.index
         )
         direction = (
             raw[side_col].astype(str).str.strip().str.lower().map(_SIDE_TO_DIRECTION)
@@ -466,12 +466,12 @@ class L2TradeReader:
         timestamp = _to_datetime(raw[ts_col], fmt.timestamp_unit)
         # Trade prints share the depth grid: integer ticks (issue #155).
         price = _to_ticks_on_grid(
-            raw[price_col], cfg, fmt.price_divisor, "L2TradeReader.load"
+            raw[price_col], cfg, fmt.price_divisor, f"L2TradeReader.load({path})"
         )
         # Canonical size is integer lots (issue #226); the raw feed carries a
         # base-asset float, so convert on the way in.
         volume = pd.Series(
-            _to_lots(raw[vol_col], cfg, "L2TradeReader.load"), index=raw.index
+            _to_lots(raw[vol_col], cfg, f"L2TradeReader.load({path})"), index=raw.index
         )
         direction = self._read_direction(raw)
 

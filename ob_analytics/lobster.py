@@ -862,6 +862,12 @@ def _read_orderbook(orderbook_path: Path) -> np.ndarray:
     except ValueError:
         # A word in the file: read it as it is so the message can name the row.
         table = pd.read_csv(orderbook_path, header=None)
+    if table.shape[1] % 4:
+        raise ConfigError(
+            f"{orderbook_path} has {table.shape[1]} column(s); a LOBSTER "
+            "orderbook file has four per level (ask price, ask size, bid "
+            "price, bid size)."
+        )
     ob_raw = finite_floats(table.to_numpy(), "price or size", str(orderbook_path))
     return ob_raw.reshape(ob_raw.shape[0], ob_raw.shape[1] // 4, 4)
 

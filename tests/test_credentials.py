@@ -391,6 +391,15 @@ class TestRedact:
         assert redact("-----BEGIN PRIVATE KEY-----") == "-----BEGIN PRIVATE KEY-----"
         assert redact("Zk8=") == "Zk8="
 
+    def test_a_line_with_spaces_in_a_key_of_several_lines_is_not_redacted(
+        self,
+    ) -> None:
+        # Only the key's own lines are found alone, not text such as a JSON
+        # key file's field names.
+        remember('{\n  "type": "service_account",\n  "key": "k3y-b0dy-91c4e"\n}')
+        text = '"type": "service_account",'
+        assert redact(text) == text
+
 
 # ---------------------------------------------------------------------------
 # The whole capture, through the CLI

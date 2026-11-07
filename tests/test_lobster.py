@@ -1080,6 +1080,15 @@ class TestBadMessageAndOrderbookFiles:
             LobsterLoader(trading_date="2024-01-02").load(tmp_path)
         assert f"{_STEM}_message_1.csv" in str(err.value)
 
+    def test_an_orderbook_file_with_the_wrong_column_count(self, tmp_path):
+        from ob_analytics.exceptions import ConfigError
+
+        orderbook = "".join(r + ",0\n" for r in self.ORDERBOOK.splitlines())
+        _write_pair(tmp_path, self.MESSAGES, orderbook)
+        with pytest.raises(ConfigError, match="has 5 column") as err:
+            _run_lobster(tmp_path)
+        assert f"{_STEM}_orderbook_1.csv" in str(err.value)
+
     @pytest.mark.parametrize("bad", ["", "abc"])
     def test_an_orderbook_value_that_is_not_a_number(self, tmp_path, bad):
         from ob_analytics.exceptions import ConfigError

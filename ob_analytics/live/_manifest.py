@@ -23,7 +23,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 import pandas as pd
@@ -167,10 +167,13 @@ class Segment:
         capture leave its directory.
         """
         name = d["name"]
+        # One rule for both platforms: on Windows "C:x" is a path too.
         if (
             not isinstance(name, str)
             or name in ("", ".", "..")
-            or any(c in name for c in ("/", "\\", "\0"))
+            or "\0" in name
+            or PurePosixPath(name).name != name
+            or PureWindowsPath(name).name != name
         ):
             raise ValueError(
                 f"capture manifest segment name {name!r} is not one plain "

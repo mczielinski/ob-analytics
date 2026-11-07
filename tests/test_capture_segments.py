@@ -1179,7 +1179,7 @@ class TestReadBack:
         assert "No closed segment" in r.stderr
         assert "seg-0001 was not checked" in r.stderr
 
-    @pytest.mark.parametrize("name", ["..", "a/b", ".", "", "a\\b"])
+    @pytest.mark.parametrize("name", ["..", "a/b", ".", "", "a\\b", "C:x", "/abs"])
     def test_a_segment_name_that_is_not_one_plain_name_is_refused(self, name):
         # #397: the name is joined to the capture directory.
         with pytest.raises(ValueError, match="segment name"):

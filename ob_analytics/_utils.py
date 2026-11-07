@@ -102,8 +102,10 @@ def finite_floats(values: object, what: str, where: str | None = None) -> np.nda
         given = np.asarray(values, dtype=object)
         coerced = pd.to_numeric(given.ravel(), errors="coerce")
         arr = np.asarray(coerced, dtype=np.float64).reshape(given.shape)
-    bad = ~np.isfinite(arr)
-    if bad.any():
+    # NaN carries through min and max, so two reductions test the column
+    # without a mask the size of it; the mask is built only to describe one.
+    if arr.size and not (np.isfinite(arr.min()) and np.isfinite(arr.max())):
+        bad = ~np.isfinite(arr)
         bad_rows = bad.reshape(bad.shape[0], -1).any(axis=1) if bad.ndim > 1 else bad
         first_row = int(np.argmax(bad_rows.ravel())) + 1
         example = given.ravel()[int(np.argmax(bad.ravel()))]

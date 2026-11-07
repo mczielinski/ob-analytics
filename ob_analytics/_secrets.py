@@ -38,10 +38,11 @@ def remember(value: str) -> None:
     quote (a private key file) is also found inside ``raw.jsonl`` and
     ``meta.json``.  So is the value without the white space around it.  For a
     value of several lines, such as a PEM private key, each line of at least
-    :data:`MIN_SECRET_LENGTH` characters is remembered on its own, so a part
-    of the key is found even where the line breaks differ; the
-    ``-----BEGIN ...-----`` and ``-----END ...-----`` lines are not secret and
-    are left out.  A value shorter than :data:`MIN_SECRET_LENGTH` is ignored.
+    :data:`MIN_SECRET_LENGTH` characters with no space in it (the key's own
+    lines) is remembered on its own, so a part of the key is found even where
+    the line breaks differ; the ``-----BEGIN ...-----`` and
+    ``-----END ...-----`` lines are not secret and are left out.  A value
+    shorter than :data:`MIN_SECRET_LENGTH` is ignored.
     """
     global _ordered
     if len(value) < MIN_SECRET_LENGTH:
@@ -51,7 +52,7 @@ def remember(value: str) -> None:
         parts.update(
             line.strip()
             for line in value.splitlines()
-            if not line.strip().startswith("-----")
+            if not line.strip().startswith("-----") and " " not in line.strip()
         )
     parts = {part for part in parts if len(part) >= MIN_SECRET_LENGTH}
     forms = parts | {json.dumps(part)[1:-1] for part in parts}
