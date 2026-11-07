@@ -32,6 +32,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from ob_analytics._utils import epoch_ns
 from ob_analytics.config import PipelineConfig
 from ob_analytics.data import register_writer
 from ob_analytics.schemas import time_order_keys
@@ -72,18 +73,6 @@ _ACTION_TO_HFT_EVENT: dict[str, int] = {
 }
 
 _DIRECTION_TO_HFT_FLAG: dict[str, int] = {"bid": _HFT_BUY, "ask": _HFT_SELL}
-
-
-def _epoch_nanos(column: pd.Series) -> np.ndarray:
-    """Return *column* as int64 nanoseconds since the epoch.
-
-    ``as_unit("ns")`` first, rather than a bare ``astype("int64")``: pandas
-    carries a resolution on a datetime column and infers microseconds for some
-    inputs, so casting straight to ``int64`` would silently export a timestamp a
-    thousand times too small.  The canonical schema is nanoseconds and both
-    engines read nanoseconds.
-    """
-    return column.dt.as_unit("ns").astype("int64").to_numpy()
 
 
 def _resting_orders_only(events: pd.DataFrame) -> pd.DataFrame:
@@ -137,8 +126,8 @@ def _hftbacktest_rows(
     out["ev"] = event_type.to_numpy(dtype=np.uint64) | side_flag.to_numpy(
         dtype=np.uint64
     )
-    out["exch_ts"] = _epoch_nanos(events["exchange_timestamp"])
-    out["local_ts"] = _epoch_nanos(events["timestamp"])
+    out["exch_ts"] = epoch_ns(events["exchange_timestamp"])
+    out["local_ts"] = epoch_ns(events["timestamp"])
     out["px"] = events["price"].to_numpy(dtype=np.float64) * tick_size
     out["qty"] = events["volume"].to_numpy(dtype=np.float64) * lot_size
     out["order_id"] = events["id"].to_numpy(dtype=np.uint64)

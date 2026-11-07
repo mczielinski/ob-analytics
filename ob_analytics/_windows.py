@@ -32,6 +32,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ob_analytics import _engine_frames
+from ob_analytics._utils import epoch_ns
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.schemas import lot_sizes_from_config, tick_sizes_from_config
 
@@ -105,15 +106,8 @@ def window_positions(
     loader gave them.  A row with no time falls in the first window, so no row
     is lost.
     """
-    cuts = np.array(
-        [start.as_unit("ns").value for start, _ in windows[1:] if start is not None],
-        dtype="int64",
-    )
-    index = pd.DatetimeIndex(timestamps).as_unit("ns")
-    if index.tz is not None:
-        index = index.tz_convert("UTC").tz_localize(None)
-    times = index.to_numpy().view("int64")
-    labels = np.searchsorted(cuts, times, side="right")
+    cuts = epoch_ns([start for start, _ in windows[1:] if start is not None])
+    labels = np.searchsorted(cuts, epoch_ns(timestamps), side="right")
     found = pd.Series(labels).groupby(labels).indices
     empty = np.empty(0, dtype="int64")
     return [found.get(k, empty) for k in range(len(windows))]

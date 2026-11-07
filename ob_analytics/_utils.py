@@ -7,7 +7,6 @@ shared internals.  Nothing in this module is part of the public API.
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable
 from typing import Any
 
 import numpy as np
@@ -25,20 +24,6 @@ from ob_analytics.schemas import (
 # ---------------------------------------------------------------------------
 # DataFrame validation
 # ---------------------------------------------------------------------------
-
-
-def validate_columns(
-    df: pd.DataFrame,
-    required: Iterable[str],
-    context: str,
-) -> None:
-    """Raise :class:`ConfigError` if *required* columns are missing."""
-    missing = set(required) - set(df.columns)
-    if missing:
-        raise ConfigError(
-            f"{context}: missing required columns {sorted(missing)}. "
-            f"Available columns: {sorted(df.columns)}"
-        )
 
 
 def validate_non_empty(df: pd.DataFrame, context: str) -> None:
@@ -62,6 +47,40 @@ def validate_non_empty(df: pd.DataFrame, context: str) -> None:
 # that were not real (issue #155).
 
 
+# A price on a tick grid and a size on a lot grid are the same arithmetic: a
+# count of whole steps.  These three bodies hold it once; the tick and lot
+# functions below name the unit.
+
+
+def _step_multiplier(step: float) -> int | None:
+    """Return ``round(1 / step)`` when *step* has an integer inverse, else ``None``."""
+    inv = 1.0 / step
+    nearest = round(inv)
+    if nearest > 0 and abs(inv - nearest) <= 1e-9 * nearest:
+        return int(nearest)
+    return None
+
+
+def _round_to_steps(values: object, step: float, what: str) -> np.ndarray:
+    """Return *values* as a ``float64`` count of whole steps, rounded.
+
+    Through the exact integer multiplier when *step* has one
+    (:func:`_step_multiplier`), else by a float divide.  A value that is not a
+    finite number is refused by :func:`finite_floats`, which names it *what*.
+    """
+    arr = finite_floats(values, what)
+    multiplier = _step_multiplier(step)
+    if multiplier is not None:
+        return np.round(arr * multiplier)
+    return np.round(arr / step)
+
+
+def _from_steps(steps: object, step: float, decimals: int | None) -> np.ndarray:
+    """Return whole *steps* as ``float64`` values, rounded to *decimals* if given."""
+    values = np.asarray(steps, dtype=np.float64) * step
+    return values if decimals is None else np.round(values, decimals)
+
+
 def tick_multiplier(tick_size: float) -> int | None:
     """Return ``round(1 / tick_size)`` when the tick is a reciprocal integer.
 
@@ -72,11 +91,7 @@ def tick_multiplier(tick_size: float) -> int | None:
     change, so the tick integers reproduce it bit-for-bit.  A tick with no
     integer inverse returns ``None``; :func:`price_to_ticks` then divides.
     """
-    inv = 1.0 / tick_size
-    nearest = round(inv)
-    if nearest > 0 and abs(inv - nearest) <= 1e-9 * nearest:
-        return int(nearest)
-    return None
+    return _step_multiplier(tick_size)
 
 
 def finite_floats(values: object, what: str, where: str | None = None) -> np.ndarray:
@@ -133,14 +148,7 @@ def price_to_ticks(price: object, tick_size: float) -> np.ndarray:
     ConfigError
         If a price is empty or not a finite number (:func:`finite_floats`).
     """
-    arr = finite_floats(price, "price")
-    multiplier = tick_multiplier(tick_size)
-    ticks = (
-        np.round(arr * multiplier)
-        if multiplier is not None
-        else np.round(arr / tick_size)
-    )
-    return ticks.astype(np.int64)
+    return _round_to_steps(price, tick_size, "price").astype(np.int64)
 
 
 # How far a price may sit from a whole number of ticks, in ticks, and still
@@ -191,8 +199,7 @@ def ticks_to_price(
     the quote-currency value exactly (e.g. ``25001 * 0.01`` rounds to
     ``250.01`` rather than ``250.01000000000002``).
     """
-    price = np.asarray(ticks, dtype=np.float64) * tick_size
-    return price if decimals is None else np.round(price, decimals)
+    return _from_steps(ticks, tick_size, decimals)
 
 
 def ticks_to_price_if_integer(
@@ -239,11 +246,7 @@ def lot_multiplier(lot_size: float) -> int | None:
     multiply-and-round rather than a float divide.  A lot with no integer
     inverse returns ``None``; :func:`size_to_lots` then divides.
     """
-    inv = 1.0 / lot_size
-    nearest = round(inv)
-    if nearest > 0 and abs(inv - nearest) <= 1e-9 * nearest:
-        return int(nearest)
-    return None
+    return _step_multiplier(lot_size)
 
 
 #: Where ``int64`` ends, as a float: ``2**63``.
@@ -265,18 +268,13 @@ def size_to_lots(size: object, lot_size: float) -> np.ndarray:
         too large to count in ``int64`` lots of *lot_size*.  At the default lot
         of ``1e-8`` the largest size is about ``9.2e10``.
     """
-    arr = finite_floats(size, "size")
-    multiplier = lot_multiplier(lot_size)
-    lots = (
-        np.round(arr * multiplier)
-        if multiplier is not None
-        else np.round(arr / lot_size)
-    )
+    lots = _round_to_steps(size, lot_size, "size")
     # float(2**63) is exact, and every float below it fits in int64.
     # max and min, not abs: no second array the length of the column.
     if lots.size and (lots.max() >= _INT64_LIMIT or lots.min() <= -_INT64_LIMIT):
         too_large = np.abs(lots) >= _INT64_LIMIT
-        example = float(arr[too_large].flat[0])
+        # The sizes passed finite_floats, so they cast to float.
+        example = float(np.asarray(size, dtype=np.float64)[too_large].flat[0])
         raise ConfigError(
             f"{int(too_large.sum())} size(s) are too large to count in whole "
             f"lots of lot_size={lot_size!r} (for example {example!r}); the "
@@ -308,8 +306,7 @@ def lots_to_size(
     display layer and the round-trip writers do so a reconstructed size reads as
     the venue's own quantity rather than ``0.30000000000000004``.
     """
-    size = np.asarray(lots, dtype=np.float64) * lot_size
-    return size if decimals is None else np.round(size, decimals)
+    return _from_steps(lots, lot_size, decimals)
 
 
 # ---------------------------------------------------------------------------
@@ -339,7 +336,7 @@ def size_scale(frame: pd.DataFrame, context: str, column: str = "volume") -> flo
     ConfigError
         If the sizes are integers and the frame has no ``lot_size``.
     """
-    return _unit_scale(frame, column, "lot_size", lot_multiplier, context)
+    return _unit_scale(frame, column, "lot_size", context)
 
 
 def price_scale(frame: pd.DataFrame, context: str, column: str = "price") -> float:
@@ -354,14 +351,13 @@ def price_scale(frame: pd.DataFrame, context: str, column: str = "price") -> flo
     ConfigError
         If the prices are integers and the frame has no ``tick_size``.
     """
-    return _unit_scale(frame, column, "tick_size", tick_multiplier, context)
+    return _unit_scale(frame, column, "tick_size", context)
 
 
 def _unit_scale(
     frame: pd.DataFrame,
     column: str,
     key: str,
-    multiplier: Any,
     context: str,
 ) -> float:
     """Shared body of :func:`size_scale` and :func:`price_scale`."""
@@ -379,7 +375,7 @@ def _unit_scale(
     # An integer inverse where the step has one, as size_to_lots and
     # price_to_ticks use, so a setting such as 0.5 BTC multiplies to
     # 50,000,000.0 lots rather than the nearest float to 0.5 / 1e-8.
-    exact = multiplier(float(step))
+    exact = _step_multiplier(float(step))
     return float(exact) if exact is not None else 1.0 / float(step)
 
 
@@ -472,8 +468,8 @@ def attach_ingest_seq(frame: pd.DataFrame) -> pd.DataFrame:
 # and land it on that shared clock; the inverses reverse the process for the
 # round-trip writers.
 
-# Nanoseconds per unit: ``datetime_to_epoch`` takes a Timedelta's int64 ns
-# count and divides by this to land in the requested unit.
+# Nanoseconds per unit: ``datetime_to_epoch`` takes the int64 ns count from
+# :func:`epoch_ns` and divides by this to land in the requested unit.
 _EPOCH_DIVISORS: dict[str, int] = {
     "s": 1_000_000_000,
     "ms": 1_000_000,
@@ -482,29 +478,45 @@ _EPOCH_DIVISORS: dict[str, int] = {
 }
 
 
-def epoch_to_datetime(series: pd.Series, unit: str) -> pd.Series:
-    """Convert numeric epoch timestamps to tz-aware UTC nanosecond datetimes.
+def to_utc_ns(series: pd.Series, unit: str = "ns") -> pd.Series:
+    """Return a timestamp column on the shared clock: tz-aware UTC nanoseconds.
 
-    Epoch integers count from the Unix epoch in UTC, so the values are already
-    on the shared clock; this attaches the UTC zone and fixes the unit at
-    nanoseconds, which is the canonical time model.
+    A numeric column counts from the Unix epoch in *unit*, so its values are
+    already on the shared clock and only gain the UTC zone.  Any other column
+    (datetimes, or strings pandas can parse) is read with ``utc=True``: a value
+    with a zone is converted to UTC, and one without a zone is read as UTC.
 
     Parameters
     ----------
     series : pandas.Series
-        Numeric timestamps (integers or floats).
-    unit : str
-        Epoch unit of the input — one of ``"s"``, ``"ms"``, ``"us"``, or
-        ``"ns"``.
+        Epoch numbers (integers or floats), datetimes, or date strings.
+    unit : str, optional
+        Epoch unit of a numeric column — one of ``"s"``, ``"ms"``, ``"us"``
+        or ``"ns"`` (default).  Not used for any other column.
 
     Returns
     -------
     pandas.Series
         Datetime series (dtype ``datetime64[ns, UTC]``).
     """
-    return pd.to_datetime(series, unit=unit, utc=True).astype(  # ty: ignore[no-matching-overload]
-        UTC_NS_DTYPE
-    )
+    if pd.api.types.is_numeric_dtype(series):
+        parsed = pd.to_datetime(series, unit=unit, utc=True)  # ty: ignore[no-matching-overload]
+    else:
+        parsed = pd.to_datetime(series, utc=True)
+    return parsed.astype(UTC_NS_DTYPE)
+
+
+def epoch_ns(times: pd.Series | pd.DatetimeIndex | list[pd.Timestamp]) -> np.ndarray:
+    """Return datetimes as ``int64`` nanoseconds since the Unix epoch.
+
+    *times* is a datetime column, a :class:`pandas.DatetimeIndex`, or a list
+    of timestamps.  A tz-aware time counts in UTC, and a tz-naive one counts as
+    it is.  The unit is fixed at nanoseconds first: pandas carries a
+    resolution on a datetime column and infers microseconds for some inputs,
+    so a bare cast to ``int64`` would give a count a thousand times too small.
+    ``NaT`` becomes the smallest ``int64``, as NumPy stores it.
+    """
+    return pd.DatetimeIndex(times).as_unit("ns").astype("int64").to_numpy()
 
 
 def datetime_to_epoch(series: pd.Series, unit: str) -> pd.Series:
@@ -525,11 +537,10 @@ def datetime_to_epoch(series: pd.Series, unit: str) -> pd.Series:
     pandas.Series
         Integer epoch values in the requested unit.
     """
-    utc = pd.to_datetime(series, utc=True).astype(UTC_NS_DTYPE)
-    epoch = pd.Timestamp("1970-01-01", tz="UTC")
-    delta = (utc - epoch).astype("timedelta64[ns]")
-    divisor = _EPOCH_DIVISORS[unit]
-    return (delta.astype("int64") // divisor).astype("int64")
+    nanos = epoch_ns(to_utc_ns(series))
+    return pd.Series(
+        nanos // _EPOCH_DIVISORS[unit], index=series.index, name=series.name
+    )
 
 
 def fixed_window(window: Any, context: str) -> pd.Timedelta:
@@ -664,5 +675,5 @@ def datetime_to_seconds_after_midnight(
     pandas.Series
         Float seconds after midnight.
     """
-    local = pd.to_datetime(series, utc=True).dt.tz_convert(tz).dt.tz_localize(None)
+    local = to_utc_ns(series).dt.tz_convert(tz).dt.tz_localize(None)
     return (local - date).dt.total_seconds()

@@ -43,15 +43,10 @@ import numpy.typing as npt
 import pandas as pd
 from loguru import logger
 
-from ob_analytics._utils import (
-    price_scale,
-    size_scale,
-    validate_columns,
-    validate_non_empty,
-)
+from ob_analytics._utils import epoch_ns, price_scale, size_scale, validate_non_empty
 from ob_analytics.depth import _BID_ASK_COLUMNS, _bid_ask_pair, readable_quotes
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.schemas import TRADE_SIDE_DTYPE, time_order_keys
+from ob_analytics.schemas import TRADE_SIDE_DTYPE, time_order_keys, validate_columns
 
 _SQRT2 = sqrt(2.0)
 
@@ -395,24 +390,18 @@ def _last_quote_before(
     return standing
 
 
-def _ns(times: pd.Series) -> np.ndarray:
-    """*times* as int64 nanoseconds since the epoch (UTC for a tz-aware clock)."""
-    index = pd.DatetimeIndex(times).as_unit("ns")
-    return index.to_numpy(dtype="datetime64[ns]").view("int64")
-
-
 def _last_quote_before_instant(at: pd.Series, stamps: pd.Series) -> np.ndarray:
     """:func:`_last_quote_before` on timestamps alone, by binary search.
 
     Equal stamps keep their input order, so the last of them is the one read,
     as in the sorted merge.  A quote with no timestamp is never read.
     """
-    stamp_ns = _ns(stamps)
+    stamp_ns = epoch_ns(stamps)
     valid = np.flatnonzero(~pd.isna(stamps).to_numpy())
     order = valid[np.argsort(stamp_ns[valid], kind="stable")]
     if not len(order):
         return np.full(len(at), -1, dtype=np.int64)
-    before = np.searchsorted(stamp_ns[order], _ns(at), side="left")
+    before = np.searchsorted(stamp_ns[order], epoch_ns(at), side="left")
     return np.where(before > 0, order[np.maximum(before - 1, 0)], -1)
 
 
@@ -761,6 +750,105 @@ def check_bucket_count(
         )
 
 
+def volume_buckets(
+    trades: pd.DataFrame,
+    bucket_volume: float,
+    context: str,
+    *,
+    advice: str | None = None,
+) -> pd.DataFrame:
+    """Cut *trades* into buckets of equal volume, in their row order.
+
+    The trades fill one bucket of *bucket_volume* at a time.  A trade that
+    crosses a bucket's edge is split: its first part fills that bucket and the
+    rest goes into the next one.  Only full buckets are returned, so the volume
+    after the last full bucket is left out.  These are the volume bars of
+    :func:`bulk_volume_classification` and
+    :func:`~ob_analytics.flow_toxicity.compute_vpin`.
+
+    Parameters
+    ----------
+    trades : pandas.DataFrame
+        Trades with a ``volume`` column, in time order.
+    bucket_volume : float
+        Volume per bucket, in the instrument's own units (BTC, shares,
+        contracts), whether ``trades["volume"]`` holds integer lots (with
+        ``trades.attrs["lot_size"]``) or display sizes.
+    context : str
+        Name of the caller, used in error messages.
+    advice : str, optional
+        What to do when *bucket_volume* makes too many buckets; see
+        :func:`check_bucket_count`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per part of a trade in a bucket, in the order the trades fill
+        the buckets, with columns ``bucket`` (zero-based bucket index), ``row``
+        (the trade's position in *trades*) and ``volume`` (the part's volume,
+        in the units of ``trades["volume"]``, so the parts of a bucket of
+        whole lots add up exactly).  No rows when the trades fill no bucket.
+
+    Raises
+    ------
+    ConfigError
+        If the sizes are integer lots and the frame carries no ``lot_size``.
+    ValueError
+        If *bucket_volume* is not positive or would make more than
+        :data:`MAX_VOLUME_BUCKETS` buckets.
+    """
+    scale = size_scale(trades, context)
+    if bucket_volume <= 0:
+        raise ValueError(f"bucket_volume must be positive, got {bucket_volume}")
+    check_bucket_count(trades, bucket_volume, context, scale=scale, advice=advice)
+
+    # The walk runs in the frame's units, so a bucket of whole lots fills
+    # exactly.
+    bucket = bucket_volume * scale
+    buckets: list[int] = []
+    rows: list[int] = []
+    parts: list[float] = []
+    full = 0
+    room = bucket
+    for row, size in enumerate(trades["volume"].to_numpy(dtype=np.float64)):
+        while size > 0:
+            part = min(size, room)
+            buckets.append(full)
+            rows.append(row)
+            parts.append(part)
+            size -= part
+            room -= part
+            if room <= 1e-12:
+                full += 1
+                room = bucket
+
+    keep = np.asarray(buckets, dtype=np.int64) < full
+    return pd.DataFrame(
+        {
+            "bucket": np.asarray(buckets, dtype=np.int64)[keep],
+            "row": np.asarray(rows, dtype=np.int64)[keep],
+            "volume": np.asarray(parts, dtype=np.float64)[keep],
+        }
+    )
+
+
+def _bucket_bounds(buckets: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """Return the trade rows each bucket of :func:`volume_buckets` starts and ends at.
+
+    A bucket ends at the trade that fills it.  The next bucket starts at that
+    same trade, since the rest of it goes there; the first bucket starts at the
+    first trade.
+    """
+    ends = buckets.groupby("bucket")["row"].last().to_numpy()
+    starts = np.concatenate(([0], ends[:-1])).astype(np.int64)
+    return starts, ends
+
+
+def _rows_at(column: pd.Series, rows: np.ndarray) -> pd.Series:
+    """Return *column* at positions *rows*, on a fresh index, keeping its dtype."""
+    return column.iloc[rows].reset_index(drop=True)
+
+
 # ── Bulk volume classification (BVC) ─────────────────────────────────
 
 
@@ -824,43 +912,32 @@ def bulk_volume_classification(
         trades, {"timestamp", "price", "volume"}, "bulk_volume_classification"
     )
     validate_non_empty(trades, "bulk_volume_classification")
-    scale = size_scale(trades, "bulk_volume_classification")
-    if bucket_volume <= 0:
-        raise ValueError(f"bucket_volume must be positive, got {bucket_volume}")
-    check_bucket_count(trades, bucket_volume, "bulk_volume_classification", scale=scale)
     if sigma is not None and sigma <= 0:
         raise ValueError(f"sigma must be positive, got {sigma}")
     if sigma is not None:
         sigma = sigma * price_scale(trades, "bulk_volume_classification")
+    return _bulk_volume_classification(
+        trades, bucket_volume, sigma, "bulk_volume_classification"
+    )
 
+
+def _bulk_volume_classification(
+    trades: pd.DataFrame,
+    bucket_volume: float,
+    sigma: float | None,
+    context: str,
+    advice: str | None = None,
+) -> pd.DataFrame:
+    """The body of :func:`bulk_volume_classification`, for a checked frame.
+
+    *sigma* is in the frame's price units.  *context* and *advice* go to
+    :func:`volume_buckets`, so a caller such as
+    :func:`~ob_analytics.flow_toxicity.compute_vpin` reports a bad
+    *bucket_volume* under its own name.
+    """
     df = trades.sort_values("timestamp").reset_index(drop=True)
-    prices = df["price"].to_numpy(dtype=np.float64)
-    volumes = df["volume"].to_numpy(dtype=np.float64)
-    timestamps = df["timestamp"].to_numpy()
-
-    # Walk trades, closing a bucket every `bucket_volume` units.  A single
-    # trade can fill several buckets; each carries the price at its close.
-    bucket = bucket_volume * scale
-    starts: list = []
-    ends: list = []
-    closes: list[float] = []
-    bucket_start_ts = timestamps[0]
-    bucket_remaining = bucket
-
-    for i in range(len(df)):
-        remaining_trade = volumes[i]
-        while remaining_trade > 0:
-            alloc = min(remaining_trade, bucket_remaining)
-            remaining_trade -= alloc
-            bucket_remaining -= alloc
-            if bucket_remaining <= 1e-12:
-                starts.append(bucket_start_ts)
-                ends.append(timestamps[i])
-                closes.append(prices[i])
-                bucket_remaining = bucket
-                bucket_start_ts = timestamps[i]
-
-    if not closes:
+    buckets = volume_buckets(df, bucket_volume, context, advice=advice)
+    if buckets.empty:
         return pd.DataFrame(
             columns=[
                 "bucket",
@@ -874,7 +951,10 @@ def bulk_volume_classification(
             ]
         )
 
-    close = np.asarray(closes, dtype=np.float64)
+    prices = df["price"].to_numpy(dtype=np.float64)
+    starts, ends = _bucket_bounds(buckets)
+    # Each bucket closes at the price of the trade that fills it.
+    close = prices[ends]
     # Close-to-close change; the first bucket is anchored to the first price.
     delta_price = np.diff(close, prepend=prices[0])
 
@@ -889,8 +969,8 @@ def bulk_volume_classification(
     return pd.DataFrame(
         {
             "bucket": np.arange(close.size),
-            "timestamp_start": starts,
-            "timestamp_end": ends,
+            "timestamp_start": _rows_at(df["timestamp"], starts),
+            "timestamp_end": _rows_at(df["timestamp"], ends),
             "close": close,
             "delta_price": delta_price,
             "buy_fraction": buy_fraction,

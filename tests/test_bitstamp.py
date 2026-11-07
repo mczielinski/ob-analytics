@@ -653,12 +653,7 @@ class TestBitstampWriter:
         result = tiny_pipeline_result
         rt_csv = tmp_path / "orders.csv"
         BitstampWriter().write(
-            {
-                "events": result.events,
-                "trades": result.trades,
-                "depth": result.depth,
-                "depth_summary": result.depth_summary,
-            },
+            result.tables(),
             rt_csv,
         )
         # The writer emits a companion trades.csv automatically whenever the
