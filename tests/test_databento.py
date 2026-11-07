@@ -1424,11 +1424,12 @@ class TestDbnFiles:
         with pytest.raises(ValueError, match="whole"):
             DatabentoWriter(_config()).write({"events": events}, tmp_path / "out.dbn")
 
-    def test_the_writer_fills_a_directory(self, tmp_path):
+    def test_save_data_writes_one_dbn_file_and_refuses_a_folder(self, tmp_path):
         result = Pipeline(source=DatabentoSource()).run(mbo_frame(LIFECYCLE))
-        out = DatabentoWriter(result.config).write({"events": result.events}, tmp_path)
-        assert out == tmp_path / "events.dbn"
-        assert out.exists()
+        with pytest.raises(ConfigError, match="'databento' writes one file"):
+            save_data(result, tmp_path, fmt="databento")
+        save_data(result, tmp_path / "events.dbn", fmt="databento")
+        assert (tmp_path / "events.dbn").is_file()
 
     def test_the_source_supplies_a_writer(self):
         writer = DatabentoSource().create_writer(_config(), RunContext())

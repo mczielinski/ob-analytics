@@ -16,7 +16,7 @@ import pytest
 from ob_analytics import save_data
 from ob_analytics.config import PipelineConfig
 from ob_analytics.datasets import toy_events
-from ob_analytics.interop import HFT_ARRAY_KEY
+from ob_analytics.interop import HFT_ARRAY_KEY, HftbacktestWriter
 
 # ── The contracts, as the engines publish them ────────────────────────
 
@@ -90,6 +90,17 @@ class TestHftbacktestWriter:
         array = np.load(dest)["data"]
         assert array.dtype == HFT_DTYPE
         assert len(array) == len(events)
+
+    def test_writes_the_exact_path_it_is_given(self, tmp_path, events):
+        # numpy adds ``.npz`` to a bare path; the writer must not, or the path
+        # it returns is not the file it wrote.
+        dest = tmp_path / "session.feed"
+
+        written = HftbacktestWriter(PipelineConfig()).write({"events": events}, dest)
+
+        assert written == dest
+        assert dest.is_file()
+        assert not (tmp_path / "session.feed.npz").exists()
 
     def test_packs_the_event_type_and_side_into_the_ev_flags(self, tmp_path):
         # Hand-computed against hftbacktest's published constants:

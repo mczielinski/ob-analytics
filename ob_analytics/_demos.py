@@ -184,13 +184,11 @@ def run_bitstamp_demo(
 
     if roundtrip:
         rt_dir = out / "roundtrip"
-        rt_dir.mkdir(parents=True, exist_ok=True)
-        rt_csv = rt_dir / "orders.csv"
-        # BitstampWriter emits the companion trades.csv from the "trades"
-        # table, so no separate shim is needed here.  Pass the run's config so
-        # ticks convert back on the run's grid (issue #155).
-        save_data(result, rt_csv, writer=BitstampWriter(result.config))
-        rt = Pipeline(source=BitstampSource()).run(str(rt_csv))
+        # BitstampWriter writes orders.csv and the companion trades.csv into
+        # the folder.  Pass the run's config so ticks convert back on the
+        # run's grid (issue #155).
+        save_data(result, rt_dir, writer=BitstampWriter(result.config))
+        rt = Pipeline(source=BitstampSource()).run(str(rt_dir / "orders.csv"))
         logger.info(
             "Round-trip events: {} (match: {})",
             len(rt.events),

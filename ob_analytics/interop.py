@@ -35,6 +35,7 @@ import pandas as pd
 from ob_analytics._utils import epoch_ns
 from ob_analytics.config import PipelineConfig
 from ob_analytics.data import register_writer
+from ob_analytics.protocols import WriteTarget
 from ob_analytics.schemas import time_order_keys
 
 # ── hftbacktest ───────────────────────────────────────────────────────
@@ -208,8 +209,10 @@ class HftbacktestWriter:
     """Write a run's events as an hftbacktest ``.npz`` feed file.
 
     Satisfies the :class:`~ob_analytics.protocols.DataWriter` protocol; reached
-    as ``save_data(..., fmt="hftbacktest")``.
+    as ``save_data(..., fmt="hftbacktest")``.  It writes one file.
     """
+
+    target = WriteTarget.FILE
 
     def __init__(self, config: PipelineConfig | None = None) -> None:
         self._config = config or PipelineConfig()
@@ -222,8 +225,9 @@ class HftbacktestWriter:
     ) -> Path:
         """Write ``data["events"]`` to *dest* as a compressed npz.
 
-        *dest* is a file.  The array lands under the ``"data"`` member, which is
-        the one ``hftbacktest`` loads.
+        *dest* is a file, written at exactly that path (``.npz`` is the usual
+        extension).  The array lands under the ``"data"`` member, which is the
+        one ``hftbacktest`` loads.
         """
         p = Path(dest)
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -232,7 +236,10 @@ class HftbacktestWriter:
             tick_size=self._config.tick_size,
             lot_size=self._config.lot_size,
         )
-        np.savez_compressed(p, **{HFT_ARRAY_KEY: array})  # type: ignore
+        # Through an open file, so numpy does not add ``.npz`` to a path that
+        # ends otherwise, and the path returned is the one written.
+        with p.open("wb") as fh:
+            np.savez_compressed(fh, **{HFT_ARRAY_KEY: array})  # type: ignore
         return p
 
 
@@ -356,8 +363,10 @@ class NautilusWriter:
     Satisfies the :class:`~ob_analytics.protocols.DataWriter` protocol; reached
     as ``save_data(..., fmt="nautilus")``.  The output is Parquet, so
     ``pd.read_parquet`` hands ``OrderBookDeltaDataWrangler.process`` the frame it
-    wants, index and dtypes intact.
+    wants, index and dtypes intact.  It writes one file.
     """
+
+    target = WriteTarget.FILE
 
     def __init__(self, config: PipelineConfig | None = None) -> None:
         self._config = config or PipelineConfig()

@@ -92,6 +92,30 @@ schema version, tick size, lot size and config in their metadata, the same as
 the Parquet files.
 See [Frame types: pandas in, pandas out](../schema.md#frame-types-pandas-in-pandas-out).
 
+### Formats, and whether each takes a folder or a file
+
+`save_data(..., fmt=...)` writes the formats below. `list_writers()` in
+`ob_analytics.data` returns the same list, with any format a plug-in adds.
+This package's own formats write several files, so `path` is a folder, created
+when missing. An export for another tool writes one file, so `path` is that
+file.
+
+| `fmt` | `path` is | What it writes |
+|---|---|---|
+| `"parquet"` (default) | a folder | one Parquet file per table |
+| `"depth_csv"` | a folder | `depth.csv`, and `trades.csv` when the run has trades |
+| `"bitstamp"` | a folder | `orders.csv`, and `trades.csv` when the run has trades |
+| `"lobster"` | a folder | a LOBSTER message file and orderbook file |
+| `"hftbacktest"` | a file | an hftbacktest `.npz` feed |
+| `"nautilus"` | a file | a Parquet file of Nautilus order-book deltas |
+| `"databento"` | a file | a DBN file of MBO records |
+
+`save_data` checks `path` before it writes. A folder format refuses an
+existing file, and a name that ends in a file extension such as `.parquet`,
+`.csv` or `.npz`. A file format refuses an existing folder, and a name with no
+extension. The error says which the format expected. A folder name may hold
+other dots, such as `btc_2024.05.01`.
+
 For LOBSTER round-trip output (back to message + orderbook CSVs), pass
 `fmt="lobster"` and a `RunContext` so the registered writer factory can
 pick up `trading_date`. The message file has one row per event, in time

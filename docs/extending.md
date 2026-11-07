@@ -127,9 +127,6 @@ class CoinbaseSource:
         # loader is this run's loader, for trades that come off the same read.
         return CoinbaseTradeReader(config)
 
-    def create_writer(self, config: PipelineConfig, ctx: RunContext):
-        return None  # no venue-specific writer; use save_data(fmt="parquet")
-
     def compute_depth(self, events, config, source, ctx, loader):
         return None  # use the standard price-level depth pipeline
 
@@ -139,6 +136,12 @@ class CoinbaseSource:
 
 register_source("coinbase", CoinbaseSource)
 ```
+
+A source that writes its own format also has a `create_writer(config, ctx)`
+method that returns a `DataWriter`, and its name then works as
+`save_data(..., fmt="coinbase")`. Leave the method out when the source has no
+format of its own, as here; `save_data`'s default Parquet format still saves
+its runs.
 
 How the venue's files encode prices and timestamps (a price in hundredths of a
 cent, an epoch in microseconds) is the loader's business: write it into the
@@ -353,7 +356,10 @@ resolve it with nothing else installed.
 ## 2. A new export format
 
 A writer satisfies the `DataWriter` Protocol — a single `write(data, dest)`
-method, where `data` is a **dict of DataFrames** keyed by name. You register a
+method, where `data` is a **dict of DataFrames** keyed by name, and a `target`
+that says whether `dest` is a folder (`WriteTarget.FOLDER`) or one file
+(`WriteTarget.FILE`). `save_data` checks the path against `target` before it
+calls `write`, and refuses the other kind. You register a
 *factory* `(config, ctx) -> DataWriter`, not the class, so writers that need
 run state (e.g. [`LobsterWriter`](api/lobster.md) reads `trading_date` from
 `ctx`) can pull it.
@@ -367,10 +373,13 @@ from typing import Any
 import pandas as pd
 
 from ob_analytics.data import register_writer, list_writers
+from ob_analytics.protocols import WriteTarget
 
 
 class DuckDBWriter:
     """Satisfies the DataWriter Protocol."""
+
+    target = WriteTarget.FILE  # one .duckdb file
 
     def write(
         self, data: dict[str, pd.DataFrame], dest: str | Path, **kwargs: Any
@@ -410,10 +419,12 @@ save_data(
 )
 ```
 
-The built-in `"parquet"` and `"pickle"` formats are registered writers too, so
-they appear in `list_writers()` and follow exactly these rules. Registering your
-own under one of those names **replaces** the built-in one — there is no special
-case in `save_data` for either.
+The built-in `"parquet"` format is a registered writer too, so it appears in
+`list_writers()` and follows exactly these rules. Registering your own under
+that name **replaces** the built-in one — there is no special case in
+`save_data` for it. `list_writers()` also lists each source that writes its
+own format (one with a `create_writer` method), because `save_data` accepts a
+source name as `fmt`.
 
 ### Asking for Arrow instead of pandas
 
