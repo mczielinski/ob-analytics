@@ -10,6 +10,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **CI tests what a user installs, and a release waits for CI** (#416). A new
+  `wheel` job installs the built wheel with no extras and runs
+  `scripts/smoke_wheel.py`: the sample pipeline, a Matplotlib plot, and a
+  `ConfigError` naming the extra for a Plotly or Bokeh plot. The release
+  workflow runs the same script on the wheel it publishes, and refuses a
+  commit whose CI run did not pass. New jobs also run the tests on Python
+  3.14 (now in the classifiers), on Windows (core and offline tests only), with
+  each direct dependency at its lowest allowed version, and with the
+  `backtest-engines` group, so the hftbacktest and Nautilus Trader parity tests
+  run. The lowest versions found floors that were wrong. The `bokeh` extra
+  now needs Bokeh 3.1, because 3.0 does not import with NumPy 2. The `ccxt`
+  extra needs ccxt 4.5.90 and the `cryptofeed` extra cryptofeed 2.4.1, the
+  oldest versions CI tests: ccxt 4.0 has no Coinbase in `ccxt.pro`, and
+  cryptofeed 2.0 has no Independent Reserve. The dev group needs nbmake
+  1.5.1, the first that loads under pytest 9. Coverage now counts the CLI
+  tests' subprocess runs. CONTRIBUTING lists the checks to mark as required
+  on `main`; the speed check still only reports. CI on `main` no longer
+  cancels or replaces a commit's run when a newer commit lands, and the docs
+  build runs on every pull request, skipping itself when no site input
+  changed, so it can be a required check.
+
 - **Every registry loads plug-ins from entry points** (#403). Bar rules,
   features, writers and plot backends now load from the entry-point groups
   `ob_analytics.bar_rules`, `ob_analytics.features`, `ob_analytics.writers`
@@ -972,6 +993,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   ones.
 
 ### Removed
+
+- **The compiled-engine compare tests** (#416). `tests/test_compare_backends.py`
+  waited for a compiled depth engine behind a factory that no plan names, and
+  always skipped. A faster engine, if one comes (#138), must pass the golden
+  tests, which already fix the output.
 
 - **The pandas-vs-Polars compare tests** (#390). Three tests in
   `tests/test_compare_backends.py` waited for a Polars analytics backend and

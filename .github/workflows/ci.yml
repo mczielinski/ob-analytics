@@ -5,8 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+# Within one pull request a new push supersedes the running checks. On main
+# each commit gets a group of its own, so no run is cancelled or replaced
+# while it waits: the release workflow refuses a commit whose CI did not
+# finish green, so every merged commit needs its own complete run.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: true
 
 jobs:
@@ -41,7 +45,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.3
@@ -88,3 +92,69 @@ jobs:
           enable-cache: true
       - run: uv sync --group dev --extra interactive
       - run: uv run --group dev --extra interactive pytest --nbmake docs/notebooks/ --nbmake-timeout=180 -q
+
+  # Install the built wheel with no extras, as `pip install ob-analytics`
+  # does. Every other job installs the dev group, which brings Plotly, Bokeh
+  # and Polars, so only this job notices when the core needs one of them.
+  # release.yml runs the same action on the wheel it publishes.
+  wheel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+      - run: uv build --wheel
+      - uses: ./.github/actions/smoke-wheel
+
+  # The dependency floors: every direct dependency, the extras' included, at
+  # the lowest version that pyproject.toml allows, on the lowest Python it
+  # allows. Every other job installs from uv.lock, which holds the newest
+  # versions.
+  lowest-deps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+      - run: uv python install 3.11
+      # This re-resolves and rewrites uv.lock on the runner. --no-sync on the
+      # run keeps `uv run` from resolving it back to the newest versions.
+      - run: uv sync --group dev --extra interactive --extra bokeh --extra live --extra ccxt --extra cryptofeed --extra databento --resolution lowest-direct --python 3.11
+      - run: uv run --no-sync pytest tests/ -q
+
+  # Windows: the core and offline parts only. Live capture is documented as
+  # Linux and macOS, so the live extras are not installed, and
+  # tests/conftest.py leaves the capture tests out on Windows.
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --group dev --python 3.12
+      - run: uv run --group dev --python 3.12 pytest tests/ -q
+
+  # The parity tests that cross-check the rebuilt book against hftbacktest and
+  # Nautilus Trader. The engines are in their own dependency group, so the
+  # other jobs skip these tests. Python 3.12, because Nautilus has no build
+  # for 3.11 with pandas 3.
+  backtest-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --group dev --group backtest-engines --python 3.12
+      # Each half of the parity tests skips when its engine is missing. Import
+      # both first, so a broken install fails the job instead of skipping.
+      - run: uv run --group dev --group backtest-engines --python 3.12 python -c "import hftbacktest, nautilus_trader"
+      - run: uv run --group dev --group backtest-engines --python 3.12 pytest tests/test_backtest_parity.py -q -rs

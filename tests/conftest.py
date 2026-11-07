@@ -15,6 +15,22 @@ SAMPLE_CSV = (
     / "orders.csv.gz"
 )
 
+# Live capture is documented as Linux and macOS only, so on Windows the tests
+# of the capture code are not collected. A new test module for live capture
+# belongs in this list.
+LIVE_CAPTURE_TESTS = [
+    "test_bitstamp_capture.py",
+    "test_capture_segments.py",
+    "test_ccxt_source.py",
+    "test_credentials.py",
+    "test_cryptofeed_source.py",
+    "test_cryptofeed_venues.py",
+    "test_kalshi.py",
+    "test_live_protocol.py",
+    "test_polymarket.py",
+]
+collect_ignore = LIVE_CAPTURE_TESTS if sys.platform == "win32" else []
+
 
 @pytest.fixture(scope="module")
 def sample_csv_path() -> Path:
