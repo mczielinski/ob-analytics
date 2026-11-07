@@ -705,9 +705,11 @@ def _faithful_best_series(depth: pd.DataFrame) -> pd.DataFrame:
     )
     ordered = depth.sort_values("timestamp", kind="stable")
     ts = ordered["timestamp"].to_numpy()
-    prices = ordered["price"].to_numpy(dtype=np.float64)
-    vols = ordered["volume"].to_numpy(dtype=np.float64)
-    is_bid = ordered["direction"].to_numpy() == "bid"
+    # Read the columns as Python lists: the loop takes one element at a time,
+    # which is faster from a list than from a numpy array.
+    prices = ordered["price"].to_numpy(dtype=np.float64).tolist()
+    vols = ordered["volume"].to_numpy(dtype=np.float64).tolist()
+    is_bid = (ordered["direction"].to_numpy() == "bid").tolist()
 
     n = len(ordered)
     best_bid = np.full(n, np.nan)
@@ -718,10 +720,8 @@ def _faithful_best_series(depth: pd.DataFrame) -> pd.DataFrame:
     bid_heap: list[float] = []  # max-heap by price, stored negated
     ask_heap: list[float] = []  # min-heap by price
 
-    for i in range(n):
-        p = float(prices[i])
-        v = float(vols[i])
-        if is_bid[i]:
+    for i, (p, v, bid) in enumerate(zip(prices, vols, is_bid, strict=True)):
+        if bid:
             bid_vol[p] = v
             if v > 0:
                 heapq.heappush(bid_heap, -p)
