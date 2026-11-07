@@ -29,15 +29,24 @@ from __future__ import annotations
 
 import importlib
 import inspect
-from collections.abc import Callable, Iterable, Iterator
 from typing import Any
 
 from loguru import logger
 from matplotlib.axes import Axes
 
-from ob_analytics._registry import Registry
+from ob_analytics.protocols import Level
 from ob_analytics.visualization import _data as _viz_data
-from ob_analytics.visualization._model import Level
+from ob_analytics.visualization._matplotlib import format_time_axis, save_figure
+from ob_analytics.visualization._palette import DEFAULT_PALETTE, Palette
+from ob_analytics.visualization._renderers import (
+    RENDERERS,
+    RendererFn,
+    RendererRegistry,
+    _load_backend,
+    load_plot_backend_plugins,
+    register_plot_backend,
+)
+from ob_analytics.visualization._theme import DEFAULT_THEME, PlotTheme
 
 # `infer_volume_scale` is a stable, user-facing helper that gallery callers
 # import from this namespace; keep it as a public re-export. The `prepare_*`
@@ -47,159 +56,12 @@ infer_volume_scale = _viz_data.infer_volume_scale
 
 
 # ---------------------------------------------------------------------------
-# Renderer registry + unified dispatcher
+# Unified dispatcher
 # ---------------------------------------------------------------------------
-
-RendererFn = Callable[..., Any]
-RendererKey = tuple[str, Level | None, str]
-
-
-def _same_kind(a: Level | None, b: Level | None) -> bool:
-    """Whether *a* and *b* are one kind: both level-less or both levels."""
-    return (a is None) == (b is None)
-
-
-def _kind_text(levels: Iterable[Level | None]) -> str:
-    """Name a kind for a message: ``"level-less"`` or ``"at L2 and L3"``.
-
-    Raises
-    ------
-    ValueError
-        If *levels* is empty: there is no kind to name.
-    """
-    levels = set(levels)
-    if not levels:
-        raise ValueError("No levels to describe.")
-    if None in levels:
-        return "level-less"
-    return "at " + " and ".join(sorted(str(lvl) for lvl in levels))
-
-
-class RendererRegistry(Registry[RendererKey, RendererFn]):
-    """The renderer :class:`Registry`, which keeps each concept one kind.
-
-    A concept is either level-less, registered at ``None``, or drawn at a
-    level, registered at ``Level.L2`` and/or ``Level.L3``.  It is the same
-    kind on every backend: :func:`plot` and the gallery call it the same way
-    whichever backend draws it.
-    """
-
-    def placements(self, concept: str) -> tuple[tuple[Level | None, str], ...]:
-        """Return each ``(level, backend)`` *concept* is registered at, in order.
-
-        A snapshot, so a caller can register while looping over it.
-        """
-        return tuple(self._placements(concept))
-
-    def _placements(self, concept: str) -> Iterator[tuple[Level | None, str]]:
-        return ((lvl, b) for (c, lvl, b) in self._items if c == concept)
-
-    def register(self, key: RendererKey, value: RendererFn) -> None:
-        """Register *value* under the key ``(concept, level, backend)``.
-
-        Raises
-        ------
-        ValueError
-            If *key* is not ``(concept, level, backend)`` with a text
-            concept, a :class:`Level` or ``None`` level and a text backend,
-            or its concept is already registered, on any backend, as the
-            other kind: at a level when *key* is level-less, or level-less
-            when *key* has a level.
-        """
-        if not (
-            isinstance(key, tuple)
-            and len(key) == 3
-            and isinstance(key[0], str)
-            and (key[1] is None or key[1] in tuple(Level))
-            and isinstance(key[2], str)
-        ):
-            raise ValueError(
-                f"A renderer key is (concept, level, backend), got {key!r}. "
-                "The concept and backend are text; the level is Level.L2, "
-                "Level.L3, or None for a level-less plot."
-            )
-        concept, level, backend = key
-        if level is not None:
-            level = Level(level)  # store Level.L2, not an equal "L2"
-        clash = next(
-            (
-                (other, b)
-                for other, b in self._placements(concept)
-                if not _same_kind(other, level)
-            ),
-            None,
-        )
-        if clash is not None:
-            other, other_backend = clash
-            raise ValueError(
-                f"Plot concept {concept!r} is already registered "
-                f"{_kind_text([other])} on {other_backend!r}, so it cannot also "
-                f"be registered {_kind_text([level])}. "
-                "A concept is the same kind on every backend: register it at "
-                "None everywhere, or at Level.L2 and/or Level.L3 everywhere."
-            )
-        super().register((concept, level, backend), value)
-
-
-#: Registry of ``(concept, level, backend)`` → renderer function, where
-#: *level* is a :class:`Level` (``L2``/``L3``) or ``None`` for level-less
-#: analytics.  A concept is one kind or the other on every backend.
-#: Renderer modules (``_matplotlib``, ``_plotly``) self-register at import
-#: time -- see the self-registration block at the bottom of each.
-RENDERERS: RendererRegistry = RendererRegistry("renderer")
 
 #: Sentinel for ``plot(level=...)`` meaning "resolve the level from the
 #: registry" -- distinct from ``None``, which is the explicit level of analytics.
 _UNSET: Any = object()
-
-# Lazy-import bootstrap: backend name → module that self-registers its
-# renderers on import.  matplotlib is a hard dep (imported just below for its
-# theme helpers, which also fires its registration); plotly and bokeh are
-# optional and imported on first use.
-_BACKEND_MODULES: dict[str, str] = {
-    "matplotlib": "ob_analytics.visualization._matplotlib",
-    "plotly": "ob_analytics.visualization._plotly",
-    "bokeh": "ob_analytics.visualization._bokeh",
-}
-
-
-def register_plot_backend(name: str, module_path: str) -> None:
-    """Register a visualization backend module.
-
-    The module at *module_path* must call ``RENDERERS.register((concept,
-    level, name), fn)`` for each plot it supports (typically at import time).
-    It is imported lazily on the first :func:`plot` call that targets *name*.
-
-    Parameters
-    ----------
-    name : str
-        Backend name used in ``plot(..., backend=name)``.
-    module_path : str
-        Dotted import path, e.g. ``"my_package._bokeh_backend"``.
-
-    Examples
-    --------
-    >>> from ob_analytics.visualization import register_plot_backend
-    >>> register_plot_backend("bokeh", "my_pkg._bokeh")
-    """
-    _BACKEND_MODULES[name] = module_path
-
-
-def _load_backend(backend: str) -> None:
-    """Import *backend*'s module so its renderers are in :data:`RENDERERS`.
-
-    The import is cached after the first call.
-
-    Raises
-    ------
-    ValueError
-        If *backend* is not registered.
-    """
-    if backend not in _BACKEND_MODULES:
-        raise ValueError(
-            f"Unknown backend {backend!r}. Available: {sorted(_BACKEND_MODULES)}"
-        )
-    importlib.import_module(_BACKEND_MODULES[backend])
 
 
 def _accepts_theme(renderer: RendererFn) -> bool:
@@ -319,13 +181,8 @@ def plot(
 FocusWindow = _viz_data.FocusWindow
 focus_window = _viz_data.focus_window
 
-# matplotlib save exports.  Imported *after* RENDERERS is defined: the
-# self-registration block at the bottom of _matplotlib imports RENDERERS from
-# this (partially initialized) package, so RENDERERS must already exist to
-# avoid a circular-import deadlock.
-from ob_analytics.visualization._matplotlib import format_time_axis, save_figure
-from ob_analytics.visualization._palette import DEFAULT_PALETTE, Palette
-from ob_analytics.visualization._theme import DEFAULT_THEME, PlotTheme
+# Plot backends that other packages advertise through entry points.
+load_plot_backend_plugins()
 
 __all__ = [
     "DEFAULT_PALETTE",
@@ -336,6 +193,7 @@ __all__ = [
     # Themes / persistence
     "Palette",
     "PlotTheme",
+    "RendererRegistry",
     "available_concepts",
     # Ticks -> quote-currency for low-level plotting (issue #155)
     "display_result",
@@ -343,6 +201,7 @@ __all__ = [
     "format_time_axis",
     # Helpers users actually call
     "infer_volume_scale",
+    "load_plot_backend_plugins",
     # Dispatcher + registry
     "plot",
     # One-line plotting from a PipelineResult

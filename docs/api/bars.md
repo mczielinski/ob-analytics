@@ -45,6 +45,8 @@ of your own.
 
 ::: ob_analytics.bars.get_bar_rule
 
+::: ob_analytics.bars.load_bar_rule_plugins
+
 ## The built-in rules
 
 ::: ob_analytics.bars.ClockRule

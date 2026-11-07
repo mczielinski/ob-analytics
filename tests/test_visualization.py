@@ -1421,12 +1421,12 @@ class TestRegisterBackend:
     def test_register_and_dispatch(self, sample_trades, tmp_path):
         """A backend module self-registers its renderers; plot() dispatches."""
         from ob_analytics.visualization import (
-            _BACKEND_MODULES,
             RENDERERS,
             Level,
             plot,
             register_plot_backend,
         )
+        from ob_analytics.visualization._renderers import _BACKEND_MODULES
 
         # The new extension contract: the backend module registers each
         # renderer into RENDERERS under (concept, level, backend) at import time.
@@ -1463,7 +1463,7 @@ class TestRendererKinds:
     """A concept is level-less or leveled on every backend, never both (#302)."""
 
     def test_kind_text(self) -> None:
-        from ob_analytics.visualization import _kind_text
+        from ob_analytics.visualization._renderers import _kind_text
 
         assert _kind_text([None]) == "level-less"
         assert _kind_text([Level.L3, Level.L2, Level.L3]) == "at L2 and L3"

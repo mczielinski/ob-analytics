@@ -13,7 +13,7 @@ import dataclasses
 import pandas as pd
 import pytest
 
-from ob_analytics import metrics
+from ob_analytics import _registry, metrics
 from ob_analytics.protocols import Level
 
 
@@ -73,7 +73,7 @@ def _fake_entry_points(*, group: str | None = None):
 def test_plugin_metric_is_discovered_through_entry_points(
     monkeypatch, _restore_registry
 ):
-    monkeypatch.setattr(metrics, "entry_points", _fake_entry_points)
+    monkeypatch.setattr(_registry, "entry_points", _fake_entry_points)
 
     registered = metrics.load_metric_plugins(force=True)
 
@@ -300,7 +300,7 @@ def test_plugin_metric_runs_and_plots_from_the_public_api(
     from ob_analytics.visualization import RENDERERS
 
     metrics.METRICS._items.clear()
-    monkeypatch.setattr(metrics, "entry_points", _fake_entry_points)
+    monkeypatch.setattr(_registry, "entry_points", _fake_entry_points)
     ob.load_metric_plugins(force=True)
     RENDERERS.register(("spread_width", None, "matplotlib"), _mpl_spread_width)
 

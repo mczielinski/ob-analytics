@@ -46,6 +46,8 @@ worked example and a baseline model, and
 
 ::: ob_analytics.features.get_feature
 
+::: ob_analytics.features.load_feature_plugins
+
 The book columns read only quotes that can be read as a price; see
 [`readable_quotes`](depth.md#ob_analytics.depth.readable_quotes).
 

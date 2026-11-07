@@ -223,7 +223,8 @@ def test_ofi_horizon_uses_buy_and_sell(backend: str) -> None:
 @contextmanager
 def _backend(renderer):
     """Register *renderer* for ``("probe", None, "probe")`` for the block."""
-    from ob_analytics.visualization import _BACKEND_MODULES, RENDERERS
+    from ob_analytics.visualization import RENDERERS
+    from ob_analytics.visualization._renderers import _BACKEND_MODULES
 
     # Any importable module will do: the renderer is registered by hand.
     _BACKEND_MODULES["probe"] = "ob_analytics.visualization._palette"
