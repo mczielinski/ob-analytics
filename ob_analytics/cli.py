@@ -136,10 +136,6 @@ def _process_one(args: argparse.Namespace, data_path: str, output: Path) -> None
     logger.info("Processing {} (source={})...", data_path, source_name)
     result = pipeline.run(data_path)
 
-    logger.info("Events: {:,}", len(result.events))
-    logger.info("Trades: {:,}", len(result.trades))
-    logger.info("Depth:  {:,}", len(result.depth))
-
     # Each Parquet file records the run's config, so `gallery` and
     # `audit --from-parquet` read the run back with its own units.
     save_data(result, output)

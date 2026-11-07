@@ -21,6 +21,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
+from ob_analytics._utils import epoch_ns
 from ob_analytics.engine import (
     ACTIONS,
     DIRECTIONS,
@@ -43,11 +44,6 @@ TimestampLike = datetime | np.datetime64 | str | pd.Timestamp
 # re-attached on the way out from whichever column the caller is mirroring.
 
 
-def nanoseconds(times: pd.Series | pd.DatetimeIndex) -> np.ndarray:
-    """Return a datetime column as int64 nanoseconds since the epoch, UTC."""
-    return pd.DatetimeIndex(times).as_unit("ns").astype("int64").to_numpy()
-
-
 def instant_ns(value: TimestampLike, *, like: pd.Series) -> int:
     """Return one snapshot instant as int64 nanoseconds, on *like*'s clock.
 
@@ -68,7 +64,7 @@ def instant_ns(value: TimestampLike, *, like: pd.Series) -> int:
             f"the event timestamps are "
             f"{'naive' if column_tz is None else str(column_tz)}."
         )
-    return int(pd.DatetimeIndex([stamp]).as_unit("ns").astype("int64")[0])
+    return int(epoch_ns([stamp])[0])
 
 
 def timestamps(values: np.ndarray, *, like: pd.Series) -> pd.DatetimeIndex:
@@ -193,7 +189,7 @@ def to_order_events(
     """
     return OrderEvents(
         order_id=events["id"].to_numpy(),
-        timestamp=nanoseconds(events["timestamp"]),
+        timestamp=epoch_ns(events["timestamp"]),
         price=events["price"].to_numpy(),
         resting_price=resting_price(events).to_numpy(),
         # Sizes cross the boundary as the integer lots the schema stores

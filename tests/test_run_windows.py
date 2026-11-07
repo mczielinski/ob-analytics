@@ -30,7 +30,7 @@ def _cuts(timestamps: pd.Series, *quantiles: float) -> list[pd.Timestamp]:
 
 def _saved_single_run(pipeline: Pipeline, source, dest) -> dict[str, pd.DataFrame]:
     result = pipeline.run(source)
-    save_data(result._frames(), dest, config=result.config)
+    save_data(result.tables(), dest, config=result.config)
     return load_data(dest)
 
 

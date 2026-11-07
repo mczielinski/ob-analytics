@@ -583,6 +583,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Each core helper is written once** (#402). Datetimes become int64
+  nanoseconds through one `epoch_ns`, and the loaders parse timestamp columns
+  through one `to_utc_ns`. One `validate_columns`, in `schemas`, checks
+  required columns, so `validate_events_df`, `validate_trades_df` and
+  `validate_depth_df` now name the missing columns sorted, followed by the
+  columns available. Each tick helper shares its body with its lot twin.
+  `trade_sign.volume_buckets` cuts trades into the equal-volume buckets of
+  `compute_vpin` and `bulk_volume_classification`. `depth.imbalance_levels`
+  clamps a depth level count to the bins a summary carries. The new
+  `PipelineResult.tables()` returns the four core tables, and the demos and
+  `process` save a result through it. `Pipeline.run` and
+  `Pipeline.run_windows` load their inputs through one path, and
+  `scripts/bench_scale.py` times the pipeline's own stages
+  (`pipeline.STAGES`). Outputs are unchanged, except that a sign-based VPIN
+  can differ in the last bit of a float, because a bucket's volume is now
+  added up from its parts. A `compute_vpin(sign_method="bvc")` call with a bad
+  `bucket_volume` now reports the error under `compute_vpin`.
+
 - **Every event loader casts through `EVENT_DTYPES`, and the validators check
   dtypes** (#379). The Bitstamp, LOBSTER and Databento loaders build their
   events through the new `schemas.cast_events`, which keeps text order ids
