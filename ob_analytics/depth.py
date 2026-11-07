@@ -22,16 +22,16 @@ import pandas as pd
 from ob_analytics import _engine_frames
 from ob_analytics._utils import (
     decimal_places,
+    epoch_ns,
     lots_to_size,
     price_scale,
     size_to_lots,
-    validate_columns,
     validate_non_empty,
 )
 from ob_analytics.config import PipelineConfig
 from ob_analytics.engine import crossed_prefix_counts
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.schemas import time_order_keys
+from ob_analytics.schemas import time_order_keys, validate_columns
 
 if TYPE_CHECKING:
     from ob_analytics.analytics import OrderBookSnapshot
@@ -1050,7 +1050,7 @@ def price_level_snapshots(
     # event order, so the book at the end of an instant is the one the depth
     # summary ends that instant on.
     ordered = depth.sort_values(by=time_order_keys(depth), kind="stable")
-    stamps = _engine_frames.nanoseconds(ordered["timestamp"])
+    stamps = epoch_ns(ordered["timestamp"])
     price_values = ordered["price"].to_numpy()
     volume_values = ordered["volume"].to_numpy()
     volume_dtype = volume_values.dtype
@@ -1419,6 +1419,21 @@ def book_imbalance(depth_summary: pd.DataFrame, levels: int = 1) -> pd.Series:
     return pd.Series(imbalance, index=depth_summary.index, name="book_imbalance")
 
 
+def imbalance_levels(depth_summary: pd.DataFrame, levels: int) -> int:
+    """Return *levels* clamped to the depth *depth_summary* carries.
+
+    The result is a level count :func:`book_imbalance` accepts: at least ``1``
+    (the touch) and at most one more than the depth bins both sides carry.  A
+    summary with fewer bins than asked for then gives a shallower reading
+    rather than the error :func:`book_imbalance` raises.
+    """
+    available = min(
+        len(bin_volume_columns(depth_summary, "bid")),
+        len(bin_volume_columns(depth_summary, "ask")),
+    )
+    return max(1, min(levels, available + 1))
+
+
 def depth_signals(
     depth_summary: pd.DataFrame,
     *,
@@ -1468,11 +1483,7 @@ def depth_signals(
         "depth_signals",
     )
 
-    available = min(
-        len(bin_volume_columns(depth_summary, "bid")),
-        len(bin_volume_columns(depth_summary, "ask")),
-    )
-    effective_levels = max(1, min(depth_levels, available + 1))
+    effective_levels = imbalance_levels(depth_summary, depth_levels)
 
     result = depth_summary.copy()
     result["mid_price"] = _readable_mid(depth_summary)

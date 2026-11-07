@@ -31,7 +31,7 @@ Usage with a Source descriptor::
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -128,8 +128,11 @@ class PipelineResult:
     config: PipelineConfig
     level: Level = Level.L3
 
-    def _frames(self) -> dict[str, pd.DataFrame]:
+    def tables(self) -> dict[str, pd.DataFrame]:
         """Return the run's four core tables keyed by name.
+
+        This is what :func:`~ob_analytics.data.save_data` saves for a result,
+        and what :meth:`to_arrow` converts.
 
         Returns
         -------
@@ -174,7 +177,7 @@ class PipelineResult:
             name: _to_arrow_table(
                 df, tick_sizes=tick_sizes, lot_sizes=lot_sizes, config=self.config
             )
-            for name, df in self._frames().items()
+            for name, df in self.tables().items()
         }
 
     def to_polars(self) -> dict[str, Any]:
@@ -454,128 +457,83 @@ class Pipeline:
         2. Build trades (``TradeSource.load``)
         3. Classify order types
         4. Compute price-level depth
-        5. Compute depth metrics
+        5. Compute depth metrics, and sign the trades the venue left
+           unlabelled
         6. Compute order aggressiveness
 
-        For an :attr:`~ob_analytics.protocols.Level.L2` source the run takes
-        the price-level path instead (see :meth:`_run_l2`): the loader yields
-        the depth frame directly, depth metrics and trade signs are computed
-        on it, and the per-order stages (3, 6) are skipped.
+        Steps 3 to 6 are ``STAGES`` in this module.  For an
+        :attr:`~ob_analytics.protocols.Level.L2` source the loader yields the
+        depth frame directly, depth metrics and trade signs are computed on
+        it, and the per-order stages (3, 6) are skipped.
         """
         run_ctx = ctx if ctx is not None else self._ctx
         config, loader, trade_source = self._for_run(source, run_ctx)
+        rows, trades, loaded_attrs = self._load_inputs(source, loader, trade_source)
 
         if self._source.level is Level.L2:
-            return self._run_l2(source, config, loader, trade_source)
+            # A price-level feed has no per-order identity, so the per-order
+            # stages (set_order_types, order_aggressiveness, queue) are skipped
+            # and ``events`` comes back empty but schema-valid.
+            tables = {"events": empty_events(), "trades": trades, "depth": rows}
+            _depth_metrics(tables, config)
+            return _result(tables, config, Level.L2)
+
+        tables = {"events": rows, "trades": trades}
+        for name, stage in STAGES:
+            if name == "price_level_volume":
+                depth_override = self._source.compute_depth(
+                    tables["events"], config, source, run_ctx, loader
+                )
+                if depth_override is not None:
+                    tables["depth"], tables["depth_summary"] = depth_override
+                    logger.info(
+                        "Pipeline: using source-provided depth ({} rows, {} "
+                        "summary rows)",
+                        len(tables["depth"]),
+                        len(tables["depth_summary"]),
+                    )
+            stage(tables, config)
+        tables["events"].attrs.update(loaded_attrs)
+        return _result(tables, config, Level.L3)
+
+    def _load_inputs(
+        self, source: Any, loader: Any, trade_source: Any
+    ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+        """Load the rows the depth stages read, and the trades.
+
+        For a per-order source the rows are the events, and for an
+        :attr:`~ob_analytics.protocols.Level.L2` source the price-level depth
+        frame.  The trades are as the trade source builds them: the ones the
+        venue left unlabelled are signed later, against the run's quotes.
+
+        Returns
+        -------
+        tuple
+            The rows, the trades, and what the loader recorded on the rows'
+            ``attrs`` (such as the records the venue flagged after a gap).  The
+            later stages build new frames, and pandas does not carry ``attrs``
+            over, so a caller that keeps them puts them back at the end.
+        """
+        if self._source.level is Level.L2:
+            logger.info(
+                "Pipeline: L2 resolution — loading price-level depth from {}", source
+            )
+            depth = loader.load(source)
+            validate_depth_df(depth)  # data contract (schemas.py)
+            logger.info("Pipeline: building trades")
+            # The trade source ignores the (empty) events frame for L2: trades
+            # come from the venue's own prints, not from order lifecycles.
+            trades = trade_source.load(empty_events(), source)
+            validate_trades_df(trades)  # data contract (schemas.py)
+            return depth, trades, dict(depth.attrs)
 
         logger.info("Pipeline: loading events from {}", source)
         events = loader.load(source)
-        # What the loader records about the data on ``attrs`` (such as the
-        # records the venue flagged after a gap) is kept for the result: the
-        # later stages build new frames, and pandas does not carry it over.
         loaded_attrs = dict(events.attrs)
-
         logger.info("Pipeline: building trades")
         trades = trade_source.load(events, source)
         validate_trades_df(trades)  # data contract (schemas.py)
-
-        logger.info("Pipeline: classifying order types")
-        events = set_order_types(events, trades)
-        validate_events_df(events)  # data contract (schemas.py)
-
-        depth_override = self._source.compute_depth(
-            events, config, source, run_ctx, loader
-        )
-
-        if depth_override is not None:
-            depth, depth_summary = depth_override
-            logger.info(
-                "Pipeline: using source-provided depth ({} rows, {} summary rows)",
-                len(depth),
-                len(depth_summary),
-            )
-        else:
-            logger.info("Pipeline: computing price-level volume")
-            depth = price_level_volume(events)
-
-            logger.info("Pipeline: computing depth metrics")
-            depth_summary = depth_metrics(
-                depth,
-                bps=config.depth_bps,
-                bins=config.depth_bins,
-            )
-
-        # Now that the quotes exist, label any trade the venue left unlabelled.
-        # A no-op for a feed that states the aggressor on every trade, which is
-        # every L3 crypto source; Databento leaves auction and off-exchange
-        # prints unset.
-        trades = _sign_unlabelled(trades, depth_summary)
-        validate_trades_df(trades)  # data contract (schemas.py)
-
-        logger.info("Pipeline: computing order aggressiveness")
-        events = order_aggressiveness(events, depth_summary)
-
-        logger.info("Pipeline: complete")
-        events.attrs.update(loaded_attrs)
-        put_config_units(config, events, trades, depth, depth_summary)
-        return PipelineResult(
-            events=events,
-            trades=trades,
-            depth=depth,
-            depth_summary=depth_summary,
-            config=config,
-            level=Level.L3,
-        )
-
-    def _run_l2(
-        self, source: Any, config: PipelineConfig, loader: Any, trade_source: Any
-    ) -> PipelineResult:
-        """Run the price-level (L2) path: depth in, per-order stages skipped.
-
-        A price-level feed carries ``(price, side, new absolute size)``
-        updates and no order IDs, so the reconstruction stages have nothing
-        to key on.  The loader (a :class:`~ob_analytics.protocols.DepthSource`)
-        yields the canonical depth frame directly; from there depth metrics
-        and — for feeds whose trades don't label the aggressor — trade signs
-        are computed, while ``set_order_types`` / ``order_aggressiveness`` /
-        queue reconstruction are **skipped by construction** (no per-order
-        identity to classify).  ``events`` comes back empty but schema-valid.
-        """
-        logger.info(
-            "Pipeline: L2 resolution — loading price-level depth from {}", source
-        )
-        depth = loader.load(source)
-        validate_depth_df(depth)  # data contract (schemas.py)
-
-        logger.info("Pipeline: computing depth metrics ({} depth rows)", len(depth))
-        depth_summary = depth_metrics(
-            depth,
-            bps=config.depth_bps,
-            bins=config.depth_bins,
-        )
-
-        logger.info("Pipeline: building trades")
-        # The trade source ignores the (empty) events frame for L2 — trades come
-        # from the venue's own prints, not from reconstructed order lifecycles.
-        events = empty_events()
-        trades = trade_source.load(events, source)
-        trades = _sign_unlabelled(trades, depth_summary)
-        validate_trades_df(trades)  # data contract (schemas.py)
-
-        logger.info(
-            "Pipeline: L2 complete — per-order stages (set_order_types, "
-            "order_aggressiveness, queue) skipped: price-level feed has no "
-            "order identity"
-        )
-        put_config_units(config, events, trades, depth, depth_summary)
-        return PipelineResult(
-            events=events,
-            trades=trades,
-            depth=depth,
-            depth_summary=depth_summary,
-            config=config,
-            level=Level.L2,
-        )
+        return events, trades, loaded_attrs
 
     def run_windows(
         self,
@@ -657,26 +615,13 @@ class Pipeline:
             source, ctx if ctx is not None else self._ctx
         )
 
-        if level is Level.L2:
-            logger.info(
-                "Pipeline: L2 resolution — loading price-level depth from {}", source
-            )
-            rows = loader.load(source)
-            validate_depth_df(rows)
-            trades = trade_source.load(empty_events(), source)
-            validate_trades_df(trades)
-        else:
-            logger.info("Pipeline: loading events from {}", source)
-            events = loader.load(source)
-
-            logger.info("Pipeline: building trades")
-            trades = trade_source.load(events, source)
-            validate_trades_df(trades)
-
-            logger.info("Pipeline: classifying order types")
-            rows = set_order_types(events, trades)
-            validate_events_df(rows)
-            del events
+        rows, trades, _ = self._load_inputs(source, loader, trade_source)
+        if level is Level.L3:
+            tables = {"events": rows, "trades": trades}
+            # The stage builds a new events frame; let the loaded one go.
+            del rows
+            _set_order_types(tables, config)
+            rows = tables.pop("events")
 
         trade_windows = window_positions(trades["timestamp"], windows)
         arrived_into: list[pd.DataFrame] = []
@@ -797,6 +742,89 @@ class Pipeline:
         if len(seeds):
             depth = depth[depth["timestamp"] >= start]
         return depth, resting_orders(frame) if carry else frame.iloc[:0]
+
+
+# ── Stages ─────────────────────────────────────────────────────────────
+#
+# Each stage reads the run's tables and adds or replaces some, in place.  A
+# depth stage leaves a table a source already provided alone.
+
+
+def _set_order_types(tables: dict[str, pd.DataFrame], config: PipelineConfig) -> None:
+    """Classify each order's type from the events and trades."""
+    logger.info("Pipeline: classifying order types")
+    tables["events"] = set_order_types(tables["events"], tables["trades"])
+    validate_events_df(tables["events"])  # data contract (schemas.py)
+
+
+def _price_level_volume(
+    tables: dict[str, pd.DataFrame], config: PipelineConfig
+) -> None:
+    """Rebuild the volume at each price level from the events."""
+    if "depth" not in tables:
+        logger.info("Pipeline: computing price-level volume")
+        tables["depth"] = price_level_volume(tables["events"])
+
+
+def _depth_metrics(tables: dict[str, pd.DataFrame], config: PipelineConfig) -> None:
+    """Summarise the depth, then sign the trades the venue left unlabelled.
+
+    Signing needs the quotes, which exist only from here on.  It is a no-op
+    for a feed that states the aggressor on every trade, which is every L3
+    crypto source; Databento leaves auction and off-exchange prints unset.
+    """
+    if "depth_summary" not in tables:
+        logger.info(
+            "Pipeline: computing depth metrics ({} depth rows)", len(tables["depth"])
+        )
+        tables["depth_summary"] = depth_metrics(
+            tables["depth"], bps=config.depth_bps, bins=config.depth_bins
+        )
+    tables["trades"] = _sign_unlabelled(tables["trades"], tables["depth_summary"])
+    validate_trades_df(tables["trades"])  # data contract (schemas.py)
+
+
+def _order_aggressiveness(
+    tables: dict[str, pd.DataFrame], config: PipelineConfig
+) -> None:
+    """Measure how far into the book each order was placed."""
+    logger.info("Pipeline: computing order aggressiveness")
+    tables["events"] = order_aggressiveness(tables["events"], tables["depth_summary"])
+
+
+#: The stages of a per-order run after loading, in the order :meth:`Pipeline.run`
+#: runs them.  ``scripts/bench_scale.py`` times the same stages one by one.
+STAGES: tuple[
+    tuple[str, Callable[[dict[str, pd.DataFrame], PipelineConfig], None]], ...
+] = (
+    ("set_order_types", _set_order_types),
+    ("price_level_volume", _price_level_volume),
+    ("depth_metrics", _depth_metrics),
+    ("order_aggressiveness", _order_aggressiveness),
+)
+
+
+def _result(
+    tables: dict[str, pd.DataFrame], config: PipelineConfig, level: Level
+) -> PipelineResult:
+    """Return the run's tables as a result, with the run's units on each."""
+    events, trades = tables["events"], tables["trades"]
+    depth, depth_summary = tables["depth"], tables["depth_summary"]
+    put_config_units(config, events, trades, depth, depth_summary)
+    logger.info(
+        "Pipeline: complete — {:,} events, {:,} trades, {:,} depth rows",
+        len(events),
+        len(trades),
+        len(depth),
+    )
+    return PipelineResult(
+        events=events,
+        trades=trades,
+        depth=depth,
+        depth_summary=depth_summary,
+        config=config,
+        level=level,
+    )
 
 
 def _sign_unlabelled(

@@ -40,7 +40,6 @@ from ob_analytics._utils import (
     price_to_ticks,
     seconds_after_midnight_to_datetime,
     size_to_lots,
-    validate_columns,
 )
 from ob_analytics.analytics import CROSSED_TOLERANCE_PCT, _book_crossing
 from ob_analytics.config import InstrumentGrid, PipelineConfig, SourceSettings
@@ -70,6 +69,7 @@ from ob_analytics.schemas import (
     cast_columns,
     cast_events,
     time_order_keys,
+    validate_columns,
 )
 
 # ── Constants ─────────────────────────────────────────────────────────

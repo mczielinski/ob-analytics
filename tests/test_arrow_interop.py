@@ -80,12 +80,7 @@ class TestToArrow:
         the files."""
         tables = result.to_arrow()
         save_data(
-            {
-                "events": result.events,
-                "trades": result.trades,
-                "depth": result.depth,
-                "depth_summary": result.depth_summary,
-            },
+            result.tables(),
             tmp_path,
             config=result.config,
         )

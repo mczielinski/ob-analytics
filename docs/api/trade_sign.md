@@ -45,7 +45,10 @@ a trade.
 
 ::: ob_analytics.trade_sign.prevailing_mid
 
-The volume-bucket analytics check their bucket size through this one.
+The volume-bucket analytics cut their trades into buckets through
+`volume_buckets`, which checks the bucket size through `check_bucket_count`.
+
+::: ob_analytics.trade_sign.volume_buckets
 
 ::: ob_analytics.trade_sign.check_bucket_count
 

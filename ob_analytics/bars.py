@@ -49,12 +49,12 @@ from ob_analytics._utils import (
     fixed_window,
     price_scale,
     size_scale,
-    validate_columns,
     validate_non_empty,
     window_start,
 )
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import BarRule
+from ob_analytics.schemas import validate_columns
 from ob_analytics.trade_sign import resolve_direction
 
 #: Registry of rule name → :class:`~ob_analytics.protocols.BarRule` instance.

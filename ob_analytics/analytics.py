@@ -26,7 +26,7 @@ import pandas as pd
 from loguru import logger
 
 from ob_analytics import _engine_frames, engine
-from ob_analytics._utils import ticks_to_price, validate_columns, validate_non_empty
+from ob_analytics._utils import epoch_ns, ticks_to_price, validate_non_empty
 from ob_analytics.depth import (
     BookLevels,
     _book_levels,
@@ -44,6 +44,7 @@ from ob_analytics.schemas import (
     SNAPSHOT_ORIGIN,
     time_order_keys,
     unsized_order_ids,
+    validate_columns,
 )
 from ob_analytics.trade_sign import quote_before
 
@@ -749,10 +750,9 @@ def _crossed_time_fraction(best: pd.DataFrame) -> tuple[float, int]:
     reading) rather than row-weighted.  Episodes count contiguous crossed
     intervals (rising edges).
     """
-    # Raw UTC nanoseconds: ``astype("int64")`` yields the int64 ns buffer on
-    # the tz-aware clock, where ``to_numpy()`` would give an object array of
-    # Timestamps (issue #154).
-    ts = best["timestamp"].astype("int64").to_numpy()
+    # Raw UTC nanoseconds, where ``to_numpy()`` on the tz-aware clock would
+    # give an object array of Timestamps (issue #154).
+    ts = epoch_ns(best["timestamp"])
     bid = best["best_bid"].to_numpy()
     ask = best["best_ask"].to_numpy()
     crossed = (~np.isnan(bid)) & (~np.isnan(ask)) & (bid > ask)
@@ -853,7 +853,7 @@ class StaleOrder:
 def _capture_end_ns(events: pd.DataFrame, trades: pd.DataFrame) -> int:
     """The last instant either frame covers, in UTC nanoseconds."""
     ends = [
-        int(frame["timestamp"].astype("int64").max())
+        int(epoch_ns(frame["timestamp"]).max())
         for frame in (events, trades)
         if not frame.empty
     ]
@@ -918,7 +918,7 @@ def _stale_spans(
     rows = rows.sort_values(["id", *time_order_keys(rows)], kind="stable")
 
     ids = rows["id"].to_numpy()
-    ts = rows["timestamp"].astype("int64").to_numpy()
+    ts = epoch_ns(rows["timestamp"])
     ends = np.full(ts.size, end_ns, dtype=np.int64)
     same_order = ids[1:] == ids[:-1]
     ends[:-1] = np.where(same_order, ts[1:], end_ns)
@@ -935,7 +935,7 @@ def _stale_spans(
     is_ask = (rows["direction"] == "ask").to_numpy()[resting]
 
     ordered = trades.sort_values("timestamp", kind="stable")
-    t_ns = ordered["timestamp"].astype("int64").to_numpy()
+    t_ns = epoch_ns(ordered["timestamp"])
     t_px = ordered["price"].to_numpy(dtype=np.float64)
 
     # Only trades strictly after the row count: a trade stamped in the same
@@ -980,7 +980,7 @@ def _stale_orders(
     spans: pd.DataFrame, best: pd.DataFrame, end_ns: int, tick_size: float
 ) -> tuple[StaleOrder, ...]:
     """Measure how long each stale span held the touch, worst first."""
-    bt = best["timestamp"].astype("int64").to_numpy()
+    bt = epoch_ns(best["timestamp"])
     held_until = np.append(bt[1:], end_ns)
     touch = {True: best["best_ask"].to_numpy(), False: best["best_bid"].to_numpy()}
     found = []
@@ -1940,8 +1940,8 @@ def _clock_order_counts(frame: pd.DataFrame) -> tuple[int, int]:
     ordered = frame.loc[both].sort_values(time_order_keys(frame), kind="stable")
     if len(ordered) < 2:
         return after_receive, 0
-    receive = np.diff(ordered["timestamp"].astype("int64").to_numpy())
-    venue = np.diff(ordered["exchange_timestamp"].astype("int64").to_numpy())
+    receive = np.diff(epoch_ns(ordered["timestamp"]))
+    venue = np.diff(epoch_ns(ordered["exchange_timestamp"]))
     reordered = int(np.count_nonzero((venue < 0) & (receive > 0)))
     return after_receive, reordered
 

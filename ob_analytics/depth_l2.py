@@ -60,17 +60,15 @@ from loguru import logger
 from pydantic import Field
 
 from ob_analytics._utils import (
-    UTC_NS_DTYPE,
     attach_ingest_seq,
     datetime_to_epoch,
     empty_trades,
-    epoch_to_datetime,
     lots_to_size,
     off_tick_grid,
     price_to_ticks,
     size_to_lots,
     ticks_to_price,
-    validate_columns,
+    to_utc_ns,
     validate_non_empty,
 )
 from ob_analytics.config import InstrumentGrid, PipelineConfig, SourceSettings
@@ -92,6 +90,7 @@ from ob_analytics.schemas import (
     TRADE_SIDE_DTYPE,
     attach_instrument_identity,
     cast_columns,
+    validate_columns,
 )
 
 # ── Column-spelling tolerance ─────────────────────────────────────────
@@ -217,18 +216,6 @@ def _to_lots(raw_size: pd.Series, cfg: PipelineConfig, where: str) -> np.ndarray
     return size_to_lots(size, cfg.lot_size)
 
 
-def _to_datetime(series: pd.Series, unit: str) -> pd.Series:
-    """Parse a timestamp column onto the shared tz-aware UTC nanosecond clock.
-
-    Integer-epoch columns go through :func:`epoch_to_datetime`; string columns
-    are parsed with ``utc=True``, so a zone-carrying string is converted to UTC
-    and a zone-less one is read as UTC.
-    """
-    if pd.api.types.is_numeric_dtype(series):
-        return epoch_to_datetime(series, unit)
-    return pd.to_datetime(series, utc=True).astype(UTC_NS_DTYPE)
-
-
 # ── L2DepthLoader ─────────────────────────────────────────────────────
 
 
@@ -311,7 +298,7 @@ class L2DepthLoader:
             )
 
         cfg, fmt = self._config, self._settings
-        timestamp = _to_datetime(raw[ts_col], fmt.timestamp_unit)
+        timestamp = to_utc_ns(raw[ts_col], fmt.timestamp_unit)
         # Canonical price is integer ticks (issue #155): scale the raw feed
         # price to the quote currency, then convert to ticks.
         price = _to_ticks_on_grid(
@@ -329,7 +316,7 @@ class L2DepthLoader:
         clocks = {"timestamp": timestamp.array}
         venue_col = _first_present(raw.columns, _EXCHANGE_TIMESTAMP_COLUMNS)
         if venue_col is not None:
-            clocks["exchange_timestamp"] = _to_datetime(
+            clocks["exchange_timestamp"] = to_utc_ns(
                 raw[venue_col], fmt.timestamp_unit
             ).array
         depth = pd.DataFrame(
@@ -462,7 +449,7 @@ class L2TradeReader:
             )
 
         cfg, fmt = self._config, self._settings
-        timestamp = _to_datetime(raw[ts_col], fmt.timestamp_unit)
+        timestamp = to_utc_ns(raw[ts_col], fmt.timestamp_unit)
         # Trade prints share the depth grid: integer ticks (issue #155).
         price = _to_ticks_on_grid(
             raw[price_col], cfg, fmt.price_divisor, "L2TradeReader.load"

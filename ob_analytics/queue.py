@@ -25,8 +25,8 @@ import numpy as np
 import pandas as pd
 
 from ob_analytics import _engine_frames, engine
-from ob_analytics._utils import validate_columns
-from ob_analytics.schemas import time_order_keys
+from ob_analytics._utils import epoch_ns
+from ob_analytics.schemas import time_order_keys, validate_columns
 
 QUEUE_COLUMNS: tuple[str, ...] = _engine_frames.QUEUE_COLUMNS
 
@@ -161,7 +161,5 @@ def queue_age_grid(
         ev["timestamp"].iloc[replayed[-1]],
         periods=n_time,
     )
-    grid = engine.queue_age_grid(
-        arrays, side=touch, at=_engine_frames.nanoseconds(samples)
-    )
+    grid = engine.queue_age_grid(arrays, side=touch, at=epoch_ns(samples))
     return grid.ages, samples.to_numpy(), grid.max_rank

@@ -35,15 +35,17 @@ import pandas as pd
 from ob_analytics._utils import (
     fixed_window,
     size_scale,
-    validate_columns,
     validate_non_empty,
     window_start,
 )
 from ob_analytics.bars import bars
+from ob_analytics.schemas import validate_columns
 from ob_analytics.trade_sign import (
-    bulk_volume_classification,
-    check_bucket_count,
+    _bucket_bounds,
+    _bulk_volume_classification,
+    _rows_at,
     resolve_direction,
+    volume_buckets,
 )
 
 #: Smallest ``|t|`` at which λ counts as distinguishable from zero.  The
@@ -321,7 +323,6 @@ def compute_vpin(
     """
     validate_columns(trades, {"timestamp", "price", "volume"}, "compute_vpin")
     validate_non_empty(trades, "compute_vpin")
-    scale = size_scale(trades, "compute_vpin")
     rule = "given"
     advice: str | None = None
     if bucket_volume is None:
@@ -334,17 +335,12 @@ def compute_vpin(
             f"vpin_bucket_volume sized the bucket from the trades' time span "
             f"of {span}; check the timestamps, or pass bucket_volume."
         )
-    if bucket_volume <= 0:
-        raise ValueError(f"bucket_volume must be positive, got {bucket_volume}")
-    check_bucket_count(
-        trades, bucket_volume, "compute_vpin", scale=scale, advice=advice
-    )
 
     if sign_method == "bvc":
-        result = _vpin_from_bvc(trades, bucket_volume, n_buckets)
+        result = _vpin_from_bvc(trades, bucket_volume, n_buckets, advice)
     else:
         result = _vpin_from_signs(
-            trades, bucket_volume, scale, n_buckets, sign_method, quotes
+            trades, bucket_volume, n_buckets, sign_method, quotes, advice
         )
 
     diagnostics: tuple[str, ...] = ()
@@ -373,75 +369,40 @@ def compute_vpin(
 def _vpin_from_signs(
     trades: pd.DataFrame,
     bucket_volume: float,
-    scale: float,
     n_buckets: int,
     sign_method: str | None,
     quotes: pd.DataFrame | None,
+    advice: str | None,
 ) -> pd.DataFrame:
     """VPIN from a per-trade buy/sell sign (every ``sign_method`` but ``"bvc"``).
 
-    *bucket_volume* is in the instrument's units and *scale* is the frame's
-    units in one of them (:func:`~ob_analytics._utils.size_scale`): the walk
-    runs in the frame's units and the volumes are reported in the
-    instrument's.
+    The bucket volumes are summed in the frame's units, as
+    :func:`~ob_analytics.trade_sign.volume_buckets` gives them, and reported in
+    the instrument's.
     """
+    scale = size_scale(trades, "compute_vpin")
     trades = resolve_direction(trades, sign_method, quotes, "compute_vpin")
     df = trades.sort_values("timestamp").reset_index(drop=True)
-
-    # Assign signed volume
-    is_buy = df["direction"] == "buy"
-    buy_vol = df["volume"].where(is_buy, 0.0).to_numpy(dtype=np.float64)
-    sell_vol = df["volume"].where(~is_buy, 0.0).to_numpy(dtype=np.float64)
-    timestamps = df["timestamp"].to_numpy()
-
-    # Walk through trades, splitting volume into equal-sized buckets.
-    # A single trade can be split across two buckets if it straddles a
-    # boundary.
-    bucket = bucket_volume * scale
-    buckets: list[dict] = []
-    bucket_buy = 0.0
-    bucket_sell = 0.0
-    bucket_start_ts = timestamps[0]
-    bucket_remaining = bucket
-
-    for i in range(len(df)):
-        trade_buy = buy_vol[i]
-        trade_sell = sell_vol[i]
-        trade_total = trade_buy + trade_sell
-
-        while trade_total > 0:
-            alloc = min(trade_total, bucket_remaining)
-            # Proportionally split the buy/sell within this trade
-            frac = alloc / trade_total
-
-            bucket_buy += trade_buy * frac
-            bucket_sell += trade_sell * frac
-            trade_buy -= trade_buy * frac
-            trade_sell -= trade_sell * frac
-            trade_total -= alloc
-            bucket_remaining -= alloc
-
-            if bucket_remaining <= 1e-12:
-                # Bucket is full
-                buckets.append(
-                    {
-                        "bucket": len(buckets),
-                        "timestamp_start": bucket_start_ts,
-                        "timestamp_end": timestamps[i],
-                        "buy_volume": bucket_buy / scale,
-                        "sell_volume": bucket_sell / scale,
-                        "vpin": abs(bucket_buy - bucket_sell) / bucket,
-                    }
-                )
-                bucket_buy = 0.0
-                bucket_sell = 0.0
-                bucket_remaining = bucket
-                # Next bucket starts at the same trade timestamp
-                bucket_start_ts = timestamps[i]
-
-    if not buckets:
+    buckets = volume_buckets(df, bucket_volume, "compute_vpin", advice=advice)
+    if buckets.empty:
         return _empty_vpin_frame(df["timestamp"].dtype)
-    result = pd.DataFrame(buckets)
+
+    # A trade is all buy or all sell, so each part of it in a bucket is too.
+    is_buy = (df["direction"] == "buy").to_numpy()[buckets["row"].to_numpy()]
+    volume = buckets["volume"]
+    buy = volume.where(is_buy, 0.0).groupby(buckets["bucket"]).sum()
+    sell = volume.where(~is_buy, 0.0).groupby(buckets["bucket"]).sum()
+    starts, ends = _bucket_bounds(buckets)
+    result = pd.DataFrame(
+        {
+            "bucket": buy.index.to_numpy(),
+            "timestamp_start": _rows_at(df["timestamp"], starts),
+            "timestamp_end": _rows_at(df["timestamp"], ends),
+            "buy_volume": buy.to_numpy() / scale,
+            "sell_volume": sell.to_numpy() / scale,
+            "vpin": (buy - sell).abs().to_numpy() / (bucket_volume * scale),
+        }
+    )
     result["vpin_avg"] = result["vpin"].rolling(n_buckets, min_periods=1).mean()
     return result
 
@@ -450,6 +411,7 @@ def _vpin_from_bvc(
     trades: pd.DataFrame,
     bucket_volume: float,
     n_buckets: int,
+    advice: str | None,
 ) -> pd.DataFrame:
     """VPIN from bulk volume classification (``sign_method="bvc"``).
 
@@ -458,7 +420,9 @@ def _vpin_from_bvc(
     per-trade sign, then measures the same normalised bucket imbalance.
     Returns the standard :func:`compute_vpin` schema.
     """
-    bvc = bulk_volume_classification(trades, bucket_volume)
+    bvc = _bulk_volume_classification(
+        trades, bucket_volume, None, "compute_vpin", advice
+    )
     if bvc.empty:
         return _empty_vpin_frame(trades["timestamp"].dtype)
     result = bvc[
