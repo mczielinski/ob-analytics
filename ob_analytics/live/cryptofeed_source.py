@@ -53,6 +53,16 @@ from ob_analytics.schemas import ORIGIN_COLUMN, SNAPSHOT_ORIGIN
 _L3_CHANNEL = "l3_book"
 _L2_CHANNEL = "l2_book"
 _TRADES_CHANNEL = "trades"
+# The kind of queue item that carries an error from a callback to the stream.
+_STREAM_ERROR = "error"
+
+
+class UnmappedMessageError(ValueError):
+    """An L3 message the capture could not turn into order events.
+
+    It ends the stream: the capture's book would no longer match the venue's.
+    """
+
 
 #: Default depth of the callback -> iterator buffer.
 _DEFAULT_QUEUE_SIZE = 10_000
@@ -454,7 +464,9 @@ class CryptofeedSource:
         self.other_market_trades = 0
         self.tape_fills = 0
         self.tape_fills_already_shown = 0
-        self.errors = 0
+        # Messages that could not be mapped and were left out (L2 only: at L3
+        # such a message ends the stream instead, see ``stream``).
+        self.dropped = 0
 
     @property
     def level(self) -> Level:
@@ -502,10 +514,10 @@ class CryptofeedSource:
         At L3, cryptofeed keeps the venue's book of resting orders, applying
         its opening book and changes, or taking each new snapshot whole.  Bids
         never rest above asks in it, so it is a matched book.  At L2 it keeps
-        the venue's total size at each price.  The level is read with
-        :meth:`_effective_level`.
+        the venue's total size at each price.  Until the venue is known, the
+        level is L2 (see :attr:`level`), and so is this declaration.
         """
-        if self._effective_level() is Level.L2:
+        if self.level is Level.L2:
             return FeedType.PRICE_LEVELS
         return FeedType.MATCHED_BOOK
 
@@ -516,10 +528,10 @@ class CryptofeedSource:
         cryptofeed's L3 channels carry the book, and a book holds resting
         orders only: a taker trades on arrival and never appears.  So an L3
         capture names the maker only, and an L2 capture, with no order
-        identity, names neither.  The level is read with
-        :meth:`_effective_level`.
+        identity, names neither.  Until the venue is known, the level is L2
+        (see :attr:`level`), and so is this declaration.
         """
-        if self._effective_level() is Level.L2:
+        if self.level is Level.L2:
             return TradeAttribution.NONE
         return TradeAttribution.MAKER_ONLY
 
@@ -535,22 +547,6 @@ class CryptofeedSource:
         opening book, so they keep both clocks.
         """
         return self.venue_clock.clocks
-
-    def _effective_level(self) -> Level:
-        """The level the declarations follow, even before the venue resolves.
-
-        An explicit request for L2 stands without a venue.  Otherwise, until
-        the venue resolves (no venue chosen, or the extra not installed), the
-        answer is L3, the level cryptofeed is used for: an L2 run ignores the
-        L3 declarations anyway.
-        """
-        if getattr(self.settings, "level", None) is Level.L2:
-            return Level.L2
-        try:
-            self._exchange_class()
-        except (ImportError, ValueError):
-            return Level.L3
-        return self.level
 
     @property
     def _venue(self) -> str:
@@ -1253,7 +1249,7 @@ class CryptofeedSource:
             "book_resyncs": self.book_resyncs,
             "books_without_venue_time": self.venue_clock.without_venue_time,
             "synthetic_deleted": self.synthetic_deleted,
-            "errors": self.errors,
+            "dropped": self.dropped,
         }
 
     # -- the cryptofeed bridge ----------------------------------------------
@@ -1335,7 +1331,10 @@ class CryptofeedSource:
         while the runner pulls from an iterator.  A **bounded** queue joins the
         two: callbacks await a slot, so a consumer that falls behind applies
         backpressure to the feed instead of dropping events (an L3 book cannot
-        survive a gap) or growing without limit.
+        survive a gap) or growing without limit.  For the same reason an L3
+        message that cannot be mapped ends the stream with
+        :class:`UnmappedMessageError`, after the messages before it are
+        written; at L2 it is left out and counted in ``dropped``.
 
         The feed handler runs on the caller's event loop
         (``run(start_loop=False)``) and never installs signal handlers -- the
@@ -1352,6 +1351,26 @@ class CryptofeedSource:
         exchange_cls = self._exchange_class()
         book_channel = _L3_CHANNEL if self.level is Level.L3 else _L2_CHANNEL
 
+        async def _unmapped(what: str, exc: Exception) -> None:
+            # At L2 a message that cannot be mapped is left out and counted:
+            # the next update of each level gives its size again.  At L3 the
+            # book would stay wrong from here on, so the stream ends with the
+            # error, and the next segment starts from a new opening book.
+            if self.level is Level.L3:
+                # A held book came before this message: it is written first.
+                for item in self._release_held_book():
+                    await queue.put(item)
+                await queue.put(
+                    (
+                        _STREAM_ERROR,
+                        {},
+                        UnmappedMessageError(f"cannot map an L3 {what}: {exc!r}"),
+                    )
+                )
+                return
+            self.dropped += 1
+            logger.warning("[cryptofeed] dropped a {}: {!r}", what, exc)
+
         async def on_book(book: Any, receipt_timestamp: float) -> None:
             self.book_updates += 1
             self.note_sequence(book, opening=self.note_resync(book))
@@ -1366,9 +1385,8 @@ class CryptofeedSource:
                     events = self._l2_rows(book, receipt_timestamp)
                     self.depth_rows += len(events)
                     kind = "depth"
-            except Exception as exc:  # noqa: BLE001 - one bad frame must not kill the run
-                self.errors += 1
-                logger.warning("[cryptofeed] dropped a book update: {!r}", exc)
+            except Exception as exc:  # noqa: BLE001 - see _unmapped
+                await _unmapped("book update", exc)
                 return
             for item in self._release_held_book(receipt_timestamp):
                 await queue.put(item)
@@ -1393,9 +1411,8 @@ class CryptofeedSource:
                     if self.level is Level.L3
                     else []
                 )
-            except Exception as exc:  # noqa: BLE001
-                self.errors += 1
-                logger.warning("[cryptofeed] dropped a trade: {!r}", exc)
+            except Exception as exc:  # noqa: BLE001 - see _unmapped
+                await _unmapped("trade", exc)
                 return
             # A held book was handed over before this trade: write it first.
             for item in self._release_held_book():
@@ -1454,14 +1471,14 @@ class CryptofeedSource:
                     for held in self._release_held_book():
                         yield held
                     continue
-                yield item
+                yield _checked(item)
             # Stop the feed first, so nothing is added while the queue drains,
             # then write what it delivered, and the held book last: it came
             # after everything in the queue.
             stopped = True
             await self._stop_handler(handler)
             while not queue.empty():
-                yield queue.get_nowait()
+                yield _checked(queue.get_nowait())
             for held in self._release_held_book():
                 yield held
         finally:
@@ -1479,6 +1496,13 @@ class CryptofeedSource:
             await stop_async()
         except Exception as exc:  # noqa: BLE001 - shutdown must not mask the run
             logger.debug("[cryptofeed] feed handler stop error: {!r}", exc)
+
+
+def _checked(item: tuple[str, EventDict, Any]) -> tuple[str, EventDict, Any]:
+    """Return *item*, or raise the error a callback queued in its place."""
+    if item[0] == _STREAM_ERROR:
+        raise item[2]
+    return item
 
 
 # ── Register this source ──────────────────────────────────────────────

@@ -1143,7 +1143,7 @@ class TestLostSync:
         meta = self._meta(self._Gappy(snap, later), tmp_path)
         assert meta["book_resyncs"] == 1
         assert meta["book_updates"] == 1
-        assert meta["errors"] == 0
+        assert "capture_error" not in meta
 
     def test_a_feed_that_keeps_losing_sync_is_given_up(self, tmp_path):
         from ob_analytics.live.ccxt_source import _MAX_BOOK_RESYNCS
@@ -1152,11 +1152,11 @@ class TestLostSync:
         ex = self._Gappy(snap, [], failures=_MAX_BOOK_RESYNCS + 1)
         meta = self._meta(ex, tmp_path)
         assert meta["book_resyncs"] == _MAX_BOOK_RESYNCS
-        # Giving up ends the stream with the error (#150), so the run records
-        # it on top of the source's own count.
+        # Giving up ends the stream with the error (#150), and the run
+        # records it once, as capture_error.
         assert meta["capture_error_phase"] == "stream"
         assert "out of sync" in meta["capture_error"]
-        assert meta["errors"] == 2
+        assert "errors" not in meta
 
 
 class TestLostConnection:
@@ -1186,4 +1186,5 @@ class TestLostConnection:
         assert "socket closed" in (result.capture_error or "")
         assert result.n_trade_events == 1
         meta = json.loads((out / "meta.json").read_text())
-        assert meta["errors"] == 2  # the source's count, plus the run's
+        assert "socket closed" in meta["capture_error"]
+        assert "errors" not in meta

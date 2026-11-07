@@ -6,8 +6,9 @@ import asyncio
 import csv
 import json
 import signal
+import warnings
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, time
 from decimal import Decimal
 from pathlib import Path
@@ -159,6 +160,8 @@ class FileCaptureSink(CaptureSink):
         # with no such key turns it off, since _encode is slower.
         self._raw_keys_as_text = False
         self._frame_had_text_key = False
+        #: The first error closing a file, set by :meth:`finalize`.
+        self.close_error: str | None = None
 
     def write_order(self, event: EventDict) -> None:
         if self._orders is None:
@@ -319,17 +322,32 @@ class FileCaptureSink(CaptureSink):
         )
 
     def finalize(self, result: CaptureResult) -> None:
-        # Flush + close everything.
+        """Close every file, then write ``meta.json`` last.
+
+        Each file is closed on its own, so one that fails to flush (a full
+        disk, say) leaves no other open.  The first failure is logged and
+        recorded in ``meta.json`` as ``capture_error`` with the phase
+        ``close``, unless the run already had an error, and kept in
+        :attr:`close_error`.
+        """
+        close_error: str | None = None
         for fp in (self._orders_fp, self._depth_fp, self._trades_fp, self._raw_fp):
-            if fp is not None:
+            if fp is None:
+                continue
+            try:
                 try:
                     fp.flush()
                 finally:
                     fp.close()
+            except Exception as exc:  # noqa: BLE001 - recorded in meta.json
+                error = redact(repr(exc))
+                logger.error("Closing {} failed: {}", getattr(fp, "name", fp), error)
+                close_error = close_error or error
         self._orders_fp = None
         self._depth_fp = None
         self._trades_fp = None  # type: ignore[assignment]
         self._raw_fp = None
+        self.close_error = close_error
 
         meta: dict[str, Any] = {
             "out_dir": str(result.out_dir),
@@ -347,11 +365,11 @@ class FileCaptureSink(CaptureSink):
             **self.raw_diagnostics(),
         }
         if result.capture_error is not None:
-            # A phase that raised is one more error on top of the ones the
-            # source counted itself.
             meta["capture_error"] = result.capture_error
             meta["capture_error_phase"] = result.capture_error_phase
-            meta["errors"] = int(meta.get("errors") or 0) + 1
+        elif close_error is not None:
+            meta["capture_error"] = close_error
+            meta["capture_error_phase"] = "close"
         write_record(self.out_dir, meta)
 
 
@@ -394,9 +412,12 @@ async def run_capturer(
 
     Handles SIGINT/SIGTERM by cancelling the streaming task; the shutdown
     synthetic events still run so every order id keeps a full lifecycle.  A
-    caller that passes *stop* owns the signals instead: setting it ends the
-    stream the same way, and no handler is installed.  *streaming*, when
-    given, is set as the first live event arrives.
+    second signal stops the run at once, in whatever phase it is: the files
+    are closed with the rows written so far, and ``meta.json`` records the
+    cut as :attr:`CaptureResult.capture_error`.  A caller that passes *stop*
+    owns the signals instead: setting it ends the stream the same way, and no
+    handler is installed.  *streaming*, when given, is set as the first live
+    event arrives.
 
     A source that implements :class:`SupportsPreflight` is checked before any
     output is created, so a missing optional extra raises :class:`ImportError`
@@ -421,9 +442,13 @@ async def run_capturer(
         sink = FileCaptureSink(config.out_dir, keep_raw=config.keep_raw, level=level)
     started = pd.Timestamp.now(tz="UTC")
     stream_times: dict[str, pd.Timestamp] = {}
-    n_order = n_trade = n_depth = n_raw = 0
+    # Rows written per kind, by every phase.  Updated in place, so the counts
+    # survive a cancellation (a second signal, or the supervisor giving up on
+    # a segment) and meta.json reports every row on disk.
+    counts = {"order": 0, "trade": 0, "depth": 0, "raw": 0}
     capture_error: str | None = None
     capture_error_phase: str | None = None
+    phase = "snapshot"
 
     def _record_error(phase: str, exc: BaseException) -> None:
         nonlocal capture_error, capture_error_phase
@@ -434,11 +459,28 @@ async def run_capturer(
             capture_error = error
             capture_error_phase = phase
 
+    def _write_book(ev: EventDict) -> None:
+        if level is Level.L2:
+            sink.write_depth(ev)
+            counts["depth"] += 1
+        else:
+            sink.write_order(ev)
+            counts["order"] += 1
+
     loop = asyncio.get_event_loop()
     installed_signals: list[int] = []
+    stopped_at_once = False
     if stop is None:
         stop = asyncio.Event()
-        installed_signals = install_stop_signals(loop, stop)
+        this_task = asyncio.current_task()
+
+        def _stop_at_once() -> None:
+            nonlocal stopped_at_once
+            stopped_at_once = True
+            if this_task is not None:
+                this_task.cancel()
+
+        installed_signals = install_stop_signals(loop, stop, _stop_at_once)
 
     # L3 only: ids from the opening book that nothing in the stream has yet
     # mentioned. _stream removes an id when an order event or a trade names
@@ -447,58 +489,59 @@ async def run_capturer(
     unconfirmed: set[Any] | None = None if level is Level.L2 else set()
 
     try:
-        logger.info("Capturer '{}': snapshot starting", capturer.name)
         try:
-            async for ev in capturer.snapshot(config):
-                ev["origin"] = ORIGIN_SNAPSHOT
-                if level is Level.L2:
-                    sink.write_depth(ev)
-                    n_depth += 1
-                else:
-                    sink.write_order(ev)
-                    n_order += 1
+            logger.info("Capturer '{}': snapshot starting", capturer.name)
+            try:
+                async for ev in capturer.snapshot(config):
+                    ev["origin"] = ORIGIN_SNAPSHOT
+                    _write_book(ev)
                     if unconfirmed is not None:
                         unconfirmed.add(ev["id"])
-        except Exception as exc:  # noqa: BLE001 - recorded in meta.json
-            _record_error("snapshot", exc)
-        logger.info(
-            "Capturer '{}': snapshot wrote {} book events",
-            capturer.name,
-            n_depth if level is Level.L2 else n_order,
-        )
-
-        # _stream updates this mapping in place as it writes, so the counts
-        # survive a SIGINT/SIGTERM cancellation: meta.json previously
-        # reported only snapshot + shutdown events for interrupted runs
-        # even though every streamed row was on disk.
-        stream_counts = {"order": 0, "trade": 0, "depth": 0, "raw": 0}
-        if capture_error is None:
-            await _run_stream(
-                capturer,
-                config,
-                sink,
-                _StreamState(stream_counts, unconfirmed, stream_times, streaming),
-                stop,
-                _record_error,
+            except Exception as exc:  # noqa: BLE001 - recorded in meta.json
+                _record_error("snapshot", exc)
+            logger.info(
+                "Capturer '{}': snapshot wrote {} book events",
+                capturer.name,
+                counts["depth"] if level is Level.L2 else counts["order"],
             )
-            stream_times["ended"] = pd.Timestamp.now(tz="UTC")
-        n_order += stream_counts["order"]
-        n_trade += stream_counts["trade"]
-        n_depth += stream_counts["depth"]
-        n_raw += stream_counts["raw"]
 
-        logger.info("Capturer '{}': emitting shutdown synthetic events", capturer.name)
-        try:
-            async for ev in capturer.shutdown_synthetic_events():
-                ev.setdefault("origin", ORIGIN_SHUTDOWN)
-                if level is Level.L2:
-                    sink.write_depth(ev)
-                    n_depth += 1
-                else:
-                    sink.write_order(ev)
-                    n_order += 1
-        except Exception as exc:  # noqa: BLE001 - recorded in meta.json
-            _record_error("shutdown", exc)
+            if capture_error is None:
+                phase = "stream"
+                await _run_stream(
+                    capturer,
+                    config,
+                    sink,
+                    _StreamState(counts, unconfirmed, stream_times, streaming),
+                    stop,
+                    _record_error,
+                )
+                stream_times["ended"] = pd.Timestamp.now(tz="UTC")
+
+            phase = "shutdown"
+            logger.info(
+                "Capturer '{}': emitting shutdown synthetic events", capturer.name
+            )
+            try:
+                async for ev in capturer.shutdown_synthetic_events():
+                    ev.setdefault("origin", ORIGIN_SHUTDOWN)
+                    _write_book(ev)
+            except Exception as exc:  # noqa: BLE001 - recorded in meta.json
+                _record_error("shutdown", exc)
+        except asyncio.CancelledError:
+            # Only the cancel a second signal asked for ends here; any other
+            # (the caller's own) goes on up once the files are closed.
+            task = asyncio.current_task()
+            if not stopped_at_once or task is None or task.uncancel() > 0:
+                raise
+            logger.warning(
+                "Capturer '{}': a second signal stopped the run at once",
+                capturer.name,
+            )
+            if capture_error is None:
+                capture_error = f"a second signal stopped the run at once ({phase})"
+                capture_error_phase = phase
+            if phase == "stream":
+                stream_times["ended"] = pd.Timestamp.now(tz="UTC")
     finally:
         # Remove signal handlers we installed.
         for sig in installed_signals:
@@ -512,27 +555,19 @@ async def run_capturer(
         # the capture to its own source's expectations.  The capture is read
         # back with a file format's source (a cryptofeed L3 capture replays as
         # bitstamp), which would otherwise supply the wrong ones.
-        extras: dict[str, Any] = source_declarations(capturer)
-        # Capturers may implement the optional SupportsDiagnostics capability
-        # to enrich meta.json with per-run counters.
-        if isinstance(capturer, SupportsDiagnostics):
-            try:
-                extras.update(capturer.diagnostics())
-            except Exception as exc:  # noqa: BLE001
-                logger.debug(
-                    "Capturer '{}' diagnostics() raised: {!r}",
-                    capturer.name,
-                    exc,
-                )
+        extras: dict[str, Any] = {
+            **source_declarations(capturer),
+            **read_diagnostics(capturer),
+        }
         result = CaptureResult(
             out_dir=config.out_dir,
-            n_order_events=n_order,
-            n_trade_events=n_trade,
-            n_raw_frames=n_raw,
+            n_order_events=counts["order"],
+            n_trade_events=counts["trade"],
+            n_raw_frames=counts["raw"],
             started=started,
             ended=ended,
             extras=extras,
-            n_depth_events=n_depth,
+            n_depth_events=counts["depth"],
             n_snapshot_unconfirmed=None if unconfirmed is None else len(unconfirmed),
             capture_error=capture_error,
             capture_error_phase=capture_error_phase,
@@ -540,32 +575,85 @@ async def run_capturer(
             stream_ended=stream_times.get("ended"),
         )
         sink.finalize(result)
+        close_error = getattr(sink, "close_error", None)
+        if close_error is not None and capture_error is None:
+            result = replace(
+                result, capture_error=close_error, capture_error_phase="close"
+            )
         logger.info(
             "Capturer '{}': finished. orders={}, depth={}, trades={}, raw={}, "
             "dur={:.1f}s",
             capturer.name,
-            n_order,
-            n_depth,
-            n_trade,
-            n_raw,
+            counts["order"],
+            counts["depth"],
+            counts["trade"],
+            counts["raw"],
             (ended - started).total_seconds(),
         )
     return result
 
 
+def read_diagnostics(source: Any) -> dict[str, Any]:
+    """Return the counters *source* reports for ``meta.json``.
+
+    Empty for a source without :class:`SupportsDiagnostics`.  When its
+    ``diagnostics()`` raises, the counters are lost: this warns, and returns
+    ``diagnostics_error`` (the error's ``repr``) instead, so ``meta.json``
+    says so and ``ob-analytics audit`` does not take the missing ``dropped``
+    count for zero.
+    """
+    if not isinstance(source, SupportsDiagnostics):
+        return {}
+    try:
+        return dict(source.diagnostics())
+    except Exception as exc:  # noqa: BLE001 - recorded in meta.json
+        error = redact(repr(exc))
+        warnings.warn(
+            f"Capturer '{source.name}' diagnostics() raised {error}; meta.json "
+            "has none of its counters",
+            UserWarning,
+            stacklevel=2,
+        )
+        return {DIAGNOSTICS_ERROR: error}
+
+
+#: The ``meta.json`` field that says the source's counters were lost.
+DIAGNOSTICS_ERROR = "diagnostics_error"
+
+
 def install_stop_signals(
-    loop: asyncio.AbstractEventLoop, stop: asyncio.Event
+    loop: asyncio.AbstractEventLoop,
+    stop: asyncio.Event,
+    at_once: Callable[[], None] | None = None,
 ) -> list[int]:
     """Make SIGINT/SIGTERM set *stop*; return the signals handled.
+
+    The first signal sets *stop*, so the capture closes cleanly.  A second
+    one calls *at_once*, which stops it without waiting for that.
 
     Where signals cannot be handled (Windows, a thread other than the main
     one, some test environments) nothing is installed and default handling
     stays.
     """
+    received = 0
+
+    def _on_signal() -> None:
+        nonlocal received
+        received += 1
+        if received == 1:
+            logger.warning(
+                "Stopping the capture: closing its files. Send the signal again "
+                "to stop at once."
+            )
+            stop.set()
+        elif received == 2 and at_once is not None:
+            logger.warning("Stopping the capture at once.")
+            at_once()
+
     installed: list[int] = []
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
-            loop.add_signal_handler(sig, stop.set)
+            loop.add_signal_handler(sig, _on_signal)
             installed.append(sig)
         except (NotImplementedError, RuntimeError):
             pass
@@ -624,22 +712,22 @@ async def _run_stream(
             {stream_task, stop_task},
             return_when=asyncio.FIRST_COMPLETED,
         )
-    finally:
         stop_task.cancel()
+        await _cancel_until_done(stream_task, state)
+    except asyncio.CancelledError:
+        # This task was cancelled too (the supervisor stopped waiting for it,
+        # or a second signal): leave the stream cancelled and do not wait for
+        # it, since it may hang while it closes.
+        stop_task.cancel()
+        stream_task.cancel()
+        stream_task.add_done_callback(_retrieve_outcome)
+        raise
+    # Drain cancellation cleanly.
+    for t in (stream_task, stop_task):
         try:
-            await _cancel_until_done(stream_task, state)
-        except asyncio.CancelledError:
-            # This task was cancelled too (the supervisor stopped waiting for
-            # it): leave the stream cancelled and do not wait for it.
-            stream_task.cancel()
-            stream_task.add_done_callback(_retrieve_outcome)
-            raise
-        # Drain cancellation cleanly.
-        for t in (stream_task, stop_task):
-            try:
-                await t
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110 - draining cancelled tasks; any error here is irrelevant during shutdown
-                pass
+            await t
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110 - draining cancelled tasks; any error here is irrelevant during shutdown
+            pass
 
     if stream_task in done and not stream_task.cancelled():
         exc = stream_task.exception()

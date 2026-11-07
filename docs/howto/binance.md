@@ -156,8 +156,8 @@ ccxt itself watches for lost messages. If a Binance message does not follow
 on from the one before, ccxt drops its book and reports an error. The capture
 then asks for the book again, and ccxt starts from a new snapshot. Levels that
 changed during the gap are recorded with their new size. `meta.json` counts
-these restarts as `book_resyncs`; after 10 in one capture, the book stops and
-`errors` counts 1.
+these restarts as `book_resyncs`; after 10 in one capture, the segment ends
+with the error, recorded as `capture_error`.
 
 ## See also
 
