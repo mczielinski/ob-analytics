@@ -29,7 +29,12 @@ LIVE_CAPTURE_TESTS = [
     "test_live_protocol.py",
     "test_polymarket.py",
 ]
-collect_ignore = LIVE_CAPTURE_TESTS if sys.platform == "win32" else []
+# The speed check measures peak memory with the POSIX ``resource`` module and
+# runs on a Linux runner only, so its tests are not collected on Windows either.
+POSIX_ONLY_TESTS = ["test_bench.py"]
+collect_ignore = (
+    LIVE_CAPTURE_TESTS + POSIX_ONLY_TESTS if sys.platform == "win32" else []
+)
 
 
 @pytest.fixture(scope="module")

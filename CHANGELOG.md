@@ -1034,6 +1034,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Reading a `.dbn.zst` file closes it on Python 3.14** (#416). From 3.14
+  databento decompresses with the standard library, whose reader leaves the
+  file it wraps open, so `read_mbo_frame` leaked one file handle per
+  compressed file. It now closes the file itself.
+
 - **A Databento file with records after an unrepaired gap warns, and `audit`
   says so.** Databento marks the records after a gap it could not repair with
   `F_MAYBE_BAD_BOOK`. The loader counted them in a loguru message, which the

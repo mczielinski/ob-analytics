@@ -1146,13 +1146,21 @@ class TestDbnFiles:
     @pytest.mark.parametrize("name", ["window.mbo.dbn", "window.mbo.dbn.zst"])
     def test_reading_a_file_closes_it(self, tmp_path, name):
         import gc
+        import sys
         import warnings
 
-        import zstandard
+        # databento needs zstandard only before Python 3.14, which has zstd in
+        # the standard library.
+        if sys.version_info >= (3, 14):
+            from compression.zstd import compress
+        else:
+            from zstandard import ZstdCompressor
+
+            compress = ZstdCompressor().compress
 
         data = dbn_bytes(LIFECYCLE)
         if name.endswith(".zst"):
-            data = zstandard.ZstdCompressor().compress(data)
+            data = compress(data)
         path = tmp_path / name
         path.write_bytes(data)
 

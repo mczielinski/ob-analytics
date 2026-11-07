@@ -299,9 +299,7 @@ def read_mbo_frame(source: Any) -> pd.DataFrame:
             frame = _mbo_records(store)
         finally:
             if opened:
-                # A store has no close of its own; its reader is the open file
-                # (or a decompressor that closes the file with it).
-                store.reader.close()
+                _close_dbn(store)
 
     validate_columns(frame, _REQUIRED_MBO_COLUMNS, "DatabentoLoader: MBO frame")
     return frame
@@ -334,6 +332,22 @@ def _open_dbn(path: Any) -> Any:
         ) from exc
 
     return db.DBNStore.from_file(Path(path))
+
+
+def _close_dbn(store: Any) -> None:
+    """Close the file a ``DBNStore`` from :func:`_open_dbn` holds open.
+
+    A store has no close of its own. Closing its ``reader`` is not enough for
+    a compressed file: from Python 3.14 databento decompresses with the
+    standard library's ``ZstdFile``, which leaves the file it wraps open. So
+    close the file itself, which the store's data source holds. If a databento
+    version has no such attribute, fall back to closing the reader.
+    """
+    data_source = getattr(store, "_data_source", None)
+    if data_source is not None:
+        data_source.reader.close()
+    else:
+        store.reader.close()
 
 
 # ── DatabentoLoader ───────────────────────────────────────────────────
