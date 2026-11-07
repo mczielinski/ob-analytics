@@ -1,14 +1,20 @@
 """Generic registry — the single plumbing primitive for pluggable surfaces.
 
-One :class:`Registry` instance per pluggable surface (formats, writers,
-capturers, renderers), so every surface shares the same lookup rules and
-error messages.
+One :class:`Registry` instance per pluggable surface (sources, metrics, bar
+rules, features, writers, renderers), so every surface shares the same lookup
+rules and error messages.  :func:`load_plugins` is the one way any of them
+discovers plug-ins that other packages advertise through entry points.
 """
 
 from __future__ import annotations
 
 import builtins
+import warnings
+from collections.abc import Callable
+from importlib.metadata import EntryPoint, entry_points
 from typing import Any, Generic, TypeVar
+
+from loguru import logger
 
 K = TypeVar("K")
 V = TypeVar("V")
@@ -59,3 +65,47 @@ class Registry(Generic[K, V]):
     @staticmethod
     def _normalize(key: Any) -> Any:
         return key.lower() if isinstance(key, str) else key
+
+
+#: The entry-point groups already scanned in this process.
+_loaded_groups: set[str] = set()
+
+
+def load_plugins(
+    group: str, register: Callable[[EntryPoint], str], *, force: bool = False
+) -> list[str]:
+    """Register every plug-in advertised under the entry-point *group*.
+
+    *register* is called once per entry point.  It loads what the entry point
+    names, registers it, and returns the name it registered.  Each registry
+    supplies its own *register*, because what an entry point names differs: a
+    class, an instance to construct, or a module to import later.
+
+    The scan runs once per group per process unless *force* is set.  A
+    plug-in that fails to load or register is skipped with a warning, so one
+    broken package cannot stop the rest from loading.
+
+    Returns
+    -------
+    list of str
+        The names this call registered.
+    """
+    if group in _loaded_groups and not force:
+        return []
+
+    registered: list[str] = []
+    for ep in entry_points(group=group):
+        try:
+            name = register(ep)
+        except Exception as exc:  # noqa: BLE001 - one bad plug-in must not break the rest
+            warnings.warn(
+                f"Skipped the plug-in {ep.name!r} ({ep.value}) in the entry-point "
+                f"group {group!r}: it failed to load: {exc!r}",
+                stacklevel=2,
+            )
+            continue
+        registered.append(name)
+        logger.debug("Registered plug-in {!r} from entry-point group {!r}", name, group)
+
+    _loaded_groups.add(group)
+    return registered

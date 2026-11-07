@@ -31,6 +31,7 @@ from matplotlib.font_manager import FontProperties
 from matplotlib.lines import Line2D
 from matplotlib.patches import FancyBboxPatch, Patch
 
+from ob_analytics.protocols import Level
 from ob_analytics.visualization._data import (
     NO_DEPTH_NOTICE,
     book_bar_thickness,
@@ -39,6 +40,7 @@ from ob_analytics.visualization._data import (
     l1_card_texts,
 )
 from ob_analytics.visualization._palette import Palette
+from ob_analytics.visualization._renderers import RENDERERS
 from ob_analytics.visualization._theme import DEFAULT_THEME, PlotTheme
 
 # ---------------------------------------------------------------------------
@@ -2300,14 +2302,6 @@ def mpl_trading_halts(
     return fig
 
 
-# ---------------------------------------------------------------------------
-# Renderer self-registration
-# ---------------------------------------------------------------------------
-# Imported here (not at module top) so RENDERERS -- defined in the package
-# __init__ -- already exists when this module is imported during package init.
-from ob_analytics.visualization import RENDERERS, Level
-
-
 @_themed
 def mpl_bars(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -2403,6 +2397,9 @@ def mpl_bars(
     return fig
 
 
+# ---------------------------------------------------------------------------
+# Renderer self-registration
+# ---------------------------------------------------------------------------
 # (concept, level, renderer).  L2 = aggregate per price level; analytics carry
 # no level and register at ``None``.  The level is a registry *coordinate*, not
 # a name suffix -- L3 faces register the same concept at ``Level.L3``.

@@ -21,12 +21,11 @@ import pandas as pd
 import pytest
 
 from ob_analytics.visualization import (
-    _BACKEND_MODULES,
     RENDERERS,
     Level,
-    _load_backend,
     register_plot_backend,
 )
+from ob_analytics.visualization._renderers import _BACKEND_MODULES, _load_backend
 from ob_analytics.visualization.gallery import (
     VIEWS,
     GalleryModel,

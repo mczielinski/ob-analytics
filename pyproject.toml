@@ -49,14 +49,29 @@ databento = [
 [project.scripts]
 ob-analytics = "ob_analytics.cli:main"
 
-# Third-party data sources advertise themselves here so they load without any
-# edit to ob-analytics; ob_analytics.sources.load_source_plugins() discovers
-# this group at import time. Each value points to a Source class, e.g.:
+# Plug-ins in other packages advertise themselves under these entry-point
+# groups, so they load without any edit to ob-analytics. One loader in
+# ob_analytics._registry scans each group: at `import ob_analytics` for the
+# first five, and at `import ob_analytics.visualization` for plot backends.
+# In a plug-in package's own pyproject.toml, for example:
 #   [project.entry-points."ob_analytics.sources"]
 #   coinbase = "my_package.coinbase:CoinbaseSource"
-# The built-in sources (bitstamp, lobster, depth_csv, ccxt, cryptofeed)
-# self-register on import and are intentionally not listed here.
+# A source or writer entry names the class or factory to register under the
+# entry-point name; a metric, bar rule or feature entry names a class that is
+# constructed with no arguments and registered under its own `name`; a plot
+# backend entry names the module that registers its renderers, imported on
+# first use. The built-ins register on import and are not listed here.
 [project.entry-points."ob_analytics.sources"]
+
+[project.entry-points."ob_analytics.metrics"]
+
+[project.entry-points."ob_analytics.bar_rules"]
+
+[project.entry-points."ob_analytics.features"]
+
+[project.entry-points."ob_analytics.writers"]
+
+[project.entry-points."ob_analytics.plot_backends"]
 
 [project.urls]
 Homepage = "https://github.com/mczielinski/ob-analytics"

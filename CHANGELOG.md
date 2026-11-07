@@ -10,6 +10,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Every registry loads plug-ins from entry points** (#403). Bar rules,
+  features, writers and plot backends now load from the entry-point groups
+  `ob_analytics.bar_rules`, `ob_analytics.features`, `ob_analytics.writers`
+  and `ob_analytics.plot_backends`, as sources and metrics already did. One
+  loader serves all six groups, and `load_bar_rule_plugins`,
+  `load_feature_plugins`, `load_writer_plugins` and
+  `load_plot_backend_plugins` re-scan a group. A plug-in that fails to load
+  is now skipped with a `UserWarning`, not a log message that is off by
+  default. The renderer registry moved to `visualization._renderers`, which
+  removes an import cycle that depended on line order.
+
 - **`InstrumentGrid` and `DepthCsvSettings`** (#348). A source states the tick
   and lot size its data is usually on as `grid`, an `InstrumentGrid`, read
   with `protocols.grid_of`; a run's config starts from it, and a field the

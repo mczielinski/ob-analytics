@@ -5,7 +5,7 @@ discovered and registered through the ``ob_analytics.sources`` entry-point
 group, with **no edit to ob-analytics**, and then drives the pipeline like any
 built-in.  The "third-party package" is stood up here by monkeypatching
 ``importlib.metadata.entry_points`` so the test stays offline and needs no real
-install.
+install.  The loader every registry shares is tested in ``test_plugins.py``.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from ob_analytics import sources
+from ob_analytics import _registry, sources
 from ob_analytics.config import PipelineConfig, SourceSettings
 from ob_analytics.pipeline import Pipeline
 from ob_analytics.protocols import FeedType, Level, OfflineSource, RunContext, Source
@@ -80,7 +80,7 @@ def _restore_registry():
 @pytest.fixture
 def discovered_plugin(monkeypatch, _restore_registry):
     """Discover the fake plug-in through the (monkeypatched) entry points."""
-    monkeypatch.setattr(sources, "entry_points", _fake_entry_points)
+    monkeypatch.setattr(_registry, "entry_points", _fake_entry_points)
     registered = sources.load_source_plugins(force=True)
     assert "faketest" in registered
     return registered
@@ -114,30 +114,3 @@ class TestEntryPointDiscovery:
         result = Pipeline.from_source("faketest").run(tmp_path)
         assert result.level is Level.L2
         assert len(result.depth) == 2
-
-    def test_idempotent_scan_is_a_noop_without_force(self, monkeypatch):
-        # After a scan, a second call without force re-registers nothing.
-        monkeypatch.setattr(sources, "_plugins_loaded", True)
-        monkeypatch.setattr(sources, "entry_points", _fake_entry_points)
-        assert sources.load_source_plugins() == []
-
-    def test_broken_plugin_is_skipped_not_fatal(self, monkeypatch, _restore_registry):
-        class _BrokenEP:
-            name = "broken"
-            value = "nope:Nope"
-
-            def load(self):
-                raise ImportError("no such module")
-
-        def _eps(*, group=None):
-            return (
-                [_BrokenEP(), _FakeEntryPoint()]
-                if group == sources.ENTRY_POINT_GROUP
-                else []
-            )
-
-        monkeypatch.setattr(sources, "entry_points", _eps)
-        registered = sources.load_source_plugins(force=True)
-        # The good one still loads; the broken one is logged and skipped.
-        assert "faketest" in registered
-        assert "broken" not in registered

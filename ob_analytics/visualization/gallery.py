@@ -36,18 +36,20 @@ from ob_analytics._utils import (
 from ob_analytics.analytics import order_book
 from ob_analytics.depth import get_spread, price_level_snapshots
 from ob_analytics.pipeline import PipelineResult
+from ob_analytics.protocols import Level
 from ob_analytics.visualization import (
-    _BACKEND_MODULES,
-    RENDERERS,
-    Level,
     PlotTheme,
     _data as _viz_data,
-    _kind_text,
-    _load_backend,
-    _same_kind,
     infer_volume_scale,
     plot,
     save_figure,
+)
+from ob_analytics.visualization._renderers import (
+    _BACKEND_MODULES,
+    RENDERERS,
+    _kind_text,
+    _load_backend,
+    _same_kind,
 )
 
 #: Views recognised by :func:`generate_gallery` / :func:`_project`.
