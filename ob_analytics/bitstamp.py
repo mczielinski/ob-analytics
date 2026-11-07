@@ -26,12 +26,12 @@ from ob_analytics._utils import (
     attach_ingest_seq,
     datetime_to_epoch,
     empty_trades,
-    epoch_to_datetime,
+    epoch_ns,
     lots_to_size,
     price_to_ticks,
     size_to_lots,
     ticks_to_price,
-    validate_columns,
+    to_utc_ns,
     validate_non_empty,
 )
 from ob_analytics.config import InstrumentGrid, PipelineConfig, SourceSettings
@@ -54,6 +54,7 @@ from ob_analytics.schemas import (
     cast_columns,
     cast_events,
     unsized_order_ids,
+    validate_columns,
 )
 
 if TYPE_CHECKING:
@@ -160,8 +161,8 @@ class BitstampLoader:
         events["volume"] = size_to_lots(events["volume"], self._config.lot_size)
         events["price"] = price_to_ticks(events["price"], self._config.tick_size)
 
-        events["timestamp"] = epoch_to_datetime(events["timestamp"], _TIMESTAMP_UNIT)
-        events["exchange_timestamp"] = epoch_to_datetime(
+        events["timestamp"] = to_utc_ns(events["timestamp"], _TIMESTAMP_UNIT)
+        events["exchange_timestamp"] = to_utc_ns(
             events["exchange_timestamp"], _TIMESTAMP_UNIT
         )
         events["action"] = events["action"].astype(ACTION_DTYPE)
@@ -216,7 +217,7 @@ class BitstampLoader:
         # dominated load time (~19s on the bundled sample).  The lexsort key
         # is the raw UTC-ns int64; the tz-aware column is reordered through
         # its ExtensionArray so the zone and unit survive (issue #154).
-        ts_i8 = events["timestamp"].astype("int64").to_numpy()
+        ts_i8 = epoch_ns(events["timestamp"])
         order = np.lexsort((ts_i8, events["id"].to_numpy()))
         events["timestamp"] = events["timestamp"].array[order]
 
@@ -333,7 +334,7 @@ class BitstampTradeReader:
 
         # Capture timestamps are epoch milliseconds; keep them on the shared
         # tz-aware UTC nanosecond clock (issue #154).
-        recv_ms = epoch_to_datetime(raw["timestamp"], _TIMESTAMP_UNIT)
+        recv_ms = to_utc_ns(raw["timestamp"], _TIMESTAMP_UNIT)
         # Trade sizes share the events' integer-lot grid (issue #226), so the
         # fill matching below compares exact integers rather than rounded
         # floats.

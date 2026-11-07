@@ -46,9 +46,9 @@ from typing import Any
 
 import pandas as pd
 
-from ob_analytics import sample_csv_path
+from ob_analytics import pipeline, sample_csv_path
 from ob_analytics._engine_frames import to_order_events
-from ob_analytics.analytics import order_aggressiveness, set_order_types
+from ob_analytics.analytics import set_order_types
 from ob_analytics.bitstamp import BitstampLoader, BitstampTradeReader
 from ob_analytics.config import PipelineConfig
 from ob_analytics.depth import depth_metrics, price_level_volume
@@ -115,26 +115,26 @@ class Regression:
 
 STAGES: tuple[str, ...] = (
     "load",
-    "set_order_types",
-    "price_level_volume",
-    "depth_metrics",
-    "order_aggressiveness",
+    *(name for name, _ in pipeline.STAGES),
     "queue_positions",
 )
 """The stages of a run, in the order the pipeline runs them.
 
-``load`` covers reading events and trades off the source.  ``queue_positions``
-is the engine's FIFO reconstruction: not part of ``Pipeline.run``, but the
-stateful loop that #138 would compile, so it needs a number of its own.
+The middle ones are the pipeline's own (``ob_analytics.pipeline.STAGES``), run
+as ``Pipeline.run`` runs them.  ``load`` covers reading events and trades off
+the source.  ``queue_positions`` is the engine's FIFO reconstruction: not part
+of ``Pipeline.run``, but the stateful loop that #138 would compile, so it needs
+a number of its own.
 """
 
 
 Load = Callable[[], tuple[pd.DataFrame, pd.DataFrame]]
+Step = Callable[[], None]
 
 
 def _stages(
     load: Load, config: PipelineConfig
-) -> tuple[dict[str, Any], list[tuple[str, Callable[[], None]]]]:
+) -> tuple[dict[str, Any], list[tuple[str, Step]]]:
     """One run as a list of named steps over shared state.
 
     Each call builds a fresh chain, so a pass can be run again from the start
@@ -145,29 +145,15 @@ def _stages(
     def _load() -> None:
         state["events"], state["trades"] = load()
 
-    def _set_order_types() -> None:
-        state["events"] = set_order_types(state["events"], state["trades"])
-
-    def _price_level_volume() -> None:
-        state["depth"] = price_level_volume(state["events"])
-
-    def _depth_metrics() -> None:
-        state["depth_summary"] = depth_metrics(
-            state["depth"], bps=config.depth_bps, bins=config.depth_bins
-        )
-
-    def _order_aggressiveness() -> None:
-        state["events"] = order_aggressiveness(state["events"], state["depth_summary"])
-
     def _queue_positions() -> None:
         queue_positions(to_order_events(state["events"], market=True))
 
+    def _stage(stage: Callable[[dict[str, Any], PipelineConfig], None]) -> Step:
+        return lambda: stage(state, config)
+
     steps = (
         _load,
-        _set_order_types,
-        _price_level_volume,
-        _depth_metrics,
-        _order_aggressiveness,
+        *(_stage(stage) for _, stage in pipeline.STAGES),
         _queue_positions,
     )
     return state, list(zip(STAGES, steps, strict=True))

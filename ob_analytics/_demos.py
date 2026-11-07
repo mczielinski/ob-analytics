@@ -33,15 +33,6 @@ from ob_analytics.visualization.gallery import (
 # ---------------------------------------------------------------------------
 
 
-def _result_dict(result: PipelineResult) -> dict[str, pd.DataFrame]:
-    return {
-        "events": result.events,
-        "trades": result.trades,
-        "depth": result.depth,
-        "depth_summary": result.depth_summary,
-    }
-
-
 def _cost_panels(result: PipelineResult) -> list[PlotSpec]:
     """The transaction-cost panel, when the run has trades and quotes to use.
 
@@ -69,8 +60,8 @@ def _save_and_gallery(
     of the bars panel every demo shows.
     """
     parquet_dir = output_dir / "parquet"
-    # Tag each Parquet file with the run's tick size (issue #155).
-    save_data(_result_dict(result), parquet_dir, config=result.config)
+    # Each Parquet file records the run's config, tick and lot size included.
+    save_data(result, parquet_dir)
     logger.info("Parquet saved to: {}", parquet_dir)
 
     panels = list(analytics or [])
@@ -191,18 +182,14 @@ def run_bitstamp_demo(
     pipeline = Pipeline(source=BitstampSource())
     result = pipeline.run(str(orders_path))
 
-    logger.info("Events: {:,}", len(result.events))
-    logger.info("Trades: {:,}", len(result.trades))
-    logger.info("Depth:  {:,}", len(result.depth))
-
     if roundtrip:
         rt_dir = out / "roundtrip"
         rt_dir.mkdir(parents=True, exist_ok=True)
         rt_csv = rt_dir / "orders.csv"
         # BitstampWriter emits the companion trades.csv from the "trades"
-        # frame in _result_dict, so no separate shim is needed here.  Pass the
-        # run's config so ticks convert back on the run's grid (issue #155).
-        save_data(_result_dict(result), rt_csv, writer=BitstampWriter(result.config))
+        # table, so no separate shim is needed here.  Pass the run's config so
+        # ticks convert back on the run's grid (issue #155).
+        save_data(result, rt_csv, writer=BitstampWriter(result.config))
         rt = Pipeline(source=BitstampSource()).run(str(rt_csv))
         logger.info(
             "Round-trip events: {} (match: {})",
@@ -249,10 +236,6 @@ def run_lobster_demo(
     # The run's own loader, so its trading halts can be read after the run.
     loader = LobsterLoader(trading_date=trading_date)
     result = Pipeline(source=LobsterSource(), loader=loader).run(str(src))
-
-    logger.info("Events: {:,}", len(result.events))
-    logger.info("Trades: {:,}", len(result.trades))
-    logger.info("Depth:  {:,}", len(result.depth))
 
     # LOBSTER halts are not part of the slim PipelineResult; read them off the
     # loader and append them to the gallery model's analytics.

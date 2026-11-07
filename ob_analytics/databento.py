@@ -102,12 +102,13 @@ from ob_analytics._utils import (
     UTC_NS_DTYPE,
     attach_ingest_seq,
     empty_trades,
-    epoch_to_datetime,
+    epoch_ns,
     lots_to_size,
     off_tick_grid,
     price_to_ticks,
     size_to_lots,
     ticks_to_price,
+    to_utc_ns,
 )
 from ob_analytics.config import InstrumentGrid, PipelineConfig, SourceSettings
 from ob_analytics.exceptions import ConfigError
@@ -129,6 +130,7 @@ from ob_analytics.schemas import (
     attach_instrument_identity,
     cast_columns,
     cast_events,
+    validate_columns,
 )
 
 # ── DBN constants ─────────────────────────────────────────────────────
@@ -301,12 +303,7 @@ def read_mbo_frame(source: Any) -> pd.DataFrame:
                 # (or a decompressor that closes the file with it).
                 store.reader.close()
 
-    missing = [c for c in _REQUIRED_MBO_COLUMNS if c not in frame.columns]
-    if missing:
-        raise ConfigError(
-            f"DatabentoLoader: MBO frame is missing required columns {missing}. "
-            f"Present: {list(frame.columns)}"
-        )
+    validate_columns(frame, _REQUIRED_MBO_COLUMNS, "DatabentoLoader: MBO frame")
     return frame
 
 
@@ -526,8 +523,8 @@ class DatabentoLoader:
                 "id": order_id,
                 "raw_price": raw["price"].astype("int64").to_numpy(),
                 "raw_size": raw["size"].astype("int64").to_numpy(),
-                "timestamp": _as_utc_ns(raw["ts_recv"]),
-                "exchange_timestamp": _as_utc_ns(raw["ts_event"]),
+                "timestamp": to_utc_ns(raw["ts_recv"]),
+                "exchange_timestamp": to_utc_ns(raw["ts_event"]),
             }
         )
         if "sequence" in raw.columns:
@@ -634,17 +631,6 @@ def _usable_records(work: pd.DataFrame) -> pd.DataFrame:
     if keep.all():
         return work
     return work[keep].reset_index(drop=True)
-
-
-def _as_utc_ns(series: pd.Series) -> pd.Series:
-    """Return *series* as the canonical tz-aware UTC nanosecond clock.
-
-    ``DBNStore.to_df`` already hands back tz-aware datetimes; a frame built
-    from CSV or JSON carries the same instants as integer nanoseconds.
-    """
-    if pd.api.types.is_integer_dtype(series):
-        return epoch_to_datetime(series, "ns")
-    return pd.to_datetime(series, utc=True).astype(UTC_NS_DTYPE)
 
 
 def _reject_aggregated_records(raw: pd.DataFrame) -> None:
@@ -1448,8 +1434,8 @@ class DatabentoWriter:
         size_raw = _whole_units(removed, cfg.lot_size, "volume")
         fill_raw = _whole_units(fill, cfg.lot_size, "fill")
 
-        ts_recv = events["timestamp"].astype("int64").to_numpy()
-        ts_event = events["exchange_timestamp"].astype("int64").to_numpy()
+        ts_recv = epoch_ns(events["timestamp"])
+        ts_event = epoch_ns(events["exchange_timestamp"])
         order_id = events["id"].to_numpy()
         side = events["direction"].astype(str).map(_DIRECTION_TO_SIDE).to_numpy()
 
@@ -1542,7 +1528,7 @@ def _resting_rows(
     # the other orders' rows there: the makers it took must leave the book
     # before it rests.  Its own rows keep their order, so a cancel of what it
     # had left still follows its ``A``.
-    when = rows["timestamp"].astype("int64").to_numpy()
+    when = epoch_ns(rows["timestamp"])
     kept_order = rows["id"].to_numpy()
     joined_at = (
         pd.Series(np.where(joins, when, np.nan)).groupby(kept_order).transform("max")

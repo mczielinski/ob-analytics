@@ -431,9 +431,7 @@ def save_data(
         writer registered via :func:`register_writer` is also resolved by name.
     writer : DataWriter, optional
         A pre-constructed writer instance.  When provided, *fmt* is
-        ignored and the writer is used directly.  This is the preferred
-        path when saving from a :class:`Pipeline` that already holds a
-        configured writer.
+        ignored and the writer is used directly.
     config, ctx
         Forwarded to a registered writer factory when ``fmt`` names one.
         The ``"parquet"`` writer records *config* in each file, so the files
@@ -449,7 +447,7 @@ def save_data(
     if isinstance(lob_data, PipelineResult):
         if config is None:
             config = lob_data.config
-        lob_data = lob_data._frames()
+        lob_data = lob_data.tables()
     # Every writer is handed the same payload: a mapping of pandas frames that
     # can also produce canonical Arrow (#216).  It is a dict, so a writer that
     # ignores the extra sees exactly what it saw before.

@@ -131,6 +131,7 @@ type, unit, nullability, and meaning for every table — is in ``docs/schema.md`
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
@@ -771,12 +772,17 @@ def group_by_instrument(df: pd.DataFrame) -> DataFrameGroupBy:
     return df.groupby(keys, dropna=False, observed=True)
 
 
-def _require(df: pd.DataFrame, cols: tuple[str, ...], who: str) -> None:
-    missing = [c for c in cols if c not in df.columns]
+def validate_columns(
+    df: pd.DataFrame,
+    required: Iterable[str],
+    context: str,
+) -> None:
+    """Raise :class:`ConfigError` if *required* columns are missing."""
+    missing = set(required) - set(df.columns)
     if missing:
         raise ConfigError(
-            f"{who}: DataFrame is missing required columns {missing}. "
-            f"Present: {list(df.columns)}"
+            f"{context}: missing required columns {sorted(missing)}. "
+            f"Available columns: {sorted(df.columns)}"
         )
 
 
@@ -811,17 +817,17 @@ def _describe(dtype: object) -> str:
 def validate_events_df(df: pd.DataFrame) -> None:
     """Raise :class:`ConfigError` unless *df* has all :data:`EVENT_COLUMNS`,
     each column named in :data:`EVENT_DTYPES` with its dtype."""
-    _require(df, EVENT_COLUMNS, "validate_events_df")
+    validate_columns(df, EVENT_COLUMNS, "validate_events_df")
     _require_dtypes(df, EVENT_DTYPES, "validate_events_df", text_ok=("id",))
 
 
 def validate_trades_df(df: pd.DataFrame) -> None:
     """Raise :class:`ConfigError` unless *df* has all :data:`TRADE_COLUMNS`,
     each column named in :data:`TRADE_DTYPES` with its dtype."""
-    _require(df, TRADE_COLUMNS, "validate_trades_df")
+    validate_columns(df, TRADE_COLUMNS, "validate_trades_df")
     _require_dtypes(df, TRADE_DTYPES, "validate_trades_df")
 
 
 def validate_depth_df(df: pd.DataFrame) -> None:
     """Raise :class:`ConfigError` unless *df* has all :data:`DEPTH_COLUMNS`."""
-    _require(df, DEPTH_COLUMNS, "validate_depth_df")
+    validate_columns(df, DEPTH_COLUMNS, "validate_depth_df")
