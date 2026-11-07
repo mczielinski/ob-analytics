@@ -79,15 +79,59 @@ def tick_multiplier(tick_size: float) -> int | None:
     return None
 
 
+def finite_floats(values: object, what: str, where: str | None = None) -> np.ndarray:
+    """Return *values* as a ``float64`` array, refusing any that is not a number.
+
+    *values* is a scalar or any array-like, such as a column read from a CSV
+    file, where an empty cell is NaN and a word is a string.  *what* names the
+    values in the message (``"price"``, ``"size"``) and *where* names the file
+    or reader they came from.  Rows are counted from 1 in the order of
+    *values*; a two-dimensional array counts its first axis as rows.
+
+    Raises
+    ------
+    ConfigError
+        If a value is empty, not a number, or not finite (NaN or infinity).
+        The message gives the number of such rows and the first one.
+    """
+    try:
+        arr = np.asarray(values, dtype=np.float64)
+        given = arr
+    except (TypeError, ValueError):
+        # Text in a number column: show the text the file holds, not NaN.
+        given = np.asarray(values, dtype=object)
+        coerced = pd.to_numeric(given.ravel(), errors="coerce")
+        arr = np.asarray(coerced, dtype=np.float64).reshape(given.shape)
+    bad = ~np.isfinite(arr)
+    if bad.any():
+        bad_rows = bad.reshape(bad.shape[0], -1).any(axis=1) if bad.ndim > 1 else bad
+        first_row = int(np.argmax(bad_rows.ravel())) + 1
+        example = given.ravel()[int(np.argmax(bad.ravel()))]
+        if isinstance(example, np.generic):
+            example = example.item()  # nan, not np.float64(nan)
+        prefix = f"{where}: " if where else ""
+        raise ConfigError(
+            f"{prefix}{int(bad_rows.sum())} of {bad_rows.size} row(s) have a "
+            f"{what} that is empty or not a finite number; the first is row "
+            f"{first_row} ({what} {example!r})."
+        )
+    return arr
+
+
 def price_to_ticks(price: object, tick_size: float) -> np.ndarray:
     """Convert quote-currency *price* to an ``int64`` whole number of ticks.
 
     ``ticks = round(price / tick_size)``, computed through an exact integer
     multiplier when the tick has one (:func:`tick_multiplier`) so the default
     grid reproduces the engine's former internal integers exactly.  *price* is
-    any array-like of finite floats (a price column is non-null by contract).
+    any array-like of numbers (a price column is non-null by contract).
+
+    Raises
+    ------
+    ConfigError
+        If a price is empty or not a finite number (:func:`finite_floats`).
     """
-    arr = np.asarray(price, dtype=np.float64)
+    arr = finite_floats(price, "price")
     multiplier = tick_multiplier(tick_size)
     ticks = (
         np.round(arr * multiplier)
@@ -209,24 +253,24 @@ def size_to_lots(size: object, lot_size: float) -> np.ndarray:
 
     ``lots = round(size / lot_size)``, through an exact integer multiplier when
     the lot has one (:func:`lot_multiplier`).  *size* is any array-like of
-    finite non-negative floats (a volume column is non-null and non-negative by
+    non-negative numbers (a volume column is non-null and non-negative by
     contract).
 
     Raises
     ------
     ConfigError
-        If a size is too large to count in ``int64`` lots of *lot_size*.  At
-        the default lot of ``1e-8`` the largest size is about ``9.2e10``.
+        If a size is empty or not a finite number (:func:`finite_floats`), or
+        too large to count in ``int64`` lots of *lot_size*.  At the default lot
+        of ``1e-8`` the largest size is about ``9.2e10``.
     """
-    arr = np.asarray(size, dtype=np.float64)
+    arr = finite_floats(size, "size")
     multiplier = lot_multiplier(lot_size)
     lots = (
         np.round(arr * multiplier)
         if multiplier is not None
         else np.round(arr / lot_size)
     )
-    # float(2**63) is exact, and every float below it fits in int64.  A NaN is
-    # left to the caller, as before.
+    # float(2**63) is exact, and every float below it fits in int64.
     # max and min, not abs: no second array the length of the column.
     if lots.size and (lots.max() >= _INT64_LIMIT or lots.min() <= -_INT64_LIMIT):
         too_large = np.abs(lots) >= _INT64_LIMIT

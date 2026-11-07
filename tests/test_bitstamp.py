@@ -159,6 +159,43 @@ class TestBitstampTradeReader:
             pass
 
 
+class TestNotANumber:
+    """A price or size that is empty or a word is refused, naming the file,
+    the number of rows and the first one (#397)."""
+
+    @staticmethod
+    def _spoil(source: Path, target: Path, column: str, bad: str | None) -> Path:
+        frame = pd.read_csv(source)
+        frame[column] = frame[column].astype(object)
+        frame.loc[2, column] = bad
+        frame.to_csv(target, index=False)
+        return target
+
+    @pytest.mark.parametrize("column", ["price", "volume"])
+    @pytest.mark.parametrize("bad", [None, "abc"])
+    def test_an_order_row(self, tiny_bitstamp_orders_csv, tmp_path, column, bad):
+        orders = self._spoil(
+            tiny_bitstamp_orders_csv, tmp_path / "orders.csv", column, bad
+        )
+        with pytest.raises(ConfigError, match=r"orders\.csv\): 1 of \d+ row.*row 3"):
+            BitstampLoader().load(orders)
+
+    @pytest.mark.parametrize("column", ["price", "amount"])
+    @pytest.mark.parametrize("bad", [None, "abc"])
+    def test_a_trade_row(self, tiny_bitstamp_orders_csv, tmp_path, column, bad):
+        events = BitstampLoader().load(tiny_bitstamp_orders_csv)
+        orders = tmp_path / "orders.csv"
+        orders.write_bytes(tiny_bitstamp_orders_csv.read_bytes())
+        self._spoil(
+            tiny_bitstamp_orders_csv.parent / "trades.csv",
+            tmp_path / "trades.csv",
+            column,
+            bad,
+        )
+        with pytest.raises(ConfigError, match=r"trades\.csv\): 1 of \d+ row.*row 3"):
+            BitstampTradeReader().load(events, orders)
+
+
 class TestTradeReaderOrderIdTypes:
     """The reader keys maker/taker attribution on the order id. Bitstamp
     publishes integers, but the same schema carries captures from venues that

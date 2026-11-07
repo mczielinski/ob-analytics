@@ -65,6 +65,7 @@ from ob_analytics._utils import (
     datetime_to_epoch,
     empty_trades,
     epoch_to_datetime,
+    finite_floats,
     lots_to_size,
     off_tick_grid,
     price_to_ticks,
@@ -179,10 +180,10 @@ def _to_ticks_on_grid(
     default 0.01 grid becomes 0.04.  A price-level CSV does not carry its own
     tick size, so a wrong one is easy to pass and cannot be seen afterwards.
     """
-    quote = raw_price.astype(float) / price_divisor
-    off_grid = off_tick_grid(quote.to_numpy(), cfg.tick_size)
+    quote = finite_floats(raw_price, "price", where) / price_divisor
+    off_grid = off_tick_grid(quote, cfg.tick_size)
     if off_grid.any():
-        example = float(quote.to_numpy()[off_grid][0])
+        example = float(quote[off_grid][0])
         raise ConfigError(
             f"{where}: {int(off_grid.sum())} price(s) are not whole multiples "
             f"of tick_size={cfg.tick_size!r} (for example {example!r}). Set the "
@@ -203,7 +204,7 @@ def _to_lots(raw_size: pd.Series, cfg: PipelineConfig, where: str) -> np.ndarray
     two lots means the recorded step is wrong, and the rounded size is not the
     venue's.  A size too large for ``int64`` lots raises ``ConfigError``.
     """
-    size = raw_size.astype(float).to_numpy()
+    size = finite_floats(raw_size, "size", where)
     off_grid = off_tick_grid(size, cfg.lot_size)
     if off_grid.any():
         warnings.warn(

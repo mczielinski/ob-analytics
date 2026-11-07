@@ -343,6 +343,54 @@ class TestRedact:
         text = json.dumps({"key": FAKE_KEY, "pem": FAKE_PEM})
         assert redact(text) == json.dumps({"key": MASK, "pem": MASK})
 
+    def test_a_one_line_key_file_is_redacted_with_and_without_its_newline(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # #397: the newline an editor adds is not part of the key.
+        key = "file-key-3c9e0b7d42a16f58"
+        path = tmp_path / "key.txt"
+        path.write_text(key + "\n")
+        monkeypatch.setenv(KEY_FILE_ENV, str(path))
+
+        settings = _KeyedSettings()
+
+        assert settings.private_key == SecretStr(key)
+        assert redact(f"key={key}&n=1") == f"key={MASK}&n=1"
+        assert redact(f"{key}\n") == f"{MASK}\n"
+
+    def test_a_pem_key_file_is_redacted_whole_and_line_by_line(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # #397: a PEM key is kept as the file holds it, and each long line of
+        # its body is found on its own.
+        body = [
+            "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgFAKEFAKEFAKEFAKE",
+            "hRANCAAQFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE",
+            "Zk8=",
+        ]
+        pem = (
+            "-----BEGIN PRIVATE KEY-----\n"
+            + "\n".join(body)
+            + "\n-----END PRIVATE KEY-----\n"
+        )
+        path = tmp_path / "key.pem"
+        path.write_text(pem)
+        monkeypatch.setenv(KEY_FILE_ENV, str(path))
+
+        settings = _KeyedSettings()
+
+        assert settings.private_key == SecretStr(pem)
+        assert redact(pem) == MASK
+        assert redact(pem.rstrip("\n")) == MASK
+        # Another line ending: every long line of the body is still found.
+        crlf = pem.replace("\n", "\r\n")
+        assert body[0] not in redact(crlf)
+        assert body[1] not in redact(crlf)
+        assert redact(f"error: {body[1]}") == f"error: {MASK}"
+        # The armour lines and a line too short to be a secret are left alone.
+        assert redact("-----BEGIN PRIVATE KEY-----") == "-----BEGIN PRIVATE KEY-----"
+        assert redact("Zk8=") == "Zk8="
+
 
 # ---------------------------------------------------------------------------
 # The whole capture, through the CLI

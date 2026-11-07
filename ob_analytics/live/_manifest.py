@@ -160,9 +160,25 @@ class Segment:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Segment:
+        """Build a segment from its manifest entry.
+
+        Raises :class:`ValueError` when ``name`` is not one plain directory
+        name: a name such as ``..`` or ``a/b`` would make a reader of the
+        capture leave its directory.
+        """
+        name = d["name"]
+        if (
+            not isinstance(name, str)
+            or name in ("", ".", "..")
+            or any(c in name for c in ("/", "\\", "\0"))
+        ):
+            raise ValueError(
+                f"capture manifest segment name {name!r} is not one plain "
+                "directory name"
+            )
         reason = d.get("end_reason")
         return cls(
-            name=d["name"],
+            name=name,
             started=pd.Timestamp(d["started"]),
             ended=_ts(d.get("ended")),
             stream_started=_ts(d.get("stream_started")),

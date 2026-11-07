@@ -40,6 +40,9 @@ chmod 600 ~/.config/venue/private-key.pem
 export VENUE_PRIVATE_KEY_PATH=~/.config/venue/private-key.pem
 ```
 
+A key file of one line is read without the spaces and newline around the key.
+A key file of several lines, such as a PEM file, is read as it is.
+
 If a key is missing, the capture stops before it creates the output directory.
 The error names each variable to set and where the venue issues keys. A key
 shorter than eight characters is refused, since no venue issues one that short:

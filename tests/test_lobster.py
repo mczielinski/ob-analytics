@@ -1031,6 +1031,66 @@ class TestOrderbookRowsFollowMessageRows:
             )
 
 
+class TestBadMessageAndOrderbookFiles:
+    """A file of the wrong shape, or a price or size that is empty or a word,
+    is refused, and the message names the file (#397)."""
+
+    MESSAGES = TestOrderbookRowsFollowMessageRows.MESSAGES
+    ORDERBOOK = TestOrderbookRowsFollowMessageRows.ORDERBOOK
+
+    @staticmethod
+    def _replace_field(text: str, row: int, field: int, value: str) -> str:
+        lines = text.splitlines(keepends=True)
+        cells = lines[row].rstrip("\n").split(",")
+        cells[field] = value
+        lines[row] = ",".join(cells) + "\n"
+        return "".join(lines)
+
+    @pytest.mark.parametrize(
+        ("change", "columns"), [("drop", 5), ("add", 7), ("empty", 0)]
+    )
+    def test_a_message_file_with_the_wrong_column_count(
+        self, tmp_path, change, columns
+    ):
+        from ob_analytics.exceptions import ConfigError
+        from ob_analytics.lobster import LobsterLoader
+
+        rows = self.MESSAGES.splitlines()
+        if change == "drop":
+            messages = "".join(r.rsplit(",", 1)[0] + "\n" for r in rows)
+        elif change == "add":
+            messages = "".join(r + ",0\n" for r in rows)
+        else:
+            messages = ""
+        _write_pair(tmp_path, messages, self.ORDERBOOK)
+        with pytest.raises(ConfigError, match=f"has {columns} column") as err:
+            LobsterLoader(trading_date="2024-01-02").load(tmp_path)
+        assert f"{_STEM}_message_1.csv" in str(err.value)
+
+    # Size is field 3, price field 4.
+    @pytest.mark.parametrize(("field", "what"), [(3, "size"), (4, "price")])
+    @pytest.mark.parametrize("bad", ["", "abc"])
+    def test_a_message_value_that_is_not_a_number(self, tmp_path, field, what, bad):
+        from ob_analytics.exceptions import ConfigError
+        from ob_analytics.lobster import LobsterLoader
+
+        messages = self._replace_field(self.MESSAGES, 2, field, bad)
+        _write_pair(tmp_path, messages, self.ORDERBOOK)
+        with pytest.raises(ConfigError, match=f"1 of 5 row.*{what}.*row 3") as err:
+            LobsterLoader(trading_date="2024-01-02").load(tmp_path)
+        assert f"{_STEM}_message_1.csv" in str(err.value)
+
+    @pytest.mark.parametrize("bad", ["", "abc"])
+    def test_an_orderbook_value_that_is_not_a_number(self, tmp_path, bad):
+        from ob_analytics.exceptions import ConfigError
+
+        orderbook = self._replace_field(self.ORDERBOOK, 3, 1, bad)
+        _write_pair(tmp_path, self.MESSAGES, orderbook)
+        with pytest.raises(ConfigError, match="1 of 5 row.*row 4") as err:
+            _run_lobster(tmp_path)
+        assert f"{_STEM}_orderbook_1.csv" in str(err.value)
+
+
 class TestOrderbookSizesAreLots:
     """Sizes read from the orderbook file are integer lots, like the events."""
 
