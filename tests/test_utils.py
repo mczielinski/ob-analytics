@@ -6,8 +6,10 @@ import pytest
 
 from ob_analytics._utils import (
     decimal_places,
+    finite_floats,
     lots_to_size,
     off_tick_grid,
+    price_to_ticks,
     size_to_lots,
     step_decimals,
     ticks_to_price_if_integer,
@@ -116,6 +118,40 @@ class TestSizeToLots:
 
     def test_the_largest_size_that_fits_is_kept(self):
         assert size_to_lots([9.2e10], 1e-8).tolist() == [9_200_000_000_000_000_000]
+
+
+class TestNotANumber:
+    """An empty cell or a word where a number belongs is refused, with the
+    number of rows and the first one (#397)."""
+
+    @pytest.mark.parametrize(
+        ("helper", "what", "step"),
+        [(price_to_ticks, "price", 0.01), (size_to_lots, "size", 1e-8)],
+    )
+    @pytest.mark.parametrize("bad", [np.nan, "", "abc", None, np.inf])
+    def test_a_value_that_is_not_a_number_is_refused(self, helper, what, step, bad):
+        values = pd.Series([1.0, bad, 2.0, bad], dtype=object)
+        with pytest.raises(ConfigError, match=f"2 of 4 row.*{what}.*row 2"):
+            helper(values, step)
+
+    def test_an_empty_price_does_not_become_a_huge_tick(self):
+        # It once became -9.2e18 ticks.
+        with pytest.raises(ConfigError, match="price"):
+            price_to_ticks([100.0, np.nan], 0.01)
+
+    def test_the_message_shows_the_value_and_where_it_came_from(self):
+        with pytest.raises(ConfigError) as err:
+            finite_floats(pd.Series(["1.5", "1.2.3"]), "size", "orders.csv")
+        assert str(err.value).startswith("orders.csv: 1 of 2 row(s)")
+        assert "row 2 (size '1.2.3')" in str(err.value)
+
+    def test_a_table_counts_its_rows(self):
+        table = np.array([[1.0, 2.0], [3.0, np.nan], [np.nan, np.nan]])
+        with pytest.raises(ConfigError, match="2 of 3 row.*row 2"):
+            finite_floats(table, "value")
+
+    def test_numbers_written_as_text_are_read(self):
+        assert finite_floats(pd.Series(["1.5", "2"]), "price").tolist() == [1.5, 2.0]
 
 
 class TestOffTickGrid:

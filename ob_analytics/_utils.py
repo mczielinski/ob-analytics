@@ -61,13 +61,14 @@ def _step_multiplier(step: float) -> int | None:
     return None
 
 
-def _round_to_steps(values: object, step: float) -> np.ndarray:
+def _round_to_steps(values: object, step: float, what: str) -> np.ndarray:
     """Return *values* as a ``float64`` count of whole steps, rounded.
 
     Through the exact integer multiplier when *step* has one
-    (:func:`_step_multiplier`), else by a float divide.
+    (:func:`_step_multiplier`), else by a float divide.  A value that is not a
+    finite number is refused by :func:`finite_floats`, which names it *what*.
     """
-    arr = np.asarray(values, dtype=np.float64)
+    arr = finite_floats(values, what)
     multiplier = _step_multiplier(step)
     if multiplier is not None:
         return np.round(arr * multiplier)
@@ -93,15 +94,61 @@ def tick_multiplier(tick_size: float) -> int | None:
     return _step_multiplier(tick_size)
 
 
+def finite_floats(values: object, what: str, where: str | None = None) -> np.ndarray:
+    """Return *values* as a ``float64`` array, refusing any that is not a number.
+
+    *values* is a scalar or any array-like, such as a column read from a CSV
+    file, where an empty cell is NaN and a word is a string.  *what* names the
+    values in the message (``"price"``, ``"size"``) and *where* names the file
+    or reader they came from.  Rows are counted from 1 in the order of
+    *values*; a two-dimensional array counts its first axis as rows.
+
+    Raises
+    ------
+    ConfigError
+        If a value is empty, not a number, or not finite (NaN or infinity).
+        The message gives the number of such rows and the first one.
+    """
+    try:
+        arr = np.asarray(values, dtype=np.float64)
+        given = arr
+    except (TypeError, ValueError):
+        # Text in a number column: show the text the file holds, not NaN.
+        given = np.asarray(values, dtype=object)
+        coerced = pd.to_numeric(given.ravel(), errors="coerce")
+        arr = np.asarray(coerced, dtype=np.float64).reshape(given.shape)
+    # NaN carries through min and max, so two reductions test the column
+    # without a mask the size of it; the mask is built only to describe one.
+    if arr.size and not (np.isfinite(arr.min()) and np.isfinite(arr.max())):
+        bad = ~np.isfinite(arr)
+        bad_rows = bad.reshape(bad.shape[0], -1).any(axis=1) if bad.ndim > 1 else bad
+        first_row = int(np.argmax(bad_rows.ravel())) + 1
+        example = given.ravel()[int(np.argmax(bad.ravel()))]
+        if isinstance(example, np.generic):
+            example = example.item()  # nan, not np.float64(nan)
+        prefix = f"{where}: " if where else ""
+        raise ConfigError(
+            f"{prefix}{int(bad_rows.sum())} of {bad_rows.size} row(s) have a "
+            f"{what} that is empty or not a finite number; the first is row "
+            f"{first_row} ({what} {example!r})."
+        )
+    return arr
+
+
 def price_to_ticks(price: object, tick_size: float) -> np.ndarray:
     """Convert quote-currency *price* to an ``int64`` whole number of ticks.
 
     ``ticks = round(price / tick_size)``, computed through an exact integer
     multiplier when the tick has one (:func:`tick_multiplier`) so the default
     grid reproduces the engine's former internal integers exactly.  *price* is
-    any array-like of finite floats (a price column is non-null by contract).
+    any array-like of numbers (a price column is non-null by contract).
+
+    Raises
+    ------
+    ConfigError
+        If a price is empty or not a finite number (:func:`finite_floats`).
     """
-    return _round_to_steps(price, tick_size).astype(np.int64)
+    return _round_to_steps(price, tick_size, "price").astype(np.int64)
 
 
 # How far a price may sit from a whole number of ticks, in ticks, and still
@@ -211,23 +258,23 @@ def size_to_lots(size: object, lot_size: float) -> np.ndarray:
 
     ``lots = round(size / lot_size)``, through an exact integer multiplier when
     the lot has one (:func:`lot_multiplier`).  *size* is any array-like of
-    finite non-negative floats (a volume column is non-null and non-negative by
+    non-negative numbers (a volume column is non-null and non-negative by
     contract).
 
     Raises
     ------
     ConfigError
-        If a size is too large to count in ``int64`` lots of *lot_size*.  At
-        the default lot of ``1e-8`` the largest size is about ``9.2e10``.
+        If a size is empty or not a finite number (:func:`finite_floats`), or
+        too large to count in ``int64`` lots of *lot_size*.  At the default lot
+        of ``1e-8`` the largest size is about ``9.2e10``.
     """
-    arr = np.asarray(size, dtype=np.float64)
-    lots = _round_to_steps(arr, lot_size)
-    # float(2**63) is exact, and every float below it fits in int64.  A NaN is
-    # left to the caller, as before.
+    lots = _round_to_steps(size, lot_size, "size")
+    # float(2**63) is exact, and every float below it fits in int64.
     # max and min, not abs: no second array the length of the column.
     if lots.size and (lots.max() >= _INT64_LIMIT or lots.min() <= -_INT64_LIMIT):
         too_large = np.abs(lots) >= _INT64_LIMIT
-        example = float(arr[too_large].flat[0])
+        # The sizes passed finite_floats, so they cast to float.
+        example = float(np.asarray(size, dtype=np.float64)[too_large].flat[0])
         raise ConfigError(
             f"{int(too_large.sum())} size(s) are too large to count in whole "
             f"lots of lot_size={lot_size!r} (for example {example!r}); the "

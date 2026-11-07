@@ -27,6 +27,7 @@ from ob_analytics._utils import (
     datetime_to_epoch,
     empty_trades,
     epoch_ns,
+    finite_floats,
     lots_to_size,
     price_to_ticks,
     size_to_lots,
@@ -140,6 +141,12 @@ class BitstampLoader:
             "BitstampLoader.load",
         )
         validate_non_empty(events, "BitstampLoader.load")
+        # Checked before the filter below, which would drop an empty size and
+        # break on a word, so the row numbers are the file's.
+        for column, what in (("price", "price"), ("volume", "size")):
+            events[column] = finite_floats(
+                events[column], what, f"BitstampLoader.load({source})"
+            )
 
         events = events[events["volume"] >= 0]
 
@@ -317,6 +324,10 @@ class BitstampTradeReader:
             return empty_trades()
 
         validate_columns(raw, set(_TRADES_COLUMNS), "BitstampTradeReader.load")
+        for column, what in (("price", "price"), ("amount", "size")):
+            raw[column] = finite_floats(
+                raw[column], what, f"BitstampTradeReader.load({path})"
+            )
 
         # `side` is the taker side: "buy" => taker is the buyer.
         taker_id = np.where(

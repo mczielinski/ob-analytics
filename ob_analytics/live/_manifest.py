@@ -23,7 +23,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 import pandas as pd
@@ -160,9 +160,28 @@ class Segment:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Segment:
+        """Build a segment from its manifest entry.
+
+        Raises :class:`ValueError` when ``name`` is not one plain directory
+        name: a name such as ``..`` or ``a/b`` would make a reader of the
+        capture leave its directory.
+        """
+        name = d["name"]
+        # One rule for both platforms: on Windows "C:x" is a path too.
+        if (
+            not isinstance(name, str)
+            or name in ("", ".", "..")
+            or "\0" in name
+            or PurePosixPath(name).name != name
+            or PureWindowsPath(name).name != name
+        ):
+            raise ValueError(
+                f"capture manifest segment name {name!r} is not one plain "
+                "directory name"
+            )
         reason = d.get("end_reason")
         return cls(
-            name=d["name"],
+            name=name,
             started=pd.Timestamp(d["started"]),
             ended=_ts(d.get("ended")),
             stream_started=_ts(d.get("stream_started")),

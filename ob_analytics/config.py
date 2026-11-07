@@ -189,7 +189,13 @@ def _from_environment(credential: Credential) -> str | None:
 
 
 def _read_key_file(path: Path, named_by: str) -> str:
-    """The text of the key file at *path*; *named_by* says where the path came from."""
+    """The text of the key file at *path*; *named_by* says where the path came from.
+
+    A key of one line is returned without the white space around it, such as
+    the newline an editor adds at the end, which is not part of the key.  A
+    key of several lines, such as a PEM private key, is returned as the file
+    holds it.
+    """
     path = path.expanduser()
     try:
         text = path.read_text()
@@ -200,7 +206,7 @@ def _read_key_file(path: Path, named_by: str) -> str:
         ) from None
     if not text.strip():
         raise ConfigError(f"{named_by} names the key file {path}, which is empty")
-    return text
+    return text if "\n" in text.strip() else text.strip()
 
 
 class PipelineConfig(BaseModel):

@@ -1179,6 +1179,40 @@ class TestReadBack:
         assert "No closed segment" in r.stderr
         assert "seg-0001 was not checked" in r.stderr
 
+    @pytest.mark.parametrize("name", ["..", "a/b", ".", "", "a\\b", "C:x", "/abs"])
+    def test_a_segment_name_that_is_not_one_plain_name_is_refused(self, name):
+        # #397: the name is joined to the capture directory.
+        with pytest.raises(ValueError, match="segment name"):
+            Segment.from_dict({"name": name, "started": _now().isoformat()})
+
+    @pytest.mark.parametrize("name", ["../outside", "..", "seg-0001/../../outside"])
+    def test_process_never_leaves_the_folders_it_was_given(
+        self, cli_runner, gappy, tmp_path, name
+    ):
+        """A manifest naming a segment outside the capture stops ``process``
+        before it reads or writes any segment (#397)."""
+        # A folder beside the capture that holds a readable segment, so a
+        # reader that followed the name would find data there.
+        outside = gappy.parent / "outside"
+        outside.mkdir()
+        for file in (gappy / "seg-0002").iterdir():
+            (outside / file.name).write_bytes(file.read_bytes())
+        manifest = json.loads((gappy / "manifest.json").read_text())
+        manifest["segments"][1]["name"] = name
+        (gappy / "manifest.json").write_text(json.dumps(manifest))
+
+        def files() -> dict[Path, int]:
+            return {p: p.stat().st_mtime_ns for p in tmp_path.rglob("*")}
+
+        before = files()
+        out = tmp_path / "out"
+        r = cli_runner("process", str(gappy), "--output", str(out))
+
+        assert r.returncode == 1
+        assert "segment name" in r.stderr
+        assert files() == before
+        assert not out.exists()
+
     def test_process_writes_each_segment_and_the_manifest(
         self, cli_runner, gappy, tmp_path
     ):
