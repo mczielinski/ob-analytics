@@ -39,7 +39,7 @@ class TestSaveLoadPickle:
 def _assert_same_result(back, result) -> None:
     assert back.config == result.config
     assert back.level is result.level
-    for name, frame in result._frames().items():
+    for name, frame in result.tables().items():
         # Parquet gives a missing value in an object column back as None, not
         # pd.NA; that is how load_data has always read it.
         loaded, frame = getattr(back, name).copy(), frame.copy()
@@ -167,7 +167,7 @@ class TestLoadResult:
         from ob_analytics.data import load_result
 
         result = lobster_day_pipeline.run(lobster_day_dir)
-        save_data(result._frames(), tmp_path / "saved")
+        save_data(result.tables(), tmp_path / "saved")
         with pytest.warns(UserWarning, match="tick_size"):
             load_result(tmp_path / "saved")
 

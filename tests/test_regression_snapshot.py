@@ -13,22 +13,12 @@ duplicate run — so this stays as cheap as a single pipeline pass.
 from __future__ import annotations
 
 import numpy as np
-import pandas as pd
 import pytest
 
 from ob_analytics.bitstamp import BitstampSource
 from ob_analytics.flow_toxicity import compute_kyle_lambda
 from ob_analytics.pipeline import Pipeline, PipelineResult
 from tests._golden import df_fingerprint
-
-
-def _frames(result: PipelineResult) -> dict[str, pd.DataFrame]:
-    return {
-        "events": result.events,
-        "trades": result.trades,
-        "depth": result.depth,
-        "depth_summary": result.depth_summary,
-    }
 
 
 @pytest.fixture(scope="module")
@@ -39,14 +29,14 @@ def demo_result(bitstamp_sample_dir) -> PipelineResult:
 
 
 def test_demo_outputs_present(demo_result):
-    for name, df in _frames(demo_result).items():
+    for name, df in demo_result.tables().items():
         assert df is not None and len(df) > 0, f"{name} empty"
 
 
 def test_demo_fingerprints(demo_result):
     # First run prints fingerprints; paste them into EXPECTED below, then
     # the equality assertion locks the numeric baseline.
-    fps = {name: df_fingerprint(df) for name, df in _frames(demo_result).items()}
+    fps = {name: df_fingerprint(df) for name, df in demo_result.tables().items()}
     for name, fp in fps.items():
         print(f"FINGERPRINT {name} = {fp}")
     # Update these ONLY when an intended output change lands (separate,

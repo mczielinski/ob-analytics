@@ -55,7 +55,8 @@ import numpy as np
 import pandas as pd
 from pandas.api.typing import DataFrameGroupBy
 
-from ob_analytics._utils import validate_columns, validate_non_empty, window_start
+from ob_analytics._utils import validate_non_empty, window_start
+from ob_analytics.schemas import validate_columns
 from ob_analytics.trade_sign import mid_before, prevailing_mid, resolve_direction
 
 #: Basis points in one, the scale every ``_bps`` column is written on.

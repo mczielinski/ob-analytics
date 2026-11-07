@@ -48,16 +48,17 @@ import pandas as pd
 from loguru import logger
 
 from ob_analytics._registry import Registry
-from ob_analytics._utils import validate_columns
 from ob_analytics.bars import bars
 from ob_analytics.depth import (
     bin_volume_columns,
     book_imbalance,
+    imbalance_levels,
     micro_price,
     readable_quotes,
 )
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import Feature
+from ob_analytics.schemas import validate_columns
 
 #: Registry of feature name → :class:`~ob_analytics.protocols.Feature`
 #: instance.  A feature carries no per-run state, so the object registered is
@@ -342,11 +343,7 @@ class ImbalanceFeature:
 
     def compute(self, frame: pd.DataFrame) -> dict[str, npt.ArrayLike]:
         """Return the touch imbalance and the deeper one."""
-        available = min(
-            len(bin_volume_columns(frame, "bid")),
-            len(bin_volume_columns(frame, "ask")),
-        )
-        levels = max(1, min(self.depth_levels, available + 1))
+        levels = imbalance_levels(frame, self.depth_levels)
         return {
             "obi": book_imbalance(frame, levels=1),
             "obi_depth": book_imbalance(frame, levels=levels),

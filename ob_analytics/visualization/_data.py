@@ -18,17 +18,19 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from ob_analytics._utils import validate_columns, window_start
+from ob_analytics._utils import window_start
 from ob_analytics.depth import (
     _readable_mid,
     book_imbalance,
     filter_depth,
+    imbalance_levels,
     micro_price,
     price_level_snapshots,
     readable_quotes,
 )
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.flow_toxicity import OFI_HORIZONS, ofi_by_horizon
+from ob_analytics.schemas import validate_columns
 
 
 @dataclass(frozen=True)
@@ -1248,8 +1250,7 @@ def prepare_book_signals_data(
     ask = win["best_ask_price"].to_numpy(dtype=float)
     mid = _readable_mid(win)
 
-    n_bins = sum(1 for c in win.columns if re.fullmatch(r"bid_vol\d+bps", c))
-    levels = max(1, min(levels, n_bins + 1))
+    levels = imbalance_levels(win, levels)
 
     micro = micro_price(win).to_numpy(dtype=float)
     obi = book_imbalance(win, levels=1).to_numpy(dtype=float)

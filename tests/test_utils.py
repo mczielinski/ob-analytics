@@ -11,10 +11,10 @@ from ob_analytics._utils import (
     size_to_lots,
     step_decimals,
     ticks_to_price_if_integer,
-    validate_columns,
     validate_non_empty,
 )
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
+from ob_analytics.schemas import validate_columns
 
 
 class TestTicksToPriceIfInteger:
