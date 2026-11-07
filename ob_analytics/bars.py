@@ -39,12 +39,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from importlib.metadata import EntryPoint
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
-from ob_analytics._registry import Registry
+from ob_analytics._registry import Registry, load_plugins
 from ob_analytics._utils import (
     fixed_window,
     price_scale,
@@ -56,6 +57,11 @@ from ob_analytics._utils import (
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import BarRule
 from ob_analytics.trade_sign import resolve_direction
+
+#: The entry-point group a third-party package advertises a bar rule under,
+#: e.g. ``[project.entry-points."ob_analytics.bar_rules"]`` with ``range =
+#: my_pkg.range:RangeRule``.
+ENTRY_POINT_GROUP = "ob_analytics.bar_rules"
 
 #: Registry of rule name → :class:`~ob_analytics.protocols.BarRule` instance.
 #: A rule carries no per-run state, so the object registered is the object
@@ -105,6 +111,33 @@ def get_bar_rule(name: str) -> BarRule:
         registered names.
     """
     return BAR_RULES.get(name)
+
+
+def _register_entry_point(ep: EntryPoint) -> str:
+    rule = ep.load()()
+    register_bar_rule(rule)
+    return rule.name
+
+
+def load_bar_rule_plugins(*, force: bool = False) -> list[str]:
+    """Discover and register bar rules advertised via entry points.
+
+    Scans the :data:`ENTRY_POINT_GROUP` entry-point group; each entry's value
+    is loaded to a :class:`~ob_analytics.protocols.BarRule` class, instantiated
+    with no arguments, and registered under its own ``name``.  This is what
+    lets a bar rule live in a separate installable package without editing
+    ob-analytics.
+
+    The scan runs once per process unless *force* is set.  A plug-in that
+    fails to load is skipped with a warning, so one broken package cannot stop
+    the rest from loading.
+
+    Returns
+    -------
+    list of str
+        The names newly registered by this call.
+    """
+    return load_plugins(ENTRY_POINT_GROUP, _register_entry_point, force=force)
 
 
 # ── The clock rule ───────────────────────────────────────────────────

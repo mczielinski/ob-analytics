@@ -16,11 +16,11 @@ pass directly.
 | Want to add… | Implement | Register with | Use via |
 |---|---|---|---|
 | **A data source** (new venue, file and/or live) | `Source` + `OfflineSource` and/or `LiveSource` | `register_source(name, cls)` (or an entry point) | `Pipeline.from_source(name)` · CLI `process --source name` / `capture name` |
-| **An export format** | `DataWriter` | `register_writer(name, factory)` | `save_data(data, path, fmt=name)` |
-| **A plot** | a `prepare_*` function + a renderer | `RENDERERS.register((name, level, backend), fn)` | `plot(name, backend=...)` |
+| **An export format** | `DataWriter` | `register_writer(name, factory)` (or an entry point) | `save_data(data, path, fmt=name)` |
+| **A plot** | a `prepare_*` function + a renderer | `RENDERERS.register((name, level, backend), fn)` (a whole backend: `register_plot_backend` or an entry point) | `plot(name, backend=...)` |
 | **A metric** | `Metric` | `register_metric(metric)` (or an entry point) | `result.metric(name)` · `result.plot(name)` · its own gallery card |
-| **A bar rule** | `BarRule` | `register_bar_rule(rule)` | `bars(trades, rule=name)` |
-| **A feature** | `Feature` | `register_feature(feature)` | a column of `features(trades, quotes)` |
+| **A bar rule** | `BarRule` | `register_bar_rule(rule)` (or an entry point) | `bars(trades, rule=name)` |
+| **A feature** | `Feature` | `register_feature(feature)` (or an entry point) | a column of `features(trades, quotes)` |
 
 Registration is an import side-effect: the module that calls
 `register_*` must be imported before the name is looked up. Built-ins register
@@ -993,9 +993,21 @@ imported before the name is used. Built-ins register themselves when
 extensions you have two options:
 
 - **Ship as a package** with an entry point (§1, [Shipping a source as its own
-  package](#shipping-a-source-as-its-own-package)). This is the cleanest path
-  for a source: `load_source_plugins()` finds it at `import ob_analytics`, no
-  wiring needed.
+  package](#shipping-a-source-as-its-own-package)). This is the cleanest path:
+  ob-analytics finds it on import, with no wiring needed. Each registry has its
+  own entry-point group:
+
+  | Group | The entry names | Registered under | Found at |
+  |---|---|---|---|
+  | `ob_analytics.sources` | a `Source` class | the entry name | `import ob_analytics` |
+  | `ob_analytics.metrics` | a `Metric` class, constructed with no arguments | its `name` | `import ob_analytics` |
+  | `ob_analytics.bar_rules` | a `BarRule` class, constructed with no arguments | its `name` | `import ob_analytics` |
+  | `ob_analytics.features` | a `Feature` class, constructed with no arguments | its `name` | `import ob_analytics` |
+  | `ob_analytics.writers` | a writer factory `(config, ctx) -> DataWriter` | the entry name | `import ob_analytics` |
+  | `ob_analytics.plot_backends` | the backend module, imported on first use | the entry name | `import ob_analytics.visualization` |
+
+  A plug-in that fails to load is skipped with a warning; the others still
+  load.
 - **Import the module once at startup** — most cleanly from your package's
   `__init__.py` — for a plot, a writer, or a source you do not package
   separately:

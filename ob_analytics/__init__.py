@@ -70,6 +70,7 @@ from ob_analytics.bars import (
     bars,
     get_bar_rule,
     list_bar_rules,
+    load_bar_rule_plugins,
     register_bar_rule,
 )
 
@@ -95,6 +96,7 @@ from ob_analytics.data import (
     PickleWriter,
     load_data,
     load_result,
+    load_writer_plugins,
     save_data,
 )
 from ob_analytics.databento import DatabentoSettings, DatabentoSource
@@ -113,6 +115,7 @@ from ob_analytics.features import (
     features,
     get_feature,
     list_features,
+    load_feature_plugins,
     register_feature,
 )
 from ob_analytics.flow_toxicity import (
@@ -137,8 +140,7 @@ from ob_analytics.interop import (
 
 # Importing the live package registers the ccxt and cryptofeed live sources
 # (the bitstamp live capability rides on BitstampSource, already registered
-# above); then discover any third-party sources advertised through the
-# entry-point group.
+# above).
 from ob_analytics.live import LiveSource
 from ob_analytics.lobster import LobsterSource
 from ob_analytics.metrics import (
@@ -183,8 +185,13 @@ from ob_analytics.trade_sign import (
     tick_rule,
 )
 
+# Discover what other packages advertise through entry points, now that every
+# built-in is registered.  Plot backends load with ob_analytics.visualization.
 load_source_plugins()
 load_metric_plugins()
+load_bar_rule_plugins()
+load_feature_plugins()
+load_writer_plugins()
 
 logger.disable("ob_analytics")
 
@@ -301,7 +308,9 @@ __all__ = [
     "list_features",
     "list_metrics",
     "list_sources",
+    "load_bar_rule_plugins",
     "load_data",
+    "load_feature_plugins",
     "load_metric_plugins",
     "load_result",
     "load_source_plugins",

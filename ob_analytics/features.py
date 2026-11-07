@@ -39,6 +39,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from importlib.metadata import EntryPoint
 from numbers import Integral
 from typing import Any
 
@@ -47,7 +48,7 @@ import numpy.typing as npt
 import pandas as pd
 from loguru import logger
 
-from ob_analytics._registry import Registry
+from ob_analytics._registry import Registry, load_plugins
 from ob_analytics._utils import validate_columns
 from ob_analytics.bars import bars
 from ob_analytics.depth import (
@@ -58,6 +59,11 @@ from ob_analytics.depth import (
 )
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import Feature
+
+#: The entry-point group a third-party package advertises a feature under,
+#: e.g. ``[project.entry-points."ob_analytics.features"]`` with ``amihud =
+#: my_pkg.amihud:AmihudFeature``.
+ENTRY_POINT_GROUP = "ob_analytics.features"
 
 #: Registry of feature name → :class:`~ob_analytics.protocols.Feature`
 #: instance.  A feature carries no per-run state, so the object registered is
@@ -117,6 +123,33 @@ def get_feature(name: str) -> Feature:
         registered names.
     """
     return FEATURES.get(name)
+
+
+def _register_entry_point(ep: EntryPoint) -> str:
+    feature = ep.load()()
+    register_feature(feature)
+    return feature.name
+
+
+def load_feature_plugins(*, force: bool = False) -> list[str]:
+    """Discover and register features advertised via entry points.
+
+    Scans the :data:`ENTRY_POINT_GROUP` entry-point group; each entry's value
+    is loaded to a :class:`~ob_analytics.protocols.Feature` class, instantiated
+    with no arguments, and registered under its own ``name``.  This is what
+    lets a feature live in a separate installable package without editing
+    ob-analytics.
+
+    The scan runs once per process unless *force* is set.  A plug-in that
+    fails to load is skipped with a warning, so one broken package cannot stop
+    the rest from loading.
+
+    Returns
+    -------
+    list of str
+        The names newly registered by this call.
+    """
+    return load_plugins(ENTRY_POINT_GROUP, _register_entry_point, force=force)
 
 
 def _check_window(feature: str, window: object, least: int) -> None:

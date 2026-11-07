@@ -21,6 +21,7 @@ from typing import Any
 import numpy as np
 
 from ob_analytics.exceptions import ConfigError
+from ob_analytics.protocols import Level
 from ob_analytics.visualization._data import (
     NO_DEPTH_NOTICE,
     biased_color_norm,
@@ -30,6 +31,7 @@ from ob_analytics.visualization._data import (
     mpl_marker_area_to_plotly_size,
 )
 from ob_analytics.visualization._palette import Palette
+from ob_analytics.visualization._renderers import RENDERERS
 from ob_analytics.visualization._theme import DEFAULT_THEME, PlotTheme
 
 
@@ -593,11 +595,7 @@ def bokeh_depth_chart_per_order(data: dict, *, theme: PlotTheme = DEFAULT_THEME)
 
 # ---------------------------------------------------------------------------
 # Renderer self-registration
-#
-# Imported here (not at module top) so RENDERERS -- defined in the package
-# __init__ -- already exists when this (lazily imported) module is loaded.
-from ob_analytics.visualization import RENDERERS, Level
-
+# ---------------------------------------------------------------------------
 # (concept, level, renderer); mirrors the matplotlib / plotly backends'
 # coordinates for the core concepts this backend covers.
 _L2 = Level.L2

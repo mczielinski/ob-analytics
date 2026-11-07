@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import warnings
 from collections.abc import Callable
+from importlib.metadata import EntryPoint
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -13,7 +14,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from loguru import logger
 
-from ob_analytics._registry import Registry
+from ob_analytics._registry import Registry, load_plugins
 from ob_analytics.config import PipelineConfig, instrument_fields
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import DataWriter
@@ -48,6 +49,11 @@ WriterFactory = Callable[[Any, "RunContext"], DataWriter]
 
 WRITERS: Registry[str, WriterFactory] = Registry("writer")
 
+#: The entry-point group a third-party package advertises a writer under, e.g.
+#: ``[project.entry-points."ob_analytics.writers"]`` with ``arrow_ipc =
+#: my_pkg.arrow:make_arrow_writer``.
+ENTRY_POINT_GROUP = "ob_analytics.writers"
+
 
 def register_writer(name: str, factory: WriterFactory) -> None:
     """Register a writer *factory* under *name* for use with
@@ -65,6 +71,32 @@ def register_writer(name: str, factory: WriterFactory) -> None:
 def list_writers() -> list[str]:
     """Return a sorted list of registered writer names."""
     return WRITERS.list()
+
+
+def _register_entry_point(ep: EntryPoint) -> str:
+    register_writer(ep.name, ep.load())
+    return ep.name
+
+
+def load_writer_plugins(*, force: bool = False) -> list[str]:
+    """Discover and register writers advertised via entry points.
+
+    Scans the :data:`ENTRY_POINT_GROUP` entry-point group; each entry's value
+    is loaded to a writer factory ``(config, ctx) -> DataWriter`` and
+    registered under the entry-point name, as :func:`register_writer` would.
+    This is what lets a writer live in a separate installable package without
+    editing ob-analytics.
+
+    The scan runs once per process unless *force* is set.  A plug-in that
+    fails to load is skipped with a warning, so one broken package cannot stop
+    the rest from loading.
+
+    Returns
+    -------
+    list of str
+        The names newly registered by this call.
+    """
+    return load_plugins(ENTRY_POINT_GROUP, _register_entry_point, force=force)
 
 
 # ── Canonical Parquet I/O (versioned) ─────────────────────────────────

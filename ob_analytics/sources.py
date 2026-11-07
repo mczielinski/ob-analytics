@@ -20,11 +20,9 @@ for file replay, :class:`~ob_analytics.live._base.LiveSource` for live capture.
 
 from __future__ import annotations
 
-from importlib.metadata import entry_points
+from importlib.metadata import EntryPoint
 
-from loguru import logger
-
-from ob_analytics._registry import Registry
+from ob_analytics._registry import Registry, load_plugins
 from ob_analytics.protocols import Source
 
 #: The entry-point group a third-party package advertises a source under, e.g.
@@ -62,7 +60,9 @@ def get_source(name: str) -> type[Source]:
     return SOURCES.get(name)
 
 
-_plugins_loaded = False
+def _register_entry_point(ep: EntryPoint) -> str:
+    register_source(ep.name, ep.load())
+    return ep.name
 
 
 def load_source_plugins(*, force: bool = False) -> list[str]:
@@ -73,35 +73,13 @@ def load_source_plugins(*, force: bool = False) -> list[str]:
     under the entry-point name.  This is what lets a source live in a separate
     installable package without editing ob-analytics.
 
-    Idempotent: the scan runs once per process unless *force* is set (the test
-    suite forces a re-scan after monkeypatching the entry points).  A plug-in
-    that fails to import is logged and skipped, so one broken package cannot
-    stop the rest from loading.
+    The scan runs once per process unless *force* is set.  A plug-in that
+    fails to load is skipped with a warning, so one broken package cannot stop
+    the rest from loading.
 
     Returns
     -------
     list of str
         The names newly registered by this call.
     """
-    global _plugins_loaded
-    if _plugins_loaded and not force:
-        return []
-
-    registered: list[str] = []
-    for ep in entry_points(group=ENTRY_POINT_GROUP):
-        try:
-            source_cls = ep.load()
-        except Exception as exc:  # noqa: BLE001 - one bad plug-in must not break the rest
-            logger.warning(
-                "Source plug-in {!r} ({}) failed to load: {!r}",
-                ep.name,
-                getattr(ep, "value", "?"),
-                exc,
-            )
-            continue
-        register_source(ep.name, source_cls)
-        registered.append(ep.name)
-        logger.debug("Registered source plug-in {!r} from entry point", ep.name)
-
-    _plugins_loaded = True
-    return registered
+    return load_plugins(ENTRY_POINT_GROUP, _register_entry_point, force=force)

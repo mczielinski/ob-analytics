@@ -33,13 +33,12 @@ called, so ``bucket_volume=0.5`` means 0.5 BTC in both.
 
 from __future__ import annotations
 
-from importlib.metadata import entry_points
+from importlib.metadata import EntryPoint
 from typing import Any
 
 import pandas as pd
-from loguru import logger
 
-from ob_analytics._registry import Registry
+from ob_analytics._registry import Registry, load_plugins
 from ob_analytics.depth import _quoted, get_spread
 from ob_analytics.flow_toxicity import (
     OFI_HORIZONS,
@@ -86,7 +85,10 @@ def get_metric(name: str) -> Metric:
     return METRICS.get(name)
 
 
-_plugins_loaded = False
+def _register_entry_point(ep: EntryPoint) -> str:
+    metric = ep.load()()
+    register_metric(metric)
+    return metric.name
 
 
 def load_metric_plugins(*, force: bool = False) -> list[str]:
@@ -98,38 +100,16 @@ def load_metric_plugins(*, force: bool = False) -> list[str]:
     lets a metric live in a separate installable package without editing
     ob-analytics.
 
-    Idempotent: the scan runs once per process unless *force* is set (the test
-    suite forces a re-scan after monkeypatching the entry points).  A plug-in
-    that fails to import is logged and skipped, so one broken package cannot
-    stop the rest from loading.
+    The scan runs once per process unless *force* is set.  A plug-in that
+    fails to load is skipped with a warning, so one broken package cannot stop
+    the rest from loading.
 
     Returns
     -------
     list of str
         The names newly registered by this call.
     """
-    global _plugins_loaded
-    if _plugins_loaded and not force:
-        return []
-
-    registered: list[str] = []
-    for ep in entry_points(group=ENTRY_POINT_GROUP):
-        try:
-            metric = ep.load()()
-        except Exception as exc:  # noqa: BLE001 - one bad plug-in must not break the rest
-            logger.warning(
-                "Metric plug-in {!r} ({}) failed to load: {!r}",
-                ep.name,
-                getattr(ep, "value", "?"),
-                exc,
-            )
-            continue
-        register_metric(metric)
-        registered.append(metric.name)
-        logger.debug("Registered metric plug-in {!r} from entry point", metric.name)
-
-    _plugins_loaded = True
-    return registered
+    return load_plugins(ENTRY_POINT_GROUP, _register_entry_point, force=force)
 
 
 # ---------------------------------------------------------------------------
