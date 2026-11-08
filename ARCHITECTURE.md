@@ -144,7 +144,7 @@ classDiagram
         <<Protocol>>
         +create_loader(config, ctx) EventLoader
         +create_trade_source(config, ctx, loader) TradeSource
-        +create_writer(config, ctx) DataWriter | None
+        +create_writer(config, ctx) DataWriter (optional)
         +compute_depth(events, config, source, ctx, loader) tuple | None
     }
     class LiveSource {

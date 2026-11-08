@@ -98,6 +98,26 @@ class FeedType(str, Enum):
     UNKNOWN = "unknown"
 
 
+class WriteTarget(str, Enum):
+    """What a :class:`DataWriter` writes to: a folder or one file.
+
+    Each writer declares it as its :attr:`DataWriter.target`, and
+    :func:`~ob_analytics.data.save_data` checks the path it is given against
+    it:
+
+    * :attr:`FOLDER` — this package's own formats (Parquet, depth CSV,
+      Bitstamp, LOBSTER), which write several files into one folder.
+    * :attr:`FILE` — exports for another tool (hftbacktest, Nautilus,
+      Databento DBN), which write one file.
+
+    Mixes in ``str`` so members compare as their value
+    (``WriteTarget.FOLDER == "folder"``).
+    """
+
+    FOLDER = "folder"
+    FILE = "file"
+
+
 class SequenceKind(str, Enum):
     """What a feed's venue ``sequence`` number promises.
 
@@ -394,7 +414,22 @@ class DepthSource(Protocol):
 
 @runtime_checkable
 class DataWriter(Protocol):
-    """Writes pipeline results to a format-specific output."""
+    """Writes pipeline results to a format-specific output.
+
+    Attributes
+    ----------
+    target : WriteTarget
+        Whether :meth:`write` takes a folder or a file.
+        :func:`~ob_analytics.data.save_data` refuses a path of the other kind
+        before it calls :meth:`write`.
+    """
+
+    # Read-only: a writer declares it, and nothing downstream sets it.  A class
+    # attribute satisfies it.
+    @property
+    def target(self) -> WriteTarget:
+        """Whether this writer takes a folder or a file (:class:`WriteTarget`)."""
+        ...
 
     def write(
         self,
@@ -410,7 +445,7 @@ class DataWriter(Protocol):
             Pipeline output keyed by name (e.g. ``"events"``, ``"trades"``,
             ``"depth"``, ``"depth_summary"``).
         dest : str or Path
-            Output path (file or directory, format-dependent).
+            The folder or file to write, as :attr:`target` says.
         """
         ...
 
@@ -684,8 +719,13 @@ class OfflineSource(Source, Protocol):
 
     Bundles the per-source factories the pipeline needs to read from a path:
     how to load events (or depth), how to acquire trades, and (optionally) how
-    to write results or compute depth directly.  Pass instances to
-    ``Pipeline(source=...)``.
+    to compute depth directly.  Pass instances to ``Pipeline(source=...)``.
+
+    A source that also writes its own format has a
+    ``create_writer(config, ctx) -> DataWriter`` method, and its name is then a
+    format :func:`~ob_analytics.data.save_data` accepts.  The method is not a
+    required member: a source with no format of its own leaves it out, and
+    :func:`~ob_analytics.data.list_writers` does not list it.
     """
 
     def create_loader(self, config: Any, ctx: RunContext) -> EventLoader | DepthSource:
@@ -706,10 +746,6 @@ class OfflineSource(Source, Protocol):
         whose trades come off the same read (Databento) takes them from it;
         most sources ignore it.
         """
-        ...
-
-    def create_writer(self, config: Any, ctx: RunContext) -> DataWriter | None:
-        """Return a writer for this source, or ``None`` if unsupported."""
         ...
 
     def compute_depth(

@@ -152,7 +152,9 @@ source, export format, plot, flow-toxicity metric, or live capturer — see
    - `create_loader(config, ctx) -> EventLoader`
    - `create_trade_source(config, ctx, loader) -> TradeSource` (`loader` is the
      run's loader, for trades that come off the same read)
-   - `create_writer(config, ctx) -> DataWriter`
+   - `create_writer(config, ctx) -> DataWriter` (optional: only for a source
+     that writes its own format; the writer declares a `target`, a folder or a
+     file)
    - `compute_depth(events, config, source, ctx, loader) -> tuple[depth, depth_summary] | None`
      (override only if your venue computes depth differently; return `None`
      to fall back to the standard `price_level_volume` → `depth_metrics` path)

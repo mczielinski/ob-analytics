@@ -27,15 +27,6 @@ class TestSaveLoadParquet:
             load_data(empty)
 
 
-class TestSaveLoadPickle:
-    def test_pickle_round_trip(self, tmp_path: Path):
-        data = {"df": pd.DataFrame({"col": [1, 2, 3]})}
-        pkl_path = tmp_path / "data.pkl"
-        save_data(data, pkl_path, fmt="pickle")
-        loaded = load_data(pkl_path)
-        pd.testing.assert_frame_equal(loaded["df"], data["df"])
-
-
 def _assert_same_result(back, result) -> None:
     assert back.config == result.config
     assert back.level is result.level
@@ -121,18 +112,6 @@ class TestLoadResult:
         assert back.config.lot_size == 1.0
         assert back.config.volume_decimals == 0
 
-    def test_a_pickle_is_refused(
-        self, tmp_path: Path, lobster_day_dir, lobster_day_pipeline
-    ):
-        """A pickle keeps no config, so its prices would read as ticks."""
-        from ob_analytics.data import load_result
-        from ob_analytics.exceptions import ConfigError
-
-        result = lobster_day_pipeline.run(lobster_day_dir)
-        save_data(result, tmp_path / "run.pkl", fmt="pickle")
-        with pytest.raises(ConfigError, match="Parquet"):
-            load_result(tmp_path / "run.pkl")
-
     def test_a_config_this_version_cannot_read_falls_back_to_the_grid(
         self, tmp_path: Path, lobster_day_dir, lobster_day_pipeline
     ):
@@ -185,8 +164,12 @@ class TestSaveLoadEdgeCases:
         with pytest.raises(ValueError, match="Unsupported format"):
             save_data({}, tmp_path / "out", fmt="csv")
 
-    def test_load_unsupported_extension_raises(self, tmp_path: Path):
-        f = tmp_path / "data.json"
-        f.write_text("{}")
-        with pytest.raises(ValueError, match="Unsupported format"):
-            load_data(f)
+    def test_load_data_refuses_a_file(self, tmp_path: Path):
+        """``load_data`` reads a Parquet folder; a pickle or any file is refused."""
+        from ob_analytics.exceptions import ConfigError
+
+        for name in ("data.json", "data.pkl"):
+            f = tmp_path / name
+            f.write_text("{}")
+            with pytest.raises(ConfigError, match="not a Parquet folder"):
+                load_data(f)

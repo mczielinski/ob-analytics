@@ -8,6 +8,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Moving from 0.1
+
+Each break, old -> new. The package keeps no aliases for old names before 1.0.
+
+- **Pickle is gone** (#409). A pickle runs code when it is loaded.
+  - `save_data(data, "run.pkl", fmt="pickle")` -> `save_data(data, "run")`,
+    which writes a Parquet folder.
+  - `PickleWriter` -> removed; use `ParquetWriter`.
+  - `load_data("run.pkl")` -> removed. To move an old pickle, read it with
+    `pandas.read_pickle` (only a file you wrote yourself) and save it with
+    `save_data`.
+- **`save_data` takes a folder or a file, by format** (#409). It checks
+  `path` before it writes, and says which it expected.
+  - `save_data(r, "out/orders.csv", fmt="bitstamp")` ->
+    `save_data(r, "out", fmt="bitstamp")`, which writes `out/orders.csv` and
+    `out/trades.csv`. `BitstampWriter.write(data, dest)` takes the folder too.
+  - `save_data(r, "out/", fmt="databento")` ->
+    `save_data(r, "out/events.dbn", fmt="databento")`.
+    `DatabentoWriter.write` no longer fills a folder with `events.dbn`.
+  - `save_data(r, "out/session", fmt="hftbacktest")` ->
+    `save_data(r, "out/session.npz", fmt="hftbacktest")`. The writer writes
+    the exact path it is given, and no longer adds `.npz`.
+  - `save_data(r, "run.parquet")` -> `save_data(r, "run")`: the default
+    Parquet format takes a folder, and now refuses a name that ends in a file
+    extension instead of making a folder called `run.parquet`.
+- **A writer declares `target`** (#409). A `DataWriter` without
+  `target = WriteTarget.FOLDER` or `target = WriteTarget.FILE` -> add one.
+  `WriteTarget` is in `ob_analytics.protocols` and at the top level.
+- **`OfflineSource.create_writer` is optional** (#409). A source whose
+  `create_writer` returns `None` -> leave the method out.
+  `list_writers()` lists a source as a format when it has the method.
+- **`list_writers()` lists every format `save_data` accepts** (#409): the
+  registered writers and the sources with a writer of their own (`bitstamp`,
+  `databento`, `depth_csv`, `lobster`). The unknown-format error offers the
+  same list, so it no longer offers `ccxt` and `cryptofeed`.
+- **`load_data` and `load_result` refuse a path that is not a folder with
+  `ConfigError`** (#409). `load_data` raised `ValueError` for a file.
+
 ### Added
 
 - **Every registry loads plug-ins from entry points** (#403). Bar rules,

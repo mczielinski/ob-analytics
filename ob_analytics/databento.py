@@ -121,6 +121,7 @@ from ob_analytics.protocols import (
     SequenceKind,
     TradeAttribution,
     TradeSource,
+    WriteTarget,
 )
 from ob_analytics.schemas import (
     MAYBE_BAD_BOOK_ATTR,
@@ -1318,6 +1319,8 @@ class DatabentoWriter:
         records (defaulting to ``1`` and ``1`` when unset).
     """
 
+    target = WriteTarget.FILE
+
     def __init__(
         self,
         config: PipelineConfig | None = None,
@@ -1343,7 +1346,7 @@ class DatabentoWriter:
             Must contain ``"events"``.  A ``"trades"`` table, when present,
             names the fills each aggressor took, which are not written.
         dest : str or Path
-            Output file.  A directory is filled with ``events.dbn``.
+            Output file, such as ``events.dbn``.
         symbol : str
             The raw symbol to record in the file's metadata.
 
@@ -1368,8 +1371,6 @@ class DatabentoWriter:
 
         events = data["events"]
         dest = Path(dest)
-        if dest.is_dir():
-            dest = dest / "events.dbn"
         dest.parent.mkdir(parents=True, exist_ok=True)
 
         records = self._records(events, data.get("trades"))
