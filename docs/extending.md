@@ -132,12 +132,17 @@ class CoinbaseSource:
 
     # Optional: define required_context to name RunContext fields a run
     # needs, e.g. ["trading_date"] if file names carry no date.  With no
-    # create_writer, save_data(fmt="parquet") still saves the run; with no
     # compute_depth, the standard price-level depth stage runs.
 
 
 register_source("coinbase", CoinbaseSource)
 ```
+
+A source that writes its own format also has a `create_writer(config, ctx)`
+method that returns a `DataWriter`, and its name then works as
+`save_data(..., fmt="coinbase")`. Leave the method out when the source has no
+format of its own, as here; `save_data`'s default Parquet format still saves
+its runs.
 
 How the venue's files encode prices and timestamps (a price in hundredths of a
 cent, an epoch in microseconds) is the loader's business: write it into the
@@ -353,7 +358,10 @@ resolve it with nothing else installed.
 ## 2. A new export format
 
 A writer satisfies the `DataWriter` Protocol — a single `write(data, dest)`
-method, where `data` is a **dict of DataFrames** keyed by name. You register a
+method, where `data` is a **dict of DataFrames** keyed by name, and a `target`
+that says whether `dest` is a folder (`WriteTarget.FOLDER`) or one file
+(`WriteTarget.FILE`). `save_data` checks the path against `target` before it
+calls `write`, and refuses the other kind. You register a
 *factory* `(config, ctx) -> DataWriter`, not the class, so writers that need
 run state (e.g. [`LobsterWriter`](api/lobster.md) reads `trading_date` from
 `ctx`) can pull it.
@@ -367,10 +375,13 @@ from typing import Any
 import pandas as pd
 
 from ob_analytics.data import register_writer, list_writers
+from ob_analytics.protocols import WriteTarget
 
 
 class DuckDBWriter:
     """Satisfies the DataWriter Protocol."""
+
+    target = WriteTarget.FILE  # one .duckdb file
 
     def write(
         self, data: dict[str, pd.DataFrame], dest: str | Path, **kwargs: Any
@@ -410,10 +421,12 @@ save_data(
 )
 ```
 
-The built-in `"parquet"` and `"pickle"` formats are registered writers too, so
-they appear in `list_writers()` and follow exactly these rules. Registering your
-own under one of those names **replaces** the built-in one — there is no special
-case in `save_data` for either.
+The built-in `"parquet"` format is a registered writer too, so it appears in
+`list_writers()` and follows exactly these rules. Registering your own under
+that name **replaces** the built-in one — there is no special case in
+`save_data` for it. `list_writers()` also lists each source that writes its
+own format (one with a `create_writer` method), because `save_data` accepts a
+source name as `fmt`.
 
 ### Asking for Arrow instead of pandas
 
@@ -699,18 +712,16 @@ on `compute` and the settings of the picture (a threshold line, a time window)
 on `prepare`. `result.plot(name, **kwargs)` sends each keyword to the method
 that names it, so the two must not share a name.
 
-Five metrics ship registered: `l1_ticker`, `vpin`, `kyle_lambda`,
-`order_flow_imbalance` and `ofi_horizon`. Each wraps a plain function you can
-still call directly ([`compute_vpin`](api/flow_toxicity.md),
-[`compute_kyle_lambda`](api/flow_toxicity.md),
-[`order_flow_imbalance`](api/flow_toxicity.md),
-[`ofi_by_horizon`](api/flow_toxicity.md)). Registering is what makes a
-function run and plot from a result.
+Nine metrics ship registered: `l1_ticker`, `book_signals`, `vpin`,
+`kyle_lambda`, `order_flow_imbalance`, `ofi_horizon`, `transaction_costs`,
+`amihud` and `roll_spread` (see [the metric list](api/metrics.md)). Each wraps
+a plain function you can still call directly, such as
+[`compute_vpin`](api/flow_toxicity.md) or [`amihud`](api/cost.md).
+Registering is what makes a function run and plot from a result.
 
 ```python
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 from matplotlib.axes import Axes
 
@@ -718,42 +729,45 @@ from ob_analytics import Level, PipelineResult, register_metric
 from ob_analytics.visualization import DEFAULT_THEME, RENDERERS, PlotTheme
 
 
-def amihud_illiquidity(trades: pd.DataFrame, freq: str = "1min") -> pd.DataFrame:
-    """Amihud (2002) illiquidity: |return| per unit of traded value, resampled."""
-    df = trades.set_index("timestamp").sort_index()
-    abs_ret = df["price"].resample(freq).last().pct_change().abs()
-    value = (df["price"] * df["volume"]).resample(freq).sum()
-    illiq = (abs_ret / value.replace(0, np.nan)).rename("amihud")
-    return illiq.to_frame()
+def price_range(trades: pd.DataFrame, freq: str = "1min") -> pd.DataFrame:
+    """Highest minus lowest trade price per window, in the quote currency."""
+    # A run stores whole ticks, and its frames carry the tick size.
+    integer = pd.api.types.is_integer_dtype(trades["price"])
+    price = trades["price"] * (trades.attrs["tick_size"] if integer else 1.0)
+    windows = price.groupby(trades["timestamp"].dt.floor(freq))
+    out = (windows.max() - windows.min()).rename("price_range")
+    return out.rename_axis("timestamp").reset_index()
 
 
-class AmihudMetric:
+class PriceRangeMetric:
     """Satisfies the Metric Protocol."""
 
-    name = "amihud"
-    title = "Amihud Illiquidity"
+    name = "price_range"
+    title = "Price Range per Window"
     levels = (Level.L2, Level.L3)  # trades only: both resolutions have them
 
     def compute(self, result: PipelineResult, *, freq: str = "1min") -> pd.DataFrame:
-        return amihud_illiquidity(result.trades, freq=freq)
+        return price_range(result.trades, freq=freq)
 
     def prepare(self, frame: pd.DataFrame) -> dict:
-        return {"series": frame.reset_index()}
+        return {"series": frame}
 
 
-def mpl_amihud(data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME):
+def mpl_price_range(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+):
     import matplotlib.pyplot as plt
 
     if ax is None:
         _, ax = plt.subplots()
     df = data["series"]
-    ax.plot(df["timestamp"], df["amihud"])
-    ax.set_ylabel("illiquidity")
+    ax.plot(df["timestamp"], df["price_range"])
+    ax.set_ylabel("high - low")
     return ax.figure
 
 
-register_metric(AmihudMetric())
-RENDERERS.register(("amihud", None, "matplotlib"), mpl_amihud)  # None = level-less
+register_metric(PriceRangeMetric())
+RENDERERS.register(("price_range", None, "matplotlib"), mpl_price_range)  # None = level-less
 ```
 
 Note what is registered: an *instance*, not a class. A metric needs no per-run
@@ -768,12 +782,12 @@ from ob_analytics.visualization import available_concepts
 
 result = Pipeline().run("orders.csv")
 
-result.metric("amihud")              # the table
-result.metric("amihud", freq="5min") # the table, with a setting changed
-result.metrics()                     # every metric that applies to this run
-result.plot("amihud")                # the face, through the renderer above
-result.plot("amihud", freq="5min")   # freq goes to compute
-available_concepts(result)           # lists "amihud" with an empty level list
+result.metric("price_range")              # the table
+result.metric("price_range", freq="5min") # the table, with a setting changed
+result.metrics()                          # every metric that applies to this run
+result.plot("price_range")                # the face, through the renderer above
+result.plot("price_range", freq="5min")   # freq goes to compute
+available_concepts(result)                # lists "price_range" with an empty level list
 ```
 
 Metrics run when asked for, not during `Pipeline.run`, so a run pays only for
@@ -788,15 +802,17 @@ concepts or plotting another face does not run it. A metric that raises is
 logged and its card says why, so one broken metric does not stop the gallery
 being built.
 
-The gallery and `result.plot` give a metric the display-unit result: prices in
-the quote currency and sizes in the base asset. `result.metric` gives it the
-result as it is, with prices in integer ticks and sizes in integer lots (see
-[the schema](schema.md)). A setting is in the instrument's own units either
-way: a size such as VPIN's `bucket_volume` in BTC, shares or contracts, and a
-price in the quote currency. Hand a size setting to a function that converts
-it, such as `compute_vpin` or `bars`, or multiply it by `1 / lot_size`
-yourself when the frame's sizes are integers; each run's tables carry
-`attrs["lot_size"]` and `attrs["tick_size"]` for this.
+**Units.** `result.metric`, `result.plot` and the gallery all hand a metric
+the result as stored, with prices in integer ticks and sizes in integer lots
+(see [the schema](schema.md)), so the table and the picture always agree.
+Report the table in the instrument's own units, as the built-in metrics do:
+prices in the quote currency and sizes in BTC, shares or contracts. Each
+run's tables carry `attrs["tick_size"]` and `attrs["lot_size"]` for this, as
+`price_range` reads above. A setting is in the instrument's own units too: a
+size such as VPIN's `bucket_volume` in BTC, shares or contracts, and a price
+in the quote currency. Hand a size setting to a function that converts it,
+such as `compute_vpin` or `bars`, or divide it by `lot_size` yourself when
+the frame's sizes are integers.
 
 **Shipping a metric as its own package.** Advertise it under the
 `ob_analytics.metrics` entry-point group and `load_metric_plugins()` finds it at
@@ -805,7 +821,7 @@ yourself when the frame's sizes are integers; each run's tables carry
 ```toml
 # pyproject.toml of your package
 [project.entry-points."ob_analytics.metrics"]
-amihud = "my_pkg.amihud:AmihudMetric"
+price_range = "my_pkg.price_range:PriceRangeMetric"
 ```
 
 The entry point names the metric *class*; discovery constructs it with no

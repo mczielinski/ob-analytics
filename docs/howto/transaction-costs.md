@@ -130,10 +130,10 @@ illiq = amihud(result.trades, window="5min")
 illiq[["timestamp", "abs_return", "turnover", "amihud"]]
 ```
 
-It carries a unit — one over the turnover unit of the input. On a raw
-pipeline frame that is ticks times lots; pass a display-unit result (see
-[`display_result`](../api/gallery.md)) to get turnover in the quote currency,
-which is what published figures use.
+It carries a unit: one over the turnover unit, which is the quote currency
+(price in dollars times size in BTC on this capture). That is what published
+figures use, and it is the same whether you pass the run's integer ticks and
+lots or a display-unit result.
 
 **Roll's implied spread** reads the spread out of the bounce between hitting
 the bid and lifting the ask, which makes successive price changes negatively
@@ -160,13 +160,13 @@ this capture is *sparse* relative to how fast the instrument moves. It prints
 a trade every 6.3 seconds on average, and over that gap BTC moves far further
 than half a spread:
 
-| | ticks |
+| | USD |
 | --- | --- |
-| median quoted spread | 100 (half-spread `c` = 50) |
-| sd of the price change between consecutive trades | 493 |
+| median quoted spread | 1.00 (half-spread `c` = 0.50) |
+| sd of the price change between consecutive trades | 4.93 |
 | share of `var(Δp)` the bounce would explain (`2c²/var`) | **2.1%** |
-| autocovariance Roll needs (`-c²`) | -2,500 |
-| autocovariance observed | **+47,795** |
+| autocovariance Roll needs (`-c²`) | -0.25 |
+| autocovariance observed | **+4.78** |
 
 The bounce is two per cent of what is moving the price, so there is nothing
 for the estimator to find, and the autocovariance comes out positive where
@@ -185,30 +185,32 @@ inferring it. Roll is for the tapes where they do not.
 
 ## Plotting it
 
-The decomposition draws as a level-less face on either backend — two lines
-with the price impact as the band between them:
+`transaction_costs`, `amihud` and `roll_spread` are registered
+[metrics](../api/metrics.md), so a result computes and draws each one in one
+call. The cost decomposition draws as two lines, with the price impact as the
+band between them:
 
 ```python
-from ob_analytics.visualization import plot, prepare, save_figure
+from ob_analytics.visualization import save_figure
+
+fig = result.plot("transaction_costs", horizon="5s", window="1min")
+save_figure(fig, "transaction_costs.png")
+
+result.metric("amihud", window="5min")   # the same table amihud() returns
+result.plot("roll_spread", window="5min")
+```
+
+`horizon` goes to `transaction_costs` and `window` to the plot's averaging.
+Each is also a gallery card, so `generate_gallery(result, ...)` and
+`ob-analytics bitstamp-demo` draw them with no extra work. To draw a cost
+table you built yourself, for example against the micro-price, prepare it
+directly:
+
+```python
+from ob_analytics.visualization import plot, prepare
 
 fig = plot("transaction_costs", **prepare.transaction_costs(costs, window="1min"))
-save_figure(fig, "transaction_costs.png")
 ```
-
-To put it in a gallery, build the panel and append it to the model:
-
-```python
-from ob_analytics.visualization.gallery import (
-    build_gallery_model, generate_gallery, transaction_costs_panel,
-)
-
-model = build_gallery_model(result)
-model.analytics.append(transaction_costs_panel(costs))
-generate_gallery(result, "output/gallery/", model=model)
-```
-
-The Bitstamp and LOBSTER demos already do this, so `ob-analytics
-bitstamp-demo` writes the face without any extra work.
 
 ## Feeds without a native aggressor side
 

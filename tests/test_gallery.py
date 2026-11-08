@@ -320,7 +320,7 @@ class TestWriteGalleryHtml:
         out = tmp_path / "g.html"
         card = _Card("Demo", [_panel("plotly"), _panel("matplotlib", role="secondary")])
         _write_gallery_html(out, [card], "Title")
-        body = out.read_text().split("<body>", 1)[1]
+        body = out.read_text(encoding="utf-8").split("<body>", 1)[1]
         assert body.index("plotly-panel") < body.index("mpl-panel")
         assert "panel-primary" in body
         assert "panel-secondary" in body
@@ -328,19 +328,19 @@ class TestWriteGalleryHtml:
     def test_empty_cards_show_placeholder(self, tmp_path: Path) -> None:
         out = tmp_path / "g.html"
         _write_gallery_html(out, [], "Title")
-        assert "No plots for this view." in out.read_text()
+        assert "No plots for this view." in out.read_text(encoding="utf-8")
 
     def test_failed_panel_renders_na(self, tmp_path: Path) -> None:
         out = tmp_path / "g.html"
         card = _Card("Demo", [_panel("plotly", rendered=False)])
         _write_gallery_html(out, [card], "Title")
-        assert "Not available" in out.read_text()
+        assert "Not available" in out.read_text(encoding="utf-8")
 
     def test_html_escapes_card_titles(self, tmp_path: Path) -> None:
         out = tmp_path / "g.html"
         card = _Card("<script>X</script>", [_panel("matplotlib")])
         _write_gallery_html(out, [card], "Page")
-        html = out.read_text()
+        html = out.read_text(encoding="utf-8")
         assert "<script>X</script>" not in html
         assert "&lt;script&gt;X&lt;/script&gt;" in html
 
@@ -362,7 +362,7 @@ class TestGenerateGallery:
 
     def test_default_backends_prefer_plotly(self, tmp_path: Path) -> None:
         path = generate_gallery(result=None, output_dir=tmp_path, model=self._model())
-        body = path.read_text().split("<body>", 1)[1]
+        body = path.read_text(encoding="utf-8").split("<body>", 1)[1]
         assert body.index("plotly-panel") < body.index("mpl-panel")
 
     def test_explicit_backends_order(self, tmp_path: Path) -> None:
@@ -372,7 +372,7 @@ class TestGenerateGallery:
             model=self._model(),
             backends=["matplotlib", "plotly"],
         )
-        body = path.read_text().split("<body>", 1)[1]
+        body = path.read_text(encoding="utf-8").split("<body>", 1)[1]
         assert body.index("mpl-panel") < body.index("plotly-panel")
 
     def test_bokeh_backend_writes_standalone_html(self, tmp_path: Path) -> None:
@@ -387,8 +387,8 @@ class TestGenerateGallery:
         )
         bokeh_html = tmp_path / "bokeh" / "stub.L2.html"
         assert bokeh_html.exists()
-        assert "bokeh" in bokeh_html.read_text().lower()
-        body = path.read_text().split("<body>", 1)[1]
+        assert "bokeh" in bokeh_html.read_text(encoding="utf-8").lower()
+        body = path.read_text(encoding="utf-8").split("<body>", 1)[1]
         assert "bokeh-panel" in body
         assert "Not available" not in body
 
@@ -422,7 +422,7 @@ class TestGenerateGallery:
         assert (tmp_path / "plotly" / "stub.L2.html").exists()
         assert (tmp_path / "plotly" / "stub.L3.html").exists()
         assert not (tmp_path / "matplotlib").exists()
-        html = path.read_text()
+        html = path.read_text(encoding="utf-8")
         assert "L2 -- MBP" in html
         assert "L3 -- MBO" in html
 
@@ -436,7 +436,7 @@ class TestGenerateGallery:
             backends=["matplotlib"],
         )
         assert (tmp_path / "matplotlib" / "stubmetric.png").exists()
-        assert "Stub Metric" in path.read_text()
+        assert "Stub Metric" in path.read_text(encoding="utf-8")
 
     def test_renderer_failure_yields_na_card(self, tmp_path: Path) -> None:
         model = GalleryModel(concepts=[_l2_concept("stubfail", "Fails")])
@@ -446,7 +446,7 @@ class TestGenerateGallery:
             model=model,
             backends=["plotly", "matplotlib"],
         )
-        html = path.read_text()
+        html = path.read_text(encoding="utf-8")
         assert "Fails -- L2" in html
         assert html.count("Not available") == 2  # one per backend
 
@@ -463,7 +463,7 @@ class TestMisplacedCard:
         path = generate_gallery(
             result=None, output_dir=tmp_path, model=model, backends=["matplotlib"]
         )
-        html = path.read_text()
+        html = path.read_text(encoding="utf-8")
         assert "Metric -- L2" in html
         assert "Not available" in html
         assert (
@@ -478,7 +478,7 @@ class TestMisplacedCard:
         path = generate_gallery(
             result=None, output_dir=tmp_path, model=model, backends=["matplotlib"]
         )
-        html = path.read_text()
+        html = path.read_text(encoding="utf-8")
         assert "Not available" in html
         assert (
             "&#x27;stub&#x27; is registered at L2 and L3, but the gallery model "
@@ -496,7 +496,7 @@ class TestMisplacedCard:
         assert (
             "&#x27;stubfail&#x27; is registered at L2, but the gallery model has "
             "it in analytics"
-        ) in path.read_text()
+        ) in path.read_text(encoding="utf-8")
 
     def test_variant_at_an_unregistered_level(self, tmp_path: Path) -> None:
         concept = PlotConcept("stubfail", "Wrong Level", {Level.L3: _spec()})
@@ -509,7 +509,7 @@ class TestMisplacedCard:
         assert (
             "&#x27;stubfail&#x27; is registered at L2, but its PlotConcept has a "
             "variant at L3. Remove that variant, or register a renderer at L3."
-        ) in path.read_text()
+        ) in path.read_text(encoding="utf-8")
 
     def test_reason_on_every_backend(self, tmp_path: Path) -> None:
         model = GalleryModel(concepts=[_l2_concept("stubmetric", "Metric")])
@@ -519,7 +519,7 @@ class TestMisplacedCard:
             model=model,
             backends=["plotly", "matplotlib"],
         )
-        html = path.read_text()
+        html = path.read_text(encoding="utf-8")
         assert html.count("Not available") == 2
         assert html.count('class="na-reason"') == 2
 
@@ -528,7 +528,7 @@ class TestMisplacedCard:
         path = generate_gallery(
             result=None, output_dir=tmp_path, model=model, view="comparison"
         )
-        html = path.read_text()
+        html = path.read_text(encoding="utf-8")
         assert html.count('class="na-reason"') == 2  # the L2 and L3 columns
         assert "Add it to GalleryModel.analytics as a PlotSpec instead." in html
 
@@ -559,7 +559,7 @@ class TestMisplacedCard:
                 )
         finally:
             _BACKEND_MODULES.pop("nosuch", None)
-        html = path.read_text()
+        html = path.read_text(encoding="utf-8")
         assert html.count("The &#x27;nosuch&#x27; backend could not be loaded") == 2
         assert (tmp_path / "matplotlib" / "stub.L2.png").exists()
         assert not (tmp_path / "nosuch").exists()
@@ -573,7 +573,7 @@ class TestMisplacedCard:
             model=GalleryModel(concepts=[_l2_concept()]),
             backends=["matplotib"],
         )
-        html = path.read_text()
+        html = path.read_text(encoding="utf-8")
         assert "Unknown backend &#x27;matplotib&#x27;. Available:" in html
         assert "could not be loaded" not in html
 
@@ -596,7 +596,7 @@ class TestMisplacedCard:
             _BACKEND_MODULES.pop("badbuild", None)
         assert (
             "The &#x27;badbuild&#x27; backend could not be loaded: bad build"
-        ) in path.read_text()
+        ) in path.read_text(encoding="utf-8")
 
     def test_comparison_view_loads_only_its_backend(self, tmp_path: Path) -> None:
         # The comparison view draws plotly alone, so a broken second backend
@@ -629,7 +629,7 @@ class TestMisplacedCard:
             )
         finally:
             RENDERERS._items.pop(("stubfail", Level.L3, "bokeh"), None)
-        assert "its PlotConcept has a variant at L3" in path.read_text()
+        assert "its PlotConcept has a variant at L3" in path.read_text(encoding="utf-8")
 
     def test_missing_backend_shows_bare_na(self, tmp_path: Path) -> None:
         # A plot with no renderer on one backend is not a mismatch: that
@@ -645,7 +645,7 @@ class TestMisplacedCard:
             )
         finally:
             RENDERERS._items.pop(("stubmplonly", Level.L2, "matplotlib"), None)
-        html = path.read_text()
+        html = path.read_text(encoding="utf-8")
         assert html.count("Not available") == 1
         assert "na-reason" not in html.split("<body>", 1)[1]
         assert (tmp_path / "matplotlib" / "stubmplonly.L2.png").exists()
@@ -655,7 +655,7 @@ class TestMisplacedCard:
         path = generate_gallery(
             result=None, output_dir=tmp_path, model=model, backends=["matplotlib"]
         )
-        assert "Not available" not in path.read_text()
+        assert "Not available" not in path.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -834,7 +834,7 @@ class TestBuildGalleryModel:
         plot_result(result, "order_activity", level="L3", backend="matplotlib")
 
     def test_hidden_liquidity_overlay_is_clipped_to_the_zoom_and_price_window(
-        self, sample_csv_path
+        self, bundled_sample_result
     ) -> None:
         # #272: a full day can have hundreds of icebergs / thousands of hidden
         # trades; the overlay handed to the faces must be the subset inside the
@@ -843,9 +843,8 @@ class TestBuildGalleryModel:
         # the next test: the bundled sample has none (below).
         from ob_analytics.engine import HIDDEN_ORDER_ID
         from ob_analytics.hidden_liquidity import hidden_trades as find_hidden_trades
-        from ob_analytics.pipeline import Pipeline
 
-        result = Pipeline().run(sample_csv_path)
+        result = bundled_sample_result
         model = build_gallery_model(result)
         heatmap = next(c for c in model.concepts if c.key == "depth_heatmap").at(
             Level.L2

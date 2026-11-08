@@ -651,11 +651,8 @@ class TestQuoteAmountTaker:
 class TestBitstampWriter:
     def test_round_trip_event_count(self, tmp_path, tiny_pipeline_result):
         result = tiny_pipeline_result
-        rt_csv = tmp_path / "orders.csv"
-        BitstampWriter().write(
-            result.tables(),
-            rt_csv,
-        )
+        rt_csv = BitstampWriter().write(result.tables(), tmp_path / "roundtrip")
+        assert rt_csv == tmp_path / "roundtrip" / "orders.csv"
         # The writer emits a companion trades.csv automatically whenever the
         # payload carries a "trades" frame, so a full re-read round-trips
         # without any demo-side shim.
@@ -665,8 +662,10 @@ class TestBitstampWriter:
         assert len(rt.events) == len(result.events)
 
     def test_writer_creates_file(self, tmp_path, tiny_pipeline_result):
-        target = tmp_path / "orders.csv"
-        BitstampWriter().write({"events": tiny_pipeline_result.events}, target)
+        target = BitstampWriter().write(
+            {"events": tiny_pipeline_result.events}, tmp_path
+        )
+        assert target == tmp_path / "orders.csv"
         assert target.exists()
         assert target.stat().st_size > 0
         # No "trades" key -> no companion trades.csv is written.

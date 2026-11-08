@@ -197,10 +197,12 @@ Two of these are judgement calls worth stating plainly:
   report for each segment and then the capture's own checks from
   `manifest.json`: `capture_gaps` (time no segment covered),
   `unfinished_segments` (segments a dead capture process left open),
-  `dropped_messages` (messages a source could not use), and `book_resyncs`
-  (times a source lost the venue's stream and started again from a new opening
-  book). All four are warnings, so `--strict` fails on them. See
-  [Running for days](live-capture.md#running-for-days).
+  `dropped_messages` (messages a source could not use, or a count lost with
+  the source's counters), `capture_errors` (a segment that ended on an error, or was slow to stop)
+  and `book_resyncs` (times a source lost the venue's stream and started again
+  from a new opening book). All five are warnings, so `--strict` fails on
+  them. A single capture gets `dropped_messages` and `capture_errors` from its
+  `meta.json`. See [Running for days](live-capture.md#running-for-days).
 - **The rebuilt book against the venue's.** A LOBSTER orderbook file states
   the best N price levels of each side after every message. `venue_book`
   rebuilds the book from the messages and compares it with the file, row by

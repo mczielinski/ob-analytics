@@ -70,6 +70,8 @@ many runs and many pipelines.
 
 ::: ob_analytics.protocols.DataWriter
 
+::: ob_analytics.protocols.WriteTarget
+
 ::: ob_analytics.protocols.Source
 
 ::: ob_analytics.protocols.OfflineSource
@@ -85,5 +87,7 @@ many runs and many pipelines.
 ::: ob_analytics.protocols.RunContext
 
 ::: ob_analytics.live.LiveSource
+
+::: ob_analytics.live.UnmappedMessageError
 
 ::: ob_analytics.protocols.Metric

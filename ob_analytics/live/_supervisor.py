@@ -51,7 +51,6 @@ from ob_analytics.live._base import (
     CaptureConfig,
     CaptureResult,
     LiveSource,
-    SupportsDiagnostics,
     SupportsPreflight,
 )
 from ob_analytics.live._manifest import (
@@ -64,11 +63,13 @@ from ob_analytics.live._runner import (
     _DEPTH_COLS,
     _ORDER_COLS,
     _TRADE_COLS,
+    DIAGNOSTICS_ERROR,
     ORIGIN_SHUTDOWN,
     FileCaptureSink,
     _FirstEvent,
     check_credentials,
     install_stop_signals,
+    read_diagnostics,
     run_capturer,
 )
 from ob_analytics.protocols import Level
@@ -151,6 +152,12 @@ class _Running:
     # in time and was cancelled.
     stop_requested: pd.Timestamp | None = None
     stuck: bool = False
+    # Why it was cancelled, when it was: it took too long to stop, or a
+    # second signal asked for the capture to stop at once.
+    why_cancelled: str = ""
+    # The error to record if it then ended by itself before the cancel took
+    # (empty: nothing went wrong, as when a second signal came as it closed).
+    late_note: str = ""
     watchers: list[asyncio.Task[Any]] = field(default_factory=list)
 
 
@@ -169,7 +176,9 @@ async def run_capture(make_source: SourceFactory, config: CaptureConfig) -> Capt
     holds a lock on ``out_dir`` while it runs.
 
     SIGINT/SIGTERM stop the capture: the running segment is closed with its
-    closing rows and the manifest is finished.
+    closing rows and the manifest is finished.  A second signal stops it at
+    once: a segment still closing is cancelled and closed from its files, as
+    one that does not stop in time is.
 
     A source whose settings declare a :class:`~ob_analytics.config.Credential`
     that is not set raises :class:`~ob_analytics.exceptions.ConfigError`
@@ -194,9 +203,10 @@ async def run_capture(make_source: SourceFactory, config: CaptureConfig) -> Capt
         manifest = _open_manifest(root, source, config)
 
         stop = asyncio.Event()
+        at_once = asyncio.Event()
         loop = asyncio.get_running_loop()
-        installed = install_stop_signals(loop, stop)
-        supervisor = _Supervisor(make_source, config, root, manifest, stop)
+        installed = install_stop_signals(loop, stop, at_once.set)
+        supervisor = _Supervisor(make_source, config, root, manifest, stop, at_once)
         try:
             await supervisor.run(source)
         finally:
@@ -242,12 +252,15 @@ class _Supervisor:
         root: Path,
         manifest: CaptureManifest,
         stop: asyncio.Event,
+        at_once: asyncio.Event | None = None,
     ) -> None:
         self._make_source = make_source
         self._config = config
         self._root = root
         self._manifest = manifest
         self._stop = stop
+        # Set by a second signal: a segment still closing is cancelled now.
+        self._at_once = asyncio.Event() if at_once is None else at_once
         self._deadline = time.monotonic() + config.minutes * 60.0
         self._backoff = BACKOFF_START_SECONDS
         # A failing handover is retried no sooner than this (monotonic).
@@ -467,12 +480,27 @@ class _Supervisor:
         running.stop_reason = reason
         running.stop_requested = pd.Timestamp.now(tz="UTC")
         running.stop.set()
-        if not await _ends_within(running.task, STOP_TIMEOUT_SECONDS):
-            logger.error(
-                "Capture '{}': {} did not stop within {:.0f} s; cancelling it",
+        if not await _ends_within(
+            running.task, STOP_TIMEOUT_SECONDS, unless=self._at_once
+        ):
+            if self._at_once.is_set():
+                running.why_cancelled = (
+                    "a second signal stopped the capture before the segment had closed"
+                )
+                log = logger.warning
+            else:
+                running.why_cancelled = (
+                    f"the segment did not stop within {STOP_TIMEOUT_SECONDS:.0f} s"
+                )
+                running.late_note = (
+                    f"the segment took more than {STOP_TIMEOUT_SECONDS:.0f} s to stop"
+                )
+                log = logger.error
+            log(
+                "Capture '{}': {}: {}; cancelling it",
                 self._manifest.source,
                 running.segment.name,
-                STOP_TIMEOUT_SECONDS,
+                running.why_cancelled,
             )
             running.stuck = True
             running.task.cancel()
@@ -520,13 +548,14 @@ class _Supervisor:
             segment.n_book_events = result.n_order_events + result.n_depth_events
             segment.n_trade_events = result.n_trade_events
             segment.dropped = int(result.extras.get("dropped") or 0)
+            segment.diagnostics_error = result.extras.get(DIAGNOSTICS_ERROR)
             segment.book_resyncs = int(result.extras.get("book_resyncs") or 0)
             segment.raw_frames_skipped = running.sink.raw_frames_skipped
             if running.stuck:
-                late = (
-                    f"the segment took more than {STOP_TIMEOUT_SECONDS:.0f} s to stop"
+                segment.error = (
+                    "; ".join(e for e in (segment.error, running.late_note) if e)
+                    or None
                 )
-                segment.error = "; ".join(e for e in (segment.error, late) if e)
         else:
             segment.ended = pd.Timestamp.now(tz="UTC")
 
@@ -563,7 +592,7 @@ class _Supervisor:
         """
         segment = running.segment
         task = running.task
-        limit = f"the segment did not stop within {STOP_TIMEOUT_SECONDS:.0f} s"
+        limit = running.why_cancelled
         # What raw.jsonl skipped so far, in case its files cannot be closed.
         segment.raw_frames_skipped = running.sink.raw_frames_skipped
         if task.done():
@@ -785,9 +814,25 @@ def _finished_normally(task: asyncio.Task[Any]) -> bool:
     return task.done() and not task.cancelled() and task.exception() is None
 
 
-async def _ends_within(task: asyncio.Task[Any], seconds: float) -> bool:
-    """Wait up to *seconds* for *task* to end; whether it did."""
-    await asyncio.wait({task}, timeout=seconds)
+async def _ends_within(
+    task: asyncio.Task[Any], seconds: float, *, unless: asyncio.Event | None = None
+) -> bool:
+    """Wait up to *seconds* for *task* to end; whether it did.
+
+    The wait ends early when *unless* is set.
+    """
+    if unless is None:
+        await asyncio.wait({task}, timeout=seconds)
+        return task.done()
+    if unless.is_set():
+        return task.done()
+    waiter = asyncio.create_task(unless.wait())
+    try:
+        await asyncio.wait(
+            {task, waiter}, timeout=seconds, return_when=asyncio.FIRST_COMPLETED
+        )
+    finally:
+        waiter.cancel()
     return task.done()
 
 
@@ -890,6 +935,7 @@ class _ClosedFiles:
     n_book: int
     n_trade: int
     dropped: int
+    diagnostics_error: str | None
     book_resyncs: int
     raw_frames_skipped: int
 
@@ -965,7 +1011,6 @@ def _close_segment_files(
             "unfinished": True,
             "capture_error": error,
             "capture_error_phase": "stream",
-            "errors": int(meta.get("errors") or 0) + 1,
             **(raw or {}),
         }
     )
@@ -976,6 +1021,7 @@ def _close_segment_files(
         n_book=n_book,
         n_trade=n_trade,
         dropped=int(meta.get("dropped") or 0),
+        diagnostics_error=meta.get(DIAGNOSTICS_ERROR),
         book_resyncs=int(meta.get("book_resyncs") or 0),
         raw_frames_skipped=int(meta.get("n_raw_frames_skipped") or 0),
     )
@@ -990,6 +1036,7 @@ def _apply_closed_files(segment: Segment, closed: _ClosedFiles, error: str) -> N
     segment.n_book_events = closed.n_book
     segment.n_trade_events = closed.n_trade
     segment.dropped = closed.dropped
+    segment.diagnostics_error = closed.diagnostics_error
     segment.book_resyncs = closed.book_resyncs
     segment.raw_frames_skipped = closed.raw_frames_skipped
 
@@ -1095,10 +1142,6 @@ def _write_provisional_meta(running: _Running) -> None:
         else str(running.segment.stream_started),
         "provisional": True,
     }
-    if isinstance(running.source, SupportsDiagnostics):
-        try:
-            meta.update(running.source.diagnostics())
-        except Exception as exc:  # noqa: BLE001 - a heartbeat must not stop the capture
-            logger.debug("diagnostics() raised during heartbeat: {!r}", exc)
+    meta.update(read_diagnostics(running.source))
     meta.update(running.sink.raw_diagnostics())
     write_record(running.sink.out_dir, meta)

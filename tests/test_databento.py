@@ -1138,13 +1138,21 @@ class TestDbnFiles:
     @pytest.mark.parametrize("name", ["window.mbo.dbn", "window.mbo.dbn.zst"])
     def test_reading_a_file_closes_it(self, tmp_path, name):
         import gc
+        import sys
         import warnings
 
-        import zstandard
+        # databento needs zstandard only before Python 3.14, which has zstd in
+        # the standard library.
+        if sys.version_info >= (3, 14):
+            from compression.zstd import compress
+        else:
+            from zstandard import ZstdCompressor
+
+            compress = ZstdCompressor().compress
 
         data = dbn_bytes(LIFECYCLE)
         if name.endswith(".zst"):
-            data = zstandard.ZstdCompressor().compress(data)
+            data = compress(data)
         path = tmp_path / name
         path.write_bytes(data)
 
@@ -1416,11 +1424,12 @@ class TestDbnFiles:
         with pytest.raises(ValueError, match="whole"):
             DatabentoWriter(_config()).write({"events": events}, tmp_path / "out.dbn")
 
-    def test_the_writer_fills_a_directory(self, tmp_path):
+    def test_save_data_writes_one_dbn_file_and_refuses_a_folder(self, tmp_path):
         result = Pipeline(source=DatabentoSource()).run(mbo_frame(LIFECYCLE))
-        out = DatabentoWriter(result.config).write({"events": result.events}, tmp_path)
-        assert out == tmp_path / "events.dbn"
-        assert out.exists()
+        with pytest.raises(ConfigError, match="'databento' writes one file"):
+            save_data(result, tmp_path, fmt="databento")
+        save_data(result, tmp_path / "events.dbn", fmt="databento")
+        assert (tmp_path / "events.dbn").is_file()
 
     def test_the_source_supplies_a_writer(self):
         writer = DatabentoSource().create_writer(_config(), RunContext())

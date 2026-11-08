@@ -797,7 +797,8 @@ class TestManifest:
 
         gappy = _capture(tmp_path / "b", [_disconnect_after(4), OK], seconds=0.8)
         failed = {c.name for c in gappy.manifest.checks() if not c.passed}
-        assert failed == {"capture_gaps"}
+        # The disconnect is the error that ended the first segment.
+        assert failed == {"capture_gaps", "capture_errors"}
         assert "Capture summary" in gappy.manifest.render()
 
     def test_resyncs_are_counted_and_flagged(self, tmp_path):
@@ -1252,3 +1253,222 @@ class TestTrimToLastLine:
         path.write_bytes(b"one\ntwo\n")
         _supervisor._trim_to_last_line(path)
         assert path.read_bytes() == b"one\ntwo\n"
+
+
+# ---------------------------------------------------------------------------
+# What a capture lost, and stopping on a signal (#398)
+# ---------------------------------------------------------------------------
+
+
+class _Lossy(_ScriptedSource):
+    def diagnostics(self) -> dict[str, Any]:
+        return {**super().diagnostics(), "dropped": 2}
+
+
+class _NoCounters(_ScriptedSource):
+    def diagnostics(self) -> dict[str, Any]:
+        raise RuntimeError("counter state broken")
+
+
+class TestLossChecks:
+    def test_dropped_messages_fail_the_check(self, tmp_path):
+        cfg = CaptureConfig(
+            pair="btcusd", out_dir=tmp_path / "cap", minutes=0.4 / 60, keep_raw=False
+        )
+        run = asyncio.run(run_capture(lambda: _Lossy(OK), cfg))
+        assert run.manifest.dropped == 2
+        checks = {c.name: c for c in run.manifest.checks()}
+        assert not checks["dropped_messages"].passed
+        assert checks["capture_errors"].passed
+
+    def test_lost_counters_are_recorded_and_fail_the_check(self, tmp_path):
+        cfg = CaptureConfig(
+            pair="btcusd", out_dir=tmp_path / "cap", minutes=0.4 / 60, keep_raw=False
+        )
+        with pytest.warns(UserWarning, match="diagnostics"):
+            run = asyncio.run(run_capture(lambda: _NoCounters(OK), cfg))
+        (segment,) = run.manifest.segments
+        assert "counter state broken" in (segment.diagnostics_error or "")
+        meta = json.loads((run.out_dir / segment.name / "meta.json").read_text())
+        assert "counter state broken" in meta["diagnostics_error"]
+        checks = {c.name: c for c in run.manifest.checks()}
+        assert not checks["dropped_messages"].passed
+        assert segment.name in checks["dropped_messages"].detail
+        read = read_manifest(run.out_dir)
+        assert read is not None
+        assert read.segments[0].diagnostics_error == segment.diagnostics_error
+
+    def test_a_segment_that_ended_on_an_error_fails_capture_errors(self, tmp_path):
+        run = _capture(tmp_path, [_disconnect_after(4), OK], seconds=0.8)
+        checks = {c.name: c for c in run.manifest.checks()}
+        assert not checks["capture_errors"].passed
+        assert "seg-0001" in checks["capture_errors"].detail
+        assert "connection closed by venue" in checks["capture_errors"].detail
+
+
+class TestSecondSignal:
+    def test_a_second_signal_cancels_a_segment_still_closing(
+        self, tmp_path, monkeypatch
+    ):
+        import os
+        import signal
+
+        # Long enough that only the second signal can end the wait.
+        monkeypatch.setattr(_supervisor, "STOP_TIMEOUT_SECONDS", 30.0)
+        cfg = CaptureConfig(
+            pair="btcusd", out_dir=tmp_path / "cap", minutes=10.0, keep_raw=False
+        )
+
+        async def main() -> Any:
+            capture = asyncio.create_task(run_capture(_factory([HANG_ON_STOP]), cfg))
+            manifest = tmp_path / "cap" / "manifest.json"
+            while not (
+                manifest.is_file()
+                and json.loads(manifest.read_text())["segments"][0]["stream_started"]
+            ):
+                await asyncio.sleep(0.02)
+            os.kill(os.getpid(), signal.SIGINT)
+            await asyncio.sleep(0.3)
+            assert not capture.done()  # the segment hangs while it closes
+            os.kill(os.getpid(), signal.SIGINT)
+            return await capture
+
+        started = time.monotonic()
+        run = asyncio.run(main())
+
+        assert time.monotonic() - started < 10
+        (segment,) = run.manifest.segments
+        assert segment.end_reason is EndReason.STOPPED
+        assert "second signal" in (segment.error or "")
+        seg_dir = run.out_dir / segment.name
+        assert _every_order_closed(seg_dir / "orders.csv")
+        meta = json.loads((seg_dir / "meta.json").read_text())
+        assert "provisional" not in meta
+
+    def test_a_segment_that_closes_by_itself_after_the_second_signal_is_clean(
+        self, tmp_path, monkeypatch
+    ):
+        import os
+        import signal
+
+        # Its closing rows take 0.6 s and it ignores the cancel, so it ends by
+        # itself within the grace, with its own result.
+        monkeypatch.setattr(_supervisor, "STOP_TIMEOUT_SECONDS", 30.0)
+        monkeypatch.setattr(_supervisor, "STOP_GRACE_SECONDS", 3.0)
+        cfg = CaptureConfig(
+            pair="btcusd", out_dir=tmp_path / "cap", minutes=10.0, keep_raw=False
+        )
+
+        async def main() -> Any:
+            capture = asyncio.create_task(
+                run_capture(_factory([_stubborn_shutdown(0.6)]), cfg)
+            )
+            manifest = tmp_path / "cap" / "manifest.json"
+            while not (
+                manifest.is_file()
+                and json.loads(manifest.read_text())["segments"][0]["stream_started"]
+            ):
+                await asyncio.sleep(0.02)
+            os.kill(os.getpid(), signal.SIGINT)
+            await asyncio.sleep(0.1)
+            os.kill(os.getpid(), signal.SIGINT)
+            return await capture
+
+        run = asyncio.run(main())
+
+        (segment,) = run.manifest.segments
+        assert segment.end_reason is EndReason.STOPPED
+        assert segment.error is None
+        assert all(c.passed for c in run.manifest.checks())
+        meta = json.loads((run.out_dir / segment.name / "meta.json").read_text())
+        assert "capture_error" not in meta
+        assert "unfinished" not in meta
+
+
+_SIGTERM_SCRIPT = """
+import asyncio, sys
+from pathlib import Path
+
+from ob_analytics.live import CaptureConfig, run_capture
+from tests.test_capture_segments import _ScriptedSource
+
+cfg = CaptureConfig(
+    pair="btcusd", out_dir=Path(sys.argv[1]), minutes=10.0, keep_raw=False
+)
+run = asyncio.run(run_capture(lambda: _ScriptedSource(sys.argv[2]), cfg))
+print("segments", len(run.manifest.segments))
+"""
+
+
+def _start_capture_process(out: Path, behaviour: str) -> Any:
+    """Start a capture in a child process; return it once it streams."""
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parent.parent
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _SIGTERM_SCRIPT, str(out), behaviour],
+        cwd=root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    manifest = out / "manifest.json"
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline and proc.poll() is None:
+        try:
+            if json.loads(manifest.read_text())["segments"][0]["stream_started"]:
+                return proc
+        except (FileNotFoundError, ValueError, IndexError, KeyError):
+            pass
+        time.sleep(0.05)
+    proc.kill()
+    _, err = proc.communicate()
+    raise AssertionError(f"the capture never streamed:\n{err}")
+
+
+class TestSigterm:
+    """A real SIGTERM, sent to a capture running in its own process."""
+
+    def test_sigterm_closes_the_capture_and_exits_cleanly(self, tmp_path):
+        import signal
+
+        out = tmp_path / "cap"
+        proc = _start_capture_process(out, OK)
+        proc.send_signal(signal.SIGTERM)
+        stdout, stderr = proc.communicate(timeout=60)
+
+        assert proc.returncode == 0, stderr
+        assert "segments 1" in stdout
+        manifest = read_manifest(out)
+        assert manifest is not None
+        (segment,) = manifest.segments
+        assert segment.end_reason is EndReason.STOPPED
+        assert segment.error is None
+        seg_dir = out / segment.name
+        assert _every_order_closed(seg_dir / "orders.csv")
+        meta = json.loads((seg_dir / "meta.json").read_text())
+        assert "provisional" not in meta
+        assert meta["closed_cleanly"] is True
+
+    def test_a_second_sigterm_stops_a_segment_that_hangs_while_closing(self, tmp_path):
+        import signal
+
+        out = tmp_path / "cap"
+        proc = _start_capture_process(out, HANG_ON_STOP)
+        proc.send_signal(signal.SIGTERM)
+        time.sleep(0.5)
+        assert proc.poll() is None  # still waiting for the segment to close
+        started = time.monotonic()
+        proc.send_signal(signal.SIGTERM)
+        _, stderr = proc.communicate(timeout=60)
+
+        # Well inside the 20 s a segment otherwise has to stop.
+        assert time.monotonic() - started < 10
+        assert proc.returncode == 0, stderr
+        manifest = read_manifest(out)
+        assert manifest is not None
+        (segment,) = manifest.segments
+        assert segment.end_reason is EndReason.STOPPED
+        assert "second signal" in (segment.error or "")
+        assert _every_order_closed(out / segment.name / "orders.csv")

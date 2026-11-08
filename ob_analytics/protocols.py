@@ -98,6 +98,26 @@ class FeedType(str, Enum):
     UNKNOWN = "unknown"
 
 
+class WriteTarget(str, Enum):
+    """What a :class:`DataWriter` writes to: a folder or one file.
+
+    Each writer declares it as its :attr:`DataWriter.target`, and
+    :func:`~ob_analytics.data.save_data` checks the path it is given against
+    it:
+
+    * :attr:`FOLDER` — this package's own formats (Parquet, depth CSV,
+      Bitstamp, LOBSTER), which write several files into one folder.
+    * :attr:`FILE` — exports for another tool (hftbacktest, Nautilus,
+      Databento DBN), which write one file.
+
+    Mixes in ``str`` so members compare as their value
+    (``WriteTarget.FOLDER == "folder"``).
+    """
+
+    FOLDER = "folder"
+    FILE = "file"
+
+
 class SequenceKind(str, Enum):
     """What a feed's venue ``sequence`` number promises.
 
@@ -484,7 +504,22 @@ class DepthSource(Protocol):
 
 @runtime_checkable
 class DataWriter(Protocol):
-    """Writes pipeline results to a format-specific output."""
+    """Writes pipeline results to a format-specific output.
+
+    Attributes
+    ----------
+    target : WriteTarget
+        Whether :meth:`write` takes a folder or a file.
+        :func:`~ob_analytics.data.save_data` refuses a path of the other kind
+        before it calls :meth:`write`.
+    """
+
+    # Read-only: a writer declares it, and nothing downstream sets it.  A class
+    # attribute satisfies it.
+    @property
+    def target(self) -> WriteTarget:
+        """Whether this writer takes a folder or a file (:class:`WriteTarget`)."""
+        ...
 
     def write(
         self,
@@ -500,7 +535,7 @@ class DataWriter(Protocol):
             Pipeline output keyed by name (e.g. ``"events"``, ``"trades"``,
             ``"depth"``, ``"depth_summary"``).
         dest : str or Path
-            Output path (file or directory, format-dependent).
+            The folder or file to write, as :attr:`target` says.
         """
         ...
 
@@ -527,15 +562,14 @@ class Metric(Protocol):
     given to the method that names it, so the two must not share a name.
 
     A size setting is in the instrument's own units (BTC, shares, contracts)
-    and a price setting in the quote currency.  :meth:`compute` is handed a
-    pipeline result whose tables hold integer lots and ticks
-    (``result.metric(...)``) or one already converted to those units
-    (``result.plot(...)`` computes on
-    :func:`~ob_analytics.visualization.display_result`), and the same setting
-    must mean the same amount on both.  Pass it to a function that converts
-    it (such as :func:`~ob_analytics.flow_toxicity.compute_vpin`), or convert
-    it with the scale that ``frame.attrs["lot_size"]`` and
-    ``frame.attrs["tick_size"]`` give.
+    and a price setting in the quote currency, and so is the table
+    :meth:`compute` returns.  :meth:`compute` is handed the pipeline result as
+    stored, its tables holding integer lots and ticks, by
+    ``result.metric(...)``, ``result.plot(...)`` and the gallery alike.  Pass
+    the tables to functions that read the units off them (such as
+    :func:`~ob_analytics.flow_toxicity.compute_vpin`), or convert with the
+    scale that ``frame.attrs["lot_size"]`` and ``frame.attrs["tick_size"]``
+    give.
 
     Attributes
     ----------

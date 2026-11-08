@@ -82,6 +82,7 @@ from ob_analytics.protocols import (
     RunContext,
     TradeAttribution,
     TradeSource,
+    WriteTarget,
 )
 from ob_analytics.schemas import (
     BOOK_SIDE_DTYPE,
@@ -539,6 +540,8 @@ class DepthCsvWriter:
     settings : DepthCsvSettings, optional
         How to encode the timestamps and prices, as the loader reads them.
     """
+
+    target = WriteTarget.FOLDER
 
     def __init__(
         self,

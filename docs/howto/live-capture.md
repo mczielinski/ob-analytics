@@ -189,6 +189,12 @@ So a connection that hangs cannot stop the rolls, and SIGTERM ends a capture
 in under a minute: at most two of these limits, if it arrives while a roll is
 waiting for a segment that hangs.
 
+**A second Ctrl-C or SIGTERM.** The first signal asks the running segment to
+stop and write its closing rows. A second signal stops the capture at once: a
+segment still closing is cancelled and closed from its files, as above, and
+its error says a second signal stopped it. Every file is closed, and
+`meta.json` and the manifest are still written.
+
 This lets a service manager restart the capture. For example, a systemd unit
 with `Restart=always` and
 `ExecStart=ob-analytics capture bitstamp --pair btcusd --minutes 10080 --roll-minutes 60 --out /data/btcusd`
@@ -204,7 +210,7 @@ reboot.
 | `version` | The layout version (currently `1`) |
 | `started`, `ended` | When the capture started, and when it last stopped |
 | `restarts` | How many times the capture was started again in this directory |
-| `segments` | Each segment: when it streamed from and to (until it was asked to stop; none for a segment asked to stop before its first live event), why it ended (`rolled_time`, `rolled_size`, `failed`, `ended_early`, `unfinished`, `stopped`, `finished`), its error, row counts, the messages its source dropped, its `book_resyncs`, and the frames `raw.jsonl` skipped |
+| `segments` | Each segment: when it streamed from and to (until it was asked to stop; none for a segment asked to stop before its first live event), why it ended (`rolled_time`, `rolled_size`, `failed`, `ended_early`, `unfinished`, `stopped`, `finished`), its error, row counts, the messages its source dropped, its `diagnostics_error` when the source's counters were lost, its `book_resyncs`, and the frames `raw.jsonl` skipped |
 | `gaps` | Each stretch with no segment streaming: start, end, length, and cause (`disconnect`, `restart`, `roll`, `stopped`, `finished`) |
 | `dropped`, `book_resyncs`, `raw_frames_skipped`, `gap_seconds` | Totals over the whole capture |
 
@@ -212,9 +218,11 @@ The manifest is rewritten after every change and every 10 seconds while the
 capture runs, so it is never more than 10 seconds out of date.
 
 `ob-analytics audit /tmp/cap` audits each segment, then prints the capture's
-own checks: gaps, segments a dead process left open, dropped messages, and
-resyncs.
-These are warnings, so `audit --strict` fails a capture that has any.
+own checks: gaps, segments a dead process left open, dropped messages,
+errors (a segment that ended on one, or was slow to stop), and resyncs.
+These are warnings, so `audit --strict` fails a capture that has any. A
+segment whose source's counters were lost (`diagnostics_error`) fails the
+dropped-message check too, since its count is not known.
 You can audit or process a capture while it runs. The segment still being
 captured is left out, and the log names it: it has no closing rows yet, so
 every order still resting would read as a fault. Only closed segments are
@@ -233,9 +241,19 @@ if no segment streamed at all. A failure after that ends the segment and the
 capture carries on, as described above.
 
 A segment keeps the rows it wrote before an error. Its `meta.json` records the
-error as `capture_error`, the step that failed as `capture_error_phase`
-(`snapshot`, `stream` or `shutdown`), and counts it in `errors`. After a failed
-snapshot the stream does not run.
+error as `capture_error`, and the step that failed as `capture_error_phase`
+(`snapshot`, `stream`, `shutdown`, or `close` when a file could not be
+written out). After a failed snapshot the stream does not run. Messages a
+source received but could not use are counted in `dropped`. At L3, an order
+message a source cannot use (Bitstamp's, or cryptofeed's) ends the segment
+instead, with `UnmappedMessageError` as its error: the book would be wrong
+from then on, and the next segment starts from a fresh snapshot. A trade
+Bitstamp cannot parse is still left out and counted, since its order events
+carry the fills. If the source
+cannot report its counters, the capture logs a warning and `meta.json`
+records `diagnostics_error` instead. `ob-analytics audit` on a single capture
+reports the dropped messages and the error as the `dropped_messages` and
+`capture_errors` warnings.
 
 ## Adding a new venue
 

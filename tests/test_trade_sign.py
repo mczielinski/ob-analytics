@@ -231,6 +231,9 @@ class TestTheQuoteATradeArrivedInto:
         from ob_analytics.cost import transaction_costs
 
         trades, quotes = self._after_a_buy_took_the_ask()
+        # One tick per dollar and one lot per unit: the prices read as given.
+        for frame in (trades, quotes):
+            frame.attrs.update(tick_size=1.0, lot_size=1.0)
 
         costs = transaction_costs(trades, quotes, horizon="1s")
 
@@ -575,11 +578,9 @@ def _agreement(true_side: pd.Series, predicted: pd.Series) -> float:
 
 
 @pytest.fixture(scope="module")
-def sample_pipeline_result(bitstamp_sample_dir):
+def sample_pipeline_result(bundled_sample_result):
     """Full pipeline run on the bundled Bitstamp sample (loaded once)."""
-    from ob_analytics import Pipeline
-
-    return Pipeline().run(bitstamp_sample_dir / "orders.csv.gz")
+    return bundled_sample_result
 
 
 class TestBitstampValidationHarness:

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -30,6 +31,7 @@ import pandas as pd
 
 from ob_analytics._secrets import redact
 from ob_analytics.analytics import QualityCheck, Severity
+from ob_analytics.capture_record import read_fields
 
 MANIFEST_NAME = "manifest.json"
 #: What the manifest's ``format`` field says, so a reader knows the file.
@@ -118,6 +120,9 @@ class Segment:
     dropped : int
         Messages the source received but could not use (its ``dropped``
         counter in ``meta.json``).
+    diagnostics_error : str or None
+        Why the source's counters are missing from ``meta.json``, when its
+        ``diagnostics()`` raised: ``dropped`` is then not known.
     book_resyncs : int
         Times the source lost the venue's stream and started again from a new
         opening book within the segment (its ``book_resyncs`` counter in
@@ -138,6 +143,7 @@ class Segment:
     n_book_events: int = 0
     n_trade_events: int = 0
     dropped: int = 0
+    diagnostics_error: str | None = None
     book_resyncs: int = 0
     raw_frames_skipped: int = 0
 
@@ -154,6 +160,7 @@ class Segment:
             "n_book_events": self.n_book_events,
             "n_trade_events": self.n_trade_events,
             "dropped": self.dropped,
+            "diagnostics_error": self.diagnostics_error,
             "book_resyncs": self.book_resyncs,
             "raw_frames_skipped": self.raw_frames_skipped,
         }
@@ -192,6 +199,7 @@ class Segment:
             n_book_events=int(d.get("n_book_events") or 0),
             n_trade_events=int(d.get("n_trade_events") or 0),
             dropped=int(d.get("dropped") or 0),
+            diagnostics_error=d.get("diagnostics_error"),
             book_resyncs=int(d.get("book_resyncs") or 0),
             raw_frames_skipped=int(d.get("raw_frames_skipped") or 0),
         )
@@ -460,8 +468,10 @@ class CaptureManifest:
         """The capture-level checks ``ob-analytics audit`` adds to each segment's.
 
         Each is a :attr:`~ob_analytics.analytics.Severity.WARNING`: a gap, a
-        dropped message or a resync is data the capture does not have, which
-        the data on either side of it still describes correctly.
+        dropped message, an error or a resync is data the capture does not
+        have, which the data on either side of it still describes correctly.
+        ``dropped_messages`` and ``capture_errors`` are the checks
+        :func:`loss_checks` makes, from every segment.
         """
         longest = max(self.gaps, key=lambda g: g.seconds, default=None)
         gap_detail = (
@@ -491,11 +501,15 @@ class CaptureManifest:
                     else "every segment was closed by the process that wrote it"
                 ),
             ),
-            QualityCheck(
-                name="dropped_messages",
-                passed=self.dropped == 0,
-                severity=Severity.WARNING,
-                detail=(f"{self.dropped} message(s) the sources could not use"),
+            *loss_checks(
+                dropped=self.dropped,
+                counters_lost=[s.name for s in self.segments if s.diagnostics_error],
+                # A segment a dead process left open is the check above.
+                errors=[
+                    f"{s.name}: {s.error}"
+                    for s in self.segments
+                    if s.error and s.end_reason is not EndReason.UNFINISHED
+                ],
             ),
             QualityCheck(
                 name="book_resyncs",
@@ -544,6 +558,69 @@ class CaptureManifest:
         else:
             lines.append("Checks: all passed")
         return "\n".join(lines)
+
+
+def loss_checks(
+    *, dropped: int, counters_lost: Sequence[str], errors: Sequence[str]
+) -> tuple[QualityCheck, QualityCheck]:
+    """The checks for what a capture's sources lost, as ``audit`` reports them.
+
+    ``dropped_messages`` fails when a source left out messages it could not
+    use (*dropped*), or when the count is not known because a source's
+    counters were lost (*counters_lost* names where).  ``capture_errors``
+    fails when the capture recorded an error (*errors*, each one line): one
+    that ended a segment, or a segment that was slow to stop.
+    Both are :attr:`~ob_analytics.analytics.Severity.WARNING`.
+    """
+    dropped_detail = f"{dropped} message(s) the sources could not use"
+    if counters_lost:
+        dropped_detail += (
+            "; the counters of "
+            + ", ".join(counters_lost)
+            + " were lost (diagnostics_error in meta.json), so more may be missing"
+        )
+    return (
+        QualityCheck(
+            name="dropped_messages",
+            passed=dropped == 0 and not counters_lost,
+            severity=Severity.WARNING,
+            detail=dropped_detail,
+        ),
+        QualityCheck(
+            name="capture_errors",
+            passed=not errors,
+            severity=Severity.WARNING,
+            detail=(
+                f"{len(errors)} error(s) while capturing: " + "; ".join(errors)
+                if errors
+                else "no error while capturing"
+            ),
+        ),
+    )
+
+
+def record_checks(path: Path) -> tuple[QualityCheck, ...]:
+    """The :func:`loss_checks` of the single capture at *path*, from its ``meta.json``.
+
+    *path* is a capture made by
+    :func:`~ob_analytics.live._runner.run_capturer`, or the output of
+    ``ob-analytics process`` made from one.  Empty when there is no
+    ``meta.json``: the input is not a live capture.
+    """
+    try:
+        fields = read_fields(path)
+    except OSError:
+        # Reading the capture's record already warned that it cannot be read.
+        return ()
+    if fields is None:
+        return ()
+    error = fields.get("capture_error")
+    dropped = fields.get("dropped")
+    return loss_checks(
+        dropped=dropped if isinstance(dropped, int) and dropped > 0 else 0,
+        counters_lost=["this capture"] if fields.get("diagnostics_error") else [],
+        errors=[f"{fields.get('capture_error_phase')}: {error}"] if error else [],
+    )
 
 
 def read_manifest(path: Path) -> CaptureManifest | None:

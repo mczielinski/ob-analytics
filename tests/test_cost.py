@@ -27,13 +27,15 @@ def _trades(prices, directions, volumes=None, offsets=None):
         offsets = list(range(n))
     if volumes is None:
         volumes = [1.0] * n
-    return pd.DataFrame(
-        {
-            "timestamp": [BASE + pd.Timedelta(seconds=s) for s in offsets],
-            "price": list(prices),
-            "volume": list(volumes),
-            "direction": list(directions),
-        }
+    return _whole_units(
+        pd.DataFrame(
+            {
+                "timestamp": [BASE + pd.Timedelta(seconds=s) for s in offsets],
+                "price": list(prices),
+                "volume": list(volumes),
+                "direction": list(directions),
+            }
+        )
     )
 
 
@@ -41,13 +43,25 @@ def _quotes(bids, asks, offsets=None):
     """Build a minimal quote frame in the depth_summary spelling."""
     if offsets is None:
         offsets = list(range(len(bids)))
-    return pd.DataFrame(
-        {
-            "timestamp": [BASE + pd.Timedelta(seconds=s) for s in offsets],
-            "best_bid_price": list(bids),
-            "best_ask_price": list(asks),
-        }
+    return _whole_units(
+        pd.DataFrame(
+            {
+                "timestamp": [BASE + pd.Timedelta(seconds=s) for s in offsets],
+                "best_bid_price": list(bids),
+                "best_ask_price": list(asks),
+            }
+        )
     )
+
+
+def _whole_units(frame):
+    """Mark *frame* as one tick per currency unit and one lot per unit of size.
+
+    The hand-worked numbers below are then in currency units whether a column
+    holds integers or floats.
+    """
+    frame.attrs.update(tick_size=1.0, lot_size=1.0)
+    return frame
 
 
 # ── Effective / realized spread and price impact ─────────────────────
@@ -275,13 +289,15 @@ class TestTransactionCosts:
         `resolve_direction` infers the blank instead, so both read +2.
         """
         quotes = _quotes([99] * 9, [101] * 9)
-        trades = pd.DataFrame(
-            {
-                "timestamp": [BASE + pd.Timedelta(seconds=s) for s in (3, 5)],
-                "price": [101, 101],
-                "volume": [1.0, 1.0],
-                "direction": ["buy", None],
-            }
+        trades = _whole_units(
+            pd.DataFrame(
+                {
+                    "timestamp": [BASE + pd.Timedelta(seconds=s) for s in (3, 5)],
+                    "price": [101, 101],
+                    "volume": [1.0, 1.0],
+                    "direction": ["buy", None],
+                }
+            )
         )
 
         costs = transaction_costs(trades, quotes, horizon="1s")
@@ -633,12 +649,9 @@ class TestRollSpread:
 class TestBundledSample:
     """Every measure runs on the bundled Bitstamp capture (issue #110)."""
 
-    @pytest.fixture(scope="class")
-    @classmethod
-    def result(cls):
-        import ob_analytics as ob
-
-        return ob.Pipeline().run(str(ob.sample_csv_path()))
+    @pytest.fixture
+    def result(self, bundled_sample_result):
+        return bundled_sample_result
 
     def test_costs_decompose(self, result):
         costs = transaction_costs(result.trades, result.depth_summary)
@@ -677,3 +690,96 @@ class TestBundledSample:
         assert roll.iloc[0]["autocovariance"] > 0
         assert roll.iloc[0]["autocorrelation"] > 0
         assert np.isnan(roll.iloc[0]["roll_spread"])
+
+
+# ── Units: integer ticks and lots report the same as display floats ──
+
+
+TICK, LOT = 0.01, 1e-8
+
+
+def _raw_and_display():
+    """One tape and its quotes, as a run stores them and as they are shown."""
+    raw_trades = pd.DataFrame(
+        {
+            "timestamp": [BASE + pd.Timedelta(seconds=s) for s in range(8)],
+            "price": [10_010, 9_990, 10_020, 9_980, 10_030, 9_990, 10_040, 10_000],
+            "volume": [50_000_000, 20_000_000, 150_000_000, 10_000_000] * 2,
+            "direction": ["buy", "sell"] * 4,
+        }
+    )
+    raw_quotes = pd.DataFrame(
+        {
+            "timestamp": [BASE + pd.Timedelta(seconds=s) for s in range(-1, 10)],
+            "best_bid_price": [9_995 + i for i in range(11)],
+            "best_ask_price": [10_005 + i for i in range(11)],
+        }
+    )
+    for frame in (raw_trades, raw_quotes):
+        frame.attrs.update(tick_size=TICK, lot_size=LOT)
+    display_trades = raw_trades.assign(
+        price=raw_trades["price"] * TICK, volume=raw_trades["volume"] * LOT
+    )
+    display_quotes = raw_quotes.assign(
+        best_bid_price=raw_quotes["best_bid_price"] * TICK,
+        best_ask_price=raw_quotes["best_ask_price"] * TICK,
+    )
+    return raw_trades, raw_quotes, display_trades, display_quotes
+
+
+class TestInstrumentUnits:
+    """Every cost measure reports in the quote currency and the instrument's units."""
+
+    def test_transaction_costs(self):
+        raw_t, raw_q, shown_t, shown_q = _raw_and_display()
+
+        raw = transaction_costs(raw_t, raw_q, horizon="1s")
+        shown = transaction_costs(shown_t, shown_q, horizon="1s")
+
+        pd.testing.assert_frame_equal(raw, shown)
+        # 100.10 against a mid of 100.00: a 0.20 round trip, in dollars.
+        assert raw["price"].iloc[0] == pytest.approx(100.10)
+        assert raw["volume"].iloc[0] == pytest.approx(0.5)
+        assert raw["effective_spread"].iloc[0] == pytest.approx(0.20)
+        assert cost_summary(raw).volume == pytest.approx(cost_summary(shown).volume)
+
+    def test_a_tick_valued_mid_column_is_read_in_the_touch_units(self):
+        # A mid derived from integer ticks is a float in ticks.
+        raw_t, raw_q, shown_t, shown_q = _raw_and_display()
+        raw_q = raw_q.assign(
+            micro_price=(raw_q["best_bid_price"] + raw_q["best_ask_price"]) / 2.0
+        )
+        shown_q = shown_q.assign(
+            micro_price=(shown_q["best_bid_price"] + shown_q["best_ask_price"]) / 2
+        )
+
+        raw = transaction_costs(raw_t, raw_q, horizon="1s", mid_column="micro_price")
+        shown = transaction_costs(
+            shown_t, shown_q, horizon="1s", mid_column="micro_price"
+        )
+
+        pd.testing.assert_frame_equal(raw, shown)
+
+    def test_amihud(self):
+        raw_t, _, shown_t, _ = _raw_and_display()
+
+        raw = amihud(raw_t, window="4s")
+        pd.testing.assert_frame_equal(raw, amihud(shown_t, window="4s"))
+        # Turnover in dollars: 100.10 * 0.5 + 99.90 * 0.2 + ...
+        expected = (shown_t["price"] * shown_t["volume"]).iloc[:4].sum()
+        assert raw["turnover"].iloc[0] == pytest.approx(expected)
+        assert raw["first_price"].iloc[0] == pytest.approx(100.10)
+
+    def test_roll_spread(self):
+        raw_t, _, shown_t, _ = _raw_and_display()
+
+        raw = roll_spread(raw_t)
+        pd.testing.assert_frame_equal(raw, roll_spread(shown_t))
+        assert raw["mean_price"].iloc[0] == pytest.approx(shown_t["price"].mean())
+
+    def test_integer_prices_without_a_tick_size_raise(self):
+        raw_t, _, _, _ = _raw_and_display()
+        raw_t.attrs.clear()
+
+        with pytest.raises(ConfigError, match="tick_size"):
+            roll_spread(raw_t)

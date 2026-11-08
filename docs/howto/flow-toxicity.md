@@ -6,6 +6,10 @@ title: Compute flow toxicity
 
 Detect informed trading and measure price impact. These work on any trades
 DataFrame — run the pipeline first, then compute metrics on `result.trades`.
+Every result is in the instrument's own units: prices in the quote currency
+and sizes in BTC on the Bitstamp sample. The functions read `tick_size` and
+`lot_size` from the trades' `attrs`, so the run's integer ticks and lots and a
+display-unit frame give the same numbers.
 
 ## VPIN
 
@@ -99,7 +103,8 @@ fig = plot("kyle_lambda", **prepare.kyle_lambda(kyle))
 save_figure(fig, "kyle_lambda.png")
 ```
 
-`significant` is `False` when there are fewer than 30 windows
+λ is in dollars per BTC here: the price move, in the quote currency, per
+unit of net order flow. `significant` is `False` when there are fewer than 30 windows
 (`KYLE_MIN_WINDOWS`), when `|t|` is below 2 (`KYLE_MIN_T_STAT`), or when the
 fit is undefined; `diagnostics` lists which. The interval `ci_low` / `ci_high`
 comes from a block bootstrap over the regression windows: 1000 resamples by
@@ -110,10 +115,11 @@ change it, `ci_level=` for a different coverage, or `n_boot=0` to skip it.
 
 ```python
 from ob_analytics import order_flow_imbalance
-from ob_analytics.visualization import plot, save_figure, prepare
+from ob_analytics.visualization import save_figure
 
 ofi = order_flow_imbalance(result.trades, window="1min")
-fig = plot("order_flow_imbalance", **prepare.ofi(ofi, trades=result.trades))
+# The same table, drawn with each window's last trade price in dollars.
+fig = result.plot("order_flow_imbalance", window="1min")
 save_figure(fig, "ofi.png")
 ```
 
@@ -121,11 +127,12 @@ save_figure(fig, "ofi.png")
 
 L3 crypto (Bitstamp) labels each trade's taker side, so `result.trades` has a
 real `direction` and the metrics above just work. L2 / aggregated feeds (and
-many CCXT sources) don't — so VPIN and OFI infer the buy/sell split with a
-[trade-sign classifier](../api/trade_sign.md) when `direction` is absent:
+many CCXT sources) don't — so VPIN, Kyle's λ and OFI infer the buy/sell
+split with a [trade-sign classifier](../api/trade_sign.md) when `direction`
+is absent, and all three take the same `sign_method` and `quotes`:
 
 ```python
-from ob_analytics import compute_vpin, order_flow_imbalance
+from ob_analytics import compute_kyle_lambda, compute_vpin, order_flow_imbalance
 
 # A trades frame with no aggressor side, such as an L2 capture's.
 l2_trades = result.trades.drop(columns=["direction"])
@@ -148,6 +155,9 @@ vpin = compute_vpin(
 vpin = compute_vpin(l2_trades, bucket_volume=bucket, sign_method="bvc")
 
 ofi = order_flow_imbalance(l2_trades, window="1min", sign_method="tick")
+kyle = compute_kyle_lambda(
+    l2_trades, window="5min", sign_method="lee_ready", quotes=result.depth_summary
+)
 ```
 
 Lee–Ready reads the quote each trade arrived into: the last quote strictly

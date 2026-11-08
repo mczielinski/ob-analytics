@@ -225,7 +225,7 @@ def run_declarations(path: Any, source: Any) -> FeedDeclarations:
         )
     sequence_kind = record.sequence_kind
     if sequence_kind is None and made_by != reader:
-        sequence_kind = _declared_sequence_kind(made_by)
+        sequence_kind = _declared_sequence_kind(made_by, default=declared.sequence_kind)
     return FeedDeclarations(
         feed_type=record.feed_type or declared.feed_type,
         trade_attribution=record.trade_attribution or declared.trade_attribution,
@@ -235,19 +235,26 @@ def run_declarations(path: Any, source: Any) -> FeedDeclarations:
     )
 
 
-def _declared_sequence_kind(source_name: str) -> SequenceKind | None:
+def _declared_sequence_kind(source_name: str, default: SequenceKind) -> SequenceKind:
     """What the source called *source_name* declares as its sequence kind.
 
-    ``None`` when the source cannot be built here: not installed, or a
-    plug-in that needs settings to start.  The check must not stop a run.
+    *default*, with a warning, when the source cannot be built here: not
+    installed, or a plug-in that needs settings to start.  The check must
+    not stop a run.
     """
     from ob_analytics.sources import get_source
 
     try:
         return sequence_kind_of(get_source(source_name)())
     except Exception as exc:  # noqa: BLE001 - fall back, never stop the run
-        logger.debug("Cannot read what {} declares: {!r}", source_name, exc)
-        return None
+        logger.warning(
+            "Cannot read what the {} source declares ({!r}); checking the venue "
+            "sequence as {} instead",
+            source_name,
+            exc,
+            default.value,
+        )
+        return default
 
 
 def read_instrument(path: Any) -> dict[str, Any]:

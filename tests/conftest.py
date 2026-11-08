@@ -15,6 +15,27 @@ SAMPLE_CSV = (
     / "orders.csv.gz"
 )
 
+# Live capture is documented as Linux and macOS only, so on Windows the tests
+# of the capture code are not collected. A new test module for live capture
+# belongs in this list.
+LIVE_CAPTURE_TESTS = [
+    "test_bitstamp_capture.py",
+    "test_capture_segments.py",
+    "test_ccxt_source.py",
+    "test_credentials.py",
+    "test_cryptofeed_source.py",
+    "test_cryptofeed_venues.py",
+    "test_kalshi.py",
+    "test_live_protocol.py",
+    "test_polymarket.py",
+]
+# The speed check measures peak memory with the POSIX ``resource`` module and
+# runs on a Linux runner only, so its tests are not collected on Windows either.
+POSIX_ONLY_TESTS = ["test_bench.py"]
+collect_ignore = (
+    LIVE_CAPTURE_TESTS + POSIX_ONLY_TESTS if sys.platform == "win32" else []
+)
+
 
 @pytest.fixture(scope="module")
 def sample_csv_path() -> Path:
@@ -22,6 +43,36 @@ def sample_csv_path() -> Path:
     if not SAMPLE_CSV.exists():
         pytest.skip(f"Sample data not found: {SAMPLE_CSV}")
     return SAMPLE_CSV
+
+
+@pytest.fixture(scope="session")
+def _bundled_sample_run():
+    """The bundled sample through the default pipeline, once per session.
+
+    The run takes ~15s, and a dozen modules need it. Do not use this one in a
+    test: use ``bundled_sample_result``, which hands each module its own copy.
+    """
+    if not SAMPLE_CSV.exists():
+        pytest.skip(f"Sample data not found: {SAMPLE_CSV}")
+    from ob_analytics.pipeline import Pipeline
+
+    return Pipeline().run(SAMPLE_CSV)
+
+
+@pytest.fixture(scope="module")
+def bundled_sample_result(_bundled_sample_run):
+    """A copy of the session's bundled-sample run, one per module.
+
+    Each module used to run the sample itself; the copy keeps that isolation
+    (a module that changes a frame does not change it for the next one) for a
+    fraction of the cost.
+    """
+    import dataclasses
+
+    run = _bundled_sample_run
+    return dataclasses.replace(
+        run, **{name: frame.copy() for name, frame in run.tables().items()}
+    )
 
 
 @pytest.fixture(scope="session")

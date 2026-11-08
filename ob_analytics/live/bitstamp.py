@@ -17,6 +17,10 @@ What the capturer does:
   the snapshot (already reflected in the synthetic ``created`` rows).
 * Emits a synthetic ``deleted`` event at shutdown for every order still
   resting (full ``created -> ... -> deleted`` lifecycle).
+* Raises :class:`~ob_analytics.live.UnmappedMessageError` on an order
+  message (a snapshot row or a live event) it cannot parse, since the book
+  would be wrong from then on.  A trade it cannot parse is left out and
+  counted in ``dropped``: the order events carry the fills.
 * Raises on ``ConnectionClosed`` instead of reconnecting.  The feed has no
   sequence numbers, so nothing could tell which orders changed while the
   connection was down, and an order deleted then would rest in the capture
@@ -40,7 +44,7 @@ import websockets
 from loguru import logger
 from websockets.exceptions import ConnectionClosed
 
-from ob_analytics.live._base import CaptureConfig, EventDict
+from ob_analytics.live._base import CaptureConfig, EventDict, UnmappedMessageError
 
 WS_URL = "wss://ws.bitstamp.net"
 REST_BOOK_URL = "https://www.bitstamp.net/api/v2/order_book/{pair}/?group=2"
@@ -109,7 +113,9 @@ class BitstampCapturer:
         # Buffered WS frames received during the REST snapshot fetch.
         self._buffered: list[tuple[dict[str, Any], int]] = []
 
-        # Diagnostic counters, written to meta.json.
+        # Diagnostic counters, written to meta.json.  ``dropped`` counts the
+        # trades that could not be parsed; an order message that cannot be
+        # parsed ends the stream instead.
         self.dropped = 0
         self.pre_snapshot_skipped = 0
         self.pre_snapshot_trades_skipped = 0
@@ -202,9 +208,12 @@ class BitstampCapturer:
                     price = float(row[0])
                     volume = float(row[1])
                     order_id = int(row[2])
-                except (IndexError, TypeError, ValueError):
-                    self.dropped += 1
-                    continue
+                except (IndexError, TypeError, ValueError) as exc:
+                    # The stream will not run, so its close never comes.
+                    await self._close_ws()
+                    raise UnmappedMessageError(
+                        f"cannot parse a snapshot {direction}: {row!r} ({exc!r})"
+                    ) from exc
                 if volume <= 0:
                     continue
                 self._open_orders[order_id] = (price, direction, volume)
@@ -243,10 +252,18 @@ class BitstampCapturer:
         deadline = time.monotonic() + config.minutes * 60.0
 
         # 1. Replay buffered frames captured during the REST snapshot fetch.
-        for msg, recv_ms in self._buffered:
-            parsed = self._parse_buffered(msg, recv_ms, orders_channel, trades_channel)
-            if parsed is not None:
-                yield parsed
+        try:
+            for msg, recv_ms in self._buffered:
+                parsed = self._parse_buffered(
+                    msg, recv_ms, orders_channel, trades_channel
+                )
+                if parsed is not None:
+                    yield parsed
+        except BaseException:
+            # A frame that cannot be parsed, or a stop: the loop below, whose
+            # ``finally`` closes the connection, never runs.
+            await self._close_ws()
+            raise
         self._buffered.clear()
 
         if self._ws is None:
@@ -444,13 +461,15 @@ class BitstampCapturer:
             volume = float(d["amount"])
             order_type = int(d["order_type"])
             ex_us = int(d["microtimestamp"])
-        except (KeyError, TypeError, ValueError):
-            self.dropped += 1
-            return None
+        except (KeyError, TypeError, ValueError) as exc:
+            raise UnmappedMessageError(
+                f"cannot parse an order event: {d!r} ({exc!r})"
+            ) from exc
         direction = _DIRECTION_MAP.get(order_type)
         if direction is None:
-            self.dropped += 1
-            return None
+            raise UnmappedMessageError(
+                f"order event with unknown order_type {order_type!r}: {d!r}"
+            )
 
         # Pre-snapshot frame: already reflected in synthetic creates.
         if self._snapshot_us and ex_us <= self._snapshot_us:

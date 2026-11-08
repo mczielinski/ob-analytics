@@ -93,7 +93,6 @@ from ob_analytics.cost import (
 from ob_analytics.data import (
     OutputTables,
     ParquetWriter,
-    PickleWriter,
     load_data,
     load_result,
     load_writer_plugins,
@@ -170,6 +169,7 @@ from ob_analytics.protocols import (
     SupportsWriter,
     TradeAttribution,
     TradeSource,
+    WriteTarget,
 )
 from ob_analytics.schemas import (
     SYMBOL_COLUMN,
@@ -267,7 +267,6 @@ __all__ = [
     "OfflineSource",
     "OutputTables",
     "ParquetWriter",
-    "PickleWriter",
     # ── Pipeline orchestration ───────────────────────────────────────
     "Pipeline",
     "PipelineConfig",
@@ -286,6 +285,7 @@ __all__ = [
     "ToyOrder",
     "TradeAttribution",
     "TradeSource",
+    "WriteTarget",
     "__version__",
     # ── Transaction cost and liquidity ───────────────────────────────
     "amihud",

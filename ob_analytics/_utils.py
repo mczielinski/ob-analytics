@@ -368,7 +368,8 @@ def _unit_scale(
         raise ConfigError(
             f"{context}: {column!r} holds whole steps of the instrument, and "
             f"the frame has no attrs[{key!r}] to say how large one step is, so "
-            f"a setting in the instrument's own units cannot be converted. Set "
+            f"neither a setting nor a result can be put in the instrument's own "
+            f"units. Set "
             f"frame.attrs[{key!r}] to the instrument's step, or convert the "
             f"frame with display_result first."
         )

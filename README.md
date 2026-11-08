@@ -162,7 +162,10 @@ uv run ty check ob_analytics/ tests/
 ```
 
 CI runs automatically on push/PR via GitHub Actions — lint, type check,
-pytest on Python 3.11/3.12/3.13, and Codecov coverage upload.
+pytest on Python 3.11 to 3.14, macOS and Windows, the lowest allowed
+dependency versions, a core-only install of the built wheel, and Codecov
+coverage upload. See [CONTRIBUTING.md](CONTRIBUTING.md#ci-checks) for the full
+list.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) (or the rendered
 [Architecture page](https://mczielinski.github.io/ob-analytics/architecture/))

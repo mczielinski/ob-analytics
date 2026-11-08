@@ -12,12 +12,11 @@ from typing import TYPE_CHECKING, Any
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-from loguru import logger
 
 from ob_analytics._registry import Registry, load_plugins
 from ob_analytics.config import PipelineConfig, instrument_fields
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.protocols import DataWriter, FeedDeclarations
+from ob_analytics.protocols import DataWriter, FeedDeclarations, WriteTarget
 from ob_analytics.schemas import (
     CONFIG_KEY,
     DECLARATIONS_KEY,
@@ -70,8 +69,17 @@ def register_writer(name: str, factory: WriterFactory) -> None:
 
 
 def list_writers() -> list[str]:
-    """Return a sorted list of registered writer names."""
-    return WRITERS.list()
+    """Return every format :func:`save_data` accepts, sorted.
+
+    The formats are the writers registered via :func:`register_writer` and
+    the sources that write their own format (those with a ``create_writer``
+    method).  This is the list ``save_data`` checks *fmt* against and names
+    in its error.
+    """
+    from ob_analytics.sources import SOURCES
+
+    sources = [name for name in SOURCES.list() if _writes_a_format(name)]
+    return sorted({*WRITERS.list(), *sources})
 
 
 def _register_entry_point(ep: EntryPoint) -> str:
@@ -210,10 +218,12 @@ class ParquetWriter:
 
     The library's default output format, and a registered writer like any other
     rather than a branch inside :func:`save_data`, so a user can register their
-    own under ``"parquet"`` and replace it.
+    own under ``"parquet"`` and replace it.  It writes a folder.
 
     Satisfies the :class:`~ob_analytics.protocols.DataWriter` protocol.
     """
+
+    target = WriteTarget.FOLDER
 
     def __init__(self, config: Any = None) -> None:
         self._tick_sizes = tick_sizes_from_config(config)
@@ -247,35 +257,6 @@ class ParquetWriter:
                 config=self._config,
                 declarations=declarations,
             )
-        return p
-
-
-class PickleWriter:
-    """Write a run's frames as one pickle file.
-
-    Kept for backward compatibility and warned about on every call: a pickle
-    executes code on load, so it is unsafe for data you did not write.  A
-    registered writer like any other.
-
-    Satisfies the :class:`~ob_analytics.protocols.DataWriter` protocol.
-    """
-
-    def write(
-        self,
-        data: dict[str, pd.DataFrame],
-        dest: str | Path,
-        **kwargs: Any,
-    ) -> Path:
-        """Write *data* whole to *dest* with :func:`pandas.to_pickle`."""
-        logger.warning(
-            "Saving as pickle. Consider using fmt='parquet' for "
-            "portability and security."
-        )
-        p = Path(dest)
-        # ``dict(data)``, not *data*: the payload is a dict subclass (#216) and
-        # pickling it whole would write ob-analytics' own class into the file,
-        # so the file would only load where that class exists.
-        pd.to_pickle(dict(data), p)  # type: ignore
         return p
 
 
@@ -379,16 +360,14 @@ def _read_versioned_parquet(path: Path) -> pd.DataFrame:
 
 
 def load_data(path: str | Path) -> dict[str, pd.DataFrame]:
-    """Load pre-processed pipeline data from a Parquet directory or pickle file.
+    """Load pre-processed pipeline data from a Parquet folder.
 
     Parameters
     ----------
     path : str or Path
-        If *path* is a directory, each ``.parquet`` file inside is loaded
-        as a DataFrame keyed by its stem (``events.parquet`` → ``"events"``).
-        If *path* is a single file with a ``.pkl`` / ``.pickle`` extension,
-        it is loaded via :func:`pandas.read_pickle` for backward
-        compatibility (**not recommended** for untrusted data).
+        A folder written by :func:`save_data` in its default Parquet format.
+        Each ``.parquet`` file inside is loaded as a DataFrame keyed by its
+        stem (``events.parquet`` → ``"events"``).
 
     Returns
     -------
@@ -397,29 +376,26 @@ def load_data(path: str | Path) -> dict[str, pd.DataFrame]:
     Raises
     ------
     ConfigError
-        If a Parquet file declares a schema version this build does not
-        support.  A file written with no version key (legacy data, or the
-        bundled sample) loads with a warning — see
+        If *path* is not a folder, or a Parquet file declares a schema version
+        this build does not support.  A file written with no version key
+        (legacy data, or the bundled sample) loads with a warning — see
         :func:`ob_analytics.schemas.check_schema_version`.
+    FileNotFoundError
+        If the folder holds no Parquet file.
     """
     p = Path(path)
-    if p.is_dir():
-        result = {}
-        for parquet_path in sorted(p.glob("*.parquet")):
-            result[parquet_path.stem] = _read_versioned_parquet(parquet_path)
-        if not result:
-            raise FileNotFoundError(f"No .parquet files found in {p}")
-        return result
-    if p.suffix in (".pkl", ".pickle"):
-        logger.warning(
-            "Loading from pickle ({}). Pickle is insecure for untrusted "
-            "data; prefer Parquet via save_data().",
-            p,
+    if not p.is_dir():
+        raise ConfigError(
+            f"{p} is not a Parquet folder. load_data and load_result read the "
+            "folder save_data writes in its default format; to read another "
+            "format, run it through its source with Pipeline(source=...)."
         )
-        return pd.read_pickle(p)
-    raise ValueError(
-        f"Unsupported format: {p.suffix}. Use a Parquet directory or .pkl file."
-    )
+    result = {}
+    for parquet_path in sorted(p.glob("*.parquet")):
+        result[parquet_path.stem] = _read_versioned_parquet(parquet_path)
+    if not result:
+        raise FileNotFoundError(f"No .parquet files found in {p}")
+    return result
 
 
 def save_data(
@@ -442,17 +418,22 @@ def save_data(
         unless *config* is given, and with its declarations.
         :func:`load_result` reads a Parquet folder back as the same result.
     path : str or Path
-        Destination directory (Parquet) or file (pickle).
+        A folder for this package's own formats (``"parquet"``,
+        ``"depth_csv"``, ``"bitstamp"``, ``"lobster"``), and a file for an
+        export to another tool (``"hftbacktest"``, ``"nautilus"``,
+        ``"databento"``).  Each writer declares which it takes as its
+        :attr:`~ob_analytics.protocols.DataWriter.target`.  A folder is
+        created when missing.
     fmt : str
-        Serialisation format.  Built-in values are ``"parquet"``
-        (default) and ``"pickle"``.  The ``"parquet"`` path writes one
-        file per key and tags each with :data:`SCHEMA_VERSION` in its
-        metadata (checked by :func:`load_data`).  A **source name** (e.g.
+        The format, one of :func:`list_writers`.  The default, ``"parquet"``,
+        writes one file per key and tags each with :data:`SCHEMA_VERSION` in
+        its metadata (checked by :func:`load_data`).  A **source name** (e.g.
         ``"bitstamp"``, ``"lobster"``) round-trips through that source's own
-        writer (its ``create_writer`` capability, so no separate writer
+        writer (its ``create_writer`` method, so no separate writer
         registration is needed); a source that needs run state — LOBSTER's
         ``trading_date`` — reads it from *ctx*.  A generic, source-independent
-        writer registered via :func:`register_writer` is also resolved by name.
+        writer registered via :func:`register_writer` is also resolved by name,
+        and wins over a source of the same name.
     writer : DataWriter, optional
         A pre-constructed writer instance.  When provided, *fmt* is
         ignored and the writer is used directly.
@@ -464,6 +445,15 @@ def save_data(
         :class:`~ob_analytics.protocols.RunContext`.
     **write_kwargs
         Extra keyword arguments forwarded to ``writer.write()``.
+
+    Raises
+    ------
+    ValueError
+        If *fmt* is not one of :func:`list_writers`.
+    ConfigError
+        If *path* is a file where the writer takes a folder, or a folder
+        where it takes a file.  The message says which the writer expected.
+        Also if the writer declares no ``target``.
     """
     from ob_analytics.pipeline import PipelineResult
 
@@ -485,19 +475,60 @@ def save_data(
         declarations=declarations,
     )
 
-    if writer is not None:
-        writer.write(tables, p, **write_kwargs)
+    if writer is None:
+        writer = _named_writer(fmt, config, ctx)
+        label = repr(fmt)
+    else:
+        label = type(writer).__name__
+    _check_target(p, writer, label)
+    writer.write(tables, p, **write_kwargs)
+
+
+#: Suffixes that mark a path as a file, so a folder format refuses it before it
+#: makes a folder called ``run.parquet``.  A folder name may hold a dot (a date
+#: such as ``btc_2024.05.01``), so only these suffixes count.
+_FILE_SUFFIXES = frozenset(
+    {".csv", ".dbn", ".gz", ".json", ".npz", ".parquet", ".pickle", ".pkl", ".zst"}
+)
+
+
+def _check_target(path: Path, writer: DataWriter, label: str) -> None:
+    """Refuse *path* when it is not the folder or file *writer* takes.
+
+    *label* names the format in the message: the ``fmt`` given, or the
+    writer's class when the caller passed a writer.  A writer that declares
+    no ``target`` is refused too.
+    """
+    declared = getattr(writer, "target", None)
+    try:
+        target = WriteTarget(declared)
+    except ValueError:
+        raise ConfigError(
+            f"{label} declares no target: give the writer class "
+            "target = WriteTarget.FOLDER or target = WriteTarget.FILE, so "
+            "save_data can check the path it is given."
+        ) from None
+    if target is WriteTarget.FOLDER:
+        if path.exists() and not path.is_dir():
+            found = "an existing file"
+        elif path.suffix.lower() in _FILE_SUFFIXES:
+            found = f"a file name (it ends in {path.suffix})"
+        else:
+            return
+        raise ConfigError(
+            f"{label} writes a folder, and {path} is {found}. Pass the path of "
+            "a folder to write into; it is created when missing."
+        )
+    if path.is_dir():
+        found = "an existing folder"
+    elif not path.suffix:
+        found = "a folder name (it has no file extension)"
+    else:
         return
-
-    resolved = _named_writer(fmt, config, ctx)
-    if resolved is not None:
-        resolved.write(tables, p, **write_kwargs)
-        return
-
-    from ob_analytics.sources import SOURCES
-
-    available = [*WRITERS.list(), *SOURCES.list()]
-    raise ValueError(f"Unsupported format: {fmt!r}. Available: {', '.join(available)}")
+    raise ConfigError(
+        f"{label} writes one file, and {path} is {found}. Pass the path of the "
+        "file to write, with its extension."
+    )
 
 
 #: The tables a saved run holds, in the order :class:`PipelineResult` lists them.
@@ -548,8 +579,7 @@ def load_result(path: str | Path, *, source: Any = None) -> PipelineResult:
     Raises
     ------
     ConfigError
-        If *path* is not a folder (it does not exist, or it is a pickle, which
-        keeps no config, so its prices and sizes could not be read back), if
+        If *path* is not a folder (it does not exist, or it is a file), if
         the folder lacks one of the four tables, or if a Parquet file
         declares a schema version this build does not support.
     FileNotFoundError
@@ -559,12 +589,6 @@ def load_result(path: str | Path, *, source: Any = None) -> PipelineResult:
     from ob_analytics.protocols import Level
 
     p = Path(path)
-    if not p.is_dir():
-        raise ConfigError(
-            f"{p} is not a Parquet folder. load_result reads the folder "
-            "save_data writes in its default Parquet format, which records the "
-            "run's tick size and lot size; use load_data for other files."
-        )
     data = load_data(p)
     missing = [name for name in _RESULT_TABLES if name not in data]
     if missing:
@@ -680,16 +704,19 @@ def _warn_missing_units(
         )
 
 
-def _named_writer(fmt: str, config: Any, ctx: Any) -> DataWriter | None:
+def _named_writer(fmt: str, config: Any, ctx: Any) -> DataWriter:
     """Resolve *fmt* to a writer: a registered generic writer, or a source's own.
 
     A generic writer registered via :func:`register_writer` wins; otherwise a
     source name resolves to that source's ``create_writer`` (so a venue writer
-    lives on the source, not in a parallel registry).  Returns ``None`` when
-    *fmt* names neither.
+    lives on the source, not in a parallel registry).
+
+    Raises
+    ------
+    ValueError
+        If *fmt* names neither, listing the formats :func:`list_writers` gives.
     """
     from ob_analytics.protocols import RunContext, SupportsWriter
-    from ob_analytics.sources import SOURCES
 
     # *config* is passed through as given, ``None`` included: every writer
     # defaults for itself, and a writer that records what the caller declared
@@ -697,19 +724,35 @@ def _named_writer(fmt: str, config: Any, ctx: Any) -> DataWriter | None:
     # ``PipelineConfig()`` here would tag a file with its default tick size
     # (#155) that the caller never asked for.  *ctx* is different: an empty
     # ``RunContext`` is an absence, not an invented value.
-    cfg = config
     rctx = ctx if ctx is not None else RunContext()
 
     if fmt in WRITERS:
-        return WRITERS.get(fmt)(cfg, rctx)
-    if fmt in SOURCES:
+        return WRITERS.get(fmt)(config, rctx)
+    if _writes_a_format(fmt):
+        from ob_analytics.sources import SOURCES
+
         source = SOURCES.get(fmt)()
         if isinstance(source, SupportsWriter):
-            return source.create_writer(cfg, rctx)
-    return None
+            return source.create_writer(config, rctx)
+    raise ValueError(
+        f"Unsupported format: {fmt!r}. Available: {', '.join(list_writers())}"
+    )
+
+
+def _writes_a_format(name: str) -> bool:
+    """Whether the source called *name* writes a format of its own.
+
+    It does when its class has a ``create_writer`` method.  This is the one
+    test of whether a source name is a format, so :func:`list_writers` and
+    :func:`save_data` cannot disagree.
+    """
+    from ob_analytics.sources import SOURCES
+
+    return name in SOURCES and callable(
+        getattr(SOURCES.get(name), "create_writer", None)
+    )
 
 
 # Built-in output formats self-register, the way sources and metrics do, so
 # ``save_data(fmt=...)`` has one resolution path and no special cases (#216).
 register_writer("parquet", lambda config, ctx: ParquetWriter(config))
-register_writer("pickle", lambda config, ctx: PickleWriter())

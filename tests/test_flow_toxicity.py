@@ -274,6 +274,55 @@ class TestComputeKyleLambda:
             compute_kyle_lambda(bad)
 
 
+class TestKyleLambdaSigning:
+    """λ infers a missing aggressor side the way VPIN and OFI do."""
+
+    def test_runs_without_a_direction_column(self):
+        tape = _busy_tape(n_windows=40)
+        unlabelled = tape.drop(columns="direction")
+
+        result = compute_kyle_lambda(unlabelled, window="1min", n_boot=0)
+
+        # The tick rule labels each window's closing trade by its price move.
+        assert np.isfinite(result.lambda_)
+        assert result.n_windows == 40
+
+    def test_sign_method_overrides_the_native_side(self):
+        tape = _busy_tape(n_windows=40)
+        native = compute_kyle_lambda(tape, window="1min", n_boot=0)
+        flipped = tape.assign(
+            direction=tape["direction"].map({"buy": "sell", "sell": "buy"})
+        )
+
+        ticked = compute_kyle_lambda(
+            flipped, window="1min", sign_method="tick", n_boot=0
+        )
+        kept = compute_kyle_lambda(flipped, window="1min", n_boot=0)
+
+        assert kept.lambda_ == pytest.approx(-native.lambda_)
+        assert ticked.lambda_ == pytest.approx(
+            compute_kyle_lambda(
+                tape, window="1min", sign_method="tick", n_boot=0
+            ).lambda_
+        )
+
+    def test_lee_ready_reads_the_quotes(self):
+        tape = _busy_tape(n_windows=40)
+        # A mid far below every trade: Lee-Ready calls every trade a buy.
+        quotes = pd.DataFrame(
+            {
+                "timestamp": [tape["timestamp"].iloc[0] - pd.Timedelta("1s")],
+                "mid": [1.0],
+            }
+        )
+
+        result = compute_kyle_lambda(
+            tape, window="1min", sign_method="lee_ready", quotes=quotes, n_boot=0
+        )
+
+        assert (result.regression_df["signed_volume"] > 0).all()
+
+
 # ── Robustness diagnostics (#119) ────────────────────────────────────
 
 
@@ -517,10 +566,8 @@ class TestVpinDiagnostics:
 
 
 @pytest.fixture(scope="module")
-def sample_trades(sample_csv_path) -> pd.DataFrame:
-    from ob_analytics import Pipeline
-
-    return Pipeline().run(sample_csv_path).trades
+def sample_trades(bundled_sample_result) -> pd.DataFrame:
+    return bundled_sample_result.trades
 
 
 class TestBundledSampleDiagnostics:
@@ -601,7 +648,9 @@ class TestOneWindowAnchor:
         np.testing.assert_allclose(
             ofi["ofi"], time_bars["signed_volume"] / time_bars["volume"]
         )
-        assert (ofi["net_volume"].to_numpy() == time_bars["signed_volume"]).all()
+        # The bars keep the run's integer lots; OFI reports the instrument's units.
+        lot = sample_trades.attrs["lot_size"]
+        np.testing.assert_allclose(ofi["net_volume"], time_bars["signed_volume"] * lot)
 
     def test_ofi_matches_one_step_horizon(self, sample_trades):
         ofi = order_flow_imbalance(sample_trades, "7s")
@@ -615,13 +664,15 @@ class TestOneWindowAnchor:
         time_bars = bars(sample_trades, "time", "7s")
         ofi = order_flow_imbalance(sample_trades, "7s")
         assert (reg["timestamp"].to_numpy() == ofi["timestamp"].to_numpy()).all()
-        assert (
-            reg["delta_price"].to_numpy()
-            == (time_bars["close"] - time_bars["open"]).to_numpy()
-        ).all()
-        assert (
-            reg["signed_volume"].to_numpy() == time_bars["signed_volume"].to_numpy()
-        ).all()
+        # λ's data is in the quote currency and the instrument's units.
+        tick = sample_trades.attrs["tick_size"]
+        lot = sample_trades.attrs["lot_size"]
+        np.testing.assert_allclose(
+            reg["delta_price"], (time_bars["close"] - time_bars["open"]) * tick
+        )
+        np.testing.assert_allclose(
+            reg["signed_volume"], time_bars["signed_volume"] * lot
+        )
 
     def test_window_starts_on_the_epoch_grid(self):
         # Midnight is not on the 7 s epoch grid, so counting from midnight

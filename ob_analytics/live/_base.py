@@ -23,6 +23,20 @@ from ob_analytics.protocols import Clocks, Source
 # ---------------------------------------------------------------------------
 
 
+class UnmappedMessageError(ValueError):
+    """An L3 message a live source could not turn into order events.
+
+    An L3 source raises it from :meth:`LiveSource.snapshot` or
+    :meth:`LiveSource.stream` instead of leaving the message out: without
+    it the capture's book would no longer match the venue's.  The runner
+    records it as :attr:`CaptureResult.capture_error`, and
+    :func:`~ob_analytics.live.run_capture` starts the next segment from a
+    new opening book.  A message that does not change the book (a trade on
+    a feed whose order events carry the fills) can be left out instead, and
+    counted under ``dropped`` (see :class:`SupportsDiagnostics`).
+    """
+
+
 @dataclass(frozen=True)
 class CaptureConfig:
     """User-facing capture-run parameters.
@@ -67,11 +81,13 @@ class CaptureResult:
     #: ``None`` on an L2 run, where a price level has no id to confirm.
     n_snapshot_unconfirmed: int | None = None
     #: ``repr`` of the first exception raised once output existed, or ``None``
-    #: for a run that ended normally or was stopped by a signal. The rows
+    #: for a run that ended normally or was stopped by one signal (a second
+    #: one, which stops the run at once, is recorded here too). The rows
     #: written before the error stay on disk, so a failed run is still readable.
     capture_error: str | None = None
-    #: Where :attr:`capture_error` was raised: ``"snapshot"``, ``"stream"`` or
-    #: ``"shutdown"``; ``None`` when there was no error.
+    #: Where :attr:`capture_error` was raised: ``"snapshot"``, ``"stream"``,
+    #: ``"shutdown"``, or ``"close"`` for a file that failed to close; ``None``
+    #: when there was no error.
     capture_error_phase: str | None = None
     #: When the first live event arrived, and when the stream stopped: the
     #: stretch of time the run covers.  ``stream_started`` is ``None`` when the
@@ -232,6 +248,12 @@ class SupportsDiagnostics(Protocol):
     tallies, ...) just defines this method; the runner detects it structurally
     (``isinstance(source, SupportsDiagnostics)``) and merges the returned
     mapping into :attr:`CaptureResult.extras` (and thus ``meta.json``).
+
+    Count the messages the source received but could not use, and left out,
+    under ``dropped``: the capture manifest totals that key, and
+    ``ob-analytics audit`` fails its ``dropped_messages`` check when it is
+    above zero.  An error that ends the stream is not counted there; the
+    runner records it as :attr:`CaptureResult.capture_error`.
     """
 
     def diagnostics(self) -> dict[str, Any]:

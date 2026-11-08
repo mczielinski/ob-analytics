@@ -15,6 +15,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Office/Business :: Financial :: Investment",
     "Topic :: Scientific/Engineering :: Information Analysis",
     "Typing :: Typed",
@@ -32,13 +33,16 @@ dependencies = [
 
 [project.optional-dependencies]
 interactive = ["plotly>=6.8.0"]
-bokeh = ["bokeh>=3"]
+bokeh = ["bokeh>=3.1"]
 live = ["websockets>=12"]
+# The ccxt and cryptofeed floors are the oldest versions CI tests (the ones in
+# uv.lock). Older releases lack venues the sources use: ccxt 4.0 has no
+# Coinbase in ccxt.pro, and cryptofeed 2.0 has no Independent Reserve.
 ccxt = [
-    "ccxt>=4",
+    "ccxt>=4.5.90",
 ]
 cryptofeed = [
-    "cryptofeed>=2",
+    "cryptofeed>=2.4.1",
 ]
 # The floor is the version this adapter was written and tested against; the
 # DBN record constructors the writer uses are newer than the reader's API.
@@ -96,16 +100,17 @@ dev = [
     "pandas-stubs>=3.0.3.260530",
     "types-seaborn>=0.13.2.20260518",
     "plotly>=6.8.0",
-    "bokeh>=3",
+    "bokeh>=3.1",
     "hypothesis>=6.155.7",
     # Dev-only, and deliberately not a runtime dependency or an extra: it is
     # here so the tests for PipelineResult.to_polars() can run. See
     # adr/0002-dataframe-library.md.
     "polars>=1.20",
-    "nbmake>=1.5",
+    "nbmake>=1.5.1",
     "ipykernel>=6.29",
     "jupytext>=1.16",
     "nbconvert>=7.16",
+    "pytest-xdist>=3.8,<4",
 ]
 
 # The two backtesting engines, installed only to cross-check our reconstruction
@@ -176,3 +181,6 @@ python_functions = ["test_*"]
 [tool.coverage.run]
 source = ["ob_analytics"]
 omit = ["tests/*"]
+# The CLI tests run `python -m ob_analytics` in a subprocess. Measure those
+# runs too, or cli.py shows as mostly untested.
+patch = ["subprocess"]

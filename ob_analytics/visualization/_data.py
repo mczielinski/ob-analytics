@@ -2125,7 +2125,7 @@ def prepare_volume_percentiles_data(
         intervals = pd.DatetimeIndex(ob.index).floor("s")
 
     aggregated = ob.groupby(intervals).mean()
-    aggregated.index = aggregated.index + delta
+    aggregated.index = pd.DatetimeIndex(aggregated.index) + delta
     ob = aggregated.reset_index().rename(columns={"index": "timestamp"})
 
     pad = max(3, len(str(bps_levels[-1])))
@@ -2359,6 +2359,70 @@ def prepare_transaction_costs_data(
         "trade_times": costs["timestamp"].to_numpy(),
         "trade_effective": costs["effective_spread_bps"].to_numpy(dtype=np.float64),
         "horizon": str(costs.attrs.get("horizon", "")),
+    }
+
+
+def prepare_amihud_data(amihud_df: pd.DataFrame) -> dict[str, Any]:
+    """Prepare an :func:`~ob_analytics.cost.amihud` table for its face.
+
+    The face draws one point per window, joined by a line.  The payload is
+    the shared window-measure shape: ``times``, ``values``, ``title``,
+    ``ylabel`` and ``notice``, a note for the title (the number of windows,
+    and how many have no value).
+    """
+    validate_columns(amihud_df, {"timestamp", "amihud"}, "prepare_amihud_data")
+    return _window_measure(
+        amihud_df,
+        "amihud",
+        title="Amihud Illiquidity",
+        ylabel="|return| per unit of turnover",
+    )
+
+
+def prepare_roll_spread_data(roll_df: pd.DataFrame) -> dict[str, Any]:
+    """Prepare a :func:`~ob_analytics.cost.roll_spread` table for its face.
+
+    The face draws the implied spread, in the quote currency, one point per
+    window.  The note says how many windows the model could not measure, and
+    the median lag-1 autocorrelation of the price changes, which Roll's
+    model puts at ``-0.5``.
+    """
+    validate_columns(
+        roll_df,
+        {"timestamp", "roll_spread", "autocorrelation"},
+        "prepare_roll_spread_data",
+    )
+    data = _window_measure(
+        roll_df,
+        "roll_spread",
+        title="Roll Spread",
+        ylabel="Implied spread (quote currency)",
+    )
+    autocorrelation = roll_df["autocorrelation"].dropna()
+    if not autocorrelation.empty:
+        data["notice"] += (
+            f"; median autocorrelation {autocorrelation.median():.2f} "
+            "(the model expects -0.50)"
+        )
+    return data
+
+
+def _window_measure(
+    frame: pd.DataFrame, column: str, *, title: str, ylabel: str
+) -> dict[str, Any]:
+    """The payload of a face that draws one value per window of *frame*."""
+    values = frame[column].to_numpy(dtype=np.float64)
+    missing = int(np.isnan(values).sum())
+    plural = "" if len(frame) == 1 else "s"
+    notice = f"{len(frame)} window{plural}"
+    if missing:
+        notice += f", {missing} with no value"
+    return {
+        "times": frame["timestamp"].to_numpy(),
+        "values": values,
+        "title": title,
+        "ylabel": ylabel,
+        "notice": notice,
     }
 
 
