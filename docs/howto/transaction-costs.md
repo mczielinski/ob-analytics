@@ -224,7 +224,7 @@ positive. (Lee–Ready always reads the plain mid, so with `mid_column` the two
 can disagree.) To use the tick rule instead:
 
 ```python
-costs = transaction_costs(l2_trades, depth_summary, sign_method="tick")
+costs = transaction_costs(result.trades, result.depth_summary, sign_method="tick")
 ```
 
 A native `direction` is honored as-is unless `sign_method` overrides it. See

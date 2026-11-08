@@ -203,10 +203,32 @@ class TestAuditSubcommand:
         r = cli_runner("process", str(tiny_bitstamp_orders_csv), "--output", str(out))
         assert r.returncode == 0, r.stderr
 
+        # The output records the run's declarations, so no --source is needed.
         r = cli_runner("audit", str(out), "--from-parquet")
         assert r.returncode == 0, r.stderr
         assert "Data quality summary" in r.stdout
+        assert "diff_feed" in r.stdout
+
+    def test_audit_an_output_that_records_no_declarations(
+        self, cli_runner, tmp_path, tiny_bitstamp_orders_csv
+    ):
+        """An output from an older version is declared by --source, or not at all."""
+        import pyarrow.parquet as pq
+
+        from ob_analytics.schemas import DECLARATIONS_KEY
+
+        out = tmp_path / "out"
+        r = cli_runner("process", str(tiny_bitstamp_orders_csv), "--output", str(out))
+        assert r.returncode == 0, r.stderr
+        for file in out.glob("*.parquet"):
+            table = pq.read_table(file)
+            metadata = dict(table.schema.metadata)
+            del metadata[DECLARATIONS_KEY]
+            pq.write_table(table.replace_schema_metadata(metadata), file)
+
         # No --source, so the feed type stays undeclared rather than guessed.
+        r = cli_runner("audit", str(out), "--from-parquet")
+        assert r.returncode == 0, r.stderr
         assert "unknown" in r.stdout
 
         r = cli_runner("audit", str(out), "--from-parquet", "--source", "bitstamp")
@@ -275,12 +297,14 @@ class TestAuditSubcommand:
         r = cli_runner("process", str(cap / "orders.csv"), "--output", str(out))
         assert r.returncode == 0, r.stderr
 
+        # The run records the capture's declarations in its output, and a
+        # run on the capture itself reads them from the record.
         for target, extra in ((out, ["--from-parquet"]), (cap / "orders.csv", [])):
             r = cli_runner("audit", str(target), *extra, "--source", "bitstamp")
             assert r.returncode == 0, r.stderr
             assert "matched_book" in r.stdout
             assert "maker only" in r.stdout
-            assert "declares" in r.stderr
+        assert "declares" in r.stderr
 
     @pytest.mark.parametrize(
         "error", [KeyError("not installed"), TypeError("needs settings")]
@@ -289,7 +313,7 @@ class TestAuditSubcommand:
         self, monkeypatch, error
     ):
         """Reading what the capture's source declares never stops ``audit``."""
-        from ob_analytics import cli
+        from ob_analytics import capture_record
         from ob_analytics.protocols import SequenceKind
 
         def get_source(name):
@@ -297,7 +321,7 @@ class TestAuditSubcommand:
 
         monkeypatch.setattr("ob_analytics.sources.get_source", get_source)
         with warnings_logged() as logged:
-            kind = cli._declared_sequence_kind(
+            kind = capture_record._declared_sequence_kind(
                 "plugin", default=SequenceKind.CONTIGUOUS
             )
         assert kind is SequenceKind.CONTIGUOUS
@@ -702,9 +726,10 @@ class TestRequiredContext:
     def test_source_required_context(self) -> None:
         from ob_analytics.bitstamp import BitstampSource
         from ob_analytics.lobster import LobsterSource
+        from ob_analytics.protocols import required_context_of
 
-        assert BitstampSource().required_context() == []
-        assert LobsterSource().required_context() == ["trading_date"]
+        assert required_context_of(BitstampSource()) == []
+        assert required_context_of(LobsterSource()) == ["trading_date"]
 
 
 # ---------------------------------------------------------------------------

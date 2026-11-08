@@ -578,11 +578,9 @@ def _agreement(true_side: pd.Series, predicted: pd.Series) -> float:
 
 
 @pytest.fixture(scope="module")
-def sample_pipeline_result(bitstamp_sample_dir):
+def sample_pipeline_result(bundled_sample_result):
     """Full pipeline run on the bundled Bitstamp sample (loaded once)."""
-    from ob_analytics import Pipeline
-
-    return Pipeline().run(bitstamp_sample_dir / "orders.csv.gz")
+    return bundled_sample_result
 
 
 class TestBitstampValidationHarness:

@@ -16,15 +16,17 @@ that needs around the stages themselves:
 * :class:`ParquetAppender` writes each window's tables to one Parquet file per
   table as the windows finish, so the depth tables are never held for the
   whole input.
+* :class:`WindowedLoader` is a loader that can also read its input one window
+  at a time, so the events are never held for the whole input either.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from datetime import date
 from itertools import pairwise
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, NamedTuple, Protocol, Self, runtime_checkable
 
 import numpy as np
 import pandas as pd
@@ -34,6 +36,7 @@ import pyarrow.parquet as pq
 from ob_analytics import _engine_frames
 from ob_analytics._utils import epoch_ns
 from ob_analytics.exceptions import ConfigError
+from ob_analytics.protocols import FeedDeclarations
 from ob_analytics.schemas import lot_sizes_from_config, tick_sizes_from_config
 
 #: How far before a window's start its seed rows are placed.  Strictly before
@@ -187,13 +190,22 @@ class ParquetAppender:
         The output folder, created when missing.
     config : PipelineConfig
         The run's configuration; its tick and lot sizes are recorded.
+    declarations : FeedDeclarations, optional
+        The run's declarations, recorded so
+        :func:`~ob_analytics.data.load_result` gives them back.
     """
 
-    def __init__(self, dest: str | Path, config: Any) -> None:
+    def __init__(
+        self,
+        dest: str | Path,
+        config: Any,
+        declarations: FeedDeclarations | None = None,
+    ) -> None:
         self.dest = Path(dest)
         self.dest.mkdir(parents=True, exist_ok=True)
         self._tick_sizes = tick_sizes_from_config(config)
         self._lot_sizes = lot_sizes_from_config(config)
+        self._declarations = declarations
         self._writers: dict[str, pq.ParquetWriter] = {}
 
     def _working(self, name: str) -> Path:
@@ -212,7 +224,10 @@ class ParquetAppender:
         from ob_analytics.data import _to_arrow_table
 
         table = _to_arrow_table(
-            frame, tick_sizes=self._tick_sizes, lot_sizes=self._lot_sizes
+            frame,
+            tick_sizes=self._tick_sizes,
+            lot_sizes=self._lot_sizes,
+            declarations=self._declarations,
         )
         writer = self._writers.get(name)
         if writer is None:
@@ -288,3 +303,38 @@ def _conform(table: pa.Table, schema: pa.Schema, name: str) -> pa.Table:
             f"the first window's did not, so the windows cannot share one file: "
             f"{exc}"
         ) from exc
+
+
+class LoadedWindow(NamedTuple):
+    """One window's events, as a :class:`WindowedLoader` yields them."""
+
+    #: The window's canonical events.
+    events: pd.DataFrame
+    #: The ``event_id`` of each of those events that a trade names, as maker
+    #: or taker.  The order types are read from them.
+    named_event_ids: Any
+
+
+@runtime_checkable
+class WindowedLoader(Protocol):
+    """A loader that can read its input one time window at a time.
+
+    :meth:`~ob_analytics.pipeline.Pipeline.run_windows` uses it when the
+    run's source built the loader and the trade source, so no more than one
+    window's events is in memory.
+    """
+
+    def load_windows(
+        self,
+        source: Any,
+        windows: list[tuple[pd.Timestamp | None, pd.Timestamp | None]],
+    ) -> Iterator[LoadedWindow]:
+        """Yield each of *windows*' events in turn.
+
+        The events are the rows the loader's ``load`` gives, cut at the
+        windows: a window holds the rows at or after its start and before its
+        end.  Once the last window is yielded, the run's trade source, given
+        an empty events frame, builds the whole run's trades from what the
+        loader kept.
+        """
+        ...

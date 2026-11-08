@@ -68,7 +68,7 @@ import pandas as pd
 from ob_analytics.visualization import plot, prepare
 
 # Pick a 10-minute window inside the sample (it spans 30 minutes).
-t_start = result.trades["timestamp"].min()
+t_start = trades["timestamp"].min()
 t3 = t_start + pd.Timedelta(minutes=10)
 t4 = t3 + pd.Timedelta(minutes=10)
 
@@ -78,11 +78,11 @@ plot(
     "trade_tape",
     level="L2",
     ax=ax1,
-    **prepare.trades(result.trades, start_time=t3, end_time=t4),
+    **prepare.trades(trades, start_time=t3, end_time=t4),
 )
 ax1.set_title(f"Trades {t3:%H:%M}–{t4:%H:%M}")
 
-hist_data = result.events[["timestamp", "direction", "price", "volume"]].copy()
+hist_data = events[["timestamp", "direction", "price", "volume"]].copy()
 # Drop sentinel-priced events (market orders / deletions) before binning.
 q01, q99 = hist_data["price"].quantile([0.01, 0.99])
 hist_data = hist_data[hist_data["price"].between(q01, q99)]

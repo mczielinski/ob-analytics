@@ -30,11 +30,13 @@ ohlcv = bars(trades, "time", "1min")
 print(ohlcv[["timestamp_end", "open", "high", "low", "close", "volume", "vwap"]])
 ```
 
+<!-- docs-test: output ohlcv[["timestamp_end", "open", "high", "low", "close", "volume", "vwap"]].head(3).to_string(index=False) -->
+
 ```text
-                   timestamp_end     open     high      low    close   volume         vwap
-2026-05-02 02:36:49.271000+00:00  78319.0  78333.0  78319.0  78323.0 1.622609 78324.423605
-2026-05-02 02:37:57.363000+00:00  78323.0  78323.0  78322.0  78323.0 0.011084 78322.160485
-2026-05-02 02:38:54.818000+00:00  78323.0  78336.0  78323.0  78336.0 0.014561 78335.772925
+                timestamp_end    open    high     low   close   volume         vwap
+2026-05-02 02:36:49.271+00:00 78319.0 78333.0 78319.0 78323.0 1.622609 78324.423605
+2026-05-02 02:37:57.363+00:00 78323.0 78323.0 78322.0 78323.0 0.011084 78322.160485
+2026-05-02 02:38:54.818+00:00 78323.0 78336.0 78323.0 78336.0 0.014561 78335.772925
 ```
 
 A minute in which nothing traded produces no row: every bar holds at least one
@@ -72,6 +74,8 @@ for rule in ("time", "tick", "volume", "dollar", "imbalance"):
     cut = bars(trades, rule, target_bars=50)
     print(f"{rule:10s} {len(cut):3d} bars  threshold={cut.attrs['bar_threshold']}")
 ```
+
+<!-- docs-test: output -->
 
 ```text
 time        44 bars  threshold=0 days 00:00:35.809380

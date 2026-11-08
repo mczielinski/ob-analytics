@@ -1,9 +1,28 @@
 name: CI
 
+# Every push to main runs every job: release.yml refuses a commit whose CI
+# did not finish green, so each commit on main needs its own complete run.
+#
+# A pull request that changes only prose (the docs pages, the ADRs, the root
+# Markdown files) or another workflow skips this one: none of those can break
+# a test, and the Docs workflow builds the site. The list says what to leave
+# out, not what to include, so a new file anywhere else runs CI. Later
+# patterns win, so the two docs files the tests read are put back after
+# docs/** is left out. main has no required checks, so a skipped run blocks
+# nothing.
 on:
   push:
     branches: [main]
   pull_request:
+    paths:
+      - '**'
+      - '!adr/**'
+      - '!*.md'
+      - '!docs/**'
+      - 'docs/notebooks/**'
+      - 'docs/extending.md'
+      - '!.github/workflows/*.yml'
+      - '.github/workflows/ci.yml'
 
 # Within one pull request a new push supersedes the running checks. On main
 # each commit gets a group of its own, so no run is cancelled or replaced
@@ -14,6 +33,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Decide how much of the matrix this run needs. A push to main and a
+  # Dependabot pull request run all of it. Any other pull request runs the
+  # lowest and highest Python, and runs the dependency-floor, macOS and
+  # Windows jobs only when it changes the dependencies or this workflow. Those
+  # jobs, and the two middle Pythons, still run on main after the merge.
+  scope:
+    runs-on: ubuntu-latest
+    outputs:
+      full: ${{ steps.scope.outputs.full }}
+      pythons: ${{ steps.scope.outputs.pythons }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+      - id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          full=true
+          if [ "$EVENT" = pull_request ] && [ "$AUTHOR" != "dependabot[bot]" ]; then
+            # The pull request's merge commit and its first parent, the base.
+            pattern='^(pyproject\.toml|uv\.lock|\.github/workflows/ci\.yml)$'
+            if ! git diff --name-only HEAD^1 HEAD | grep -Eq "$pattern"; then
+              full=false
+            fi
+          fi
+          if [ "$full" = true ]; then
+            pythons='["3.11", "3.12", "3.13", "3.14"]'
+          else
+            pythons='["3.11", "3.14"]'
+          fi
+          echo "full=$full" >> "$GITHUB_OUTPUT"
+          echo "pythons=$pythons" >> "$GITHUB_OUTPUT"
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -41,11 +95,12 @@ jobs:
       - run: uv run --group dev --extra interactive --extra live --extra ccxt --extra cryptofeed --extra databento ty check ob_analytics/ tests/
 
   test:
+    needs: scope
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        python-version: ${{ fromJSON(needs.scope.outputs.pythons) }}
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.3
@@ -58,7 +113,15 @@ jobs:
       # websockets / ccxt / cryptofeed, which causes test_plotly_backend.py to
       # skip and any test_live_protocol / test_ccxt_source /
       # test_cryptofeed_source tests that need those to break.
-      - run: uv run --group dev --extra interactive --extra live --extra ccxt --extra cryptofeed --extra databento --python ${{ matrix.python-version }} pytest tests/ --cov=ob_analytics --cov-report=xml -q --durations=15
+      #
+      # Coverage only on 3.11, the version that uploads it: measuring it adds
+      # about four minutes to a run. -n auto spreads the tests over the
+      # runner's cores; --dist loadfile keeps each module on one worker, so a
+      # module-scoped fixture is built once.
+      - run: >-
+          uv run --group dev --extra interactive --extra live --extra ccxt --extra cryptofeed --extra databento --python ${{ matrix.python-version }}
+          pytest tests/ -q --durations=15 -n auto --dist loadfile
+          ${{ matrix.python-version == '3.11' && '--cov=ob_analytics --cov-report=xml' || '' }}
       - name: Upload coverage
         if: matrix.python-version == '3.11' && github.event_name == 'push'
         uses: codecov/codecov-action@v7
@@ -71,6 +134,8 @@ jobs:
   # macOS smoke: one Python, no coverage — catches platform-specific breakage
   # (paths, matplotlib backend, wheels) that the ubuntu matrix can't.
   macos-smoke:
+    needs: scope
+    if: needs.scope.outputs.full == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -79,7 +144,7 @@ jobs:
           enable-cache: true
       - run: uv python install 3.12
       - run: uv sync --group dev --extra interactive --extra live --python 3.12
-      - run: uv run --group dev --extra interactive --extra live --python 3.12 pytest tests/ -q
+      - run: uv run --group dev --extra interactive --extra live --python 3.12 pytest tests/ -q -n auto --dist loadfile
 
   # Execute the tutorial notebooks as living integration tests of the public
   # API. Kept off the test matrix (own job) so notebook latency doesn't 3x.
@@ -112,6 +177,8 @@ jobs:
   # allows. Every other job installs from uv.lock, which holds the newest
   # versions.
   lowest-deps:
+    needs: scope
+    if: needs.scope.outputs.full == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -122,12 +189,14 @@ jobs:
       # This re-resolves and rewrites uv.lock on the runner. --no-sync on the
       # run keeps `uv run` from resolving it back to the newest versions.
       - run: uv sync --group dev --extra interactive --extra bokeh --extra live --extra ccxt --extra cryptofeed --extra databento --resolution lowest-direct --python 3.11
-      - run: uv run --no-sync pytest tests/ -q
+      - run: uv run --no-sync pytest tests/ -q -n auto --dist loadfile
 
   # Windows: the core and offline parts only. Live capture is documented as
   # Linux and macOS, so the live extras are not installed, and
   # tests/conftest.py leaves the capture tests out on Windows.
   windows:
+    needs: scope
+    if: needs.scope.outputs.full == 'true'
     runs-on: windows-latest
     defaults:
       run:
@@ -139,7 +208,7 @@ jobs:
           enable-cache: true
       - run: uv python install 3.12
       - run: uv sync --group dev --python 3.12
-      - run: uv run --group dev --python 3.12 pytest tests/ -q
+      - run: uv run --group dev --python 3.12 pytest tests/ -q -n auto --dist loadfile
 
   # The parity tests that cross-check the rebuilt book against hftbacktest and
   # Nautilus Trader. The engines are in their own dependency group, so the

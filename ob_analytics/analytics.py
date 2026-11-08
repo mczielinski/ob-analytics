@@ -284,63 +284,142 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
     )
     validate_non_empty(events, "set_order_types")
 
-    # Work on a copy: the caller's frame must not gain the 'type' column as
-    # a side effect.
+    facts = _OrderFacts.of(events, _named_event_ids(trades))
+    return _with_order_types(events, _order_types(facts, trades))
+
+
+def _named_event_ids(trades: pd.DataFrame) -> np.ndarray:
+    """Return every ``event_id`` a trade names, as maker or as taker."""
+    named = pd.concat([trades["maker_event_id"], trades["taker_event_id"]])
+    return named.dropna().unique()
+
+
+@dataclass(frozen=True)
+class _OrderFacts:
+    """What the order-type rule reads of the events: a few values per order.
+
+    :func:`set_order_types` reads them off a whole run at once.  A windowed run
+    reads them one window at a time and joins the parts with :meth:`combine`,
+    so it never holds the whole run's events.  The rule itself is
+    :func:`_order_types`.
+
+    Attributes
+    ----------
+    ids : pandas.Index
+        Every order id seen, once each.
+    created, deleted : pandas.DataFrame
+        The ``id`` and ``volume`` of each ``created`` and each ``deleted`` row.
+    changed : pandas.Index
+        The ids with a ``changed`` row, once each.
+    named : pandas.DataFrame
+        The ``event_id`` and ``id`` of each event a trade names.
+    """
+
+    ids: pd.Index
+    created: pd.DataFrame
+    deleted: pd.DataFrame
+    changed: pd.Index
+    named: pd.DataFrame
+
+    @classmethod
+    def of(cls, events: pd.DataFrame, named_event_ids: Any) -> _OrderFacts:
+        """Read the facts off *events*.
+
+        *named_event_ids* are the ``event_id`` values the run's trades name,
+        as maker or taker; an event not among them is never read as one.
+        """
+        action = events["action"]
+        return cls(
+            ids=pd.Index(events["id"]).unique(),
+            created=events.loc[action == "created", ["id", "volume"]],
+            deleted=events.loc[action == "deleted", ["id", "volume"]],
+            changed=pd.Index(events.loc[action == "changed", "id"]).unique(),
+            named=events.loc[
+                events["event_id"].isin(named_event_ids), ["event_id", "id"]
+            ],
+        )
+
+    @classmethod
+    def combine(cls, parts: Iterable[_OrderFacts]) -> _OrderFacts:
+        """Join the facts of consecutive parts of one run."""
+        parts = list(parts)
+        if not parts:
+            raise ValueError("_OrderFacts.combine: no parts to combine")
+        return cls(
+            ids=parts[0].ids.append([p.ids for p in parts[1:]]).unique(),
+            created=pd.concat([p.created for p in parts], ignore_index=True),
+            deleted=pd.concat([p.deleted for p in parts], ignore_index=True),
+            changed=parts[0].changed.append([p.changed for p in parts[1:]]).unique(),
+            named=pd.concat([p.named for p in parts], ignore_index=True),
+        )
+
+
+def _order_types(facts: _OrderFacts, trades: pd.DataFrame) -> pd.Series:
+    """Return each order's type, on an index of order ids.
+
+    The rule :func:`set_order_types` applies; see it for what each type means.
+    An order whose type the rule cannot tell is ``"unknown"``.
+    """
+    created, deleted = facts.created, facts.deleted
+    created_ids, deleted_ids = created["id"], deleted["id"]
+    changed = facts.changed
+
+    # Created and deleted with no change in between: a flashed order, when it
+    # left with the size it came with.
+    created_deleted_ids = created_ids[
+        created_ids.isin(deleted_ids) & ~created_ids.isin(changed)
+    ]
+    cd_created = created[created_ids.isin(created_deleted_ids)]
+    cd_deleted = deleted[deleted_ids.isin(created_deleted_ids)]
+    cd_merged = cd_created.merge(cd_deleted, on="id", suffixes=("_created", "_deleted"))
+    flashed_ids = cd_merged.loc[
+        cd_merged["volume_created"] == cd_merged["volume_deleted"], "id"
+    ]
+    forever_ids = created_ids[
+        ~created_ids.isin(changed) & ~created_ids.isin(deleted_ids)
+    ]
+
+    named = facts.named
+    maker_ids = pd.Index(
+        named.loc[named["event_id"].isin(trades["maker_event_id"].dropna()), "id"]
+    )
+    taker_ids = pd.Index(
+        named.loc[named["event_id"].isin(trades["taker_event_id"].dropna()), "id"]
+    )
+
+    ids = facts.ids
+    is_maker, is_taker = ids.isin(maker_ids), ids.isin(taker_ids)
+    # Taker labels win over resting ones, and a resting label over a flash.
+    # An order first seen mid-stream (no created row) is from the book that
+    # was already there, or a hidden execution: structurally unclassifiable,
+    # so it gets a class of its own instead of "unknown".
+    kind = np.select(
+        [
+            is_taker & ~is_maker,
+            is_taker & is_maker,
+            ids.isin(forever_ids) | (is_maker & ~is_taker),
+            ids.isin(flashed_ids),
+            ~ids.isin(created_ids),
+        ],
+        ["market", "market-limit", "resting-limit", "flashed-limit", "pre-existing"],
+        default="unknown",
+    )
+    unidentified = int((kind == "unknown").sum())
+    if unidentified:
+        logger.warning("Could not identify {} orders", unidentified)
+    return pd.Series(kind, index=ids, name="type")
+
+
+def _with_order_types(events: pd.DataFrame, types: pd.Series) -> pd.DataFrame:
+    """Return a copy of *events* with each row's order type from *types*.
+
+    *types* is what :func:`_order_types` returns.  The copy keeps the caller's
+    frame free of the new column.
+    """
     events = events.copy()
     events["type"] = pd.Categorical(
-        np.repeat("unknown", len(events)), dtype=ORDER_TYPE_DTYPE
+        events["id"].map(types).to_numpy(), dtype=ORDER_TYPE_DTYPE
     )
-
-    created = events[events["action"] == "created"].sort_values(by="id", kind="stable")
-    deleted = events[events["action"] == "deleted"].sort_values(by="id", kind="stable")
-    changed = events[events["action"] == "changed"]
-
-    created_deleted_ids = created[
-        created["id"].isin(deleted["id"]) & ~created["id"].isin(changed["id"])
-    ]["id"]
-
-    cd_created = created[created["id"].isin(created_deleted_ids)][["id", "volume"]]
-    cd_deleted = deleted[deleted["id"].isin(created_deleted_ids)][["id", "volume"]]
-    cd_merged = cd_created.merge(cd_deleted, on="id", suffixes=("_created", "_deleted"))
-    flashed_ids = set(
-        cd_merged.loc[cd_merged["volume_created"] == cd_merged["volume_deleted"], "id"]
-    )
-    forever_ids = set(
-        created[
-            ~created["id"].isin(changed["id"]) & ~created["id"].isin(deleted["id"])
-        ]["id"]
-    )
-
-    maker_event_ids_set = set(trades["maker_event_id"].dropna())
-    taker_event_ids_set = set(trades["taker_event_id"].dropna())
-
-    maker_ids = set(events[events["event_id"].isin(maker_event_ids_set)]["id"])
-    taker_ids = set(events[events["event_id"].isin(taker_event_ids_set)]["id"])
-
-    pure_maker_ids = maker_ids - taker_ids
-    ml_ids = taker_ids & maker_ids
-    mo_ids = taker_ids - maker_ids
-
-    events.loc[events["id"].isin(flashed_ids), "type"] = "flashed-limit"
-    events.loc[events["id"].isin(forever_ids | pure_maker_ids), "type"] = (
-        "resting-limit"
-    )
-    events.loc[events["id"].isin(ml_ids), "type"] = "market-limit"
-    events.loc[events["id"].isin(mo_ids), "type"] = "market"
-
-    # Orders first seen mid-stream (no created row): the pre-existing opening
-    # book and hidden executions.  An explicit class instead of "unknown" —
-    # they are structurally unclassifiable, not classification failures.
-    # Trade-derived labels above take precedence.
-    pre_ids = set(events["id"]) - set(created["id"])
-    events.loc[events["id"].isin(pre_ids) & (events["type"] == "unknown"), "type"] = (
-        "pre-existing"
-    )
-
-    unidentified = (events["type"] == "unknown").sum()
-    if unidentified > 0:
-        logger.warning("Could not identify {} orders", unidentified)
-
     return events
 
 
@@ -2090,6 +2169,12 @@ def data_quality_summary(
     :data:`~ob_analytics.schemas.MAYBE_BAD_BOOK_ATTR`; the summary reports
     it as ``maybe_bad_book_records``.
 
+    For a pipeline run, call
+    :meth:`~ob_analytics.pipeline.PipelineResult.audit` instead: it passes
+    the run's tables, tick size and declarations
+    (:class:`~ob_analytics.protocols.FeedDeclarations`) for you.  Pass the
+    declarations here yourself only for tables that are not a run's.
+
     Like :func:`detect_stale_orders`, this takes either the pipeline's own
     tables or the tables :func:`~ob_analytics.visualization.display_result`
     converts for display, and measures the same crossing and the same stale
@@ -2108,8 +2193,7 @@ def data_quality_summary(
         The trades frame, with ``maker_event_id`` / ``taker_event_id``.
     feed_type : FeedType, optional
         The source's declared feed type, recorded on the summary and used to
-        interpret ``crossed_pct``.  Read it off the format:
-        ``getattr(fmt, "feed_type", FeedType.UNKNOWN)``.
+        interpret ``crossed_pct``.
     depth : pandas.DataFrame, optional
         A faithful price-level-volume frame (e.g. ``PipelineResult.depth``).
         When ``None`` it is computed from *events* via

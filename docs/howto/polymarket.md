@@ -57,6 +57,8 @@ curl -s "https://gamma-api.polymarket.com/markets?active=true&closed=false&order
 To print the token ids of one market, take the market's slug from the end of
 its URL on polymarket.com:
 
+<!-- docs-test: skip needs the network -->
+
 ```python
 import json
 import urllib.request
@@ -103,6 +105,8 @@ the final value, in Python and in `ob-analytics process` and `ob-analytics
 audit`, so every price in the file replays exactly. Sizes work the same way:
 the capture records the size step as `lot_size`, and makes it finer if a size
 arrives between two steps (`lot_size_changes`).
+
+<!-- docs-test: skip needs a Polymarket capture -->
 
 ```python
 from ob_analytics import Pipeline

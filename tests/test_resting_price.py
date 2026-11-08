@@ -229,10 +229,8 @@ class TestMarketOrdersInTheQueue:
 
 
 @pytest.fixture(scope="module")
-def sample_run_events(bitstamp_sample_dir):
-    from ob_analytics.pipeline import Pipeline
-
-    return Pipeline().run(bitstamp_sample_dir / "orders.csv.gz").events
+def sample_run_events(bundled_sample_result):
+    return bundled_sample_result.events
 
 
 @pytest.mark.parametrize("side", ["bid", "ask"])

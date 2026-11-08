@@ -74,6 +74,8 @@ Python API and the CLI give the same result for one folder. To read the record
 yourself, use
 [`read_record`](../api/capture_record.md#ob_analytics.capture_record.read_record):
 
+<!-- docs-test: skip needs a live capture -->
+
 ```python
 from ob_analytics.capture_record import read_record
 

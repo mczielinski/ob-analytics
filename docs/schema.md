@@ -43,12 +43,22 @@ a renamed or removed column, a changed unit or dtype, or a new required column.
 
 Read the version from another tool through pyarrow:
 
+<!-- docs-test
+from ob_analytics import Pipeline, sample_csv_path, save_data
+
+save_data(Pipeline().run(sample_csv_path()), "out/")
+-->
+
 ```python
 import pyarrow.parquet as pq
 
 metadata = pq.read_schema("out/events.parquet").metadata
 version = metadata[b"ob_analytics_schema_version"].decode()  # "4.0"
 ```
+
+<!-- docs-test
+assert version == "4.0", version
+-->
 
 ## The tables
 
@@ -134,6 +144,10 @@ tick_size = tick_sizes["default"]
 # quote-currency price = price_column * tick_size
 ```
 
+<!-- docs-test
+assert tick_sizes == {"default": 0.01}, tick_sizes
+-->
+
 `load_data` surfaces it on each returned frame's `attrs`:
 `df.attrs["tick_size"]` is the resolved default and `df.attrs["tick_sizes"]` the
 full map. A legacy (pre-`3.0`) file carries neither and stores float prices
@@ -209,6 +223,10 @@ lot_size = lot_sizes["default"]
 # base-asset size = volume_column * lot_size
 ```
 
+<!-- docs-test
+assert lot_sizes == {"default": 1e-08}, lot_sizes
+-->
+
 `load_data` surfaces it on each returned frame's `attrs`: `df.attrs["lot_size"]`
 is the resolved default and `df.attrs["lot_sizes"]` the full map. A pre-`4.0`
 file carries neither and stores float sizes already in the base asset.
@@ -225,6 +243,17 @@ windowed run's folder, or one written by an older version) still records the
 tick and lot size; `load_result` then takes the display precision from the
 decimal places of each step (a tick of 0.001 gives `price_decimals=3`). The key is optional, so it does not
 change the schema version, and an older reader ignores it.
+
+### The run's declarations
+
+When `save_data` is given a result, each file also records the run's
+declarations (`FeedDeclarations`: feed type, trade attribution, sequence kind,
+clocks, and a capture's sequence restarts) as a JSON object under
+`ob_analytics_declarations`. `load_result` reads it, so `result.audit()` and
+`ob-analytics audit --from-parquet` check a saved run against what its data
+was declared to show. A folder without the key gets the declarations of the
+capture record beside it, then those of the source passed to `load_result`.
+Like the config key, it is optional and does not change the schema version.
 
 A size too large to count in `int64` lots of the run's `lot_size` (about
 9.2e10 units at the default `1e-8`) is refused with `ConfigError` when a
@@ -409,7 +438,7 @@ The frame type is part of the contract, so it is written down here:
   `pandas.DataFrame`.
 - **Plug-ins are handed pandas.** The protocols you implement to add a source or
   an export format — `EventLoader`, `TradeSource`, `DepthSource`,
-  `OfflineSource.compute_depth`, `DataWriter` — take and return
+  `SupportsComputeDepth.compute_depth`, `DataWriter` — take and return
   `pandas.DataFrame`. See [Extending](extending.md).
 - **The file format is how other tools read the output.** The versioned Parquet
   described on this page is the interop surface, not the Python type. Polars,
@@ -424,7 +453,9 @@ functions never return one of their types. The reasoning is recorded in
 You do not have to write files first. A `PipelineResult` converts itself:
 
 ```python
-result = Pipeline().run("data/orders.csv")
+from ob_analytics import Pipeline
+
+result = Pipeline().run("orders.csv")
 
 tables = result.to_arrow()    # dict[str, pyarrow.Table]
 frames = result.to_polars()   # dict[str, polars.DataFrame]
@@ -476,6 +507,8 @@ touch = (
 ```
 
 ### DuckDB
+
+<!-- docs-test: skip needs duckdb, which ob-analytics does not install -->
 
 ```python
 import duckdb

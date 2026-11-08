@@ -82,6 +82,16 @@ Column names are flexible: `side` / `direction` and `volume` / `size` /
 A file with another timestamp unit, or prices in a smaller unit than the quote
 currency, says so in the source's settings:
 
+<!-- docs-test
+from ob_analytics import DepthCsvSettings
+from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
+from ob_analytics.depth_l2 import DepthCsvWriter
+
+toy = {"depth": toy_l2_depth(), "trades": toy_l2_trades()}
+encoding = DepthCsvSettings(timestamp_unit="us", price_divisor=10_000)
+DepthCsvWriter(settings=encoding).write(toy, "my_l2_run/")
+-->
+
 ```python
 from ob_analytics import DepthCsvSettings, DepthCsvSource, Pipeline
 
@@ -92,6 +102,10 @@ result = Pipeline(source=DepthCsvSource(settings=settings)).run("my_l2_run/")
 
 Point the pipeline at the file (or a directory containing `depth.csv`); a
 companion `trades.csv` next to it is picked up automatically.
+
+<!-- docs-test
+DepthCsvWriter().write(toy, "my_l2_run/")
+-->
 
 ```python
 from ob_analytics import Pipeline

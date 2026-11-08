@@ -44,12 +44,15 @@ two coordinates, `level` (`Level.L2` / `Level.L3`) and `feed_type`
 (`FeedType`), and carries typed `settings` (a `SourceSettings`). It then
 implements one or both **capabilities**:
 
-- **`OfflineSource`** — replay stored files. The per-venue factories the
-  pipeline needs: a loader (`EventLoader` for L3, `DepthSource` for L2), a trade
-  source (`TradeSource`), and — optionally — a writer (`DataWriter`), plus
-  `compute_depth(...)`. The pipeline calls the factories once for each run,
-  with that run's config and `RunContext`, so a source keeps nothing from one
-  run to the next.
+- **`OfflineSource`** — replay stored files. Two factories are required: a
+  loader (`EventLoader` for L3, `DepthSource` for L2) and a trade source
+  (`TradeSource`). The pipeline calls them once for each run, with that run's
+  config and `RunContext`, so a source keeps nothing from one run to the next.
+  Three more capabilities are optional, each its own small protocol:
+  `SupportsWriter` (`create_writer`, a writer in the venue's own format),
+  `SupportsComputeDepth` (`compute_depth`, depth the venue ships, as LOBSTER
+  does) and `SupportsRequiredContext` (`required_context`, the `RunContext`
+  fields a run needs). Leave out the ones you do not use.
 - **`LiveSource`** — capture a venue's live feed: `snapshot` / `stream` /
   `shutdown_synthetic_events` (see [the live capability](#the-live-capability)).
 
@@ -113,10 +116,12 @@ class CoinbaseSource:
     name = "coinbase"
     level = Level.L3  # per-order (Coinbase `full` channel)
     feed_type = FeedType.MATCHED_BOOK  # exchange matching engine: never crossed
-    settings = SourceSettings()  # empty: no per-source knobs
     # The tick and lot size the venue's data is usually on; the run's config
     # starts from it, and a field the caller sets wins.
     grid = InstrumentGrid(tick_size=0.01, lot_size=1e-8)
+
+    def __init__(self, settings: SourceSettings | None = None) -> None:
+        self.settings = settings or SourceSettings()  # empty: no per-source knobs
 
     def create_loader(self, config: PipelineConfig, ctx: RunContext) -> CoinbaseLoader:
         return CoinbaseLoader(config)
@@ -127,11 +132,9 @@ class CoinbaseSource:
         # loader is this run's loader, for trades that come off the same read.
         return CoinbaseTradeReader(config)
 
-    def compute_depth(self, events, config, source, ctx, loader):
-        return None  # use the standard price-level depth pipeline
-
-    def required_context(self) -> list[str]:
-        return []  # e.g. ["trading_date"] if filenames carry no date
+    # Optional: define required_context to name RunContext fields a run
+    # needs, e.g. ["trading_date"] if file names carry no date.  With no
+    # compute_depth, the standard price-level depth stage runs.
 
 
 register_source("coinbase", CoinbaseSource)
@@ -171,13 +174,16 @@ The pipeline adds `type` itself. The trade source's frame needs `timestamp`,
 `maker_event_id` and `taker_event_id`. [The schema](schema.md) says what each
 column means, including how `volume` and `fill` change over an order's life.
 
-!!! warning "`compute_depth` must be defined"
-    The pipeline calls `source.compute_depth(...)` unconditionally. **Return
-    `None`** to use the standard price-level depth pipeline (what almost every
-    venue wants). Only return a `(depth, depth_summary)` tuple if your venue
-    ships ground-truth depth — as LOBSTER does from its orderbook file.
+!!! note "Define `compute_depth` only for depth the venue ships"
+    Without it the pipeline runs its standard price-level depth stage, which
+    is what almost every venue wants. Define it only if your venue ships
+    ground-truth depth, as LOBSTER does from its orderbook file. Return a
+    `(depth, depth_summary)` tuple, or `None` to fall back to the standard
+    stage for one run.
 
 Using it — programmatically and from the CLI:
+
+<!-- docs-test: skip needs a Coinbase file and a finished loader -->
 
 ```python
 from ob_analytics import Pipeline, list_sources
@@ -403,6 +409,8 @@ print(list_writers())  # [..., "duckdb", ...]
 
 Using it — `save_data` takes a **dict of DataFrames**, not a `PipelineResult`:
 
+<!-- docs-test: skip needs duckdb, which ob-analytics does not install -->
+
 ```python
 from ob_analytics import Pipeline, save_data
 
@@ -516,12 +524,16 @@ result.
 `OrderBookDeltaDataWrangler` takes: a UTC index and the columns `action`,
 `side`, `price`, `size`, `order_id`, `flags`, `sequence`.
 
+<!-- docs-test: skip needs nautilus-trader, which the docs job does not install -->
+
 ```python
 import pandas as pd
 from nautilus_trader.persistence.wranglers import OrderBookDeltaDataWrangler
+from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
+instrument = TestInstrumentProvider.btcusdt_binance()  # see size_precision below
 deltas = OrderBookDeltaDataWrangler(instrument).process(
-    pd.read_parquet("out/deltas.parquet")
+    pd.read_parquet("out/toy-deltas.parquet")
 )
 ```
 
@@ -632,6 +644,8 @@ fig = plot(
 **A custom backend.** Register renderers under your backend name, then point
 the dispatcher at the module so it imports lazily on first use:
 
+<!-- docs-test: skip needs the reader's own backend package -->
+
 ```python
 from ob_analytics.visualization import register_plot_backend
 
@@ -677,6 +691,8 @@ A plot registered at a level is a `PlotConcept` appended to the model's
 `concepts` list instead, before `generate_gallery` is called. Its `variants` map
 each level it is registered at to a `PlotSpec`, and the gallery gives it one
 card per level:
+
+<!-- docs-test: skip prepare_my_face is the reader's own function -->
 
 ```python
 from ob_analytics.visualization import Level
@@ -904,6 +920,8 @@ register_bar_rule(RangeRule())
 ```
 
 ```python
+from ob_analytics import bars
+
 bars(result.trades, "range", 25)  # a new bar every $25 of price travel
 ```
 
@@ -970,7 +988,7 @@ register_feature(CloseLocationFeature())
 ```
 
 ```python
-features(trades, quotes, "volume", 0.5)["close_location"]
+features(result.trades, result.depth_summary, "volume", 0.5)["close_location"]
 ```
 
 It is measured with the built-in ten and its column lands after theirs. Name
@@ -1025,6 +1043,8 @@ extensions you have two options:
 - **Import the module once at startup** — most cleanly from your package's
   `__init__.py` — for a plot, a writer, or a source you do not package
   separately:
+
+  <!-- docs-test: skip needs the reader's own package -->
 
   ```python
   # my_pkg/__init__.py

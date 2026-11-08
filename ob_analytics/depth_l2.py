@@ -692,24 +692,6 @@ class DepthCsvSource:
             config, settings=_csv_settings(self.settings, "DepthCsvSource")
         )
 
-    def compute_depth(
-        self,
-        events: pd.DataFrame,
-        config: Any,
-        source: Any,
-        ctx: RunContext,
-        loader: Any,
-    ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
-        # Unused on the L2 path: the loader *is* the depth source, so the
-        # pipeline never folds events into depth (there are no events). Present
-        # only to satisfy the OfflineSource protocol; returns None like the L3
-        # sources that use the standard depth stages.
-        return None
-
-    def required_context(self) -> list[str]:
-        # Price-level captures carry their own receive timestamps.
-        return []
-
 
 # ── Register this source ──────────────────────────────────────────────
 # Registration runs at the bottom, after ``DepthCsvSource`` is defined.

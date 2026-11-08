@@ -89,6 +89,8 @@ and listing sources — never requires it.
 from __future__ import annotations
 
 import warnings
+from collections.abc import Generator, Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -110,6 +112,7 @@ from ob_analytics._utils import (
     ticks_to_price,
     to_utc_ns,
 )
+from ob_analytics._windows import LoadedWindow
 from ob_analytics.config import InstrumentGrid, PipelineConfig, SourceSettings
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import (
@@ -293,17 +296,75 @@ def read_mbo_frame(source: Any) -> pd.DataFrame:
     """
     if isinstance(source, pd.DataFrame):
         frame = source.reset_index() if source.index.name else source.copy()
-    elif hasattr(source, "to_df"):
-        frame = _mbo_records(source)
     else:
-        frame = _read_dbn_file(source)
+        with _mbo_store(source) as store:
+            # ``price_type="fixed"`` keeps Databento's raw integer prices,
+            # which convert to ticks exactly; the decimal default would
+            # round-trip them through a float first.
+            frame = store.to_df(price_type="fixed").reset_index()
 
     validate_columns(frame, _REQUIRED_MBO_COLUMNS, "DatabentoLoader: MBO frame")
     return frame
 
 
-def _mbo_records(store: Any) -> pd.DataFrame:
-    """Return the records of an open ``DBNStore``, refusing a non-MBO schema."""
+def _mbo_parts(source: Any, rows: int) -> Iterator[pd.DataFrame]:
+    """Yield the raw MBO records of *source* in file order, *rows* at a time.
+
+    Takes what :func:`read_mbo_frame` takes, and reads a file or store a part
+    at a time, so the whole file is never in memory.
+    """
+    if isinstance(source, pd.DataFrame):
+        frame = source.reset_index() if source.index.name else source
+        validate_columns(frame, _REQUIRED_MBO_COLUMNS, "DatabentoLoader: MBO frame")
+        for start in range(0, len(frame), rows):
+            yield frame.iloc[start : start + rows]
+        return
+    with _mbo_store(source) as store:
+        for part in store.to_df(price_type="fixed", count=rows):
+            part = part.reset_index()
+            validate_columns(part, _REQUIRED_MBO_COLUMNS, "DatabentoLoader: MBO frame")
+            yield part
+
+
+@contextmanager
+def _mbo_store(source: Any) -> Generator[Any]:
+    """Give the open ``DBNStore`` of a path or store, refusing a bad file.
+
+    A store opened here from a path is closed on the way out; a store the
+    caller passed is left open.  A file that is not DBN, holds a schema other
+    than MBO, or ends part way through its metadata or a record raises
+    :class:`ConfigError`, whether it fails on opening or while the records are
+    read inside the ``with`` block.  ``databento`` only warns about a cut
+    record and reads the records before it, so that warning is an error here:
+    a frame missing the end of the file is a wrong answer.
+    """
+    db = _databento()
+    from databento_dbn import DBNError
+
+    bad_file = (db.BentoError, db.common.error.BentoWarning, DBNError, ValueError)
+    opened = not hasattr(source, "to_df")
+    store = None
+    try:
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "error", message=".*truncated", category=db.common.error.BentoWarning
+            )
+            store = db.DBNStore.from_file(Path(source)) if opened else source
+            _check_mbo_schema(store)
+            yield store
+    except bad_file as exc:
+        if isinstance(exc, ConfigError):
+            raise
+        raise ConfigError(
+            f"DatabentoLoader: {source} is not a DBN file this reader can read: {exc}"
+        ) from exc
+    finally:
+        if opened and store is not None:
+            _close_dbn(store)
+
+
+def _check_mbo_schema(store: Any) -> None:
+    """Raise unless an open ``DBNStore`` holds the MBO schema."""
     schema = str(getattr(store.metadata, "schema", "") or "")
     if schema != "mbo":
         raise ConfigError(
@@ -312,45 +373,6 @@ def _mbo_records(store: Any) -> pd.DataFrame:
             "reconstruction; the price-level schemas (mbp-1, mbp-10, "
             "bbo, tbbo) carry no order ids."
         )
-    # ``price_type="fixed"`` keeps Databento's raw integer prices, which
-    # convert to ticks exactly; the decimal default would round-trip them
-    # through a float first.
-    return store.to_df(price_type="fixed").reset_index()
-
-
-def _read_dbn_file(path: Any) -> pd.DataFrame:
-    """Return the MBO records of the DBN file at *path*, refusing a bad file.
-
-    A file that is not DBN, or that ends part way through its metadata or a
-    record, raises :class:`ConfigError`.  ``databento`` only warns about a
-    cut record and reads the records before it, so that warning is an error
-    here: a frame missing the end of the file is a wrong answer.
-    """
-    db = _databento()
-    from databento_dbn import DBNError
-
-    store = None
-    try:
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "error", message=".*truncated", category=db.common.error.BentoWarning
-            )
-            store = db.DBNStore.from_file(Path(path))
-            return _mbo_records(store)
-    except (
-        db.BentoError,
-        db.common.error.BentoWarning,
-        DBNError,
-        ValueError,
-    ) as exc:
-        if isinstance(exc, ConfigError):
-            raise
-        raise ConfigError(
-            f"DatabentoLoader: {path} is not a DBN file this reader can read: {exc}"
-        ) from exc
-    finally:
-        if store is not None:
-            _close_dbn(store)
 
 
 def _databento() -> Any:
@@ -366,7 +388,7 @@ def _databento() -> Any:
 
 
 def _close_dbn(store: Any) -> None:
-    """Close the file a ``DBNStore`` from :func:`_read_dbn_file` holds open.
+    """Close the file a ``DBNStore`` from :func:`_mbo_store` holds open.
 
     A store has no close of its own. Closing its ``reader`` is not enough for
     a compressed file: from Python 3.14 databento decompresses with the
@@ -442,6 +464,9 @@ class DatabentoLoader:
         #: could not repair.  ``0`` before the first load.
         self.maybe_bad_book_records: int = 0
 
+    #: How many records :meth:`load_windows` reads from the file at a time.
+    read_size: int = 250_000
+
     def load(self, source: Any) -> pd.DataFrame:
         """Load MBO records from *source* and return the events frame.
 
@@ -461,15 +486,89 @@ class DatabentoLoader:
             holds :attr:`maybe_bad_book_records`.
         """
         logger.info("DatabentoLoader: reading {}", source)
-        raw = read_mbo_frame(source)
-        raw = self._select_instrument(raw)
+        book = _BookFilter(self._settings)
+        raw = book.narrow(read_mbo_frame(source))
+        book.finish()
+        reading = _Reading()
+        events, records = self._read_part(raw, reading, last=True)
+        self.maybe_bad_book_records = _warn_on_maybe_bad_book(reading)
+        self.trade_records = _in_record_order([records])
+        return events
+
+    def load_windows(
+        self,
+        source: Any,
+        windows: list[tuple[pd.Timestamp | None, pd.Timestamp | None]],
+    ) -> Iterator[LoadedWindow]:
+        """Yield the events of each time window of *source* in turn.
+
+        The file is read :attr:`read_size` records at a time, and only one
+        window's records and events are in memory at once.  The state an order
+        carries from one window into the next (its size, its price, a fill
+        whose book record has not arrived yet) is kept between windows, so the
+        events are the rows :meth:`load` gives, cut at the windows.  Their
+        ``event_id`` and ``original_number`` count across the whole file.
+
+        A window holds the records received (``ts_recv``) at or after its
+        start and before its end.  Once the last window is yielded,
+        :attr:`trade_records` holds the trade records of the whole file, so
+        :class:`DatabentoTradeReader` builds the whole run's trades.
+
+        Parameters
+        ----------
+        source : str, Path, DBNStore, or pandas.DataFrame
+            Anything :func:`read_mbo_frame` accepts.
+        windows : list of tuple
+            ``(start, end)`` per window, tz-aware UTC, ``None`` for an open
+            end, covering the whole file: what
+            :func:`~ob_analytics._windows.window_bounds` returns.
+
+        Yields
+        ------
+        LoadedWindow
+            The window's events, and the ``event_id`` of each of them a trade
+            names.
+
+        Raises
+        ------
+        ConfigError
+            If a record was received before the start of the window it falls
+            in: the records are not in receive-time order, which Databento
+            guarantees for one instrument.
+        """
+        logger.info("DatabentoLoader: reading {} one window at a time", source)
+        self.trade_records = None
+        book = _BookFilter(self._settings)
+        parts = (book.narrow(raw) for raw in _mbo_parts(source, self.read_size))
+        reading = _Reading()
+        records = []
+        cut = _window_records(parts, windows)
+        for number, raw in enumerate(cut, 1):
+            last = number == len(windows)
+            if last:
+                book.finish()
+            events, part_records = self._read_part(raw, reading, last=last)
+            records.append(part_records)
+            yield LoadedWindow(events, part_records["maker_event_id"].dropna().unique())
+        self.maybe_bad_book_records = _warn_on_maybe_bad_book(reading)
+        self.trade_records = _in_record_order(records)
+
+    def _read_part(
+        self, raw: pd.DataFrame, reading: _Reading, *, last: bool
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Return the events and trade records of the next part of the file.
+
+        *reading* holds what the parts before left behind, and is updated for
+        the part after.  *last* marks the part that ends the file.
+        """
         _reject_aggregated_records(raw)
-        self.maybe_bad_book_records = _count_maybe_bad_book(raw)
+        flagged = _count_maybe_bad_book(raw)
+        reading.flagged += flagged
 
-        work = self._to_working_frame(raw)
-        events, fills = _book_events_and_fills(work)
-
-        self.trade_records = fills
+        work = self._to_working_frame(raw, first=reading.records + 1)
+        first_event = reading.events
+        events, records = _book_events_and_fills(work, reading, last=last)
+        reading.records += len(raw)
 
         if self._config.track_sequence:
             # The venue's own sequence number, where the publisher sends one
@@ -483,7 +582,7 @@ class DatabentoLoader:
                 events[SEQUENCE_COLUMN] = (
                     events["original_number"].map(seq_by_record).astype("Int64")
                 )
-            events = attach_ingest_seq(events)
+            events = attach_ingest_seq(events, start=first_event)
 
         events = events.drop(columns=["source_pos"])
 
@@ -494,8 +593,8 @@ class DatabentoLoader:
             int((events["action"] == "created").sum()),
             int((events["action"] == "changed").sum()),
             int((events["action"] == "deleted").sum()),
-            int((fills["raw_event_type"] == ACTION_FILL).sum()),
-            int((fills["raw_event_type"] == ACTION_TRADE).sum()),
+            int((records["raw_event_type"] == ACTION_FILL).sum()),
+            int((records["raw_event_type"] == ACTION_TRADE).sum()),
         )
 
         events = attach_instrument_identity(
@@ -505,61 +604,16 @@ class DatabentoLoader:
             default_venue=self._VENUE,
         )
         events = cast_events(events)
-        events.attrs[MAYBE_BAD_BOOK_ATTR] = self.maybe_bad_book_records
-        return events
+        events.attrs[MAYBE_BAD_BOOK_ATTR] = flagged
+        return events, records
 
-    # ── input narrowing ───────────────────────────────────────────────
-
-    def _select_instrument(self, raw: pd.DataFrame) -> pd.DataFrame:
-        """Narrow *raw* to the single book this run covers.
-
-        Applies whichever of the :class:`DatabentoSettings` filters were set,
-        then insists that what is left is one instrument from one publisher:
-        two publishers of the same instrument are two books, and merging them
-        would reconstruct a book that never existed.
-        """
-        s = self._settings
-        for column, wanted in (
-            ("instrument_id", s.instrument_id),
-            ("publisher_id", s.publisher_id),
-            ("symbol", s.raw_symbol),
-        ):
-            if wanted is None:
-                continue
-            if column not in raw.columns:
-                raise ConfigError(
-                    f"DatabentoLoader: cannot filter on {column!r} — the "
-                    f"records carry no such column. Present: {list(raw.columns)}"
-                )
-            raw = raw[raw[column] == wanted]
-            if raw.empty:
-                raise ConfigError(
-                    f"DatabentoLoader: no records left after {column}={wanted!r}."
-                )
-
-        for column, setting in (
-            ("instrument_id", "instrument_id"),
-            ("publisher_id", "publisher_id"),
-        ):
-            if column not in raw.columns:
-                continue
-            present = pd.unique(raw[column])
-            if len(present) > 1:
-                raise ConfigError(
-                    f"DatabentoLoader: the records cover {len(present)} values "
-                    f"of {column} ({sorted(present.tolist())[:10]}). One run "
-                    "reconstructs one book, so pick one with "
-                    f"DatabentoSettings({setting}=...)."
-                )
-
-        return raw.reset_index(drop=True)
-
-    def _to_working_frame(self, raw: pd.DataFrame) -> pd.DataFrame:
+    def _to_working_frame(self, raw: pd.DataFrame, *, first: int) -> pd.DataFrame:
         """Return the columns the mapping needs, typed and in file order.
 
         Keeps the file's own row order: a fill is charged to the book event
         that follows it, so re-sorting here would break the pairing.  The
-        1-based file position is kept as ``original_number``.
+        1-based file position is kept as ``original_number``; *raw*'s first
+        record is at *first*.
         """
         cfg = self._config
         action = raw["action"].astype(str).str.strip()
@@ -568,7 +622,7 @@ class DatabentoLoader:
 
         work = pd.DataFrame(
             {
-                "original_number": np.arange(1, len(raw) + 1, dtype="int64"),
+                "original_number": np.arange(first, first + len(raw), dtype="int64"),
                 "action": action.to_numpy(),
                 "side": side.to_numpy(),
                 "id": order_id,
@@ -591,6 +645,167 @@ class DatabentoLoader:
         work["size_lots"] = size_to_lots(work["raw_size"].to_numpy(), cfg.lot_size)
         work["direction"] = work["side"].map(_SIDE_TO_DIRECTION)
         return _usable_records(work)
+
+
+class _BookFilter:
+    """Narrow the records to the single book a run covers, part by part.
+
+    Applies whichever of the :class:`DatabentoSettings` filters were set, and
+    insists that what is left is one instrument from one publisher: two
+    publishers of the same instrument are two books, and merging them would
+    reconstruct a book that never existed.  A file read in parts is checked
+    across all of them: :meth:`finish` raises if a filter kept nothing.
+    """
+
+    def __init__(self, settings: DatabentoSettings) -> None:
+        self._filters = [
+            (column, wanted)
+            for column, wanted in (
+                ("instrument_id", settings.instrument_id),
+                ("publisher_id", settings.publisher_id),
+                ("symbol", settings.raw_symbol),
+            )
+            if wanted is not None
+        ]
+        self._kept = dict.fromkeys((column for column, _ in self._filters), 0)
+        self._present: dict[str, set[Any]] = {
+            "instrument_id": set(),
+            "publisher_id": set(),
+        }
+
+    def narrow(self, raw: pd.DataFrame) -> pd.DataFrame:
+        """Return the records of *raw* that belong to the run's book."""
+        for column, wanted in self._filters:
+            if column not in raw.columns:
+                raise ConfigError(
+                    f"DatabentoLoader: cannot filter on {column!r} — the "
+                    f"records carry no such column. Present: {list(raw.columns)}"
+                )
+            raw = raw[raw[column] == wanted]
+            self._kept[column] += len(raw)
+
+        for column, setting in (
+            ("instrument_id", "instrument_id"),
+            ("publisher_id", "publisher_id"),
+        ):
+            if column not in raw.columns:
+                continue
+            present = self._present[column]
+            present.update(pd.unique(raw[column]).tolist())
+            if len(present) > 1:
+                raise ConfigError(
+                    f"DatabentoLoader: the records cover {len(present)} values "
+                    f"of {column} ({sorted(present)[:10]}). One run "
+                    "reconstructs one book, so pick one with "
+                    f"DatabentoSettings({setting}=...)."
+                )
+
+        return raw.reset_index(drop=True)
+
+    def finish(self) -> None:
+        """Raise if one of the filters has kept no record of the file."""
+        for column, wanted in self._filters:
+            if not self._kept[column]:
+                raise ConfigError(
+                    f"DatabentoLoader: no records left after {column}={wanted!r}."
+                )
+
+
+@dataclass
+class _Reading:
+    """What one part of a file leaves for the next.
+
+    A file read whole is one part.  Read a window at a time, each part starts
+    where the one before stopped: the orders still on the book, the fills
+    whose book record has not come yet, and the counts the next part's
+    numbers continue from.
+    """
+
+    #: Records read so far; the next part's ``original_number`` follows on.
+    records: int = 0
+    #: Events numbered so far; the next part's ``event_id`` follows on.
+    events: int = 0
+    #: The orders resting at the end of the part: ``id``, ``price`` (the
+    #: price of the order's last row), ``outstanding`` and ``direction``.
+    book: pd.DataFrame | None = None
+    #: The orders that have left the book since the last clear.  An id seen
+    #: again before the next clear is the same order, as in a whole read.
+    gone: pd.Index = field(default_factory=lambda: pd.Index([], dtype="int64"))
+    #: Fill records not yet charged to a book record: the window ended
+    #: between a fill and the cancel or modify that takes its size off.
+    fills: pd.DataFrame | None = None
+    #: Records carrying ``F_MAYBE_BAD_BOOK``, for the warning once the file
+    #: is done.
+    flagged: int = 0
+
+
+def _window_records(
+    parts: Iterable[pd.DataFrame],
+    windows: list[tuple[pd.Timestamp | None, pd.Timestamp | None]],
+) -> Iterator[pd.DataFrame]:
+    """Yield the raw records of each of *windows* in turn, from *parts*.
+
+    A window holds the records received at or after its start and before its
+    end.  The records are taken in file order, so one received before the
+    start of the window it would fall in is out of receive-time order, and
+    raises.
+    """
+    source = iter(parts)
+    # The part not yet taken, and when each of its records was received.
+    rest: pd.DataFrame | None = None
+    received = np.empty(0, dtype="int64")
+    template: pd.DataFrame | None = None
+    for start, end in windows:
+        taken, taken_at = [], []
+        end_ns = None if end is None else epoch_ns([end])[0]
+        while True:
+            if rest is None:
+                rest = next(source, None)
+                if rest is None:
+                    break
+                if template is None:
+                    template = rest.iloc[:0]
+                received = epoch_ns(to_utc_ns(rest["ts_recv"]))
+            if end_ns is None:
+                n = len(rest)
+            else:
+                later = received >= end_ns
+                n = int(np.argmax(later)) if later.any() else len(rest)
+            taken.append(rest.iloc[:n])
+            taken_at.append(received[:n])
+            if n < len(rest):
+                rest, received = rest.iloc[n:], received[n:]
+                break
+            rest = None
+        if template is None:
+            template = _no_mbo_records()
+        window = pd.concat(taken, ignore_index=True) if taken else template
+        if start is not None and len(window):
+            early = np.concatenate(taken_at) < epoch_ns([start])[0]
+            if early.any():
+                raise ConfigError(
+                    f"DatabentoLoader: {int(early.sum())} records received "
+                    f"before {start} come after a record received at or after "
+                    "it, so the file is not in receive-time order and cannot "
+                    "be read one window at a time. Run it whole with "
+                    "Pipeline.run."
+                )
+        yield window
+
+
+def _no_mbo_records() -> pd.DataFrame:
+    """Return a zero-row frame of the MBO fields the loader reads."""
+    dtypes = {
+        "ts_recv": UTC_NS_DTYPE,
+        "ts_event": UTC_NS_DTYPE,
+        "action": "object",
+        "side": "object",
+        "price": "int64",
+        "size": "int64",
+        "order_id": "uint64",
+        "flags": "uint8",
+    }
+    return pd.DataFrame({k: pd.Series([], dtype=v) for k, v in dtypes.items()})
 
 
 def _order_ids(order_id: pd.Series) -> np.ndarray:
@@ -709,23 +924,27 @@ def _reject_aggregated_records(raw: pd.DataFrame) -> None:
 
 
 def _count_maybe_bad_book(raw: pd.DataFrame) -> int:
-    """Count the records carrying ``F_MAYBE_BAD_BOOK``, and warn when any do.
+    """Count the records carrying ``F_MAYBE_BAD_BOOK``."""
+    flags = raw["flags"].to_numpy(dtype="int64", na_value=0)
+    return int((flags & F_MAYBE_BAD_BOOK).astype(bool).sum())
+
+
+def _warn_on_maybe_bad_book(reading: _Reading) -> int:
+    """Warn when records carry ``F_MAYBE_BAD_BOOK``, and return how many do.
 
     Databento sets the flag on the records after a gap in the channel that it
     could not repair.  The records are kept: the book rebuilt from them may be
     wrong from the gap on, but dropping them would not make it right.
     """
-    flags = raw["flags"].to_numpy(dtype="int64", na_value=0)
-    flagged = int((flags & F_MAYBE_BAD_BOOK).astype(bool).sum())
-    if flagged:
+    if reading.flagged:
         warnings.warn(
-            f"DatabentoLoader: {flagged} of {len(raw)} records carry "
-            "F_MAYBE_BAD_BOOK. Databento found a gap in the feed that it "
+            f"DatabentoLoader: {reading.flagged} of {reading.records} records "
+            "carry F_MAYBE_BAD_BOOK. Databento found a gap in the feed that it "
             "could not repair, so the book may be wrong from the first of "
             "these records on",
             stacklevel=3,
         )
-    return flagged
+    return reading.flagged
 
 
 # ── The action mapping ────────────────────────────────────────────────
@@ -733,6 +952,9 @@ def _count_maybe_bad_book(raw: pd.DataFrame) -> int:
 
 def _book_events_and_fills(
     work: pd.DataFrame,
+    reading: _Reading | None = None,
+    *,
+    last: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Split MBO records into the canonical events frame and the trade records.
 
@@ -740,7 +962,19 @@ def _book_events_and_fills(
     plus a synthetic ``deleted`` row per order still resting when an ``R``
     (clear) arrives.  ``trade_records`` holds the F and T records, each with
     the ``maker_event_id`` of the book event its fill was charged to.
+
+    *work* is one part of the file, and *reading* what the parts before it
+    left (see :class:`_Reading`); it is updated for the next part.  The
+    orders the earlier parts left are put back in front of *work* as rows of
+    their own, the seeds, so this part's records find each order as it was.
+    The seeds' own rows are dropped once the fills are charged.  Unless the
+    part is the *last*, a fill with no book record after it is kept for the
+    next part rather than reported as having none.
     """
+    reading = _Reading() if reading is None else reading
+    lead = _carried_records(work, reading)
+    if len(lead):
+        work = pd.concat([lead, work], ignore_index=True)
     action = work["action"].to_numpy()
     is_book = np.isin(action, list(BOOK_ACTIONS))
     is_fill = action == ACTION_FILL
@@ -764,9 +998,88 @@ def _book_events_and_fills(
     events = _events_from_book_records(work[is_book])
     events = _add_clear_deletes(events, work[is_clear])
     events = events.sort_values("source_pos", kind="stable").reset_index(drop=True)
+    _keep_book(reading, events, epoch=int(work["epoch"].iloc[-1]) if len(work) else 0)
 
     fills = work[is_fill]
-    return _charge_fills_to_events(events, fills, work)
+    return _charge_fills_to_events(events, fills, work, reading, last=last)
+
+
+def _carried_records(work: pd.DataFrame, reading: _Reading) -> pd.DataFrame:
+    """Return the records the parts before *work* leave in front of it.
+
+    First a seed per order: an add of its outstanding size at the price of
+    its last row, for each order resting, and for each order that has left
+    the book and whose id *work* uses again before a clear.  The seed's price
+    is also where the order rests, because a Databento cancel carries the
+    price of the order it cancels.  Then the fills that wait for their
+    book record.  The seeds are numbered at or below ``reading.records``, so
+    their rows sort ahead of the part's own and are told apart by that.
+    """
+    pieces = []
+    seeds = reading.book
+    if len(reading.gone):
+        action = work["action"].to_numpy()
+        before_clear = np.cumsum(action == ACTION_CLEAR) == 0
+        book_ids = work.loc[before_clear & np.isin(action, list(BOOK_ACTIONS)), "id"]
+        gone = reading.gone[reading.gone.isin(book_ids)]
+        if len(gone):
+            # Gone orders have nothing resting.  Only the id matters: a modify
+            # of it is a change, not a new order, and a cancel removes nothing.
+            gone_seeds = pd.DataFrame(
+                {
+                    "id": gone.to_numpy(dtype="int64"),
+                    "price": np.zeros(len(gone), dtype="int64"),
+                    "outstanding": np.zeros(len(gone), dtype="int64"),
+                    "direction": None,
+                }
+            )
+            seeds = gone_seeds if seeds is None else pd.concat([seeds, gone_seeds])
+    if seeds is not None and len(seeds):
+        n = len(seeds)
+        pieces.append(
+            pd.DataFrame(
+                {
+                    "original_number": np.arange(
+                        reading.records - n + 1, reading.records + 1, dtype="int64"
+                    ),
+                    "action": ACTION_ADD,
+                    "id": seeds["id"].to_numpy(),
+                    "raw_price": 0,
+                    "raw_size": 0,
+                    "timestamp": pd.Series([pd.NaT] * n, dtype=UTC_NS_DTYPE).array,
+                    "exchange_timestamp": pd.Series(
+                        [pd.NaT] * n, dtype=UTC_NS_DTYPE
+                    ).array,
+                    "price": seeds["price"].to_numpy(),
+                    "size_lots": seeds["outstanding"].to_numpy(),
+                    "direction": seeds["direction"].to_numpy(),
+                }
+            )
+        )
+    if reading.fills is not None and len(reading.fills):
+        pieces.append(reading.fills)
+    if not pieces:
+        return work.iloc[:0]
+    return pd.concat(pieces, ignore_index=True)
+
+
+def _keep_book(reading: _Reading, events: pd.DataFrame, *, epoch: int) -> None:
+    """Keep the orders *events* leave on the book, for the next part.
+
+    *events* are the part's rows before the fills are charged, seeds
+    included, in event order.  *epoch* is the part's last: a clear ends every
+    order before it, so only the orders after the part's last clear carry on.
+    """
+    in_epoch = events[events["epoch"] == epoch]
+    last_rows = in_epoch.drop_duplicates(subset=["id"], keep="last")
+    resting = last_rows["action"] != "deleted"
+    reading.book = last_rows.loc[
+        resting, ["id", "price", "outstanding", "direction"]
+    ].reset_index(drop=True)
+    gone = pd.Index(last_rows.loc[~resting, "id"], dtype="int64")
+    if epoch == 0:
+        gone = reading.gone.append(gone).unique()
+    reading.gone = gone[~gone.isin(reading.book["id"])]
 
 
 def _events_from_book_records(book: pd.DataFrame) -> pd.DataFrame:
@@ -960,6 +1273,9 @@ def _charge_fills_to_events(
     events: pd.DataFrame,
     fills: pd.DataFrame,
     work: pd.DataFrame,
+    reading: _Reading,
+    *,
+    last: bool,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Attach ``fill`` to the events and ``maker_event_id`` to the fills.
 
@@ -968,7 +1284,8 @@ def _charge_fills_to_events(
     on one book record when a sweep takes an order out in pieces, so the
     ``fill`` on an event is the sum of them.  The rows are numbered once the
     fills have made them final, so ``event_id`` runs 1, 2, 3, ... in event
-    order.
+    order, from where *reading* left off.  Seed rows (see
+    :func:`_carried_records`) are dropped before that.
     """
     slot = ["epoch", "id", "book_rank"]
     events = events.copy()
@@ -982,21 +1299,38 @@ def _charge_fills_to_events(
 
     events = _split_deleted_volume(events)
     events = _split_mixed_changes(events)
-    events["event_id"] = np.arange(1, len(events) + 1, dtype="int64")
+    events = events[events["source_pos"].to_numpy() > reading.records]
+    events = events.reset_index(drop=True)
+    events["event_id"] = np.arange(
+        reading.events + 1, reading.events + len(events) + 1, dtype="int64"
+    )
+    reading.events += len(events)
+    reading.fills = None
 
     if not fills.empty:
-        event_ids = pd.Series(
-            events["event_id"].to_numpy(),
-            index=pd.MultiIndex.from_frame(events[slot]),
-        )
+        made = events.set_index(pd.MultiIndex.from_frame(events[slot]))[
+            ["event_id", "original_number"]
+        ]
         # An order id can repeat across epochs, and a book record is one slot,
         # so the index is unique by construction; guard anyway because a
         # malformed file could repeat a rank.
-        event_ids = event_ids[~event_ids.index.duplicated()]
-        maker_event_id = event_ids.reindex(
-            pd.MultiIndex.from_frame(target[slot])
-        ).to_numpy()
-        orphan = int(pd.isna(maker_event_id).sum())
+        made = made[~made.index.duplicated()]
+        maker = made.reindex(pd.MultiIndex.from_frame(target[slot]))
+        maker_event_id = maker["event_id"].to_numpy()
+        maker_og = maker["original_number"].to_numpy()
+        uncharged = pd.isna(maker_event_id)
+        if not last:
+            # A fill after the part's last clear may yet meet its book record
+            # in the next part.
+            waiting = uncharged & (fills["epoch"].to_numpy() == work["epoch"].iloc[-1])
+            if waiting.any():
+                reading.fills = fills[waiting].drop(
+                    columns=["epoch", "book_rank", "is_book"]
+                )
+                keep = ~waiting
+                fills, uncharged = fills[keep], uncharged[keep]
+                maker_event_id, maker_og = maker_event_id[keep], maker_og[keep]
+        orphan = int(uncharged.sum())
         if orphan:
             logger.warning(
                 "DatabentoLoader: {} fills have no book record after them in "
@@ -1005,9 +1339,9 @@ def _charge_fills_to_events(
                 orphan,
             )
     else:
-        maker_event_id = np.empty(0)
+        maker_event_id = maker_og = np.empty(0)
 
-    trade_records = _trade_records(fills, work, maker_event_id)
+    trade_records = _trade_records(fills, work, maker_event_id, maker_og)
     events = events.drop(columns=["epoch", "book_rank", "outstanding"])
     return events, trade_records
 
@@ -1122,9 +1456,16 @@ def _split_mixed_changes(events: pd.DataFrame) -> pd.DataFrame:
 
 
 def _trade_records(
-    fills: pd.DataFrame, work: pd.DataFrame, maker_event_id: np.ndarray
+    fills: pd.DataFrame,
+    work: pd.DataFrame,
+    maker_event_id: np.ndarray,
+    maker_og: np.ndarray,
 ) -> pd.DataFrame:
-    """Return the F and T records the trade reader projects into trades."""
+    """Return the F and T records the trade reader projects into trades.
+
+    ``maker_og`` is the ``original_number`` of the book event a fill was
+    charged to, and ``record`` the record's own.
+    """
     prints = work[work["action"] == ACTION_TRADE]
 
     fill_rows = pd.DataFrame(
@@ -1132,10 +1473,13 @@ def _trade_records(
             "timestamp": fills["timestamp"].array,
             "price": fills["price"].to_numpy(),
             "volume": fills["size_lots"].to_numpy(),
-            "direction": fills["side"].map(_FILL_SIDE_TO_DIRECTION).to_numpy(),
+            "direction": pd.Categorical(
+                fills["side"].map(_FILL_SIDE_TO_DIRECTION), dtype=TRADE_SIDE_DTYPE
+            ),
             "maker": fills["id"].to_numpy(),
             "maker_event_id": pd.array(maker_event_id, dtype="Int64"),
-            "maker_og": fills["original_number"].to_numpy(),
+            "maker_og": pd.array(maker_og, dtype="Int64"),
+            "record": fills["original_number"].to_numpy(),
             "raw_event_type": ACTION_FILL,
         }
     )
@@ -1144,14 +1488,29 @@ def _trade_records(
             "timestamp": prints["timestamp"].array,
             "price": prints["price"].to_numpy(),
             "volume": prints["size_lots"].to_numpy(),
-            "direction": prints["side"].map(_TRADE_SIDE_TO_DIRECTION).to_numpy(),
+            "direction": pd.Categorical(
+                prints["side"].map(_TRADE_SIDE_TO_DIRECTION), dtype=TRADE_SIDE_DTYPE
+            ),
             "maker": pd.NA,
             "maker_event_id": pd.array([pd.NA] * len(prints), dtype="Int64"),
-            "maker_og": prints["original_number"].to_numpy(),
+            "maker_og": pd.array([pd.NA] * len(prints), dtype="Int64"),
+            "record": prints["original_number"].to_numpy(),
             "raw_event_type": ACTION_TRADE,
         }
     )
     return pd.concat([fill_rows, print_rows], ignore_index=True)
+
+
+def _in_record_order(parts: list[pd.DataFrame]) -> pd.DataFrame:
+    """Join the trade records of a file's parts, fills first, in file order.
+
+    That is the order one part on its own gives.  A fill whose book record was
+    in a later part comes back into its place among the fills.
+    """
+    records = pd.concat(parts, ignore_index=True) if len(parts) > 1 else parts[0]
+    is_print = (records["raw_event_type"] == ACTION_TRADE).to_numpy()
+    order = np.lexsort((records["record"].to_numpy(), is_print))
+    return records.iloc[order].reset_index(drop=True)
 
 
 # ── DatabentoTradeReader ──────────────────────────────────────────────
@@ -1220,8 +1579,7 @@ class DatabentoTradeReader:
         Parameters
         ----------
         events : pandas.DataFrame
-            The loaded events frame, used to map a maker event back to its
-            ``original_number``.
+            Unused; each trade record already names its maker event.
         source
             Unused; the trade records came off the file with the events.
 
@@ -1246,11 +1604,6 @@ class DatabentoTradeReader:
         if chosen.empty:
             return empty_trades()
 
-        og_by_event = pd.Series(
-            events["original_number"].to_numpy(), index=events["event_id"].to_numpy()
-        )
-        maker_og = chosen["maker_event_id"].map(og_by_event)
-
         n = len(chosen)
         trades = pd.DataFrame(
             {
@@ -1266,7 +1619,7 @@ class DatabentoTradeReader:
                 "taker_event_id": pd.array([pd.NA] * n, dtype="Int64"),
                 "maker": chosen["maker"].to_numpy(),
                 "taker": pd.array([pd.NA] * n, dtype="object"),
-                "maker_og": maker_og.astype("Int64").to_numpy(),
+                "maker_og": chosen["maker_og"].to_numpy(),
                 "taker_og": pd.array([pd.NA] * n, dtype="object"),
             }
         )
@@ -1740,23 +2093,6 @@ class DatabentoSource:
         self, config: PipelineConfig | None, ctx: RunContext
     ) -> DataWriter:
         return DatabentoWriter(config, settings=self.dbn_settings())
-
-    def compute_depth(
-        self,
-        events: pd.DataFrame,
-        config: Any,
-        source: Any,
-        ctx: RunContext,
-        loader: Any,
-    ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
-        # MBO is the book itself: there is no companion depth file to prefer
-        # over the reconstruction, so the standard price-level path runs.
-        return None
-
-    def required_context(self) -> list[str]:
-        # DBN records carry absolute UTC timestamps, so there is no date to
-        # supply.
-        return []
 
 
 # ── Register this source ──────────────────────────────────────────────

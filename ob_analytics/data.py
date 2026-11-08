@@ -16,9 +16,10 @@ import pyarrow.parquet as pq
 from ob_analytics._registry import Registry, load_plugins
 from ob_analytics.config import PipelineConfig, instrument_fields
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.protocols import DataWriter, WriteTarget
+from ob_analytics.protocols import DataWriter, FeedDeclarations, WriteTarget
 from ob_analytics.schemas import (
     CONFIG_KEY,
+    DECLARATIONS_KEY,
     EVENT_DTYPES,
     LOT_SIZE_KEY,
     SCHEMA_VERSION,
@@ -117,6 +118,7 @@ def _write_versioned_parquet(
     tick_sizes: dict[str, float] | None = None,
     lot_sizes: dict[str, float] | None = None,
     config: Any = None,
+    declarations: FeedDeclarations | None = None,
 ) -> None:
     """Write *df* to *path* as Parquet, tagging the version, tick and lot size.
 
@@ -126,12 +128,19 @@ def _write_versioned_parquet(
     ``{instrument_key: tick_size}`` map) it is written under
     :data:`TICK_SIZE_KEY` so a reader can recover the float price from the
     integer ticks.  *lot_sizes* does the same for the integer sizes under
-    :data:`LOT_SIZE_KEY`, and *config* records the whole run configuration
-    under :data:`CONFIG_KEY`.  The index is dropped,
+    :data:`LOT_SIZE_KEY`, *config* records the whole run configuration
+    under :data:`CONFIG_KEY`, and *declarations* the run's declarations under
+    :data:`DECLARATIONS_KEY`.  The index is dropped,
     matching the previous ``df.to_parquet(..., index=False)`` behaviour.
     """
     pq.write_table(
-        _to_arrow_table(df, tick_sizes=tick_sizes, lot_sizes=lot_sizes, config=config),
+        _to_arrow_table(
+            df,
+            tick_sizes=tick_sizes,
+            lot_sizes=lot_sizes,
+            config=config,
+            declarations=declarations,
+        ),
         path,
     )
 
@@ -163,6 +172,9 @@ class OutputTables(dict[str, pd.DataFrame]):
     config : PipelineConfig, optional
         The run's configuration, recorded whole so
         :func:`load_result` can rebuild the run.
+    declarations : FeedDeclarations, optional
+        The run's declarations, recorded so the rebuilt run is audited
+        against them.  ``None`` when the tables are not a run's.
     """
 
     def __init__(
@@ -172,17 +184,20 @@ class OutputTables(dict[str, pd.DataFrame]):
         tick_sizes: dict[str, float] | None = None,
         lot_sizes: dict[str, float] | None = None,
         config: PipelineConfig | None = None,
+        declarations: FeedDeclarations | None = None,
     ) -> None:
         super().__init__(tables)
         self._tick_sizes = tick_sizes
         self._lot_sizes = lot_sizes
         self._config = config
+        self.declarations = declarations
 
     def arrow(self) -> dict[str, pa.Table]:
         """Return the same tables as canonical Arrow, keyed the same way.
 
         Each table carries the schema version and, when the run declared one,
-        the tick size, the lot size and the configuration — the same key-value
+        the tick size, the lot size, the configuration and the
+        :attr:`declarations` — the same key-value
         metadata a canonical Parquet file carries, so a writer building one is
         no worse off than :class:`ParquetWriter`.
         """
@@ -192,6 +207,7 @@ class OutputTables(dict[str, pd.DataFrame]):
                 tick_sizes=self._tick_sizes,
                 lot_sizes=self._lot_sizes,
                 config=self._config,
+                declarations=self.declarations,
             )
             for name, df in self.items()
         }
@@ -226,10 +242,12 @@ class ParquetWriter:
         the schema version and, when the writer was given the run's config,
         the tick size, the lot size and the config itself, so
         :func:`load_data` can check the first and restore prices and sizes,
-        and :func:`load_result` can rebuild the run.
+        and :func:`load_result` can rebuild the run.  When *data* is a run's
+        :class:`OutputTables`, its declarations are recorded too.
         """
         p = Path(dest)
         p.mkdir(parents=True, exist_ok=True)
+        declarations = data.declarations if isinstance(data, OutputTables) else None
         for name, df in data.items():
             _write_versioned_parquet(
                 df,
@@ -237,6 +255,7 @@ class ParquetWriter:
                 tick_sizes=self._tick_sizes,
                 lot_sizes=self._lot_sizes,
                 config=self._config,
+                declarations=declarations,
             )
         return p
 
@@ -247,6 +266,7 @@ def _to_arrow_table(
     tick_sizes: dict[str, float] | None = None,
     lot_sizes: dict[str, float] | None = None,
     config: Any = None,
+    declarations: FeedDeclarations | None = None,
 ) -> pa.Table:
     """Convert *df* to an Arrow table tagged with the canonical metadata.
 
@@ -269,6 +289,8 @@ def _to_arrow_table(
     config : PipelineConfig, optional
         The run's configuration, recorded whole under :data:`CONFIG_KEY`.
         Anything else is not recorded.
+    declarations : FeedDeclarations, optional
+        The run's declarations, recorded under :data:`DECLARATIONS_KEY`.
 
     Returns
     -------
@@ -289,6 +311,8 @@ def _to_arrow_table(
         metadata[LOT_SIZE_KEY] = encode_lot_sizes(lot_sizes)
     if isinstance(config, PipelineConfig):
         metadata[CONFIG_KEY] = config.model_dump_json().encode()
+    if declarations is not None:
+        metadata[DECLARATIONS_KEY] = json.dumps(declarations.to_dict()).encode()
     return table.replace_schema_metadata(metadata)
 
 
@@ -398,8 +422,8 @@ def save_data(
     lob_data : PipelineResult or dict of str to pandas.DataFrame
         A pipeline result, or the DataFrames to save (keys become file
         stems).  A result is saved as its four tables, with its own config
-        unless *config* is given.  :func:`load_result` reads a Parquet folder
-        back as the same result.
+        unless *config* is given, and with its declarations.
+        :func:`load_result` reads a Parquet folder back as the same result.
     path : str or Path
         A folder for this package's own formats (``"parquet"``,
         ``"depth_csv"``, ``"bitstamp"``, ``"lobster"``), and a file for an
@@ -441,9 +465,11 @@ def save_data(
     from ob_analytics.pipeline import PipelineResult
 
     p = Path(path)
+    declarations = None
     if isinstance(lob_data, PipelineResult):
         if config is None:
             config = lob_data.config
+        declarations = lob_data.declarations
         lob_data = lob_data.tables()
     # Every writer is handed the same payload: a mapping of pandas frames that
     # can also produce canonical Arrow (#216).  It is a dict, so a writer that
@@ -453,6 +479,7 @@ def save_data(
         tick_sizes=tick_sizes_from_config(config),
         lot_sizes=lot_sizes_from_config(config),
         config=config if isinstance(config, PipelineConfig) else None,
+        declarations=declarations,
     )
 
     if writer is None:
@@ -515,7 +542,7 @@ def _check_target(path: Path, writer: DataWriter, label: str) -> None:
 _RESULT_TABLES: tuple[str, ...] = ("events", "trades", "depth", "depth_summary")
 
 
-def load_result(path: str | Path) -> PipelineResult:
+def load_result(path: str | Path, *, source: Any = None) -> PipelineResult:
     """Load a saved run back into a :class:`~ob_analytics.pipeline.PipelineResult`.
 
     The inverse of ``save_data(result, path)``: the four tables come back
@@ -535,11 +562,21 @@ def load_result(path: str | Path) -> PipelineResult:
     :attr:`~ob_analytics.protocols.Level.L2` run has an empty ``events``
     table, and an L3 run never does.
 
+    The run's declarations (:attr:`PipelineResult.declarations`) come back
+    too.  A folder written by an older version does not record them; it gets
+    those of the capture record ``ob-analytics process`` keeps beside the
+    tables, over those of *source*
+    (:func:`~ob_analytics.capture_record.run_declarations`).
+
     Parameters
     ----------
     path : str or Path
         A Parquet folder written by :func:`save_data` or by
         ``ob-analytics process``.
+    source : Source, optional
+        The source whose declarations to use when the folder records none.
+        ``None`` leaves them undeclared.  Recorded declarations always win,
+        since they describe the data the run read.
 
     Returns
     -------
@@ -573,7 +610,31 @@ def load_result(path: str | Path) -> PipelineResult:
         depth_summary=data["depth_summary"],
         config=_saved_config(p, data),
         level=Level.L2 if data["events"].empty else Level.L3,
+        declarations=_saved_declarations(p, source),
     )
+
+
+def _saved_declarations(path: Path, source: Any) -> FeedDeclarations:
+    """The declarations a saved run recorded, or its capture's and *source*'s."""
+    from ob_analytics.capture_record import run_declarations
+
+    for name in _RESULT_TABLES:
+        file = path / f"{name}.parquet"
+        raw = (pq.read_schema(file).metadata or {}).get(DECLARATIONS_KEY)
+        if raw is None:
+            continue
+        try:
+            return FeedDeclarations.from_dict(json.loads(raw.decode()))
+        except (ValueError, TypeError, AttributeError) as exc:
+            warnings.warn(
+                f"{file}: the saved declarations cannot be read by this "
+                f"version ({exc}); using the capture record's and the "
+                "source's instead.",
+                UserWarning,
+                stacklevel=3,
+            )
+            break
+    return run_declarations(path, source)
 
 
 def _saved_config(path: Path, data: dict[str, pd.DataFrame]) -> PipelineConfig:
@@ -662,7 +723,7 @@ def _named_writer(fmt: str, config: Any, ctx: Any) -> DataWriter:
     ValueError
         If *fmt* names neither, listing the formats :func:`list_writers` gives.
     """
-    from ob_analytics.protocols import RunContext
+    from ob_analytics.protocols import RunContext, SupportsWriter
 
     # *config* is passed through as given, ``None`` included: every writer
     # defaults for itself, and a writer that records what the caller declared
@@ -677,7 +738,9 @@ def _named_writer(fmt: str, config: Any, ctx: Any) -> DataWriter:
     if _writes_a_format(fmt):
         from ob_analytics.sources import SOURCES
 
-        return SOURCES.get(fmt)().create_writer(config, rctx)  # ty: ignore[unresolved-attribute] -- _writes_a_format checked it
+        source = SOURCES.get(fmt)()
+        if isinstance(source, SupportsWriter):
+            return source.create_writer(config, rctx)
     raise ValueError(
         f"Unsupported format: {fmt!r}. Available: {', '.join(list_writers())}"
     )

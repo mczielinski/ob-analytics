@@ -19,13 +19,25 @@ Both read the tables of a finished L3 run.
 
 ## Find icebergs
 
+<!-- docs-test
+# A LOBSTER folder written from a synthetic session stands in for the AAPL day.
+from ob_analytics import RunContext, save_data
+from ob_analytics.synth import generate_session
+
+session = generate_session(seed=3, duration=600, iceberg_fraction=0.1)
+save_data(
+    {"events": session.events, "trades": session.trades}, "AAPL_2012-06-21_10",
+    fmt="lobster", config=session.config, ctx=RunContext(trading_date="2012-06-21"),
+)
+-->
+
 ```python
 from ob_analytics import LobsterSource, Pipeline, RunContext, detect_icebergs
 
 result = Pipeline(
     source=LobsterSource(),
     ctx=RunContext(trading_date="2012-06-21"),
-).run("/path/to/AAPL_2012-06-21_10")
+).run("AAPL_2012-06-21_10")
 
 found = detect_icebergs(result.events, result.trades)
 found.icebergs      # one row per suspected iceberg
