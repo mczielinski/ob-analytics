@@ -8,6 +8,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Moving from 0.1
+
+Each break, old -> new. The package keeps no aliases for old names before 1.0.
+
+- **Pickle is gone** (#409). A pickle runs code when it is loaded.
+  - `save_data(data, "run.pkl", fmt="pickle")` -> `save_data(data, "run")`,
+    which writes a Parquet folder.
+  - `PickleWriter` -> removed; use `ParquetWriter`.
+  - `load_data("run.pkl")` -> removed. To move an old pickle, read it with
+    `pandas.read_pickle` (only a file you wrote yourself) and save it with
+    `save_data`.
+- **`save_data` takes a folder or a file, by format** (#409). It checks
+  `path` before it writes, and says which it expected.
+  - `save_data(r, "out/orders.csv", fmt="bitstamp")` ->
+    `save_data(r, "out", fmt="bitstamp")`, which writes `out/orders.csv` and
+    `out/trades.csv`. `BitstampWriter.write(data, dest)` takes the folder too.
+  - `save_data(r, "out/", fmt="databento")` ->
+    `save_data(r, "out/events.dbn", fmt="databento")`.
+    `DatabentoWriter.write` no longer fills a folder with `events.dbn`.
+  - `save_data(r, "out/session", fmt="hftbacktest")` ->
+    `save_data(r, "out/session.npz", fmt="hftbacktest")`. The writer writes
+    the exact path it is given, and no longer adds `.npz`.
+  - `save_data(r, "run.parquet")` -> `save_data(r, "run")`: the default
+    Parquet format takes a folder, and now refuses a name that ends in a file
+    extension instead of making a folder called `run.parquet`.
+- **A writer declares `target`** (#409). A `DataWriter` without
+  `target = WriteTarget.FOLDER` or `target = WriteTarget.FILE` -> add one.
+  `WriteTarget` is in `ob_analytics.protocols` and at the top level.
+- **`OfflineSource.create_writer` is optional** (#409). A source whose
+  `create_writer` returns `None` -> leave the method out.
+  `list_writers()` lists a source as a format when it has the method.
+- **`list_writers()` lists every format `save_data` accepts** (#409): the
+  registered writers and the sources with a writer of their own (`bitstamp`,
+  `databento`, `depth_csv`, `lobster`). The unknown-format error offers the
+  same list, so it no longer offers `ccxt` and `cryptofeed`.
+- **`load_data` and `load_result` refuse a path that is not a folder with
+  `ConfigError`** (#409). `load_data` raised `ValueError` for a file.
+
 ### Added
 
 - **CI tests what a user installs, and a release waits for CI** (#416). A new
@@ -1042,6 +1080,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **The gallery page is written as UTF-8 on every platform** (#416). The page
   declares UTF-8, but it was written in the locale's encoding, so on Windows
   a non-ASCII title could show wrongly or fail to write.
+
+- **Live capture reports what it lost, and stops on a second signal**
+  (#398).
+  - ccxt and cryptofeed counted lost messages as `errors`, but the manifest
+    and `audit` read `dropped`, so `dropped_messages` passed a capture that
+    lost frames. cryptofeed now counts them in `dropped`, as Bitstamp does.
+    ccxt's `errors` only counted the error that ends the stream, which is
+    already `capture_error`, so it is gone, and the runner no longer adds a
+    stream error to `errors`.
+  - `audit` has a new `capture_errors` warning for a segment that ended on
+    an error or was slow to stop, and runs `dropped_messages` and `capture_errors` on a single
+    capture from its `meta.json` too.
+  - A source whose `diagnostics()` raises lost its counters with only a
+    debug message. The capture now warns and records `diagnostics_error` in
+    `meta.json` and the manifest, and `dropped_messages` fails, since the
+    count is not known. `audit` also warns, not only logs at debug level,
+    when it cannot read the sequence kind a capture's source declares.
+  - A cryptofeed source with no venue said L2 but declared an L3 feed type
+    and trade attribution. All three now say L2 until the venue is known.
+  - An L3 cryptofeed message that cannot be mapped ends the segment, as in
+    ccxt, so the next segment starts from a new opening book. Before, the
+    message was left out and the capture went on with a wrong book.
+  - A second SIGINT or SIGTERM stops a capture at once: a segment still
+    closing is cancelled and closed from its files. Every file is closed
+    even when one fails to flush (recorded as `capture_error` with the phase
+    `close`), and `meta.json` is written last. The row counts in `meta.json`
+    also survive a cancelled segment.
 
 - **A Databento file with records after an unrepaired gap warns, and `audit`
   says so.** Databento marks the records after a gap it could not repair with

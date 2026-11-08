@@ -16,6 +16,8 @@ from ob_analytics.data import (
     register_writer,
     save_data,
 )
+from ob_analytics.exceptions import ConfigError
+from ob_analytics.protocols import WriteTarget
 from ob_analytics.schemas import (
     SCHEMA_VERSION,
     SCHEMA_VERSION_KEY,
@@ -32,6 +34,7 @@ class _StubWriter:
     """Minimal DataWriter — records what it was asked to write."""
 
     written: ClassVar[list[tuple[Path, list[str]]]] = []
+    target = WriteTarget.FOLDER
 
     def write(self, data: dict, dest: str | Path, **kwargs) -> Path:
         p = Path(dest)
@@ -61,10 +64,30 @@ def _cleanup_registry():
 class TestWriterRegistry:
     def test_venue_writers_come_from_the_source_not_the_generic_registry(self):
         # Issue #137 folds venue writers onto their source's create_writer, so
-        # the generic writer registry no longer double-lists them.
-        names = list_writers()
-        assert "bitstamp" not in names
-        assert "lobster" not in names
+        # the generic writer registry does not list them a second time.
+        assert "bitstamp" not in WRITERS
+        assert "lobster" not in WRITERS
+
+    def test_list_writers_lists_every_format_save_data_accepts(self):
+        # Issue #409: the source writers are formats too, and the live-only
+        # sources, which write nothing, are not.
+        assert list_writers() == [
+            "bitstamp",
+            "databento",
+            "depth_csv",
+            "hftbacktest",
+            "lobster",
+            "nautilus",
+            "parquet",
+        ]
+
+    def test_the_unknown_format_error_offers_only_list_writers(self, tmp_path):
+        with pytest.raises(ValueError, match="Unsupported format") as info:
+            save_data({"events": pd.DataFrame()}, tmp_path / "x", fmt="nope")
+        offered = str(info.value).split("Available: ")[1].split(", ")
+        assert offered == list_writers()
+        assert "ccxt" not in offered
+        assert "cryptofeed" not in offered
 
     def test_source_name_resolves_to_its_writer(self):
         # save_data(fmt="<venue>") reaches the writer through the source.
@@ -117,9 +140,9 @@ class TestSaveDataExplicitWriter:
 
 
 class TestBuiltInFormatsAreRegisteredWriters:
-    """Issue #216: parquet and pickle resolve through ``WRITERS`` like the rest.
+    """Issue #216: the built-in parquet format resolves through ``WRITERS``.
 
-    They were hardcoded branches in ``save_data``, so they were the only
+    It was a hardcoded branch in ``save_data``, so it was the only
     extension point in the library a user could not replace or extend.
     """
 
@@ -131,22 +154,14 @@ class TestBuiltInFormatsAreRegisteredWriters:
         assert _StubWriter.written == [(tmp_path / "out", ["events"])]
         assert not (tmp_path / "out" / "events.parquet").exists()
 
-    def test_a_registered_pickle_writer_replaces_the_built_in_one(self, tmp_path):
-        register_writer("pickle", lambda config, ctx: _StubWriter())
-
-        save_data(
-            {"events": pd.DataFrame({"a": [1]})}, tmp_path / "out.pkl", fmt="pickle"
-        )
-
-        assert _StubWriter.written == [(tmp_path / "out.pkl", ["events"])]
-        assert not (tmp_path / "out.pkl").exists()
-
     def test_a_writer_can_ask_for_canonical_arrow_tables(self, tmp_path):
         # A writer that targets Arrow (#113's Nautilus export is the first)
         # must not have to rebuild the canonical metadata by hand.
         seen: dict[str, Any] = {}
 
         class _ArrowWantingWriter:
+            target = WriteTarget.FOLDER
+
             def write(self, data, dest, **kwargs):
                 seen["frames"] = dict(data)
                 seen["tables"] = data.arrow()
@@ -169,12 +184,80 @@ class TestBuiltInFormatsAreRegisteredWriters:
         assert metadata[SCHEMA_VERSION_KEY] == SCHEMA_VERSION.encode()
         assert decode_tick_sizes(metadata[TICK_SIZE_KEY]) == {"default": 0.05}
 
-    def test_a_saved_pickle_holds_a_plain_dict(self, tmp_path):
-        # The payload handed to a writer is a dict subclass (#216).  Pickling it
-        # whole would write ob-analytics' own class into the file, so the file
-        # would only load where that class exists.
-        pkl = tmp_path / "out.pkl"
-        save_data({"events": pd.DataFrame({"a": [1]})}, pkl, fmt="pickle")
+    def test_pickle_is_not_a_format(self, tmp_path):
+        # Issue #409: a pickle runs code when it is loaded, so it is gone.
+        assert "pickle" not in list_writers()
+        with pytest.raises(ValueError, match="Unsupported format"):
+            save_data({"events": pd.DataFrame()}, tmp_path / "out.pkl", fmt="pickle")
 
-        assert type(load_data(pkl)) is dict
-        assert b"OutputTables" not in pkl.read_bytes()
+
+class _FileStubWriter(_StubWriter):
+    target = WriteTarget.FILE
+
+
+class TestSaveDataChecksThePath:
+    """Issue #409: each writer declares a folder or a file, and save_data checks."""
+
+    @pytest.mark.parametrize("name", ["run.parquet", "orders.csv", "run.pkl"])
+    def test_a_folder_format_refuses_a_file_name(self, tmp_path, name):
+        with pytest.raises(ConfigError, match="'parquet' writes a folder"):
+            save_data({"events": pd.DataFrame({"a": [1]})}, tmp_path / name)
+        assert not (tmp_path / name).exists()
+
+    def test_a_folder_format_refuses_an_existing_file(self, tmp_path):
+        existing = tmp_path / "taken"
+        existing.write_text("")
+        with pytest.raises(ConfigError, match="an existing file"):
+            save_data({"events": pd.DataFrame({"a": [1]})}, existing)
+
+    def test_a_folder_name_with_a_dot_is_a_folder(self, tmp_path):
+        save_data({"events": pd.DataFrame({"a": [1]})}, tmp_path / "btc_2024.05.01")
+        assert (tmp_path / "btc_2024.05.01" / "events.parquet").is_file()
+
+    def test_a_file_format_refuses_an_existing_folder(self, tmp_path):
+        register_writer("filestub", lambda config, ctx: _FileStubWriter())
+        with pytest.raises(ConfigError, match="'filestub' writes one file"):
+            save_data({"events": pd.DataFrame()}, tmp_path, fmt="filestub")
+        assert not _StubWriter.written
+
+    def test_a_file_format_refuses_a_path_with_no_extension(self, tmp_path):
+        register_writer("filestub", lambda config, ctx: _FileStubWriter())
+        with pytest.raises(ConfigError, match="no file extension"):
+            save_data({"events": pd.DataFrame()}, tmp_path / "out", fmt="filestub")
+
+    def test_a_writer_with_no_target_is_refused(self, tmp_path):
+        class _NoTarget:
+            def write(self, data, dest, **kwargs):
+                return Path(dest)
+
+        with pytest.raises(ConfigError, match="_NoTarget declares no target"):
+            save_data(
+                {"events": pd.DataFrame()},
+                tmp_path / "x",
+                writer=_NoTarget(),  # ty: ignore[invalid-argument-type] -- the broken writer under test
+            )
+
+    def test_a_passed_writer_is_checked_too(self, tmp_path):
+        with pytest.raises(ConfigError, match="_FileStubWriter writes one file"):
+            save_data({"events": pd.DataFrame()}, tmp_path, writer=_FileStubWriter())
+
+    @pytest.mark.parametrize(
+        ("fmt", "target"),
+        [
+            ("parquet", WriteTarget.FOLDER),
+            ("depth_csv", WriteTarget.FOLDER),
+            ("bitstamp", WriteTarget.FOLDER),
+            ("databento", WriteTarget.FILE),
+            ("hftbacktest", WriteTarget.FILE),
+            ("nautilus", WriteTarget.FILE),
+        ],
+    )
+    def test_each_built_in_format_declares_its_target(self, fmt, target):
+        from ob_analytics.data import _named_writer
+
+        assert _named_writer(fmt, None, None).target is target
+
+    def test_the_lobster_writer_writes_a_folder(self):
+        from ob_analytics.lobster import LobsterWriter
+
+        assert LobsterWriter.target is WriteTarget.FOLDER

@@ -44,6 +44,7 @@ from ob_analytics.protocols import (
     RunContext,
     TradeAttribution,
     TradeSource,
+    WriteTarget,
 )
 from ob_analytics.schemas import (
     ACTION_DTYPE,
@@ -532,8 +533,13 @@ class BitstampTradeReader:
 class BitstampWriter:
     """Write pipeline events back to Bitstamp-format CSV.
 
+    Writes a folder laid out as ``ob-analytics capture bitstamp`` lays one
+    out: ``orders.csv``, and ``trades.csv`` when the run has trades.
+
     Satisfies the :class:`~ob_analytics.protocols.DataWriter` protocol.
     """
+
+    target = WriteTarget.FOLDER
 
     def __init__(self, config: PipelineConfig | None = None) -> None:
         self._config = config or PipelineConfig()
@@ -544,28 +550,28 @@ class BitstampWriter:
         dest: str | Path,
         **kwargs: Any,
     ) -> Path:
-        """Write the events DataFrame to a Bitstamp-format CSV.
+        """Write the events to ``<dest>/orders.csv`` in Bitstamp's format.
 
-        When *data* also carries a ``"trades"`` frame, a companion
-        ``trades.csv`` is written next to *dest* in capture format, so that a
-        subsequent :class:`BitstampTradeReader` can reconstruct trades when the
-        orders.csv is re-read.
+        When *data* also carries a ``"trades"`` frame, a ``trades.csv`` is
+        written next to it in capture format, so that a subsequent
+        :class:`BitstampTradeReader` can reconstruct trades when the
+        ``orders.csv`` is re-read.
 
         Parameters
         ----------
         data : dict of str to DataFrame
             Must contain an ``"events"`` key.  An optional ``"trades"`` key
-            triggers a companion ``trades.csv`` alongside *dest*.
+            triggers a ``trades.csv`` in the same folder.
         dest : str or Path
-            Output CSV file path.
+            Output folder, created when missing.
 
         Returns
         -------
         Path
-            The written events CSV path.
+            The written ``orders.csv`` path.
         """
         events = data["events"]
-        p = Path(dest)
+        p = Path(dest) / "orders.csv"
         out = pd.DataFrame(
             {
                 "id": events["id"],
