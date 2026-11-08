@@ -356,7 +356,7 @@ Without it, only the fills of the orders classed `market` are known to be the
 aggressor's.
 
 DBN sizes are whole shares or contracts. A size that is not a whole number of
-units at the config's `lot_size`, such as 0.5 BTC, raises a `ValueError`
+units at the config's `lot_size`, such as 0.5 BTC, raises a `ConfigError`
 rather than being rounded.
 
 The metadata says `OB.ANALYTICS` rather than claiming to be Databento's own

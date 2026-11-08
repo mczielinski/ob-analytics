@@ -38,7 +38,11 @@ from ob_analytics.analytics import order_book
 from ob_analytics.depth import price_level_snapshots
 from ob_analytics.protocols import Level
 from ob_analytics.visualization import _data
-from ob_analytics.visualization._renderers import RENDERERS, RendererKey
+from ob_analytics.visualization._renderers import (
+    RENDERERS,
+    RendererKey,
+    missing_plot,
+)
 
 L2, L3 = Level.L2, Level.L3
 
@@ -653,13 +657,11 @@ def levels(key: str, backend: str) -> tuple[Level | None, ...]:
     return tuple(lvl for lvl, b in placements(key) if b == backend)
 
 
-def _at(level: Level | None) -> str:
-    return "level-less" if level is None else f"at {level}"
-
-
-def _unknown(key: str) -> KeyError:
-    known = sorted({c for c, _, _ in [*PLOTS, *RENDERERS.list()]})
-    return KeyError(f"Unknown plot concept {key!r}. Known: {known}")
+def _missing(key: str, level: Level | None, backend: str, *, any_level: bool):
+    concepts = {c for c, _, _ in [*PLOTS, *RENDERERS.list()]}
+    return missing_plot(
+        key, level, backend, placements(key), sorted(concepts), any_level=any_level
+    )
 
 
 def require_backend(key: str, backend: str) -> None:
@@ -667,19 +669,12 @@ def require_backend(key: str, backend: str) -> None:
 
     Raises
     ------
-    KeyError
+    UnknownNameError
         If *backend* does not draw *key*.  The message names the backends
-        that do, or says *key* is not a plot.
+        that do, or the plots closest to *key* when it is not a plot.
     """
-    if levels(key, backend):
-        return
-    drawn_by = sorted({b for _, b in placements(key)})
-    if not drawn_by:
-        raise _unknown(key)
-    raise KeyError(
-        f"Plot {key!r} has no {backend!r} renderer. "
-        f"It is drawn by: {', '.join(drawn_by)}."
-    )
+    if not levels(key, backend):
+        raise _missing(key, None, backend, any_level=True)
 
 
 def require(key: str, level: Level | None, backend: str) -> None:
@@ -687,24 +682,12 @@ def require(key: str, level: Level | None, backend: str) -> None:
 
     Raises
     ------
-    KeyError
+    UnknownNameError
         If *backend* does not draw *key* at *level*.  The message names the
         backends that do, or, when none does, the levels *key* is drawn at.
     """
-    have = backends(key, level)
-    if backend in have:
-        return
-    if have:
-        raise KeyError(
-            f"Plot {key!r} {_at(level)} has no {backend!r} renderer. "
-            f"It is drawn by: {', '.join(have)}."
-        )
-    drawn = sorted({_at(lvl) for lvl, _ in placements(key)})
-    if not drawn:
-        raise _unknown(key)
-    raise KeyError(
-        f"Plot {key!r} is not drawn {_at(level)}. It is drawn {' and '.join(drawn)}."
-    )
+    if backend not in backends(key, level):
+        raise _missing(key, level, backend, any_level=False)
 
 
 def register_backend(backend: str, namespace: Mapping[str, Any]) -> None:

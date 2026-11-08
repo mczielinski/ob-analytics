@@ -53,9 +53,9 @@ def get_source(name: str) -> type[Source]:
 
     Raises
     ------
-    KeyError
-        If no source is registered under *name*; the message lists the
-        registered names.
+    UnknownNameError
+        If no source is registered under *name*; the message names
+        the registered names closest to it.
     """
     return SOURCES.get(name)
 

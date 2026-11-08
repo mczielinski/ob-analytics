@@ -12,7 +12,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from ob_analytics.exceptions import ConfigError, ObAnalyticsError
+from ob_analytics.exceptions import ConfigError
 from ob_analytics.schemas import (
     EVENT_DTYPES,
     INGEST_SEQ_COLUMN,
@@ -27,9 +27,9 @@ from ob_analytics.schemas import (
 
 
 def validate_non_empty(df: pd.DataFrame, context: str) -> None:
-    """Raise :class:`ObAnalyticsError` if *df* is empty."""
+    """Raise :class:`ConfigError` if *df* is empty."""
     if df.empty:
-        raise ObAnalyticsError(
+        raise ConfigError(
             f"{context}: received empty DataFrame ({len(df.columns)} columns, 0 rows)"
         )
 

@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import pytest
 
+from ob_analytics.exceptions import UnknownNameError
 from ob_analytics.visualization import (
     RENDERERS,
     Level,
@@ -252,7 +253,7 @@ class TestProject:
         assert {p.backend for p in cards[0].panels} == {"matplotlib"}
 
     def test_unknown_view_raises(self) -> None:
-        with pytest.raises(ValueError, match="Unknown view"):
+        with pytest.raises(UnknownNameError, match="Unknown gallery view"):
             _project(GalleryModel(concepts=[]), "nope", ["matplotlib"])
 
 
@@ -574,7 +575,10 @@ class TestMisplacedCard:
             backends=["matplotib"],
         )
         html = path.read_text(encoding="utf-8")
-        assert "Unknown backend &#x27;matplotib&#x27;. Available:" in html
+        assert (
+            "Unknown plot backend &#x27;matplotib&#x27;. "
+            "Did you mean &#x27;matplotlib&#x27;?"
+        ) in html
         assert "could not be loaded" not in html
 
     def test_value_error_on_import_names_the_backend(

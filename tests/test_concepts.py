@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from ob_analytics.exceptions import UnknownNameError
 from ob_analytics.protocols import Level
 from ob_analytics.visualization import (
     RENDERERS,
@@ -78,20 +79,28 @@ class TestTable:
 
 class TestMissingBackend:
     def test_plot_names_the_backends_that_draw_it(self):
-        with pytest.raises(KeyError, match="drawn by: plotly"):
+        with pytest.raises(UnknownNameError) as info:
             plot("book_replay", Level.L2, backend="matplotlib")
+        assert str(info.value) == (
+            "Unknown L2 'matplotlib' plot 'book_replay'. "
+            "Backends that draw it: 'plotly'."
+        )
 
     def test_plot_without_a_level_names_them_too(self):
-        with pytest.raises(KeyError, match="drawn by: plotly"):
+        with pytest.raises(UnknownNameError, match="Backends that draw it: 'plotly'.$"):
             plot("book_replay", backend="bokeh")
 
     def test_plot_names_the_levels_when_none_matches(self):
-        with pytest.raises(KeyError, match="is drawn at L3"):
+        with pytest.raises(UnknownNameError, match="It is drawn at L3.$"):
             plot("order_outcome", Level.L2, backend="matplotlib")
 
     def test_an_unknown_concept_says_so(self):
-        with pytest.raises(KeyError, match="Unknown plot concept"):
+        with pytest.raises(UnknownNameError, match="Unknown plot concept"):
             plot("no_such_plot", backend="matplotlib")
+
+    def test_a_close_name_is_suggested(self):
+        with pytest.raises(UnknownNameError, match="Did you mean 'book_replay'"):
+            plot("book_replays", backend="plotly")
 
     def test_require_passes_a_drawn_plot(self):
         _concepts.require("trade_tape", Level.L3, "bokeh")

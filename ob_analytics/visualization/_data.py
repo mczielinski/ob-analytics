@@ -91,15 +91,15 @@ def busiest_window(
 
     Raises
     ------
-    ValueError
+    ConfigError
         If *frame* has no rows, or *width* is not positive.
     """
     span = pd.Timedelta(width)
     if span <= pd.Timedelta(0):
-        raise ValueError(f"The window width must be positive, got {width!r}.")
+        raise ConfigError(f"The window width must be positive, got {width!r}.")
     ts = frame["timestamp"].dropna().sort_values().reset_index(drop=True)
     if ts.empty:
-        raise ValueError("busiest_window needs at least one timestamp.")
+        raise ConfigError("busiest_window needs at least one timestamp.")
     counts = ts.searchsorted(ts + span, side="left") - np.arange(len(ts))
     start = ts.iloc[int(np.argmax(counts))]
     start = max(ts.iloc[0], min(start, ts.iloc[-1] - span))
@@ -388,7 +388,7 @@ def prepare_time_series_data(
 ) -> dict[str, Any]:
     """Prepare data for a generic time-series step plot."""
     if len(timestamp) != len(series):
-        raise ValueError("Length of timestamp and series must be the same.")
+        raise ConfigError("Length of timestamp and series must be the same.")
 
     df = pd.DataFrame({"ts": timestamp, "val": series})
     start_time, end_time = _default_start_end(df, start_time, end_time, col="ts")
@@ -1568,7 +1568,7 @@ def prepare_volume_map_data(
     if event_type is None:
         event_type = ["flashed-limit"]
     if action not in ("deleted", "created"):
-        raise ValueError(f"action must be 'deleted' or 'created', got {action!r}")
+        raise ConfigError(f"action must be 'deleted' or 'created', got {action!r}")
 
     start_time, end_time = _default_start_end(events, start_time, end_time)
 
@@ -2173,7 +2173,7 @@ def prepare_volume_percentiles_data(
         if (m := re.fullmatch(r"bid_vol(\d+)bps", str(c)))
     )
     if not bps_levels:
-        raise ValueError(
+        raise ConfigError(
             "prepare_volume_percentiles_data: no 'bid_vol<N>bps' columns in "
             f"depth_summary. Columns: {list(depth_summary.columns)}"
         )
@@ -2319,7 +2319,7 @@ def prepare_events_histogram_data(
     same one the depth heatmap uses) to keep the near-touch distribution legible.
     """
     if val not in ("volume", "price"):
-        raise ValueError(f"val must be 'volume' or 'price', got {val!r}")
+        raise ConfigError(f"val must be 'volume' or 'price', got {val!r}")
     start_time, end_time = _default_start_end(events, start_time, end_time)
     filtered = events[
         (events["timestamp"] >= start_time) & (events["timestamp"] <= end_time)

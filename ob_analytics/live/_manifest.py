@@ -184,9 +184,9 @@ class Segment:
     def from_dict(cls, d: dict[str, Any]) -> Segment:
         """Build a segment from its manifest entry.
 
-        Raises :class:`ValueError` when ``name`` is not one plain directory
-        name: a name such as ``..`` or ``a/b`` would make a reader of the
-        capture leave its directory.
+        Raises :class:`~ob_analytics.exceptions.ConfigError` when ``name`` is
+        not one plain directory name: a name such as ``..`` or ``a/b`` would
+        make a reader of the capture leave its directory.
         """
         name = d["name"]
         # One rule for both platforms: on Windows "C:x" is a path too.
@@ -197,7 +197,7 @@ class Segment:
             or PurePosixPath(name).name != name
             or PureWindowsPath(name).name != name
         ):
-            raise ValueError(
+            raise ConfigError(
                 f"capture manifest segment name {name!r} is not one plain "
                 "directory name"
             )
@@ -345,17 +345,17 @@ class CaptureManifest:
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> CaptureManifest:
         if d.get("format") != CAPTURE_FORMAT:
-            raise ValueError(
+            raise ConfigError(
                 f"not an ob-analytics capture manifest: {d.get('format')!r}"
             )
         if d.get("version") != CAPTURE_FORMAT_VERSION:
-            raise ValueError(
+            raise ConfigError(
                 f"capture manifest version {d.get('version')!r} is not supported "
                 f"(this ob-analytics reads version {CAPTURE_FORMAT_VERSION})"
             )
         for key in ("source", "pair", "level"):
             if not isinstance(d[key], str) or not d[key]:
-                raise ValueError(f"capture manifest {key} {d[key]!r} is not a name")
+                raise ConfigError(f"capture manifest {key} {d[key]!r} is not a name")
         for key in ("segments", "gaps"):
             if not isinstance(d.get(key, []), list):
                 raise TypeError(f"capture manifest {key} {d[key]!r} is not a list")

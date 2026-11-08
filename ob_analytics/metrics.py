@@ -94,9 +94,9 @@ def get_metric(name: str) -> Metric:
 
     Raises
     ------
-    KeyError
-        If no metric is registered under *name*; the message lists the
-        registered names.
+    UnknownNameError
+        If no metric is registered under *name*; the message names
+        the registered names closest to it.
     """
     return METRICS.get(name)
 

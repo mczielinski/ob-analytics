@@ -38,6 +38,7 @@ import pandas as pd
 from loguru import logger
 
 from ob_analytics.config import SourceSettings
+from ob_analytics.exceptions import ConfigError, ObAnalyticsError, UnknownNameError
 from ob_analytics.live._base import (
     CaptureConfig,
     EventDict,
@@ -332,7 +333,7 @@ def _resolve_level(exchange: Any, requested: Level | None) -> Level:
     if requested is None:
         return Level.L3 if publishes_l3 else Level.L2
     if requested is Level.L3 and not publishes_l3:
-        raise ValueError(
+        raise ConfigError(
             f"cryptofeed venue {getattr(exchange, 'id', exchange)!r} does not "
             f"publish an L3 (per-order) book; it offers "
             f"{sorted(_venue_channels(exchange))}. Capture it at L2 instead -- "
@@ -489,7 +490,7 @@ class CryptofeedSource:
         requested: Level | None = getattr(self.settings, "level", None)
         try:
             exchange = self._exchange_class()
-        except (ImportError, ValueError):
+        except (ImportError, ObAnalyticsError):
             return requested or Level.L2
         self._level = _resolve_level(exchange, requested)
         return self._level
@@ -560,7 +561,7 @@ class CryptofeedSource:
         configured = str(getattr(self._exchange, "id", self._exchange) or "")
         try:
             resolved = self._exchange_class()
-        except (ImportError, ValueError):
+        except (ImportError, ObAnalyticsError):
             return configured
         return str(getattr(resolved, "id", "") or configured)
 
@@ -1256,7 +1257,9 @@ class CryptofeedSource:
         """Raise now if the capture cannot start (SupportsPreflight).
 
         Resolves the venue, which raises the install hint when the extra is
-        missing and :class:`ValueError` for no venue or an unknown one. A
+        missing, :class:`~ob_analytics.exceptions.ConfigError` for no venue
+        and :class:`~ob_analytics.exceptions.UnknownNameError` for an unknown
+        one. A
         supplied ``feed_handler`` and exchange class need no import.
         """
         self._exchange_class()
@@ -1281,7 +1284,7 @@ class CryptofeedSource:
         if not isinstance(exchange, str):
             return _fixed_feed(exchange)
         if not exchange:
-            raise ValueError(
+            raise ConfigError(
                 "cryptofeed source needs CryptofeedSettings(exchange='<venue id>') "
                 "(e.g. 'bitstamp')."
             )
@@ -1295,9 +1298,8 @@ class CryptofeedSource:
         try:
             feed = EXCHANGE_MAP[exchange.upper()]
         except KeyError:
-            raise ValueError(
-                f"Unknown cryptofeed exchange {exchange!r}; expected one of "
-                f"{len(EXCHANGE_MAP)} venues."
+            raise UnknownNameError(
+                "cryptofeed exchange", exchange, [k.lower() for k in EXCHANGE_MAP]
             ) from None
         return _fixed_feed(feed)
 

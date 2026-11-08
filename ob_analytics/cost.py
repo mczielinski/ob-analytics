@@ -253,8 +253,7 @@ def transaction_costs(
         labels volume bars rather than trades, or the prices or sizes of
         either frame are integers with no ``tick_size`` or ``lot_size`` on
         its ``attrs``.
-    ObAnalyticsError
-        If *trades* is empty.
+        Also if *trades* is empty.
 
     Examples
     --------
@@ -372,8 +371,7 @@ def cost_summary(costs: pd.DataFrame) -> CostSummary:
     ------
     ConfigError
         If *costs* is missing a column :func:`transaction_costs` writes.
-    ObAnalyticsError
-        If *costs* is empty.
+        Also if *costs* is empty.
     """
     validate_columns(costs, COST_COLUMNS, "cost_summary")
     validate_non_empty(costs, "cost_summary")
@@ -459,8 +457,7 @@ def amihud(trades: pd.DataFrame, *, window: str | None = None) -> pd.DataFrame:
         If a required column is missing, *window* is not a fixed duration,
         or the prices or sizes are integers and the frame carries no
         ``tick_size`` or ``lot_size``.
-    ObAnalyticsError
-        If *trades* is empty.
+        Also if *trades* is empty.
     """
     validate_columns(trades, {"timestamp", "price", "volume"}, "amihud")
     validate_non_empty(trades, "amihud")
@@ -565,8 +562,7 @@ def roll_spread(trades: pd.DataFrame, *, window: str | None = None) -> pd.DataFr
         If a required column is missing, *window* is not a fixed duration,
         or the prices are integer ticks and the frame carries no
         ``tick_size``.
-    ObAnalyticsError
-        If *trades* is empty.
+        Also if *trades* is empty.
     """
     validate_columns(trades, {"timestamp", "price"}, "roll_spread")
     validate_non_empty(trades, "roll_spread")

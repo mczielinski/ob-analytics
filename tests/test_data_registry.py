@@ -16,7 +16,7 @@ from ob_analytics.data import (
     register_writer,
     save_data,
 )
-from ob_analytics.exceptions import ConfigError
+from ob_analytics.exceptions import ConfigError, UnknownNameError
 from ob_analytics.protocols import WriteTarget
 from ob_analytics.schemas import (
     SCHEMA_VERSION,
@@ -82,9 +82,9 @@ class TestWriterRegistry:
         ]
 
     def test_the_unknown_format_error_offers_only_list_writers(self, tmp_path):
-        with pytest.raises(ValueError, match="Unsupported format") as info:
+        with pytest.raises(UnknownNameError, match="Unknown format 'nope'") as info:
             save_data({"events": pd.DataFrame()}, tmp_path / "x", fmt="nope")
-        offered = str(info.value).split("Available: ")[1].split(", ")
+        offered = info.value.known
         assert offered == list_writers()
         assert "ccxt" not in offered
         assert "cryptofeed" not in offered
@@ -108,7 +108,7 @@ class TestWriterRegistry:
         assert keys == ["events"]
 
     def test_unknown_format_raises(self, tmp_path):
-        with pytest.raises(ValueError, match="Unsupported format"):
+        with pytest.raises(UnknownNameError, match="Unknown format"):
             save_data({"events": pd.DataFrame()}, tmp_path / "x", fmt="no-such-fmt")
 
     def test_parquet_default(self, tmp_path):
@@ -187,7 +187,7 @@ class TestBuiltInFormatsAreRegisteredWriters:
     def test_pickle_is_not_a_format(self, tmp_path):
         # Issue #409: a pickle runs code when it is loaded, so it is gone.
         assert "pickle" not in list_writers()
-        with pytest.raises(ValueError, match="Unsupported format"):
+        with pytest.raises(UnknownNameError, match="Unknown format"):
             save_data({"events": pd.DataFrame()}, tmp_path / "out.pkl", fmt="pickle")
 
 

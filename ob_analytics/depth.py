@@ -1221,7 +1221,7 @@ def _bid_ask(quotes: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     """The bid and ask prices of *quotes*, from the pair :func:`_bid_ask_pair` finds."""
     pair = _bid_ask_pair(quotes)
     if pair is None:
-        raise ValueError(
+        raise ConfigError(
             "quotes need a bid/ask column pair: "
             + ", ".join(f"{bid} / {ask}" for bid, ask in _BID_ASK_COLUMNS)
         )
@@ -1387,11 +1387,11 @@ def book_imbalance(depth_summary: pd.DataFrame, levels: int = 1) -> pd.Series:
 
     Raises
     ------
-    ValueError
+    ConfigError
         If *levels* is below ``1`` or exceeds the available depth bins.
     """
     if levels < 1:
-        raise ValueError(f"levels must be >= 1, got {levels}")
+        raise ConfigError(f"levels must be >= 1, got {levels}")
 
     if levels == 1:
         validate_columns(
@@ -1405,7 +1405,7 @@ def book_imbalance(depth_summary: pd.DataFrame, levels: int = 1) -> pd.Series:
         take = levels - 1
         available = min(len(bid_cols), len(ask_cols))
         if take > available:
-            raise ValueError(
+            raise ConfigError(
                 f"levels={levels} needs {take} depth bins, but the summary has "
                 f"{available}"
             )

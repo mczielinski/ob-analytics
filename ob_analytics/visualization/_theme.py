@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ob_analytics.exceptions import UnknownNameError
 from ob_analytics.visualization._palette import DEFAULT_PALETTE, Palette
 
 #: Seaborn's context font multipliers.  The plotly and bokeh backends use the
@@ -106,13 +107,9 @@ class PlotTheme:
 
     def __post_init__(self) -> None:
         if self.style not in STYLES:
-            raise ValueError(
-                f"Unknown style {self.style!r}. Available: {sorted(STYLES)}"
-            )
+            raise UnknownNameError("style", self.style, STYLES)
         if self.context not in CONTEXT_SCALES:
-            raise ValueError(
-                f"Unknown context {self.context!r}. Available: {sorted(CONTEXT_SCALES)}"
-            )
+            raise UnknownNameError("context", self.context, CONTEXT_SCALES)
 
     @property
     def dark(self) -> bool:

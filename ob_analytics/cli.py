@@ -263,11 +263,12 @@ def _build_source(source_name: str) -> Any:
     """The registered source called *source_name*; exit when there is none."""
     from loguru import logger
 
+    from ob_analytics.exceptions import UnknownNameError
     from ob_analytics.sources import get_source
 
     try:
         return get_source(source_name)()
-    except KeyError as exc:
+    except UnknownNameError as exc:
         logger.error(str(exc))
         sys.exit(1)
 
@@ -429,7 +430,7 @@ def _cmd_capture(args: argparse.Namespace) -> None:
     from loguru import logger
 
     from ob_analytics.config import SourceSettings
-    from ob_analytics.exceptions import ConfigError
+    from ob_analytics.exceptions import ConfigError, ObAnalyticsError, UnknownNameError
     from ob_analytics.live import (
         CaptureConfig,
         LiveSource,
@@ -461,7 +462,7 @@ def _cmd_capture(args: argparse.Namespace) -> None:
 
     try:
         source_cls = get_source(args.venue)
-    except KeyError as exc:
+    except UnknownNameError as exc:
         logger.error(str(exc))
         sys.exit(1)
 
@@ -538,7 +539,7 @@ def _cmd_capture(args: argparse.Namespace) -> None:
     if isinstance(source, SupportsPreflight):
         try:
             source.preflight()
-        except (ImportError, ValueError) as exc:
+        except (ImportError, ObAnalyticsError) as exc:
             logger.error(str(exc))
             sys.exit(1)
 

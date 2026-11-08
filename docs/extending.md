@@ -576,7 +576,7 @@ at `None`: a metric's chart is, and so is the example below, which reads only
 trades. The kind decides how the plot is called and where the gallery shows it,
 not what data it reads: the built-in `trade_size` reads only trades and is
 registered at `L2`. A concept is one kind or the other, on every backend:
-registering it both at `None` and at a level raises `ValueError`.
+registering it both at `None` and at a level raises `ConfigError`.
 
 A concept registered at a single level dispatches without naming it;
 registering the *same* concept at both `L2` and `L3` makes it *comparable*, and

@@ -26,6 +26,7 @@ import pandas as pd
 
 from ob_analytics import _engine_frames, engine
 from ob_analytics._utils import epoch_ns
+from ob_analytics.exceptions import ConfigError
 from ob_analytics.schemas import time_order_keys, validate_columns
 
 QUEUE_COLUMNS: tuple[str, ...] = _engine_frames.QUEUE_COLUMNS
@@ -100,7 +101,7 @@ def queue_positions(
     assert.
     """
     if levels not in ("touch", "all"):
-        raise ValueError(f"levels must be 'touch' or 'all', got {levels!r}")
+        raise ConfigError(f"levels must be 'touch' or 'all', got {levels!r}")
 
     ev = _in_canonical_order(events, "queue_positions")
     positions = engine.queue_positions(
@@ -143,7 +144,7 @@ def queue_age_grid(
         Visible-only (hidden orders and market orders absent).
     """
     if side not in ("bid", "ask"):
-        raise ValueError(f"side must be 'bid' or 'ask', got {side!r}")
+        raise ConfigError(f"side must be 'bid' or 'ask', got {side!r}")
 
     touch = engine.Direction[side.upper()]
     ev = _in_canonical_order(events, "queue_age_grid")

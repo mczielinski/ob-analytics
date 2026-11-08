@@ -238,8 +238,7 @@ def classify_trade_sign(
         If *method* is unknown, if ``"bvc"`` is requested here, if required
         columns are missing, or if ``lee_ready`` is requested without usable
         *quotes*.
-    ObAnalyticsError
-        If *trades* is empty.
+        Also if *trades* is empty.
     """
     validate_non_empty(trades, "classify_trade_sign")
     method = method.lower()
@@ -735,14 +734,14 @@ def check_bucket_count(
 
     Raises
     ------
-    ValueError
+    ConfigError
         If the trades' total volume divided by *bucket_volume* is more than
         :data:`MAX_VOLUME_BUCKETS`.
     """
     total = float(trades["volume"].sum()) / scale
     count = total / bucket_volume
     if count > MAX_VOLUME_BUCKETS:
-        raise ValueError(
+        raise ConfigError(
             f"{context}: bucket_volume={bucket_volume:g} cuts the trades' total "
             f"volume of {total:g} into about {count:.3g} buckets, more than "
             f"MAX_VOLUME_BUCKETS ({MAX_VOLUME_BUCKETS:,}). "
@@ -793,13 +792,12 @@ def volume_buckets(
     ------
     ConfigError
         If the sizes are integer lots and the frame carries no ``lot_size``.
-    ValueError
-        If *bucket_volume* is not positive or would make more than
+        Also if *bucket_volume* is not positive or would make more than
         :data:`MAX_VOLUME_BUCKETS` buckets.
     """
     scale = size_scale(trades, context)
     if bucket_volume <= 0:
-        raise ValueError(f"bucket_volume must be positive, got {bucket_volume}")
+        raise ConfigError(f"bucket_volume must be positive, got {bucket_volume}")
     check_bucket_count(trades, bucket_volume, context, scale=scale, advice=advice)
 
     # The walk runs in the frame's units, so a bucket of whole lots fills
@@ -902,10 +900,8 @@ def bulk_volume_classification(
         If required columns are missing, the sizes are integer lots and the
         frame carries no ``lot_size``, or *sigma* is given for integer ticks
         and the frame carries no ``tick_size``.
-    ObAnalyticsError
-        If *trades* is empty.
-    ValueError
-        If *bucket_volume* is not positive or would make more than
+        Also if *trades* is empty.
+        Also if *bucket_volume* is not positive or would make more than
         :data:`MAX_VOLUME_BUCKETS` buckets, or *sigma* is not positive.
     """
     validate_columns(
@@ -913,7 +909,7 @@ def bulk_volume_classification(
     )
     validate_non_empty(trades, "bulk_volume_classification")
     if sigma is not None and sigma <= 0:
-        raise ValueError(f"sigma must be positive, got {sigma}")
+        raise ConfigError(f"sigma must be positive, got {sigma}")
     if sigma is not None:
         sigma = sigma * price_scale(trades, "bulk_volume_classification")
     return _bulk_volume_classification(

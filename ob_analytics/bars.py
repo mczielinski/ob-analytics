@@ -106,9 +106,9 @@ def get_bar_rule(name: str) -> BarRule:
 
     Raises
     ------
-    KeyError
-        If no rule is registered under *name*; the message lists the
-        registered names.
+    UnknownNameError
+        If no rule is registered under *name*; the message names
+        the registered names closest to it.
     """
     return BAR_RULES.get(name)
 
@@ -451,10 +451,10 @@ def bars(
         If required columns are missing, the threshold does not suit the
         rule, or a size or price rule runs on integer lots or ticks with no
         ``lot_size`` or ``tick_size`` on the frame's ``attrs``.
-    KeyError
-        If *rule* is not registered; the message lists the registered names.
-    ObAnalyticsError
-        If *trades* is empty.
+        Also if *trades* is empty.
+    UnknownNameError
+        If *rule* is not registered; the message names the registered names
+        closest to it.
 
     Notes
     -----

@@ -15,7 +15,7 @@ import pyarrow.parquet as pq
 
 from ob_analytics._registry import Registry, load_plugins
 from ob_analytics.config import PipelineConfig, instrument_fields
-from ob_analytics.exceptions import ConfigError
+from ob_analytics.exceptions import ConfigError, UnknownNameError
 from ob_analytics.protocols import DataWriter, FeedDeclarations, WriteTarget
 from ob_analytics.schemas import (
     CONFIG_KEY,
@@ -455,7 +455,7 @@ def save_data(
 
     Raises
     ------
-    ValueError
+    UnknownNameError
         If *fmt* is not one of :func:`list_writers`.
     ConfigError
         If *path* is a file where the writer takes a folder, or a folder
@@ -720,8 +720,9 @@ def _named_writer(fmt: str, config: Any, ctx: Any) -> DataWriter:
 
     Raises
     ------
-    ValueError
-        If *fmt* names neither, listing the formats :func:`list_writers` gives.
+    UnknownNameError
+        If *fmt* names neither.  The message names the closest formats
+        :func:`list_writers` gives.
     """
     from ob_analytics.protocols import RunContext, SupportsWriter
 
@@ -741,9 +742,7 @@ def _named_writer(fmt: str, config: Any, ctx: Any) -> DataWriter:
         source = SOURCES.get(fmt)()
         if isinstance(source, SupportsWriter):
             return source.create_writer(config, rctx)
-    raise ValueError(
-        f"Unsupported format: {fmt!r}. Available: {', '.join(list_writers())}"
-    )
+    raise UnknownNameError("format", fmt, list_writers())
 
 
 def _writes_a_format(name: str) -> bool:

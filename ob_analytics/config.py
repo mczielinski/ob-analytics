@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Self, Union, get_args, get_origin
 
-from pydantic import BaseModel, Field, SecretStr, model_validator
+from pydantic import BaseModel, Field, SecretStr, ValidationError, model_validator
 
 from ob_analytics._secrets import MIN_SECRET_LENGTH, remember
 from ob_analytics.exceptions import ConfigError
@@ -76,6 +76,20 @@ class SourceSettings(BaseModel):
     """
 
     model_config = {"frozen": True}
+
+    def __init__(self, /, **data: Any) -> None:
+        # Pydantic wraps a ValueError raised in a validator, and ConfigError
+        # is a ValueError, so a bad credential would come out as a
+        # ValidationError.  Raise the ConfigError itself, as the package
+        # does for every other bad value.
+        try:
+            super().__init__(**data)
+        except ValidationError as exc:
+            for error in exc.errors():
+                original = error.get("ctx", {}).get("error")
+                if isinstance(original, ConfigError):
+                    raise original from None
+            raise
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
@@ -311,7 +325,7 @@ class PipelineConfig(BaseModel):
 
         Raises
         ------
-        ValueError
+        ConfigError
             If :attr:`tick_size` has no integer inverse; convert prices with
             ``ob_analytics._utils.price_to_ticks`` (which divides) instead.
         """
@@ -319,7 +333,7 @@ class PipelineConfig(BaseModel):
 
         multiplier = tick_multiplier(self.tick_size)
         if multiplier is None:
-            raise ValueError(
+            raise ConfigError(
                 f"tick_size={self.tick_size!r} has no integer inverse; use "
                 "ob_analytics._utils.price_to_ticks to convert prices to ticks."
             )

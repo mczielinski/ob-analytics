@@ -152,9 +152,9 @@ Every plot of the package is declared once, in a concept table, at the
 coordinate `(concept, level, backend)` (where *level* is a `Level` or `None`
 for level-less analytics). The table says which backends draw each plot, and
 the built-in backends register their renderers into `RENDERERS` from it.
-Asking a backend for a plot it does not draw raises a `KeyError` that names
-the backends that do. A concept is level-less or drawn at a level, and the
-same kind on every backend: registering it the other way raises `ValueError`.
+Asking a backend for a plot it does not draw raises `UnknownNameError`
+(also a `KeyError`) that names the backends that do. A concept is level-less or drawn at a level, and the
+same kind on every backend: registering it the other way raises `ConfigError`.
 Register a whole new backend module with
 `register_plot_backend` (or advertise it under the `ob_analytics.plot_backends`
 entry-point group), or a single renderer directly with
