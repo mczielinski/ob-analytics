@@ -87,6 +87,8 @@ A capture records the market's price step as `tick_size` in `meta.json`, and
 its size step as `lot_size`. The pipeline reads both from there, in Python and
 in `ob-analytics process` and `ob-analytics audit`:
 
+<!-- docs-test: skip needs a Kalshi capture -->
+
 ```python
 from ob_analytics import Pipeline
 
@@ -107,6 +109,8 @@ suits a price of 100,000, but not a price of 0.04, where 25 basis points is
 rings for a prediction market:
 
 ```python
+from ob_analytics import PipelineConfig
+
 config = PipelineConfig(tick_size=0.001, price_decimals=3, depth_bps=500)
 ```
 
@@ -124,6 +128,8 @@ see the book move.
 
 To draw the unchanged levels when some levels do change, pass
 `show_all_depth=True`:
+
+<!-- docs-test: skip needs a Kalshi capture -->
 
 ```python
 from ob_analytics.visualization import plot_result

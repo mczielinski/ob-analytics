@@ -21,6 +21,18 @@ ob-analytics audit orders.csv --strict         # warnings fail too
 
 Text output looks like this (bundled Bitstamp sample):
 
+<!-- docs-test
+import subprocess
+import sys
+
+audit_report = subprocess.run(
+    [sys.executable, "-m", "ob_analytics", "audit", "orders.csv"],
+    stdout=subprocess.PIPE, text=True, check=False,
+).stdout
+-->
+
+<!-- docs-test: output audit_report -->
+
 ```text
 Data quality summary
   feed type             : diff_feed
@@ -276,6 +288,8 @@ those. A result saved with `save_data` keeps them, so
 The sequence checks need the venue's numbers, which a run keeps only with
 `PipelineConfig(track_sequence=True)`; `audit` turns this on for you:
 
+<!-- docs-test: skip needs a Databento file -->
+
 ```python
 from ob_analytics import DatabentoSource, Pipeline, PipelineConfig
 
@@ -287,6 +301,8 @@ summary = result.audit()
 To compare a LOBSTER run with its orderbook file, pass the venue's book as
 `venue_book`. `LobsterSource().venue_book(folder, config)` reads it, or
 returns `None` when the folder has no orderbook file:
+
+<!-- docs-test: skip needs LOBSTER files -->
 
 ```python
 from ob_analytics import LobsterSource, Pipeline, RunContext

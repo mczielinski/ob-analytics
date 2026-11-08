@@ -36,6 +36,8 @@ The columns above are the contract the pipeline reads; see
 
 ### Generic CSV loader
 
+<!-- docs-test: skip needs the reader's own CSV, and its loader is unfinished -->
+
 ```python
 from pathlib import Path
 import pandas as pd
@@ -142,6 +144,8 @@ class CryptofeedLoader:
 
 Implement `TradeSource` (a `load(events, source) -> DataFrame` method) when
 trades come from an API, a database, or a non-CSV layout:
+
+<!-- docs-test: skip its trade source is a stub that raises -->
 
 ```python
 import pandas as pd

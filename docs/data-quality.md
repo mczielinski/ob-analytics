@@ -94,12 +94,26 @@ The [`ob-analytics audit`](howto/audit.md) command runs the pipeline, prints a
 per-run data-quality summary, and exits non-zero when a check fails. On the
 bundled Bitstamp sample:
 
+<!-- docs-test
+import subprocess
+import sys
+
+audit_report = subprocess.run(
+    [sys.executable, "-m", "ob_analytics", "audit", "orders.csv"],
+    stdout=subprocess.PIPE, text=True, check=False,
+).stdout
+-->
+
+<!-- docs-test: output audit_report -->
+
 ```text
 Data quality summary
   feed type             : diff_feed
   events / orders       : 314,057 / 156,902
   trades                : 284
-  crossed resting book  : 91.61% of session (7238 episode(s)) [diff feed, but 2 stale resting order(s) stay in the book — see stale resting orders]
+  crossed resting book  : 91.61% of session (8883 episode(s)) [diff feed, but 2 stale resting order(s) stay in the book — see stale resting orders]
+  per-order book crossed: 91.61% of session (8883 episode(s)) [no more than the depth table — see the crossed resting book]
+  venue book            : not checked: no venue book to compare with; only a LOBSTER run from its files has one
   stale resting orders  : 2 (worst: ask 2002347646152704 at 78,333 held the ask touch for 27.4 min after a trade printed through it)
   unmatched trades      : 0.00% [maker and taker]
   matched by order      : 2 trade(s) [taker created with size 0]
@@ -109,6 +123,7 @@ Data quality summary
   orphan orders         : 13 (13 event(s), no created row)
   impossible values     : 49 non-positive price(s) / 0 negative volume(s) / 0 level row(s) below zero
   clock order           : 0 venue-after-receive / 11 reordered
+  records after a gap   : not checked: the events carry no count of records flagged after a gap (only Databento flags them)
   venue sequence        : 0 missing / 0 out-of-order (0 row(s) numbered)
 Checks: 0 error(s), 4 warning(s)
   WARNING orphan_orders: 13 order(s) are changed or deleted with no created event ...
@@ -189,7 +204,10 @@ When you want a clean `best_bid < best_ask` ladder from a diff feed — for a
 figure, not for analysis — pass `uncross=True`:
 
 ```python
+from ob_analytics import Pipeline, sample_csv_path
 from ob_analytics.analytics import order_book
+
+events = Pipeline().run(sample_csv_path()).events
 
 faithful = order_book(events)                 # default: crossed if the feed is
 display  = order_book(events, uncross=True)   # best_bid < best_ask everywhere
@@ -202,7 +220,7 @@ given, so pass them the uncrossed book:
 from ob_analytics.visualization import prepare, plot
 
 fig = plot("book_snapshot", level="L3",
-           **prepare.book_snapshot(order_book=display))
+           **prepare.book_snapshot(order_book=display, per_order=True))
 ```
 
 Uncrossing applies to orders the rule the depth summary applies to price

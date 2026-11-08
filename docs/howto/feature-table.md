@@ -24,13 +24,15 @@ table = features(trades, quotes, "volume", 0.05)
 print(table[["timestamp", "close", "spread_bps", "obi", "trade_imbalance", "vpin"]])
 ```
 
+<!-- docs-test: output table[["timestamp", "close", "spread_bps", "obi", "trade_imbalance", "vpin"]].head().to_string(index=False) -->
+
 ```text
-                       timestamp   close  spread_bps       obi  trade_imbalance  vpin
-2026-05-02 02:36:23.889000+00:00 78319.0    0.127684  0.772174              1.0   1.0
-2026-05-02 02:36:23.918000+00:00 78319.0    1.787401 -0.950544              1.0   1.0
-2026-05-02 02:36:23.924000+00:00 78319.0    1.787401 -0.950544              1.0   1.0
-2026-05-02 02:36:23.936000+00:00 78320.0    1.787401 -0.950544              1.0   1.0
-2026-05-02 02:36:23.936000+00:00 78321.0    1.787401 -0.950544              1.0   1.0
+                    timestamp   close  spread_bps       obi  trade_imbalance  vpin
+2026-05-02 02:36:23.889+00:00 78319.0    0.127684  0.772174              1.0   1.0
+2026-05-02 02:36:23.918+00:00 78319.0    1.787401 -0.950544              1.0   1.0
+2026-05-02 02:36:23.924+00:00 78319.0    1.787401 -0.950544              1.0   1.0
+2026-05-02 02:36:23.936+00:00 78320.0    1.787401 -0.950544              1.0   1.0
+2026-05-02 02:36:23.936+00:00 78321.0    1.787401 -0.950544              1.0   1.0
 ```
 
 Two decisions make the table, and they are separate: where the rows fall, and
@@ -223,6 +225,8 @@ def r_squared(frame):
 print(f"in sample      R² {r_squared(train):+.3f}   ({len(train)} rows)")
 print(f"out of sample  R² {r_squared(test):+.3f}   ({len(test)} rows)")
 ```
+
+<!-- docs-test: output -->
 
 ```text
 in sample      R² +0.173   (88 rows)

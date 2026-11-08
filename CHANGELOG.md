@@ -48,6 +48,18 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Added
 
+- **The docs code runs in CI** (#420). `scripts/check_doc_examples.py` runs
+  the Python blocks of every docs page outside the tutorial, page by page
+  and in order, and a new `examples` job in the docs workflow runs it. A
+  block that cannot run as written, such as one that needs an API key, the
+  network or the reader's own file, carries a `docs-test: skip` comment with
+  the reason. Quoted outputs, such as the `audit` report and the bar and
+  feature tables, are compared with what the code prints, so a change that
+  moves a figure fails the job. The examples that did not run are fixed: the `uncross=` example on Data quality, the
+  custom metric that called a `Resampler.skew` pandas does not have, the
+  custom source that took no settings, and blocks with missing imports or
+  undefined names. The quoted `audit` report, episode counts, the bar and
+  feature tables, and the quickstart's table shapes are brought up to date.
 - **CI tests what a user installs, and a release waits for CI** (#416). A new
   `wheel` job installs the built wheel with no extras and runs
   `scripts/smoke_wheel.py`: the sample pipeline, a Matplotlib plot, and a

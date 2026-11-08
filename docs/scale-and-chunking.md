@@ -105,6 +105,8 @@ whole input, and each window is an ordinary in-memory run of the depth stages.
 You do not have to guess. Databento bills by record, so it exposes an exact,
 metadata-only record count — cheap, no bulk download:
 
+<!-- docs-test: skip needs a Databento API key and the network -->
+
 ```python
 import databento as db
 
@@ -125,6 +127,8 @@ cost, so you can size memory and spend in one step. If you already hold a
 `.dbn` / `.dbn.zst` file, count it locally — reading a local file needs no API
 key:
 
+<!-- docs-test: skip needs a Databento file -->
+
 ```python
 from databento import DBNStore
 
@@ -139,6 +143,8 @@ print(n)  # compare against the ~5M envelope
 
 Give `run_windows` the input, the times to cut it at, and a folder for the
 output:
+
+<!-- docs-test: skip needs a Databento file -->
 
 ```python
 from ob_analytics import Pipeline
@@ -160,6 +166,8 @@ single run's. [Windowed runs](#windowed-runs) gives the details and the limits.
 If the input is already one file per window, for example the files
 `scripts/databento_window.py` downloads, run each file and concatenate the
 results:
+
+<!-- docs-test: skip needs one file per window -->
 
 ```python
 import pandas as pd

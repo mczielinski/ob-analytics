@@ -40,11 +40,13 @@ print(f"Depth:         {result.depth.shape}")
 print(f"Depth summary: {result.depth_summary.shape}")
 ```
 
-```
-Events:        (~314000, …)   # shape depends on bundled capture
-Trades:        (~280, …)
-Depth:         (…, 5)
-Depth summary: (…, 46)
+<!-- docs-test: output -->
+
+```text
+Events:        (314057, 13)
+Trades:        (284, 10)
+Depth:         (313561, 5)
+Depth summary: (313561, 46)
 ```
 
 `result` holds four DataFrames: the normalized event stream, the trades,

@@ -38,6 +38,8 @@ orderbook file (ground-truth) when present.
     [What each feed shows](../feeds.md) explains each property and compares
     every source.
 
+<!-- docs-test: skip needs LOBSTER files -->
+
 ```python
 from ob_analytics import LobsterSource, Pipeline
 from ob_analytics.protocols import RunContext
@@ -57,6 +59,8 @@ result = Pipeline.from_source(
 A context given to `Pipeline` is the default for every run. A context given to
 `run` is for that run alone, so one pipeline reads several days:
 
+<!-- docs-test: skip needs LOBSTER files -->
+
 ```python
 pipeline = Pipeline(source=LobsterSource())
 monday = pipeline.run("/data/AAPL_monday", ctx=RunContext(trading_date="2012-06-18"))
@@ -75,6 +79,8 @@ executions, for example. These no longer ride on `PipelineResult`; a
 attribute (`None` when absent). Build the loader yourself and give it to the
 pipeline, and read the tables off it after the run:
 
+<!-- docs-test: skip needs LOBSTER files -->
+
 ```python
 from ob_analytics import Pipeline
 from ob_analytics.lobster import LobsterLoader, LobsterSource
@@ -86,7 +92,7 @@ from ob_analytics.visualization.gallery import (
 )
 
 loader = LobsterLoader(trading_date="2015-05-01")
-result = Pipeline(source=LobsterSource(), loader=loader).run(path)
+result = Pipeline(source=LobsterSource(), loader=loader).run("/data/AAPL_2015-05-01")
 halts = loader.trading_halts  # pd.DataFrame | None
 
 if halts is not None:
