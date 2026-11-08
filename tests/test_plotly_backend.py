@@ -13,6 +13,7 @@ import pytest
 
 go = pytest.importorskip("plotly.graph_objects", reason="plotly not installed")
 
+from ob_analytics.exceptions import UnknownNameError
 from ob_analytics.visualization._data import (
     prepare_book_snapshot_data,
     prepare_cancellations_l3_data,
@@ -690,7 +691,7 @@ class TestBackendDispatch:
     def test_invalid_backend_raises(self, sample_trades: pd.DataFrame) -> None:
         from ob_analytics.visualization import _data, plot
 
-        with pytest.raises(ValueError, match="Unknown backend"):
+        with pytest.raises(UnknownNameError, match="Unknown plot backend"):
             plot(
                 "trade_tape",
                 backend="nonexistent",

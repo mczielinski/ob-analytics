@@ -47,7 +47,7 @@ from loguru import logger
 from ob_analytics._utils import off_tick_grid
 from ob_analytics.capture_record import LOT_SIZE, TICK_SIZE
 from ob_analytics.config import SourceSettings
-from ob_analytics.exceptions import ConfigError
+from ob_analytics.exceptions import ConfigError, UnknownNameError
 from ob_analytics.live._base import CaptureConfig, EventDict, VenueClockCount
 from ob_analytics.protocols import (
     Clocks,
@@ -292,7 +292,8 @@ def _make_exchange(exchange_id: str) -> Any:
     :data:`PREDICTION_PREFIX` is looked up among the prediction markets only.
 
     Raises :class:`ImportError` with an install hint if ccxt is absent, and
-    :class:`ValueError` if *exchange_id* is not a known CCXT venue.
+    :class:`~ob_analytics.exceptions.UnknownNameError` if *exchange_id* is
+    not a known CCXT venue.
     """
     return _exchange_class(exchange_id)({"enableRateLimit": True})
 
@@ -321,10 +322,10 @@ def _exchange_class(exchange_id: str) -> Any:
         return getattr(ccxtpro, name)
     if name in prediction:
         return prediction[name]
-    raise ValueError(
-        f"Unknown CCXT exchange {exchange_id!r}; expected one of "
-        f"{len(ccxtpro.exchanges)} ccxt.pro venues or a prediction market "
-        f"({', '.join(prediction) or 'none in this ccxt release'})."
+    raise UnknownNameError(
+        "CCXT exchange",
+        exchange_id,
+        [*ccxtpro.exchanges, *prediction],
     )
 
 
@@ -427,15 +428,17 @@ class CcxtSource:
     def preflight(self) -> None:
         """Raise now if the venue cannot be built (SupportsPreflight).
 
-        Raises the install hint when ccxt is missing and :class:`ValueError`
-        for no venue or an unknown one. A pre-built exchange object in the
+        Raises the install hint when ccxt is missing,
+        :class:`~ob_analytics.exceptions.ConfigError` for no venue and
+        :class:`~ob_analytics.exceptions.UnknownNameError` for an unknown
+        one. A pre-built exchange object in the
         settings needs no check.
         """
         exchange = getattr(self.settings, "exchange", None)
         if not isinstance(exchange, str):
             return
         if not exchange:
-            raise ValueError(
+            raise ConfigError(
                 "ccxt source needs CcxtSettings(exchange='<venue id>') "
                 "(e.g. 'binance')."
             )
@@ -452,7 +455,7 @@ class CcxtSource:
             )
         exchange = settings.exchange
         if not exchange:
-            raise ValueError(
+            raise ConfigError(
                 "ccxt source needs CcxtSettings(exchange='<venue id>') "
                 "(e.g. 'binance')."
             )

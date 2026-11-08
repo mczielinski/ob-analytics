@@ -119,9 +119,9 @@ def get_feature(name: str) -> Feature:
 
     Raises
     ------
-    KeyError
-        If no feature is registered under *name*; the message lists the
-        registered names.
+    UnknownNameError
+        If no feature is registered under *name*; the message names
+        the registered names closest to it.
     """
     return FEATURES.get(name)
 
@@ -656,11 +656,10 @@ def features(
         feature named in
         *include* cannot read what it needs, or if two features would write
         the same column.
-    KeyError
+        Also if *trades* is empty.
+    UnknownNameError
         If *rule*, or a name in *include*, is not registered; the message
-        lists the registered names.
-    ObAnalyticsError
-        If *trades* is empty.
+        names the registered names closest to it.
 
     Notes
     -----

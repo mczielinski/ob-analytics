@@ -13,6 +13,7 @@ import importlib.util
 import pandas as pd
 import pytest
 
+from ob_analytics.exceptions import ConfigError, UnknownNameError
 from ob_analytics.protocols import FeedType, Level
 
 _CRYPTOFEED_INSTALLED = importlib.util.find_spec("cryptofeed") is not None
@@ -96,8 +97,23 @@ class TestLevelDiscovery:
         src = CryptofeedSource(
             settings=CryptofeedSettings(exchange=_l2_venue("coinbase"), level=Level.L3)
         )
-        with pytest.raises(ValueError, match="does not publish an L3"):
+        with pytest.raises(ConfigError, match="does not publish an L3"):
             _ = src.level
+
+    def test_an_unknown_venue_answers_l2_until_the_capture_starts(self, monkeypatch):
+        """An unknown venue id does not break reading ``level`` or the venue."""
+        from ob_analytics.live.cryptofeed_source import (
+            CryptofeedSettings,
+            CryptofeedSource,
+        )
+
+        def unknown(self):
+            raise UnknownNameError("cryptofeed exchange", "nope", ["bitstamp"])
+
+        monkeypatch.setattr(CryptofeedSource, "_exchange_class", unknown)
+        src = CryptofeedSource(settings=CryptofeedSettings(exchange="nope"))
+        assert src.level is Level.L2
+        assert src._venue == "nope"
 
 
 class _FakeBook:
@@ -878,7 +894,7 @@ class TestCryptofeedInstalled:
         src = CryptofeedSource(
             settings=CryptofeedSettings(exchange="not_a_real_venue_xyz")
         )
-        with pytest.raises(ValueError, match="Unknown cryptofeed exchange"):
+        with pytest.raises(UnknownNameError, match="Unknown cryptofeed exchange"):
             src._exchange_class()
 
     def test_a_real_l3_venue_discovers_l3(self):
@@ -935,8 +951,23 @@ class TestCryptofeedInstalled:
         src = CryptofeedSource(
             settings=CryptofeedSettings(exchange="binance", level=Level.L3)
         )
-        with pytest.raises(ValueError, match="does not publish an L3"):
+        with pytest.raises(ConfigError, match="does not publish an L3"):
             _ = src.level
+
+    def test_an_unknown_venue_answers_l2_until_the_capture_starts(self, monkeypatch):
+        """An unknown venue id does not break reading ``level`` or the venue."""
+        from ob_analytics.live.cryptofeed_source import (
+            CryptofeedSettings,
+            CryptofeedSource,
+        )
+
+        def unknown(self):
+            raise UnknownNameError("cryptofeed exchange", "nope", ["bitstamp"])
+
+        monkeypatch.setattr(CryptofeedSource, "_exchange_class", unknown)
+        src = CryptofeedSource(settings=CryptofeedSettings(exchange="nope"))
+        assert src.level is Level.L2
+        assert src._venue == "nope"
 
 
 class TestSequenceReachesTheOutput:

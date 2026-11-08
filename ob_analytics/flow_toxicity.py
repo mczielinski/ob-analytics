@@ -44,6 +44,7 @@ from ob_analytics._utils import (
     window_start,
 )
 from ob_analytics.bars import bars
+from ob_analytics.exceptions import ConfigError
 from ob_analytics.schemas import validate_columns
 from ob_analytics.trade_sign import (
     _bucket_bounds,
@@ -187,23 +188,21 @@ def vpin_bucket_volume(
     ConfigError
         If required columns are missing, or the sizes are integer lots and
         the frame carries no ``lot_size``.
-    ObAnalyticsError
-        If *trades* is empty.
-    ValueError
-        If the trades span no time, or *buckets_per_day* or *trading_day* is
+        Also if *trades* is empty.
+        Also if the trades span no time, or *buckets_per_day* or *trading_day* is
         not positive.
     """
     validate_columns(trades, {"timestamp", "volume"}, "vpin_bucket_volume")
     validate_non_empty(trades, "vpin_bucket_volume")
     scale = size_scale(trades, "vpin_bucket_volume")
     if buckets_per_day <= 0:
-        raise ValueError(f"buckets_per_day must be positive, got {buckets_per_day}")
+        raise ConfigError(f"buckets_per_day must be positive, got {buckets_per_day}")
     day = pd.Timedelta(trading_day)
     if day <= pd.Timedelta(0):
-        raise ValueError(f"trading_day must be positive, got {trading_day!r}")
+        raise ConfigError(f"trading_day must be positive, got {trading_day!r}")
     span = trades["timestamp"].max() - trades["timestamp"].min()
     if span <= pd.Timedelta(0):
-        raise ValueError(
+        raise ConfigError(
             "vpin_bucket_volume: the trades span no time, so there is no rate "
             "to scale to a day; pass bucket_volume explicitly."
         )
@@ -321,10 +320,8 @@ def compute_vpin(
     ConfigError
         If required columns are missing, or the sizes are integer lots and
         the frame carries no ``lot_size``.
-    ObAnalyticsError
-        If *trades* is empty.
-    ValueError
-        If *bucket_volume* is not positive, would make more than
+        Also if *trades* is empty.
+        Also if *bucket_volume* is not positive, would make more than
         :data:`~ob_analytics.trade_sign.MAX_VOLUME_BUCKETS` buckets, or is
         left out and the trades span no time (see :func:`vpin_bucket_volume`).
     """
@@ -525,19 +522,17 @@ def compute_kyle_lambda(
         If required columns are missing, *window* is not a fixed duration,
         or the prices or sizes are integers and the frame carries no
         ``tick_size`` or ``lot_size``.
-    ObAnalyticsError
-        If *trades* is empty.
-    ValueError
-        If *ci_level* is not between 0 and 1, or *n_boot* is negative.
+        Also if *trades* is empty.
+        Also if *ci_level* is not between 0 and 1, or *n_boot* is negative.
     """
     validate_columns(trades, {"timestamp", "price", "volume"}, "compute_kyle_lambda")
     validate_non_empty(trades, "compute_kyle_lambda")
     prices = price_scale(trades, "compute_kyle_lambda")
     sizes = size_scale(trades, "compute_kyle_lambda")
     if not 0.0 < ci_level < 1.0:
-        raise ValueError(f"ci_level must be between 0 and 1, got {ci_level}")
+        raise ConfigError(f"ci_level must be between 0 and 1, got {ci_level}")
     if n_boot < 0:
-        raise ValueError(f"n_boot must not be negative, got {n_boot}")
+        raise ConfigError(f"n_boot must not be negative, got {n_boot}")
     step = fixed_window(window, "compute_kyle_lambda: window")
 
     trades = resolve_direction(trades, sign_method, quotes, "compute_kyle_lambda")
@@ -711,8 +706,7 @@ def order_flow_imbalance(
     ConfigError
         If required columns are missing, *window* is not a fixed duration,
         or the sizes are integer lots and the frame carries no ``lot_size``.
-    ObAnalyticsError
-        If *trades* is empty.
+        Also if *trades* is empty.
     """
     return _ofi_windows(trades, window, sign_method, quotes)[0]
 
@@ -796,8 +790,7 @@ def ofi_by_horizon(
     ConfigError
         If required columns are missing, or *grid* or a horizon is not a
         fixed duration.
-    ObAnalyticsError
-        If *trades* is empty.
+        Also if *trades* is empty.
     """
     validate_columns(trades, {"timestamp", "volume"}, "ofi_by_horizon")
     validate_non_empty(trades, "ofi_by_horizon")

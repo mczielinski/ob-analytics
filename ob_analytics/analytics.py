@@ -194,8 +194,7 @@ def trade_impacts(trades: pd.DataFrame) -> pd.DataFrame:
     ConfigError
         If a required column is missing, or the prices or sizes are integers
         and the frame carries no ``tick_size`` or ``lot_size``.
-    ObAnalyticsError
-        If *trades* is empty.
+        Also if *trades* is empty.
     """
     validate_columns(
         trades,

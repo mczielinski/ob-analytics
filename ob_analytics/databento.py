@@ -1377,7 +1377,7 @@ class DatabentoWriter:
 
         Raises
         ------
-        ValueError
+        ConfigError
             If a size is not a whole number of units at the config's
             ``lot_size``.
         """
@@ -1605,7 +1605,7 @@ def _whole_units(lots: Any, lot_size: float, column: str) -> np.ndarray:
     size = lots_to_size(lots, lot_size)
     not_whole = off_tick_grid(size, 1.0)
     if not_whole.any():
-        raise ValueError(
+        raise ConfigError(
             f"DatabentoWriter: {int(not_whole.sum())} {column} value(s) are not a "
             f"whole number of units at lot_size={lot_size:g}, and DBN sizes are "
             "whole shares or contracts.  Pass the config the events were made "

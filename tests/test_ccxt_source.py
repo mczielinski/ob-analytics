@@ -15,6 +15,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
+from ob_analytics.exceptions import UnknownNameError
 from ob_analytics.live._base import CaptureConfig
 from ob_analytics.live._runner import run_capturer
 from ob_analytics.live.ccxt_source import CcxtSettings, CcxtSource
@@ -502,7 +503,7 @@ class TestCcxtInstalled:
     def test_unknown_exchange_raises(self):
         from ob_analytics.live.ccxt_source import _make_exchange
 
-        with pytest.raises(ValueError, match="Unknown CCXT exchange"):
+        with pytest.raises(UnknownNameError, match="Unknown CCXT exchange"):
             _make_exchange("not_a_real_exchange_xyz")
 
     def test_registered_when_ccxt_present(self):
@@ -570,7 +571,7 @@ class TestPredictionVenues:
     def test_prefix_only_searches_prediction_markets(self):
         from ob_analytics.live.ccxt_source import _make_exchange
 
-        with pytest.raises(ValueError, match="Unknown CCXT exchange"):
+        with pytest.raises(UnknownNameError, match="Unknown CCXT exchange"):
             _make_exchange("prediction/kraken")
 
     def test_venue_column_drops_the_prefix(self, tmp_path):

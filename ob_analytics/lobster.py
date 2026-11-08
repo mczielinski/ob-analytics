@@ -1199,10 +1199,11 @@ def _require_trading_date(td: object, where: str) -> str | pd.Timestamp:
 
     Single source of truth for the loader, writer, and standalone
     writer-factory paths.  Returns *td* unchanged when valid; raises
-    :class:`ValueError` when missing and :class:`TypeError` on a bad type.
+    :class:`~ob_analytics.exceptions.ConfigError` when missing and
+    :class:`TypeError` on a bad type.
     """
     if td is None:
-        raise ValueError(
+        raise ConfigError(
             f"LobsterSource.{where}: trading_date is required. "
             f"Pass it via ctx=RunContext(trading_date=...)."
         )

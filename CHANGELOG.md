@@ -45,6 +45,22 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   same list, so it no longer offers `ccxt` and `cryptofeed`.
 - **`load_data` and `load_result` refuse a path that is not a folder with
   `ConfigError`** (#409). `load_data` raised `ValueError` for a file.
+- **One error type for one kind of mistake** (#408). `except ObAnalyticsError`
+  now catches every mistake the package reports.
+  - A bad value (an argument out of range, empty or incomplete input data)
+    raises `ConfigError`, which is now also a `ValueError`, so
+    `except ValueError` still catches it. An empty frame raised the base
+    `ObAnalyticsError`; it now raises `ConfigError`.
+  - An unknown name raises the new `UnknownNameError`, which is also a
+    `KeyError`. This covers sources, metrics, features, bar rules, formats,
+    plots, plot backends, gallery views, theme styles and contexts, and CCXT
+    and cryptofeed venues. Its message names the closest known names, not
+    every registration. Several of these raised `ValueError`:
+    `except ValueError` around `save_data(fmt=...)`, `plot(backend=...)`,
+    `PlotTheme(style=...)`, `Pipeline.from_source` or a venue id ->
+    `except UnknownNameError` (or `KeyError`).
+  - A plot a backend does not draw names the backends that do draw it.
+  - `UnmappedMessageError` is now also an `ObAnalyticsError`.
 
 ### Added
 

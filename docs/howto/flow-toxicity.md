@@ -33,7 +33,7 @@ and on [`display_result(result).trades`](../api/gallery.md#ob_analytics.visualiz
 Trades with integer sizes and no `attrs["lot_size"]` (a frame you built
 yourself) raise `ConfigError`: set the lot size on the frame, or pass float
 sizes. [Short captures](#short-captures) explains the 60. `compute_vpin`
-raises `ValueError` when the bucket would cut the trades into more than
+raises `ConfigError` when the bucket would cut the trades into more than
 [`MAX_VOLUME_BUCKETS`](../api/trade_sign.md#ob_analytics.trade_sign.MAX_VOLUME_BUCKETS)
 (one million) buckets.
 

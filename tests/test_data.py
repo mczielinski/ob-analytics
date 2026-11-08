@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from ob_analytics.data import load_data, save_data
+from ob_analytics.exceptions import UnknownNameError
 
 
 class TestSaveLoadParquet:
@@ -161,7 +162,7 @@ class TestLoadResult:
 
 class TestSaveLoadEdgeCases:
     def test_unsupported_format_raises(self, tmp_path: Path):
-        with pytest.raises(ValueError, match="Unsupported format"):
+        with pytest.raises(UnknownNameError, match="Unknown format"):
             save_data({}, tmp_path / "out", fmt="csv")
 
     def test_load_data_refuses_a_file(self, tmp_path: Path):

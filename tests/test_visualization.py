@@ -18,6 +18,7 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from matplotlib.text import Text
 
+from ob_analytics.exceptions import UnknownNameError
 from ob_analytics.visualization import (
     Level,
     PlotTheme,
@@ -1391,7 +1392,7 @@ class TestBackendDispatch:
         assert isinstance(fig, Figure)
 
     def test_invalid_backend_raises_value_error(self, sample_trades):
-        with pytest.raises(ValueError, match="Unknown backend"):
+        with pytest.raises(UnknownNameError, match="Unknown plot backend"):
             plot(
                 "trade_tape",
                 backend="nonexistent",
@@ -1413,7 +1414,7 @@ class TestBackendDispatch:
     def test_plot_unknown_backend_raises(self):
         from ob_analytics.visualization import plot
 
-        with pytest.raises(ValueError, match="Unknown backend"):
+        with pytest.raises(UnknownNameError, match="Unknown plot backend"):
             plot("trade_tape", backend="nope")
 
 

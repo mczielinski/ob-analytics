@@ -311,7 +311,7 @@ class PipelineConfig(BaseModel):
 
         Raises
         ------
-        ValueError
+        ConfigError
             If :attr:`tick_size` has no integer inverse; convert prices with
             ``ob_analytics._utils.price_to_ticks`` (which divides) instead.
         """
@@ -319,7 +319,7 @@ class PipelineConfig(BaseModel):
 
         multiplier = tick_multiplier(self.tick_size)
         if multiplier is None:
-            raise ValueError(
+            raise ConfigError(
                 f"tick_size={self.tick_size!r} has no integer inverse; use "
                 "ob_analytics._utils.price_to_ticks to convert prices to ticks."
             )

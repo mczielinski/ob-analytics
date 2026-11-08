@@ -16,6 +16,7 @@ from typing import Any, Protocol, runtime_checkable
 
 import pandas as pd
 
+from ob_analytics.exceptions import ObAnalyticsError
 from ob_analytics.protocols import Clocks, Source
 
 # ---------------------------------------------------------------------------
@@ -23,7 +24,7 @@ from ob_analytics.protocols import Clocks, Source
 # ---------------------------------------------------------------------------
 
 
-class UnmappedMessageError(ValueError):
+class UnmappedMessageError(ObAnalyticsError, ValueError):
     """An L3 message a live source could not turn into order events.
 
     An L3 source raises it from :meth:`LiveSource.snapshot` or
@@ -274,7 +275,9 @@ class SupportsPreflight(Protocol):
     def preflight(self) -> None:
         """Raise :class:`ImportError` (with the install hint) if the source cannot run.
 
-        May also raise :class:`ValueError` for settings that cannot work (no
-        venue chosen, an unknown venue id).
+        May also raise :class:`~ob_analytics.exceptions.ConfigError` for
+        settings that cannot work (no venue chosen), or
+        :class:`~ob_analytics.exceptions.UnknownNameError` for an unknown
+        venue id.
         """
         ...

@@ -242,9 +242,9 @@ class PipelineResult:
 
         Raises
         ------
-        KeyError
-            If no metric is registered under *name*; the message lists the
-            registered names.
+        UnknownNameError
+            If no metric is registered under *name*; the message names
+            the registered names closest to it.
         """
         from ob_analytics.metrics import get_metric
 
@@ -425,12 +425,14 @@ class Pipeline:
             ``OfflineSource.create_*`` factories.
         **kwargs
             Passed to the :class:`~ob_analytics.protocols.Source` constructor.
+
+        Raises
+        ------
+        UnknownNameError
+            If no source is registered under *name*; the message names
+            the registered names closest to it.
         """
-        try:
-            source_cls = get_source(name)
-        except KeyError as exc:
-            raise ValueError(str(exc)) from exc
-        source = source_cls(**kwargs)
+        source = get_source(name)(**kwargs)
         return cls(source=source, ctx=ctx)
 
     def run(self, source: Any, *, ctx: RunContext | None = None) -> PipelineResult:

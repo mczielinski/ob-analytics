@@ -16,6 +16,8 @@ from typing import Any, Generic, TypeVar
 
 from loguru import logger
 
+from ob_analytics.exceptions import UnknownNameError
+
 K = TypeVar("K")
 V = TypeVar("V")
 
@@ -41,10 +43,17 @@ class Registry(Generic[K, V]):
         self._items[self._normalize(key)] = value
 
     def get(self, key: K) -> V:
-        """Return the value for *key*, or raise ``KeyError`` listing registrations."""
+        """Return the value for *key*.
+
+        Raises
+        ------
+        UnknownNameError
+            If nothing is registered under *key*.  The message names the
+            registered keys closest to it.
+        """
         nk = self._normalize(key)
         if nk not in self._items:
-            raise KeyError(f"Unknown {self._kind} {key!r}. Registered: {self.list()}")
+            raise UnknownNameError(self._kind, key, self.list())
         return self._items[nk]
 
     # ``builtins.list`` because the method name ``list`` shadows the builtin

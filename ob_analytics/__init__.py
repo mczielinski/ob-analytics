@@ -109,7 +109,7 @@ from ob_analytics.datasets import (
     toy_trades,
 )
 from ob_analytics.depth_l2 import DepthCsvSettings, DepthCsvSource
-from ob_analytics.exceptions import ConfigError, ObAnalyticsError
+from ob_analytics.exceptions import ConfigError, ObAnalyticsError, UnknownNameError
 from ob_analytics.features import (
     features,
     get_feature,
@@ -277,6 +277,7 @@ __all__ = [
     "ToyOrder",
     "TradeAttribution",
     "TradeSource",
+    "UnknownNameError",
     "WriteTarget",
     "__version__",
     # ── Transaction cost and liquidity ───────────────────────────────

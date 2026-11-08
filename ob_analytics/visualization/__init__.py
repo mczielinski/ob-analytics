@@ -34,6 +34,7 @@ from typing import Any
 from loguru import logger
 from matplotlib.axes import Axes
 
+from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import Level
 from ob_analytics.visualization import _data as _viz_data
 from ob_analytics.visualization._matplotlib import format_time_axis, save_figure
@@ -89,13 +90,10 @@ def _resolve_level(concept: str, backend: str) -> Level | None:
     """
     levels = [lvl for lvl, b in RENDERERS.placements(concept) if b == backend]
     if not levels:
-        raise KeyError(
-            f"Unknown plot concept {concept!r} for backend {backend!r}. "
-            f"Registered: {RENDERERS.list()}"
-        )
+        raise RENDERERS.missing(concept, None, backend)
     if len(levels) > 1:
         shown = ", ".join(sorted(str(lvl) for lvl in levels))
-        raise ValueError(
+        raise ConfigError(
             f"Plot concept {concept!r} is comparable (registered at levels "
             f"{shown}); pass level=Level.L2 or level=Level.L3 to disambiguate."
         )
@@ -148,11 +146,11 @@ def plot(
 
     Raises
     ------
-    ValueError
-        If *backend* is not registered, or *concept* is comparable and no
-        *level* was given.
-    KeyError
-        If *concept* (at the resolved *level*) is not registered.
+    UnknownNameError
+        If *backend* is not registered, or *backend* does not draw
+        *concept* at the resolved *level*.
+    ConfigError
+        If *concept* is comparable and no *level* was given.
     """
     theme = data.pop("theme", None)
     _load_backend(backend)

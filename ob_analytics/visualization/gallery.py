@@ -35,6 +35,7 @@ from ob_analytics._utils import (
 )
 from ob_analytics.analytics import order_book
 from ob_analytics.depth import get_spread, price_level_snapshots
+from ob_analytics.exceptions import ConfigError, UnknownNameError
 from ob_analytics.pipeline import PipelineResult
 from ob_analytics.protocols import Level
 from ob_analytics.visualization import (
@@ -1152,9 +1153,9 @@ def plot_result(
 
     Raises
     ------
-    KeyError
-        If *concept* is not built for this result, or has no variant at *level*.
-        The message lists what is available.
+    UnknownNameError
+        If *concept* is not built for this result, or has no variant at
+        *level*.  The message names what is available.
     """
     from ob_analytics.metrics import METRICS
 
@@ -1179,9 +1180,12 @@ def plot_result(
     pc = concept_map.get(concept)
     if pc is None:
         metric_names = sorted(spec.name for spec in model.analytics)
-        raise KeyError(
-            f"Unknown concept {concept!r} for this result. "
-            f"Available: {sorted(concept_map) + metric_names}"
+        built_elsewhere = bool(RENDERERS.placements(concept)) or concept in METRICS
+        raise UnknownNameError(
+            "concept",
+            concept,
+            sorted(concept_map) + metric_names,
+            hint="It is not built for this result." if built_elsewhere else None,
         )
 
     if level is None:
@@ -1191,10 +1195,12 @@ def plot_result(
 
     spec = pc.at(resolved)
     if spec is None:
-        have = sorted(lvl.value for lvl in pc.variants)
-        raise KeyError(
-            f"Concept {concept!r} has no {resolved.value} variant "
-            f"(available levels: {have})."
+        have = ", ".join(sorted(lvl.value for lvl in pc.variants))
+        raise UnknownNameError(
+            f"{resolved.value} concept",
+            concept,
+            (),
+            hint=f"It is drawn at {have}.",
         )
 
     data = spec.prepare(**{**spec.prep_kwargs, **overrides})
@@ -1437,7 +1443,7 @@ def _project(
     card with an L2|L3 column axis on one backend.
     """
     if view not in VIEWS:
-        raise ValueError(f"Unknown view {view!r}. Available: {list(VIEWS)}")
+        raise UnknownNameError("gallery view", view, VIEWS)
 
     if view == "comparison":
         backend = _comparison_backend(backends)
@@ -1564,7 +1570,7 @@ def generate_gallery(
 
     if model is None:
         if result is None:
-            raise ValueError(
+            raise ConfigError(
                 "generate_gallery requires either `result` or an explicit `model`."
             )
         model = build_gallery_model(result, volume_scale=volume_scale)

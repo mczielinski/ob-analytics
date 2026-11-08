@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from ob_analytics.exceptions import UnknownNameError
 from ob_analytics.visualization import (
     DEFAULT_PALETTE,
     DEFAULT_THEME,
@@ -123,7 +124,7 @@ class TestPlotTheme:
         ],
     )
     def test_rejects_unknown_names(self, kwargs: dict, match: str) -> None:
-        with pytest.raises(ValueError, match=match):
+        with pytest.raises(UnknownNameError, match=match):
             PlotTheme(**kwargs)
 
     def test_dark_styles(self) -> None:

@@ -32,6 +32,7 @@ import pandas as pd
 from ob_analytics._secrets import redact
 from ob_analytics.analytics import QualityCheck, Severity
 from ob_analytics.capture_record import read_fields
+from ob_analytics.exceptions import ConfigError
 
 MANIFEST_NAME = "manifest.json"
 #: What the manifest's ``format`` field says, so a reader knows the file.
@@ -169,9 +170,9 @@ class Segment:
     def from_dict(cls, d: dict[str, Any]) -> Segment:
         """Build a segment from its manifest entry.
 
-        Raises :class:`ValueError` when ``name`` is not one plain directory
-        name: a name such as ``..`` or ``a/b`` would make a reader of the
-        capture leave its directory.
+        Raises :class:`~ob_analytics.exceptions.ConfigError` when ``name`` is
+        not one plain directory name: a name such as ``..`` or ``a/b`` would
+        make a reader of the capture leave its directory.
         """
         name = d["name"]
         # One rule for both platforms: on Windows "C:x" is a path too.
@@ -182,7 +183,7 @@ class Segment:
             or PurePosixPath(name).name != name
             or PureWindowsPath(name).name != name
         ):
-            raise ValueError(
+            raise ConfigError(
                 f"capture manifest segment name {name!r} is not one plain "
                 "directory name"
             )
@@ -330,11 +331,11 @@ class CaptureManifest:
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> CaptureManifest:
         if d.get("format") != CAPTURE_FORMAT:
-            raise ValueError(
+            raise ConfigError(
                 f"not an ob-analytics capture manifest: {d.get('format')!r}"
             )
         if d.get("version") != CAPTURE_FORMAT_VERSION:
-            raise ValueError(
+            raise ConfigError(
                 f"capture manifest version {d.get('version')!r} is not supported "
                 f"(this ob-analytics reads version {CAPTURE_FORMAT_VERSION})"
             )
@@ -629,7 +630,8 @@ def read_manifest(path: Path) -> CaptureManifest | None:
     *path* is the capture directory (or its ``manifest.json``).  Returns
     ``None`` when there is no manifest: a single capture made by
     :func:`~ob_analytics.live._runner.run_capturer`, or a processed output.
-    Raises :class:`ValueError` for a manifest this version cannot read.
+    Raises :class:`~ob_analytics.exceptions.ConfigError` for a manifest
+    this version cannot read.
     """
     path = Path(path)
     file = path if path.name == MANIFEST_NAME else path / MANIFEST_NAME

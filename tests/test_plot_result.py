@@ -9,6 +9,7 @@ import pytest
 from matplotlib.figure import Figure
 
 from ob_analytics.bitstamp import BitstampSource
+from ob_analytics.exceptions import UnknownNameError
 from ob_analytics.pipeline import Pipeline, PipelineResult
 from ob_analytics.visualization import available_concepts, plot_result, prepare
 
@@ -51,12 +52,25 @@ class TestPlotResult:
         assert isinstance(fig, go.Figure)
 
     def test_unknown_concept_raises(self, result: PipelineResult) -> None:
-        with pytest.raises(KeyError, match="Unknown concept"):
+        with pytest.raises(UnknownNameError, match="Unknown concept") as info:
             plot_result(result, "does_not_exist")
+        assert "not built for this result" not in str(info.value)
+
+    def test_a_registered_concept_the_result_lacks_says_so(
+        self, result: PipelineResult, monkeypatch
+    ) -> None:
+        from ob_analytics.visualization import RENDERERS
+
+        key = ("probe_not_built", None, "matplotlib")
+        monkeypatch.setitem(RENDERERS._items, key, lambda data, ax=None: None)
+        with pytest.raises(UnknownNameError, match="It is not built for this result.$"):
+            plot_result(result, "probe_not_built")
 
     def test_missing_level_raises(self, result: PipelineResult) -> None:
         # order_outcome is L3-only; asking for L2 lists what is available.
-        with pytest.raises(KeyError, match="no L2 variant"):
+        with pytest.raises(
+            UnknownNameError, match="Unknown L2 concept 'order_outcome'.*drawn at L3"
+        ):
             plot_result(result, "order_outcome", "L2")
 
 

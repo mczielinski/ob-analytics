@@ -14,7 +14,7 @@ import pytest
 
 go = pytest.importorskip("plotly.graph_objects", reason="plotly not installed")
 
-from ob_analytics.exceptions import ConfigError
+from ob_analytics.exceptions import ConfigError, UnknownNameError
 from ob_analytics.visualization import (
     Level,
     display_result,
@@ -265,7 +265,8 @@ def test_frame_names_are_unique_below_a_second(tiny_result):
 def test_plot_result_draws_the_replay_on_plotly_only(tiny_result):
     fig = plot_result(tiny_result, "book_replay", level="L3", backend="plotly")
     assert "replay-trades:" in fig.to_html()
-    with pytest.raises(KeyError):
+    # The message names the backend that does draw it, not every renderer.
+    with pytest.raises(UnknownNameError, match="Backends that draw it: 'plotly'.$"):
         plot_result(tiny_result, "book_replay", level="L2", backend="matplotlib")
 
 

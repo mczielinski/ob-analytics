@@ -18,6 +18,7 @@ from importlib.metadata import EntryPoint
 from typing import Any
 
 from ob_analytics._registry import Registry, load_plugins
+from ob_analytics.exceptions import ConfigError, UnknownNameError
 from ob_analytics.protocols import Level
 
 #: The entry-point group a third-party package advertises a plot backend under,
@@ -61,6 +62,49 @@ class RendererRegistry(Registry[RendererKey, RendererFn]):
     gallery call it the same way whichever backend draws it.
     """
 
+    def get(self, key: RendererKey) -> RendererFn:
+        """Return the renderer for ``(concept, level, backend)``.
+
+        Raises
+        ------
+        UnknownNameError
+            If no renderer is registered under *key*.  The message says
+            which backends or levels do draw the concept, or names the
+            concepts closest to it when no backend draws it.
+        """
+        if self._normalize(key) not in self._items:
+            raise self.missing(*key)
+        return super().get(key)
+
+    def missing(
+        self, concept: str, level: Level | None, backend: str
+    ) -> UnknownNameError:
+        """The error for a *concept* that *backend* does not draw at *level*.
+
+        It names the backends that draw *concept*, or the levels *backend*
+        draws it at, rather than every registered renderer.
+        """
+        placements = self.placements(concept)
+        if not placements:
+            concepts = sorted({c for c, _, _ in self._items})
+            return UnknownNameError("plot concept", concept, concepts)
+        backends = sorted({b for _, b in placements})
+        if backend not in backends:
+            shown = ", ".join(repr(b) for b in backends)
+            return UnknownNameError(
+                f"{backend!r} plot",
+                concept,
+                (),
+                hint=f"Backends that draw it: {shown}.",
+            )
+        levels = [lvl for lvl, b in placements if b == backend]
+        return UnknownNameError(
+            f"{_kind_text([level]).removeprefix('at ')} {backend!r} plot",
+            concept,
+            (),
+            hint=f"On {backend!r} it is {_kind_text(levels)}.",
+        )
+
     def placements(self, concept: str) -> tuple[tuple[Level | None, str], ...]:
         """Return each ``(level, backend)`` *concept* is registered at, in order.
 
@@ -76,7 +120,7 @@ class RendererRegistry(Registry[RendererKey, RendererFn]):
 
         Raises
         ------
-        ValueError
+        ConfigError
             If *key* is not ``(concept, level, backend)`` with a text
             concept, a :class:`Level` or ``None`` level and a text backend,
             or its concept is already registered, on any backend, as the
@@ -90,7 +134,7 @@ class RendererRegistry(Registry[RendererKey, RendererFn]):
             and (key[1] is None or key[1] in tuple(Level))
             and isinstance(key[2], str)
         ):
-            raise ValueError(
+            raise ConfigError(
                 f"A renderer key is (concept, level, backend), got {key!r}. "
                 "The concept and backend are text; the level is Level.L2, "
                 "Level.L3, or None for a level-less plot."
@@ -108,7 +152,7 @@ class RendererRegistry(Registry[RendererKey, RendererFn]):
         )
         if clash is not None:
             other, other_backend = clash
-            raise ValueError(
+            raise ConfigError(
                 f"Plot concept {concept!r} is already registered "
                 f"{_kind_text([other])} on {other_backend!r}, so it cannot also "
                 f"be registered {_kind_text([level])}. "
@@ -166,13 +210,11 @@ def _load_backend(backend: str) -> None:
 
     Raises
     ------
-    ValueError
+    UnknownNameError
         If *backend* is not registered.
     """
     if backend not in _BACKEND_MODULES:
-        raise ValueError(
-            f"Unknown backend {backend!r}. Available: {sorted(_BACKEND_MODULES)}"
-        )
+        raise UnknownNameError("plot backend", backend, _BACKEND_MODULES)
     importlib.import_module(_BACKEND_MODULES[backend])
 
 
