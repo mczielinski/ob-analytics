@@ -12,7 +12,13 @@ duplicate run — so this stays as cheap as a single pipeline pass.
 
 from __future__ import annotations
 
+import csv
+import gzip
+from collections import Counter
+from decimal import Decimal
+
 import numpy as np
+import pandas as pd
 import pytest
 
 from ob_analytics.bitstamp import BitstampSource
@@ -225,3 +231,50 @@ def test_kyle_lambda_baseline(demo_result):
     BASELINE_LAMBDA: float | None = 8.651849748125398
     if BASELINE_LAMBDA is not None and not np.isnan(BASELINE_LAMBDA):
         assert np.isclose(res.lambda_, BASELINE_LAMBDA, rtol=1e-10, equal_nan=True)
+
+
+# ── Totals counted from the raw files ─────────────────────────────────
+#
+# The fingerprints only say the numbers have not moved.  These count the
+# sample's own CSV rows with the standard library, not with the package, so a
+# loader that drops, doubles or rescales rows fails here even when a
+# re-recorded fingerprint would hide it.
+
+
+def _raw_rows(path) -> list[dict[str, str]]:
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt", newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def test_trades_match_the_raw_trades_file(demo_result, bitstamp_sample_dir):
+    raw = _raw_rows(bitstamp_sample_dir / "trades.csv")
+    trades = demo_result.trades
+    tick = Decimal(str(demo_result.config.tick_size))
+    lot = Decimal(str(demo_result.config.lot_size))
+
+    assert len(trades) == len(raw)
+    assert Counter(trades["direction"].astype(str)) == Counter(r["side"] for r in raw)
+    assert int(trades["volume"].sum()) == sum(Decimal(r["amount"]) for r in raw) / lot
+    notional = sum(Decimal(r["price"]) * Decimal(r["amount"]) for r in raw)
+    ticks_by_lots = sum(
+        int(p) * int(v) for p, v in zip(trades["price"], trades["volume"])
+    )
+    assert ticks_by_lots == notional / tick / lot
+    stamps = [int(r["timestamp"]) for r in raw]
+    first, last = min(stamps), max(stamps)
+    assert trades["timestamp"].min() == pd.Timestamp(first, unit="ms", tz="UTC")
+    assert trades["timestamp"].max() == pd.Timestamp(last, unit="ms", tz="UTC")
+
+
+def test_events_match_the_raw_orders_file(demo_result, bitstamp_sample_dir):
+    raw = _raw_rows(bitstamp_sample_dir / "orders.csv.gz")
+    events = demo_result.events
+
+    assert len(events) == len(raw)
+    assert Counter(events["action"].astype(str)) == Counter(r["action"] for r in raw)
+    assert events["id"].nunique() == len({r["id"] for r in raw})
+    created = [r for r in raw if r["action"] == "created"]
+    lot = Decimal(str(demo_result.config.lot_size))
+    on_created = events.loc[events["action"] == "created", "volume"]
+    assert int(on_created.sum()) == sum(Decimal(r["volume"]) for r in created) / lot

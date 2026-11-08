@@ -77,8 +77,14 @@ def tiny_bitstamp_orders_csv(
     to produce non-empty DataFrames on tiny bucket/window settings.
     Pipeline.run on this fixture is well under a second.
     """
-    d = tmp_path_factory.mktemp("tiny_bitstamp")
+    return write_tiny_bitstamp(tmp_path_factory.mktemp("tiny_bitstamp"))
 
+
+def write_tiny_bitstamp(d: Path) -> Path:
+    """Write the :func:`tiny_bitstamp_orders_csv` files into *d*.
+
+    Returns the path of its ``orders.csv``.
+    """
     # Build a self-consistent micro orderbook: three resting bids, three
     # resting asks, then a sequence of changed/deleted events implying
     # five trades that hit the resting book.
@@ -798,6 +804,11 @@ def lobster_day_dir(tmp_path) -> Path:
     """
     directory = tmp_path / "lobster"
     directory.mkdir()
+    return write_lobster_day(directory)
+
+
+def write_lobster_day(directory: Path) -> Path:
+    """Write the LOBSTER day of :func:`lobster_day_dir` into *directory*."""
     stem = f"TEST_{LOBSTER_DAY_DATE}_34200000_57600000"
     (directory / f"{stem}_message_1.csv").write_text(_LOBSTER_DAY_MESSAGES)
     (directory / f"{stem}_orderbook_1.csv").write_text(_LOBSTER_DAY_ORDERBOOK)

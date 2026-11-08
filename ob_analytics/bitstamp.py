@@ -24,15 +24,17 @@ from loguru import logger
 
 from ob_analytics._utils import (
     attach_ingest_seq,
+    checked_labels,
+    checked_times,
     datetime_to_epoch,
     empty_trades,
     epoch_ns,
     finite_floats,
     lots_to_size,
     price_to_ticks,
+    read_csv_file,
     size_to_lots,
     ticks_to_price,
-    to_utc_ns,
     validate_non_empty,
 )
 from ob_analytics.config import InstrumentGrid, PipelineConfig, SourceSettings
@@ -127,7 +129,8 @@ class BitstampLoader:
         previous row.  A row whose size rises (an order changed to a larger
         amount) has ``fill`` 0.
         """
-        events = pd.read_csv(source)
+        where = f"BitstampLoader.load({source})"
+        events = read_csv_file(source, where)
         validate_columns(
             events,
             {
@@ -145,9 +148,23 @@ class BitstampLoader:
         # Checked before the filter below, which would drop an empty size and
         # break on a word, so the row numbers are the file's.
         for column, what in (("price", "price"), ("volume", "size")):
-            events[column] = finite_floats(
-                events[column], what, f"BitstampLoader.load({source})"
-            )
+            events[column] = finite_floats(events[column], what, where)
+        checked_labels(
+            events["action"], "action", where, allowed=ACTION_DTYPE.categories
+        )
+        checked_labels(
+            events["direction"], "direction", where, allowed=BOOK_SIDE_DTYPE.categories
+        )
+        events["timestamp"] = checked_times(
+            events["timestamp"], _TIMESTAMP_UNIT, "timestamp", where
+        )
+        events["exchange_timestamp"] = checked_times(
+            events["exchange_timestamp"],
+            _TIMESTAMP_UNIT,
+            "exchange_timestamp",
+            where,
+            required=False,
+        )
 
         events = events[events["volume"] >= 0]
 
@@ -169,10 +186,6 @@ class BitstampLoader:
         events["volume"] = size_to_lots(events["volume"], self._config.lot_size)
         events["price"] = price_to_ticks(events["price"], self._config.tick_size)
 
-        events["timestamp"] = to_utc_ns(events["timestamp"], _TIMESTAMP_UNIT)
-        events["exchange_timestamp"] = to_utc_ns(
-            events["exchange_timestamp"], _TIMESTAMP_UNIT
-        )
         events["action"] = events["action"].astype(ACTION_DTYPE)
         events["direction"] = events["direction"].astype(BOOK_SIDE_DTYPE)
 
@@ -319,16 +332,25 @@ class BitstampTradeReader:
 
     def load(self, events: pd.DataFrame, source: Any) -> pd.DataFrame:
         path = self._resolve_trades_path(source)
-        raw = pd.read_csv(path)
+        where = f"BitstampTradeReader.load({path})"
+        raw = read_csv_file(path, where)
 
         if raw.empty:
             return empty_trades()
 
         validate_columns(raw, set(_TRADES_COLUMNS), "BitstampTradeReader.load")
         for column, what in (("price", "price"), ("amount", "size")):
-            raw[column] = finite_floats(
-                raw[column], what, f"BitstampTradeReader.load({path})"
-            )
+            raw[column] = finite_floats(raw[column], what, where)
+        # A trade with no known side or order (as this format's writer saves
+        # one from a feed that does not name them) leaves the cell empty.
+        checked_labels(
+            raw["side"],
+            "side",
+            where,
+            allowed=TRADE_SIDE_DTYPE.categories,
+            required=False,
+        )
+        recv_ms = checked_times(raw["timestamp"], _TIMESTAMP_UNIT, "timestamp", where)
 
         # `side` is the taker side: "buy" => taker is the buyer.
         taker_id = np.where(
@@ -344,9 +366,6 @@ class BitstampTradeReader:
 
         ev_lookup = self._build_lookup(events)
 
-        # Capture timestamps are epoch milliseconds; keep them on the shared
-        # tz-aware UTC nanosecond clock (issue #154).
-        recv_ms = to_utc_ns(raw["timestamp"], _TIMESTAMP_UNIT)
         # Trade sizes share the events' integer-lot grid (issue #226), so the
         # fill matching below compares exact integers rather than rounded
         # floats.

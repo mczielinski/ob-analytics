@@ -61,15 +61,17 @@ from pydantic import Field
 
 from ob_analytics._utils import (
     attach_ingest_seq,
+    checked_labels,
+    checked_times,
     datetime_to_epoch,
     empty_trades,
     finite_floats,
     lots_to_size,
     off_tick_grid,
     price_to_ticks,
+    read_csv_file,
     size_to_lots,
     ticks_to_price,
-    to_utc_ns,
     validate_non_empty,
 )
 from ob_analytics.config import InstrumentGrid, PipelineConfig, SourceSettings
@@ -276,8 +278,9 @@ class L2DepthLoader:
             kept when the file has it.
         """
         path = self._resolve_depth_file(source)
+        where = f"L2DepthLoader.load({path})"
         logger.info("L2DepthLoader: reading {}", path)
-        raw = pd.read_csv(path)
+        raw = read_csv_file(path, where)
         validate_non_empty(raw, "L2DepthLoader.load")
 
         ts_col = _first_present(raw.columns, _TIMESTAMP_COLUMNS)
@@ -300,17 +303,13 @@ class L2DepthLoader:
             )
 
         cfg, fmt = self._config, self._settings
-        timestamp = to_utc_ns(raw[ts_col], fmt.timestamp_unit)
+        timestamp = checked_times(raw[ts_col], fmt.timestamp_unit, "timestamp", where)
         # Canonical price is integer ticks (issue #155): scale the raw feed
         # price to the quote currency, then convert to ticks.
-        price = _to_ticks_on_grid(
-            raw[price_col], cfg, fmt.price_divisor, f"L2DepthLoader.load({path})"
-        )
+        price = _to_ticks_on_grid(raw[price_col], cfg, fmt.price_divisor, where)
         # Canonical size is integer lots (issue #226); the raw feed carries a
         # base-asset float, so convert on the way in.
-        volume = pd.Series(
-            _to_lots(raw[vol_col], cfg, f"L2DepthLoader.load({path})"), index=raw.index
-        )
+        volume = pd.Series(_to_lots(raw[vol_col], cfg, where), index=raw.index)
         direction = (
             raw[side_col].astype(str).str.strip().str.lower().map(_SIDE_TO_DIRECTION)
         )
@@ -318,8 +317,8 @@ class L2DepthLoader:
         clocks = {"timestamp": timestamp.array}
         venue_col = _first_present(raw.columns, _EXCHANGE_TIMESTAMP_COLUMNS)
         if venue_col is not None:
-            clocks["exchange_timestamp"] = to_utc_ns(
-                raw[venue_col], fmt.timestamp_unit
+            clocks["exchange_timestamp"] = checked_times(
+                raw[venue_col], fmt.timestamp_unit, venue_col, where, required=False
             ).array
         depth = pd.DataFrame(
             {
@@ -436,7 +435,8 @@ class L2TradeReader:
             logger.info("L2TradeReader: no trades.csv next to {}; no trades", source)
             return empty_trades()
 
-        raw = pd.read_csv(path)
+        where = f"L2TradeReader.load({path})"
+        raw = read_csv_file(path, where)
         if raw.empty:
             return empty_trades()
 
@@ -451,17 +451,13 @@ class L2TradeReader:
             )
 
         cfg, fmt = self._config, self._settings
-        timestamp = to_utc_ns(raw[ts_col], fmt.timestamp_unit)
+        timestamp = checked_times(raw[ts_col], fmt.timestamp_unit, "timestamp", where)
         # Trade prints share the depth grid: integer ticks (issue #155).
-        price = _to_ticks_on_grid(
-            raw[price_col], cfg, fmt.price_divisor, f"L2TradeReader.load({path})"
-        )
+        price = _to_ticks_on_grid(raw[price_col], cfg, fmt.price_divisor, where)
         # Canonical size is integer lots (issue #226); the raw feed carries a
         # base-asset float, so convert on the way in.
-        volume = pd.Series(
-            _to_lots(raw[vol_col], cfg, f"L2TradeReader.load({path})"), index=raw.index
-        )
-        direction = self._read_direction(raw)
+        volume = pd.Series(_to_lots(raw[vol_col], cfg, where), index=raw.index)
+        direction = self._read_direction(raw, where)
 
         n = len(raw)
         na = pd.array([pd.NA] * n, dtype="object")
@@ -495,21 +491,20 @@ class L2TradeReader:
         return trades
 
     @staticmethod
-    def _read_direction(raw: pd.DataFrame) -> pd.Categorical:
-        """Taker side per trade: native ``side`` mapped to buy/sell, else NA."""
+    def _read_direction(raw: pd.DataFrame, where: str) -> pd.Categorical:
+        """Taker side per trade: native ``side`` mapped to buy/sell, else NA.
+
+        An empty side is unlabelled, for the pipeline to classify; a side that
+        is not one of the known spellings is refused.
+        """
         side_col = _first_present(raw.columns, _SIDE_COLUMNS)
-        n = len(raw)
-        if side_col is None:
-            values: list[str | float] = [np.nan] * n
-        else:
-            values = (
-                raw[side_col]
-                .astype(str)
-                .str.strip()
-                .str.lower()
-                .map(_TRADE_SIDE_MAP)
-                .to_list()
+        values: list[str | float] = [np.nan] * len(raw)
+        if side_col is not None:
+            spelled = raw[side_col].astype("string").str.strip().str.lower()
+            checked_labels(
+                spelled, "side", where, allowed=_TRADE_SIDE_MAP, required=False
             )
+            values = [*spelled.map(_TRADE_SIDE_MAP)]
         return pd.Categorical(values, dtype=TRADE_SIDE_DTYPE)
 
     @staticmethod

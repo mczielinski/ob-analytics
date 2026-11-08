@@ -135,6 +135,124 @@ def finite_floats(values: object, what: str, where: str | None = None) -> np.nda
     return arr
 
 
+# ---------------------------------------------------------------------------
+# Reading files
+# ---------------------------------------------------------------------------
+#
+# A reader handed a bad file raises ConfigError and never returns a frame
+# built from it.  These helpers hold the checks every CSV reader shares, so a
+# reader names its columns and leaves the refusing to them.
+
+
+def read_csv_file(path: object, where: str, **kwargs: Any) -> pd.DataFrame:
+    """Return ``pandas.read_csv(path, **kwargs)``, refusing a file it cannot read.
+
+    *where* names the reader and the file in the message.  An empty file
+    reads as an empty frame with no columns, so each reader decides whether
+    that is allowed.
+
+    Raises
+    ------
+    ConfigError
+        If the file is not text, or is not laid out as a CSV file.
+    """
+    try:
+        return pd.read_csv(path, **kwargs)  # ty: ignore[no-matching-overload]
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
+    except (UnicodeDecodeError, pd.errors.ParserError) as exc:
+        raise ConfigError(
+            f"{where}: not a CSV file this reader can read ({exc})."
+        ) from exc
+
+
+def _refuse_rows(
+    bad: np.ndarray, values: pd.Series, what: str, where: str, hint: str = ""
+) -> None:
+    """Raise :class:`ConfigError` naming the rows of *values* that *bad* marks.
+
+    Rows are counted from 1 in the order of *values*, as in
+    :func:`finite_floats`.  *hint*, when given, ends the message.
+    """
+    if not bad.any():
+        return
+    first = int(np.argmax(bad))
+    example = values.iloc[first]
+    if isinstance(example, np.generic):
+        example = example.item()  # 1.5, not np.float64(1.5)
+    shown = "empty" if pd.isna(example) else repr(example)
+    raise ConfigError(
+        f"{where}: {int(bad.sum())} of {bad.size} row(s) have no valid {what}; "
+        f"the first is row {first + 1} ({what}: {shown})."
+        + (f" {hint}" if hint else "")
+    )
+
+
+def checked_times(
+    values: pd.Series, unit: str, what: str, where: str, *, required: bool = True
+) -> pd.Series:
+    """Return a time column on the UTC clock, refusing a value that is not a time.
+
+    The column is read as :func:`to_utc_ns` reads it.  A column that holds any number is an epoch column in *unit*, so every
+    value in it must be a finite number.  A column of text holds dates, which
+    must all parse.  When *required* is false an empty cell is allowed and
+    becomes ``NaT``; text is refused either way.  *what* and *where* name the
+    column and the reader in the message.
+
+    Raises
+    ------
+    ConfigError
+        If a value is not a time, or is empty when *required*, or is outside
+        the range a nanosecond clock can hold.
+    """
+    given = values.notna().to_numpy()
+    numbers = pd.to_numeric(values, errors="coerce")
+    if pd.api.types.is_numeric_dtype(values) or numbers.notna().any():
+        number = numbers.to_numpy(dtype=np.float64, na_value=np.nan)
+        bad = (np.isnan(number) & given) | np.isinf(number)
+        if required:
+            bad |= ~given
+        _refuse_rows(bad, values, what, where)
+        source = numbers
+    else:
+        source = values
+    try:
+        parsed = to_utc_ns(source, unit)
+    except (ValueError, OverflowError, TypeError) as exc:
+        raise ConfigError(f"{where}: a {what} is not a time ({exc}).") from exc
+    if required:
+        _refuse_rows(parsed.isna().to_numpy(), values, what, where)
+    return parsed
+
+
+def checked_labels(
+    values: pd.Series,
+    what: str,
+    where: str,
+    *,
+    allowed: object = None,
+    required: bool = True,
+) -> None:
+    """Refuse a column holding an empty cell, or a value not in *allowed*.
+
+    *allowed* is a collection of the values the column may hold, or ``None``
+    for any value.  When *required* is false an empty cell is allowed.
+
+    Raises
+    ------
+    ConfigError
+        If a value is empty (when *required*) or not one of *allowed*.
+    """
+    given = values.notna().to_numpy()
+    bad = ~given if required else np.zeros(len(values), dtype=bool)
+    hint = ""
+    if allowed is not None:
+        allowed = list(allowed)  # ty: ignore[invalid-argument-type]
+        bad |= given & ~values.isin(allowed).to_numpy()
+        hint = f"Expected one of {sorted(map(str, allowed))}."
+    _refuse_rows(bad, values, what, where, hint)
+
+
 def price_to_ticks(price: object, tick_size: float) -> np.ndarray:
     """Convert quote-currency *price* to an ``int64`` whole number of ticks.
 

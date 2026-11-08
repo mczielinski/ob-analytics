@@ -115,11 +115,12 @@ def _read_capture_manifest(path: Path) -> Any:
     """The manifest of a segmented capture at *path*, or ``None``."""
     from loguru import logger
 
+    from ob_analytics.exceptions import ConfigError
     from ob_analytics.live import read_manifest
 
     try:
         return read_manifest(path) if path.is_dir() else None
-    except ValueError as exc:
+    except ConfigError as exc:
         logger.error(str(exc))
         sys.exit(1)
 

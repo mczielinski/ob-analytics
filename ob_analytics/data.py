@@ -308,16 +308,22 @@ _RESTORED_DTYPES: dict[str, dict[str, str | pd.CategoricalDtype]] = {
 def _read_versioned_parquet(path: Path) -> pd.DataFrame:
     """Read a canonical Parquet *path*, checking its schema version first.
 
-    Raises :class:`~ob_analytics.exceptions.ConfigError` on an unsupported
-    version; a file with no version key loads as legacy data with a warning
-    (see :func:`ob_analytics.schemas.check_schema_version`).  The tick size
+    Raises :class:`~ob_analytics.exceptions.ConfigError` on a file that is
+    not Parquet (or is cut short) and on an unsupported version; a file with
+    no version key loads as legacy data with a warning (see
+    :func:`ob_analytics.schemas.check_schema_version`).  The tick size
     stored under :data:`TICK_SIZE_KEY` is surfaced on the returned frame's
     ``attrs``: ``df.attrs["tick_sizes"]`` holds the full instrument map and
     ``df.attrs["tick_size"]`` the resolved default, so ``price * tick_size``
     recovers the quote currency.  An older file that stored float
     quote-currency prices has neither.
     """
-    table = pq.read_table(path)
+    try:
+        table = pq.read_table(path)
+    except pa.ArrowException as exc:
+        raise ConfigError(
+            f"{path} is not a Parquet file this build can read: {exc}"
+        ) from exc
     metadata = table.schema.metadata or {}
     raw = metadata.get(SCHEMA_VERSION_KEY)
     version = raw.decode() if raw is not None else None
@@ -352,8 +358,9 @@ def load_data(path: str | Path) -> dict[str, pd.DataFrame]:
     Raises
     ------
     ConfigError
-        If *path* is not a folder, or a Parquet file declares a schema version
-        this build does not support.  A file written with no version key
+        If *path* is not a folder, a file in it is not a Parquet file this
+        build can read, or a Parquet file declares a schema version this build
+        does not support.  A file written with no version key
         (legacy data, or the bundled sample) loads with a warning — see
         :func:`ob_analytics.schemas.check_schema_version`.
     FileNotFoundError

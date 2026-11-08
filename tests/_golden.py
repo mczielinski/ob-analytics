@@ -74,3 +74,22 @@ def book_fingerprint(book: Mapping[str, Any]) -> str:
         ``"<bids-digest>:<asks-digest>"``.
     """
     return f"{df_fingerprint(book['bids'])}:{df_fingerprint(book['asks'])}"
+
+
+def assert_same_result(back: Any, result: Any) -> None:
+    """Assert a run read back from Parquet is the run that was saved.
+
+    Parquet gives a missing value in an object column back as ``None``, not
+    ``pd.NA``; that is how :func:`~ob_analytics.data.load_data` has always
+    read it, so both are compared as ``None``.  The row labels are not
+    saved, so the rows are compared in order.
+    """
+    assert back.config == result.config
+    assert back.level is result.level
+    for name, frame in result.tables().items():
+        loaded = getattr(back, name).reset_index(drop=True)
+        frame = frame.reset_index(drop=True)
+        objects = [c for c in frame.columns if frame[c].dtype == object]
+        for df in (frame, loaded):
+            df[objects] = df[objects].astype(object).where(df[objects].notna(), None)
+        pd.testing.assert_frame_equal(loaded, frame, check_categorical=False, obj=name)
