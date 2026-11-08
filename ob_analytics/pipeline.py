@@ -32,7 +32,7 @@ Usage with a Source descriptor::
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -49,10 +49,16 @@ from ob_analytics._windows import (
     window_bounds,
     window_positions,
 )
-from ob_analytics.analytics import order_aggressiveness, set_order_types
-from ob_analytics.capture_record import read_instrument
+from ob_analytics.analytics import (
+    DataQualitySummary,
+    data_quality_summary,
+    order_aggressiveness,
+    set_order_types,
+)
+from ob_analytics.capture_record import read_instrument, run_declarations
 from ob_analytics.config import PipelineConfig, instrument_fields
 from ob_analytics.depth import (
+    BookLevels,
     DepthMetricsEngine,
     depth_metrics,
     price_level_volume,
@@ -60,10 +66,12 @@ from ob_analytics.depth import (
 )
 from ob_analytics.protocols import (
     EventLoader,
+    FeedDeclarations,
     Level,
     OfflineSource,
     RunContext,
     Source,
+    SupportsComputeDepth,
     TradeSource,
     grid_of,
 )
@@ -119,6 +127,11 @@ class PipelineResult:
         :attr:`~ob_analytics.protocols.Level.L2` for price-level feeds).
         Downstream code (the gallery, data-quality) reads it to decide which
         per-order faces / metrics apply.
+    declarations : FeedDeclarations
+        What the run's data is declared to show: its source's declarations,
+        with what a live capture recorded in their place (see
+        :func:`~ob_analytics.capture_record.run_declarations`).
+        :meth:`audit` holds the run to them.  The defaults declare nothing.
     """
 
     events: pd.DataFrame
@@ -127,6 +140,7 @@ class PipelineResult:
     depth_summary: pd.DataFrame
     config: PipelineConfig
     level: Level = Level.L3
+    declarations: FeedDeclarations = field(default_factory=FeedDeclarations)
 
     def tables(self) -> dict[str, pd.DataFrame]:
         """Return the run's four core tables keyed by name.
@@ -153,9 +167,10 @@ class PipelineResult:
         """Return the run's four core tables as Arrow tables.
 
         Each table carries the same key-value metadata a canonical Parquet file
-        carries — the schema version, the run's tick and lot size, and its
-        config (see :mod:`ob_analytics.schemas`) — so a reader handed these
-        tables in memory is no worse off than one reading the files.
+        carries — the schema version, the run's tick and lot size, its config
+        and its declarations (see :mod:`ob_analytics.schemas`) — so a reader
+        handed these tables in memory is no worse off than one reading the
+        files.
 
         Returns
         -------
@@ -175,7 +190,11 @@ class PipelineResult:
         lot_sizes = lot_sizes_from_config(self.config)
         return {
             name: _to_arrow_table(
-                df, tick_sizes=tick_sizes, lot_sizes=lot_sizes, config=self.config
+                df,
+                tick_sizes=tick_sizes,
+                lot_sizes=lot_sizes,
+                config=self.config,
+                declarations=self.declarations,
             )
             for name, df in self.tables().items()
         }
@@ -215,6 +234,39 @@ class PipelineResult:
             ) from exc
 
         return {name: pl.from_arrow(table) for name, table in self.to_arrow().items()}
+
+    def audit(self, *, venue_book: BookLevels | None = None) -> DataQualitySummary:
+        """Check this run's data quality against its :attr:`declarations`.
+
+        The same checks as ``ob-analytics audit``: this calls
+        :func:`~ob_analytics.analytics.data_quality_summary` with the run's
+        tables, its faithful ``depth``, its tick size and its declarations.
+
+        Parameters
+        ----------
+        venue_book : BookLevels, optional
+            The venue's own book after every message, when the source
+            supplies one (LOBSTER's orderbook file, read by
+            :meth:`~ob_analytics.lobster.LobsterSource.venue_book`).  The
+            book rebuilt from the events is then compared with it.
+
+        Returns
+        -------
+        DataQualitySummary
+        """
+        declared = self.declarations
+        return data_quality_summary(
+            self.events,
+            self.trades,
+            feed_type=declared.feed_type,
+            depth=self.depth,
+            tick_size=self.config.tick_size,
+            sequence_kind=declared.sequence_kind,
+            sequence_restarts=declared.sequence_restarts,
+            trade_attribution=declared.trade_attribution,
+            clocks=declared.clocks,
+            venue_book=venue_book,
+        )
 
     def metric(self, name: str, **settings: Any) -> pd.DataFrame:
         """Compute the registered metric *name* over this result.
@@ -362,7 +414,8 @@ class Pipeline:
         if not isinstance(source, OfflineSource):
             raise TypeError(
                 f"Pipeline needs an offline-capable source; {source.name!r} "
-                "cannot replay stored files (it has no create_loader)."
+                "cannot replay stored files (it lacks create_loader or "
+                "create_trade_source)."
             )
 
         # What the caller set, so a capture's record fills only the rest.
@@ -449,7 +502,7 @@ class Pipeline:
         -------
         PipelineResult
             Frozen dataclass with ``events``, ``trades``, ``depth``,
-            ``depth_summary``, ``config``, and ``level``.
+            ``depth_summary``, ``config``, ``level`` and ``declarations``.
 
         Steps (L3 / per-order feeds)
         ----------------------------
@@ -468,6 +521,7 @@ class Pipeline:
         """
         run_ctx = ctx if ctx is not None else self._ctx
         config, loader, trade_source = self._for_run(source, run_ctx)
+        declarations = run_declarations(source, self._source)
         rows, trades, loaded_attrs = self._load_inputs(source, loader, trade_source)
 
         if self._source.level is Level.L2:
@@ -476,13 +530,17 @@ class Pipeline:
             # and ``events`` comes back empty but schema-valid.
             tables = {"events": empty_events(), "trades": trades, "depth": rows}
             _depth_metrics(tables, config)
-            return _result(tables, config, Level.L2)
+            return _result(tables, config, Level.L2, declarations)
 
         tables = {"events": rows, "trades": trades}
         for name, stage in STAGES:
             if name == "price_level_volume":
-                depth_override = self._source.compute_depth(
-                    tables["events"], config, source, run_ctx, loader
+                depth_override = (
+                    self._source.compute_depth(
+                        tables["events"], config, source, run_ctx, loader
+                    )
+                    if isinstance(self._source, SupportsComputeDepth)
+                    else None
                 )
                 if depth_override is not None:
                     tables["depth"], tables["depth_summary"] = depth_override
@@ -494,7 +552,7 @@ class Pipeline:
                     )
             stage(tables, config)
         tables["events"].attrs.update(loaded_attrs)
-        return _result(tables, config, Level.L3)
+        return _result(tables, config, Level.L3, declarations)
 
     def _load_inputs(
         self, source: Any, loader: Any, trade_source: Any
@@ -614,6 +672,7 @@ class Pipeline:
         config, loader, trade_source = self._for_run(
             source, ctx if ctx is not None else self._ctx
         )
+        declarations = run_declarations(source, self._source)
 
         rows, trades, _ = self._load_inputs(source, loader, trade_source)
         if level is Level.L3:
@@ -633,7 +692,7 @@ class Pipeline:
         engine = DepthMetricsEngine(config)
         last_quote = last_readable = pd.DataFrame()
         had_quotes = False
-        with ParquetAppender(output, config) as out:
+        with ParquetAppender(output, config, declarations) as out:
             for number, ((start, _), positions, at_trades) in enumerate(
                 zip(
                     windows,
@@ -805,7 +864,10 @@ STAGES: tuple[
 
 
 def _result(
-    tables: dict[str, pd.DataFrame], config: PipelineConfig, level: Level
+    tables: dict[str, pd.DataFrame],
+    config: PipelineConfig,
+    level: Level,
+    declarations: FeedDeclarations,
 ) -> PipelineResult:
     """Return the run's tables as a result, with the run's units on each."""
     events, trades = tables["events"], tables["trades"]
@@ -824,6 +886,7 @@ def _result(
         depth_summary=depth_summary,
         config=config,
         level=level,
+        declarations=declarations,
     )
 
 

@@ -15,7 +15,10 @@ inheritance required.
 | `TradeSource` | `load(events, source) → DataFrame` | Build the canonical trades DataFrame |
 | `DataWriter` | `write(data, dest)` | Serialize pipeline outputs |
 | `Source` | `level` · `feed_type` · `trade_attribution` · `settings` | The shape shared by every data source, file or live |
-| `OfflineSource` | factory methods | A `Source` that replays stored files (loader, trade source, writer) |
+| `OfflineSource` | `create_loader` · `create_trade_source` | A `Source` that replays stored files |
+| `SupportsWriter` | `create_writer` | Optional: write a run in the source's own format |
+| `SupportsComputeDepth` | `compute_depth` | Optional: supply the depth the venue ships |
+| `SupportsRequiredContext` | `required_context` | Optional: name the `RunContext` fields a run needs |
 | `LiveSource` | `snapshot` · `stream` · `shutdown_synthetic_events` | A `Source` that captures a live venue feed |
 | `Metric` | `compute(result)` · `prepare(frame)` | A measurement taken from a finished run, drawn as a level-less plot |
 
@@ -29,6 +32,9 @@ means a lost message. A source whose data has one clock declares `Clocks`, so
 the clock checks know there is nothing to compare. It carries typed `settings` and registers in the source
 registry (see [Sources](sources.md)). It may state the tick and lot size its
 data is usually on as `grid`, which a run's config starts from.
+
+A run carries these declarations on its result as `FeedDeclarations`, and
+`result.audit()` holds the run to them.
 
 A source keeps nothing from a run. The pipeline builds each run's loader and
 trade source from that run's config and `RunContext`, so one source can serve
@@ -50,6 +56,10 @@ many runs and many pipelines.
 
 ::: ob_analytics.protocols.clocks_of
 
+::: ob_analytics.protocols.FeedDeclarations
+
+::: ob_analytics.protocols.declarations_of
+
 ::: ob_analytics.protocols.grid_of
 
 ::: ob_analytics.protocols.EventLoader
@@ -65,6 +75,14 @@ many runs and many pipelines.
 ::: ob_analytics.protocols.Source
 
 ::: ob_analytics.protocols.OfflineSource
+
+::: ob_analytics.protocols.SupportsWriter
+
+::: ob_analytics.protocols.SupportsComputeDepth
+
+::: ob_analytics.protocols.SupportsRequiredContext
+
+::: ob_analytics.protocols.required_context_of
 
 ::: ob_analytics.protocols.RunContext
 

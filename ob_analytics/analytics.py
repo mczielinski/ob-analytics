@@ -2090,6 +2090,12 @@ def data_quality_summary(
     :data:`~ob_analytics.schemas.MAYBE_BAD_BOOK_ATTR`; the summary reports
     it as ``maybe_bad_book_records``.
 
+    For a pipeline run, call
+    :meth:`~ob_analytics.pipeline.PipelineResult.audit` instead: it passes
+    the run's tables, tick size and declarations
+    (:class:`~ob_analytics.protocols.FeedDeclarations`) for you.  Pass the
+    declarations here yourself only for tables that are not a run's.
+
     Like :func:`detect_stale_orders`, this takes either the pipeline's own
     tables or the tables :func:`~ob_analytics.visualization.display_result`
     converts for display, and measures the same crossing and the same stale
@@ -2108,8 +2114,7 @@ def data_quality_summary(
         The trades frame, with ``maker_event_id`` / ``taker_event_id``.
     feed_type : FeedType, optional
         The source's declared feed type, recorded on the summary and used to
-        interpret ``crossed_pct``.  Read it off the format:
-        ``getattr(fmt, "feed_type", FeedType.UNKNOWN)``.
+        interpret ``crossed_pct``.
     depth : pandas.DataFrame, optional
         A faithful price-level-volume frame (e.g. ``PipelineResult.depth``).
         When ``None`` it is computed from *events* via

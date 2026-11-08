@@ -22,6 +22,7 @@ from ob_analytics.capture_record import (
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import (
     Clocks,
+    FeedDeclarations,
     FeedType,
     Level,
     SequenceKind,
@@ -219,15 +220,55 @@ class TestPipelineAppliesTheRecord:
         )
         assert load_result(tmp_path / "out").config.tick_size == 0.001
 
-    def test_a_declaration_the_run_does_not_use_is_not_warned_about(self, tmp_path):
-        import warnings
-
+    def test_an_unknown_declaration_is_warned_about_and_left_out(self, tmp_path):
         record = {"tick_size": 0.001, "sequence_kind": "plugin_custom"}
         cap = _l2_capture(tmp_path / "cap", _FINE_ROWS, record)
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
+        with pytest.warns(UserWarning, match="sequence_kind"):
             result = Pipeline.from_source("depth_csv").run(cap)
         assert result.config.tick_size == 0.001
+        assert result.declarations.sequence_kind is SequenceKind.CONTIGUOUS
+
+    def test_the_result_carries_what_the_capture_recorded(self, tmp_path):
+        record = {
+            "source": "ccxt",
+            "tick_size": 0.001,
+            "feed_type": "price_levels",
+            "trade_attribution": "none",
+            "sequence_kind": "monotonic",
+            "clocks": "receive_only",
+            "sequence_restarts": 2,
+        }
+        cap = _l2_capture(tmp_path / "cap", _FINE_ROWS, record)
+        declared = Pipeline.from_source("depth_csv").run(cap).declarations
+        assert declared == FeedDeclarations(
+            feed_type=FeedType.PRICE_LEVELS,
+            trade_attribution=TradeAttribution.NONE,
+            sequence_kind=SequenceKind.MONOTONIC,
+            clocks=Clocks.RECEIVE_ONLY,
+            sequence_restarts=2,
+        )
+
+    def test_a_saved_result_keeps_its_declarations(self, tmp_path):
+        from ob_analytics.data import load_result, save_data
+
+        record = {"source": "ccxt", "tick_size": 0.001, "sequence_kind": "monotonic"}
+        cap = _l2_capture(tmp_path / "cap", _FINE_ROWS, record)
+        result = Pipeline.from_source("depth_csv").run(cap)
+        save_data(result, tmp_path / "out")
+        loaded = load_result(tmp_path / "out")
+        assert loaded.declarations == result.declarations
+        assert loaded.audit().to_dict() == result.audit().to_dict()
+
+    def test_run_windows_keeps_the_declarations(self, tmp_path):
+        from ob_analytics.data import load_result
+
+        record = {"source": "ccxt", "tick_size": 0.001, "sequence_kind": "monotonic"}
+        cap = _l2_capture(tmp_path / "cap", _FINE_ROWS, record)
+        pipeline = Pipeline.from_source("depth_csv")
+        pipeline.run_windows(cap, [pd.Timestamp(_T0 + 2, unit="ms")], tmp_path / "out")
+        loaded = load_result(tmp_path / "out")
+        assert loaded.declarations == pipeline.run(cap).declarations
+        assert loaded.declarations.sequence_kind is SequenceKind.MONOTONIC
 
     def test_a_size_between_lots_is_warned_about(self, tmp_path):
         rows = [("bid", 0.123, 10.004), ("ask", 0.125, 12.0)]

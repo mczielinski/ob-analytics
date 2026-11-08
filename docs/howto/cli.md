@@ -36,7 +36,7 @@ ob-analytics bitstamp-demo --input orders.csv -o demo_out/
 ob-analytics lobster-demo /path/to/lobster_data --trading-date 2012-06-21 -o demo_out/
 ```
 
-`process` saves each table with the run's config. `gallery` and
+`process` saves each table with the run's config and declarations. `gallery` and
 `audit --from-parquet` read the run back with
 [`load_result`](../api/data.md#ob_analytics.data.load_result), so a saved run
 keeps its tick size, lot size and display precision: a LOBSTER run still shows

@@ -203,6 +203,16 @@ _DEFAULT_LOT_KEY: str = "default"
 """Key for the lot size that applies to rows with no ``(venue, symbol)`` match
 in the :data:`LOT_SIZE_KEY` metadata map."""
 
+DECLARATIONS_KEY: bytes = b"ob_analytics_declarations"
+"""Parquet metadata key under which a run's declarations are stored.
+
+The value is a JSON object of the run's
+:class:`~ob_analytics.protocols.FeedDeclarations` (feed type, trade
+attribution, sequence kind, clocks and the capture's sequence restarts), so
+:func:`ob_analytics.data.load_result` gives back a result that
+:meth:`~ob_analytics.pipeline.PipelineResult.audit` holds to the same
+declarations as the run.  Bytes, as for :data:`CONFIG_KEY`."""
+
 CONFIG_KEY: bytes = b"ob_analytics_config"
 """Parquet metadata key under which a run's whole configuration is stored.
 
