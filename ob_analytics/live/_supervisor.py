@@ -850,10 +850,7 @@ def _open_manifest(
 ) -> CaptureManifest:
     """Start a new capture in *root*, or continue the one already there."""
     level = str(getattr(source, "level", Level.L3).value)
-    try:
-        existing = read_manifest(root)
-    except ValueError as exc:
-        raise ConfigError(f"{root}: {exc}") from exc
+    existing = read_manifest(root)
     if existing is None:
         if any(p.name != LOCK_NAME for p in root.iterdir()):
             raise ConfigError(

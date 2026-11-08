@@ -34,11 +34,13 @@ from loguru import logger
 
 from ob_analytics._utils import (
     attach_ingest_seq,
+    checked_labels,
     datetime_to_seconds_after_midnight,
     empty_trades,
     finite_floats,
     lots_to_size,
     price_to_ticks,
+    read_csv_file,
     seconds_after_midnight_to_datetime,
     size_to_lots,
 )
@@ -196,10 +198,8 @@ class LobsterLoader:
         msg_path = self._resolve_message_file(source)
 
         logger.info("LobsterLoader: reading {}", msg_path)
-        try:
-            raw = pd.read_csv(msg_path, header=None)
-        except pd.errors.EmptyDataError:
-            raw = pd.DataFrame()
+        where = f"LobsterLoader.load({msg_path})"
+        raw = read_csv_file(msg_path, where, header=None)
         # Given names, read_csv would take a seventh column as the index and
         # fill a missing one with NaN, so the count is checked first.
         if raw.shape[1] != len(_LOBSTER_COLS):
@@ -210,6 +210,20 @@ class LobsterLoader:
             )
         raw.columns = _LOBSTER_COLS
         self.message_rows = len(raw)
+        # Every column of a message file is a number.  A row cut short, or a
+        # cell that is empty or a word, is refused here rather than dropped
+        # by the event-type filter below or read as a time it is not.
+        for column, what in (("time", "time"), ("id", "order id")):
+            raw[column] = finite_floats(raw[column], what, where)
+        for column, allowed in (
+            ("event_type", range(1, 8)),
+            ("direction", _DIRECTION_MAP),
+        ):
+            raw[column] = finite_floats(raw[column], column, where)
+            checked_labels(raw[column], column, where, allowed=allowed)
+        raw[["event_type", "id", "direction"]] = raw[
+            ["event_type", "id", "direction"]
+        ].astype("int64")
 
         cfg = self._config
 
@@ -217,13 +231,13 @@ class LobsterLoader:
         # integer in ten-thousandths of a dollar, so divide by the feed's
         # encoding scale to reach the quote currency, then quantise to ticks.
         # The price is checked before the division, which a word would break.
-        raw_price = finite_floats(raw["price"], "price", str(msg_path))
+        raw_price = finite_floats(raw["price"], "price", where)
         raw["price"] = price_to_ticks(raw_price / LOBSTER_PRICE_DIVISOR, cfg.tick_size)
         # Canonical size is integer lots (issue #226).  LOBSTER's Size column is
         # already a whole share count and its ``lot_size`` default is 1, so this
         # keeps the venue's own integer rather than routing it through a float.
         raw["volume"] = size_to_lots(
-            finite_floats(raw["volume"], "size", str(msg_path)), cfg.lot_size
+            finite_floats(raw["volume"], "size", where), cfg.lot_size
         )
 
         raw["timestamp"] = seconds_after_midnight_to_datetime(
@@ -863,9 +877,12 @@ def _read_orderbook(orderbook_path: Path) -> np.ndarray:
     try:
         table = pd.read_csv(orderbook_path, header=None, dtype=np.float64)
     except ValueError:
-        # A word in the file: read it as it is so the message can name the row.
-        table = pd.read_csv(orderbook_path, header=None)
-    if table.shape[1] % 4:
+        # A word in the file: read it as it is so the message can name the
+        # row.  A file that is not a CSV file at all is refused here.
+        table = read_csv_file(
+            orderbook_path, f"LOBSTER orderbook {orderbook_path}", header=None
+        )
+    if table.shape[1] % 4 or table.shape[1] == 0:
         raise ConfigError(
             f"{orderbook_path} has {table.shape[1]} column(s); a LOBSTER "
             "orderbook file has four per level (ask price, ask size, bid "

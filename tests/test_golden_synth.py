@@ -210,3 +210,30 @@ def test_golden_session_is_reproducible() -> None:
         trade_source=SyntheticTradeSource(session),
     ).run(source=None)
     assert _fingerprints(result) == EXPECTED
+
+
+# ── Checks that do not come from the pipeline ─────────────────────────
+#
+# The fingerprints above only say the numbers have not moved.  These say the
+# numbers are right, from a source the pipeline does not compute: the
+# simulator's own book.  A market order sweeps the simulator's book from its
+# best price, so the first fill of each sweep is the simulator's touch just
+# before the order arrived.
+
+
+def test_the_depth_summary_touch_is_the_simulators(
+    golden_session: SynthSession, golden_result: PipelineResult
+) -> None:
+    trades = golden_session.trades
+    first_fills = trades.groupby("taker", sort=False).head(1)
+    assert len(first_fills) > 50
+
+    summary = golden_result.depth_summary
+    for t, price, side in zip(
+        first_fills["timestamp"], first_fills["price"], first_fills["direction"]
+    ):
+        # The last summary row strictly before the sweep: the book it met.
+        before = int(summary["timestamp"].searchsorted(t, side="left")) - 1
+        assert before >= 0
+        column = "best_ask_price" if side == "buy" else "best_bid_price"
+        assert summary[column].iloc[before] == price, (t, side)

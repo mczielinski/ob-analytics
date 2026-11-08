@@ -788,7 +788,7 @@ class TestManifest:
         (tmp_path / "manifest.json").write_text(
             json.dumps({"format": "ob-analytics-capture", "version": 99})
         )
-        with pytest.raises(ValueError, match="version 99"):
+        with pytest.raises(ConfigError, match="version 99"):
             read_manifest(tmp_path)
 
     def test_checks_flag_gaps_but_pass_a_clean_capture(self, tmp_path):

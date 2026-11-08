@@ -45,6 +45,9 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   same list, so it no longer offers `ccxt` and `cryptofeed`.
 - **`load_data` and `load_result` refuse a path that is not a folder with
   `ConfigError`** (#409). `load_data` raised `ValueError` for a file.
+- **`read_manifest` refuses a bad `manifest.json` with `ConfigError`**
+  (#418). It raised `ValueError`, `KeyError` or `TypeError`, depending on
+  what was wrong. `except ValueError` around it -> `except ConfigError`.
 
 ### Added
 
@@ -1101,6 +1104,20 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   applied. Use `bps_range` or `max_levels`, or filter the returned frames.
 
 ### Fixed
+
+- **Every reader refuses a bad file with `ConfigError`** (#418). The
+  Bitstamp, LOBSTER, `depth_csv`, DBN and Parquet readers and
+  `read_manifest` returned a frame built from some bad files, or raised an
+  error from pandas, pyarrow, databento or `json`. Each now raises
+  `ConfigError` when a file is not text, is not laid out as its format says,
+  ends part way through a row or record, or has a required cell that is
+  empty or holds something other than a number, a time, a side or an action
+  where one belongs. Some of these the readers used to take: a LOBSTER row
+  with an unknown event type was left out, a Bitstamp order with no time read
+  as `NaT`, a trade side that was not `buy` or `sell` read as unknown, and a
+  DBN file cut inside a record gave the records before the cut. An empty
+  side, venue time or Bitstamp trade order id is still allowed, and an empty
+  `trades.csv` reads as no trades.
 
 - **A Bitstamp order message that cannot be parsed ends the segment.** The
   Bitstamp capture left such a message out and carried on with a book that
