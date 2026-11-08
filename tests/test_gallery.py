@@ -834,7 +834,7 @@ class TestBuildGalleryModel:
         plot_result(result, "order_activity", level="L3", backend="matplotlib")
 
     def test_hidden_liquidity_overlay_is_clipped_to_the_zoom_and_price_window(
-        self, sample_csv_path
+        self, bundled_sample_result
     ) -> None:
         # #272: a full day can have hundreds of icebergs / thousands of hidden
         # trades; the overlay handed to the faces must be the subset inside the
@@ -843,9 +843,8 @@ class TestBuildGalleryModel:
         # the next test: the bundled sample has none (below).
         from ob_analytics.engine import HIDDEN_ORDER_ID
         from ob_analytics.hidden_liquidity import hidden_trades as find_hidden_trades
-        from ob_analytics.pipeline import Pipeline
 
-        result = Pipeline().run(sample_csv_path)
+        result = bundled_sample_result
         model = build_gallery_model(result)
         heatmap = next(c for c in model.concepts if c.key == "depth_heatmap").at(
             Level.L2

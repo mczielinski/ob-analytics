@@ -360,13 +360,8 @@ class TestSameInstantOrder:
 class TestAgainstTheBundledSample:
     """No level may hold volume that no order is resting on."""
 
-    def test_no_phantom_levels_on_the_bitstamp_sample(self, bitstamp_sample_dir):
-        from ob_analytics.bitstamp import BitstampSource
-        from ob_analytics.pipeline import Pipeline
-
-        result = Pipeline(source=BitstampSource()).run(
-            str(bitstamp_sample_dir / "orders.csv.gz")
-        )
+    def test_no_phantom_levels_on_the_bitstamp_sample(self, bundled_sample_result):
+        result = bundled_sample_result
         events, depth = result.events, result.depth
 
         # Read both books at the last real event, before the capture's

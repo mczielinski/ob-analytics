@@ -46,6 +46,36 @@ def sample_csv_path() -> Path:
 
 
 @pytest.fixture(scope="session")
+def _bundled_sample_run():
+    """The bundled sample through the default pipeline, once per session.
+
+    The run takes ~15s, and a dozen modules need it. Do not use this one in a
+    test: use ``bundled_sample_result``, which hands each module its own copy.
+    """
+    if not SAMPLE_CSV.exists():
+        pytest.skip(f"Sample data not found: {SAMPLE_CSV}")
+    from ob_analytics.pipeline import Pipeline
+
+    return Pipeline().run(SAMPLE_CSV)
+
+
+@pytest.fixture(scope="module")
+def bundled_sample_result(_bundled_sample_run):
+    """A copy of the session's bundled-sample run, one per module.
+
+    Each module used to run the sample itself; the copy keeps that isolation
+    (a module that changes a frame does not change it for the next one) for a
+    fraction of the cost.
+    """
+    import dataclasses
+
+    run = _bundled_sample_run
+    return dataclasses.replace(
+        run, **{name: frame.copy() for name, frame in run.tables().items()}
+    )
+
+
+@pytest.fixture(scope="session")
 def _sample_events_cache() -> pd.DataFrame:
     """Bundled sample loaded once per session (the load costs ~15s)."""
     if not SAMPLE_CSV.exists():
