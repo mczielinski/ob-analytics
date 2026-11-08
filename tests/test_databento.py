@@ -45,8 +45,8 @@ from ob_analytics.protocols import (
     OfflineSource,
     RunContext,
     SequenceKind,
+    required_context_of,
     sequence_kind_of,
-    trade_attribution_of,
 )
 from ob_analytics.schemas import (
     MAYBE_BAD_BOOK_ATTR,
@@ -695,7 +695,7 @@ class TestSource:
         assert source.name == "databento"
 
     def test_it_needs_no_run_context(self):
-        assert DatabentoSource().required_context() == []
+        assert required_context_of(DatabentoSource()) == []
 
     def test_its_sequence_only_rises(self):
         # Trade and fill records leave the events table, and a file usually
@@ -968,15 +968,7 @@ class TestExecutionThenReduction:
 def audit_frame(frame: pd.DataFrame) -> DataQualitySummary:
     """Run *frame* through the pipeline and score it the way ``audit`` does."""
     source = DatabentoSource()
-    result = Pipeline(_config(track_sequence=True), source=source).run(frame)
-    return data_quality_summary(
-        result.events,
-        result.trades,
-        feed_type=source.feed_type,
-        depth=result.depth,
-        sequence_kind=sequence_kind_of(source),
-        trade_attribution=trade_attribution_of(source),
-    )
+    return Pipeline(_config(track_sequence=True), source=source).run(frame).audit()
 
 
 class TestSequenceCheck:

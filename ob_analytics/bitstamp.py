@@ -699,21 +699,6 @@ class BitstampSource:
     ) -> DataWriter:
         return BitstampWriter(config)
 
-    def compute_depth(
-        self,
-        events: pd.DataFrame,
-        config: Any,
-        source: Any,
-        ctx: RunContext,
-        loader: Any,
-    ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
-        # Bitstamp uses the standard price_level_volume -> depth_metrics path.
-        return None
-
-    def required_context(self) -> list[str]:
-        # Bitstamp captures are self-describing (timestamps carry the date).
-        return []
-
     # -- live capability (delegated to the WebSocket engine, lazily) --------
 
     def _live_engine(self) -> Any:

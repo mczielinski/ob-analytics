@@ -216,6 +216,96 @@ def clocks_of(source: Any) -> Clocks:
     return Clocks(getattr(source, "clocks", Clocks.BOTH))
 
 
+@dataclass(frozen=True)
+class FeedDeclarations:
+    """What a run's data is declared to show, which ``audit`` holds it to.
+
+    A run gets these from its source (:func:`declarations_of`), and a live
+    capture's ``meta.json`` replaces any of them it recorded (see
+    :func:`~ob_analytics.capture_record.run_declarations`).  A
+    :class:`~ob_analytics.pipeline.PipelineResult` carries them, and a saved
+    result keeps them, so
+    :meth:`~ob_analytics.pipeline.PipelineResult.audit` reads them from the
+    result.  The defaults are what an undeclared source is read as.
+
+    Attributes
+    ----------
+    feed_type : FeedType
+        The crossing invariant (:class:`FeedType`).
+    trade_attribution : TradeAttribution
+        Which orders of a trade the feed names (:class:`TradeAttribution`).
+    sequence_kind : SequenceKind
+        What the venue ``sequence`` promises (:class:`SequenceKind`).
+    clocks : Clocks
+        Which clocks the book rows carry (:class:`Clocks`).
+    sequence_restarts : int
+        How many times a capture's venue sequence started again at a new
+        opening book.  This is not a declaration but a count the capture
+        records; ``audit`` does not count these steps back as faults.  ``0``
+        for data that is not a capture.
+    """
+
+    feed_type: FeedType = FeedType.UNKNOWN
+    trade_attribution: TradeAttribution = TradeAttribution.BOTH
+    sequence_kind: SequenceKind = SequenceKind.CONTIGUOUS
+    clocks: Clocks = Clocks.BOTH
+    sequence_restarts: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the declarations as JSON-serialisable values."""
+        return {
+            "feed_type": self.feed_type.value,
+            "trade_attribution": self.trade_attribution.value,
+            "sequence_kind": self.sequence_kind.value,
+            "clocks": self.clocks.value,
+            "sequence_restarts": self.sequence_restarts,
+        }
+
+    @classmethod
+    def from_dict(cls, fields: Mapping[str, Any]) -> FeedDeclarations:
+        """Read declarations written by :meth:`to_dict`.
+
+        A field that is missing keeps its default.
+
+        Raises
+        ------
+        ValueError
+            If a field holds a value this version does not know.
+        """
+        default = cls()
+        return cls(
+            feed_type=FeedType(fields.get("feed_type", default.feed_type)),
+            trade_attribution=TradeAttribution(
+                fields.get("trade_attribution", default.trade_attribution)
+            ),
+            sequence_kind=SequenceKind(
+                fields.get("sequence_kind", default.sequence_kind)
+            ),
+            clocks=Clocks(fields.get("clocks", default.clocks)),
+            sequence_restarts=int(
+                fields.get("sequence_restarts", default.sequence_restarts)
+            ),
+        )
+
+
+def declarations_of(source: Any) -> FeedDeclarations:
+    """Return the :class:`FeedDeclarations` *source* makes.
+
+    A declaration the source does not make keeps the default, as
+    :func:`trade_attribution_of`, :func:`sequence_kind_of` and
+    :func:`clocks_of` read it; a source that declares no ``feed_type`` is
+    :attr:`FeedType.UNKNOWN`.  ``None`` declares nothing.
+    """
+    if source is None:
+        return FeedDeclarations()
+    return FeedDeclarations(
+        feed_type=FeedType(getattr(source, "feed_type", FeedType.UNKNOWN)),
+        trade_attribution=trade_attribution_of(source),
+        sequence_kind=sequence_kind_of(source),
+        clocks=clocks_of(source),
+    )
+
+
 def grid_of(source: Any) -> InstrumentGrid:
     """Return the :class:`~ob_analytics.config.InstrumentGrid` *source* declares.
 
@@ -682,10 +772,17 @@ class Source(Protocol):
 class OfflineSource(Source, Protocol):
     """A :class:`Source` that replays stored files into the shared schema.
 
-    Bundles the per-source factories the pipeline needs to read from a path:
-    how to load events (or depth), how to acquire trades, and (optionally) how
-    to write results or compute depth directly.  Pass instances to
+    Requires only the two factories every replay needs: how to load events
+    (or depth) and how to acquire trades.  Pass instances to
     ``Pipeline(source=...)``.
+
+    A source MAY also implement the optional capabilities
+    :class:`SupportsWriter` (write a run back in the source's own format),
+    :class:`SupportsComputeDepth` (supply its own depth) and
+    :class:`SupportsRequiredContext` (name the :class:`RunContext` fields it
+    needs).  Each is a separate protocol, so an offline source never has to
+    define a method only to say it does not use it; callers detect them with
+    ``isinstance``, as the live runner detects ``SupportsDiagnostics``.
     """
 
     def create_loader(self, config: Any, ctx: RunContext) -> EventLoader | DepthSource:
@@ -708,9 +805,28 @@ class OfflineSource(Source, Protocol):
         """
         ...
 
-    def create_writer(self, config: Any, ctx: RunContext) -> DataWriter | None:
-        """Return a writer for this source, or ``None`` if unsupported."""
+
+@runtime_checkable
+class SupportsWriter(Protocol):
+    """Optional offline capability: write a run in the source's own format.
+
+    :func:`~ob_analytics.data.save_data` with ``fmt=<source name>`` uses it,
+    so a venue writer lives on its source rather than in a second registry.
+    """
+
+    def create_writer(self, config: Any, ctx: RunContext) -> DataWriter:
+        """Return the writer for this source."""
         ...
+
+
+@runtime_checkable
+class SupportsComputeDepth(Protocol):
+    """Optional offline capability: supply the depth tables for a run.
+
+    The pipeline calls :meth:`compute_depth` in place of its own depth stage
+    when the source implements it.  LOBSTER reads the venue's orderbook file
+    this way.
+    """
 
     def compute_depth(
         self,
@@ -720,20 +836,35 @@ class OfflineSource(Source, Protocol):
         ctx: RunContext,
         loader: Any,
     ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
-        """Return ``(depth, depth_summary)`` to override the standard
-        depth pipeline, or ``None`` to use it.
+        """Return ``(depth, depth_summary)``, or ``None`` to use the standard stage.
 
         *loader* is the run's loader, after it read *events*.  LOBSTER takes
-        the orderbook file it found from it.
+        the orderbook file it found from it, and returns ``None`` when there
+        is none.
         """
         ...
+
+
+@runtime_checkable
+class SupportsRequiredContext(Protocol):
+    """Optional offline capability: name the :class:`RunContext` fields a run needs.
+
+    LOBSTER needs ``trading_date`` because its file names carry no date.  The
+    CLI checks these before a run starts.  Read it with
+    :func:`required_context_of`, which gives ``[]`` for a source without it.
+    """
 
     def required_context(self) -> list[str]:
-        """:class:`RunContext` field names this source requires.
-
-        E.g. LOBSTER returns ``["trading_date"]`` because its filenames carry
-        no date; Bitstamp returns ``[]``.  Lets the CLI/pipeline validate
-        required context generically instead of special-casing source names.
-        Callers should treat a missing method as ``[]`` (structural default).
-        """
+        """Return the :class:`RunContext` field names this source requires."""
         ...
+
+
+def required_context_of(source: Any) -> list[str]:
+    """Return the :class:`RunContext` fields *source* requires.
+
+    ``[]`` for a source that does not implement
+    :class:`SupportsRequiredContext`.
+    """
+    if isinstance(source, SupportsRequiredContext):
+        return list(source.required_context())
+    return []

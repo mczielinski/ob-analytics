@@ -44,12 +44,15 @@ two coordinates, `level` (`Level.L2` / `Level.L3`) and `feed_type`
 (`FeedType`), and carries typed `settings` (a `SourceSettings`). It then
 implements one or both **capabilities**:
 
-- **`OfflineSource`** — replay stored files. The per-venue factories the
-  pipeline needs: a loader (`EventLoader` for L3, `DepthSource` for L2), a trade
-  source (`TradeSource`), and — optionally — a writer (`DataWriter`), plus
-  `compute_depth(...)`. The pipeline calls the factories once for each run,
-  with that run's config and `RunContext`, so a source keeps nothing from one
-  run to the next.
+- **`OfflineSource`** — replay stored files. Two factories are required: a
+  loader (`EventLoader` for L3, `DepthSource` for L2) and a trade source
+  (`TradeSource`). The pipeline calls them once for each run, with that run's
+  config and `RunContext`, so a source keeps nothing from one run to the next.
+  Three more capabilities are optional, each its own small protocol:
+  `SupportsWriter` (`create_writer`, a writer in the venue's own format),
+  `SupportsComputeDepth` (`compute_depth`, depth the venue ships, as LOBSTER
+  does) and `SupportsRequiredContext` (`required_context`, the `RunContext`
+  fields a run needs). Leave out the ones you do not use.
 - **`LiveSource`** — capture a venue's live feed: `snapshot` / `stream` /
   `shutdown_synthetic_events` (see [the live capability](#the-live-capability)).
 
@@ -127,14 +130,10 @@ class CoinbaseSource:
         # loader is this run's loader, for trades that come off the same read.
         return CoinbaseTradeReader(config)
 
-    def create_writer(self, config: PipelineConfig, ctx: RunContext):
-        return None  # no venue-specific writer; use save_data(fmt="parquet")
-
-    def compute_depth(self, events, config, source, ctx, loader):
-        return None  # use the standard price-level depth pipeline
-
-    def required_context(self) -> list[str]:
-        return []  # e.g. ["trading_date"] if filenames carry no date
+    # Optional: define required_context to name RunContext fields a run
+    # needs, e.g. ["trading_date"] if file names carry no date.  With no
+    # create_writer, save_data(fmt="parquet") still saves the run; with no
+    # compute_depth, the standard price-level depth stage runs.
 
 
 register_source("coinbase", CoinbaseSource)
@@ -168,11 +167,12 @@ The pipeline adds `type` itself. The trade source's frame needs `timestamp`,
 `maker_event_id` and `taker_event_id`. [The schema](schema.md) says what each
 column means, including how `volume` and `fill` change over an order's life.
 
-!!! warning "`compute_depth` must be defined"
-    The pipeline calls `source.compute_depth(...)` unconditionally. **Return
-    `None`** to use the standard price-level depth pipeline (what almost every
-    venue wants). Only return a `(depth, depth_summary)` tuple if your venue
-    ships ground-truth depth — as LOBSTER does from its orderbook file.
+!!! note "Define `compute_depth` only for depth the venue ships"
+    Without it the pipeline runs its standard price-level depth stage, which
+    is what almost every venue wants. Define it only if your venue ships
+    ground-truth depth, as LOBSTER does from its orderbook file. Return a
+    `(depth, depth_summary)` tuple, or `None` to fall back to the standard
+    stage for one run.
 
 Using it — programmatically and from the CLI:
 

@@ -341,8 +341,16 @@ How long an order has rested, in seconds. Named `age_s`.
 **Source**:
 A venue ob-analytics can read, declaring its name, resolution, feed type and
 settings. It replays stored files (`OfflineSource`), captures a running venue
-(`LiveSource`), or both.
+(`LiveSource`), or both. Anything more a source can do is a small optional
+protocol it may implement, such as `SupportsWriter` or `SupportsDiagnostics`.
 _Avoid_: format, connector, adapter, driver, backend
+
+**Declarations**:
+What a run's data is declared to show: feed type, trade attribution, sequence
+kind and clocks. They come from the source, and a capture record replaces any
+it holds. A result carries them (`FeedDeclarations`), saves them with its
+tables, and `audit` holds the run to them.
+_Avoid_: profile, metadata
 
 **Credential**:
 A key a source needs to read a venue's data, such as an API key or a private
@@ -407,7 +415,8 @@ The `meta.json` a capture writes beside each segment's files. Most of it is
 counters; the part that says how to read the data back is the source that made
 the capture, what that source declares, and the instrument's tick and lot size.
 Typed `CaptureRecord`, read with `read_record`. The pipeline uses its tick and
-lot size when the caller sets none.
+lot size when the caller sets none, and its declarations in place of the
+reading source's.
 _Avoid_: meta, metadata (that is the Parquet key-value metadata)
 
 **Origin**:

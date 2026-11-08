@@ -34,6 +34,7 @@ import pyarrow.parquet as pq
 from ob_analytics import _engine_frames
 from ob_analytics._utils import epoch_ns
 from ob_analytics.exceptions import ConfigError
+from ob_analytics.protocols import FeedDeclarations
 from ob_analytics.schemas import lot_sizes_from_config, tick_sizes_from_config
 
 #: How far before a window's start its seed rows are placed.  Strictly before
@@ -187,13 +188,22 @@ class ParquetAppender:
         The output folder, created when missing.
     config : PipelineConfig
         The run's configuration; its tick and lot sizes are recorded.
+    declarations : FeedDeclarations, optional
+        The run's declarations, recorded so
+        :func:`~ob_analytics.data.load_result` gives them back.
     """
 
-    def __init__(self, dest: str | Path, config: Any) -> None:
+    def __init__(
+        self,
+        dest: str | Path,
+        config: Any,
+        declarations: FeedDeclarations | None = None,
+    ) -> None:
         self.dest = Path(dest)
         self.dest.mkdir(parents=True, exist_ok=True)
         self._tick_sizes = tick_sizes_from_config(config)
         self._lot_sizes = lot_sizes_from_config(config)
+        self._declarations = declarations
         self._writers: dict[str, pq.ParquetWriter] = {}
 
     def _working(self, name: str) -> Path:
@@ -212,7 +222,10 @@ class ParquetAppender:
         from ob_analytics.data import _to_arrow_table
 
         table = _to_arrow_table(
-            frame, tick_sizes=self._tick_sizes, lot_sizes=self._lot_sizes
+            frame,
+            tick_sizes=self._tick_sizes,
+            lot_sizes=self._lot_sizes,
+            declarations=self._declarations,
         )
         writer = self._writers.get(name)
         if writer is None:
