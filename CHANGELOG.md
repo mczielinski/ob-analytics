@@ -632,6 +632,24 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Changed
 
+- **Every measure reports in the instrument's own units** (#400). VPIN,
+  Kyle's λ, order flow imbalance, `transaction_costs`, `cost_summary`,
+  `amihud`, `roll_spread`, `trade_impacts` and the `l1_ticker` and
+  `book_signals` metrics read `tick_size` and `lot_size` from the frame's
+  `attrs` and return prices in the quote currency and sizes in BTC, shares or
+  contracts, whether they are given a run's integer ticks and lots or a
+  display-unit frame. `result.metric(name)`, `result.plot(name)` and the bare
+  function now give the same numbers: `result.plot` and the gallery compute a
+  metric on the run as stored instead of on `display_result`, which made
+  Amihud differ by 10^10 between the two. A frame with integer prices or sizes
+  and no `tick_size` or `lot_size` on its `attrs` now raises `ConfigError`.
+  `amihud`, `roll_spread`, `transaction_costs` and `book_signals` are
+  registered metrics, so `result.metric("amihud")` and
+  `result.plot("transaction_costs")` work and each is a gallery card; the
+  demos no longer add their own cost card. `compute_kyle_lambda` takes
+  `sign_method` and `quotes` like `compute_vpin` and `order_flow_imbalance`,
+  so it no longer needs a `direction` column.
+
 - **Each core helper is written once** (#402). Datetimes become int64
   nanoseconds through one `epoch_ns`, and the loaders parse timestamp columns
   through one `to_utc_ns`. One `validate_columns`, in `schemas`, checks

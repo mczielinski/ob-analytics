@@ -12,9 +12,11 @@ A registered value is a :class:`~ob_analytics.protocols.Metric` *instance*, not
 a class: a metric carries no per-run construction, so the object registered is
 the object called.
 
-Five metrics ship with the package and are registered on import:
+Nine metrics ship with the package and are registered on import:
 
 * ``"l1_ticker"`` — the Level 1 quote: best bid, best ask and last trade.
+* ``"book_signals"`` — mid, micro-price and order-book imbalance
+  (:func:`~ob_analytics.depth.depth_signals`).
 * ``"vpin"`` — VPIN (:func:`~ob_analytics.flow_toxicity.compute_vpin`).
 * ``"kyle_lambda"`` — Kyle's λ
   (:func:`~ob_analytics.flow_toxicity.compute_kyle_lambda`).
@@ -22,13 +24,25 @@ Five metrics ship with the package and are registered on import:
   (:func:`~ob_analytics.flow_toxicity.order_flow_imbalance`).
 * ``"ofi_horizon"`` — order flow imbalance over several horizons
   (:func:`~ob_analytics.flow_toxicity.ofi_by_horizon`).
+* ``"transaction_costs"`` — effective and realized spread and price impact
+  per trade (:func:`~ob_analytics.cost.transaction_costs`).
+* ``"amihud"`` — Amihud illiquidity (:func:`~ob_analytics.cost.amihud`).
+* ``"roll_spread"`` — Roll's implied spread
+  (:func:`~ob_analytics.cost.roll_spread`).
 
-Each uses the defaults of the function it wraps.  Pass that function's
+Each uses the defaults of the function it wraps, and the run's own
+``depth_summary`` wherever that function takes quotes.  Pass that function's
 settings as keyword arguments to change them, for example
 ``result.metric("vpin", n_buckets=20)`` or
-``result.plot("vpin", n_buckets=20, threshold=0.8)``.  A size setting is in
-the instrument's own units (BTC, shares, contracts) whichever of the two is
-called, so ``bucket_volume=0.5`` means 0.5 BTC in both.
+``result.plot("vpin", n_buckets=20, threshold=0.8)``.
+
+Units.  Every metric reports in the instrument's own units — prices in the
+quote currency and sizes in BTC, shares or contracts — and so does every
+function it wraps, whether it is given a run's integer ticks and lots or
+display prices and sizes.  ``result.metric(name)``, ``result.plot(name)`` and
+the bare function therefore give the same numbers.  A size setting is in the
+instrument's own units too, so ``bucket_volume=0.5`` means 0.5 BTC in all
+three.
 """
 
 from __future__ import annotations
@@ -39,7 +53,9 @@ from typing import Any
 import pandas as pd
 
 from ob_analytics._registry import Registry, load_plugins
-from ob_analytics.depth import _quoted, get_spread
+from ob_analytics._utils import price_scale, size_scale
+from ob_analytics.cost import amihud, roll_spread, transaction_costs
+from ob_analytics.depth import _quoted, depth_signals, get_spread, imbalance_levels
 from ob_analytics.flow_toxicity import (
     OFI_HORIZONS,
     KyleLambdaResult,
@@ -126,6 +142,30 @@ def load_metric_plugins(*, force: bool = False) -> list[str]:
 _EVERY_LEVEL: tuple[Level, ...] = (Level.L2, Level.L3)
 
 
+def _in_units(
+    frame: pd.DataFrame,
+    units_of: pd.DataFrame,
+    prices: tuple[str, ...],
+    sizes: tuple[str, ...],
+    context: str,
+) -> pd.DataFrame:
+    """Return *frame* with its *prices* and *sizes* columns in the instrument's units.
+
+    The scales are read from *units_of*, the frame the columns were taken
+    from: its ``best_bid_price`` for prices and ``best_bid_vol`` for sizes,
+    so a column derived from them (a mid, a depth bin) is scaled as they are.
+    A float frame is already in those units and is returned unchanged in
+    value.
+    """
+    price = price_scale(units_of, context, "best_bid_price")
+    size = size_scale(units_of, context, "best_bid_vol")
+    columns = {c: price for c in prices if c in frame.columns}
+    columns.update({c: size for c in sizes if c in frame.columns})
+    return frame.assign(
+        **{c: frame[c].to_numpy(dtype=float) / scale for c, scale in columns.items()}
+    )
+
+
 class L1TickerMetric:
     """The Level 1 quote: best bid, best ask and last trade through the run.
 
@@ -143,7 +183,8 @@ class L1TickerMetric:
         """Return ``timestamp``, the touch prices and sizes, and the last trade.
 
         Columns: ``timestamp``, ``best_bid_price``, ``best_bid_vol``,
-        ``best_ask_price``, ``best_ask_vol``, ``last_price``, ``last_volume``.
+        ``best_ask_price``, ``best_ask_vol``, ``last_price``, ``last_volume``,
+        prices in the quote currency and sizes in the instrument's units.
         Each row carries every value forward from the rows before it, so a
         row is the whole quote at that time.  ``last_price`` is ``NaN`` before
         the first trade, and a side with no orders has a ``NaN`` price and
@@ -151,19 +192,22 @@ class L1TickerMetric:
         as :func:`~ob_analytics.depth.readable_quotes`.  The other side is
         still shown.
         """
-        quotes = get_spread(result.depth_summary).astype(
-            {
-                c: float
-                for c in (
-                    "best_bid_price",
-                    "best_bid_vol",
-                    "best_ask_price",
-                    "best_ask_vol",
-                )
-            }
+        quotes = _in_units(
+            get_spread(result.depth_summary),
+            result.depth_summary,
+            ("best_bid_price", "best_ask_price"),
+            ("best_bid_vol", "best_ask_vol"),
+            "l1_ticker",
         )
-        last = result.trades[["timestamp", "price", "volume"]].rename(
-            columns={"price": "last_price", "volume": "last_volume"}
+        trades = result.trades
+        last = pd.DataFrame(
+            {
+                "timestamp": trades["timestamp"],
+                "last_price": trades["price"].to_numpy(dtype=float)
+                / price_scale(trades, "l1_ticker"),
+                "last_volume": trades["volume"].to_numpy(dtype=float)
+                / size_scale(trades, "l1_ticker"),
+            }
         )
         # A quote and a trade at the same time keep that order: stable sort.
         frame = pd.concat([quotes, last], ignore_index=True)
@@ -207,6 +251,7 @@ class VpinMetric:
             bucket_volume=bucket_volume,
             n_buckets=n_buckets,
             sign_method=sign_method,
+            quotes=result.depth_summary,
         )
 
     def prepare(self, frame: pd.DataFrame, *, threshold: float = 0.7) -> dict[str, Any]:
@@ -234,13 +279,20 @@ class KyleLambdaMetric:
         result: Any,
         *,
         window: str = "5min",
+        sign_method: str | None = None,
         n_boot: int = 1000,
         ci_level: float = 0.95,
         seed: int | None = 0,
     ) -> pd.DataFrame:
         """Return the regression table; the settings are ``compute_kyle_lambda``'s."""
         kyle = compute_kyle_lambda(
-            result.trades, window, n_boot=n_boot, ci_level=ci_level, seed=seed
+            result.trades,
+            window,
+            sign_method=sign_method,
+            quotes=result.depth_summary,
+            n_boot=n_boot,
+            ci_level=ci_level,
+            seed=seed,
         )
         frame = kyle.regression_df.copy()
         frame.attrs.update(
@@ -277,8 +329,8 @@ class KyleLambdaMetric:
 class OrderFlowImbalanceMetric:
     """Order flow imbalance, from :func:`~ob_analytics.flow_toxicity.order_flow_imbalance`.
 
-    The table adds ``last_price``, the last trade price in each window, which
-    the face draws as a price line behind the bars.
+    The table adds ``last_price``, the last trade price in each window in the
+    quote currency, which the face draws as a price line behind the bars.
     """
 
     name = "order_flow_imbalance"
@@ -293,9 +345,12 @@ class OrderFlowImbalanceMetric:
         sign_method: str | None = None,
     ) -> pd.DataFrame:
         """Return the per-window table; the settings are ``order_flow_imbalance``'s."""
-        # The same time bars that cut the windows give each one's last price.
-        frame, windows = _ofi_windows(result.trades, window, sign_method, None)
-        return frame.assign(last_price=windows["close"])
+        # The same time bars that cut the windows give each one's last price;
+        # the bars keep the trades' units, so the price is converted here.
+        trades = result.trades
+        frame, windows = _ofi_windows(trades, window, sign_method, result.depth_summary)
+        close = windows["close"].to_numpy(dtype=float)
+        return frame.assign(last_price=close / price_scale(trades, "ofi"))
 
     def prepare(self, frame: pd.DataFrame) -> dict[str, Any]:
         """Payload for the bars, with the window prices as the price line."""
@@ -324,7 +379,11 @@ class OfiHorizonMetric:
     ) -> pd.DataFrame:
         """Return the grid table; the settings are ``ofi_by_horizon``'s."""
         return ofi_by_horizon(
-            result.trades, horizons=horizons, grid=grid, sign_method=sign_method
+            result.trades,
+            horizons=horizons,
+            grid=grid,
+            sign_method=sign_method,
+            quotes=result.depth_summary,
         )
 
     def prepare(
@@ -342,11 +401,133 @@ class OfiHorizonMetric:
         )
 
 
+class BookSignalsMetric:
+    """Mid, micro-price and order-book imbalance, from :func:`~ob_analytics.depth.depth_signals`.
+
+    The table is the run's ``depth_summary`` with the signal columns added,
+    prices in the quote currency and sizes in the instrument's units.  Its
+    face draws the micro-price against the mid over an imbalance strip.
+    """
+
+    name = "book_signals"
+    title = "Book Signals (micro-price & OBI)"
+    levels: tuple[Level, ...] = _EVERY_LEVEL
+
+    def compute(self, result: Any, *, depth_levels: int = 5) -> pd.DataFrame:
+        """Return the summary with ``mid_price``, ``micro_price``, ``obi`` and ``obi_depth``.
+
+        *depth_levels* is ``depth_signals``'s: the depth of ``obi_depth``.  The
+        level count used, after clamping to the bins present, is in
+        ``attrs["depth_levels"]``.
+        """
+        summary = result.depth_summary
+        signals = depth_signals(summary, depth_levels=depth_levels)
+        frame = _in_units(
+            signals,
+            summary,
+            ("best_bid_price", "best_ask_price", "mid_price", "micro_price"),
+            tuple(c for c in signals.columns if "vol" in c),
+            "book_signals",
+        )
+        frame.attrs["depth_levels"] = imbalance_levels(summary, depth_levels)
+        return frame
+
+    def prepare(
+        self,
+        frame: pd.DataFrame,
+        *,
+        start_time: pd.Timestamp | None = None,
+        end_time: pd.Timestamp | None = None,
+    ) -> dict[str, Any]:
+        """Payload for the face, for the rows from *start_time* to *end_time*."""
+        from ob_analytics.visualization._data import prepare_book_signals_data
+
+        return prepare_book_signals_data(
+            frame,
+            levels=frame.attrs.get("depth_levels", 5),
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+
+class TransactionCostsMetric:
+    """Per-trade costs, from :func:`~ob_analytics.cost.transaction_costs`.
+
+    Measured against the run's own ``depth_summary``.  The face draws the
+    effective and realized spread in basis points, averaged over windows.
+    """
+
+    name = "transaction_costs"
+    title = "Transaction Costs (effective, realized, impact)"
+    levels: tuple[Level, ...] = _EVERY_LEVEL
+
+    def compute(
+        self,
+        result: Any,
+        *,
+        horizon: str = "1min",
+        sign_method: str | None = None,
+    ) -> pd.DataFrame:
+        """Return the per-trade cost table; the settings are ``transaction_costs``'s."""
+        return transaction_costs(
+            result.trades,
+            result.depth_summary,
+            horizon=horizon,
+            sign_method=sign_method,
+        )
+
+    def prepare(self, frame: pd.DataFrame, *, window: str = "1min") -> dict[str, Any]:
+        """Payload for the face; *window* is the span the lines average over."""
+        from ob_analytics.visualization._data import prepare_transaction_costs_data
+
+        return prepare_transaction_costs_data(frame, window=window)
+
+
+class AmihudMetric:
+    """Amihud illiquidity, from :func:`~ob_analytics.cost.amihud`."""
+
+    name = "amihud"
+    title = "Amihud Illiquidity"
+    levels: tuple[Level, ...] = _EVERY_LEVEL
+
+    def compute(self, result: Any, *, window: str | None = None) -> pd.DataFrame:
+        """Return the per-window table; the setting is ``amihud``'s."""
+        return amihud(result.trades, window=window)
+
+    def prepare(self, frame: pd.DataFrame) -> dict[str, Any]:
+        """Payload for the face: one point per window."""
+        from ob_analytics.visualization._data import prepare_amihud_data
+
+        return prepare_amihud_data(frame)
+
+
+class RollSpreadMetric:
+    """Roll's implied spread, from :func:`~ob_analytics.cost.roll_spread`."""
+
+    name = "roll_spread"
+    title = "Roll Spread"
+    levels: tuple[Level, ...] = _EVERY_LEVEL
+
+    def compute(self, result: Any, *, window: str | None = None) -> pd.DataFrame:
+        """Return the per-window table; the setting is ``roll_spread``'s."""
+        return roll_spread(result.trades, window=window)
+
+    def prepare(self, frame: pd.DataFrame) -> dict[str, Any]:
+        """Payload for the face: one point per window."""
+        from ob_analytics.visualization._data import prepare_roll_spread_data
+
+        return prepare_roll_spread_data(frame)
+
+
 for _metric in (
     L1TickerMetric(),
+    BookSignalsMetric(),
     VpinMetric(),
     KyleLambdaMetric(),
     OrderFlowImbalanceMetric(),
     OfiHorizonMetric(),
+    TransactionCostsMetric(),
+    AmihudMetric(),
+    RollSpreadMetric(),
 ):
     register_metric(_metric)

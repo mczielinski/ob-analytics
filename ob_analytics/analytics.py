@@ -26,7 +26,13 @@ import pandas as pd
 from loguru import logger
 
 from ob_analytics import _engine_frames, engine
-from ob_analytics._utils import epoch_ns, ticks_to_price, validate_non_empty
+from ob_analytics._utils import (
+    epoch_ns,
+    price_scale,
+    size_scale,
+    ticks_to_price,
+    validate_non_empty,
+)
 from ob_analytics.depth import (
     BookLevels,
     _book_levels,
@@ -177,9 +183,19 @@ def trade_impacts(trades: pd.DataFrame) -> pd.DataFrame:
         A DataFrame summarising market order impacts with columns:
         ``id``, ``min_price``, ``max_price``, ``vwap``, ``hits``, ``vol``,
         ``start_time``, ``end_time``, ``dir``.  The price-valued columns
-        (``min_price``, ``max_price``, ``vwap``) are in the same integer-tick
-        units as ``trades["price"]``; multiply by ``tick_size`` for the quote
-        currency.
+        (``min_price``, ``max_price``, ``vwap``) are in the quote currency
+        and ``vol`` in the instrument's own units, whether the trades hold
+        integer ticks and lots (with ``tick_size`` and ``lot_size`` on the
+        frame's ``attrs``, as on a pipeline result) or display prices and
+        sizes.
+
+    Raises
+    ------
+    ConfigError
+        If a required column is missing, or the prices or sizes are integers
+        and the frame carries no ``tick_size`` or ``lot_size``.
+    ObAnalyticsError
+        If *trades* is empty.
     """
     validate_columns(
         trades,
@@ -188,19 +204,21 @@ def trade_impacts(trades: pd.DataFrame) -> pd.DataFrame:
     )
     validate_non_empty(trades, "trade_impacts")
 
-    # As a float, as in amihud: ticks times lots can pass int64 and wrap.
-    trades_pv = trades.assign(
-        _pv=trades["price"].to_numpy(dtype=np.float64)
-        * trades["volume"].to_numpy(dtype=np.float64)
+    price = trades["price"].to_numpy(dtype=np.float64) / price_scale(
+        trades, "trade_impacts"
     )
+    volume = trades["volume"].to_numpy(dtype=np.float64) / size_scale(
+        trades, "trade_impacts"
+    )
+    trades_pv = trades.assign(_price=price, _volume=volume, _pv=price * volume)
     impacts = (
         trades_pv.groupby("taker")
         .agg(
             id=("taker", "last"),
-            min_price=("price", "min"),
-            max_price=("price", "max"),
+            min_price=("_price", "min"),
+            max_price=("_price", "max"),
             hits=("taker", "size"),
-            vol=("volume", "sum"),
+            vol=("_volume", "sum"),
             start_time=("timestamp", "min"),
             end_time=("timestamp", "max"),
             dir=("direction", "last"),

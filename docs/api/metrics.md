@@ -29,20 +29,31 @@ goes to `compute` or `prepare`, whichever names it.
 | Name | Measures | Wraps |
 |---|---|---|
 | `l1_ticker` | Best bid, best ask and last trade. Draws the three over time, or the quote card at `at=`. | the depth summary and the trades |
+| `book_signals` | Mid, micro-price and order-book imbalance | [`depth_signals`](depth.md) |
 | `vpin` | VPIN per volume bucket | [`compute_vpin`](flow_toxicity.md) |
 | `kyle_lambda` | Kyle's λ regression | [`compute_kyle_lambda`](flow_toxicity.md) |
 | `order_flow_imbalance` | Order flow imbalance per window | [`order_flow_imbalance`](flow_toxicity.md) |
 | `ofi_horizon` | Order flow imbalance over several horizons | [`ofi_by_horizon`](flow_toxicity.md) |
+| `transaction_costs` | Effective and realized spread and price impact per trade | [`transaction_costs`](cost.md) |
+| `amihud` | Amihud illiquidity per window | [`amihud`](cost.md) |
+| `roll_spread` | Roll's implied spread per window | [`roll_spread`](cost.md) |
 
-Each uses the defaults of the function it wraps. The gallery and `result.plot`
-give a metric the result in display units (quote currency, base asset);
-`result.metric` gives it the result as stored (integer ticks and lots). A
-setting means the same either way: a size such as `bucket_volume` is in the
-instrument's own units (BTC, shares, contracts) and a price in the quote
-currency, so `result.metric("vpin", bucket_volume=0.5)` and
+Each uses the defaults of the function it wraps, and the run's own
+`depth_summary` wherever that function takes quotes.
+
+Every metric reports in the instrument's own units: prices in the quote
+currency and sizes in BTC, shares or contracts. `result.metric`,
+`result.plot` and the gallery all compute on the run as stored (integer ticks
+and lots), and each measure converts with the `tick_size` and `lot_size` the
+run's tables carry, so the three give the same numbers. A setting means the
+same everywhere too: a size such as `bucket_volume` is in the instrument's own
+units and a price in the quote currency, so
+`result.metric("vpin", bucket_volume=0.5)` and
 `result.plot("vpin", bucket_volume=0.5)` use the same 0.5 BTC buckets.
 
 ::: ob_analytics.metrics.L1TickerMetric
+
+::: ob_analytics.metrics.BookSignalsMetric
 
 ::: ob_analytics.metrics.VpinMetric
 
@@ -51,6 +62,12 @@ currency, so `result.metric("vpin", bucket_volume=0.5)` and
 ::: ob_analytics.metrics.OrderFlowImbalanceMetric
 
 ::: ob_analytics.metrics.OfiHorizonMetric
+
+::: ob_analytics.metrics.TransactionCostsMetric
+
+::: ob_analytics.metrics.AmihudMetric
+
+::: ob_analytics.metrics.RollSpreadMetric
 
 ## Registry
 

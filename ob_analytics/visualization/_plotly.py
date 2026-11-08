@@ -2255,6 +2255,26 @@ def _hex_to_rgba(hexc: str, alpha: float) -> str:
     return f"rgba({r},{g},{b},{alpha})"
 
 
+def plotly_window_measure(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
+    """Render one value per window: the Amihud and Roll faces."""
+    pal = theme.palette
+    go = _import_plotly()
+    fig = _base_figure(go, theme, title=data["title"], notice=data["notice"])
+    fig.add_trace(
+        go.Scatter(
+            x=data["times"],
+            y=data["values"],
+            mode="lines+markers",
+            line={"color": pal.series, "width": 2},
+            name=data["title"],
+            hovertemplate="Time: %{x}<br>%{y:.4g}<extra></extra>",
+        )
+    )
+    fig.update_yaxes(title_text=data["ylabel"])
+    fig.update_xaxes(title_text="Time")
+    return fig
+
+
 def plotly_transaction_costs(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render the transaction-cost decomposition: effective, realized, impact.
 
@@ -2701,6 +2721,8 @@ for _concept, _level, _fn in [
     ("vpin", None, plotly_vpin),
     ("order_flow_imbalance", None, plotly_order_flow_imbalance),
     ("transaction_costs", None, plotly_transaction_costs),
+    ("amihud", None, plotly_window_measure),
+    ("roll_spread", None, plotly_window_measure),
     ("ofi_horizon", None, plotly_ofi_horizon),
     ("kyle_lambda", None, plotly_kyle_lambda),
     ("trading_halts", None, plotly_trading_halts),

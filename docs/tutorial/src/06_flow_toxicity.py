@@ -341,10 +341,14 @@ for reason in vpin_real.attrs["diagnostics"]:
 fig = result.plot("kyle_lambda")  # the same fit as kyle_real above
 
 # %% [markdown]
-# The registered names are `vpin`, `kyle_lambda`, `order_flow_imbalance`
-# and `ofi_horizon`, plus `l1_ticker`, the quote from chapter 1.
-# A flow metric is still just a function over a trades table. Here is
-# Amihud's (2002) illiquidity, |return| per unit volume, in four lines:
+# The flow names are `vpin`, `kyle_lambda`, `order_flow_imbalance` and
+# `ofi_horizon`; `transaction_costs`, `amihud` and `roll_spread` measure
+# cost, and `l1_ticker` and `book_signals` read the quote. Each reports in
+# the instrument's own units, so `result.metric(name)`, `result.plot(name)`
+# and the bare function give the same numbers.
+# A flow metric is still just a function over a trades table. Here is a
+# rough form of Amihud's (2002) illiquidity, |return| per unit volume, in
+# four lines:
 
 
 # %%
@@ -358,10 +362,13 @@ amihud(tape).dropna().round({"amihud": 5})
 
 # %% [markdown]
 # It rises in the accumulation windows for the same reason λ does —
-# price moving on volume. To make it a metric like the built-ins, wrap it
-# in a small class and register it with `register_metric`; it then shows
-# in `available_concepts`, draws with `result.plot("amihud")` and gets a
-# gallery card (see [Extending ob-analytics](../extending.md#4-a-new-metric)).
+# price moving on volume. The package's own `amihud` divides by turnover
+# (price times size) rather than size, and ships as a metric, so
+# `result.plot("amihud")` draws it. To make a function of your own a metric
+# like the built-ins, wrap it in a small class and register it with
+# `register_metric`; it then shows in `available_concepts`, draws with
+# `result.plot(name)` and gets a gallery card (see
+# [Extending ob-analytics](../extending.md#4-a-new-metric)).
 # The point of the whole chapter: these are ordinary functions over a
 # trades table, and on a small tape you can check every number by hand.
 #

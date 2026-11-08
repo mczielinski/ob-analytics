@@ -1877,6 +1877,31 @@ def mpl_vpin(
 
 
 @_themed
+def mpl_window_measure(
+    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
+) -> Figure:
+    """Render one value per window: the Amihud and Roll faces."""
+    pal = theme.palette
+    own_figure = ax is None
+    fig, ax = _create_axes(ax, figsize=(12, 5))
+    ax.plot(
+        data["times"],
+        data["values"],
+        color=pal.series,
+        linewidth=1.5,
+        marker="o",
+        markersize=4,
+    )
+    ax.set_xlabel("Time")
+    ax.set_ylabel(data["ylabel"])
+    ax.set_title(f"{data['title']}\n{data['notice']}")
+    format_time_axis(ax)
+    if own_figure:
+        fig.tight_layout()
+    return fig
+
+
+@_themed
 def mpl_transaction_costs(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
@@ -2433,6 +2458,8 @@ for _concept, _level, _fn in [
     ("vpin", None, mpl_vpin),
     ("order_flow_imbalance", None, mpl_order_flow_imbalance),
     ("transaction_costs", None, mpl_transaction_costs),
+    ("amihud", None, mpl_window_measure),
+    ("roll_spread", None, mpl_window_measure),
     ("ofi_horizon", None, mpl_ofi_horizon),
     ("kyle_lambda", None, mpl_kyle_lambda),
     ("trading_halts", None, mpl_trading_halts),

@@ -472,15 +472,14 @@ class Metric(Protocol):
     given to the method that names it, so the two must not share a name.
 
     A size setting is in the instrument's own units (BTC, shares, contracts)
-    and a price setting in the quote currency.  :meth:`compute` is handed a
-    pipeline result whose tables hold integer lots and ticks
-    (``result.metric(...)``) or one already converted to those units
-    (``result.plot(...)`` computes on
-    :func:`~ob_analytics.visualization.display_result`), and the same setting
-    must mean the same amount on both.  Pass it to a function that converts
-    it (such as :func:`~ob_analytics.flow_toxicity.compute_vpin`), or convert
-    it with the scale that ``frame.attrs["lot_size"]`` and
-    ``frame.attrs["tick_size"]`` give.
+    and a price setting in the quote currency, and so is the table
+    :meth:`compute` returns.  :meth:`compute` is handed the pipeline result as
+    stored, its tables holding integer lots and ticks, by
+    ``result.metric(...)``, ``result.plot(...)`` and the gallery alike.  Pass
+    the tables to functions that read the units off them (such as
+    :func:`~ob_analytics.flow_toxicity.compute_vpin`), or convert with the
+    scale that ``frame.attrs["lot_size"]`` and ``frame.attrs["tick_size"]``
+    give.
 
     Attributes
     ----------

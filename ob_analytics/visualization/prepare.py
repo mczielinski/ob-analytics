@@ -18,6 +18,7 @@ arguments to a single face.
 from __future__ import annotations
 
 from ob_analytics.visualization._data import (
+    prepare_amihud_data as amihud,
     prepare_bars_data as bars,
     prepare_book_replay_data as book_replay,
     prepare_book_signals_data as book_signals,
@@ -37,6 +38,7 @@ from ob_analytics.visualization._data import (
     prepare_price_levels_data as price_levels,
     prepare_price_view_data as price_view,
     prepare_queue_position_l3_data as queue_position_l3,
+    prepare_roll_spread_data as roll_spread,
     prepare_time_series_data as time_series,
     prepare_trade_size_data as trade_size,
     prepare_trade_tape_l3_data as trade_tape_l3,
@@ -49,6 +51,7 @@ from ob_analytics.visualization._data import (
 )
 
 __all__ = [
+    "amihud",
     "bars",
     "book_replay",
     "book_signals",
@@ -68,6 +71,7 @@ __all__ = [
     "price_levels",
     "price_view",
     "queue_position_l3",
+    "roll_spread",
     "time_series",
     "trade_size",
     "trade_tape_l3",

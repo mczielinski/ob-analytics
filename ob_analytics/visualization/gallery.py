@@ -361,8 +361,9 @@ def _metric_panels(result: PipelineResult) -> list[PlotSpec]:
     the metrics it does not draw.  A metric that raises fails only its own
     card, which says why.
 
-    The metric sees the display-unit *result* the faces render, so its numbers
-    and the axes beside them are in the same units (see :func:`display_result`).
+    *result* is the run as it is, not converted with :func:`display_result`:
+    every metric reports in the instrument's own units from the run's own
+    frames, so a card shows the numbers ``result.metric(name)`` returns.
     """
     from ob_analytics.metrics import METRICS
 
@@ -534,7 +535,7 @@ def _build_l2_gallery_model(
             )
         )
 
-    return GalleryModel(concepts=concepts, analytics=_metric_panels(result))
+    return GalleryModel(concepts=concepts)
 
 
 #: Price-valued columns per frame, converted from integer ticks to a
@@ -670,7 +671,8 @@ def build_gallery_model(
     """
     # Kept for the hidden-liquidity overlay below, which needs canonical
     # integer-tick prices (exact equality, and hidden_trades()'s int64 output)
-    # rather than the converted display floats.
+    # rather than the converted display floats, and for the metric panels,
+    # which convert to the instrument's units themselves.
     raw_result = result
 
     # Convert integer-tick prices to the quote currency once, here, so every
@@ -681,7 +683,9 @@ def build_gallery_model(
     # depth/trades model and skip every L3-only face rather than erroring on
     # the empty events frame.
     if result.level is Level.L2:
-        return _build_l2_gallery_model(result, volume_scale=volume_scale)
+        model = _build_l2_gallery_model(result, volume_scale=volume_scale)
+        model.analytics.extend(_metric_panels(raw_result))
+        return model
 
     events = result.events
     trades = result.trades
@@ -1094,7 +1098,7 @@ def build_gallery_model(
                 )
             )
 
-    return GalleryModel(concepts=concepts, analytics=_metric_panels(result))
+    return GalleryModel(concepts=concepts, analytics=_metric_panels(raw_result))
 
 
 def plot_result(
@@ -1123,7 +1127,9 @@ def plot_result(
     concept : str
         Concept key, e.g. ``"trade_tape"`` (see :data:`available_concepts`).
         The name of a registered metric works too; a metric is level-less, so
-        *level* does not apply to it.
+        *level* does not apply to it.  A metric measures *result* as it is,
+        not converted with :func:`display_result`, and draws the table
+        ``result.metric(concept)`` returns.
     level : Level or str or None
         ``"L2"`` / ``"L3"`` (or a :class:`Level`).  ``None`` picks the concept's
         only level, preferring L2 when both exist.
@@ -1150,22 +1156,32 @@ def plot_result(
         If *concept* is not built for this result, or has no variant at *level*.
         The message lists what is available.
     """
+    from ob_analytics.metrics import METRICS
+
+    # A face registered at a level keeps its name, so a metric with the same
+    # name cannot hide it.
+    is_face = any(key[0] == concept and key[1] is not None for key in RENDERERS.list())
+    if (
+        not is_face
+        and concept in METRICS
+        and result.level in METRICS.get(concept).levels
+    ):
+        # A registered metric is a level-less concept: it has no L2/L3
+        # variants, and it measures the run's own frames, so it is drawn
+        # without building the gallery model or converting the result.
+        data = _metric_payload(METRICS.get(concept), result, **overrides)
+        if theme is not None:
+            data["theme"] = theme
+        return plot(concept, None, backend=backend, **data)
+
     model = build_gallery_model(result, volume_scale=volume_scale)
     concept_map = {c.key: c for c in model.concepts}
-    metric_map = {spec.name: spec for spec in model.analytics}
     pc = concept_map.get(concept)
     if pc is None:
-        # A registered metric (issue #140) is a level-less concept: it has no
-        # L2/L3 variants, so it renders straight from its panel.
-        metric_spec = metric_map.get(concept)
-        if metric_spec is not None:
-            data = metric_spec.prepare(**{**metric_spec.prep_kwargs, **overrides})
-            if theme is not None:
-                data["theme"] = theme
-            return plot(concept, None, backend=backend, **data)
+        metric_names = sorted(spec.name for spec in model.analytics)
         raise KeyError(
             f"Unknown concept {concept!r} for this result. "
-            f"Available: {sorted(concept_map) + sorted(metric_map)}"
+            f"Available: {sorted(concept_map) + metric_names}"
         )
 
     if level is None:
