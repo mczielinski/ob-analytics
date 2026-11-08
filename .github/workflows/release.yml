@@ -19,12 +19,36 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      checks: read
     steps:
+      # Publish only a commit that passed CI. Wait while its CI run is still
+      # going (a tag is often pushed right after the merge), then refuse any
+      # result but success. A cancelled or failed run has to be re-run on
+      # that commit before the release can go ahead.
+      - name: Require green CI on this commit
+        timeout-minutes: 120
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          id=$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" --limit 1 \
+            --json databaseId --jq '.[0].databaseId // empty')
+          if [ -z "$id" ]; then
+            echo "::error::no CI run found for $GITHUB_SHA; push it to main first"
+            exit 1
+          fi
+          gh run watch "$id" --exit-status --interval 30
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: true
       - run: uv build
+      # The same check as the `wheel` job in ci.yml, on the wheel this run
+      # publishes.
+      - uses: ./.github/actions/smoke-wheel
       - name: Verify tag matches package version
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
