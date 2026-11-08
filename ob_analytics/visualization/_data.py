@@ -2125,7 +2125,7 @@ def prepare_volume_percentiles_data(
         intervals = pd.DatetimeIndex(ob.index).floor("s")
 
     aggregated = ob.groupby(intervals).mean()
-    aggregated.index = aggregated.index + delta
+    aggregated.index = pd.DatetimeIndex(aggregated.index) + delta
     ob = aggregated.reset_index().rename(columns={"index": "timestamp"})
 
     pad = max(3, len(str(bps_levels[-1])))
