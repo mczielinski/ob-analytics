@@ -130,8 +130,10 @@ The weekly pre-commit autoupdate pull request is opened with `GITHUB_TOKEN`,
 and GitHub does not start workflows for such a pull request. Its required
 checks therefore wait forever. Close and reopen it to start CI.
 
-On Windows, `tests/conftest.py` leaves the live-capture test modules out. Add
-a new live-capture test module to its `LIVE_CAPTURE_TESTS` list.
+On Windows, `tests/conftest.py` leaves out the live-capture test modules and
+the speed check's tests, which need the POSIX `resource` module. Add a new
+live-capture test module to its `LIVE_CAPTURE_TESTS` list, and a new test that
+needs a POSIX-only module to `POSIX_ONLY_TESTS`.
 
 ## Code style
 

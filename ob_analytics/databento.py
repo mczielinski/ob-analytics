@@ -344,10 +344,16 @@ def _close_dbn(store: Any) -> None:
     version has no such attribute, fall back to closing the reader.
     """
     data_source = getattr(store, "_data_source", None)
-    if data_source is not None:
-        data_source.reader.close()
-    else:
+    if data_source is None:
         store.reader.close()
+        return
+    try:
+        # The data source seeks its file to the start before returning it,
+        # which raises on a file that something else has already closed.
+        data_file = data_source.reader
+    except ValueError:
+        return
+    data_file.close()
 
 
 # ── DatabentoLoader ───────────────────────────────────────────────────

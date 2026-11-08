@@ -1039,6 +1039,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   file it wraps open, so `read_mbo_frame` leaked one file handle per
   compressed file. It now closes the file itself.
 
+- **The gallery page is written as UTF-8 on every platform** (#416). The page
+  declares UTF-8, but it was written in the locale's encoding, so on Windows
+  a non-ASCII title could show wrongly or fail to write.
+
 - **A Databento file with records after an unrepaired gap warns, and `audit`
   says so.** Databento marks the records after a gap it could not repair with
   `F_MAYBE_BAD_BOOK`. The loader counted them in a loguru message, which the
