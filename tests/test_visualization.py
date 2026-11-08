@@ -669,7 +669,12 @@ class TestPlotOfiHorizon:
     def _grid(ofi: np.ndarray) -> dict[str, Any]:
         """A 45-second, 5-second-step payload with the given OFI rows."""
         times = pd.date_range("2015-05-01 01:00:00", periods=10, freq="5s", tz="UTC")
-        return {"ofi": ofi, "times": times.to_numpy(), "horizons": ["5s", "60s"]}
+        return {
+            "ofi": ofi,
+            "times": times.to_numpy(),
+            "horizons": ["5s", "60s"],
+            **_data._horizon_bands(ofi),
+        }
 
     @pytest.mark.parametrize(
         "row",
@@ -687,10 +692,12 @@ class TestPlotOfiHorizon:
 
     def test_one_time_step_spans_seconds(self, tmp_path) -> None:
         times = pd.DatetimeIndex(["2015-05-01 01:00:00"], tz="UTC").to_numpy()
+        ofi = np.array([[0.3], [0.1]])
         data: dict[str, Any] = {
-            "ofi": np.array([[0.3], [0.1]]),
+            "ofi": ofi,
             "times": times,
             "horizons": ["5s", "60s"],
+            **_data._horizon_bands(ofi),
         }
         fig = plot("ofi_horizon", **data)
         save_figure(fig, tmp_path / "ofi.png")

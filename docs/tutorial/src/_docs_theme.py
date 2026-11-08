@@ -347,17 +347,6 @@ def plot_toy_depth_heatmap(
     return fig
 
 
-def busiest_window(
-    trades: pd.DataFrame, minutes: int = 10
-) -> tuple[pd.Timestamp, pd.Timestamp]:
-    """Start/end of the *minutes*-long window containing the most trades."""
-    ts = trades["timestamp"].sort_values().reset_index(drop=True)
-    width = pd.Timedelta(minutes=minutes)
-    counts = ts.searchsorted(ts + width) - pd.RangeIndex(len(ts))
-    start = ts.iloc[int(counts.argmax())]
-    return start, start + width
-
-
 def plot_sample_heatmap(
     result,
     *,
@@ -374,9 +363,9 @@ def plot_sample_heatmap(
     walkable region'.
     """
     from ob_analytics.depth import get_spread
-    from ob_analytics.visualization import plot, prepare
+    from ob_analytics.visualization import busiest_window, plot, prepare
 
-    start, end = busiest_window(result.trades, minutes=minutes)
+    start, end = busiest_window(result.trades, f"{minutes}min")
     win = result.depth[
         (result.depth["timestamp"] >= start) & (result.depth["timestamp"] <= end)
     ]

@@ -25,7 +25,7 @@ from ob_analytics.flow_toxicity import (
     compute_vpin,
     order_flow_imbalance,
 )
-from ob_analytics.visualization import plot, prepare
+from ob_analytics.visualization import busiest_window, plot, prepare
 
 
 @dataclass(frozen=True)
@@ -37,22 +37,12 @@ class Example:
     render: Callable[[Any], Any]
 
 
-def _window(result: Any, minutes: int = 10) -> tuple[pd.Timestamp, pd.Timestamp]:
-    """The busiest *minutes*-long window (most trades) — the same selection
-    the tutorial walkthrough uses, so sparse faces have data to show."""
-    ts = result.trades["timestamp"].sort_values().reset_index(drop=True)
-    width = pd.Timedelta(minutes=minutes)
-    counts = ts.searchsorted(ts + width) - pd.RangeIndex(len(ts))
-    start = ts.iloc[int(counts.to_numpy().argmax())]
-    return start, start + width
-
-
 # ── Book structure ───────────────────────────────────────────────────
 
 
 def depth_heatmap(result):
     """Resting volume at each price level over time."""
-    start, end = _window(result)
+    start, end = busiest_window(result.trades)
     return plot(
         "depth_heatmap",
         level="L2",
@@ -88,7 +78,7 @@ def depth_chart(result):
 
 def trade_tape(result):
     """Executions plotted against the mid price, marked by aggressor side."""
-    start, end = _window(result)
+    start, end = busiest_window(result.trades)
     return plot(
         "trade_tape",
         level="L2",
@@ -106,7 +96,7 @@ def trade_tape(result):
 
 def volume_percentiles(result):
     """Cumulative resting volume in basis-point bands around the mid."""
-    start, end = _window(result)
+    start, end = busiest_window(result.trades)
     return plot(
         "volume_percentiles",
         level="L2",
@@ -118,7 +108,7 @@ def volume_percentiles(result):
 
 def liquidity_at_touch(result):
     """Resting volume at the best bid and ask over time."""
-    start, end = _window(result)
+    start, end = busiest_window(result.trades)
     return plot(
         "liquidity_at_touch",
         level="L2",
@@ -138,7 +128,7 @@ def order_outcome(result):
 
 def queue_position(result):
     """Each order's FIFO rank at the touch over time, coloured by outcome."""
-    start, end = _window(result)
+    start, end = busiest_window(result.trades)
     return plot(
         "queue_position",
         level="L3",

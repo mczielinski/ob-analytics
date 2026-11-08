@@ -35,27 +35,20 @@ from ob_analytics.schemas import validate_columns
 
 @dataclass(frozen=True)
 class FocusWindow:
-    """A shared display window for gallery faces.
+    """The price band that the gallery's clipped faces share.
 
     One clipping decision, made once per gallery build, instead of every
     face inventing its own (raw-price percentiles here, ±kσ there): faces
     that receive the same bounds stay comparable on shared axes.  ``None``
-    on either axis means no clipping there.
+    on either side means no clipping there.  The time window is
+    :func:`busiest_window`.
     """
 
-    start_time: pd.Timestamp | None = None
-    end_time: pd.Timestamp | None = None
     price_from: float | None = None
     price_to: float | None = None
 
 
-def focus_window(
-    trades: pd.DataFrame,
-    *,
-    k_sigma: float = 3.0,
-    start_time: pd.Timestamp | None = None,
-    end_time: pd.Timestamp | None = None,
-) -> FocusWindow:
+def focus_window(trades: pd.DataFrame, *, k_sigma: float = 3.0) -> FocusWindow:
     """Mid-anchored :class:`FocusWindow`: trades-median ± *k_sigma*·σ.
 
     Trades happen at the touch, so their median anchors the window where
@@ -64,14 +57,53 @@ def focus_window(
     dispersion) yield an unclipped price axis.
     """
     if trades.empty:
-        return FocusWindow(start_time, end_time, None, None)
+        return FocusWindow()
     mid = float(trades["price"].median())
     std = float(trades["price"].std())
     if not math.isfinite(std) or std <= 0:
-        return FocusWindow(start_time, end_time, None, None)
-    return FocusWindow(
-        start_time, end_time, max(0.0, mid - k_sigma * std), mid + k_sigma * std
-    )
+        return FocusWindow()
+    return FocusWindow(max(0.0, mid - k_sigma * std), mid + k_sigma * std)
+
+
+def busiest_window(
+    frame: pd.DataFrame, width: str | timedelta = "10min"
+) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """The *width*-long time window that holds the most rows of *frame*.
+
+    Pass the trades to get the busiest stretch of trading, so a face drawn
+    over a short window has something to show.  The window starts at a row's
+    timestamp; of two equally busy windows, the earlier one is chosen.  A
+    window that would run past the last row is moved back to end at the last
+    row, which keeps every row it held, but never to start before the first
+    row.
+
+    Parameters
+    ----------
+    frame : pandas.DataFrame
+        Any frame with a ``timestamp`` column, e.g. the trades.
+    width : str or timedelta
+        The length of the window, e.g. ``"10min"``.
+
+    Returns
+    -------
+    tuple of pandas.Timestamp
+        ``(start, end)``, with ``end - start == width``.
+
+    Raises
+    ------
+    ValueError
+        If *frame* has no rows, or *width* is not positive.
+    """
+    span = pd.Timedelta(width)
+    if span <= pd.Timedelta(0):
+        raise ValueError(f"The window width must be positive, got {width!r}.")
+    ts = frame["timestamp"].dropna().sort_values().reset_index(drop=True)
+    if ts.empty:
+        raise ValueError("busiest_window needs at least one timestamp.")
+    counts = ts.searchsorted(ts + span, side="left") - np.arange(len(ts))
+    start = ts.iloc[int(np.argmax(counts))]
+    start = max(ts.iloc[0], min(start, ts.iloc[-1] - span))
+    return start, start + span
 
 
 def price_y_range(*series: pd.Series | None) -> tuple[float, float] | None:
@@ -84,6 +116,22 @@ def price_y_range(*series: pd.Series | None) -> tuple[float, float] | None:
         return None
     prices = pd.concat(parts)
     return float(prices.min()), float(prices.max())
+
+
+def padded_range(
+    span: tuple[float, float] | None, fraction: float = 0.04
+) -> tuple[float, float] | None:
+    """Widen *span* by *fraction* of its length on each side.
+
+    A marker drawn at the edge of an unpadded range is cut in half; the
+    padding keeps it whole.  A zero-length span is widened by 1.0 on each
+    side instead.  ``None`` (nothing to frame) stays ``None``.
+    """
+    if span is None:
+        return None
+    lo, hi = span
+    pad = (hi - lo) * fraction or 1.0
+    return lo - pad, hi + pad
 
 
 def volume_marker_areas(
@@ -421,9 +469,12 @@ def prepare_trades_data(
     tape["mid"] = mid_line["mid"].to_numpy()
     tape["marker_area"] = lollipop_marker_areas(tape["volume"])
 
-    # No clipping: the y-range is the full price extent within the window, so
-    # the prints a tape exists to show (spikes) are never cut mid-marker.
-    y_range = price_y_range(filtered["price"]) if not filtered.empty else None
+    # No clipping: the y-range is the full price extent within the window,
+    # padded, so the prints a tape exists to show (spikes) are never cut
+    # mid-marker.
+    y_range = padded_range(
+        price_y_range(filtered["price"]) if not filtered.empty else None
+    )
 
     return {
         "filtered_trades": filtered,
@@ -527,7 +578,11 @@ def prepare_price_levels_data(
             spread = spread[
                 (spread["timestamp"] >= start_time) & (spread["timestamp"] <= end_time)
             ]
-        spread = readable_quotes(spread)
+        spread = readable_quotes(spread).sort_values("timestamp", kind="stable")
+        if show_mp and {"best_bid_price", "best_ask_price"} <= set(spread.columns):
+            spread = spread.assign(
+                midprice=(spread["best_bid_price"] + spread["best_ask_price"]) / 2
+            )
         if price_from is None:
             price_from = _price_bound(0.995 * spread["best_bid_price"].min())
         if price_to is None:
@@ -893,7 +948,7 @@ def prepare_queue_position_l3_data(
     :func:`~ob_analytics.analytics.set_order_types`) and carry ``fill``.
 
     Returns one frame per fate (``filled`` / ``cancelled`` / ``resting``) with
-    ``timestamp``, ``id``, ``rank``, ``age_s``; ``max_rank`` for the (inverted)
+    ``timestamp``, ``id``, ``rank``, ``age_s``, in time order; ``max_rank`` for the (inverted)
     y-axis; and ``show_markers`` (terminal × / ○ only when few enough orders).
     """
     from ob_analytics.analytics import order_lifecycles
@@ -912,6 +967,8 @@ def prepare_queue_position_l3_data(
     life = order_lifecycles(events)[["id", "outcome"]]
     q = q.merge(life, on="id", how="left")
     q["fate"] = q["outcome"].map(fate_map).fillna("resting")
+    # Time order, so each order's rows already run along its trajectory.
+    q = q.sort_values("timestamp", kind="stable")
 
     max_rank = int(q["rank"].max()) if not q.empty else 1
     return {
@@ -1473,8 +1530,10 @@ def prepare_trade_tape_l3_data(
         lolli_buys = tr[tr["direction"] == "buy"]
         lolli_sells = tr[tr["direction"] == "sell"]
 
-    # y-range spans every print (and its mid), never a quantile clip.
-    y_range = price_y_range(tr["price"], mid_line["mid"]) if not tr.empty else None
+    # y-range spans every print (and its mid), padded, never a quantile clip.
+    y_range = padded_range(
+        price_y_range(tr["price"], mid_line["mid"]) if not tr.empty else None
+    )
 
     return {
         "buys": tr[tr["direction"] == "buy"],
@@ -1780,9 +1839,10 @@ def prepare_book_snapshot_data(
     ``order_book(..., uncross=True)`` returns.
 
     Returns ``bids``/``asks`` frames ordered best-first with columns ``price,
-    volume, liquidity, seg_lo, seg_hi`` (volumes already scaled), plus
-    high-volume ``*_quantiles`` price marks, ``timestamp``, ``volume_scale``,
-    and the ``per_order`` flag.
+    volume, liquidity, seg_lo, seg_hi`` (volumes already scaled), the same
+    rows in rising price order as ``bid_curve``/``ask_curve`` for the depth
+    curve, the ``mid`` (see :func:`book_mid`), high-volume ``*_quantiles``
+    price marks, ``timestamp``, ``volume_scale``, and the ``per_order`` flag.
     """
     bids = _as_book_side_frame(order_book["bids"])
     asks = _as_book_side_frame(order_book["asks"])
@@ -1814,6 +1874,9 @@ def prepare_book_snapshot_data(
         "asks": ask_side,
         "bid_quantiles": bid_quantiles,
         "ask_quantiles": ask_quantiles,
+        "bid_curve": bid_side.sort_values("price", kind="stable"),
+        "ask_curve": ask_side.sort_values("price", kind="stable"),
+        "mid": book_mid(bid_side, ask_side),
         "show_quantiles": show_quantiles,
         "per_order": per_order,
         "timestamp": timestamp,
@@ -1952,8 +2015,11 @@ def prepare_book_replay_data(
         or ``None`` when no frame has both sides), ``interval`` (the time
         between frames, as a :class:`pandas.Timedelta`), ``speeds``,
         ``trades`` (``timestamp``, ``price``, ``volume`` and ``direction``,
-        sizes scaled, from the first frame to the last), ``per_order`` and
-        ``volume_scale``.
+        sizes scaled, from the first frame to the last), ``per_order``,
+        ``volume_scale``, ``bar_thickness`` (one bar thickness for every
+        frame, the smallest of the frames' :func:`book_bar_thickness`) and
+        ``view_range`` (``price_range`` widened by a bar thickness each side,
+        so the bars at its edges are drawn whole; ``None`` with it).
 
     Raises
     ------
@@ -2053,17 +2119,23 @@ def prepare_book_replay_data(
         ].sort_values("timestamp", kind="stable")
         shown = shown.assign(volume=shown["volume"] * volume_scale)
 
+    snapshots = [
+        prepare_book_snapshot_data(
+            book, per_order=per_order, volume_scale=volume_scale, top_n=None
+        )
+        for book in books
+    ]
+    # One thickness for every frame, so the bars keep one height as it plays.
+    thickness = min(
+        (book_bar_thickness(s["bids"], s["asks"]) for s in snapshots), default=1.0
+    )
     return {
-        "snapshots": [
-            prepare_book_snapshot_data(
-                book,
-                per_order=per_order,
-                volume_scale=volume_scale,
-                top_n=None,
-            )
-            for book in books
-        ],
+        "snapshots": snapshots,
         "price_range": price_range,
+        "bar_thickness": thickness,
+        "view_range": None
+        if price_range is None
+        else (price_range[0] - thickness, price_range[1] + thickness),
         "interval": step,
         "speeds": tuple(speeds),
         "trades": shown.reset_index(drop=True),
@@ -2351,15 +2423,34 @@ def prepare_transaction_costs_data(
         with np.errstate(invalid="ignore", divide="ignore"):
             return np.where(den > 0, num / den, np.nan)
 
+    effective = ratio("w_effective", "d_effective")
+    realized = ratio("w_realized", "d_realized")
     return {
         "times": binned["timestamp"].to_numpy(),
-        "effective": ratio("w_effective", "d_effective"),
-        "realized": ratio("w_realized", "d_realized"),
+        "effective": effective,
+        "realized": realized,
         "impact": ratio("w_impact", "d_impact"),
         "trade_times": costs["timestamp"].to_numpy(),
         "trade_effective": costs["effective_spread_bps"].to_numpy(dtype=np.float64),
         "horizon": str(costs.attrs.get("horizon", "")),
+        "y_range": _band_range(effective, realized),
     }
+
+
+def _band_range(*series: np.ndarray, floor: float = 3.0) -> tuple[float, float] | None:
+    """A y-range around the finite values of *series*, widened by a quarter.
+
+    The per-trade scatter of the cost plot is much wider than its averaged
+    lines; framing the averages keeps the lines readable while outlying
+    trades run off the edge.  The margin is at least *floor* each side.
+    ``None`` when *series* holds no finite value.
+    """
+    finite = np.concatenate([s[np.isfinite(s)] for s in series])
+    if finite.size == 0:
+        return None
+    low, high = float(finite.min()), float(finite.max())
+    margin = max((high - low) * 0.25, floor)
+    return low - margin, high + margin
 
 
 def prepare_ofi_data(
@@ -2396,7 +2487,9 @@ def prepare_ofi_horizon_data(
     stacked horizon-graph band per row.
 
     Returns ``ofi`` (a ``len(horizons)`` x ``n_grid`` array, longest horizon
-    last so it plots at the top), ``times`` (grid timestamps) and ``horizons``.
+    last so it plots at the top), ``times`` (grid timestamps), ``horizons``,
+    and the fill of each colour band: ``band_alphas``, ``buy_bands`` and
+    ``sell_bands``, the height of each band as a fraction of its row.
     """
     start_time, end_time = _default_start_end(trades, start_time, end_time)
     tr = trades[(trades["timestamp"] >= start_time) & (trades["timestamp"] <= end_time)]
@@ -2405,6 +2498,7 @@ def prepare_ofi_horizon_data(
             "ofi": np.empty((0, 0)),
             "times": np.array([], dtype="datetime64[ns]"),
             "horizons": list(horizons),
+            **_horizon_bands(np.empty((0, 0))),
         }
     return prepare_ofi_horizon_grid_data(
         ofi_by_horizon(tr, horizons=horizons, grid=grid)
@@ -2427,10 +2521,45 @@ def prepare_ofi_horizon_grid_data(
     start_time, end_time = _default_start_end(grid, start_time, end_time)
     rows = grid[(grid["timestamp"] >= start_time) & (grid["timestamp"] <= end_time)]
     horizons = [c for c in grid.columns if c != "timestamp"]
+    ofi = rows[horizons].to_numpy(dtype=float).T.reshape(len(horizons), -1)
     return {
-        "ofi": rows[horizons].to_numpy(dtype=float).T.reshape(len(horizons), -1),
+        "ofi": ofi,
         "times": pd.DatetimeIndex(rows["timestamp"]).to_numpy(),
         "horizons": horizons,
+        **_horizon_bands(ofi),
+    }
+
+
+#: The horizon graph splits each side of a row into this many colour bands.
+HORIZON_BANDS = 3
+
+
+def _horizon_bands(ofi: np.ndarray) -> dict[str, Any]:
+    """The fill of each colour band of the OFI horizon graph.
+
+    A horizon graph folds a row's value into :data:`HORIZON_BANDS` bands of
+    equal width that are drawn on top of each other, each darker than the
+    one below.  Band *b* holds the part of ``|ofi|`` between ``b / n`` and
+    ``(b + 1) / n``, stretched to the full row height, so the row is filled
+    as far as the value reaches and the colour darkens as it grows.
+
+    Returns ``band_alphas`` (the opacity of each band, lightest first), and
+    ``buy_bands`` and ``sell_bands``: arrays of shape ``(rows, bands,
+    steps)`` with each band's height as a fraction of the row, for net
+    buying (positive OFI) and net selling.
+    """
+    n = HORIZON_BANDS
+    value = np.clip(np.nan_to_num(ofi), -1.0, 1.0)
+    lows = np.arange(n) / n
+
+    def fill(signed: np.ndarray) -> np.ndarray:
+        stacked = np.clip(signed[:, None, :], lows[:, None], (lows + 1 / n)[:, None])
+        return (stacked - lows[:, None]) * n
+
+    return {
+        "band_alphas": tuple(0.25 + 0.25 * b for b in range(n)),
+        "buy_bands": fill(value),
+        "sell_bands": fill(-value),
     }
 
 

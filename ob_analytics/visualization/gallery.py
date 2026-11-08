@@ -33,12 +33,12 @@ from ob_analytics._utils import (
     ticks_to_price,
     ticks_to_price_if_integer,
 )
-from ob_analytics.analytics import order_book
-from ob_analytics.depth import get_spread, price_level_snapshots
+from ob_analytics.depth import get_spread
 from ob_analytics.pipeline import PipelineResult
 from ob_analytics.protocols import Level
 from ob_analytics.visualization import (
     PlotTheme,
+    _concepts,
     _data as _viz_data,
     infer_volume_scale,
     plot,
@@ -46,7 +46,6 @@ from ob_analytics.visualization import (
 )
 from ob_analytics.visualization._renderers import (
     _BACKEND_MODULES,
-    RENDERERS,
     _kind_text,
     _load_backend,
     _same_kind,
@@ -54,13 +53,6 @@ from ob_analytics.visualization._renderers import (
 
 #: Views recognised by :func:`generate_gallery` / :func:`_project`.
 VIEWS = ("l2", "l3", "both", "comparison")
-
-# How the depth heatmap picks its levels (#303), shared by its L2 and L3 notes.
-_HIDDEN_LEVELS_NOTE = (
-    "Levels that do not change in the window are left out unless no level "
-    'changes; plot_result(result, "depth_heatmap", show_all_depth=True) '
-    "keeps them all."
-)
 
 
 @dataclass
@@ -130,21 +122,22 @@ class GalleryModel:
     analytics: list[PlotSpec] = field(default_factory=list)
 
 
-def _auto_zoom_window(
-    events: pd.DataFrame,
+def _zoom_window(
+    trades: pd.DataFrame, clock: pd.DataFrame
 ) -> tuple[pd.Timestamp, pd.Timestamp]:
-    """Derive a sensible (start, end) zoom window from the data's time range."""
-    t_min = events["timestamp"].min()
-    t_max = events["timestamp"].max()
+    """The gallery's zoom window: the busiest stretch of trading.
+
+    The window is half of the run when the run is shorter than two hours,
+    and a quarter of it otherwise (see :func:`~ob_analytics.visualization.busiest_window`).
+    *clock* (the events, or the depth on a price-level run) sets the run's
+    length, and picks the window when there are no trades.
+    """
+    t_min, t_max = clock["timestamp"].min(), clock["timestamp"].max()
     duration = t_max - t_min
-
-    if duration < pd.Timedelta(hours=2):
-        mid = t_min + duration / 2
-        half = duration / 4
-        return (mid - half, mid + half)
-
-    quarter = duration / 4
-    return (t_min + quarter, t_min + 2 * quarter)
+    if pd.isna(duration) or duration <= pd.Timedelta(0):
+        return t_min, t_max
+    width = duration / 2 if duration < pd.Timedelta(hours=2) else duration / 4
+    return _viz_data.busiest_window(trades if not trades.empty else clock, width)
 
 
 def _window_over(
@@ -158,9 +151,9 @@ def _window_over(
     faces are given the depth summary with its first minute dropped.  On a
     short or sparse capture the two need not overlap, and a window with no
     rows leaves the face nothing to draw.  A zoom window derived from *frame*
-    alone would not fix that: its middle half can fall between two sparse
-    rows.  So the face keeps the shared window when it can, and otherwise
-    shows all of *frame*.  An empty *frame* returns the window unchanged.
+    alone would not fix that: it can fall between two sparse rows.  So the
+    face keeps the shared window when it can, and otherwise shows all of
+    *frame*.  An empty *frame* returns the window unchanged.
     """
     ts = frame["timestamp"]
     if ts.empty or ts.between(start, end).any():
@@ -168,160 +161,27 @@ def _window_over(
     return ts.min(), ts.max()
 
 
-#: The most frames the gallery's book replay holds: enough to scrub the zoom
-#: window smoothly, few enough to keep the page small and quick to build.
-_REPLAY_FRAMES = 300
+def _concept_cards(scene: _concepts.Scene) -> list[PlotConcept]:
+    """One :class:`PlotConcept` per table concept the run has a face for.
 
-_REPLAY_NOTE = (
-    "The book through the zoom window. Drag the slider or press a play "
-    "button (1x is real time); the line on the trades panel marks the time "
-    "shown. Click a trade to move there: its price level is marked in the "
-    "trade's colour. L2: one bar per price level, from the depth table. L3: "
-    "one segment per order. Both remove stale crossed orders, so the trades "
-    "sit around the mid. Drawn by Plotly only."
-)
-
-
-def _replay_interval(start: pd.Timestamp, end: pd.Timestamp) -> pd.Timedelta:
-    """The time between the gallery replay's frames: 1 s, or wider to fit."""
-    return max(pd.Timedelta("1s"), (end - start) / _REPLAY_FRAMES)
-
-
-def _l2(
-    key: str,
-    title: str,
-    plot_name: str,
-    prepare: Callable[..., dict],
-    prep_kwargs: dict[str, Any],
-    *,
-    note: str = "",
-) -> PlotConcept:
-    """Build a single-variant (L2-only) concept."""
-    spec = PlotSpec(key, title, plot_name, prepare, prep_kwargs)
-    return PlotConcept(key, title, {Level.L2: spec}, note=note)
-
-
-def _l3(
-    key: str,
-    title: str,
-    plot_name: str,
-    prepare: Callable[..., dict],
-    prep_kwargs: dict[str, Any],
-    *,
-    note: str = "",
-) -> PlotConcept:
-    """Build a single-variant (L3-only) concept.
-
-    Used for faces that require persistent order identity and have no aggregate
-    (L2/MBP) counterpart -- e.g. competing-risks order outcomes.
+    Every face comes from the concept table, bound to *scene*; a face whose
+    data the run lacks binds to nothing and is left out.
     """
-    spec = PlotSpec(key, title, plot_name, prepare, prep_kwargs)
-    return PlotConcept(key, title, {Level.L3: spec}, note=note)
-
-
-def _comparable(
-    key: str,
-    title: str,
-    prepare: Callable[..., dict],
-    base_kwargs: dict[str, Any],
-    *,
-    note: str = "",
-) -> PlotConcept:
-    """Build a comparable (L2 + L3) concept from one prepare + shared kwargs.
-
-    Both faces share *base_kwargs* and differ only in the ``per_order`` flag the
-    prepare/renderer pair keys off of: ``False`` aggregates per price (L2/MBP),
-    ``True`` keeps one primitive per order (L3/MBO).
-    """
-    l2 = PlotSpec(key, title, key, prepare, {**base_kwargs, "per_order": False})
-    l3 = PlotSpec(key, title, key, prepare, {**base_kwargs, "per_order": True})
-    return PlotConcept(key, title, {Level.L2: l2, Level.L3: l3}, note=note)
-
-
-def _paired(
-    key: str,
-    title: str,
-    l2: PlotSpec,
-    l3: PlotSpec,
-    *,
-    note: str = "",
-) -> PlotConcept:
-    """Build a comparable concept from two explicit faces.
-
-    Unlike :func:`_comparable` (one prepare keyed by ``per_order``), the L2 and
-    L3 faces here use *different* prepares -- e.g. an aggregate volume map (L2)
-    paired with a per-order scatter (L3).
-    """
-    return PlotConcept(key, title, {Level.L2: l2, Level.L3: l3}, note=note)
-
-
-def _book_concepts(
-    depth: pd.DataFrame,
-    events: pd.DataFrame,
-    snap_time: pd.Timestamp,
-    volume_scale: float,
-) -> list[PlotConcept]:
-    """The book snapshot and the depth chart, both at *snap_time*.
-
-    Each face reads the data of its own level.  The L2 face reads the depth
-    table (:func:`~ob_analytics.depth.price_level_snapshots`): one bar per
-    price level, never crossed.  The L3 face reads the per-order book rebuilt
-    from the classified events (:func:`~ob_analytics.analytics.order_book`):
-    one segment per order.  Both faces show the price levels nearest the
-    touch, by the same cut (``top_n`` of
-    :func:`~ob_analytics.visualization._data.prepare_book_snapshot_data`).
-    So a run with no per-order events (a price-level feed) still gets the L2
-    face, and a per-order book with stale orders in it does not change the
-    L2 face.
-    """
-    books: dict[Level, Any] = {}
-    if not depth.empty:
-        books[Level.L2] = price_level_snapshots(depth, [snap_time])[0]
-    if not events.empty and "type" in events.columns:
-        books[Level.L3] = order_book(events, tp=snap_time)
-    label = snap_time.strftime("%H:%M")
-    faces = (
-        (
-            "book_snapshot",
-            "Book Snapshot",
-            (
-                "The resting book at one instant. L2: total size per price "
-                "level, from the depth table. L3: one segment per order, from "
-                "the book rebuilt from the events. One large order and many "
-                "small ones of the same total size look the same on L2 and "
-                "different on L3."
-            ),
-        ),
-        (
-            "depth_chart",
-            "Depth Chart",
-            (
-                "Cumulative size from the touch outwards: how far the price "
-                "moves to fill X units. L2 reads the depth table; L3 marks "
-                "each order along the curve."
-            ),
-        ),
-    )
-    concepts = []
-    for key, name, note in faces:
-        title = f"{name} ({label})"
-        variants = {
-            level: PlotSpec(
-                key,
-                title,
-                key,
-                _viz_data.prepare_book_snapshot_data,
-                {
-                    "order_book": book,
-                    "per_order": level is Level.L3,
-                    "volume_scale": volume_scale,
-                },
-            )
-            for level, book in books.items()
-        }
+    cards: list[PlotConcept] = []
+    for entry in _concepts.CONCEPTS:
+        variants: dict[Level, PlotSpec] = {}
+        title = entry.title.format(snapshot=scene.snapshot_label)
+        for level, face in entry.faces.items():
+            if level is None or face.bind is None:
+                continue
+            binding = face.bind(scene)
+            if binding is not None:
+                variants[level] = PlotSpec(
+                    entry.key, title, entry.key, binding.prepare, binding.kwargs
+                )
         if variants:
-            concepts.append(PlotConcept(key, title, variants, note=note))
-    return concepts
+            cards.append(PlotConcept(entry.key, title, variants, note=entry.note))
+    return cards
 
 
 def _compute_settings(metric: Any) -> frozenset[str]:
@@ -380,161 +240,6 @@ def _metric_panels(result: PipelineResult) -> list[PlotSpec]:
             )
         )
     return panels
-
-
-def _build_l2_gallery_model(
-    result: PipelineResult,
-    *,
-    volume_scale: float | None = None,
-) -> GalleryModel:
-    """Gallery model for a price-level (L2) result — the depth/trades faces only.
-
-    An L2 run has no per-order events (``result.events`` is empty), so every
-    face that needs order identity — the L3 lifecycles, queue position, order
-    outcome, the event/cancellation maps, the events histogram — is **skipped
-    by construction**.  What remains is the aggregate book: the depth heatmap,
-    the price/spread view, depth percentiles, the L2 book snapshot, depth
-    chart and book replay, and the trade faces — exactly the
-    analytics a price-level feed supports (see
-    :class:`~ob_analytics.protocols.Level`).
-    """
-    trades = result.trades
-    depth = result.depth
-    depth_summary = result.depth_summary
-
-    if volume_scale is None:
-        basis = depth["volume"] if not depth.empty else trades.get("volume")
-        volume_scale = (
-            infer_volume_scale(basis) if basis is not None and len(basis) else 1.0
-        )
-
-    spread = get_spread(depth_summary)
-    # Windows come from the depth clock (there are no events); trades still
-    # anchor the mid-focused price band.
-    zoom_start, zoom_end = _auto_zoom_window(depth)
-    focus = _viz_data.focus_window(trades)
-    price_from = focus.price_from
-    price_to = focus.price_to
-
-    offset = depth["timestamp"].min() + pd.Timedelta(minutes=1)
-    depth_summary_offset = depth_summary[depth_summary["timestamp"] >= offset]
-    summary_start, summary_end = _window_over(
-        depth_summary_offset, zoom_start, zoom_end
-    )
-
-    concepts: list[PlotConcept] = [
-        _l2(
-            "depth_heatmap",
-            "Depth Heatmap",
-            "depth_heatmap",
-            _viz_data.prepare_price_levels_data,
-            {
-                "depth": depth,
-                "spread": spread,
-                "trades": trades,
-                "volume_scale": volume_scale,
-                "price_from": price_from,
-                "price_to": price_to,
-            },
-            note=(
-                "Resting liquidity through time: one horizontal line per price "
-                "level, colored by available volume; the pale line is the "
-                "midprice. Triangles mark executions (aggressor side). The "
-                "native L2 view — aggregate size per price, no order identity. "
-                f"{_HIDDEN_LEVELS_NOTE}"
-            ),
-        ),
-    ]
-
-    if not trades.empty:
-        concepts.append(
-            _l2(
-                "trade_tape",
-                "Trade Tape",
-                "trade_tape",
-                _viz_data.prepare_trades_data,
-                {"trades": trades},
-                note="Executions over time as a price tape; color = aggressor side.",
-            )
-        )
-
-    if not depth_summary_offset.empty:
-        concepts.append(
-            _l2(
-                "price_view",
-                "Price View",
-                "price_view",
-                _viz_data.prepare_price_view_data,
-                {
-                    "depth_summary": depth_summary_offset,
-                    "trades": trades,
-                    "start_time": summary_start,
-                    "end_time": summary_end,
-                },
-                note=(
-                    "The spread as a ribbon (best bid to best ask) with the "
-                    "volume-weighted microprice through it. Dots are executions "
-                    "by aggressor side."
-                ),
-            )
-        )
-        concepts.append(
-            _l2(
-                "volume_percentiles",
-                "Volume Percentiles",
-                "volume_percentiles",
-                _viz_data.prepare_volume_percentiles_data,
-                {
-                    "depth_summary": depth_summary_offset,
-                    "start_time": summary_start,
-                    "end_time": summary_end,
-                    "volume_scale": volume_scale,
-                },
-                note=(
-                    "Book depth through time, stacked by distance from the touch "
-                    "in bps bands: asks above zero, bids below; band thickness = "
-                    "resting volume in that bps ring."
-                ),
-            )
-        )
-
-    concepts.extend(_book_concepts(depth, result.events, zoom_end, volume_scale))
-
-    if not depth.empty:
-        concepts.append(
-            _l2(
-                "book_replay",
-                "Book Replay",
-                "book_replay",
-                _viz_data.prepare_book_replay_data,
-                {
-                    "depth": depth,
-                    "trades": trades,
-                    "start_time": zoom_start,
-                    "end_time": zoom_end,
-                    "interval": _replay_interval(zoom_start, zoom_end),
-                    "volume_scale": volume_scale,
-                },
-                note=_REPLAY_NOTE,
-            )
-        )
-
-    if not trades.empty:
-        concepts.append(
-            _l2(
-                "trade_size",
-                "Trade Size",
-                "trade_size",
-                _viz_data.prepare_trade_size_data,
-                {"trades": trades, "volume_scale": volume_scale},
-                note=(
-                    "How big trades are: each execution a jittered dot on a log "
-                    "size axis, buys and sells in separate bands."
-                ),
-            )
-        )
-
-    return GalleryModel(concepts=concepts, analytics=_metric_panels(result))
 
 
 #: Price-valued columns per frame, converted from integer ticks to a
@@ -643,74 +348,25 @@ def display_result(result: PipelineResult) -> PipelineResult:
     )
 
 
-def build_gallery_model(
-    result: PipelineResult,
-    *,
-    volume_scale: float | None = None,
-) -> GalleryModel:
-    """Build the default gallery model from pipeline results.
+def _hidden_liquidity_overlay(
+    raw_result: PipelineResult,
+    zoom_start: pd.Timestamp,
+    zoom_end: pd.Timestamp,
+    focus: _viz_data.FocusWindow,
+) -> dict[str, pd.DataFrame]:
+    """Iceberg refills and trades against hidden orders, in display units.
 
-    Every order-book concept is registered with its ``Level.L2`` variant (the
-    L3 faces are added by later renderers; a concept becomes
-    :attr:`~PlotConcept.comparable` automatically once both exist).  Analytics
-    are *not* derived here -- callers append computed analytic panels (built
-    with the ``*_panel`` helpers) to :attr:`GalleryModel.analytics`.
-
-    Parameters
-    ----------
-    result : PipelineResult
-        Pipeline output.
-    volume_scale : float or None
-        Volume display scale.  ``None`` (default) auto-infers a power-of-10
-        scale from ``result.events['volume']`` via :func:`infer_volume_scale`.
-
-    Returns
-    -------
-    GalleryModel
+    They are overlaid on the depth heatmap and the per-order activity map, so
+    hidden liquidity shows without reading the tables.  They are clipped to
+    the zoom window: a full LOBSTER day has about 900 suspected icebergs and
+    9,600 hidden trades, which would flood a face meant to show a few
+    minutes.  A failed detector run, unit conversion or clip must not stop
+    the gallery (as a failed metric fails only its own card), so any failure
+    drops the overlay and logs a warning.  A run with no per-order events has
+    no overlay.
     """
-    # Kept for the hidden-liquidity overlay below, which needs canonical
-    # integer-tick prices (exact equality, and hidden_trades()'s int64 output)
-    # rather than the converted display floats.
-    raw_result = result
-
-    # Convert integer-tick prices to the quote currency once, here, so every
-    # face renders display prices (issue #155).
-    result = display_result(result)
-
-    # A price-level (L2) result has no per-order events: build the reduced
-    # depth/trades model and skip every L3-only face rather than erroring on
-    # the empty events frame.
-    if result.level is Level.L2:
-        return _build_l2_gallery_model(result, volume_scale=volume_scale)
-
-    events = result.events
-    trades = result.trades
-    depth = result.depth
-    depth_summary = result.depth_summary
-
-    if volume_scale is None:
-        volume_scale = infer_volume_scale(events["volume"])
-
-    spread = get_spread(depth_summary)
-    zoom_start, zoom_end = _auto_zoom_window(events)
-
-    # One shared mid-anchored window feeds every clipped face;
-    # faces receiving the same bounds stay comparable on shared axes.
-    focus = _viz_data.focus_window(trades)
-    price_from = focus.price_from
-    price_to = focus.price_to
-
-    # Iceberg refills and trades against hidden orders (#111), overlaid on the
-    # depth heatmap and per-order activity map so hidden liquidity is visible
-    # without reading the tables (#272). Clipped to the zoom window: a full
-    # LOBSTER day has ~900 suspected icebergs and ~9,600 hidden trades, which
-    # would flood a face meant to show a few minutes -- deliberately narrower
-    # than depth_heatmap/order_activity's own (unclipped) time axis, per the
-    # issue's own instruction to restrict the overlay, not the base plot.
-    # A single bad detector run, unit conversion, or clip must not sink the
-    # gallery (just as a bad metric fails only its own card), so
-    # any failure here just drops the overlay and logs a warning.
-    hidden_liquidity_overlay: dict[str, pd.DataFrame] = {}
+    if raw_result.events.empty:
+        return {}
     try:
         from ob_analytics.hidden_liquidity import (
             detect_icebergs,
@@ -746,355 +402,98 @@ def build_gallery_model(
                 hidden["best_ask_price"], tick_size, decimals=decimals
             ),
         )
-        hidden_liquidity_overlay = _viz_data.prepare_hidden_liquidity_overlay(
+        return _viz_data.prepare_hidden_liquidity_overlay(
             icebergs_display,
             detection.slices,
             hidden_display,
             start_time=zoom_start,
             end_time=zoom_end,
-            price_from=price_from,
-            price_to=price_to,
+            price_from=focus.price_from,
+            price_to=focus.price_to,
         )
     except Exception as e:  # noqa: BLE001 -- one bad overlay must not sink the gallery
         logger.warning("Gallery: hidden-liquidity overlay failed: {}", e)
+        return {}
 
-    offset = events["timestamp"].min() + pd.Timedelta(minutes=1)
-    depth_summary_offset = depth_summary[depth_summary["timestamp"] >= offset]
-    summary_start, summary_end = _window_over(
-        depth_summary_offset, zoom_start, zoom_end
+
+def build_gallery_model(
+    result: PipelineResult,
+    *,
+    volume_scale: float | None = None,
+) -> GalleryModel:
+    """Build the default gallery model from pipeline results.
+
+    Each order-book concept comes from the concept table
+    (:mod:`ob_analytics.visualization._concepts`), with a variant at each
+    level whose data the run has: a price-level (L2) run has no per-order
+    events, so it gets the L2 faces only.  A concept with both an L2 and an
+    L3 variant is :attr:`~PlotConcept.comparable`.  The analytics are one
+    panel per registered metric that applies to the run; callers may append
+    more (built with the ``*_panel`` helpers) to :attr:`GalleryModel.analytics`.
+
+    Parameters
+    ----------
+    result : PipelineResult
+        Pipeline output.
+    volume_scale : float or None
+        Volume display scale.  ``None`` (default) infers a power-of-10 scale
+        via :func:`infer_volume_scale`, from the events' volumes, or on a
+        price-level run from the depth's (the trades' when there is no depth).
+
+    Returns
+    -------
+    GalleryModel
+    """
+    # The overlay detectors need integer-tick prices (exact equality), so they
+    # read the result before it is converted to display units.
+    raw_result = result
+    result = display_result(result)
+
+    events = result.events
+    trades = result.trades
+    depth = result.depth
+    depth_summary = result.depth_summary
+
+    # The clock that sets the run's length: the events, or the depth on a
+    # price-level run, which has no events.
+    clock = events if not events.empty else depth
+
+    if volume_scale is None:
+        basis = (
+            events["volume"]
+            if not events.empty
+            else (depth["volume"] if not depth.empty else trades.get("volume"))
+        )
+        volume_scale = (
+            infer_volume_scale(basis) if basis is not None and len(basis) else 1.0
+        )
+
+    zoom_start, zoom_end = _zoom_window(trades, clock)
+    # One mid-anchored price band feeds every clipped face, so faces that get
+    # the same bounds stay comparable on shared axes.
+    focus = _viz_data.focus_window(trades)
+
+    offset = clock["timestamp"].min() + pd.Timedelta(minutes=1)
+    summary = depth_summary[depth_summary["timestamp"] >= offset]
+    summary_start, summary_end = _window_over(summary, zoom_start, zoom_end)
+
+    scene = _concepts.Scene(
+        events=events,
+        trades=trades,
+        depth=depth,
+        depth_summary=summary,
+        spread=get_spread(depth_summary),
+        volume_scale=volume_scale,
+        zoom_start=zoom_start,
+        zoom_end=zoom_end,
+        summary_start=summary_start,
+        summary_end=summary_end,
+        focus=focus,
+        overlay=_hidden_liquidity_overlay(raw_result, zoom_start, zoom_end, focus),
     )
-
-    concepts: list[PlotConcept] = [
-        _paired(
-            "trade_tape",
-            "Trade Tape",
-            PlotSpec(
-                "trade_tape",
-                "Trade Tape (price tape)",
-                "trade_tape",
-                _viz_data.prepare_trades_data,
-                {"trades": trades},
-            ),
-            PlotSpec(
-                "trade_tape",
-                "Trade tape with maker order lifecycles",
-                "trade_tape",
-                _viz_data.prepare_trade_tape_l3_data,
-                {"events": events, "trades": trades, "volume_scale": volume_scale},
-            ),
-            note=(
-                "Executions over time. L2: price as a step line. L3: each "
-                "execution dot sits at the end of a bar tracing how long the "
-                "consumed maker order had rested; color = aggressor side."
-            ),
-        ),
-        _l2(
-            "depth_heatmap",
-            "Depth Heatmap",
-            "depth_heatmap",
-            _viz_data.prepare_price_levels_data,
-            {
-                "depth": depth,
-                "spread": spread,
-                "trades": trades,
-                "volume_scale": volume_scale,
-                "price_from": price_from,
-                "price_to": price_to,
-                **hidden_liquidity_overlay,
-            },
-            note=(
-                "Resting liquidity through time: one horizontal line per "
-                "price level, colored by available volume; the pale line is "
-                "the midprice. Triangles mark executions (aggressor side). "
-                "Gaps mean the level emptied. Pass col_bias<1 to brighten "
-                "thin levels and reveal near-touch structure. Diamonds mark "
-                "suspected iceberg refills (joined by a line per iceberg) "
-                "and stars mark trades against hidden orders, from #111's "
-                "detectors, inside the zoom window. "
-                f"{_HIDDEN_LEVELS_NOTE}"
-            ),
-        ),
-        _paired(
-            "order_activity",
-            "Order Activity",
-            PlotSpec(
-                "order_activity",
-                "Order Activity (event map)",
-                "order_activity",
-                _viz_data.prepare_event_map_data,
-                # Share the depth heatmap's mid-anchored window so the L2 event
-                # map clips around the touch rather than its own raw-price
-                # percentile (far flashed orders otherwise squish the activity).
-                {
-                    "events": events,
-                    "volume_scale": volume_scale,
-                    "price_from": price_from,
-                    "price_to": price_to,
-                },
-            ),
-            PlotSpec(
-                "order_activity",
-                "Order lifecycles (place → outcome)",
-                "order_activity",
-                _viz_data.prepare_order_activity_l3_data,
-                # Reuses the depth heatmap's trades-median ±3σ window so the
-                # Gantt clips around the touch.  A shared FocusWindow primitive
-                # would replace these per-face clips.
-                {
-                    "events": events,
-                    "volume_scale": volume_scale,
-                    "price_from": price_from,
-                    "price_to": price_to,
-                    **hidden_liquidity_overlay,
-                },
-            ),
-            note=(
-                "Order placement and removal. L2: created/deleted events "
-                "scattered at their price. L3: each order is one lifespan "
-                "from placement to outcome - orange = pulled (flashed), "
-                "green = rested/filled. L3 also overlays iceberg refills "
-                "and trades against hidden orders, from #111's detectors."
-            ),
-        ),
-        _paired(
-            "cancellations",
-            "Cancellations",
-            PlotSpec(
-                "cancellations",
-                "Cancellations (log)",
-                "cancellations",
-                _viz_data.prepare_volume_map_data,
-                {"events": events, "volume_scale": volume_scale, "log_scale": True},
-            ),
-            PlotSpec(
-                "cancellations",
-                "Cancellations (age x distance)",
-                "cancellations",
-                _viz_data.prepare_cancellations_l3_data,
-                {"events": events, "volume_scale": volume_scale},
-            ),
-            note=(
-                "Pulled orders. L2: cancelled volume over time (log scale). "
-                "L3: every cancellation as how-long-it-rested vs "
-                "how-far-from-the-touch-it-sat, sized by volume."
-            ),
-        ),
-    ]
-
-    # Book snapshot + depth chart: an L2 face from the depth table and an L3
-    # face from the per-order book, so both are comparable.
-    concepts.extend(_book_concepts(depth, events, zoom_end, volume_scale))
-    if "type" in events.columns and not depth.empty:
-        concepts.append(
-            _comparable(
-                "book_replay",
-                "Book Replay",
-                _viz_data.prepare_book_replay_data,
-                {
-                    "depth": depth,
-                    "events": events,
-                    "trades": trades,
-                    "start_time": zoom_start,
-                    "end_time": zoom_end,
-                    "interval": _replay_interval(zoom_start, zoom_end),
-                    "volume_scale": volume_scale,
-                },
-                note=_REPLAY_NOTE,
-            )
-        )
-
-    # Order outcome is L3-only: it asks where each *order* was placed (distance
-    # from the touch, from order_aggressiveness) and how it ended (competing-risks
-    # fate).  No aggregate counterpart, and it needs the per-event bps column.
-    if "aggressiveness_bps" in events.columns:
-        concepts.append(
-            _l3(
-                "order_outcome",
-                "Order Outcome",
-                "order_outcome",
-                _viz_data.prepare_order_outcome_l3_data,
-                {"events": events, "volume_scale": volume_scale},
-                note=(
-                    "Where orders were placed vs how they ended. x = signed "
-                    "distance from the best price at placement (right of 0 "
-                    "improved the touch), y = size; green filled, purple "
-                    "partial, orange cancelled. Still-resting orders are "
-                    "not shown."
-                ),
-            )
-        )
-
-    # Queue position is L3-only: the FIFO queue engine reconstructs each
-    # touch order's rank over time.  No aggregate counterpart (rank is an
-    # MBO notion).  Visible-only (hidden and market orders absent).
-    concepts.append(
-        _l3(
-            "queue_position",
-            "Queue Position",
-            "queue_position",
-            _viz_data.prepare_queue_position_l3_data,
-            # Clip to the zoom window: a whole session of touch orders smears
-            # into a band at the front; a minutes-wide slice shows individual
-            # orders climbing the queue.
-            {"events": events, "start_time": zoom_start, "end_time": zoom_end},
-            note=(
-                "Each line is a resting order's FIFO rank at the touch over "
-                "time, marching toward the front (rank 1, at the top) as the "
-                "orders ahead fill or cancel; colour = how it ended."
-            ),
-        )
+    return GalleryModel(
+        concepts=_concept_cards(scene), analytics=_metric_panels(result)
     )
-
-    if not depth_summary_offset.empty:
-        # Liquidity at the touch is now a comparable pair: L2 = best bid/ask
-        # resting size (MBP); L3 = the FIFO queue-composition strip (MBO,
-        # order age by rank), reconstructed by the queue engine.
-        concepts.append(
-            _paired(
-                "liquidity_at_touch",
-                "Liquidity at the Touch",
-                PlotSpec(
-                    "liquidity_at_touch",
-                    "Liquidity at the touch (best size)",
-                    "liquidity_at_touch",
-                    _viz_data.prepare_liquidity_at_touch_data,
-                    {
-                        "depth_summary": depth_summary_offset,
-                        "events": events,
-                        "start_time": summary_start,
-                        "end_time": summary_end,
-                        "volume_scale": volume_scale,
-                    },
-                ),
-                PlotSpec(
-                    "liquidity_at_touch",
-                    "Queue composition at the touch (age x rank)",
-                    "liquidity_at_touch",
-                    _viz_data.prepare_liquidity_at_touch_l3_data,
-                    {"events": events, "start_time": zoom_start, "end_time": zoom_end},
-                ),
-                note=(
-                    "Liquidity a marketable order meets first. L2: resting size "
-                    "at the best bid/ask, with an event rug beneath (gray = "
-                    "created, amber = cancelled, green = filled) marking when the "
-                    "book churned. L3: the touch queue's composition - each cell "
-                    "is the age of the order at that rank; pale = recent churn, "
-                    "dark = sticky liquidity."
-                ),
-            )
-        )
-        concepts.append(
-            _l2(
-                "volume_percentiles",
-                "Volume Percentiles",
-                "volume_percentiles",
-                _viz_data.prepare_volume_percentiles_data,
-                {
-                    "depth_summary": depth_summary_offset,
-                    "start_time": summary_start,
-                    "end_time": summary_end,
-                    "volume_scale": volume_scale,
-                },
-                note=(
-                    "Book depth through time, stacked by distance from the "
-                    "touch in bps bands: asks above zero, bids below; band "
-                    "thickness = resting volume in that bps ring."
-                ),
-            )
-        )
-        concepts.append(
-            _l2(
-                "price_view",
-                "Price View",
-                "price_view",
-                _viz_data.prepare_price_view_data,
-                {
-                    "depth_summary": depth_summary_offset,
-                    "trades": trades,
-                    "start_time": summary_start,
-                    "end_time": summary_end,
-                },
-                note=(
-                    "The spread as a ribbon (best bid to best ask) with the "
-                    "volume-weighted microprice through it - it leans toward "
-                    "the side with the heavier opposite book (where price is "
-                    "likely to go). Dots are executions by aggressor side."
-                ),
-            )
-        )
-
-    # Events histogram (price). Clip to the shared mid-anchored focus window so
-    # the near-touch distribution stays legible: even q01-q99 of a heavy-tailed
-    # book still spans the far-from-touch flashed orders, collapsing the face to
-    # a single 1px spike.  The prepare clips; here we only size the bandwidth.
-    hist_events = events[["timestamp", "direction", "price", "volume"]].copy()
-    hist_events["volume"] = hist_events["volume"] * volume_scale
-    if price_from is not None and price_to is not None:
-        price_window = price_to - price_from
-    else:  # no focus window (degenerate trades): fall back to the tail span
-        price_window = hist_events["price"].quantile(0.99) - hist_events[
-            "price"
-        ].quantile(0.01)
-    price_bw = max(0.01, round(price_window / 100, 2))
-    concepts.append(
-        _l2(
-            "events_histogram",
-            "Events Histogram (price)",
-            "events_histogram",
-            _viz_data.prepare_events_histogram_data,
-            {
-                "events": hist_events,
-                "val": "price",
-                "bw": price_bw,
-                "price_from": price_from,
-                "price_to": price_to,
-            },
-            note=(
-                "Where order activity concentrated: event counts binned by "
-                "price within the focus window, split by side."
-            ),
-        )
-    )
-    concepts.append(
-        _l2(
-            "trade_size",
-            "Trade Size",
-            "trade_size",
-            _viz_data.prepare_trade_size_data,
-            {"trades": trades, "volume_scale": volume_scale},
-            note=(
-                "How big trades are: each execution a jittered dot on a log "
-                "size axis, buys and sells in separate bands. Trade size is "
-                "heavy-tailed, so the log axis spreads the bulk while keeping "
-                "the rare block trades on-scale."
-            ),
-        )
-    )
-
-    # Hidden executions are LOBSTER-only (raw_event_type == 5) -- kept
-    # alongside the general hidden_trades() overlay on depth_heatmap /
-    # order_activity (#272) rather than replaced: the venue's own type-5
-    # label is ground truth where it exists, while hidden_trades() is an
-    # inference that works on any L3 feed.
-    if "raw_event_type" in events.columns:
-        hidden = events[events["raw_event_type"] == 5]
-        if not hidden.empty:
-            concepts.append(
-                _l2(
-                    "hidden_executions",
-                    "Hidden Executions",
-                    "hidden_executions",
-                    _viz_data.prepare_hidden_executions_data,
-                    {"events": events, "trades": trades},
-                    note=(
-                        "LOBSTER-only: executions against hidden orders "
-                        "(type 5) scattered over the trade price line - "
-                        "liquidity that never showed in the visible book."
-                    ),
-                )
-            )
-
-    return GalleryModel(concepts=concepts, analytics=_metric_panels(result))
 
 
 def plot_result(
@@ -1147,9 +546,13 @@ def plot_result(
     Raises
     ------
     KeyError
-        If *concept* is not built for this result, or has no variant at *level*.
-        The message lists what is available.
+        If *concept* is not built for this result, has no variant at *level*,
+        or is not drawn by *backend*.  The message lists what is available:
+        for a missing backend, the backends that draw the plot.
+    ValueError
+        If *backend* is not registered.
     """
+    _load_backend(backend)
     model = build_gallery_model(result, volume_scale=volume_scale)
     concept_map = {c.key: c for c in model.concepts}
     metric_map = {spec.name: spec for spec in model.analytics}
@@ -1159,6 +562,7 @@ def plot_result(
         # L2/L3 variants, so it renders straight from its panel.
         metric_spec = metric_map.get(concept)
         if metric_spec is not None:
+            _concepts.require(concept, None, backend)
             data = metric_spec.prepare(**{**metric_spec.prep_kwargs, **overrides})
             if theme is not None:
                 data["theme"] = theme
@@ -1180,6 +584,7 @@ def plot_result(
             f"Concept {concept!r} has no {resolved.value} variant "
             f"(available levels: {have})."
         )
+    _concepts.require(concept, resolved, backend)
 
     data = spec.prepare(**{**spec.prep_kwargs, **overrides})
     if theme is not None:
@@ -1585,11 +990,10 @@ def generate_gallery(
                     logger.warning("Gallery: {}", panel.reason)
                     logged.add(panel.reason)
                 continue
-            if (panel.concept, panel.level, panel.backend) not in RENDERERS and any(
-                (panel.concept, panel.level, other) in RENDERERS for other in loaded
-            ):
-                # Another backend draws this plot and this one does not, by
-                # design (the book replay is Plotly only): the panel shows a
+            drawn_by = _concepts.backends(panel.concept, panel.level)
+            if panel.backend not in drawn_by and loaded & set(drawn_by):
+                # Another backend draws this plot and this one does not, as
+                # declared (the book replay is Plotly only): the panel shows a
                 # bare "Not available" without a failed render to warn about.
                 continue
             if panel.backend not in rendered_dirs:
@@ -1609,8 +1013,8 @@ def _misplaced(panel: _Panel, backends: frozenset[str]) -> str:
     The model decides how a panel is drawn: a :class:`PlotConcept` in
     :attr:`GalleryModel.concepts` is drawn at the level of each variant, and a
     :class:`PlotSpec` in :attr:`GalleryModel.analytics` is drawn level-less.
-    The renderer registry decides it separately, from the level each renderer
-    is registered at.  Only the renderers on *backends*, the gallery's own
+    The concept table (with any plug-in renderers) decides it separately,
+    from the levels it declares the plot at.  Only the renderers on *backends*, the gallery's own
     loaded backends, are read, so the answer does not depend on what else was
     imported.  The panel does not match when it is the other kind, or when
     none of *backends* has a renderer at its level.  The text says how to fix
@@ -1618,7 +1022,7 @@ def _misplaced(panel: _Panel, backends: frozenset[str]) -> str:
     not a mismatch, and neither is a plot none of them draws, so both return
     ``""``.
     """
-    levels = {lvl for lvl, b in RENDERERS.placements(panel.concept) if b in backends}
+    levels = {lvl for lvl, b in _concepts.placements(panel.concept) if b in backends}
     if not levels:
         return ""
     registered = f"{panel.concept!r} is registered {_kind_text(levels)}"

@@ -21,17 +21,15 @@ from typing import Any
 import numpy as np
 
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.protocols import Level
+from ob_analytics.visualization._concepts import register_backend
 from ob_analytics.visualization._data import (
     NO_DEPTH_NOTICE,
     biased_color_norm,
     book_bar_thickness,
-    book_mid,
     check_book_payload_level,
     mpl_marker_area_to_plotly_size,
 )
 from ob_analytics.visualization._palette import Palette
-from ob_analytics.visualization._renderers import RENDERERS
 from ob_analytics.visualization._theme import DEFAULT_THEME, PlotTheme
 
 
@@ -135,14 +133,10 @@ def _maybe_legend(fig: Any) -> None:
         fig.legend.click_policy = "hide"
 
 
-def _apply_padded_y_range(fig: Any, y_range: tuple[float, float] | None) -> None:
-    """Set a 4%-padded y-range so spike prints are never cut at the axis edge."""
-    if y_range is None:
-        return
-    lo, hi = y_range
-    pad = (hi - lo) * 0.04 or 1.0
-    fig.y_range.start = lo - pad
-    fig.y_range.end = hi + pad
+def _apply_y_range(fig: Any, y_range: tuple[float, float] | None) -> None:
+    """Set the payload's y-range, if it has one; the prepare step padded it."""
+    if y_range is not None:
+        fig.y_range.start, fig.y_range.end = y_range
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +221,7 @@ def bokeh_trades(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
             continue
         _bokeh_lollipops(fig, side, color, label)
 
-    _apply_padded_y_range(fig, data.get("y_range"))
+    _apply_y_range(fig, data.get("y_range"))
     _maybe_legend(fig)
     return fig
 
@@ -277,7 +271,7 @@ def bokeh_trade_tape_per_order(data: dict, *, theme: PlotTheme = DEFAULT_THEME) 
             continue
         _bokeh_lollipops(fig, side, color, label)
 
-    _apply_padded_y_range(fig, data.get("y_range"))
+    _apply_y_range(fig, data.get("y_range"))
     _maybe_legend(fig)
     return fig
 
@@ -367,10 +361,9 @@ def bokeh_price_levels(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
 
     if spread is not None and show_mp:
         if "best_bid_price" in spread and "best_ask_price" in spread:
-            mp = (spread["best_bid_price"] + spread["best_ask_price"]) / 2
             fig.step(
                 x=spread["timestamp"],
-                y=mp,
+                y=spread["midprice"],
                 mode="after",
                 line_color=pal.price_line,
                 line_width=1.5,
@@ -422,9 +415,7 @@ def bokeh_price_levels(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
                 legend_label="Buy Trades",
             )
 
-    y_range = data.get("y_range")
-    if y_range is not None:
-        fig.y_range.start, fig.y_range.end = y_range
+    _apply_y_range(fig, data.get("y_range"))
 
     _maybe_legend(fig)
     return fig
@@ -478,7 +469,7 @@ def _bokeh_book_bars(
             legend_label=label,
         )
 
-    mid = book_mid(bids, asks)
+    mid = data["mid"]
     if mid is not None:
         fig.add_layout(
             Span(
@@ -540,12 +531,12 @@ def _bokeh_depth_curve(
     )
 
     for side, color, label in (
-        (data["bids"], pal.bid, "Bid"),
-        (data["asks"], pal.ask, "Ask"),
+        (data["bid_curve"], pal.bid, "Bid"),
+        (data["ask_curve"], pal.ask, "Ask"),
     ):
         if side.empty:
             continue
-        s = side.sort_values("price")
+        s = side
         # One source shared across the fill/step/scatter glyphs below, so the
         # price/liquidity columns are converted once per side, not per glyph.
         source = ColumnDataSource({"price": s["price"], "liquidity": s["liquidity"]})
@@ -593,20 +584,5 @@ def bokeh_depth_chart_per_order(data: dict, *, theme: PlotTheme = DEFAULT_THEME)
     return _bokeh_depth_curve(data, per_order=True, theme=theme)
 
 
-# ---------------------------------------------------------------------------
-# Renderer self-registration
-# ---------------------------------------------------------------------------
-# (concept, level, renderer); mirrors the matplotlib / plotly backends'
-# coordinates for the core concepts this backend covers.
-_L2 = Level.L2
-_L3 = Level.L3
-for _concept, _level, _fn in [
-    ("trade_tape", _L2, bokeh_trades),
-    ("trade_tape", _L3, bokeh_trade_tape_per_order),
-    ("depth_heatmap", _L2, bokeh_price_levels),
-    ("book_snapshot", _L2, bokeh_book_snapshot_aggregate),
-    ("book_snapshot", _L3, bokeh_book_snapshot_per_order),
-    ("depth_chart", _L2, bokeh_depth_chart_aggregate),
-    ("depth_chart", _L3, bokeh_depth_chart_per_order),
-]:
-    RENDERERS.register((_concept, _level, "bokeh"), _fn)
+# The concept table names the plots this backend draws; register them.
+register_backend("bokeh", globals())
