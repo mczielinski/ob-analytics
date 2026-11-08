@@ -38,7 +38,12 @@ import pandas as pd
 from loguru import logger
 
 from ob_analytics.config import SourceSettings
-from ob_analytics.live._base import CaptureConfig, EventDict, VenueClockCount
+from ob_analytics.live._base import (
+    CaptureConfig,
+    EventDict,
+    UnmappedMessageError,
+    VenueClockCount,
+)
 from ob_analytics.protocols import (
     Clocks,
     FeedType,
@@ -55,13 +60,6 @@ _L2_CHANNEL = "l2_book"
 _TRADES_CHANNEL = "trades"
 # The kind of queue item that carries an error from a callback to the stream.
 _STREAM_ERROR = "error"
-
-
-class UnmappedMessageError(ValueError):
-    """An L3 message the capture could not turn into order events.
-
-    It ends the stream: the capture's book would no longer match the venue's.
-    """
 
 
 #: Default depth of the callback -> iterator buffer.

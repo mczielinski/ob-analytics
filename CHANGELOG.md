@@ -1090,6 +1090,21 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
+- **A Bitstamp order message that cannot be parsed ends the segment.** The
+  Bitstamp capture left such a message out and carried on with a book that
+  no longer matched the venue's, as cryptofeed did before #398. A snapshot
+  row or live order event it cannot parse, or one with an unknown
+  `order_type`, now raises `UnmappedMessageError`, so the segment ends and
+  the next one starts from a fresh snapshot. A trade it cannot parse is still
+  left out and counted in `dropped`. `UnmappedMessageError` moved to
+  `ob_analytics.live`, so a plug-in L3 source can raise it too.
+
+- **A segment that closes by itself after a second signal has no error.**
+  When a second Ctrl-C or SIGTERM arrived just as a segment was finishing on
+  its own, the manifest still said a second signal had stopped it, and
+  `capture_errors` failed. A segment that is late to stop after the time
+  limit is still recorded as such.
+
 - **Reading a `.dbn.zst` file closes it on Python 3.14** (#416). From 3.14
   databento decompresses with the standard library, whose reader leaves the
   file it wraps open, so `read_mbo_frame` leaked one file handle per

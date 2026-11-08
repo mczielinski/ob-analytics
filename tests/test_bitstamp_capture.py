@@ -263,3 +263,128 @@ class TestStop:
             return task.done()
 
         assert asyncio.run(stop_as_a_message_arrives())
+
+
+def _bad_order_frame(microtimestamp: int) -> str:
+    frame = json.loads(_order_frame(7, microtimestamp))
+    frame["data"]["price"] = "not a price"
+    return json.dumps(frame)
+
+
+def _bad_trade_frame(microtimestamp: int) -> str:
+    frame = json.loads(_trade_frame(5, microtimestamp))
+    del frame["data"]["buy_order_id"]
+    return json.dumps(frame)
+
+
+class TestUnparseableMessages:
+    """An order message that cannot be parsed ends the stream; a trade is counted.
+
+    Without the order message the book would be wrong from then on, so the
+    segment ends and the next one starts from a fresh snapshot.
+    """
+
+    def _stream(self, cap: BitstampCapturer) -> list[tuple[str, Any, Any]]:
+        config = CaptureConfig(pair="btcusd", out_dir=Path("unused"), minutes=0.01)
+
+        async def collect() -> list[tuple[str, Any, Any]]:
+            return [item async for item in cap.stream(config)]
+
+        return asyncio.run(collect())
+
+    def test_a_live_order_event_ends_the_stream(self, monkeypatch):
+        from ob_analytics.live import UnmappedMessageError
+
+        cap = _capturer(
+            monkeypatch,
+            frames=[_order_frame(9, 1_000), _bad_order_frame(3_000)],
+            books=[_book(2_000, 8)],
+            fetch_delay=0.05,
+        )
+        assert _snapshot_ids(cap) == [8]
+        closed = []
+        real_close = cap._close_ws
+
+        async def close_ws() -> None:
+            closed.append(True)
+            await real_close()
+
+        monkeypatch.setattr(cap, "_close_ws", close_ws)
+        with pytest.raises(UnmappedMessageError, match="not a price"):
+            self._stream(cap)
+        assert cap.dropped == 0
+        assert closed  # the connection is closed
+
+    def test_a_buffered_order_event_ends_the_stream_and_closes(self, monkeypatch):
+        from ob_analytics.live import UnmappedMessageError
+
+        cap = _capturer(
+            monkeypatch,
+            frames=[_order_frame(9, 1_000), _bad_order_frame(1_500)],
+            books=[_book(2_000, 8)],
+            fetch_delay=0.05,
+        )
+        _snapshot_ids(cap)
+        closed = []
+
+        async def close_ws() -> None:
+            closed.append(True)
+            cap._ws = None
+
+        monkeypatch.setattr(cap, "_close_ws", close_ws)
+        with pytest.raises(UnmappedMessageError):
+            self._stream(cap)
+        assert closed
+
+    def test_an_unknown_order_type_ends_the_stream(self, monkeypatch):
+        from ob_analytics.live import UnmappedMessageError
+
+        frame = json.loads(_order_frame(7, 3_000))
+        frame["data"]["order_type"] = 5
+        cap = _capturer(
+            monkeypatch,
+            frames=[_order_frame(9, 1_000), json.dumps(frame)],
+            books=[_book(2_000, 8)],
+            fetch_delay=0.05,
+        )
+        _snapshot_ids(cap)
+        with pytest.raises(UnmappedMessageError, match="order_type 5"):
+            self._stream(cap)
+
+    def test_a_snapshot_row_ends_the_snapshot(self, monkeypatch):
+        from ob_analytics.live import UnmappedMessageError
+
+        book = _book(2_000, 8)
+        book["bids"].append(["100.0", "1.0", "not an id"])
+        cap = _capturer(
+            monkeypatch,
+            frames=[_order_frame(9, 1_000)],
+            books=[book],
+            fetch_delay=0.05,
+        )
+        closed = []
+
+        async def close_ws() -> None:
+            closed.append(True)
+
+        monkeypatch.setattr(cap, "_close_ws", close_ws)
+        with pytest.raises(UnmappedMessageError, match="snapshot bid"):
+            _snapshot_ids(cap)
+        assert closed
+
+    def test_a_trade_is_left_out_and_counted(self, monkeypatch):
+        cap = _capturer(
+            monkeypatch,
+            frames=[
+                _order_frame(9, 1_000),
+                _bad_trade_frame(3_000),
+                _trade_frame(6, 4_000),
+            ],
+            books=[_book(2_000, 8)],
+            fetch_delay=0.05,
+        )
+        _snapshot_ids(cap)
+        trades = [ev for kind, ev, _ in self._stream(cap) if kind == "trade"]
+        assert [t["trade_id"] for t in trades] == [6]
+        assert cap.dropped == 1
+        assert cap.diagnostics()["dropped"] == 1

@@ -9,7 +9,7 @@ segment.
 
 Public API:
     CaptureConfig, CaptureResult, CaptureSink, EventDict
-    LiveSource, SupportsDiagnostics, SupportsPreflight
+    LiveSource, SupportsDiagnostics, SupportsPreflight, UnmappedMessageError
     run_capture, CaptureRun
     read_manifest, CaptureManifest, Segment, Gap, EndReason
 
@@ -36,6 +36,7 @@ from ob_analytics.live._base import (
     LiveSource,
     SupportsDiagnostics,
     SupportsPreflight,
+    UnmappedMessageError,
 )
 from ob_analytics.live._manifest import (
     CaptureManifest,
@@ -59,6 +60,7 @@ __all__ = [
     "Segment",
     "SupportsDiagnostics",
     "SupportsPreflight",
+    "UnmappedMessageError",
     "read_manifest",
     "run_capture",
 ]

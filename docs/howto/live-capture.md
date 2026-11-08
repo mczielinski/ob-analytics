@@ -244,7 +244,12 @@ A segment keeps the rows it wrote before an error. Its `meta.json` records the
 error as `capture_error`, and the step that failed as `capture_error_phase`
 (`snapshot`, `stream`, `shutdown`, or `close` when a file could not be
 written out). After a failed snapshot the stream does not run. Messages a
-source received but could not use are counted in `dropped`. If the source
+source received but could not use are counted in `dropped`. At L3, an order
+message a source cannot use (Bitstamp's, or cryptofeed's) ends the segment
+instead, with `UnmappedMessageError` as its error: the book would be wrong
+from then on, and the next segment starts from a fresh snapshot. A trade
+Bitstamp cannot parse is still left out and counted, since its order events
+carry the fills. If the source
 cannot report its counters, the capture logs a warning and `meta.json`
 records `diagnostics_error` instead. `ob-analytics audit` on a single capture
 reports the dropped messages and the error as the `dropped_messages` and

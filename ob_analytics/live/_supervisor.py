@@ -155,6 +155,9 @@ class _Running:
     # Why it was cancelled, when it was: it took too long to stop, or a
     # second signal asked for the capture to stop at once.
     why_cancelled: str = ""
+    # The error to record if it then ended by itself before the cancel took
+    # (empty: nothing went wrong, as when a second signal came as it closed).
+    late_note: str = ""
     watchers: list[asyncio.Task[Any]] = field(default_factory=list)
 
 
@@ -489,6 +492,9 @@ class _Supervisor:
                 running.why_cancelled = (
                     f"the segment did not stop within {STOP_TIMEOUT_SECONDS:.0f} s"
                 )
+                running.late_note = (
+                    f"the segment took more than {STOP_TIMEOUT_SECONDS:.0f} s to stop"
+                )
                 log = logger.error
             log(
                 "Capture '{}': {}: {}; cancelling it",
@@ -546,8 +552,9 @@ class _Supervisor:
             segment.book_resyncs = int(result.extras.get("book_resyncs") or 0)
             segment.raw_frames_skipped = running.sink.raw_frames_skipped
             if running.stuck:
-                segment.error = "; ".join(
-                    e for e in (segment.error, running.why_cancelled) if e
+                segment.error = (
+                    "; ".join(e for e in (segment.error, running.late_note) if e)
+                    or None
                 )
         else:
             segment.ended = pd.Timestamp.now(tz="UTC")
