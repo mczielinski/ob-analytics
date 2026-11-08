@@ -7,6 +7,7 @@ import pytest
 
 from ob_analytics.data import load_data, save_data
 from ob_analytics.exceptions import UnknownNameError
+from tests._golden import assert_same_result
 
 
 class TestSaveLoadParquet:
@@ -28,19 +29,6 @@ class TestSaveLoadParquet:
             load_data(empty)
 
 
-def _assert_same_result(back, result) -> None:
-    assert back.config == result.config
-    assert back.level is result.level
-    for name, frame in result.tables().items():
-        # Parquet gives a missing value in an object column back as None, not
-        # pd.NA; that is how load_data has always read it.
-        loaded, frame = getattr(back, name).copy(), frame.copy()
-        objects = [c for c in frame.columns if frame[c].dtype == object]
-        for df in (frame, loaded):
-            df[objects] = df[objects].astype(object).where(df[objects].notna(), None)
-        pd.testing.assert_frame_equal(loaded, frame, check_categorical=False)
-
-
 class TestLoadResult:
     """``load_result`` gives back the result ``save_data`` was given."""
 
@@ -55,7 +43,7 @@ class TestLoadResult:
         save_data(result, tmp_path / "saved")
         back = load_result(tmp_path / "saved")
 
-        _assert_same_result(back, result)
+        assert_same_result(back, result)
         assert display_result(back).trades["volume"].tolist() == [40.0, 25.0]
         assert display_result(back).trades["price"].tolist() == [101.0, 100.0]
 
@@ -78,7 +66,7 @@ class TestLoadResult:
         result = replace(result, config=config)
         save_data(result, tmp_path / "saved")
 
-        _assert_same_result(load_result(tmp_path / "saved"), result)
+        assert_same_result(load_result(tmp_path / "saved"), result)
 
     def test_an_l2_run_comes_back_at_l2(self, tmp_path: Path):
         from ob_analytics import Pipeline
@@ -95,7 +83,7 @@ class TestLoadResult:
         back = load_result(tmp_path / "saved")
 
         assert back.level is Level.L2
-        _assert_same_result(back, result)
+        assert_same_result(back, result)
 
     def test_a_file_with_only_the_tick_and_lot_takes_decimals_from_them(
         self, tmp_path: Path, lobster_day_dir, lobster_day_pipeline

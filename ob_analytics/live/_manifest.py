@@ -88,6 +88,20 @@ def _ts(value: Any) -> pd.Timestamp | None:
     return None if value is None else pd.Timestamp(value)
 
 
+def _count(d: dict[str, Any], key: str) -> int:
+    """The whole number under *key* in a manifest entry; 0 when it is absent.
+
+    Raises :class:`TypeError` for any other value, so a count that is a word
+    or a list is refused rather than read as 0.
+    """
+    value = d.get(key)
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"capture manifest {key} {value!r} is not a whole number")
+    return value
+
+
 def _iso(value: pd.Timestamp | None) -> str | None:
     return None if value is None else value.isoformat()
 
@@ -197,12 +211,12 @@ class Segment:
             heartbeat=_ts(d.get("heartbeat")),
             end_reason=None if reason is None else EndReason(reason),
             error=d.get("error"),
-            n_book_events=int(d.get("n_book_events") or 0),
-            n_trade_events=int(d.get("n_trade_events") or 0),
-            dropped=int(d.get("dropped") or 0),
+            n_book_events=_count(d, "n_book_events"),
+            n_trade_events=_count(d, "n_trade_events"),
+            dropped=_count(d, "dropped"),
             diagnostics_error=d.get("diagnostics_error"),
-            book_resyncs=int(d.get("book_resyncs") or 0),
-            raw_frames_skipped=int(d.get("raw_frames_skipped") or 0),
+            book_resyncs=_count(d, "book_resyncs"),
+            raw_frames_skipped=_count(d, "raw_frames_skipped"),
         )
 
 
@@ -339,6 +353,12 @@ class CaptureManifest:
                 f"capture manifest version {d.get('version')!r} is not supported "
                 f"(this ob-analytics reads version {CAPTURE_FORMAT_VERSION})"
             )
+        for key in ("source", "pair", "level"):
+            if not isinstance(d[key], str) or not d[key]:
+                raise ConfigError(f"capture manifest {key} {d[key]!r} is not a name")
+        for key in ("segments", "gaps"):
+            if not isinstance(d.get(key, []), list):
+                raise TypeError(f"capture manifest {key} {d[key]!r} is not a list")
         declarations = {
             k: d[k]
             for k in ("feed_type", "trade_attribution", "sequence_kind")
@@ -353,7 +373,7 @@ class CaptureManifest:
             roll_minutes=d.get("roll_minutes"),
             roll_mb=d.get("roll_mb"),
             ended=_ts(d.get("ended")),
-            restarts=int(d.get("restarts") or 0),
+            restarts=_count(d, "restarts"),
             segments=[Segment.from_dict(s) for s in d.get("segments") or ()],
             gaps=[Gap.from_dict(g) for g in d.get("gaps") or ()],
         )
@@ -630,11 +650,22 @@ def read_manifest(path: Path) -> CaptureManifest | None:
     *path* is the capture directory (or its ``manifest.json``).  Returns
     ``None`` when there is no manifest: a single capture made by
     :func:`~ob_analytics.live._runner.run_capturer`, or a processed output.
-    Raises :class:`~ob_analytics.exceptions.ConfigError` for a manifest
-    this version cannot read.
+    Raises :class:`~ob_analytics.exceptions.ConfigError` for a manifest this
+    version cannot read: one that is not a JSON object, lacks a key, or holds
+    a value of the wrong kind, such as a segment name that is not one plain
+    directory name.
     """
     path = Path(path)
     file = path if path.name == MANIFEST_NAME else path / MANIFEST_NAME
     if not file.is_file():
         return None
-    return CaptureManifest.from_dict(json.loads(file.read_text()))
+    try:
+        d = json.loads(file.read_text())
+        if not isinstance(d, dict):
+            raise TypeError("it does not hold a JSON object")
+        return CaptureManifest.from_dict(d)
+    except (ValueError, KeyError, TypeError) as exc:
+        why = f"it has no {exc} key" if isinstance(exc, KeyError) else str(exc)
+        raise ConfigError(
+            f"{file} is not a capture manifest this version can read: {why}"
+        ) from exc

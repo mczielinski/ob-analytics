@@ -328,18 +328,38 @@ def _mbo_parts(source: Any, rows: int) -> Iterator[pd.DataFrame]:
 
 @contextmanager
 def _mbo_store(source: Any) -> Generator[Any]:
-    """Give the open ``DBNStore`` of a path or store, refusing a non-MBO schema.
+    """Give the open ``DBNStore`` of a path or store, refusing a bad file.
 
     A store opened here from a path is closed on the way out; a store the
-    caller passed is left open.
+    caller passed is left open.  A file that is not DBN, holds a schema other
+    than MBO, or ends part way through its metadata or a record raises
+    :class:`ConfigError`, whether it fails on opening or while the records are
+    read inside the ``with`` block.  ``databento`` only warns about a cut
+    record and reads the records before it, so that warning is an error here:
+    a frame missing the end of the file is a wrong answer.
     """
+    db = _databento()
+    from databento_dbn import DBNError
+
+    bad_file = (db.BentoError, db.common.error.BentoWarning, DBNError, ValueError)
     opened = not hasattr(source, "to_df")
-    store = _open_dbn(source) if opened else source
+    store = None
     try:
-        _check_mbo_schema(store)
-        yield store
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "error", message=".*truncated", category=db.common.error.BentoWarning
+            )
+            store = db.DBNStore.from_file(Path(source)) if opened else source
+            _check_mbo_schema(store)
+            yield store
+    except bad_file as exc:
+        if isinstance(exc, ConfigError):
+            raise
+        raise ConfigError(
+            f"DatabentoLoader: {source} is not a DBN file this reader can read: {exc}"
+        ) from exc
     finally:
-        if opened:
+        if opened and store is not None:
             _close_dbn(store)
 
 
@@ -355,21 +375,20 @@ def _check_mbo_schema(store: Any) -> None:
         )
 
 
-def _open_dbn(path: Any) -> Any:
-    """Return a ``databento.DBNStore`` for *path* (lazy import)."""
+def _databento() -> Any:
+    """Return the ``databento`` module, imported on first use."""
     try:
-        import databento as db
+        import databento
     except ImportError as exc:  # pragma: no cover - exercised by the extra
         raise ImportError(
             "Reading DBN files needs the databento package, which is an "
             'optional dependency: pip install "ob-analytics[databento]".'
         ) from exc
-
-    return db.DBNStore.from_file(Path(path))
+    return databento
 
 
 def _close_dbn(store: Any) -> None:
-    """Close the file a ``DBNStore`` from :func:`_open_dbn` holds open.
+    """Close the file a ``DBNStore`` from :func:`_mbo_store` holds open.
 
     A store has no close of its own. Closing its ``reader`` is not enough for
     a compressed file: from Python 3.14 databento decompresses with the
