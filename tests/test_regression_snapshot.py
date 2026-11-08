@@ -218,6 +218,10 @@ def test_kyle_lambda_baseline(demo_result):
     # the regression itself did not move — only its units. Multiply by
     # tick_size and divide by lot_size for the quote-currency-per-base-asset
     # value.
-    BASELINE_LAMBDA: float | None = 8.651849748125398e-06
+    # 2026-11-07 (#400, measures in instrument units): compute_kyle_lambda reads
+    # tick_size and lot_size off the trades and reports dollars per BTC, so
+    # lambda is back at the original 8.651849748125398 (the 1e-6 above times
+    # tick_size / lot_size = 1e6), with r_squared unchanged once more.
+    BASELINE_LAMBDA: float | None = 8.651849748125398
     if BASELINE_LAMBDA is not None and not np.isnan(BASELINE_LAMBDA):
         assert np.isclose(res.lambda_, BASELINE_LAMBDA, rtol=1e-10, equal_nan=True)

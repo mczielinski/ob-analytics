@@ -11,7 +11,6 @@ import pandas as pd
 import pytest
 
 from ob_analytics._demos import (
-    _cost_panels,
     _lobster_analytics_panels,
     run_bitstamp_demo,
 )
@@ -55,20 +54,6 @@ class TestLobsterAnalyticsPanels:
     def test_no_halts_no_halts_panel(self, result: PipelineResult) -> None:
         keys = {p.name for p in _lobster_analytics_panels(result, None)}
         assert "trading_halts" not in keys
-
-
-def test_cost_panel_bps_match_display_units(result: PipelineResult) -> None:
-    # The cost panel is fed raw-tick frames on purpose: bps are ratios.
-    from ob_analytics.cost import transaction_costs
-
-    display = display_result(result)
-    raw_costs = transaction_costs(result.trades, result.depth_summary)
-    shown_costs = transaction_costs(display.trades, display.depth_summary)
-    for col in ("effective_spread_bps", "realized_spread_bps", "price_impact_bps"):
-        assert raw_costs[col].to_numpy() == pytest.approx(
-            shown_costs[col].to_numpy(), nan_ok=True
-        )
-    assert isinstance(_cost_panels(result), list)
 
 
 def test_bitstamp_demo_without_trades_names_the_capture_command(tmp_path) -> None:

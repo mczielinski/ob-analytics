@@ -65,5 +65,23 @@ class TestTradeImpacts:
                 "taker": [1, 1],
             }
         )
+        trades.attrs.update(tick_size=0.01, lot_size=1e-8)
         out = trade_impacts(trades)
-        assert out["vwap"].iloc[0] == pytest.approx(7_800_050)
+        assert out["vwap"].iloc[0] == pytest.approx(78_000.5)
+
+    def test_integer_ticks_and_lots_report_in_instrument_units(self) -> None:
+        raw = pd.DataFrame(
+            {
+                "timestamp": [TS, TS + pd.Timedelta(seconds=1)],
+                "price": [10_000, 10_100],
+                "volume": [100_000_000, 300_000_000],
+                "direction": ["buy", "buy"],
+                "taker": [1, 1],
+            }
+        )
+        raw.attrs.update(tick_size=0.01, lot_size=1e-8)
+        display = raw.assign(price=raw["price"] * 0.01, volume=raw["volume"] * 1e-8)
+
+        pd.testing.assert_frame_equal(trade_impacts(raw), trade_impacts(display))
+        one = trade_impacts(raw).iloc[0]
+        assert (one["min_price"], one["max_price"], one["vol"]) == (100.0, 101.0, 4.0)
