@@ -1047,13 +1047,9 @@ class TestStaleOrders:
 
 
 @pytest.fixture(scope="module")
-def bitstamp_sample_result(bitstamp_sample_dir):
+def bitstamp_sample_result(bundled_sample_result):
     """The bundled Bitstamp sample through the pipeline, once per module."""
-    from ob_analytics.pipeline import Pipeline
-
-    return Pipeline(source=BitstampSource()).run(
-        str(bitstamp_sample_dir / "orders.csv.gz")
-    )
+    return bundled_sample_result
 
 
 class TestStaleOrdersInSummary:

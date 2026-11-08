@@ -36,8 +36,8 @@ FRAMES = ("events", "trades", "depth", "depth_summary")
 
 
 @pytest.fixture(scope="module")
-def sample(sample_csv_path):
-    return Pipeline().run(sample_csv_path)
+def sample(bundled_sample_result):
+    return bundled_sample_result
 
 
 @pytest.fixture(scope="module")

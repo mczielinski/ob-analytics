@@ -15,17 +15,14 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from ob_analytics.bitstamp import BitstampSource
 from ob_analytics.flow_toxicity import compute_kyle_lambda
-from ob_analytics.pipeline import Pipeline, PipelineResult
+from ob_analytics.pipeline import PipelineResult
 from tests._golden import df_fingerprint
 
 
 @pytest.fixture(scope="module")
-def demo_result(bitstamp_sample_dir) -> PipelineResult:
-    return Pipeline(source=BitstampSource()).run(
-        str(bitstamp_sample_dir / "orders.csv.gz")
-    )
+def demo_result(bundled_sample_result) -> PipelineResult:
+    return bundled_sample_result
 
 
 def test_demo_outputs_present(demo_result):
