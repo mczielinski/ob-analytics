@@ -113,10 +113,12 @@ class CoinbaseSource:
     name = "coinbase"
     level = Level.L3  # per-order (Coinbase `full` channel)
     feed_type = FeedType.MATCHED_BOOK  # exchange matching engine: never crossed
-    settings = SourceSettings()  # empty: no per-source knobs
     # The tick and lot size the venue's data is usually on; the run's config
     # starts from it, and a field the caller sets wins.
     grid = InstrumentGrid(tick_size=0.01, lot_size=1e-8)
+
+    def __init__(self, settings: SourceSettings | None = None) -> None:
+        self.settings = settings or SourceSettings()  # empty: no per-source knobs
 
     def create_loader(self, config: PipelineConfig, ctx: RunContext) -> CoinbaseLoader:
         return CoinbaseLoader(config)
@@ -178,6 +180,8 @@ column means, including how `volume` and `fill` change over an order's life.
     ships ground-truth depth — as LOBSTER does from its orderbook file.
 
 Using it — programmatically and from the CLI:
+
+<!-- docs-test: skip needs a Coinbase file and a finished loader -->
 
 ```python
 from ob_analytics import Pipeline, list_sources
@@ -403,6 +407,8 @@ print(list_writers())  # [..., "duckdb", ...]
 
 Using it — `save_data` takes a **dict of DataFrames**, not a `PipelineResult`:
 
+<!-- docs-test: skip needs duckdb, which ob-analytics does not install -->
+
 ```python
 from ob_analytics import Pipeline, save_data
 
@@ -516,12 +522,16 @@ result.
 `OrderBookDeltaDataWrangler` takes: a UTC index and the columns `action`,
 `side`, `price`, `size`, `order_id`, `flags`, `sequence`.
 
+<!-- docs-test: skip needs nautilus-trader, which the docs job does not install -->
+
 ```python
 import pandas as pd
 from nautilus_trader.persistence.wranglers import OrderBookDeltaDataWrangler
+from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
+instrument = TestInstrumentProvider.btcusdt_binance()  # see size_precision below
 deltas = OrderBookDeltaDataWrangler(instrument).process(
-    pd.read_parquet("out/deltas.parquet")
+    pd.read_parquet("out/toy-deltas.parquet")
 )
 ```
 
@@ -632,6 +642,8 @@ fig = plot(
 **A custom backend.** Register renderers under your backend name, then point
 the dispatcher at the module so it imports lazily on first use:
 
+<!-- docs-test: skip needs the reader's own backend package -->
+
 ```python
 from ob_analytics.visualization import register_plot_backend
 
@@ -677,6 +689,8 @@ A plot registered at a level is a `PlotConcept` appended to the model's
 `concepts` list instead, before `generate_gallery` is called. Its `variants` map
 each level it is registered at to a `PlotSpec`, and the gallery gives it one
 card per level:
+
+<!-- docs-test: skip prepare_my_face is the reader's own function -->
 
 ```python
 from ob_analytics.visualization import Level
@@ -904,6 +918,8 @@ register_bar_rule(RangeRule())
 ```
 
 ```python
+from ob_analytics import bars
+
 bars(result.trades, "range", 25)  # a new bar every $25 of price travel
 ```
 
@@ -970,7 +986,7 @@ register_feature(CloseLocationFeature())
 ```
 
 ```python
-features(trades, quotes, "volume", 0.5)["close_location"]
+features(result.trades, result.depth_summary, "volume", 0.5)["close_location"]
 ```
 
 It is measured with the built-in ten and its column lands after theirs. Name
@@ -1025,6 +1041,8 @@ extensions you have two options:
 - **Import the module once at startup** — most cleanly from your package's
   `__init__.py` — for a plot, a writer, or a source you do not package
   separately:
+
+  <!-- docs-test: skip needs the reader's own package -->
 
   ```python
   # my_pkg/__init__.py

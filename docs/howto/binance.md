@@ -111,6 +111,8 @@ Reach further, and narrow the rings, by raising `--depth-limit` past 1,000:
 ob-analytics capture ccxt --exchange binance --pair BTC/USDT --depth-limit 5000 --out /tmp/binance
 ```
 
+<!-- docs-test: skip needs a Binance capture -->
+
 ```python
 from ob_analytics import DepthCsvSource, Pipeline, PipelineConfig
 

@@ -48,6 +48,8 @@ with the package.
 
 ## Run a file
 
+<!-- docs-test: skip needs a Databento file -->
+
 ```python
 from ob_analytics import Pipeline
 from ob_analytics.databento import DatabentoSource
@@ -58,6 +60,8 @@ print(result.events.shape, result.trades.shape)
 ```
 
 Or by name, through the source registry:
+
+<!-- docs-test: skip needs a Databento file -->
 
 ```python
 from ob_analytics import Pipeline
@@ -77,6 +81,8 @@ There is no trading date to supply: DBN records carry absolute UTC timestamps.
 
 The defaults suit a US equity — a one-cent tick and whole shares. Another
 instrument needs its own, or prices are quantised onto the wrong grid:
+
+<!-- docs-test: skip needs a Databento file -->
 
 ```python
 from ob_analytics import Pipeline, PipelineConfig
@@ -271,6 +277,8 @@ the in-memory envelope; a whole feed for a whole day does not. Databento bills
 by record, so it will tell you the size and the cost of a query before anything
 is downloaded:
 
+<!-- docs-test: skip needs a Databento API key and the network -->
+
 ```python
 import databento as db
 
@@ -305,6 +313,8 @@ A file you already hold can be cut the same way without the script. Use
 `run_windows`, which carries the book across each cut, so the output matches a
 single run:
 
+<!-- docs-test: skip needs a Databento file -->
+
 ```python
 from ob_analytics import Pipeline
 from ob_analytics.databento import DatabentoSource
@@ -319,6 +329,8 @@ Pipeline(source=DatabentoSource()).run_windows("aapl.mbo.dbn.zst", cuts, "out/")
 on can be handed to another DBN reader. The file reads back to the same events,
 though not always to the same records: a cancel the loader wrote as two rows
 comes back as two `M` records.
+
+<!-- docs-test: skip needs a Databento run -->
 
 ```python
 from ob_analytics.databento import DatabentoWriter

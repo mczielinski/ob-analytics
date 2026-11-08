@@ -15,6 +15,15 @@ Place `orders.csv` and `trades.csv` in the same directory (a capture made with
 Point the pipeline at the **orders** path; it resolves sibling `trades.csv`
 automatically.
 
+<!-- docs-test
+import os
+import shutil
+
+os.mkdir("my_run")
+for name in ("orders.csv", "trades.csv"):
+    shutil.copy(name, "my_run")
+-->
+
 ```python
 from ob_analytics import Pipeline, PipelineConfig
 

@@ -12,10 +12,10 @@ name: Docs
 #
 # Keep this list in step with what the build reads: docs/ and its tutorial
 # sources, the package (mkdocstrings renders its docstrings and the tutorial
-# chapters execute against it), the three build scripts, the site and
-# dependency config, and the two root files that docs/ pulls in via snippets
-# (docs/changelog.md includes CHANGELOG.md, docs/architecture.md includes
-# ARCHITECTURE.md). The `changes` job below repeats it for pull requests.
+# chapters execute against it), the build scripts, the example runner, the
+# site and dependency config, and the two root files that docs/ pulls in via
+# snippets (docs/changelog.md includes CHANGELOG.md, docs/architecture.md
+# includes ARCHITECTURE.md). The `changes` job below repeats it for pull requests.
 on:
   push:
     branches: [main]
@@ -25,6 +25,7 @@ on:
       - 'scripts/build_tutorial.py'
       - 'scripts/build_gallery.py'
       - 'scripts/check_links.py'
+      - 'scripts/check_doc_examples.py'
       - 'zensical.toml'
       - 'pyproject.toml'
       - 'uv.lock'
@@ -57,7 +58,7 @@ jobs:
           fetch-depth: 2
       - id: diff
         run: |
-          pattern='^(docs/|ob_analytics/|scripts/(build_tutorial|build_gallery|check_links)\.py$|zensical\.toml$|pyproject\.toml$|uv\.lock$|CHANGELOG\.md$|ARCHITECTURE\.md$|\.github/workflows/docs\.yml$)'
+          pattern='^(docs/|ob_analytics/|scripts/(build_tutorial|build_gallery|check_links|check_doc_examples)\.py$|zensical\.toml$|pyproject\.toml$|uv\.lock$|CHANGELOG\.md$|ARCHITECTURE\.md$|\.github/workflows/docs\.yml$)'
           if git diff --name-only HEAD^1 HEAD | grep -Eq "$pattern"; then
             echo "docs=true" >> "$GITHUB_OUTPUT"
           else
@@ -106,6 +107,34 @@ jobs:
       - uses: actions/upload-pages-artifact@v5
         with:
           path: site
+
+  # Run the Python code blocks of the how-to, explanation and API pages, each
+  # page in its own process, and check the outputs they quote. A block that
+  # cannot run as written, such as one that needs an API key, is marked to be
+  # left out; scripts/check_doc_examples.py says how. It is a job of its own so
+  # that it runs beside the build, and the deploy does not wait for it.
+  examples:
+    needs: changes
+    if: >-
+      !failure() && !cancelled()
+      && (github.event_name != 'pull_request' || needs.changes.outputs.docs == 'true')
+    runs-on: ubuntu-latest
+    # The slowest pages take about 5 minutes each; this stops a hung page
+    # long before the 6-hour default.
+    timeout-minutes: 45
+    concurrency:
+      group: docs-examples-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+      # Every extra a page imports from. `uv run --no-sync` below keeps them.
+      - run: uv sync --group dev --extra interactive --extra bokeh --extra live --extra ccxt --extra cryptofeed --extra databento
+      # Two pages at a time: a page that builds a full gallery needs about
+      # 4.5 GB, and the runner has 16 GB.
+      - run: uv run --no-sync python scripts/check_doc_examples.py --jobs 2
 
   deploy:
     # Deploy only from main; PRs stop after the build job above. The status

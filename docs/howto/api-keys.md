@@ -57,6 +57,8 @@ A source's settings read an unset key from its environment variable. To give
 the key yourself, pass it to the settings. A value you pass is used instead of
 the environment. For a key file, pass a `Path` and the settings read the file:
 
+<!-- docs-test: skip needs an API key; VenueSource stands for a venue that takes one -->
+
 ```python
 from pathlib import Path
 
@@ -71,6 +73,8 @@ settings = VenueSettings(
 Build the settings once and give the same settings to every segment of a
 capture. A factory that builds new settings reads the key again for each
 segment, and stops the capture if the key file has gone:
+
+<!-- docs-test: skip needs an API key; VenueSource stands for a venue that takes one -->
 
 ```python
 from ob_analytics.live import run_capture
