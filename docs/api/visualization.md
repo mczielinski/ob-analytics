@@ -64,12 +64,13 @@ For smoother slow playback, pass a shorter `interval`. The file grows with the
 number of frames, which `max_frames` caps at 600. When `interval` would need
 more frames, the replay uses a longer interval and logs a warning.
 
-`result.plot()` and the gallery replay the gallery's zoom window: the middle
-half of a run shorter than two hours, or the second quarter of a longer run.
-They set `interval` to 1 s, or longer so that the window fits in about 300
-frames. On the sample data the window is about 15 minutes, so each frame is
-about 3 s and every speed steps. To choose the window and the interval
-yourself, pass `start_time`, `end_time` and `interval`:
+`result.plot()` and the gallery replay the gallery's zoom window: the busiest
+stretch of trading (`busiest_window`), half as long as a run shorter than two
+hours, or a quarter as long as a longer run. They set `interval` to 1 s, or
+longer so that the window fits in about 300 frames. On the sample data the
+window is about 15 minutes, so each frame is about 3 s and every speed steps.
+To choose the window and the interval yourself, pass `start_time`, `end_time`
+and `interval`:
 
 ```python
 import pandas as pd
@@ -100,11 +101,13 @@ fig = plot_result(result, "book_replay", "L3", backend="plotly")
 fig.write_html("replay.html")
 ```
 
-The replay is drawn by Plotly only. The clicking needs a script, which Plotly
-cannot store inside a figure, so the replay is a `BookReplayFigure`: a Plotly
-figure that adds the script whenever it becomes HTML (`write_html`,
-`to_html`, `show`, and display in a notebook). In a notebook it displays as
-HTML, so the notebook must be trusted for the clicking to work.
+The replay is drawn by Plotly only, and the concept table says so: asking
+another backend for it raises a `KeyError` that names Plotly. The clicking
+needs a script, which Plotly cannot store inside a figure, so the replay is a
+`BookReplayFigure`: a Plotly figure that adds the script whenever it becomes
+HTML (`write_html`, `to_html`, `show`, and display in a notebook). In a
+notebook it displays as HTML, so the notebook must be trusted for the
+clicking to work.
 
 ::: ob_analytics.visualization.prepare.book_replay
 
@@ -129,18 +132,33 @@ single call, on any backend; there is no global theme to set.
 
 ::: ob_analytics.visualization.infer_volume_scale
 
+## Display windows
+
+The gallery picks one time window and one price band per run, and every face
+it clips gets the same bounds. Pass them to your own faces to match it.
+
+::: ob_analytics.visualization.busiest_window
+
+::: ob_analytics.visualization.focus_window
+
+::: ob_analytics.visualization.FocusWindow
+
 ## Renderer registry
 
-Backends self-register their renderers into `RENDERERS`, keyed by the
+Every plot of the package is declared once, in a concept table, at the
 coordinate `(concept, level, backend)` (where *level* is a `Level` or `None`
-for level-less analytics). A concept is level-less or drawn at a level, and the
+for level-less analytics). The table says which backends draw each plot, and
+the built-in backends register their renderers into `RENDERERS` from it.
+Asking a backend for a plot it does not draw raises a `KeyError` that names
+the backends that do. A concept is level-less or drawn at a level, and the
 same kind on every backend: registering it the other way raises `ValueError`.
 Register a whole new backend module with
 `register_plot_backend` (or advertise it under the `ob_analytics.plot_backends`
 entry-point group), or a single renderer directly with
-`RENDERERS.register((concept, level, backend), fn)`. To see how a concept is
-registered before adding to it, list its `(level, backend)` pairs with
-`RENDERERS.placements(concept)`.
+`RENDERERS.register((concept, level, backend), fn)`; `plot()`, `plot_result()`
+and the gallery find such a renderer as they find the table's. To see how a
+concept is registered before adding to it, list its `(level, backend)` pairs
+with `RENDERERS.placements(concept)`.
 
 ::: ob_analytics.visualization.register_plot_backend
 

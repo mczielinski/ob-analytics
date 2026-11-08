@@ -31,13 +31,13 @@ from ob_analytics.visualization.gallery import (
     GalleryModel,
     PlotConcept,
     PlotSpec,
-    _auto_zoom_window,
     _Card,
     _misplaced,
     _Panel,
     _project,
     _render_panel,
     _write_gallery_html,
+    _zoom_window,
     build_gallery_model,
     generate_gallery,
 )
@@ -865,7 +865,7 @@ class TestBuildGalleryModel:
         assert full_hidden.empty
         assert heatmap.prep_kwargs["hidden_trades"].empty
 
-        zoom_start, zoom_end = _auto_zoom_window(result.events)
+        zoom_start, zoom_end = _zoom_window(result.trades, result.events)
         for frame in (
             heatmap.prep_kwargs["iceberg_lines"],
             heatmap.prep_kwargs["iceberg_refills"],
@@ -892,8 +892,9 @@ class TestBuildGalleryModel:
 
         events = pd.DataFrame(
             [
-                # Padding events set a 100s span so the auto zoom window's
-                # middle half (25s-75s) covers the story below, at ~50s.
+                # Padding events set a 100s span, so the zoom window is the
+                # busiest 50s of trading, which holds the two trades at ~50s
+                # and not the one at the start.
                 {
                     "event_id": 900,
                     "id": 900,
@@ -945,11 +946,11 @@ class TestBuildGalleryModel:
                     "direction": "bid",
                     "fill": 0.0,
                 },
-                # A hidden maker fill at 10s, outside the zoom window.
+                # A hidden maker fill at 0.05s, outside the zoom window.
                 {
                     "event_id": 101,
                     "id": HIDDEN_ORDER_ID,
-                    "timestamp": _at(seconds=10),
+                    "timestamp": _at(milliseconds=50),
                     "price": 236.70,
                     "volume": 0.0,
                     "action": "changed",
@@ -979,7 +980,7 @@ class TestBuildGalleryModel:
         trades = pd.DataFrame(
             {
                 "timestamp": [
-                    _at(seconds=10),
+                    _at(milliseconds=50),
                     _at(seconds=50, milliseconds=100),
                     _at(seconds=51),
                 ],
@@ -1022,7 +1023,7 @@ class TestBuildGalleryModel:
 
         assert not refills.empty
         assert refills["price"].iloc[0] == pytest.approx(236.50)
-        # The trade at 10s is outside the zoom window, so only one is left.
+        # The trade at 0.05s is outside the zoom window, so only one is left.
         assert len(hidden) == 1
         assert hidden["price"].iloc[0] == pytest.approx(236.60)
         assert hidden["best_bid_price"].iloc[0] == pytest.approx(236.50)

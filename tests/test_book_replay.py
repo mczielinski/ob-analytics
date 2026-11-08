@@ -263,7 +263,7 @@ def test_frame_names_are_unique_below_a_second(tiny_result):
 def test_plot_result_draws_the_replay_on_plotly_only(tiny_result):
     fig = plot_result(tiny_result, "book_replay", level="L3", backend="plotly")
     assert "replay-trades:" in fig.to_html()
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="drawn by: plotly"):
         plot_result(tiny_result, "book_replay", level="L2", backend="matplotlib")
 
 
