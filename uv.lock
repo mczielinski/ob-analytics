@@ -2626,9 +2626,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "bokeh", marker = "extra == 'bokeh'", specifier = ">=3" },
-    { name = "ccxt", marker = "extra == 'ccxt'", specifier = ">=4" },
-    { name = "cryptofeed", marker = "extra == 'cryptofeed'", specifier = ">=2" },
+    { name = "bokeh", marker = "extra == 'bokeh'", specifier = ">=3.1" },
+    { name = "ccxt", marker = "extra == 'ccxt'", specifier = ">=4.5.90" },
+    { name = "cryptofeed", marker = "extra == 'cryptofeed'", specifier = ">=2.4.1" },
     { name = "databento", marker = "extra == 'databento'", specifier = ">=0.86" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "matplotlib", specifier = ">=3.11.0,<4" },
@@ -2650,7 +2650,7 @@ backtest-engines = [
     { name = "numba", specifier = ">=0.67" },
 ]
 dev = [
-    { name = "bokeh", specifier = ">=3" },
+    { name = "bokeh", specifier = ">=3.1" },
     { name = "codecov", specifier = ">=2.1.13,<3" },
     { name = "coverage", extras = ["toml"], specifier = ">=7.14.3,<8" },
     { name = "hypothesis", specifier = ">=6.155.7" },
@@ -2658,7 +2658,7 @@ dev = [
     { name = "jupytext", specifier = ">=1.16" },
     { name = "mkdocstrings", extras = ["python"], specifier = ">=1.0.4" },
     { name = "nbconvert", specifier = ">=7.16" },
-    { name = "nbmake", specifier = ">=1.5" },
+    { name = "nbmake", specifier = ">=1.5.1" },
     { name = "pandas-stubs", specifier = ">=3.0.3.260530" },
     { name = "plotly", specifier = ">=6.8.0" },
     { name = "polars", specifier = ">=1.20" },

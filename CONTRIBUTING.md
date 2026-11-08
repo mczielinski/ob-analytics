@@ -53,7 +53,7 @@ on `git commit` once `pre-commit install` has been run.
 
 ### Correctness gates
 
-Four kinds of test hold the numbers steady while the engine, the dataframe
+Three kinds of test hold the numbers steady while the engine, the dataframe
 library, and the schema change underneath them (issue #143). All run under
 `pytest tests/` in CI, so a mismatch blocks the merge.
 
@@ -67,26 +67,28 @@ library, and the schema change underneath them (issue #143). All run under
   `tests/test_properties_lobster.py` use Hypothesis to hold the schema rules
   over many generated inputs: time goes forward, the book does not cross after
   an uncross, and volume adds up.
-- **Backend compare.** `tests/test_compare_backends.py` checks a compiled
-  depth engine against the pure-Python one. These tests skip until that engine
-  exists; the module docstring records the activation contract.
 - **Boundary.** `tests/test_engine_boundary.py` parses the engine's own sources
   to prove it imports no pandas and nothing from the layers above it, and that
   only `_engine_frames.py` converts frames to engine arrays (issue #136).
 
-### The speed gate
+### The speed check
 
 `scripts/bench_scale.py` times each stage of a run — load, order types, price
 level volume, depth metrics, aggressiveness, queue positions — over the bundled
 sample and a seeded synthetic session of about the same size, and compares the
-result with `bench-baseline.json`. CI runs it on every pull request and fails
-when a stage is more than half again slower, or a tenth larger in peak memory,
-than the baseline (issue #144).
+result with `bench-baseline.json` (issue #144). CI runs it on every pull
+request. It fails when a stage takes more than twice its baseline time, or
+more than 15% more peak memory than its baseline.
 
 A stage that runs for under a second is not judged on time: at that length the
 spread between two runs of identical code is wider than any slow-down worth
 finding. Each run is measured in its own process, because peak RSS only rises,
 so two runs in one process would report the larger one's peak for both.
+
+Time on a shared runner is noisy, so the speed check is not a required check
+(see [CI checks](#ci-checks)). A failure on time alone is often noise: run the
+job again before you look for a cause. A failure on peak memory is usually
+real.
 
 ```bash
 uv run python scripts/bench_scale.py                    # check the baseline
@@ -100,6 +102,38 @@ with `record` set, download the `bench-baseline` artifact, and commit it in its
 own labelled commit. Locally the script says which machine the baseline came
 from when it is not the one in front of you, so a failure there is a hint, not a
 verdict.
+
+### CI checks
+
+Every pull request runs these checks. All of them except the speed check must
+pass before a merge, and the maintainer marks them as required in the branch
+protection for `main`. The names are the check names GitHub shows.
+
+| Check | Workflow | What it does |
+|---|---|---|
+| `lint` | CI | `ruff check` and `ruff format --check` |
+| `typecheck` | CI | `ty check` with every extra installed |
+| `test (3.11)`, `test (3.12)`, `test (3.13)`, `test (3.14)` | CI | the test suite with every extra, from `uv.lock` |
+| `macos-smoke` | CI | the test suite on macOS |
+| `windows` | CI | the core and offline tests on Windows; live capture is Linux and macOS only |
+| `lowest-deps` | CI | the test suite with every extra, each direct dependency at its lowest allowed version, on Python 3.11 |
+| `wheel` | CI | installs the built wheel with no extras and runs `scripts/smoke_wheel.py` |
+| `backtest-parity` | CI | the hftbacktest and Nautilus Trader parity tests, with the `backtest-engines` group |
+| `notebooks` | CI | runs the tutorial notebooks |
+| `build` | Docs | builds the site and checks its links; skipped, and so passed, when a pull request changes nothing the site is built from |
+| `speed` | bench | the speed check; reports only, not required |
+
+A release runs the same smoke script on the wheel it publishes, and refuses a
+commit whose CI run did not pass (see [Releasing](#releasing)).
+
+The weekly pre-commit autoupdate pull request is opened with `GITHUB_TOKEN`,
+and GitHub does not start workflows for such a pull request. Its required
+checks therefore wait forever. Close and reopen it to start CI.
+
+On Windows, `tests/conftest.py` leaves out the live-capture test modules and
+the speed check's tests, which need the POSIX `resource` module. Add a new
+live-capture test module to its `LIVE_CAPTURE_TESTS` list, and a new test that
+needs a POSIX-only module to `POSIX_ONLY_TESTS`.
 
 ## Code style
 
@@ -207,10 +241,13 @@ To cut a release:
 2. Bump `version` in `pyproject.toml` to `X.Y.Z`.
 3. Commit, then tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 
-`.github/workflows/release.yml` then builds the sdist + wheel, checks the tag
-matches the package version, publishes to **PyPI via trusted publishing** (OIDC —
-no stored token), and creates a GitHub Release from the changelog section. A
-manual **workflow_dispatch** run publishes to **TestPyPI** as a dry run.
+`.github/workflows/release.yml` then checks that the CI run on the tagged
+commit passed (it waits while that run is still going), builds the sdist +
+wheel, runs `scripts/smoke_wheel.py` on the wheel installed with no extras,
+checks the tag matches the package version, publishes to **PyPI via trusted
+publishing** (OIDC — no stored token), and creates a GitHub Release from the
+changelog section. A manual **workflow_dispatch** run publishes to **TestPyPI**
+as a dry run, after the same checks.
 
 **One-time setup (repo owner):** register trusted publishers at
 <https://pypi.org/manage/account/publishing/> and

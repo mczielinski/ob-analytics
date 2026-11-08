@@ -213,7 +213,9 @@ class TestFigure:
         html = fig.to_html(post_script="console.log('mine');")
         assert "console.log('mine');" in html and "replay-trades:" in html
         fig.write_html(tmp_path / "replay.html")
-        assert "replay-trades:" in (tmp_path / "replay.html").read_text()
+        # Plotly writes UTF-8; read it back as UTF-8, not the locale's encoding.
+        html_file = (tmp_path / "replay.html").read_text(encoding="utf-8")
+        assert "replay-trades:" in html_file
         assert "replay-trades:" in fig._repr_mimebundle_()["text/html"]
 
     def test_notebook_display_carries_the_click_script(self, faces, level, monkeypatch):

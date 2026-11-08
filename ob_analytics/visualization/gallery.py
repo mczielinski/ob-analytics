@@ -1828,4 +1828,5 @@ function zoom(s){{document.getElementById("lb-img").src=s;document.getElementByI
 </body>
 </html>"""
 
-    path.write_text(html)
+    # The page declares UTF-8, so write it as UTF-8 whatever the locale is.
+    path.write_text(html, encoding="utf-8")
