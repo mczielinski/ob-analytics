@@ -2256,11 +2256,11 @@ class TestIndependentReserveTrades:
         trades = result.trades.set_index("taker")
         for taker in (taker_offer, "taker-2"):
             assert trades.loc[taker, "maker"] == maker_bid
-            assert pd.notna(trades.loc[taker, "maker_event_id"])
-            assert pd.notna(trades.loc[taker, "taker_event_id"])
+            assert trades["maker_event_id"].notna()[taker]
+            assert trades["taker_event_id"].notna()[taker]
         assert trades.loc[taker_bid, "maker"] == maker_offer
-        assert pd.notna(trades.loc[taker_bid, "maker_event_id"])
-        assert pd.isna(trades.loc[taker_bid, "taker_event_id"])
+        assert trades["maker_event_id"].notna()[taker_bid]
+        assert trades["taker_event_id"].isna()[taker_bid]
 
         summary = data_quality_summary(
             result.events,
