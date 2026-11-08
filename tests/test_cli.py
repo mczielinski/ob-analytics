@@ -19,6 +19,7 @@ import json
 import pytest
 
 from tests import _lobster_few_levels as few
+from tests._logging import warnings_logged
 
 _CCXT_INSTALLED = importlib.util.find_spec("ccxt") is not None
 
@@ -295,8 +296,55 @@ class TestAuditSubcommand:
             raise error
 
         monkeypatch.setattr("ob_analytics.sources.get_source", get_source)
-        kind = cli._declared_sequence_kind("plugin", default=SequenceKind.CONTIGUOUS)
+        with warnings_logged() as logged:
+            kind = cli._declared_sequence_kind(
+                "plugin", default=SequenceKind.CONTIGUOUS
+            )
         assert kind is SequenceKind.CONTIGUOUS
+        # The fallback changes how audit reads the sequence, so it is said.
+        assert any("contiguous instead" in m for m in logged)
+
+    def test_audit_reports_what_a_single_capture_lost(
+        self, cli_runner, tmp_path, tiny_bitstamp_orders_csv
+    ):
+        """dropped and capture_error in meta.json fail the capture checks."""
+        cap = self._capture_by_cryptofeed(tmp_path, tiny_bitstamp_orders_csv)
+        meta = json.loads((cap / "meta.json").read_text())
+        meta.update(
+            dropped=2,
+            capture_error="ConnectionError('closed')",
+            capture_error_phase="stream",
+        )
+        (cap / "meta.json").write_text(json.dumps(meta))
+
+        r = cli_runner("audit", str(cap / "orders.csv"), "--source", "bitstamp")
+        assert r.returncode == 0, r.stderr
+        assert "dropped_messages: 2 message(s)" in r.stdout
+        assert "capture_errors" in r.stdout
+        assert "ConnectionError('closed')" in r.stdout
+
+        r = cli_runner(
+            "audit", str(cap / "orders.csv"), "--source", "bitstamp", "--strict"
+        )
+        assert r.returncode == 1
+        assert "dropped_messages" in r.stderr
+
+        r = cli_runner(
+            "audit", str(cap / "orders.csv"), "--source", "bitstamp", "--json"
+        )
+        report = json.loads(r.stdout)
+        failed = {c["name"] for c in report["capture_checks"] if not c["passed"]}
+        assert failed == {"dropped_messages", "capture_errors"}
+
+    def test_a_clean_single_capture_passes_strict(
+        self, cli_runner, tmp_path, tiny_bitstamp_orders_csv
+    ):
+        cap = self._capture_by_cryptofeed(tmp_path, tiny_bitstamp_orders_csv)
+        r = cli_runner(
+            "audit", str(cap / "orders.csv"), "--source", "bitstamp", "--json"
+        )
+        report = json.loads(r.stdout)
+        assert all(c["passed"] for c in report["capture_checks"])
 
 
 class TestAuditFewLevels:

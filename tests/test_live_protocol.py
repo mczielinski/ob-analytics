@@ -736,20 +736,23 @@ class TestFailedCapture:
         meta = json.loads((out / "meta.json").read_text())
         assert meta["capture_error"] == result.capture_error
         assert meta["capture_error_phase"] == "stream"
-        assert meta["errors"] == 1
+        # The error is recorded once, as capture_error, not in a counter.
+        assert "errors" not in meta
         # The order streamed before the error is still on disk.
         orders = pd.read_csv(out / "orders.csv")
         assert 3 in set(orders["id"])
 
-    def test_stream_error_adds_to_the_source_error_count(self, tmp_path):
+    def test_a_stream_error_is_not_counted_as_a_dropped_message(self, tmp_path):
         class _CountingCrasher(_CrashingCapturer):
             def diagnostics(self) -> dict[str, Any]:
-                return {"errors": 2}
+                return {"dropped": 2}
 
         out = tmp_path / "cap"
         cfg = CaptureConfig(pair="btcusd", out_dir=out, minutes=0.001)
         asyncio.run(run_capturer(_CountingCrasher(), cfg))
-        assert json.loads((out / "meta.json").read_text())["errors"] == 3
+        meta = json.loads((out / "meta.json").read_text())
+        assert meta["dropped"] == 2
+        assert meta["capture_error_phase"] == "stream"
 
     def test_snapshot_error_is_recorded_and_stream_skipped(self, tmp_path):
         out = tmp_path / "cap"
@@ -760,7 +763,6 @@ class TestFailedCapture:
         assert "snapshot fetch failed" in (result.capture_error or "")
         meta = json.loads((out / "meta.json").read_text())
         assert meta["capture_error_phase"] == "snapshot"
-        assert meta["errors"] == 1
         # The opening order written before the error is kept, and the
         # shutdown events still close it out.
         orders = pd.read_csv(out / "orders.csv")
@@ -773,7 +775,8 @@ class TestFailedCapture:
 
         assert result.capture_error_phase == "shutdown"
         assert result.n_trade_events == 1  # the stream ran to its end
-        assert json.loads((out / "meta.json").read_text())["errors"] == 1
+        meta = json.loads((out / "meta.json").read_text())
+        assert meta["capture_error_phase"] == "shutdown"
 
     def test_clean_run_has_no_capture_error(self, tmp_path):
         out = tmp_path / "cap"
@@ -790,3 +793,178 @@ class TestFailedCapture:
         with pytest.raises(ImportError, match="ob-analytics"):
             asyncio.run(run_capturer(_MissingExtraCapturer(), cfg))
         assert not out.exists()
+
+
+# ---------------------------------------------------------------------------
+# What a capture lost: counters, files, signals (#398)
+# ---------------------------------------------------------------------------
+
+
+class _BrokenDiagnostics(_FakeCapturer):
+    def diagnostics(self) -> dict[str, Any]:
+        raise RuntimeError("counter state broken")
+
+
+class TestLostCounters:
+    def test_meta_records_diagnostics_error_and_the_run_warns(self, tmp_path):
+        from ob_analytics.live._manifest import record_checks
+
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="btcusd", out_dir=out, minutes=0.001)
+        with pytest.warns(UserWarning, match="diagnostics"):
+            asyncio.run(run_capturer(_BrokenDiagnostics(), cfg))
+        meta = json.loads((out / "meta.json").read_text())
+        assert "counter state broken" in meta["diagnostics_error"]
+        # The declarations are still there.
+        assert meta["source"] == "fake"
+        # The dropped count is not known, so the check does not pass.
+        checks = {c.name: c for c in record_checks(out)}
+        assert not checks["dropped_messages"].passed
+        assert "counters of this capture were lost" in checks["dropped_messages"].detail
+
+
+class TestRecordChecks:
+    def test_a_clean_capture_passes(self, tmp_path):
+        from ob_analytics.live._manifest import record_checks
+
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="btcusd", out_dir=out, minutes=0.001)
+        asyncio.run(run_capturer(_FakeCapturer(), cfg))
+        checks = record_checks(out)
+        assert {c.name for c in checks} == {"dropped_messages", "capture_errors"}
+        assert all(c.passed for c in checks)
+
+    def test_dropped_messages_and_an_error_fail(self, tmp_path):
+        from ob_analytics.live._manifest import record_checks
+
+        class _Lossy(_CrashingCapturer):
+            def diagnostics(self) -> dict[str, Any]:
+                return {"dropped": 3}
+
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="btcusd", out_dir=out, minutes=0.001)
+        asyncio.run(run_capturer(_Lossy(), cfg))
+        checks = {c.name: c for c in record_checks(out)}
+        assert not checks["dropped_messages"].passed
+        assert checks["dropped_messages"].detail.startswith("3 message(s)")
+        assert not checks["capture_errors"].passed
+        assert "stream broke" in checks["capture_errors"].detail
+
+    def test_input_that_is_not_a_capture_has_no_checks(self, tmp_path):
+        from ob_analytics.live._manifest import record_checks
+
+        assert record_checks(tmp_path) == ()
+
+
+class _FailingFlush:
+    """Wraps a file whose flush fails, as on a full disk."""
+
+    def __init__(self, fp: Any) -> None:
+        self._fp = fp
+        self.name = getattr(fp, "name", "?")
+
+    def write(self, text: str) -> int:
+        return self._fp.write(text)
+
+    def tell(self) -> int:
+        return self._fp.tell()
+
+    def flush(self) -> None:
+        raise OSError(28, "No space left on device")
+
+    def close(self) -> None:
+        self._fp.close()
+
+    @property
+    def closed(self) -> bool:
+        return self._fp.closed
+
+
+class TestFinalize:
+    def test_every_file_closes_and_meta_is_written_when_one_flush_fails(self, tmp_path):
+        out = tmp_path / "cap"
+        sink = FileCaptureSink(out, keep_raw=True)
+        files = [sink._orders_fp, sink._trades_fp, sink._raw_fp]
+        sink._orders_fp = _FailingFlush(sink._orders_fp)
+        cfg = CaptureConfig(pair="btcusd", out_dir=out, minutes=0.001)
+        result = asyncio.run(run_capturer(_FakeCapturer(), cfg, sink))
+
+        assert all(fp is not None and fp.closed for fp in files)
+        assert result.capture_error_phase == "close"
+        assert "No space left on device" in (result.capture_error or "")
+        meta = json.loads((out / "meta.json").read_text())
+        assert meta["capture_error_phase"] == "close"
+        assert meta["n_order_events"] == result.n_order_events
+
+    def test_an_earlier_error_is_kept(self, tmp_path):
+        out = tmp_path / "cap"
+        sink = FileCaptureSink(out, keep_raw=False)
+        sink._trades_fp = _FailingFlush(sink._trades_fp)
+        cfg = CaptureConfig(pair="btcusd", out_dir=out, minutes=0.001)
+        result = asyncio.run(run_capturer(_CrashingCapturer(), cfg, sink))
+        assert result.capture_error_phase == "stream"
+        assert sink.close_error is not None
+
+
+class _HangsOnClose(_FakeCapturer):
+    """Streams one order, then hangs while it closes its connection."""
+
+    name = "hangs"
+
+    async def stream(
+        self, config: CaptureConfig
+    ) -> AsyncIterator[tuple[str, EventDict, Any]]:
+        ts = pd.Timestamp("2025-01-01 00:00:01", tz="UTC")
+        try:
+            yield (
+                "order",
+                {
+                    "id": 3,
+                    "timestamp": ts,
+                    "exchange_timestamp": ts,
+                    "price": 100.5,
+                    "volume": 0.5,
+                    "action": "created",
+                    "direction": "bid",
+                },
+                None,
+            )
+            await asyncio.sleep(3600)
+        finally:
+            # Closing the connection waits until it is cancelled again.
+            await asyncio.sleep(3600)
+
+
+class TestSecondSignal:
+    def test_a_second_signal_stops_the_run_at_once(self, tmp_path):
+        import os
+        import signal
+        import time as clock
+
+        out = tmp_path / "cap"
+        cfg = CaptureConfig(pair="btcusd", out_dir=out, minutes=10.0)
+        streaming = asyncio.Event()
+
+        async def main() -> Any:
+            async def signal_twice() -> None:
+                await streaming.wait()
+                os.kill(os.getpid(), signal.SIGINT)
+                await asyncio.sleep(0.3)
+                os.kill(os.getpid(), signal.SIGINT)
+
+            sender = asyncio.create_task(signal_twice())
+            result = await run_capturer(_HangsOnClose(), cfg, streaming=streaming)
+            await sender
+            return result
+
+        started = clock.monotonic()
+        result = asyncio.run(main())
+
+        assert clock.monotonic() - started < 5
+        assert "second signal" in (result.capture_error or "")
+        assert result.capture_error_phase == "stream"
+        # The streamed row is counted, though the stream never returned.
+        assert result.n_order_events == 3
+        meta = json.loads((out / "meta.json").read_text())
+        assert meta["capture_error"] == result.capture_error
+        assert meta["n_order_events"] == 3

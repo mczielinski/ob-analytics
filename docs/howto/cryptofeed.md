@@ -92,7 +92,7 @@ A capture is a directory of segments with a `manifest.json` (see
 | `depth.csv` | L2 only: price-level updates (`volume` = new absolute size, `0` removes the level) |
 | `trades.csv` | The trade tape (taker side; feeds trade-sign) |
 | `raw.jsonl` | Raw frames as cryptofeed passed them on (omit with `--no-raw`). cryptofeed reads prices and sizes as `Decimal`, and these are written as strings so no digits are lost: a venue's `0.011` is stored as `"0.011"`. For some venues (independent_reserve, blockchain) cryptofeed also reads date and time strings as dates and times; these are written back as ISO 8601 strings, such as `"2026-09-28T08:30:15.123456+00:00"`. These strings come from cryptofeed's parsed value, not the venue's text: `Z` becomes `+00:00`, and digits past the microsecond are lost. Any other value or dict key that JSON cannot hold is written as text, and a frame that JSON cannot hold at all is skipped; `meta.json` records both (see [Capture live order-book data](live-capture.md)) |
-| `meta.json` | Counts + per-run diagnostics (venue, level, book updates, sequence gaps, fills from the trade tape, errors), what the source declares about its feed (`source`, `feed_type`, `trade_attribution`), and what `raw.jsonl` wrote as text or skipped (`raw_text_types`, `n_raw_frames_skipped`) |
+| `meta.json` | Counts + per-run diagnostics (venue, level, book updates, sequence gaps, fills from the trade tape, dropped messages), what the source declares about its feed (`source`, `feed_type`, `trade_attribution`), and what `raw.jsonl` wrote as text or skipped (`raw_text_types`, `n_raw_frames_skipped`) |
 
 ## How the per-order events are derived
 
@@ -214,6 +214,12 @@ connections were missed. A capture of several segments adds the counts up in
 Changes that come before the first opening book, such as on Bitstamp L2, are
 not a resync. Bitstamp's L3 channel sends the whole book every time, so it
 never counts one.
+
+A message the source cannot turn into rows is handled by level. At L2 it is
+left out with a warning and counted in `dropped`: the next change to each
+price level gives its size again. At L3 the book would be wrong from then on,
+so the segment ends with the error (`capture_error` in `meta.json`) and the
+next segment starts from a new opening book.
 
 On Independent Reserve, cryptofeed takes the opening book from the venue's REST
 interface when the first stream message arrives. The venue serves that book

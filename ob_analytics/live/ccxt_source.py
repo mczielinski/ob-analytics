@@ -410,7 +410,6 @@ class CcxtSource:
         self.depth_rows = 0
         self.trade_events = 0
         self.duplicate_trades = 0
-        self.errors = 0
 
     @property
     def clocks(self) -> Clocks:
@@ -636,7 +635,6 @@ class CcxtSource:
                     self.book_resyncs += 1
                     logger.warning("[ccxt] book lost sync, restarting: {!r}", exc)
                     continue
-                self.errors += 1
                 logger.warning("[ccxt] book loop ended on error: {!r}", exc)
                 raise
             self.book_updates += 1
@@ -685,7 +683,6 @@ class CcxtSource:
             except StopAsyncIteration:
                 return
             except Exception as exc:
-                self.errors += 1
                 logger.warning("[ccxt] trades loop ended on error: {!r}", exc)
                 raise
             for t in trades or ():
@@ -973,7 +970,6 @@ class CcxtSource:
             "depth_rows": self.depth_rows,
             "trade_events": self.trade_events,
             "duplicate_trades": self.duplicate_trades,
-            "errors": self.errors,
         }
 
 

@@ -2664,3 +2664,114 @@ class TestOtherMarketTrades:
 
         src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
         assert not src._other_market(_FakeTrade(symbol="BTC-SGD"))
+
+
+class TestNoVenue:
+    """A source with no venue yet declares one level everywhere (#398)."""
+
+    def test_level_feed_type_and_attribution_all_say_l2(self):
+        from ob_analytics.capture_record import source_declarations
+        from ob_analytics.live.cryptofeed_source import CryptofeedSource
+        from ob_analytics.protocols import TradeAttribution
+
+        src = CryptofeedSource()
+        assert src.level is Level.L2
+        assert src.feed_type is FeedType.PRICE_LEVELS
+        assert src.trade_attribution is TradeAttribution.NONE
+        declared = source_declarations(src)
+        assert declared["feed_type"] == FeedType.PRICE_LEVELS.value
+        assert declared["trade_attribution"] == TradeAttribution.NONE.value
+
+    def test_a_requested_l3_stands_for_all_three(self):
+        from ob_analytics.live.cryptofeed_source import (
+            CryptofeedSettings,
+            CryptofeedSource,
+        )
+        from ob_analytics.protocols import TradeAttribution
+
+        src = CryptofeedSource(settings=CryptofeedSettings(level=Level.L3))
+        assert src.level is Level.L3
+        assert src.feed_type is FeedType.MATCHED_BOOK
+        assert src.trade_attribution is TradeAttribution.MAKER_ONLY
+
+
+class TestUnmappableMessages:
+    """An L3 message that cannot be mapped ends the stream; at L2 it is counted."""
+
+    # Two fields where an L3 delta entry has three: _l3_events raises.
+    _BAD_L3 = _l3_book({"bid": {}, "ask": {}}, delta={"bid": [(12, 99.0)], "ask": []})
+
+    def test_an_l3_book_update_ends_the_stream_after_the_rows_before_it(self, tmp_path):
+        import asyncio
+        import json
+
+        from ob_analytics.live._runner import run_capturer
+
+        script = [
+            ("l3_book", _l3_book({"bid": {100.0: {11: 2.0}}, "ask": {}}, delta=None)),
+            ("l3_book", self._BAD_L3),
+            (
+                "l3_book",
+                _l3_book(
+                    {"bid": {100.0: {11: 1.0}}, "ask": {}},
+                    delta={"bid": [(11, 100.0, 1.0)], "ask": []},
+                ),
+            ),
+        ]
+        src = _source_with(_l3_venue(), script)
+        out = tmp_path / "cap"
+        result = asyncio.run(run_capturer(src, _capture_cfg(tmp_path, minutes=1.0)))
+
+        assert result.capture_error_phase == "stream"
+        assert "UnmappedMessageError" in (result.capture_error or "")
+        assert "cannot map an L3 book update" in (result.capture_error or "")
+        orders = pd.read_csv(out / "orders.csv")
+        # The opening order is written and closed; the update after the bad
+        # one is not applied.
+        assert list(orders["action"]) == ["created", "deleted"]
+        meta = json.loads((out / "meta.json").read_text())
+        assert meta["dropped"] == 0
+        assert src.settings.feed_handler.stopped is True
+
+    def test_an_l3_trade_that_cannot_be_mapped_ends_the_stream(self, tmp_path):
+        import asyncio
+
+        from ob_analytics.live._runner import run_capturer
+
+        bad_trade = _FakeTrade()
+        bad_trade.price = None  # ty: ignore[invalid-assignment]
+        script = [
+            ("l3_book", _l3_book({"bid": {100.0: {11: 2.0}}, "ask": {}}, delta=None)),
+            ("trades", bad_trade),
+        ]
+        src = _source_with(_l3_venue(), script)
+        result = asyncio.run(run_capturer(src, _capture_cfg(tmp_path, minutes=1.0)))
+        assert "cannot map an L3 trade" in (result.capture_error or "")
+
+    def test_an_l2_book_update_is_left_out_and_counted(self, tmp_path):
+        import asyncio
+        import json
+
+        from ob_analytics.live._runner import run_capturer
+
+        bad = _FakeBook(
+            {"bid": {}, "ask": {}}, delta={"bid": [("not a price", 1.0)], "ask": []}
+        )
+        script = [
+            ("l2_book", _FakeBook({"bid": {100.0: 5.0}, "ask": {}}, delta=None)),
+            ("l2_book", bad),
+            (
+                "l2_book",
+                _FakeBook(
+                    {"bid": {100.0: 7.0}, "ask": {}},
+                    delta={"bid": [(100.0, 7.0)], "ask": []},
+                ),
+            ),
+        ]
+        src = _source_with(_l2_venue(), script)
+        out = tmp_path / "cap"
+        result = asyncio.run(run_capturer(src, _capture_cfg(tmp_path)))
+
+        assert result.capture_error is None
+        assert result.n_depth_events == 2
+        assert json.loads((out / "meta.json").read_text())["dropped"] == 1
