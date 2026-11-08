@@ -70,4 +70,6 @@ many runs and many pipelines.
 
 ::: ob_analytics.live.LiveSource
 
+::: ob_analytics.live.UnmappedMessageError
+
 ::: ob_analytics.protocols.Metric

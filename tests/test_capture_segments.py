@@ -547,7 +547,7 @@ class TestRoll:
 
         (segment,) = run.manifest.segments
         assert segment.end_reason is EndReason.FINISHED
-        assert "did not stop within" in (segment.error or "")
+        assert "took more than" in (segment.error or "")
         assert run.manifest.gaps == []
         seg_dir = run.out_dir / segment.name
         assert _every_order_closed(seg_dir / "orders.csv")
@@ -1344,6 +1344,45 @@ class TestSecondSignal:
         assert _every_order_closed(seg_dir / "orders.csv")
         meta = json.loads((seg_dir / "meta.json").read_text())
         assert "provisional" not in meta
+
+    def test_a_segment_that_closes_by_itself_after_the_second_signal_is_clean(
+        self, tmp_path, monkeypatch
+    ):
+        import os
+        import signal
+
+        # Its closing rows take 0.6 s and it ignores the cancel, so it ends by
+        # itself within the grace, with its own result.
+        monkeypatch.setattr(_supervisor, "STOP_TIMEOUT_SECONDS", 30.0)
+        monkeypatch.setattr(_supervisor, "STOP_GRACE_SECONDS", 3.0)
+        cfg = CaptureConfig(
+            pair="btcusd", out_dir=tmp_path / "cap", minutes=10.0, keep_raw=False
+        )
+
+        async def main() -> Any:
+            capture = asyncio.create_task(
+                run_capture(_factory([_stubborn_shutdown(0.6)]), cfg)
+            )
+            manifest = tmp_path / "cap" / "manifest.json"
+            while not (
+                manifest.is_file()
+                and json.loads(manifest.read_text())["segments"][0]["stream_started"]
+            ):
+                await asyncio.sleep(0.02)
+            os.kill(os.getpid(), signal.SIGINT)
+            await asyncio.sleep(0.1)
+            os.kill(os.getpid(), signal.SIGINT)
+            return await capture
+
+        run = asyncio.run(main())
+
+        (segment,) = run.manifest.segments
+        assert segment.end_reason is EndReason.STOPPED
+        assert segment.error is None
+        assert all(c.passed for c in run.manifest.checks())
+        meta = json.loads((run.out_dir / segment.name / "meta.json").read_text())
+        assert "capture_error" not in meta
+        assert "unfinished" not in meta
 
 
 _SIGTERM_SCRIPT = """

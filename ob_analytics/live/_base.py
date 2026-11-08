@@ -23,6 +23,20 @@ from ob_analytics.protocols import Clocks, Source
 # ---------------------------------------------------------------------------
 
 
+class UnmappedMessageError(ValueError):
+    """An L3 message a live source could not turn into order events.
+
+    An L3 source raises it from :meth:`LiveSource.snapshot` or
+    :meth:`LiveSource.stream` instead of leaving the message out: without
+    it the capture's book would no longer match the venue's.  The runner
+    records it as :attr:`CaptureResult.capture_error`, and
+    :func:`~ob_analytics.live.run_capture` starts the next segment from a
+    new opening book.  A message that does not change the book (a trade on
+    a feed whose order events carry the fills) can be left out instead, and
+    counted under ``dropped`` (see :class:`SupportsDiagnostics`).
+    """
+
+
 @dataclass(frozen=True)
 class CaptureConfig:
     """User-facing capture-run parameters.
