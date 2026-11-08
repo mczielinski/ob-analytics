@@ -105,6 +105,8 @@ whole input, and each window is an ordinary in-memory run of the depth stages.
 You do not have to guess. Databento bills by record, so it exposes an exact,
 metadata-only record count — cheap, no bulk download:
 
+<!-- docs-test: skip needs a Databento API key and the network -->
+
 ```python
 import databento as db
 
@@ -125,6 +127,8 @@ cost, so you can size memory and spend in one step. If you already hold a
 `.dbn` / `.dbn.zst` file, count it locally — reading a local file needs no API
 key:
 
+<!-- docs-test: skip needs a Databento file -->
+
 ```python
 from databento import DBNStore
 
@@ -139,6 +143,8 @@ print(n)  # compare against the ~5M envelope
 
 Give `run_windows` the input, the times to cut it at, and a folder for the
 output:
+
+<!-- docs-test: skip needs a Databento file -->
 
 ```python
 from ob_analytics import Pipeline
@@ -160,6 +166,8 @@ single run's. [Windowed runs](#windowed-runs) gives the details and the limits.
 If the input is already one file per window, for example the files
 `scripts/databento_window.py` downloads, run each file and concatenate the
 results:
+
+<!-- docs-test: skip needs one file per window -->
 
 ```python
 import pandas as pd
@@ -262,12 +270,19 @@ time.
 
 ### Limits
 
-- **The loader still reads the whole input.** The `events` and `trades` tables
-  are held for the whole run, because order types and trade signs depend on
-  every row. These are the fixed part of the memory above. A loader that reads
-  one window at a time, for example Databento's `DBNStore.to_df(count=...)`,
-  would remove it. Build that when a measured input's events table does not
-  fit.
+- **Only the Databento loader reads one window at a time,** and only when the
+  source builds it, as `Pipeline(source=DatabentoSource())` does. It reads the file
+  in parts, carries each order's size and price across the cuts, and gives the
+  events of one window at a time. The run saves each window's events to a
+  working folder inside `output`, decides order types and trade signs over the
+  whole run, and then reads the windows back for the depth stages. The run
+  still holds the trades and a few values per order, so its memory grows a
+  little with the input. On a synthetic file four times as long, with the same
+  window length, it held 1.5 times as much; reading the whole file, it held 3.6
+  times as much. The records must be in receive-time order, which Databento
+  guarantees for one instrument. Every other loader reads the whole input, and
+  the `events` and `trades` tables are held for the whole run. These are the
+  fixed part of the memory above.
 - **A source's own depth is not used.** LOBSTER's order book file states the
   book after each message of the whole session, so it cannot be cut. A windowed
   LOBSTER run rebuilds its depth from the messages instead.

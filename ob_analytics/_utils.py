@@ -441,19 +441,20 @@ def empty_events() -> pd.DataFrame:
     return empty_frame(EVENT_DTYPES)
 
 
-def attach_ingest_seq(frame: pd.DataFrame) -> pd.DataFrame:
+def attach_ingest_seq(frame: pd.DataFrame, *, start: int = 0) -> pd.DataFrame:
     """Attach the local monotonic ingest counter, in place, and return *frame*.
 
     ``ingest_seq`` is a 0-based ``int64`` index over *frame*'s rows in their
     current order — a deterministic ordering / replay key that never depends on
-    a venue-supplied number (see :mod:`ob_analytics.schemas`).  Loaders call this
-    while the frame is still in source (arrival) order, so the counter records
-    arrival order even when the frame is sorted differently before it is
-    returned.  Called only when ``track_sequence`` is enabled on the
+    a venue-supplied number (see :mod:`ob_analytics.schemas`).  It counts from
+    *start* when *frame* goes on from an earlier part of the same input.
+    Loaders call this while the frame is still in source (arrival) order, so
+    the counter records arrival order even when the frame is sorted
+    differently before it is returned.  Called only when ``track_sequence`` is enabled on the
     :class:`~ob_analytics.config.PipelineConfig`, so the default output is
     unchanged.
     """
-    frame[INGEST_SEQ_COLUMN] = np.arange(len(frame), dtype="int64")
+    frame[INGEST_SEQ_COLUMN] = np.arange(start, start + len(frame), dtype="int64")
     return frame
 
 

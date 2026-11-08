@@ -9,6 +9,9 @@ folder a windowed run is meant to be interchangeable with.
 
 from __future__ import annotations
 
+import importlib.util
+import tracemalloc
+
 import pandas as pd
 import pytest
 
@@ -308,6 +311,160 @@ def test_databento_windowed_run_matches_a_single_run(tmp_path):
     out = Pipeline(source=DatabentoSource()).run_windows(frame, cuts, tmp_path / "w")
 
     _assert_tables_equal(single, load_data(out))
+
+
+def test_a_loader_the_caller_passes_reads_the_whole_input(tmp_path, monkeypatch):
+    # The source's trade source may not read what such a loader keeps, so the
+    # run cannot rely on it to build the trades of a windowed read.
+    from ob_analytics.databento import DatabentoLoader, DatabentoSource
+    from tests.test_databento import LIFECYCLE, T0, mbo_frame
+
+    def refuse(self, source, windows):
+        raise AssertionError("read one window at a time")
+
+    monkeypatch.setattr(DatabentoLoader, "load_windows", refuse)
+    frame = mbo_frame(LIFECYCLE)
+    cut = pd.Timestamp(T0 + 3 * 1_000_000, tz="UTC")
+    pipeline = Pipeline(source=DatabentoSource(), loader=DatabentoLoader())
+
+    single = _saved_single_run(pipeline, frame, tmp_path / "single")
+    out = pipeline.run_windows(frame, [cut], tmp_path / "w")
+
+    _assert_tables_equal(single, load_data(out))
+
+
+requires_databento = pytest.mark.skipif(
+    importlib.util.find_spec("databento") is None,
+    reason="databento is an optional extra",
+)
+
+
+def _dbn_file(duration: float, path):
+    """A synthetic session of *duration* seconds, written as a DBN MBO file."""
+    from ob_analytics import PipelineConfig
+    from ob_analytics.databento import DatabentoWriter
+    from ob_analytics.synth import SynthConfig
+
+    session = generate_session(
+        SynthConfig(
+            seed=11,
+            duration=duration,
+            lot_size=1.0,
+            min_size=1.0,
+            mean_size=5.0,
+            volume_decimals=0,
+        )
+    )
+    config = PipelineConfig(
+        tick_size=0.01, lot_size=1.0, price_decimals=2, volume_decimals=0
+    )
+    result = Pipeline(
+        config,
+        loader=SyntheticLoader(session),
+        trade_source=SyntheticTradeSource(session),
+    ).run(None)
+    tables = {"events": result.events, "trades": result.trades}
+    return DatabentoWriter(config).write(tables, path), result.events
+
+
+@requires_databento
+def test_a_databento_file_read_a_window_at_a_time_matches_a_single_run(
+    tmp_path, monkeypatch
+):
+    from ob_analytics.databento import DatabentoLoader, DatabentoSource
+
+    path, events = _dbn_file(300.0, tmp_path / "session.dbn")
+    single = _saved_single_run(
+        Pipeline(source=DatabentoSource()), path, tmp_path / "single"
+    )
+    # Read the file in parts much smaller than a window, so the windows cut
+    # across parts as well as across orders.
+    monkeypatch.setattr(DatabentoLoader, "read_size", 997)
+    cuts = _cuts(events["timestamp"], *(k / 10 for k in range(1, 10)))
+
+    out = Pipeline(source=DatabentoSource()).run_windows(path, cuts, tmp_path / "w")
+
+    _assert_tables_equal(single, load_data(out))
+
+
+def _peak_mib(run) -> float:
+    """The most memory Python held while *run* ran, in MiB."""
+    tracemalloc.start()
+    try:
+        run()
+        return tracemalloc.get_traced_memory()[1] / 2**20
+    finally:
+        tracemalloc.stop()
+
+
+@requires_databento
+def test_a_databento_run_holds_one_window_of_events(tmp_path, monkeypatch):
+    # The same window length over a file four times as long: reading a window
+    # at a time, the run holds about the same; reading the whole file, it
+    # holds four times as much.  What still grows is a few values per order
+    # and the trades.
+    from ob_analytics import PipelineConfig
+    from ob_analytics.databento import (
+        DatabentoLoader,
+        DatabentoSource,
+        DatabentoTradeReader,
+    )
+
+    monkeypatch.setattr(DatabentoLoader, "read_size", 5000)
+    config = PipelineConfig(tick_size=0.01, lot_size=1.0)
+
+    def windowed(path, cuts):
+        Pipeline(source=DatabentoSource()).run_windows(path, cuts, tmp_path / "w")
+
+    def whole(path, cuts):
+        # A loader the caller passes reads the whole file.
+        loader = DatabentoLoader(config)
+        trade_source = DatabentoTradeReader(config, loader=loader)
+        Pipeline(config, loader=loader, trade_source=trade_source).run_windows(
+            path, cuts, tmp_path / "w"
+        )
+
+    peaks: dict[tuple[str, float], float] = {}
+    for duration in (300.0, 1200.0):
+        path, events = _dbn_file(duration, tmp_path / f"{duration:.0f}.dbn")
+        start = events["timestamp"].min()
+        cuts = [start + pd.Timedelta(seconds=s) for s in range(150, int(duration), 150)]
+        for name, run in (("windowed", windowed), ("whole", whole)):
+            run(path, cuts)  # once first, so imports and caches are not counted
+            peaks[name, duration] = _peak_mib(lambda: run(path, cuts))  # noqa: B023
+
+    assert peaks["whole", 1200.0] > 3 * peaks["whole", 300.0], peaks
+    assert peaks["windowed", 1200.0] < 2 * peaks["windowed", 300.0], peaks
+    assert peaks["windowed", 1200.0] < peaks["whole", 1200.0] / 2, peaks
+
+
+@requires_databento
+def test_a_failed_databento_run_leaves_the_folder_as_it_was(tmp_path, monkeypatch):
+    import ob_analytics.pipeline as pipeline_module
+    from ob_analytics.databento import DatabentoSource
+
+    path, events = _dbn_file(60.0, tmp_path / "session.dbn")
+    out = tmp_path / "w"
+    out.mkdir()
+    (out / "events.parquet").write_bytes(b"earlier run")
+    calls = []
+
+    def fail_on_second_window(window, quotes):
+        calls.append(1)
+        if len(calls) == 2:
+            raise RuntimeError("stopped part-way")
+        return window.assign(aggressiveness_bps=0.0)
+
+    monkeypatch.setattr(pipeline_module, "order_aggressiveness", fail_on_second_window)
+
+    with pytest.raises(RuntimeError, match="part-way"):
+        Pipeline(source=DatabentoSource()).run_windows(
+            path, [events["timestamp"].median()], out
+        )
+
+    # The windows saved on the way are gone too.
+    assert sorted(p.name for p in out.iterdir()) == ["events.parquet"]
+    assert (out / "events.parquet").read_bytes() == b"earlier run"
 
 
 # ── The output folder ─────────────────────────────────────────────────

@@ -43,12 +43,22 @@ a renamed or removed column, a changed unit or dtype, or a new required column.
 
 Read the version from another tool through pyarrow:
 
+<!-- docs-test
+from ob_analytics import Pipeline, sample_csv_path, save_data
+
+save_data(Pipeline().run(sample_csv_path()), "out/")
+-->
+
 ```python
 import pyarrow.parquet as pq
 
 metadata = pq.read_schema("out/events.parquet").metadata
 version = metadata[b"ob_analytics_schema_version"].decode()  # "4.0"
 ```
+
+<!-- docs-test
+assert version == "4.0", version
+-->
 
 ## The tables
 
@@ -134,6 +144,10 @@ tick_size = tick_sizes["default"]
 # quote-currency price = price_column * tick_size
 ```
 
+<!-- docs-test
+assert tick_sizes == {"default": 0.01}, tick_sizes
+-->
+
 `load_data` surfaces it on each returned frame's `attrs`:
 `df.attrs["tick_size"]` is the resolved default and `df.attrs["tick_sizes"]` the
 full map. A legacy (pre-`3.0`) file carries neither and stores float prices
@@ -208,6 +222,10 @@ lot_sizes = json.loads(metadata[b"ob_analytics_lot_size"])  # {"default": 1e-08}
 lot_size = lot_sizes["default"]
 # base-asset size = volume_column * lot_size
 ```
+
+<!-- docs-test
+assert lot_sizes == {"default": 1e-08}, lot_sizes
+-->
 
 `load_data` surfaces it on each returned frame's `attrs`: `df.attrs["lot_size"]`
 is the resolved default and `df.attrs["lot_sizes"]` the full map. A pre-`4.0`
@@ -435,7 +453,9 @@ functions never return one of their types. The reasoning is recorded in
 You do not have to write files first. A `PipelineResult` converts itself:
 
 ```python
-result = Pipeline().run("data/orders.csv")
+from ob_analytics import Pipeline
+
+result = Pipeline().run("orders.csv")
 
 tables = result.to_arrow()    # dict[str, pyarrow.Table]
 frames = result.to_polars()   # dict[str, polars.DataFrame]
@@ -487,6 +507,8 @@ touch = (
 ```
 
 ### DuckDB
+
+<!-- docs-test: skip needs duckdb, which ob-analytics does not install -->
 
 ```python
 import duckdb

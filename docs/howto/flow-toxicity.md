@@ -14,8 +14,10 @@ display-unit frame give the same numbers.
 ## VPIN
 
 ```python
-from ob_analytics import compute_vpin
+from ob_analytics import Pipeline, compute_vpin, sample_csv_path
 from ob_analytics.visualization import plot, save_figure, prepare
+
+result = Pipeline().run(sample_csv_path())
 
 # About 60 buckets: enough to fill the 50-bucket trailing window.
 # The trades store whole lots; lot_size turns their total into BTC.
@@ -208,7 +210,7 @@ def signed_volume_skew(trades: pd.DataFrame, freq: str = "1min") -> pd.DataFrame
     """How lopsided each window's flow was, beyond its net direction."""
     t = trades.copy()
     t["signed"] = t["volume"] * np.where(t["direction"] == "buy", 1.0, -1.0)
-    skew = t.set_index("timestamp")["signed"].resample(freq).skew()
+    skew = t.set_index("timestamp")["signed"].resample(freq).apply(pd.Series.skew)
     return skew.rename("signed_volume_skew").reset_index()
 
 skew_df = signed_volume_skew(result.trades)

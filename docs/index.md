@@ -121,6 +121,8 @@ decisions, and module map.
 
 === "LOBSTER"
 
+    <!-- docs-test: skip needs LOBSTER files -->
+
     ```python
     from ob_analytics import LobsterSource, Pipeline, RunContext
 

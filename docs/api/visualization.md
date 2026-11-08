@@ -9,7 +9,10 @@ To plot straight from a pipeline result, the one-liner `plot_result` (or
 for you; `available_concepts(result)` lists what a given result can render:
 
 ```python
+from ob_analytics import Pipeline, sample_csv_path
 from ob_analytics.visualization import plot_result
+
+result = Pipeline().run(sample_csv_path())
 
 fig = plot_result(result, "depth_heatmap")          # level defaults to L2
 fig = result.plot("trade_tape", "L3", backend="plotly")
@@ -24,7 +27,7 @@ arguments:
 ```python
 from ob_analytics.visualization import plot, prepare
 
-fig = plot("trade_tape", level="L2", **prepare.trades(trades))
+fig = plot("trade_tape", level="L2", **prepare.trades(result.trades))
 ```
 
 `backend="matplotlib"` (default) returns a Matplotlib figure;

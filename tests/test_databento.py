@@ -18,12 +18,14 @@ import pandas as pd
 import pytest
 
 from ob_analytics import Pipeline, PipelineConfig
+from ob_analytics._utils import empty_events
+from ob_analytics._windows import window_bounds
 from ob_analytics.analytics import (
     DataQualitySummary,
     data_quality_summary,
     order_book,
 )
-from ob_analytics.data import load_result, save_data
+from ob_analytics.data import load_data, load_result, save_data
 from ob_analytics.databento import (
     DBN_PRICE_DIVISOR,
     F_MAYBE_BAD_BOOK,
@@ -1051,6 +1053,208 @@ class TestMaybeBadBook:
             feed_type=FeedType.MATCHED_BOOK,
         )
         assert summary.maybe_bad_book_records == 1
+
+
+# ── Reading one window at a time ──────────────────────────────────────
+
+#: Records that make an order's state matter across a cut: fills waiting for
+#: the record that takes their size off, an execution that also moves the
+#: order, a cancel for an order never seen, an id used again after its order
+#: left, a clear with orders resting, an id used again after the clear, and
+#: fills that never meet a book record.
+ACROSS_CUTS = [
+    (1, "A", "B", px(100.00), 10),
+    (2, "A", "A", px(100.10), 8),
+    (3, "A", "B", px(99.90), 5),
+    (0, "T", "B", px(100.10), 3),
+    (2, "F", "A", px(100.10), 3),
+    (2, "C", "A", px(100.10), 3),  # takes the fill off
+    (1, "C", "B", px(100.00), 4),  # partial cancel -> 6
+    (0, "T", "N", px(100.00), 2),  # a print with no aggressor side
+    (1, "F", "B", px(100.00), 2),
+    (1, "M", "B", px(100.05), 4),  # executes 2 and moves -> two rows
+    (4, "C", "A", px(100.20), 1),  # an order never seen
+    (3, "C", "B", px(99.90), 5),  # order 3 leaves the book
+    (3, "M", "B", px(99.95), 2),  # ... and its id is used again
+    (3, "C", "B", px(99.95), 7),  # removing more than it has
+    (5, "A", "A", px(100.30), 4),
+    (6, "A", "A", px(100.40), 2),
+    (0, "N", "N", px(0.0), 0),
+    (5, "F", "A", px(100.30), 1),  # no book record before the clear
+    (0, "R", "N", px(0.0), 0),  # clears orders 1, 2, 5 and 6
+    (1, "A", "B", px(100.00), 3),  # a new order 1
+    (7, "A", "A", px(100.20), 6),
+    (7, "F", "A", px(100.20), 2),
+    (1, "C", "B", px(100.00), 1),
+    (7, "C", "A", px(100.20), 2),
+    (8, "A", "B", px(99.80), 4),
+    (8, "F", "B", px(99.80), 4),  # the file ends before its book record
+]
+
+
+def load_windows(frame: pd.DataFrame, cuts: list, *, read_size: int = 3):
+    """Read *frame* cut at *cuts*; return the loader and the windows."""
+    loader = DatabentoLoader(_config())
+    loader.read_size = read_size
+    return loader, list(loader.load_windows(frame, window_bounds(cuts)))
+
+
+def cut_sets(frame: pd.DataFrame) -> list[list[pd.Timestamp]]:
+    """Every single cut between two records, and a cut between every two."""
+    received = list(frame["ts_recv"])
+    return [[t] for t in received[1:]] + [received[1:]]
+
+
+class TestReadingOneWindowAtATime:
+    @pytest.mark.parametrize("read_size", [1, 4, 1000])
+    def test_the_windows_are_the_whole_read_cut_up(self, read_size):
+        frame = mbo_frame(ACROSS_CUTS)
+        whole_loader, whole = load(frame)
+
+        for cuts in cut_sets(frame):
+            loader, windows = load_windows(frame, cuts, read_size=read_size)
+
+            assert len(windows) == len(cuts) + 1
+            joined = pd.concat([w.events for w in windows], ignore_index=True)
+            pd.testing.assert_frame_equal(joined, whole)
+            pd.testing.assert_frame_equal(
+                loader.trade_records, whole_loader.trade_records
+            )
+
+    def test_each_window_names_the_events_its_trades_name(self):
+        frame = mbo_frame(ACROSS_CUTS)
+        whole_loader, _ = load(frame)
+        named = whole_loader.trade_records["maker_event_id"].dropna()
+
+        for cuts in cut_sets(frame):
+            _, windows = load_windows(frame, cuts)
+            for window in windows:
+                assert set(window.named_event_ids) <= set(window.events["event_id"])
+            assert sorted(int(e) for w in windows for e in w.named_event_ids) == sorted(
+                named.astype(int)
+            )
+
+    def test_a_fill_waits_for_the_record_after_the_cut(self):
+        # The cut falls between order 2's fill and the cancel that takes it
+        # off, so the fill is charged in the next window, as in a whole read.
+        frame = mbo_frame(ACROSS_CUTS)
+        loader, windows = load_windows(frame, [frame["ts_recv"].iloc[5]])
+
+        cancel = windows[1].events.iloc[0]
+        assert (cancel["id"], cancel["fill"]) == (2, 3)
+        fill = loader.trade_records.iloc[0]
+        assert fill["maker_event_id"] == cancel["event_id"]
+        assert fill["maker_og"] == cancel["original_number"] == 6
+
+    def test_the_trades_are_built_once_the_last_window_is_read(self):
+        frame = mbo_frame(ACROSS_CUTS)
+        loader, _ = load(frame)
+        whole = DatabentoTradeReader(_config(), loader=loader).load(
+            empty_events(), None
+        )
+
+        loader = DatabentoLoader(_config())
+        windows = loader.load_windows(frame, window_bounds([frame["ts_recv"][9]]))
+        next(windows)
+        with pytest.raises(ConfigError, match="has not read a file yet"):
+            DatabentoTradeReader(_config(), loader=loader).load(empty_events(), None)
+        list(windows)
+
+        trades = DatabentoTradeReader(_config(), loader=loader).load(
+            empty_events(), None
+        )
+        pd.testing.assert_frame_equal(trades, whole)
+
+    def test_a_window_with_no_records_has_no_events(self):
+        frame = mbo_frame(LIFECYCLE)
+        first = frame["ts_recv"].iloc[0]
+        cuts = [first - pd.Timedelta(seconds=2), first - pd.Timedelta(seconds=1)]
+        _, windows = load_windows(frame, cuts)
+
+        assert [len(w.events) for w in windows] == [0, 0, 5]
+        assert list(windows[0].events.columns) == list(windows[2].events.columns)
+
+    def test_records_out_of_receive_order_are_refused(self):
+        frame = mbo_frame(LIFECYCLE)
+        received = frame["ts_recv"].to_numpy().copy()
+        received[[3, 6]] = received[[6, 3]]
+        frame["ts_recv"] = received
+
+        with pytest.raises(ConfigError, match="not in receive-time order"):
+            load_windows(frame, [frame["ts_recv"].iloc[4]])
+
+    def test_the_book_is_checked_across_every_part(self):
+        frame = mbo_frame(LIFECYCLE)
+        frame.loc[7, "instrument_id"] = 999
+
+        with pytest.raises(ConfigError, match="instrument_id"):
+            load_windows(frame, [frame["ts_recv"].iloc[1]], read_size=2)
+
+    def test_a_filter_keeps_records_from_any_part(self):
+        frame = mbo_frame(LIFECYCLE)
+        frame.loc[:4, "instrument_id"] = 999
+        loader = DatabentoLoader(
+            _config(), settings=DatabentoSettings(instrument_id=INSTRUMENT_ID)
+        )
+        loader.read_size = 2
+
+        windows = list(loader.load_windows(frame, window_bounds([frame["ts_recv"][2]])))
+
+        assert len(windows[1].events) == 2
+
+    def test_a_filter_that_matches_nothing_in_any_part_is_an_error(self):
+        loader = DatabentoLoader(
+            _config(), settings=DatabentoSettings(instrument_id=4242)
+        )
+        frame = mbo_frame(LIFECYCLE)
+        with pytest.raises(ConfigError, match="no records left"):
+            list(loader.load_windows(frame, window_bounds([frame["ts_recv"][2]])))
+
+    def test_flagged_records_warn_once_with_the_whole_count(self):
+        frame = flag_one_record(flag_one_record(mbo_frame(LIFECYCLE), 1), 7)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            loader, _ = load_windows(frame, list(frame["ts_recv"][1:]), read_size=2)
+
+        messages = [
+            str(w.message) for w in caught if "F_MAYBE_BAD_BOOK" in str(w.message)
+        ]
+        assert messages == [messages[0]]
+        assert "2 of 9 records" in messages[0]
+        assert loader.maybe_bad_book_records == 2
+
+    @pytest.mark.parametrize("trades_from", ["fills", "prints"])
+    def test_a_windowed_run_matches_a_single_run(self, trades_from, tmp_path):
+        # Order 3's id used again after it left is left out here: the depth
+        # carry between windows does not handle it, whichever way the file
+        # is read.
+        frame = mbo_frame(ACROSS_CUTS[:12] + ACROSS_CUTS[14:])
+
+        def pipeline() -> Pipeline:
+            settings = DatabentoSettings(trades_from=trades_from)
+            return Pipeline(source=DatabentoSource(settings=settings))
+
+        single = pipeline().run(frame)
+        save_data(single.tables(), tmp_path / "single", config=single.config)
+        expected = load_data(tmp_path / "single")
+
+        for number, cuts in enumerate(cut_sets(frame)):
+            out = pipeline().run_windows(frame, cuts, tmp_path / f"w{number}")
+            windowed = load_data(out)
+            for name in ("trades", "depth", "depth_summary"):
+                pd.testing.assert_frame_equal(windowed[name], expected[name], obj=name)
+            pd.testing.assert_frame_equal(
+                windowed["events"].sort_values("event_id").reset_index(drop=True),
+                expected["events"],
+                obj="events",
+            )
+            # The working folder the windows were saved to is gone.
+            assert sorted(p.name for p in out.iterdir()) == [
+                "depth.parquet",
+                "depth_summary.parquet",
+                "events.parquet",
+                "trades.parquet",
+            ]
 
 
 # ── Reading and writing real DBN files ────────────────────────────────

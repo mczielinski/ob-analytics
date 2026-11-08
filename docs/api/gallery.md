@@ -44,6 +44,14 @@ trading halts, or a flow-toxicity face from a frame you computed with other
 settings, and append it to `model.analytics` before rendering:
 
 ```python
+from ob_analytics import Pipeline, compute_vpin, sample_csv_path
+from ob_analytics.visualization.gallery import (
+    build_gallery_model, generate_gallery, vpin_panel,
+)
+
+result = Pipeline().run(sample_csv_path())
+vpin_df = compute_vpin(result.trades)
+
 model = build_gallery_model(result)
 model.analytics.append(vpin_panel(vpin_df))
 generate_gallery(result, "out/gallery", model=model)

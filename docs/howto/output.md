@@ -13,7 +13,10 @@ There is no global theme to set. Pass a `PlotTheme` to `plot()` and it
 applies only to that call, on any backend:
 
 ```python
+from ob_analytics import Pipeline, sample_csv_path
 from ob_analytics.visualization import plot, save_figure, prepare, PlotTheme
+
+result = Pipeline().run(sample_csv_path())
 
 theme = PlotTheme(
     style="whitegrid",
@@ -133,7 +136,7 @@ from ob_analytics.protocols import RunContext
 
 save_data(
     data, "round_trip/", fmt="lobster",
-    config=config, ctx=RunContext(trading_date="2012-06-21"),
+    config=result.config, ctx=RunContext(trading_date="2012-06-21"),
 )
 ```
 
