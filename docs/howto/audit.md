@@ -112,9 +112,11 @@ Two of these are judgement calls worth stating plainly:
   always a defect in a matched book or a price-level book, but can be a
   faithful replay of a diff feed. Only the source's declared [`FeedType`](../api/protocols.md) can tell
   them apart. Size alone says little: on the bundled sample, almost all of the
-  92% comes from two stale orders, which `stale_orders` reports. With
-  `--from-parquet` and no `--source`, the feed type is undeclared and crossing
-  drops to a warning rather than being guessed.
+  92% comes from two stale orders, which `stale_orders` reports. A saved
+  output records the feed type of the run that made it. One written by an
+  older version does not: with `--from-parquet` and no `--source`, its feed
+  type is undeclared and crossing drops to a warning rather than being
+  guessed.
 - **A dropped `created` message cannot be told apart from an order that was
   already resting** when the capture began — both leave an order that is only
   ever changed or deleted. So `orphan_orders` is a warning, and the hard
@@ -145,9 +147,10 @@ Two of these are judgement calls worth stating plainly:
   one instrument of that channel, and its trade and fill records become
   trades rather than book events, so the numbers left in the events skip even
   when nothing was lost. The source declares this, and `audit` then prints
-  `gaps not checked`. Audit a saved Databento output with
-  `--from-parquet --source databento`: without `--source`, nothing says what
-  the numbers promise, and every skip counts as a lost message.
+  `gaps not checked`. A saved Databento output records this too. For one
+  written by an older version, pass `--from-parquet --source databento`:
+  without `--source`, nothing says what the numbers promise, and every skip
+  counts as a lost message.
 
   So Databento's own flag is its only gap signal. When Databento finds a gap
   it cannot repair, it marks the records after it with `F_MAYBE_BAD_BOOK`.
@@ -248,16 +251,15 @@ can read the verdict instead of parsing the text block:
 
 ## From Python
 
+A run's result carries what its data is declared to show (its
+`declarations`: feed type, trade attribution, sequence kind and clocks), and
+`result.audit()` holds the run to them, as `ob-analytics audit` does:
+
 ```python
-from ob_analytics import Pipeline, BitstampSource, FeedType, data_quality_summary
+from ob_analytics import Pipeline
 
 result = Pipeline().run("orders.csv")
-summary = data_quality_summary(
-    result.events, result.trades,
-    feed_type=BitstampSource().feed_type,   # or getattr(source, "feed_type", FeedType.UNKNOWN)
-    depth=result.depth,                      # faithful depth; not depth_summary
-    tick_size=result.config.tick_size,       # stale-order prices in the quote currency
-)
+summary = result.audit()
 print(summary.render())
 summary.ok            # False when an error-severity check failed
 summary.errors        # the failed error checks, each with a one-line detail
@@ -266,24 +268,20 @@ summary.stale_orders  # StaleOrder records, worst first
 summary.to_dict()     # JSON-serialisable, including every check
 ```
 
+The declarations come from the run's source. For a live capture, what its
+`meta.json` records replaces them, since the capture's own source declared
+those. A result saved with `save_data` keeps them, so
+`load_result(folder).audit()` checks it the same way.
+
 The sequence checks need the venue's numbers, which a run keeps only with
-`PipelineConfig(track_sequence=True)`; `audit` turns this on for you. Pass the
-source's `sequence_kind` too, or a source whose numbers skip on their own,
-such as `databento` or `ccxt`, is read as losing messages:
+`PipelineConfig(track_sequence=True)`; `audit` turns this on for you:
 
 ```python
-from ob_analytics import DatabentoSource, Pipeline, PipelineConfig, data_quality_summary
-from ob_analytics.protocols import sequence_kind_of, trade_attribution_of
+from ob_analytics import DatabentoSource, Pipeline, PipelineConfig
 
 source = DatabentoSource()
 result = Pipeline(PipelineConfig(track_sequence=True), source=source).run("aapl.mbo.dbn.zst")
-summary = data_quality_summary(
-    result.events, result.trades,
-    feed_type=source.feed_type,
-    depth=result.depth,
-    sequence_kind=sequence_kind_of(source),
-    trade_attribution=trade_attribution_of(source),
-)
+summary = result.audit()
 ```
 
 To compare a LOBSTER run with its orderbook file, pass the venue's book as
@@ -291,20 +289,17 @@ To compare a LOBSTER run with its orderbook file, pass the venue's book as
 returns `None` when the folder has no orderbook file:
 
 ```python
-from ob_analytics import LobsterSource, Pipeline, RunContext, data_quality_summary
+from ob_analytics import LobsterSource, Pipeline, RunContext
 
 source = LobsterSource()
 result = Pipeline(source=source, ctx=RunContext(trading_date="2012-06-21")).run("data/")
-summary = data_quality_summary(
-    result.events, result.trades,
-    feed_type=source.feed_type,
-    depth=result.depth,
-    tick_size=result.config.tick_size,
-    venue_book=source.venue_book("data/", result.config),
-)
+summary = result.audit(venue_book=source.venue_book("data/", result.config))
 summary.venue_book_differing_rows    # rows where the two books differ
 summary.venue_book_first_difference  # a BookDifference, or None
 ```
+
+For tables that are not a run's, call `data_quality_summary(events, trades,
+...)` and pass the declarations yourself.
 
 !!! note "Pass `depth`, not `depth_summary`"
     Crossing is measured from the *faithful* resting book. `depth_summary` is

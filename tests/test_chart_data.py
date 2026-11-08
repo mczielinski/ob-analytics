@@ -750,7 +750,14 @@ class TestPrepareOfiHorizon:
     def test_grid_shape(self) -> None:
         horizons = ("5s", "15s", "60s", "300s")
         data = prepare_ofi_horizon_data(self._trades(), horizons=horizons, grid="5s")
-        assert set(data) == {"ofi", "times", "horizons"}
+        assert set(data) == {
+            "ofi",
+            "times",
+            "horizons",
+            "band_alphas",
+            "buy_bands",
+            "sell_bands",
+        }
         assert list(data["horizons"]) == list(horizons)
         # One row per horizon; one column per grid step.
         assert data["ofi"].shape[0] == len(horizons)

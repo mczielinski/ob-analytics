@@ -17,18 +17,15 @@ import numpy as np
 import pandas as pd
 
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.protocols import Level
+from ob_analytics.visualization._concepts import register_backend
 from ob_analytics.visualization._data import (
     NO_DEPTH_NOTICE,
     biased_color_norm,
-    book_bar_thickness,
-    book_mid,
     check_book_payload_level,
     l1_card_texts,
     mpl_marker_area_to_plotly_size,
 )
-from ob_analytics.visualization._palette import Palette
-from ob_analytics.visualization._renderers import RENDERERS
+from ob_analytics.visualization._palette import Palette, iceberg_opacity
 from ob_analytics.visualization._theme import DEFAULT_THEME, PlotTheme
 
 
@@ -184,7 +181,7 @@ def plotly_trades(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
 
     fig.update_xaxes(title_text="Time")
     fig.update_yaxes(title_text="Price")
-    _apply_padded_y_range(fig, data.get("y_range"))
+    _apply_y_range(fig, data.get("y_range"))
     return fig
 
 
@@ -265,11 +262,10 @@ def plotly_price_levels(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
 
     if spread is not None and show_mp:
         if "best_bid_price" in spread and "best_ask_price" in spread:
-            mp = (spread["best_bid_price"] + spread["best_ask_price"]) / 2
             fig.add_trace(
                 go.Scatter(
                     x=spread["timestamp"],
-                    y=mp,
+                    y=spread["midprice"],
                     mode="lines",
                     line={"color": pal.price_line, "width": 1.5, "shape": "hv"},
                     name="Midprice",
@@ -348,9 +344,7 @@ def plotly_price_levels(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
 
     fig.update_xaxes(title_text="Time")
     fig.update_yaxes(title_text="Limit Price")
-    y_range = data.get("y_range")
-    if y_range is not None:
-        fig.update_yaxes(range=list(y_range))
+    _apply_y_range(fig, data.get("y_range"))
     return fig
 
 
@@ -511,7 +505,7 @@ def _plotly_book_bars(
         if len(trace.y):
             fig.add_trace(trace)
 
-    mid = book_mid(data["bids"], data["asks"])
+    mid = data["mid"]
     if mid is not None:
         fig.add_hline(y=mid, line_dash="dash", line_color=pal.rule, line_width=1)
 
@@ -542,12 +536,12 @@ def _plotly_depth_curve(
 
     mode = "lines+markers" if per_order else "lines"
     for side, color, label in (
-        (data["bids"], pal.bid, "Bid"),
-        (data["asks"], pal.ask, "Ask"),
+        (data["bid_curve"], pal.bid, "Bid"),
+        (data["ask_curve"], pal.ask, "Ask"),
     ):
         if side.empty:
             continue
-        s = side.sort_values("price")
+        s = side
         fig.add_trace(
             go.Scatter(
                 x=s["price"],
@@ -591,7 +585,7 @@ def _replay_frame(
     without its colour, which shows as black.
     """
     t = snapshot["timestamp"]
-    mid = book_mid(snapshot["bids"], snapshot["asks"])
+    mid = snapshot["mid"]
     padded = {
         **snapshot,
         **{
@@ -657,11 +651,7 @@ def _replay_timeline(
     trace the side of the book it traded against, for the click handler in
     :data:`BOOK_REPLAY_SCRIPT`.
     """
-    mids = [
-        (s["timestamp"], book_mid(s["bids"], s["asks"]))
-        for s in snapshots
-        if book_mid(s["bids"], s["asks"]) is not None
-    ]
+    mids = [(s["timestamp"], s["mid"]) for s in snapshots if s["mid"] is not None]
     frame_times = pd.DatetimeIndex([s["timestamp"] for s in snapshots])
     traces = [
         go.Scatter(
@@ -909,14 +899,9 @@ def _plotly_book_replay(
     )
     # One thickness for every frame: Plotly would otherwise size each frame's
     # bars from that frame's own price gaps, and the bars would change height.
-    bar_width = 0.9 * min(
-        book_bar_thickness(snapshot["bids"], snapshot["asks"]) for snapshot in snapshots
-    )
-    # The prepare step fixed one price range for every frame; pad it by a bar
-    # so the bars at its edges are drawn whole.
-    price_range = data.get("price_range")
-    if price_range is not None:
-        price_range = [price_range[0] - bar_width, price_range[1] + bar_width]
+    bar_width = 0.9 * data["bar_thickness"]
+    view_range = data["view_range"]
+    price_range = list(view_range) if view_range is not None else None
     # The most bars either side has in any frame, and a price for the filler
     # bars that make up the rest: below the visible range, so they are never
     # seen or hovered.
@@ -1305,15 +1290,12 @@ def _plotly_lollipops(fig: Any, go: Any, side: Any, color: str, label: str) -> N
 # orders, shared by the depth heatmap and the L3 order-activity map.
 # ---------------------------------------------------------------------------
 
-_ICEBERG_CONFIDENCE_OPACITY = {"low": 0.35, "medium": 0.6, "high": 0.9}
-
 
 def _iceberg_chain_xy(group: Any) -> tuple[list, list]:
     """One ``None``-gapped polyline per iceberg within *group* (>=2 slices)."""
     xs: list = []
     ys: list = []
     for _, g in group.groupby("iceberg", sort=False):
-        g = g.sort_values("timestamp")
         xs.extend(g["timestamp"].tolist())
         xs.append(None)
         ys.extend(g["price"].tolist())
@@ -1339,7 +1321,7 @@ def _add_iceberg_overlay(
                         y=ys,
                         mode="lines",
                         line={"color": color, "width": 1.4},
-                        opacity=_ICEBERG_CONFIDENCE_OPACITY.get(str(confidence), 0.5),
+                        opacity=iceberg_opacity(confidence),
                         name="Iceberg chain",
                         legendgroup="iceberg_chain",
                         showlegend=first,
@@ -1409,13 +1391,10 @@ def _add_hidden_trades_overlay(
     )
 
 
-def _apply_padded_y_range(fig: Any, y_range: tuple[float, float] | None) -> None:
-    """Set a 4%-padded y-range so spike prints are never cut at the axis edge."""
-    if y_range is None:
-        return
-    lo, hi = y_range
-    pad = (hi - lo) * 0.04 or 1.0
-    fig.update_yaxes(range=[lo - pad, hi + pad])
+def _apply_y_range(fig: Any, y_range: tuple[float, float] | None) -> None:
+    """Set the payload's y-range, if it has one; the prepare step padded it."""
+    if y_range is not None:
+        fig.update_yaxes(range=list(y_range))
 
 
 def plotly_order_activity_per_order(
@@ -1468,9 +1447,7 @@ def plotly_order_activity_per_order(
         )
     fig.update_xaxes(title_text="Time")
     fig.update_yaxes(title_text="Limit Price")
-    y_range = data.get("y_range")
-    if y_range is not None:
-        fig.update_yaxes(range=list(y_range))
+    _apply_y_range(fig, data.get("y_range"))
     return fig
 
 
@@ -1479,7 +1456,6 @@ def _queue_traj_xy(side: Any) -> tuple[list, list]:
     xs: list = []
     ys: list = []
     for _, g in side.groupby("id", sort=False):
-        g = g.sort_values("timestamp", kind="stable")
         xs.extend(g["timestamp"].tolist())
         xs.append(None)
         ys.extend(g["rank"].tolist())
@@ -1688,9 +1664,7 @@ def plotly_price_view(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
 
     fig.update_xaxes(title_text="Time")
     fig.update_yaxes(title_text="Price")
-    y_range = data.get("y_range")
-    if y_range is not None:
-        fig.update_yaxes(range=list(y_range))
+    _apply_y_range(fig, data.get("y_range"))
     return fig
 
 
@@ -1858,9 +1832,7 @@ def plotly_book_signals(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
 
     fig.update_xaxes(title_text="Time")
     fig.update_yaxes(title_text="Price")
-    y_range = data.get("y_range")
-    if y_range is not None:
-        fig.update_yaxes(range=list(y_range))
+    _apply_y_range(fig, data.get("y_range"))
     fig.update_layout(
         yaxis2={
             "title": {"text": "OBI"},
@@ -2015,7 +1987,7 @@ def plotly_trade_tape_per_order(data: dict, *, theme: PlotTheme = DEFAULT_THEME)
 
     fig.update_xaxes(title_text="Time")
     fig.update_yaxes(title_text="Execution Price")
-    _apply_padded_y_range(fig, data.get("y_range"))
+    _apply_y_range(fig, data.get("y_range"))
     return fig
 
 
@@ -2325,21 +2297,10 @@ def plotly_transaction_costs(data: dict, *, theme: PlotTheme = DEFAULT_THEME) ->
     )
 
     fig.add_hline(y=0, line_color=pal.rule, line_width=0.5, opacity=0.6)
-    fig.update_yaxes(title_text="Basis points", range=_bps_range(data))
+    fig.update_yaxes(title_text="Basis points")
+    _apply_y_range(fig, data.get("y_range"))
     fig.update_xaxes(title_text="Time")
     return fig
-
-
-def _bps_range(data: dict) -> list[float] | None:
-    """Y range covering the averaged lines, so outlying trades do not flatten them."""
-    finite = np.concatenate(
-        [s[np.isfinite(s)] for s in (data["effective"], data["realized"])]
-    )
-    if finite.size == 0:
-        return None
-    low, high = float(finite.min()), float(finite.max())
-    margin = max((high - low) * 0.25, 3.0)
-    return [low - margin, high + margin]
 
 
 def plotly_ofi_horizon(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
@@ -2361,7 +2322,6 @@ def plotly_ofi_horizon(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     from plotly.subplots import make_subplots
 
     n = len(horizons)
-    n_bands, band_h = 3, 1.0
     fig = make_subplots(
         rows=n,
         cols=1,
@@ -2371,12 +2331,12 @@ def plotly_ofi_horizon(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     )
     x = data["times"]
     for i in range(n):
-        sn = np.clip(np.nan_to_num(ofi[i]), -1.0, 1.0)
-        for b in range(n_bands):
-            lo, hi = b / n_bands, (b + 1) / n_bands
-            alpha = 0.25 + 0.25 * b
-            for signed, color in ((sn, pal.buy), (-sn, pal.sell)):
-                height = (np.clip(signed, lo, hi) - lo) * band_h * n_bands
+        for b, alpha in enumerate(data["band_alphas"]):
+            for bands, color in (
+                (data["buy_bands"], pal.buy),
+                (data["sell_bands"], pal.sell),
+            ):
+                height = bands[i, b]
                 fig.add_trace(
                     go.Scatter(
                         x=x,
@@ -2390,7 +2350,7 @@ def plotly_ofi_horizon(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
                     row=i + 1,
                     col=1,
                 )
-        fig.update_yaxes(range=[0, band_h], showticklabels=False, row=i + 1, col=1)
+        fig.update_yaxes(range=[0, 1], showticklabels=False, row=i + 1, col=1)
     fig.update_layout(
         template=_template(go, theme),
         title="Order flow imbalance — horizon graph (buy / sell)",
@@ -2549,9 +2509,7 @@ def plotly_hidden_executions(data: dict, *, theme: PlotTheme = DEFAULT_THEME) ->
 
     fig.update_xaxes(title_text="Time")
     fig.update_yaxes(title_text="Price")
-    y_range = data.get("y_range")
-    if y_range is not None:
-        fig.update_yaxes(range=list(y_range))
+    _apply_y_range(fig, data.get("y_range"))
     return fig
 
 
@@ -2595,10 +2553,6 @@ def plotly_trading_halts(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any
     fig.update_xaxes(title_text="Time")
     fig.update_yaxes(title_text="Price")
     return fig
-
-
-# ---------------------------------------------------------------------------
-# Renderer self-registration
 
 
 def plotly_bars(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
@@ -2684,47 +2638,5 @@ def plotly_bars(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     return fig
 
 
-# ---------------------------------------------------------------------------
-# Renderer self-registration
-# ---------------------------------------------------------------------------
-# (concept, level, renderer); mirrors the matplotlib backend's coordinates so
-# every concept has both faces.  Analytics are level-less (``None``).
-_L2 = Level.L2
-_L3 = Level.L3
-for _concept, _level, _fn in [
-    ("time_series", _L2, plotly_time_series),
-    ("trade_tape", _L2, plotly_trades),
-    ("trade_tape", _L3, plotly_trade_tape_per_order),
-    ("depth_heatmap", _L2, plotly_price_levels),
-    ("order_activity", _L2, plotly_event_map),
-    ("order_activity", _L3, plotly_order_activity_per_order),
-    ("order_outcome", _L3, plotly_order_outcome_per_order),
-    ("queue_position", _L3, plotly_queue_position_per_order),
-    ("liquidity_at_touch", _L2, plotly_liquidity_at_touch),
-    ("liquidity_at_touch", _L3, plotly_liquidity_at_touch_per_order),
-    ("price_view", _L2, plotly_price_view),
-    ("l1_ticker", None, plotly_l1_ticker),
-    ("book_signals", None, plotly_book_signals),
-    ("trade_size", _L2, plotly_trade_size),
-    ("cancellations", _L2, plotly_volume_map),
-    ("cancellations", _L3, plotly_cancellations_per_order),
-    ("book_snapshot", _L2, plotly_book_snapshot_aggregate),
-    ("book_snapshot", _L3, plotly_book_snapshot_per_order),
-    ("depth_chart", _L2, plotly_depth_chart_aggregate),
-    ("depth_chart", _L3, plotly_depth_chart_per_order),
-    ("book_replay", _L2, plotly_book_replay_aggregate),
-    ("book_replay", _L3, plotly_book_replay_per_order),
-    ("volume_percentiles", _L2, plotly_volume_percentiles),
-    ("events_histogram", _L2, plotly_events_histogram),
-    ("hidden_executions", _L2, plotly_hidden_executions),
-    ("bars", None, plotly_bars),
-    ("vpin", None, plotly_vpin),
-    ("order_flow_imbalance", None, plotly_order_flow_imbalance),
-    ("transaction_costs", None, plotly_transaction_costs),
-    ("amihud", None, plotly_window_measure),
-    ("roll_spread", None, plotly_window_measure),
-    ("ofi_horizon", None, plotly_ofi_horizon),
-    ("kyle_lambda", None, plotly_kyle_lambda),
-    ("trading_halts", None, plotly_trading_halts),
-]:
-    RENDERERS.register((_concept, _level, "plotly"), _fn)
+# The concept table names the plots this backend draws; register them.
+register_backend("plotly", globals())

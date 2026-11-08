@@ -110,6 +110,7 @@ dev = [
     "ipykernel>=6.29",
     "jupytext>=1.16",
     "nbconvert>=7.16",
+    "pytest-xdist>=3.8,<4",
 ]
 
 # The two backtesting engines, installed only to cross-check our reconstruction

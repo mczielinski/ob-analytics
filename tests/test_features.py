@@ -771,10 +771,8 @@ def _book_at(table: pd.DataFrame, quotes: pd.DataFrame) -> pd.DataFrame:
 
 
 class TestBundledSample:
-    def test_one_call_on_the_sample(self, sample_csv_path):
-        from ob_analytics import Pipeline
-
-        result = Pipeline().run(sample_csv_path)
+    def test_one_call_on_the_sample(self, bundled_sample_result):
+        result = bundled_sample_result
         # 1e-6 BTC is 100 satoshi lots, the threshold this test was written
         # with before thresholds were read in the instrument's units.
         table = features(result.trades, result.depth_summary, "volume", 1e-6)

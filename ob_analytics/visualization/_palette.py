@@ -125,3 +125,16 @@ class Palette:
 
 #: The palette :data:`~ob_analytics.visualization.DEFAULT_THEME` uses.
 DEFAULT_PALETTE: Palette = Palette()
+
+
+#: How opaque a suspected iceberg's chain is drawn, by the detector's
+#: confidence in it: the surer the detection, the more solid the line.
+ICEBERG_CONFIDENCE_OPACITY: dict[str, float] = {"low": 0.35, "medium": 0.6, "high": 0.9}
+
+#: The opacity of a chain whose confidence is not one of the names above.
+_UNKNOWN_CONFIDENCE_OPACITY = 0.5
+
+
+def iceberg_opacity(confidence: object) -> float:
+    """The opacity every backend draws an iceberg chain at, by *confidence*."""
+    return ICEBERG_CONFIDENCE_OPACITY.get(str(confidence), _UNKNOWN_CONFIDENCE_OPACITY)

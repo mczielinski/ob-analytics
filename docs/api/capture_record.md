@@ -23,6 +23,8 @@ recorded tick size and lot size when your config does not set them. So
 
 ::: ob_analytics.capture_record.read_instrument
 
+::: ob_analytics.capture_record.run_declarations
+
 ::: ob_analytics.capture_record.write_record
 
 ::: ob_analytics.capture_record.source_declarations

@@ -226,6 +226,17 @@ tick and lot size; `load_result` then takes the display precision from the
 decimal places of each step (a tick of 0.001 gives `price_decimals=3`). The key is optional, so it does not
 change the schema version, and an older reader ignores it.
 
+### The run's declarations
+
+When `save_data` is given a result, each file also records the run's
+declarations (`FeedDeclarations`: feed type, trade attribution, sequence kind,
+clocks, and a capture's sequence restarts) as a JSON object under
+`ob_analytics_declarations`. `load_result` reads it, so `result.audit()` and
+`ob-analytics audit --from-parquet` check a saved run against what its data
+was declared to show. A folder without the key gets the declarations of the
+capture record beside it, then those of the source passed to `load_result`.
+Like the config key, it is optional and does not change the schema version.
+
 A size too large to count in `int64` lots of the run's `lot_size` (about
 9.2e10 units at the default `1e-8`) is refused with `ConfigError` when a
 loader reads it, rather than wrapped to a negative number. Set the instrument's
@@ -409,7 +420,7 @@ The frame type is part of the contract, so it is written down here:
   `pandas.DataFrame`.
 - **Plug-ins are handed pandas.** The protocols you implement to add a source or
   an export format — `EventLoader`, `TradeSource`, `DepthSource`,
-  `OfflineSource.compute_depth`, `DataWriter` — take and return
+  `SupportsComputeDepth.compute_depth`, `DataWriter` — take and return
   `pandas.DataFrame`. See [Extending](extending.md).
 - **The file format is how other tools read the output.** The versioned Parquet
   described on this page is the interop surface, not the Python type. Polars,

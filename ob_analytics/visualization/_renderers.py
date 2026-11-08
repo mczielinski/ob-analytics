@@ -121,12 +121,13 @@ class RendererRegistry(Registry[RendererKey, RendererFn]):
 #: Registry of ``(concept, level, backend)`` → renderer function, where
 #: *level* is a :class:`Level` (``L2``/``L3``) or ``None`` for level-less
 #: analytics.  A concept is one kind or the other on every backend.
-#: Renderer modules (``_matplotlib``, ``_plotly``) self-register at import
-#: time -- see the self-registration block at the bottom of each.
+#: The built-in backend modules (``_matplotlib``, ``_plotly``, ``_bokeh``)
+#: register, when imported, every plot the concept table
+#: (``visualization/_concepts.py``) gives them.
 RENDERERS: RendererRegistry = RendererRegistry("renderer")
 
-# Lazy-import bootstrap: backend name → module that self-registers its
-# renderers on import.  matplotlib is a hard dep, imported with the
+# Lazy-import bootstrap: backend name → module that registers its renderers
+# on import.  matplotlib is a hard dep, imported with the
 # visualization package for its save and theme helpers, which also fires its
 # registration; plotly and bokeh are optional and imported on first use.
 _BACKEND_MODULES: dict[str, str] = {

@@ -110,7 +110,9 @@ class TestDepthCsvSource:
         assert "depth_csv" in list_sources()
 
     def test_self_describing_no_required_context(self):
-        assert DepthCsvSource().required_context() == []
+        from ob_analytics.protocols import required_context_of
+
+        assert required_context_of(DepthCsvSource()) == []
 
     def test_loader_is_a_depth_source(self):
         from ob_analytics import PipelineConfig

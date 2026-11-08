@@ -23,7 +23,6 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ob_analytics.config import PipelineConfig
-    from ob_analytics.protocols import SequenceKind
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -220,120 +219,43 @@ def _cmd_audit(args: argparse.Namespace) -> None:
 
 
 def _audit_one(args: argparse.Namespace, path: Path) -> Any:
-    """Audit one capture, file or saved result; return its quality summary."""
-    from loguru import logger
+    """Audit one capture, file or saved result; return its quality summary.
 
-    from ob_analytics.analytics import data_quality_summary
-    from ob_analytics.capture_record import read_record
-    from ob_analytics.config import PipelineConfig
-    from ob_analytics.protocols import (
-        Clocks,
-        FeedType,
-        SequenceKind,
-        TradeAttribution,
-        clocks_of,
-        sequence_kind_of,
-        trade_attribution_of,
-    )
-
-    # Running the pipeline needs a source, so it falls back to the default one.
-    # Reading a saved result does not: the feed type is a property of the
-    # *source*, not of the data, so without --source it stays undeclared rather
-    # than guessed, which keeps the crossing check honest (see FeedType).
-    source_name = args.source
-    if source_name is None and not args.from_parquet:
-        source_name = "bitstamp"
-
-    feed_type = FeedType.UNKNOWN
-    trade_attribution = TradeAttribution.BOTH
-    sequence_kind = SequenceKind.CONTIGUOUS
-    clocks = Clocks.BOTH
-    source = None
-    if source_name is not None:
-        source = _build_source(source_name)
-        feed_type = getattr(source, "feed_type", feed_type)
-        trade_attribution = trade_attribution_of(source)
-        sequence_kind = sequence_kind_of(source)
-        clocks = clocks_of(source)
-
-    # A live capture records what its own source declares, and that describes
-    # this data exactly.  --source may name a different source because it also
-    # says how to read the files: a cryptofeed L3 capture is read as bitstamp,
-    # whose feed shows more.  So the record, when there is one, sets what the
-    # checks expect.
-    record = read_record(path)
-    made_by = record.source
-    if made_by is not None:
-        feed_type = record.feed_type or feed_type
-        trade_attribution = record.trade_attribution or trade_attribution
-        clocks = record.clocks or clocks
-        # A capture written before captures recorded the sequence kind is
-        # checked the way the source that made it declares it now.
-        if made_by != source_name and record.sequence_kind is None:
-            sequence_kind = _declared_sequence_kind(made_by, default=sequence_kind)
-        if source_name is not None and made_by != source_name:
-            logger.info(
-                "Checking against what the {} source declares (recorded in "
-                "meta.json when it made this capture), not {}",
-                made_by,
-                source_name,
-            )
-
-    # A source that supplies its own book (LOBSTER's orderbook file) lets the
-    # rebuilt book be compared with it.  A saved result has no such file.
-    venue_book = None
-    if args.from_parquet:
-        result = _load_saved_result(path)
-    else:
-        # Dropped-message detection reads the venue sequence, which is off by
-        # default elsewhere.  Only this field is set, so the source's own config
-        # defaults still apply to the rest.
-        pipeline = _build_pipeline(
-            args, source, source_name, PipelineConfig(track_sequence=True)
-        )
-        logger.info("Auditing {} (source={})...", path, source_name)
-        result = pipeline.run(path)
-        read_venue_book = getattr(source, "venue_book", None)
-        if read_venue_book is not None:
-            venue_book = read_venue_book(path, result.config)
-
-    return data_quality_summary(
-        result.events,
-        result.trades,
-        feed_type=feed_type,
-        depth=result.depth,
-        tick_size=result.config.tick_size,
-        sequence_kind=record.sequence_kind or sequence_kind,
-        sequence_restarts=record.sequence_restarts,
-        trade_attribution=trade_attribution,
-        clocks=clocks,
-        venue_book=venue_book,
-    )
-
-
-def _declared_sequence_kind(source_name: str, default: SequenceKind) -> SequenceKind:
-    """What the source called *source_name* declares as its sequence kind.
-
-    *default*, with a warning, when the source cannot be built here: not
-    installed, or a plug-in that needs settings to start.  The check must
-    not stop ``audit``.
+    The result carries the declarations it is checked against: its source's,
+    with what a live capture recorded in their place.
     """
     from loguru import logger
 
-    from ob_analytics.protocols import sequence_kind_of
-    from ob_analytics.sources import get_source
+    from ob_analytics.config import PipelineConfig
 
-    try:
-        return sequence_kind_of(get_source(source_name)())
-    except Exception as exc:  # noqa: BLE001 - fall back, never stop audit
-        logger.warning(
-            "Cannot read what the {} source declares ({!r}); checking the venue "
-            "sequence as {} instead",
-            source_name,
-            exc,
-            default.value,
-        )
-        return default
+    # Running the pipeline needs a source, so it falls back to the default one.
+    # Reading a saved result does not: it records its own declarations, and
+    # one that records none (an older output) stays undeclared without
+    # --source rather than guessed, which keeps the crossing check honest
+    # (see FeedType).
+    source_name = args.source
+    if source_name is None and not args.from_parquet:
+        source_name = "bitstamp"
+    source = _build_source(source_name) if source_name is not None else None
+
+    if args.from_parquet:
+        return _load_saved_result(path, source=source).audit()
+
+    # Dropped-message detection reads the venue sequence, which is off by
+    # default elsewhere.  Only this field is set, so the source's own config
+    # defaults still apply to the rest.
+    pipeline = _build_pipeline(
+        args, source, source_name, PipelineConfig(track_sequence=True)
+    )
+    logger.info("Auditing {} (source={})...", path, source_name)
+    result = pipeline.run(path)
+    # A source that supplies its own book (LOBSTER's orderbook file) lets the
+    # rebuilt book be compared with it.
+    read_venue_book = getattr(source, "venue_book", None)
+    venue_book = None
+    if read_venue_book is not None:
+        venue_book = read_venue_book(path, result.config)
+    return result.audit(venue_book=venue_book)
 
 
 def _build_source(source_name: str) -> Any:
@@ -365,9 +287,9 @@ def _build_pipeline(
     from loguru import logger
 
     from ob_analytics.pipeline import Pipeline
-    from ob_analytics.protocols import RunContext
+    from ob_analytics.protocols import RunContext, required_context_of
 
-    required = getattr(source, "required_context", list)()
+    required = required_context_of(source)
     if "trading_date" in required and args.trading_date is None:
         logger.error("--trading-date is required for the {} source", source_name)
         sys.exit(1)
@@ -386,10 +308,10 @@ def _build_pipeline(
 def _keep_capture_record(data_path: Path, output: Path) -> None:
     """Copy a live capture's ``meta.json`` into the processed output.
 
-    The record says which source made the capture and what that source
-    declares about its feed.  ``audit --from-parquet`` on the output reads it
-    from there; without the copy, the output would be audited against the
-    expectations of whichever source read the files.
+    The record says which source made the capture, what that source
+    declares about its feed, and the capture's counters.  The output's
+    Parquet files already record the run's declarations; the copy keeps the
+    rest of the record with the output.
 
     Input without a record removes any ``meta.json`` an earlier run left in
     *output*, so a reused output directory never carries another capture's
@@ -407,8 +329,11 @@ def _keep_capture_record(data_path: Path, output: Path) -> None:
         dest.unlink(missing_ok=True)
 
 
-def _load_saved_result(data_path: Path) -> Any:
-    """Load a saved run (a ``process`` output) for ``gallery`` and ``audit``."""
+def _load_saved_result(data_path: Path, *, source: Any = None) -> Any:
+    """Load a saved run (a ``process`` output) for ``gallery`` and ``audit``.
+
+    *source* declares the feed of a run that records no declarations.
+    """
     from loguru import logger
 
     from ob_analytics.data import load_result
@@ -416,7 +341,7 @@ def _load_saved_result(data_path: Path) -> Any:
 
     logger.info("Loading data from {}...", data_path)
     try:
-        return load_result(data_path)
+        return load_result(data_path, source=source)
     except (ConfigError, FileNotFoundError) as exc:
         logger.error(str(exc))
         sys.exit(1)
@@ -458,6 +383,8 @@ def _cmd_sources(args: argparse.Namespace) -> None:
     """List the registered sources: capability, required context and API keys."""
     from ob_analytics.config import SourceSettings
     from ob_analytics.exceptions import ConfigError
+    from ob_analytics.live import LiveSource
+    from ob_analytics.protocols import OfflineSource, required_context_of
     from ob_analytics.sources import SOURCES, list_sources
 
     for name in list_sources():
@@ -467,12 +394,12 @@ def _cmd_sources(args: argparse.Namespace) -> None:
             print(f"{name}  [cannot be built: {exc}]")
             continue
         caps = []
-        if hasattr(source, "create_loader"):
+        if isinstance(source, OfflineSource):
             caps.append("offline")
-        if hasattr(source, "stream"):
+        if isinstance(source, LiveSource):
             caps.append("live")
         cap_str = "/".join(caps) if caps else "?"
-        required = getattr(source, "required_context", list)()
+        required = required_context_of(source)
         req_str = f", requires: {', '.join(required)}" if required else ""
         settings = getattr(source, "settings", None)
         keys = (
@@ -748,8 +675,9 @@ def main() -> None:
         choices=sources,
         help=(
             "Data source (default: bitstamp when running the pipeline). "
-            "With --from-parquet it only declares the feed type; omit it to "
-            f"leave the feed type undeclared. Registered: {', '.join(sources)}"
+            "With --from-parquet it only declares the feed of an output that "
+            "records no declarations (one written by an older version); omit "
+            f"it to leave those undeclared. Registered: {', '.join(sources)}"
         ),
     )
     p_audit.add_argument(

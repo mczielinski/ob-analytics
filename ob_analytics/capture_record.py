@@ -39,10 +39,13 @@ from ob_analytics._secrets import redact
 from ob_analytics.config import instrument_fields
 from ob_analytics.protocols import (
     Clocks,
+    FeedDeclarations,
     FeedType,
     SequenceKind,
     TradeAttribution,
     clocks_of,
+    declarations_of,
+    sequence_kind_of,
     trade_attribution_of,
 )
 
@@ -180,13 +183,87 @@ def read_record(path: Any) -> CaptureRecord:
     )
 
 
+def run_declarations(path: Any, source: Any) -> FeedDeclarations:
+    """Return the declarations a run of *source* on *path* is held to.
+
+    They start as what *source* declares (:func:`declarations_of`).  A live
+    capture records what its own source declares, and that describes the data
+    exactly, so each declaration the record holds replaces the reading
+    source's.  The two sources can differ, because the reading source also
+    says how to read the files: a cryptofeed L3 capture is read as
+    ``bitstamp``, whose feed shows more.
+
+    A capture written before captures recorded the sequence kind is held to
+    what the source that made it declares now, when that source can be built
+    here.
+
+    Parameters
+    ----------
+    path
+        What the run reads, as for :func:`read_record`.
+    source
+        The source that reads it, or ``None`` for a saved result read with no
+        source named.
+
+    Returns
+    -------
+    FeedDeclarations
+        With the record's ``sequence_restarts``.
+    """
+    declared = declarations_of(source)
+    record = read_record(path)
+    made_by = record.source
+    if made_by is None:
+        return declared
+    reader = getattr(source, "name", None)
+    if reader is not None and made_by != reader:
+        logger.info(
+            "Checking against what the {} source declares (recorded in "
+            "meta.json when it made this capture), not {}",
+            made_by,
+            reader,
+        )
+    sequence_kind = record.sequence_kind
+    if sequence_kind is None and made_by != reader:
+        sequence_kind = _declared_sequence_kind(made_by, default=declared.sequence_kind)
+    return FeedDeclarations(
+        feed_type=record.feed_type or declared.feed_type,
+        trade_attribution=record.trade_attribution or declared.trade_attribution,
+        sequence_kind=sequence_kind or declared.sequence_kind,
+        clocks=record.clocks or declared.clocks,
+        sequence_restarts=record.sequence_restarts,
+    )
+
+
+def _declared_sequence_kind(source_name: str, default: SequenceKind) -> SequenceKind:
+    """What the source called *source_name* declares as its sequence kind.
+
+    *default*, with a warning, when the source cannot be built here: not
+    installed, or a plug-in that needs settings to start.  The check must
+    not stop a run.
+    """
+    from ob_analytics.sources import get_source
+
+    try:
+        return sequence_kind_of(get_source(source_name)())
+    except Exception as exc:  # noqa: BLE001 - fall back, never stop the run
+        logger.warning(
+            "Cannot read what the {} source declares ({!r}); checking the venue "
+            "sequence as {} instead",
+            source_name,
+            exc,
+            default.value,
+        )
+        return default
+
+
 def read_instrument(path: Any) -> dict[str, Any]:
     """Return the :class:`~ob_analytics.config.PipelineConfig` fields a capture recorded.
 
     The same as ``read_record(path).instrument()``, without reading the
     source's declarations, so a declaration this version does not know is not
-    warned about.  This is what :meth:`~ob_analytics.pipeline.Pipeline.run`
-    reads.
+    warned about.  :meth:`~ob_analytics.pipeline.Pipeline.run` reads the
+    config this way, and the declarations with :func:`run_declarations`.
 
     Parameters
     ----------
