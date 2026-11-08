@@ -221,8 +221,9 @@ def _metric_panels(result: PipelineResult) -> list[PlotSpec]:
     the metrics it does not draw.  A metric that raises fails only its own
     card, which says why.
 
-    The metric sees the display-unit *result* the faces render, so its numbers
-    and the axes beside them are in the same units (see :func:`display_result`).
+    *result* is the run as it is, not converted with :func:`display_result`:
+    every metric reports in the instrument's own units from the run's own
+    frames, so a card shows the numbers ``result.metric(name)`` returns.
     """
     from ob_analytics.metrics import METRICS
 
@@ -444,8 +445,9 @@ def build_gallery_model(
     -------
     GalleryModel
     """
-    # The overlay detectors need integer-tick prices (exact equality), so they
-    # read the result before it is converted to display units.
+    # The overlay detectors need integer-tick prices (exact equality), and the
+    # metrics report in the instrument's own units, so both read the result
+    # before it is converted to display units.
     raw_result = result
     result = display_result(result)
 
@@ -492,7 +494,7 @@ def build_gallery_model(
         overlay=_hidden_liquidity_overlay(raw_result, zoom_start, zoom_end, focus),
     )
     return GalleryModel(
-        concepts=_concept_cards(scene), analytics=_metric_panels(result)
+        concepts=_concept_cards(scene), analytics=_metric_panels(raw_result)
     )
 
 
@@ -522,7 +524,9 @@ def plot_result(
     concept : str
         Concept key, e.g. ``"trade_tape"`` (see :data:`available_concepts`).
         The name of a registered metric works too; a metric is level-less, so
-        *level* does not apply to it.
+        *level* does not apply to it.  A metric measures *result* as it is,
+        not converted with :func:`display_result`, and draws the table
+        ``result.metric(concept)`` returns.
     level : Level or str or None
         ``"L2"`` / ``"L3"`` (or a :class:`Level`).  ``None`` picks the concept's
         only level, preferring L2 when both exist.
@@ -552,24 +556,35 @@ def plot_result(
     ValueError
         If *backend* is not registered.
     """
+    from ob_analytics.metrics import METRICS
+
     _load_backend(backend)
+
+    # A face registered at a level keeps its name, so a metric with the same
+    # name cannot hide it.
+    is_face = any(lvl is not None for lvl, _ in _concepts.placements(concept))
+    if (
+        not is_face
+        and concept in METRICS
+        and result.level in METRICS.get(concept).levels
+    ):
+        # A registered metric is a level-less concept: it has no L2/L3
+        # variants, and it measures the run's own frames, so it is drawn
+        # without building the gallery model or converting the result.
+        _concepts.require(concept, None, backend)
+        data = _metric_payload(METRICS.get(concept), result, **overrides)
+        if theme is not None:
+            data["theme"] = theme
+        return plot(concept, None, backend=backend, **data)
+
     model = build_gallery_model(result, volume_scale=volume_scale)
     concept_map = {c.key: c for c in model.concepts}
-    metric_map = {spec.name: spec for spec in model.analytics}
     pc = concept_map.get(concept)
     if pc is None:
-        # A registered metric (issue #140) is a level-less concept: it has no
-        # L2/L3 variants, so it renders straight from its panel.
-        metric_spec = metric_map.get(concept)
-        if metric_spec is not None:
-            _concepts.require(concept, None, backend)
-            data = metric_spec.prepare(**{**metric_spec.prep_kwargs, **overrides})
-            if theme is not None:
-                data["theme"] = theme
-            return plot(concept, None, backend=backend, **data)
+        metric_names = sorted(spec.name for spec in model.analytics)
         raise KeyError(
             f"Unknown concept {concept!r} for this result. "
-            f"Available: {sorted(concept_map) + sorted(metric_map)}"
+            f"Available: {sorted(concept_map) + metric_names}"
         )
 
     if level is None:
@@ -1232,4 +1247,5 @@ function zoom(s){{document.getElementById("lb-img").src=s;document.getElementByI
 </body>
 </html>"""
 
-    path.write_text(html)
+    # The page declares UTF-8, so write it as UTF-8 whatever the locale is.
+    path.write_text(html, encoding="utf-8")

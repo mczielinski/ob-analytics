@@ -66,7 +66,7 @@ def _interval_sums_sorted(
     if idxs.size == 0:
         return np.zeros(bins, dtype=np.float64)
 
-    prefix = np.cumsum(vols)
+    prefix = vols.cumsum()
 
     # prefix[j] equals the dense cumulative sum at the j-th active offset.
     # Negative break indices address from the end, matching the numpy fancy
@@ -74,7 +74,7 @@ def _interval_sums_sorted(
     breaks_norm = np.where(breaks < 0, range_len + breaks, breaks)
     # ``pos`` is at most ``idxs.size - 1``; a -1 (no active level at or below
     # the break) indexes the last prefix harmlessly and is masked to zero.
-    pos = np.searchsorted(idxs, breaks_norm, side="right") - 1
+    pos = idxs.searchsorted(breaks_norm, side="right") - 1
     intervals = np.where(pos >= 0, prefix[pos], 0.0)
 
     sums = np.empty_like(intervals)
@@ -229,7 +229,7 @@ class PriceLevelBook:
             behind = k >= 0 and price < prices[k]
 
         self._clock += 1
-        i = int(np.searchsorted(prices, price))
+        i = int(prices.searchsorted(price))
         found = i < prices.size and prices[i] == price
         if volume > 0:
             if found:
@@ -570,13 +570,13 @@ class DepthMetricsEngine:
         if side == 1:
             end_value = round((1 + self._bps * self._bins * 0.0001) * best) + 1
             range_len = end_value - best + 1
-            k = int(np.searchsorted(prices, best + range_len, side="left"))
+            k = int(prices.searchsorted(best + range_len, side="left"))
             idxs = prices[:k] - best
             win_vols = vols[:k]
         else:
             end_value = round((1 - self._bps * self._bins * 0.0001) * best)
             range_len = best - end_value + 1
-            j = int(np.searchsorted(prices, best - range_len, side="right"))
+            j = int(prices.searchsorted(best - range_len, side="right"))
             idxs = (best - prices[j:])[::-1]
             win_vols = vols[j:][::-1]
 

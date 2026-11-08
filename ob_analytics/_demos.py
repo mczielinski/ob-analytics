@@ -14,7 +14,6 @@ from loguru import logger
 
 from ob_analytics.bars import bars
 from ob_analytics.bitstamp import BitstampSource, BitstampWriter
-from ob_analytics.cost import transaction_costs
 from ob_analytics.data import save_data
 from ob_analytics.lobster import LobsterLoader, LobsterSource
 from ob_analytics.pipeline import Pipeline, PipelineResult
@@ -25,24 +24,11 @@ from ob_analytics.visualization.gallery import (
     display_result,
     generate_gallery,
     trading_halts_panel,
-    transaction_costs_panel,
 )
 
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
-
-
-def _cost_panels(result: PipelineResult) -> list[PlotSpec]:
-    """The transaction-cost panel, when the run has trades and quotes to use.
-
-    The face reads the basis-point columns, which are ratios to the mid, so
-    the raw tick-price result gives the same picture as a display-unit one.
-    """
-    if result.trades.empty or result.depth_summary.empty:
-        return []
-    costs = transaction_costs(result.trades, result.depth_summary)
-    return [transaction_costs_panel(costs)]
 
 
 def _save_and_gallery(
@@ -184,13 +170,11 @@ def run_bitstamp_demo(
 
     if roundtrip:
         rt_dir = out / "roundtrip"
-        rt_dir.mkdir(parents=True, exist_ok=True)
-        rt_csv = rt_dir / "orders.csv"
-        # BitstampWriter emits the companion trades.csv from the "trades"
-        # table, so no separate shim is needed here.  Pass the run's config so
-        # ticks convert back on the run's grid (issue #155).
-        save_data(result, rt_csv, writer=BitstampWriter(result.config))
-        rt = Pipeline(source=BitstampSource()).run(str(rt_csv))
+        # BitstampWriter writes orders.csv and the companion trades.csv into
+        # the folder.  Pass the run's config so ticks convert back on the
+        # run's grid (issue #155).
+        save_data(result, rt_dir, writer=BitstampWriter(result.config))
+        rt = Pipeline(source=BitstampSource()).run(str(rt_dir / "orders.csv"))
         logger.info(
             "Round-trip events: {} (match: {})",
             len(rt.events),
@@ -201,7 +185,6 @@ def run_bitstamp_demo(
         result,
         out,
         title=f"Bitstamp ({orders_path.name}) -- ob-analytics",
-        analytics=_cost_panels(result),
         view=view,
     )
 
@@ -241,7 +224,6 @@ def run_lobster_demo(
     # loader and append them to the gallery model's analytics.
     halts = loader.trading_halts
     analytics = _lobster_analytics_panels(result, halts)
-    analytics.extend(_cost_panels(result))
 
     return _save_and_gallery(
         result,

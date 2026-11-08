@@ -24,12 +24,13 @@ no aggressor side at all:
 * :func:`roll_spread` — Roll (1984): the spread implied by bid-ask bounce in
   the price series.
 
-Units.  The absolute columns carry the unit of the ``price`` column handed in,
-which on a pipeline frame is integer ticks (see the price policy in
-:mod:`ob_analytics.schemas`); multiply by ``tick_size`` for the quote
-currency.  The ``_bps`` columns are ratios to the mid-price, so they carry no
-unit and are the ones to compare across instruments.  :func:`amihud` has a
-unit of its own; its docstring says which.
+Units.  Every result is in the instrument's own units: prices in the quote
+currency and sizes in BTC, shares or contracts.  This holds whether the frames
+handed in hold integer ticks and lots (with ``tick_size`` and ``lot_size`` on
+their ``attrs``, as on a pipeline result) or display prices and sizes.  The
+``_bps`` columns are ratios to the mid-price, so they carry no unit and are
+the ones to compare across instruments.  :func:`amihud` has a unit of its own;
+its docstring says which.
 
 References
 ----------
@@ -55,9 +56,20 @@ import numpy as np
 import pandas as pd
 from pandas.api.typing import DataFrameGroupBy
 
-from ob_analytics._utils import validate_non_empty, window_start
+from ob_analytics._utils import (
+    price_scale,
+    size_scale,
+    validate_non_empty,
+    window_start,
+)
+from ob_analytics.depth import _bid_ask_pair
 from ob_analytics.schemas import validate_columns
-from ob_analytics.trade_sign import mid_before, prevailing_mid, resolve_direction
+from ob_analytics.trade_sign import (
+    _MID_COLUMNS,
+    mid_before,
+    prevailing_mid,
+    resolve_direction,
+)
 
 #: Basis points in one, the scale every ``_bps`` column is written on.
 _BPS = 10_000.0
@@ -99,7 +111,7 @@ class CostSummary:
     Attributes
     ----------
     effective_spread : float
-        Volume-weighted effective spread, in the price unit of the trades.
+        Volume-weighted effective spread, in the quote currency.
     realized_spread : float
         Volume-weighted realized spread, same unit.
     price_impact : float
@@ -116,8 +128,8 @@ class CostSummary:
         Trades that also had a mid-price *horizon* later, so the realized
         spread and the impact could be measured.
     volume : float
-        Total size of the :attr:`n_trades` trades — the weight behind the
-        effective-spread figure.
+        Total size of the :attr:`n_trades` trades, in the instrument's own
+        units — the weight behind the effective-spread figure.
     """
 
     effective_spread: float
@@ -229,14 +241,18 @@ def transaction_costs(
         One row per trade, chronological, with the columns in
         :data:`COST_COLUMNS`.  ``mid_price`` and ``future_mid_price`` are the
         two mids the measures were taken against, kept so a number can be
-        traced back to the quotes that produced it.  The horizon is recorded
-        in ``frame.attrs["horizon"]``.
+        traced back to the quotes that produced it.  Prices, mids and spreads
+        are in the quote currency and ``volume`` in the instrument's own
+        units, as floats.  The horizon is recorded in
+        ``frame.attrs["horizon"]``.
 
     Raises
     ------
     ConfigError
-        If a required column is missing, or *sign_method* is ``"bvc"``, which
-        labels volume bars rather than trades.
+        If a required column is missing, *sign_method* is ``"bvc"``, which
+        labels volume bars rather than trades, or the prices or sizes of
+        either frame are integers with no ``tick_size`` or ``lot_size`` on
+        its ``attrs``.
     ObAnalyticsError
         If *trades* is empty.
 
@@ -251,11 +267,14 @@ def transaction_costs(
     validate_columns(trades, {"timestamp", "price", "volume"}, "transaction_costs")
     validate_non_empty(trades, "transaction_costs")
     validate_columns(quotes, {"timestamp"}, "transaction_costs(quotes)")
+    prices = price_scale(trades, "transaction_costs")
+    sizes = size_scale(trades, "transaction_costs")
+    quote_prices = _quote_price_scale(quotes, mid_column, "transaction_costs(quotes)")
 
     trades = resolve_direction(trades, sign_method, quotes, "transaction_costs")
     df = trades.sort_values("timestamp", kind="stable").reset_index(drop=True)
 
-    price = df["price"].to_numpy(dtype=np.float64)
+    price = df["price"].to_numpy(dtype=np.float64) / prices
     # Safe because resolve_direction guarantees the column holds only the two
     # sides; an unlabelled trade is inferred there rather than arriving here,
     # where it would read as a sell and invert the trade's cost.
@@ -265,6 +284,7 @@ def transaction_costs(
     # before it.  The future mid is read at an instant, so a quote stamped at
     # that instant counts there.
     mid = mid_before(df, quotes, "transaction_costs", mid_column=mid_column)
+    mid = mid / quote_prices
     later = df["timestamp"] + pd.Timedelta(horizon)
     # `require_covered` leaves the row unmeasured when the quotes do not reach
     # the future instant, rather than reusing the final quote and reporting a
@@ -276,6 +296,7 @@ def transaction_costs(
         mid_column=mid_column,
         require_covered=True,
     )
+    future_mid = future_mid / quote_prices
 
     effective = 2.0 * sign * (price - mid)
     realized = 2.0 * sign * (price - future_mid)
@@ -287,8 +308,8 @@ def transaction_costs(
     out = pd.DataFrame(
         {
             "timestamp": df["timestamp"],
-            "price": df["price"],
-            "volume": df["volume"],
+            "price": price,
+            "volume": df["volume"].to_numpy(dtype=np.float64) / sizes,
             "direction": df["direction"],
             "mid_price": mid,
             "future_mid_price": future_mid,
@@ -303,6 +324,28 @@ def transaction_costs(
     )
     out.attrs["horizon"] = horizon
     return out
+
+
+def _quote_price_scale(
+    quotes: pd.DataFrame, mid_column: str | None, context: str
+) -> float:
+    """Return how many units of the quote frame's prices make one unit of currency.
+
+    The prices are read in the units of the frame's bid/ask pair when it has
+    one, and otherwise in those of the mid column the mids are read from.  A
+    mid derived from integer ticks, such as the ``micro_price`` that
+    :func:`~ob_analytics.depth.depth_signals` adds to a pipeline summary, is a
+    float in ticks, so its own dtype cannot say which units it is in; the
+    touch beside it can.
+    """
+    pair = _bid_ask_pair(quotes)
+    if pair is not None:
+        return price_scale(quotes, context, pair[0])
+    column = mid_column or next((c for c in _MID_COLUMNS if c in quotes.columns), None)
+    if column is None or column not in quotes.columns:
+        # No price column at all: mid_before raises the error that names them.
+        return 1.0
+    return price_scale(quotes, context, column)
 
 
 def cost_summary(costs: pd.DataFrame) -> CostSummary:
@@ -383,12 +426,13 @@ def amihud(trades: pd.DataFrame, *, window: str | None = None) -> pd.DataFrame:
     the whole-session case (*window* ``None``) the same calculation over one
     window rather than a different one.
 
-    The result carries a unit: one over the turnover unit of the input, which
-    on a pipeline frame is ticks times lots.  It is comparable across windows
-    of one run, and across runs of one instrument, but not across instruments
-    without rescaling.  Published figures are multiplied by a power of ten to
-    reach readable digits; this returns the raw ratio and leaves that choice
-    to the caller.
+    The result carries a unit: one over the turnover unit, the quote currency
+    (price in the quote currency times size in the instrument's own units),
+    whether the trades hold integer ticks and lots or display prices and
+    sizes.  It is comparable across windows of one run, and across runs of one
+    instrument, but not across instruments without rescaling.  Published
+    figures are multiplied by a power of ten to reach readable digits; this
+    returns the raw ratio and leaves that choice to the caller.
 
     Parameters
     ----------
@@ -404,30 +448,33 @@ def amihud(trades: pd.DataFrame, *, window: str | None = None) -> pd.DataFrame:
     -------
     pandas.DataFrame
         One row per window with ``timestamp`` (the window's start),
-        ``first_price``, ``last_price``, ``abs_return``, ``turnover``,
-        ``n_trades`` and ``amihud``.  Windows with no trade are dropped;
-        a window whose turnover is zero has ``NaN`` for ``amihud``.
+        ``first_price``, ``last_price`` (in the quote currency),
+        ``abs_return``, ``turnover`` (in the quote currency), ``n_trades`` and
+        ``amihud``.  Windows with no trade are dropped; a window whose
+        turnover is zero has ``NaN`` for ``amihud``.
 
     Raises
     ------
     ConfigError
-        If a required column is missing, or *window* is not a fixed
-        duration.
+        If a required column is missing, *window* is not a fixed duration,
+        or the prices or sizes are integers and the frame carries no
+        ``tick_size`` or ``lot_size``.
     ObAnalyticsError
         If *trades* is empty.
     """
     validate_columns(trades, {"timestamp", "price", "volume"}, "amihud")
     validate_non_empty(trades, "amihud")
 
+    prices = price_scale(trades, "amihud")
+    sizes = size_scale(trades, "amihud")
     df = trades.sort_values("timestamp", kind="stable")
-    turnover = df["price"].to_numpy(dtype=np.float64) * df["volume"].to_numpy(
-        dtype=np.float64
-    )
-    df = df.assign(_turnover=turnover)
+    price = df["price"].to_numpy(dtype=np.float64) / prices
+    turnover = price * (df["volume"].to_numpy(dtype=np.float64) / sizes)
+    df = df.assign(_price=price, _turnover=turnover)
 
     grouped = _by_window(df, window, "amihud").agg(
-        first_price=("price", "first"),
-        last_price=("price", "last"),
+        first_price=("_price", "first"),
+        last_price=("_price", "last"),
         turnover=("_turnover", "sum"),
         n_trades=("price", "size"),
     )
@@ -502,7 +549,10 @@ def roll_spread(trades: pd.DataFrame, *, window: str | None = None) -> pd.DataFr
     pandas.DataFrame
         One row per window with ``timestamp`` (the window's start),
         ``n_trades``, ``mean_price``, ``autocovariance``, ``autocorrelation``,
-        ``roll_spread`` and ``roll_spread_bps``.  ``autocorrelation`` is the
+        ``roll_spread`` and ``roll_spread_bps``.  ``mean_price`` and
+        ``roll_spread`` are in the quote currency, and ``autocovariance`` in
+        its square, whether the trades hold integer ticks or display prices.
+        ``autocorrelation`` is the
         lag-1 autocorrelation of the price changes, which Roll's model puts at
         ``-0.5``; a window whose value is far from that is one the model does
         not describe.  A window with fewer than four trades — too few for two
@@ -512,17 +562,19 @@ def roll_spread(trades: pd.DataFrame, *, window: str | None = None) -> pd.DataFr
     Raises
     ------
     ConfigError
-        If a required column is missing, or *window* is not a fixed
-        duration.
+        If a required column is missing, *window* is not a fixed duration,
+        or the prices are integer ticks and the frame carries no
+        ``tick_size``.
     ObAnalyticsError
         If *trades* is empty.
     """
     validate_columns(trades, {"timestamp", "price"}, "roll_spread")
     validate_non_empty(trades, "roll_spread")
+    prices = price_scale(trades, "roll_spread")
 
     df = trades.sort_values("timestamp", kind="stable")
     rows = [
-        _roll_window(start, group["price"].to_numpy(dtype=np.float64))
+        _roll_window(start, group["price"].to_numpy(dtype=np.float64) / prices)
         for start, group in _by_window(df, window, "roll_spread")
     ]
     return pd.DataFrame(

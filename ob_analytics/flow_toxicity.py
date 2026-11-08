@@ -13,7 +13,11 @@ quantifying price impact:
   on one time grid.
 
 All functions accept a trades DataFrame from the pipeline (or any
-DataFrame with the required columns).
+DataFrame with the required columns).  Every result is in the instrument's
+own units — prices in the quote currency, sizes in BTC, shares or contracts —
+whether the trades hold integer ticks and lots (with ``tick_size`` and
+``lot_size`` on the frame's ``attrs``, as on a pipeline result) or display
+prices and sizes.
 
 VPIN and Kyle's λ were designed for markets that trade thousands of times a
 minute.  On a thin tape they still return a number, so both results say when
@@ -34,6 +38,7 @@ import pandas as pd
 
 from ob_analytics._utils import (
     fixed_window,
+    price_scale,
     size_scale,
     validate_non_empty,
     window_start,
@@ -73,7 +78,8 @@ class KyleLambdaResult:
     Attributes
     ----------
     lambda_ : float
-        Slope — price change per unit signed order flow (higher = less liquid).
+        Slope — price change in the quote currency per unit of signed order
+        flow in the instrument's units (higher = less liquid).
     t_stat : float
         t-statistic for ``lambda_``.
     r_squared : float
@@ -81,7 +87,8 @@ class KyleLambdaResult:
     n_windows : int
         Number of time windows in the regression.
     regression_df : pandas.DataFrame
-        Per-window ``timestamp``/``delta_price``/``signed_volume`` data.
+        Per-window ``timestamp``/``delta_price``/``signed_volume`` data, in
+        the quote currency and the instrument's units.
     ci_low, ci_high : float
         Bounds of a block-bootstrap confidence interval for ``lambda_``.
         ``NaN`` when the bootstrap was turned off or the fit is undefined.
@@ -442,6 +449,8 @@ def compute_kyle_lambda(
     trades: pd.DataFrame,
     window: str = "5min",
     *,
+    sign_method: str | None = None,
+    quotes: pd.DataFrame | None = None,
     n_boot: int = 1000,
     ci_level: float = 0.95,
     seed: int | np.random.Generator | None = 0,
@@ -457,25 +466,37 @@ def compute_kyle_lambda(
     slope (λ) measures how much the price moves per unit of net order
     flow — a proxy for market illiquidity and adverse selection.
 
-    ΔPrice is read directly from ``trades["price"]``, which is an integer tick
-    count, so λ is in **ticks** per unit volume.  It scales with the price
-    unit — a run at a finer ``tick_size`` reports a proportionally larger λ;
-    multiply by ``tick_size`` to express it in the quote currency.
+    λ is in the quote currency per unit of size (for example USD per BTC),
+    whether the trades hold integer ticks and lots (with ``tick_size`` and
+    ``lot_size`` on the frame's ``attrs``, as on a pipeline result) or
+    display prices and sizes.  ``regression_df`` is in the same units.
+
+    Works on feeds without a native aggressor side.  When the trades frame
+    has no ``direction``, the side is inferred with a trade-sign classifier
+    (see *sign_method*), as for :func:`compute_vpin` and
+    :func:`order_flow_imbalance`.
 
     Parameters
     ----------
     trades : pandas.DataFrame
-        Trades with ``timestamp``, ``price``, ``volume``, ``direction``.
-        Unlike :func:`compute_vpin` and :func:`order_flow_imbalance`, the
-        aggressor side is required rather than inferred, so this needs a feed
-        that labels it (or a ``direction`` attached beforehand with
-        :func:`~ob_analytics.trade_sign.classify_trade_sign`).  Individual
-        rows the venue left blank are filled with the tick rule.
+        Trades with ``timestamp``, ``price`` and ``volume``.  A ``direction``
+        column (``"buy"`` / ``"sell"``, the taker side) is used when present;
+        otherwise it is inferred — see *sign_method*.
     window : str, optional
         Length of each regression window, a fixed duration such as ``"30s"``
         or ``"5min"``.  Default ``"5min"``.  Windows are the time bars of
         :func:`~ob_analytics.bars.bars`: they count from the Unix epoch, and a
         window in which nothing traded is left out.
+    sign_method : str, optional
+        How to obtain the buy/sell split when there is no native
+        ``direction``.  ``None`` (default) uses an existing ``direction`` if
+        present, else falls back to a per-trade classifier (Lee–Ready when
+        *quotes* are given, otherwise the tick rule).  ``"tick"`` /
+        ``"lee_ready"`` force a per-trade classifier, overriding any native
+        ``direction``.  (``"bvc"`` is VPIN-native; use :func:`compute_vpin`.)
+    quotes : pandas.DataFrame, optional
+        Quote frame for ``sign_method="lee_ready"`` — passed through to
+        :func:`~ob_analytics.trade_sign.classify_trade_sign`.
     n_boot : int, optional
         Number of bootstrap resamples for the confidence interval.  Default
         1000; ``0`` skips the interval.  Each resample draws blocks of
@@ -501,37 +522,33 @@ def compute_kyle_lambda(
     Raises
     ------
     ConfigError
-        If required columns are missing, or *window* is not a fixed
-        duration.
+        If required columns are missing, *window* is not a fixed duration,
+        or the prices or sizes are integers and the frame carries no
+        ``tick_size`` or ``lot_size``.
     ObAnalyticsError
         If *trades* is empty.
     ValueError
         If *ci_level* is not between 0 and 1, or *n_boot* is negative.
     """
-    validate_columns(
-        trades,
-        {"timestamp", "price", "volume", "direction"},
-        "compute_kyle_lambda",
-    )
+    validate_columns(trades, {"timestamp", "price", "volume"}, "compute_kyle_lambda")
     validate_non_empty(trades, "compute_kyle_lambda")
+    prices = price_scale(trades, "compute_kyle_lambda")
+    sizes = size_scale(trades, "compute_kyle_lambda")
     if not 0.0 < ci_level < 1.0:
         raise ValueError(f"ci_level must be between 0 and 1, got {ci_level}")
     if n_boot < 0:
         raise ValueError(f"n_boot must not be negative, got {n_boot}")
     step = fixed_window(window, "compute_kyle_lambda: window")
 
-    # `direction` is required here, but a column being present does not make
-    # every row in it usable: the signed volume below reads it as == "buy" and
-    # takes the rest as a sell, so a blank would be counted on the wrong side
-    # rather than skipped.  resolve_direction infers those rows instead.
-    trades = resolve_direction(trades, None, None, "compute_kyle_lambda")
-    # One time bar per window: ΔPrice is the bar's close minus its open.
+    trades = resolve_direction(trades, sign_method, quotes, "compute_kyle_lambda")
+    # One time bar per window: ΔPrice is the bar's close minus its open.  The
+    # bars keep the frame's units, so both columns are converted here.
     windows = bars(trades, "time", step)
     reg_df = pd.DataFrame(
         {
             "timestamp": window_start(windows["timestamp_start"], step),
-            "delta_price": windows["close"] - windows["open"],
-            "signed_volume": windows["signed_volume"],
+            "delta_price": (windows["close"] - windows["open"]) / prices,
+            "signed_volume": windows["signed_volume"] / sizes,
         }
     )
 
@@ -685,13 +702,15 @@ def order_flow_imbalance(
     -------
     pandas.DataFrame
         Columns: ``timestamp`` (the start of the window), ``buy_volume``,
-        ``sell_volume``, ``net_volume``, ``ofi``.
+        ``sell_volume``, ``net_volume`` (in the instrument's own units, BTC,
+        shares or contracts, whether the trades hold integer lots or display
+        sizes), ``ofi``.
 
     Raises
     ------
     ConfigError
-        If required columns are missing, or *window* is not a fixed
-        duration.
+        If required columns are missing, *window* is not a fixed duration,
+        or the sizes are integer lots and the frame carries no ``lot_size``.
     ObAnalyticsError
         If *trades* is empty.
     """
@@ -707,23 +726,26 @@ def _ofi_windows(
     """Return the :func:`order_flow_imbalance` table and the time bars it came from.
 
     The two frames share a row order, so a caller that needs more of each
-    window (its closing price, say) reads it from the bars.
+    window (its closing price, say) reads it from the bars.  The table is in
+    the instrument's units; the bars keep the units of *trades*.
     """
     validate_columns(trades, {"timestamp", "price", "volume"}, "order_flow_imbalance")
     validate_non_empty(trades, "order_flow_imbalance")
     step = fixed_window(window, "order_flow_imbalance: window")
+    sizes = size_scale(trades, "order_flow_imbalance")
 
     trades = resolve_direction(trades, sign_method, quotes, "order_flow_imbalance")
     windows = bars(trades, "time", step)
     out = pd.DataFrame(
         {
             "timestamp": window_start(windows["timestamp_start"], step),
-            "buy_volume": windows["buy_volume"],
-            "sell_volume": windows["sell_volume"],
-            "net_volume": windows["signed_volume"],
+            "buy_volume": windows["buy_volume"] / sizes,
+            "sell_volume": windows["sell_volume"] / sizes,
+            "net_volume": windows["signed_volume"] / sizes,
         }
     )
-    out["ofi"] = out["net_volume"] / windows["volume"].replace(0, np.nan)
+    # A ratio of two sizes in the bars' own units, so it needs no conversion.
+    out["ofi"] = windows["signed_volume"] / windows["volume"].replace(0, np.nan)
     return out, windows
 
 

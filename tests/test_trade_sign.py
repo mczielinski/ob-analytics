@@ -231,6 +231,9 @@ class TestTheQuoteATradeArrivedInto:
         from ob_analytics.cost import transaction_costs
 
         trades, quotes = self._after_a_buy_took_the_ask()
+        # One tick per dollar and one lot per unit: the prices read as given.
+        for frame in (trades, quotes):
+            frame.attrs.update(tick_size=1.0, lot_size=1.0)
 
         costs = transaction_costs(trades, quotes, horizon="1s")
 

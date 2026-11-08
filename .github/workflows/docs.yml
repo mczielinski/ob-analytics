@@ -15,7 +15,7 @@ name: Docs
 # chapters execute against it), the three build scripts, the site and
 # dependency config, and the two root files that docs/ pulls in via snippets
 # (docs/changelog.md includes CHANGELOG.md, docs/architecture.md includes
-# ARCHITECTURE.md).
+# ARCHITECTURE.md). The `changes` job below repeats it for pull requests.
 on:
   push:
     branches: [main]
@@ -31,20 +31,10 @@ on:
       - 'CHANGELOG.md'
       - 'ARCHITECTURE.md'
       - '.github/workflows/docs.yml'
+  # No path filter here. `build` is a required check, and a required check
+  # whose workflow a filter left out stays pending and blocks the merge. The
+  # `changes` job skips the build instead, and a skipped job counts as passed.
   pull_request:
-    # Repeated verbatim: the workflow parser does not support YAML anchors.
-    paths:
-      - 'docs/**'
-      - 'ob_analytics/**'
-      - 'scripts/build_tutorial.py'
-      - 'scripts/build_gallery.py'
-      - 'scripts/check_links.py'
-      - 'zensical.toml'
-      - 'pyproject.toml'
-      - 'uv.lock'
-      - 'CHANGELOG.md'
-      - 'ARCHITECTURE.md'
-      - '.github/workflows/docs.yml'
   workflow_dispatch:
 
 permissions:
@@ -53,7 +43,34 @@ permissions:
   id-token: write
 
 jobs:
+  # On a pull request, find whether it touches anything the site is built from
+  # (the same list as the push filter above).
+  changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      docs: ${{ steps.diff.outputs.docs }}
+    steps:
+      # The pull request's merge commit and its first parent, the base branch.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+      - id: diff
+        run: |
+          pattern='^(docs/|ob_analytics/|scripts/(build_tutorial|build_gallery|check_links)\.py$|zensical\.toml$|pyproject\.toml$|uv\.lock$|CHANGELOG\.md$|ARCHITECTURE\.md$|\.github/workflows/docs\.yml$)'
+          if git diff --name-only HEAD^1 HEAD | grep -Eq "$pattern"; then
+            echo "docs=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: changes
+    # `changes` is skipped on a push or a manual run, so build then; on a pull
+    # request, build only when `changes` found a site input.
+    if: >-
+      !failure() && !cancelled()
+      && (github.event_name != 'pull_request' || needs.changes.outputs.docs == 'true')
     runs-on: ubuntu-latest
     # One build at a time per branch or pull request. The group is keyed by ref
     # so that builds on different refs never queue behind (or cancel) each
@@ -61,8 +78,9 @@ jobs:
     # over one slot, and the losers were cancelled with no jobs run.
     #
     # Within one pull request a new push supersedes the running build, so stale
-    # builds stop instead of running out their 10 minutes. On main nothing is
-    # cancelled: every merged commit builds and publishes in turn.
+    # builds stop instead of running out their 10 minutes. On main a running
+    # build is never cancelled, but a newer push replaces a build that is
+    # still waiting, so after a burst of merges only the newest one builds.
     concurrency:
       group: docs-build-${{ github.ref }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -90,8 +108,11 @@ jobs:
           path: site
 
   deploy:
-    # Deploy only from main; PRs stop after the build job above.
-    if: github.event_name != 'pull_request'
+    # Deploy only from main; PRs stop after the build job above. The status
+    # checks are explicit because the default one also needs `changes`, which
+    # is skipped on a push, to have passed.
+    if: >-
+      !failure() && !cancelled() && github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
     # One deployment at a time; never cancel an in-progress publish. This is

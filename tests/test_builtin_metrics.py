@@ -155,7 +155,9 @@ def test_ofi_metric_adds_the_window_close_price(result) -> None:
     closes = result.trades.groupby(pd.Grouper(key="timestamp", freq="10s"))[
         "price"
     ].last()
-    assert frame["last_price"].tolist() == closes.loc[frame["timestamp"]].tolist()
+    # In the quote currency, as every measure reports.
+    expected = closes.loc[frame["timestamp"]].to_numpy() * result.config.tick_size
+    np.testing.assert_allclose(frame["last_price"], expected)
 
 
 def test_ofi_metric_draws_the_close_as_its_price_line(result) -> None:
@@ -220,13 +222,15 @@ def test_l1_table_carries_the_quote_and_the_last_trade(result) -> None:
         "last_volume",
     ]
     assert l1["timestamp"].is_monotonic_increasing
-    # The last row is the last trade and the final touch.
-    assert l1["last_price"].iloc[-1] == result.trades["price"].iloc[-1]
-    summary = result.depth_summary.iloc[-1]
+    # The last row is the last trade and the final touch, in the quote
+    # currency.
+    shown = display_result(result)
+    assert l1["last_price"].iloc[-1] == pytest.approx(shown.trades["price"].iloc[-1])
+    summary = shown.depth_summary.iloc[-1]
     for side in ("bid", "ask"):
         price = summary[f"best_{side}_price"]
         got = l1[f"best_{side}_price"].iloc[-1]
-        assert np.isnan(got) if price == 0 else got == price
+        assert np.isnan(got) if price == 0 else got == pytest.approx(price)
 
 
 def test_l1_table_reads_an_empty_side_as_missing(result) -> None:

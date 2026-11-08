@@ -605,6 +605,11 @@ CONCEPTS: tuple[Concept, ...] = (
             "trading_halts",
         )
     ),
+    # One value per window, drawn by the shared window-measure renderer.
+    *(
+        Concept(key, {None: Face("window_measure", _MPL_PLOTLY)})
+        for key in ("amihud", "roll_spread")
+    ),
 )
 
 #: The same table keyed by the coordinate ``(concept, level, backend)``.

@@ -23,7 +23,6 @@ from ob_analytics.depth import get_spread
 from ob_analytics.flow_toxicity import (
     compute_kyle_lambda,
     compute_vpin,
-    order_flow_imbalance,
 )
 from ob_analytics.visualization import busiest_window, plot, prepare
 
@@ -166,8 +165,9 @@ def kyle_lambda(result):
 
 def flow_imbalance(result):
     """Net buy-minus-sell volume per minute, with the trade tape above."""
-    ofi = order_flow_imbalance(result.trades, window="1min")
-    return plot("order_flow_imbalance", **prepare.ofi(ofi, trades=result.trades))
+    # The registered metric draws the last trade price of each window in the
+    # quote currency; order_flow_imbalance(result.trades) is the same table.
+    return result.plot("order_flow_imbalance", window="1min")
 
 
 # ── Transaction cost ─────────────────────────────────────────────────

@@ -154,22 +154,37 @@ def _cmd_audit(args: argparse.Namespace) -> None:
     A segmented live capture (a directory with ``manifest.json``, or the
     ``process`` output made from one) is audited one segment at a time, and
     the manifest adds the capture's own checks: gaps between segments,
-    segments a dead process left open, dropped messages, and resyncs.
+    segments a dead process left open, dropped messages, errors that ended
+    capturing early, and resyncs.  A single live capture (or its ``process``
+    output) adds the dropped-message and error checks from its
+    ``meta.json``.
     """
     _setup_logging(args.verbose)
     import json
 
     from loguru import logger
 
+    from ob_analytics.live._manifest import record_checks
+
     root = Path(args.path)
     manifest = _read_capture_manifest(root)
+    capture_checks: tuple[Any, ...]
     if manifest is None:
         summary = _audit_one(args, root)
-        print(
-            json.dumps(summary.to_dict(), indent=2) if args.json else summary.render()
-        )
+        capture_checks = record_checks(root)
+        if args.json:
+            report = summary.to_dict()
+            if capture_checks:
+                report["capture_checks"] = [c.to_dict() for c in capture_checks]
+            print(json.dumps(report, indent=2))
+        else:
+            print(summary.render())
+            failed_capture = [c for c in capture_checks if not c.passed]
+            if failed_capture:
+                print(f"Capture checks: {len(failed_capture)} warning(s)")
+                for c in failed_capture:
+                    print(f"  {c.severity.value.upper():<7} {c.name}: {c.detail}")
         named = [("", summary)]
-        capture_checks: tuple[Any, ...] = ()
     else:
         seg_dirs = manifest.segment_dirs(root)
         _note_open_segments(manifest, "checked")
@@ -299,8 +314,9 @@ def _audit_one(args: argparse.Namespace, path: Path) -> Any:
 def _declared_sequence_kind(source_name: str, default: SequenceKind) -> SequenceKind:
     """What the source called *source_name* declares as its sequence kind.
 
-    *default* when the source cannot be built here: not installed, or a
-    plug-in that needs settings to start.  The check must not stop ``audit``.
+    *default*, with a warning, when the source cannot be built here: not
+    installed, or a plug-in that needs settings to start.  The check must
+    not stop ``audit``.
     """
     from loguru import logger
 
@@ -310,7 +326,13 @@ def _declared_sequence_kind(source_name: str, default: SequenceKind) -> Sequence
     try:
         return sequence_kind_of(get_source(source_name)())
     except Exception as exc:  # noqa: BLE001 - fall back, never stop audit
-        logger.debug("Cannot read what {} declares: {!r}", source_name, exc)
+        logger.warning(
+            "Cannot read what the {} source declares ({!r}); checking the venue "
+            "sequence as {} instead",
+            source_name,
+            exc,
+            default.value,
+        )
         return default
 
 

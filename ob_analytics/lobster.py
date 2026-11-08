@@ -61,6 +61,7 @@ from ob_analytics.protocols import (
     RunContext,
     TradeAttribution,
     TradeSource,
+    WriteTarget,
 )
 from ob_analytics.schemas import (
     BOOK_SIDE_DTYPE,
@@ -576,6 +577,8 @@ class LobsterWriter:
         to LOBSTER's seconds after local midnight.  Defaults to
         :data:`LOBSTER_DEFAULT_TZ`; must match the value used on load.
     """
+
+    target = WriteTarget.FOLDER
 
     def __init__(
         self,

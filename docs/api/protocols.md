@@ -60,6 +60,8 @@ many runs and many pipelines.
 
 ::: ob_analytics.protocols.DataWriter
 
+::: ob_analytics.protocols.WriteTarget
+
 ::: ob_analytics.protocols.Source
 
 ::: ob_analytics.protocols.OfflineSource
