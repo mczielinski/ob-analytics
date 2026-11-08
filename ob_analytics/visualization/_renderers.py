@@ -79,31 +79,9 @@ class RendererRegistry(Registry[RendererKey, RendererFn]):
     def missing(
         self, concept: str, level: Level | None, backend: str
     ) -> UnknownNameError:
-        """The error for a *concept* that *backend* does not draw at *level*.
-
-        It names the backends that draw *concept*, or the levels *backend*
-        draws it at, rather than every registered renderer.
-        """
-        placements = self.placements(concept)
-        if not placements:
-            concepts = sorted({c for c, _, _ in self._items})
-            return UnknownNameError("plot concept", concept, concepts)
-        backends = sorted({b for _, b in placements})
-        if backend not in backends:
-            shown = ", ".join(repr(b) for b in backends)
-            return UnknownNameError(
-                f"{backend!r} plot",
-                concept,
-                (),
-                hint=f"Backends that draw it: {shown}.",
-            )
-        levels = [lvl for lvl, b in placements if b == backend]
-        return UnknownNameError(
-            f"{_kind_text([level]).removeprefix('at ')} {backend!r} plot",
-            concept,
-            (),
-            hint=f"On {backend!r} it is {_kind_text(levels)}.",
-        )
+        """The error for a *concept* that *backend* does not draw at *level*."""
+        concepts = sorted({c for c, _, _ in self._items})
+        return missing_plot(concept, level, backend, self.placements(concept), concepts)
 
     def placements(self, concept: str) -> tuple[tuple[Level | None, str], ...]:
         """Return each ``(level, backend)`` *concept* is registered at, in order.
@@ -165,12 +143,13 @@ class RendererRegistry(Registry[RendererKey, RendererFn]):
 #: Registry of ``(concept, level, backend)`` → renderer function, where
 #: *level* is a :class:`Level` (``L2``/``L3``) or ``None`` for level-less
 #: analytics.  A concept is one kind or the other on every backend.
-#: Renderer modules (``_matplotlib``, ``_plotly``) self-register at import
-#: time -- see the self-registration block at the bottom of each.
+#: The built-in backend modules (``_matplotlib``, ``_plotly``, ``_bokeh``)
+#: register, when imported, every plot the concept table
+#: (``visualization/_concepts.py``) gives them.
 RENDERERS: RendererRegistry = RendererRegistry("renderer")
 
-# Lazy-import bootstrap: backend name → module that self-registers its
-# renderers on import.  matplotlib is a hard dep, imported with the
+# Lazy-import bootstrap: backend name → module that registers its renderers
+# on import.  matplotlib is a hard dep, imported with the
 # visualization package for its save and theme helpers, which also fires its
 # registration; plotly and bokeh are optional and imported on first use.
 _BACKEND_MODULES: dict[str, str] = {
@@ -178,6 +157,54 @@ _BACKEND_MODULES: dict[str, str] = {
     "plotly": "ob_analytics.visualization._plotly",
     "bokeh": "ob_analytics.visualization._bokeh",
 }
+
+
+def missing_plot(
+    concept: str,
+    level: Level | None,
+    backend: str,
+    placements: Iterable[tuple[Level | None, str]],
+    concepts: Iterable[str],
+    *,
+    any_level: bool = False,
+) -> UnknownNameError:
+    """The error for a plot *backend* does not draw.
+
+    It names the backends that draw *concept* at *level*, or, when none
+    does, the levels *concept* is drawn at.  It never lists every renderer.
+
+    Parameters
+    ----------
+    concept, level, backend : str, Level or None, str
+        The plot asked for.
+    placements : iterable of (Level or None, str)
+        Each ``(level, backend)`` *concept* is drawn at.
+    concepts : iterable of str
+        Every plot concept, for the close-match hint when *placements* is
+        empty.
+    any_level : bool
+        Ignore *level*: the caller asks whether *backend* draws *concept*
+        at all.
+    """
+    placements = list(placements)
+    if not placements:
+        return UnknownNameError("plot concept", concept, concepts)
+    at = "" if any_level else _kind_text([level]).removeprefix("at ") + " "
+    drawn_by = sorted({b for lvl, b in placements if any_level or lvl == level})
+    if drawn_by:
+        shown = ", ".join(repr(b) for b in drawn_by)
+        return UnknownNameError(
+            f"{at}{backend!r} plot",
+            concept,
+            (),
+            hint=f"Backends that draw it: {shown}.",
+        )
+    return UnknownNameError(
+        f"{at}plot",
+        concept,
+        (),
+        hint=f"It is drawn {_kind_text(lvl for lvl, _ in placements)}.",
+    )
 
 
 def register_plot_backend(name: str, module_path: str) -> None:

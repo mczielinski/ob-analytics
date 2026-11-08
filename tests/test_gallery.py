@@ -32,13 +32,13 @@ from ob_analytics.visualization.gallery import (
     GalleryModel,
     PlotConcept,
     PlotSpec,
-    _auto_zoom_window,
     _Card,
     _misplaced,
     _Panel,
     _project,
     _render_panel,
     _write_gallery_html,
+    _zoom_window,
     build_gallery_model,
     generate_gallery,
 )
@@ -838,7 +838,7 @@ class TestBuildGalleryModel:
         plot_result(result, "order_activity", level="L3", backend="matplotlib")
 
     def test_hidden_liquidity_overlay_is_clipped_to_the_zoom_and_price_window(
-        self, sample_csv_path
+        self, bundled_sample_result
     ) -> None:
         # #272: a full day can have hundreds of icebergs / thousands of hidden
         # trades; the overlay handed to the faces must be the subset inside the
@@ -847,9 +847,8 @@ class TestBuildGalleryModel:
         # the next test: the bundled sample has none (below).
         from ob_analytics.engine import HIDDEN_ORDER_ID
         from ob_analytics.hidden_liquidity import hidden_trades as find_hidden_trades
-        from ob_analytics.pipeline import Pipeline
 
-        result = Pipeline().run(sample_csv_path)
+        result = bundled_sample_result
         model = build_gallery_model(result)
         heatmap = next(c for c in model.concepts if c.key == "depth_heatmap").at(
             Level.L2
@@ -870,7 +869,7 @@ class TestBuildGalleryModel:
         assert full_hidden.empty
         assert heatmap.prep_kwargs["hidden_trades"].empty
 
-        zoom_start, zoom_end = _auto_zoom_window(result.events)
+        zoom_start, zoom_end = _zoom_window(result.trades, result.events)
         for frame in (
             heatmap.prep_kwargs["iceberg_lines"],
             heatmap.prep_kwargs["iceberg_refills"],
@@ -897,8 +896,9 @@ class TestBuildGalleryModel:
 
         events = pd.DataFrame(
             [
-                # Padding events set a 100s span so the auto zoom window's
-                # middle half (25s-75s) covers the story below, at ~50s.
+                # Padding events set a 100s span, so the zoom window is the
+                # busiest 50s of trading, which holds the two trades at ~50s
+                # and not the one at the start.
                 {
                     "event_id": 900,
                     "id": 900,
@@ -950,11 +950,11 @@ class TestBuildGalleryModel:
                     "direction": "bid",
                     "fill": 0.0,
                 },
-                # A hidden maker fill at 10s, outside the zoom window.
+                # A hidden maker fill at 0.05s, outside the zoom window.
                 {
                     "event_id": 101,
                     "id": HIDDEN_ORDER_ID,
-                    "timestamp": _at(seconds=10),
+                    "timestamp": _at(milliseconds=50),
                     "price": 236.70,
                     "volume": 0.0,
                     "action": "changed",
@@ -984,7 +984,7 @@ class TestBuildGalleryModel:
         trades = pd.DataFrame(
             {
                 "timestamp": [
-                    _at(seconds=10),
+                    _at(milliseconds=50),
                     _at(seconds=50, milliseconds=100),
                     _at(seconds=51),
                 ],
@@ -1027,7 +1027,7 @@ class TestBuildGalleryModel:
 
         assert not refills.empty
         assert refills["price"].iloc[0] == pytest.approx(236.50)
-        # The trade at 10s is outside the zoom window, so only one is left.
+        # The trade at 0.05s is outside the zoom window, so only one is left.
         assert len(hidden) == 1
         assert hidden["price"].iloc[0] == pytest.approx(236.60)
         assert hidden["best_bid_price"].iloc[0] == pytest.approx(236.50)

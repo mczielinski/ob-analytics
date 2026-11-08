@@ -35,11 +35,9 @@ def tiny_result(tiny_bitstamp_orders_csv):
 
 
 @pytest.fixture(scope="module")
-def sample_result(bitstamp_sample_dir):
+def sample_result(bundled_sample_result):
     """Full pipeline run on the bundled Bitstamp sample (loaded once)."""
-    from ob_analytics import Pipeline
-
-    return Pipeline().run(bitstamp_sample_dir / "orders.csv.gz")
+    return bundled_sample_result
 
 
 def _replay(result, per_order=False, **kwargs):

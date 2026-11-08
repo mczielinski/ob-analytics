@@ -566,10 +566,8 @@ class TestVpinDiagnostics:
 
 
 @pytest.fixture(scope="module")
-def sample_trades(sample_csv_path) -> pd.DataFrame:
-    from ob_analytics import Pipeline
-
-    return Pipeline().run(sample_csv_path).trades
+def sample_trades(bundled_sample_result) -> pd.DataFrame:
+    return bundled_sample_result.trades
 
 
 class TestBundledSampleDiagnostics:

@@ -7,15 +7,18 @@ The unified :func:`plot` dispatcher renders a plot *concept* at a resolution
     fig = plot("trade_tape", backend="matplotlib",
                **_data.prepare_trades_data(trades))
 
-Backends self-register their renderers into :data:`RENDERERS`, keyed by the
-coordinate ``(concept, level, backend)`` where *level* is a :class:`Level`
-(``L2``/``L3``) or ``None`` for level-less analytics.  The registry is
-extensible via :func:`register_plot_backend`.  ``backend="matplotlib"``
-(default) returns a Matplotlib figure; ``backend="plotly"`` returns an
-interactive Plotly figure; ``backend="bokeh"`` returns a Bokeh figure
-(covering the core concepts -- ``trade_tape``, ``depth_heatmap``,
-``book_snapshot``, ``depth_chart`` -- for Bokeh / Panel server dashboards
-and streaming views).
+Every plot is a coordinate ``(concept, level, backend)``, where *level* is a
+:class:`Level` (``L2``/``L3``) or ``None`` for level-less analytics.  One
+concept table declares each plot of the package and the backends that draw
+it; the backends register their renderers from it into :data:`RENDERERS`.
+Other packages add plots and backends through :data:`RENDERERS` and
+:func:`register_plot_backend`.  ``backend="matplotlib"`` (default) returns a
+Matplotlib figure; ``backend="plotly"`` returns an interactive Plotly
+figure; ``backend="bokeh"`` returns a Bokeh figure (covering the core
+concepts -- ``trade_tape``, ``depth_heatmap``, ``book_snapshot``,
+``depth_chart`` -- for Bokeh / Panel server dashboards and streaming views).
+Asking a backend for a plot it does not draw raises and names the backends
+that do: the book replay, for one, is drawn by Plotly only.
 
 A concept registered at a single level resolves it automatically, so callers
 pass only the concept name; *comparable* concepts (both L2 and L3 registered)
@@ -36,7 +39,7 @@ from matplotlib.axes import Axes
 
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import Level
-from ob_analytics.visualization import _data as _viz_data
+from ob_analytics.visualization import _concepts, _data as _viz_data
 from ob_analytics.visualization._matplotlib import format_time_axis, save_figure
 from ob_analytics.visualization._palette import DEFAULT_PALETTE, Palette
 from ob_analytics.visualization._renderers import (
@@ -83,14 +86,13 @@ def _accepts_theme(renderer: RendererFn) -> bool:
 def _resolve_level(concept: str, backend: str) -> Level | None:
     """Resolve the implicit level of *concept* on *backend*.
 
-    A concept registered at exactly one level resolves to it -- this covers
-    L2-only plots and level-less analytics (registered at ``None``).  A
-    *comparable* concept, registered at both L2 and L3, is ambiguous and needs
+    A concept drawn at exactly one level resolves to it -- this covers
+    L2-only plots and level-less analytics (drawn at ``None``).  A
+    *comparable* concept, drawn at both L2 and L3, is ambiguous and needs
     an explicit ``level=`` from the caller.
     """
-    levels = [lvl for lvl, b in RENDERERS.placements(concept) if b == backend]
-    if not levels:
-        raise RENDERERS.missing(concept, None, backend)
+    _concepts.require_backend(concept, backend)
+    levels = _concepts.levels(concept, backend)
     if len(levels) > 1:
         shown = ", ".join(sorted(str(lvl) for lvl in levels))
         raise ConfigError(
@@ -147,8 +149,8 @@ def plot(
     Raises
     ------
     UnknownNameError
-        If *backend* is not registered, or *backend* does not draw
-        *concept* at the resolved *level*.
+        If *backend* is not registered, or does not draw *concept* (at
+        *level*).  The message names the backends that do.
     ConfigError
         If *concept* is comparable and no *level* was given.
     """
@@ -157,6 +159,9 @@ def plot(
 
     if level is _UNSET:
         level = _resolve_level(concept, backend)
+    elif level is not None:
+        level = Level(level)
+    _concepts.require(concept, level, backend)
     renderer = RENDERERS.get((concept, level, backend))
     kwargs: dict[str, Any] = {}
     if theme is not None:
@@ -174,9 +179,10 @@ def plot(
     return renderer(data, **kwargs)
 
 
-# Shared display-window primitive: one mid-anchored clipping
-# decision per gallery build instead of per-face ad-hoc clips.
+# The shared display windows: the busiest stretch of time, and the
+# mid-anchored price band, each decided once per gallery build.
 FocusWindow = _viz_data.FocusWindow
+busiest_window = _viz_data.busiest_window
 focus_window = _viz_data.focus_window
 
 # Plot backends that other packages advertise through entry points.
@@ -193,6 +199,7 @@ __all__ = [
     "PlotTheme",
     "RendererRegistry",
     "available_concepts",
+    "busiest_window",
     # Ticks -> quote-currency for low-level plotting (issue #155)
     "display_result",
     "focus_window",

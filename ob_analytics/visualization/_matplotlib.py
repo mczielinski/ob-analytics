@@ -31,16 +31,14 @@ from matplotlib.font_manager import FontProperties
 from matplotlib.lines import Line2D
 from matplotlib.patches import FancyBboxPatch, Patch
 
-from ob_analytics.protocols import Level
+from ob_analytics.visualization._concepts import register_backend
 from ob_analytics.visualization._data import (
     NO_DEPTH_NOTICE,
     book_bar_thickness,
-    book_mid,
     check_book_payload_level,
     l1_card_texts,
 )
-from ob_analytics.visualization._palette import Palette
-from ob_analytics.visualization._renderers import RENDERERS
+from ob_analytics.visualization._palette import Palette, iceberg_opacity
 from ob_analytics.visualization._theme import DEFAULT_THEME, PlotTheme
 
 # ---------------------------------------------------------------------------
@@ -250,9 +248,7 @@ def mpl_trades(
     ax.set_ylabel("Price")
     y_range = data.get("y_range")
     if y_range is not None:
-        lo, hi = y_range
-        pad = (hi - lo) * 0.04 or 1.0
-        ax.set_ylim(lo - pad, hi + pad)
+        ax.set_ylim(y_range)
     format_time_axis(ax)
     ax.grid(True)
     if any_pts:
@@ -287,8 +283,6 @@ def _volume_norm(volume: pd.Series, col_bias: float) -> mcolors.Normalize:
 # orders, shared by the depth heatmap and the L3 order-activity map.
 # ---------------------------------------------------------------------------
 
-_ICEBERG_CONFIDENCE_ALPHA = {"low": 0.35, "medium": 0.6, "high": 0.9}
-
 _HIDDEN_TRADE_LABEL = "Hidden-order trade"
 
 
@@ -305,9 +299,8 @@ def _draw_iceberg_overlay(
     drew = False
     if lines is not None and not lines.empty:
         for _, g in lines.groupby("iceberg", sort=False):
-            g = g.sort_values("timestamp")
             color = pal.bid if g["direction"].iloc[0] == "bid" else pal.ask
-            alpha = _ICEBERG_CONFIDENCE_ALPHA.get(str(g["confidence"].iloc[0]), 0.5)
+            alpha = iceberg_opacity(g["confidence"].iloc[0])
             ax.plot(
                 mdates.date2num(g["timestamp"]),
                 g["price"],
@@ -524,12 +517,8 @@ def mpl_price_levels(
         _draw_depth_lines(ax, depth, col_bias)
 
     if spread is not None:
-        spread = spread.sort_values(by="timestamp", kind="stable")
         spread_x = mdates.date2num(spread["timestamp"])
-        if show_mp and "best_bid_price" in spread and "best_ask_price" in spread:
-            spread["midprice"] = (
-                spread["best_bid_price"] + spread["best_ask_price"]
-            ) / 2
+        if show_mp and "midprice" in spread:
             ax.plot(
                 spread_x,
                 spread["midprice"],
@@ -832,7 +821,7 @@ def _mpl_book_bars(
             linewidth=linewidth,
         )
 
-    mid = book_mid(bids, asks)
+    mid = data["mid"]
     if mid is not None:
         ax.axhline(mid, color=pal.rule, linestyle="--", linewidth=1, zorder=1)
 
@@ -887,12 +876,12 @@ def _mpl_depth_curve(
     own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(12, 7))
     for side, color, label in (
-        (data["bids"], pal.bid, "bid"),
-        (data["asks"], pal.ask, "ask"),
+        (data["bid_curve"], pal.bid, "bid"),
+        (data["ask_curve"], pal.ask, "ask"),
     ):
         if side.empty:
             continue
-        s = side.sort_values("price")
+        s = side
         ax.step(
             s["price"],
             s["liquidity"],
@@ -1138,7 +1127,6 @@ def mpl_queue_position_per_order(
             continue
         drew_any = True
         for _, g in side.groupby("id", sort=False):
-            g = g.sort_values("timestamp", kind="stable")
             ax.plot(
                 mdates.date2num(g["timestamp"]),
                 g["rank"].to_numpy(),
@@ -1148,11 +1136,7 @@ def mpl_queue_position_per_order(
                 drawstyle="steps-post",
             )
         if show_markers and marker is not None:
-            ends = (
-                side.sort_values("timestamp", kind="stable")
-                .groupby("id", sort=False)
-                .tail(1)
-            )
+            ends = side.groupby("id", sort=False).tail(1)
             x = mdates.date2num(ends["timestamp"])
             if marker == "o":  # cancelled: open circle
                 ax.scatter(
@@ -1665,9 +1649,7 @@ def mpl_trade_tape_per_order(
     format_time_axis(ax)
     y_range = data.get("y_range")
     if y_range is not None:
-        lo, hi = y_range
-        pad = (hi - lo) * 0.04 or 1.0
-        ax.set_ylim(lo - pad, hi + pad)
+        ax.set_ylim(y_range)
     ax.set_xlabel("Time")
     ax.set_ylabel("Execution Price")
     ax.set_title("Trade tape with maker order lifecycles")
@@ -1961,10 +1943,10 @@ def mpl_transaction_costs(
     )
 
     ax.axhline(y=0, color=pal.rule, linewidth=0.8, alpha=0.6)
-    # The per-trade scatter has a much wider range than the averages; clip to
-    # the averaged band so the lines stay readable and the outliers show as
-    # points running off the top rather than flattening everything.
-    _clip_to_series(ax, (effective, realized))
+    # The prepare step framed the averaged lines, so outlying trades run off
+    # the edge rather than flattening them.
+    if data.get("y_range") is not None:
+        ax.set_ylim(data["y_range"])
     ax.set_xlabel("Time")
     ax.set_ylabel("Basis points")
     ax.set_title(f"Transaction costs (realized spread at {horizon})")
@@ -1973,16 +1955,6 @@ def mpl_transaction_costs(
     if own_figure:
         fig.tight_layout()
     return fig
-
-
-def _clip_to_series(ax: Axes, series: tuple[np.ndarray, ...], pad: float = 3.0) -> None:
-    """Set the y limits from *series*, padded, ignoring anything else drawn."""
-    finite = np.concatenate([s[np.isfinite(s)] for s in series])
-    if finite.size == 0:
-        return
-    low, high = float(finite.min()), float(finite.max())
-    margin = max((high - low) * 0.25, pad)
-    ax.set_ylim(low - margin, high + margin)
 
 
 @_themed
@@ -2045,10 +2017,6 @@ def mpl_order_flow_imbalance(
     return fig
 
 
-#: Horizon-graph banding: split each side into this many saturating colour bands.
-_OFI_N_BANDS = 3
-
-
 @_themed
 def mpl_ofi_horizon(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -2075,30 +2043,21 @@ def mpl_ofi_horizon(
     band_h, gap = 1.0, 0.15
     for i, horizon in enumerate(horizons):
         y0 = i * (band_h + gap)
-        sn = np.clip(np.nan_to_num(ofi[i]), -1.0, 1.0)
-        for b in range(_OFI_N_BANDS):
-            lo, hi = b / _OFI_N_BANDS, (b + 1) / _OFI_N_BANDS
-            alpha = 0.25 + 0.25 * b
-            pos = (np.clip(sn, lo, hi) - lo) * band_h * _OFI_N_BANDS
-            ax.fill_between(
-                x,
-                y0,
-                y0 + pos,
-                where=sn > lo,
-                color=pal.buy,
-                alpha=alpha,
-                linewidth=0,
-            )
-            neg = (np.clip(-sn, lo, hi) - lo) * band_h * _OFI_N_BANDS
-            ax.fill_between(
-                x,
-                y0,
-                y0 + neg,
-                where=sn < -lo,
-                color=pal.sell,
-                alpha=alpha,
-                linewidth=0,
-            )
+        for b, alpha in enumerate(data["band_alphas"]):
+            for bands, color in (
+                (data["buy_bands"], pal.buy),
+                (data["sell_bands"], pal.sell),
+            ):
+                height = bands[i, b] * band_h
+                ax.fill_between(
+                    x,
+                    y0,
+                    y0 + height,
+                    where=height > 0,
+                    color=color,
+                    alpha=alpha,
+                    linewidth=0,
+                )
         ax.axhline(y0, color="white", linewidth=0.8)
         ax.text(
             x[0],
@@ -2422,46 +2381,5 @@ def mpl_bars(
     return fig
 
 
-# ---------------------------------------------------------------------------
-# Renderer self-registration
-# ---------------------------------------------------------------------------
-# (concept, level, renderer).  L2 = aggregate per price level; analytics carry
-# no level and register at ``None``.  The level is a registry *coordinate*, not
-# a name suffix -- L3 faces register the same concept at ``Level.L3``.
-_L2 = Level.L2
-_L3 = Level.L3
-for _concept, _level, _fn in [
-    ("time_series", _L2, mpl_time_series),
-    ("trade_tape", _L2, mpl_trades),
-    ("trade_tape", _L3, mpl_trade_tape_per_order),
-    ("depth_heatmap", _L2, mpl_price_levels),
-    ("order_activity", _L2, mpl_event_map),
-    ("order_activity", _L3, mpl_order_activity_per_order),
-    ("order_outcome", _L3, mpl_order_outcome_per_order),
-    ("queue_position", _L3, mpl_queue_position_per_order),
-    ("liquidity_at_touch", _L2, mpl_liquidity_at_touch),
-    ("liquidity_at_touch", _L3, mpl_liquidity_at_touch_per_order),
-    ("price_view", _L2, mpl_price_view),
-    ("l1_ticker", None, mpl_l1_ticker),
-    ("book_signals", None, mpl_book_signals),
-    ("trade_size", _L2, mpl_trade_size),
-    ("cancellations", _L2, mpl_volume_map),
-    ("cancellations", _L3, mpl_cancellations_per_order),
-    ("book_snapshot", _L2, mpl_book_snapshot_aggregate),
-    ("book_snapshot", _L3, mpl_book_snapshot_per_order),
-    ("depth_chart", _L2, mpl_depth_chart_aggregate),
-    ("depth_chart", _L3, mpl_depth_chart_per_order),
-    ("volume_percentiles", _L2, mpl_volume_percentiles),
-    ("events_histogram", _L2, mpl_events_histogram),
-    ("hidden_executions", _L2, mpl_hidden_executions),
-    ("bars", None, mpl_bars),
-    ("vpin", None, mpl_vpin),
-    ("order_flow_imbalance", None, mpl_order_flow_imbalance),
-    ("transaction_costs", None, mpl_transaction_costs),
-    ("amihud", None, mpl_window_measure),
-    ("roll_spread", None, mpl_window_measure),
-    ("ofi_horizon", None, mpl_ofi_horizon),
-    ("kyle_lambda", None, mpl_kyle_lambda),
-    ("trading_halts", None, mpl_trading_halts),
-]:
-    RENDERERS.register((_concept, _level, "matplotlib"), _fn)
+# The concept table names the plots this backend draws; register them.
+register_backend("matplotlib", globals())

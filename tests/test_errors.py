@@ -168,19 +168,17 @@ class TestRendererMissing:
         with pytest.raises(UnknownNameError) as info:
             registry.get(("depth_map", Level.L2, "bokeh"))
         assert str(info.value) == (
-            "Unknown 'bokeh' plot 'depth_map'. "
+            "Unknown L2 'bokeh' plot 'depth_map'. "
             "Backends that draw it: 'matplotlib', 'plotly'."
         )
 
     def test_a_level_the_backend_does_not_draw(self, registry) -> None:
         with pytest.raises(UnknownNameError) as info:
             registry.get(("depth_map", Level.L3, "matplotlib"))
-        assert str(info.value) == (
-            "Unknown L3 'matplotlib' plot 'depth_map'. On 'matplotlib' it is at L2."
-        )
+        assert str(info.value) == "Unknown L3 plot 'depth_map'. It is drawn at L2."
 
     def test_a_level_less_plot_asked_for_at_a_level(self, registry) -> None:
-        with pytest.raises(UnknownNameError, match="On 'matplotlib' it is level-less"):
+        with pytest.raises(UnknownNameError, match="It is drawn level-less.$"):
             registry.get(("trade_tape", Level.L2, "matplotlib"))
 
     def test_an_unknown_concept_names_close_matches_only(self, registry) -> None:

@@ -31,14 +31,14 @@ from ob_analytics.flow_toxicity import (
     ofi_by_horizon,
     order_flow_imbalance,
 )
-from ob_analytics.pipeline import Pipeline, PipelineResult
+from ob_analytics.pipeline import PipelineResult
 from ob_analytics.visualization import gallery
 from ob_analytics.visualization.gallery import display_result
 
 
 @pytest.fixture(scope="module")
-def result(sample_csv_path) -> PipelineResult:
-    return Pipeline().run(sample_csv_path)
+def result(bundled_sample_result) -> PipelineResult:
+    return bundled_sample_result
 
 
 @pytest.fixture(scope="module")

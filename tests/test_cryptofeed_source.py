@@ -2227,7 +2227,6 @@ class TestIndependentReserveTrades:
         """The maker always links, and the taker when the book shows it (#311)."""
         import asyncio
 
-        from ob_analytics.analytics import data_quality_summary
         from ob_analytics.bitstamp import BitstampSource
         from ob_analytics.config import PipelineConfig
         from ob_analytics.live._runner import run_capturer
@@ -2293,12 +2292,9 @@ class TestIndependentReserveTrades:
         assert trades["maker_event_id"].notna()[taker_bid]
         assert trades["taker_event_id"].isna()[taker_bid]
 
-        summary = data_quality_summary(
-            result.events,
-            result.trades,
-            feed_type=src.feed_type,
-            trade_attribution=src.trade_attribution,
-        )
+        # The result holds the capture to what its own source declared.
+        summary = result.audit()
+        assert summary.trade_attribution is src.trade_attribution
         assert summary.unmatched_trades_pct == 0.0
 
 
@@ -2359,7 +2355,6 @@ class TestCaptureToAudit:
         import asyncio
         import json
 
-        from ob_analytics.analytics import data_quality_summary
         from ob_analytics.bitstamp import BitstampSource
         from ob_analytics.capture_record import read_record
         from ob_analytics.config import PipelineConfig
@@ -2407,12 +2402,9 @@ class TestCaptureToAudit:
         linked = result.trades.set_index("maker")["maker_event_id"]
         assert pd.notna(linked[9001])
 
-        summary = data_quality_summary(
-            result.events,
-            result.trades,
-            feed_type=src.feed_type,
-            trade_attribution=src.trade_attribution,
-        )
+        # The result holds the capture to what its own source declared.
+        summary = result.audit()
+        assert summary.trade_attribution is src.trade_attribution
         # The fake feed handler hands every message the same receipt time, so
         # the clock checks are covered by TestReceiptClock instead.
         assert summary.duplicate_created_ids == 0

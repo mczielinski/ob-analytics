@@ -649,12 +649,9 @@ class TestRollSpread:
 class TestBundledSample:
     """Every measure runs on the bundled Bitstamp capture (issue #110)."""
 
-    @pytest.fixture(scope="class")
-    @classmethod
-    def result(cls):
-        import ob_analytics as ob
-
-        return ob.Pipeline().run(str(ob.sample_csv_path()))
+    @pytest.fixture
+    def result(self, bundled_sample_result):
+        return bundled_sample_result
 
     def test_costs_decompose(self, result):
         costs = transaction_costs(result.trades, result.depth_summary)

@@ -42,15 +42,6 @@ class FakeSource:
 
         return L2TradeReader(config)
 
-    def create_writer(self, config: PipelineConfig, ctx: RunContext):
-        return None
-
-    def compute_depth(self, events, config, source, ctx, loader):
-        return None
-
-    def required_context(self) -> list[str]:
-        return []
-
 
 class _FakeEntryPoint:
     """Minimal stand-in for ``importlib.metadata.EntryPoint``."""

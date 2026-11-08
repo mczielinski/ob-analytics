@@ -1711,23 +1711,6 @@ class DatabentoSource:
     ) -> DataWriter:
         return DatabentoWriter(config, settings=self.dbn_settings())
 
-    def compute_depth(
-        self,
-        events: pd.DataFrame,
-        config: Any,
-        source: Any,
-        ctx: RunContext,
-        loader: Any,
-    ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
-        # MBO is the book itself: there is no companion depth file to prefer
-        # over the reconstruction, so the standard price-level path runs.
-        return None
-
-    def required_context(self) -> list[str]:
-        # DBN records carry absolute UTC timestamps, so there is no date to
-        # supply.
-        return []
-
 
 # ── Register this source ──────────────────────────────────────────────
 # Registration runs at the bottom, after ``DatabentoSource`` is defined.
