@@ -64,14 +64,14 @@ def main() -> None:
         _fail("the sample run returned an empty frame")
     print(f"ok: sample run, {len(result.events)} events, {len(result.trades)} trades")
 
-    figure = result.plot("trade_tape")
+    figure = result.plot("trade_tape", "L2")
     if not isinstance(figure, Figure):
         _fail(f"the Matplotlib plot returned {type(figure).__name__}, not a Figure")
     print("ok: Matplotlib plot")
 
     for backend, (_, extra) in EXTRAS.items():
         try:
-            result.plot("trade_tape", backend=backend)
+            result.plot("trade_tape", "L2", backend=backend)
         except ConfigError as exc:
             if f"ob-analytics[{extra}]" not in str(exc):
                 _fail(f"the {backend} error does not name the extra: {exc}")

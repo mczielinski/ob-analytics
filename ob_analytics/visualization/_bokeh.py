@@ -29,7 +29,7 @@ from ob_analytics.visualization._data import (
     check_book_payload_level,
     mpl_marker_area_to_plotly_size,
 )
-from ob_analytics.visualization._palette import Palette
+from ob_analytics.visualization._palette import Palette, iceberg_opacity
 from ob_analytics.visualization._theme import DEFAULT_THEME, PlotTheme
 
 
@@ -415,10 +415,90 @@ def bokeh_price_levels(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
                 legend_label="Buy Trades",
             )
 
+    _bokeh_iceberg_overlay(
+        fig, data.get("iceberg_lines"), data.get("iceberg_refills"), pal
+    )
+    _bokeh_hidden_trades_overlay(fig, data.get("hidden_trades"), pal)
+
     _apply_y_range(fig, data.get("y_range"))
 
     _maybe_legend(fig)
     return fig
+
+
+# ---------------------------------------------------------------------------
+# Hidden-liquidity overlay: iceberg refills + trades against hidden orders
+# ---------------------------------------------------------------------------
+
+
+def _bokeh_iceberg_overlay(
+    fig: Any, lines: Any | None, refills: Any | None, pal: Palette
+) -> None:
+    """Draw suspected-iceberg chains (opacity = confidence) + refill markers."""
+    from bokeh.models import ColumnDataSource
+
+    if lines is not None and not lines.empty:
+        chains = [g for _, g in lines.groupby("iceberg", sort=False)]
+        source = ColumnDataSource(
+            {
+                "xs": [g["timestamp"].to_numpy() for g in chains],
+                "ys": [g["price"].to_numpy() for g in chains],
+                "color": [
+                    pal.bid if g["direction"].iloc[0] == "bid" else pal.ask
+                    for g in chains
+                ],
+                "alpha": [iceberg_opacity(g["confidence"].iloc[0]) for g in chains],
+            }
+        )
+        fig.multi_line(
+            xs="xs",
+            ys="ys",
+            source=source,
+            line_color="color",
+            line_alpha="alpha",
+            line_width=1.4,
+            legend_label="Iceberg chain",
+        )
+    if refills is not None and not refills.empty:
+        fig.scatter(
+            x=refills["timestamp"],
+            y=refills["price"],
+            marker="diamond",
+            size=10,
+            fill_color=list(
+                np.where(refills["direction"].to_numpy() == "bid", pal.bid, pal.ask)
+            ),
+            line_color="black",
+            legend_label="Iceberg refill",
+        )
+
+
+def _bokeh_hidden_trades_overlay(fig: Any, hidden: Any | None, pal: Palette) -> None:
+    """Draw trades ``hidden_trades()`` flagged as printing inside the spread.
+
+    An I-beam runs from the standing best bid to the standing best ask, with
+    the trade print marked between them.
+    """
+    if hidden is None or hidden.empty:
+        return
+    fig.segment(
+        x0=hidden["timestamp"],
+        y0=hidden["best_bid_price"],
+        x1=hidden["timestamp"],
+        y1=hidden["best_ask_price"],
+        line_color=pal.neutral,
+        line_width=1,
+        line_alpha=0.5,
+    )
+    fig.scatter(
+        x=hidden["timestamp"],
+        y=hidden["price"],
+        marker="star",
+        size=12,
+        fill_color=pal.hidden_trade,
+        line_color="black",
+        legend_label="Hidden-order trade",
+    )
 
 
 # ---------------------------------------------------------------------------

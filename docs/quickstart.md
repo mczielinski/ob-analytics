@@ -65,12 +65,16 @@ from ob_analytics.visualization import plot_result, available_concepts, save_fig
 available_concepts(result)
 # {'trade_tape': ['L2', 'L3'], 'depth_heatmap': ['L2'], 'order_outcome': ['L3'], ...}
 
-fig = plot_result(result, "depth_heatmap")       # level defaults to L2
+fig = plot_result(result, "depth_heatmap")       # drawn at L2 only
 save_figure(fig, "price_levels.png")
 
 fig = result.plot("trade_tape", "L3")            # equivalent method form
 save_figure(fig, "trades.png")
 ```
+
+A concept that this result has at both L2 and L3, such as `trade_tape` on
+an L3 run, needs `level=`; leaving it out raises `ConfigError`. Both forms
+also take `ax=` to draw on a Matplotlib axes of your own.
 
 Overrides flow through to the underlying prepare function, and
 `backend="plotly"` gives an interactive figure (with the `[interactive]`

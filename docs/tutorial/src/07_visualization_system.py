@@ -41,11 +41,13 @@ from ob_analytics.visualization import display_result
 result = Pipeline().run(sample_csv_path())
 # Canonical prices are integer ticks (issue #155); show quote currency.
 result = display_result(result)
-fig = result.plot("depth_heatmap")  # level defaults sensibly per concept
+fig = result.plot("depth_heatmap")  # drawn at L2 only, so no level needed
 
 # %% [markdown]
 # `result.plot(concept, level)` (and the equivalent free function
 # `plot_result(result, concept, level)`) is the whole convenience layer.
+# Pass `level` when the result has the concept at both L2 and L3; there
+# is no default.
 # It does not guess what a result can draw — it *knows*, because that
 # depends on the data's resolution, exactly as chapter 2 promised. Ask
 # it:

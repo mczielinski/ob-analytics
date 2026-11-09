@@ -387,7 +387,7 @@ def test_plot_result_accepts_theme(tiny_bitstamp_orders_csv) -> None:
 
     result = Pipeline(source=BitstampSource()).run(str(tiny_bitstamp_orders_csv))
     fig = plot_result(
-        result, "trade_tape", backend="plotly", theme=PlotTheme(palette=CUSTOM)
+        result, "trade_tape", "L2", backend="plotly", theme=PlotTheme(palette=CUSTOM)
     )
     found = fig.to_json().lower()
     assert CUSTOM.buy in found or CUSTOM.sell in found
