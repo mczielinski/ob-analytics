@@ -103,6 +103,14 @@ if halts is not None:
     generate_gallery(result, "out/gallery", model=model)
 ```
 
+The loader keeps two such tables, each `None` when the file has no rows of
+its type:
+
+- `loader.trading_halts`: the trading-halt messages (event type 7).
+- `loader.cross_trades`: the cross-trade messages (event type 6), which
+  LOBSTER uses for auction trades such as the opening and closing cross.
+  They are not in the events frame, so the trades frame leaves them out too.
+
 A `LobsterLoader` built by hand reads LOBSTER's own grid, a cent tick and whole
 shares, and knows that a price in the file is in ten-thousandths of a dollar.
 So it reads the same prices and sizes as a pipeline run. Give it a

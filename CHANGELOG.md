@@ -71,9 +71,9 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   - `plot_result(result, concept)` and `result.plot(concept)` for a concept
     the result has at both L2 and L3 (on an L3 run: `trade_tape`,
     `order_activity`, `cancellations`, `book_snapshot`, `depth_chart`,
-    `book_replay`, `liquidity_at_touch`) drew the L2 plot. They now raise `ConfigError`, as
-    `plot()` did -> pass `level="L2"` (or `"L3"`). A concept the result has
-    at one level still needs no level.
+    `book_replay`, `liquidity_at_touch`) drew the L2 plot. They now raise
+    `ConfigError`, as `plot()` did -> pass `level="L2"` (or `"L3"`). A
+    concept the result has at one level still needs no level.
   - `plot_result(..., level=None)` and `result.plot(..., level=None)` meant
     "pick the level". `None` now means a level-less plot (a metric), as in
     `plot()` -> leave `level` out instead.
@@ -86,6 +86,8 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   - `plot_result(result, metric, level="L2")` ignored the level. It now
     raises `UnknownNameError`, since a metric has no L2 or L3 plot -> leave
     `level` out.
+- **`Palette.flashed` and `Palette.resting` are gone** (#415). No plot read
+  them. `Palette(flashed=..., resting=...)` -> leave both out.
 
 ### Added
 
@@ -1103,6 +1105,18 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Removed
 
+- **The `sortedcontainers` dependency, three dev tools and three scripts**
+  (#415). Nothing imported `sortedcontainers`, and the dev group no longer
+  installs `safety`, `codecov` or `pytest-mock`, which nothing ran.
+  `scripts/bitstamp_demo.py` and `scripts/lobster_demo.py` copied the
+  `bitstamp-demo` and `lobster-demo` CLI commands and had fallen behind them;
+  run `python -m ob_analytics bitstamp-demo` from a clone instead.
+  `scripts/parse_bitstamp_log.sh` wrote a format that the Bitstamp loader now
+  reads 10^8 times too large. The README and the docs home page share one
+  hero image, `docs/assets/hero-depth-heatmap.png`, which
+  `scripts/make_hero.py` writes. The unused `volume_marker_areas` helper in
+  `ob_analytics.visualization._data` is gone.
+
 - **The compiled-engine compare tests** (#416). `tests/test_compare_backends.py`
   waited for a compiled depth engine behind a factory that no plan names, and
   always skipped. A faster engine, if one comes (#138), must pass the golden
@@ -1147,6 +1161,24 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   With `backend="bokeh"`, the iceberg chains and refill markers and the
   trades against hidden orders were left out without a word. Bokeh now draws
   them as Matplotlib and Plotly do.
+- **A wheel holds only the package** (#415). The wheel and sdist `include`
+  patterns now start with `/`, so hatchling no longer packs an
+  `ob_analytics` folder found below the root, such as one in an agent
+  worktree, and they leave out hidden files and `__pycache__`. A wheel built
+  from a checkout with agent worktrees under `.claude/` held 45 MB of them;
+  `.claude/` is now ignored by git too. CI fails when a wheel holds a file
+  outside `ob_analytics/` and its metadata, or a hidden file or cache inside
+  the package (`scripts/check_wheel_contents.py`).
+- **CI lints and type-checks `scripts/`** (#415), as the pre-commit `ty`
+  hook now does too, and the scripts pass. `build_gallery.py`,
+  `build_tutorial.py`, `check_links.py` and `smoke_wheel.py` read their
+  arguments with `argparse`, so `--help` prints usage instead of running the
+  script; `build_gallery.py` takes `--output`. Ruff now checks for broad
+  `except Exception`, `except: pass` and `exec` (`BLE001`, `S110`, `S102`),
+  so each `noqa` comment for those rules marks a reviewed case and a new one
+  fails the lint. A registry's `in` check now catches only the `TypeError`
+  of an unhashable key.
+
 - **Every reader refuses a bad file with `ConfigError`** (#418). The
   Bitstamp, LOBSTER, `depth_csv`, DBN and Parquet readers and
   `read_manifest` returned a frame built from some bad files, or raised an

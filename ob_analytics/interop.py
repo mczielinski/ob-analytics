@@ -239,7 +239,7 @@ class HftbacktestWriter:
         # Through an open file, so numpy does not add ``.npz`` to a path that
         # ends otherwise, and the path returned is the one written.
         with p.open("wb") as fh:
-            np.savez_compressed(fh, **{HFT_ARRAY_KEY: array})  # type: ignore
+            np.savez_compressed(fh, **{HFT_ARRAY_KEY: array})  # ty: ignore[invalid-argument-type] -- a computed key could be allow_pickle
         return p
 
 

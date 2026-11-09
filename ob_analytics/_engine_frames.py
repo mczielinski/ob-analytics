@@ -216,9 +216,6 @@ BOOK_SIDE_ORDER_COLUMNS: tuple[str, ...] = (
 )
 """Per-order columns of a book side: the order's latest event, with its resting price."""
 
-BOOK_SIDE_COLUMNS: tuple[str, ...] = (*BOOK_SIDE_ORDER_COLUMNS, "liquidity", "bps")
-"""Columns of a reconstructed order-book side, in order."""
-
 
 def book_side_frame(events: pd.DataFrame, side: BookSide) -> pd.DataFrame:
     """Build one reconstructed book side as a frame, best price first.

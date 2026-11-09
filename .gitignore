@@ -162,6 +162,9 @@ cython_debug/
 # Git worktrees
 .worktrees/
 
+# Claude Code agent worktrees and local settings
+.claude/
+
 # Demo / runtime outputs
 bitstamp_output/
 bitstamp_output_live/

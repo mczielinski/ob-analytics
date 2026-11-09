@@ -23,6 +23,7 @@ each run of them renders as one collapsed "Solution" block.
 
 from __future__ import annotations
 
+import argparse
 import json
 import re
 import shutil
@@ -176,8 +177,16 @@ def build_chapter(path: Path) -> tuple[str, list[str]]:
     return summary, problems
 
 
-def main(argv: list[str]) -> int:
-    prefixes = argv or [""]
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "prefixes",
+        nargs="*",
+        metavar="PREFIX",
+        help="build only the chapters whose file name starts with PREFIX "
+        "(default: every chapter)",
+    )
+    prefixes = parser.parse_args(argv).prefixes or [""]
     chapters = sorted(
         p
         for p in SRC.glob("[0-9][0-9]_*.py")
@@ -203,4 +212,4 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))
+    raise SystemExit(main())
