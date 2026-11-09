@@ -27,6 +27,7 @@ from typing import Any
 
 import pandas as pd
 from loguru import logger
+from matplotlib.axes import Axes
 
 from ob_analytics._utils import (
     lots_to_size,
@@ -35,12 +36,14 @@ from ob_analytics._utils import (
 )
 from ob_analytics.depth import get_spread
 from ob_analytics.exceptions import ConfigError, UnknownNameError
-from ob_analytics.pipeline import PipelineResult
+from ob_analytics.pipeline import _UNSET, PipelineResult
 from ob_analytics.protocols import Level
 from ob_analytics.visualization import (
     PlotTheme,
+    _check_ax,
     _concepts,
     _data as _viz_data,
+    _resolve_level,
     infer_volume_scale,
     plot,
     save_figure,
@@ -502,9 +505,10 @@ def build_gallery_model(
 def plot_result(
     result: PipelineResult,
     concept: str,
-    level: Level | str | None = None,
+    level: Level | str | None = _UNSET,
     *,
     backend: str = "matplotlib",
+    ax: Axes | None = None,
     volume_scale: float | None = None,
     theme: PlotTheme | None = None,
     **overrides: Any,
@@ -528,11 +532,15 @@ def plot_result(
         *level* does not apply to it.  A metric measures *result* as it is,
         not converted with :func:`display_result`, and draws the table
         ``result.metric(concept)`` returns.
-    level : Level or str or None
-        ``"L2"`` / ``"L3"`` (or a :class:`Level`).  ``None`` picks the concept's
-        only level, preferring L2 when both exist.
+    level : Level or str, optional
+        ``"L2"`` / ``"L3"`` (or a :class:`Level`).  Leave it out when *result*
+        has the concept at one level; it is required when *result* has the
+        concept at both L2 and L3 (an L3 run has most concepts at both).
     backend : str
         ``"matplotlib"`` (default), ``"plotly"``, or ``"bokeh"``.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on, as in :func:`~ob_analytics.visualization.plot`
+        (Matplotlib only).
     volume_scale : float or None
         Display volume scale; ``None`` auto-infers (as the gallery does).
     theme : PlotTheme or None
@@ -546,7 +554,7 @@ def plot_result(
 
     Returns
     -------
-    A Matplotlib ``Figure`` or a Plotly ``Figure``, per *backend*.
+    A Matplotlib, Plotly or Bokeh figure, per *backend*.
 
     Raises
     ------
@@ -555,10 +563,14 @@ def plot_result(
         is not drawn by *backend*, or *backend* is not registered.  The
         message names what is available: for a missing backend, the
         backends that draw the plot.
+    ConfigError
+        If *level* was left out and *result* has *concept* at both L2 and
+        L3, or *ax* is given for a backend other than Matplotlib.
     """
     from ob_analytics.metrics import METRICS
 
     _load_backend(backend)
+    _check_ax(ax, backend)
 
     # A face registered at a level keeps its name, so a metric with the same
     # name cannot hide it.
@@ -571,11 +583,12 @@ def plot_result(
         # A registered metric is a level-less concept: it has no L2/L3
         # variants, and it measures the run's own frames, so it is drawn
         # without building the gallery model or converting the result.
-        _concepts.require(concept, None, backend)
+        resolved = _resolve_level(concept, level, backend)
+        _concepts.require(concept, resolved, backend)
         data = _metric_payload(METRICS.get(concept), result, **overrides)
         if theme is not None:
             data["theme"] = theme
-        return plot(concept, None, backend=backend, **data)
+        return plot(concept, resolved, backend=backend, ax=ax, **data)
 
     model = build_gallery_model(result, volume_scale=volume_scale)
     concept_map = {c.key: c for c in model.concepts}
@@ -590,16 +603,12 @@ def plot_result(
             hint="It is not built for this result." if built_elsewhere else None,
         )
 
-    if level is None:
-        resolved = Level.L2 if Level.L2 in pc.variants else next(iter(pc.variants))
-    else:
-        resolved = level if isinstance(level, Level) else Level(level)
-
-    spec = pc.at(resolved)
+    resolved = _resolve_level(concept, level, backend, pc.variants)
+    spec = None if resolved is None else pc.at(resolved)
     if spec is None:
         have = ", ".join(sorted(lvl.value for lvl in pc.variants))
         raise UnknownNameError(
-            f"{resolved.value} concept",
+            f"{_kind_text([resolved]).removeprefix('at ')} concept",
             concept,
             (),
             hint=f"It is drawn at {have}.",
@@ -609,7 +618,7 @@ def plot_result(
     data = spec.prepare(**{**spec.prep_kwargs, **overrides})
     if theme is not None:
         data["theme"] = theme
-    return plot(concept, resolved, backend=backend, **data)
+    return plot(concept, resolved, backend=backend, ax=ax, **data)
 
 
 def available_concepts(result: PipelineResult) -> dict[str, list[str]]:

@@ -20,9 +20,9 @@ concepts -- ``trade_tape``, ``depth_heatmap``, ``book_snapshot``,
 Asking a backend for a plot it does not draw raises and names the backends
 that do: the book replay, for one, is drawn by Plotly only.
 
-A concept registered at a single level resolves it automatically, so callers
-pass only the concept name; *comparable* concepts (both L2 and L3 registered)
-require an explicit ``level=``.
+A concept drawn at one level resolves it, so callers pass only the concept
+name; a concept drawn at both L2 and L3 needs ``level=``.  The same rule holds
+for :func:`plot_result` and ``PipelineResult.plot``.
 
 Plot types: depth heatmaps, event maps, volume maps, order book snapshots,
 trade price charts, volume percentiles, and event histograms.
@@ -32,12 +32,14 @@ from __future__ import annotations
 
 import importlib
 import inspect
+from collections.abc import Iterable
 from typing import Any
 
 from loguru import logger
 from matplotlib.axes import Axes
 
 from ob_analytics.exceptions import ConfigError
+from ob_analytics.pipeline import _UNSET
 from ob_analytics.protocols import Level
 from ob_analytics.visualization import _concepts, _data as _viz_data
 from ob_analytics.visualization._matplotlib import format_time_axis, save_figure
@@ -63,10 +65,6 @@ infer_volume_scale = _viz_data.infer_volume_scale
 # Unified dispatcher
 # ---------------------------------------------------------------------------
 
-#: Sentinel for ``plot(level=...)`` meaning "resolve the level from the
-#: registry" -- distinct from ``None``, which is the explicit level of analytics.
-_UNSET: Any = object()
-
 
 def _accepts_theme(renderer: RendererFn) -> bool:
     """Whether *renderer* takes a ``theme`` keyword (by name or ``**kwargs``).
@@ -83,28 +81,62 @@ def _accepts_theme(renderer: RendererFn) -> bool:
     )
 
 
-def _resolve_level(concept: str, backend: str) -> Level | None:
-    """Resolve the implicit level of *concept* on *backend*.
+def _resolve_level(
+    concept: str,
+    level: Level | str | None,
+    backend: str,
+    levels: Iterable[Level | None] | None = None,
+) -> Level | None:
+    """Return the level to draw *concept* at, for every plot entry point.
 
-    A concept drawn at exactly one level resolves to it -- this covers
-    L2-only plots and level-less analytics (drawn at ``None``).  A
-    *comparable* concept, drawn at both L2 and L3, is ambiguous and needs
-    an explicit ``level=`` from the caller.
+    A *level* the caller gave is used as given (``"L2"`` becomes
+    ``Level.L2``; ``None`` is the level of a level-less plot).  A *level* left
+    out (``_UNSET``) resolves to the only one of *levels*: the levels the
+    caller can draw *concept* at for its data, or, when it passes none, the
+    levels *backend* draws *concept* at.  More than one is a choice the
+    caller must make.
+
+    Raises
+    ------
+    UnknownNameError
+        If *levels* is not given and *backend* does not draw *concept*.
+    ConfigError
+        If *level* was left out and *concept* can be drawn at more than one
+        level.
     """
-    _concepts.require_backend(concept, backend)
-    levels = _concepts.levels(concept, backend)
-    if len(levels) > 1:
-        shown = ", ".join(sorted(str(lvl) for lvl in levels))
+    if level is not _UNSET:
+        return None if level is None else Level(level)
+    if levels is None:
+        _concepts.require_backend(concept, backend)
+        levels = _concepts.levels(concept, backend)
+    choices = sorted(set(levels), key=str)
+    if len(choices) > 1:
+        shown = " or ".join(f'level="{lvl}"' for lvl in choices)
         raise ConfigError(
-            f"Plot concept {concept!r} is comparable (registered at levels "
-            f"{shown}); pass level=Level.L2 or level=Level.L3 to disambiguate."
+            f"Plot concept {concept!r} has a plot at each of "
+            f"{', '.join(str(lvl) for lvl in choices)}; pass {shown}."
         )
-    return levels[0]
+    return choices[0]
+
+
+def _check_ax(ax: Axes | None, backend: str) -> None:
+    """Refuse *ax* for a backend other than Matplotlib.
+
+    Raises
+    ------
+    ConfigError
+        If *ax* is given and *backend* is not ``"matplotlib"``.
+    """
+    if ax is not None and backend != "matplotlib":
+        raise ConfigError(
+            f"ax= is a Matplotlib axes, but backend {backend!r} makes its own "
+            "figure. Leave ax out, or use backend='matplotlib'."
+        )
 
 
 def plot(
     concept: str,
-    level: Level | None = _UNSET,
+    level: Level | str | None = _UNSET,
     *,
     backend: str = "matplotlib",
     ax: Axes | None = None,
@@ -125,14 +157,14 @@ def plot(
     ----------
     concept : str
         Plot concept, e.g. ``"trade_tape"`` or ``"order_activity"``.
-    level : Level, optional
-        Resolution level (``Level.L2``/``Level.L3``).  Omit to auto-resolve
-        when the concept is registered at a single level; required for a
-        *comparable* concept registered at both.
+    level : Level or str or None, optional
+        Resolution level (``Level.L2``/``"L2"`` or ``Level.L3``/``"L3"``).
+        Leave it out when *backend* draws the concept at one level; it is
+        required when *backend* draws the concept at both L2 and L3.
     backend : str, optional
         Registered backend name (default ``"matplotlib"``).
     ax : matplotlib.axes.Axes, optional
-        Axes to draw on (matplotlib only; ignored by other backends).  The
+        Axes to draw on (Matplotlib only; another backend refuses it).  The
         figure that holds *ax* is yours: the face draws on *ax* and leaves the
         figure's layout alone, so call ``fig.tight_layout()`` (or use a
         layout engine) once all the panels are drawn.  Without *ax*, the face
@@ -152,15 +184,14 @@ def plot(
         If *backend* is not registered, or does not draw *concept* (at
         *level*).  The message names the backends that do.
     ConfigError
-        If *concept* is comparable and no *level* was given.
+        If *level* was left out and *backend* draws *concept* at both L2 and
+        L3, or *ax* is given for a backend other than Matplotlib.
     """
     theme = data.pop("theme", None)
     _load_backend(backend)
 
-    if level is _UNSET:
-        level = _resolve_level(concept, backend)
-    elif level is not None:
-        level = Level(level)
+    _check_ax(ax, backend)
+    level = _resolve_level(concept, level, backend)
     _concepts.require(concept, level, backend)
     renderer = RENDERERS.get((concept, level, backend))
     kwargs: dict[str, Any] = {}

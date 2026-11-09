@@ -265,6 +265,56 @@ To run it, install the `backtest-engines` dependency group:
 `uv run pytest tests/test_backtest_parity.py`. Nautilus needs Python 3.12 or
 newer; on 3.11 its half skips.
 
+## Checked against Databento's own BBO
+
+The engines above check the rebuild on synthetic sessions. A real Databento
+file can be checked against Databento itself. Databento publishes the best bid
+and offer (BBO) for each instrument, built from the same feed as its
+market-by-order (MBO) records. `scripts/databento_bbo_check.py` rebuilds the
+book from an MBO file with `Pipeline(source=DatabentoSource())` and compares
+its best bid and ask with Databento's.
+
+The check needs two files for the same instrument and time range:
+
+- the **MBO** file, which the package rebuilds the book from;
+- a **top-of-book** file in the `mbp-1` schema (one record each time the top
+  of the book changes) or the `bbo-1s` or `bbo-1m` schema (one record a second
+  or a minute). `mbp-1` is the stronger check, because every change is
+  compared. `bbo-1s` is smaller, but it does not see a wrong state that lasts
+  less than a second.
+
+The MBO file must start at the start of the venue's day. The rebuilt book
+starts empty, so an order resting before the file starts is missing from it.
+
+How the two are lined up:
+
+- Both files stamp each record with `ts_recv`, Databento's receive time. For
+  each top-of-book record, the check reads the rebuilt book after every MBO
+  record received at or before that time.
+- Records received at the same instant are one update. On both sides, only the
+  last record of each instant is compared.
+- A record **matches** when the best bid price and the best ask price are both
+  the same. Sizes are compared too, and reported apart.
+- Mismatches are grouped into episodes: runs of consecutive mismatched
+  records. For the largest ones, the script prints both books and the MBO
+  events just before the first mismatch.
+
+To run it, install the `databento` extra and pass the two files:
+
+```bash
+uv run --extra databento python scripts/databento_bbo_check.py \
+    XNAS.ITCH-AAPL-20240212.mbo.dbn.zst XNAS.ITCH-AAPL-20240212.mbp-1.dbn.zst
+```
+
+For a file of several million records, add `--cut TIME` once or more. The book
+is then rebuilt one window at a time with `run_windows`, which carries the book
+across each cut. `--csv PATH` writes every mismatched record to a file.
+`tests/test_databento_bbo_check.py` runs the check on a short hand-built MBO
+stream and its known top of book. It needs no key.
+
+**Result:** not run on a real file yet. The result, with the dataset, symbol
+and date range, will be recorded here after the first run.
+
 ## See also
 
 - **How-to:** [Check data quality with `audit`](howto/audit.md)

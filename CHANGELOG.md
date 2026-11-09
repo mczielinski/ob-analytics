@@ -65,6 +65,27 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   (#418). It raised `ValueError`, `KeyError` or `TypeError`, depending on
   what was wrong. `except ValueError` still catches it, since `ConfigError` is one;
   `except TypeError` or `except KeyError` around it -> `except ConfigError`.
+- **Every plot entry point takes the same arguments** (#410). `plot()`,
+  `plot_result()` and `PipelineResult.plot()` decide the level by one rule,
+  and all three take `ax=`.
+  - `plot_result(result, concept)` and `result.plot(concept)` for a concept
+    the result has at both L2 and L3 (on an L3 run: `trade_tape`,
+    `order_activity`, `cancellations`, `book_snapshot`, `depth_chart`,
+    `book_replay`, `liquidity_at_touch`) drew the L2 plot. They now raise
+    `ConfigError`, as `plot()` did -> pass `level="L2"` (or `"L3"`). A
+    concept the result has at one level still needs no level.
+  - `plot_result(..., level=None)` and `result.plot(..., level=None)` meant
+    "pick the level". `None` now means a level-less plot (a metric), as in
+    `plot()` -> leave `level` out instead.
+  - `result.plot(..., ax=ax)` and `plot_result(..., ax=ax)` are new; they
+    draw on your Matplotlib axes, as `plot(..., ax=ax)` does.
+  - `plot(..., ax=ax, backend="plotly")` (or `"bokeh"`) ignored `ax`. It now
+    raises `ConfigError` -> leave `ax` out for those backends.
+  - The error for a missing level says `pass level="L2" or level="L3"`; it
+    no longer says the concept is "comparable".
+  - `plot_result(result, metric, level="L2")` ignored the level. It now
+    raises `UnknownNameError`, since a metric has no L2 or L3 plot -> leave
+    `level` out.
 - **The ccxt and cryptofeed source and settings classes are in
   `ob_analytics.live`** (#410). The module paths still work; import from
   the package instead.
@@ -1159,6 +1180,10 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   hashed lost one of its two icebergs). Rows of different orders at one
   instant now follow the venue's `sequence` when the file has one, then
   their file order. Each order's own rows are unchanged.
+- **The Bokeh depth heatmap draws the hidden-liquidity overlay** (#410).
+  With `backend="bokeh"`, the iceberg chains and refill markers and the
+  trades against hidden orders were left out without a word. Bokeh now draws
+  them as Matplotlib and Plotly do.
 - **`BitstampWriter` keeps a capture's `origin` and `sequence` columns**
   (#401). It wrote only the order columns, so a capture read, run and written
   again lost which part of the capture wrote each row, and the clock checks

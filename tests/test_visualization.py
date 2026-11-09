@@ -18,7 +18,7 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from matplotlib.text import Text
 
-from ob_analytics.exceptions import UnknownNameError
+from ob_analytics.exceptions import ConfigError, UnknownNameError
 from ob_analytics.visualization import (
     Level,
     PlotTheme,
@@ -328,7 +328,7 @@ class TestPlotTrades:
         assert fig is fig_orig
 
     def test_comparable_requires_level(self, sample_trades):
-        with pytest.raises(ValueError, match="comparable"):
+        with pytest.raises(ConfigError, match='pass level="L2" or level="L3"'):
             plot("trade_tape", **_data.prepare_trades_data(sample_trades))
 
     def test_l2_ylabel_is_price(self, sample_trades):
@@ -404,7 +404,7 @@ class TestPlotOrderActivityL3:
 
     def test_comparable_requires_level(self, sample_order_lifecycle_events):
         data = _data.prepare_order_activity_l3_data(sample_order_lifecycle_events)
-        with pytest.raises(ValueError, match="comparable"):
+        with pytest.raises(ConfigError, match='pass level="L2" or level="L3"'):
             plot("order_activity", **data)
 
     def test_rounded_price_ticks_caps_count(self) -> None:
@@ -508,7 +508,7 @@ class TestPlotCancellationsL3:
 
     def test_comparable_requires_level(self, sample_cancellation_events):
         data = _data.prepare_cancellations_l3_data(sample_cancellation_events)
-        with pytest.raises(ValueError, match="comparable"):
+        with pytest.raises(ConfigError, match='pass level="L2" or level="L3"'):
             plot("cancellations", **data)
 
     def test_hexbin_is_rasterized(self, sample_cancellation_events):
@@ -773,7 +773,7 @@ class TestPlotBookSnapshot:
 
     def test_comparable_requires_level(self) -> None:
         data = _data.prepare_book_snapshot_data(self._order_book())
-        with pytest.raises(ValueError, match="comparable"):
+        with pytest.raises(ConfigError, match='pass level="L2" or level="L3"'):
             plot("book_snapshot", **data)
 
     @pytest.mark.parametrize("level", [Level.L2, Level.L3])
@@ -1518,7 +1518,7 @@ class TestRendererKinds:
         RENDERERS.register(("kind_probe", Level.L2, "matplotlib"), self._renderer)
         RENDERERS.register(("kind_probe", Level.L3, "matplotlib"), self._renderer)
         RENDERERS.register(("kind_probe", Level.L2, "plotly"), self._renderer)
-        with pytest.raises(ValueError, match="comparable"):
+        with pytest.raises(ConfigError, match='pass level="L2" or level="L3"'):
             plot("kind_probe")
 
     def test_placements_can_be_looped_over_while_registering(self):
