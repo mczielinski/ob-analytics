@@ -15,6 +15,7 @@ from ob_analytics.hidden_liquidity import (
     hidden_trades,
 )
 from ob_analytics.synth import generate_session
+from ob_analytics.visualization._data import prepare_hidden_liquidity_overlay
 
 BASE = pd.Timestamp("2024-01-02 14:30:00", tz="UTC")
 
@@ -97,6 +98,36 @@ class TestDetectIcebergs:
         assert det.slices["delay_s"].iloc[1:].tolist() == pytest.approx(
             [250e-6, 200e-6]
         )
+
+    def test_uuid_order_ids_are_kept_as_written(self):
+        # Independent Reserve writes order ids as UUID strings.
+        a, b, c = (
+            "0b6c8f1e-3a52-4c1e-9d0a-5f2e7c41a001",
+            "0b6c8f1e-3a52-4c1e-9d0a-5f2e7c41a002",
+            "0b6c8f1e-3a52-4c1e-9d0a-5f2e7c41a003",
+        )
+        s = _Stream()
+        s.add(a, 0, "created", 100)
+        s.add(a, 1_000, "changed", 0, 100, maker=True)
+        s.add(b, 1_250, "created", 100)
+        s.add(b, 5_000, "changed", 0, 100, maker=True)
+        s.add(c, 5_200, "created", 100)
+        s.add(c, 9_000, "deleted", 100)
+        events, trades = s.frames()
+
+        det = detect_icebergs(events, trades)
+
+        assert len(det.icebergs) == 1
+        assert det.icebergs.iloc[0]["slices"] == 3
+        assert det.icebergs.iloc[0]["confidence"] == "high"
+        assert det.slices["id"].tolist() == [a, b, c]
+
+        # The gallery's overlay joins the two frames; string ids pass through.
+        overlay = prepare_hidden_liquidity_overlay(
+            det.icebergs, det.slices, pd.DataFrame(columns=["timestamp", "price"])
+        )
+        assert overlay["iceberg_lines"]["id"].tolist() == [a, b, c]
+        assert overlay["iceberg_refills"]["id"].tolist() == [b, c]
 
     def test_new_order_after_a_cancel_is_not_a_refill(self):
         s = _Stream()

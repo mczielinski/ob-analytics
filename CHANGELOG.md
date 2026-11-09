@@ -1136,6 +1136,10 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
+- **`detect_icebergs` no longer stops on UUID order ids** (#314). On an
+  Independent Reserve capture, a refill made `detect_icebergs` raise
+  `ValueError`, and the gallery left out its hidden-liquidity overlay. The
+  slices now keep each order `id` as the feed writes it.
 - **A wheel holds only the package** (#415). The wheel and sdist `include`
   patterns now start with `/`, so hatchling no longer packs an
   `ob_analytics` folder found below the root, such as one in an agent
