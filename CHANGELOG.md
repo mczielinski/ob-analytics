@@ -65,6 +65,8 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   (#418). It raised `ValueError`, `KeyError` or `TypeError`, depending on
   what was wrong. `except ValueError` still catches it, since `ConfigError` is one;
   `except TypeError` or `except KeyError` around it -> `except ConfigError`.
+- **`Palette.flashed` and `Palette.resting` are gone** (#415). No plot read
+  them. `Palette(flashed=..., resting=...)` -> leave both out.
 
 ### Added
 
@@ -1082,6 +1084,18 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Removed
 
+- **The `sortedcontainers` dependency, three dev tools and three scripts**
+  (#415). Nothing imported `sortedcontainers`, and the dev group no longer
+  installs `safety`, `codecov` or `pytest-mock`, which nothing ran.
+  `scripts/bitstamp_demo.py` and `scripts/lobster_demo.py` copied the
+  `bitstamp-demo` and `lobster-demo` CLI commands and had fallen behind them;
+  run `python -m ob_analytics bitstamp-demo` from a clone instead.
+  `scripts/parse_bitstamp_log.sh` wrote a format that the Bitstamp loader now
+  reads 10^8 times too large. The README and the docs home page share one
+  hero image, `docs/assets/hero-depth-heatmap.png`, which
+  `scripts/make_hero.py` writes. The unused `volume_marker_areas` helper in
+  `ob_analytics.visualization._data` is gone.
+
 - **The compiled-engine compare tests** (#416). `tests/test_compare_backends.py`
   waited for a compiled depth engine behind a factory that no plan names, and
   always skipped. A faster engine, if one comes (#138), must pass the golden
@@ -1121,6 +1135,24 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   applied. Use `bps_range` or `max_levels`, or filter the returned frames.
 
 ### Fixed
+
+- **A wheel holds only the package** (#415). The wheel and sdist `include`
+  patterns now start with `/`, so hatchling no longer packs an
+  `ob_analytics` folder found below the root, such as one in an agent
+  worktree, and they leave out hidden files and `__pycache__`. A wheel built
+  from a checkout with agent worktrees under `.claude/` held 45 MB of them;
+  `.claude/` is now ignored by git too. CI fails when a wheel holds a file
+  outside `ob_analytics/` and its metadata, or a hidden file or cache inside
+  the package (`scripts/check_wheel_contents.py`).
+- **CI lints and type-checks `scripts/`** (#415), as the pre-commit `ty`
+  hook now does too, and the scripts pass. `build_gallery.py`,
+  `build_tutorial.py`, `check_links.py` and `smoke_wheel.py` read their
+  arguments with `argparse`, so `--help` prints usage instead of running the
+  script; `build_gallery.py` takes `--output`. Ruff now checks for broad
+  `except Exception`, `except: pass` and `exec` (`BLE001`, `S110`, `S102`),
+  so each `noqa` comment for those rules marks a reviewed case and a new one
+  fails the lint. A registry's `in` check now catches only the `TypeError`
+  of an unhashable key.
 
 - **Every reader refuses a bad file with `ConfigError`** (#418). The
   Bitstamp, LOBSTER, `depth_csv`, DBN and Parquet readers and

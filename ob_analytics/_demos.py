@@ -1,8 +1,8 @@
-"""Internal demo runners shared between the ob-analytics CLI and scripts/.
+"""Demo runners behind the ``bitstamp-demo`` and ``lobster-demo`` CLI commands.
 
-Both ``scripts/bitstamp_demo.py`` and ``cli.py:_cmd_bitstamp_demo`` (and the
-LOBSTER equivalents) are thin wrappers around these functions, so the
-"what a full pipeline run looks like" logic lives in exactly one place.
+``cli.py:_cmd_bitstamp_demo`` and ``cli.py:_cmd_lobster_demo`` are thin
+wrappers around these functions, so the "what a full pipeline run looks like"
+logic lives in exactly one place.
 """
 
 from __future__ import annotations
