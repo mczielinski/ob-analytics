@@ -24,8 +24,16 @@ from ob_analytics.bitstamp import (
     BitstampTradeReader,
     BitstampWriter,
 )
+from ob_analytics.capture_files import (
+    ORDER_COLUMNS,
+    ORIGIN_SHUTDOWN,
+    ORIGIN_SNAPSHOT,
+    ORIGIN_STREAM,
+    FileCaptureSink,
+)
 from ob_analytics.config import PipelineConfig
 from ob_analytics.exceptions import ConfigError
+from ob_analytics.live._base import CaptureResult
 from ob_analytics.pipeline import Pipeline
 from ob_analytics.protocols import RunContext, grid_of
 
@@ -660,6 +668,76 @@ class TestBitstampWriter:
 
         rt = Pipeline(source=BitstampSource()).run(str(rt_csv))
         assert len(rt.events) == len(result.events)
+
+    def test_a_capture_keeps_its_origin_and_sequence(self, tmp_path):
+        # Write a capture with the sink a live capture uses, run it, write the
+        # run back, and read that again: each row keeps which part of the
+        # capture wrote it, and the venue sequence.
+        capture = tmp_path / "capture"
+        sink = FileCaptureSink(capture, keep_raw=False)
+
+        def at(ms: int) -> pd.Timestamp:
+            return pd.Timestamp(1_700_000_000_000 + ms, unit="ms", tz="UTC")
+
+        rows = [
+            (1, 0, 100.0, 1.0, "created", "bid", ORIGIN_SNAPSHOT, None),
+            (2, 0, 101.0, 1.0, "created", "ask", ORIGIN_SNAPSHOT, None),
+            (3, 10, 100.5, 0.5, "created", "bid", ORIGIN_STREAM, 7),
+            (1, 20, 100.0, 0.4, "changed", "bid", ORIGIN_STREAM, 8),
+            (1, 30, 100.0, 0.4, "deleted", "bid", ORIGIN_SHUTDOWN, None),
+            (2, 30, 101.0, 1.0, "deleted", "ask", ORIGIN_SHUTDOWN, None),
+            (3, 30, 100.5, 0.5, "deleted", "bid", ORIGIN_SHUTDOWN, None),
+        ]
+        for oid, ms, price, volume, action, direction, origin, seq in rows:
+            sink.write_order(
+                {
+                    "id": oid,
+                    "timestamp": at(ms),
+                    "exchange_timestamp": at(ms),
+                    "price": price,
+                    "volume": volume,
+                    "action": action,
+                    "direction": direction,
+                    "sequence": seq,
+                    "origin": origin,
+                }
+            )
+        sink.finalize(
+            CaptureResult(
+                out_dir=capture,
+                n_order_events=len(rows),
+                n_trade_events=0,
+                n_raw_frames=0,
+                started=at(0),
+                ended=at(30),
+            )
+        )
+
+        def by_row(result) -> list[tuple]:
+            events = result.events.sort_values(["id", "timestamp"])
+            return [
+                (oid, action, origin, None if pd.isna(seq) else int(seq))
+                for oid, action, origin, seq in zip(
+                    events["id"],
+                    events["action"].astype(str),
+                    events["origin"],
+                    events["sequence"],
+                    strict=True,
+                )
+            ]
+
+        first = Pipeline(source=BitstampSource()).run(str(capture / "orders.csv"))
+        written = BitstampWriter(first.config).write(
+            first.tables(), tmp_path / "roundtrip"
+        )
+        again = Pipeline(source=BitstampSource()).run(str(written))
+
+        expected = sorted(
+            (oid, action, origin, seq) for oid, _, _, _, action, _, origin, seq in rows
+        )
+        assert sorted(by_row(first)) == expected
+        assert by_row(again) == by_row(first)
+        assert pd.read_csv(written).columns.tolist() == list(ORDER_COLUMNS)
 
     def test_writer_creates_file(self, tmp_path, tiny_pipeline_result):
         target = BitstampWriter().write(

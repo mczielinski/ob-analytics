@@ -14,6 +14,7 @@ from loguru import logger
 
 from ob_analytics.bars import bars
 from ob_analytics.bitstamp import BitstampSource, BitstampWriter
+from ob_analytics.capture_files import ORDERS_NAME, TRADES_NAME
 from ob_analytics.data import save_data
 from ob_analytics.lobster import LobsterLoader, LobsterSource
 from ob_analytics.pipeline import Pipeline, PipelineResult
@@ -108,7 +109,7 @@ def _lobster_analytics_panels(
 
 def _resolve_orders_path(path: Path) -> Path:
     """Return path to orders.csv (directory containing orders.csv is ok)."""
-    return path / "orders.csv" if path.is_dir() else path
+    return path / ORDERS_NAME if path.is_dir() else path
 
 
 def run_bitstamp_demo(
@@ -151,7 +152,7 @@ def run_bitstamp_demo(
             f"orders.csv not found: {orders_path}. "
             f"Provide --input pointing at a Bitstamp orders.csv."
         )
-    trades_path = orders_path.parent / "trades.csv"
+    trades_path = orders_path.parent / TRADES_NAME
     if not trades_path.exists():
         raise FileNotFoundError(
             f"Companion trades.csv missing next to {orders_path.name}. "
@@ -174,7 +175,7 @@ def run_bitstamp_demo(
         # the folder.  Pass the run's config so ticks convert back on the
         # run's grid (issue #155).
         save_data(result, rt_dir, writer=BitstampWriter(result.config))
-        rt = Pipeline(source=BitstampSource()).run(str(rt_dir / "orders.csv"))
+        rt = Pipeline(source=BitstampSource()).run(str(rt_dir / ORDERS_NAME))
         logger.info(
             "Round-trip events: {} (match: {})",
             len(rt.events),

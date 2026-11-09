@@ -48,7 +48,12 @@ from ob_analytics._utils import off_tick_grid
 from ob_analytics.capture_record import LOT_SIZE, TICK_SIZE
 from ob_analytics.config import SourceSettings
 from ob_analytics.exceptions import ConfigError, UnknownNameError
-from ob_analytics.live._base import CaptureConfig, EventDict, VenueClockCount
+from ob_analytics.live._base import (
+    CaptureConfig,
+    EventDict,
+    VenueClockCount,
+    diff_levels,
+)
 from ob_analytics.protocols import (
     Clocks,
     FeedType,
@@ -772,31 +777,22 @@ class CcxtSource:
         # CCXT's per-book monotonic sequence (``None`` when the venue omits it);
         # every row from this book update carries it as the venue ``sequence``.
         nonce = book.get("nonce")
-        changes: dict[str, list[tuple[float, float]]] = {"bid": [], "ask": []}
-        for side, key in (("bid", "bids"), ("ask", "asks")):
-            # Diffed by mutating self._last[side] in place, not by building a
-            # fresh dict every call: for a deep book (whole-book venues, or
-            # Coinbase/Bitstamp/OKX which hand ccxt everything regardless of
-            # depth_limit) that dict can hold tens of thousands of entries,
-            # and this is the hot path for a capture that can run for hours.
-            # Safe because a CCXT book side never repeats a price (ccxt's own
-            # OrderBookSide is keyed by price), so one pass both updates
-            # changed levels and marks what is still present.
-            prev = self._last[side]
-            seen: set[float] = set()
-            for row in self._side(book, key):
-                price = float(row[0])
-                size = float(row[1])
-                seen.add(price)
-                if prev.get(price) != size:
-                    self._fit_tick(price)
-                    self._fit_lot(size)
-                    changes[side].append((price, size))
-                    prev[price] = size
-            gone = [price for price in prev if price not in seen]
-            for price in gone:
-                changes[side].append((price, 0.0))
-                del prev[price]
+        # A CCXT book side never repeats a price (ccxt's own OrderBookSide is
+        # keyed by price), as diff_levels needs.
+        changes = {
+            side: diff_levels(
+                self._last[side],
+                ((float(row[0]), float(row[1])) for row in self._side(book, key)),
+            )
+            for side, key in (("bid", "bids"), ("ask", "asks"))
+        }
+        # A removed level's price was fitted when it was added, and a size of
+        # 0 is on every grid, so fitting every change is the same as fitting
+        # the levels that are new or changed.
+        for side_changes in changes.values():
+            for price, size in side_changes:
+                self._fit_tick(price)
+                self._fit_lot(size)
         if not (changes["bid"] or changes["ask"]):
             return
         raw: dict[str, Any] | None

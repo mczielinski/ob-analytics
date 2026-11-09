@@ -37,6 +37,12 @@ from ob_analytics._utils import (
     ticks_to_price,
     validate_non_empty,
 )
+from ob_analytics.capture_files import (
+    ORDER_COLUMNS,
+    ORDERS_NAME,
+    TRADE_COLUMNS,
+    TRADES_NAME,
+)
 from ob_analytics.config import InstrumentGrid, PipelineConfig, SourceSettings
 from ob_analytics.protocols import (
     DataWriter,
@@ -51,6 +57,7 @@ from ob_analytics.protocols import (
 from ob_analytics.schemas import (
     ACTION_DTYPE,
     BOOK_SIDE_DTYPE,
+    ORIGIN_COLUMN,
     SEQUENCE_COLUMN,
     TRADE_DTYPES,
     TRADE_SIDE_DTYPE,
@@ -167,6 +174,10 @@ class BitstampLoader:
         )
 
         events = events[events["volume"] >= 0]
+        # Which part of a capture wrote each row, when the file says: the clock
+        # checks leave out the opening book's rows (see ORIGIN_COLUMN).
+        if ORIGIN_COLUMN in events.columns:
+            events[ORIGIN_COLUMN] = events[ORIGIN_COLUMN].astype("string")
 
         # Ordering keys, captured in source (arrival) order before the id-sort
         # below reorders the rows (opt-in, so the default frame is unchanged;
@@ -286,17 +297,6 @@ class BitstampLoader:
 #: and trades alike.
 _TIMESTAMP_UNIT = "ms"
 
-_TRADES_COLUMNS = (
-    "trade_id",
-    "timestamp",
-    "exchange_timestamp",
-    "price",
-    "amount",
-    "buy_order_id",
-    "sell_order_id",
-    "side",
-)
-
 
 class BitstampTradeReader:
     """Build trades from the companion ``trades.csv`` that
@@ -338,7 +338,7 @@ class BitstampTradeReader:
         if raw.empty:
             return empty_trades()
 
-        validate_columns(raw, set(_TRADES_COLUMNS), "BitstampTradeReader.load")
+        validate_columns(raw, set(TRADE_COLUMNS), "BitstampTradeReader.load")
         for column, what in (("price", "price"), ("amount", "size")):
             raw[column] = finite_floats(raw[column], what, where)
         # A trade with no known side or order (as this format's writer saves
@@ -422,7 +422,7 @@ class BitstampTradeReader:
         p = Path(source)
         if p.is_file():
             p = p.parent
-        candidate = p / "trades.csv"
+        candidate = p / TRADES_NAME
         if not candidate.exists():
             raise FileNotFoundError(
                 f"BitstampTradeReader: no trades.csv next to {source!r} "
@@ -574,7 +574,9 @@ class BitstampWriter:
         When *data* also carries a ``"trades"`` frame, a ``trades.csv`` is
         written next to it in capture format, so that a subsequent
         :class:`BitstampTradeReader` can reconstruct trades when the
-        ``orders.csv`` is re-read.
+        ``orders.csv`` is re-read.  The events' ``sequence`` and ``origin``
+        columns are written too when the events carry them, so a capture
+        read and written again keeps them.
 
         Parameters
         ----------
@@ -590,36 +592,41 @@ class BitstampWriter:
             The written ``orders.csv`` path.
         """
         events = data["events"]
-        p = Path(dest) / "orders.csv"
-        out = pd.DataFrame(
-            {
-                "id": events["id"],
-                "timestamp": datetime_to_epoch(events["timestamp"], _TIMESTAMP_UNIT),
-                "exchange_timestamp": datetime_to_epoch(
-                    events["exchange_timestamp"], _TIMESTAMP_UNIT
-                ),
-                # Restore the quote-currency float from integer ticks (#155).
-                "price": ticks_to_price(
-                    events["price"],
-                    self._config.tick_size,
-                    decimals=self._config.price_decimals,
-                ),
-                # Restore the base-asset float from integer lots (#226).
-                "volume": lots_to_size(
-                    events["volume"],
-                    self._config.lot_size,
-                    decimals=self._config.volume_decimals,
-                ),
-                "action": events["action"].astype(str),
-                "direction": events["direction"].astype(str),
-            }
-        )
+        p = Path(dest) / ORDERS_NAME
+        columns: dict[str, Any] = {
+            "id": events["id"],
+            "timestamp": datetime_to_epoch(events["timestamp"], _TIMESTAMP_UNIT),
+            "exchange_timestamp": datetime_to_epoch(
+                events["exchange_timestamp"], _TIMESTAMP_UNIT
+            ),
+            # Restore the quote-currency float from integer ticks (#155).
+            "price": ticks_to_price(
+                events["price"],
+                self._config.tick_size,
+                decimals=self._config.price_decimals,
+            ),
+            # Restore the base-asset float from integer lots (#226).
+            "volume": lots_to_size(
+                events["volume"],
+                self._config.lot_size,
+                decimals=self._config.volume_decimals,
+            ),
+            "action": events["action"].astype(str),
+            "direction": events["direction"].astype(str),
+        }
+        # The capture's own columns, when the events carry them: the venue
+        # sequence, and which part of the capture wrote each row.
+        if SEQUENCE_COLUMN in events.columns:
+            columns[SEQUENCE_COLUMN] = events[SEQUENCE_COLUMN].astype("Int64")
+        if ORIGIN_COLUMN in events.columns:
+            columns[ORIGIN_COLUMN] = events[ORIGIN_COLUMN]
+        out = pd.DataFrame(columns)[[c for c in ORDER_COLUMNS if c in columns]]
         p.parent.mkdir(parents=True, exist_ok=True)
         out.to_csv(p, index=False)
 
         trades = data.get("trades")
         if trades is not None:
-            self._write_companion_trades(trades, p.parent / "trades.csv")
+            self._write_companion_trades(trades, p.parent / TRADES_NAME)
         return p
 
     def _write_companion_trades(self, trades: pd.DataFrame, dest: Path) -> None:
@@ -629,18 +636,8 @@ class BitstampWriter:
         ``maker``/``taker`` fields so that :class:`BitstampTradeReader` can
         re-read it.  An empty *trades* frame yields a header-only file.
         """
-        cols = [
-            "trade_id",
-            "timestamp",
-            "exchange_timestamp",
-            "price",
-            "amount",
-            "buy_order_id",
-            "sell_order_id",
-            "side",
-        ]
         if trades.empty:
-            pd.DataFrame(columns=cols).to_csv(dest, index=False)
+            pd.DataFrame(columns=list(TRADE_COLUMNS)).to_csv(dest, index=False)
             return
         side = trades["direction"].astype(str)
         buy_order_id = np.where(side == "buy", trades["taker"], trades["maker"])
