@@ -104,10 +104,9 @@ def _segment_input(seg_dir: Path) -> Path:
     segment is read through its ``orders.csv`` (L3) or ``depth.csv`` (L2), as
     a single capture is.  A ``process`` output has neither and is read whole.
     """
-    for name in ("orders.csv", "depth.csv"):
-        if (seg_dir / name).is_file():
-            return seg_dir / name
-    return seg_dir
+    from ob_analytics.capture_files import book_file
+
+    return book_file(seg_dir) or seg_dir
 
 
 def _read_capture_manifest(path: Path) -> Any:
@@ -433,12 +432,12 @@ def _cmd_capture(args: argparse.Namespace) -> None:
     from ob_analytics.exceptions import ConfigError, ObAnalyticsError, UnknownNameError
     from ob_analytics.live import (
         CaptureConfig,
+        CcxtSettings,
+        CryptofeedSettings,
         LiveSource,
         SupportsPreflight,
         run_capture,
     )
-    from ob_analytics.live.ccxt_source import CcxtSettings
-    from ob_analytics.live.cryptofeed_source import CryptofeedSettings
     from ob_analytics.protocols import Level
     from ob_analytics.sources import SOURCES, get_source, list_sources
 

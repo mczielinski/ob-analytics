@@ -21,6 +21,8 @@ from ob_analytics import (
     data_quality_summary,
     list_sources,
 )
+from ob_analytics.capture_files import DEPTH_COLUMNS
+from ob_analytics.config import PipelineConfig
 from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
 from ob_analytics.depth import depth_metrics, get_spread
 from ob_analytics.depth_l2 import DepthCsvWriter, L2DepthLoader, L2TradeReader
@@ -380,6 +382,30 @@ class TestDepthCsvWriter:
             check_dtype=False,
             check_categorical=False,
         )
+
+    def test_keeps_the_capture_columns(self, tmp_path):
+        # A capture's depth.csv: the venue sequence, and which part of the
+        # capture wrote each row.
+        pd.DataFrame(
+            {
+                "timestamp": [_BASE_MS, _BASE_MS + 1_000],
+                "exchange_timestamp": [_BASE_MS, _BASE_MS + 990],
+                "side": ["bid", "ask"],
+                "price": [100.0, 101.0],
+                "volume": [1.0, 1.0],
+                "sequence": [None, 12],
+                "origin": ["snapshot", "stream"],
+            }
+        ).to_csv(tmp_path / "depth.csv", index=False)
+        loader = L2DepthLoader(PipelineConfig(track_sequence=True))
+        depth_in = loader.load(tmp_path)
+        out = tmp_path / "out"
+        DepthCsvWriter().write({"depth": depth_in}, out)
+
+        assert pd.read_csv(out / "depth.csv").columns.tolist() == list(DEPTH_COLUMNS)
+        depth_out = loader.load(out)
+        for column in ("sequence", "origin"):
+            pd.testing.assert_series_equal(depth_in[column], depth_out[column])
 
     def test_writes_companion_trades(self, tmp_path):
         DepthCsvWriter().write(
