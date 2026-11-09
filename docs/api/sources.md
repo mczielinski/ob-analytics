@@ -15,7 +15,8 @@ for live capture.
 Per-source configuration is a typed `SourceSettings` (a frozen pydantic model),
 not an untyped dict — subclass it per source, e.g. `CcxtSettings`. A source
 that needs an API key marks the field with `Credential` (see
-[Use an API key](../howto/api-keys.md)).
+[Use an API key](../howto/api-keys.md)). A field marked with `CliOption`
+names and describes its flag on `ob-analytics capture <source>`.
 
 ::: ob_analytics.sources.register_source
 
@@ -28,3 +29,5 @@ that needs an API key marks the field with `Credential` (see
 ::: ob_analytics.config.SourceSettings
 
 ::: ob_analytics.config.Credential
+
+::: ob_analytics.sources.CliOption

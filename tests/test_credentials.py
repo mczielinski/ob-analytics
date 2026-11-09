@@ -447,7 +447,7 @@ class TestCaptureWritesNoKey:
         out = tmp_path / "cap"
         env = {**_clean_env(), KEY_ENV: FAKE_KEY, KEY_FILE_ENV: str(key_file)}
         proc = _cli(
-            "capture", "keyed", "--pair", "x", "--out", str(out),
+            "capture", "keyed", "--pair", "x", "--output", str(out),
             "--minutes", "0.03",
             env=env,
         )  # fmt: skip
@@ -485,7 +485,7 @@ class TestCaptureWritesNoKey:
     ) -> None:
         out = tmp_path / "cap"
         proc = _cli(
-            "capture", "keyed", "--pair", "x", "--out", str(out),
+            "capture", "keyed", "--pair", "x", "--output", str(out),
             "--minutes", "0.03",
             env=_clean_env(),
         )  # fmt: skip
@@ -501,7 +501,7 @@ class TestCaptureWritesNoKey:
         out = tmp_path / "cap"
         env = {**_clean_env(), KEY_ENV: FAKE_KEY, KEY_FILE_ENV: str(key_file)}
         proc = _cli(
-            "capture", "keyed-rotating", "--pair", "x", "--out", str(out),
+            "capture", "keyed-rotating", "--pair", "x", "--output", str(out),
             "--minutes", "0.05", "--roll-minutes", "0.01",
             env=env,
         )  # fmt: skip
@@ -516,7 +516,7 @@ class TestCaptureWritesNoKey:
         out = tmp_path / "cap"
         env = {**_clean_env(), KEY_ENV: FAKE_KEY, KEY_FILE_ENV: str(key_file)}
         proc = _cli(
-            "capture", "keyed-no-arg", "--pair", "x", "--out", str(out),
+            "capture", "keyed-no-arg", "--pair", "x", "--output", str(out),
             "--minutes", "0.05", "--roll-minutes", "0.01",
             env=env,
         )  # fmt: skip

@@ -82,8 +82,43 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   `ob_analytics.capture_files.FileCaptureSink`.
 - **`Palette.flashed` and `Palette.resting` are gone** (#415). No plot read
   them. `Palette(flashed=..., resting=...)` -> leave both out.
+- **The command line has one name per thing** (#411). The input is `path`
+  and the output is `-o/--output` on every subcommand.
+  - `ob-analytics capture ... --out DIR` -> `ob-analytics capture ... -o DIR`
+    (or `--output DIR`).
+  - `ob-analytics capture ccxt --exchange kraken` ->
+    `ob-analytics capture ccxt --venue kraken`; the same for `cryptofeed`.
+  - `ob-analytics capture <source> --help` lists the source's flags, which
+    are now read after the source's name: `ob-analytics capture
+    --exchange kraken ccxt` -> `ob-analytics capture ccxt --venue kraken`.
+    `ob-analytics capture --help` no longer lists them.
+  - `ob-analytics bitstamp-demo --input PATH` ->
+    `ob-analytics bitstamp-demo PATH`.
+- **A plug-in source's settings are flags of `capture`** (#411). A
+  `SourceSettings` field gets a `--<field>` flag when its type is one the
+  command line can read. A plug-in whose settings have a field named like a
+  `capture` flag (`pair`, `minutes`, `output`, `roll_minutes`, `roll_mb`,
+  `no_raw`) -> give the field `CliOption(flag=...)` with another name, or
+  `capture` stops with a message naming the field.
 
 ### Added
+
+- **The command line sets what the Python API sets** (#411).
+  - `process` and `audit` take `--tick-size`, `--lot-size`, `--depth-bins`,
+    `--depth-bps` and `--session-tz`. Without `--tick-size` and `--lot-size`
+    a capture's own still come from its `meta.json`.
+  - `process --format` saves in any format `save_data` writes, such as
+    `--format bitstamp` or `--format hftbacktest -o run.npz`.
+  - `process --cut TIME` runs one time window at a time, as
+    `Pipeline.run_windows` does; give it once for each cut, and
+    `--no-carry` to start each window from an empty book.
+  - `gallery --backend` and `process --gallery --backend` pick the plot
+    backends; give it once for each.
+  - `capture <source>` has one flag for each field of the source's settings
+    class, so a plug-in source can be set up from the command line. A field
+    marked with the new `ob_analytics.sources.CliOption` gets its help text,
+    flag name or value type from the marker; a `Credential` field never gets
+    a flag.
 
 - **The docs code runs in CI** (#420). `scripts/check_doc_examples.py` runs
   the Python blocks of every docs page outside the tutorial, page by page

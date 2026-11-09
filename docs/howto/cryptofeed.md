@@ -51,7 +51,7 @@ pip install "ob-analytics[cryptofeed]"
 ```
 
 ```bash
-ob-analytics capture cryptofeed --exchange bitstamp --pair BTC-USD --minutes 10 --out /tmp/cap
+ob-analytics capture cryptofeed --venue bitstamp --pair BTC-USD --minutes 10 -o /tmp/cap
 ```
 
 ## The level comes from the venue, not from a list
@@ -77,10 +77,10 @@ IDs that the feed never had.
 
 ```bash
 # A per-order venue, captured at price level instead:
-ob-analytics capture cryptofeed --exchange bitstamp --pair BTC-USD --level L2 --out /tmp/cap
+ob-analytics capture cryptofeed --venue bitstamp --pair BTC-USD --level L2 -o /tmp/cap
 
 # An L2-only venue:
-ob-analytics capture cryptofeed --exchange binance --pair BTC-USDT --out /tmp/cap
+ob-analytics capture cryptofeed --venue binance --pair BTC-USDT -o /tmp/cap
 ```
 
 A capture is a directory of segments with a `manifest.json` (see
@@ -262,7 +262,7 @@ A venue that publishes no sequence number is never scored, and reports zero.
 
 | Flag | Meaning |
 |------|---------|
-| `--exchange` | cryptofeed venue id (`bitstamp`, `binance`, `coinbase`, …) |
+| `--venue` | cryptofeed venue id (`bitstamp`, `binance`, `coinbase`, …) |
 | `--pair` | Symbol in cryptofeed notation (e.g. `BTC-USD`) |
 | `--level` | Force `L2` or `L3`; omit to discover it from the venue |
 
