@@ -132,7 +132,9 @@ class BitstampLoader:
         instant follow the file's ``sequence`` column when it has one; a
         ``deleted`` row then goes last, and the rest keep their order in the
         file.  A row with no sequence number keeps its place after the row
-        before it in the file.  ``fill`` is the drop in size from the order's
+        before it in the file.  ``event_id`` numbers the rows of all orders
+        by the same keys: time, then ``sequence``, then file order.  The
+        order ids take no part.  ``fill`` is the drop in size from the order's
         previous row.  A row whose size rises (an order changed to a larger
         amount) has ``fill`` 0.
         """
@@ -220,10 +222,9 @@ class BitstampLoader:
         events = (
             events.assign(**sort_columns)
             .sort_values(by=order_keys, kind="stable")
-            .drop(columns=list(sort_columns))
+            .drop(columns="_later")
         )
 
-        events["event_id"] = np.arange(1, len(events) + 1)
         events = self._remove_duplicates(events)
 
         # A volume drop between consecutive events for the same id is a fill.
@@ -250,8 +251,29 @@ class BitstampLoader:
         # is the raw UTC-ns int64; the tz-aware column is reordered through
         # its ExtensionArray so the zone and unit survive (issue #154).
         ts_i8 = epoch_ns(events["timestamp"])
-        order = np.lexsort((ts_i8, events["id"].to_numpy()))
+        ids = events["id"].to_numpy()
+        order = np.lexsort((ts_i8, ids))
         events["timestamp"] = events["timestamp"].array[order]
+
+        # Number the events across orders by the same keys: time, then the
+        # venue's sequence when the file has one, then file order.  Order ids
+        # say nothing about time (Independent Reserve writes this format with
+        # UUIDs), so they take no part.  Each order's rows, in the order set
+        # above, take that order's sequence numbers and file positions in
+        # rising order, gathered back the same way as the timestamps.  Within
+        # an order every key then rises, so its own order is kept.
+        def per_order(values: np.ndarray) -> np.ndarray:
+            return values[np.lexsort((values, ids))]
+
+        tie_keys = [per_order(events["original_number"].to_numpy())]
+        if "_sequence" in events.columns:
+            # Ranks, so any column the sort above could order works here too.
+            sequence = events.pop("_sequence").rank(method="dense").to_numpy()
+            tie_keys.append(per_order(sequence))
+        by_time = np.lexsort((*tie_keys, ts_i8[order]))
+        event_id = np.empty(len(events), dtype=np.int64)
+        event_id[by_time] = np.arange(1, len(events) + 1)
+        events["event_id"] = event_id
 
         events["raw_event_type"] = pd.NA
 
@@ -274,20 +296,22 @@ class BitstampLoader:
         )
         dup_ids = deletes.loc[deletes["id"].duplicated(), "id"]
         duplicate_deletes = deletes[deletes["id"].isin(dup_ids)]
-        duplicate_event_ids = duplicate_deletes.loc[
-            duplicate_deletes["id"].duplicated(), "event_id"
+        duplicate_rows = duplicate_deletes.loc[
+            duplicate_deletes["id"].duplicated(), "original_number"
         ]
 
-        rem_dup = len(duplicate_event_ids)
+        rem_dup = len(duplicate_rows)
         if rem_dup > 0:
-            removed_ids = events.loc[events["event_id"].isin(duplicate_event_ids), "id"]
+            removed_ids = events.loc[
+                events["original_number"].isin(duplicate_rows), "id"
+            ]
             logger.warning(
                 "Removed {} duplicate order cancellations: {}",
                 rem_dup,
                 " ".join(removed_ids.astype(str)),
             )
 
-        return events[~events["event_id"].isin(duplicate_event_ids)]
+        return events[~events["original_number"].isin(duplicate_rows)]
 
 
 # ── BitstampTradeReader ───────────────────────────────────────────────

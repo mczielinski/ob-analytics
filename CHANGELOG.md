@@ -1151,6 +1151,14 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
+- **The Bitstamp-format loader numbers events in time order** (#456). It
+  numbered them by order id, so rows of two orders at one instant came in the
+  order their ids sort. Bitstamp's ids rise with time; Independent Reserve's
+  UUIDs do not, and the order of those rows then changed the rebuilt depth
+  and the icebergs found (the bundled sample with its ids
+  hashed lost one of its two icebergs). Rows of different orders at one
+  instant now follow the venue's `sequence` when the file has one, then
+  their file order. Each order's own rows are unchanged.
 - **`BitstampWriter` keeps a capture's `origin` and `sequence` columns**
   (#401). It wrote only the order columns, so a capture read, run and written
   again lost which part of the capture wrote each row, and the clock checks

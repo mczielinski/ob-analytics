@@ -170,8 +170,8 @@ def detect_icebergs(
         raise ConfigError("detect_icebergs: max_delay must not be negative.")
 
     visible = events[events["id"] != HIDDEN_ORDER_ID]
-    # Time order first: not every loader numbers events chronologically
-    # (Bitstamp numbers them by order id), so event_id only breaks ties.
+    # Time order first: event_id only breaks ties, so a loader whose
+    # numbers do not follow time still gives the right order.
     visible = visible.sort_values(["timestamp", "event_id"], kind="stable")
     filled_out = _filled_out(visible, trades)
     created = visible.loc[
