@@ -17,7 +17,7 @@ or [LOBSTER](https://lobsterdata.com/) message and orderbook files.
 > flow-toxicity metrics, and Matplotlib/Plotly backends.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/mczielinski/ob-analytics/main/assets/ob-analytics-price-levels.png" alt="Price levels depth heatmap (Bitstamp sample)" width="700">
+  <img src="https://raw.githubusercontent.com/mczielinski/ob-analytics/main/docs/assets/hero-depth-heatmap.png" alt="Price levels depth heatmap (Bitstamp sample)" width="700">
 </p>
 
 ---
@@ -157,8 +157,8 @@ uv run pre-commit install
 
 ```bash
 uv run pytest tests/ -v
-uv run ruff check ob_analytics/ tests/
-uv run ty check ob_analytics/ tests/
+uv run ruff check ob_analytics/ tests/ scripts/
+uv run ty check ob_analytics/ tests/ scripts/
 ```
 
 CI runs automatically on push/PR via GitHub Actions — lint, type check,

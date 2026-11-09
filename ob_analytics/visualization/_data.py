@@ -134,13 +134,6 @@ def padded_range(
     return lo - pad, hi + pad
 
 
-def volume_marker_areas(
-    volume: pd.Series | np.ndarray, *, scale: float = 2.0
-) -> np.ndarray:
-    """Matplotlib scatter ``s`` values proportional to volume."""
-    return np.asarray(volume, dtype=float) * scale
-
-
 def normalized_marker_areas(
     volume: pd.Series | np.ndarray,
     *,
@@ -150,13 +143,13 @@ def normalized_marker_areas(
 ) -> np.ndarray:
     """Bounded, outlier-robust matplotlib scatter ``s`` values.
 
-    Where :func:`volume_marker_areas` is raw-proportional and unbounded -- fine
-    for sparse overlays but degenerate when one whale order is 10,000x the
-    median -- this maps volume *linearly* into ``[lo, hi]`` against its
-    *ref_quantile*: anything at or above that reference saturates at *hi*, and
-    everything below scales down toward *lo* (volume ``0`` lands exactly on
-    *lo*, so no point is invisible).  Suited to the dense L3 per-order scatters
-    that draw one marker per order across a heavy-tailed volume range.
+    Area proportional to raw volume is unbounded, and degenerate when one
+    whale order is 10,000x the median.  This maps volume *linearly* into
+    ``[lo, hi]`` against its *ref_quantile*: anything at or above that
+    reference saturates at *hi*, and everything below scales down toward *lo*
+    (volume ``0`` lands exactly on *lo*, so no point is invisible).  Suited to
+    the dense L3 per-order scatters that draw one marker per order across a
+    heavy-tailed volume range.
     """
     arr = np.asarray(volume, dtype=float)
     if arr.size == 0:

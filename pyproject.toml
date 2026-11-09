@@ -28,7 +28,6 @@ dependencies = [
     "pydantic>=2.13.4,<3",
     "pyarrow>=24.0.0",
     "loguru>=0.7.3",
-    "sortedcontainers>=2.4",
 ]
 
 [project.optional-dependencies]
@@ -89,12 +88,9 @@ dev = [
     "pytest>=9.1.1,<10",
     "coverage[toml]>=7.14.3,<8",
     "pytest-cov>=7.1.0,<8",
-    "pytest-mock>=3.15.1,<4",
     "pre-commit>=4.6.0",
     "ruff>=0.15.20",
-    "safety>=3.8.1,<4",
     "ty>=0.0.55",
-    "codecov>=2.1.13,<3",
     "zensical>=0.0.46",
     "mkdocstrings[python]>=1.0.4",
     "pandas-stubs>=3.0.3.260530",
@@ -131,7 +127,9 @@ backtest-engines = [
 ]
 
 [tool.ruff.lint]
-extend-select = ["TID251"]
+# BLE001, S110 and S102 make every `except Exception`, every `except: pass`
+# and every `exec` carry a `noqa` comment that says why it is safe there.
+extend-select = ["TID251", "BLE001", "S110", "S102"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 # On Python 3.11 it drops a cancel that arrives with the result it awaits, and
@@ -144,6 +142,7 @@ extend-select = ["TID251"]
 combine-as-imports = true
 
 [tool.ruff.lint.per-file-ignores]
+# The tutorial sources are Jupytext notebooks: each one imports what it needs
 # in the cell that introduces them (E402), and a bare expression on a cell's
 # last line is the idiomatic way to render its value as the cell output, not
 # dead code (B018) -- both by design.
@@ -161,10 +160,17 @@ include = ["tests/test_backtest_parity.py"]
 unresolved-import = "ignore"
 
 [tool.hatch.build.targets.sdist]
-include = ["ob_analytics", "tests"]
+# A leading slash anchors each pattern at the project root. Without it,
+# hatchling also matches an `ob_analytics` folder anywhere below the root, such
+# as one in an agent worktree under `.claude/`. The excludes keep out hidden
+# files and caches, such as `ob_analytics/.claude/` or `.ruff_cache/`, which
+# hatchling packs from a git worktree even when git ignores them.
+include = ["/ob_analytics", "/tests"]
+exclude = [".*", "__pycache__/"]
 
 [tool.hatch.build.targets.wheel]
-include = ["ob_analytics"]
+include = ["/ob_analytics"]
+exclude = [".*", "__pycache__/"]
 
 [build-system]
 requires = ["hatchling"]

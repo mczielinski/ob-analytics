@@ -74,7 +74,7 @@ cp "$RUN/trades.csv" "$RUN/meta.json" ob_analytics/_sample_data/
 Run the demo to confirm the bundled capture flows through end-to-end:
 
 ```bash
-uv run python scripts/bitstamp_demo.py --output /tmp/bitstamp_demo
+uv run python -m ob_analytics bitstamp-demo -o /tmp/bitstamp_demo
 open /tmp/bitstamp_demo/gallery/gallery.html
 ```
 

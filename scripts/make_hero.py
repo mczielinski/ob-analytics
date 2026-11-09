@@ -1,9 +1,9 @@
-#!/usr/bin/env python3
-"""Regenerate the README hero image (the price-levels depth heatmap).
+"""Regenerate the hero image (the price-levels depth heatmap).
 
 Renders the bundled Bitstamp sample's busiest window as the depth heatmap shown
-in README.md. The depth_heatmap face already provides the gray background, white
-midprice line, and white y-gridlines; this recipe adds the hero-specific bits:
+in README.md and on the docs home page. The depth_heatmap face already provides
+the gray background, white midprice line, and white y-gridlines; this recipe
+adds the hero-specific bits:
 
   * a focused time window (the busiest N minutes) + price band around the action,
   * a biased viridis palette (``col_bias`` < 1) so resting liquidity walls glow,
@@ -12,7 +12,7 @@ midprice line, and white y-gridlines; this recipe adds the hero-specific bits:
 Run via:
 
     uv run python scripts/make_hero.py
-    uv run python scripts/make_hero.py --output assets/ob-analytics-price-levels.png
+    uv run python scripts/make_hero.py --output /tmp/hero.png
     uv run python scripts/make_hero.py --window-min 10 --col-bias 0.45
 """
 
@@ -29,7 +29,7 @@ from ob_analytics import Pipeline, sample_csv_path
 from ob_analytics.visualization.gallery import plot_result
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_OUTPUT = REPO_ROOT / "assets" / "ob-analytics-price-levels.png"
+DEFAULT_OUTPUT = REPO_ROOT / "docs" / "assets" / "hero-depth-heatmap.png"
 
 
 def main() -> None:
@@ -58,7 +58,8 @@ def main() -> None:
     counts = (
         tr.set_index("timestamp").sort_index().assign(n=1)["n"].resample("1min").sum()
     )
-    peak = counts.rolling(args.window_min).sum().idxmax()
+    rolling = counts.rolling(args.window_min).sum()
+    peak = pd.DatetimeIndex(rolling.index)[int(rolling.argmax())]
     start = peak - pd.Timedelta(minutes=args.window_min - 1)
     end = peak + pd.Timedelta(minutes=1)
     win = tr[(tr["timestamp"] >= start) & (tr["timestamp"] <= end)]
