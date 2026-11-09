@@ -167,8 +167,10 @@ class LobsterLoader:
         self._venue = venue
         self._symbol = symbol
         #: Trading-halt (event_type 7) and cross-trade (event_type 6) rows,
-        #: split out during :meth:`load`. Public so callers can append them to
-        #: the gallery model's ``analytics`` (LOBSTER-only; ``None`` if absent).
+        #: split out during :meth:`load` (LOBSTER-only; ``None`` if absent).
+        #: Neither type reaches the events frame. Public so callers can read
+        #: them after a run, for example to append a halts panel to the
+        #: gallery model's ``analytics``.
         self.trading_halts: pd.DataFrame | None = None
         self.cross_trades: pd.DataFrame | None = None
         #: Path to the companion LOBSTER orderbook file, discovered during

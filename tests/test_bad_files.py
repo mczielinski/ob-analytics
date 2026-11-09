@@ -196,7 +196,7 @@ def _broken(valid: Path, file: str, text: str | bytes) -> Generator[Path]:
         if isinstance(text, bytes):
             (folder / file).write_bytes(text)
         else:
-            (folder / file).write_text(text)
+            (folder / file).write_text(text, encoding="utf-8")
         yield folder
 
 
@@ -449,5 +449,5 @@ def test_a_manifest_missing_a_key_is_refused(key: str) -> None:
 )
 def test_a_manifest_that_is_not_a_json_object_is_refused(text: str) -> None:
     with _folder() as folder:
-        (folder / MANIFEST_NAME).write_text(text)
+        (folder / MANIFEST_NAME).write_text(text, encoding="utf-8")
         _refuses(read_manifest, folder)

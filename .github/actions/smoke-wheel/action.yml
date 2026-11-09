@@ -1,14 +1,19 @@
 name: Smoke-test the wheel
 description: >-
-  Install the wheel in dist/ into a new environment with no extras, as
-  `pip install ob-analytics` does, and run scripts/smoke_wheel.py on it.
-  ci.yml and release.yml both use it, so CI tests the same thing a release
-  publishes. Needs the checkout, uv, and a built wheel in dist/.
+  Check that the wheel in dist/ holds only the package, then install it into a
+  new environment with no extras, as `pip install ob-analytics` does, and run
+  scripts/smoke_wheel.py on it. ci.yml and release.yml both use it, so CI
+  tests the same thing a release publishes. Needs the checkout, uv, and a
+  built wheel in dist/.
 runs:
   using: composite
   steps:
     - shell: bash
       run: uv venv --python 3.12 core-only
+    # A wheel holds the package and its metadata folder and nothing else. A
+    # loose include pattern once let hatchling pack every agent worktree.
+    - shell: bash
+      run: core-only/bin/python -I scripts/check_wheel_contents.py dist/*.whl
     - shell: bash
       run: uv pip install --python core-only dist/*.whl
     # -I keeps the checkout off sys.path, so the installed wheel is imported.

@@ -14,6 +14,7 @@ first check that fails.
 
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import sys
 from pathlib import Path
@@ -54,6 +55,8 @@ def check_install() -> None:
 
 
 def main() -> None:
+    # No options; the parser gives the script a --help that runs nothing.
+    argparse.ArgumentParser(description=__doc__.splitlines()[0]).parse_args()
     check_install()
 
     result = Pipeline().run(sample_csv_path())

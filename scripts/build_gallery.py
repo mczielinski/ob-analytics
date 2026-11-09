@@ -10,10 +10,13 @@ gitignored; CI runs this before ``zensical build`` (see
 .github/workflows/docs.yml), and locally:
 
     uv run python scripts/build_gallery.py
+    uv run python scripts/build_gallery.py --output /tmp/gallery
 """
 
 from __future__ import annotations
 
+import argparse
+import importlib
 import inspect
 import os
 import sys
@@ -28,8 +31,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 REPO = Path(__file__).resolve().parent.parent
-OUT = REPO / "docs" / "gallery"
-IMAGES = OUT / "images"
+DEFAULT_OUTPUT = REPO / "docs" / "gallery"
 
 
 def _source_of(fn) -> str:
@@ -48,13 +50,28 @@ def _source_of(fn) -> str:
     return text.rstrip()
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=DEFAULT_OUTPUT,
+        help="folder for index.md and images/ (default: docs/gallery); "
+        "the page links to the rest of the docs only from the default",
+    )
+    args = parser.parse_args(argv)
+    # Resolve now: the examples render from a scratch working directory.
+    out_dir = args.output.resolve()
+    images = out_dir / "images"
+
     from ob_analytics import Pipeline, sample_csv_path
 
+    # The examples live beside the docs, not in a package, so load them by
+    # name from their folder.
     sys.path.insert(0, str(REPO / "docs" / "examples"))
-    from gallery_examples import GALLERY  # type: ignore[import-not-found]
+    GALLERY = importlib.import_module("gallery_examples").GALLERY
 
-    IMAGES.mkdir(parents=True, exist_ok=True)
+    images.mkdir(parents=True, exist_ok=True)
     result = Pipeline().run(sample_csv_path())
 
     # Render each example from a scratch cwd (no stray files in the repo).
@@ -74,7 +91,7 @@ def main() -> int:
                 # a crisp dpi.
                 w, h = fig.get_size_inches()
                 fig.set_size_inches(w * 1.4, h * 1.4)
-                fig.savefig(IMAGES / f"{ex.name}.png", dpi=130, bbox_inches="tight")
+                fig.savefig(images / f"{ex.name}.png", dpi=130, bbox_inches="tight")
             warned += [
                 f"{ex.name}: {warning.category.__name__}: {warning.message}"
                 for warning in caught
@@ -103,7 +120,7 @@ def main() -> int:
                 if (leg := ax.get_legend()) is not None:
                     leg.remove()
             fig.savefig(
-                IMAGES / f"{ex.name}_thumb.png",
+                images / f"{ex.name}_thumb.png",
                 dpi=90,
                 bbox_inches="tight",
                 pad_inches=0,
@@ -166,8 +183,8 @@ def main() -> int:
                 "",
             ]
 
-    (OUT / "index.md").write_text("\n".join(out) + "\n", encoding="utf-8")
-    print(f"gallery: {len(rendered)} examples -> {OUT / 'index.md'}")
+    (out_dir / "index.md").write_text("\n".join(out) + "\n", encoding="utf-8")
+    print(f"gallery: {len(rendered)} examples -> {out_dir / 'index.md'}")
     return 0
 
 
