@@ -43,10 +43,8 @@ keeps its tick size, lot size and display precision: a LOBSTER run still shows
 whole shares. Given a live capture, `process` and `audit` use the tick size and
 lot size in its `meta.json`, as `Pipeline.run` does in Python.
 
-The `bitstamp-demo` and `lobster-demo` subcommands are equivalent to
-running `scripts/bitstamp_demo.py` / `scripts/lobster_demo.py` from a
-clone — both run the pipeline, save Parquet, verify round-trip I/O, and
-build an HTML plot gallery.
+The `bitstamp-demo` and `lobster-demo` subcommands run the pipeline, save
+Parquet, verify round-trip I/O, and build an HTML plot gallery.
 
 ## Related
 

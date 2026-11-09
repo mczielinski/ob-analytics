@@ -92,10 +92,6 @@ class Palette:
     buy: str = "#009E73"
     sell: str = "#D55E00"
 
-    # Fate: order_activity L3 Gantt
-    flashed: str = "#E69F00"
-    resting: str = "#009E73"
-
     # Fate: order_outcome L3 competing-risks scatter
     filled: str = "#009E73"
     partial: str = "#CC79A7"

@@ -266,7 +266,6 @@ class _Order:
     side: str
     price_tick: int
     outstanding: int
-    created_event_id: int
     hidden: int = 0
     peak: int = 0
     iceberg: int = 0
@@ -613,12 +612,12 @@ class _Simulator:
         starts an iceberg of its own.
         """
         oid = self._new_order_id()
-        eid = self._emit(oid, side, price_tick, "created", size, 0, t)
+        self._emit(oid, side, price_tick, "created", size, 0, t)
         if iceberg == 0 and hidden > 0:
             iceberg = oid
         if iceberg:
             self.iceberg_slices.append((oid, iceberg))
-        order = _Order(oid, side, price_tick, size, eid, hidden, peak, iceberg)
+        order = _Order(oid, side, price_tick, size, hidden, peak, iceberg)
         self.orders[oid] = order
         levels = self.bid_levels if side == "bid" else self.ask_levels
         levels.setdefault(price_tick, deque()).append(oid)

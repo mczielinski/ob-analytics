@@ -13,6 +13,7 @@ deployed Pages site, not in the local tree.
 
 from __future__ import annotations
 
+import argparse
 import sys
 from html.parser import HTMLParser
 from pathlib import Path
@@ -28,14 +29,22 @@ class _Page(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         d = dict(attrs)
         for key in ("id", "name"):
-            if d.get(key):
-                self.ids.add(d[key])  # type: ignore[arg-type]
-        if tag == "a" and d.get("href"):
-            self.links.append(d["href"])  # type: ignore[arg-type]
+            if value := d.get(key):
+                self.ids.add(value)
+        if tag == "a" and (href := d.get("href")):
+            self.links.append(href)
 
 
-def main(argv: list[str]) -> int:
-    root = Path(argv[0]) if argv else Path("site")
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "site",
+        nargs="?",
+        type=Path,
+        default=Path("site"),
+        help="the built site folder (default: ./site)",
+    )
+    root = parser.parse_args(argv).site
     if not root.is_dir():
         print(
             f"no site directory at {root!r} — run the docs build first", file=sys.stderr
@@ -88,4 +97,4 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))
+    raise SystemExit(main())

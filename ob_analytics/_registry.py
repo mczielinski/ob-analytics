@@ -68,7 +68,7 @@ class Registry(Generic[K, V]):
     def __contains__(self, key: object) -> bool:
         try:
             return self._normalize(key) in self._items
-        except Exception:  # noqa: BLE001 - membership must never raise; unknown key is simply absent
+        except TypeError:  # an unhashable key is simply absent
             return False
 
     @staticmethod
