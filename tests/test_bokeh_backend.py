@@ -14,6 +14,7 @@ import pytest
 
 bpl = pytest.importorskip("bokeh.plotting", reason="bokeh not installed")
 
+from ob_analytics.exceptions import ConfigError
 from ob_analytics.visualization._bokeh import (
     _bokeh_color_field,
     bokeh_book_snapshot_aggregate,
@@ -156,6 +157,32 @@ class TestBokehPriceLevels:
         )
         assert isinstance(fig, bpl.figure)
 
+    def test_hidden_liquidity_overlay_draws_glyphs(
+        self, sample_events: pd.DataFrame, hidden_liquidity_overlay: dict
+    ) -> None:
+        depth = sample_events[["timestamp", "price", "volume"]].copy()
+        depth["direction"] = "bid"
+        overlay = hidden_liquidity_overlay
+        fig = bokeh_price_levels(prepare_price_levels_data(depth, **overlay))
+        labels = {item.label["value"] for item in fig.legend[0].items}
+        assert {"Iceberg chain", "Iceberg refill", "Hidden-order trade"} <= labels
+        chains = next(r for r in fig.renderers if type(r.glyph).__name__ == "MultiLine")
+        assert (
+            len(chains.data_source.data["xs"])
+            == overlay["iceberg_lines"]["iceberg"].nunique()
+        )
+        stems = next(r for r in fig.renderers if type(r.glyph).__name__ == "Segment")
+        assert len(stems.data_source.data["x0"]) == len(overlay["hidden_trades"])
+
+    def test_no_overlay_draws_no_hidden_liquidity_glyphs(
+        self, sample_events: pd.DataFrame
+    ) -> None:
+        depth = sample_events[["timestamp", "price", "volume"]].copy()
+        depth["direction"] = "bid"
+        fig = bokeh_price_levels(prepare_price_levels_data(depth))
+        glyphs = {type(r.glyph).__name__ for r in fig.renderers}
+        assert not glyphs & {"MultiLine", "Segment"}
+
 
 class TestBokehTradeTapeL3:
     def test_returns_bokeh_figure(self, sample_executed_orders) -> None:
@@ -189,8 +216,6 @@ class TestBokehBookSnapshot:
     def test_payload_level_mismatch_raises(
         self, sample_order_book: dict, renderer, wrong_per_order: bool
     ) -> None:
-        from ob_analytics.exceptions import ConfigError
-
         data = prepare_book_snapshot_data(sample_order_book, per_order=wrong_per_order)
         with pytest.raises(ConfigError, match="prepare.book_snapshot"):
             renderer(data)
@@ -218,8 +243,6 @@ class TestBokehDepthChart:
     def test_payload_level_mismatch_raises(
         self, sample_order_book: dict, renderer, wrong_per_order: bool
     ) -> None:
-        from ob_analytics.exceptions import ConfigError
-
         data = prepare_book_snapshot_data(sample_order_book, per_order=wrong_per_order)
         with pytest.raises(ConfigError, match="prepare.book_snapshot"):
             renderer(data)
@@ -250,5 +273,16 @@ class TestBackendDispatch:
         from ob_analytics.visualization import _data, plot
 
         data = _data.prepare_book_snapshot_data(sample_order_book, per_order=False)
-        with pytest.raises(ValueError, match="comparable"):
+        with pytest.raises(ConfigError, match='pass level="L2" or level="L3"'):
             plot("book_snapshot", backend="bokeh", **data)
+
+    def test_ax_is_refused(self, sample_order_book: dict) -> None:
+        import matplotlib.pyplot as plt
+
+        from ob_analytics.visualization import _data, plot
+
+        data = _data.prepare_book_snapshot_data(sample_order_book, per_order=False)
+        _, ax = plt.subplots()
+        with pytest.raises(ConfigError, match="ax= is a Matplotlib axes"):
+            plot("book_snapshot", "L2", backend="bokeh", ax=ax, **data)
+        plt.close("all")

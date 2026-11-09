@@ -150,7 +150,7 @@ def test_bare_function_reads_a_display_frame_the_same(result, shown, name) -> No
 def test_plot_draws_the_metric_table(result, name, monkeypatch) -> None:
     drawn: dict[str, Any] = {}
 
-    def capture(concept, level, *, backend, **data):
+    def capture(concept, level, *, backend, ax=None, **data):
         drawn.update(data)
 
     def no_display(_result):

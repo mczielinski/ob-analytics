@@ -14,7 +14,7 @@ from ob_analytics.visualization import plot_result
 
 result = Pipeline().run(sample_csv_path())
 
-fig = plot_result(result, "depth_heatmap")          # level defaults to L2
+fig = plot_result(result, "depth_heatmap")          # drawn at L2 only
 fig = result.plot("trade_tape", "L3", backend="plotly")
 ```
 
