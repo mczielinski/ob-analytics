@@ -21,6 +21,7 @@ from uuid import UUID
 import pandas as pd
 import pytest
 
+from ob_analytics import capture_files
 from ob_analytics.config import SourceSettings
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.live import (
@@ -571,7 +572,7 @@ class TestRoll:
         def full_disk(self: Any, result: Any) -> None:
             raise OSError("No space left on device")
 
-        monkeypatch.setattr(_runner.FileCaptureSink, "finalize", full_disk)
+        monkeypatch.setattr(capture_files.FileCaptureSink, "finalize", full_disk)
         run = _capture(tmp_path, [HANG_ON_STOP], seconds=0.5)
 
         (segment,) = run.manifest.segments
@@ -889,7 +890,7 @@ def _first_event_recorded(
         running = _supervisor._Running(
             segment=segment,
             source=_ScriptedSource(OK),
-            sink=_runner.FileCaptureSink(tmp_path / "seg-0001", keep_raw=False),
+            sink=capture_files.FileCaptureSink(tmp_path / "seg-0001", keep_raw=False),
             stop=asyncio.Event(),
             streaming=_runner._FirstEvent(),
             # The watcher never reads the task.
@@ -1238,20 +1239,20 @@ class TestTrimToLastLine:
 
     def test_cuts_a_partial_line_longer_than_one_block(self, tmp_path):
         path = tmp_path / "raw.jsonl"
-        path.write_bytes(b'{"a":1}\n' + b"x" * (3 * _supervisor._TRIM_BLOCK + 5))
-        _supervisor._trim_to_last_line(path)
+        path.write_bytes(b'{"a":1}\n' + b"x" * (3 * capture_files._TRIM_BLOCK + 5))
+        capture_files._trim_to_last_line(path)
         assert path.read_bytes() == b'{"a":1}\n'
 
     def test_empties_a_file_with_no_whole_line(self, tmp_path):
         path = tmp_path / "raw.jsonl"
-        path.write_bytes(b"x" * (_supervisor._TRIM_BLOCK + 1))
-        _supervisor._trim_to_last_line(path)
+        path.write_bytes(b"x" * (capture_files._TRIM_BLOCK + 1))
+        capture_files._trim_to_last_line(path)
         assert path.read_bytes() == b""
 
     def test_leaves_a_whole_file_alone(self, tmp_path):
         path = tmp_path / "raw.jsonl"
         path.write_bytes(b"one\ntwo\n")
-        _supervisor._trim_to_last_line(path)
+        capture_files._trim_to_last_line(path)
         assert path.read_bytes() == b"one\ntwo\n"
 
 

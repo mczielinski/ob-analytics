@@ -29,8 +29,6 @@ retrying would hide that.
 from __future__ import annotations
 
 import asyncio
-import csv
-import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -41,6 +39,7 @@ import pandas as pd
 from loguru import logger
 
 from ob_analytics._secrets import redact
+from ob_analytics.capture_files import FileCaptureSink, repair_files
 from ob_analytics.capture_record import (
     read_fields,
     source_declarations,
@@ -60,12 +59,7 @@ from ob_analytics.live._manifest import (
     read_manifest,
 )
 from ob_analytics.live._runner import (
-    _DEPTH_COLS,
-    _ORDER_COLS,
-    _TRADE_COLS,
     DIAGNOSTICS_ERROR,
-    ORIGIN_SHUTDOWN,
-    FileCaptureSink,
     _FirstEvent,
     check_credentials,
     install_stop_signals,
@@ -946,11 +940,8 @@ def _close_segment_files(
 ) -> _ClosedFiles:
     """Complete the files of a segment whose capture never closed them.
 
-    Its last line in each file may be cut short -- or, if the capture died
-    before its first flush, a file may be empty.  This cuts each file back to
-    its last whole line, puts back a missing header, closes every L3 order
-    still open at the last recorded time (the same ``deleted`` rows a normal
-    shutdown writes), and completes ``meta.json`` with *error*.
+    :func:`~ob_analytics.capture_files.repair_files` completes the files,
+    and this completes ``meta.json`` with *error*.
 
     *raw* is what the segment's sink counted for ``raw.jsonl`` (see
     :meth:`FileCaptureSink.raw_diagnostics`), when the sink is still at hand.
@@ -961,32 +952,18 @@ def _close_segment_files(
     It reads *segment* and *manifest* but changes neither, so it can run in a
     thread while the capture goes on.
     """
-    for name in ("orders.csv", "depth.csv", "trades.csv", "raw.jsonl"):
-        _trim_to_last_line(seg_dir / name)
-    for name, columns in (
-        ("orders.csv", _ORDER_COLS),
-        ("depth.csv", _DEPTH_COLS),
-        ("trades.csv", _TRADE_COLS),
-    ):
-        _restore_header(seg_dir / name, columns)
-
-    stamps = [
-        ms
-        for name in ("orders.csv", "depth.csv", "trades.csv")
-        if (ms := _last_timestamp_ms(seg_dir / name)) is not None
-    ]
-    last_ms = max(stamps, default=None)
-    closed = 0
-    orders = seg_dir / "orders.csv"
-    if orders.is_file() and last_ms is not None:
-        closed = _close_open_orders(orders, last_ms)
-
-    last_row = None if last_ms is None else pd.Timestamp(last_ms, unit="ms", tz="UTC")
+    files = repair_files(seg_dir)
+    closed = files.orders_closed
+    last_row = (
+        None
+        if files.last_ms is None
+        else pd.Timestamp(files.last_ms, unit="ms", tz="UTC")
+    )
     covered_to = max(
         (t for t in (last_row, segment.heartbeat) if t is not None), default=None
     )
-    n_book = _count_rows(orders) + _count_rows(seg_dir / "depth.csv")
-    n_trade = _count_rows(seg_dir / "trades.csv")
+    n_book = files.n_order_events + files.n_depth_events
+    n_trade = files.n_trade_events
 
     meta = read_fields(seg_dir) or {}
     meta.pop("provisional", None)
@@ -997,8 +974,8 @@ def _close_segment_files(
             "out_dir": str(seg_dir),
             "started": str(segment.started),
             "ended": str(covered_to),
-            "n_order_events": _count_rows(orders),
-            "n_depth_events": _count_rows(seg_dir / "depth.csv"),
+            "n_order_events": files.n_order_events,
+            "n_depth_events": files.n_depth_events,
             "n_trade_events": n_trade,
             "stream_started": None
             if segment.stream_started is None
@@ -1036,91 +1013,6 @@ def _apply_closed_files(segment: Segment, closed: _ClosedFiles, error: str) -> N
     segment.diagnostics_error = closed.diagnostics_error
     segment.book_resyncs = closed.book_resyncs
     segment.raw_frames_skipped = closed.raw_frames_skipped
-
-
-_TRIM_BLOCK = 64 * 1024
-
-
-def _trim_to_last_line(path: Path) -> None:
-    """Cut *path* back to its last complete line (a crash can leave half of one)."""
-    if not path.is_file():
-        return
-    with path.open("r+b") as fp:
-        end = fp.seek(0, os.SEEK_END)
-        if end == 0:
-            return
-        fp.seek(end - 1)
-        if fp.read(1) == b"\n":
-            return
-        # Read back from the end a block at a time: raw.jsonl can be many GB.
-        pos = end
-        while pos > 0:
-            start = max(0, pos - _TRIM_BLOCK)
-            fp.seek(start)
-            cut = fp.read(pos - start).rfind(b"\n")
-            if cut >= 0:
-                fp.truncate(start + cut + 1)
-                return
-            pos = start
-        fp.truncate(0)
-
-
-def _restore_header(path: Path, columns: list[str]) -> None:
-    """Write the header into a capture CSV the crash left empty."""
-    if path.is_file() and path.stat().st_size == 0:
-        path.write_text(",".join(columns) + "\n")
-
-
-def _count_rows(path: Path) -> int:
-    if not path.is_file():
-        return 0
-    with path.open(newline="") as fp:
-        return max(sum(1 for _ in fp) - 1, 0)  # minus the header
-
-
-def _last_timestamp_ms(path: Path) -> int | None:
-    """The latest receive ``timestamp`` in a capture CSV, in epoch ms."""
-    if not path.is_file():
-        return None
-    latest: int | None = None
-    with path.open(newline="") as fp:
-        for row in csv.DictReader(fp):
-            try:
-                ts = int(row["timestamp"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            if latest is None or ts > latest:
-                latest = ts
-    return latest
-
-
-def _close_open_orders(orders: Path, at_ms: int) -> int:
-    """Append a ``deleted`` row at *at_ms* for every order still open."""
-    open_orders: dict[str, dict[str, str]] = {}
-    with orders.open(newline="") as fp:
-        reader = csv.DictReader(fp)
-        fieldnames = reader.fieldnames or []
-        for row in reader:
-            if row.get("action") == "deleted":
-                open_orders.pop(row["id"], None)
-            else:
-                open_orders[row["id"]] = row
-    if not open_orders:
-        return 0
-    with orders.open("a", newline="") as fp:
-        writer = csv.DictWriter(fp, fieldnames=fieldnames, extrasaction="ignore")
-        for row in open_orders.values():
-            writer.writerow(
-                {
-                    **row,
-                    "timestamp": at_ms,
-                    "exchange_timestamp": at_ms,
-                    "action": "deleted",
-                    "sequence": "",
-                    "origin": ORIGIN_SHUTDOWN,
-                }
-            )
-    return len(open_orders)
 
 
 def _write_provisional_meta(running: _Running) -> None:

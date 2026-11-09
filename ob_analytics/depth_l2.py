@@ -74,6 +74,7 @@ from ob_analytics._utils import (
     ticks_to_price,
     validate_non_empty,
 )
+from ob_analytics.capture_files import DEPTH_NAME, TRADES_NAME
 from ob_analytics.config import InstrumentGrid, PipelineConfig, SourceSettings
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import (
@@ -244,7 +245,7 @@ class L2DepthLoader:
     """
 
     #: Depth-file basenames tried when *source* is a directory (in order).
-    _DEPTH_NAMES: tuple[str, ...] = ("depth.csv", "depth_updates.csv", "l2.csv")
+    _DEPTH_NAMES: tuple[str, ...] = (DEPTH_NAME, "depth_updates.csv", "l2.csv")
 
     def __init__(
         self,
@@ -511,7 +512,7 @@ class L2TradeReader:
     def _resolve_trades_file(source: Any) -> Path | None:
         p = Path(source)
         base = p.parent if p.is_file() else p
-        candidate = base / "trades.csv"
+        candidate = base / TRADES_NAME
         return candidate if candidate.exists() else None
 
 
@@ -587,11 +588,13 @@ class DepthCsvWriter:
             clocks["exchange_timestamp"] = datetime_to_epoch(
                 depth["exchange_timestamp"], fmt.timestamp_unit
             )
-        origin = (
-            {ORIGIN_COLUMN: depth[ORIGIN_COLUMN].to_numpy()}
-            if ORIGIN_COLUMN in depth.columns
-            else {}
-        )
+        # The capture's own columns, when the frame carries them: the venue
+        # sequence, and which part of the capture wrote each row.
+        kept = {
+            column: depth[column].array
+            for column in (SEQUENCE_COLUMN, ORIGIN_COLUMN)
+            if column in depth.columns
+        }
         depth_out = pd.DataFrame(
             {
                 **clocks,
@@ -606,15 +609,15 @@ class DepthCsvWriter:
                     self._config.lot_size,
                     decimals=self._config.volume_decimals,
                 ),
-                **origin,
+                **kept,
             }
         )
-        depth_path = out_dir / "depth.csv"
+        depth_path = out_dir / DEPTH_NAME
         depth_out.to_csv(depth_path, index=False)
 
         trades = data.get("trades")
         if trades is not None and not trades.empty:
-            self._write_trades(trades, out_dir / "trades.csv")
+            self._write_trades(trades, out_dir / TRADES_NAME)
         logger.info("DepthCsvWriter: wrote {} depth rows to {}", len(depth), depth_path)
         return depth_path
 
