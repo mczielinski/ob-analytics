@@ -36,7 +36,7 @@ from collections.abc import Callable, Iterable, Iterator
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -97,6 +97,9 @@ from ob_analytics.trade_sign import (
     resolve_direction,
 )
 
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
+
 #: The quote columns a windowed run keeps for labelling trades after the
 #: last window: what Lee-Ready reads, and nothing else.
 _ARRIVAL_COLUMNS = ["timestamp", "best_bid_price", "best_ask_price"]
@@ -108,6 +111,12 @@ _GRID_FIELDS = (
     frozenset(instrument_fields(tick_size=1.0)),
     frozenset(instrument_fields(lot_size=1.0)),
 )
+
+#: The default of a plot's ``level=`` argument: the caller left it out.  It
+#: differs from ``None``, the level of a level-less plot.  It lives here, not in
+#: the visualization package, so that importing this module does not import
+#: Matplotlib; :func:`ob_analytics.visualization.plot` uses the same object.
+_UNSET: Any = object()
 
 
 @dataclass(frozen=True)
@@ -333,17 +342,19 @@ class PipelineResult:
     def plot(
         self,
         concept: str,
-        level: Any = None,
+        level: Level | str | None = _UNSET,
         *,
         backend: str = "matplotlib",
+        ax: Axes | None = None,
         volume_scale: float | None = None,
         **overrides: Any,
     ) -> Any:
         """Render one plot *concept* from this result in a single call.
 
-        Thin convenience wrapper over
-        :func:`ob_analytics.visualization.plot_result`, e.g.
-        ``result.plot("depth_heatmap", col_bias=0.1)``.  See
+        The method form of :func:`ob_analytics.visualization.plot_result`,
+        which takes the same arguments, e.g.
+        ``result.plot("depth_heatmap", col_bias=0.1)``.  Pass *level* when
+        this result has the concept at both L2 and L3.  See
         :func:`~ob_analytics.visualization.available_concepts` for what a given
         result can plot (it varies by format).
         """
@@ -354,6 +365,7 @@ class PipelineResult:
             concept,
             level,
             backend=backend,
+            ax=ax,
             volume_scale=volume_scale,
             **overrides,
         )
