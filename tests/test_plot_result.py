@@ -9,7 +9,7 @@ import pytest
 from matplotlib.figure import Figure
 
 from ob_analytics.bitstamp import BitstampSource
-from ob_analytics.exceptions import UnknownNameError
+from ob_analytics.exceptions import ConfigError, UnknownNameError
 from ob_analytics.pipeline import Pipeline, PipelineResult
 from ob_analytics.visualization import available_concepts, plot_result, prepare
 
@@ -35,10 +35,28 @@ class TestPlotResult:
         assert isinstance(plot_result(result, "trade_tape", "L2"), Figure)
         assert isinstance(plot_result(result, "trade_tape", "L3"), Figure)
 
-    def test_level_none_resolves(self, result: PipelineResult) -> None:
-        # Comparable concept (both levels) and an L3-only concept both resolve.
-        assert isinstance(plot_result(result, "trade_tape"), Figure)
+    def test_one_level_resolves(self, result: PipelineResult) -> None:
+        # An L2-only and an L3-only concept need no level.
+        assert isinstance(plot_result(result, "depth_heatmap"), Figure)
         assert isinstance(plot_result(result, "order_outcome"), Figure)
+
+    def test_two_levels_require_level(self, result: PipelineResult) -> None:
+        # This L3 run has the trade tape at L2 and at L3: no default.
+        with pytest.raises(ConfigError, match='pass level="L2" or level="L3"'):
+            plot_result(result, "trade_tape")
+
+    def test_draws_on_ax(self, result: PipelineResult) -> None:
+        fig, ax = plt.subplots()
+        assert plot_result(result, "trade_tape", "L2", ax=ax) is fig
+
+    def test_ax_needs_matplotlib(self, result: PipelineResult) -> None:
+        _, ax = plt.subplots()
+        with pytest.raises(ConfigError, match="ax= is a Matplotlib axes"):
+            plot_result(result, "depth_heatmap", backend="plotly", ax=ax)
+
+    def test_a_metric_takes_no_level(self, result: PipelineResult) -> None:
+        with pytest.raises(UnknownNameError, match="level-less"):
+            plot_result(result, "roll_spread", "L2")
 
     def test_override_flows_to_prepare(self, result: PipelineResult) -> None:
         # A prepare kwarg passes through (col_bias is real since §3.5).
@@ -80,6 +98,16 @@ class TestPipelineResultPlot:
 
     def test_method_passes_overrides(self, result: PipelineResult) -> None:
         assert isinstance(result.plot("trade_tape", "L3", volume_scale=1.0), Figure)
+
+    def test_method_requires_level_like_plot_result(
+        self, result: PipelineResult
+    ) -> None:
+        with pytest.raises(ConfigError, match='pass level="L2" or level="L3"'):
+            result.plot("book_snapshot")
+
+    def test_method_draws_on_ax(self, result: PipelineResult) -> None:
+        fig, ax = plt.subplots()
+        assert result.plot("trade_tape", "L3", ax=ax) is fig
 
 
 class TestQueuePositionFace:
