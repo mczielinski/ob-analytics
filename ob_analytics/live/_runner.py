@@ -3,22 +3,23 @@
 from __future__ import annotations
 
 import asyncio
-import csv
-import json
 import signal
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import date, time
-from decimal import Decimal
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
 from loguru import logger
 
-from ob_analytics._secrets import RedactingFile, any_known, redact
-from ob_analytics.capture_record import source_declarations, write_record
+from ob_analytics._secrets import redact
+from ob_analytics.capture_files import (
+    ORIGIN_SHUTDOWN,
+    ORIGIN_SNAPSHOT,
+    ORIGIN_STREAM,
+    FileCaptureSink,
+)
+from ob_analytics.capture_record import source_declarations
 from ob_analytics.config import SourceSettings
 from ob_analytics.live._base import (
     CaptureConfig,
@@ -30,353 +31,10 @@ from ob_analytics.live._base import (
     SupportsPreflight,
 )
 from ob_analytics.protocols import Level
-from ob_analytics.schemas import SNAPSHOT_ORIGIN
-
-# Which part of the capture wrote a book row: the source's opening book, a live
-# message, or a synthetic close-out at the end. The runner stamps it from the
-# phase it is in, so no source has to, and a row's origin never has to be
-# guessed from its timestamp. A source whose opening book arrives through the
-# stream (cryptofeed) marks those rows itself, and the mark is kept.
-ORIGIN_SNAPSHOT = SNAPSHOT_ORIGIN
-ORIGIN_STREAM = "stream"
-ORIGIN_SHUTDOWN = "shutdown"
+from ob_analytics.schemas import ORIGIN_COLUMN
 
 # How often a stopped stream that is still yielding items is cancelled again.
 CANCEL_RETRY_SECONDS = 0.5
-
-# L3 (per-order) rows -- the BitstampLoader schema.  ``sequence`` is the
-# venue's own per-event number when the source supplies one (blank otherwise);
-# BitstampLoader reads it back under ``track_sequence`` for gap detection.
-_ORDER_COLS = [
-    "id",
-    "timestamp",
-    "exchange_timestamp",
-    "price",
-    "volume",
-    "action",
-    "direction",
-    "sequence",
-    "origin",
-]
-_TRADE_COLS = [
-    "trade_id",
-    "timestamp",
-    "exchange_timestamp",
-    "price",
-    "amount",
-    "buy_order_id",
-    "sell_order_id",
-    "side",
-]
-# L2 (price-level) depth rows -- the L2DepthLoader schema. ``volume`` is the
-# new absolute size at ``price`` (0 removes the level). ``sequence`` is the
-# venue's per-book number when the capturer supplies one (blank otherwise);
-# L2DepthLoader reads it back for gap detection.  ``timestamp`` is the receive
-# time replay sorts on; ``exchange_timestamp`` keeps the venue's time.
-_DEPTH_COLS = [
-    "timestamp",
-    "exchange_timestamp",
-    "side",
-    "price",
-    "volume",
-    "sequence",
-    "origin",
-]
-
-
-def _ts_ms(ts: pd.Timestamp | float) -> int:
-    if isinstance(ts, pd.Timestamp):
-        return int(ts.value // 1_000_000)
-    return int(ts)
-
-
-class FileCaptureSink(CaptureSink):
-    """Default sink: writes the book file, trades.csv, raw.jsonl, meta.json.
-
-    The book file tracks the capturer's :class:`~ob_analytics.protocols.Level`:
-    **L3** -> ``orders.csv`` (per-order lifecycle, BitstampLoader schema);
-    **L2** -> ``depth.csv`` (price-level updates, L2DepthLoader schema).
-    ``trades.csv`` is written for both.
-
-    When a source's settings hold an API key, every file passes through
-    :func:`ob_analytics._secrets.redact`, so the key is not written even if a
-    frame or an error message carries it.  The keys are registered before the
-    sink is built (:func:`check_credentials`); with none, the files are plain.
-    """
-
-    def __init__(
-        self,
-        out_dir: Path,
-        *,
-        keep_raw: bool,
-        level: Level = Level.L3,
-        raw_warned: set[str] | None = None,
-    ) -> None:
-        self.out_dir = Path(out_dir)
-        self.out_dir.mkdir(parents=True, exist_ok=True)
-        self._keep_raw = keep_raw
-        self._level = level
-
-        # Exactly one book writer is opened, per resolution. The other stays
-        # None so write_order / write_depth are safe no-ops on the wrong side.
-        self._orders_fp: Any = None
-        self._orders: csv.DictWriter[str] | None = None
-        self._depth_fp: Any = None
-        self._depth: csv.DictWriter[str] | None = None
-        if level is Level.L2:
-            self._depth_fp = _open_redacting(self.out_dir / "depth.csv")
-            self._depth = csv.DictWriter(
-                self._depth_fp, fieldnames=_DEPTH_COLS, extrasaction="ignore"
-            )
-            self._depth.writeheader()
-        else:
-            self._orders_fp = _open_redacting(self.out_dir / "orders.csv")
-            self._orders = csv.DictWriter(
-                self._orders_fp, fieldnames=_ORDER_COLS, extrasaction="ignore"
-            )
-            self._orders.writeheader()
-
-        self._trades_fp = _open_redacting(self.out_dir / "trades.csv")
-        self._trades = csv.DictWriter(
-            self._trades_fp, fieldnames=_TRADE_COLS, extrasaction="ignore"
-        )
-        self._trades.writeheader()
-
-        self._raw_fp = _open_redacting(self.out_dir / "raw.jsonl") if keep_raw else None
-        # raw.jsonl is a record for debugging, so what it cannot hold never
-        # stops the capture. The types it wrote as str(value) and the frames it
-        # skipped go to meta.json. The warnings already logged are shared by
-        # the caller across a capture's segments, so each is logged once.
-        self._raw_text_types: set[str] = set()
-        self._raw_skipped = 0
-        self._raw_warned = set() if raw_warned is None else raw_warned
-        # The types the frame being encoded wrote as text. They join
-        # _raw_text_types only once the frame is written.
-        self._frame_text_types: set[str] = set()
-        self._raw_type_names: dict[type, str] = {}
-        # Whether the last frame had a dict key JSON cannot hold. A source that
-        # sends one usually sends them in every frame, so the next frame goes
-        # straight to _encode instead of failing json.dumps first. A frame
-        # with no such key turns it off, since _encode is slower.
-        self._raw_keys_as_text = False
-        self._frame_had_text_key = False
-        #: The first error closing a file, set by :meth:`finalize`.
-        self.close_error: str | None = None
-
-    def write_order(self, event: EventDict) -> None:
-        if self._orders is None:
-            return
-        row = {
-            **event,
-            "timestamp": _ts_ms(event["timestamp"]),
-            "exchange_timestamp": _ts_ms(event["exchange_timestamp"]),
-        }
-        self._orders.writerow(row)
-
-    def write_depth(self, event: EventDict) -> None:
-        if self._depth is None:
-            return
-        # Only the _DEPTH_COLS are persisted (extras ignored).
-        row = {
-            **event,
-            "timestamp": _ts_ms(event["timestamp"]),
-            "exchange_timestamp": _ts_ms(event["exchange_timestamp"]),
-        }
-        self._depth.writerow(row)
-
-    def write_trade(self, event: EventDict) -> None:
-        row = {
-            **event,
-            "timestamp": _ts_ms(event["timestamp"]),
-            "exchange_timestamp": _ts_ms(event["exchange_timestamp"]),
-        }
-        self._trades.writerow(row)
-
-    def write_raw(self, frame: Any) -> None:
-        if self._raw_fp is None or frame is None:
-            return
-        self._frame_text_types.clear()
-        self._frame_had_text_key = False
-        try:
-            if self._raw_keys_as_text:
-                line = self._encode(frame, set())
-                self._raw_keys_as_text = self._frame_had_text_key
-            else:
-                try:
-                    line = json.dumps(
-                        frame, separators=(",", ":"), default=self._raw_default
-                    )
-                except TypeError:
-                    # json.dumps never passes a dict key to default=, so a key
-                    # that is not a str, int, float, bool or None raises.
-                    self._frame_text_types.clear()
-                    line = self._encode(frame, set())
-                    self._raw_keys_as_text = self._frame_had_text_key
-        except Exception as exc:  # noqa: BLE001 - one bad frame must not kill the run
-            # A circular reference, or a value whose str() raises: JSON cannot
-            # hold the frame at all.
-            self._raw_skipped += 1
-            kind = type(exc).__name__
-            self._warn_once(
-                f"skip:{kind}",
-                f"raw.jsonl: skipping frames JSON cannot hold ({kind}: {exc})",
-            )
-            return
-        self._raw_fp.write(line + "\n")
-        for name in self._frame_text_types:
-            self._raw_text_types.add(name)
-            self._warn_once(
-                f"text:{name}",
-                f"raw.jsonl: writing {name} values or keys as text (str(value))",
-            )
-
-    def _encode(self, value: Any, path: set[int]) -> str:
-        """Encode *value* as ``json.dumps`` would, writing any dict key as text.
-
-        A key is written the way :meth:`_raw_default` writes a value. Keys
-        that turn into the same text are all kept, as ``json.dumps`` keeps
-        both ``1`` and ``"1"``. *path* holds the containers above *value*, so
-        a circular reference raises ``ValueError`` as ``json.dumps`` would.
-        """
-        if not isinstance(value, dict | list | tuple):
-            return json.dumps(value, default=self._raw_default)
-        if id(value) in path:
-            raise ValueError("Circular reference detected")
-        path.add(id(value))
-        try:
-            if isinstance(value, dict):
-                return (
-                    "{"
-                    + ",".join(
-                        f"{json.dumps(self._key_text(k))}:{self._encode(v, path)}"
-                        for k, v in value.items()
-                    )
-                    + "}"
-                )
-            return "[" + ",".join(self._encode(v, path) for v in value) + "]"
-        finally:
-            path.discard(id(value))
-
-    def _key_text(self, key: Any) -> str:
-        # As json.dumps writes a key: a str as it is, None, a bool or a number
-        # as its JSON text.
-        if isinstance(key, str):
-            return key
-        if key is None or isinstance(key, bool | int | float):
-            return json.dumps(key)
-        self._frame_had_text_key = True
-        return str(self._raw_default(key))
-
-    def _raw_default(self, value: Any) -> Any:
-        # Some feeds parse prices and sizes as Decimal (cryptofeed does for
-        # Bitstamp trades). Write them as strings so raw.jsonl keeps every digit.
-        if isinstance(value, Decimal):
-            return str(value)
-        # cryptofeed parses most venues' frames with yapic json, which turns ISO
-        # date and time strings into date, datetime and time objects
-        # (independent_reserve, blockchain). Write them back as ISO 8601
-        # strings. datetime is a subclass of date.
-        if isinstance(value, (date, time)):
-            return value.isoformat()
-        kind = type(value)
-        name = self._raw_type_names.get(kind)
-        if name is None:
-            name = self._raw_type_names[kind] = f"{kind.__module__}.{kind.__qualname__}"
-        self._frame_text_types.add(name)
-        return str(value)
-
-    def _warn_once(self, key: str, message: str) -> None:
-        if key not in self._raw_warned:
-            self._raw_warned.add(key)
-            logger.warning("{}", message)
-
-    @property
-    def raw_frames_skipped(self) -> int:
-        """Frames raw.jsonl skipped because JSON cannot hold them."""
-        return self._raw_skipped
-
-    def raw_diagnostics(self) -> dict[str, Any]:
-        """What raw.jsonl wrote as text or skipped, as ``meta.json`` fields.
-
-        Empty when raw.jsonl is off.
-        """
-        if not self._keep_raw:
-            return {}
-        return {
-            "raw_text_types": sorted(self._raw_text_types),
-            "n_raw_frames_skipped": self._raw_skipped,
-        }
-
-    def flush(self) -> None:
-        """Push buffered rows to disk, so a crash loses as few as possible."""
-        for fp in (self._orders_fp, self._depth_fp, self._trades_fp, self._raw_fp):
-            if fp is not None:
-                fp.flush()
-
-    def bytes_written(self) -> int:
-        """Bytes written so far across every open file (what a size roll reads)."""
-        return sum(
-            fp.tell()
-            for fp in (self._orders_fp, self._depth_fp, self._trades_fp, self._raw_fp)
-            if fp is not None
-        )
-
-    def finalize(self, result: CaptureResult) -> None:
-        """Close every file, then write ``meta.json`` last.
-
-        Each file is closed on its own, so one that fails to flush (a full
-        disk, say) leaves no other open.  The first failure is logged and
-        recorded in ``meta.json`` as ``capture_error`` with the phase
-        ``close``, unless the run already had an error, and kept in
-        :attr:`close_error`.
-        """
-        close_error: str | None = None
-        for fp in (self._orders_fp, self._depth_fp, self._trades_fp, self._raw_fp):
-            if fp is None:
-                continue
-            try:
-                try:
-                    fp.flush()
-                finally:
-                    fp.close()
-            except Exception as exc:  # noqa: BLE001 - recorded in meta.json
-                error = redact(repr(exc))
-                logger.error("Closing {} failed: {}", getattr(fp, "name", fp), error)
-                close_error = close_error or error
-        self._orders_fp = None
-        self._depth_fp = None
-        self._trades_fp = None  # type: ignore[assignment]
-        self._raw_fp = None
-        self.close_error = close_error
-
-        meta: dict[str, Any] = {
-            "out_dir": str(result.out_dir),
-            "started": str(result.started),
-            "ended": str(result.ended),
-            "duration_seconds": (result.ended - result.started).total_seconds(),
-            "n_order_events": result.n_order_events,
-            "n_depth_events": result.n_depth_events,
-            "n_trade_events": result.n_trade_events,
-            "n_raw_frames": result.n_raw_frames,
-            "n_snapshot_unconfirmed": result.n_snapshot_unconfirmed,
-            "stream_started": _iso_or_none(result.stream_started),
-            "stream_ended": _iso_or_none(result.stream_ended),
-            **result.extras,
-            **self.raw_diagnostics(),
-        }
-        if result.capture_error is not None:
-            meta["capture_error"] = result.capture_error
-            meta["capture_error_phase"] = result.capture_error_phase
-        elif close_error is not None:
-            meta["capture_error"] = close_error
-            meta["capture_error_phase"] = "close"
-        write_record(self.out_dir, meta)
-
-
-def _open_redacting(path: Path) -> Any:
-    """Open *path* for writing text, redacting every write when a key is loaded."""
-    fp = path.open("w", newline="")
-    return RedactingFile(fp) if any_known() else fp
 
 
 def check_credentials(source: Any) -> None:
@@ -390,10 +48,6 @@ def check_credentials(source: Any) -> None:
     settings = getattr(source, "settings", None)
     if isinstance(settings, SourceSettings):
         settings.check_credentials(source.name)
-
-
-def _iso_or_none(ts: pd.Timestamp | None) -> str | None:
-    return None if ts is None else str(ts)
 
 
 async def run_capturer(
@@ -493,7 +147,7 @@ async def run_capturer(
             logger.info("Capturer '{}': snapshot starting", capturer.name)
             try:
                 async for ev in capturer.snapshot(config):
-                    ev["origin"] = ORIGIN_SNAPSHOT
+                    ev[ORIGIN_COLUMN] = ORIGIN_SNAPSHOT
                     _write_book(ev)
                     if unconfirmed is not None:
                         unconfirmed.add(ev["id"])
@@ -523,7 +177,7 @@ async def run_capturer(
             )
             try:
                 async for ev in capturer.shutdown_synthetic_events():
-                    ev.setdefault("origin", ORIGIN_SHUTDOWN)
+                    ev.setdefault(ORIGIN_COLUMN, ORIGIN_SHUTDOWN)
                     _write_book(ev)
             except Exception as exc:  # noqa: BLE001 - recorded in meta.json
                 _record_error("shutdown", exc)
@@ -784,13 +438,13 @@ async def _stream(
             if state.streaming is not None:
                 state.streaming.set()
         if kind == "order":
-            event.setdefault("origin", ORIGIN_STREAM)
+            event.setdefault(ORIGIN_COLUMN, ORIGIN_STREAM)
             sink.write_order(event)
             counts["order"] += 1
             if unconfirmed:
                 unconfirmed.discard(event["id"])
         elif kind == "depth":
-            event.setdefault("origin", ORIGIN_STREAM)
+            event.setdefault(ORIGIN_COLUMN, ORIGIN_STREAM)
             sink.write_depth(event)
             counts["depth"] += 1
         elif kind == "trade":

@@ -44,7 +44,12 @@ import websockets
 from loguru import logger
 from websockets.exceptions import ConnectionClosed
 
-from ob_analytics.live._base import CaptureConfig, EventDict, UnmappedMessageError
+from ob_analytics.live._base import (
+    CaptureConfig,
+    EventDict,
+    OpenOrders,
+    UnmappedMessageError,
+)
 
 WS_URL = "wss://ws.bitstamp.net"
 REST_BOOK_URL = "https://www.bitstamp.net/api/v2/order_book/{pair}/?group=2"
@@ -101,7 +106,7 @@ class BitstampCapturer:
         # orders so we can emit synthetic deletes at shutdown and recover
         # price/direction when a ``deleted`` event arrives with missing
         # fields.
-        self._open_orders: dict[int, tuple[float, str, float]] = {}
+        self._open_orders = OpenOrders()
         self._snapshot_us: int = 0
 
         # WebSocket state -- opened in ``snapshot``, used in ``stream``.
@@ -322,20 +327,10 @@ class BitstampCapturer:
 
     async def shutdown_synthetic_events(self) -> AsyncIterator[EventDict]:
         """Yield synthetic ``deleted`` events for every still-resting order."""
-        end_ms = int(time.time() * 1000)
-        ts = _epoch_ms_to_ts(end_ms)
-        for order_id, (price, direction, volume) in list(self._open_orders.items()):
+        at = _epoch_ms_to_ts(int(time.time() * 1000))
+        for event in self._open_orders.close(at):
             self.synthetic_deleted += 1
-            yield {
-                "id": order_id,
-                "timestamp": ts,
-                "exchange_timestamp": ts,
-                "price": price,
-                "volume": volume,
-                "action": "deleted",
-                "direction": direction,
-            }
-        self._open_orders.clear()
+            yield event
 
     # ---------------------------------------------------------------
     # internals

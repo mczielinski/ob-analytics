@@ -37,13 +37,16 @@ from typing import Any, NamedTuple, TypeGuard
 import pandas as pd
 from loguru import logger
 
+from ob_analytics.capture_files import ORIGIN_SNAPSHOT, ORIGIN_STREAM
 from ob_analytics.config import SourceSettings
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError, UnknownNameError
 from ob_analytics.live._base import (
     CaptureConfig,
     EventDict,
+    OpenOrders,
     UnmappedMessageError,
     VenueClockCount,
+    diff_levels,
 )
 from ob_analytics.protocols import (
     Clocks,
@@ -52,7 +55,7 @@ from ob_analytics.protocols import (
     SequenceKind,
     TradeAttribution,
 )
-from ob_analytics.schemas import ORIGIN_COLUMN, SNAPSHOT_ORIGIN
+from ob_analytics.schemas import ORIGIN_COLUMN
 
 #: cryptofeed's channel names (``cryptofeed.defines``), spelled out so this
 #: module imports without cryptofeed installed.
@@ -419,7 +422,7 @@ class CryptofeedSource:
         # Diff baselines for venues that resend a whole book with no delta.
         self._last_l2: dict[str, dict[float, float]] = {"bid": {}, "ask": {}}
         # Every order currently resting: order_id -> (price, direction, volume).
-        self._open_orders: dict[Any, tuple[float, str, float]] = {}
+        self._open_orders = OpenOrders()
         # Venue time (epoch seconds) of the last book that showed each order,
         # and of the last trade applied to it (see ``_fill_events``).  The
         # book and the trades arrive on separate channels, so these say which
@@ -684,7 +687,7 @@ class CryptofeedSource:
         items: list[tuple[str, EventDict, Any]] = []
         for event in events:
             if placed or not had_venue_time:
-                event[ORIGIN_COLUMN] = SNAPSHOT_ORIGIN
+                event[ORIGIN_COLUMN] = ORIGIN_SNAPSHOT
             items.append((kind, event, raw))
             raw = None
         return items
@@ -797,20 +800,13 @@ class CryptofeedSource:
         self, levels: dict[str, dict[float, float]], common: dict[str, Any]
     ) -> list[EventDict]:
         """Diff a whole L2 book against the previous one into depth rows."""
-        rows: list[EventDict] = []
-        for side in ("bid", "ask"):
-            current = levels.get(side, {})
-            previous = self._last_l2.get(side, {})
-            for price, size in current.items():
-                if previous.get(price) != size:
-                    rows.append(
-                        {"side": side, "price": price, "volume": size, **common}
-                    )
-            for price in previous:
-                if price not in current:
-                    rows.append({"side": side, "price": price, "volume": 0.0, **common})
-        self._last_l2 = levels
-        return rows
+        return [
+            {"side": side, "price": price, "volume": size, **common}
+            for side in ("bid", "ask")
+            for price, size in diff_levels(
+                self._last_l2[side], levels.get(side, {}).items()
+            )
+        ]
 
     # -- L3 translation (pure) ----------------------------------------------
 
@@ -1016,7 +1012,7 @@ class CryptofeedSource:
                 )
             else:
                 events.append(deleted)
-        self._open_orders = {**kept, **current}
+        self._open_orders = OpenOrders({**kept, **current})
         if shown_at is not None:
             events.extend(self._release_held_deletes(shown_at))
         return events
@@ -1209,25 +1205,15 @@ class CryptofeedSource:
         for _, event, _ in self._release_held_book():
             # It came from the stream; only the close-outs below are the
             # shutdown's own rows.
-            event.setdefault(ORIGIN_COLUMN, "stream")
+            event.setdefault(ORIGIN_COLUMN, ORIGIN_STREAM)
             yield event
         if self.level is not Level.L2:
             for held in self._release_held_deletes():
                 yield held
-            ts = pd.Timestamp.now(tz="UTC").as_unit("ns")
-            for order_id, (price, direction, volume) in list(self._open_orders.items()):
+            at = pd.Timestamp.now(tz="UTC").as_unit("ns")
+            for event in self._open_orders.close(at, **self._configured_identity()):
                 self.synthetic_deleted += 1
-                yield {
-                    "id": order_id,
-                    "timestamp": ts,
-                    "exchange_timestamp": ts,
-                    "price": price,
-                    "volume": volume,
-                    "action": "deleted",
-                    "direction": direction,
-                    **self._configured_identity(),
-                }
-            self._open_orders.clear()
+                yield event
 
     # -- diagnostics --------------------------------------------------------
 

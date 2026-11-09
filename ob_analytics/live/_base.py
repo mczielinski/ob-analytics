@@ -9,7 +9,7 @@ benefits.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -144,6 +144,72 @@ class VenueClockCount:
 
 
 # ---------------------------------------------------------------------------
+# Book state shared by the live sources
+# ---------------------------------------------------------------------------
+
+
+class OpenOrders(dict[Any, tuple[float, str, float]]):
+    """The orders resting on an L3 book: order id -> ``(price, direction, volume)``.
+
+    An L3 live source records each order it reports as created or changed,
+    and removes it when it is deleted.  At shutdown :meth:`close` gives every
+    order still resting a ``deleted`` event, so each id in ``orders.csv`` has
+    a complete ``created -> ... -> deleted`` lifecycle.
+    """
+
+    def close(self, at: pd.Timestamp, **fields: Any) -> list[EventDict]:
+        """Return a ``deleted`` event at *at* for each open order, and forget them.
+
+        Each event carries the order's last price, direction and volume, and
+        *fields* (the instrument's ``venue`` and ``symbol``, say).
+        """
+        events: list[EventDict] = [
+            {
+                "id": order_id,
+                "timestamp": at,
+                "exchange_timestamp": at,
+                "price": price,
+                "volume": volume,
+                "action": "deleted",
+                "direction": direction,
+                **fields,
+            }
+            for order_id, (price, direction, volume) in self.items()
+        ]
+        self.clear()
+        return events
+
+
+def diff_levels(
+    previous: dict[float, float], levels: Iterable[tuple[float, float]]
+) -> list[tuple[float, float]]:
+    """Update one side of an L2 book in place, and return what changed.
+
+    *previous* maps each price to its size, as last reported.  *levels* is
+    the side's whole book now, as ``(price, size)`` pairs with no price
+    repeated.  Returns ``(price, size)`` for each level whose size changed or
+    that is new, then ``(price, 0.0)`` for each level that is gone, and makes
+    *previous* match *levels*.
+
+    *previous* is changed in place rather than rebuilt: a deep book side can
+    hold tens of thousands of levels, and this runs on every update of a
+    capture that can last for days.
+    """
+    changes: list[tuple[float, float]] = []
+    seen: set[float] = set()
+    for price, size in levels:
+        seen.add(price)
+        if previous.get(price) != size:
+            changes.append((price, size))
+            previous[price] = size
+    gone = [price for price in previous if price not in seen]
+    for price in gone:
+        changes.append((price, 0.0))
+        del previous[price]
+    return changes
+
+
+# ---------------------------------------------------------------------------
 # Sink: how the runner persists what a capturer yields
 # ---------------------------------------------------------------------------
 
@@ -152,13 +218,12 @@ class VenueClockCount:
 class CaptureSink(Protocol):
     """Write target for a capture run.
 
-    The default implementation (in ``_runner.py``) writes, keyed on the
-    source's :attr:`~ob_analytics.protocols.Source.level`:
-    - orders.csv  -- L3 only: append-only, BitstampLoader-compatible schema
-    - depth.csv   -- L2 only: append-only, L2DepthLoader-compatible schema
-    - trades.csv  -- append-only (both resolutions)
-    - raw.jsonl   -- every raw frame, one JSON object per line (if keep_raw)
-    - meta.json   -- finalised at shutdown
+    The default implementation,
+    :class:`~ob_analytics.capture_files.FileCaptureSink`, writes the capture
+    folder :mod:`ob_analytics.capture_files` describes: ``orders.csv`` for an
+    L3 source or ``depth.csv`` for an L2 one (see
+    :attr:`~ob_analytics.protocols.Source.level`), ``trades.csv``,
+    ``raw.jsonl`` and ``meta.json``.
     """
 
     def write_order(self, event: EventDict) -> None: ...

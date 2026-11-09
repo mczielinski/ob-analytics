@@ -86,6 +86,21 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   - `plot_result(result, metric, level="L2")` ignored the level. It now
     raises `UnknownNameError`, since a metric has no L2 or L3 plot -> leave
     `level` out.
+- **The ccxt and cryptofeed source and settings classes are in
+  `ob_analytics.live`** (#410). The module paths still work; import from
+  the package instead.
+  - `from ob_analytics.live.ccxt_source import CcxtSource` ->
+    `from ob_analytics.live import CcxtSource`.
+  - `from ob_analytics.live.ccxt_source import CcxtSettings` ->
+    `from ob_analytics.live import CcxtSettings`.
+  - `from ob_analytics.live.cryptofeed_source import CryptofeedSource` ->
+    `from ob_analytics.live import CryptofeedSource`.
+  - `from ob_analytics.live.cryptofeed_source import CryptofeedSettings` ->
+    `from ob_analytics.live import CryptofeedSettings`.
+- **The capture folder format has one module** (#401). The sink that writes
+  a capture moved out of the private runner module:
+  `ob_analytics.live._runner.FileCaptureSink` ->
+  `ob_analytics.capture_files.FileCaptureSink`.
 - **`Palette.flashed` and `Palette.resting` are gone** (#415). No plot read
   them. `Palette(flashed=..., resting=...)` -> leave both out.
 
@@ -1161,6 +1176,13 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   With `backend="bokeh"`, the iceberg chains and refill markers and the
   trades against hidden orders were left out without a word. Bokeh now draws
   them as Matplotlib and Plotly do.
+- **`BitstampWriter` keeps a capture's `origin` and `sequence` columns**
+  (#401). It wrote only the order columns, so a capture read, run and written
+  again lost which part of the capture wrote each row, and the clock checks
+  then counted the opening book's rows. `DepthCsvWriter` keeps `sequence` too,
+  as it already kept `origin`. The capture's file names and columns are now
+  in `ob_analytics.capture_files`, which the capture, the crash repair, the
+  readers and both writers share.
 - **A wheel holds only the package** (#415). The wheel and sdist `include`
   patterns now start with `/`, so hatchling no longer packs an
   `ob_analytics` folder found below the root, such as one in an agent
