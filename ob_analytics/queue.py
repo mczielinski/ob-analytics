@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 
 from ob_analytics import _engine_frames, engine
-from ob_analytics._utils import epoch_ns
+from ob_analytics._utils import epoch_ns, require_per_order_events
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.schemas import time_order_keys, validate_columns
 
@@ -54,6 +54,7 @@ def _in_canonical_order(events: pd.DataFrame, context: str) -> pd.DataFrame:
     and engine to engine.
     """
     validate_columns(events, set(_ENGINE_COLUMNS), context)
+    require_per_order_events(events, context)
     ev = events[_ENGINE_COLUMNS]
     return ev.sort_values(time_order_keys(ev), kind="stable")
 
@@ -110,6 +111,11 @@ def queue_positions(
     return _engine_frames.queue_frame(ev, positions)
 
 
+def _empty_age_grid() -> tuple[np.ndarray, np.ndarray, int]:
+    """What :func:`queue_age_grid` returns when no order is queued."""
+    return np.empty((0, 0)), np.array([], dtype="datetime64[ns]"), 0
+
+
 def queue_age_grid(
     events: pd.DataFrame,
     *,
@@ -153,7 +159,7 @@ def queue_age_grid(
     # engine which those are rather than restating its visibility rule here.
     replayed = arrays.visible(side=touch)
     if replayed.size == 0 or n_time < 1:
-        return np.empty((0, 0)), np.array([], dtype="datetime64[ns]"), 0
+        return _empty_age_grid()
 
     # The sampling window is a display choice, so it is set here and handed to
     # the engine, which only replays to the instants it is given.

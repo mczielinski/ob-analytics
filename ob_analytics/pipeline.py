@@ -43,7 +43,7 @@ import pandas as pd
 import pyarrow as pa
 from loguru import logger
 
-from ob_analytics._utils import empty_events, validate_non_empty
+from ob_analytics._utils import empty_events, require_per_order_events
 from ob_analytics._windows import (
     ParquetAppender,
     WindowedLoader,
@@ -321,22 +321,21 @@ class PipelineResult:
         """Compute every registered metric that applies to this run.
 
         A metric declares the resolutions it applies to (
-        :attr:`~ob_analytics.protocols.Metric.levels`), so an L3-only metric is
-        skipped on an L2 run rather than failing on its empty ``events`` table.
+        :attr:`~ob_analytics.protocols.Metric.levels`) and the tables it needs
+        (:attr:`~ob_analytics.protocols.Metric.needs`), so an L3-only metric
+        is skipped on an L2 run, and a trade metric on a run with no trades,
+        rather than failing on an empty table.
 
         Returns
         -------
         dict of str to pandas.DataFrame
-            Metric name → its table, for the metrics whose ``levels`` include
-            this run's :attr:`level`.
+            Metric name → its table, for the metrics that apply to this run
+            (see :func:`~ob_analytics.metrics.skip_reason`).
         """
-        from ob_analytics.metrics import METRICS
+        from ob_analytics.metrics import applicable_metrics
 
-        applicable = (METRICS.get(name) for name in METRICS.list())
         return {
-            metric.name: metric.compute(self)
-            for metric in applicable
-            if self.level in metric.levels
+            metric.name: metric.compute(self) for metric in applicable_metrics(self)
         }
 
     def plot(
@@ -1083,7 +1082,7 @@ def _read_windows(
         paths.append(working / f"window-{number}.pkl")
         events.to_pickle(paths[-1])
     if not any(len(part.ids) for part in facts):
-        validate_non_empty(events, "set_order_types")
+        require_per_order_events(events, "set_order_types")
     del events
 
     logger.info("Pipeline: building trades")

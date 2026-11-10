@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from ob_analytics.config import PipelineConfig
+from ob_analytics.config import InstrumentGrid, PipelineConfig
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
 
 
@@ -42,6 +42,30 @@ class TestPipelineConfig:
     def test_validation_rejects_zero_depth_bins(self):
         with pytest.raises(ValidationError):
             PipelineConfig(depth_bins=0)
+
+    def test_a_lot_finer_than_the_shown_decimals_is_refused(self):
+        # Sizes would be shown rounded to 8 places, so a size of one lot of
+        # 1e-9 would be shown as 0.
+        with pytest.raises(ConfigError, match="volume_decimals=9"):
+            PipelineConfig(lot_size=1e-9)
+
+    @pytest.mark.parametrize(
+        ("lot_size", "volume_decimals"), [(1e-9, 9), (0.25, 2), (1.0, 0), (1e-8, 8)]
+    )
+    def test_a_lot_the_shown_decimals_can_show_is_accepted(
+        self, lot_size, volume_decimals
+    ):
+        config = PipelineConfig(lot_size=lot_size, volume_decimals=volume_decimals)
+        assert config.lot_size == lot_size
+
+    def test_a_step_set_over_a_grid_brings_its_own_decimals(self):
+        # Whole shares show no decimals; a caller's finer lot must not keep
+        # the grid's 0, which the config would refuse.
+        grid = InstrumentGrid(tick_size=0.01, lot_size=1.0)
+        config = grid.config(PipelineConfig(lot_size=0.01))
+        assert (config.lot_size, config.volume_decimals) == (0.01, 2)
+        config = grid.config(PipelineConfig(lot_size=0.01, volume_decimals=4))
+        assert config.volume_decimals == 4
 
     @pytest.mark.parametrize("name", ["price_divisor", "timestamp_unit"])
     def test_a_feed_encoding_field_is_refused(self, name):

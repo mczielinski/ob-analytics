@@ -41,6 +41,7 @@ from ob_analytics._utils import (
     lots_to_size,
     price_to_ticks,
     read_csv_file,
+    require_per_order_events,
     seconds_after_midnight_to_datetime,
     size_to_lots,
 )
@@ -659,11 +660,7 @@ class LobsterWriter:
         # A plain 0..n-1 index: frames joined with ``pd.concat`` can repeat
         # labels, which the depth computation cannot align on.
         events = data["events"].reset_index(drop=True)
-        if events.empty:
-            raise ConfigError(
-                "LobsterWriter: the run has no events to write.  A LOBSTER "
-                "message file holds per-order events, which an L2 run has not."
-            )
+        require_per_order_events(events, "LobsterWriter")
         validate_columns(
             events,
             {"event_id", "id", "timestamp", "price", "volume", "direction", "action"},
@@ -1305,9 +1302,14 @@ class LobsterSource:
             ob_path = LobsterLoader._resolve_orderbook_file(Path(source))
         _warn_if_book_crosses(events, from_orderbook=ob_path is not None)
         if ob_path is None:
-            logger.warning(
-                "LobsterSource: no orderbook file found; "
-                "falling back to event-based depth"
+            warnings.warn(
+                "LobsterSource: no orderbook file found next to the messages, "
+                "so the depth is rebuilt from the events instead of read from "
+                "LOBSTER's own book. The message file holds only the events "
+                "inside the requested price levels, so that depth can differ "
+                "from LOBSTER's.",
+                # The caller of Pipeline.run.
+                stacklevel=3,
             )
             return None
         message_rows = read.message_rows if read is not None else None

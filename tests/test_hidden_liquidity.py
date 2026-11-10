@@ -358,10 +358,13 @@ def _trade_frame(rows):
     )
 
 
-NO_EVENTS = pd.DataFrame(
+#: One event that no trade names as its maker, so each trade is read at its
+#: own timestamp.  hidden_trades refuses an events frame with no rows, which
+#: is what an L2 run has.
+UNNAMED_EVENTS = pd.DataFrame(
     {
-        "event_id": pd.Series(dtype="int64"),
-        "timestamp": pd.Series(dtype="datetime64[ns, UTC]"),
+        "event_id": pd.Series([10**9], dtype="int64"),
+        "timestamp": pd.Series([pd.Timestamp(0, tz="UTC")]),
     }
 )
 
@@ -371,7 +374,7 @@ class TestHiddenTrades:
         summary = _summary([(0, 100, 104)])
         trades = _trade_frame([(10, 102), (20, 104), (30, 100)])
 
-        out = hidden_trades(NO_EVENTS, trades, summary)
+        out = hidden_trades(UNNAMED_EVENTS, trades, summary)
 
         assert out.index.tolist() == [0]
         assert out["best_bid_price"].tolist() == [100]
@@ -382,13 +385,13 @@ class TestHiddenTrades:
         summary = _summary([(0, 100, 104), (10, 100, 106)])
         trades = _trade_frame([(10, 104)])
 
-        assert hidden_trades(NO_EVENTS, trades, summary).empty
+        assert hidden_trades(UNNAMED_EVENTS, trades, summary).empty
 
     def test_one_sided_or_crossed_book_flags_nothing(self):
         summary = _summary([(0, 0, 104), (10, 105, 104)])
         trades = _trade_frame([(5, 50), (15, 104)])
 
-        assert hidden_trades(NO_EVENTS, trades, summary).empty
+        assert hidden_trades(UNNAMED_EVENTS, trades, summary).empty
 
     def test_an_unreadable_spread_is_not_replaced_by_an_older_one(self):
         # The bid side emptied at t=5.  The spread at t=0 no longer stood, so
@@ -396,20 +399,20 @@ class TestHiddenTrades:
         summary = _summary([(0, 100, 104), (5, 0, 104)])
         trades = _trade_frame([(10, 102)])
 
-        assert hidden_trades(NO_EVENTS, trades, summary).empty
+        assert hidden_trades(UNNAMED_EVENTS, trades, summary).empty
 
     def test_trade_before_any_book_flags_nothing(self):
         summary = _summary([(10, 100, 104)])
         trades = _trade_frame([(5, 102)])
 
-        assert hidden_trades(NO_EVENTS, trades, summary).empty
+        assert hidden_trades(UNNAMED_EVENTS, trades, summary).empty
 
     def test_input_order_and_index_are_kept(self):
         summary = _summary([(0, 100, 104)])
         trades = _trade_frame([(30, 101), (10, 104), (20, 103)])
         trades.index = [7, 8, 7]
 
-        out = hidden_trades(NO_EVENTS, trades, summary)
+        out = hidden_trades(UNNAMED_EVENTS, trades, summary)
 
         assert out["price"].tolist() == [101, 103]
         assert out.index.tolist() == [7, 7]
@@ -425,7 +428,7 @@ class TestHiddenTrades:
         summary.loc[0, ["best_bid_price", "best_ask_price"]] = [100.5, 104.5]
         trades = _trade_frame([(10, 102.75)])
 
-        out = hidden_trades(NO_EVENTS, trades, summary)
+        out = hidden_trades(UNNAMED_EVENTS, trades, summary)
 
         assert out["best_bid_price"].dtype == np.float64
         assert out["best_ask_price"].dtype == np.float64
@@ -441,7 +444,7 @@ class TestHiddenTrades:
         trades["maker_event_id"] = pd.array([5], dtype="Int64")
 
         assert hidden_trades(events, trades, summary).empty
-        assert len(hidden_trades(NO_EVENTS, trades, summary)) == 1
+        assert len(hidden_trades(UNNAMED_EVENTS, trades, summary)) == 1
 
     def test_book_is_read_just_before_the_maker_fill_at_one_instant(self):
         # At t=10 the maker was placed at 104 (event 4) and filled (event 5).
@@ -463,7 +466,7 @@ class TestHiddenTrades:
         trades = _trade_frame([])
         trades["timestamp"] = trades["timestamp"].astype("datetime64[ns, UTC]")
 
-        out = hidden_trades(NO_EVENTS, trades, summary)
+        out = hidden_trades(UNNAMED_EVENTS, trades, summary)
 
         assert out.empty
         assert {"best_bid_price", "best_ask_price"} <= set(out.columns)
@@ -471,7 +474,9 @@ class TestHiddenTrades:
     def test_missing_column_raises(self):
         with pytest.raises(ConfigError, match="best_ask_price"):
             hidden_trades(
-                NO_EVENTS, _trade_frame([]), _summary([]).drop(columns="best_ask_price")
+                UNNAMED_EVENTS,
+                _trade_frame([]),
+                _summary([]).drop(columns="best_ask_price"),
             )
 
 

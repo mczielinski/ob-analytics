@@ -121,6 +121,24 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   `capture` flag (`pair`, `minutes`, `output`, `roll_minutes`, `roll_mb`,
   `no_raw`) -> give the field `CliOption(flag=...)` with another name, or
   `capture` stops with a message naming the field.
+- **A function that needs per-order events refuses an L2 run** (#399). On a
+  run with no events (what an L2 run has), `set_order_types`,
+  `order_lifecycles`, `order_book`, `order_aggressiveness`,
+  `price_level_volume`, `queue_positions`, `queue_age_grid` and
+  `hidden_trades` raise `ConfigError` naming L3. `queue_positions`,
+  `queue_age_grid` and `hidden_trades` returned an empty result, which read
+  as "nothing there". The Bitstamp, Databento, hftbacktest and Nautilus
+  writers raise it too instead of writing an empty file. The LOBSTER writer
+  already refused; its message is now the same as the others'.
+- **A metric declares `needs`** (#399). A `Metric` without it -> add
+  `needs: tuple[str, ...]`, the run's tables it cannot be computed without,
+  e.g. `("trades",)`. A metric is skipped on a run where one of them has no
+  rows.
+- **A `lot_size` finer than `volume_decimals` is refused** (#399).
+  `PipelineConfig(lot_size=1e-9)` -> `PipelineConfig(lot_size=1e-9,
+  volume_decimals=9)`. Sizes were shown rounded to a coarser step than they
+  have. `PipelineConfig` now raises `ConfigError` from its own checks, as
+  `SourceSettings` does.
 
 ### Added
 
@@ -1207,6 +1225,18 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
+- **Data problems reach a Python user** (#399). The package turns its loguru
+  logger off, so these went unseen; each is now a `UserWarning`: Databento
+  records dropped for no price or no side, Databento fills that do not
+  account for all the printed trade volume, orders `set_order_types` cannot
+  classify, Bitstamp duplicate cancellations, a LOBSTER run with no
+  orderbook file, and a Parquet file with no schema version.
+- **A run with no trades offers no trade metric** (#399).
+  `available_concepts` listed VPIN, Kyle's λ, order flow imbalance and the
+  cost metrics, which cannot be drawn, and `result.metrics()` raised.
+  `result.metrics()`, the gallery and `plot_result` now use one test of
+  whether a metric applies (`ob_analytics.metrics.skip_reason`), and
+  `result.plot("vpin")` on such a run says that it needs trades.
 - **The Bitstamp-format loader numbers events in time order** (#456). It
   numbered them by order id, so rows of two orders at one instant came in the
   order their ids sort. Bitstamp's ids rise with time; Independent Reserve's

@@ -108,6 +108,7 @@ from ob_analytics._utils import (
     lots_to_size,
     off_tick_grid,
     price_to_ticks,
+    require_per_order_events,
     size_to_lots,
     ticks_to_price,
     to_utc_ns,
@@ -883,14 +884,12 @@ def _usable_records(work: pd.DataFrame) -> pd.DataFrame:
             # Which way the book is off depends on what was dropped: a missing
             # add leaves it short, a missing cancel leaves an order resting that
             # should have gone.  Say that it is off, not which way.
-            logger.warning(
-                "DatabentoLoader: dropped {} of {} records with {} — {}. The "
-                "book will not reflect them: a dropped add leaves it short, a "
-                "dropped cancel leaves an order resting that should have gone",
-                count,
-                len(work),
-                why,
-                effect,
+            warnings.warn(
+                f"DatabentoLoader: dropped {count} of {len(work)} records with "
+                f"{why} — {effect}. The book will not reflect them: a dropped "
+                "add leaves it short, a dropped cancel leaves an order resting "
+                "that should have gone",
+                stacklevel=2,
             )
 
     keep = ~(no_price | no_side)
@@ -1662,15 +1661,14 @@ def _warn_on_volume_gap(records: pd.DataFrame) -> None:
     filled = int(by_kind.get(ACTION_FILL, 0))
     printed = int(by_kind.get(ACTION_TRADE, 0))
     if printed and filled != printed:
-        logger.warning(
-            "DatabentoTradeReader: fills account for {} of {} printed trade "
-            "volume ({} unaccounted). Trades with no fill behind them — "
-            "auctions, non-displayed orders, off-exchange prints — are not in "
-            "the trades frame; DatabentoSettings(trades_from='prints') builds "
-            "it from the whole tape instead, without makers",
-            filled,
-            printed,
-            printed - filled,
+        warnings.warn(
+            f"DatabentoTradeReader: fills account for {filled} of {printed} "
+            f"printed trade volume ({printed - filled} unaccounted). Trades "
+            "with no fill behind them — auctions, non-displayed orders, "
+            "off-exchange prints — are not in the trades frame; "
+            "DatabentoSettings(trades_from='prints') builds it from the whole "
+            "tape instead, without makers",
+            stacklevel=2,
         )
 
 
@@ -1761,9 +1759,12 @@ class DatabentoWriter:
         Raises
         ------
         ConfigError
-            If a size is not a whole number of units at the config's
+            If the events have no rows (an L2 run has no per-order events),
+            or a size is not a whole number of units at the config's
             ``lot_size``.
         """
+        events = data["events"]
+        require_per_order_events(events, "DatabentoWriter")
         try:
             from databento_dbn import Action, MBOMsg, Metadata, Schema, Side, SType
         except ImportError as exc:  # pragma: no cover - exercised by the extra
@@ -1772,7 +1773,6 @@ class DatabentoWriter:
                 'optional dependency: pip install "ob-analytics[databento]".'
             ) from exc
 
-        events = data["events"]
         dest = Path(dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
 

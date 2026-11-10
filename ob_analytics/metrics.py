@@ -71,6 +71,10 @@ from ob_analytics.protocols import Level, Metric
 #: my_pkg.amihud:AmihudMetric``.
 ENTRY_POINT_GROUP = "ob_analytics.metrics"
 
+#: The members of the :class:`~ob_analytics.protocols.Metric` protocol, named
+#: in the error for a metric that lacks one.
+_METRIC_MEMBERS = ("name", "title", "levels", "needs", "compute", "prepare")
+
 #: Registry of metric name → :class:`~ob_analytics.protocols.Metric` instance.
 METRICS: Registry[str, Metric] = Registry("metric")
 
@@ -80,7 +84,21 @@ def register_metric(metric: Metric) -> None:
 
     Case-insensitive; overwriting an existing registration is allowed (handy
     for tests and for a plug-in that intentionally shadows a built-in).
+
+    Raises
+    ------
+    TypeError
+        If *metric* lacks a member of the
+        :class:`~ob_analytics.protocols.Metric` protocol, such as ``needs``.
+        Checked here, so one incomplete plug-in fails when it loads instead
+        of breaking every metric a run computes.
     """
+    if not isinstance(metric, Metric):
+        missing = [m for m in _METRIC_MEMBERS if not hasattr(metric, m)]
+        raise TypeError(
+            f"{type(metric).__name__} is not a Metric: it lacks "
+            f"{', '.join(missing)}. A metric has {', '.join(_METRIC_MEMBERS)}."
+        )
     METRICS.register(metric.name, metric)
 
 
@@ -99,6 +117,33 @@ def get_metric(name: str) -> Metric:
         the registered names closest to it.
     """
     return METRICS.get(name)
+
+
+def skip_reason(metric: Metric, result: Any) -> str | None:
+    """Return why *metric* does not apply to *result*, or ``None`` when it does.
+
+    A metric applies when *result* is at one of its
+    :attr:`~ob_analytics.protocols.Metric.levels` and every table it
+    :attr:`~ob_analytics.protocols.Metric.needs` has rows.  This is the one
+    test :meth:`~ob_analytics.pipeline.PipelineResult.metrics`, the gallery
+    and :func:`~ob_analytics.visualization.plot_result` use.
+    """
+    if result.level not in metric.levels:
+        drawn = " and ".join(str(level) for level in metric.levels)
+        return f"it applies at {drawn}, and this run is {result.level}"
+    empty = [name for name in metric.needs if getattr(result, name).empty]
+    if empty:
+        return f"it needs {' and '.join(empty)}, and this run has none"
+    return None
+
+
+def applicable_metrics(result: Any) -> list[Metric]:
+    """Return the registered metrics that apply to *result*, by name.
+
+    See :func:`skip_reason` for what applies.
+    """
+    found = (METRICS.get(name) for name in METRICS.list())
+    return [metric for metric in found if skip_reason(metric, result) is None]
 
 
 def _register_entry_point(ep: EntryPoint) -> str:
@@ -178,6 +223,7 @@ class L1TickerMetric:
     name = "l1_ticker"
     title = "Level 1 Quote (best bid, best ask, last trade)"
     levels: tuple[Level, ...] = _EVERY_LEVEL
+    needs: tuple[str, ...] = ("depth_summary",)
 
     def compute(self, result: Any) -> pd.DataFrame:
         """Return ``timestamp``, the touch prices and sizes, and the last trade.
@@ -232,6 +278,7 @@ class VpinMetric:
     name = "vpin"
     title = "VPIN"
     levels: tuple[Level, ...] = _EVERY_LEVEL
+    needs: tuple[str, ...] = ("trades",)
 
     def compute(
         self,
@@ -273,6 +320,7 @@ class KyleLambdaMetric:
     name = "kyle_lambda"
     title = "Kyle's Lambda"
     levels: tuple[Level, ...] = _EVERY_LEVEL
+    needs: tuple[str, ...] = ("trades",)
 
     def compute(
         self,
@@ -336,6 +384,7 @@ class OrderFlowImbalanceMetric:
     name = "order_flow_imbalance"
     title = "Order Flow Imbalance"
     levels: tuple[Level, ...] = _EVERY_LEVEL
+    needs: tuple[str, ...] = ("trades",)
 
     def compute(
         self,
@@ -368,6 +417,7 @@ class OfiHorizonMetric:
     name = "ofi_horizon"
     title = "Order Flow Imbalance vs Horizon"
     levels: tuple[Level, ...] = _EVERY_LEVEL
+    needs: tuple[str, ...] = ("trades",)
 
     def compute(
         self,
@@ -412,6 +462,7 @@ class BookSignalsMetric:
     name = "book_signals"
     title = "Book Signals (micro-price & OBI)"
     levels: tuple[Level, ...] = _EVERY_LEVEL
+    needs: tuple[str, ...] = ("depth_summary",)
 
     def compute(self, result: Any, *, depth_levels: int = 5) -> pd.DataFrame:
         """Return the summary with ``mid_price``, ``micro_price``, ``obi`` and ``obi_depth``.
@@ -460,6 +511,7 @@ class TransactionCostsMetric:
     name = "transaction_costs"
     title = "Transaction Costs (effective, realized, impact)"
     levels: tuple[Level, ...] = _EVERY_LEVEL
+    needs: tuple[str, ...] = ("trades",)
 
     def compute(
         self,
@@ -489,6 +541,7 @@ class AmihudMetric:
     name = "amihud"
     title = "Amihud Illiquidity"
     levels: tuple[Level, ...] = _EVERY_LEVEL
+    needs: tuple[str, ...] = ("trades",)
 
     def compute(self, result: Any, *, window: str | None = None) -> pd.DataFrame:
         """Return the per-window table; the setting is ``amihud``'s."""
@@ -507,6 +560,7 @@ class RollSpreadMetric:
     name = "roll_spread"
     title = "Roll Spread"
     levels: tuple[Level, ...] = _EVERY_LEVEL
+    needs: tuple[str, ...] = ("trades",)
 
     def compute(self, result: Any, *, window: str | None = None) -> pd.DataFrame:
         """Return the per-window table; the setting is ``roll_spread``'s."""

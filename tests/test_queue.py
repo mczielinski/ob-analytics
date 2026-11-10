@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from ob_analytics.exceptions import ConfigError
 from ob_analytics.queue import QUEUE_COLUMNS, queue_age_grid, queue_positions
 
 TS = pd.Timestamp("2015-05-01 00:00:00")
@@ -170,11 +171,11 @@ class TestEdgeCases:
         )
         assert queue_positions(ev, levels="all").empty
 
-    def test_empty_events(self) -> None:
-        ev = _events([])
-        out = queue_positions(ev, levels="touch")
-        assert out.empty
-        assert list(out.columns) == list(QUEUE_COLUMNS)
+    def test_empty_events_name_l3(self) -> None:
+        # No events is what an L2 run has: an empty queue would read as "no
+        # orders queued", so the function says it needs L3 instead.
+        with pytest.raises(ConfigError, match=r"needs per-order \(L3\) events"):
+            queue_positions(_events([]), levels="touch")
 
     def test_invalid_levels_raises(self) -> None:
         with pytest.raises(ValueError, match="levels must be"):
@@ -225,10 +226,24 @@ class TestQueueAgeGrid:
         ages, _, mr = queue_age_grid(ev, side="bid", n_time=5)
         assert mr == 0 and ages.size == 0
 
-    def test_empty_events(self) -> None:
-        ages, times, mr = queue_age_grid(_events([]), side="bid", n_time=5)
-        assert mr == 0 and ages.size == 0 and len(times) == 0
+    def test_empty_events_name_l3(self) -> None:
+        with pytest.raises(ConfigError, match=r"needs per-order \(L3\) events"):
+            queue_age_grid(_events([]), side="bid", n_time=5)
 
     def test_invalid_side_raises(self) -> None:
         with pytest.raises(ValueError, match="side must be"):
             queue_age_grid(_events(self.GRID_EVENTS), side="nope")
+
+    def test_the_composition_of_a_window_with_no_events_is_empty(self) -> None:
+        # A zoom window can hold no events on an L3 run; that is an empty
+        # grid, not the L2 refusal.
+        from ob_analytics.visualization._data import (
+            prepare_liquidity_at_touch_l3_data,
+        )
+
+        ev = _events(self.GRID_EVENTS)
+        later = ev["timestamp"].max() + pd.Timedelta("1h")
+        data = prepare_liquidity_at_touch_l3_data(
+            ev, start_time=later, end_time=later + pd.Timedelta("1s")
+        )
+        assert data["max_rank"] == 0 and data["ages"].size == 0

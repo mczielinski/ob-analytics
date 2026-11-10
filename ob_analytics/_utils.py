@@ -34,6 +34,24 @@ def validate_non_empty(df: pd.DataFrame, context: str) -> None:
         )
 
 
+def require_per_order_events(events: pd.DataFrame, context: str) -> None:
+    """Raise :class:`ConfigError` naming L3 if *events* has no rows.
+
+    The functions that read one row per order event call this first.  An L2
+    (price-level) run has no per-order events: its events frame is the empty
+    one :func:`empty_events` returns.  Without the check those functions would
+    return an empty answer, which reads as "nothing happened", or write an
+    empty file.
+    """
+    if events.empty:
+        raise ConfigError(
+            f"{context} needs per-order (L3) events, and the events frame has "
+            "no rows. An L2 (price-level) run has no per-order events; read "
+            "the data with an L3 source, such as Bitstamp, LOBSTER or "
+            "Databento MBO."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Price / tick conversions (issue #155)
 # ---------------------------------------------------------------------------

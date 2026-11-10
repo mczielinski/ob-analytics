@@ -21,13 +21,25 @@ from ob_analytics import (
     data_quality_summary,
     list_sources,
 )
+from ob_analytics.analytics import (
+    order_aggressiveness,
+    order_book,
+    order_lifecycles,
+    set_order_types,
+)
+from ob_analytics.bitstamp import BitstampWriter
 from ob_analytics.capture_files import DEPTH_COLUMNS
 from ob_analytics.config import PipelineConfig
+from ob_analytics.databento import DatabentoWriter
 from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
-from ob_analytics.depth import depth_metrics, get_spread
+from ob_analytics.depth import depth_metrics, get_spread, price_level_volume
 from ob_analytics.depth_l2 import DepthCsvWriter, L2DepthLoader, L2TradeReader
-from ob_analytics.exceptions import ConfigError
+from ob_analytics.exceptions import ConfigError, UnknownNameError
+from ob_analytics.hidden_liquidity import hidden_trades
+from ob_analytics.interop import HftbacktestWriter, NautilusWriter
+from ob_analytics.lobster import LobsterWriter
 from ob_analytics.protocols import Clocks, DepthSource, FeedType
+from ob_analytics.queue import queue_age_grid, queue_positions
 from ob_analytics.schemas import (
     validate_depth_df,
     validate_events_df,
@@ -497,6 +509,102 @@ class TestL2DataQuality:
         assert summary.crossed_pct == pytest.approx(0.0)
         assert summary.unmatched_trades_pct == pytest.approx(0.0)
         assert "price_levels" in summary.render()
+
+
+class TestPerOrderFunctionsRefuseL2:
+    """A function that needs per-order events says so on an L2 run, naming
+    L3, instead of answering with an empty frame or writing an empty file."""
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            pytest.param(lambda r: set_order_types(r.events, r.trades), id="types"),
+            pytest.param(lambda r: order_lifecycles(r.events), id="lifecycles"),
+            pytest.param(lambda r: order_book(r.events), id="order_book"),
+            pytest.param(
+                lambda r: order_aggressiveness(r.events, r.depth_summary),
+                id="aggressiveness",
+            ),
+            pytest.param(lambda r: price_level_volume(r.events), id="depth"),
+            pytest.param(lambda r: queue_positions(r.events), id="queue"),
+            pytest.param(lambda r: queue_age_grid(r.events), id="queue_age"),
+            pytest.param(
+                lambda r: hidden_trades(r.events, r.trades, r.depth_summary),
+                id="hidden_trades",
+            ),
+        ],
+    )
+    def test_an_analysis_names_l3(self, toy_l2_result, call):
+        with pytest.raises(ConfigError, match=r"needs per-order \(L3\) events"):
+            call(toy_l2_result)
+
+    @pytest.mark.parametrize(
+        "fmt", ["hftbacktest", "nautilus", "databento", "lobster", "bitstamp"]
+    )
+    def test_a_writer_refuses_instead_of_writing_an_empty_file(
+        self, toy_l2_result, tmp_path, fmt
+    ):
+        config = toy_l2_result.config
+        writer = {
+            "hftbacktest": lambda: HftbacktestWriter(config),
+            "nautilus": lambda: NautilusWriter(config),
+            "databento": lambda: DatabentoWriter(config),
+            "lobster": lambda: LobsterWriter(config, trading_date="2024-01-02"),
+            "bitstamp": lambda: BitstampWriter(config),
+        }[fmt]()
+        dest = tmp_path / "out" / "feed"
+        tables = {
+            "events": toy_l2_result.events,
+            "trades": toy_l2_result.trades,
+            "depth": toy_l2_result.depth,
+        }
+
+        with pytest.raises(ConfigError, match=r"needs per-order \(L3\) events"):
+            writer.write(tables, dest)
+        assert not dest.exists()
+
+
+#: The built-in metrics that read the trades.
+_TRADE_METRICS = (
+    "vpin",
+    "kyle_lambda",
+    "order_flow_imbalance",
+    "ofi_horizon",
+    "transaction_costs",
+    "amihud",
+    "roll_spread",
+)
+
+
+@pytest.fixture
+def no_trade_result(tmp_path):
+    """A price-level run whose trades file has no rows."""
+    DepthCsvWriter().write(
+        {"depth": toy_l2_depth(), "trades": toy_l2_trades().iloc[:0]}, tmp_path
+    )
+    return Pipeline.from_source("depth_csv").run(tmp_path)
+
+
+class TestNoTrades:
+    """A run with no trades offers no trade metric, and computing every metric
+    that applies does not raise."""
+
+    def test_available_concepts_lists_no_trade_metric(self, no_trade_result):
+        from ob_analytics.visualization import available_concepts
+
+        assert no_trade_result.trades.empty
+        concepts = available_concepts(no_trade_result)
+        assert not set(_TRADE_METRICS) & set(concepts)
+        assert "book_signals" in concepts
+
+    def test_result_metrics_does_not_raise(self, no_trade_result):
+        computed = no_trade_result.metrics()
+        assert not set(_TRADE_METRICS) & set(computed)
+        assert "book_signals" in computed
+
+    def test_plotting_a_trade_metric_says_why_not(self, no_trade_result):
+        with pytest.raises(UnknownNameError, match="needs trades"):
+            no_trade_result.plot("vpin")
 
 
 class TestL2Gallery:

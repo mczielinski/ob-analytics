@@ -582,11 +582,17 @@ class Metric(Protocol):
         The resolutions the metric applies to.  A metric that reads per-order
         events declares ``(Level.L3,)`` only, so it is skipped on an L2 run
         rather than failing on an empty ``events`` table.
+    needs : tuple of str
+        The run's tables the metric cannot be computed without, by their
+        :class:`~ob_analytics.pipeline.PipelineResult` attribute names, e.g.
+        ``("trades",)``.  The metric is skipped on a run where one of them
+        has no rows, such as a run with no trades.
     """
 
     name: str
     title: str
     levels: tuple[Level, ...]
+    needs: tuple[str, ...]
 
     def compute(self, result: Any) -> pd.DataFrame:
         """Return this metric's table for *result* (a ``PipelineResult``)."""
