@@ -11,7 +11,7 @@ and the exact conventions of :class:`~ob_analytics.bitstamp.BitstampLoader`
 output, so they flow through the real pipeline stages —
 :func:`~ob_analytics.analytics.set_order_types`,
 :func:`~ob_analytics.depth.price_level_volume`,
-:func:`~ob_analytics.analytics.order_book` — and the real plot faces.
+:func:`~ob_analytics.book.order_book` — and the real plot faces.
 An extra ``actor`` column (and ``maker_actor`` / ``taker_actor`` on
 trades) names each order for annotation; extra columns are permitted by
 every schema validator.

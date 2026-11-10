@@ -4,7 +4,7 @@ A golden-output test pins the *exact numbers* a fixed input produces, so any
 change that shifts a value fails loudly instead of slipping through a quick
 check. :func:`df_fingerprint` turns a DataFrame into a stable content hash used
 by those gates; :func:`book_fingerprint` does the same for an
-:func:`~ob_analytics.analytics.order_book` snapshot (its two side frames).
+:func:`~ob_analytics.book.order_book` snapshot (its two side frames).
 
 The hash is deliberately dtype- and value-exact. Numeric and datetime columns
 hash their raw IEEE-754 / int64 value buffers (native byte order), which is
@@ -65,7 +65,7 @@ def book_fingerprint(book: Mapping[str, Any]) -> str:
     Parameters
     ----------
     book : collections.abc.Mapping
-        An :func:`~ob_analytics.analytics.order_book` result, carrying ``bids``
+        An :func:`~ob_analytics.book.order_book` result, carrying ``bids``
         and ``asks`` DataFrames.
 
     Returns

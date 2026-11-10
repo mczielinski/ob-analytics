@@ -52,7 +52,8 @@
 import pandas as pd
 
 from ob_analytics import toy_events, toy_trades
-from ob_analytics.analytics import order_lifecycles, set_order_types
+from ob_analytics.analytics import set_order_types
+from ob_analytics.book import order_lifecycles
 
 events = set_order_types(toy_events(), toy_trades())
 lc = order_lifecycles(events)

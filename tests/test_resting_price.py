@@ -16,9 +16,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ob_analytics import analytics
+from ob_analytics import book
 from ob_analytics._windows import resting_orders
-from ob_analytics.analytics import order_book
+from ob_analytics.book import order_book
 from ob_analytics.depth import price_level_volume
 from ob_analytics.queue import queue_age_grid, queue_positions
 
@@ -287,7 +287,7 @@ class TestOneUncross:
     def test_there_is_no_second_uncross_path(self):
         from ob_analytics.visualization._data import prepare_book_snapshot_data
 
-        assert not hasattr(analytics, "uncross_book_sides")
+        assert not hasattr(book, "uncross_book_sides")
         assert "uncross" not in inspect.signature(prepare_book_snapshot_data).parameters
 
 

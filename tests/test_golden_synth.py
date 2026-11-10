@@ -2,8 +2,8 @@
 
 This locks the exact numbers a fixed synthetic L3 session produces through the
 pipeline and the two per-order reconstructions the issue names —
-:func:`~ob_analytics.analytics.order_book`,
-:func:`~ob_analytics.analytics.order_lifecycles`, and
+:func:`~ob_analytics.book.order_book`,
+:func:`~ob_analytics.book.order_lifecycles`, and
 :func:`~ob_analytics.queue.queue_positions` — alongside price-level ``depth``.
 A change that shifts any value fails here.
 
@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import pytest
 
-from ob_analytics.analytics import order_book, order_lifecycles
+from ob_analytics.book import order_book, order_lifecycles
 from ob_analytics.pipeline import Pipeline, PipelineResult
 from ob_analytics.queue import queue_positions
 from ob_analytics.synth import (

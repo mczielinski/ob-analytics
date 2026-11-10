@@ -76,7 +76,7 @@ class FeedType(str, Enum):
     * :attr:`DIFF_FEED` — an L3 feed reconstructed from a public
       placement/cancellation *diff stream* (the Bitstamp public feed).  It
       can contain genuinely crossed *resting* orders (a bid resting above an
-      ask, neither filling); :func:`~ob_analytics.analytics.order_book`
+      ask, neither filling); :func:`~ob_analytics.book.order_book`
       replays this faithfully — a crossed book in the output is a property of
       the feed, not a reconstruction bug.
     * :attr:`PRICE_LEVELS` — an L2 feed: the venue's total size at each price,
@@ -165,7 +165,7 @@ class TradeAttribution(str, Enum):
       be named.
 
     A source declares it so the unmatched-trades check in
-    :func:`~ob_analytics.analytics.data_quality_summary` counts only the orders
+    :func:`~ob_analytics.quality.data_quality_summary` counts only the orders
     the feed can show.  A source that does not declare it is read as
     :attr:`BOTH`, the check's behaviour before this declaration existed.
 
@@ -197,7 +197,7 @@ class Clocks(str, Enum):
       ``timestamp`` copies ``exchange_timestamp``.  LOBSTER files are like
       this.
 
-    A source declares it so :func:`~ob_analytics.analytics.data_quality_summary`
+    A source declares it so :func:`~ob_analytics.quality.data_quality_summary`
     runs its clock checks only when there are two clocks to compare, and says
     why when it does not.  A live capture finds out from the venue's messages
     and records it in ``meta.json``.

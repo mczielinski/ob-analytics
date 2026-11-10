@@ -61,11 +61,6 @@ DIRECTIONS: tuple[str, ...] = Direction.labels()
 ACTIONS: tuple[str, ...] = Action.labels()
 """Action labels, indexed by :class:`Action` code."""
 
-HIDDEN_ORDER_ID: int = 0
-"""Order id reserved for orders with no public identity (LOBSTER hidden
-executions).  They never join the visible queue, so the queue reconstructions
-skip them — see :meth:`OrderEvents.visible`."""
-
 NAT_NS: int = np.iinfo(np.int64).min
 """Sentinel for "no time" in an int64-nanosecond column.
 
@@ -93,8 +88,7 @@ class OrderEvents:
     Attributes
     ----------
     order_id : numpy.ndarray
-        The venue's per-order identifier (``int64``).  :data:`HIDDEN_ORDER_ID`
-        marks an order with no public identity.
+        The venue's per-order identifier (``int64``).
     timestamp : numpy.ndarray
         Receive-clock time as **int64 nanoseconds since the epoch, UTC**.  The
         zone is dropped on the way in and re-attached on the way out, so the
@@ -120,6 +114,10 @@ class OrderEvents:
         queue, so every reconstruction except
         :func:`~ob_analytics.engine.order_lifecycles` leaves them out.
         ``None`` means "nothing is a market order".
+    is_hidden : numpy.ndarray or None
+        ``True`` where the order has no public identity (a LOBSTER hidden
+        execution).  Hidden rows never join a queue.  ``None`` means "nothing
+        is hidden".
     resting_price : numpy.ndarray or None
         The price the row's order rests at once the row is applied, in the
         same units as :attr:`price`.  The book and the queues place an order
@@ -141,6 +139,7 @@ class OrderEvents:
     action: np.ndarray
     fill: np.ndarray | None = None
     is_market: np.ndarray | None = None
+    is_hidden: np.ndarray | None = None
     resting_price: np.ndarray | None = None
 
     def __post_init__(self) -> None:
@@ -154,6 +153,7 @@ class OrderEvents:
             "action",
             "fill",
             "is_market",
+            "is_hidden",
             "resting_price",
         ):
             column = getattr(self, name)
@@ -174,13 +174,15 @@ class OrderEvents:
     def visible(self, *, side: Direction | None = None) -> np.ndarray:
         """Rows of orders that can join the visible queue, optionally on one side.
 
-        Orders sharing :data:`HIDDEN_ORDER_ID` have no public identity, and
-        market orders never rest, so neither joins the visible queue.  Both
+        Hidden orders (:attr:`is_hidden`) have no public identity, and market
+        orders never rest, so neither joins the visible queue.  Both
         queue reconstructions select rows through here, and so does any caller
         that needs to size a window over the same rows the engine will replay —
         the rule lives in one place.
         """
-        keep = (self.order_id != HIDDEN_ORDER_ID) & ~self.market_mask()
+        keep = ~self.market_mask()
+        if self.is_hidden is not None:
+            keep = keep & ~self.is_hidden
         if side is not None:
             keep = keep & (self.direction == side)
         return np.flatnonzero(keep)

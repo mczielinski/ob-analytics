@@ -41,7 +41,7 @@ timestamp:
 
 ```python
 import pandas as pd
-from ob_analytics.analytics import order_book
+from ob_analytics.book import order_book
 
 # Snapshot ten minutes into the run (events.timestamp is tz-aware UTC).
 tp = events["timestamp"].iloc[0] + pd.Timedelta(minutes=10)
@@ -97,5 +97,6 @@ fig.savefig("combined.png", dpi=150)
 ## Related
 
 - [Visualization API](../api/visualization.md) — `plot`, `prepare`, concepts and levels
-- [Analytics API](../api/analytics.md) — `order_book`, `set_order_types`, `order_aggressiveness`
+- [Analytics API](../api/analytics.md) — `set_order_types`, `order_aggressiveness`
+- [Order book API](../api/book.md) — `order_book`, `order_lifecycles`
 - [Plug in custom components](custom-components.md) — swap any of these stages for your own

@@ -829,7 +829,7 @@ def prepare_order_activity_l3_data(
     only the cancellation flood is sampled, with a ``shown_of`` ratio the
     renderer annotates.
 
-    Spans come from :func:`~ob_analytics.analytics.order_lifecycles`, so an
+    Spans come from :func:`~ob_analytics.book.order_lifecycles`, so an
     order ends when it is deleted **or fully executed** (LOBSTER fills never
     emit a delete); only genuinely still-resting orders extend to the window
     end.  Lifecycles overlapping the window are clipped to it.
@@ -839,7 +839,7 @@ def prepare_order_activity_l3_data(
     issue #272), already clipped to the caller's display window. ``None``
     (the default) draws the Gantt with no overlay.
     """
-    from ob_analytics.analytics import order_lifecycles
+    from ob_analytics.book import order_lifecycles
 
     start_time, end_time = _default_start_end(events, start_time, end_time)
 
@@ -934,7 +934,7 @@ def prepare_queue_position_l3_data(
 
     Consumes the queue engine (:func:`ob_analytics.queue.queue_positions` at the
     touch) and joins each order's terminal outcome
-    (:func:`~ob_analytics.analytics.order_lifecycles`), so a trajectory traces an
+    (:func:`~ob_analytics.book.order_lifecycles`), so a trajectory traces an
     order marching toward the front (rank 1) as the orders ahead fill or cancel,
     coloured by how it ended.  Visible-only: hidden orders and market orders
     are absent.  *events* must be classified (the ``type`` column of
@@ -944,7 +944,7 @@ def prepare_queue_position_l3_data(
     ``timestamp``, ``id``, ``rank``, ``age_s``, in time order; ``max_rank`` for the (inverted)
     y-axis; and ``show_markers`` (terminal × / ○ only when few enough orders).
     """
-    from ob_analytics.analytics import order_lifecycles
+    from ob_analytics.book import order_lifecycles
     from ob_analytics.queue import queue_positions
 
     start_time, end_time = _default_start_end(events, start_time, end_time)
@@ -1369,7 +1369,7 @@ def prepare_order_outcome_l3_data(
     ``x = aggressiveness_bps`` (signed distance from the prevailing best at
     creation; ``>0`` improved the touch) against ``y = size`` -- coloured by a
     competing-risks *outcome* from
-    :func:`~ob_analytics.analytics.order_lifecycles`:
+    :func:`~ob_analytics.book.order_lifecycles`:
 
     - **filled**: the whole order executed.
     - **partial**: some volume executed, the remainder was removed.
@@ -1391,7 +1391,7 @@ def prepare_order_outcome_l3_data(
     are dropped before clipping so they neither distort the quantiles nor the
     axis.
     """
-    from ob_analytics.analytics import order_lifecycles
+    from ob_analytics.book import order_lifecycles
 
     start_time, end_time = _default_start_end(events, start_time, end_time)
 
@@ -1666,7 +1666,7 @@ def prepare_cancellations_l3_data(
 def _as_book_side_frame(side: pd.DataFrame | np.ndarray) -> pd.DataFrame:
     """Coerce one order-book side to a DataFrame with at least price + volume.
 
-    :func:`ob_analytics.analytics.order_book` hands back per-order frames
+    :func:`ob_analytics.book.order_book` hands back per-order frames
     carrying ``id`` and ``bps``, and
     :func:`ob_analytics.depth.price_level_snapshots` one row per price level.
     The synthetic/legacy path hands back a 3-column ``[price, volume,
@@ -1833,7 +1833,7 @@ def prepare_book_snapshot_data(
     The book is drawn as it is given.  For the L2 face, a book from
     :func:`~ob_analytics.depth.price_level_snapshots` reads the depth table
     and is never crossed.  For the L3 face, a per-order book from
-    :func:`~ob_analytics.analytics.order_book` can be crossed; to draw a
+    :func:`~ob_analytics.book.order_book` can be crossed; to draw a
     clean ``best_bid < best_ask`` ladder from it, pass the book
     ``order_book(..., uncross=True)`` returns.
 
@@ -1946,7 +1946,7 @@ def prepare_book_replay_data(
     :func:`~ob_analytics.depth.price_level_snapshots`: one bar per price level,
     and a touch equal to the depth summary's at every frame.  ``per_order=True``
     (L3) rebuilds the book from *events* at each frame with
-    :func:`~ob_analytics.analytics.order_book`: one segment per order.  The
+    :func:`~ob_analytics.book.order_book`: one segment per order.  The
     L3 rebuild reads the whole event table once per frame, so it is the slower
     of the two.
 
@@ -2073,7 +2073,7 @@ def prepare_book_replay_data(
     )
 
     if per_order:
-        from ob_analytics.analytics import order_book
+        from ob_analytics.book import order_book
 
         # Uncross before the price range is chosen, so the range follows the
         # mid of the book the frames show.

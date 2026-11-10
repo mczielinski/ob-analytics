@@ -30,12 +30,11 @@ from ob_analytics._utils import (
     validate_non_empty,
 )
 from ob_analytics.config import PipelineConfig
-from ob_analytics.engine import crossed_prefix_counts
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.schemas import time_order_keys, validate_columns
 
 if TYPE_CHECKING:
-    from ob_analytics.analytics import OrderBookSnapshot
+    from ob_analytics.book import OrderBookSnapshot
 
 
 @lru_cache(maxsize=256)
@@ -256,7 +255,7 @@ class PriceLevelBook:
         bids, asks = self.bid_prices, self.ask_prices
         if bids.size and asks.size and bids[-1] >= asks[0]:
             # Crossed or locked: walk the touch from both best ends.
-            self.crossed_bids, self.crossed_asks = crossed_prefix_counts(
+            self.crossed_bids, self.crossed_asks = _engine_frames.crossed_touch_counts(
                 bids[::-1], self._bid_updated[::-1], asks, self._ask_updated
             )
         else:
@@ -1010,7 +1009,7 @@ def price_level_snapshots(
     last row at or before that instant: each snapshot holds the quoted
     levels, which leave out a level crossed by a more recently updated quote
     on the other side, as the depth summary does.  This is the L2
-    counterpart of :func:`ob_analytics.analytics.order_book`, which rebuilds
+    counterpart of :func:`ob_analytics.book.order_book`, which rebuilds
     the per-order book at one instant from the events.
 
     Parameters
@@ -1031,7 +1030,7 @@ def price_level_snapshots(
     -------
     list of OrderBookSnapshot
         One per entry of *times*, in the same order.  Each has the shape
-        :func:`~ob_analytics.analytics.order_book` returns, with one row per
+        :func:`~ob_analytics.book.order_book` returns, with one row per
         price level: ``bids`` best first and ``asks`` best last, each with
         ``price``, ``volume`` and ``liquidity`` (cumulative volume from the
         touch).

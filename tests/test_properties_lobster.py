@@ -138,7 +138,7 @@ def test_lifecycle_invariants(stream: pd.DataFrame, tmp_path_factory) -> None:
     """order_lifecycles over generated streams: outcomes partition the
     submitted orders; fills never exceed placement; ends never precede
     placements; exhausted-or-deleted orders are terminal."""
-    from ob_analytics.analytics import order_lifecycles
+    from ob_analytics.book import order_lifecycles
 
     tmp = tmp_path_factory.mktemp("hyp_life")
     events = _load(stream, tmp)
@@ -173,7 +173,7 @@ def test_order_book_matches_surviving_outstanding(
     sizes: every submitted, non-exhausted, non-deleted order appears with
     exactly its remaining size; nothing else appears; the book never
     crosses."""
-    from ob_analytics.analytics import order_book
+    from ob_analytics.book import order_book
 
     tmp = tmp_path_factory.mktemp("hyp_book")
     events = _load(stream, tmp)

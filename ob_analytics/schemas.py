@@ -107,7 +107,7 @@ consumers read them when present):
   means a reordered message.  Whether a skip means a dropped one depends on the
   source's :class:`~ob_analytics.protocols.SequenceKind`: yes for a contiguous
   counter, no for a number that only rises (the CCXT ``nonce``) — see
-  :func:`ob_analytics.analytics.detect_sequence_gaps`.
+  :func:`ob_analytics.quality.detect_sequence_gaps`.
 * ``ingest_seq`` (:data:`INGEST_SEQ_COLUMN`) — a local monotonic ingest counter,
   a 0-based ``int64`` index in the order the rows were read from the source
   (arrival order).  It is captured before any reordering, so it stays monotonic
@@ -116,7 +116,7 @@ consumers read them when present):
   but not necessarily contiguous.  This is the deterministic ordering / replay
   key that never depends on a venue-supplied number, so it is defined even when
   ``sequence`` is missing (the common case on L2 diff feeds), and it is the
-  order :func:`~ob_analytics.analytics.detect_sequence_gaps` scans ``sequence``
+  order :func:`~ob_analytics.quality.detect_sequence_gaps` scans ``sequence``
   along.  The loaders attach it only when ``track_sequence`` is enabled on
   :class:`~ob_analytics.config.PipelineConfig`, so the default pipeline output is
   byte-for-byte unchanged.
@@ -422,7 +422,7 @@ after a gap it could not repair, so the book may be wrong from there on.
 
 Databento sets the flag ``F_MAYBE_BAD_BOOK`` on such records;
 :class:`~ob_analytics.databento.DatabentoLoader` puts the count here, and
-:func:`~ob_analytics.analytics.data_quality_summary` reads it.  A frame
+:func:`~ob_analytics.quality.data_quality_summary` reads it.  A frame
 without the key comes from a source that does not flag such records, so the
 count was not checked."""
 
@@ -716,6 +716,13 @@ not measure, so the clock checks leave those rows out.
 
 SNAPSHOT_ORIGIN: str = "snapshot"
 """The :data:`ORIGIN_COLUMN` value of a row from a capture's opening book."""
+
+HIDDEN_ORDER_ID: int = 0
+"""The ``id`` of an order with no public identity.
+
+LOBSTER gives every execution against a hidden order this id.  Hidden orders
+never join the visible queue, so the queue reconstructions leave them out.
+"""
 
 VENUE_COLUMN: str = "venue"
 """Name of the optional per-row source-venue column."""

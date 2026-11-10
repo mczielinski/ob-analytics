@@ -37,15 +37,13 @@ from ob_analytics import (
     detect_stale_orders,
 )
 from ob_analytics._utils import empty_events
-from ob_analytics.analytics import (
-    _faithful_best_series,
-    order_book,
-    set_order_types,
-)
+from ob_analytics.analytics import set_order_types
+from ob_analytics.book import order_book
 from ob_analytics.datasets import toy_events, toy_trades
 from ob_analytics.depth import price_level_volume
 from ob_analytics.engine import crossed_prefix_counts
 from ob_analytics.protocols import clocks_of, trade_attribution_of
+from ob_analytics.quality import _faithful_best_series
 from tests import _lobster_few_levels as few
 
 # ---------------------------------------------------------------------------

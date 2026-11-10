@@ -23,3 +23,5 @@ allowed.
 ::: ob_analytics.schemas.cast_events
 
 ::: ob_analytics.schemas.MAYBE_BAD_BOOK_ATTR
+
+::: ob_analytics.schemas.HIDDEN_ORDER_ID

@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from ob_analytics.analytics import order_book
+from ob_analytics.book import order_book
 
 
 def _events(*rows):

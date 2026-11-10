@@ -200,7 +200,7 @@ def transaction_costs(
     venue never withdrew, which reads as a negative effective spread — the
     taker apparently paying less than the mid.  That is a finding about the
     capture, not about the market: run
-    :func:`~ob_analytics.analytics.detect_stale_orders` (or the ``audit``
+    :func:`~ob_analytics.quality.detect_stale_orders` (or the ``audit``
     command) before reading the costs as execution quality.
 
     Parameters

@@ -16,7 +16,7 @@ import pandas as pd
 import pytest
 
 from ob_analytics import Pipeline
-from ob_analytics.analytics import order_book, order_lifecycles
+from ob_analytics.book import order_book, order_lifecycles
 from ob_analytics.depth import price_level_volume
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.schemas import (

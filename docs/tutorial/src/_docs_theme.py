@@ -11,7 +11,7 @@ from __future__ import annotations
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from ob_analytics.analytics import order_book
+from ob_analytics.book import order_book
 from ob_analytics.visualization import PlotTheme
 
 DOCS_THEME = PlotTheme(

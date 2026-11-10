@@ -93,7 +93,7 @@ class TestCallersUseTheInterface:
 
     @pytest.mark.parametrize(
         "module",
-        ["analytics.py", "queue.py", "_engine_frames.py", "visualization/_data.py"],
+        ["book.py", "queue.py", "_engine_frames.py", "visualization/_data.py"],
     )
     def test_no_reach_into_engine_internals(self, module: str) -> None:
         private = [
@@ -105,6 +105,36 @@ class TestCallersUseTheInterface:
             f"{module} imports {private}: use the ob_analytics.engine "
             "interface, not its private submodules"
         )
+
+    def test_only_the_frame_faces_import_the_engine(self) -> None:
+        # The rest of the library reaches the engine through the adapter and
+        # the frame faces built on it, never directly.
+        def imports_engine(path: pathlib.Path) -> bool:
+            tree = ast.parse(path.read_text(), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    names = [alias.name for alias in node.names]
+                elif (
+                    isinstance(node, ast.ImportFrom) and node.module and not node.level
+                ):
+                    names = [node.module]
+                    names += [f"{node.module}.{alias.name}" for alias in node.names]
+                else:
+                    continue
+                if any(
+                    name == "ob_analytics.engine"
+                    or name.startswith("ob_analytics.engine.")
+                    for name in names
+                ):
+                    return True
+            return False
+
+        importers = sorted(
+            path.relative_to(_PACKAGE_DIR).as_posix()
+            for path in _PACKAGE_DIR.rglob("*.py")
+            if _ENGINE_DIR not in path.parents and imports_engine(path)
+        )
+        assert importers == ["_engine_frames.py", "book.py", "queue.py"]
 
     def test_only_the_adapter_builds_engine_input(self) -> None:
         # One place in the library turns DataFrames into engine arrays.  If a
@@ -266,7 +296,7 @@ class TestEngineInterface:
         # caller sizing a window over the same stream cannot disagree.
         second = 1_000_000_000
         events = OrderEvents(
-            order_id=np.array([0, 4, 0, 5], dtype=np.int64),
+            order_id=np.array([7, 4, 7, 5], dtype=np.int64),
             timestamp=np.arange(4, dtype=np.int64) * second,
             price=np.full(4, 100, dtype=np.int64),
             volume=np.ones(4, dtype=np.float64),
@@ -274,6 +304,7 @@ class TestEngineInterface:
                 [Direction.BID, Direction.BID, Direction.ASK, Direction.ASK], np.int8
             ),
             action=np.full(4, Action.CREATED, dtype=np.int8),
+            is_hidden=np.array([True, False, True, False]),
         )
         assert events.visible().tolist() == [1, 3]
         assert events.visible(side=Direction.BID).tolist() == [1]

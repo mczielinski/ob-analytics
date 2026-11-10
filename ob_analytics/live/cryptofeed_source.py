@@ -728,7 +728,7 @@ class CryptofeedSource:
         Blockchain.com: a ``sequence_restarts``, which ``audit`` does not
         count as out of order because the resync already accounts for it.
         Anywhere else it is a reordered or repeated message, the fault
-        :func:`~ob_analytics.analytics.detect_sequence_gaps` reports as out of
+        :func:`~ob_analytics.quality.detect_sequence_gaps` reports as out of
         order.  Counting it live too means ``meta.json`` says whether a run is
         clean without re-reading the capture.  Venues that publish no sequence
         are never scored.

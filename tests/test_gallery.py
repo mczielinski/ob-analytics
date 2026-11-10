@@ -845,8 +845,8 @@ class TestBuildGalleryModel:
         # shared zoom window and mid-anchored price band, not the raw detection.
         # The clipping of hidden trades is checked on the hand-built result of
         # the next test: the bundled sample has none (below).
-        from ob_analytics.engine import HIDDEN_ORDER_ID
         from ob_analytics.hidden_liquidity import hidden_trades as find_hidden_trades
+        from ob_analytics.schemas import HIDDEN_ORDER_ID
 
         result = bundled_sample_result
         model = build_gallery_model(result)
@@ -886,8 +886,8 @@ class TestBuildGalleryModel:
         # already-float price would land icebergs/hidden trades off the axes
         # they are drawn on (236.50 -> 2.3650 at the default tick_size=0.01).
         from ob_analytics.config import PipelineConfig
-        from ob_analytics.engine import HIDDEN_ORDER_ID
         from ob_analytics.pipeline import PipelineResult
+        from ob_analytics.schemas import HIDDEN_ORDER_ID
 
         ts = pd.Timestamp("2015-05-01 01:00:00", tz="UTC")
 
@@ -1097,7 +1097,7 @@ class TestDisplayUnitsPreserveFaces:
     def test_lifecycle_outcomes_survive_the_conversion(
         self, fractional_bitstamp_orders_csv
     ) -> None:
-        from ob_analytics.analytics import order_lifecycles
+        from ob_analytics.book import order_lifecycles
         from ob_analytics.visualization.gallery import display_result
 
         result = self._result(fractional_bitstamp_orders_csv)
