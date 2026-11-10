@@ -34,6 +34,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from ob_analytics._utils import require_per_order_events
 from ob_analytics.depth import readable_quotes
 from ob_analytics.engine import HIDDEN_ORDER_ID
 from ob_analytics.exceptions import ConfigError
@@ -402,9 +403,12 @@ def hidden_trades(
     Raises
     ------
     ConfigError
-        If a required column is missing.
+        If a required column is missing, or *events* has no rows: an L2 run
+        has no per-order events, and an empty answer would read as "no
+        hidden liquidity".
     """
     validate_columns(events, {"event_id", "timestamp"}, "hidden_trades")
+    require_per_order_events(events, "hidden_trades")
     validate_columns(trades, {"timestamp", "price", "maker_event_id"}, "hidden_trades")
     validate_columns(
         depth_summary,

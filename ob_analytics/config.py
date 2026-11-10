@@ -55,7 +55,27 @@ class Credential:
     from_file: bool = False
 
 
-class SourceSettings(BaseModel):
+class _Settings(BaseModel):
+    """A pydantic model whose validators raise :class:`ConfigError` as it is.
+
+    Pydantic wraps a ``ValueError`` raised in a validator, and ``ConfigError``
+    is a ``ValueError``, so a bad value would come out as a
+    ``ValidationError``.  This raises the ``ConfigError`` itself, as the
+    package does for every other bad value.
+    """
+
+    def __init__(self, /, **data: Any) -> None:
+        try:
+            super().__init__(**data)
+        except ValidationError as exc:
+            for error in exc.errors():
+                original = error.get("ctx", {}).get("error")
+                if isinstance(original, ConfigError):
+                    raise original from None
+            raise
+
+
+class SourceSettings(_Settings):
     """Base class for a data source's typed, immutable settings.
 
     The typed replacement for the untyped per-source settings dict that live
@@ -76,20 +96,6 @@ class SourceSettings(BaseModel):
     """
 
     model_config = {"frozen": True}
-
-    def __init__(self, /, **data: Any) -> None:
-        # Pydantic wraps a ValueError raised in a validator, and ConfigError
-        # is a ValueError, so a bad credential would come out as a
-        # ValidationError.  Raise the ConfigError itself, as the package
-        # does for every other bad value.
-        try:
-            super().__init__(**data)
-        except ValidationError as exc:
-            for error in exc.errors():
-                original = error.get("ctx", {}).get("error")
-                if isinstance(original, ConfigError):
-                    raise original from None
-            raise
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
@@ -223,7 +229,7 @@ def _read_key_file(path: Path, named_by: str) -> str:
     return text if "\n" in text.strip() else text.strip()
 
 
-class PipelineConfig(BaseModel):
+class PipelineConfig(_Settings):
     """Validated, immutable configuration for the ob-analytics pipeline.
 
     Every parameter that was previously a hard-coded literal now lives here
@@ -266,8 +272,8 @@ class PipelineConfig(BaseModel):
         default=1e-8,
         gt=0,
         description=(
-            "The instrument's minimum size increment, in the base asset "
-            "in the base asset.  Sizes are stored as a whole number of lots "
+            "The instrument's minimum size increment, in the base asset.  "
+            "Sizes are stored as a whole number of lots "
             "(``int64``); the base-asset size is ``lots * lot_size``.  1e-8 "
             "(default) is a satoshi grid, which is the finest any supported "
             "venue quotes; use 1 for whole shares (LOBSTER).  This is the size "
@@ -275,7 +281,8 @@ class PipelineConfig(BaseModel):
             "float size does not sum back to exactly zero when a price level "
             "empties, so the level lingers and is reported as the best bid or "
             "ask.  By default it matches ``volume_decimals`` "
-            "(``10 ** -volume_decimals``)."
+            "(``10 ** -volume_decimals``); a ``lot_size`` finer than "
+            "``volume_decimals`` shows is refused."
         ),
     )
     volume_decimals: int = Field(
@@ -312,6 +319,22 @@ class PipelineConfig(BaseModel):
         gt=0,
         description="Number of depth bins on each side of the book.",
     )
+
+    @model_validator(mode="after")
+    def _check_size_display(self) -> Self:
+        # A size is shown rounded to volume_decimals, so a lot finer than that
+        # would be shown as a different size, or as zero.
+        from ob_analytics._utils import step_decimals
+
+        needed = step_decimals(self.lot_size)
+        if needed > self.volume_decimals:
+            raise ConfigError(
+                f"lot_size={self.lot_size!r} is finer than volume_decimals="
+                f"{self.volume_decimals}, so sizes would be shown rounded to a "
+                f"coarser step than they have. Set volume_decimals={needed} or "
+                "more."
+            )
+        return self
 
     # ── Derived helpers ───────────────────────────────────────────────────
     @property
@@ -413,9 +436,15 @@ class InstrumentGrid:
         """Return *config* laid over this grid.
 
         The fields the caller set in *config* win; every other grid field
-        comes from this grid.  With no *config*, the config is this grid's.
+        comes from this grid.  A step the caller set without its display
+        precision brings the precision that shows one step, as
+        :func:`instrument_fields` gives it, rather than the grid's.  With no
+        *config*, the config is this grid's.
         """
         explicit = (
             {k: getattr(config, k) for k in config.model_fields_set} if config else {}
         )
-        return PipelineConfig(**{**self.fields(), **explicit})
+        steps = instrument_fields(
+            tick_size=explicit.get("tick_size"), lot_size=explicit.get("lot_size")
+        )
+        return PipelineConfig(**{**self.fields(), **steps, **explicit})

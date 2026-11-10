@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from ob_analytics._utils import window_start
+from ob_analytics._utils import require_per_order_events, window_start
 from ob_analytics.depth import (
     _readable_mid,
     book_imbalance,
@@ -1056,13 +1056,19 @@ def prepare_liquidity_at_touch_l3_data(
     Returns ``ages`` (a ``max_rank`` x ``n_time`` array, NaN where the queue is
     short), ``times`` (column timestamps), ``max_rank`` and ``side``.
     """
-    from ob_analytics.queue import queue_age_grid
+    from ob_analytics.queue import _empty_age_grid, queue_age_grid
 
+    # Checked on the whole run: a window with no events is an empty grid, but
+    # a run with none is an L2 run, which has no queue to compose.
+    require_per_order_events(events, "queue composition")
     start_time, end_time = _default_start_end(events, start_time, end_time)
     win = events[
         (events["timestamp"] >= start_time) & (events["timestamp"] <= end_time)
     ]
-    ages, times, max_rank = queue_age_grid(win, side=side, n_time=n_time)
+    if win.empty:
+        ages, times, max_rank = _empty_age_grid()
+    else:
+        ages, times, max_rank = queue_age_grid(win, side=side, n_time=n_time)
     return {"ages": ages, "times": times, "max_rank": max_rank, "side": side}
 
 

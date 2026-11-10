@@ -131,11 +131,11 @@ type, unit, nullability, and meaning for every table — is in ``docs/schema.md`
 from __future__ import annotations
 
 import json
+import warnings
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
-from loguru import logger
 
 from ob_analytics.exceptions import ConfigError
 
@@ -232,7 +232,9 @@ dtype the file stored — the caller sees float prices or float sizes, not ticks
 and lots, and must scale them itself."""
 
 
-def check_schema_version(version: str | None, *, source: str = "<parquet>") -> None:
+def check_schema_version(
+    version: str | None, *, source: str = "<parquet>", stacklevel: int = 2
+) -> None:
     """Validate an on-disk schema *version* against what this build reads.
 
     Parameters
@@ -242,25 +244,33 @@ def check_schema_version(version: str | None, *, source: str = "<parquet>") -> N
         metadata, or ``None`` when the file carries no such key.
     source : str
         Short identifier for the file, used only in messages.
+    stacklevel : int
+        Passed to :func:`warnings.warn`, so a caller several frames down can
+        point the warning at the user's own call.
 
     Raises
     ------
     ConfigError
         If *version* is a string this build does not support.
 
+    Warns
+    -----
+    UserWarning
+        If *version* is ``None`` (a legacy, unversioned file).
+
     Notes
     -----
     ``version is None`` is a **legacy/unversioned** file — data written before
-    the schema carried a version, and the bundled sample.  Such files still
-    load, with a warning, so existing captures and pre-existing outputs keep
+    the schema carried a version.  Such files still load, with a
+    :class:`UserWarning`, so existing captures and pre-existing outputs keep
     working.
     """
     if version is None:
-        logger.warning(
-            "{}: no schema version in Parquet metadata; treating as legacy "
-            "(pre-{}) data. Re-save with save_data() to tag it.",
-            source,
-            SCHEMA_VERSION,
+        warnings.warn(
+            f"{source}: no schema version in Parquet metadata; treating as "
+            f"legacy (pre-{SCHEMA_VERSION}) data. Re-save with save_data() to "
+            "tag it.",
+            stacklevel=stacklevel,
         )
         return
     if version not in _SUPPORTED_SCHEMA_VERSIONS:

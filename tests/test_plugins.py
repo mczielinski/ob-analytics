@@ -34,6 +34,7 @@ from ob_analytics.features import (
     get_feature,
     load_feature_plugins,
 )
+from ob_analytics.protocols import Level
 from ob_analytics.visualization import _renderers
 
 
@@ -41,6 +42,21 @@ class FakePlugin:
     """A stand-in for a plug-in class, constructed with no arguments."""
 
     name = "fake_plugin"
+
+
+class FakeMetric(FakePlugin):
+    """A stand-in metric: register_metric refuses an object without every
+    member of the Metric protocol."""
+
+    title = "Fake"
+    levels = (Level.L2, Level.L3)
+    needs = ()
+
+    def compute(self, result: Any) -> Any:
+        return None
+
+    def prepare(self, frame: Any) -> dict[str, Any]:
+        return {}
 
 
 def fake_writer_factory(config: Any, ctx: Any) -> None:
@@ -69,9 +85,9 @@ _GROUPS = [
     _Group(
         metrics.ENTRY_POINT_GROUP,
         metrics.load_metric_plugins,
-        f"{__name__}:FakePlugin",
+        f"{__name__}:FakeMetric",
         lambda: metrics.get_metric("fake_plugin"),
-        lambda found: isinstance(found, FakePlugin),
+        lambda found: isinstance(found, FakeMetric),
     ),
     _Group(
         BAR_RULES_GROUP,

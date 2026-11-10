@@ -32,7 +32,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from ob_analytics._utils import epoch_ns
+from ob_analytics._utils import epoch_ns, require_per_order_events
 from ob_analytics.config import PipelineConfig
 from ob_analytics.data import register_writer
 from ob_analytics.protocols import WriteTarget
@@ -227,8 +227,10 @@ class HftbacktestWriter:
 
         *dest* is a file, written at exactly that path (``.npz`` is the usual
         extension).  The array lands under the ``"data"`` member, which is the
-        one ``hftbacktest`` loads.
+        one ``hftbacktest`` loads.  Raises :class:`~ob_analytics.exceptions.ConfigError`
+        when the events have no rows: an L2 run has no per-order events.
         """
+        require_per_order_events(data["events"], "HftbacktestWriter")
         p = Path(dest)
         p.parent.mkdir(parents=True, exist_ok=True)
         array = to_hftbacktest_array(
@@ -377,7 +379,12 @@ class NautilusWriter:
         dest: str | Path,
         **kwargs: Any,
     ) -> Path:
-        """Write ``data["events"]`` to *dest* as one Parquet file of deltas."""
+        """Write ``data["events"]`` to *dest* as one Parquet file of deltas.
+
+        Raises :class:`~ob_analytics.exceptions.ConfigError` when the events
+        have no rows: an L2 run has no per-order events.
+        """
+        require_per_order_events(data["events"], "NautilusWriter")
         p = Path(dest)
         p.parent.mkdir(parents=True, exist_ok=True)
         deltas = to_nautilus_deltas(

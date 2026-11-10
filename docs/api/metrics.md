@@ -19,7 +19,9 @@ ob-analytics.
 
 Metrics run on demand, not during `Pipeline.run`: use
 [`PipelineResult.metric`](pipeline.md) for one, `PipelineResult.metrics()` for
-every metric that applies to the run's resolution. Settings are keyword
+every metric that applies to the run: its resolution is one of the metric's
+`levels`, and each table in the metric's `needs` has rows, so a run with no
+trades skips the trade metrics. Settings are keyword
 arguments: `result.metric("vpin", n_buckets=20)`, or
 `result.plot("vpin", n_buckets=20, threshold=0.8)`, where each keyword
 goes to `compute` or `prepare`, whichever names it.
@@ -78,3 +80,7 @@ units and a price in the quote currency, so
 ::: ob_analytics.metrics.get_metric
 
 ::: ob_analytics.metrics.load_metric_plugins
+
+::: ob_analytics.metrics.skip_reason
+
+::: ob_analytics.metrics.applicable_metrics

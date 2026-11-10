@@ -1,6 +1,7 @@
 """Tests for set_order_types — order classification logic."""
 
 import pandas as pd
+import pytest
 
 from ob_analytics.analytics import set_order_types
 
@@ -99,6 +100,9 @@ class TestSetOrderTypes:
             (2, 10, "deleted", "bid", 100, 3),  # different volume → not flashed
         )
         trades = _trades()  # no trades → not market/maker/taker
-        result = set_order_types(events, trades)
+        # The package's loguru logger stays off, so the user hears of the
+        # unclassified order only through warnings.warn.
+        with pytest.warns(UserWarning, match="Could not classify 1 orders"):
+            result = set_order_types(events, trades)
         # It's created+deleted with volume mismatch, no changed, not forever → unknown
         assert (result[result["id"] == 10]["type"] == "unknown").all()

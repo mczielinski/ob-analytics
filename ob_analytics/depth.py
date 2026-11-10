@@ -25,6 +25,7 @@ from ob_analytics._utils import (
     epoch_ns,
     lots_to_size,
     price_scale,
+    require_per_order_events,
     size_to_lots,
     validate_non_empty,
 )
@@ -665,7 +666,7 @@ def _price_level_volume(events: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFram
         },
         "price_level_volume",
     )
-    validate_non_empty(events, "price_level_volume")
+    require_per_order_events(events, "price_level_volume")
 
     # A float sum of a level's adds, cancels and fills need not return to
     # exactly zero when the last order leaves: 0.1 + 0.02 - 0.1 - 0.02 is

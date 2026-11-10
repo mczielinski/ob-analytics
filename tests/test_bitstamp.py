@@ -282,6 +282,38 @@ class TestTradeReaderOrderIdTypes:
         assert trades["taker"].iloc[0] == 11
 
 
+class TestDuplicateCancellations:
+    def test_a_repeated_cancellation_is_dropped_with_a_warning(self, tmp_path):
+        # The package's loguru logger stays off, so the user hears of the
+        # dropped row only through warnings.warn.
+        ts = 1_777_691_156_000
+        rows = [
+            (7, ts, 78360.0, 0.5, "created"),
+            (7, ts + 10, 78360.0, 0.5, "deleted"),
+            (7, ts + 20, 78360.0, 0.5, "deleted"),
+        ]
+        orders = tmp_path / "orders.csv"
+        pd.DataFrame(
+            [
+                {
+                    "id": i,
+                    "timestamp": t,
+                    "exchange_timestamp": t,
+                    "price": price,
+                    "volume": v,
+                    "action": a,
+                    "direction": "bid",
+                }
+                for i, t, price, v, a in rows
+            ]
+        ).to_csv(orders, index=False)
+
+        with pytest.warns(UserWarning, match=r"removed 1 duplicate order.*ids 7\)"):
+            events = BitstampLoader().load(orders)
+
+        assert list(events["action"]) == ["created", "deleted"]
+
+
 class TestInstantOrders:
     """Bitstamp sends an instant order bought by quote amount as ``created``
     with size 0 at price 999999999, then the rest of its life.  Its

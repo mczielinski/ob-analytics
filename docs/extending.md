@@ -707,7 +707,7 @@ model.concepts.append(PlotConcept("my_face", "My Face", {Level.L2: spec}))
 ## 4. A new metric
 
 A metric measures a finished run and draws as a level-less plot. It is a plain
-object with four members — no base class to inherit, the same structural typing
+object with six members — no base class to inherit, the same structural typing
 the other surfaces use:
 
 - `name` — the registry key, and the plot concept the metric draws under.
@@ -715,6 +715,8 @@ the other surfaces use:
 - `levels` — the resolutions it applies to. A metric that reads per-order
   events declares `(Level.L3,)` and is skipped on an L2 run instead of failing
   on the empty `events` table.
+- `needs` — the run's tables it cannot be computed without, such as
+  `("trades",)`. The metric is skipped on a run where one of them has no rows.
 - `compute(result)` — the measurement: takes a `PipelineResult`, returns a
   `pandas.DataFrame`.
 - `prepare(frame)` — turns that table into the payload the renderer takes,
@@ -759,6 +761,7 @@ class PriceRangeMetric:
     name = "price_range"
     title = "Price Range per Window"
     levels = (Level.L2, Level.L3)  # trades only: both resolutions have them
+    needs = ("trades",)  # skipped on a run with no trades
 
     def compute(self, result: PipelineResult, *, freq: str = "1min") -> pd.DataFrame:
         return price_range(result.trades, freq=freq)
@@ -807,7 +810,7 @@ available_concepts(result)                # lists "price_range" with an empty le
 Metrics run when asked for, not during `Pipeline.run`, so a run pays only for
 the metrics it uses and a metric that raises cannot break the pipeline.
 `result.metrics()` runs every registered metric whose `levels` include the
-run's resolution.
+run's resolution and whose `needs` tables all have rows.
 
 **In the gallery.** A registered metric becomes a gallery card on its own —
 `generate_gallery(result, ...)` draws it beside the built-in faces with no
