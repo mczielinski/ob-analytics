@@ -48,7 +48,7 @@ three.
 from __future__ import annotations
 
 from importlib.metadata import EntryPoint
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 
@@ -284,14 +284,14 @@ class VpinMetric:
         self,
         result: Any,
         *,
-        bucket_volume: float | None = None,
+        bucket_volume: float | Literal["fit"] | None = None,
         n_buckets: int = 50,
         sign_method: str | None = None,
     ) -> pd.DataFrame:
         """Return the per-bucket VPIN table; the settings are ``compute_vpin``'s.
 
         *bucket_volume* is in the instrument's own units, as
-        ``compute_vpin`` takes it.
+        ``compute_vpin`` takes it, or ``"fit"`` to size it to the capture.
         """
         return compute_vpin(
             result.trades,

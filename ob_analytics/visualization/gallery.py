@@ -210,6 +210,12 @@ def _metric_payload(metric: Any, result: PipelineResult, **settings: Any) -> dic
     return metric.prepare(metric.compute(result, **compute), **prepare)
 
 
+#: Settings the gallery picks for a metric in place of the metric's defaults.
+#: VPIN's default bucket (a day's volume ÷ 50) fills one bucket on a capture
+#: of half an hour, so the gallery has ``compute_vpin`` fit it to the capture.
+_GALLERY_SETTINGS: dict[str, dict[str, Any]] = {"vpin": {"bucket_volume": "fit"}}
+
+
 def _metric_panels(result: PipelineResult) -> list[PlotSpec]:
     """Build one analytic panel per registered metric that applies to *result*.
 
@@ -226,7 +232,9 @@ def _metric_panels(result: PipelineResult) -> list[PlotSpec]:
 
     *result* is the run as it is, not converted with :func:`display_result`:
     every metric reports in the instrument's own units from the run's own
-    frames, so a card shows the numbers ``result.metric(name)`` returns.
+    frames, so a card shows the numbers ``result.metric(name)`` returns.  The
+    one exception is a setting in :data:`_GALLERY_SETTINGS`: VPIN's buckets
+    are fitted to the capture, and the card says so when that changed them.
     """
     from ob_analytics.metrics import applicable_metrics
 
@@ -235,10 +243,21 @@ def _metric_panels(result: PipelineResult) -> list[PlotSpec]:
             metric.name,
             metric.title,
             metric.name,
-            partial(_metric_payload, metric, result),
+            partial(_metric_payload, metric, result, **_gallery_settings(metric)),
         )
         for metric in applicable_metrics(result)
     ]
+
+
+def _gallery_settings(metric: Any) -> dict[str, Any]:
+    """The :data:`_GALLERY_SETTINGS` for *metric* that its ``compute`` takes.
+
+    A plug-in metric registered under a built-in name keeps its own defaults
+    for any setting its ``compute`` does not name.
+    """
+    names = _compute_settings(metric)
+    settings = _GALLERY_SETTINGS.get(metric.name, {})
+    return {k: v for k, v in settings.items() if k in names}
 
 
 #: Price-valued columns per frame, converted from integer ticks to a
@@ -1028,6 +1047,8 @@ def generate_gallery(
                 (out / panel.backend).mkdir(parents=True, exist_ok=True)
                 rendered_dirs.add(panel.backend)
             panel.rendered = _render_and_save(panel, out, plt, prepared)
+        if not card.note:
+            card.note = _payload_note(prepared)
 
     html_path = out / "gallery.html"
     _write_gallery_html(html_path, cards, title)
@@ -1084,6 +1105,18 @@ def _drawn_elsewhere(backends: tuple[str, ...]) -> str:
 def _backend_label(backend: str) -> str:
     style = _BACKEND_STYLES.get(backend)
     return style.label if style else backend.capitalize()
+
+
+def _payload_note(prepared: dict[tuple[int, int], dict | Exception]) -> str:
+    """The first ``note`` a card's prepared payloads carry, or ``""``.
+
+    A prepare step that changed a setting for the gallery says so in its
+    payload's ``note``, and the card shows it under the plot.
+    """
+    for payload in prepared.values():
+        if isinstance(payload, dict) and payload.get("note"):
+            return str(payload["note"])
+    return ""
 
 
 def _render_and_save(

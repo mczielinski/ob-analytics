@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, field
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -233,7 +234,7 @@ def _empty_vpin_frame(
 
 def compute_vpin(
     trades: pd.DataFrame,
-    bucket_volume: float | None = None,
+    bucket_volume: float | Literal["fit"] | None = None,
     n_buckets: int = 50,
     sign_method: str | None = None,
     quotes: pd.DataFrame | None = None,
@@ -264,7 +265,11 @@ def compute_vpin(
         :func:`~ob_analytics.visualization.display_result`).  This is highly
         instrument-specific, so size it from the data.  When left out, it is
         picked by :func:`vpin_bucket_volume` (average daily volume ÷ 50, with
-        a 24-hour trading day).
+        a 24-hour trading day).  ``"fit"`` picks it the same way, unless that
+        bucket would fill fewer than *n_buckets* buckets, as it does on a
+        capture shorter than a day; then each bucket is the trades' total
+        volume ÷ (2 × *n_buckets*), so they fill about twice *n_buckets*.
+        The gallery uses ``"fit"``, so a short capture still plots.
     n_buckets : int, optional
         Window length (in buckets) for the trailing VPIN average.
         Default is 50, following the original paper.  Fewer complete buckets
@@ -306,7 +311,9 @@ def compute_vpin(
         * ``attrs["bucket_volume"]`` — the bucket size used, in the
           instrument's own units
         * ``attrs["bucket_volume_rule"]`` — ``"given"`` when passed in,
-          ``"adv/50"`` when picked by :func:`vpin_bucket_volume`
+          ``"adv/50"`` when picked by :func:`vpin_bucket_volume`, and
+          ``"total/100"`` (for *n_buckets* 50) when ``"fit"`` sized it from
+          the total volume
         * ``attrs["n_buckets"]`` — the trailing window, in buckets
         * ``attrs["diagnostics"]`` — a tuple of reasons the result should not
           be relied on; empty when there are none.  Today the one check is
@@ -321,7 +328,8 @@ def compute_vpin(
         If required columns are missing, or the sizes are integer lots and
         the frame carries no ``lot_size``.
         Also if *trades* is empty.
-        Also if *bucket_volume* is not positive, would make more than
+        Also if *bucket_volume* is a string other than ``"fit"``, is not
+        positive, would make more than
         :data:`~ob_analytics.trade_sign.MAX_VOLUME_BUCKETS` buckets, or is
         left out and the trades span no time (see :func:`vpin_bucket_volume`).
     """
@@ -329,9 +337,22 @@ def compute_vpin(
     validate_non_empty(trades, "compute_vpin")
     rule = "given"
     advice: str | None = None
-    if bucket_volume is None:
+    if isinstance(bucket_volume, str) and bucket_volume != "fit":
+        raise ConfigError(
+            f"compute_vpin: bucket_volume must be a number, None or 'fit', "
+            f"got {bucket_volume!r}"
+        )
+    if bucket_volume is None or bucket_volume == "fit":
+        fit = bucket_volume == "fit"
         bucket_volume = vpin_bucket_volume(trades)
         rule = f"adv/{VPIN_BUCKETS_PER_DAY}"
+        if fit:
+            total = float(trades["volume"].sum()) / size_scale(trades, "compute_vpin")
+            if total < n_buckets * bucket_volume:
+                # A day's volume ÷ 50 fills fewer than n_buckets buckets: size
+                # them from the total so the trades fill about 2 × n_buckets.
+                bucket_volume = total / (2 * n_buckets)
+                rule = f"total/{2 * n_buckets}"
         # The default rule makes about 50 buckets per day the trades span, so
         # only a span of decades trips the cap: a timestamp problem, not units.
         span = trades["timestamp"].max() - trades["timestamp"].min()

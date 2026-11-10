@@ -1247,6 +1247,14 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   the book replay, which only Plotly draws. Now that card says which backend
   draws the plot, and nothing is logged. A plot that fails to draw or save
   still logs a warning, and its card now gives the reason.
+- **The gallery's VPIN card plots a short capture** (#464). VPIN's default
+  bucket, a day's volume ÷ 50, filled one bucket on the bundled half-hour
+  sample, so the card showed one point and `compute_vpin` warned. The gallery
+  now passes `bucket_volume="fit"`, a new `compute_vpin` setting: when the
+  default would fill fewer than `n_buckets` buckets, each bucket is the total
+  volume ÷ (2 × `n_buckets`). The card says when it did so. `compute_vpin`,
+  `result.metric("vpin")` and `result.plot("vpin")` keep the default and
+  still warn when a bucket size fills too few buckets.
 - **The Matplotlib `book_signals` plot no longer runs out of memory** (#462).
   It drew the touch OBI strip as one bar per depth-summary row, about 313,000
   bars on the bundled sample, and went past 3 GB. The strip is now two stepped

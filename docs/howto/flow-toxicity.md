@@ -89,6 +89,15 @@ vpin = compute_vpin(result.trades, bucket_volume=total / 60)
 len(vpin)                      # a full series, no warning
 ```
 
+Or pass `bucket_volume="fit"`, as the gallery does. It keeps the default when
+that fills `n_buckets` buckets. Otherwise each bucket is the total volume ÷
+(2 × `n_buckets`), and `attrs["bucket_volume_rule"]` says `"total/100"`:
+
+```python
+vpin = compute_vpin(result.trades, bucket_volume="fit")
+len(vpin)                      # about 100 buckets on the sample, no warning
+```
+
 ## Kyle's lambda
 
 ```python
