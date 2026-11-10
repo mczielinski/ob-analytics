@@ -1207,6 +1207,12 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
+- **The Matplotlib `book_signals` plot no longer runs out of memory** (#462).
+  It drew the touch OBI strip as one bar per depth-summary row, about 313,000
+  bars on the bundled sample, and went past 3 GB. The strip is now two stepped
+  fills, buy above zero and sell below, each reduced to the highest and lowest
+  value in each of 4,000 time columns. On the sample the plot peaks at about
+  680 MiB, and `ob-analytics process ... --gallery` finishes under a 3 GB cap.
 - **The Bitstamp-format loader numbers events in time order** (#456). It
   numbered them by order id, so rows of two orders at one instant came in the
   order their ids sort. Bitstamp's ids rise with time; Independent Reserve's

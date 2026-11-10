@@ -1422,6 +1422,38 @@ def _mpl_l1_card(data: dict, ax: Axes | None, theme: PlotTheme) -> Figure:
     return fig
 
 
+# Columns in a stepped strip: well above the pixel width of a saved figure.
+_STRIP_COLUMNS = 4000
+
+
+def _step_envelope(
+    x: np.ndarray,
+    above: np.ndarray,
+    below: np.ndarray,
+    columns: int = _STRIP_COLUMNS,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Reduce a stepped strip split at zero to its extremes per time column.
+
+    *above* (``>= 0``) and *below* (``<= 0``) are stepped series over sorted
+    *x* (``step="post"``).  The result has *columns* equal time columns; in
+    each, *above* holds the highest and *below* the lowest of the steps that
+    show in that column, which is what a full-resolution fill paints there.
+    Agg's memory grows with the vertices of a filled path, so a strip of
+    hundreds of thousands of steps is drawn this way.  A strip of up to
+    *columns* steps comes back unchanged.
+    """
+    if len(x) <= columns or not x[-1] > x[0]:
+        return x, above, below
+    edges = np.linspace(x[0], x[-1], columns + 1)
+    # The step showing at each column's left edge, then every step that starts
+    # inside the column; the next column's first step may also show here.
+    first = np.searchsorted(x, edges[:-1], side="right") - 1
+    nxt = np.append(first[1:], first[-1])
+    top = np.maximum(np.maximum.reduceat(above, first), above[nxt])
+    bottom = np.minimum(np.minimum.reduceat(below, first), below[nxt])
+    return edges, np.append(top, top[-1]), np.append(bottom, bottom[-1])
+
+
 @_themed
 def mpl_book_signals(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -1429,9 +1461,9 @@ def mpl_book_signals(
     """Predictive touch signals: micro-price vs mid, with an OBI strip.
 
     Price lines (micro-price vs mid, over the spread ribbon) sit on the primary
-    axis; the order-book-imbalance strip -- touch OBI as green/red bars, the
-    cumulative-depth OBI as a line -- sits on a twin ``[-1, +1]`` axis behind
-    them.
+    axis; the order-book-imbalance strip -- touch OBI as a green/red stepped
+    fill, the cumulative-depth OBI as a line -- sits on a twin ``[-1, +1]`` axis
+    behind them.
     """
     pal = theme.palette
     own_figure = ax is None
@@ -1441,9 +1473,11 @@ def mpl_book_signals(
     # OBI strip on a twin axis, drawn first so the price lines sit above it.
     ax2 = ax.twinx()
     obi = np.asarray(data["obi"], dtype=float)
-    colors = [pal.buy if v >= 0 else pal.sell for v in np.nan_to_num(obi)]
-    bar_width = float(np.median(np.diff(x))) * 0.8 if len(x) > 1 else 0.001
-    ax2.bar(x, obi, width=bar_width, color=colors, alpha=0.3, linewidth=0)
+    # Two stepped fills split at zero. One bar per row makes one artist per
+    # row and runs out of memory on a long depth summary.
+    x_strip, above, below = _step_envelope(x, np.fmax(obi, 0.0), np.fmin(obi, 0.0))
+    for part, color in ((above, pal.buy), (below, pal.sell)):
+        ax2.fill_between(x_strip, part, 0.0, step="post", color=color, alpha=0.3, lw=0)
     ax2.plot(
         x,
         data["obi_depth"],

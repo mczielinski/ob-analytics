@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from matplotlib.axes import Axes
+from matplotlib.colors import to_rgb
 from matplotlib.figure import Figure
 from matplotlib.text import Text
 
@@ -26,7 +27,7 @@ from ob_analytics.visualization import (
     plot,
     save_figure,
 )
-from ob_analytics.visualization._matplotlib import _create_axes
+from ob_analytics.visualization._matplotlib import _create_axes, _step_envelope
 
 
 @pytest.fixture(autouse=True)
@@ -1618,3 +1619,83 @@ class TestPlotTradeSize:
         assert isinstance(fig, Figure)
         assert ax.get_xscale() == "log"
         assert [t.get_text() for t in ax.get_yticklabels()] == ["sell", "buy"]
+
+
+def _book_signals_payload(n: int) -> dict[str, Any]:
+    """A book-signals payload of *n* rows whose touch OBI flips sign each row."""
+    obi = np.where(np.arange(n) % 2 == 0, 0.5, -0.25)
+    obi[1] = np.nan
+    mid = np.full(n, 100.5)
+    return {
+        "timestamp": pd.Series(pd.date_range("2020-01-01", periods=n, freq="s")),
+        "best_bid_price": mid - 0.5,
+        "best_ask_price": mid + 0.5,
+        "mid": mid,
+        "microprice": mid + 0.1,
+        "obi": obi,
+        "obi_depth": obi / 2,
+        "levels": 3,
+    }
+
+
+def _artist_count(fig: Figure) -> int:
+    return sum(len(ax.patches) + len(ax.collections) + len(ax.lines) for ax in fig.axes)
+
+
+class TestPlotBookSignals:
+    """Book signals: the OBI strip costs a fixed number of artists."""
+
+    def test_artist_count_does_not_grow_with_rows(self):
+        small = plot("book_signals", backend="matplotlib", **_book_signals_payload(10))
+        large = plot(
+            "book_signals", backend="matplotlib", **_book_signals_payload(5_000)
+        )
+        assert _artist_count(large) == _artist_count(small)
+
+    def test_obi_strip_is_buy_above_and_sell_below_zero(self):
+        from ob_analytics.visualization._theme import DEFAULT_THEME
+
+        pal = DEFAULT_THEME.palette
+        fig = plot("book_signals", backend="matplotlib", **_book_signals_payload(10))
+        price_ax, obi_ax = fig.axes
+        assert price_ax.get_zorder() > obi_ax.get_zorder()
+        fills = obi_ax.collections
+        assert len(fills) == 2
+        buy, sell = (f.get_paths()[0].vertices[:, 1] for f in fills)
+        assert np.allclose(fills[0].get_facecolor()[0][:3], to_rgb(pal.buy))
+        assert np.allclose(fills[1].get_facecolor()[0][:3], to_rgb(pal.sell))
+        assert buy.max() == pytest.approx(0.5) and buy.min() == pytest.approx(0.0)
+        assert sell.min() == pytest.approx(-0.25) and sell.max() == pytest.approx(0.0)
+
+
+class TestStepEnvelope:
+    """The OBI strip keeps each time column's extremes when it has many steps."""
+
+    def test_short_strip_comes_back_unchanged(self):
+        x = np.arange(5.0)
+        above = np.array([0.1, 0.0, 0.3, 0.0, 0.2])
+        below = -above[::-1]
+        xs, a, b = _step_envelope(x, above, below, columns=10)
+        assert xs is x and a is above and b is below
+
+    def test_columns_hold_the_extremes_of_their_steps(self):
+        # Ten steps into two columns: [0, 4.5) shows steps 0-4, [4.5, 9]
+        # shows step 4 (still showing at 4.5) through step 9.
+        x = np.arange(10.0)
+        above = np.array([0.1, 0.9, 0.0, 0.2, 0.4, 0.0, 0.3, 0.0, 0.0, 0.1])
+        below = -above
+        xs, a, b = _step_envelope(x, above, below, columns=2)
+        np.testing.assert_allclose(xs, [0.0, 4.5, 9.0])
+        np.testing.assert_allclose(a, [0.9, 0.4, 0.4])
+        np.testing.assert_allclose(b, [-0.9, -0.4, -0.4])
+
+    def test_long_strip_reaches_the_same_extremes_with_few_vertices(self):
+        fig = plot(
+            "book_signals", backend="matplotlib", **_book_signals_payload(20_000)
+        )
+        buy, sell = fig.axes[1].collections
+        buy_y = buy.get_paths()[0].vertices[:, 1]
+        sell_y = sell.get_paths()[0].vertices[:, 1]
+        assert len(buy_y) < 20_000
+        assert buy_y.max() == pytest.approx(0.5)
+        assert sell_y.min() == pytest.approx(-0.25)
