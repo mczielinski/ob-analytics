@@ -11,12 +11,13 @@ What lives here is the pandas face of that engine: the canonical same-instant
 sort, the display-level filter, the sampling window, and the frames the
 plotting layer consumes.
 
-Visible-only caveat: hidden orders (LOBSTER ``id == 0`` / type-5 executions)
-never join the visible queue and are excluded, so reconstructed touch volume
-matches the *visible* book, not the full book.  Market orders never rest, so
-they are left out as well, as :func:`~ob_analytics.book.order_book`
-leaves them out.  Each order is queued at the price ``order_book`` shows it
-at, which need not be the price on its latest row.
+Visible-only caveat: hidden orders (LOBSTER type-5 executions, whose ``id`` is
+:data:`~ob_analytics.schemas.HIDDEN_ORDER_ID`) never join the visible queue and
+are excluded, so reconstructed touch volume matches the *visible* book, not the
+full book.  Market orders never rest, so they are left out as well, as
+:func:`~ob_analytics.book.order_book` leaves them out.  Each order is queued at
+the price ``order_book`` shows it at, which need not be the price on its latest
+row.
 """
 
 from __future__ import annotations

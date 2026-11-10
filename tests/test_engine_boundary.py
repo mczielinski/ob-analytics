@@ -310,6 +310,30 @@ class TestEngineInterface:
         assert events.visible(side=Direction.BID).tolist() == [1]
         assert events.visible(side=Direction.ASK).tolist() == [3]
 
+    def test_the_adapter_marks_the_hidden_order_id(self) -> None:
+        # The engine does not know which id is hidden; the frame adapter tells
+        # it, from the schema's HIDDEN_ORDER_ID.
+        import pandas as pd
+
+        from ob_analytics._engine_frames import to_order_events
+        from ob_analytics.schemas import HIDDEN_ORDER_ID
+
+        frame = pd.DataFrame(
+            {
+                "id": [HIDDEN_ORDER_ID, 4, HIDDEN_ORDER_ID, 5],
+                "timestamp": pd.date_range("2026-01-01", periods=4, freq="s", tz="UTC"),
+                "price": [100, 100, 101, 101],
+                "volume": [1, 1, 1, 1],
+                "fill": [0, 0, 0, 0],
+                "direction": ["bid", "bid", "ask", "ask"],
+                "action": ["created"] * 4,
+            }
+        )
+        events = to_order_events(frame)
+        assert events.is_hidden is not None
+        assert events.is_hidden.tolist() == [True, False, True, False]
+        assert events.visible().tolist() == [1, 3]
+
     def test_visible_rows_skip_market_orders(self) -> None:
         # A market order never rests, so it never joins a queue.
         second = 1_000_000_000
