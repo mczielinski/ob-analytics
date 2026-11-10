@@ -16,6 +16,7 @@ from __future__ import annotations
 import importlib.util
 import json
 
+import pandas as pd
 import pytest
 
 from tests import _lobster_few_levels as few
@@ -102,6 +103,143 @@ class TestProcessSubcommand:
         )
         assert r.returncode == 0, r.stderr
         assert (out / "gallery" / "gallery.html").exists()
+
+    def test_the_run_settings_reach_the_config(
+        self, cli_runner, tmp_path, tiny_bitstamp_orders_csv
+    ):
+        from ob_analytics.data import load_result
+
+        out = tmp_path / "out"
+        r = cli_runner(
+            "process", str(tiny_bitstamp_orders_csv), "-o", str(out),
+            "--tick-size", "0.001", "--lot-size", "0.0001",
+            "--depth-bins", "4", "--depth-bps", "50",
+        )  # fmt: skip
+        assert r.returncode == 0, r.stderr
+        config = load_result(out).config
+        assert config.tick_size == 0.001
+        assert config.price_decimals == 3
+        assert config.lot_size == 0.0001
+        assert config.volume_decimals == 4
+        assert config.depth_bins == 4
+        assert config.depth_bps == 50
+
+    def test_a_size_that_is_not_more_than_0_is_refused(
+        self, cli_runner, tmp_path, tiny_bitstamp_orders_csv
+    ):
+        r = cli_runner(
+            "process", str(tiny_bitstamp_orders_csv), "-o", str(tmp_path / "o"),
+            "--tick-size", "0",
+        )  # fmt: skip
+        assert r.returncode == 2
+        assert "'0' is not more than 0" in r.stderr
+
+    def test_session_tz_places_the_session_on_the_clock(
+        self, cli_runner, tmp_path, lobster_day_dir
+    ):
+        from ob_analytics.data import load_result
+
+        first = {}
+        for tz in ("America/New_York", "Europe/London"):
+            out = tmp_path / tz.replace("/", "_")
+            r = cli_runner(
+                "process", str(lobster_day_dir), "--source", "lobster",
+                "--trading-date", "2024-01-02", "--session-tz", tz, "-o", str(out),
+            )  # fmt: skip
+            assert r.returncode == 0, r.stderr
+            first[tz] = load_result(out).events["timestamp"].min()
+        # New York is five hours behind London in January.
+        assert first["America/New_York"] - first["Europe/London"] == pd.Timedelta(
+            hours=5
+        )
+
+    def test_an_unknown_time_zone_is_refused(
+        self, cli_runner, tmp_path, lobster_day_dir
+    ):
+        r = cli_runner(
+            "process", str(lobster_day_dir), "--source", "lobster",
+            "--trading-date", "2024-01-02", "--session-tz", "Mars/Olympus",
+            "-o", str(tmp_path / "o"),
+        )  # fmt: skip
+        assert r.returncode == 2
+        assert "not a time zone name" in r.stderr
+
+    def test_format_writes_another_format(
+        self, cli_runner, tmp_path, tiny_bitstamp_orders_csv
+    ):
+        out = tmp_path / "out"
+        r = cli_runner(
+            "process", str(tiny_bitstamp_orders_csv), "-o", str(out),
+            "--format", "bitstamp",
+        )  # fmt: skip
+        assert r.returncode == 0, r.stderr
+        assert (out / "orders.csv").exists()
+        assert (out / "trades.csv").exists()
+
+    def test_a_format_that_writes_a_file(
+        self, cli_runner, tmp_path, tiny_bitstamp_orders_csv
+    ):
+        out = tmp_path / "run.npz"
+        r = cli_runner(
+            "process", str(tiny_bitstamp_orders_csv), "-o", str(out),
+            "--format", "hftbacktest", "--gallery", "--backend", "matplotlib",
+        )  # fmt: skip
+        assert r.returncode == 0, r.stderr
+        assert out.is_file()
+        assert (tmp_path / "run_gallery" / "gallery.html").exists()
+
+    def test_a_file_format_without_a_file_name_is_reported(
+        self, cli_runner, tmp_path, tiny_bitstamp_orders_csv
+    ):
+        r = cli_runner(
+            "process", str(tiny_bitstamp_orders_csv), "-o", str(tmp_path / "run"),
+            "--format", "hftbacktest",
+        )  # fmt: skip
+        assert r.returncode == 1
+        assert "with its extension" in r.stderr
+        assert "Traceback" not in r.stderr
+
+    def test_cut_runs_one_window_at_a_time(
+        self, cli_runner, tmp_path, tiny_bitstamp_orders_csv
+    ):
+        from ob_analytics.data import load_result
+
+        whole, windowed = tmp_path / "whole", tmp_path / "windowed"
+        r = cli_runner("process", str(tiny_bitstamp_orders_csv), "-o", str(whole))
+        assert r.returncode == 0, r.stderr
+        r = cli_runner(
+            "process", str(tiny_bitstamp_orders_csv), "-o", str(windowed),
+            "--cut", "1970-01-01T00:00:10", "--cut", "1970-01-01T00:00:20",
+        )  # fmt: skip
+        assert r.returncode == 0, r.stderr
+        assert "in 3 windows" in r.stderr
+        a, b = load_result(whole), load_result(windowed)
+        # With the book carried over, the cuts do not show in the output.
+        pd.testing.assert_frame_equal(
+            a.trades.reset_index(drop=True), b.trades.reset_index(drop=True)
+        )
+        assert len(a.depth) == len(b.depth)
+
+    @pytest.mark.parametrize(
+        ("extra", "message"),
+        [
+            (("--cut", "1970-01-01T00:00:10", "--format", "bitstamp"), "--cut writes Parquet"),
+            (("--cut", "1970-01-01T00:00:10", "--gallery"), "--cut does not build a gallery"),
+            (("--no-carry",), "--no-carry applies only with --cut"),
+            (("--backend", "plotly"), "--backend applies only with --gallery"),
+            (("--cut", "soon"), "is not a time"),
+        ],
+    )  # fmt: skip
+    def test_cut_flags_that_do_not_fit_are_refused(
+        self, cli_runner, tmp_path, tiny_bitstamp_orders_csv, extra, message
+    ):
+        r = cli_runner(
+            "process", str(tiny_bitstamp_orders_csv), "-o", str(tmp_path / "o"),
+            *extra,
+        )  # fmt: skip
+        assert r.returncode == 2
+        assert message in r.stderr
+        assert not (tmp_path / "o").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -530,7 +668,48 @@ class TestAuditVenueBook:
 # ---------------------------------------------------------------------------
 
 
+class TestAuditRunFlags:
+    def test_run_settings_are_refused_on_a_saved_result(
+        self, cli_runner, tmp_path, tiny_bitstamp_orders_csv
+    ):
+        r = cli_runner(
+            "audit", str(tmp_path), "--from-parquet", "--tick-size", "0.001",
+            "--session-tz", "UTC",
+        )  # fmt: skip
+        assert r.returncode == 2
+        assert "--session-tz, --tick-size set how the pipeline runs" in r.stderr
+
+    def test_run_settings_reach_the_audited_run(
+        self, cli_runner, tiny_bitstamp_orders_csv
+    ):
+        r = cli_runner(
+            "audit", str(tiny_bitstamp_orders_csv), "--tick-size", "0.001", "--json"
+        )
+        assert r.returncode == 0, r.stderr
+
+
 class TestGallerySubcommand:
+    def test_backend_picks_the_gallery_columns(
+        self, monkeypatch, tmp_path, tiny_bitstamp_orders_csv
+    ):
+        from ob_analytics import cli
+        from ob_analytics.visualization import gallery
+
+        out = tmp_path / "parq"
+        cli.main(["process", str(tiny_bitstamp_orders_csv), "-o", str(out)])
+        shown = {}
+
+        def generate_gallery(result, output, **kwargs):
+            shown.update(kwargs)
+            return output / "gallery.html"
+
+        monkeypatch.setattr(gallery, "generate_gallery", generate_gallery)
+        cli.main(
+            ["gallery", str(out), "-o", str(tmp_path / "g"),
+             "--backend", "matplotlib", "--backend", "bokeh"]
+        )  # fmt: skip
+        assert shown["backends"] == ["matplotlib", "bokeh"]
+
     def test_gallery_from_process_output(
         self, cli_runner, tmp_path, tiny_bitstamp_orders_csv
     ):
@@ -614,7 +793,7 @@ class TestGallerySubcommand:
 
 class TestBitstampDemoSubcommand:
     def test_explicit_input(self, cli_runner, tmp_path, tiny_bitstamp_orders_csv):
-        """bitstamp-demo --input <dir-with-orders-and-trades> succeeds.
+        """bitstamp-demo <dir-with-orders-and-trades> succeeds.
 
         Uses the tiny programmatic fixture instead of the bundled sample
         (bundled-sample bitstamp-demo takes minutes through full pipeline +
@@ -623,7 +802,6 @@ class TestBitstampDemoSubcommand:
         out = tmp_path / "bs_out"
         r = cli_runner(
             "bitstamp-demo",
-            "--input",
             str(tiny_bitstamp_orders_csv.parent),
             "--output",
             str(out),
@@ -637,7 +815,6 @@ class TestBitstampDemoSubcommand:
         out = tmp_path / "bs_cmp"
         r = cli_runner(
             "bitstamp-demo",
-            "--input",
             str(tiny_bitstamp_orders_csv.parent),
             "--output",
             str(out),
@@ -653,7 +830,6 @@ class TestBitstampDemoSubcommand:
         """An unknown ``--view`` is rejected by argparse before any work."""
         r = cli_runner(
             "bitstamp-demo",
-            "--input",
             str(tiny_bitstamp_orders_csv.parent),
             "--output",
             str(tmp_path / "bs_bad"),
@@ -737,16 +913,66 @@ class TestRequiredContext:
 # ---------------------------------------------------------------------------
 
 
+def _fake_capture(monkeypatch, *, error=None):
+    """Replace the capture loop; return the dict it fills with what it was given."""
+    import pandas as pd
+
+    from ob_analytics.live._base import CaptureResult
+
+    captured: dict = {}
+
+    async def _fake_run(source, config, sink=None, **_kwargs):
+        captured["source"] = source
+        captured["config"] = config
+        now = pd.Timestamp.now(tz="UTC")
+        return CaptureResult(
+            out_dir=config.out_dir,
+            n_order_events=0,
+            n_trade_events=0,
+            n_raw_frames=0,
+            started=now,
+            ended=now,
+            capture_error=error,
+            capture_error_phase="stream" if error else None,
+        )
+
+    monkeypatch.setattr("ob_analytics.live._supervisor.run_capturer", _fake_run)
+    return captured
+
+
 class TestCaptureSubcommand:
-    def test_ccxt_flags_in_help(self, cli_runner):
+    def test_capture_help_points_at_the_source_help(self, cli_runner):
         r = cli_runner("capture", "--help")
         assert r.returncode == 0
-        for flag in ("--exchange", "--depth-limit", "--poll-interval"):
+        assert "for that source's flags" in r.stdout
+
+    def test_ccxt_flags_in_its_help(self, cli_runner):
+        r = cli_runner("capture", "ccxt", "--help")
+        assert r.returncode == 0
+        for flag in ("--venue", "--depth-limit", "--poll-interval", "--output"):
             assert flag in r.stdout
+        assert "--exchange" not in r.stdout
         assert "depth.csv" in r.stdout  # L2 output documented
 
+    def test_old_flag_names_are_refused(self, cli_runner, tmp_path):
+        r = cli_runner(
+            "capture", "ccxt", "--exchange", "kraken", "--out", str(tmp_path / "c")
+        )
+        assert r.returncode == 2
+        assert "unrecognized arguments" in r.stderr
+
+    def test_output_is_required(self, cli_runner):
+        r = cli_runner("capture", "bitstamp")
+        assert r.returncode == 2
+        assert "-o/--output" in r.stderr
+
+    def test_a_source_is_required(self, cli_runner):
+        r = cli_runner("capture")
+        assert r.returncode == 2
+        assert "source is required" in r.stderr
+
     def test_offline_only_source_is_named(self, cli_runner, tmp_path):
-        r = cli_runner("capture", "lobster", "--out", str(tmp_path / "cap"))
+        r = cli_runner("capture", "lobster", "--output", str(tmp_path / "cap"))
         assert r.returncode == 1
         assert "Source 'lobster' has no live capture" in r.stderr
 
@@ -757,50 +983,24 @@ class TestCaptureSubcommand:
         assert "bitstamp" in r.stdout
         assert "ccxt" in r.stdout
 
-    def test_exchange_flag_flows_into_typed_settings(self, monkeypatch, tmp_path):
-        """--exchange / --depth-limit flow into typed CcxtSettings (no network)."""
-        import argparse
-
-        import pandas as pd
-
+    def test_venue_flag_flows_into_typed_settings(self, monkeypatch, tmp_path):
+        """--venue / --depth-limit flow into typed CcxtSettings (no network)."""
         from ob_analytics import cli
-        from ob_analytics.live._base import CaptureConfig, CaptureResult
+        from ob_analytics.live._base import CaptureConfig
         from ob_analytics.live.ccxt_source import CcxtSettings, CcxtSource
 
-        captured: dict = {}
-
-        async def _fake_run(source, config, sink=None, **_kwargs):
-            captured["source"] = source
-            captured["config"] = config
-            now = pd.Timestamp.now(tz="UTC")
-            return CaptureResult(
-                out_dir=config.out_dir,
-                n_order_events=0,
-                n_trade_events=0,
-                n_raw_frames=0,
-                started=now,
-                ended=now,
-            )
-
-        monkeypatch.setattr("ob_analytics.live._supervisor.run_capturer", _fake_run)
+        captured = _fake_capture(monkeypatch)
         # This test checks the flag wiring, not the extra: skip the check for it.
         monkeypatch.setattr(
             "ob_analytics.live.ccxt_source.CcxtSource.preflight", lambda self: None
         )
-
-        args = argparse.Namespace(
-            verbose=False,
-            list=False,
-            venue="ccxt",
-            pair="BTC/USDT",
-            exchange="binance",
-            depth_limit=50,
-            poll_interval=None,
-            minutes=0.001,
-            out=str(tmp_path / "o"),
-            no_raw=True,
-        )
-        cli._cmd_capture(args)
+        cli.main(
+            [
+                "capture", "ccxt", "--pair", "BTC/USDT", "--venue", "binance",
+                "--depth-limit", "50", "--market-data-mirror", "--minutes", "0.001",
+                "-o", str(tmp_path / "o"), "--no-raw",
+            ]
+        )  # fmt: skip
 
         # The venue knobs land as typed settings on the source, not on the config.
         source = captured["source"]
@@ -808,30 +1008,14 @@ class TestCaptureSubcommand:
         assert isinstance(source.settings, CcxtSettings)
         assert source.settings.exchange == "binance"
         assert source.settings.depth_limit == 50
+        assert source.settings.market_data_mirror is True
         assert source.settings.poll_interval == 1.0  # not passed -> default
 
         cfg = captured["config"]
         assert isinstance(cfg, CaptureConfig)
         assert cfg.pair == "BTC/USDT"
-        assert not hasattr(cfg, "extras")  # the untyped dict is gone
-
-    def _capture_args(self, tmp_path, venue, **extra):
-        import argparse
-
-        base = {
-            "verbose": False,
-            "list": False,
-            "venue": venue,
-            "pair": "BTC/USD",
-            "exchange": None,
-            "level": None,
-            "depth_limit": None,
-            "poll_interval": None,
-            "minutes": 0.001,
-            "out": str(tmp_path / "o"),
-            "no_raw": True,
-        }
-        return argparse.Namespace(**{**base, **extra})
+        assert cfg.out_dir.parent == tmp_path / "o"  # one folder per segment
+        assert cfg.keep_raw is False
 
     def test_missing_extra_exits_nonzero_before_output(self, monkeypatch, tmp_path):
         """Without the cryptofeed extra the capture stops before it starts (#283)."""
@@ -843,47 +1027,183 @@ class TestCaptureSubcommand:
         for mod in ("cryptofeed", "cryptofeed.exchanges"):
             monkeypatch.setitem(sys.modules, mod, None)
 
-        args = self._capture_args(tmp_path, "cryptofeed", exchange="bitstamp")
         with pytest.raises(SystemExit) as exc:
-            cli._cmd_capture(args)
+            cli.main(
+                ["capture", "cryptofeed", "--venue", "bitstamp",
+                 "-o", str(tmp_path / "o")]
+            )  # fmt: skip
         assert exc.value.code == 1
         assert not (tmp_path / "o").exists()
 
     @pytest.mark.skipif(not _CCXT_INSTALLED, reason="ccxt extra not installed")
-    def test_unknown_ccxt_exchange_exits_nonzero_before_output(self, tmp_path):
-        """A misspelt --exchange stops the capture before it starts (#283)."""
+    def test_unknown_ccxt_venue_exits_nonzero_before_output(self, tmp_path):
+        """A misspelt --venue stops the capture before it starts (#283)."""
         from ob_analytics import cli
 
-        args = self._capture_args(tmp_path, "ccxt", exchange="binanse")
         with pytest.raises(SystemExit) as exc:
-            cli._cmd_capture(args)
+            cli.main(
+                ["capture", "ccxt", "--venue", "binanse", "-o", str(tmp_path / "o")]
+            )
         assert exc.value.code == 1
         assert not (tmp_path / "o").exists()
 
     def test_capture_error_exits_nonzero(self, monkeypatch, tmp_path):
         """A capture that fails part way through fails the command (#283)."""
-        import pandas as pd
-
         from ob_analytics import cli
-        from ob_analytics.live._base import CaptureResult
 
-        async def _failed_run(source, config, sink=None, **_kwargs):
-            now = pd.Timestamp.now(tz="UTC")
-            return CaptureResult(
-                out_dir=config.out_dir,
-                n_order_events=0,
-                n_trade_events=0,
-                n_raw_frames=0,
-                started=now,
-                ended=now,
-                capture_error="ValueError('boom')",
-                capture_error_phase="stream",
-            )
-
-        monkeypatch.setattr("ob_analytics.live._supervisor.run_capturer", _failed_run)
+        _fake_capture(monkeypatch, error="ValueError('boom')")
         monkeypatch.setattr(
             "ob_analytics.bitstamp.BitstampSource.preflight", lambda self: None
         )
         with pytest.raises(SystemExit) as exc:
-            cli._cmd_capture(self._capture_args(tmp_path, "bitstamp"))
+            cli.main(
+                ["capture", "bitstamp", "--minutes", "0.001",
+                 "-o", str(tmp_path / "o")]
+            )  # fmt: skip
         assert exc.value.code == 1
+
+
+class TestCaptureFlagsFromSettings:
+    """``capture <source>`` builds its flags from the source's settings class."""
+
+    @staticmethod
+    def _register(monkeypatch, name, source_cls):
+        from ob_analytics.sources import SOURCES
+
+        monkeypatch.setitem(SOURCES._items, name, source_cls)
+
+    def test_a_plug_in_source_is_set_up_from_the_command_line(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        from ob_analytics import cli
+        from ob_analytics.protocols import Level
+        from tests._fake_plugin_source import (
+            TOKEN_ENV,
+            FakePluginSettings,
+            FakePluginSource,
+        )
+
+        self._register(monkeypatch, "fakeplugin", FakePluginSource)
+        monkeypatch.setenv(TOKEN_ENV, "fake-plugin-token")
+        captured = _fake_capture(monkeypatch)
+
+        with pytest.raises(SystemExit):
+            cli.main(["capture", "fakeplugin", "--help"])
+        shown = capsys.readouterr().out
+        for flag in (
+            "--market MARKET",
+            "--levels LEVELS",
+            "--speed SPEED",
+            "--book-side {bid,ask}",
+            "--resolution {L2,L3}",
+            "--fast, --no-fast",
+            "--where WHERE",
+        ):
+            assert flag in shown, flag
+        assert "The market to follow" in shown
+        assert "(default: 10)" in shown
+        # No key on the command line, and no flag for a type it cannot read.
+        assert "--token" not in shown
+        assert "--handle" not in shown
+
+        cli.main(
+            [
+                "capture", "fakeplugin", "--market", "M-1", "--levels", "3",
+                "--speed", "0.5", "--book-side", "ASK", "--resolution", "l2",
+                "--fast", "--where", "far/away", "--pair", "x",
+                "--minutes", "0.001", "-o", str(tmp_path / "o"),
+            ]
+        )  # fmt: skip
+        settings = captured["source"].settings
+        assert isinstance(settings, FakePluginSettings)
+        assert settings.market == "M-1"
+        assert settings.depth == 3
+        assert settings.speed == 0.5
+        assert settings.book_side == "ask"
+        assert settings.resolution is Level.L2
+        assert settings.fast is True
+        assert str(settings.where) == "far/away"
+        # The key came from the environment, not from a flag.
+        assert settings.token.get_secret_value() == "fake-plugin-token"
+
+    def test_a_flag_left_out_keeps_the_default(self, monkeypatch, tmp_path):
+        from ob_analytics import cli
+        from tests._fake_plugin_source import TOKEN_ENV, FakePluginSource
+
+        self._register(monkeypatch, "fakeplugin", FakePluginSource)
+        monkeypatch.setenv(TOKEN_ENV, "fake-plugin-token")
+        captured = _fake_capture(monkeypatch)
+        cli.main(
+            ["capture", "fakeplugin", "--market", "M-1", "--minutes", "0.001",
+             "-o", str(tmp_path / "o")]
+        )  # fmt: skip
+        settings = captured["source"].settings
+        assert settings.depth == 10
+        assert settings.book_side == "bid"
+        assert settings.fast is False
+
+    def test_a_source_that_requires_its_settings_runs_with_no_flag(
+        self, monkeypatch, tmp_path
+    ):
+        from ob_analytics import cli
+        from tests._fake_plugin_source import OptionalSettings, SettingsRequiredSource
+
+        self._register(monkeypatch, "settingsrequired", SettingsRequiredSource)
+        captured = _fake_capture(monkeypatch)
+        cli.main(
+            ["capture", "settingsrequired", "--minutes", "0.001",
+             "-o", str(tmp_path / "o")]
+        )  # fmt: skip
+        assert captured["source"].settings == OptionalSettings()
+
+    def test_a_required_field_is_a_required_flag(self, monkeypatch, tmp_path, capsys):
+        from ob_analytics import cli
+        from tests._fake_plugin_source import FakePluginSource
+
+        self._register(monkeypatch, "fakeplugin", FakePluginSource)
+        with pytest.raises(SystemExit) as exc:
+            cli.main(["capture", "fakeplugin", "-o", str(tmp_path / "o")])
+        assert exc.value.code == 2
+        assert "--market" in capsys.readouterr().err
+
+    def test_a_value_the_settings_refuse_stops_before_output(
+        self, monkeypatch, tmp_path, capfd
+    ):
+        from ob_analytics import cli
+        from tests._fake_plugin_source import FakePluginSource
+
+        self._register(monkeypatch, "fakeplugin", FakePluginSource)
+        with pytest.raises(SystemExit) as exc:
+            cli.main(
+                ["capture", "fakeplugin", "--market", "M-1", "--levels", "0",
+                 "-o", str(tmp_path / "o")]
+            )  # fmt: skip
+        assert exc.value.code == 2
+        assert "Bad settings for source 'fakeplugin'" in capfd.readouterr().err
+        assert not (tmp_path / "o").exists()
+
+    def test_a_bad_choice_is_refused(self, monkeypatch, tmp_path, capsys):
+        from ob_analytics import cli
+        from tests._fake_plugin_source import FakePluginSource
+
+        self._register(monkeypatch, "fakeplugin", FakePluginSource)
+        with pytest.raises(SystemExit) as exc:
+            cli.main(
+                ["capture", "fakeplugin", "--market", "M-1", "--book-side", "mid",
+                 "-o", str(tmp_path / "o")]
+            )  # fmt: skip
+        assert exc.value.code == 2
+        assert "'mid' is not one of bid, ask" in capsys.readouterr().err
+
+    def test_a_field_that_clashes_with_a_capture_flag_is_named(
+        self, monkeypatch, tmp_path, capfd
+    ):
+        from ob_analytics import cli
+        from tests._fake_plugin_source import ClashingSource
+
+        self._register(monkeypatch, "clashing", ClashingSource)
+        with pytest.raises(SystemExit) as exc:
+            cli.main(["capture", "clashing", "-o", str(tmp_path / "o")])
+        assert exc.value.code == 1
+        err = capfd.readouterr().err
+        assert "ClashingSettings.minutes would be the flag --minutes" in err

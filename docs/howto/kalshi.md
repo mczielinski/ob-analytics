@@ -36,7 +36,7 @@ order book and the trades are public.
 ```bash
 pip install "ob-analytics[ccxt]"
 
-ob-analytics capture ccxt --exchange kalshi --pair KXPRESNOMD-28-MK --minutes 10 --out /tmp/kalshi
+ob-analytics capture ccxt --venue kalshi --pair KXPRESNOMD-28-MK --minutes 10 -o /tmp/kalshi
 ob-analytics process /tmp/kalshi --source depth_csv --gallery --output /tmp/kalshi_out
 ```
 

@@ -70,6 +70,10 @@ _ICEBERG_COLUMNS = [
     "confidence",
 ]
 
+# An order id as the feed writes it: an integer on most venues, a UUID string
+# on Independent Reserve.  Ids are identity keys and are never converted.
+_OrderId = int | str
+
 _SLICE_COLUMNS = ["iceberg", "slice", "id", "timestamp", "volume", "fill", "delay_s"]
 
 _CONFIDENCE = pd.CategoricalDtype(["low", "medium", "high"], ordered=True)
@@ -102,7 +106,8 @@ class IcebergDetection:
 
     slices : pandas.DataFrame
         One row per visible order in a chain: ``iceberg``, ``slice`` (from 1),
-        order ``id``, ``timestamp`` placed (or first seen), displayed
+        order ``id`` as the feed writes it (an integer, or a UUID string on
+        Independent Reserve), ``timestamp`` placed (or first seen), displayed
         ``volume``, total ``fill``, and ``delay_s`` from the previous slice
         being filled to this one appearing (``NaN`` for the first slice).
     """
@@ -195,7 +200,7 @@ def _filled_out(visible: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
 
 def _refill_links(
     filled_out: pd.DataFrame, created: pd.DataFrame, delay: pd.Timedelta
-) -> list[tuple[int, int, pd.Timedelta]]:
+) -> list[tuple[_OrderId, _OrderId, pd.Timedelta]]:
     """Return ``(old_id, new_id, delay)`` for every refill found.
 
     A backward as-of join first keeps only the new orders placed within
@@ -234,16 +239,16 @@ def _refill_links(
     # Sizes for matching a new slice to the peak it replaces.
     peaks = created.drop_duplicates("id").set_index("id")["volume"]
 
-    links: list[tuple[int, int, pd.Timedelta]] = []
+    links: list[tuple[_OrderId, _OrderId, pd.Timedelta]] = []
     for _, level in timeline.sort_values(
         ["timestamp", "event_id"], kind="stable"
     ).groupby(keys, observed=True, sort=False):
-        pending: deque[tuple[pd.Timestamp, int, float]] = deque()
+        pending: deque[tuple[pd.Timestamp, _OrderId, float]] = deque()
         for ts, oid, kind, size in zip(
             level["timestamp"], level["id"], level["kind"], level["size"]
         ):
             if kind == 0:
-                pending.append((ts, int(oid), float(peaks.get(oid, np.nan))))
+                pending.append((ts, oid, float(peaks.get(oid, np.nan))))
                 continue
             while pending and ts - pending[0][0] > delay:
                 pending.popleft()
@@ -251,12 +256,12 @@ def _refill_links(
                 continue
             match = next((p for p in pending if p[2] == size), pending[0])
             pending.remove(match)
-            links.append((match[1], int(oid), ts - match[0]))
+            links.append((match[1], oid, ts - match[0]))
     return links
 
 
 def _build_detection(
-    visible: pd.DataFrame, links: list[tuple[int, int, pd.Timedelta]]
+    visible: pd.DataFrame, links: list[tuple[_OrderId, _OrderId, pd.Timedelta]]
 ) -> IcebergDetection:
     """Chain refill links into icebergs and summarise each one."""
     successor = {old: (new, wait) for old, new, wait in links}

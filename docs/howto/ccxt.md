@@ -36,12 +36,12 @@ becomes an ob-analytics source by passing a venue id — no per-venue code.
     shows](../feeds.md) explains each property and compares every source.
 
 Install the optional `[ccxt]` extra (CCXT Pro ships inside `ccxt`) and use the
-`capture` verb with `--exchange`:
+`capture` verb with `--venue`:
 
 ```bash
 pip install "ob-analytics[ccxt]"
 
-ob-analytics capture ccxt --exchange binance --pair BTC/USDT --minutes 10 --out /tmp/cap
+ob-analytics capture ccxt --venue binance --pair BTC/USDT --minutes 10 -o /tmp/cap
 ob-analytics process /tmp/cap --source depth_csv --gallery --output /tmp/cap_out
 ```
 
@@ -85,7 +85,7 @@ The capturer reads each venue's declared capabilities:
   cadence with `--poll-interval`).
 
 CCXT's prediction markets (**Kalshi**, **Polymarket** and others) are in CCXT's
-separate `ccxt.prediction` package, and the same `--exchange` id reaches them.
+separate `ccxt.prediction` package, and the same `--venue` id reaches them.
 Kalshi is polled; Polymarket streams over its public websocket.
 
 Book updates become depth rows by diffing CCXT's maintained book: a level whose
@@ -119,16 +119,16 @@ capture-only window while still resting in the book. That crop is gone
 
 ```bash
 # Another crypto CEX (websocket):
-ob-analytics capture ccxt --exchange kraken --pair BTC/USD --out /tmp/kraken
+ob-analytics capture ccxt --venue kraken --pair BTC/USD -o /tmp/kraken
 
 # Prediction markets:
-ob-analytics capture ccxt --exchange kalshi --pair KXPRESNOMD-28-MK --out /tmp/kalshi
-ob-analytics capture ccxt --exchange polymarket --pair <token id> --out /tmp/poly
+ob-analytics capture ccxt --venue kalshi --pair KXPRESNOMD-28-MK -o /tmp/kalshi
+ob-analytics capture ccxt --venue polymarket --pair <token id> -o /tmp/poly
 ```
 
 | Flag | Meaning |
 |------|---------|
-| `--exchange` | CCXT venue id (`binance`, `kraken`, `coinbase`, `kalshi`, `polymarket`, …). `binance` and `hyperliquid` are also prediction markets; the plain id is the crypto exchange, and `prediction/binance` is the prediction market |
+| `--venue` | CCXT venue id (`binance`, `kraken`, `coinbase`, `kalshi`, `polymarket`, …). `binance` and `hyperliquid` are also prediction markets; the plain id is the crypto exchange, and `prediction/binance` is the prediction market |
 | `--pair` | Symbol in the venue's CCXT notation (e.g. `BTC/USDT`) |
 | `--depth-limit` | Levels per side to request (default 100). Kraken records exactly this many; Coinbase, Bitstamp, OKX, Binance and its family record more — see [what a size-`0` row means](#what-a-size-0-row-means) |
 | `--market-data-mirror` | Read from the venue's market-data-only endpoints (Binance spot; see [Binance](binance.md)) |

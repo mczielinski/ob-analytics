@@ -36,7 +36,7 @@ Polymarket's public websocket.
 ```bash
 pip install "ob-analytics[ccxt]"
 
-ob-analytics capture ccxt --exchange polymarket --pair <token id> --minutes 10 --out /tmp/poly
+ob-analytics capture ccxt --venue polymarket --pair <token id> --minutes 10 -o /tmp/poly
 ob-analytics process /tmp/poly --source depth_csv --gallery --output /tmp/poly_out
 ```
 

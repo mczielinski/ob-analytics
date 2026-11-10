@@ -150,7 +150,7 @@ def run_bitstamp_demo(
     if not orders_path.exists():
         raise FileNotFoundError(
             f"orders.csv not found: {orders_path}. "
-            f"Provide --input pointing at a Bitstamp orders.csv."
+            "Give the path of a Bitstamp orders.csv, or of the folder holding it."
         )
     trades_path = orders_path.parent / TRADES_NAME
     if not trades_path.exists():

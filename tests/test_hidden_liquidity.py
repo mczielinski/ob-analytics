@@ -1,6 +1,7 @@
 """Tests for hidden_liquidity.py — iceberg refills and trades inside the spread."""
 
 import hashlib
+import uuid
 from itertools import pairwise
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from ob_analytics.hidden_liquidity import (
     hidden_trades,
 )
 from ob_analytics.synth import generate_session
+from ob_analytics.visualization._data import prepare_hidden_liquidity_overlay
 
 BASE = pd.Timestamp("2024-01-02 14:30:00", tz="UTC")
 
@@ -99,6 +101,36 @@ class TestDetectIcebergs:
         assert det.slices["delay_s"].iloc[1:].tolist() == pytest.approx(
             [250e-6, 200e-6]
         )
+
+    def test_uuid_order_ids_are_kept_as_written(self):
+        # Independent Reserve writes order ids as UUID strings.
+        a, b, c = (
+            "0b6c8f1e-3a52-4c1e-9d0a-5f2e7c41a001",
+            "0b6c8f1e-3a52-4c1e-9d0a-5f2e7c41a002",
+            "0b6c8f1e-3a52-4c1e-9d0a-5f2e7c41a003",
+        )
+        s = _Stream()
+        s.add(a, 0, "created", 100)
+        s.add(a, 1_000, "changed", 0, 100, maker=True)
+        s.add(b, 1_250, "created", 100)
+        s.add(b, 5_000, "changed", 0, 100, maker=True)
+        s.add(c, 5_200, "created", 100)
+        s.add(c, 9_000, "deleted", 100)
+        events, trades = s.frames()
+
+        det = detect_icebergs(events, trades)
+
+        assert len(det.icebergs) == 1
+        assert det.icebergs.iloc[0]["slices"] == 3
+        assert det.icebergs.iloc[0]["confidence"] == "high"
+        assert det.slices["id"].tolist() == [a, b, c]
+
+        # The gallery's overlay joins the two frames; string ids pass through.
+        overlay = prepare_hidden_liquidity_overlay(
+            det.icebergs, det.slices, pd.DataFrame(columns=["timestamp", "price"])
+        )
+        assert overlay["iceberg_lines"]["id"].tolist() == [a, b, c]
+        assert overlay["iceberg_refills"]["id"].tolist() == [b, c]
 
     def test_new_order_after_a_cancel_is_not_a_refill(self):
         s = _Stream()
@@ -268,20 +300,26 @@ class TestSyntheticGroundTruth:
 class TestOrderIdsDoNotMatter:
     """Detection follows time, not how the venue's order ids sort."""
 
+    @pytest.mark.parametrize(
+        "remap",
+        [
+            lambda i: int(hashlib.sha1(str(i).encode()).hexdigest()[:12], 16),
+            lambda i: str(uuid.uuid5(uuid.NAMESPACE_OID, str(i))),
+        ],
+        ids=["hashed-integers", "uuids"],
+    )
     def test_ids_unrelated_to_time_give_the_same_icebergs(
-        self, bitstamp_sample_dir, tmp_path
+        self, bitstamp_sample_dir, tmp_path, remap
     ):
         # Bitstamp's ids rise with time; Independent Reserve writes the same
-        # format with UUIDs, which do not.  Integers from a hash do not either
+        # format with UUIDs, which do not, and neither do integers from a hash
         # (#456: a refill placed in the millisecond its old slice filled was
         # numbered before the fill and lost).
         orders = pd.read_csv(bitstamp_sample_dir / "orders.csv.gz")
         trades = pd.read_csv(bitstamp_sample_dir / "trades.csv")
         sides = ["buy_order_id", "sell_order_id"]
         ids = pd.unique(pd.concat([orders["id"], *(trades[c] for c in sides)]))
-        new_id = {
-            i: int(hashlib.sha1(str(i).encode()).hexdigest()[:12], 16) for i in ids
-        }
+        new_id = {i: remap(i) for i in ids}
         assert len(set(new_id.values())) == len(ids)
         orders["id"] = orders["id"].map(new_id)
         for c in sides:

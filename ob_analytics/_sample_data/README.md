@@ -64,7 +64,7 @@ no extra value for pipeline users).
 
 ```bash
 OUT=$(mktemp -d)  # a new directory, so the capture is its first segment
-ob-analytics capture bitstamp --pair btcusd --minutes 30 --out "$OUT"
+ob-analytics capture bitstamp --pair btcusd --minutes 30 -o "$OUT"
 
 RUN="$OUT/seg-0001"
 gzip -9 -c "$RUN/orders.csv" > ob_analytics/_sample_data/orders.csv.gz

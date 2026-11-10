@@ -122,7 +122,7 @@ for days: it reconnects, rolls to new files, continues after a restart, and
 records every gap in `manifest.json`:
 
 ```bash
-ob-analytics capture bitstamp --pair btcusd --out ./capture --minutes 30
+ob-analytics capture bitstamp --pair btcusd -o ./capture --minutes 30
 ```
 
 `ob-analytics capture --list` shows live-capable sources. Add new ones by

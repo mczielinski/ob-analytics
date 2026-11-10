@@ -6,12 +6,18 @@ Usage::
 
     ob-analytics process orders.csv --output results/
     ob-analytics process data/ --source lobster --trading-date 2012-06-21
+    ob-analytics process orders.csv --tick-size 0.001 --lot-size 0.0001
+    ob-analytics process orders.csv --cut 2015-05-01T02:00 --output windows/
     ob-analytics audit orders.csv --strict
-    ob-analytics gallery results/parquet/ --output my_gallery/
-    ob-analytics bitstamp-demo --input /path/to/dir_with_orders_and_trades/ --output demo_out/
+    ob-analytics gallery results/ --output my_gallery/ --backend plotly
+    ob-analytics bitstamp-demo /path/to/dir_with_orders_and_trades/ --output demo_out/
     ob-analytics bitstamp-demo --view comparison   # L2-vs-L3 counterparts side by side
     ob-analytics lobster-demo /path/to/lobster_data --trading-date 2012-06-21 --output demo_out/
-    ob-analytics capture bitstamp --pair btcusd --minutes 30 --out /tmp/capture
+    ob-analytics capture bitstamp --pair btcusd --minutes 30 --output /tmp/capture
+    ob-analytics capture ccxt --venue kraken --pair BTC/USD --output /tmp/kraken
+
+``ob-analytics capture <source> --help`` lists the flags of that source's
+settings.
 """
 
 from __future__ import annotations
@@ -49,11 +55,36 @@ def _cmd_process(args: argparse.Namespace) -> None:
     under the output, and the manifest is copied alongside.
     """
     _setup_logging(args.verbose)
+    from loguru import logger
+
+    if args.cut and args.format != "parquet":
+        logger.error("--cut writes Parquet; leave out --format {}", args.format)
+        sys.exit(2)
+    if args.cut and args.gallery:
+        logger.error(
+            "--cut does not build a gallery; run 'ob-analytics gallery' on its "
+            "output instead"
+        )
+        sys.exit(2)
+    if args.backend and not args.gallery:
+        logger.error("--backend applies only with --gallery")
+        sys.exit(2)
+    if args.no_carry and not args.cut:
+        logger.error("--no-carry applies only with --cut")
+        sys.exit(2)
     root = Path(args.path)
     manifest = _read_capture_manifest(root)
     if manifest is None:
         _process_one(args, args.path, Path(args.output))
         return
+    if _writes_a_file(args.format, _run_context(args)):
+        logger.error(
+            "A segmented capture is saved as one folder per segment, and "
+            "--format {} writes one file; process one segment at a time to "
+            "write it",
+            args.format,
+        )
+        sys.exit(2)
     output = Path(args.output)
     seg_dirs = manifest.segment_dirs(root)
     _note_open_segments(manifest, "processed")
@@ -63,6 +94,18 @@ def _cmd_process(args: argparse.Namespace) -> None:
         _process_one(args, str(_segment_input(seg_dir)), output / seg_dir.name)
     output.mkdir(parents=True, exist_ok=True)
     (output / "manifest.json").write_bytes((root / "manifest.json").read_bytes())
+
+
+def _writes_a_file(fmt: str, ctx: Any) -> bool:
+    """Whether the ``save_data`` format *fmt* writes one file, not a folder."""
+    from ob_analytics.data import _named_writer
+    from ob_analytics.protocols import WriteTarget
+
+    try:
+        writer = _named_writer(fmt, None, ctx)
+    except Exception:  # noqa: BLE001 -- save_data reports it, with the run's config
+        return False
+    return getattr(writer, "target", None) == WriteTarget.FILE
 
 
 def _note_open_segments(manifest: Any, verb: str) -> None:
@@ -128,22 +171,47 @@ def _process_one(args: argparse.Namespace, data_path: str, output: Path) -> None
     from loguru import logger
 
     from ob_analytics.data import save_data
+    from ob_analytics.exceptions import ConfigError
 
     source_name = args.source
     pipeline = _build_pipeline(args, _build_source(source_name), source_name)
 
-    logger.info("Processing {} (source={})...", data_path, source_name)
-    result = pipeline.run(data_path)
-
-    # Each Parquet file records the run's config, so `gallery` and
-    # `audit --from-parquet` read the run back with its own units.
-    save_data(result, output)
-    _keep_capture_record(Path(data_path), output)
+    result = None
+    try:
+        if args.cut:
+            logger.info(
+                "Processing {} (source={}) in {} windows...",
+                data_path,
+                source_name,
+                len(args.cut) + 1,
+            )
+            pipeline.run_windows(data_path, args.cut, output, carry=not args.no_carry)
+        else:
+            logger.info("Processing {} (source={})...", data_path, source_name)
+            result = pipeline.run(data_path)
+            # A Parquet folder records the run's config, so `gallery` and
+            # `audit --from-parquet` read the run back with its own units.
+            save_data(result, output, fmt=args.format, ctx=_run_context(args))
+    except ConfigError as exc:
+        logger.error(str(exc))
+        sys.exit(1)
+    if output.is_dir():
+        _keep_capture_record(Path(data_path), output)
     logger.info("Saved to: {}", output.resolve())
 
-    if args.gallery:
+    if result is not None and args.gallery:
+        gallery_dir = (
+            output / "gallery"
+            if output.is_dir()
+            else output.with_name(f"{output.stem}_gallery")
+        )
         _generate_gallery_from_result(
-            result, output, source_name, data_path, view=args.view
+            result,
+            gallery_dir,
+            source_name,
+            data_path,
+            view=args.view,
+            backends=args.backend,
         )
 
 
@@ -165,6 +233,15 @@ def _cmd_audit(args: argparse.Namespace) -> None:
 
     from ob_analytics.live._manifest import record_checks
 
+    if args.from_parquet:
+        given = [flag for dest, flag in _RUN_FLAGS.items() if getattr(args, dest)]
+        if given:
+            logger.error(
+                "{} set how the pipeline runs; a saved result keeps the "
+                "settings of its own run, so leave them out with --from-parquet",
+                ", ".join(given),
+            )
+            sys.exit(2)
     root = Path(args.path)
     manifest = _read_capture_manifest(root)
     capture_checks: tuple[Any, ...]
@@ -226,7 +303,7 @@ def _audit_one(args: argparse.Namespace, path: Path) -> Any:
     """
     from loguru import logger
 
-    from ob_analytics.config import PipelineConfig
+    from ob_analytics.exceptions import ConfigError
 
     # Running the pipeline needs a source, so it falls back to the default one.
     # Reading a saved result does not: it records its own declarations, and
@@ -242,13 +319,15 @@ def _audit_one(args: argparse.Namespace, path: Path) -> Any:
         return _load_saved_result(path, source=source).audit()
 
     # Dropped-message detection reads the venue sequence, which is off by
-    # default elsewhere.  Only this field is set, so the source's own config
-    # defaults still apply to the rest.
-    pipeline = _build_pipeline(
-        args, source, source_name, PipelineConfig(track_sequence=True)
-    )
+    # default elsewhere.  Only the fields given are set, so the source's own
+    # config defaults still apply to the rest.
+    pipeline = _build_pipeline(args, source, source_name, track_sequence=True)
     logger.info("Auditing {} (source={})...", path, source_name)
-    result = pipeline.run(path)
+    try:
+        result = pipeline.run(path)
+    except ConfigError as exc:
+        logger.error(str(exc))
+        sys.exit(1)
     # A source that supplies its own book (LOBSTER's orderbook file) lets the
     # rebuilt book be compared with it.
     read_venue_book = getattr(source, "venue_book", None)
@@ -272,35 +351,69 @@ def _build_source(source_name: str) -> Any:
         sys.exit(1)
 
 
+#: The ``process`` and ``audit`` flags that set the run's config or context,
+#: by ``argparse`` destination.  A saved result keeps its own, so ``audit
+#: --from-parquet`` refuses them.
+_RUN_FLAGS = {
+    "trading_date": "--trading-date",
+    "session_tz": "--session-tz",
+    "tick_size": "--tick-size",
+    "lot_size": "--lot-size",
+    "depth_bins": "--depth-bins",
+    "depth_bps": "--depth-bps",
+}
+
+
+def _run_context(args: argparse.Namespace) -> Any:
+    """The run context the ``--trading-date`` and ``--session-tz`` flags give."""
+    from ob_analytics.protocols import RunContext
+
+    return RunContext(trading_date=args.trading_date, session_tz=args.session_tz)
+
+
+def _run_config(args: argparse.Namespace, **fields: Any) -> PipelineConfig | None:
+    """The config the run flags give, laid over *fields*; ``None`` when neither.
+
+    Only the fields given are set, so the source's own defaults, and a
+    capture's tick and lot size, still apply to the rest.
+    """
+    from ob_analytics.config import PipelineConfig, instrument_fields
+
+    fields.update(instrument_fields(tick_size=args.tick_size, lot_size=args.lot_size))
+    for name in ("depth_bins", "depth_bps"):
+        if getattr(args, name) is not None:
+            fields[name] = getattr(args, name)
+    return PipelineConfig(**fields) if fields else None
+
+
 def _build_pipeline(
     args: argparse.Namespace,
     source: Any,
     source_name: str,
-    config: PipelineConfig | None = None,
+    **fields: Any,
 ) -> Any:
     """The pipeline that ``process`` and ``audit`` run on *source*.
 
     The source says which run context it needs, so a missing
-    ``--trading-date`` stops here with a message naming the source.  Without
-    *config* the source's defaults apply, and the pipeline takes a capture's
-    tick and lot size from its ``meta.json``.
+    ``--trading-date`` stops here with a message naming the source.  The
+    config sets *fields* and the fields the run flags give; the source's
+    defaults apply to the rest, and the pipeline takes a capture's tick and
+    lot size from its ``meta.json`` unless ``--tick-size`` or ``--lot-size``
+    is given.
     """
     from loguru import logger
 
     from ob_analytics.pipeline import Pipeline
-    from ob_analytics.protocols import RunContext, required_context_of
+    from ob_analytics.protocols import required_context_of
 
     required = required_context_of(source)
     if "trading_date" in required and args.trading_date is None:
         logger.error("--trading-date is required for the {} source", source_name)
         sys.exit(1)
-    ctx = (
-        RunContext(trading_date=args.trading_date)
-        if args.trading_date is not None
-        else RunContext()
-    )
     try:
-        return Pipeline(config, source=source, ctx=ctx)
+        return Pipeline(
+            _run_config(args, **fields), source=source, ctx=_run_context(args)
+        )
     except TypeError as exc:  # e.g. a live-only source cannot replay files
         logger.error(str(exc))
         sys.exit(1)
@@ -355,7 +468,7 @@ def _cmd_gallery(args: argparse.Namespace) -> None:
 
     from ob_analytics.visualization.gallery import generate_gallery
 
-    data_path = Path(args.data)
+    data_path = Path(args.path)
     output = Path(args.output)
 
     result = _load_saved_result(data_path)
@@ -365,6 +478,7 @@ def _cmd_gallery(args: argparse.Namespace) -> None:
         output,
         view=args.view,
         volume_scale=args.volume_scale,
+        backends=args.backend,
         title=args.title or f"ob-analytics gallery -- {data_path.name}",
     )
 
@@ -377,7 +491,7 @@ def _cmd_bitstamp_demo(args: argparse.Namespace) -> None:
     _setup_logging(args.verbose)
     from ob_analytics._demos import run_bitstamp_demo
 
-    run_bitstamp_demo(args.input, args.output, view=args.view, roundtrip=args.roundtrip)
+    run_bitstamp_demo(args.path, args.output, view=args.view, roundtrip=args.roundtrip)
 
 
 def _cmd_sources(args: argparse.Namespace) -> None:
@@ -417,107 +531,92 @@ def _cmd_lobster_demo(args: argparse.Namespace) -> None:
     _setup_logging(args.verbose)
     from ob_analytics._demos import run_lobster_demo
 
-    run_lobster_demo(args.source, args.trading_date, args.output, view=args.view)
+    run_lobster_demo(args.path, args.trading_date, args.output, view=args.view)
 
 
 def _cmd_capture(args: argparse.Namespace) -> None:
-    """Run a live market-data capture."""
+    """Run a live market-data capture.
+
+    The flags after the source's name are read once the source is known: the
+    capture's own, and one for each field of the source's settings class.
+    """
     _setup_logging(args.verbose)
     import asyncio
-    import inspect
 
     from loguru import logger
 
-    from ob_analytics.config import SourceSettings
     from ob_analytics.exceptions import ConfigError, ObAnalyticsError, UnknownNameError
     from ob_analytics.live import (
         CaptureConfig,
-        CcxtSettings,
-        CryptofeedSettings,
         LiveSource,
         SupportsPreflight,
         run_capture,
     )
-    from ob_analytics.protocols import Level
     from ob_analytics.sources import SOURCES, get_source, list_sources
 
-    def _is_live(name: str) -> bool:
-        return hasattr(SOURCES.get(name), "stream")
-
-    if getattr(args, "list", False):
+    if args.list:
         for name in list_sources():
-            if _is_live(name):
+            if hasattr(SOURCES.get(name), "stream"):
                 print(name)
         return
 
-    if not args.venue:
+    if not args.source:
         logger.error(
-            "venue is required (e.g. 'bitstamp'). Use --list to see live sources."
+            "source is required (e.g. 'bitstamp'). Use --list to see live sources."
         )
-        sys.exit(2)
-    if not args.out:
-        logger.error("--out is required")
         sys.exit(2)
 
     try:
-        source_cls = get_source(args.venue)
+        source_cls = get_source(args.source)
     except UnknownNameError as exc:
         logger.error(str(exc))
         sys.exit(1)
 
-    # Build typed per-source settings. ccxt and cryptofeed take venue knobs; a
-    # source with no knobs is constructed with its empty default settings.
+    # Building a source reads any API key from the environment; a key file
+    # that cannot be read is user error, not a crash.  A pydantic
+    # ValidationError is a ValueError.
+    try:
+        settings_cls = _settings_class(source_cls)
+    except (ConfigError, ValueError) as exc:
+        logger.error("Source {!r} cannot be built: {}", args.source, exc)
+        sys.exit(1)
+    try:
+        parser = _capture_parser(args.source, settings_cls)
+    except ConfigError as exc:  # a plug-in whose field clashes with a flag
+        logger.error(str(exc))
+        sys.exit(1)
+    options = parser.parse_args(args.flags)
+
+    given = {
+        name: getattr(options, dest)
+        for dest, name in _settings_dests(settings_cls).items()
+        if hasattr(options, dest)
+    }
+    # A source holds one run's connection and book, so each segment of the
+    # capture gets a fresh one.  Every segment reuses these settings, so a key
+    # file moved or rotated during a long capture does not end it at the next
+    # roll.  The registry is typed as `type[Source]`; the core protocol
+    # declares no constructor, so passing settings is a checked-at-runtime
+    # dynamic call (every built-in source accepts an optional `settings`).
     settings: Any = None
-    if args.venue.lower() == "ccxt":
-        ccxt_kwargs: dict[str, Any] = {}
-        if getattr(args, "exchange", None):
-            ccxt_kwargs["exchange"] = args.exchange
-        if getattr(args, "depth_limit", None) is not None:
-            ccxt_kwargs["depth_limit"] = args.depth_limit
-        if getattr(args, "poll_interval", None) is not None:
-            ccxt_kwargs["poll_interval"] = args.poll_interval
-        if getattr(args, "market_data_mirror", False):
-            ccxt_kwargs["market_data_mirror"] = True
-        # The registry is typed as `type[Source]`; the core protocol declares
-        # no constructor, so passing settings is a checked-at-runtime dynamic
-        # call (every built-in source accepts an optional `settings`).
-        settings = CcxtSettings(**ccxt_kwargs)
-    elif args.venue.lower() == "cryptofeed":
-        cf_kwargs: dict[str, Any] = {}
-        if getattr(args, "exchange", None):
-            cf_kwargs["exchange"] = args.exchange
-        if getattr(args, "level", None):
-            cf_kwargs["level"] = Level(args.level.upper())
-        settings = CryptofeedSettings(**cf_kwargs)
+    if settings_cls is not None:
+        try:
+            settings = settings_cls(**given)
+        except (ConfigError, ValueError) as exc:
+            # A pydantic ValidationError is a ValueError.
+            logger.error("Bad settings for source {!r}: {}", args.source, exc)
+            sys.exit(2)
 
     def make_source() -> Any:
-        # A source holds one run's connection and book, so each segment of the
-        # capture gets a fresh one.  The registry is typed as `type[Source]`;
-        # the core protocol declares no constructor, so passing settings is a
-        # checked-at-runtime dynamic call (every built-in source accepts an
-        # optional `settings`).
         if settings is None:
             return source_cls()
         return source_cls(settings=settings)  # ty: ignore[unknown-argument]
 
-    # Building the settings reads any API key from the environment; a key
-    # file that cannot be read is user error, not a crash.
     try:
         source = make_source()
-    except ConfigError as exc:
-        logger.error(str(exc))
+    except (ConfigError, ValueError) as exc:
+        logger.error("Source {!r} cannot be built: {}", args.source, exc)
         sys.exit(1)
-    # Every later segment reuses these settings, so a key file moved or
-    # rotated during a long capture does not end it at the next roll.  Only
-    # for a source that takes them: the protocol does not require it to.
-    first_settings = getattr(source, "settings", None)
-    if (
-        settings is None
-        and isinstance(first_settings, SourceSettings)
-        and first_settings.credentials()
-        and "settings" in inspect.signature(source_cls).parameters
-    ):
-        settings = first_settings
 
     # A venue that cannot supply the requested resolution is user error, not a
     # crash: report the explanation and stop.  (Reading ``level`` is what
@@ -527,10 +626,12 @@ def _cmd_capture(args: argparse.Namespace) -> None:
     except ValueError as exc:
         logger.error(str(exc))
         sys.exit(1)
-    logger.debug("Source {!r} captures at {}", args.venue, source_level)
+    logger.debug("Source {!r} captures at {}", args.source, source_level)
 
     if not isinstance(source, LiveSource):
-        logger.error("Source {!r} has no live capture; it is offline-only.", args.venue)
+        logger.error(
+            "Source {!r} has no live capture; it is offline-only.", args.source
+        )
         sys.exit(1)
 
     # A missing optional extra or an unusable venue stops the run here, before
@@ -543,16 +644,16 @@ def _cmd_capture(args: argparse.Namespace) -> None:
             sys.exit(1)
 
     config = CaptureConfig(
-        pair=args.pair,
-        out_dir=Path(args.out),
-        minutes=args.minutes,
-        keep_raw=not args.no_raw,
-        roll_minutes=getattr(args, "roll_minutes", None),
-        roll_mb=getattr(args, "roll_mb", None),
+        pair=options.pair,
+        out_dir=Path(options.output),
+        minutes=options.minutes,
+        keep_raw=not options.no_raw,
+        roll_minutes=options.roll_minutes,
+        roll_mb=options.roll_mb,
     )
     try:
         run = asyncio.run(run_capture(make_source, config))
-    except ConfigError as exc:  # an --out that holds something else
+    except ConfigError as exc:  # an --output that holds something else
         logger.error(str(exc))
         sys.exit(1)
     if run.error is not None:
@@ -573,8 +674,232 @@ def _cmd_capture(args: argparse.Namespace) -> None:
     logger.info("Capture complete: {}", run.out_dir)
 
 
+def _settings_class(source_cls: Any) -> Any:
+    """The settings class the command line can set for *source_cls*, or ``None``.
+
+    It is the class the constructor's ``settings`` parameter names, when that
+    is a subclass of :class:`~ob_analytics.config.SourceSettings`.  Otherwise
+    it is the type of a default source's settings, since the protocol
+    requires the value, not a declaration of its class; a source whose
+    settings have a field with no default should name its class, as it
+    cannot build a default.  ``None`` when the source takes no ``settings``
+    argument, or its settings are not a ``SourceSettings``.
+    """
+    import inspect
+    import types
+    from typing import Union, get_args, get_origin, get_type_hints
+
+    from ob_analytics.config import SourceSettings
+
+    try:
+        parameters = inspect.signature(source_cls).parameters
+    except (TypeError, ValueError):  # a constructor with no signature to read
+        return None
+    if "settings" not in parameters:
+        return None
+    try:
+        hint = get_type_hints(source_cls.__init__).get("settings")
+    except Exception:  # noqa: BLE001 -- a hint that cannot be resolved
+        hint = None
+    if get_origin(hint) in (Union, types.UnionType):
+        named = [a for a in get_args(hint) if a is not type(None)]
+        hint = named[0] if len(named) == 1 else None
+    if (
+        isinstance(hint, type)
+        and issubclass(hint, SourceSettings)
+        and hint is not SourceSettings
+    ):
+        return hint
+    settings = getattr(source_cls(), "settings", None)
+    return type(settings) if isinstance(settings, SourceSettings) else None
+
+
+#: The prefix of a settings flag's ``argparse`` destination, so a field never
+#: shares a destination with one of the capture's own flags.
+_SETTING_DEST = "setting__"
+
+
+def _settings_dests(settings_cls: Any) -> dict[str, str]:
+    """The field each settings flag sets, by its ``argparse`` destination."""
+    if settings_cls is None:
+        return {}
+    return {_SETTING_DEST + name: name for name in settings_cls.model_fields}
+
+
+def _capture_parser(source_name: str, settings_cls: Any) -> argparse.ArgumentParser:
+    """The parser for the flags after ``capture <source_name>``."""
+    from ob_analytics.capture_files import (
+        DEPTH_NAME,
+        ORDERS_NAME,
+        RAW_NAME,
+        TRADES_NAME,
+    )
+    from ob_analytics.capture_record import RECORD_NAME
+    from ob_analytics.live._manifest import MANIFEST_NAME
+
+    parser = argparse.ArgumentParser(
+        prog=f"ob-analytics capture {source_name}",
+        description=f"Live-capture market data from the {source_name!r} source.",
+    )
+    parser.add_argument(
+        "--pair",
+        default="btcusd",
+        help="Venue-specific pair symbol (default: btcusd)",
+    )
+    parser.add_argument(
+        "--minutes",
+        type=float,
+        default=10.0,
+        help="Capture duration in minutes (default: 10.0)",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        required=True,
+        help=(
+            f"Capture directory: {MANIFEST_NAME} plus one folder per segment "
+            f"({ORDERS_NAME} for L3 or {DEPTH_NAME} for L2, plus {TRADES_NAME}, "
+            f"{RAW_NAME}, {RECORD_NAME}). A directory that already holds a "
+            "capture of the same source and pair is continued."
+        ),
+    )
+    parser.add_argument(
+        "--roll-minutes",
+        type=float,
+        default=None,
+        help="Start a new segment every this many minutes (default: never)",
+    )
+    parser.add_argument(
+        "--roll-mb",
+        type=float,
+        default=None,
+        help=(
+            "Start a new segment once one has written this many MB since its "
+            "first live event (default: never)"
+        ),
+    )
+    parser.add_argument(
+        "--no-raw",
+        action="store_true",
+        default=False,
+        help=f"Don't write {RAW_NAME} (saves disk for long runs)",
+    )
+    if settings_cls is not None:
+        _add_settings_flags(parser, settings_cls)
+    return parser
+
+
+def _add_settings_flags(parser: argparse.ArgumentParser, settings_cls: Any) -> None:
+    """Add one flag to *parser* for each field of *settings_cls* it can read.
+
+    A flag given sets its field; a flag left out leaves the field at the
+    class's default.  A :class:`~ob_analytics.config.Credential` field gets
+    no flag: a key on a command line stays in the shell history.
+    """
+    from pydantic_core import PydanticUndefined
+
+    from ob_analytics.exceptions import ConfigError
+    from ob_analytics.sources import CliOption
+
+    group = parser.add_argument_group(f"source settings ({settings_cls.__name__})")
+    credentials = settings_cls.credentials()
+    for name, field in settings_cls.model_fields.items():
+        if name in credentials:
+            continue
+        option = next((m for m in field.metadata if isinstance(m, CliOption)), None)
+        kind = _flag_kind(field.annotation, option)
+        if kind is None:  # a type the command line cannot read
+            continue
+        flag = "--" + ((option.flag if option else None) or name).replace("_", "-")
+        help_text = (option.help if option else None) or field.description or name
+        required = field.default is PydanticUndefined and field.default_factory is None
+        if kind == "bool" and not required:
+            help_text = f"{help_text} (default: {'on' if field.default else 'off'})"
+        elif not required and field.default not in (None, ""):
+            shown = getattr(field.default, "value", field.default)
+            help_text = f"{help_text} (default: {shown})"
+        kwargs: dict[str, Any] = {
+            "dest": _SETTING_DEST + name,
+            "help": help_text,
+            "default": argparse.SUPPRESS,
+            "required": required,
+        }
+        if kind == "bool":
+            kwargs["action"] = argparse.BooleanOptionalAction
+        else:
+            convert, choices = kind
+            kwargs["type"] = convert
+            kwargs["metavar"] = (
+                "{" + ",".join(choices) + "}"
+                if choices is not None
+                else flag.removeprefix("--").replace("-", "_").upper()
+            )
+        try:
+            group.add_argument(flag, **kwargs)
+        except argparse.ArgumentError:
+            raise ConfigError(
+                f"{settings_cls.__name__}.{name} would be the flag {flag}, which "
+                "the capture command has already; give the field "
+                "CliOption(flag=...) with another name"
+            ) from None
+
+
+def _flag_kind(annotation: Any, option: Any) -> Any:
+    """How a flag reads a value of *annotation*.
+
+    ``"bool"`` for an on/off flag, ``(convert, choices)`` for a flag that
+    takes a value, where *choices* is ``None`` or the names to show, and
+    ``None`` for a type the command line cannot read.  The marker's *type*
+    wins over the annotation.
+    """
+    import types
+    from enum import Enum
+    from typing import Literal, Union, get_args, get_origin
+
+    if option is not None and option.type is not None:
+        return option.type, None
+    if get_origin(annotation) in (Union, types.UnionType):
+        members = [a for a in get_args(annotation) if a is not type(None)]
+        if len(members) != 1:
+            return None
+        annotation = members[0]
+    if annotation is bool:
+        return "bool"
+    if annotation in (str, int, float, Path):
+        return annotation, None
+    if get_origin(annotation) is Literal:
+        values = get_args(annotation)
+        return _choice_reader({str(v): v for v in values}), [str(v) for v in values]
+    if isinstance(annotation, type) and issubclass(annotation, Enum):
+        members = {str(m.value): m for m in annotation}
+        return _choice_reader(members), list(members)
+    return None
+
+
+def _choice_reader(values: dict[str, Any]) -> Any:
+    """Read one of *values* by its name, ignoring case."""
+    by_folded = {name.casefold(): value for name, value in values.items()}
+
+    def read(text: str) -> Any:
+        try:
+            return by_folded[text.casefold()]
+        except KeyError:
+            raise argparse.ArgumentTypeError(
+                f"{text!r} is not one of {', '.join(values)}"
+            ) from None
+
+    read.__name__ = "choice"
+    return read
+
+
 def _generate_gallery_from_result(
-    result: Any, output: Path, fmt_name: str, source: str, *, view: str = "both"
+    result: Any,
+    gallery_dir: Path,
+    fmt_name: str,
+    source: str,
+    *,
+    view: str = "both",
+    backends: list[str] | None = None,
 ) -> None:
     """Helper to generate a gallery alongside process output.
 
@@ -586,11 +911,11 @@ def _generate_gallery_from_result(
 
     from ob_analytics.visualization.gallery import generate_gallery
 
-    gallery_dir = output / "gallery"
     gallery_path = generate_gallery(
         result,
         gallery_dir,
         view=view,
+        backends=backends,
         title=f"{fmt_name} ({Path(source).name}) -- ob-analytics",
     )
     logger.info("Gallery: {}", gallery_path.resolve())
@@ -610,8 +935,134 @@ def _add_view_arg(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def main() -> None:
-    """Entry point for the ``ob-analytics`` CLI."""
+def _add_backend_arg(parser: argparse.ArgumentParser) -> None:
+    """Add the shared ``--backend`` gallery argument."""
+    parser.add_argument(
+        "--backend",
+        action="append",
+        default=None,
+        help=(
+            "Plot backend to draw the gallery with (matplotlib, plotly, bokeh, "
+            "or a registered plug-in); give it more than once for more columns. "
+            "Default: plotly and matplotlib when plotly is installed, else "
+            "matplotlib."
+        ),
+    )
+
+
+def _positive_float(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a number") from None
+    if not value > 0:
+        raise argparse.ArgumentTypeError(f"{text!r} is not more than 0")
+    return value
+
+
+def _positive_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a whole number") from None
+    if value <= 0:
+        raise argparse.ArgumentTypeError(f"{text!r} is not more than 0")
+    return value
+
+
+def _time_zone(text: str) -> str:
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    try:
+        ZoneInfo(text)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise argparse.ArgumentTypeError(
+            f"{text!r} is not a time zone name, such as America/New_York"
+        ) from None
+    return text
+
+
+def _cut_time(text: str) -> Any:
+    import pandas as pd
+
+    try:
+        return pd.Timestamp(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"{text!r} is not a time, such as 2015-05-01T02:00"
+        ) from None
+
+
+def _add_run_args(
+    parser: argparse.ArgumentParser, sources: list[str], *, source_default: str | None
+) -> None:
+    """Add the flags ``process`` and ``audit`` share: the source and the run's settings."""
+    parser.add_argument("path", help="Path to data file or directory")
+    default_text = (
+        f"default: {source_default}"
+        if source_default
+        else "default: bitstamp when running the pipeline"
+    )
+    parser.add_argument(
+        "-s",
+        "--source",
+        default=source_default,
+        choices=sources,
+        help=f"Data source ({default_text}; registered: {', '.join(sources)})",
+    )
+    parser.add_argument(
+        "--trading-date",
+        default=None,
+        help="Trading date, for a source that needs one (LOBSTER), as YYYY-MM-DD",
+    )
+    parser.add_argument(
+        "--session-tz",
+        type=_time_zone,
+        default=None,
+        help=(
+            "The venue's time zone, for a feed whose times count from the "
+            "session's midnight (LOBSTER; default: America/New_York)"
+        ),
+    )
+    parser.add_argument(
+        "--tick-size",
+        type=_positive_float,
+        default=None,
+        help=(
+            "The instrument's price step, in the quote currency (e.g. 0.001). "
+            "Default: the source's, or a capture's own from its meta.json"
+        ),
+    )
+    parser.add_argument(
+        "--lot-size",
+        type=_positive_float,
+        default=None,
+        help=(
+            "The instrument's size step, in the base asset (e.g. 0.0001). "
+            "Default: the source's, or a capture's own from its meta.json"
+        ),
+    )
+    parser.add_argument(
+        "--depth-bins",
+        type=_positive_int,
+        default=None,
+        help="Number of depth bins on each side of the book (default: 20)",
+    )
+    parser.add_argument(
+        "--depth-bps",
+        type=_positive_int,
+        default=None,
+        help="Width of each depth bin, in basis points (default: 25)",
+    )
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Entry point for the ``ob-analytics`` CLI.
+
+    *argv* is the arguments after the command name; ``None`` reads
+    ``sys.argv``.
+    """
+    from ob_analytics.data import list_writers
     from ob_analytics.sources import list_sources
 
     sources = list_sources()
@@ -634,24 +1085,42 @@ def main() -> None:
         "process",
         help="Run the pipeline on a data source and save results",
     )
-    p_process.add_argument("path", help="Path to data file or directory")
-    p_process.add_argument(
-        "-s",
-        "--source",
-        default="bitstamp",
-        choices=sources,
-        help=f"Data source (default: bitstamp; registered: {', '.join(sources)})",
-    )
+    _add_run_args(p_process, sources, source_default="bitstamp")
     p_process.add_argument(
         "-o",
         "--output",
         default="output",
-        help="Output directory for Parquet results (default: ./output)",
+        help=(
+            "Where to save the results (default: ./output): a folder, or a "
+            "file for a --format that writes one"
+        ),
     )
     p_process.add_argument(
-        "--trading-date",
+        "--format",
+        default="parquet",
+        choices=list_writers(),
+        help="Format to save the results in (default: parquet)",
+    )
+    p_process.add_argument(
+        "--cut",
+        action="append",
+        type=_cut_time,
         default=None,
-        help="Trading date for the LOBSTER source (YYYY-MM-DD)",
+        metavar="TIME",
+        help=(
+            "Run one time window at a time, cut at TIME (e.g. 2015-05-01T02:00; "
+            "a time with no zone is UTC). Give it more than once for more "
+            "windows. Peak memory is set by the largest window. Writes Parquet"
+        ),
+    )
+    p_process.add_argument(
+        "--no-carry",
+        action="store_true",
+        default=False,
+        help=(
+            "With --cut: start each window from an empty book, as if it were a "
+            "separate input, instead of from the book the window before ended with"
+        ),
     )
     p_process.add_argument(
         "--gallery",
@@ -660,6 +1129,7 @@ def main() -> None:
         help="Also generate an HTML plot gallery",
     )
     _add_view_arg(p_process)
+    _add_backend_arg(p_process)
     p_process.set_defaults(func=_cmd_process)
 
     # -- audit --
@@ -668,29 +1138,17 @@ def main() -> None:
         aliases=["validate"],
         help="Check a run's data quality; exit non-zero when a check fails",
     )
-    p_audit.add_argument("path", help="Path to data file or directory")
-    p_audit.add_argument(
-        "-s",
-        "--source",
-        default=None,
-        choices=sources,
-        help=(
-            "Data source (default: bitstamp when running the pipeline). "
-            "With --from-parquet it only declares the feed of an output that "
-            "records no declarations (one written by an older version); omit "
-            f"it to leave those undeclared. Registered: {', '.join(sources)}"
-        ),
-    )
-    p_audit.add_argument(
-        "--trading-date",
-        default=None,
-        help="Trading date for the LOBSTER source (YYYY-MM-DD)",
-    )
+    _add_run_args(p_audit, sources, source_default=None)
     p_audit.add_argument(
         "--from-parquet",
         action="store_true",
         default=False,
-        help="Read a saved 'process' output directory instead of running the pipeline",
+        help=(
+            "Read a saved 'process' output directory instead of running the "
+            "pipeline. --source then only declares the feed of an output that "
+            "records no declarations (one written by an older version); omit "
+            "it to leave those undeclared"
+        ),
     )
     p_audit.add_argument(
         "--strict",
@@ -712,7 +1170,7 @@ def main() -> None:
         help="Generate an HTML plot gallery from saved Parquet data",
     )
     p_gallery.add_argument(
-        "data",
+        "path",
         help="Path to Parquet directory (output of 'process')",
     )
     p_gallery.add_argument(
@@ -736,6 +1194,7 @@ def main() -> None:
         help="Gallery page title",
     )
     _add_view_arg(p_gallery)
+    _add_backend_arg(p_gallery)
     p_gallery.set_defaults(func=_cmd_gallery)
 
     # -- bitstamp-demo --
@@ -744,9 +1203,13 @@ def main() -> None:
         help="Run the Bitstamp demo (pipeline + gallery)",
     )
     p_bs.add_argument(
-        "--input",
+        "path",
+        nargs="?",
         default=None,
-        help="Path to Bitstamp CSV (default: bundled sample data)",
+        help=(
+            "Path to a Bitstamp orders.csv, or the folder holding it and its "
+            "trades.csv (default: bundled sample data)"
+        ),
     )
     p_bs.add_argument(
         "-o",
@@ -769,7 +1232,7 @@ def main() -> None:
         help="Run the LOBSTER demo on local data (pipeline + gallery)",
     )
     p_lob.add_argument(
-        "source",
+        "path",
         help="Path to LOBSTER data directory (containing message + orderbook CSVs)",
     )
     p_lob.add_argument(
@@ -787,107 +1250,30 @@ def main() -> None:
     p_lob.set_defaults(func=_cmd_lobster_demo)
 
     # -- capture --
+    # The flags after the source's name depend on the source, so they are
+    # read by _cmd_capture once the source is known.
     p_cap = subparsers.add_parser(
         "capture",
-        help="Live-capture market data from a registered venue",
+        help="Live-capture market data from a registered source",
+        description=(
+            "Live-capture market data from a registered source. Run "
+            "'ob-analytics capture <source> --help' for that source's flags: "
+            "the capture's own (--pair, --minutes, -o/--output, ...) and one "
+            "for each of its settings (for ccxt: --venue, --depth-limit, ...)."
+        ),
     )
     p_cap.add_argument(
-        "venue",
+        "source",
         nargs="?",
-        help=("Venue name (e.g. 'bitstamp'). Use --list to see live sources."),
-    )
-    p_cap.add_argument(
-        "--pair",
-        default="btcusd",
-        help="Venue-specific pair symbol (default: btcusd)",
-    )
-    p_cap.add_argument(
-        "--exchange",
-        default=None,
-        help=(
-            "For the 'ccxt' venue: the CCXT exchange id (e.g. 'binance', "
-            "'kraken', 'coinbase'); use CCXT pair notation, e.g. 'BTC/USDT'. "
-            "For 'cryptofeed': the cryptofeed venue id (e.g. 'bitstamp', "
-            "'binance'); use cryptofeed notation, e.g. 'BTC-USD'."
-        ),
-    )
-    p_cap.add_argument(
-        "--level",
-        default=None,
-        choices=["L2", "L3", "l2", "l3"],
-        help=(
-            "For the 'cryptofeed' venue: force the capture resolution. Omit to "
-            "discover it from the venue (L3 where the venue publishes a "
-            "per-order book, L2 otherwise)."
-        ),
-    )
-    p_cap.add_argument(
-        "--depth-limit",
-        type=int,
-        default=None,
-        help=(
-            "ccxt: order-book depth (levels per side) to request -- a floor, "
-            "not a cap: most venues record more than this (see the ccxt "
-            "how-to page)"
-        ),
-    )
-    p_cap.add_argument(
-        "--poll-interval",
-        type=float,
-        default=None,
-        help="ccxt: seconds between REST polls (REST-only venues)",
-    )
-    p_cap.add_argument(
-        "--market-data-mirror",
-        action="store_true",
-        help=(
-            "ccxt: read from the venue's market-data-only endpoints "
-            "(binance spot). Check the venue's terms allow it where you are"
-        ),
-    )
-    p_cap.add_argument(
-        "--minutes",
-        type=float,
-        default=10.0,
-        help="Capture duration in minutes (default: 10.0)",
-    )
-    p_cap.add_argument(
-        "--out",
-        default=None,
-        help=(
-            "Capture directory: manifest.json plus one folder per segment "
-            "(orders.csv for L3 or depth.csv for L2, plus trades.csv, "
-            "raw.jsonl, meta.json). A directory that already holds a capture "
-            "of the same venue and pair is continued. Required unless --list."
-        ),
-    )
-    p_cap.add_argument(
-        "--roll-minutes",
-        type=float,
-        default=None,
-        help="Start a new segment every this many minutes (default: never)",
-    )
-    p_cap.add_argument(
-        "--roll-mb",
-        type=float,
-        default=None,
-        help=(
-            "Start a new segment once one has written this many MB since its "
-            "first live event (default: never)"
-        ),
-    )
-    p_cap.add_argument(
-        "--no-raw",
-        action="store_true",
-        default=False,
-        help="Don't write raw.jsonl (saves disk for long runs)",
+        help="Source name (e.g. 'bitstamp', 'ccxt'). Use --list to see live sources.",
     )
     p_cap.add_argument(
         "--list",
         action="store_true",
         default=False,
-        help="List live-capable sources and exit (ignores other flags)",
+        help="List live-capable sources and exit",
     )
+    p_cap.add_argument("flags", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
     p_cap.set_defaults(func=_cmd_capture)
 
     # -- sources --
@@ -897,7 +1283,7 @@ def main() -> None:
     )
     p_src.set_defaults(func=_cmd_sources)
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     args.func(args)
 
 

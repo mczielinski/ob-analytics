@@ -333,7 +333,7 @@ class CoinbaseSource:  # ... plus the offline members above
 Capturing from the CLI (requires the `[live]` extra):
 
 ```bash
-ob-analytics capture coinbase --pair btcusd --minutes 10 --out capture/
+ob-analytics capture coinbase --pair btcusd --minutes 10 -o capture/
 ob-analytics capture --list   # show live-capable sources
 ```
 

@@ -816,8 +816,6 @@ class TestRegistration:
 
 class TestCliWiring:
     def test_flags_flow_into_typed_settings(self, monkeypatch, tmp_path):
-        import argparse
-
         import pandas as pd
 
         from ob_analytics import cli
@@ -849,20 +847,13 @@ class TestCliWiring:
             lambda self: None,
         )
 
-        args = argparse.Namespace(
-            verbose=False,
-            list=False,
-            venue="cryptofeed",
-            pair="BTC-USD",
-            exchange="bitstamp",
-            level="L3",
-            depth_limit=None,
-            poll_interval=None,
-            minutes=0.001,
-            out=str(tmp_path / "o"),
-            no_raw=True,
-        )
-        cli._cmd_capture(args)
+        cli.main(
+            [
+                "capture", "cryptofeed", "--pair", "BTC-USD", "--venue", "bitstamp",
+                "--level", "l3", "--minutes", "0.001", "-o", str(tmp_path / "o"),
+                "--no-raw",
+            ]
+        )  # fmt: skip
 
         source = captured["source"]
         assert isinstance(source, CryptofeedSource)
@@ -872,9 +863,12 @@ class TestCliWiring:
         assert captured["config"].pair == "BTC-USD"
 
     def test_level_flag_is_documented(self, cli_runner):
-        r = cli_runner("capture", "--help")
+        r = cli_runner("capture", "cryptofeed", "--help")
         assert r.returncode == 0
-        assert "--level" in r.stdout
+        assert "--level {L2,L3}" in r.stdout
+        assert "--venue" in r.stdout
+        # A field the command line cannot read gets no flag.
+        assert "--feed-handler" not in r.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -921,25 +915,16 @@ class TestCryptofeedInstalled:
     def test_cli_reports_an_impossible_level_cleanly(self, monkeypatch, tmp_path):
         """Asking for L3 where there is none is user error, so the CLI should
         exit with the explanation, not a traceback."""
-        import argparse
-
         from ob_analytics import cli
 
-        args = argparse.Namespace(
-            verbose=False,
-            list=False,
-            venue="cryptofeed",
-            pair="BTC-USD",
-            exchange="coinbase",
-            level="L3",
-            depth_limit=None,
-            poll_interval=None,
-            minutes=0.001,
-            out=str(tmp_path / "o"),
-            no_raw=True,
-        )
         with pytest.raises(SystemExit) as exc:
-            cli._cmd_capture(args)
+            cli.main(
+                [
+                    "capture", "cryptofeed", "--pair", "BTC-USD", "--venue",
+                    "coinbase", "--level", "L3", "--minutes", "0.001",
+                    "-o", str(tmp_path / "o"),
+                ]
+            )  # fmt: skip
         assert exc.value.code == 1
 
     def test_forcing_l3_on_a_real_l2_only_venue_raises(self):
