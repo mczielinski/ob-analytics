@@ -23,6 +23,7 @@ class SpreadWidthMetric:
     name = "spread_width"
     title = "Spread Width"
     levels: tuple[Level, ...] = (Level.L2, Level.L3)
+    needs: tuple[str, ...] = ()
 
     def compute(self, result) -> pd.DataFrame:
         summary = result.depth_summary
@@ -114,6 +115,7 @@ class HiddenRefillMetric:
     name = "hidden_refill"
     title = "Hidden Refill"
     levels: tuple[Level, ...] = (Level.L3,)
+    needs: tuple[str, ...] = ()
 
     def compute(self, result) -> pd.DataFrame:
         return result.events[["timestamp", "id"]].head(1)
@@ -158,6 +160,7 @@ class BrokenMetric:
     name = "broken"
     title = "Broken"
     levels: tuple[Level, ...] = (Level.L2, Level.L3)
+    needs: tuple[str, ...] = ()
 
     def compute(self, result) -> pd.DataFrame:
         raise RuntimeError("no data for this run")
@@ -308,3 +311,20 @@ def test_plugin_metric_runs_and_plots_from_the_public_api(
     assert "spread_width" in ob.visualization.available_concepts(tiny_result)
     assert not tiny_result.metric("spread_width").empty
     assert isinstance(tiny_result.plot("spread_width"), Figure)
+
+
+def test_a_metric_without_needs_is_refused_when_registered(_restore_registry):
+    # Refused here, so it cannot break every metric a run computes later.
+    class OldMetric:
+        name = "old"
+        title = "Old"
+        levels: tuple[Level, ...] = (Level.L2, Level.L3)
+
+        def compute(self, result) -> pd.DataFrame:
+            return pd.DataFrame()
+
+        def prepare(self, frame: pd.DataFrame) -> dict:
+            return {}
+
+    with pytest.raises(TypeError, match="lacks needs"):
+        metrics.register_metric(OldMetric())  # ty: ignore[invalid-argument-type]

@@ -339,16 +339,24 @@ placed[["price", "type", "aggressiveness_bps"]].round(1)
 
 
 # %%
+import warnings
+
+
 def classify(ev, tr):
     return set_order_types(ev, tr).groupby("actor", observed=True)["type"].first()
 
 
 late_events = toy_events().iloc[5:]  # recording now starts at t=12
+# Without the tape, set_order_types also warns that it could not classify
+# four orders; suppressed, since the table below shows them.
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", UserWarning)
+    no_tape = classify(late_events, toy_trades().iloc[:0])
 pd.DataFrame(
     {
         "full window": classify(toy_events(), toy_trades()),
         "late window": classify(late_events, toy_trades()),
-        "late window, no tape": classify(late_events, toy_trades().iloc[:0]),
+        "late window, no tape": no_tape,
     }
 )
 

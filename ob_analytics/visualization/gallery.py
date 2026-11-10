@@ -216,9 +216,8 @@ def _metric_panels(result: PipelineResult) -> list[PlotSpec]:
     A metric registered in :data:`~ob_analytics.metrics.METRICS` becomes a
     gallery card without any edit here: its ``name`` is the level-less plot
     concept the panel dispatches on, so a renderer registered at
-    ``(name, None, backend)`` draws it.  A metric whose
-    :attr:`~ob_analytics.protocols.Metric.levels` exclude this run's level is
-    skipped.
+    ``(name, None, backend)`` draws it.  A metric that does not apply to
+    this run (see :func:`~ob_analytics.metrics.skip_reason`) is skipped.
 
     The metric is computed when its panel is prepared, not here, so building
     the model (which every :func:`plot_result` call does) costs nothing for
@@ -229,22 +228,17 @@ def _metric_panels(result: PipelineResult) -> list[PlotSpec]:
     every metric reports in the instrument's own units from the run's own
     frames, so a card shows the numbers ``result.metric(name)`` returns.
     """
-    from ob_analytics.metrics import METRICS
+    from ob_analytics.metrics import applicable_metrics
 
-    panels: list[PlotSpec] = []
-    for name in METRICS.list():
-        metric = METRICS.get(name)
-        if result.level not in metric.levels:
-            continue
-        panels.append(
-            PlotSpec(
-                metric.name,
-                metric.title,
-                metric.name,
-                partial(_metric_payload, metric, result),
-            )
+    return [
+        PlotSpec(
+            metric.name,
+            metric.title,
+            metric.name,
+            partial(_metric_payload, metric, result),
         )
-    return panels
+        for metric in applicable_metrics(result)
+    ]
 
 
 #: Price-valued columns per frame, converted from integer ticks to a
@@ -567,7 +561,7 @@ def plot_result(
         If *level* was left out and *result* has *concept* at both L2 and
         L3, or *ax* is given for a backend other than Matplotlib.
     """
-    from ob_analytics.metrics import METRICS
+    from ob_analytics.metrics import METRICS, skip_reason
 
     _load_backend(backend)
     _check_ax(ax, backend)
@@ -575,17 +569,14 @@ def plot_result(
     # A face registered at a level keeps its name, so a metric with the same
     # name cannot hide it.
     is_face = any(lvl is not None for lvl, _ in _concepts.placements(concept))
-    if (
-        not is_face
-        and concept in METRICS
-        and result.level in METRICS.get(concept).levels
-    ):
+    metric = None if is_face or concept not in METRICS else METRICS.get(concept)
+    if metric is not None and skip_reason(metric, result) is None:
         # A registered metric is a level-less concept: it has no L2/L3
         # variants, and it measures the run's own frames, so it is drawn
         # without building the gallery model or converting the result.
         resolved = _resolve_level(concept, level, backend)
         _concepts.require(concept, resolved, backend)
-        data = _metric_payload(METRICS.get(concept), result, **overrides)
+        data = _metric_payload(metric, result, **overrides)
         if theme is not None:
             data["theme"] = theme
         return plot(concept, resolved, backend=backend, ax=ax, **data)
@@ -596,11 +587,15 @@ def plot_result(
     if pc is None:
         metric_names = sorted(spec.name for spec in model.analytics)
         built_elsewhere = bool(_concepts.placements(concept)) or concept in METRICS
+        reason = None if metric is None else skip_reason(metric, result)
+        if reason is not None:
+            hint = f"It is not built for this result: {reason}."
+        elif built_elsewhere:
+            hint = "It is not built for this result."
+        else:
+            hint = None
         raise UnknownNameError(
-            "concept",
-            concept,
-            sorted(concept_map) + metric_names,
-            hint="It is not built for this result." if built_elsewhere else None,
+            "concept", concept, sorted(concept_map) + metric_names, hint=hint
         )
 
     resolved = _resolve_level(concept, level, backend, pc.variants)

@@ -14,6 +14,7 @@ live in :mod:`ob_analytics.analytics`.
 from __future__ import annotations
 
 import math
+import warnings
 from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -33,6 +34,7 @@ from ob_analytics._utils import (
     lots_to_size,
     price_to_ticks,
     read_csv_file,
+    require_per_order_events,
     size_to_lots,
     ticks_to_price,
     validate_non_empty,
@@ -74,6 +76,9 @@ if TYPE_CHECKING:
     from ob_analytics.live._base import CaptureConfig, EventDict
 
 # ── BitstampLoader ────────────────────────────────────────────────────
+
+#: How many order ids the duplicate-cancellation warning names.
+_SHOWN_IDS = 10
 
 
 class BitstampLoader:
@@ -304,11 +309,14 @@ class BitstampLoader:
         if rem_dup > 0:
             removed_ids = events.loc[
                 events["original_number"].isin(duplicate_rows), "id"
-            ]
-            logger.warning(
-                "Removed {} duplicate order cancellations: {}",
-                rem_dup,
-                " ".join(removed_ids.astype(str)),
+            ].astype(str)
+            shown = " ".join(removed_ids.iloc[:_SHOWN_IDS])
+            more = " ..." if len(removed_ids) > _SHOWN_IDS else ""
+            warnings.warn(
+                f"BitstampLoader: removed {rem_dup} duplicate order "
+                f"cancellations, which repeat a cancellation already in the "
+                f"file (order ids {shown}{more})",
+                stacklevel=2,
             )
 
         return events[~events["original_number"].isin(duplicate_rows)]
@@ -614,8 +622,14 @@ class BitstampWriter:
         -------
         Path
             The written ``orders.csv`` path.
+
+        Raises
+        ------
+        ConfigError
+            If the events have no rows: an L2 run has no per-order events.
         """
         events = data["events"]
+        require_per_order_events(events, "BitstampWriter")
         p = Path(dest) / ORDERS_NAME
         columns: dict[str, Any] = {
             "id": events["id"],

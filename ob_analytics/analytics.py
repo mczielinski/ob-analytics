@@ -15,6 +15,7 @@ back up as DataFrames.
 from __future__ import annotations
 
 import heapq
+import warnings
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -29,6 +30,7 @@ from ob_analytics import _engine_frames, engine
 from ob_analytics._utils import (
     epoch_ns,
     price_scale,
+    require_per_order_events,
     size_scale,
     ticks_to_price,
     validate_non_empty,
@@ -126,6 +128,7 @@ def order_aggressiveness(
         {"timestamp"},
         "order_aggressiveness(depth_summary)",
     )
+    require_per_order_events(events, "order_aggressiveness")
 
     orders = events[
         (events["action"] != "changed")
@@ -281,7 +284,7 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
         {"maker_event_id", "taker_event_id"},
         "set_order_types(trades)",
     )
-    validate_non_empty(events, "set_order_types")
+    require_per_order_events(events, "set_order_types")
 
     facts = _OrderFacts.of(events, _named_event_ids(trades))
     return _with_order_types(events, _order_types(facts, trades))
@@ -405,7 +408,11 @@ def _order_types(facts: _OrderFacts, trades: pd.DataFrame) -> pd.Series:
     )
     unidentified = int((kind == "unknown").sum())
     if unidentified:
-        logger.warning("Could not identify {} orders", unidentified)
+        warnings.warn(
+            f"Could not classify {unidentified} orders; their type is 'unknown'",
+            # The caller of set_order_types.
+            stacklevel=3,
+        )
     return pd.Series(kind, index=ids, name="type")
 
 
@@ -467,7 +474,7 @@ def order_lifecycles(events: pd.DataFrame) -> pd.DataFrame:
         {"id", "timestamp", "price", "volume", "direction", "action", "fill"},
         "order_lifecycles",
     )
-    validate_non_empty(events, "order_lifecycles")
+    require_per_order_events(events, "order_lifecycles")
 
     lifecycles = engine.order_lifecycles(
         _engine_frames.to_order_events(events, fill=True)
@@ -568,7 +575,7 @@ def order_book(
         },
         "order_book",
     )
-    validate_non_empty(events, "order_book")
+    require_per_order_events(events, "order_book")
 
     if tp is None:
         tp = events["timestamp"].max()

@@ -174,7 +174,10 @@ def test_load_accepts_legacy_unversioned_file(tmp_path: Path):
     # A plain pandas write carries no ob-analytics version key.
     events.to_parquet(out / "events.parquet", index=False)
 
-    loaded = load_data(out)["events"]  # must not raise
+    with pytest.warns(UserWarning, match="no schema version") as caught:
+        loaded = load_data(out)["events"]  # must not raise
+    # Reported at the caller of load_data, not inside the package.
+    assert caught[0].filename.endswith("test_schemas.py")
     assert list(loaded.columns) == list(events.columns)
 
 
@@ -183,7 +186,10 @@ def test_check_schema_version_current_passes():
 
 
 def test_check_schema_version_none_is_legacy():
-    check_schema_version(None, source="test")  # warns, does not raise
+    # The package's loguru logger stays off here, so only warnings.warn reaches
+    # the user.
+    with pytest.warns(UserWarning, match="test: no schema version"):
+        check_schema_version(None, source="test")
 
 
 def test_check_schema_version_unknown_raises():

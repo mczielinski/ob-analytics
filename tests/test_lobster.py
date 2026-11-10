@@ -564,7 +564,7 @@ class TestWriterOrderbookFile:
         from ob_analytics.exceptions import ConfigError
 
         events = self._one_bid().iloc[0:0]
-        with pytest.raises(ConfigError, match="no events"):
+        with pytest.raises(ConfigError, match=r"needs per-order \(L3\) events"):
             writer.write({"events": events}, tmp_path)
 
     def test_a_depth_table_in_display_units_is_refused(self, writer, tmp_path):
@@ -1396,3 +1396,15 @@ class TestFewLevelsWarning:
         message = next(str(w.message) for w in caught if "crossed" in str(w.message))
         assert "no orderbook file" in message
         assert "not affected" not in message
+
+    def test_without_an_orderbook_file_the_fallback_warns(self, tmp_path):
+        # The package's loguru logger stays off, so the user hears that the
+        # depth is rebuilt from the messages only through warnings.warn.
+        files = few.write_files(tmp_path, few.CLEAN_MESSAGES, None)
+
+        with pytest.warns(UserWarning, match="no orderbook file found") as caught:
+            few.run(files)
+
+        warning = next(w for w in caught if "no orderbook file found" in str(w.message))
+        # Reported at the caller of Pipeline.run, not inside the package.
+        assert warning.filename.endswith("_lobster_few_levels.py")

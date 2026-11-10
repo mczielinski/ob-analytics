@@ -428,7 +428,10 @@ class TestTrades:
     ]
 
     def test_fills_leave_out_a_print_with_no_fill_behind_it(self):
-        result = Pipeline(source=DatabentoSource()).run(mbo_frame(self.AUCTION))
+        # The package's loguru logger stays off, so warnings.warn is how the
+        # user learns that the trades frame is short.
+        with pytest.warns(UserWarning, match=r"fills account for 3 of 5003"):
+            result = Pipeline(source=DatabentoSource()).run(mbo_frame(self.AUCTION))
         assert result.trades["volume"].sum() == 3
         assert result.trades["maker"].notna().all()
 
@@ -654,10 +657,11 @@ class TestRefusals:
         assert trades.empty
 
     def test_the_drop_warning_does_not_say_which_way_the_book_is_off(self):
-        # A dropped cancel leaves extra size resting, not missing size.
-        with warnings_logged() as logged:
+        # A dropped cancel leaves extra size resting, not missing size.  The
+        # package's loguru logger stays off, so this is a warnings.warn.
+        with pytest.warns(UserWarning, match="dropped") as caught:
             load([(1, "A", "B", px(100.00), 10), (1, "C", "B", UNDEF_PRICE, 10)])
-        message = "\n".join(logged)
+        message = "\n".join(str(w.message) for w in caught)
         assert "dropped 1 of 2 records" in message
         assert "missing whatever liquidity" not in message
         assert "dropped cancel leaves an order resting" in message
@@ -666,13 +670,14 @@ class TestRefusals:
         # Databento states a side on every A/M/C. Without one there is no side
         # of the book to put the order on, and the depth rebuild would drop it
         # while the events frame kept it.
-        _, events = load(
-            [
-                (1, "A", "B", px(100.00), 10),
-                (2, "A", "N", px(100.05), 10),
-                (2, "C", "N", px(100.05), 10),
-            ]
-        )
+        with pytest.warns(UserWarning, match="dropped 2 of 3 records with no side"):
+            _, events = load(
+                [
+                    (1, "A", "B", px(100.00), 10),
+                    (2, "A", "N", px(100.05), 10),
+                    (2, "C", "N", px(100.05), 10),
+                ]
+            )
         assert list(events["id"]) == [1]
         assert events["direction"].notna().all()
 
@@ -1030,7 +1035,7 @@ class TestMaybeBadBook:
 
     def test_a_file_without_the_flag_neither_warns_nor_fails(self):
         with warnings.catch_warnings():
-            warnings.simplefilter("error")
+            warnings.filterwarnings("error", message=".*F_MAYBE_BAD_BOOK")
             loader, events = load(mbo_frame(LIFECYCLE))
             summary = audit_frame(mbo_frame(LIFECYCLE))
 
@@ -1617,7 +1622,7 @@ class TestDbnFiles:
         result = Pipeline(source=DatabentoSource()).run(mbo_frame(LIFECYCLE))
         # Read with a lot of a hundredth, 100 lots are one unit and 50 are not.
         with pytest.raises(ValueError, match="whole"):
-            DatabentoWriter(_config(lot_size=0.01)).write(
+            DatabentoWriter(_config(lot_size=0.01, volume_decimals=2)).write(
                 {"events": result.events}, tmp_path / "out.dbn"
             )
 

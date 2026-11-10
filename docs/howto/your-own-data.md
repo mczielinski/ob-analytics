@@ -27,29 +27,51 @@ for name in ("orders.csv", "trades.csv"):
 ```python
 from ob_analytics import Pipeline, PipelineConfig
 
-config = PipelineConfig(price_decimals=2, volume_decimals=8)
+config = PipelineConfig(
+    tick_size=0.01,
+    price_decimals=2,
+    lot_size=1e-8,
+    volume_decimals=8,
+)
 result = Pipeline(config=config).run("my_run/orders.csv")
 ```
 
 ## Configuration presets
 
+Set the instrument's price step (`tick_size`) and size step (`lot_size`), with
+the decimals that show one step (`price_decimals`, `volume_decimals`). A
+`lot_size` finer than `volume_decimals` can show is refused, because sizes
+would be shown rounded.
+
 === "BTC/USD (default)"
 
     ```python
-    config = PipelineConfig(price_decimals=2, volume_decimals=8)
+    config = PipelineConfig(
+        tick_size=0.01,
+        price_decimals=2,
+        lot_size=1e-8,
+        volume_decimals=8,
+    )
     ```
 
 === "ETH/USD"
 
     ```python
-    config = PipelineConfig(price_decimals=2, volume_decimals=6)
+    config = PipelineConfig(
+        tick_size=0.01,
+        price_decimals=2,
+        lot_size=1e-6,
+        volume_decimals=6,
+    )
     ```
 
 === "FX (EUR/USD)"
 
     ```python
     config = PipelineConfig(
+        tick_size=0.0001,
         price_decimals=4,
+        lot_size=0.01,
         volume_decimals=2,
         depth_bps=5,
         depth_bins=100,
@@ -59,7 +81,12 @@ result = Pipeline(config=config).run("my_run/orders.csv")
 === "High-Price Equity"
 
     ```python
-    config = PipelineConfig(price_decimals=2, volume_decimals=0)
+    config = PipelineConfig(
+        tick_size=0.01,
+        price_decimals=2,
+        lot_size=1.0,
+        volume_decimals=0,
+    )
     ```
 
 ## Related
