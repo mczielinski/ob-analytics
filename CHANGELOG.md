@@ -1225,6 +1225,12 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
+- **The Matplotlib `book_signals` plot no longer runs out of memory** (#462).
+  It drew the touch OBI strip as one bar per depth-summary row, about 313,000
+  bars on the bundled sample, and went past 3 GB. The strip is now two stepped
+  fills, buy above zero and sell below, each reduced to the highest and lowest
+  value in each of 4,000 time columns. On the sample the plot peaks at about
+  675 MiB, and `ob-analytics process ... --gallery` finishes under a 3 GB cap.
 - **Data problems reach a Python user** (#399). The package turns its loguru
   logger off, so these went unseen; each is now a `UserWarning`: Databento
   records dropped for no price or no side, Databento fills that do not
