@@ -1172,6 +1172,10 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
+- **`detect_icebergs` no longer stops on UUID order ids** (#314). On an
+  Independent Reserve capture, a refill made `detect_icebergs` raise
+  `ValueError`, and the gallery left out its hidden-liquidity overlay. The
+  slices now keep each order `id` as the feed writes it.
 - **The Bokeh depth heatmap draws the hidden-liquidity overlay** (#410).
   With `backend="bokeh"`, the iceberg chains and refill markers and the
   trades against hidden orders were left out without a word. Bokeh now draws
