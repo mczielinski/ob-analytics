@@ -11,6 +11,7 @@ inventory from :func:`build_gallery_model`).
 from __future__ import annotations
 
 import dataclasses
+import warnings
 from pathlib import Path
 
 import matplotlib
@@ -905,6 +906,39 @@ class TestBuildGalleryModel:
         # (#272 acceptance: a run with neither must not raise).
         plot_result(result, "depth_heatmap", backend="matplotlib")
         plot_result(result, "order_activity", level="L3", backend="matplotlib")
+
+    def test_gallery_settings_go_only_to_a_compute_that_takes_them(self) -> None:
+        from ob_analytics.metrics import METRICS
+        from ob_analytics.visualization.gallery import _gallery_settings
+
+        class OwnVpin:
+            name = "vpin"
+
+            def compute(self, result):
+                return result
+
+        assert _gallery_settings(METRICS.get("vpin")) == {"bucket_volume": "fit"}
+        assert _gallery_settings(OwnVpin()) == {}
+
+    def test_vpin_card_fits_its_buckets_and_says_so(
+        self, bundled_sample_result, tmp_path: Path
+    ) -> None:
+        # A day's volume ÷ 50 fills one bucket on the half-hour sample.  The
+        # gallery fits the buckets to the capture, raises no warning, and
+        # says on the card how it sized them.
+        model = build_gallery_model(bundled_sample_result)
+        model = GalleryModel(
+            concepts=[], analytics=[s for s in model.analytics if s.name == "vpin"]
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            path = generate_gallery(
+                None, tmp_path, model=model, backends=["matplotlib"]
+            )
+        html = path.read_text(encoding="utf-8")
+        assert (tmp_path / "matplotlib" / "vpin.png").exists()
+        assert "the capture&#x27;s total ÷ 100" in html
+        assert 'class="card-note"' in html
 
     def test_hidden_liquidity_overlay_is_clipped_to_the_zoom_and_price_window(
         self, bundled_sample_result

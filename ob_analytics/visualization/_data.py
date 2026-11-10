@@ -2334,7 +2334,12 @@ def prepare_vpin_data(
     vpin_df: pd.DataFrame,
     threshold: float = 0.7,
 ) -> dict[str, Any]:
-    """Prepare data for a VPIN time-series chart."""
+    """Prepare data for a VPIN time-series chart.
+
+    The payload's ``note`` says how the buckets were sized when
+    ``bucket_volume="fit"`` sized them from the total volume, and is empty
+    otherwise.  The gallery shows it under the card.
+    """
     if len(vpin_df) > 1:
         bar_width = 0.6 * (
             (vpin_df["timestamp_end"].iloc[-1] - vpin_df["timestamp_end"].iloc[0])
@@ -2342,7 +2347,27 @@ def prepare_vpin_data(
         )
     else:
         bar_width = 0.001
-    return {"vpin_df": vpin_df, "threshold": threshold, "bar_width": bar_width}
+    return {
+        "vpin_df": vpin_df,
+        "threshold": threshold,
+        "bar_width": bar_width,
+        "note": _vpin_note(vpin_df),
+    }
+
+
+def _vpin_note(vpin_df: pd.DataFrame) -> str:
+    """Say how ``bucket_volume="fit"`` sized the buckets, or return ``""``."""
+    rule = str(vpin_df.attrs.get("bucket_volume_rule", ""))
+    if not rule.startswith("total/"):
+        return ""
+    divisor = rule.removeprefix("total/")
+    size = vpin_df.attrs["bucket_volume"]
+    n_buckets = vpin_df.attrs["n_buckets"]
+    return (
+        f"Each bucket holds {size:,.4g} of volume: the capture's total ÷ "
+        f"{divisor}. The usual size, a day's volume ÷ 50, fills fewer than "
+        f"{n_buckets} buckets on this capture."
+    )
 
 
 def prepare_transaction_costs_data(

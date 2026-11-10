@@ -20,6 +20,7 @@ from ob_analytics.flow_toxicity import (
     order_flow_imbalance,
     vpin_bucket_volume,
 )
+from ob_analytics.visualization._data import prepare_vpin_data
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -361,6 +362,31 @@ class TestKyleLambdaDiagnostics:
         assert not result.significant
         assert any("windows" in d for d in result.diagnostics)
 
+    def test_fit_keeps_the_default_when_it_fills_the_window(self):
+        trades = _trades(
+            ["buy", "sell"] * 100,
+            base_sec_offsets=[i * 1800 for i in range(200)],  # about 4 days
+        )
+        vpin = compute_vpin(trades, bucket_volume="fit")
+        assert vpin.attrs["bucket_volume_rule"] == "adv/50"
+        assert vpin.attrs["bucket_volume"] == pytest.approx(vpin_bucket_volume(trades))
+        # Nothing changed, so the gallery card has nothing to explain.
+        assert prepare_vpin_data(vpin)["note"] == ""
+
+    def test_fit_sizes_a_short_capture_from_its_total(self):
+        trades = _trades(["buy", "sell"] * 50)  # 100 trades over 99 seconds
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            vpin = compute_vpin(trades, bucket_volume="fit", n_buckets=10)
+        assert vpin.attrs["bucket_volume_rule"] == "total/20"
+        assert vpin.attrs["bucket_volume"] == pytest.approx(trades["volume"].sum() / 20)
+        assert len(vpin) >= 10
+        assert vpin.attrs["diagnostics"] == ()
+
+    def test_unknown_bucket_volume_word_raises(self):
+        with pytest.raises(ConfigError, match="'fit'"):
+            compute_vpin(_trades(["buy"] * 10), bucket_volume="auto")  # ty: ignore[invalid-argument-type]
+
     def test_busy_tape_is_not_flagged(self):
         result = compute_kyle_lambda(_busy_tape(), window="1min")
         assert result.n_windows == 200
@@ -584,6 +610,16 @@ class TestBundledSampleDiagnostics:
             vpin = compute_vpin(trades)
         assert vpin.attrs["bucket_volume"] == pytest.approx(vpin_bucket_volume(trades))
         assert vpin.attrs["diagnostics"]
+
+    def test_vpin_fit_fills_the_window_without_a_warning(self, sample_trades):
+        # The sample is half an hour, so a day's volume ÷ 50 fills one bucket;
+        # "fit" sizes the buckets from the total and the window fills.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            vpin = compute_vpin(sample_trades, bucket_volume="fit")
+        assert vpin.attrs["bucket_volume_rule"] == "total/100"
+        assert len(vpin) >= 50
+        assert vpin.attrs["diagnostics"] == ()
 
 
 # ── Order Flow Imbalance ─────────────────────────────────────────────
