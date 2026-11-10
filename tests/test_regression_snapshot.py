@@ -193,11 +193,26 @@ def test_demo_fingerprints(demo_result):
     # uncross=True)` has the summary's best bid at 299 and best ask at 299,
     # against 241 and 165 before.  `hidden_trades` now flags none of the 284
     # trades, where it flagged 29 that all had a visible maker.
+    # 2026-11-09 (events numbered in file order across orders, #456): the
+    # loader numbered events by order id, so rows of two orders at one instant
+    # came in the order their ids sort.  They now keep their file order; each
+    # order's own rows are unchanged.  Every `event_id` moves, and with it
+    # `maker_event_id` / `taker_event_id` in `trades`; mapped through
+    # `original_number`, `trades` is otherwise identical.  The time order of
+    # events changes at 61,585 of 314,057 positions (51,956 instants hold
+    # more than one order).  `depth` differs on 2,888 rows, in `volume`
+    # only: the steps inside one instant; the level sizes at the end of every
+    # instant are identical.  `depth_summary` differs on 58,173 rows, the same
+    # steps; at the end of an instant it differs on 6 of 130,244, all in one
+    # crossed episode (02:48:03.743 to 02:48:04.870), where the touch now
+    # agrees with `order_book(..., uncross=True)` at each instant (bid
+    # 78,374.00, ask 78,375.00) and did not before.  `events` follows through
+    # `aggressiveness_bps` on 3,858 rows.
     EXPECTED: dict[str, str] = {
-        "events": "07a04f64b2b6d573682ff2da821da85d6ca37959d85b500970edf22aab10f1d2",
-        "trades": "f90ec605bfafe32c1a06cf3d97ee2ade9a5d418a2198af65b1a640ee0dfdf31d",
-        "depth": "f2ddbca30f48004b352fb230e086b66fcb372de840fa87b1289439f1803a5cec",
-        "depth_summary": "e2c326fccb02f3af3c0cbf3a974b53c37292664fc8557c0f1759278b0e85df7d",
+        "events": "4465fcd2d31b6683228b3cc3807baa846032f7252e87ac78c19f0b83f34a576a",
+        "trades": "492a83736f801d08be3c3ebac1e4ca4dde6010a6b324082600d1f3d01b4eb7b7",
+        "depth": "2deeef0fe9c009ef0d1dea7bbb1297c4c0523500703e7972040be449b2b8149d",
+        "depth_summary": "2ec4be96458bcc6029e00204f3ff72ac6efa0c9a76175493eaba0aec595da781",
     }
     if EXPECTED:
         assert fps == EXPECTED

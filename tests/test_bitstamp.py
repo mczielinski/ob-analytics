@@ -454,6 +454,72 @@ class TestRowOrder:
         assert list(events["action"]) == ["created", "changed", "deleted"]
         assert list(events["fill"]) == [0, 1, 4]
 
+    @classmethod
+    def _numbered(cls, tmp_path, rows, *, sequence=None):
+        """Load bid orders from ``(id, ms after TS, size in lots, action)``
+        rows and return ``(id, action)`` in ``event_id`` order."""
+        frame = pd.DataFrame(
+            [
+                {
+                    "id": oid,
+                    "timestamp": cls.TS + dt,
+                    "exchange_timestamp": cls.TS + dt,
+                    "price": 78360.0,
+                    "volume": lots * 1e-8,
+                    "action": action,
+                    "direction": "bid",
+                }
+                for oid, dt, lots, action in rows
+            ]
+        )
+        if sequence is not None:
+            frame["sequence"] = sequence
+        orders = tmp_path / "orders.csv"
+        frame.to_csv(orders, index=False)
+        events = BitstampLoader(PipelineConfig()).load(orders)
+        ordered = events.sort_values("event_id")
+        return list(zip(ordered["id"].astype(str), ordered["action"]))
+
+    @pytest.mark.parametrize(
+        "ids",
+        [
+            (2, 1),
+            (
+                "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+                "0b1c2d3e-aaaa-4bbb-8ccc-0d0e0f101112",
+            ),
+        ],
+    )
+    def test_orders_at_one_instant_are_numbered_in_file_order(self, tmp_path, ids):
+        # The first order's id sorts after the second's; event_id must still
+        # follow the file, since ids need not rise with time (#456).
+        first, second = ids
+        rows = [
+            (first, 0, 5, "created"),
+            (second, 1, 4, "created"),
+            (first, 1, 0, "deleted"),
+            (second, 2, 0, "deleted"),
+        ]
+
+        assert self._numbered(tmp_path, rows) == [
+            (str(oid), action) for oid, _, _, action in rows
+        ]
+
+    def test_orders_at_one_instant_are_numbered_by_the_venue_sequence(self, tmp_path):
+        # The file holds order 1's deletion before order 2's creation; the
+        # venue's sequence numbers say order 2 came first.
+        rows = [
+            (1, 0, 5, "created"),
+            (1, 1, 0, "deleted"),
+            (2, 1, 4, "created"),
+        ]
+
+        assert self._numbered(tmp_path, rows, sequence=[1, 3, 2]) == [
+            ("1", "created"),
+            ("2", "created"),
+            ("1", "deleted"),
+        ]
+
 
 class TestQuoteAmountTaker:
     """An instant order bought by quote amount never reports the size it

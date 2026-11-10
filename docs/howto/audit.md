@@ -38,8 +38,8 @@ Data quality summary
   feed type             : diff_feed
   events / orders       : 314,057 / 156,902
   trades                : 284
-  crossed resting book  : 91.61% of session (8883 episode(s)) [diff feed, but 2 stale resting order(s) stay in the book — see stale resting orders]
-  per-order book crossed: 91.61% of session (8883 episode(s)) [no more than the depth table — see the crossed resting book]
+  crossed resting book  : 91.61% of session (8886 episode(s)) [diff feed, but 2 stale resting order(s) stay in the book — see stale resting orders]
+  per-order book crossed: 91.61% of session (8886 episode(s)) [no more than the depth table — see the crossed resting book]
   venue book            : not checked: no venue book to compare with; only a LOBSTER run from its files has one
   stale resting orders  : 2 (worst: ask 2002347646152704 at 78,333 held the ask touch for 27.4 min after a trade printed through it)
   unmatched trades      : 0.00% [maker and taker]

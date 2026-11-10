@@ -1,5 +1,7 @@
 """Tests for hidden_liquidity.py — iceberg refills and trades inside the spread."""
 
+import hashlib
+import uuid
 from itertools import pairwise
 from pathlib import Path
 
@@ -8,6 +10,7 @@ import pandas as pd
 import pytest
 
 from ob_analytics import LobsterSource, Pipeline, RunContext
+from ob_analytics.bitstamp import BitstampLoader, BitstampTradeReader
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.hidden_liquidity import (
     ICEBERG_MAX_DELAY,
@@ -292,6 +295,50 @@ class TestSyntheticGroundTruth:
         session = generate_session(seed=1, duration=30)
         assert session.icebergs.empty
         assert list(session.icebergs.columns) == ["id", "iceberg"]
+
+
+class TestOrderIdsDoNotMatter:
+    """Detection follows time, not how the venue's order ids sort."""
+
+    @pytest.mark.parametrize(
+        "remap",
+        [
+            lambda i: int(hashlib.sha1(str(i).encode()).hexdigest()[:12], 16),
+            lambda i: str(uuid.uuid5(uuid.NAMESPACE_OID, str(i))),
+        ],
+        ids=["hashed-integers", "uuids"],
+    )
+    def test_ids_unrelated_to_time_give_the_same_icebergs(
+        self, bitstamp_sample_dir, tmp_path, remap
+    ):
+        # Bitstamp's ids rise with time; Independent Reserve writes the same
+        # format with UUIDs, which do not, and neither do integers from a hash
+        # (#456: a refill placed in the millisecond its old slice filled was
+        # numbered before the fill and lost).
+        orders = pd.read_csv(bitstamp_sample_dir / "orders.csv.gz")
+        trades = pd.read_csv(bitstamp_sample_dir / "trades.csv")
+        sides = ["buy_order_id", "sell_order_id"]
+        ids = pd.unique(pd.concat([orders["id"], *(trades[c] for c in sides)]))
+        new_id = {i: remap(i) for i in ids}
+        assert len(set(new_id.values())) == len(ids)
+        orders["id"] = orders["id"].map(new_id)
+        for c in sides:
+            trades[c] = trades[c].map(new_id)
+        orders.to_csv(tmp_path / "orders.csv", index=False)
+        trades.to_csv(tmp_path / "trades.csv", index=False)
+
+        def detect(orders_csv):
+            events = BitstampLoader().load(orders_csv)
+            linked = BitstampTradeReader().load(events, orders_csv)
+            return detect_icebergs(events, linked)
+
+        expected = detect(bitstamp_sample_dir / "orders.csv.gz")
+        got = detect(tmp_path / "orders.csv")
+
+        old_id = {v: k for k, v in new_id.items()}
+        assert len(expected.icebergs) == 2
+        assert got.slices["id"].map(old_id).tolist() == expected.slices["id"].tolist()
+        pd.testing.assert_frame_equal(got.icebergs, expected.icebergs)
 
 
 # ── hidden_trades ────────────────────────────────────────────────────
