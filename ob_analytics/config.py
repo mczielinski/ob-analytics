@@ -304,7 +304,7 @@ class PipelineConfig(_Settings):
             "and the venue 'sequence' number when the source carries one.  Off "
             "by default so the standard pipeline output is unchanged; turn it "
             "on to detect dropped or reordered messages via "
-            "ob_analytics.analytics.detect_sequence_gaps."
+            "ob_analytics.quality.detect_sequence_gaps."
         ),
     )
 

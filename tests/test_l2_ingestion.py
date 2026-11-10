@@ -21,13 +21,9 @@ from ob_analytics import (
     data_quality_summary,
     list_sources,
 )
-from ob_analytics.analytics import (
-    order_aggressiveness,
-    order_book,
-    order_lifecycles,
-    set_order_types,
-)
+from ob_analytics.analytics import order_aggressiveness, set_order_types
 from ob_analytics.bitstamp import BitstampWriter
+from ob_analytics.book import order_book, order_lifecycles
 from ob_analytics.capture_files import DEPTH_COLUMNS
 from ob_analytics.config import PipelineConfig
 from ob_analytics.databento import DatabentoWriter

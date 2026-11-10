@@ -53,11 +53,9 @@ from ob_analytics._windows import (
     window_positions,
 )
 from ob_analytics.analytics import (
-    DataQualitySummary,
     _order_types,
     _OrderFacts,
     _with_order_types,
-    data_quality_summary,
     order_aggressiveness,
     set_order_types,
 )
@@ -81,6 +79,7 @@ from ob_analytics.protocols import (
     TradeSource,
     grid_of,
 )
+from ob_analytics.quality import DataQualitySummary, data_quality_summary
 from ob_analytics.schemas import (
     lot_sizes_from_config,
     put_config_units,
@@ -254,7 +253,7 @@ class PipelineResult:
         """Check this run's data quality against its :attr:`declarations`.
 
         The same checks as ``ob-analytics audit``: this calls
-        :func:`~ob_analytics.analytics.data_quality_summary` with the run's
+        :func:`~ob_analytics.quality.data_quality_summary` with the run's
         tables, its faithful ``depth``, its tick size and its declarations.
 
         Parameters

@@ -10,8 +10,9 @@ frames the analytics and plotting layers expect.
 Keeping the conversion here — rather than inside the engine — is what lets the
 engine stay pandas-free, so it can be replaced with a faster implementation
 without any of this moving.  Nothing here is public API; the callers are
-:func:`ob_analytics.analytics.order_book`,
-:func:`ob_analytics.analytics.order_lifecycles`, and :mod:`ob_analytics.queue`.
+:func:`ob_analytics.book.order_book`,
+:func:`ob_analytics.book.order_lifecycles`, :mod:`ob_analytics.queue`, and
+:mod:`ob_analytics.depth`.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
+from ob_analytics import engine
 from ob_analytics._utils import epoch_ns
 from ob_analytics.engine import (
     ACTIONS,
@@ -302,3 +304,14 @@ def queue_frame(events: pd.DataFrame, positions: QueuePositions) -> pd.DataFrame
     frame["remaining"] = positions.remaining
     frame["age_s"] = positions.age_s
     return frame
+
+
+# ── Price-level book ──────────────────────────────────────────────────
+
+
+crossed_prefix_counts = engine.crossed_prefix_counts
+"""How many best-end bids and asks to evict to uncross two book sides.
+
+:class:`ob_analytics.depth.PriceLevelBook` uncrosses its touch by the engine's
+rule, :func:`ob_analytics.engine.crossed_prefix_counts`.  It already holds
+price-sorted arrays, so it takes the rule as it is."""

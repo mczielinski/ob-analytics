@@ -107,7 +107,7 @@ consumers read them when present):
   means a reordered message.  Whether a skip means a dropped one depends on the
   source's :class:`~ob_analytics.protocols.SequenceKind`: yes for a contiguous
   counter, no for a number that only rises (the CCXT ``nonce``) — see
-  :func:`ob_analytics.analytics.detect_sequence_gaps`.
+  :func:`ob_analytics.quality.detect_sequence_gaps`.
 * ``ingest_seq`` (:data:`INGEST_SEQ_COLUMN`) — a local monotonic ingest counter,
   a 0-based ``int64`` index in the order the rows were read from the source
   (arrival order).  It is captured before any reordering, so it stays monotonic
@@ -116,7 +116,7 @@ consumers read them when present):
   but not necessarily contiguous.  This is the deterministic ordering / replay
   key that never depends on a venue-supplied number, so it is defined even when
   ``sequence`` is missing (the common case on L2 diff feeds), and it is the
-  order :func:`~ob_analytics.analytics.detect_sequence_gaps` scans ``sequence``
+  order :func:`~ob_analytics.quality.detect_sequence_gaps` scans ``sequence``
   along.  The loaders attach it only when ``track_sequence`` is enabled on
   :class:`~ob_analytics.config.PipelineConfig`, so the default pipeline output is
   byte-for-byte unchanged.
@@ -137,6 +137,7 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from ob_analytics import engine
 from ob_analytics.exceptions import ConfigError
 
 if TYPE_CHECKING:
@@ -422,7 +423,7 @@ after a gap it could not repair, so the book may be wrong from there on.
 
 Databento sets the flag ``F_MAYBE_BAD_BOOK`` on such records;
 :class:`~ob_analytics.databento.DatabentoLoader` puts the count here, and
-:func:`~ob_analytics.analytics.data_quality_summary` reads it.  A frame
+:func:`~ob_analytics.quality.data_quality_summary` reads it.  A frame
 without the key comes from a source that does not flag such records, so the
 count was not checked."""
 
@@ -474,6 +475,13 @@ INGEST_SEQ_COLUMN: str = "ingest_seq"
 
 TIMESTAMP_COLUMN: str = "timestamp"
 """Name of the primary (receive-clock) timestamp column."""
+
+HIDDEN_ORDER_ID: int = engine.HIDDEN_ORDER_ID
+"""The ``id`` of an order with no public identity, such as a LOBSTER hidden
+execution.  Such an order never joins the visible queue, so the queue
+reconstructions and the iceberg detector skip it.  The value is defined in
+:mod:`ob_analytics.engine`, which cannot import this module, so both sides read
+the same number."""
 
 # Tie-break keys applied after ``timestamp``, in priority order, to totally
 # order events that share an instant (issue #154).  The venue ``sequence`` is

@@ -998,10 +998,10 @@ class TestSequenceReachesTheOutput:
     def test_a_sequence_gap_is_detectable_in_the_captured_output(self, tmp_path):
         import asyncio
 
-        from ob_analytics.analytics import detect_sequence_gaps
         from ob_analytics.bitstamp import BitstampLoader
         from ob_analytics.config import PipelineConfig
         from ob_analytics.live._runner import run_capturer
+        from ob_analytics.quality import detect_sequence_gaps
 
         # 41 then 43: the venue skipped 42.
         script = [
@@ -1361,10 +1361,10 @@ class TestAcceptanceReplay:
     def test_l3_capture_replays_through_the_full_pipeline_and_validates(self, tmp_path):
         import asyncio
 
-        from ob_analytics.analytics import data_quality_summary
         from ob_analytics.bitstamp import BitstampSource
         from ob_analytics.live._runner import run_capturer
         from ob_analytics.pipeline import Pipeline
+        from ob_analytics.quality import data_quality_summary
 
         script = [
             (

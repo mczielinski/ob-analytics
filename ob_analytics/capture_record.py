@@ -99,7 +99,7 @@ class CaptureRecord:
         finds a lost message itself starts again from a new opening book, and
         on some venues the sequence starts again too.  These steps back are
         not faults (see
-        :func:`~ob_analytics.analytics.data_quality_summary`).
+        :func:`~ob_analytics.quality.data_quality_summary`).
     tick_size : float or None
         The instrument's price step, in the quote currency.
     lot_size : float or None

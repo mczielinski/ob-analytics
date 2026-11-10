@@ -28,8 +28,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ob_analytics.analytics import order_book
 from ob_analytics.bitstamp import BitstampSource
+from ob_analytics.book import order_book
 from ob_analytics.data import load_result, save_data
 from ob_analytics.databento import DatabentoSource
 from ob_analytics.datasets import toy_l2_depth, toy_l2_trades

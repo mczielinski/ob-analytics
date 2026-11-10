@@ -20,7 +20,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import pytest
 
-from ob_analytics.analytics import order_book, order_lifecycles, set_order_types
+from ob_analytics.analytics import set_order_types
+from ob_analytics.book import order_book, order_lifecycles
 from ob_analytics.datasets import (
     ToyOrder,
     match_toy_orders,

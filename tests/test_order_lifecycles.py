@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ob_analytics.analytics import order_lifecycles
+from ob_analytics.book import order_lifecycles
 from ob_analytics.engine._lifecycles import DEFAULT_FILL_TOLERANCE, _grouped_sum
 
 _TS = pd.Timestamp("2012-06-21 09:30:00")

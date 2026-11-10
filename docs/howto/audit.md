@@ -76,7 +76,7 @@ Checks: 0 error(s), 4 warning(s)
 | **impossible values** | Levels priced at or below zero, negative volumes or fills, and depth rows where the events take more off a price level than they put on (the depth table holds such a level at zero) |
 | **clock order** | Rows the venue stamped *after* we received them, and messages that reached the capture out of venue order. The opening book's rows are left out; `not checked` when the data has one clock |
 | **records after a gap** | Records the venue flagged as coming after a gap in its feed that it could not repair, so the book may be wrong from the first of them on. Only Databento flags these (`F_MAYBE_BAD_BOOK`); `not checked` for every other source |
-| **venue sequence** | Skipped and non-advancing sequence numbers: dropped and reordered messages ([gap detection](../api/analytics.md)) |
+| **venue sequence** | Skipped and non-advancing sequence numbers: dropped and reordered messages ([gap detection](../api/quality.md)) |
 
 A high **crossed resting book** number on a `diff_feed` can be expected — see
 [Data quality: matched book, diff feed and price levels](../data-quality.md) for why, and for
@@ -233,7 +233,7 @@ Two of these are judgement calls worth stating plainly:
   milliseconds, so `stale_orders` waits one second before it counts one. The
   test needs to know what the feed said after the trade, which a live capture
   cannot know in time, so `order_book()` keeps the order.
-  [`detect_stale_orders`](../api/analytics.md) runs the same test from Python.
+  [`detect_stale_orders`](../api/quality.md) runs the same test from Python.
 
 ## In CI
 
@@ -327,4 +327,4 @@ For tables that are not a run's, call `data_quality_summary(events, trades,
 - [Data quality: matched book, diff feed and price levels](../data-quality.md) — the concepts behind these numbers
 - [What each feed shows](../feeds.md) — what each source can and cannot show, so which checks can fire on it
 - [Run from the command line](cli.md) — every CLI verb
-- [`data_quality_summary` reference](../api/analytics.md)
+- [`data_quality_summary` reference](../api/quality.md)

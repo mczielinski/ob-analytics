@@ -93,7 +93,14 @@ class TestCallersUseTheInterface:
 
     @pytest.mark.parametrize(
         "module",
-        ["analytics.py", "queue.py", "_engine_frames.py", "visualization/_data.py"],
+        [
+            "analytics.py",
+            "book.py",
+            "depth.py",
+            "queue.py",
+            "_engine_frames.py",
+            "visualization/_data.py",
+        ],
     )
     def test_no_reach_into_engine_internals(self, module: str) -> None:
         private = [

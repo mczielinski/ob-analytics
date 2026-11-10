@@ -74,7 +74,7 @@ snapshot reported and the venue never reported again. Trades print above it
 for 27 minutes while it holds the ask touch. It is a
 [stale resting order](#stale-resting-orders), and `audit` names it.
 
-[`order_book()`](api/analytics.md) therefore replays a diff feed **as-is**: a
+[`order_book()`](api/book.md) therefore replays a diff feed **as-is**: a
 crossed book in the output is a property of the feed, not a reconstruction
 error. The tutorial meets this pitfall twice — once in
 [Chapter 2 · L1 → L2 → L3](tutorial/02_three_resolutions.md) and again in
@@ -161,7 +161,7 @@ amount on 19 of its 127 rows.
 
 `audit` reports stale orders as a warning and names the worst one: its id,
 side, price, and how long it held the touch after the trade. From Python,
-[`detect_stale_orders`](api/analytics.md) returns every one. Neither removes
+[`detect_stale_orders`](api/quality.md) returns every one. Neither removes
 anything:
 
 - The test needs to know what the feed said *after* the trade. A live capture
@@ -205,7 +205,7 @@ figure, not for analysis — pass `uncross=True`:
 
 ```python
 from ob_analytics import Pipeline, sample_csv_path
-from ob_analytics.analytics import order_book
+from ob_analytics.book import order_book
 
 events = Pipeline().run(sample_csv_path()).events
 
@@ -321,5 +321,5 @@ and date range, will be recorded here after the first run.
 - **Tutorial:** [Chapter 2 · L1 → L2 → L3](tutorial/02_three_resolutions.md),
   [Chapter 3 · Loading order data](tutorial/03_loading_data.md)
 - **Reference:** [`FeedType`](api/protocols.md),
-  [`data_quality_summary` / `order_book`](api/analytics.md),
+  [`data_quality_summary`](api/quality.md) / [`order_book`](api/book.md),
   [Glossary → Data formats](glossary.md#data-formats)

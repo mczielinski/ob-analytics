@@ -17,7 +17,7 @@ from typing import Any
 
 import pandas as pd
 
-from ob_analytics.analytics import order_book
+from ob_analytics.book import order_book
 from ob_analytics.cost import transaction_costs
 from ob_analytics.depth import get_spread
 from ob_analytics.flow_toxicity import (

@@ -14,7 +14,7 @@ plotting layer consumes.
 Visible-only caveat: hidden orders (LOBSTER ``id == 0`` / type-5 executions)
 never join the visible queue and are excluded, so reconstructed touch volume
 matches the *visible* book, not the full book.  Market orders never rest, so
-they are left out as well, as :func:`~ob_analytics.analytics.order_book`
+they are left out as well, as :func:`~ob_analytics.book.order_book`
 leaves them out.  Each order is queued at the price ``order_book`` shows it
 at, which need not be the price on its latest row.
 """

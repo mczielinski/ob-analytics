@@ -139,6 +139,20 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   volume_decimals=9)`. Sizes were shown rounded to a coarser step than they
   have. `PipelineConfig` now raises `ConfigError` from its own checks, as
   `SourceSettings` does.
+- **`ob_analytics.analytics` is split in three** (#404). The names that
+  import from the package root (`from ob_analytics import
+  data_quality_summary`) are unchanged. Imports from the module change:
+  - `ob_analytics.analytics.order_book`, `.order_lifecycles` and
+    `.OrderBookSnapshot` -> `ob_analytics.book`.
+  - `ob_analytics.analytics.data_quality_summary`, `.DataQualitySummary`,
+    `.QualityCheck`, `.Severity`, `.BookDifference`, `.detect_sequence_gaps`,
+    `.SequenceGapReport`, `.detect_stale_orders`, `.StaleOrder`,
+    `.STALE_GRACE`, `.CROSSED_TOLERANCE_PCT` and
+    `.UNMATCHED_TRADES_WARN_PCT` -> `ob_analytics.quality`.
+  - `order_aggressiveness`, `trade_impacts` and `set_order_types` stay in
+    `ob_analytics.analytics`.
+  - `HIDDEN_ORDER_ID` is now also in `ob_analytics.schemas`, with the other
+    column-contract names. `ob_analytics.engine.HIDDEN_ORDER_ID` still works.
 
 ### Added
 

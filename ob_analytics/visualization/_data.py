@@ -839,7 +839,7 @@ def prepare_order_activity_l3_data(
     issue #272), already clipped to the caller's display window. ``None``
     (the default) draws the Gantt with no overlay.
     """
-    from ob_analytics.analytics import order_lifecycles
+    from ob_analytics.book import order_lifecycles
 
     start_time, end_time = _default_start_end(events, start_time, end_time)
 
@@ -944,7 +944,7 @@ def prepare_queue_position_l3_data(
     ``timestamp``, ``id``, ``rank``, ``age_s``, in time order; ``max_rank`` for the (inverted)
     y-axis; and ``show_markers`` (terminal × / ○ only when few enough orders).
     """
-    from ob_analytics.analytics import order_lifecycles
+    from ob_analytics.book import order_lifecycles
     from ob_analytics.queue import queue_positions
 
     start_time, end_time = _default_start_end(events, start_time, end_time)
@@ -1391,7 +1391,7 @@ def prepare_order_outcome_l3_data(
     are dropped before clipping so they neither distort the quantiles nor the
     axis.
     """
-    from ob_analytics.analytics import order_lifecycles
+    from ob_analytics.book import order_lifecycles
 
     start_time, end_time = _default_start_end(events, start_time, end_time)
 
@@ -2073,7 +2073,7 @@ def prepare_book_replay_data(
     )
 
     if per_order:
-        from ob_analytics.analytics import order_book
+        from ob_analytics.book import order_book
 
         # Uncross before the price range is chosen, so the range follows the
         # mid of the book the frames show.

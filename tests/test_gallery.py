@@ -1097,7 +1097,7 @@ class TestDisplayUnitsPreserveFaces:
     def test_lifecycle_outcomes_survive_the_conversion(
         self, fractional_bitstamp_orders_csv
     ) -> None:
-        from ob_analytics.analytics import order_lifecycles
+        from ob_analytics.book import order_lifecycles
         from ob_analytics.visualization.gallery import display_result
 
         result = self._result(fractional_bitstamp_orders_csv)

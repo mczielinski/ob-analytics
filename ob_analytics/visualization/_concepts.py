@@ -34,7 +34,7 @@ from typing import Any
 
 import pandas as pd
 
-from ob_analytics.analytics import order_book
+from ob_analytics.book import order_book
 from ob_analytics.depth import price_level_snapshots
 from ob_analytics.protocols import Level
 from ob_analytics.visualization import _data

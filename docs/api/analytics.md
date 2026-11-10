@@ -5,7 +5,9 @@ title: Analytics
 # Analytics
 
 Format-agnostic post-processing analytics.  These functions work with the
-output of any format's pipeline run (Bitstamp, LOBSTER, or custom).
+output of any format's pipeline run (Bitstamp, LOBSTER, or custom).  The book
+at an instant and the order lifecycles are on the [Order book](book.md) page;
+the data-quality checks are on the [Data quality](quality.md) page.
 
 ## Trade Analysis
 
@@ -16,37 +18,3 @@ output of any format's pipeline run (Bitstamp, LOBSTER, or custom).
 ## Order Type Classification
 
 ::: ob_analytics.analytics.set_order_types
-
-## Order Book Reconstruction
-
-The reconstructions themselves live in the
-[order-book engine](engine.md); these are their frame-level faces.
-
-::: ob_analytics.analytics.OrderBookSnapshot
-
-::: ob_analytics.analytics.order_book
-
-::: ob_analytics.analytics.order_lifecycles
-
-## Data Quality
-
-See [Data quality: matched book, diff feed and price levels](../data-quality.md) for the
-concepts and the [`audit` how-to](../howto/audit.md) for the CLI.
-
-::: ob_analytics.analytics.data_quality_summary
-
-::: ob_analytics.analytics.DataQualitySummary
-
-::: ob_analytics.analytics.QualityCheck
-
-::: ob_analytics.analytics.Severity
-
-::: ob_analytics.analytics.detect_sequence_gaps
-
-::: ob_analytics.analytics.SequenceGapReport
-
-::: ob_analytics.analytics.detect_stale_orders
-
-::: ob_analytics.analytics.StaleOrder
-
-::: ob_analytics.analytics.BookDifference

@@ -53,8 +53,8 @@ Using it from pandas
 :mod:`ob_analytics._engine_frames` is the adapter that converts a canonical
 events DataFrame into :class:`OrderEvents` and turns these records back into
 frames.  It is the one place in the library where pandas and the engine meet;
-:func:`ob_analytics.analytics.order_book`,
-:func:`ob_analytics.analytics.order_lifecycles`, and the functions in
+:func:`ob_analytics.book.order_book`,
+:func:`ob_analytics.book.order_lifecycles`, and the functions in
 :mod:`ob_analytics.queue` are its callers.
 """
 

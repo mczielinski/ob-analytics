@@ -248,7 +248,7 @@ For the authoritative check, replay the capture and score it:
 
 ```python
 from ob_analytics import SequenceKind
-from ob_analytics.analytics import detect_sequence_gaps
+from ob_analytics.quality import detect_sequence_gaps
 from ob_analytics.bitstamp import BitstampLoader
 from ob_analytics.config import PipelineConfig
 

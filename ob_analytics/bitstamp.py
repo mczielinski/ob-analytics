@@ -348,7 +348,7 @@ class BitstampTradeReader:
     to that order's ``deleted`` row, else its latest row, and every such
     trade of that order names the same row.  The order and its type are
     then right, but its rows show less fill than its trades.
-    :func:`~ob_analytics.analytics.data_quality_summary` counts these trades
+    :func:`~ob_analytics.quality.data_quality_summary` counts these trades
     as ``trades_matched_by_order``.
 
     Every other trade is matched on size only.  A trade stays unresolved
