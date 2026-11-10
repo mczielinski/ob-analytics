@@ -20,11 +20,7 @@ import pytest
 from ob_analytics import Pipeline, PipelineConfig
 from ob_analytics._utils import empty_events
 from ob_analytics._windows import window_bounds
-from ob_analytics.analytics import (
-    DataQualitySummary,
-    data_quality_summary,
-    order_book,
-)
+from ob_analytics.book import order_book
 from ob_analytics.data import load_data, load_result, save_data
 from ob_analytics.databento import (
     DBN_PRICE_DIVISOR,
@@ -50,6 +46,7 @@ from ob_analytics.protocols import (
     required_context_of,
     sequence_kind_of,
 )
+from ob_analytics.quality import DataQualitySummary, data_quality_summary
 from ob_analytics.schemas import (
     MAYBE_BAD_BOOK_ATTR,
     validate_events_df,

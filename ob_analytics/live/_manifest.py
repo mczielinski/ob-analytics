@@ -30,9 +30,9 @@ from typing import Any
 import pandas as pd
 
 from ob_analytics._secrets import redact
-from ob_analytics.analytics import QualityCheck, Severity
 from ob_analytics.capture_record import read_fields
 from ob_analytics.exceptions import ConfigError
+from ob_analytics.quality import QualityCheck, Severity
 
 MANIFEST_NAME = "manifest.json"
 #: What the manifest's ``format`` field says, so a reader knows the file.
@@ -488,7 +488,7 @@ class CaptureManifest:
     def checks(self) -> tuple[QualityCheck, ...]:
         """The capture-level checks ``ob-analytics audit`` adds to each segment's.
 
-        Each is a :attr:`~ob_analytics.analytics.Severity.WARNING`: a gap, a
+        Each is a :attr:`~ob_analytics.quality.Severity.WARNING`: a gap, a
         dropped message, an error or a resync is data the capture does not
         have, which the data on either side of it still describes correctly.
         ``dropped_messages`` and ``capture_errors`` are the checks
@@ -591,7 +591,7 @@ def loss_checks(
     counters were lost (*counters_lost* names where).  ``capture_errors``
     fails when the capture recorded an error (*errors*, each one line): one
     that ended a segment, or a segment that was slow to stop.
-    Both are :attr:`~ob_analytics.analytics.Severity.WARNING`.
+    Both are :attr:`~ob_analytics.quality.Severity.WARNING`.
     """
     dropped_detail = f"{dropped} message(s) the sources could not use"
     if counters_lost:

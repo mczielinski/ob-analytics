@@ -27,7 +27,7 @@ import pandas as pd
 import pytest
 from hypothesis import given, settings, strategies as st
 
-from ob_analytics.analytics import order_book
+from ob_analytics.book import order_book
 from ob_analytics.depth import DepthMetricsEngine, depth_metrics, price_level_volume
 from ob_analytics.synth import SynthConfig, generate_session
 

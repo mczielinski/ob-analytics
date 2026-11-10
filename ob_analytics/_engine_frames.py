@@ -9,9 +9,9 @@ frames the analytics and plotting layers expect.
 
 Keeping the conversion here — rather than inside the engine — is what lets the
 engine stay pandas-free, so it can be replaced with a faster implementation
-without any of this moving.  Nothing here is public API; the callers are
-:func:`ob_analytics.analytics.order_book`,
-:func:`ob_analytics.analytics.order_lifecycles`, and :mod:`ob_analytics.queue`.
+without any of this moving.  Nothing here is public API.  The library reaches
+the engine only through this module: :mod:`ob_analytics.book`,
+:mod:`ob_analytics.queue`, and the depth table in :mod:`ob_analytics.depth`.
 """
 
 from __future__ import annotations
@@ -31,7 +31,9 @@ from ob_analytics.engine import (
     OrderEvents,
     OrderLifecycles,
     QueuePositions,
+    crossed_prefix_counts,
 )
+from ob_analytics.schemas import HIDDEN_ORDER_ID
 
 TimestampLike = datetime | np.datetime64 | str | pd.Timestamp
 """What :func:`instant_ns` accepts as a snapshot instant."""
@@ -202,7 +204,26 @@ def to_order_events(
         action=_codes(events["action"], ACTIONS),
         fill=_sizes(events["fill"]) if fill else None,
         is_market=(events["type"] == "market").to_numpy() if market else None,
+        is_hidden=(events["id"] == HIDDEN_ORDER_ID).to_numpy(),
     )
+
+
+# ── Uncrossing ────────────────────────────────────────────────────────
+
+
+def crossed_touch_counts(
+    bid_prices: np.ndarray,
+    bid_ts: np.ndarray,
+    ask_prices: np.ndarray,
+    ask_ts: np.ndarray,
+) -> tuple[int, int]:
+    """How many best-end bids and asks to evict to uncross two book sides.
+
+    The depth table's price-level book uncrosses its touch by the engine's
+    rule (:func:`~ob_analytics.engine.crossed_prefix_counts`), so the depth
+    summary and an uncrossed :func:`~ob_analytics.book.order_book` agree.
+    """
+    return crossed_prefix_counts(bid_prices, bid_ts, ask_prices, ask_ts)
 
 
 # ── Results out ───────────────────────────────────────────────────────

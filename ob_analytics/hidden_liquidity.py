@@ -36,9 +36,8 @@ import pandas as pd
 
 from ob_analytics._utils import require_per_order_events
 from ob_analytics.depth import readable_quotes
-from ob_analytics.engine import HIDDEN_ORDER_ID
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.schemas import time_order_keys, validate_columns
+from ob_analytics.schemas import HIDDEN_ORDER_ID, time_order_keys, validate_columns
 from ob_analytics.trade_sign import quote_before
 
 __all__ = [

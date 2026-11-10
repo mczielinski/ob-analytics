@@ -55,17 +55,6 @@ from pathlib import Path
 
 from loguru import logger
 
-from ob_analytics.analytics import (
-    BookDifference,
-    DataQualitySummary,
-    QualityCheck,
-    SequenceGapReport,
-    Severity,
-    StaleOrder,
-    data_quality_summary,
-    detect_sequence_gaps,
-    detect_stale_orders,
-)
 from ob_analytics.bars import (
     bars,
     get_bar_rule,
@@ -170,6 +159,17 @@ from ob_analytics.protocols import (
     TradeAttribution,
     TradeSource,
     WriteTarget,
+)
+from ob_analytics.quality import (
+    BookDifference,
+    DataQualitySummary,
+    QualityCheck,
+    SequenceGapReport,
+    Severity,
+    StaleOrder,
+    data_quality_summary,
+    detect_sequence_gaps,
+    detect_stale_orders,
 )
 from ob_analytics.schemas import (
     SYMBOL_COLUMN,

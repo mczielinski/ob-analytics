@@ -45,7 +45,6 @@ from ob_analytics._utils import (
     seconds_after_midnight_to_datetime,
     size_to_lots,
 )
-from ob_analytics.analytics import CROSSED_TOLERANCE_PCT, _book_crossing
 from ob_analytics.config import InstrumentGrid, PipelineConfig, SourceSettings
 from ob_analytics.depth import (
     BookLevels,
@@ -66,6 +65,7 @@ from ob_analytics.protocols import (
     TradeSource,
     WriteTarget,
 )
+from ob_analytics.quality import CROSSED_TOLERANCE_PCT, _book_crossing
 from ob_analytics.schemas import (
     BOOK_SIDE_DTYPE,
     TRADE_DTYPES,
@@ -1135,7 +1135,7 @@ def lobster_venue_book(orderbook_path: Path, config: PipelineConfig) -> BookLeve
     The file states the best N price levels of each side after every
     message.  ``ob-analytics audit`` compares the book rebuilt from the
     messages with it (see
-    :func:`~ob_analytics.analytics.data_quality_summary`).
+    :func:`~ob_analytics.quality.data_quality_summary`).
 
     Parameters
     ----------
@@ -1175,7 +1175,7 @@ def _warn_if_book_crosses(events: pd.DataFrame, *, from_orderbook: bool) -> None
     requested from LOBSTER.  An order cancelled or filled after it moved
     outside them never gets a closing row, so the book rebuilt from the
     messages keeps it.  When that book is crossed for more than
-    :data:`~ob_analytics.analytics.CROSSED_TOLERANCE_PCT` of the session
+    :data:`~ob_analytics.quality.CROSSED_TOLERANCE_PCT` of the session
     time, this warns with that share.  *from_orderbook* says whether the
     depth table is read from the orderbook file, which the stale orders do
     not reach, or rebuilt from the same messages.

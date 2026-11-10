@@ -265,7 +265,7 @@ print("executed units, after round trip:", rt.events["fill"].sum())
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from ob_analytics.analytics import order_book
+from ob_analytics.book import order_book
 from ob_analytics.visualization import plot, prepare
 
 t30 = events["timestamp"].iloc[0] + pd.Timedelta(seconds=30)

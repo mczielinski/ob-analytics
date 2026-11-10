@@ -27,7 +27,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 from ob_analytics import toy_events, toy_trades
-from ob_analytics.analytics import order_book, set_order_types
+from ob_analytics.analytics import set_order_types
+from ob_analytics.book import order_book
 from ob_analytics.visualization import plot, prepare
 
 events = set_order_types(toy_events(), toy_trades())
@@ -299,12 +300,12 @@ assert list(sweep["maker_actor"]) == ["Jo", "Alice"]
 #
 # Hint: a matching engine fills the better price first, so a trade that
 # prints *through* a resting order shows that the order has already
-# left the venue. `detect_stale_orders` from `ob_analytics.analytics`
+# left the venue. `detect_stale_orders` from `ob_analytics.quality`
 # lists the orders the feed never removed after such a trade, worst
 # first.
 
 # %% tags=["solution"]
-from ob_analytics.analytics import detect_stale_orders
+from ob_analytics.quality import detect_stale_orders
 
 worst = detect_stale_orders(result.events, result.trades)[0]
 print(f"side:            {worst.direction}")

@@ -11,8 +11,8 @@ arrays, so the inside can be made faster later (numba, then possibly Rust)
 without anything above it moving.
 
 Most users never call it directly. Its frame-level faces are
-[`order_book`](analytics.md#ob_analytics.analytics.order_book),
-[`order_lifecycles`](analytics.md#ob_analytics.analytics.order_lifecycles),
+[`order_book`](book.md#ob_analytics.book.order_book),
+[`order_lifecycles`](book.md#ob_analytics.book.order_lifecycles),
 and
 the functions in `ob_analytics.queue`; they convert to and from these arrays.
 
