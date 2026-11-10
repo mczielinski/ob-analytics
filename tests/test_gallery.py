@@ -441,15 +441,21 @@ class TestGenerateGallery:
 
     def test_renderer_failure_yields_na_card(self, tmp_path: Path) -> None:
         model = GalleryModel(concepts=[_l2_concept("stubfail", "Fails")])
-        path = generate_gallery(
-            result=None,
-            output_dir=tmp_path,
-            model=model,
-            backends=["plotly", "matplotlib"],
-        )
+        with warnings_logged() as messages:
+            path = generate_gallery(
+                result=None,
+                output_dir=tmp_path,
+                model=model,
+                backends=["plotly", "matplotlib"],
+            )
         html = path.read_text(encoding="utf-8")
         assert "Fails -- L2" in html
         assert html.count("Not available") == 2  # one per backend
+        # A real failure is logged and the card says why it has no plot.
+        assert len(messages) == 2
+        assert "deliberate plotly failure" in messages[0]
+        assert "Drawing the plot failed: deliberate plotly failure" in html
+        assert "Drawing the plot failed: deliberate matplotlib failure" in html
 
     def test_requires_result_or_model(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="requires either"):
@@ -653,6 +659,69 @@ class TestMisplacedCard:
         assert html.count("Not available") == 1
         assert "na-reason" not in html.split("<body>", 1)[1]
         assert (tmp_path / "matplotlib" / "stubmplonly.L2.png").exists()
+
+    def test_backend_not_asked_for_a_plot_it_does_not_draw(
+        self, tmp_path: Path
+    ) -> None:
+        # The book replay is Plotly only.  A Matplotlib-only gallery (a plain
+        # install without plotly) does not ask Matplotlib for it: no warning,
+        # and the card says which backend draws it.
+        def prepare() -> dict:
+            raise AssertionError("prepared a panel no backend in the gallery draws")
+
+        spec = PlotSpec("book_replay", "Replay", "book_replay", prepare)
+        concept = PlotConcept("book_replay", "Replay", {Level.L2: spec})
+        with warnings_logged() as messages:
+            path = generate_gallery(
+                result=None,
+                output_dir=tmp_path,
+                model=GalleryModel(concepts=[concept]),
+                backends=["matplotlib"],
+            )
+        assert messages == []
+        html = path.read_text(encoding="utf-8")
+        assert html.count("Not available") == 1
+        assert (
+            "Only Plotly draws this plot, and this gallery does not use it."
+        ) in html
+
+    def test_drawing_backend_failed_to_load(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The gallery asked for the backend that draws the plot, but it failed
+        # to load: its column says so, and the other column does not claim the
+        # gallery does not use it.
+        (tmp_path / "ob_bad_backend.py").write_text("raise ValueError('bad build')\n")
+        monkeypatch.syspath_prepend(str(tmp_path))
+        register_plot_backend("badbuild", "ob_bad_backend")
+        RENDERERS.register(("stubbadonly", Level.L2, "badbuild"), _stub_mpl)
+        try:
+            path = generate_gallery(
+                result=None,
+                output_dir=tmp_path / "out",
+                model=GalleryModel(concepts=[_l2_concept("stubbadonly", "Bad")]),
+                backends=["badbuild", "matplotlib"],
+            )
+        finally:
+            _BACKEND_MODULES.pop("badbuild", None)
+            RENDERERS._items.pop(("stubbadonly", Level.L2, "badbuild"), None)
+        html = path.read_text(encoding="utf-8")
+        assert "backend could not be loaded: bad build" in html
+        assert "does not use" not in html
+        assert html.count('class="na-reason"') == 1
+
+    def test_plot_no_backend_draws_still_warns(self, tmp_path: Path) -> None:
+        # A plot that no backend draws at all is a mistake in the model.
+        with warnings_logged() as messages:
+            path = generate_gallery(
+                result=None,
+                output_dir=tmp_path,
+                model=GalleryModel(concepts=[_l2_concept("nosuchplot", "Nothing")]),
+                backends=["matplotlib"],
+            )
+        assert len(messages) == 1
+        assert "nosuchplot" in messages[0]
+        assert "Drawing the plot failed" in path.read_text(encoding="utf-8")
 
     def test_matching_kinds_have_no_reason(self, tmp_path: Path) -> None:
         model = GalleryModel(concepts=[_l2_concept()], analytics=[_metric_spec()])

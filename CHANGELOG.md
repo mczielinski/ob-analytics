@@ -1242,6 +1242,11 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
+- **The gallery asks a backend only for the plots it draws** (#463). Without
+  Plotly installed, `ob-analytics process ... --gallery` logged a failure for
+  the book replay, which only Plotly draws. Now that card says which backend
+  draws the plot, and nothing is logged. A plot that fails to draw or save
+  still logs a warning, and its card now gives the reason.
 - **The Matplotlib `book_signals` plot no longer runs out of memory** (#462).
   It drew the touch OBI strip as one bar per depth-summary row, about 313,000
   bars on the bundled sample, and went past 3 GB. The strip is now two stepped
