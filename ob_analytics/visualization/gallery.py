@@ -815,7 +815,6 @@ def _backend_panels(
     """One panel per backend (the column axis for l2/l3/both views)."""
     panels: list[_Panel] = []
     for i, backend in enumerate(backends):
-        style = _BACKEND_STYLES.get(backend)
         panels.append(
             _Panel(
                 concept=concept,
@@ -824,7 +823,7 @@ def _backend_panels(
                 prep_kwargs=spec.prep_kwargs,
                 backend=backend,
                 stem=stem,
-                label=style.label if style else backend.capitalize(),
+                label=_backend_label(backend),
                 panel_cls=_panel_cls(backend),
                 role="primary" if i == 0 else "secondary",
             )
@@ -1015,10 +1014,15 @@ def generate_gallery(
                     logged.add(panel.reason)
                 continue
             drawn_by = _concepts.backends(panel.concept, panel.level)
-            if panel.backend not in drawn_by and loaded & set(drawn_by):
-                # Another backend draws this plot and this one does not, as
-                # declared (the book replay is Plotly only): the panel shows a
-                # bare "Not available" without a failed render to warn about.
+            if drawn_by and panel.backend not in drawn_by:
+                # The registry says other backends draw this plot and this one
+                # does not (the book replay is Plotly only), so this backend is
+                # not asked for it and there is no failure to warn about.  When
+                # the gallery was not asked for any of those backends, the card
+                # says which one would draw it.  (One that failed to load says
+                # so in its own column.)
+                if not set(drawn) & set(drawn_by):
+                    panel.reason = _drawn_elsewhere(drawn_by)
                 continue
             if panel.backend not in rendered_dirs:
                 (out / panel.backend).mkdir(parents=True, exist_ok=True)
@@ -1070,6 +1074,18 @@ def _misplaced(panel: _Panel, backends: frozenset[str]) -> str:
     return ""
 
 
+def _drawn_elsewhere(backends: tuple[str, ...]) -> str:
+    """Say that only *backends*, none of them in the gallery, draw a plot."""
+    names = " or ".join(_backend_label(b) for b in backends)
+    verb, them = ("draws", "it") if len(backends) == 1 else ("draw", "them")
+    return f"Only {names} {verb} this plot, and this gallery does not use {them}."
+
+
+def _backend_label(backend: str) -> str:
+    style = _BACKEND_STYLES.get(backend)
+    return style.label if style else backend.capitalize()
+
+
 def _render_and_save(
     panel: _Panel,
     out: Path,
@@ -1100,6 +1116,7 @@ def _render_and_save(
         fig = plot(panel.concept, panel.level, backend=panel.backend, **payload)
     except Exception as e:  # noqa: BLE001
         logger.warning("Gallery: {} {} failed: {}", panel.backend, panel.stem, e)
+        panel.reason = f"Drawing the plot failed: {e}"
         return False
 
     target = out / panel.backend / panel.stem
@@ -1122,6 +1139,7 @@ def _render_and_save(
         logger.warning(
             "Gallery: persisting {} {} failed: {}", panel.backend, panel.stem, e
         )
+        panel.reason = f"Saving the plot failed: {e}"
         return False
 
 
