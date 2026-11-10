@@ -39,7 +39,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator, Iterator
-from typing import Any
+from typing import Annotated, Any
 
 import pandas as pd
 from loguru import logger
@@ -61,6 +61,7 @@ from ob_analytics.protocols import (
     SequenceKind,
     TradeAttribution,
 )
+from ob_analytics.sources import CliOption
 
 # Per-venue defaults, overridable via CcxtSettings.
 _DEFAULT_DEPTH_LIMIT = 100
@@ -117,10 +118,38 @@ class CcxtSettings(SourceSettings):
         from yours is for you to check against the venue's terms.
     """
 
-    exchange: Any = ""
-    depth_limit: int = _DEFAULT_DEPTH_LIMIT
-    poll_interval: float = _DEFAULT_POLL_INTERVAL
-    market_data_mirror: bool = False
+    exchange: Annotated[
+        Any,
+        CliOption(
+            flag="venue",
+            type=str,
+            help=(
+                "The CCXT venue id (e.g. 'binance', 'kraken', 'coinbase'); "
+                "give --pair in CCXT notation, e.g. 'BTC/USDT'"
+            ),
+        ),
+    ] = ""
+    depth_limit: Annotated[
+        int,
+        CliOption(
+            help=(
+                "Order-book depth (levels per side) to request: a floor, not a "
+                "cap, since most venues record more (see the ccxt how-to page)"
+            )
+        ),
+    ] = _DEFAULT_DEPTH_LIMIT
+    poll_interval: Annotated[
+        float, CliOption(help="Seconds between REST polls (REST-only venues)")
+    ] = _DEFAULT_POLL_INTERVAL
+    market_data_mirror: Annotated[
+        bool,
+        CliOption(
+            help=(
+                "Read from the venue's market-data-only endpoints (binance "
+                "spot). Check the venue's terms allow it where you are"
+            )
+        ),
+    ] = False
 
 
 #: Prefix that picks a venue from CCXT's prediction markets.  ``binance`` and
@@ -259,7 +288,7 @@ def _refused_location(exc: Exception, exchange_id: str) -> ConfigError | None:
     hint = ""
     if exchange_id == "binance":
         hint = (
-            " For Binance US, use --exchange binanceus. Binance's market-data "
+            " For Binance US, use --venue binanceus. Binance's market-data "
             "mirror is --market-data-mirror; check Binance's terms allow you "
             "to use it from your location."
         )

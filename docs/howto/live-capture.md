@@ -11,7 +11,7 @@ straight into the format the pipeline reads. Install the optional
 ```bash
 pip install "ob-analytics[live]"
 
-ob-analytics capture bitstamp --pair btcusd --minutes 10 --out /tmp/cap
+ob-analytics capture bitstamp --pair btcusd --minutes 10 -o /tmp/cap
 ob-analytics process /tmp/cap --gallery --output /tmp/cap_out
 ```
 
@@ -169,15 +169,15 @@ Book changes made during a gap cannot be recovered: no venue replays them. The
 new snapshot means the book is correct again from the start of the next
 segment.
 
-**A restart.** Run the same command again with the same `--out` and the
+**A restart.** Run the same command again with the same `--output` and the
 capture continues in the next segment. If the old process died without
 closing its last segment, the restart closes it: it cuts off a half-written
 last line, writes a `deleted` row for each order still open at the last
 recorded time, and completes `meta.json` with `"unfinished": true`. The time
-the capture was down is recorded as a gap. The capture refuses an `--out`
+the capture was down is recorded as a gap. The capture refuses an `--output`
 that holds a different venue or pair, files but no `manifest.json`, or a
 `manifest.json` this version cannot read. While it runs, the capture holds a
-lock on `--out` (the `.capture.lock` file), so a second capture into the same
+lock on `--output` (the `.capture.lock` file), so a second capture into the same
 directory stops with an error instead of rewriting the first one's files.
 
 **A segment that does not stop.** A segment asked to stop, at a roll, at the
@@ -199,7 +199,7 @@ its error says a second signal stopped it. Every file is closed, and
 
 This lets a service manager restart the capture. For example, a systemd unit
 with `Restart=always` and
-`ExecStart=ob-analytics capture bitstamp --pair btcusd --minutes 10080 --roll-minutes 60 --out /data/btcusd`
+`ExecStart=ob-analytics capture bitstamp --pair btcusd --minutes 10080 --roll-minutes 60 -o /data/btcusd`
 captures for a week (counted from each start) and continues after a crash or
 reboot.
 

@@ -32,7 +32,7 @@ import asyncio
 import functools
 import time
 from collections.abc import AsyncIterator
-from typing import Any, NamedTuple, TypeGuard
+from typing import Annotated, Any, NamedTuple, TypeGuard
 
 import pandas as pd
 from loguru import logger
@@ -56,6 +56,7 @@ from ob_analytics.protocols import (
     TradeAttribution,
 )
 from ob_analytics.schemas import ORIGIN_COLUMN
+from ob_analytics.sources import CliOption
 
 #: cryptofeed's channel names (``cryptofeed.defines``), spelled out so this
 #: module imports without cryptofeed installed.
@@ -300,9 +301,31 @@ class CryptofeedSettings(SourceSettings):
         (multiple feeds, custom config).  ``None`` builds one per run.
     """
 
-    exchange: Any = ""
-    level: Level | None = None
-    queue_size: int = _DEFAULT_QUEUE_SIZE
+    exchange: Annotated[
+        Any,
+        CliOption(
+            flag="venue",
+            type=str,
+            help=(
+                "The cryptofeed venue id (e.g. 'bitstamp', 'binance'); give "
+                "--pair in cryptofeed notation, e.g. 'BTC-USD'"
+            ),
+        ),
+    ] = ""
+    level: Annotated[
+        Level | None,
+        CliOption(
+            help=(
+                "Force the capture resolution. Leave it out to read it from "
+                "the venue: L3 where the venue publishes a per-order book, L2 "
+                "otherwise"
+            )
+        ),
+    ] = None
+    queue_size: Annotated[
+        int,
+        CliOption(help="Messages the buffer between cryptofeed and the capture holds"),
+    ] = _DEFAULT_QUEUE_SIZE
     feed_handler: Any = None
 
 

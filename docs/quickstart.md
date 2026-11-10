@@ -92,7 +92,7 @@ The same pipeline, from a shell:
 
 ```bash
 ob-analytics process orders.csv -o results/ --gallery
-ob-analytics bitstamp-demo --input orders.csv
+ob-analytics bitstamp-demo orders.csv
 ```
 
 See [Run from the command line](howto/cli.md) for all subcommands.

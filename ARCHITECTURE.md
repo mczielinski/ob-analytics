@@ -212,8 +212,8 @@ classDiagram
 | **LOBSTER** | L3 | `Pipeline(source=LobsterSource(), ctx=RunContext(trading_date=...))` | Embedded execution rows (types 4/5) in the message file |
 | **Databento** (DBN market-by-order) | L3 | `Pipeline(source=DatabentoSource())` · `process --source databento` | Fill records, paired with the book event that took the size off |
 | **L2 depth CSV** | L2 | `Pipeline.from_source("depth_csv").run(...)` | Optional companion `trades.csv` (signed via trade-sign classification) |
-| **CCXT** (live L2 capture) | L2 | `capture ccxt --exchange <venue>` | Public trade tape (taker side) |
-| **cryptofeed** (live capture) | L2 or L3, discovered from the venue | `capture cryptofeed --exchange <venue>` | Public trade tape (taker side) |
+| **CCXT** (live L2 capture) | L2 | `capture ccxt --venue <venue>` | Public trade tape (taker side) |
+| **cryptofeed** (live capture) | L2 or L3, discovered from the venue | `capture cryptofeed --venue <venue>` | Public trade tape (taker side) |
 
 The bundled sample under `ob_analytics/_sample_data/` is a modern BTC/USD
 capture (`orders.csv` + `trades.csv`).

@@ -137,7 +137,7 @@ decisions, and module map.
     ```bash
     ob-analytics process orders.csv -o results/
     ob-analytics gallery results/parquet/ -o my_gallery/
-    ob-analytics bitstamp-demo --input orders.csv
+    ob-analytics bitstamp-demo orders.csv
     ```
 
     See [Run from the command line](howto/cli.md) for every subcommand.

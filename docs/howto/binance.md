@@ -34,7 +34,7 @@ account or an API key: the order book and the trades are public.
 ```bash
 pip install "ob-analytics[ccxt]"
 
-ob-analytics capture ccxt --exchange binance --pair BTC/USDT --minutes 10 --out /tmp/binance
+ob-analytics capture ccxt --venue binance --pair BTC/USDT --minutes 10 -o /tmp/binance
 ob-analytics process /tmp/binance --source depth_csv --gallery --output /tmp/binance_out
 ```
 
@@ -47,12 +47,12 @@ Binance does not serve some countries, the United States among them. From
 those, the capture stops with this error:
 
 ```text
-binance refused this location (HTTP 451). For Binance US, use --exchange binanceus. ...
+binance refused this location (HTTP 451). For Binance US, use --venue binanceus. ...
 ```
 
 You can do one of two things:
 
-- **Capture Binance US** with `--exchange binanceus`. It is a separate
+- **Capture Binance US** with `--venue binanceus`. It is a separate
   exchange with its own book, and much less trading: 21 BTC/USDT trades in
   five minutes when we tested it, against about 7,000 on Binance.
 - **Read from Binance's market-data mirror** with `--market-data-mirror`.
@@ -61,7 +61,7 @@ You can do one of two things:
   you use it, check that Binance's terms let you do so from where you are.
 
 ```bash
-ob-analytics capture ccxt --exchange binance --market-data-mirror --pair BTC/USDT --minutes 10 --out /tmp/binance
+ob-analytics capture ccxt --venue binance --market-data-mirror --pair BTC/USDT --minutes 10 -o /tmp/binance
 ```
 
 From Python, set `CcxtSettings(exchange="binance", market_data_mirror=True)`.
@@ -108,7 +108,7 @@ rings 25 basis points (0.25%) wide, out to 5%.
 Reach further, and narrow the rings, by raising `--depth-limit` past 1,000:
 
 ```bash
-ob-analytics capture ccxt --exchange binance --pair BTC/USDT --depth-limit 5000 --out /tmp/binance
+ob-analytics capture ccxt --venue binance --pair BTC/USDT --depth-limit 5000 -o /tmp/binance
 ```
 
 <!-- docs-test: skip needs a Binance capture -->

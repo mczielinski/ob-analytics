@@ -11,7 +11,7 @@ galleries, and running demo pipelines.
 ```bash
 ob-analytics process orders.csv -o results/
 ob-analytics gallery results/parquet/ -o my_gallery/
-ob-analytics bitstamp-demo --input orders.csv
+ob-analytics bitstamp-demo orders.csv
 ob-analytics lobster-demo /path/to/lobster_data --trading-date 2012-06-21
 ```
 

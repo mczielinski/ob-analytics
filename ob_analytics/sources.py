@@ -20,10 +20,51 @@ for file replay, :class:`~ob_analytics.live._base.LiveSource` for live capture.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from importlib.metadata import EntryPoint
+from typing import Any
 
 from ob_analytics._registry import Registry, load_plugins
 from ob_analytics.protocols import Source
+
+
+@dataclass(frozen=True)
+class CliOption:
+    """How a :class:`~ob_analytics.config.SourceSettings` field shows on the command line.
+
+    ``ob-analytics capture <source>`` has one flag for each field of the
+    source's settings class, so a plug-in source can be set up from the
+    command line as from Python.  Put this marker on a field with
+    ``typing.Annotated`` to give the flag its help text, another name, or a
+    way to read its value::
+
+        class VenueSettings(SourceSettings):
+            venue: Annotated[str, CliOption(help="The venue id")] = ""
+            depth: Annotated[int, CliOption(help="Levels a side", flag="levels")] = 10
+
+    A field without the marker still gets a flag named after it, when its
+    type is one the command line can read: ``str``, ``int``, ``float``,
+    ``bool``, a ``Literal``, an ``Enum`` or ``Path``, or ``None`` or one of
+    those.  A field of any other type gets no flag unless the marker gives a
+    *type*.  A :class:`~ob_analytics.config.Credential` field never gets one.
+
+    Attributes
+    ----------
+    help : str
+        The flag's help text.
+    flag : str, optional
+        The flag's name without the leading ``--``.  ``None`` (the default)
+        names it after the field, with ``-`` for ``_``.
+    type : callable, optional
+        Turns the text given on the command line into the field's value.
+        ``None`` (the default) reads it from the field's type.
+    """
+
+    help: str
+    flag: str | None = None
+    type: Callable[[str], Any] | None = None
+
 
 #: The entry-point group a third-party package advertises a source under, e.g.
 #: ``[project.entry-points."ob_analytics.sources"]`` with ``coinbase =
