@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -1122,7 +1123,7 @@ class TestCaptureFlagsFromSettings:
         assert settings.book_side == "ask"
         assert settings.resolution is Level.L2
         assert settings.fast is True
-        assert str(settings.where) == "far/away"
+        assert settings.where == Path("far/away")
         # The key came from the environment, not from a flag.
         assert settings.token.get_secret_value() == "fake-plugin-token"
 
