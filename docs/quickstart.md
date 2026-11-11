@@ -9,6 +9,13 @@ first plot — about ten minutes. When something here sparks a question, the
 [Tutorial](tutorial/index.md) teaches the concepts; the how-to guides
 (linked [below](#where-next)) cover every recipe.
 
+!!! note "These docs follow `main`"
+    This site is built from the `main` branch on GitHub. It can describe
+    features that are not yet in the newest release on PyPI. To get
+    everything these pages describe, install from source:
+    `pip install git+https://github.com/mczielinski/ob-analytics.git`.
+    The [changelog](changelog.md) lists what changed since the last release.
+
 ## Install
 
 ```bash
@@ -19,10 +26,35 @@ Optional extras:
 
 ```bash
 pip install "ob-analytics[interactive]"   # Plotly figures
-pip install "ob-analytics[live]"          # live exchange capture (websockets)
+pip install "ob-analytics[bokeh]"         # Bokeh figures (four of the plots)
+pip install "ob-analytics[databento]"     # read Databento DBN files
+pip install "ob-analytics[live]"          # live Bitstamp capture (websockets)
+pip install "ob-analytics[ccxt]"          # live L2 capture from CCXT venues
+pip install "ob-analytics[cryptofeed]"    # live L2 or L3 capture through cryptofeed
 ```
 
-Requires Python 3.11+.
+Requires Python 3.11+. Live capture (the `live`, `ccxt` and `cryptofeed`
+extras) is supported on Linux and macOS only. CI does not test it on
+Windows, where it takes no lock on the capture folder and Ctrl-C does not
+close the files cleanly. On Windows, CI tests reading files, the analytics
+and the plots.
+
+## Sources
+
+The pipeline reads these sources. `ob-analytics sources` lists them, with
+what each can do.
+
+| Source | Level | What it reads or captures | Extra |
+|--------|-------|---------------------------|-------|
+| `bitstamp` | L3 | Bitstamp `orders.csv` + `trades.csv`, and live capture | `live` to capture |
+| `lobster` | L3 | LOBSTER message and orderbook files | none |
+| `databento` | L3 | Databento market-by-order (DBN) files | `databento` |
+| `depth_csv` | L2 | price-level `depth.csv` + `trades.csv` | none |
+| `ccxt` | L2 | live capture from a venue that CCXT supports | `ccxt` |
+| `cryptofeed` | L2 or L3 | live capture from a cryptofeed venue | `cryptofeed` |
+
+A capture from `ccxt` or `cryptofeed` writes the same files that `depth_csv`
+or `bitstamp` reads, so `ob-analytics process` runs on it directly.
 
 ## Run the pipeline
 
@@ -108,9 +140,11 @@ See [Run from the command line](howto/cli.md) for all subcommands.
 | Plug in your own loader, trade source, or format | [Plug in custom components](howto/custom-components.md) |
 | Theme plots, save artefacts, or use Plotly | [Save, load, and export](howto/output.md) |
 | Compute VPIN / Kyle's λ / OFI | [Compute flow toxicity](howto/flow-toxicity.md) |
+| Process Databento market-by-order files | [Process Databento files](howto/databento.md) |
+| Process price-level (L2) feeds | [Process L2 feeds](howto/l2-depth.md) |
 | Capture live order-book data from an exchange | [Capture live data](howto/live-capture.md) |
 | Run everything from a shell | [Run from the command line](howto/cli.md) |
-| See how the pipeline is designed | [Architecture](architecture.md) |
+| See how the pipeline is designed, and its known limitations | [Architecture](architecture.md) |
 | Look up a term | [Glossary](glossary.md) |
 
 !!! info "Looking for the old quickstart?"

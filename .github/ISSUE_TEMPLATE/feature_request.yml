@@ -1,0 +1,49 @@
+name: Feature request
+description: A new source, metric, plot or other change you would like.
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before you ask, read the known limitations on the Architecture page
+        (https://mczielinski.github.io/ob-analytics/architecture/#known-limitations)
+        and search the open issues: the request may be there already.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you want to do
+      description: The task you want to do, and why the package does not let you do it now.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you propose
+      description: |
+        How it could work: a function, a setting, a plot or a source. Show the
+        code you would like to write, if you can.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried
+      description: Other ways you tried, and why they do not work for you.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - A data source or venue
+        - Analytics or metrics
+        - Plots
+        - Export to other tools
+        - Speed or memory
+        - Documentation
+        - Other
+  - type: checkboxes
+    id: plugin
+    attributes:
+      label: Plug-in
+      options:
+        - label: This could be a plug-in in its own package (a source, metric, bar rule, feature, writer or plot backend).

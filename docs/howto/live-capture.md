@@ -6,7 +6,8 @@ title: Capture live data
 
 ob-analytics ships a small framework for capturing live order-book data
 straight into the format the pipeline reads. Install the optional
-``[live]`` extra (pulls in ``websockets``) and use the ``capture`` CLI verb:
+``[live]`` extra (pulls in ``websockets``) and use the ``capture`` CLI verb.
+Live capture is supported on Linux and macOS only.
 
 ```bash
 pip install "ob-analytics[live]"

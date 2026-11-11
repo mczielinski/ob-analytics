@@ -159,6 +159,19 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Added
 
+- **A security policy, issue forms and a list of known limitations** (#422).
+  `SECURITY.md` says how to report a security problem privately. New bug and
+  feature forms under `.github/ISSUE_TEMPLATE/` ask for what a report needs.
+  The Architecture page has a "Known limitations" section: the depth heatmap
+  on a dense book, the feature table without the metric diagnostics, colour
+  scales that do not follow the theme, and Databento's lost queue priority.
+  The bundled sample's README names the data's source and terms.
+- **The Architecture page lists every package file** (#422). A new test,
+  `tests/test_module_map.py`, fails when a file is missing from the module map
+  or the map names a file that is gone. The class diagram, the stage table
+  and the stage timings (from the speed baseline) are brought up to date, the
+  scale envelope is measured again (about 0.8 GiB per 1M events), and for
+  larger inputs the page points to `Pipeline.run_windows`.
 - **The command line sets what the Python API sets** (#411).
   - `process` and `audit` take `--tick-size`, `--lot-size`, `--depth-bins`,
     `--depth-bps` and `--session-tz`. Without `--tick-size` and `--lot-size`
@@ -793,6 +806,10 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Changed
 
+- **The README and Getting started describe the current package** (#422):
+  every source, the plot backends and all six extras. Both say that live
+  capture is supported on Linux and macOS only, and that the docs follow `main`, not
+  the newest release.
 - **Every measure reports in the instrument's own units** (#400). VPIN,
   Kyle's λ, order flow imbalance, `transaction_costs`, `cost_summary`,
   `amihud`, `roll_spread`, `trade_impacts` and the `l1_ticker` and
@@ -2112,7 +2129,7 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ---
 
-## [0.1.0] - 2026-06-26
+## [0.1.0] - 2026-07-01
 
 First public release (PyPI). The Python port of the R
 [obAnalytics](https://cran.r-project.org/package=obAnalytics) package, reworked

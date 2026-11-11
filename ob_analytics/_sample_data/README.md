@@ -9,6 +9,25 @@ shipped alongside the package so `Pipeline()` runs out of the box.
 | `trades.csv` | Live trades (`live_trades_btcusd`), one row per match. Read by `BitstampTradeReader` to produce the canonical trades DataFrame. |
 | `meta.json` | Capture metadata (start/end, channel list, snapshot microtimestamp, counters, reconnects). |
 
+## Source and terms
+
+- **Source:** Bitstamp's public market data, for the BTC/USD pair. The orders
+  and trades come from the public WebSocket channels `live_orders_btcusd` and
+  `live_trades_btcusd` (`wss://ws.bitstamp.net`). The opening book comes from
+  the public REST endpoint
+  `https://www.bitstamp.net/api/v2/order_book/btcusd/?group=2`. None of them
+  needs an account or an API key. `meta.json` records the URLs and channels.
+- **Who made it:** the maintainer recorded it on 2026-05-02 with the
+  package's Bitstamp capture (see [Regenerating the sample](#regenerating-the-sample)).
+  The files are the capture's own output, with `orders.csv` compressed.
+- **Terms:** the data is Bitstamp's, under Bitstamp's terms of use
+  (<https://www.bitstamp.net/terms-of-use/>). The package's GPL licence
+  covers the code, not this data. The package ships the sample so that its
+  examples and tests run. Before you use or share this data for another
+  purpose, read Bitstamp's terms.
+- **Not yet checked:** the maintainer has not yet confirmed that Bitstamp's
+  terms allow this capture to be shipped in a package on PyPI.
+
 Headline numbers (see `meta.json` for the full set):
 
 - `live_orders` 301 027, `synthetic_created` 6 512, `synthetic_deleted` 6 518

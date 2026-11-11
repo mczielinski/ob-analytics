@@ -1,0 +1,54 @@
+name: Bug report
+description: A wrong result, a crash, or a message that does not help.
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the report. For a security problem, do not use this
+        form: see SECURITY.md and report it privately.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: |
+        The smallest code or command that shows the problem. Start from the
+        bundled sample (`sample_csv_path()`) if you can. If the problem needs
+        your own file, say which source reads it and attach a small part of it.
+      render: python
+    validations:
+      required: true
+  - type: textarea
+    id: traceback
+    attributes:
+      label: Traceback and logs
+      description: |
+        The full traceback and the log. Turn the log on with `-v` on the
+        command line, or `logger.enable("ob_analytics")` in Python.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: ob-analytics version
+      description: The output of `pip show ob-analytics`, or the commit if you installed from `main`.
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version and operating system
+      placeholder: Python 3.12, Ubuntu 24.04
+    validations:
+      required: true
+  - type: input
+    id: extras
+    attributes:
+      label: Extras installed
+      description: For example `interactive`, `bokeh`, `databento`, `live`, `ccxt`, `cryptofeed`.

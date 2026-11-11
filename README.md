@@ -8,13 +8,18 @@
 **Limit order book analytics and visualization for Python.**
 
 Reconstruct trades from raw exchange events, classify order types, compute
-depth metrics, and visualize market microstructure — from Bitstamp-style CSVs
-or [LOBSTER](https://lobsterdata.com/) message and orderbook files.
+depth metrics, and visualize market microstructure. It reads Bitstamp CSV,
+[LOBSTER](https://lobsterdata.com/) message and orderbook files, Databento
+market-by-order (DBN) files, and price-level (L2) depth CSV. It can also
+capture live data from Bitstamp, from any venue that
+[CCXT](https://github.com/ccxt/ccxt) supports, and from the venues of
+[cryptofeed](https://github.com/bmoscon/cryptofeed).
 
 > Ported from the R
 > [obAnalytics](https://cran.r-project.org/package=obAnalytics) CRAN package.
-> Now a standalone Python package with a pipeline API, pluggable formats,
-> flow-toxicity metrics, and Matplotlib/Plotly backends.
+> Now a standalone Python package with a pipeline API, pluggable sources,
+> flow-toxicity and cost metrics, and Matplotlib and Plotly backends. Bokeh
+> draws four of the plots.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/mczielinski/ob-analytics/main/docs/assets/hero-depth-heatmap.png" alt="Price levels depth heatmap (Bitstamp sample)" width="700">
@@ -38,8 +43,24 @@ Optional extras:
 
 ```bash
 pip install "ob-analytics[interactive]"   # Plotly figures
-pip install "ob-analytics[live]"          # live exchange capture (websockets)
+pip install "ob-analytics[bokeh]"         # Bokeh figures (four of the plots)
+pip install "ob-analytics[databento]"     # read Databento DBN files
+pip install "ob-analytics[live]"          # live Bitstamp capture (websockets)
+pip install "ob-analytics[ccxt]"          # live L2 capture from CCXT venues
+pip install "ob-analytics[cryptofeed]"    # live L2 or L3 capture through cryptofeed
 ```
+
+Live capture (the `live`, `ccxt` and `cryptofeed` extras) is supported on
+Linux and macOS only. CI does not test it on Windows, where it takes no lock
+on the capture folder and Ctrl-C does not close the files cleanly. On
+Windows, CI tests reading files, the analytics and the plots.
+
+> **The documentation follows `main`.** The
+> [docs site](https://mczielinski.github.io/ob-analytics/) is built from the
+> `main` branch, so it can describe features that are not yet in the newest
+> release on PyPI. To get everything the docs describe, install from source
+> (below). [CHANGELOG.md](CHANGELOG.md) lists what changed since the last
+> release.
 
 ### From source
 
@@ -57,9 +78,9 @@ pip install -e ".[interactive,live]"
 **Requires** Python 3.11+. Core dependencies: NumPy, pandas, matplotlib,
 seaborn, pydantic, pyarrow, loguru.
 
-**Scale:** in-memory (pandas) — comfortable to ~5M events (~5 GiB, session-scale
-data); for larger inputs, pre-slice by time window. See
-[Scale envelope](ARCHITECTURE.md#scale-envelope).
+**Scale:** in-memory (pandas) — comfortable to ~5M events (about 4–5 GiB,
+session-scale data). For larger inputs, `Pipeline.run_windows` runs one time window at a
+time. See [Scale envelope](ARCHITECTURE.md#scale-envelope).
 
 ---
 
@@ -125,7 +146,9 @@ records every gap in `manifest.json`:
 ob-analytics capture bitstamp --pair btcusd -o ./capture --minutes 30
 ```
 
-`ob-analytics capture --list` shows live-capable sources. Add new ones by
+`ob-analytics capture --list` shows live-capable sources: `bitstamp`, `ccxt`
+(with `--venue`, for example `binance`, `coinbase`, `kalshi` or `polymarket`) and
+`cryptofeed`. `ob-analytics sources` lists every source, file or live. Add new ones by
 giving a `Source` the `LiveSource` capability and registering it with
 `register_source`.
 
@@ -169,7 +192,8 @@ list.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) (or the rendered
 [Architecture page](https://mczielinski.github.io/ob-analytics/architecture/))
-for design decisions, the module map, and class diagrams.
+for design decisions, the module map, the class diagram, and the known
+limitations.
 See [CHANGELOG.md](CHANGELOG.md) for the release history.
 
 ---
@@ -180,8 +204,8 @@ Full docs at **<https://mczielinski.github.io/ob-analytics/>**:
 
 - **[Getting started](https://mczielinski.github.io/ob-analytics/quickstart/)** — install, run the pipeline, first plot.
 - **[Tutorial](https://mczielinski.github.io/ob-analytics/tutorial/)** — a guided tour from what a price *is* through L3 reconstruction, depth, and flow toxicity, every figure built up on toy data first.
-- **[Example gallery](https://mczielinski.github.io/ob-analytics/gallery/)** — every figure the package draws, each with its code.
-- **[How-to guides](https://mczielinski.github.io/ob-analytics/howto/full-control/)** — task-focused recipes (your own data, LOBSTER, custom loaders, live capture, CLI).
+- **[Example gallery](https://mczielinski.github.io/ob-analytics/gallery/)** — a figure for each main plot, each with its code.
+- **[How-to guides](https://mczielinski.github.io/ob-analytics/howto/full-control/)** — task-focused recipes (your own data, LOBSTER, Databento, L2 feeds, live capture from each venue, custom loaders, CLI).
 - **[API reference](https://mczielinski.github.io/ob-analytics/api/pipeline/)** and **[glossary](https://mczielinski.github.io/ob-analytics/glossary/)**.
 
 The site is built with [Zensical](https://github.com/zensicalHQ/zensical);
@@ -200,7 +224,8 @@ uv run zensical build                     # static site in site/
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style,
-and conventions for adding new formats.
+and conventions for adding new formats. To report a security problem, see
+[SECURITY.md](SECURITY.md); do not open a public issue for it.
 
 ## License
 
