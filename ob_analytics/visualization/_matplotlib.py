@@ -2331,7 +2331,7 @@ def mpl_bars(
     volume, coloured by which side was the net aggressor, on a twin axis
     scaled so it occupies the lower quarter of the frame.
 
-    Clock bars are drawn on a time axis; activity bars get one slot each, with
+    Time bars are drawn on a time axis; activity bars get one slot each, with
     their closing times as tick labels (see
     :func:`~ob_analytics.visualization._data.prepare_bars_data`).
     """

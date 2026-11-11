@@ -142,7 +142,7 @@ class TestShape:
 # ---------------------------------------------------------------------------
 
 
-class TestClockRule:
+class TestTimeRule:
     def test_bars_are_epoch_aligned_spans(self, toy: pd.DataFrame) -> None:
         out = bars(toy, "time", "30s")
 

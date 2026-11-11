@@ -97,7 +97,7 @@ from ob_analytics.datasets import (
     toy_orders,
     toy_trades,
 )
-from ob_analytics.depth_l2 import DepthCsvSettings, DepthCsvSource
+from ob_analytics.depth_csv import DepthCsvSettings, DepthCsvSource
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError, UnknownNameError
 from ob_analytics.features import (
     features,
@@ -142,7 +142,7 @@ from ob_analytics.protocols import (
     BarRule,
     Clocks,
     DataWriter,
-    DepthSource,
+    DepthLoader,
     EventLoader,
     Feature,
     FeedDeclarations,
@@ -157,7 +157,7 @@ from ob_analytics.protocols import (
     SupportsRequiredContext,
     SupportsWriter,
     TradeAttribution,
-    TradeSource,
+    TradeReader,
     WriteTarget,
 )
 from ob_analytics.quality import (
@@ -246,7 +246,7 @@ __all__ = [
     "DatabentoSource",
     "DepthCsvSettings",
     "DepthCsvSource",
-    "DepthSource",
+    "DepthLoader",
     "EventLoader",
     "Feature",
     "FeedDeclarations",
@@ -284,7 +284,7 @@ __all__ = [
     "SupportsWriter",
     "ToyOrder",
     "TradeAttribution",
-    "TradeSource",
+    "TradeReader",
     "UnknownNameError",
     "WriteTarget",
     "__version__",

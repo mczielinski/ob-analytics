@@ -37,8 +37,8 @@ from ob_analytics.interop import to_hftbacktest_array, to_nautilus_deltas
 from ob_analytics.pipeline import Pipeline, PipelineResult
 from ob_analytics.synth import (
     SynthConfig,
-    SyntheticLoader,
-    SyntheticTradeSource,
+    SynthLoader,
+    SynthTradeReader,
     generate_session,
 )
 
@@ -73,9 +73,9 @@ def _session(seed: int, duration: float = 30.0) -> PipelineResult:
     """Run one seeded synthetic L3 session through the pipeline."""
     session = generate_session(SynthConfig(seed=seed, duration=duration))
     return Pipeline(
-        loader=SyntheticLoader(session),
-        trade_source=SyntheticTradeSource(session),
-    ).run(source=None)
+        loader=SynthLoader(session),
+        trade_reader=SynthTradeReader(session),
+    ).run(path=None)
 
 
 def _hftbacktest_touch(array: np.ndarray) -> pd.DataFrame:

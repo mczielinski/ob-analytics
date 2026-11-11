@@ -1,6 +1,6 @@
 """A source keeps nothing from a run, and each run reads its own context.
 
-The pipeline builds each run's loader and trade source from that run's config
+The pipeline builds each run's loader and trade reader from that run's config
 and context, and a loader knows its own feed's price encoding.
 """
 
@@ -168,15 +168,15 @@ class TestTheGrid:
 class TestDepthCsvSettings:
     def test_the_empty_base_settings_give_the_defaults(self):
         from ob_analytics.config import SourceSettings
-        from ob_analytics.depth_l2 import DepthCsvSource, L2DepthLoader
+        from ob_analytics.depth_csv import DepthCsvLoader, DepthCsvSource
 
         source = DepthCsvSource(settings=SourceSettings())
         loader = source.create_loader(PipelineConfig(), RunContext())
-        assert isinstance(loader, L2DepthLoader)
+        assert isinstance(loader, DepthCsvLoader)
 
     def test_another_sources_settings_are_refused(self):
         from ob_analytics.databento import DatabentoSettings
-        from ob_analytics.depth_l2 import DepthCsvSource
+        from ob_analytics.depth_csv import DepthCsvSource
         from ob_analytics.exceptions import ConfigError
 
         source = DepthCsvSource(settings=DatabentoSettings())

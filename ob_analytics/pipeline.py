@@ -20,7 +20,7 @@ Usage with custom configuration::
 
 Usage with a custom loader (any object satisfying EventLoader)::
 
-    Pipeline(loader=my_custom_loader, trade_source=my_trade_source).run("data/")
+    Pipeline(loader=my_custom_loader, trade_reader=my_trade_reader).run("data/")
 
 Usage with a Source descriptor::
 
@@ -76,7 +76,7 @@ from ob_analytics.protocols import (
     RunContext,
     Source,
     SupportsComputeDepth,
-    TradeSource,
+    TradeReader,
     grid_of,
 )
 from ob_analytics.quality import DataQualitySummary, data_quality_summary
@@ -381,17 +381,17 @@ class Pipeline:
     config : PipelineConfig, optional
         Central configuration.  The fields it sets are laid over the source's
         instrument grid (``source.grid``), and the result is what each run's
-        loader and trade source are built from.
+        loader and trade reader are built from.
     source : OfflineSource, optional
-        A source descriptor that builds each run's loader and trade source, and
+        A source descriptor that builds each run's loader and trade reader, and
         gives the instrument grid the config starts from (its ``grid``).
         Defaults to :class:`~ob_analytics.bitstamp.BitstampSource`.  Explicit
         component arguments take precedence over the source's factories.
     loader : EventLoader, optional
         Loads raw events from a data source.  Overrides the source's loader,
         and is used for every run.
-    trade_source : TradeSource, optional
-        Builds the trades DataFrame.  Overrides the source's trade source, and
+    trade_reader : TradeReader, optional
+        Builds the trades DataFrame.  Overrides the source's trade reader, and
         is used for every run.
     ctx : RunContext, optional
         The per-run parameters (such as LOBSTER's ``trading_date``) every run
@@ -406,7 +406,7 @@ class Pipeline:
     ``ob-analytics process`` reads it.  A tick size you set (or a
     ``price_decimals``) keeps the recorded tick size out, and a lot size (or a
     ``volume_decimals``) the recorded lot size.  When you pass your own
-    *loader* or *trade_source*, the record is not used: those components hold
+    *loader* or *trade_reader*, the record is not used: those components hold
     their own config.
     """
 
@@ -416,7 +416,7 @@ class Pipeline:
         *,
         source: Source | None = None,
         loader: EventLoader | None = None,
-        trade_source: TradeSource | None = None,
+        trade_reader: TradeReader | None = None,
         ctx: RunContext | None = None,
     ) -> None:
         self._ctx = ctx or RunContext()
@@ -431,7 +431,7 @@ class Pipeline:
             raise TypeError(
                 f"Pipeline needs an offline-capable source; {source.name!r} "
                 "cannot replay stored files (it lacks create_loader or "
-                "create_trade_source)."
+                "create_trade_reader)."
             )
 
         # What the caller set, so a capture's record fills only the rest.
@@ -440,29 +440,29 @@ class Pipeline:
         # run is on whole shares unless the caller says otherwise.
         self.config = grid_of(source).config(config)
         self._loader = loader
-        self._trade_source = trade_source
+        self._trade_reader = trade_reader
         self._source = source
 
-    def _for_run(self, source: Any, ctx: RunContext) -> tuple[PipelineConfig, Any, Any]:
-        """Return the config, loader and trade source for one run on *source*.
+    def _for_run(self, path: Any, ctx: RunContext) -> tuple[PipelineConfig, Any, Any]:
+        """Return the config, loader and trade reader for one run on *path*.
 
-        The source builds the loader and trade source for each run, from that
-        run's config and *ctx*; a loader or trade source the caller passed is
-        used as it is.  The config is the pipeline's own, unless *source* is a
+        The source builds the loader and trade reader for each run, from that
+        run's config and *ctx*; a loader or trade reader the caller passed is
+        used as it is.  The config is the pipeline's own, unless *path* is a
         capture whose record gives a tick or lot size the caller did not set.
         """
         config = self.config
-        if self._loader is None and self._trade_source is None:
-            config = self._recorded_config(source)
+        if self._loader is None and self._trade_reader is None:
+            config = self._recorded_config(path)
         loader = self._loader or self._source.create_loader(config, ctx)
-        trade_source = self._trade_source or self._source.create_trade_source(
+        trade_reader = self._trade_reader or self._source.create_trade_reader(
             config, ctx, loader
         )
-        return config, loader, trade_source
+        return config, loader, trade_reader
 
-    def _recorded_config(self, source: Any) -> PipelineConfig:
+    def _recorded_config(self, path: Any) -> PipelineConfig:
         """Return the config with the grid a capture recorded, where unset."""
-        recorded = read_instrument(source)
+        recorded = read_instrument(path)
         fields = {
             name: value
             for name, value in recorded.items()
@@ -504,13 +504,13 @@ class Pipeline:
         source = get_source(name)(**kwargs)
         return cls(source=source, ctx=ctx)
 
-    def run(self, source: Any, *, ctx: RunContext | None = None) -> PipelineResult:
-        """Execute the full pipeline on *source* and return results.
+    def run(self, path: Any, *, ctx: RunContext | None = None) -> PipelineResult:
+        """Execute the full pipeline on *path* and return results.
 
         Parameters
         ----------
-        source
-            Data source for the loader (typically a file path).
+        path
+            What the loader reads, typically a file or directory path.
         ctx : RunContext, optional
             Override the pipeline's default :class:`RunContext` for this
             single call.  When ``None``, the ``ctx`` provided at
@@ -525,7 +525,7 @@ class Pipeline:
         Steps (L3 / per-order feeds)
         ----------------------------
         1. Load events (``EventLoader.load``)
-        2. Build trades (``TradeSource.load``)
+        2. Build trades (``TradeReader.load``)
         3. Classify order types
         4. Compute price-level depth
         5. Compute depth metrics, and sign the trades the venue left
@@ -538,9 +538,9 @@ class Pipeline:
         it, and the per-order stages (3, 6) are skipped.
         """
         run_ctx = ctx if ctx is not None else self._ctx
-        config, loader, trade_source = self._for_run(source, run_ctx)
-        declarations = run_declarations(source, self._source)
-        rows, trades, loaded_attrs = self._load_inputs(source, loader, trade_source)
+        config, loader, trade_reader = self._for_run(path, run_ctx)
+        declarations = run_declarations(path, self._source)
+        rows, trades, loaded_attrs = self._load_inputs(path, loader, trade_reader)
 
         if self._source.level is Level.L2:
             # A price-level feed has no per-order identity, so the per-order
@@ -555,7 +555,7 @@ class Pipeline:
             if name == "price_level_volume":
                 depth_override = (
                     self._source.compute_depth(
-                        tables["events"], config, source, run_ctx, loader
+                        tables["events"], config, path, run_ctx, loader
                     )
                     if isinstance(self._source, SupportsComputeDepth)
                     else None
@@ -573,13 +573,13 @@ class Pipeline:
         return _result(tables, config, Level.L3, declarations)
 
     def _load_inputs(
-        self, source: Any, loader: Any, trade_source: Any
+        self, path: Any, loader: Any, trade_reader: Any
     ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
         """Load the rows the depth stages read, and the trades.
 
         For a per-order source the rows are the events, and for an
         :attr:`~ob_analytics.protocols.Level.L2` source the price-level depth
-        frame.  The trades are as the trade source builds them: the ones the
+        frame.  The trades are as the trade reader builds them: the ones the
         venue left unlabelled are signed later, against the run's quotes.
 
         Returns
@@ -592,28 +592,28 @@ class Pipeline:
         """
         if self._source.level is Level.L2:
             logger.info(
-                "Pipeline: L2 resolution — loading price-level depth from {}", source
+                "Pipeline: L2 resolution — loading price-level depth from {}", path
             )
-            depth = loader.load(source)
+            depth = loader.load(path)
             validate_depth_df(depth)  # data contract (schemas.py)
             logger.info("Pipeline: building trades")
-            # The trade source ignores the (empty) events frame for L2: trades
+            # The trade reader ignores the (empty) events frame for L2: trades
             # come from the venue's own prints, not from order lifecycles.
-            trades = trade_source.load(empty_events(), source)
+            trades = trade_reader.load(empty_events(), path)
             validate_trades_df(trades)  # data contract (schemas.py)
             return depth, trades, dict(depth.attrs)
 
-        logger.info("Pipeline: loading events from {}", source)
-        events = loader.load(source)
+        logger.info("Pipeline: loading events from {}", path)
+        events = loader.load(path)
         loaded_attrs = dict(events.attrs)
         logger.info("Pipeline: building trades")
-        trades = trade_source.load(events, source)
+        trades = trade_reader.load(events, path)
         validate_trades_df(trades)  # data contract (schemas.py)
         return events, trades, loaded_attrs
 
     def run_windows(
         self,
-        source: Any,
+        path: Any,
         boundaries: Iterable[Any],
         output: str | Path,
         *,
@@ -622,7 +622,7 @@ class Pipeline:
     ) -> Path:
         """Run the pipeline one time window at a time and write the result.
 
-        Cuts *source* at each of the *boundaries*, runs the depth stages on one
+        Cuts *path* at each of the *boundaries*, runs the depth stages on one
         window at a time, and writes each window's rows to *output* as soon as
         the window is done.  The depth stages are what makes a run large, so
         their peak memory is set by the largest window rather than by the whole
@@ -643,8 +643,8 @@ class Pipeline:
 
         Parameters
         ----------
-        source
-            Data source for the loader (typically a file path), as for
+        path
+            What the loader reads, typically a file or directory path, as for
             :meth:`run`.
         boundaries : time or iterable of times
             Where to cut, anything :class:`pandas.Timestamp` accepts; one time
@@ -677,7 +677,7 @@ class Pipeline:
         -----
         A loader that can read one window at a time (a
         :class:`~ob_analytics.databento.DatabentoLoader` can) does so when the
-        source built both the loader and the trade source, which then builds
+        source built both the loader and the trade reader, which then builds
         the trades from what the loader kept.  The run then never holds more
         than one window's events, and goes over the windows twice.
         The first time it reads each window, keeps a few values per order and
@@ -699,17 +699,17 @@ class Pipeline:
         """
         windows = window_bounds(boundaries)
         level = self._source.level
-        config, loader, trade_source = self._for_run(
-            source, ctx if ctx is not None else self._ctx
+        config, loader, trade_reader = self._for_run(
+            path, ctx if ctx is not None else self._ctx
         )
-        declarations = run_declarations(source, self._source)
+        declarations = run_declarations(path, self._source)
 
         with ExitStack() as stack:
-            # The trade source builds the trades from what the loader kept, so
+            # The trade reader builds the trades from what the loader kept, so
             # both must be the pair the source built.
             windowed = (
                 self._loader is None
-                and self._trade_source is None
+                and self._trade_reader is None
                 and isinstance(loader, WindowedLoader)
             )
             if level is Level.L3 and windowed:
@@ -718,11 +718,11 @@ class Pipeline:
                     tempfile.TemporaryDirectory(prefix=".run_windows-", dir=output)
                 )
                 trades, typed_windows, like = _read_windows(
-                    source, loader, trade_source, windows, Path(working)
+                    path, loader, trade_reader, windows, Path(working)
                 )
             else:
                 trades, typed_windows, like = self._cut_inputs(
-                    source, loader, trade_source, windows, config
+                    path, loader, trade_reader, windows, config
                 )
             self._write_windows(
                 windows,
@@ -740,9 +740,9 @@ class Pipeline:
 
     def _cut_inputs(
         self,
-        source: Any,
+        path: Any,
         loader: Any,
-        trade_source: Any,
+        trade_reader: Any,
         windows: list[tuple[pd.Timestamp | None, pd.Timestamp | None]],
         config: PipelineConfig,
     ) -> tuple[pd.DataFrame, Iterator[pd.DataFrame], pd.DataFrame]:
@@ -751,7 +751,7 @@ class Pipeline:
         Returns the trades, each window's rows (order types set, for a
         per-order source), and a frame holding a value of each column.
         """
-        rows, trades, _ = self._load_inputs(source, loader, trade_source)
+        rows, trades, _ = self._load_inputs(path, loader, trade_reader)
         if self._source.level is Level.L3:
             tables = {"events": rows, "trades": trades}
             # The stage builds a new events frame; let the loaded one go.
@@ -1045,17 +1045,17 @@ def _note_quotes(
 
 
 def _read_windows(
-    source: Any,
+    path: Any,
     loader: WindowedLoader,
-    trade_source: Any,
+    trade_reader: Any,
     windows: list[tuple[pd.Timestamp | None, pd.Timestamp | None]],
     working: Path,
 ) -> tuple[pd.DataFrame, Iterator[pd.DataFrame], pd.DataFrame]:
-    """Read *source* one window at a time, saving each window's events.
+    """Read *path* one window at a time, saving each window's events.
 
     An order's type is decided over the whole run, so the first pass keeps
     only what the rule reads (:class:`~ob_analytics.analytics._OrderFacts`),
-    and saves the events to *working*.  The trade source then builds the
+    and saves the events to *working*.  The trade reader then builds the
     whole run's trades from what the loader kept.
 
     Returns
@@ -1065,12 +1065,12 @@ def _read_windows(
         from *working* one at a time; and a frame holding a value of each
         text column, for the output's column types.
     """
-    logger.info("Pipeline: reading {} one window at a time", source)
+    logger.info("Pipeline: reading {} one window at a time", path)
     paths: list[Path] = []
     facts: list[_OrderFacts] = []
     texts: dict[str, Any] = {}
     events = empty_events()
-    for number, (events, named) in enumerate(loader.load_windows(source, windows)):
+    for number, (events, named) in enumerate(loader.load_windows(path, windows)):
         facts.append(_OrderFacts.of(events, named))
         for column in events.columns:
             if column in texts or events[column].dtype != object:
@@ -1085,8 +1085,8 @@ def _read_windows(
     del events
 
     logger.info("Pipeline: building trades")
-    # The loader kept what the trade source reads (see WindowedLoader).
-    trades = trade_source.load(empty_events(), source)
+    # The loader kept what the trade reader reads (see WindowedLoader).
+    trades = trade_reader.load(empty_events(), path)
     validate_trades_df(trades)  # data contract (schemas.py)
     logger.info("Pipeline: classifying order types")
     types = _order_types(_OrderFacts.combine(facts), trades)
@@ -1096,9 +1096,9 @@ def _read_windows(
         # Row labels go on across the windows, as they do in a frame read
         # whole: the next window's seed rows come from this one's.
         start = 0
-        for path in paths:
-            window = _with_order_types(pd.read_pickle(path), types)
-            path.unlink()
+        for saved in paths:
+            window = _with_order_types(pd.read_pickle(saved), types)
+            saved.unlink()
             window.index = pd.RangeIndex(start, start + len(window))
             start += len(window)
             validate_events_df(window)  # data contract (schemas.py)

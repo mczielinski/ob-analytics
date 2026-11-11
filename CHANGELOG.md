@@ -156,6 +156,38 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   `from ob_analytics.schemas import HIDDEN_ORDER_ID`. The engine no longer
   knows the id: `OrderEvents` takes an `is_hidden` mask instead, and
   `OrderEvents.visible()` skips the rows it marks.
+- **One name per thing for sources, loaders and inputs** (#412). A
+  `Source` is a venue the package reads; a loader and a trade reader are
+  what a source builds for each run; the input they read is a `path`.
+  - The input argument `source` -> `path`, where it is what a loader reads:
+    `Pipeline.run(source)`, `Pipeline.run_windows(source, ...)`,
+    `EventLoader.load(source)`, `DepthLoader.load(source)`,
+    `TradeReader.load(events, source)`, `WindowedLoader.load_windows(source,
+    ...)`, `SupportsComputeDepth.compute_depth(events, config, source, ...)`,
+    `LobsterSource.venue_book(source, ...)` and every built-in
+    implementation. Positional calls keep working;
+    `Pipeline(...).run(source=x)` -> `Pipeline(...).run(path=x)`. A plug-in
+    loader or trade reader that names the parameter `source` -> rename it
+    `path`. `Pipeline(source=...)` still takes the `Source`.
+  - `read_mbo_frame(source)` -> `read_mbo_frame(data)`, since it takes a
+    path, an open `DBNStore` or a frame.
+  - `check_schema_version(version, source=...)` ->
+    `check_schema_version(version, path=...)`.
+  - `DepthSource` -> `DepthLoader` (it pairs with `EventLoader`).
+  - `TradeSource` -> `TradeReader`, the name its implementations already had.
+  - `OfflineSource.create_trade_source` -> `OfflineSource.create_trade_reader`.
+    A plug-in source -> rename the method.
+  - `Pipeline(trade_source=...)` -> `Pipeline(trade_reader=...)`.
+  - The depth-CSV source uses one prefix, as the other sources do:
+    `ob_analytics.depth_l2` -> `ob_analytics.depth_csv`,
+    `L2DepthLoader` -> `DepthCsvLoader`, `L2TradeReader` ->
+    `DepthCsvTradeReader`. `DepthCsvSource`, `DepthCsvWriter` and
+    `DepthCsvSettings` move with the module. Its API page moves from
+    `api/depth_l2/` to `api/depth_csv/`.
+  - The synthetic source uses one prefix: `SyntheticLoader` -> `SynthLoader`,
+    `SyntheticTradeSource` -> `SynthTradeReader`.
+  - `ClockRule` -> `TimeRule`, the name of the rule it registers (`"time"`).
+    The docs call its bars time bars, not clock bars.
 
 ### Added
 

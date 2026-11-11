@@ -7,7 +7,7 @@ title: Plug in custom components
 Every pipeline stage is a [Protocol](../api/protocols.md). Implement the right
 method signature on any object and pass it in — no inheritance required.
 This page shows the two most common cases: a custom event loader and a custom
-trade source. For the full extension surface (formats, writers, plot
+trade reader. For the full extension surface (formats, writers, plot
 backends, live capturers, registries), see
 [Extending ob-analytics](../extending.md).
 
@@ -61,8 +61,8 @@ class GenericCsvLoader:
     def __init__(self, config: PipelineConfig | None = None):
         self.config = config or PipelineConfig()
 
-    def load(self, source: str | Path) -> pd.DataFrame:
-        df = pd.read_csv(source)
+    def load(self, path: str | Path) -> pd.DataFrame:
+        df = pd.read_csv(path)
         df = df.rename(columns=self.COLUMN_MAP)
         df["action"] = df["action"].map(self.ACTION_MAP)
         df["direction"] = df["direction"].map(self.DIRECTION_MAP)
@@ -74,7 +74,7 @@ class GenericCsvLoader:
 
 result = Pipeline(
     loader=GenericCsvLoader(),
-    trade_source=BitstampTradeReader(),
+    trade_reader=BitstampTradeReader(),
 ).run("my_exchange_data/orders.csv")  # requires sibling trades.csv
 ```
 
@@ -95,8 +95,8 @@ class CryptofeedLoader:
     def __init__(self, config: PipelineConfig | None = None):
         self.config = config or PipelineConfig()
 
-    def load(self, source: str | Path) -> pd.DataFrame:
-        raw = pd.read_parquet(source)
+    def load(self, path: str | Path) -> pd.DataFrame:
+        raw = pd.read_parquet(path)
         known_orders: dict[str, float] = {}
         rows = []
 
@@ -140,26 +140,26 @@ class CryptofeedLoader:
     `load` method returning the right DataFrame works — no subclassing
     required.
 
-## Custom trade source
+## Custom trade reader
 
-Implement `TradeSource` (a `load(events, source) -> DataFrame` method) when
+Implement `TradeReader` (a `load(events, path) -> DataFrame` method) when
 trades come from an API, a database, or a non-CSV layout:
 
-<!-- docs-test: skip its trade source is a stub that raises -->
+<!-- docs-test: skip its trade reader is a stub that raises -->
 
 ```python
 import pandas as pd
 from ob_analytics import Pipeline, PipelineConfig, sample_csv_path
 
-class ApiTradeSource:
-    def load(self, events: pd.DataFrame, source: object) -> pd.DataFrame:
+class ApiTradeReader:
+    def load(self, events: pd.DataFrame, path: object) -> pd.DataFrame:
         # Build the canonical trades DataFrame (timestamp, price, volume,
         # direction, maker_event_id, taker_event_id, maker, taker, …)
         raise NotImplementedError
 
 result = Pipeline(
     config=PipelineConfig(),
-    trade_source=ApiTradeSource(),
+    trade_reader=ApiTradeReader(),
 ).run(sample_csv_path())
 ```
 

@@ -27,7 +27,7 @@ from ob_analytics import (
 from ob_analytics.bars import BAR_RULES
 from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
 from ob_analytics.depth import micro_price
-from ob_analytics.depth_l2 import DepthCsvWriter
+from ob_analytics.depth_csv import DepthCsvWriter
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.metrics import get_metric
 from ob_analytics.visualization.gallery import _metric_payload, display_result

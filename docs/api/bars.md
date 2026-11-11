@@ -49,7 +49,7 @@ of your own.
 
 ## The built-in rules
 
-::: ob_analytics.bars.ClockRule
+::: ob_analytics.bars.TimeRule
 
 ::: ob_analytics.bars.TickRule
 

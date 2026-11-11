@@ -182,7 +182,7 @@ Implemented in [`bars`](api/bars.md).
 and the microstructure columns that go with them. The boundaries come from a
 **bar rule**.
 
-**Clock bar (OHLCV)**
+**Time bar (OHLCV)**
 : A bar covering a fixed span of the clock — the familiar 1-minute or daily
 candle.
 
@@ -295,7 +295,7 @@ one with a negative shift.
 
 **Realized volatility**
 : The standard deviation of returns over a trailing window. Per bar rather
-than annualized: only clock bars span equal amounts of time, so there is no
+than annualized: only time bars span equal amounts of time, so there is no
 one factor that would scale it to a year.
 
 **Close location**
@@ -314,12 +314,12 @@ venue they came from.
 : Produces the canonical frame for a source, via `create_loader`. An L3
 source's `create_loader` returns an [`EventLoader`](api/protocols.md),
 whose `load()` returns a validator-passing events frame; an L2 source
-returns a [`DepthSource`](api/protocols.md), whose `load()` returns the
+returns a [`DepthLoader`](api/protocols.md), whose `load()` returns the
 depth frame directly, since a price-level feed has no per-order events to
 fold. One per venue dialect.
 
-**Trade source**
-: The companion protocol for executions: `load(events, source)` returns
+**Trade reader**
+: The companion protocol for executions: `load(events, path)` returns
 the canonical trades frame with maker/taker attribution.
 
 **Metric**

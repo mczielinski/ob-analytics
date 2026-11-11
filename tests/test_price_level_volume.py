@@ -123,14 +123,14 @@ class TestBundledData:
         from ob_analytics import Pipeline
         from ob_analytics.synth import (
             SynthConfig,
-            SyntheticLoader,
-            SyntheticTradeSource,
+            SynthLoader,
+            SynthTradeReader,
             generate_session,
         )
 
         session = generate_session(SynthConfig(seed=42, duration=90.0))
         result = Pipeline(
-            loader=SyntheticLoader(session),
-            trade_source=SyntheticTradeSource(session),
+            loader=SynthLoader(session),
+            trade_reader=SynthTradeReader(session),
         ).run(None)
         _assert_no_level_below_zero(result.events)

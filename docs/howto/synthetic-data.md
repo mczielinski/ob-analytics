@@ -28,7 +28,7 @@ byte-identical frames.
 
 ## Run it through the pipeline
 
-`SyntheticLoader` and `SyntheticTradeSource` serve a generated session to the
+`SynthLoader` and `SynthTradeReader` serve a generated session to the
 pipeline, so no files are written to disk:
 
 ```python
@@ -36,15 +36,15 @@ from ob_analytics import Pipeline
 from ob_analytics.synth import (
     generate_session,
     SynthConfig,
-    SyntheticLoader,
-    SyntheticTradeSource,
+    SynthLoader,
+    SynthTradeReader,
 )
 
 session = generate_session(SynthConfig(seed=1, duration=120))
 result = Pipeline(
-    loader=SyntheticLoader(session),
-    trade_source=SyntheticTradeSource(session),
-).run(source=None)
+    loader=SynthLoader(session),
+    trade_reader=SynthTradeReader(session),
+).run(path=None)
 
 print(result.depth_summary[["best_bid_price", "best_ask_price"]].tail())
 ```

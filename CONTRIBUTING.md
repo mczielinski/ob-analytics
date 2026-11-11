@@ -179,17 +179,17 @@ source, export format, plot, flow-toxicity metric, or live capturer — see
 [docs/extending.md](docs/extending.md). The summary below covers a new format.
 
 1. Create `ob_analytics/<venue>.py` with `<Venue>Loader`, `<Venue>TradeReader`
-   (or another type satisfying `TradeSource`), `<Venue>Writer`, and a
+   (or another type satisfying `TradeReader`), `<Venue>Writer`, and a
    `<Venue>Format` class with `name = "<venue>"` (no base class — `Format` is a
    structural `Protocol`). The factory methods take
    `(config: PipelineConfig, ctx: RunContext)`:
    - `create_loader(config, ctx) -> EventLoader`
-   - `create_trade_source(config, ctx, loader) -> TradeSource` (`loader` is the
+   - `create_trade_reader(config, ctx, loader) -> TradeReader` (`loader` is the
      run's loader, for trades that come off the same read)
    - `create_writer(config, ctx) -> DataWriter` (optional: only for a source
      that writes its own format; the writer declares a `target`, a folder or a
      file)
-   - `compute_depth(events, config, source, ctx, loader) -> tuple[depth, depth_summary] | None`
+   - `compute_depth(events, config, path, ctx, loader) -> tuple[depth, depth_summary] | None`
      (override only if your venue computes depth differently; return `None`
      to fall back to the standard `price_level_volume` → `depth_metrics` path)
 

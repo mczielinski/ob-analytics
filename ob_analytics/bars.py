@@ -140,10 +140,10 @@ def load_bar_rule_plugins(*, force: bool = False) -> list[str]:
     return load_plugins(ENTRY_POINT_GROUP, _register_entry_point, force=force)
 
 
-# ── The clock rule ───────────────────────────────────────────────────
+# ── The time rule ───────────────────────────────────────────────────
 
 
-class ClockRule:
+class TimeRule:
     """A new bar every fixed span of the clock — classic OHLCV.
 
     The threshold is a fixed duration: a string pandas reads as one
@@ -355,7 +355,7 @@ def _signed_volume(frame: pd.DataFrame) -> np.ndarray:
 
 
 for _rule in (
-    ClockRule(),
+    TimeRule(),
     TickRule(),
     AccumulationRule("volume", _volume, units=("volume",)),
     AccumulationRule("dollar", _turnover, units=("volume", "price")),

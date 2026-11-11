@@ -53,7 +53,7 @@ class _TwoMethodSource:
     def create_loader(self, config, ctx):
         raise NotImplementedError
 
-    def create_trade_source(self, config, ctx, loader):
+    def create_trade_reader(self, config, ctx, loader):
         raise NotImplementedError
 
 
@@ -68,7 +68,7 @@ def test_an_offline_source_needs_only_the_two_factories():
 
 def test_built_in_sources_declare_only_the_capabilities_they_use():
     from ob_analytics.bitstamp import BitstampSource
-    from ob_analytics.depth_l2 import DepthCsvSource
+    from ob_analytics.depth_csv import DepthCsvSource
     from ob_analytics.lobster import LobsterSource
 
     assert isinstance(BitstampSource(), SupportsWriter)
@@ -87,7 +87,7 @@ class TestFeedDeclarations:
         assert FeedDeclarations().feed_type is FeedType.UNKNOWN
 
     def test_a_source_declares_its_feed(self):
-        from ob_analytics.depth_l2 import DepthCsvSource
+        from ob_analytics.depth_csv import DepthCsvSource
 
         declared = declarations_of(DepthCsvSource())
         assert declared.feed_type is FeedType.PRICE_LEVELS

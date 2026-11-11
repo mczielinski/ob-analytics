@@ -2558,7 +2558,7 @@ def plotly_trading_halts(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any
 def plotly_bars(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render bars as candlesticks over a signed-volume strip.
 
-    Clock bars are drawn on a time axis; activity bars get one slot each, with
+    Time bars are drawn on a time axis; activity bars get one slot each, with
     their closing times as tick labels (see
     :func:`~ob_analytics.visualization._data.prepare_bars_data`).
     """

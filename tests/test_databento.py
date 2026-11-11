@@ -55,8 +55,8 @@ from ob_analytics.schemas import (
 from ob_analytics.sources import get_source
 from ob_analytics.synth import (
     SynthConfig,
-    SyntheticLoader,
-    SyntheticTradeSource,
+    SynthLoader,
+    SynthTradeReader,
     generate_session,
 )
 from tests._logging import warnings_logged
@@ -124,16 +124,16 @@ LIFECYCLE = [
 ]
 
 
-def load(source, config=None, **loader_kwargs):
-    """Load *source* and return ``(loader, events)``.
+def load(path, config=None, **loader_kwargs):
+    """Load *path* and return ``(loader, events)``.
 
     A list of record tuples is turned into a frame first; anything else — a
     frame, a path, a ``DBNStore`` — goes to the loader as it is.
     """
-    if isinstance(source, list):
-        source = mbo_frame(source)
+    if isinstance(path, list):
+        path = mbo_frame(path)
     loader = DatabentoLoader(config or _config(), **loader_kwargs)
-    return loader, loader.load(source)
+    return loader, loader.load(path)
 
 
 def _config(**overrides) -> PipelineConfig:
@@ -458,7 +458,7 @@ class TestTrades:
         )
         assert reader.load(events, None).empty
 
-    def test_an_unknown_trade_source_is_refused(self):
+    def test_an_unknown_trade_reader_is_refused(self):
         with pytest.raises(ValueError):
             DatabentoSettings(trades_from="both")  # ty: ignore[invalid-argument-type]
 
@@ -728,7 +728,7 @@ class TestSource:
         config = _config()
         ctx = RunContext()
         loader = source.create_loader(config, ctx)
-        reader = source.create_trade_source(config, ctx, loader)
+        reader = source.create_trade_reader(config, ctx, loader)
         events = loader.load(mbo_frame(LIFECYCLE))
         assert len(reader.load(events, None)) == 2
 
@@ -1455,8 +1455,8 @@ class TestDbnFiles:
         )
         result = Pipeline(
             config,
-            loader=SyntheticLoader(session),
-            trade_source=SyntheticTradeSource(session),
+            loader=SynthLoader(session),
+            trade_reader=SynthTradeReader(session),
         ).run(None)
         assert len(result.trades) > 50
 

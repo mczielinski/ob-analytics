@@ -182,19 +182,19 @@ def test_load_accepts_legacy_unversioned_file(tmp_path: Path):
 
 
 def test_check_schema_version_current_passes():
-    check_schema_version(SCHEMA_VERSION, source="test")  # must not raise
+    check_schema_version(SCHEMA_VERSION, path="test")  # must not raise
 
 
 def test_check_schema_version_none_is_legacy():
     # The package's loguru logger stays off here, so only warnings.warn reaches
     # the user.
     with pytest.warns(UserWarning, match="test: no schema version"):
-        check_schema_version(None, source="test")
+        check_schema_version(None, path="test")
 
 
 def test_check_schema_version_unknown_raises():
     with pytest.raises(ConfigError, match="unsupported schema version"):
-        check_schema_version("99.0", source="test")
+        check_schema_version("99.0", path="test")
 
 
 class TestCanonicalSizeDtype:
@@ -263,7 +263,7 @@ class TestDtypeMaps:
     @pytest.fixture
     def l2_result(self, tmp_path):
         from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
-        from ob_analytics.depth_l2 import DepthCsvWriter
+        from ob_analytics.depth_csv import DepthCsvWriter
         from ob_analytics.pipeline import Pipeline
 
         DepthCsvWriter().write(

@@ -70,7 +70,7 @@ Two groups of tables exist.
 | File | Produced by | Rows are |
 |---|---|---|
 | `events.parquet` | the loader + `set_order_types` | one order event (add / change / delete) |
-| `trades.parquet` | the trade source | one execution (a trade print) |
+| `trades.parquet` | the trade reader | one execution (a trade print) |
 | `depth.parquet` | `price_level_volume` | one price level's size after a change |
 | `depth_summary.parquet` | `depth_metrics` | the reconstructed book state at one event |
 
@@ -437,7 +437,7 @@ The frame type is part of the contract, so it is written down here:
   metrics, the plot helpers, `load_data` and `save_data` all speak
   `pandas.DataFrame`.
 - **Plug-ins are handed pandas.** The protocols you implement to add a source or
-  an export format — `EventLoader`, `TradeSource`, `DepthSource`,
+  an export format — `EventLoader`, `TradeReader`, `DepthLoader`,
   `SupportsComputeDepth.compute_depth`, `DataWriter` — take and return
   `pandas.DataFrame`. See [Extending](extending.md).
 - **The file format is how other tools read the output.** The versioned Parquet

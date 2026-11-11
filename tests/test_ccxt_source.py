@@ -287,7 +287,7 @@ class TestSnapshot:
 
 class TestFullCapture:
     def test_capture_writes_depth_and_replays_through_l2(self, tmp_path):
-        from ob_analytics.depth_l2 import L2DepthLoader
+        from ob_analytics.depth_csv import DepthCsvLoader
 
         snap = {"bids": [[100.0, 5.0]], "asks": [[101.0, 4.0]], "timestamp": 1_000}
         ws_books = [
@@ -320,7 +320,7 @@ class TestFullCapture:
         assert result.n_order_events == 0
         assert ex.closed is True
 
-        depth = L2DepthLoader().load(out / "depth.csv")
+        depth = DepthCsvLoader().load(out / "depth.csv")
         assert len(depth) == 3
         assert set(depth["direction"].dropna().unique()) <= {"bid", "ask"}
 
@@ -343,7 +343,7 @@ class TestRestPoll:
     Polymarket) fetch_* on a poll loop, de-duped by a `since` cursor."""
 
     def test_rest_poll_capture_replays_through_l2(self, tmp_path):
-        from ob_analytics.depth_l2 import L2DepthLoader
+        from ob_analytics.depth_csv import DepthCsvLoader
 
         snap = {"bids": [[100.0, 5.0]], "asks": [[101.0, 4.0]], "timestamp": 1_000}
         poll_books = [
@@ -374,7 +374,7 @@ class TestRestPoll:
         assert result.n_depth_events == 3
         assert result.n_trade_events == 1
 
-        depth = L2DepthLoader().load(out / "depth.csv")
+        depth = DepthCsvLoader().load(out / "depth.csv")
         assert len(depth) == 3
 
     def test_rest_poll_dedupes_trades_via_since(self, tmp_path):
@@ -974,7 +974,7 @@ class TestClocks:
     def test_replay_follows_arrival_when_the_venue_clock_steps_back(self, tmp_path):
         # ccxt stamps its first Binance book with its own snapshot's time,
         # then applies older buffered diffs: the venue clock steps back.
-        from ob_analytics.depth_l2 import L2DepthLoader
+        from ob_analytics.depth_csv import DepthCsvLoader
 
         snap = {"bids": [[100.0, 5.0]], "asks": [[101.0, 4.0]], "timestamp": 1_000}
         ws_books = [
@@ -989,7 +989,7 @@ class TestClocks:
         assert written["timestamp"].is_monotonic_increasing
         assert list(written["exchange_timestamp"]) == [1_000, 1_000, 3_000, 2_000]
         # Replay applies the bid sizes 5, 6, 7 in the order they arrived.
-        depth = L2DepthLoader().load(out / "depth.csv")
+        depth = DepthCsvLoader().load(out / "depth.csv")
         bids = depth.loc[depth["direction"] == "bid", "volume"].tolist()
         assert len(bids) == 3
         assert bids == sorted(bids)

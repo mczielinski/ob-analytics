@@ -196,7 +196,7 @@ def run_bitstamp_demo(
 
 
 def run_lobster_demo(
-    source: Path | str,
+    path: Path | str,
     trading_date: str,
     output_dir: Path | str | None,
     *,
@@ -209,7 +209,7 @@ def run_lobster_demo(
 
     Returns the path to the generated gallery HTML.
     """
-    src = Path(source)
+    src = Path(path)
     out = Path(output_dir) if output_dir else Path("lobster_output")
     out.mkdir(parents=True, exist_ok=True)
 

@@ -10,7 +10,7 @@ import pytest
 from ob_analytics._utils import empty_trades
 from ob_analytics.config import PipelineConfig
 from ob_analytics.pipeline import Pipeline, PipelineResult
-from ob_analytics.protocols import EventLoader, TradeSource
+from ob_analytics.protocols import EventLoader, TradeReader
 from ob_analytics.schemas import TRADE_DTYPES, cast_columns, cast_events
 
 
@@ -85,18 +85,18 @@ class TestPipelineWithMocks:
         mock_loader = MagicMock(spec=EventLoader)
         mock_loader.load.return_value = events
 
-        mock_trade_source = MagicMock(spec=TradeSource)
-        mock_trade_source.load.return_value = trades
+        mock_trade_reader = MagicMock(spec=TradeReader)
+        mock_trade_reader.load.return_value = trades
 
         pipeline = Pipeline(
             loader=mock_loader,
-            trade_source=mock_trade_source,
+            trade_reader=mock_trade_reader,
         )
         result = pipeline.run("dummy.csv")
 
         mock_loader.load.assert_called_once_with("dummy.csv")
-        mock_trade_source.load.assert_called_once()
-        call_events, call_source = mock_trade_source.load.call_args[0]
+        mock_trade_reader.load.assert_called_once()
+        call_events, call_source = mock_trade_reader.load.call_args[0]
         assert len(call_events) == len(events)
         assert call_source == "dummy.csv"
 
@@ -115,8 +115,8 @@ class TestPipelineWithMocks:
 
 
 class TestPipelineFlow:
-    def test_pipeline_uses_trade_source(self, tmp_path: Path):
-        """Verify Pipeline.run() invokes the injected TradeSource.
+    def test_pipeline_uses_trade_reader(self, tmp_path: Path):
+        """Verify Pipeline.run() invokes the injected TradeReader.
 
         Uses a 4-event minimal orders.csv rather than the bundled 22 MB
         capture: this test only checks dependency-injection wiring, not
@@ -170,15 +170,15 @@ class TestPipelineFlow:
 
         captured = {}
 
-        class StubTradeSource:
-            def load(self, events, source):
+        class StubTradeReader:
+            def load(self, events, path):
                 captured["called"] = True
                 captured["n_events"] = len(events)
                 return empty_trades()
 
         result = Pipeline(
             loader=BitstampLoader(),
-            trade_source=StubTradeSource(),
+            trade_reader=StubTradeReader(),
         ).run(tmp_path / "orders.csv")
 
         assert captured["called"]

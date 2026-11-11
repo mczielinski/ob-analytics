@@ -52,8 +52,8 @@ from pandas `merge_asof` on tolerance, ties, and nulls — the join-semantics tr
 #104 itself warns about.
 
 **The plug-in contract already promises pandas.** #137 merged on 2026-08-30 with
-`pd.DataFrame` written into `EventLoader.load`, `TradeSource.load`,
-`DepthSource.load`, `DataWriter.write`, and `OfflineSource.compute_depth`.
+`pd.DataFrame` written into `EventLoader.load`, `TradeReader.load`,
+`DepthLoader.load`, `DataWriter.write`, and `OfflineSource.compute_depth`.
 Decision 4 predates that merge. Widening those signatures now would change a
 shape third parties are invited to implement.
 

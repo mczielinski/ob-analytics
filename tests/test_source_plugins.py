@@ -33,14 +33,14 @@ class FakeSource:
     settings = SourceSettings()
 
     def create_loader(self, config: PipelineConfig, ctx: RunContext):
-        from ob_analytics.depth_l2 import L2DepthLoader
+        from ob_analytics.depth_csv import DepthCsvLoader
 
-        return L2DepthLoader(config)
+        return DepthCsvLoader(config)
 
-    def create_trade_source(self, config: PipelineConfig, ctx: RunContext, loader):
-        from ob_analytics.depth_l2 import L2TradeReader
+    def create_trade_reader(self, config: PipelineConfig, ctx: RunContext, loader):
+        from ob_analytics.depth_csv import DepthCsvTradeReader
 
-        return L2TradeReader(config)
+        return DepthCsvTradeReader(config)
 
 
 class _FakeEntryPoint:

@@ -360,10 +360,10 @@ _Avoid_: secret, token, auth
 
 **Loader**:
 The component that turns one source's stored files into a canonical table —
-`EventLoader` at L3, `DepthSource` at L2.
+`EventLoader` at L3, `DepthLoader` at L2.
 
-**Trade source**:
-The component that builds the trades table for a run. Typed `TradeSource`: a
+**Trade reader**:
+The component that builds the trades table for a run. Typed `TradeReader`: a
 loader role, not a venue.
 
 **Canonical**:

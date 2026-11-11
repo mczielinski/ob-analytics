@@ -38,9 +38,9 @@ from ob_analytics.pipeline import Pipeline, PipelineResult
 from ob_analytics.queue import queue_positions
 from ob_analytics.synth import (
     SynthConfig,
-    SyntheticLoader,
-    SyntheticTradeSource,
+    SynthLoader,
     SynthSession,
+    SynthTradeReader,
     generate_session,
 )
 from tests._golden import book_fingerprint, df_fingerprint
@@ -161,9 +161,9 @@ def golden_session() -> SynthSession:
 @pytest.fixture(scope="module")
 def golden_result(golden_session: SynthSession) -> PipelineResult:
     return Pipeline(
-        loader=SyntheticLoader(golden_session),
-        trade_source=SyntheticTradeSource(golden_session),
-    ).run(source=None)
+        loader=SynthLoader(golden_session),
+        trade_reader=SynthTradeReader(golden_session),
+    ).run(path=None)
 
 
 def _fingerprints(result: PipelineResult) -> dict[str, str]:
@@ -206,9 +206,9 @@ def test_golden_session_is_reproducible() -> None:
     # generation from the same config must fingerprint identically.
     session = generate_session(_GOLDEN_CONFIG)
     result = Pipeline(
-        loader=SyntheticLoader(session),
-        trade_source=SyntheticTradeSource(session),
-    ).run(source=None)
+        loader=SynthLoader(session),
+        trade_reader=SynthTradeReader(session),
+    ).run(path=None)
     assert _fingerprints(result) == EXPECTED
 
 

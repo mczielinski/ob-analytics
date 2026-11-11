@@ -660,13 +660,13 @@ class TestL2Runner:
 
     def test_l2_output_replays_through_depth_path(self, tmp_path):
         """The captured depth.csv must load via the L2 depth path."""
-        from ob_analytics.depth_l2 import L2DepthLoader
+        from ob_analytics.depth_csv import DepthCsvLoader
 
         out = tmp_path / "cap"
         cfg = CaptureConfig(pair="x", out_dir=out, minutes=0.001)
         asyncio.run(run_capturer(_FakeL2Capturer(), cfg))
 
-        depth = L2DepthLoader().load(out / "depth.csv")
+        depth = DepthCsvLoader().load(out / "depth.csv")
         # 4 absolute-size price-level rows (the 0-size removal is kept)
         assert len(depth) == 4
         assert set(depth["direction"].dropna().unique()) <= {"bid", "ask"}

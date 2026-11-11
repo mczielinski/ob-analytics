@@ -40,7 +40,7 @@ from hypothesis import HealthCheck, given, settings, strategies as st
 from ob_analytics.bitstamp import BitstampLoader, BitstampTradeReader
 from ob_analytics.data import load_data, save_data
 from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
-from ob_analytics.depth_l2 import L2DepthLoader, L2TradeReader
+from ob_analytics.depth_csv import DepthCsvLoader, DepthCsvTradeReader
 from ob_analytics.exceptions import ObAnalyticsError
 from ob_analytics.live._manifest import (
     CAPTURE_FORMAT,
@@ -164,14 +164,14 @@ CSV_READERS = [
         "depth_csv depth",
         _toy_l2,
         "depth.csv",
-        lambda folder: L2DepthLoader().load(folder),
+        lambda folder: DepthCsvLoader().load(folder),
         required=("timestamp", "side", "price", "volume"),
     ),
     CsvReader(
         "depth_csv trades",
         _toy_l2,
         "trades.csv",
-        lambda folder: L2TradeReader().load(pd.DataFrame(), folder),
+        lambda folder: DepthCsvTradeReader().load(pd.DataFrame(), folder),
         required=("timestamp", "price", "amount"),
         optional=("side",),
     ),

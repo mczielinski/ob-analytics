@@ -53,7 +53,7 @@ from ob_analytics.protocols import (
     Level,
     RunContext,
     TradeAttribution,
-    TradeSource,
+    TradeReader,
     WriteTarget,
 )
 from ob_analytics.schemas import (
@@ -113,12 +113,12 @@ class BitstampLoader:
         self._venue = venue
         self._symbol = symbol
 
-    def load(self, source: str | Path) -> pd.DataFrame:
-        """Read *source* CSV and return a cleaned events DataFrame.
+    def load(self, path: str | Path) -> pd.DataFrame:
+        """Read *path* CSV and return a cleaned events DataFrame.
 
         Parameters
         ----------
-        source : str or Path
+        path : str or Path
             Path to a Bitstamp-format CSV with columns ``id``,
             ``timestamp``, ``exchange_timestamp``,
             ``price``, ``volume``, ``action``, ``direction``.
@@ -143,8 +143,8 @@ class BitstampLoader:
         previous row.  A row whose size rises (an order changed to a larger
         amount) has ``fill`` 0.
         """
-        where = f"BitstampLoader.load({source})"
-        events = read_csv_file(source, where)
+        where = f"BitstampLoader.load({path})"
+        events = read_csv_file(path, where)
         validate_columns(
             events,
             {
@@ -186,7 +186,7 @@ class BitstampLoader:
         if ORIGIN_COLUMN in events.columns:
             events[ORIGIN_COLUMN] = events[ORIGIN_COLUMN].astype("string")
 
-        # Ordering keys, captured in source (arrival) order before the id-sort
+        # Ordering keys, captured in file (arrival) order before the id-sort
         # below reorders the rows (opt-in, so the default frame is unchanged;
         # see ob_analytics.schemas).  The public Bitstamp diff feed publishes a
         # microtimestamp, not a sequence, so ``sequence`` is normally absent and
@@ -356,16 +356,16 @@ class BitstampTradeReader:
     of that order, or a message was lost.  The same rules apply to captures
     from other venues read through this reader.
 
-    Satisfies the :class:`~ob_analytics.protocols.TradeSource` protocol.
+    Satisfies the :class:`~ob_analytics.protocols.TradeReader` protocol.
     """
 
     def __init__(self, config: PipelineConfig | None = None) -> None:
         self._config = config or PipelineConfig()
 
-    def load(self, events: pd.DataFrame, source: Any) -> pd.DataFrame:
-        path = self._resolve_trades_path(source)
-        where = f"BitstampTradeReader.load({path})"
-        raw = read_csv_file(path, where)
+    def load(self, events: pd.DataFrame, path: Any) -> pd.DataFrame:
+        file = self._resolve_trades_path(path)
+        where = f"BitstampTradeReader.load({file})"
+        raw = read_csv_file(file, where)
 
         if raw.empty:
             return empty_trades()
@@ -450,14 +450,14 @@ class BitstampTradeReader:
         return trades
 
     @staticmethod
-    def _resolve_trades_path(source: Any) -> Path:
-        p = Path(source)
+    def _resolve_trades_path(path: Any) -> Path:
+        p = Path(path)
         if p.is_file():
             p = p.parent
         candidate = p / TRADES_NAME
         if not candidate.exists():
             raise FileNotFoundError(
-                f"BitstampTradeReader: no trades.csv next to {source!r} "
+                f"BitstampTradeReader: no trades.csv next to {path!r} "
                 f"(looked at {candidate}). Capture trades alongside orders "
                 f"with `ob-analytics capture bitstamp`."
             )
@@ -749,9 +749,9 @@ class BitstampSource:
     def create_loader(self, config: PipelineConfig, ctx: RunContext) -> EventLoader:
         return BitstampLoader(config, venue=ctx.venue, symbol=ctx.symbol)
 
-    def create_trade_source(
+    def create_trade_reader(
         self, config: PipelineConfig, ctx: RunContext, loader: Any
-    ) -> TradeSource:
+    ) -> TradeReader:
         return BitstampTradeReader(config)
 
     def create_writer(

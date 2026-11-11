@@ -654,7 +654,7 @@ class TestFullCapture:
     def test_l2_capture_writes_depth_and_replays_through_the_l2_loader(self, tmp_path):
         import asyncio
 
-        from ob_analytics.depth_l2 import L2DepthLoader
+        from ob_analytics.depth_csv import DepthCsvLoader
         from ob_analytics.live._runner import run_capturer
 
         script = [
@@ -680,7 +680,7 @@ class TestFullCapture:
         assert result.n_depth_events == 3  # 2 opening levels + 1 change
         assert result.n_trade_events == 1
 
-        depth = L2DepthLoader().load(out / "depth.csv")
+        depth = DepthCsvLoader().load(out / "depth.csv")
         assert len(depth) == 3
 
     def test_diagnostics_land_in_meta(self, tmp_path):
@@ -1710,7 +1710,7 @@ class TestClocks:
         """
         import asyncio
 
-        from ob_analytics.depth_l2 import L2DepthLoader
+        from ob_analytics.depth_csv import DepthCsvLoader
         from ob_analytics.live._runner import run_capturer
 
         t0 = 1_700_000_000.0
@@ -1729,7 +1729,7 @@ class TestClocks:
         asyncio.run(
             run_capturer(_source_with(_l2_venue(), script), _capture_cfg(tmp_path))
         )
-        depth = L2DepthLoader().load(tmp_path / "cap" / "depth.csv")
+        depth = DepthCsvLoader().load(tmp_path / "cap" / "depth.csv")
         # The book's size first, then the message's change to it.
         opening, changed = depth["volume"].tolist()
         assert changed == 2 * opening

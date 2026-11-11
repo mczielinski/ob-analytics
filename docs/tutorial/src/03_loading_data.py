@@ -23,7 +23,7 @@
 # flowchart LR
 #     SRC[(venue files)] --> LD[loader]
 #     LD --> EV[canonical events]
-#     SRC --> TS[trade source]
+#     SRC --> TS[trade reader]
 #     TS --> TR[canonical trades]
 #     EV --> CL[classify]
 #     TR --> CL
@@ -31,7 +31,7 @@
 # ```
 #
 # A **loader** speaks one venue's dialect and translates it into the
-# canonical events frame; a **trade source** does the same for
+# canonical events frame; a **trade reader** does the same for
 # executions; everything downstream — classification, depth, every plot
 # in this tutorial — reads only the canonical frames and never learns
 # which venue they came from. Learn the contract once, and every new

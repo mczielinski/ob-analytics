@@ -2827,7 +2827,7 @@ def prepare_bars_data(
     *bars* is a table from :func:`ob_analytics.bars.bars`.  *label* names the
     rule and threshold it was cut with; the default reads them off the frame.
 
-    **The x axis follows the rule.**  Clock bars occupy equal spans of time, so
+    **The x axis follows the rule.**  Time bars occupy equal spans of time, so
     they are drawn on a real time axis, each centred in its own span: a stretch
     with no trading shows as the gap it was.  Bars cut by trading activity
     (tick, volume, dollar, imbalance) occupy wildly unequal spans — a burst can

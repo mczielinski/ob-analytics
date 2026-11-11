@@ -201,7 +201,7 @@ depth  = pd.concat([r.depth  for r in results], ignore_index=True)
 
 ## Windowed runs
 
-`Pipeline.run_windows(source, boundaries, output)` cuts one input at the
+`Pipeline.run_windows(path, boundaries, output)` cuts one input at the
 `boundaries` and runs the depth stages on one window at a time. The depth
 stages hold most of a run's memory, so their peak is set by the largest window,
 not by the whole input.
