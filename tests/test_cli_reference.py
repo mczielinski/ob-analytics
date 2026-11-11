@@ -6,13 +6,27 @@ added, renamed or reworded without running the script fails here.
 
 from __future__ import annotations
 
-from scripts.cli_reference import PAGE, main, render
+import subprocess
+import sys
+
+from scripts.cli_reference import PAGE
+
+
+def _run(*args: str) -> subprocess.CompletedProcess[str]:
+    # A new interpreter, so a source or writer another test registered in
+    # this process cannot change the --source and --format choices.
+    script = PAGE.parents[2] / "scripts" / "cli_reference.py"
+    return subprocess.run(
+        [sys.executable, str(script), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
 
 def test_the_flag_reference_page_is_up_to_date() -> None:
-    assert main(["--check"]) == 0, (
-        "docs/api/cli-flags.md is stale: run `uv run python scripts/cli_reference.py`"
-    )
+    result = _run("--check")
+    assert result.returncode == 0, result.stderr
 
 
 def test_the_page_lists_every_subcommand_and_live_source() -> None:
@@ -34,4 +48,4 @@ def test_the_page_lists_every_subcommand_and_live_source() -> None:
 
 def test_help_text_is_used_as_written() -> None:
     # The script does not expand argparse's %(default)s placeholders.
-    assert "%(" not in render()
+    assert "%(" not in PAGE.read_text(encoding="utf-8")
