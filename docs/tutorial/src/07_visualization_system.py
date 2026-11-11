@@ -89,7 +89,7 @@ catalogue = [
     (
         "depth_heatmap",
         "L2",
-        lambda: prepare.price_levels(
+        lambda: prepare.depth_heatmap(
             result.depth,
             spread=spread,
             trades=result.trades,
@@ -101,15 +101,15 @@ catalogue = [
     (
         "trade_tape",
         "L2",
-        lambda: prepare.trades(
-            result.trades, spread=spread, start_time=t0, end_time=t1
+        lambda: prepare.trade_tape(
+            result.trades, spread=spread, start_time=t0, end_time=t1, level="L2"
         ),
     ),
-    ("order_outcome", "L3", lambda: prepare.order_outcome_l3(result.events)),
+    ("order_outcome", "L3", lambda: prepare.order_outcome(result.events)),
     (
         "queue_position",
         "L3",
-        lambda: prepare.queue_position_l3(result.events, start_time=t0, end_time=t1),
+        lambda: prepare.queue_position(result.events, start_time=t0, end_time=t1),
     ),
     (
         "volume_percentiles",
@@ -118,7 +118,7 @@ catalogue = [
             result.depth_summary, start_time=t0, end_time=t1
         ),
     ),
-    ("cancellations", "L3", lambda: prepare.cancellations_l3(result.events)),
+    ("cancellations", "L3", lambda: prepare.cancellations(result.events, level="L3")),
 ]
 
 fig, axes = plt.subplots(2, 3, figsize=(16, 8))
@@ -158,7 +158,9 @@ fig = result.plot("l1_ticker")
 # a concept, then **plot** it:
 
 # %%
-payload = prepare.trades(result.trades, spread=spread, start_time=t0, end_time=t1)
+payload = prepare.trade_tape(
+    result.trades, spread=spread, start_time=t0, end_time=t1, level="L2"
+)
 fig = plot("trade_tape", level="L2", **payload)
 
 # %% [markdown]
@@ -254,7 +256,9 @@ fig = plot(
     "trade_tape",
     level="L2",
     theme=theme,
-    **prepare.trades(result.trades, spread=spread, start_time=t0, end_time=t1),
+    **prepare.trade_tape(
+        result.trades, spread=spread, start_time=t0, end_time=t1, level="L2"
+    ),
 )
 save_figure(fig, "trades_talk.png", dpi=200)
 

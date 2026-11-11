@@ -25,7 +25,9 @@ theme = PlotTheme(
     rc={"axes.facecolor": "#f8f9fa", "figure.facecolor": "#ffffff"},
 )
 
-fig = plot("trade_tape", level="L2", theme=theme, **prepare.trades(result.trades))
+fig = plot(
+    "trade_tape", level="L2", theme=theme, **prepare.trade_tape(result.trades, level="L2")
+)
 save_figure(fig, "trades_hires.png", dpi=300)
 ```
 
@@ -58,7 +60,7 @@ fig = plot(
     level="L2",
     backend="plotly",
     theme=theme,
-    **prepare.trades(result.trades),
+    **prepare.trade_tape(result.trades, level="L2"),
 )
 ```
 

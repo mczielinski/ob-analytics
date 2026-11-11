@@ -16,8 +16,13 @@ import pytest
 
 from ob_analytics.capture_files import FileCaptureSink
 from ob_analytics.config import SourceSettings
-from ob_analytics.live import CaptureConfig, LiveSource, SupportsDiagnostics
-from ob_analytics.live._base import CaptureResult, EventDict
+from ob_analytics.live import (
+    CaptureConfig,
+    CaptureResult,
+    EventDict,
+    LiveSource,
+    SupportsDiagnostics,
+)
 from ob_analytics.live._runner import run_capturer
 from ob_analytics.protocols import FeedType, Level
 from ob_analytics.sources import get_source, list_sources, register_source

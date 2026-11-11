@@ -4,30 +4,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from ob_analytics.visualization import prepare
 from ob_analytics.visualization._data import (
     _default_start_end,
     _price_axis_breaks,
     infer_volume_scale,
     normalized_marker_areas,
-    prepare_book_snapshot_data,
-    prepare_cancellations_l3_data,
-    prepare_event_map_data,
-    prepare_events_histogram_data,
-    prepare_hidden_executions_data,
-    prepare_kyle_lambda_data,
-    prepare_liquidity_at_touch_data,
-    prepare_ofi_data,
-    prepare_ofi_horizon_data,
-    prepare_order_activity_l3_data,
-    prepare_order_outcome_l3_data,
-    prepare_price_view_data,
-    prepare_time_series_data,
-    prepare_trade_size_data,
-    prepare_trade_tape_l3_data,
-    prepare_trades_data,
-    prepare_volume_map_data,
-    prepare_volume_percentiles_data,
-    prepare_vpin_data,
 )
 
 # ---------------------------------------------------------------------------
@@ -203,7 +185,7 @@ class TestPrepareTimeSeries:
     def test_returns_dict(self) -> None:
         ts = pd.Series(pd.date_range("2015-01-01", periods=5, freq="s"))
         vals = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0])
-        data = prepare_time_series_data(ts, vals, title="test", y_label="val")
+        data = prepare.time_series(ts, vals, title="test", y_label="val")
         assert isinstance(data, dict)
         assert "df" in data
         assert data["title"] == "test"
@@ -214,19 +196,19 @@ class TestPrepareTimeSeries:
         vals = pd.Series(range(10), dtype=float)
         start = ts.iloc[3]
         end = ts.iloc[7]
-        data = prepare_time_series_data(ts, vals, start_time=start, end_time=end)
+        data = prepare.time_series(ts, vals, start_time=start, end_time=end)
         assert len(data["df"]) == 5  # indices 3..7
 
     def test_length_mismatch_raises(self) -> None:
         ts = pd.Series(pd.date_range("2015-01-01", periods=5, freq="s"))
         vals = pd.Series([1.0, 2.0])
         with pytest.raises(ValueError, match="Length"):
-            prepare_time_series_data(ts, vals)
+            prepare.time_series(ts, vals)
 
 
 class TestPrepareTrades:
     def test_returns_dict_with_required_keys(self, sample_trades: pd.DataFrame) -> None:
-        data = prepare_trades_data(sample_trades)
+        data = prepare.trade_tape(sample_trades, level="L2")
         assert "filtered_trades" in data
         assert "y_breaks" in data
         assert len(data["filtered_trades"]) == 5
@@ -234,13 +216,15 @@ class TestPrepareTrades:
     def test_filters_by_time(self, sample_trades: pd.DataFrame) -> None:
         start = sample_trades["timestamp"].iloc[1]
         end = sample_trades["timestamp"].iloc[3]
-        data = prepare_trades_data(sample_trades, start_time=start, end_time=end)
+        data = prepare.trade_tape(
+            sample_trades, start_time=start, end_time=end, level="L2"
+        )
         assert len(data["filtered_trades"]) == 3
 
 
 class TestPrepareEventMap:
     def test_returns_created_and_deleted(self, sample_events: pd.DataFrame) -> None:
-        data = prepare_event_map_data(sample_events)
+        data = prepare.order_activity(sample_events, level="L2")
         assert "created" in data
         assert "deleted" in data
         assert "events" in data
@@ -250,17 +234,17 @@ class TestPrepareEventMap:
 
 class TestPrepareVolumeMap:
     def test_default_action_deleted(self, sample_events: pd.DataFrame) -> None:
-        data = prepare_volume_map_data(sample_events)
+        data = prepare.cancellations(sample_events, level="L2")
         assert "events" in data
         assert "log_scale" in data
         assert data["log_scale"] is False
 
     def test_invalid_action_raises(self, sample_events: pd.DataFrame) -> None:
         with pytest.raises(ValueError, match="action must be"):
-            prepare_volume_map_data(sample_events, action="invalid")
+            prepare.cancellations(sample_events, action="invalid", level="L2")
 
     def test_log_scale_passed_through(self, sample_events: pd.DataFrame) -> None:
-        data = prepare_volume_map_data(sample_events, log_scale=True)
+        data = prepare.cancellations(sample_events, log_scale=True, level="L2")
         assert data["log_scale"] is True
 
 
@@ -268,7 +252,7 @@ class TestPrepareCancellationsL3:
     def test_returns_sided_frames(
         self, sample_cancellation_events: pd.DataFrame
     ) -> None:
-        data = prepare_cancellations_l3_data(sample_cancellation_events)
+        data = prepare.cancellations(sample_cancellation_events, level="L3")
         assert set(data) == {"bids", "asks", "volume_scale"}
         for side in (data["bids"], data["asks"]):
             assert isinstance(side, pd.DataFrame)
@@ -277,7 +261,7 @@ class TestPrepareCancellationsL3:
     def test_age_and_distance_floored_for_log(
         self, sample_cancellation_events: pd.DataFrame
     ) -> None:
-        data = prepare_cancellations_l3_data(sample_cancellation_events)
+        data = prepare.cancellations(sample_cancellation_events, level="L3")
         both = pd.concat([data["bids"], data["asks"]])
         assert not both.empty
         # §3.3: floored onto the log scale (no zeros), distance is positive bps.
@@ -293,7 +277,7 @@ class TestPrepareCancellationsL3:
         orphan = extra.iloc[[1]].copy()  # a 'deleted' row...
         orphan["id"] = 999  # ...with no matching 'created'
         extra = pd.concat([extra, orphan], ignore_index=True)
-        data = prepare_cancellations_l3_data(extra)
+        data = prepare.cancellations(extra, level="L3")
         both = pd.concat([data["bids"], data["asks"]])
         assert (both["age_s"].notna()).all()
         assert 999 not in both["id"].to_numpy()
@@ -303,7 +287,7 @@ class TestPrepareOrderActivityL3:
     def test_returns_fate_frames(
         self, sample_order_lifecycle_events: pd.DataFrame
     ) -> None:
-        data = prepare_order_activity_l3_data(sample_order_lifecycle_events)
+        data = prepare.order_activity(sample_order_lifecycle_events, level="L3")
         assert set(data) == {
             "filled",
             "cancelled",
@@ -328,7 +312,7 @@ class TestPrepareOrderActivityL3:
     def test_spans_split_by_outcome(
         self, sample_order_lifecycle_events: pd.DataFrame
     ) -> None:
-        data = prepare_order_activity_l3_data(sample_order_lifecycle_events)
+        data = prepare.order_activity(sample_order_lifecycle_events, level="L3")
         assert (data["cancelled"]["outcome"] == "cancelled").all()
         assert data["filled"]["outcome"].isin(["filled", "partial"]).all()
         assert (data["resting"]["outcome"] == "resting").all()
@@ -339,7 +323,7 @@ class TestPrepareOrderActivityL3:
     def test_cancelled_span_ends_at_delete(
         self, sample_order_lifecycle_events: pd.DataFrame
     ) -> None:
-        data = prepare_order_activity_l3_data(sample_order_lifecycle_events)
+        data = prepare.order_activity(sample_order_lifecycle_events, level="L3")
         cancelled = data["cancelled"]
         # Each cancelled order ran 3s from create to delete (< the window), so
         # its span must terminate before the window end.
@@ -354,7 +338,7 @@ class TestPrepareOrderActivityL3:
         # The created-only order (id 300) never terminates, so its span runs to
         # the window end rather than collapsing to its single event.
         end_time = sample_order_lifecycle_events["timestamp"].max()
-        data = prepare_order_activity_l3_data(sample_order_lifecycle_events)
+        data = prepare.order_activity(sample_order_lifecycle_events, level="L3")
         forever = data["resting"].set_index("id").loc[300]
         assert forever["end_ts"] == end_time
         assert forever["end_ts"] > forever["start_ts"]
@@ -365,8 +349,12 @@ class TestPrepareOrderActivityL3:
         # Every fill survives; the cancelled/resting flood is sampled down to
         # the remaining budget, with the ratio reported.  A wide price window
         # disables the percentile clip so the counts are exact.
-        data = prepare_order_activity_l3_data(
-            sample_order_lifecycle_events, max_spans=5, price_from=0.0, price_to=1e9
+        data = prepare.order_activity(
+            sample_order_lifecycle_events,
+            max_spans=5,
+            price_from=0.0,
+            price_to=1e9,
+            level="L3",
         )
         assert data["shown_of"] is not None
         shown, total = data["shown_of"]
@@ -379,7 +367,7 @@ class TestPrepareOrderActivityL3:
     def test_linewidth_encodes_size(
         self, sample_order_lifecycle_events: pd.DataFrame
     ) -> None:
-        data = prepare_order_activity_l3_data(sample_order_lifecycle_events)
+        data = prepare.order_activity(sample_order_lifecycle_events, level="L3")
         allspans = pd.concat(
             [data["filled"], data["cancelled"], data["resting"]], ignore_index=True
         )
@@ -392,20 +380,20 @@ class TestPrepareOrderActivityL3:
 
 class TestPrepareLiquidityAtTouch:
     def test_returns_paired_series(self, sample_depth_summary: pd.DataFrame) -> None:
-        data = prepare_liquidity_at_touch_data(sample_depth_summary)
+        data = prepare.liquidity_at_touch(sample_depth_summary, level="L2")
         assert set(data) == {"rug", "timestamp", "bid_vol", "ask_vol", "volume_scale"}
         assert len(data["timestamp"]) == len(sample_depth_summary)
         assert len(data["bid_vol"]) == len(data["ask_vol"]) == len(data["timestamp"])
 
     def test_rug_none_without_events(self, sample_depth_summary: pd.DataFrame) -> None:
-        data = prepare_liquidity_at_touch_data(sample_depth_summary)
+        data = prepare.liquidity_at_touch(sample_depth_summary, level="L2")
         assert data["rug"] is None
 
     def test_rug_classes_from_events(
         self, sample_depth_summary: pd.DataFrame, sample_events: pd.DataFrame
     ) -> None:
-        data = prepare_liquidity_at_touch_data(
-            sample_depth_summary, events=sample_events
+        data = prepare.liquidity_at_touch(
+            sample_depth_summary, events=sample_events, level="L2"
         )
         rug = data["rug"]
         assert set(rug) == {"created", "cancelled", "filled"}
@@ -416,15 +404,21 @@ class TestPrepareLiquidityAtTouch:
         assert len(rug["filled"]) == 0
 
     def test_scales_volume(self, sample_depth_summary: pd.DataFrame) -> None:
-        raw = prepare_liquidity_at_touch_data(sample_depth_summary, volume_scale=1.0)
-        scaled = prepare_liquidity_at_touch_data(sample_depth_summary, volume_scale=2.0)
+        raw = prepare.liquidity_at_touch(
+            sample_depth_summary, volume_scale=1.0, level="L2"
+        )
+        scaled = prepare.liquidity_at_touch(
+            sample_depth_summary, volume_scale=2.0, level="L2"
+        )
         assert np.allclose(
             scaled["bid_vol"].to_numpy(), raw["bid_vol"].to_numpy() * 2.0
         )
 
     def test_window_filters_by_time(self, sample_depth_summary: pd.DataFrame) -> None:
         mid = sample_depth_summary["timestamp"].iloc[15]
-        data = prepare_liquidity_at_touch_data(sample_depth_summary, start_time=mid)
+        data = prepare.liquidity_at_touch(
+            sample_depth_summary, start_time=mid, level="L2"
+        )
         assert (data["timestamp"] >= mid).all()
 
 
@@ -433,7 +427,7 @@ class TestPrepareOrderOutcomeL3:
         self, sample_executed_orders: tuple[pd.DataFrame, pd.DataFrame]
     ) -> None:
         events, _trades = sample_executed_orders
-        data = prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
+        data = prepare.order_outcome(events, bps_quantiles=(0.0, 1.0))
         assert set(data) == {"filled", "partial", "cancelled", "volume_scale"}
         for frame in (data["filled"], data["partial"], data["cancelled"]):
             assert {"distance_bps", "placed", "marker_area"} <= set(frame.columns)
@@ -442,7 +436,7 @@ class TestPrepareOrderOutcomeL3:
         self, sample_executed_orders: tuple[pd.DataFrame, pd.DataFrame]
     ) -> None:
         events, _trades = sample_executed_orders
-        data = prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
+        data = prepare.order_outcome(events, bps_quantiles=(0.0, 1.0))
         # filled via maker (1, 6) + via taker (5); partial=2; cancelled=3.
         assert set(data["filled"]["id"]) == {1, 5, 6}
         assert set(data["partial"]["id"]) == {2}
@@ -452,7 +446,7 @@ class TestPrepareOrderOutcomeL3:
         self, sample_executed_orders: tuple[pd.DataFrame, pd.DataFrame]
     ) -> None:
         events, _trades = sample_executed_orders
-        data = prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
+        data = prepare.order_outcome(events, bps_quantiles=(0.0, 1.0))
         all_ids = pd.concat([data["filled"], data["partial"], data["cancelled"]])["id"]
         # id 4 never filled and never deleted -> censored -> absent.
         assert 4 not in all_ids.to_numpy()
@@ -461,7 +455,7 @@ class TestPrepareOrderOutcomeL3:
         self, sample_executed_orders: tuple[pd.DataFrame, pd.DataFrame]
     ) -> None:
         events, _trades = sample_executed_orders
-        data = prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
+        data = prepare.order_outcome(events, bps_quantiles=(0.0, 1.0))
         both = pd.concat([data["filled"], data["partial"], data["cancelled"]])
         assert both["marker_area"].between(10.0, 120.0).all()
 
@@ -473,7 +467,7 @@ class TestPrepareOrderOutcomeL3:
         # The fixture's most aggressive order (id 5, +3 bps) is above the q95 a
         # symmetric clip would land at but below the positive-bps floor.
         events, _ = sample_executed_orders
-        data = prepare_order_outcome_l3_data(
+        data = prepare.order_outcome(
             events, bps_quantiles=(0.05, 0.95), min_positive_bps=5.0
         )
         both = pd.concat([data["filled"], data["partial"], data["cancelled"]])
@@ -489,7 +483,7 @@ class TestPrepareOrderOutcomeL3:
         events, _ = sample_executed_orders
         events = events.copy()
         events.loc[events["id"] == 1, "aggressiveness_bps"] = np.inf
-        data = prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
+        data = prepare.order_outcome(events, bps_quantiles=(0.0, 1.0))
         both = pd.concat([data["filled"], data["partial"], data["cancelled"]])
         assert np.isfinite(both["distance_bps"]).all()
         assert 1 not in both["id"].to_numpy()
@@ -502,7 +496,7 @@ class TestPrepareOrderOutcomeL3:
         events, _ = sample_executed_orders
         events = events.copy()
         events.loc[events["id"] == 6, "aggressiveness_bps"] = -1000.0
-        data = prepare_order_outcome_l3_data(
+        data = prepare.order_outcome(
             events, bps_quantiles=(0.05, 0.99), min_positive_bps=5.0
         )
         both = pd.concat([data["filled"], data["partial"], data["cancelled"]])
@@ -515,7 +509,9 @@ class TestPrepareTradeTapeL3:
         self, sample_executed_orders: tuple[pd.DataFrame, pd.DataFrame]
     ) -> None:
         events, trades = sample_executed_orders
-        data = prepare_trade_tape_l3_data(events, trades, price_from=0.0, price_to=1e9)
+        data = prepare.trade_tape(
+            events, trades, price_from=0.0, price_to=1e9, level="L3"
+        )
         assert set(data) == {
             "buys",
             "sells",
@@ -535,7 +531,9 @@ class TestPrepareTradeTapeL3:
         self, sample_executed_orders: tuple[pd.DataFrame, pd.DataFrame]
     ) -> None:
         events, trades = sample_executed_orders
-        data = prepare_trade_tape_l3_data(events, trades, price_from=0.0, price_to=1e9)
+        data = prepare.trade_tape(
+            events, trades, price_from=0.0, price_to=1e9, level="L3"
+        )
         both = pd.concat([data["buys"], data["sells"]])
         # Each maker order was created before the trade that consumed it.
         assert (both["created_ts"] <= both["timestamp"]).all()
@@ -544,7 +542,9 @@ class TestPrepareTradeTapeL3:
         self, sample_executed_orders: tuple[pd.DataFrame, pd.DataFrame]
     ) -> None:
         events, trades = sample_executed_orders
-        data = prepare_trade_tape_l3_data(events, trades, price_from=0.0, price_to=1e9)
+        data = prepare.trade_tape(
+            events, trades, price_from=0.0, price_to=1e9, level="L3"
+        )
         # T2 (buy) -> maker id 2; T1+T4 (sell) -> maker ids 1, 6. The un-tracked
         # maker in T3 (sentinel event) is dropped by the inner merge.
         assert set(data["buys"]["id"]) == {2}
@@ -554,14 +554,16 @@ class TestPrepareTradeTapeL3:
         self, sample_executed_orders: tuple[pd.DataFrame, pd.DataFrame]
     ) -> None:
         events, trades = sample_executed_orders
-        data = prepare_trade_tape_l3_data(events, trades, price_from=0.0, price_to=1e9)
+        data = prepare.trade_tape(
+            events, trades, price_from=0.0, price_to=1e9, level="L3"
+        )
         lo, hi = data["y_range"]
         assert lo <= hi
 
 
 class TestPrepareBookSnapshot:
     def test_returns_book_sides(self, sample_order_book: dict) -> None:
-        data = prepare_book_snapshot_data(sample_order_book)
+        data = prepare.book_snapshot(sample_order_book, level="L2")
         assert "bids" in data
         assert "asks" in data
         assert "timestamp" in data
@@ -573,13 +575,13 @@ class TestPrepareBookSnapshot:
             )
 
     def test_volume_scale_applied(self, sample_order_book: dict) -> None:
-        data = prepare_book_snapshot_data(sample_order_book, volume_scale=0.5)
+        data = prepare.book_snapshot(sample_order_book, volume_scale=0.5, level="L2")
         # Cumulative liquidity is scaled: ask cumsum 400 * 0.5 == 200.
         assert data["asks"]["liquidity"].max() <= 200
 
     def test_aggregate_zeroes_segment_floor(self, sample_order_book: dict) -> None:
         # L2 bars sit on the axis: each level is one segment from 0.
-        data = prepare_book_snapshot_data(sample_order_book, per_order=False)
+        data = prepare.book_snapshot(sample_order_book, level="L2")
         assert (data["bids"]["seg_lo"] == 0).all()
         assert (data["asks"]["seg_lo"] == 0).all()
 
@@ -590,7 +592,7 @@ class TestPrepareBookSnapshot:
             "bids": np.array([[236.0, 100, 100], [236.0, 50, 150]]),
             "asks": np.empty((0, 3)),
         }
-        data = prepare_book_snapshot_data(book, per_order=True, volume_scale=1.0)
+        data = prepare.book_snapshot(book, level="L3", volume_scale=1.0)
         bids = data["bids"]
         assert data["per_order"] is True
         assert len(bids) == 2
@@ -600,7 +602,7 @@ class TestPrepareBookSnapshot:
 
 class TestPrepareVolumePercentiles:
     def test_returns_cumsum_data(self, sample_depth_summary: pd.DataFrame) -> None:
-        data = prepare_volume_percentiles_data(sample_depth_summary)
+        data = prepare.volume_percentiles(sample_depth_summary)
         assert "asks_cumsum" in data
         assert "bids_cumsum_neg" in data
         assert "colors_dict" in data
@@ -614,7 +616,7 @@ class TestPrepareVolumePercentiles:
         # A window before the data: pivoting the empty frame used to drop the
         # bin columns, so selecting them raised KeyError.
         t0 = sample_depth_summary["timestamp"].min()
-        data = prepare_volume_percentiles_data(
+        data = prepare.volume_percentiles(
             sample_depth_summary,
             start_time=t0 - pd.Timedelta(hours=2),
             end_time=t0 - pd.Timedelta(hours=1),
@@ -643,7 +645,7 @@ class TestPrepareVolumePercentiles:
         for b in range(50, 1001, 50):  # depth_bps=50, depth_bins=20
             cols[f"bid_vol{b}bps"] = np.ones(10)
             cols[f"ask_vol{b}bps"] = np.ones(10)
-        data = prepare_volume_percentiles_data(pd.DataFrame(cols))
+        data = prepare.volume_percentiles(pd.DataFrame(cols))
         assert len(data["asks_cols"]) == 20
         assert len(data["colors_dict"]) == 40
         # §3.7: legend collapsed to 3 representative depths per side
@@ -678,19 +680,19 @@ class TestPrepareVolumePercentiles:
 
 class TestPrepareEventsHistogram:
     def test_returns_filtered_events(self, sample_events: pd.DataFrame) -> None:
-        data = prepare_events_histogram_data(sample_events, val="price")
+        data = prepare.events_histogram(sample_events, val="price")
         assert "events" in data
         assert data["val"] == "price"
 
     def test_invalid_val_raises(self, sample_events: pd.DataFrame) -> None:
         with pytest.raises(ValueError, match="val must be"):
-            prepare_events_histogram_data(sample_events, val="invalid")
+            prepare.events_histogram(sample_events, val="invalid")
 
     def test_clips_price_to_focus_window(self, sample_events: pd.DataFrame) -> None:
         # The price face was a single 1px spike because q01-q99 of a heavy-tailed
         # book still spans far-from-touch flashed orders.  A caller-supplied
         # focus window must clip the events to the near-touch band.
-        data = prepare_events_histogram_data(
+        data = prepare.events_histogram(
             sample_events, val="price", price_from=236.4, price_to=236.7
         )
         prices = data["events"]["price"]
@@ -709,7 +711,7 @@ class TestPrepareVpin:
                 "vpin_avg": [0.3, 0.4, 0.5, 0.45, 0.5],
             }
         )
-        data = prepare_vpin_data(vpin_df, threshold=0.7)
+        data = prepare.vpin(vpin_df, threshold=0.7)
         assert data["threshold"] == 0.7
         assert "bar_width" in data
         assert len(data["vpin_df"]) == 5
@@ -724,7 +726,7 @@ class TestPrepareOfi:
                 "ofi": [0.3, -0.5, 0.7, -0.4, 0.6],
             }
         )
-        data = prepare_ofi_data(ofi_df)
+        data = prepare.order_flow_imbalance(ofi_df)
         # Bar colours come from the theme's palette at render time.
         assert "colors" not in data
         assert data["ofi_df"] is ofi_df
@@ -749,7 +751,7 @@ class TestPrepareOfiHorizon:
 
     def test_grid_shape(self) -> None:
         horizons = ("5s", "15s", "60s", "300s")
-        data = prepare_ofi_horizon_data(self._trades(), horizons=horizons, grid="5s")
+        data = prepare.ofi_horizon(self._trades(), horizons=horizons, grid="5s")
         assert set(data) == {
             "ofi",
             "times",
@@ -764,7 +766,7 @@ class TestPrepareOfiHorizon:
         assert data["ofi"].shape[1] == len(data["times"])
 
     def test_values_bounded(self) -> None:
-        data = prepare_ofi_horizon_data(self._trades())
+        data = prepare.ofi_horizon(self._trades())
         finite = data["ofi"][np.isfinite(data["ofi"])]
         assert finite.size > 0
         assert finite.min() >= -1.0 - 1e-9
@@ -773,7 +775,7 @@ class TestPrepareOfiHorizon:
     def test_empty_window_returns_empty(self) -> None:
         trades = self._trades()
         after = trades["timestamp"].max() + pd.Timedelta(hours=1)
-        data = prepare_ofi_horizon_data(trades, start_time=after)
+        data = prepare.ofi_horizon(trades, start_time=after)
         assert data["ofi"].size == 0
         assert len(data["times"]) == 0
         assert data["horizons"]  # horizons still reported
@@ -792,7 +794,7 @@ class TestPrepareKyleLambda:
             r_squared = 0.5
             t_stat = 2.1
 
-        data = prepare_kyle_lambda_data(FakeResult())
+        data = prepare.kyle_lambda(FakeResult())
         assert data["lambda_"] == 0.01
         assert data["r_squared"] == 0.5
         assert len(data["reg_df"]) == 3
@@ -830,7 +832,7 @@ class TestPrepareHiddenExecutions:
         # The whole point of §3.6: heavy-tailed volume must map to bounded
         # marker areas (not raw ``volume * 2`` blobs).
         events, trades = self._frames(with_hidden=True)
-        data = prepare_hidden_executions_data(events, trades)
+        data = prepare.hidden_executions(events, trades)
         assert data["has_hidden"]
         areas = data["marker_area"]
         assert areas.size == 4
@@ -841,7 +843,7 @@ class TestPrepareHiddenExecutions:
 
     def test_exposes_direction(self) -> None:
         events, trades = self._frames(with_hidden=True)
-        data = prepare_hidden_executions_data(events, trades)
+        data = prepare.hidden_executions(events, trades)
         assert data["direction"] is not None
         assert set(data["direction"].unique()) <= {"bid", "ask"}
         # Aligned 1:1 with the hidden rows so renderers can hue per marker.
@@ -849,7 +851,7 @@ class TestPrepareHiddenExecutions:
 
     def test_no_hidden_returns_empty_markers(self) -> None:
         events, trades = self._frames(with_hidden=False)
-        data = prepare_hidden_executions_data(events, trades)
+        data = prepare.hidden_executions(events, trades)
         assert not data["has_hidden"]
         assert data["marker_area"].size == 0
         assert data["direction"] is None
@@ -870,18 +872,18 @@ class TestPreparePriceView:
         )
 
     def test_microprice_formula(self) -> None:
-        data = prepare_price_view_data(self._ds())
+        data = prepare.price_view(self._ds())
         # (bid*ask_vol + ask*bid_vol)/(bid_vol+ask_vol) = (100*30+102*10)/40 = 100.5
         assert data["microprice"][0] == pytest.approx(100.5)
         # balanced book (5/5) -> microprice == mid (101.0)
         assert data["microprice"][2] == pytest.approx(101.0)
 
     def test_zero_volume_falls_back_to_mid(self) -> None:
-        data = prepare_price_view_data(self._ds())
+        data = prepare.price_view(self._ds())
         assert data["microprice"][1] == pytest.approx(101.0)  # mid, not NaN/inf
 
     def test_keys_and_optional_trades(self) -> None:
-        data = prepare_price_view_data(self._ds())
+        data = prepare.price_view(self._ds())
         assert {
             "timestamp",
             "best_bid_price",
@@ -898,7 +900,7 @@ class TestPreparePriceView:
                 "direction": ["buy"],
             }
         )
-        assert len(prepare_price_view_data(self._ds(), trades)["trades"]) == 1
+        assert len(prepare.price_view(self._ds(), trades)["trades"]) == 1
 
 
 class TestPrepareTradeSize:
@@ -915,7 +917,7 @@ class TestPrepareTradeSize:
         )
 
     def test_splits_by_side_and_drops_nonpositive(self) -> None:
-        data = prepare_trade_size_data(self._trades())
+        data = prepare.trade_size(self._trades())
         assert set(data) >= {"buys", "sells", "volume_scale"}
         # buys: the two positive-size buys; the zero-volume sell is dropped.
         assert len(data["buys"]) == 2

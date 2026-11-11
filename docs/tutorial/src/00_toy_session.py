@@ -71,7 +71,7 @@ plot(
     level="L2",
     ax=ax_tape,
     theme=DOCS_THEME,
-    **prepare.trades(trades, spread=spread),
+    **prepare.trade_tape(trades, spread=spread, level="L2"),
 )
 # The face steps the mid natively; darken it for the tutorial and give it
 # a legend entry so the reference line is unmissable next to the gridlines.
@@ -120,7 +120,7 @@ classified.groupby("actor", observed=True)["type"].first().sort_values()
 
 # %%
 replay = prepare.book_replay(
-    events=classified, trades=trades, per_order=True, price_levels=3
+    events=classified, trades=trades, level="L3", price_levels=3
 )
 plot("book_replay", level="L3", backend="plotly", **replay)
 
@@ -161,7 +161,7 @@ edited_trades[["timestamp", "price", "volume", "maker_actor", "taker_actor"]]
 # %%
 edited = set_order_types(edited_events, edited_trades)
 replay = prepare.book_replay(
-    events=edited, trades=edited_trades, per_order=True, price_levels=3
+    events=edited, trades=edited_trades, level="L3", price_levels=3
 )
 plot("book_replay", level="L3", backend="plotly", **replay)
 

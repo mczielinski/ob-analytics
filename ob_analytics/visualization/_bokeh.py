@@ -198,7 +198,7 @@ def _bokeh_lollipops(fig: Any, side: Any, color: str, label: str) -> None:
     )
 
 
-def bokeh_trades(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
+def bokeh_trade_tape_aggregate(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render the L2 signed-lollipop trade tape.
 
     Each trade is a stem from the mid line to its execution price, tipped by
@@ -285,7 +285,7 @@ def bokeh_trade_tape_per_order(data: dict, *, theme: PlotTheme = DEFAULT_THEME) 
 _bokeh_color_field = biased_color_norm
 
 
-def bokeh_price_levels(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
+def bokeh_depth_heatmap(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render the price-level depth heatmap."""
     pal = theme.palette
     bpl = _import_bokeh()

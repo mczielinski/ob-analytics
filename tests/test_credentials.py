@@ -19,8 +19,7 @@ from pydantic import SecretStr
 
 from ob_analytics import ConfigError, Credential, SourceSettings
 from ob_analytics._secrets import MASK, redact, remember
-from ob_analytics.live import CaptureConfig, run_capture
-from ob_analytics.live._base import EventDict
+from ob_analytics.live import CaptureConfig, EventDict, run_capture
 from ob_analytics.live._runner import run_capturer
 from ob_analytics.protocols import FeedType, Level
 

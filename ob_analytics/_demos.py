@@ -20,11 +20,11 @@ from ob_analytics.lobster import LobsterLoader, LobsterSource
 from ob_analytics.pipeline import Pipeline, PipelineResult
 from ob_analytics.visualization.gallery import (
     PlotSpec,
-    bars_panel,
+    bars_card,
     build_gallery_model,
     display_result,
     generate_gallery,
-    trading_halts_panel,
+    trading_halts_card,
 )
 
 # ---------------------------------------------------------------------------
@@ -42,22 +42,22 @@ def _save_and_gallery(
 ) -> Path:
     """Save Parquet + generate gallery; return the gallery HTML path.
 
-    *analytics* are level-less panels (built with the ``*_panel`` helpers)
+    *analytics* are level-less cards (built with the ``*_card`` helpers)
     appended to the model's :attr:`~...gallery.GalleryModel.analytics`, on top
-    of the bars panel every demo shows.
+    of the bars cards every demo shows.
     """
     parquet_dir = output_dir / "parquet"
     # Each Parquet file records the run's config, tick and lot size included.
     save_data(result, parquet_dir)
     logger.info("Parquet saved to: {}", parquet_dir)
 
-    panels = list(analytics or [])
-    panels.extend(_bars_panels(display_result(result).trades))
+    cards = list(analytics or [])
+    cards.extend(_bars_cards(display_result(result).trades))
 
     model = None
-    if panels:
+    if cards:
         model = build_gallery_model(result)
-        model.analytics.extend(panels)
+        model.analytics.extend(cards)
 
     gallery_dir = output_dir / "gallery"
     gallery_path = generate_gallery(
@@ -68,8 +68,8 @@ def _save_and_gallery(
     return gallery_path
 
 
-def _bars_panels(trades: pd.DataFrame) -> list[PlotSpec]:
-    """Build the demo's bar faces: one cut by the clock, one by traded volume.
+def _bars_cards(trades: pd.DataFrame) -> list[PlotSpec]:
+    """Build the demo's bar cards: one cut by time, one by traded volume.
 
     The pair is the point of the card — the same trades cut two ways. *trades*
     must already be in display units (see :func:`display_result`) so bar
@@ -77,29 +77,29 @@ def _bars_panels(trades: pd.DataFrame) -> list[PlotSpec]:
     """
     if trades.empty:
         return []
-    panels: list[PlotSpec] = []
+    cards: list[PlotSpec] = []
     for rule in ("time", "volume"):
         try:
-            panels.append(bars_panel(bars(trades, rule)))
+            cards.append(bars_card(bars(trades, rule)))
         except Exception as e:  # noqa: BLE001 -- a demo face must not sink the run
             logger.warning("Demo: {} bars failed: {}", rule, e)
-    return panels
+    return cards
 
 
-def _lobster_analytics_panels(
+def _lobster_analytics_cards(
     result: PipelineResult, halts: pd.DataFrame | None
 ) -> list[PlotSpec]:
-    """Build the LOBSTER-only analytic panel: trading halts.
+    """Build the LOBSTER-only card: trading halts.
 
     Trading halts draws trade price as a line with halt bands overlaid, so it
-    needs the same display-unit trades as every other panel in the gallery
+    needs the same display-unit trades as every other face in the gallery
     (see :func:`display_result`).
     """
-    panels: list[PlotSpec] = []
+    cards: list[PlotSpec] = []
     if halts is not None and not halts.empty:
         display_trades = display_result(result).trades
-        panels.append(trading_halts_panel(display_trades, halts))
-    return panels
+        cards.append(trading_halts_card(display_trades, halts))
+    return cards
 
 
 # ---------------------------------------------------------------------------
@@ -224,7 +224,7 @@ def run_lobster_demo(
     # LOBSTER halts are not part of the slim PipelineResult; read them off the
     # loader and append them to the gallery model's analytics.
     halts = loader.trading_halts
-    analytics = _lobster_analytics_panels(result, halts)
+    analytics = _lobster_analytics_cards(result, halts)
 
     return _save_and_gallery(
         result,

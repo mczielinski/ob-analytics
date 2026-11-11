@@ -1,7 +1,7 @@
 """Tests for ``ob_analytics.visualization.gallery``.
 
 The gallery is driven by a :class:`GalleryModel` (leveled
-:class:`PlotConcept` objects + level-less analytic :class:`PlotSpec` panels).
+:class:`PlotConcept` objects + level-less :class:`PlotSpec` cards).
 A *view* projects that model into cards; :func:`generate_gallery` renders and
 saves them.  These tests build hand-made models + stub renderers so they don't
 need a full pipeline (one test runs the tiny pipeline to check the real
@@ -1220,8 +1220,8 @@ class TestDisplayUnitsPreserveFaces:
         from ob_analytics.visualization.gallery import display_result
 
         result = self._result(fractional_bitstamp_orders_csv)
-        canonical = prepare.order_activity_l3(result.events)
-        displayed = prepare.order_activity_l3(display_result(result).events)
+        canonical = prepare.order_activity(result.events, level="L3")
+        displayed = prepare.order_activity(display_result(result).events, level="L3")
 
         assert len(canonical["filled"]) > 0
         for fate in ("filled", "cancelled", "resting"):

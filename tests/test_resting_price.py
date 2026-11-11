@@ -277,18 +277,18 @@ class TestOneUncross:
         assert book["asks"]["id"].tolist() == []
 
     def test_the_book_snapshot_shows_the_uncrossed_book(self):
-        from ob_analytics.visualization._data import prepare_book_snapshot_data
+        from ob_analytics.visualization import prepare
 
         book = order_book(_events(self.TIE), _at(10), uncross=True)
-        data = prepare_book_snapshot_data(book, per_order=True)
+        data = prepare.book_snapshot(book, level="L3")
         assert len(data["bids"]) == 1
         assert data["asks"].empty
 
     def test_there_is_no_second_uncross_path(self):
-        from ob_analytics.visualization._data import prepare_book_snapshot_data
+        from ob_analytics.visualization import prepare
 
         assert not hasattr(book, "uncross_book_sides")
-        assert "uncross" not in inspect.signature(prepare_book_snapshot_data).parameters
+        assert "uncross" not in inspect.signature(prepare.book_snapshot).parameters
 
 
 @pytest.mark.parametrize("dtype", ["Int64", "int64[pyarrow]"])

@@ -20,14 +20,14 @@ fig = result.plot("trade_tape", "L3", backend="plotly")
 
 For full control, the unified `plot()` dispatcher renders a *concept* at a
 resolution *level* on a chosen backend from already-prepared data. Prepare the
-payload with the matching helper in the public `prepare` namespace (friendly
-wrappers over the internal prepare-data functions) and spread it as keyword
-arguments:
+payload with the function of the same name in the public `prepare` namespace
+and spread it as keyword arguments. Each `prepare` function takes `level=` by
+the same rule as `plot()`, below:
 
 ```python
 from ob_analytics.visualization import plot, prepare
 
-fig = plot("trade_tape", level="L2", **prepare.trades(result.trades))
+fig = plot("trade_tape", level="L2", **prepare.trade_tape(result.trades, level="L2"))
 ```
 
 `backend="matplotlib"` (default) returns a Matplotlib figure;
@@ -42,7 +42,9 @@ Every concept declares a resolution **level** — `Level.L2` (Market-By-Price
 aggregate) or `Level.L3` (Market-By-Order, per order). A concept registered at
 a single level resolves it automatically, so you pass only the concept name;
 *comparable* concepts (both `L2` and `L3` registered) take an explicit
-`level=`.
+`level=`. The `prepare` functions follow the same rule:
+`prepare.depth_heatmap(...)` needs no level, and `prepare.trade_tape(...)`
+needs `level="L2"` or `level="L3"`, with the arguments of that face.
 
 Concepts with both L2 and L3 faces: `trade_tape`, `order_activity`,
 `cancellations`, `book_snapshot`, `depth_chart`, `book_replay`,

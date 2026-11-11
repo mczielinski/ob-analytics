@@ -188,6 +188,57 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
     `SyntheticTradeSource` -> `SynthTradeReader`.
   - `ClockRule` -> `TimeRule`, the name of the rule it registers (`"time"`).
     The docs call its bars time bars, not clock bars.
+- **Each `prepare` function is named after its plot concept and takes
+  `level=`** (#413). `level=` follows the rule of `plot()`: leave it out
+  when the concept is drawn at one level or is level-less, and pass `"L2"`
+  or `"L3"` when it is drawn at both. A level the concept is not drawn at
+  raises `ConfigError`.
+  - `prepare.trades(...)` -> `prepare.trade_tape(..., level="L2")`.
+  - `prepare.trade_tape_l3(...)` -> `prepare.trade_tape(..., level="L3")`.
+  - `prepare.price_levels(...)` -> `prepare.depth_heatmap(...)`.
+  - `prepare.event_map(...)` -> `prepare.order_activity(..., level="L2")`.
+  - `prepare.order_activity_l3(...)` ->
+    `prepare.order_activity(..., level="L3")`.
+  - `prepare.volume_map(...)` -> `prepare.cancellations(..., level="L2")`.
+  - `prepare.cancellations_l3(...)` ->
+    `prepare.cancellations(..., level="L3")`.
+  - `prepare.liquidity_at_touch(...)` ->
+    `prepare.liquidity_at_touch(..., level="L2")`.
+  - `prepare.liquidity_at_touch_l3(...)` ->
+    `prepare.liquidity_at_touch(..., level="L3")`.
+  - `prepare.order_outcome_l3(...)` -> `prepare.order_outcome(...)`.
+  - `prepare.queue_position_l3(...)` -> `prepare.queue_position(...)`.
+  - `prepare.ofi(...)` -> `prepare.order_flow_imbalance(...)`.
+  - `prepare.book_snapshot(book)` -> `prepare.book_snapshot(book,
+    level="L2")`, and `prepare.book_snapshot(book, per_order=True)` ->
+    `prepare.book_snapshot(book, level="L3")`. `per_order` was the second
+    positional argument; `volume_scale`, `show_quantiles` and `top_n` each
+    move up one place.
+  - `prepare.book_replay(..., per_order=False)` (the default) ->
+    `prepare.book_replay(..., level="L2")`, and `per_order=True` ->
+    `level="L3"`. `start_time` and the arguments after it each move up one
+    place.
+  - New: `prepare.depth_chart` (the depth chart, from the same book as
+    `prepare.book_snapshot`) and `prepare.l1_ticker` (the L1 quote card).
+  - The other `prepare` functions keep their names and take `level=` too:
+    `amihud`, `bars`, `book_signals`, `events_histogram`,
+    `hidden_executions`, `kyle_lambda`, `ofi_horizon`, `price_view`,
+    `roll_spread`, `time_series`, `trade_size`, `trading_halts`,
+    `transaction_costs`, `volume_percentiles` and `vpin`.
+    `hidden_liquidity_overlay` prepares no plot of its own and takes no
+    level.
+- **Gallery cards for level-less plots are cards, not panels** (#413). A
+  panel is one column of a card.
+  - `vpin_panel`, `book_signals_panel`, `ofi_panel` and
+    `transaction_costs_panel` -> removed. They built the same card as the
+    VPIN, book signals, order flow imbalance and transaction costs metrics,
+    which every gallery already shows. For one with other settings, build a
+    `PlotSpec` with `prepare.vpin`, `prepare.book_signals`,
+    `prepare.order_flow_imbalance` or `prepare.transaction_costs`.
+  - `bars_panel` -> `bars_card`.
+  - `ofi_horizon_panel` -> `ofi_horizon_card`.
+  - `kyle_panel` -> `kyle_lambda_card`.
+  - `trading_halts_panel` -> `trading_halts_card`.
 
 ### Added
 

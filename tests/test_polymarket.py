@@ -15,9 +15,8 @@ import json
 
 import pytest
 
-from ob_analytics.live._base import CaptureConfig
+from ob_analytics.live import CaptureConfig, CcxtSettings, CcxtSource
 from ob_analytics.live._runner import run_capturer
-from ob_analytics.live.ccxt_source import CcxtSettings, CcxtSource
 from tests.test_ccxt_source import _FakeCcxtExchange
 
 _PREDICTION_INSTALLED = (

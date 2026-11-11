@@ -29,12 +29,8 @@ from ob_analytics.flow_toxicity import (
 )
 from ob_analytics.pipeline import Pipeline, PipelineResult
 from ob_analytics.protocols import Level
-from ob_analytics.visualization import available_concepts, plot
-from ob_analytics.visualization._data import (
-    l1_card_texts,
-    prepare_l1_ticker_data,
-    prepare_ofi_horizon_data,
-)
+from ob_analytics.visualization import available_concepts, plot, prepare
+from ob_analytics.visualization._data import l1_card_texts
 from ob_analytics.visualization.gallery import (
     _metric_payload,
     build_gallery_model,
@@ -198,7 +194,7 @@ def test_ofi_by_horizon_sums_a_trailing_window_per_horizon() -> None:
 
 def test_ofi_horizon_face_draws_the_metric_grid(result) -> None:
     grid = result.metric("ofi_horizon")
-    payload = prepare_ofi_horizon_data(result.trades)
+    payload = prepare.ofi_horizon(result.trades)
 
     assert payload["horizons"] == list(grid.columns[1:])
     np.testing.assert_allclose(payload["ofi"], grid.iloc[:, 1:].to_numpy().T)
@@ -265,8 +261,8 @@ def _l1(rows) -> pd.DataFrame:
 def test_l1_card_is_the_quote_at_or_before_the_instant() -> None:
     l1 = _l1([(0, 99, 101, np.nan), (10, 100, 101, 101)])
 
-    early = prepare_l1_ticker_data(l1, at="2026-01-01 00:00:05", symbol="TOY")
-    late = prepare_l1_ticker_data(l1, at=pd.Timestamp("2026-01-01 00:00:10", tz="UTC"))
+    early = prepare.l1_ticker(l1, at="2026-01-01 00:00:05", symbol="TOY")
+    late = prepare.l1_ticker(l1, at=pd.Timestamp("2026-01-01 00:00:10", tz="UTC"))
 
     assert (early["bid"], early["ask"], early["last"]) == (99, 101, None)
     assert early["symbol"] == "TOY"
@@ -277,7 +273,7 @@ def test_l1_card_is_the_quote_at_or_before_the_instant() -> None:
 def test_l1_lines_read_a_naive_window_in_the_data_time_zone() -> None:
     l1 = _l1([(0, 99, 101, 100), (10, 100, 102, 101), (20, 101, 103, 102)])
 
-    lines = prepare_l1_ticker_data(
+    lines = prepare.l1_ticker(
         l1,
         start_time="2026-01-01 00:00:05",
         end_time=pd.Timestamp("2026-01-01 00:00:15"),
@@ -297,7 +293,7 @@ def test_ofi_close_is_the_last_trade_in_time(result) -> None:
 
 def test_l1_card_before_the_first_row_is_empty() -> None:
     l1 = _l1([(10, 100, 101, 101)])
-    card = prepare_l1_ticker_data(l1, at="2026-01-01 00:00:00")
+    card = prepare.l1_ticker(l1, at="2026-01-01 00:00:00")
     assert card["bid"] is None and card["ask"] is None and card["last"] is None
 
 
@@ -312,7 +308,7 @@ def test_l1_lines_keep_only_rows_where_a_price_changes() -> None:
         ]
     )
 
-    lines = prepare_l1_ticker_data(l1)
+    lines = prepare.l1_ticker(l1)
 
     assert len(lines["timestamp"]) == 3
     assert lines["best_ask_price"].tolist() == [101, 101, 102]
@@ -320,7 +316,7 @@ def test_l1_lines_keep_only_rows_where_a_price_changes() -> None:
 
 def test_l1_line_axis_ignores_a_stray_far_quote() -> None:
     rows = [(s, 99, 101, 100) for s in range(200)] + [(200, 99, 1e9, 100)]
-    lines = prepare_l1_ticker_data(_l1(rows))
+    lines = prepare.l1_ticker(_l1(rows))
     assert lines["y_range"][1] < 1000
 
 

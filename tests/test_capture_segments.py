@@ -28,13 +28,13 @@ from ob_analytics.live import (
     CaptureConfig,
     CaptureManifest,
     EndReason,
+    EventDict,
     Segment,
     _runner,
     _supervisor,
     read_manifest,
     run_capture,
 )
-from ob_analytics.live._base import EventDict
 from ob_analytics.protocols import Clocks, FeedType, Level
 from tests._logging import warnings_logged
 

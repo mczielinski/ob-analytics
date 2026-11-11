@@ -403,12 +403,12 @@ class OrderFlowImbalanceMetric:
 
     def prepare(self, frame: pd.DataFrame) -> dict[str, Any]:
         """Payload for the bars, with the window prices as the price line."""
-        from ob_analytics.visualization._data import prepare_ofi_data
+        from ob_analytics.visualization._data import prepare_order_flow_imbalance_data
 
         prices = frame[["timestamp", "last_price"]].rename(
             columns={"last_price": "price"}
         )
-        return prepare_ofi_data(frame, trades=prices)
+        return prepare_order_flow_imbalance_data(frame, trades=prices)
 
 
 class OfiHorizonMetric:

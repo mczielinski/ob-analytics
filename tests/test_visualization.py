@@ -25,6 +25,7 @@ from ob_analytics.visualization import (
     PlotTheme,
     _data,
     plot,
+    prepare,
     save_figure,
 )
 from ob_analytics.visualization._matplotlib import _create_axes, _step_envelope
@@ -128,7 +129,7 @@ class TestPlotTheme:
             "trade_tape",
             Level.L2,
             theme=PlotTheme(style="darkgrid", context="talk"),
-            **_data.prepare_trades_data(sample_trades),
+            **prepare.trade_tape(sample_trades, level="L2"),
         )
         assert dict(matplotlib.rcParams) == before
 
@@ -139,7 +140,7 @@ class TestPlotTheme:
             "trade_tape",
             Level.L2,
             theme=PlotTheme(style="darkgrid", context="talk", font_scale=1.0),
-            **_data.prepare_trades_data(sample_trades),
+            **prepare.trade_tape(sample_trades, level="L2"),
         )
         fig.canvas.draw()
         ax = fig.axes[0]
@@ -161,7 +162,7 @@ class TestPlotTheme:
             "trade_tape",
             Level.L2,
             theme=custom,
-            **_data.prepare_trades_data(sample_trades),
+            **prepare.trade_tape(sample_trades, level="L2"),
         )
         assert isinstance(fig, Figure)
 
@@ -190,7 +191,7 @@ class TestFigureLayout:
     @staticmethod
     def _time_series() -> dict:
         ts = pd.Series(pd.date_range("2020-01-01", periods=5, freq="s", tz="UTC"))
-        return _data.prepare_time_series_data(ts, pd.Series([1, 2, 3, 2, 1]))
+        return prepare.time_series(ts, pd.Series([1, 2, 3, 2, 1]))
 
     def test_own_figure_is_laid_out(self):
         fig = plot("time_series", **self._time_series())
@@ -218,7 +219,7 @@ class TestFigureLayout:
         from ob_analytics.pipeline import Pipeline
         from ob_analytics.visualization import RENDERERS
         from ob_analytics.visualization.gallery import (
-            _metric_panels,
+            _metric_cards,
             build_gallery_model,
             display_result,
         )
@@ -228,7 +229,7 @@ class TestFigureLayout:
         faces: list[tuple[Any, Level | None]] = [
             (spec, level) for c in model.concepts for level, spec in c.variants.items()
         ]
-        faces += [(spec, None) for spec in _metric_panels(display_result(result))]
+        faces += [(spec, None) for spec in _metric_cards(display_result(result))]
         # Only matplotlib lays out a figure; a face drawn by other backends
         # alone (such as the plotly book replay) has nothing to check here.
         faces = [
@@ -265,7 +266,7 @@ class TestFigureLayout:
         # The colorbar must share the caller's gridspec, or the caller's own
         # tight_layout cannot place it and warns.
         fig, axes = plt.subplots(1, 2)
-        data = _data.prepare_cancellations_l3_data(sample_cancellation_events)
+        data = prepare.cancellations(sample_cancellation_events, level="L3")
         plot("cancellations", Level.L3, ax=axes[0], **data)
         with warnings.catch_warnings():
             warnings.simplefilter("error")
@@ -277,7 +278,7 @@ class TestFigureLayout:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             fig = plot(
-                "book_snapshot", Level.L2, **_data.prepare_book_snapshot_data(book)
+                "book_snapshot", Level.L2, **prepare.book_snapshot(book, level="L2")
             )
         assert fig.axes[0].get_legend() is None
 
@@ -300,22 +301,22 @@ class TestPlotTimeSeries:
     def test_returns_figure(self):
         ts = pd.Series(pd.date_range("2020-01-01", periods=5, freq="s"))
         vals = pd.Series([1, 2, 3, 2, 1])
-        fig = plot("time_series", **_data.prepare_time_series_data(ts, vals))
+        fig = plot("time_series", **prepare.time_series(ts, vals))
         assert isinstance(fig, Figure)
 
     def test_accepts_ax(self):
         fig_orig, ax_orig = plt.subplots()
         ts = pd.Series(pd.date_range("2020-01-01", periods=5, freq="s"))
         vals = pd.Series([1, 2, 3, 2, 1])
-        fig = plot(
-            "time_series", ax=ax_orig, **_data.prepare_time_series_data(ts, vals)
-        )
+        fig = plot("time_series", ax=ax_orig, **prepare.time_series(ts, vals))
         assert fig is fig_orig
 
 
 class TestPlotTrades:
     def test_returns_figure(self, sample_trades):
-        fig = plot("trade_tape", Level.L2, **_data.prepare_trades_data(sample_trades))
+        fig = plot(
+            "trade_tape", Level.L2, **prepare.trade_tape(sample_trades, level="L2")
+        )
         assert isinstance(fig, Figure)
 
     def test_accepts_ax(self, sample_trades):
@@ -324,23 +325,27 @@ class TestPlotTrades:
             "trade_tape",
             Level.L2,
             ax=ax_orig,
-            **_data.prepare_trades_data(sample_trades),
+            **prepare.trade_tape(sample_trades, level="L2"),
         )
         assert fig is fig_orig
 
     def test_comparable_requires_level(self, sample_trades):
         with pytest.raises(ConfigError, match='pass level="L2" or level="L3"'):
-            plot("trade_tape", **_data.prepare_trades_data(sample_trades))
+            plot("trade_tape", **prepare.trade_tape(sample_trades, level="L2"))
 
     def test_l2_ylabel_is_price(self, sample_trades):
         # The L2 tape plots execution prices, not limit prices.
-        fig = plot("trade_tape", Level.L2, **_data.prepare_trades_data(sample_trades))
+        fig = plot(
+            "trade_tape", Level.L2, **prepare.trade_tape(sample_trades, level="L2")
+        )
         assert fig.axes[0].get_ylabel() == "Price"
 
     def test_mid_line_is_step(self, sample_trades):
         # The mid holds until the book changes; linear interpolation would
         # paint a diagonal ramp between sparse samples that never existed.
-        fig = plot("trade_tape", Level.L2, **_data.prepare_trades_data(sample_trades))
+        fig = plot(
+            "trade_tape", Level.L2, **prepare.trade_tape(sample_trades, level="L2")
+        )
         (mid,) = fig.axes[0].get_lines()
         assert mid.get_drawstyle() == "steps-post"
 
@@ -350,7 +355,7 @@ class TestPlotEventMap:
         fig = plot(
             "order_activity",
             Level.L2,
-            **_data.prepare_event_map_data(sample_events),
+            **prepare.order_activity(sample_events, level="L2"),
         )
         assert isinstance(fig, Figure)
 
@@ -360,7 +365,7 @@ class TestPlotEventMap:
         fig = plot(
             "order_activity",
             Level.L2,
-            **_data.prepare_event_map_data(sample_events),
+            **prepare.order_activity(sample_events, level="L2"),
         )
         legend = fig.axes[0].get_legend()
         assert legend is not None
@@ -373,17 +378,18 @@ class TestPlotEventMap:
             "order_activity",
             Level.L2,
             ax=ax_orig,
-            **_data.prepare_event_map_data(sample_events),
+            **prepare.order_activity(sample_events, level="L2"),
         )
         assert fig is fig_orig
 
     def test_empty_window_draws_no_data(self, sample_events):
         # A window before the data: the price-axis step used to raise
         # ValueError on the NaN price range of zero rows.
-        data = _data.prepare_event_map_data(
+        data = prepare.order_activity(
             sample_events,
             start_time=pd.Timestamp("2015-05-01 00:00:00"),
             end_time=pd.Timestamp("2015-05-01 00:30:00"),
+            level="L2",
         )
         ax = plot("order_activity", Level.L2, **data).axes[0]
         # The theme places titles on the left; read every slot.
@@ -393,18 +399,18 @@ class TestPlotEventMap:
 
 class TestPlotOrderActivityL3:
     def test_returns_figure(self, sample_order_lifecycle_events):
-        data = _data.prepare_order_activity_l3_data(sample_order_lifecycle_events)
+        data = prepare.order_activity(sample_order_lifecycle_events, level="L3")
         fig = plot("order_activity", Level.L3, **data)
         assert isinstance(fig, Figure)
 
     def test_accepts_ax(self, sample_order_lifecycle_events):
         fig_orig, ax_orig = plt.subplots()
-        data = _data.prepare_order_activity_l3_data(sample_order_lifecycle_events)
+        data = prepare.order_activity(sample_order_lifecycle_events, level="L3")
         fig = plot("order_activity", Level.L3, ax=ax_orig, **data)
         assert fig is fig_orig
 
     def test_comparable_requires_level(self, sample_order_lifecycle_events):
-        data = _data.prepare_order_activity_l3_data(sample_order_lifecycle_events)
+        data = prepare.order_activity(sample_order_lifecycle_events, level="L3")
         with pytest.raises(ConfigError, match='pass level="L2" or level="L3"'):
             plot("order_activity", **data)
 
@@ -450,11 +456,12 @@ class TestPlotOrderActivityL3:
     ) -> None:
         overlay = hidden_liquidity_overlay
 
-        data = _data.prepare_order_activity_l3_data(
+        data = prepare.order_activity(
             sample_order_lifecycle_events,
             iceberg_lines=overlay["iceberg_lines"],
             iceberg_refills=overlay["iceberg_refills"],
             hidden_trades=overlay["hidden_trades"],
+            level="L3",
         )
         fig = plot("order_activity", Level.L3, **data)
         labels = {h.get_label() for h in fig.axes[0].get_legend().legend_handles}
@@ -467,7 +474,7 @@ class TestPlotOrderActivityL3:
     def test_no_overlay_draws_no_extra_legend_entries(
         self, sample_order_lifecycle_events
     ) -> None:
-        data = _data.prepare_order_activity_l3_data(sample_order_lifecycle_events)
+        data = prepare.order_activity(sample_order_lifecycle_events, level="L3")
         fig = plot("order_activity", Level.L3, **data)
         legend = fig.axes[0].get_legend()
         labels = {h.get_label() for h in legend.legend_handles} if legend else set()
@@ -480,7 +487,7 @@ class TestPlotVolumeMap:
         fig = plot(
             "cancellations",
             Level.L2,
-            **_data.prepare_volume_map_data(sample_events),
+            **prepare.cancellations(sample_events, level="L2"),
         )
         assert isinstance(fig, Figure)
 
@@ -490,32 +497,32 @@ class TestPlotVolumeMap:
             "cancellations",
             Level.L2,
             ax=ax_orig,
-            **_data.prepare_volume_map_data(sample_events),
+            **prepare.cancellations(sample_events, level="L2"),
         )
         assert fig is fig_orig
 
 
 class TestPlotCancellationsL3:
     def test_returns_figure(self, sample_cancellation_events):
-        data = _data.prepare_cancellations_l3_data(sample_cancellation_events)
+        data = prepare.cancellations(sample_cancellation_events, level="L3")
         fig = plot("cancellations", Level.L3, **data)
         assert isinstance(fig, Figure)
 
     def test_accepts_ax(self, sample_cancellation_events):
         fig_orig, ax_orig = plt.subplots()
-        data = _data.prepare_cancellations_l3_data(sample_cancellation_events)
+        data = prepare.cancellations(sample_cancellation_events, level="L3")
         fig = plot("cancellations", Level.L3, ax=ax_orig, **data)
         assert fig is fig_orig
 
     def test_comparable_requires_level(self, sample_cancellation_events):
-        data = _data.prepare_cancellations_l3_data(sample_cancellation_events)
+        data = prepare.cancellations(sample_cancellation_events, level="L3")
         with pytest.raises(ConfigError, match='pass level="L2" or level="L3"'):
             plot("cancellations", **data)
 
     def test_hexbin_is_rasterized(self, sample_cancellation_events):
         # The density hexbin is a vector PolyCollection; rasterize it so a dense
         # book does not bloat the saved figure.
-        data = _data.prepare_cancellations_l3_data(sample_cancellation_events)
+        data = prepare.cancellations(sample_cancellation_events, level="L3")
         fig = plot("cancellations", Level.L3, **data)
         ax = fig.axes[0]
         assert ax.collections
@@ -523,7 +530,7 @@ class TestPlotCancellationsL3:
 
     def test_axes_are_log_log(self, sample_cancellation_events):
         # §3.3: the latent populations only separate on log-log axes.
-        data = _data.prepare_cancellations_l3_data(sample_cancellation_events)
+        data = prepare.cancellations(sample_cancellation_events, level="L3")
         fig = plot("cancellations", Level.L3, **data)
         ax = fig.axes[0]
         assert ax.get_xscale() == "log"
@@ -531,7 +538,7 @@ class TestPlotCancellationsL3:
 
     def test_distance_is_positive_and_floored(self, sample_cancellation_events):
         # Distance becomes |bps| floored at 0.05 so log axes can show it.
-        data = _data.prepare_cancellations_l3_data(sample_cancellation_events)
+        data = prepare.cancellations(sample_cancellation_events, level="L3")
         for side in (data["bids"], data["asks"]):
             assert (side["distance_from_touch"] >= 0.05).all()
             assert (side["age_s"] >= 1e-3).all()
@@ -540,8 +547,8 @@ class TestPlotCancellationsL3:
 class TestPlotTradeTapeL3:
     def test_returns_figure(self, sample_executed_orders):
         events, trades = sample_executed_orders
-        data = _data.prepare_trade_tape_l3_data(
-            events, trades, price_from=0.0, price_to=1e9
+        data = prepare.trade_tape(
+            events, trades, price_from=0.0, price_to=1e9, level="L3"
         )
         fig = plot("trade_tape", Level.L3, **data)
         assert isinstance(fig, Figure)
@@ -549,8 +556,8 @@ class TestPlotTradeTapeL3:
     def test_accepts_ax(self, sample_executed_orders):
         events, trades = sample_executed_orders
         fig_orig, ax_orig = plt.subplots()
-        data = _data.prepare_trade_tape_l3_data(
-            events, trades, price_from=0.0, price_to=1e9
+        data = prepare.trade_tape(
+            events, trades, price_from=0.0, price_to=1e9, level="L3"
         )
         fig = plot("trade_tape", Level.L3, ax=ax_orig, **data)
         assert fig is fig_orig
@@ -558,8 +565,8 @@ class TestPlotTradeTapeL3:
     def test_mid_line_is_step(self, sample_executed_orders):
         # Same step semantics as the L2 tape: the mid holds between samples.
         events, trades = sample_executed_orders
-        data = _data.prepare_trade_tape_l3_data(
-            events, trades, price_from=0.0, price_to=1e9
+        data = prepare.trade_tape(
+            events, trades, price_from=0.0, price_to=1e9, level="L3"
         )
         fig = plot("trade_tape", Level.L3, **data)
         (mid,) = fig.axes[0].get_lines()
@@ -569,20 +576,20 @@ class TestPlotTradeTapeL3:
 class TestPlotLiquidityAtTouch:
     # Now a comparable concept (L2 step + L3 composition), so level is explicit.
     def test_returns_figure(self, sample_depth_summary):
-        data = _data.prepare_liquidity_at_touch_data(sample_depth_summary)
+        data = prepare.liquidity_at_touch(sample_depth_summary, level="L2")
         fig = plot("liquidity_at_touch", Level.L2, **data)
         assert isinstance(fig, Figure)
 
     def test_accepts_ax(self, sample_depth_summary):
         fig_orig, ax_orig = plt.subplots()
-        data = _data.prepare_liquidity_at_touch_data(sample_depth_summary)
+        data = prepare.liquidity_at_touch(sample_depth_summary, level="L2")
         fig = plot("liquidity_at_touch", Level.L2, ax=ax_orig, **data)
         assert fig is fig_orig
 
     def test_lines_drawn_with_transparency(self, sample_depth_summary):
         # The bid/ask step series overplot heavily in the dense band; drawing
         # them with alpha < 1 keeps both legible where they overlap.
-        data = _data.prepare_liquidity_at_touch_data(sample_depth_summary)
+        data = prepare.liquidity_at_touch(sample_depth_summary, level="L2")
         fig = plot("liquidity_at_touch", Level.L2, **data)
         ax = fig.axes[0]
         lines = ax.get_lines()
@@ -594,9 +601,9 @@ class TestPlotLiquidityAtTouch:
     def test_event_rug_drawn_from_events(self, sample_depth_summary, sample_events):
         # Passing events adds a rug (created/cancelled vlines) below the series;
         # without events there is no rug.
-        bare = _data.prepare_liquidity_at_touch_data(sample_depth_summary)
-        with_rug = _data.prepare_liquidity_at_touch_data(
-            sample_depth_summary, events=sample_events
+        bare = prepare.liquidity_at_touch(sample_depth_summary, level="L2")
+        with_rug = prepare.liquidity_at_touch(
+            sample_depth_summary, events=sample_events, level="L2"
         )
         assert bare["rug"] is None
         n_bare = len(plot("liquidity_at_touch", Level.L2, **bare).axes[0].collections)
@@ -650,7 +657,7 @@ class TestPlotOfiHorizon:
         )
 
     def test_returns_banded_figure(self) -> None:
-        data = _data.prepare_ofi_horizon_data(self._trades())
+        data = prepare.ofi_horizon(self._trades())
         fig = plot("ofi_horizon", **data)
         ax = fig.axes[0]
         assert isinstance(fig, Figure)
@@ -718,21 +725,21 @@ class TestPlotOfiHorizon:
 class TestPlotOrderOutcomeL3:
     def test_returns_figure(self, sample_executed_orders):
         events, _trades = sample_executed_orders
-        data = _data.prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
+        data = prepare.order_outcome(events, bps_quantiles=(0.0, 1.0))
         fig = plot("order_outcome", Level.L3, **data)
         assert isinstance(fig, Figure)
 
     def test_accepts_ax(self, sample_executed_orders):
         events, _trades = sample_executed_orders
         fig_orig, ax_orig = plt.subplots()
-        data = _data.prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
+        data = prepare.order_outcome(events, bps_quantiles=(0.0, 1.0))
         fig = plot("order_outcome", Level.L3, ax=ax_orig, **data)
         assert fig is fig_orig
 
     def test_resolves_single_level(self, sample_executed_orders):
         # L3-only: registered at exactly one level, so it resolves without level=.
         events, _trades = sample_executed_orders
-        data = _data.prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
+        data = prepare.order_outcome(events, bps_quantiles=(0.0, 1.0))
         fig = plot("order_outcome", **data)
         assert isinstance(fig, Figure)
 
@@ -742,7 +749,7 @@ class TestPlotOrderOutcomeL3:
         from ob_analytics.visualization import DEFAULT_PALETTE
 
         events, _trades = sample_executed_orders
-        data = _data.prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
+        data = prepare.order_outcome(events, bps_quantiles=(0.0, 1.0))
         fig = plot("order_outcome", Level.L3, **data)
         ax = fig.axes[0]
         # The dominant cancelled class must be drawn first (underneath) so the
@@ -767,13 +774,12 @@ class TestPlotBookSnapshot:
     @pytest.mark.parametrize("level", [Level.L2, Level.L3])
     @pytest.mark.parametrize("concept", ["book_snapshot", "depth_chart"])
     def test_returns_figure(self, concept: str, level: Level) -> None:
-        per_order = level is Level.L3
-        data = _data.prepare_book_snapshot_data(self._order_book(), per_order=per_order)
+        data = prepare.book_snapshot(self._order_book(), level=level)
         fig = plot(concept, level, **data)
         assert isinstance(fig, Figure)
 
     def test_comparable_requires_level(self) -> None:
-        data = _data.prepare_book_snapshot_data(self._order_book())
+        data = prepare.book_snapshot(self._order_book(), level="L2")
         with pytest.raises(ConfigError, match='pass level="L2" or level="L3"'):
             plot("book_snapshot", **data)
 
@@ -786,15 +792,15 @@ class TestPlotBookSnapshot:
         from ob_analytics.exceptions import ConfigError
 
         wrong_per_order = level is Level.L2  # contradict the requested level
-        data = _data.prepare_book_snapshot_data(
-            self._order_book(), per_order=wrong_per_order
+        data = prepare.book_snapshot(
+            self._order_book(), level="L3" if wrong_per_order else "L2"
         )
         with pytest.raises(ConfigError, match="prepare.book_snapshot"):
             plot(concept, level, **data)
 
     def test_horizontal_ladder_orientation(self) -> None:
         # §3.1: price on y, size on x (was the reverse).
-        data = _data.prepare_book_snapshot_data(self._order_book(), per_order=True)
+        data = prepare.book_snapshot(self._order_book(), level="L3")
         fig = plot("book_snapshot", Level.L3, **data)
         ax = fig.axes[0]
         assert ax.get_ylabel() == "Price"
@@ -803,7 +809,7 @@ class TestPlotBookSnapshot:
     def test_per_order_uses_white_separators(self) -> None:
         # Windowing keeps bars tall, so L3 separators are always on: white edges
         # segment each level into its orders and bid/ask hue survives.
-        data = _data.prepare_book_snapshot_data(self._order_book(), per_order=True)
+        data = prepare.book_snapshot(self._order_book(), level="L3")
         fig = plot("book_snapshot", Level.L3, **data)
         ax = fig.axes[0]
         edges = [c.patches[0].get_edgecolor() for c in ax.containers if len(c.patches)]
@@ -813,7 +819,7 @@ class TestPlotBookSnapshot:
 
     def test_aggregate_has_no_separators(self) -> None:
         # L2 bars never get a per-order edge (edgecolor "none" -> alpha 0).
-        data = _data.prepare_book_snapshot_data(self._order_book(), per_order=False)
+        data = prepare.book_snapshot(self._order_book(), level="L2")
         fig = plot("book_snapshot", Level.L2, **data)
         ax = fig.axes[0]
         for container in ax.containers:
@@ -843,8 +849,8 @@ class TestPlotBookSnapshot:
             "timestamp": 1430438400,
         }
         buffers = {}
-        for level, per_order in ((Level.L2, False), (Level.L3, True)):
-            data = _data.prepare_book_snapshot_data(book, per_order=per_order)
+        for level in (Level.L2, Level.L3):
+            data = prepare.book_snapshot(book, level=level)
             fig = plot("book_snapshot", level, **data)
             fig.canvas.draw()
             buffers[level] = np.asarray(fig.canvas.buffer_rgba()).copy()
@@ -870,7 +876,7 @@ class TestPlotBookSnapshot:
             ),
             "timestamp": 1430438400,
         }
-        data = _data.prepare_book_snapshot_data(book, top_n=5)
+        data = prepare.book_snapshot(book, top_n=5, level="L2")
         assert data["bids"]["price"].nunique() == 5
         assert data["asks"]["price"].nunique() == 5
         # Best-first: bids keep the five highest prices, asks the five lowest.
@@ -880,9 +886,9 @@ class TestPlotBookSnapshot:
     def test_quantiles_off_by_default(self) -> None:
         import inspect
 
-        sig = inspect.signature(_data.prepare_book_snapshot_data)
+        sig = inspect.signature(prepare.book_snapshot)
         assert sig.parameters["show_quantiles"].default is False
-        data = _data.prepare_book_snapshot_data(self._order_book())
+        data = prepare.book_snapshot(self._order_book(), level="L2")
         assert len(data["bid_quantiles"]) == 0
         assert len(data["ask_quantiles"]) == 0
 
@@ -906,7 +912,7 @@ class TestPlotBookSnapshot:
             ),
             "timestamp": 1430438400,
         }
-        data = _data.prepare_book_snapshot_data(book, show_quantiles=True, top_n=None)
+        data = prepare.book_snapshot(book, show_quantiles=True, top_n=None, level="L2")
         assert len(data["bid_quantiles"]) <= 3
         assert len(data["ask_quantiles"]) <= 3
 
@@ -915,7 +921,7 @@ class TestPlotVolumePercentiles:
     def test_returns_figure(self, sample_depth_summary):
         fig = plot(
             "volume_percentiles",
-            **_data.prepare_volume_percentiles_data(sample_depth_summary),
+            **prepare.volume_percentiles(sample_depth_summary),
         )
         assert isinstance(fig, Figure)
 
@@ -924,7 +930,7 @@ class TestPlotEventsHistogram:
     def test_returns_figure(self, sample_events):
         fig = plot(
             "events_histogram",
-            **_data.prepare_events_histogram_data(sample_events, val="price", bw=0.25),
+            **prepare.events_histogram(sample_events, val="price", bw=0.25),
         )
         assert isinstance(fig, Figure)
 
@@ -933,14 +939,14 @@ class TestPlotEventsHistogram:
         fig = plot(
             "events_histogram",
             ax=ax_orig,
-            **_data.prepare_events_histogram_data(sample_events, val="price", bw=0.25),
+            **prepare.events_histogram(sample_events, val="price", bw=0.25),
         )
         assert fig is fig_orig
 
     def test_empty_window_draws_no_data(self, sample_events):
         # A window before the data: seaborn's histplot used to raise
         # ValueError while working out bin edges for zero rows.
-        data = _data.prepare_events_histogram_data(
+        data = prepare.events_histogram(
             sample_events,
             start_time=pd.Timestamp("2015-05-01 00:00:00"),
             end_time=pd.Timestamp("2015-05-01 00:30:00"),
@@ -1007,7 +1013,7 @@ class TestPriceLevelsColBias:
         depth = self._depth(sample_events)
         fig = plot(
             "depth_heatmap",
-            **_data.prepare_price_levels_data(depth, col_bias=col_bias),
+            **prepare.depth_heatmap(depth, col_bias=col_bias),
         )
         assert isinstance(fig, Figure)
 
@@ -1015,7 +1021,7 @@ class TestPriceLevelsColBias:
         # The library default is the hero linear look (col_bias=1.0).
         import inspect
 
-        sig = inspect.signature(_data.prepare_price_levels_data)
+        sig = inspect.signature(prepare.depth_heatmap)
         assert sig.parameters["col_bias"].default == 1.0
 
     def test_midprice_overlay_is_step(self, sample_events):
@@ -1031,7 +1037,7 @@ class TestPriceLevelsColBias:
         )
         fig = plot(
             "depth_heatmap",
-            **_data.prepare_price_levels_data(depth, spread=spread, show_mp=True),
+            **prepare.depth_heatmap(depth, spread=spread, show_mp=True),
         )
         mid = next(ln for ln in fig.axes[0].get_lines() if ln.get_label() == "Midprice")
         assert mid.get_drawstyle() == "steps-post"
@@ -1049,7 +1055,7 @@ class TestPrepareHiddenLiquidityOverlay:
         from ob_analytics.hidden_liquidity import detect_icebergs
 
         detection = detect_icebergs(*iceberg_events_and_trades)
-        return _data.prepare_hidden_liquidity_overlay(
+        return prepare.hidden_liquidity_overlay(
             detection.icebergs, detection.slices, hidden_trade_rows, **window
         )
 
@@ -1108,7 +1114,7 @@ class TestPrepareHiddenLiquidityOverlay:
         empty_slices = pd.DataFrame(
             columns=["iceberg", "slice", "id", "timestamp", "volume", "fill", "delay_s"]
         )
-        out = _data.prepare_hidden_liquidity_overlay(
+        out = prepare.hidden_liquidity_overlay(
             empty_icebergs, empty_slices, hidden_trade_rows.iloc[0:0]
         )
         assert out["iceberg_lines"].empty
@@ -1126,7 +1132,7 @@ class TestPriceLevelsHiddenLiquidityOverlay:
 
     def test_no_overlay_draws_no_extra_legend_entries(self, sample_events):
         depth = self._depth(sample_events)
-        fig = plot("depth_heatmap", **_data.prepare_price_levels_data(depth))
+        fig = plot("depth_heatmap", **prepare.depth_heatmap(depth))
         labels = {t.get_text() for t in fig.axes[0].get_legend().get_texts()}
         assert "Iceberg refill" not in labels
         assert "Hidden-order trade" not in labels
@@ -1139,7 +1145,7 @@ class TestPriceLevelsHiddenLiquidityOverlay:
         depth = self._depth(sample_events)
         fig = plot(
             "depth_heatmap",
-            **_data.prepare_price_levels_data(
+            **prepare.depth_heatmap(
                 depth,
                 iceberg_lines=overlay["iceberg_lines"],
                 iceberg_refills=overlay["iceberg_refills"],
@@ -1203,7 +1209,7 @@ class TestPriceLevelsNotice:
 
     def _prepare(self, depth: pd.DataFrame, **kwargs: Any) -> dict:
         kwargs.setdefault("end_time", self.T0 + pd.Timedelta(seconds=60))
-        return _data.prepare_price_levels_data(depth, **kwargs)
+        return prepare.depth_heatmap(depth, **kwargs)
 
     def test_no_level_changed_draws_every_level(self):
         data = self._prepare(self._quiet_depth())
@@ -1223,7 +1229,7 @@ class TestPriceLevelsNotice:
         assert data["notice"] is None
 
     def test_empty_depth_frame_says_so(self):
-        data = _data.prepare_price_levels_data(self._quiet_depth().iloc[0:0])
+        data = prepare.depth_heatmap(self._quiet_depth().iloc[0:0])
         assert data["depth"].empty
         assert data["notice"] == _data.NO_DEPTH_NOTICE
 
@@ -1370,10 +1376,16 @@ class TestSubplotComposition:
     def test_two_plots_on_shared_figure(self, sample_trades):
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
         fig1 = plot(
-            "trade_tape", Level.L2, ax=ax1, **_data.prepare_trades_data(sample_trades)
+            "trade_tape",
+            Level.L2,
+            ax=ax1,
+            **prepare.trade_tape(sample_trades, level="L2"),
         )
         fig2 = plot(
-            "trade_tape", Level.L2, ax=ax2, **_data.prepare_trades_data(sample_trades)
+            "trade_tape",
+            Level.L2,
+            ax=ax2,
+            **prepare.trade_tape(sample_trades, level="L2"),
         )
         assert fig1 is fig
         assert fig2 is fig
@@ -1387,7 +1399,9 @@ class TestSubplotComposition:
 
 class TestBackendDispatch:
     def test_default_backend_returns_matplotlib_figure(self, sample_trades):
-        fig = plot("trade_tape", Level.L2, **_data.prepare_trades_data(sample_trades))
+        fig = plot(
+            "trade_tape", Level.L2, **prepare.trade_tape(sample_trades, level="L2")
+        )
         assert isinstance(fig, Figure)
 
     def test_explicit_matplotlib_returns_figure(self, sample_trades):
@@ -1395,7 +1409,7 @@ class TestBackendDispatch:
             "trade_tape",
             Level.L2,
             backend="matplotlib",
-            **_data.prepare_trades_data(sample_trades),
+            **prepare.trade_tape(sample_trades, level="L2"),
         )
         assert isinstance(fig, Figure)
 
@@ -1404,18 +1418,18 @@ class TestBackendDispatch:
             plot(
                 "trade_tape",
                 backend="nonexistent",
-                **_data.prepare_trades_data(sample_trades),
+                **prepare.trade_tape(sample_trades, level="L2"),
             )
 
     def test_plot_dispatch_matplotlib(self, sample_trades):
         """The unified plot() dispatcher renders from already-prepared data."""
-        from ob_analytics.visualization import _data, plot
+        from ob_analytics.visualization import plot, prepare
 
         fig = plot(
             "trade_tape",
             Level.L2,
             backend="matplotlib",
-            **_data.prepare_trades_data(sample_trades),
+            **prepare.trade_tape(sample_trades, level="L2"),
         )
         assert isinstance(fig, Figure)
 
@@ -1599,7 +1613,7 @@ class TestPlotPriceView:
     """§4.2 spread ribbon + microprice (L2)."""
 
     def test_returns_figure_with_ribbon(self, sample_depth_summary):
-        data = _data.prepare_price_view_data(sample_depth_summary)
+        data = prepare.price_view(sample_depth_summary)
         fig = plot("price_view", Level.L2, **data)
         ax = fig.axes[0]
         assert isinstance(fig, Figure)
@@ -1613,7 +1627,7 @@ class TestPlotTradeSize:
     """§4.3 trade-size strip (log-x jittered dots by side)."""
 
     def test_returns_figure_log_x(self, sample_trades):
-        data = _data.prepare_trade_size_data(sample_trades)
+        data = prepare.trade_size(sample_trades)
         fig = plot("trade_size", Level.L2, **data)
         ax = fig.axes[0]
         assert isinstance(fig, Figure)

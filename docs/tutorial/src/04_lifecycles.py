@@ -281,7 +281,7 @@ deletes[deletes["timestamp"] > end - pd.Timedelta(seconds=2)]["id"].nunique()
 # %%
 from ob_analytics.visualization import plot, prepare
 
-fig = plot("order_outcome", level="L3", **prepare.order_outcome_l3(result.events))
+fig = plot("order_outcome", level="L3", **prepare.order_outcome(result.events))
 
 # %% [markdown]
 # The green fills cluster at the dashed touch line while the orange

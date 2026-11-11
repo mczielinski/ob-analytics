@@ -42,11 +42,11 @@ from ob_analytics.data import load_data, save_data
 from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
 from ob_analytics.depth_csv import DepthCsvLoader, DepthCsvTradeReader
 from ob_analytics.exceptions import ObAnalyticsError
+from ob_analytics.live import read_manifest
 from ob_analytics.live._manifest import (
     CAPTURE_FORMAT,
     CAPTURE_FORMAT_VERSION,
     MANIFEST_NAME,
-    read_manifest,
 )
 from ob_analytics.lobster import LobsterLoader, LobsterSource
 from ob_analytics.pipeline import Pipeline

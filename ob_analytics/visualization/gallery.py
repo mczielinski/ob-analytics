@@ -3,7 +3,7 @@
 A :class:`GalleryModel` is the single source of truth: leveled order-book
 :class:`PlotConcept` objects (each with up to one :class:`PlotSpec` variant per
 :class:`~ob_analytics.visualization.Level`) plus a separate list of level-less
-analytic panels.  A *view* (``l2`` / ``l3`` / ``both`` / ``comparison``)
+cards.  A *view* (``l2`` / ``l3`` / ``both`` / ``comparison``)
 projects that model into gallery cards; :func:`generate_gallery` renders every
 selected face across the backend (or L2|L3) column axis, saves the figures, and
 writes a standalone HTML page.
@@ -70,7 +70,7 @@ class PlotSpec:
     Parameters
     ----------
     name : str
-        Identifier / file stem for analytic panels (e.g. ``"vpin"``).  For a
+        Identifier / file stem for level-less cards (e.g. ``"vpin"``).  For a
         concept variant the file stem is derived from the concept + level, so
         ``name`` is only metadata there.
     title : str
@@ -216,16 +216,16 @@ def _metric_payload(metric: Any, result: PipelineResult, **settings: Any) -> dic
 _GALLERY_SETTINGS: dict[str, dict[str, Any]] = {"vpin": {"bucket_volume": "fit"}}
 
 
-def _metric_panels(result: PipelineResult) -> list[PlotSpec]:
-    """Build one analytic panel per registered metric that applies to *result*.
+def _metric_cards(result: PipelineResult) -> list[PlotSpec]:
+    """Build one card per registered metric that applies to *result*.
 
     A metric registered in :data:`~ob_analytics.metrics.METRICS` becomes a
     gallery card without any edit here: its ``name`` is the level-less plot
-    concept the panel dispatches on, so a renderer registered at
+    concept the card dispatches on, so a renderer registered at
     ``(name, None, backend)`` draws it.  A metric that does not apply to
     this run (see :func:`~ob_analytics.metrics.skip_reason`) is skipped.
 
-    The metric is computed when its panel is prepared, not here, so building
+    The metric is computed when its card is prepared, not here, so building
     the model (which every :func:`plot_result` call does) costs nothing for
     the metrics it does not draw.  A metric that raises fails only its own
     card, which says why.
@@ -446,8 +446,8 @@ def build_gallery_model(
     level whose data the run has: a price-level (L2) run has no per-order
     events, so it gets the L2 faces only.  A concept with both an L2 and an
     L3 variant is :attr:`~PlotConcept.comparable`.  The analytics are one
-    panel per registered metric that applies to the run; callers may append
-    more (built with the ``*_panel`` helpers) to :attr:`GalleryModel.analytics`.
+    card per registered metric that applies to the run; callers may append
+    more (built with the ``*_card`` helpers) to :attr:`GalleryModel.analytics`.
 
     Parameters
     ----------
@@ -511,7 +511,7 @@ def build_gallery_model(
         overlay=_hidden_liquidity_overlay(raw_result, zoom_start, zoom_end, focus),
     )
     return GalleryModel(
-        concepts=_concept_cards(scene), analytics=_metric_panels(raw_result)
+        concepts=_concept_cards(scene), analytics=_metric_cards(raw_result)
     )
 
 
@@ -532,8 +532,8 @@ def plot_result(
     same per-face context (spread, focus window, snapshot, volume scale) via
     :func:`build_gallery_model` -- the single source of truth for how each
     concept binds to its prepare function -- then prepares and renders the face.
-    So ``plot_result(result, "depth_heatmap")`` replaces having to know the
-    private ``prepare_price_levels_data`` name and its argument shape.
+    So ``plot_result(result, "depth_heatmap")`` replaces calling
+    ``prepare.depth_heatmap`` with the run's tables yourself.
 
     Parameters
     ----------
@@ -650,8 +650,8 @@ def available_concepts(result: PipelineResult) -> dict[str, list[str]]:
     return {**concepts, **{spec.name: [] for spec in model.analytics}}
 
 
-def bars_panel(bars_df: pd.DataFrame, *, label: str = "") -> PlotSpec:
-    """Build a bars analytic panel for :attr:`GalleryModel.analytics`.
+def bars_card(bars_df: pd.DataFrame, *, label: str = "") -> PlotSpec:
+    """Build a bars card for :attr:`GalleryModel.analytics`.
 
     *bars_df* is a table from :func:`ob_analytics.bars.bars`.  *label* names
     the rule and threshold it was cut with and is shown in the chart title;
@@ -672,45 +672,7 @@ def bars_panel(bars_df: pd.DataFrame, *, label: str = "") -> PlotSpec:
     )
 
 
-def vpin_panel(vpin_df: pd.DataFrame, *, threshold: float = 0.7) -> PlotSpec:
-    """Build a VPIN analytic panel for :attr:`GalleryModel.analytics`."""
-    return PlotSpec(
-        "vpin",
-        "VPIN",
-        "vpin",
-        _viz_data.prepare_vpin_data,
-        {"vpin_df": vpin_df, "threshold": threshold},
-    )
-
-
-def book_signals_panel(depth_summary: pd.DataFrame, *, levels: int = 5) -> PlotSpec:
-    """Build a predictive touch-signals panel (micro-price vs mid + OBI strip).
-
-    *levels* sets the depth of the cumulative order-book-imbalance line (see
-    :func:`~ob_analytics.depth.book_imbalance`); it is clamped to the depth bins
-    present on *depth_summary*.
-    """
-    return PlotSpec(
-        "book_signals",
-        "Book Signals (micro-price & OBI)",
-        "book_signals",
-        _viz_data.prepare_book_signals_data,
-        {"depth_summary": depth_summary, "levels": levels},
-    )
-
-
-def ofi_panel(ofi_df: pd.DataFrame, trades: pd.DataFrame | None = None) -> PlotSpec:
-    """Build an order-flow-imbalance analytic panel."""
-    return PlotSpec(
-        "ofi",
-        "Order Flow Imbalance",
-        "order_flow_imbalance",
-        _viz_data.prepare_ofi_data,
-        {"ofi_df": ofi_df, "trades": trades},
-    )
-
-
-def ofi_horizon_panel(
+def ofi_horizon_card(
     trades: pd.DataFrame,
     *,
     horizons: tuple[str, ...] = ("5s", "15s", "60s", "300s"),
@@ -718,7 +680,7 @@ def ofi_horizon_panel(
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
 ) -> PlotSpec:
-    """Build an OFI-vs-horizon analytic panel (diverging band per horizon)."""
+    """Build an OFI-vs-horizon card for :attr:`GalleryModel.analytics` (one band per horizon)."""
     return PlotSpec(
         "ofi_horizon",
         "Order Flow Imbalance vs Horizon",
@@ -734,23 +696,8 @@ def ofi_horizon_panel(
     )
 
 
-def transaction_costs_panel(costs: pd.DataFrame, *, window: str = "1min") -> PlotSpec:
-    """Build a transaction-cost panel: effective and realized spread, and impact.
-
-    *costs* is a :func:`~ob_analytics.cost.transaction_costs` frame; *window*
-    is the span the per-trade costs are volume-weighted onto for the lines.
-    """
-    return PlotSpec(
-        "transaction_costs",
-        "Transaction Costs (effective, realized, impact)",
-        "transaction_costs",
-        _viz_data.prepare_transaction_costs_data,
-        {"costs": costs, "window": window},
-    )
-
-
-def kyle_panel(kyle_result: Any) -> PlotSpec:
-    """Build a Kyle's-Lambda analytic panel."""
+def kyle_lambda_card(kyle_result: Any) -> PlotSpec:
+    """Build a Kyle's lambda card for :attr:`GalleryModel.analytics`."""
     return PlotSpec(
         "kyle_lambda",
         f"Kyle's Lambda (lambda={kyle_result.lambda_:.4f})",
@@ -760,8 +707,8 @@ def kyle_panel(kyle_result: Any) -> PlotSpec:
     )
 
 
-def trading_halts_panel(trades: pd.DataFrame, halts: pd.DataFrame) -> PlotSpec:
-    """Build a trading-halts analytic panel.
+def trading_halts_card(trades: pd.DataFrame, halts: pd.DataFrame) -> PlotSpec:
+    """Build a trading-halts card for :attr:`GalleryModel.analytics`.
 
     LOBSTER halts are not part of the slim :class:`PipelineResult`; read them
     from :attr:`~ob_analytics.lobster.LobsterLoader.trading_halts` and pass

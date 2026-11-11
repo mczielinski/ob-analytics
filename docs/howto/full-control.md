@@ -78,7 +78,7 @@ plot(
     "trade_tape",
     level="L2",
     ax=ax1,
-    **prepare.trades(trades, start_time=t3, end_time=t4),
+    **prepare.trade_tape(trades, start_time=t3, end_time=t4, level="L2"),
 )
 ax1.set_title(f"Trades {t3:%H:%M}–{t4:%H:%M}")
 

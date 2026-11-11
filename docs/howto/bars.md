@@ -137,13 +137,13 @@ inside a second — so they get one equal slot each, labelled with their closing
 times. That even spacing *is* the point of an activity bar: it is what puts the
 same amount of market in each one.
 
-To put bars in a gallery, build a panel and append it:
+To put bars in a gallery, build a card and append it:
 
 ```python
-from ob_analytics.visualization.gallery import bars_panel, build_gallery_model, generate_gallery
+from ob_analytics.visualization.gallery import bars_card, build_gallery_model, generate_gallery
 
 model = build_gallery_model(result)
-model.analytics.append(bars_panel(bars(trades, "volume", 0.5)))
+model.analytics.append(bars_card(bars(trades, "volume", 0.5)))
 generate_gallery(result, "gallery/", model=model)
 ```
 

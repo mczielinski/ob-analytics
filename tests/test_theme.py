@@ -26,12 +26,7 @@ from ob_analytics.visualization import (
     Palette,
     PlotTheme,
     plot,
-)
-from ob_analytics.visualization._data import (
-    prepare_book_snapshot_data,
-    prepare_ofi_data,
-    prepare_ofi_horizon_data,
-    prepare_trades_data,
+    prepare,
 )
 from tests._logging import warnings_logged
 
@@ -53,7 +48,7 @@ def trades_data() -> dict:
             ),
         }
     )
-    return prepare_trades_data(trades)
+    return prepare.trade_tape(trades, level="L2")
 
 
 @pytest.fixture
@@ -63,7 +58,7 @@ def book_data() -> dict:
         "bids": np.array([[236.50, 100, 100], [236.00, 200, 300]]),
         "asks": np.array([[237.00, 150, 150], [237.50, 250, 400]]),
     }
-    return prepare_book_snapshot_data(book, per_order=False)
+    return prepare.book_snapshot(book, level="L2")
 
 
 def _mpl_colours(fig) -> set[str]:
@@ -171,7 +166,7 @@ class TestPaletteAcrossBackends:
 def test_ofi_bars_use_buy_and_sell(backend: str) -> None:
     _skip_missing(backend)
     ts = pd.date_range("2015-01-01", periods=4, freq="min")
-    data = prepare_ofi_data(
+    data = prepare.order_flow_imbalance(
         pd.DataFrame({"timestamp": ts, "ofi": [0.3, -0.5, 0.7, -0.4]})
     )
     fig = plot(
@@ -201,7 +196,7 @@ def test_ofi_horizon_uses_buy_and_sell(backend: str) -> None:
     )
     theme = PlotTheme(palette=CUSTOM)
     fig = plot(
-        "ofi_horizon", backend=backend, theme=theme, **prepare_ofi_horizon_data(trades)
+        "ofi_horizon", backend=backend, theme=theme, **prepare.ofi_horizon(trades)
     )
     if backend == "plotly":
         # Plotly fills are rgba() strings built from the palette's hex.

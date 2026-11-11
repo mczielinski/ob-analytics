@@ -451,7 +451,7 @@ def sample_cancellation_events() -> pd.DataFrame:
 
     Each order ``id`` has a ``created`` row carrying ``aggressiveness_bps``
     (placement distance) and a later ``deleted`` row carrying the cancelled
-    volume -- exactly what :func:`prepare_cancellations_l3_data` merges on.
+    volume -- exactly what :func:`~ob_analytics.visualization.prepare.cancellations` merges on at L3.
     """
     ts = pd.Timestamp("2015-05-01 01:00:00", tz="UTC")
     rng = np.random.default_rng(7)
@@ -497,7 +497,7 @@ def sample_order_lifecycle_events() -> pd.DataFrame:
     """Limit-order lifecycles for the order_activity L3 Gantt face.
 
     Three populations exercise every span branch in
-    :func:`prepare_order_activity_l3_data`:
+    :func:`~ob_analytics.visualization.prepare.order_activity` at L3:
 
     - ``flashed-limit`` bids (ids 100-102): created then deleted with unchanged
       volume -- placed and pulled (**cancelled**); the span ends at the delete.
@@ -617,7 +617,7 @@ def sample_executed_orders() -> tuple[pd.DataFrame, pd.DataFrame]:
 
     Returns ``(events, trades)``.  Event lifecycles follow the canonical
     schema (outcomes derive from ``order_lifecycles`` via the ``fill``
-    column); the trades frame feeds :func:`prepare_trade_tape_l3_data`'s
+    column); the trades frame feeds :func:`~ob_analytics.visualization.prepare.trade_tape`'s L3
     maker-bar merge:
 
     - **id 1** (bid): fully filled (maker of trade T1)        -> ``filled``.
@@ -973,9 +973,9 @@ def hidden_liquidity_overlay(
 ) -> dict[str, pd.DataFrame]:
     """The overlay frames for the two fixtures above, unclipped."""
     from ob_analytics.hidden_liquidity import detect_icebergs
-    from ob_analytics.visualization._data import prepare_hidden_liquidity_overlay
+    from ob_analytics.visualization import prepare
 
     detection = detect_icebergs(*iceberg_events_and_trades)
-    return prepare_hidden_liquidity_overlay(
+    return prepare.hidden_liquidity_overlay(
         detection.icebergs, detection.slices, hidden_trade_rows
     )

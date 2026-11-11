@@ -274,14 +274,14 @@ plot(
     "book_snapshot",
     level="L2",
     ax=ax1,
-    **prepare.book_snapshot(order_book(events, tp=t30)),
+    **prepare.book_snapshot(order_book(events, tp=t30), level="L2"),
 )
 ax1.set_title("original toy events", fontsize=10)
 plot(
     "book_snapshot",
     level="L2",
     ax=ax2,
-    **prepare.book_snapshot(order_book(rt.events, tp=t30)),
+    **prepare.book_snapshot(order_book(rt.events, tp=t30), level="L2"),
 )
 ax2.set_title("after the LOBSTER round trip", fontsize=10)
 ax2.set_ylabel("")

@@ -20,9 +20,8 @@ import pytest
 from ob_analytics import DepthCsvSource, Pipeline
 from ob_analytics.config import PipelineConfig
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.live._base import CaptureConfig
+from ob_analytics.live import CaptureConfig, CcxtSettings, CcxtSource
 from ob_analytics.live._runner import run_capturer
-from ob_analytics.live.ccxt_source import CcxtSettings, CcxtSource
 from ob_analytics.schemas import validate_depth_df, validate_trades_df
 from tests.test_ccxt_source import _FakeCcxtExchange
 

@@ -233,7 +233,7 @@ plot(
     level="L2",
     ax=ax_tape,
     theme=DOCS_THEME,
-    **prepare.trades(trades, spread=spread),
+    **prepare.trade_tape(trades, spread=spread, level="L2"),
 )
 for i, line in enumerate(ax_tape.get_lines()):
     line.set_color("#333333")

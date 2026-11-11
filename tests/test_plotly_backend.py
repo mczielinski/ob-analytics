@@ -14,46 +14,28 @@ import pytest
 go = pytest.importorskip("plotly.graph_objects", reason="plotly not installed")
 
 from ob_analytics.exceptions import UnknownNameError
-from ob_analytics.visualization._data import (
-    prepare_book_snapshot_data,
-    prepare_cancellations_l3_data,
-    prepare_event_map_data,
-    prepare_events_histogram_data,
-    prepare_kyle_lambda_data,
-    prepare_liquidity_at_touch_data,
-    prepare_ofi_data,
-    prepare_ofi_horizon_data,
-    prepare_order_activity_l3_data,
-    prepare_order_outcome_l3_data,
-    prepare_price_levels_data,
-    prepare_time_series_data,
-    prepare_trade_tape_l3_data,
-    prepare_trades_data,
-    prepare_volume_map_data,
-    prepare_volume_percentiles_data,
-    prepare_vpin_data,
-)
+from ob_analytics.visualization import prepare
 from ob_analytics.visualization._plotly import (
     _biased_color_norm,
     plotly_book_snapshot_aggregate,
     plotly_book_snapshot_per_order,
+    plotly_cancellations_aggregate,
     plotly_cancellations_per_order,
     plotly_depth_chart_aggregate,
     plotly_depth_chart_per_order,
-    plotly_event_map,
+    plotly_depth_heatmap,
     plotly_events_histogram,
     plotly_kyle_lambda,
-    plotly_liquidity_at_touch,
+    plotly_liquidity_at_touch_aggregate,
     plotly_liquidity_at_touch_per_order,
     plotly_ofi_horizon,
+    plotly_order_activity_aggregate,
     plotly_order_activity_per_order,
     plotly_order_flow_imbalance,
     plotly_order_outcome_per_order,
-    plotly_price_levels,
     plotly_time_series,
+    plotly_trade_tape_aggregate,
     plotly_trade_tape_per_order,
-    plotly_trades,
-    plotly_volume_map,
     plotly_volume_percentiles,
     plotly_vpin,
 )
@@ -135,7 +117,7 @@ class TestPlotlyTimeSeries:
     def test_returns_plotly_figure(self) -> None:
         ts = pd.Series(pd.date_range("2015-01-01", periods=5, freq="s"))
         vals = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0])
-        data = prepare_time_series_data(ts, vals)
+        data = prepare.time_series(ts, vals)
         fig = plotly_time_series(data)
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 1
@@ -143,29 +125,29 @@ class TestPlotlyTimeSeries:
 
 class TestPlotlyTrades:
     def test_returns_plotly_figure(self, sample_trades: pd.DataFrame) -> None:
-        data = prepare_trades_data(sample_trades)
-        fig = plotly_trades(data)
+        data = prepare.trade_tape(sample_trades, level="L2")
+        fig = plotly_trade_tape_aggregate(data)
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 1
 
     def test_has_lollipop_traces(self, sample_trades: pd.DataFrame) -> None:
         # §3.4: signed lollipops by aggressor side, not one "Price" step line.
-        data = prepare_trades_data(sample_trades)
-        fig = plotly_trades(data)
+        data = prepare.trade_tape(sample_trades, level="L2")
+        fig = plotly_trade_tape_aggregate(data)
         names = {tr.name for tr in fig.data}
         assert "buy (lifts ask)" in names
         assert "sell (hits bid)" in names
 
     def test_l2_ylabel_is_price(self, sample_trades: pd.DataFrame) -> None:
-        data = prepare_trades_data(sample_trades)
-        fig = plotly_trades(data)
+        data = prepare.trade_tape(sample_trades, level="L2")
+        fig = plotly_trade_tape_aggregate(data)
         assert fig.layout.yaxis.title.text == "Price"
 
     def test_mid_line_is_step(self, sample_trades: pd.DataFrame) -> None:
         # The mid holds until the book changes; linear interpolation would
         # paint a diagonal ramp between sparse samples that never existed.
-        data = prepare_trades_data(sample_trades)
-        fig = plotly_trades(data)
+        data = prepare.trade_tape(sample_trades, level="L2")
+        fig = plotly_trade_tape_aggregate(data)
         mid = next(tr for tr in fig.data if tr.name == "mid")
         assert mid.line.shape == "hv"
 
@@ -209,8 +191,8 @@ class TestPlotlyPriceLevels:
         # Use a minimal depth-like DataFrame
         depth = sample_events[["timestamp", "price", "volume"]].copy()
         depth["direction"] = "bid"
-        data = prepare_price_levels_data(depth)
-        fig = plotly_price_levels(data)
+        data = prepare.depth_heatmap(depth)
+        fig = plotly_depth_heatmap(data)
         assert isinstance(fig, go.Figure)
 
     def test_real_volume_rides_along_as_customdata(
@@ -218,8 +200,8 @@ class TestPlotlyPriceLevels:
     ) -> None:
         depth = sample_events[["timestamp", "price", "volume"]].copy()
         depth["direction"] = "bid"
-        data = prepare_price_levels_data(depth, col_bias=0.1)
-        fig = plotly_price_levels(data)
+        data = prepare.depth_heatmap(depth, col_bias=0.1)
+        fig = plotly_depth_heatmap(data)
         depth_trace = next(tr for tr in fig.data if tr.name == "Depth")
         # Color is the normalized ramp (cmax == 1); hover reads true volume.
         assert depth_trace.marker.cmax == 1
@@ -237,14 +219,14 @@ class TestPlotlyPriceLevels:
                 "best_ask_price": depth["price"] + 0.05,
             }
         )
-        fig = plotly_price_levels(
-            prepare_price_levels_data(depth, spread=spread, show_mp=True)
+        fig = plotly_depth_heatmap(
+            prepare.depth_heatmap(depth, spread=spread, show_mp=True)
         )
         mp = next(tr for tr in fig.data if tr.name == "Midprice")
         assert mp.line.shape == "hv"
 
-        fig = plotly_price_levels(
-            prepare_price_levels_data(depth, spread=spread, show_mp=False)
+        fig = plotly_depth_heatmap(
+            prepare.depth_heatmap(depth, spread=spread, show_mp=False)
         )
         for name in ("Best Ask", "Best Bid"):
             trace = next(tr for tr in fig.data if tr.name == name)
@@ -256,8 +238,8 @@ class TestPlotlyPriceLevels:
         depth = sample_events[["timestamp", "price", "volume"]].copy()
         depth["direction"] = "bid"
         overlay = hidden_liquidity_overlay
-        fig = plotly_price_levels(
-            prepare_price_levels_data(
+        fig = plotly_depth_heatmap(
+            prepare.depth_heatmap(
                 depth,
                 iceberg_lines=overlay["iceberg_lines"],
                 iceberg_refills=overlay["iceberg_refills"],
@@ -276,7 +258,7 @@ class TestPlotlyPriceLevels:
     ) -> None:
         depth = sample_events[["timestamp", "price", "volume"]].copy()
         depth["direction"] = "bid"
-        fig = plotly_price_levels(prepare_price_levels_data(depth))
+        fig = plotly_depth_heatmap(prepare.depth_heatmap(depth))
         names = {tr.name for tr in fig.data}
         assert "Iceberg refill" not in names
         assert "Hidden-order trade" not in names
@@ -284,25 +266,26 @@ class TestPlotlyPriceLevels:
 
 class TestPlotlyEventMap:
     def test_returns_plotly_figure(self, sample_events: pd.DataFrame) -> None:
-        data = prepare_event_map_data(sample_events)
-        fig = plotly_event_map(data)
+        data = prepare.order_activity(sample_events, level="L2")
+        fig = plotly_order_activity_aggregate(data)
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 1
 
     def test_empty_window_draws_no_data(self, sample_events: pd.DataFrame) -> None:
-        data = prepare_event_map_data(
+        data = prepare.order_activity(
             sample_events,
             start_time=pd.Timestamp("2015-05-01 00:00:00"),
             end_time=pd.Timestamp("2015-05-01 00:30:00"),
+            level="L2",
         )
-        fig = plotly_event_map(data)
+        fig = plotly_order_activity_aggregate(data)
         assert "no data" in fig.layout.title.text
 
 
 class TestPlotlyVolumeMap:
     def test_returns_plotly_figure(self, sample_events: pd.DataFrame) -> None:
-        data = prepare_volume_map_data(sample_events)
-        fig = plotly_volume_map(data)
+        data = prepare.cancellations(sample_events, level="L2")
+        fig = plotly_cancellations_aggregate(data)
         assert isinstance(fig, go.Figure)
 
 
@@ -310,7 +293,7 @@ class TestPlotlyCancellationsL3:
     def test_returns_plotly_figure(
         self, sample_cancellation_events: pd.DataFrame
     ) -> None:
-        data = prepare_cancellations_l3_data(sample_cancellation_events)
+        data = prepare.cancellations(sample_cancellation_events, level="L3")
         fig = plotly_cancellations_per_order(data)
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 1
@@ -321,7 +304,7 @@ class TestPlotlyCancellationsL3:
         # §3.3: a server-side-binned density grid per side (not one Scattergl
         # marker per cancelled order) -- reveals the latent populations on
         # log-log axes and keeps the exported HTML small.
-        data = prepare_cancellations_l3_data(sample_cancellation_events)
+        data = prepare.cancellations(sample_cancellation_events, level="L3")
         fig = plotly_cancellations_per_order(data)
         assert fig.data  # at least one populated side
         assert all(trace.type == "heatmap" for trace in fig.data)
@@ -331,7 +314,7 @@ class TestPlotlyOrderActivityL3:
     def test_returns_plotly_figure(
         self, sample_order_lifecycle_events: pd.DataFrame
     ) -> None:
-        data = prepare_order_activity_l3_data(sample_order_lifecycle_events)
+        data = prepare.order_activity(sample_order_lifecycle_events, level="L3")
         fig = plotly_order_activity_per_order(data)
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 1
@@ -342,7 +325,7 @@ class TestPlotlyOrderActivityL3:
         # The per-order lifecycle cloud must use the WebGL Scattergl path (like
         # the L2 event map it pairs with), not the SVG Scatter path that fails to
         # scale to one segment per limit order.
-        data = prepare_order_activity_l3_data(sample_order_lifecycle_events)
+        data = prepare.order_activity(sample_order_lifecycle_events, level="L3")
         fig = plotly_order_activity_per_order(data)
         assert all(trace.type == "scattergl" for trace in fig.data)
 
@@ -352,11 +335,12 @@ class TestPlotlyOrderActivityL3:
         hidden_liquidity_overlay: dict,
     ) -> None:
         overlay = hidden_liquidity_overlay
-        data = prepare_order_activity_l3_data(
+        data = prepare.order_activity(
             sample_order_lifecycle_events,
             iceberg_lines=overlay["iceberg_lines"],
             iceberg_refills=overlay["iceberg_refills"],
             hidden_trades=overlay["hidden_trades"],
+            level="L3",
         )
         fig = plotly_order_activity_per_order(data)
         names = {tr.name for tr in fig.data}
@@ -369,7 +353,7 @@ class TestPlotlyOrderActivityL3:
     def test_no_overlay_adds_no_hidden_liquidity_traces(
         self, sample_order_lifecycle_events: pd.DataFrame
     ) -> None:
-        data = prepare_order_activity_l3_data(sample_order_lifecycle_events)
+        data = prepare.order_activity(sample_order_lifecycle_events, level="L3")
         fig = plotly_order_activity_per_order(data)
         names = {tr.name for tr in fig.data}
         assert "Iceberg refill" not in names
@@ -378,8 +362,8 @@ class TestPlotlyOrderActivityL3:
 
 class TestPlotlyLiquidityAtTouch:
     def test_returns_plotly_figure(self, sample_depth_summary: pd.DataFrame) -> None:
-        data = prepare_liquidity_at_touch_data(sample_depth_summary)
-        fig = plotly_liquidity_at_touch(data)
+        data = prepare.liquidity_at_touch(sample_depth_summary, level="L2")
+        fig = plotly_liquidity_at_touch_aggregate(data)
         assert isinstance(fig, go.Figure)
         # Two aggregate time series: best bid size + best ask size.
         assert len(fig.data) == 2
@@ -387,17 +371,17 @@ class TestPlotlyLiquidityAtTouch:
     def test_uses_svg_scatter(self, sample_depth_summary: pd.DataFrame) -> None:
         # Two small aggregate series -- the SVG Scatter path is appropriate here,
         # unlike the per-order WebGL clouds.
-        data = prepare_liquidity_at_touch_data(sample_depth_summary)
-        fig = plotly_liquidity_at_touch(data)
+        data = prepare.liquidity_at_touch(sample_depth_summary, level="L2")
+        fig = plotly_liquidity_at_touch_aggregate(data)
         assert all(trace.type == "scatter" for trace in fig.data)
 
     def test_event_rug_adds_scattergl_ticks(
         self, sample_depth_summary: pd.DataFrame, sample_events: pd.DataFrame
     ) -> None:
-        data = prepare_liquidity_at_touch_data(
-            sample_depth_summary, events=sample_events
+        data = prepare.liquidity_at_touch(
+            sample_depth_summary, events=sample_events, level="L2"
         )
-        fig = plotly_liquidity_at_touch(data)
+        fig = plotly_liquidity_at_touch_aggregate(data)
         # Two SVG series plus the WebGL rug ticks (created/cancelled).
         assert len(fig.data) > 2
         assert any(trace.type == "scattergl" for trace in fig.data)
@@ -436,7 +420,7 @@ class TestPlotlyOfiHorizon:
         )
 
     def test_returns_banded_subplots(self) -> None:
-        data = prepare_ofi_horizon_data(self._trades())
+        data = prepare.ofi_horizon(self._trades())
         fig = plotly_ofi_horizon(data)
         assert isinstance(fig, go.Figure)
         # Horizon graph = stacked filled scatter bands (one subplot per row),
@@ -457,7 +441,7 @@ class TestPlotlyOfiHorizon:
 class TestPlotlyOrderOutcomeL3:
     def test_returns_plotly_figure(self, sample_executed_orders) -> None:
         events, _trades = sample_executed_orders
-        data = prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
+        data = prepare.order_outcome(events, bps_quantiles=(0.0, 1.0))
         fig = plotly_order_outcome_per_order(data)
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 1
@@ -466,7 +450,7 @@ class TestPlotlyOrderOutcomeL3:
         # One marker per order -> the WebGL Scattergl path, like the other
         # per-order faces.
         events, _trades = sample_executed_orders
-        data = prepare_order_outcome_l3_data(events, bps_quantiles=(0.0, 1.0))
+        data = prepare.order_outcome(events, bps_quantiles=(0.0, 1.0))
         fig = plotly_order_outcome_per_order(data)
         assert all(trace.type == "scattergl" for trace in fig.data)
 
@@ -474,7 +458,9 @@ class TestPlotlyOrderOutcomeL3:
 class TestPlotlyTradeTapeL3:
     def test_returns_plotly_figure(self, sample_executed_orders) -> None:
         events, trades = sample_executed_orders
-        data = prepare_trade_tape_l3_data(events, trades, price_from=0.0, price_to=1e9)
+        data = prepare.trade_tape(
+            events, trades, price_from=0.0, price_to=1e9, level="L3"
+        )
         fig = plotly_trade_tape_per_order(data)
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 1
@@ -483,14 +469,18 @@ class TestPlotlyTradeTapeL3:
         # Both the maker-bar segment cloud and the execution-marker cloud use the
         # WebGL Scattergl path, like the L3 order-activity face it pairs with.
         events, trades = sample_executed_orders
-        data = prepare_trade_tape_l3_data(events, trades, price_from=0.0, price_to=1e9)
+        data = prepare.trade_tape(
+            events, trades, price_from=0.0, price_to=1e9, level="L3"
+        )
         fig = plotly_trade_tape_per_order(data)
         assert all(trace.type == "scattergl" for trace in fig.data)
 
     def test_mid_line_is_step(self, sample_executed_orders) -> None:
         # Same step semantics as the L2 tape: the mid holds between samples.
         events, trades = sample_executed_orders
-        data = prepare_trade_tape_l3_data(events, trades, price_from=0.0, price_to=1e9)
+        data = prepare.trade_tape(
+            events, trades, price_from=0.0, price_to=1e9, level="L3"
+        )
         fig = plotly_trade_tape_per_order(data)
         mid = next(tr for tr in fig.data if tr.name == "mid")
         assert mid.line.shape == "hv"
@@ -498,20 +488,20 @@ class TestPlotlyTradeTapeL3:
 
 class TestPlotlyBookSnapshot:
     def test_aggregate_returns_figure(self, sample_order_book: dict) -> None:
-        data = prepare_book_snapshot_data(sample_order_book, per_order=False)
+        data = prepare.book_snapshot(sample_order_book, level="L2")
         fig = plotly_book_snapshot_aggregate(data)
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 2  # bid + ask bars
 
     def test_per_order_returns_figure(self, sample_order_book: dict) -> None:
-        data = prepare_book_snapshot_data(sample_order_book, per_order=True)
+        data = prepare.book_snapshot(sample_order_book, level="L3")
         fig = plotly_book_snapshot_per_order(data)
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 2
 
     def test_per_order_uses_white_separators(self, sample_order_book: dict) -> None:
         # Dark separators were invisible on the dark plot background; white shows.
-        data = prepare_book_snapshot_data(sample_order_book, per_order=True)
+        data = prepare.book_snapshot(sample_order_book, level="L3")
         fig = plotly_book_snapshot_per_order(data)
         assert any(
             getattr(tr.marker, "line", None) is not None
@@ -521,7 +511,7 @@ class TestPlotlyBookSnapshot:
 
     def test_horizontal_orientation(self, sample_order_book: dict) -> None:
         # §3.1: ladder is horizontal (price on y, size on x).
-        data = prepare_book_snapshot_data(sample_order_book, per_order=False)
+        data = prepare.book_snapshot(sample_order_book, level="L2")
         fig = plotly_book_snapshot_aggregate(data)
         bars = [tr for tr in fig.data if tr.type == "bar"]
         assert bars and all(tr.orientation == "h" for tr in bars)
@@ -540,20 +530,22 @@ class TestPlotlyBookSnapshot:
         # The payload's per_order stamp must match the renderer's level.
         from ob_analytics.exceptions import ConfigError
 
-        data = prepare_book_snapshot_data(sample_order_book, per_order=wrong_per_order)
+        data = prepare.book_snapshot(
+            sample_order_book, level="L3" if wrong_per_order else "L2"
+        )
         with pytest.raises(ConfigError, match="prepare.book_snapshot"):
             renderer(data)
 
 
 class TestPlotlyDepthChart:
     def test_aggregate_returns_figure(self, sample_order_book: dict) -> None:
-        data = prepare_book_snapshot_data(sample_order_book, per_order=False)
+        data = prepare.book_snapshot(sample_order_book, level="L2")
         fig = plotly_depth_chart_aggregate(data)
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 2  # bid + ask step curves
 
     def test_per_order_returns_figure(self, sample_order_book: dict) -> None:
-        data = prepare_book_snapshot_data(sample_order_book, per_order=True)
+        data = prepare.book_snapshot(sample_order_book, level="L3")
         fig = plotly_depth_chart_per_order(data)
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 2
@@ -571,14 +563,16 @@ class TestPlotlyDepthChart:
         # The payload's per_order stamp must match the renderer's level.
         from ob_analytics.exceptions import ConfigError
 
-        data = prepare_book_snapshot_data(sample_order_book, per_order=wrong_per_order)
+        data = prepare.book_snapshot(
+            sample_order_book, level="L3" if wrong_per_order else "L2"
+        )
         with pytest.raises(ConfigError, match="prepare.book_snapshot"):
             renderer(data)
 
 
 class TestPlotlyVolumePercentiles:
     def test_returns_plotly_figure(self, sample_depth_summary: pd.DataFrame) -> None:
-        data = prepare_volume_percentiles_data(sample_depth_summary)
+        data = prepare.volume_percentiles(sample_depth_summary)
         fig = plotly_volume_percentiles(data)
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 20  # 20 asks + 20 bids
@@ -586,12 +580,12 @@ class TestPlotlyVolumePercentiles:
 
 class TestPlotlyEventsHistogram:
     def test_returns_plotly_figure(self, sample_events: pd.DataFrame) -> None:
-        data = prepare_events_histogram_data(sample_events, val="price")
+        data = prepare.events_histogram(sample_events, val="price")
         fig = plotly_events_histogram(data)
         assert isinstance(fig, go.Figure)
 
     def test_empty_window_draws_no_data(self, sample_events: pd.DataFrame) -> None:
-        data = prepare_events_histogram_data(
+        data = prepare.events_histogram(
             sample_events,
             start_time=pd.Timestamp("2015-05-01 00:00:00"),
             end_time=pd.Timestamp("2015-05-01 00:30:00"),
@@ -611,7 +605,7 @@ class TestPlotlyVpin:
                 "vpin_avg": [0.3, 0.4, 0.5, 0.45, 0.5],
             }
         )
-        data = prepare_vpin_data(vpin_df)
+        data = prepare.vpin(vpin_df)
         fig = plotly_vpin(data)
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 2  # bar + rolling avg line
@@ -621,7 +615,7 @@ class TestPlotlyVpin:
         # overlapping at sub-second cadence.  width is set in ms (60s bucket).
         ts = pd.date_range("2015-01-01", periods=5, freq="min")
         vpin_df = pd.DataFrame({"timestamp_end": ts, "vpin": [0.3, 0.5, 0.7, 0.4, 0.6]})
-        data = prepare_vpin_data(vpin_df)
+        data = prepare.vpin(vpin_df)
         fig = plotly_vpin(data)
         bar = next(tr for tr in fig.data if tr.type == "bar")
         # 0.6 * 60s bucket = 36s = 36_000 ms.
@@ -636,7 +630,7 @@ class TestPlotlyVpin:
                 "vpin_avg": pd.Series(dtype="float64"),
             }
         )
-        fig = plotly_vpin(prepare_vpin_data(vpin_df))
+        fig = plotly_vpin(prepare.vpin(vpin_df))
         assert "no complete buckets" in fig.layout.title.text
         assert len(fig.data) == 0
 
@@ -645,7 +639,7 @@ class TestPlotlyOfi:
     def test_returns_plotly_figure(self) -> None:
         ts = pd.date_range("2015-01-01", periods=5, freq="min")
         ofi_df = pd.DataFrame({"timestamp": ts, "ofi": [0.3, -0.5, 0.7, -0.4, 0.6]})
-        data = prepare_ofi_data(ofi_df)
+        data = prepare.order_flow_imbalance(ofi_df)
         fig = plotly_order_flow_imbalance(data)
         assert isinstance(fig, go.Figure)
 
@@ -663,7 +657,7 @@ class TestPlotlyKyleLambda:
             r_squared = 0.5
             t_stat = 2.1
 
-        data = prepare_kyle_lambda_data(FakeResult())
+        data = prepare.kyle_lambda(FakeResult())
         fig = plotly_kyle_lambda(data)
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 2  # scatter + regression line
@@ -678,24 +672,24 @@ class TestBackendDispatch:
     def test_plotly_backend_returns_plotly_figure(
         self, sample_trades: pd.DataFrame
     ) -> None:
-        from ob_analytics.visualization import Level, _data, plot
+        from ob_analytics.visualization import Level, plot, prepare
 
         fig = plot(
             "trade_tape",
             Level.L2,
             backend="plotly",
-            **_data.prepare_trades_data(sample_trades),
+            **prepare.trade_tape(sample_trades, level="L2"),
         )
         assert isinstance(fig, go.Figure)
 
     def test_invalid_backend_raises(self, sample_trades: pd.DataFrame) -> None:
-        from ob_analytics.visualization import _data, plot
+        from ob_analytics.visualization import plot, prepare
 
         with pytest.raises(UnknownNameError, match="Unknown plot backend"):
             plot(
                 "trade_tape",
                 backend="nonexistent",
-                **_data.prepare_trades_data(sample_trades),
+                **prepare.trade_tape(sample_trades, level="L2"),
             )
 
 
@@ -703,19 +697,19 @@ class TestPlotlyPriceView:
     def test_returns_figure_with_microprice(
         self, sample_depth_summary: pd.DataFrame
     ) -> None:
-        from ob_analytics.visualization._data import prepare_price_view_data
+        from ob_analytics.visualization import prepare
         from ob_analytics.visualization._plotly import plotly_price_view
 
-        fig = plotly_price_view(prepare_price_view_data(sample_depth_summary))
+        fig = plotly_price_view(prepare.price_view(sample_depth_summary))
         assert isinstance(fig, go.Figure)
         assert "microprice" in {tr.name for tr in fig.data}
 
 
 class TestPlotlyTradeSize:
     def test_returns_figure_log_x(self, sample_trades: pd.DataFrame) -> None:
-        from ob_analytics.visualization._data import prepare_trade_size_data
+        from ob_analytics.visualization import prepare
         from ob_analytics.visualization._plotly import plotly_trade_size
 
-        fig = plotly_trade_size(prepare_trade_size_data(sample_trades))
+        fig = plotly_trade_size(prepare.trade_size(sample_trades))
         assert isinstance(fig, go.Figure)
         assert fig.layout.xaxis.type == "log"

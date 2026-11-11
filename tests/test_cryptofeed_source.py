@@ -58,29 +58,20 @@ def _l2_venue(exchange_id: str = "fakel2") -> _FakeExchangeCls:
 
 class TestLevelDiscovery:
     def test_venue_declaring_l3_book_is_l3(self):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
         assert src.level is Level.L3
 
     def test_venue_without_l3_book_is_l2(self):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l2_venue()))
         assert src.level is Level.L2
 
     def test_explicit_l2_on_an_l3_venue_is_honoured(self):
         """An L3-capable venue can still be captured at L2 on request."""
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         src = CryptofeedSource(
             settings=CryptofeedSettings(exchange=_l3_venue(), level=Level.L2)
@@ -89,10 +80,7 @@ class TestLevelDiscovery:
 
     def test_explicit_l3_on_an_l2_only_venue_errors(self):
         """Coinbase no longer publishes L3 in cryptofeed; asking must not fake it."""
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         src = CryptofeedSource(
             settings=CryptofeedSettings(exchange=_l2_venue("coinbase"), level=Level.L3)
@@ -102,10 +90,7 @@ class TestLevelDiscovery:
 
     def test_an_unknown_venue_answers_l2_until_the_capture_starts(self, monkeypatch):
         """An unknown venue id does not break reading ``level`` or the venue."""
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         def unknown(self):
             raise UnknownNameError("cryptofeed exchange", "nope", ["bitstamp"])
@@ -161,10 +146,7 @@ class _FakeInnerBook:
 
 class TestL2Translation:
     def _source(self):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         return CryptofeedSource(settings=CryptofeedSettings(exchange=_l2_venue()))
 
@@ -239,10 +221,7 @@ def _l3_book(levels, **kw):
 
 class TestL3Translation:
     def _source(self):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         return CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
 
@@ -385,10 +364,7 @@ class TestL3Translation:
 class TestRepeatedDelta:
     def test_a_delta_that_repeats_an_order_writes_nothing(self):
         """On a venue whose trades name no orders, as on one whose trades do."""
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
         src._fill_events(_FakeTrade())  # a tape that names no orders
@@ -427,10 +403,7 @@ class _FakeTrade:
 
 class TestTradeTranslation:
     def _source(self):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         return CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
 
@@ -471,10 +444,7 @@ class TestOrderIdsArePassedThrough:
     re-labelled."""
 
     def _source(self):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         return CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
 
@@ -561,7 +531,7 @@ class _FakeFeedHandler:
 
 
 def _capture_cfg(tmp_path, **kw):
-    from ob_analytics.live._base import CaptureConfig
+    from ob_analytics.live import CaptureConfig
 
     return CaptureConfig(
         pair=kw.pop("pair", "BTC-USD"),
@@ -572,7 +542,7 @@ def _capture_cfg(tmp_path, **kw):
 
 
 def _source_with(exchange, script, **settings_kw):
-    from ob_analytics.live.cryptofeed_source import CryptofeedSettings, CryptofeedSource
+    from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
     return CryptofeedSource(
         settings=CryptofeedSettings(
@@ -743,10 +713,7 @@ class TestRunTermination:
             async def _drive(self):
                 await asyncio.sleep(3600)
 
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         src = CryptofeedSource(
             settings=CryptofeedSettings(
@@ -767,25 +734,21 @@ class TestRegistration:
     def test_registered_without_the_extra_installed(self):
         """Importing the module must never require cryptofeed, so the source is
         listed (and discoverable) whether or not the extra is present."""
-        from ob_analytics.live.cryptofeed_source import CryptofeedSource
+        from ob_analytics.live import CryptofeedSource
         from ob_analytics.sources import get_source, list_sources
 
         assert "cryptofeed" in list_sources()
         assert get_source("cryptofeed") is CryptofeedSource
 
     def test_is_a_livesource(self):
-        from ob_analytics.live import LiveSource
-        from ob_analytics.live.cryptofeed_source import CryptofeedSource
+        from ob_analytics.live import CryptofeedSource, LiveSource
 
         assert isinstance(CryptofeedSource(), LiveSource)
 
     def test_a_string_venue_needs_the_extra_or_a_clear_error(self):
         """Without cryptofeed installed, a venue id must fail with an install
         hint rather than an obscure ImportError deep in the run."""
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         src = CryptofeedSource(settings=CryptofeedSettings(exchange="bitstamp"))
         if _CRYPTOFEED_INSTALLED:
@@ -795,7 +758,7 @@ class TestRegistration:
                 src._exchange_class()
 
     def test_empty_venue_errors_clearly(self):
-        from ob_analytics.live.cryptofeed_source import CryptofeedSource
+        from ob_analytics.live import CryptofeedSource
 
         with pytest.raises(ValueError, match="exchange"):
             CryptofeedSource()._exchange_class()
@@ -803,10 +766,7 @@ class TestRegistration:
     def test_level_is_reported_once_the_venue_resolves(self):
         """A string venue id needs the exchange map before its channels can be
         read, so the level is discovered on first access."""
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
         assert src._level is None  # not resolved yet
@@ -819,8 +779,8 @@ class TestCliWiring:
         import pandas as pd
 
         from ob_analytics import cli
-        from ob_analytics.live._base import CaptureResult
-        from ob_analytics.live.cryptofeed_source import (
+        from ob_analytics.live import (
+            CaptureResult,
             CryptofeedSettings,
             CryptofeedSource,
         )
@@ -880,10 +840,7 @@ class TestCliWiring:
 @pytest.mark.skipif(not _CRYPTOFEED_INSTALLED, reason="cryptofeed extra not installed")
 class TestCryptofeedInstalled:
     def test_unknown_venue_raises(self):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         src = CryptofeedSource(
             settings=CryptofeedSettings(exchange="not_a_real_venue_xyz")
@@ -893,10 +850,7 @@ class TestCryptofeedInstalled:
 
     def test_a_real_l3_venue_discovers_l3(self):
         """bitstamp publishes a per-order book in cryptofeed."""
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         src = CryptofeedSource(settings=CryptofeedSettings(exchange="bitstamp"))
         assert src.level is Level.L3
@@ -904,10 +858,7 @@ class TestCryptofeedInstalled:
     def test_a_real_l2_only_venue_discovers_l2(self):
         """Coinbase publishes price-level data only -- issue #134 assumed
         otherwise, which is why the level is discovered rather than hardcoded."""
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         src = CryptofeedSource(settings=CryptofeedSettings(exchange="coinbase"))
         assert src.level is Level.L2
@@ -928,10 +879,7 @@ class TestCryptofeedInstalled:
         assert exc.value.code == 1
 
     def test_forcing_l3_on_a_real_l2_only_venue_raises(self):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         src = CryptofeedSource(
             settings=CryptofeedSettings(exchange="binance", level=Level.L3)
@@ -941,10 +889,7 @@ class TestCryptofeedInstalled:
 
     def test_an_unknown_venue_answers_l2_until_the_capture_starts(self, monkeypatch):
         """An unknown venue id does not break reading ``level`` or the venue."""
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         def unknown(self):
             raise UnknownNameError("cryptofeed exchange", "nope", ["bitstamp"])
@@ -1039,10 +984,7 @@ class TestSequenceDiagnostics:
     not counted, and only a number lower than the one before is."""
 
     def _source(self):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         return CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
 
@@ -1186,10 +1128,7 @@ class TestResyncDiagnostics:
     _OPEN = ("open", None)
 
     def _source(self):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         return CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
 
@@ -1293,10 +1232,7 @@ class TestDeltaFailureLeavesStateIntact:
     events handed to the sink have to agree, or every later diff is wrong."""
 
     def _source(self):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         return CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
 
@@ -1329,19 +1265,13 @@ class TestVenueNamingIsConsistent:
     def test_diagnostics_use_the_resolved_venue_id(self):
         from cryptofeed.exchanges import EXCHANGE_MAP
 
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         src = CryptofeedSource(settings=CryptofeedSettings(exchange="bitstamp"))
         assert src.diagnostics()["exchange"] == EXCHANGE_MAP["BITSTAMP"].id
 
     def test_event_venue_matches_diagnostics(self):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         src = CryptofeedSource(settings=CryptofeedSettings(exchange="bitstamp"))
         src._resolve_symbol(
@@ -1497,10 +1427,7 @@ class TestBookWindow:
     """An order that drops out of a cut-off book has left the view, not the book."""
 
     def _source(self, venue=None):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         return CryptofeedSource(
             settings=CryptofeedSettings(exchange=venue or _bitstamp_venue())
@@ -1561,10 +1488,7 @@ class TestBookWindow:
 
 class TestReceiptClock:
     def _source(self):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         return CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
 
@@ -1592,10 +1516,7 @@ class TestReceiptClock:
 
     def test_an_l2_book_without_venue_time_copies_the_receipt_time(self):
         """Kraken's L2 book sends no time either (#310)."""
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l2_venue()))
         rows = src._l2_rows(
@@ -1664,10 +1585,7 @@ class TestClocks:
     @staticmethod
     def _held(venue_time):
         """A source holding one book row received at 10.0 s."""
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l2_venue()))
         (row,) = src._l2_rows(
@@ -1789,10 +1707,7 @@ class TestClocks:
 
     @staticmethod
     def _idle_source(script):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         return CryptofeedSource(
             settings=CryptofeedSettings(
@@ -1902,10 +1817,7 @@ def _tape_trade(buy, sell, *, amount="0.5", timestamp=1_700_000_010.0, side="buy
 
 class TestTradeOrderIds:
     def _source(self):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         return CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
 
@@ -1922,10 +1834,7 @@ class TestFillsFromTheTape:
     """A trade that names a tracked order reports its fill (#284)."""
 
     def _source(self):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         return CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
 
@@ -1997,10 +1906,7 @@ class TestHeldDeletes:
     """A book that leaves out a filled order before its trade arrives (#284)."""
 
     def _source(self):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
         # Once a trade has named an order, the tape is known to name them.
@@ -2075,10 +1981,7 @@ class TestHeldDeletes:
         assert (gone["id"], gone["action"]) == ("s1", "deleted")
 
     def test_without_order_ids_on_the_tape_the_delete_is_immediate(self):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
         src._fill_events(_FakeTrade())  # a tape that names no orders
@@ -2144,10 +2047,7 @@ class TestIndependentReserveTrades:
     SENT = 1_700_000_010.05
 
     def _source(self):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
         src._l3_events(_ir_delta("ask", "m1", 101.0, 1.0, 1_700_000_000.0))
@@ -2285,20 +2185,14 @@ class TestIndependentReserveTrades:
 
 class TestTradeAttribution:
     def test_an_l3_capture_names_the_maker_only(self):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
         from ob_analytics.protocols import TradeAttribution
 
         src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
         assert src.trade_attribution is TradeAttribution.MAKER_ONLY
 
     def test_an_l2_capture_names_neither(self):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
         from ob_analytics.protocols import TradeAttribution
 
         src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l2_venue()))
@@ -2311,19 +2205,13 @@ class TestTradeAttribution:
 
 class TestFeedType:
     def test_an_l3_capture_is_a_matched_book(self):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
         assert src.feed_type is FeedType.MATCHED_BOOK
 
     def test_an_l2_capture_is_price_levels(self):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l2_venue()))
         assert src.feed_type is FeedType.PRICE_LEVELS
@@ -2409,10 +2297,7 @@ class TestIndependentReserveKeepsChangedOrders:
         """Return (feed, connection, book callbacks) for BTC-AUD."""
         from cryptofeed.symbols import Symbols
 
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         feed_cls = CryptofeedSource(
             CryptofeedSettings(exchange="independent_reserve")
@@ -2472,10 +2357,7 @@ class TestIndependentReserveKeepsChangedOrders:
     def test_venue_id_resolves_to_the_fixed_feed(self):
         from cryptofeed.exchanges import EXCHANGE_MAP
 
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         stock = EXCHANGE_MAP["INDEPENDENT_RESERVE"]
         feed_cls = CryptofeedSource(
@@ -2488,10 +2370,7 @@ class TestIndependentReserveKeepsChangedOrders:
     def test_cryptofeed_class_also_gets_the_fixed_feed(self):
         from cryptofeed.exchanges import EXCHANGE_MAP
 
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         stock = EXCHANGE_MAP["INDEPENDENT_RESERVE"]
         by_class = CryptofeedSource(CryptofeedSettings(exchange=stock))
@@ -2618,10 +2497,7 @@ class TestOtherMarketTrades:
         assert (meta["trade_events"], meta["other_market_trades"]) == (1, 1)
 
     def test_its_fill_carries_the_capture_symbol(self, tmp_path):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
         src._resolve_symbol(_capture_cfg(tmp_path, pair="BTC-AUD"))
@@ -2665,10 +2541,7 @@ class TestOtherMarketTrades:
         assert (meta["trade_events"], meta["other_market_trades"]) == (0, 1)
 
     def test_without_a_run_symbol_every_trade_is_kept(self):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         src = CryptofeedSource(settings=CryptofeedSettings(exchange=_l3_venue()))
         assert not src._other_market(_FakeTrade(symbol="BTC-SGD"))
@@ -2679,7 +2552,7 @@ class TestNoVenue:
 
     def test_level_feed_type_and_attribution_all_say_l2(self):
         from ob_analytics.capture_record import source_declarations
-        from ob_analytics.live.cryptofeed_source import CryptofeedSource
+        from ob_analytics.live import CryptofeedSource
         from ob_analytics.protocols import TradeAttribution
 
         src = CryptofeedSource()
@@ -2691,10 +2564,7 @@ class TestNoVenue:
         assert declared["trade_attribution"] == TradeAttribution.NONE.value
 
     def test_a_requested_l3_stands_for_all_three(self):
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
         from ob_analytics.protocols import TradeAttribution
 
         src = CryptofeedSource(settings=CryptofeedSettings(level=Level.L3))

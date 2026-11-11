@@ -235,11 +235,8 @@ class TestIndependentReserveOpeningBook:
 
 class TestTheSourceUsesTheCorrectedFeed:
     def test_independent_reserve_resolves_to_the_corrected_feed(self):
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
         from ob_analytics.live._cryptofeed_venues import IndependentReserveFeed
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
 
         src = CryptofeedSource(
             settings=CryptofeedSettings(exchange="independent_reserve")
@@ -250,11 +247,8 @@ class TestTheSourceUsesTheCorrectedFeed:
     def test_a_caller_s_own_class_gets_the_corrected_feed_too(self):
         from cryptofeed.exchanges import IndependentReserve
 
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
         from ob_analytics.live._cryptofeed_venues import IndependentReserveFeed
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
 
         class Mine(IndependentReserve):
             pass
@@ -271,10 +265,7 @@ class TestTheSourceUsesTheCorrectedFeed:
     def test_other_venues_keep_cryptofeed_s_feed(self):
         from cryptofeed.exchanges import EXCHANGE_MAP
 
-        from ob_analytics.live.cryptofeed_source import (
-            CryptofeedSettings,
-            CryptofeedSource,
-        )
+        from ob_analytics.live import CryptofeedSettings, CryptofeedSource
 
         src = CryptofeedSource(settings=CryptofeedSettings(exchange="bitstamp"))
         assert src._exchange_class() is EXCHANGE_MAP["BITSTAMP"]

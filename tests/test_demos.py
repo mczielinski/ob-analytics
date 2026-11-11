@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 
 from ob_analytics._demos import (
-    _lobster_analytics_panels,
+    _lobster_analytics_cards,
     run_bitstamp_demo,
 )
 from ob_analytics.bitstamp import BitstampSource
@@ -29,21 +29,21 @@ def halts(result: PipelineResult) -> pd.DataFrame:
     return pd.DataFrame({"timestamp": [result.trades["timestamp"].iloc[0]]})
 
 
-def _panel(panels, key):
-    return next(p for p in panels if p.name == key)
+def _card(cards, key):
+    return next(c for c in cards if c.name == key)
 
 
-class TestLobsterAnalyticsPanels:
+class TestLobsterAnalyticsCards:
     def test_fixture_stores_ticks(self, result: PipelineResult) -> None:
         # Guard: if prices were already floats the tests below would pass
-        # whether or not the panels convert.
+        # whether or not the cards convert.
         assert pd.api.types.is_integer_dtype(result.trades["price"])
 
-    def test_trading_halts_panel_prices_are_display_units(
+    def test_trading_halts_card_prices_are_display_units(
         self, result: PipelineResult, halts: pd.DataFrame
     ) -> None:
-        panel = _panel(_lobster_analytics_panels(result, halts), "trading_halts")
-        data = panel.prepare(**panel.prep_kwargs)
+        card = _card(_lobster_analytics_cards(result, halts), "trading_halts")
+        data = card.prepare(**card.prep_kwargs)
 
         expected = display_result(result).trades["price"].to_numpy()
         got = data["trades"]["price"].to_numpy()
@@ -51,8 +51,8 @@ class TestLobsterAnalyticsPanels:
         assert got == pytest.approx(expected)
         assert got.max() < result.trades["price"].max()
 
-    def test_no_halts_no_halts_panel(self, result: PipelineResult) -> None:
-        keys = {p.name for p in _lobster_analytics_panels(result, None)}
+    def test_no_halts_no_halts_card(self, result: PipelineResult) -> None:
+        keys = {p.name for p in _lobster_analytics_cards(result, None)}
         assert "trading_halts" not in keys
 
 

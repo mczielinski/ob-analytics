@@ -74,7 +74,7 @@ def plot_queue_story(
     """
     from ob_analytics.visualization import plot, prepare
 
-    payload = prepare.queue_position_l3(events)
+    payload = prepare.queue_position(events)
     actor_of = dict(zip(events["id"], events[actor_col].astype(str)))
 
     fig = plt.figure(figsize=(13, 7.2))
@@ -147,11 +147,12 @@ def plot_lifecycle_story(
     from ob_analytics.visualization import plot, prepare
 
     prices = events.loc[events["price"] > 0, "price"]
-    payload = prepare.order_activity_l3(
+    payload = prepare.order_activity(
         events,
         price_from=prices.min() - 0.5,
         price_to=prices.max() + 0.5,
         end_time=events["timestamp"].max() + pd.Timedelta(seconds=pad_end_s),
+        level="L3",
     )
     if at_s is None:
         fig, ax = plt.subplots(figsize=(11, 5.2))
@@ -327,7 +328,7 @@ def plot_toy_depth_heatmap(
         level="L2",
         ax=ax,
         theme=DOCS_THEME,
-        **prepare.price_levels(
+        **prepare.depth_heatmap(
             depth,
             spread=spread,
             trades=trades,
@@ -379,7 +380,7 @@ def plot_sample_heatmap(
         level="L2",
         ax=ax,
         theme=DOCS_THEME,
-        **prepare.price_levels(
+        **prepare.depth_heatmap(
             result.depth,
             spread=get_spread(result.depth_summary),
             trades=result.trades,

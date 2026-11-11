@@ -20,7 +20,7 @@ from ob_analytics.flow_toxicity import (
     order_flow_imbalance,
     vpin_bucket_volume,
 )
-from ob_analytics.visualization._data import prepare_vpin_data
+from ob_analytics.visualization import prepare
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -371,7 +371,7 @@ class TestKyleLambdaDiagnostics:
         assert vpin.attrs["bucket_volume_rule"] == "adv/50"
         assert vpin.attrs["bucket_volume"] == pytest.approx(vpin_bucket_volume(trades))
         # Nothing changed, so the gallery card has nothing to explain.
-        assert prepare_vpin_data(vpin)["note"] == ""
+        assert prepare.vpin(vpin)["note"] == ""
 
     def test_fit_sizes_a_short_capture_from_its_total(self):
         trades = _trades(["buy", "sell"] * 50)  # 100 trades over 99 seconds
@@ -765,7 +765,7 @@ import matplotlib
 matplotlib.use("Agg")
 from matplotlib.figure import Figure
 
-from ob_analytics.visualization import _data, plot
+from ob_analytics.visualization import plot
 
 # Built at import time (parametrize arguments are evaluated on collection,
 # where a pytest mark does not apply), so the warning is silenced inline.
@@ -780,7 +780,7 @@ class TestFlowToxicityPlots:
         """plot_vpin returns a Figure."""
         trades = _trades(["buy"] * 10, volumes=[1.0] * 10)
         vpin_df = compute_vpin(trades, bucket_volume=2.0)
-        fig = plot("vpin", **_data.prepare_vpin_data(vpin_df))
+        fig = plot("vpin", **prepare.vpin(vpin_df))
         assert isinstance(fig, Figure)
 
     @pytest.mark.parametrize(
@@ -795,7 +795,7 @@ class TestFlowToxicityPlots:
     )
     def test_plot_vpin_empty_draws_no_buckets(self, vpin_df):
         """Zero buckets draws an empty panel instead of raising."""
-        ax = plot("vpin", **_data.prepare_vpin_data(vpin_df)).axes[0]
+        ax = plot("vpin", **prepare.vpin(vpin_df)).axes[0]
         # The theme places titles on the left; read every slot.
         title = " ".join(ax.get_title(loc=s) for s in ("left", "center", "right"))
         assert "no complete buckets" in title
@@ -808,7 +808,7 @@ class TestFlowToxicityPlots:
             volumes=[1.0] * 10,
         )
         ofi_df = order_flow_imbalance(trades, window="1min")
-        fig = plot("order_flow_imbalance", **_data.prepare_ofi_data(ofi_df))
+        fig = plot("order_flow_imbalance", **prepare.order_flow_imbalance(ofi_df))
         assert isinstance(fig, Figure)
 
     def test_plot_ofi_with_price_overlay(self):
@@ -819,7 +819,9 @@ class TestFlowToxicityPlots:
             prices=[100.0 + i for i in range(10)],
         )
         ofi_df = order_flow_imbalance(trades, window="1min")
-        fig = plot("order_flow_imbalance", **_data.prepare_ofi_data(ofi_df, trades))
+        fig = plot(
+            "order_flow_imbalance", **prepare.order_flow_imbalance(ofi_df, trades)
+        )
         assert isinstance(fig, Figure)
 
     def test_plot_kyle_lambda_returns_figure(self):
@@ -831,5 +833,5 @@ class TestFlowToxicityPlots:
             base_sec_offsets=[0, 60, 300, 360],
         )
         result = compute_kyle_lambda(trades, window="5min")
-        fig = plot("kyle_lambda", **_data.prepare_kyle_lambda_data(result))
+        fig = plot("kyle_lambda", **prepare.kyle_lambda(result))
         assert isinstance(fig, Figure)
