@@ -63,6 +63,11 @@ from ob_analytics.protocols import (
 )
 from ob_analytics.sources import CliOption
 
+__all__ = [
+    "CcxtSettings",
+    "CcxtSource",
+]
+
 # Per-venue defaults, overridable via CcxtSettings.
 _DEFAULT_DEPTH_LIMIT = 100
 _DEFAULT_POLL_INTERVAL = 1.0  # seconds; REST-poll venues only

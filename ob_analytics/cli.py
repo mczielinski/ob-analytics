@@ -30,6 +30,10 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from ob_analytics.config import PipelineConfig
 
+__all__ = [
+    "main",
+]
+
 
 def _setup_logging(verbose: bool) -> None:
     import matplotlib

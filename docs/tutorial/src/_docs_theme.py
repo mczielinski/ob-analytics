@@ -235,7 +235,7 @@ def plot_book_keyframes(
     for i, (axk, k) in enumerate(zip(axes, ticks)):
         window_start_s = ticks[i - 1] if i > 0 else k - every_s
         tp = t0 + pd.Timedelta(seconds=k)
-        snap = order_book(events, tp=tp)
+        snap = order_book(events, at=tp)
         x_max = 0.0
         for side, color in ((snap["bids"], BID_COLOR), (snap["asks"], ASK_COLOR)):
             lefts: dict[float, float] = {}

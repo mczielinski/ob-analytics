@@ -253,7 +253,8 @@ from ob_analytics.bitstamp import BitstampLoader
 from ob_analytics.config import PipelineConfig
 
 events = BitstampLoader(config=PipelineConfig(track_sequence=True)).load("orders.csv")
-print(detect_sequence_gaps(events, kind=SequenceKind.MONOTONIC))
+gaps = detect_sequence_gaps(events, sequence_kind=SequenceKind.MONOTONIC)
+print(gaps.attrs["n_out_of_order"], len(gaps))  # one row per break
 ```
 
 A venue that publishes no sequence number is never scored, and reports zero.

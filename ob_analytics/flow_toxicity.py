@@ -3,13 +3,13 @@
 Implements market microstructure measures for detecting informed trading and
 quantifying price impact:
 
-* :func:`compute_vpin` — Volume-Synchronized Probability of Informed
+* :func:`vpin` — Volume-Synchronized Probability of Informed
   Trading (Easley, López de Prado & O'Hara, 2012).
-* :func:`compute_kyle_lambda` — Kyle's Lambda price-impact coefficient
+* :func:`kyle_lambda` — Kyle's Lambda price-impact coefficient
   (Kyle, 1985).
 * :func:`order_flow_imbalance` — Normalised buy/sell volume imbalance
   per time window.
-* :func:`ofi_by_horizon` — the same imbalance over several trailing horizons
+* :func:`ofi_by_window` — the same imbalance over several trailing windows
   on one time grid.
 
 All functions accept a trades DataFrame from the pipeline (or any
@@ -55,6 +55,19 @@ from ob_analytics.trade_sign import (
     volume_buckets,
 )
 
+__all__ = [
+    "KYLE_MIN_T_STAT",
+    "KYLE_MIN_WINDOWS",
+    "OFI_WINDOWS",
+    "VPIN_BUCKETS_PER_DAY",
+    "KyleLambdaResult",
+    "kyle_lambda",
+    "ofi_by_window",
+    "order_flow_imbalance",
+    "vpin",
+    "vpin_bucket_volume",
+]
+
 #: Smallest ``|t|`` at which λ counts as distinguishable from zero.  The
 #: usual rule of thumb, about a 5% two-sided test on a large sample.
 KYLE_MIN_T_STAT = 2.0
@@ -65,7 +78,7 @@ KYLE_MIN_WINDOWS = 30
 
 #: Buckets in one average day of volume, for :func:`vpin_bucket_volume`.
 #: Fifty is the rule used by Easley, López de Prado and O'Hara (2012), and
-#: matches the default ``n_buckets`` of :func:`compute_vpin`: the trailing
+#: matches the default ``n_buckets`` of :func:`vpin`: the trailing
 #: average then covers about one day.
 VPIN_BUCKETS_PER_DAY = 50
 
@@ -160,7 +173,7 @@ def vpin_bucket_volume(
     The same formula covers every session length.  A 30-minute capture is
     scaled up to a full day at the rate it traded; a week-long one is averaged
     down to a day.  On a short capture the result is therefore a large bucket,
-    and VPIN will fill only a few of them, which :func:`compute_vpin` then
+    and VPIN will fill only a few of them, which :func:`vpin` then
     reports in its diagnostics.
 
     Parameters
@@ -181,7 +194,7 @@ def vpin_bucket_volume(
     -------
     float
         The bucket volume, in the instrument's own units (BTC, shares,
-        contracts), ready to pass to :func:`compute_vpin` as
+        contracts), ready to pass to :func:`vpin` as
         ``bucket_volume``.
 
     Raises
@@ -214,7 +227,7 @@ def vpin_bucket_volume(
 def _empty_vpin_frame(
     timestamp_dtype: np.dtype | pd.api.extensions.ExtensionDtype,
 ) -> pd.DataFrame:
-    """Zero-row :func:`compute_vpin` result with the standard columns and dtypes.
+    """Zero-row :func:`vpin` result with the standard columns and dtypes.
 
     *timestamp_dtype* is the trades' ``timestamp`` dtype, so the bucket
     bounds keep the same time zone as a non-empty result.
@@ -232,7 +245,7 @@ def _empty_vpin_frame(
     )
 
 
-def compute_vpin(
+def vpin(
     trades: pd.DataFrame,
     bucket_volume: float | Literal["fit"] | None = None,
     n_buckets: int = 50,
@@ -333,13 +346,13 @@ def compute_vpin(
         :data:`~ob_analytics.trade_sign.MAX_VOLUME_BUCKETS` buckets, or is
         left out and the trades span no time (see :func:`vpin_bucket_volume`).
     """
-    validate_columns(trades, {"timestamp", "price", "volume"}, "compute_vpin")
-    validate_non_empty(trades, "compute_vpin")
+    validate_columns(trades, {"timestamp", "price", "volume"}, "vpin")
+    validate_non_empty(trades, "vpin")
     rule = "given"
     advice: str | None = None
     if isinstance(bucket_volume, str) and bucket_volume != "fit":
         raise ConfigError(
-            f"compute_vpin: bucket_volume must be a number, None or 'fit', "
+            f"vpin: bucket_volume must be a number, None or 'fit', "
             f"got {bucket_volume!r}"
         )
     if bucket_volume is None or bucket_volume == "fit":
@@ -347,7 +360,7 @@ def compute_vpin(
         bucket_volume = vpin_bucket_volume(trades)
         rule = f"adv/{VPIN_BUCKETS_PER_DAY}"
         if fit:
-            total = float(trades["volume"].sum()) / size_scale(trades, "compute_vpin")
+            total = float(trades["volume"].sum()) / size_scale(trades, "vpin")
             if total < n_buckets * bucket_volume:
                 # A day's volume ÷ 50 fills fewer than n_buckets buckets: size
                 # them from the total so the trades fill about 2 × n_buckets.
@@ -383,7 +396,7 @@ def compute_vpin(
         # (e.g. "too large for a capture under a day") would be wrong there.
         see_rule = " (see vpin_bucket_volume)" if rule != "given" else ""
         advice = f"Pass a smaller bucket_volume{see_rule} or a smaller n_buckets."
-        warnings.warn(f"compute_vpin: {too_few}. {advice}", stacklevel=2)
+        warnings.warn(f"vpin: {too_few}. {advice}", stacklevel=2)
     result.attrs["bucket_volume"] = float(bucket_volume)
     result.attrs["bucket_volume_rule"] = rule
     result.attrs["n_buckets"] = n_buckets
@@ -405,10 +418,10 @@ def _vpin_from_signs(
     :func:`~ob_analytics.trade_sign.volume_buckets` gives them, and reported in
     the instrument's.
     """
-    scale = size_scale(trades, "compute_vpin")
-    trades = resolve_direction(trades, sign_method, quotes, "compute_vpin")
+    scale = size_scale(trades, "vpin")
+    trades = resolve_direction(trades, sign_method, quotes, "vpin")
     df = trades.sort_values("timestamp").reset_index(drop=True)
-    buckets = volume_buckets(df, bucket_volume, "compute_vpin", advice=advice)
+    buckets = volume_buckets(df, bucket_volume, "vpin", advice=advice)
     if buckets.empty:
         return _empty_vpin_frame(df["timestamp"].dtype)
 
@@ -443,11 +456,9 @@ def _vpin_from_bvc(
     Splits each volume bar with
     :func:`~ob_analytics.trade_sign.bulk_volume_classification` instead of a
     per-trade sign, then measures the same normalised bucket imbalance.
-    Returns the standard :func:`compute_vpin` schema.
+    Returns the standard :func:`vpin` schema.
     """
-    bvc = _bulk_volume_classification(
-        trades, bucket_volume, None, "compute_vpin", advice
-    )
+    bvc = _bulk_volume_classification(trades, bucket_volume, None, "vpin", advice)
     if bvc.empty:
         return _empty_vpin_frame(trades["timestamp"].dtype)
     result = bvc[
@@ -463,7 +474,7 @@ def _vpin_from_bvc(
 # ── Kyle's Lambda ────────────────────────────────────────────────────
 
 
-def compute_kyle_lambda(
+def kyle_lambda(
     trades: pd.DataFrame,
     window: str = "5min",
     *,
@@ -491,7 +502,7 @@ def compute_kyle_lambda(
 
     Works on feeds without a native aggressor side.  When the trades frame
     has no ``direction``, the side is inferred with a trade-sign classifier
-    (see *sign_method*), as for :func:`compute_vpin` and
+    (see *sign_method*), as for :func:`vpin` and
     :func:`order_flow_imbalance`.
 
     Parameters
@@ -511,7 +522,7 @@ def compute_kyle_lambda(
         present, else falls back to a per-trade classifier (Lee–Ready when
         *quotes* are given, otherwise the tick rule).  ``"tick"`` /
         ``"lee_ready"`` force a per-trade classifier, overriding any native
-        ``direction``.  (``"bvc"`` is VPIN-native; use :func:`compute_vpin`.)
+        ``direction``.  (``"bvc"`` is VPIN-native; use :func:`vpin`.)
     quotes : pandas.DataFrame, optional
         Quote frame for ``sign_method="lee_ready"`` — passed through to
         :func:`~ob_analytics.trade_sign.classify_trade_sign`.
@@ -546,17 +557,17 @@ def compute_kyle_lambda(
         Also if *trades* is empty.
         Also if *ci_level* is not between 0 and 1, or *n_boot* is negative.
     """
-    validate_columns(trades, {"timestamp", "price", "volume"}, "compute_kyle_lambda")
-    validate_non_empty(trades, "compute_kyle_lambda")
-    prices = price_scale(trades, "compute_kyle_lambda")
-    sizes = size_scale(trades, "compute_kyle_lambda")
+    validate_columns(trades, {"timestamp", "price", "volume"}, "kyle_lambda")
+    validate_non_empty(trades, "kyle_lambda")
+    prices = price_scale(trades, "kyle_lambda")
+    sizes = size_scale(trades, "kyle_lambda")
     if not 0.0 < ci_level < 1.0:
         raise ConfigError(f"ci_level must be between 0 and 1, got {ci_level}")
     if n_boot < 0:
         raise ConfigError(f"n_boot must not be negative, got {n_boot}")
-    step = fixed_window(window, "compute_kyle_lambda: window")
+    step = fixed_window(window, "kyle_lambda: window")
 
-    trades = resolve_direction(trades, sign_method, quotes, "compute_kyle_lambda")
+    trades = resolve_direction(trades, sign_method, quotes, "kyle_lambda")
     # One time bar per window: ΔPrice is the bar's close minus its open.  The
     # bars keep the frame's units, so both columns are converted here.
     windows = bars(trades, "time", step)
@@ -709,7 +720,7 @@ def order_flow_imbalance(
         *quotes* are given, otherwise the tick rule).  ``"tick"`` /
         ``"lee_ready"`` force a per-trade classifier, overriding any native
         ``direction``.  (``"bvc"`` is VPIN-native; use
-        :func:`compute_vpin`.)
+        :func:`vpin`.)
     quotes : pandas.DataFrame, optional
         Quote frame for ``sign_method="lee_ready"`` — passed through to
         :func:`~ob_analytics.trade_sign.classify_trade_sign`.
@@ -718,7 +729,7 @@ def order_flow_imbalance(
     -------
     pandas.DataFrame
         Columns: ``timestamp`` (the start of the window), ``buy_volume``,
-        ``sell_volume``, ``net_volume`` (in the instrument's own units, BTC,
+        ``sell_volume``, ``signed_volume`` (in the instrument's own units, BTC,
         shares or contracts, whether the trades hold integer lots or display
         sizes), ``ofi``.
 
@@ -756,7 +767,7 @@ def _ofi_windows(
             "timestamp": window_start(windows["timestamp_start"], step),
             "buy_volume": windows["buy_volume"] / sizes,
             "sell_volume": windows["sell_volume"] / sizes,
-            "net_volume": windows["signed_volume"] / sizes,
+            "signed_volume": windows["signed_volume"] / sizes,
         }
     )
     # A ratio of two sizes in the bars' own units, so it needs no conversion.
@@ -764,34 +775,34 @@ def _ofi_windows(
     return out, windows
 
 
-#: Trailing horizons :func:`ofi_by_horizon` measures by default, shortest first.
-OFI_HORIZONS: tuple[str, ...] = ("5s", "15s", "60s", "300s")
+#: Trailing windows :func:`ofi_by_window` measures by default, shortest first.
+OFI_WINDOWS: tuple[str, ...] = ("5s", "15s", "60s", "300s")
 
 
-def ofi_by_horizon(
+def ofi_by_window(
     trades: pd.DataFrame,
-    horizons: tuple[str, ...] = OFI_HORIZONS,
+    windows: tuple[str, ...] = OFI_WINDOWS,
     grid: str = "5s",
     sign_method: str | None = None,
     quotes: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Compute order flow imbalance over several trailing horizons on one grid.
+    """Compute order flow imbalance over several trailing windows on one grid.
 
     :func:`order_flow_imbalance` measures one window at a time.  This measures
-    each of *horizons* at every step of a common time *grid*, so short- and
-    long-horizon pressure can be compared at the same instant.  Each value is
-    a *trailing* window ending at the grid step, not a block of the grid, so a
-    long horizon changes slowly and a short one changes quickly.
+    each of *windows* at every step of a common time *grid*, so pressure over short
+    and long windows can be compared at the same instant.  Each value is a
+    *trailing* window ending at the grid step, not a block of the grid, so a
+    long window changes slowly and a short one changes quickly.
 
     Parameters
     ----------
     trades : pandas.DataFrame
         Trades with ``timestamp`` and ``volume``.  A ``direction`` column is
         used when present; otherwise it is inferred — see *sign_method*.
-    horizons : tuple of str, optional
-        Fixed durations, one per horizon.  Each is rounded to a whole number
+    windows : tuple of str, optional
+        Fixed durations, one per window.  Each is rounded to a whole number
         of *grid* steps, with a minimum of one.  Default
-        :data:`OFI_HORIZONS`.
+        :data:`OFI_WINDOWS`.
     grid : str, optional
         Step of the time grid, a fixed duration.  Default ``"5s"``.  Grid
         steps count from the Unix epoch, as the windows of
@@ -802,24 +813,24 @@ def ofi_by_horizon(
     Returns
     -------
     pandas.DataFrame
-        One row per grid step, with ``timestamp`` and one column per horizon,
+        One row per grid step, with ``timestamp`` and one column per window,
         named by its offset string.  Each value is OFI in ``[-1, +1]`` (buy
         pressure positive), or ``NaN`` when nothing traded in that window.
 
     Raises
     ------
     ConfigError
-        If required columns are missing, or *grid* or a horizon is not a
+        If required columns are missing, or *grid* or a window is not a
         fixed duration.
         Also if *trades* is empty.
     """
-    validate_columns(trades, {"timestamp", "volume"}, "ofi_by_horizon")
-    validate_non_empty(trades, "ofi_by_horizon")
-    trades = resolve_direction(trades, sign_method, quotes, "ofi_by_horizon")
+    validate_columns(trades, {"timestamp", "volume"}, "ofi_by_window")
+    validate_non_empty(trades, "ofi_by_window")
+    trades = resolve_direction(trades, sign_method, quotes, "ofi_by_window")
 
-    step = fixed_window(grid, "ofi_by_horizon: grid")
+    step = fixed_window(grid, "ofi_by_window: grid")
     timestamps = trades["timestamp"]
-    # Signed volume binned onto the fine grid, then trailing-summed per horizon.
+    # Signed volume binned onto the fine grid, then trailing-summed per window.
     floored = window_start(timestamps, step)
     # The grid runs to the step at or after the last trade.
     last = floored.max()
@@ -835,11 +846,11 @@ def ofi_by_horizon(
     )
 
     out = pd.DataFrame({"timestamp": index})
-    for horizon in horizons:
-        length = fixed_window(horizon, "ofi_by_horizon: horizon")
+    for window in windows:
+        length = fixed_window(window, "ofi_by_window: window")
         k = max(round(length / step), 1)
         b = buy.rolling(k, min_periods=1).sum()
         s = sell.rolling(k, min_periods=1).sum()
         total = (b + s).replace(0.0, np.nan)
-        out[horizon] = ((b - s) / total).to_numpy()
+        out[window] = ((b - s) / total).to_numpy()
     return out

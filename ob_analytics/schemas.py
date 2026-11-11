@@ -89,7 +89,7 @@ tie-breaks when present — the venue ``sequence`` (:data:`SEQUENCE_COLUMN`), th
 ``ingest_seq`` (:data:`INGEST_SEQ_COLUMN`).  :func:`time_order_keys` returns that
 key list for a frame.  The per-order reconstructions (``queue_positions``,
 ``order_book``) and the price-level depth engine (``price_level_volume``,
-``depth_metrics``) all replay events in this order.  Every loader-built frame is
+``summarize_depth``) all replay events in this order.  Every loader-built frame is
 produced by fixed, stable sorts, so the rebuild is deterministic run-to-run.  On
 a price-level (L2) feed there is no ``event_id``; ties there fall to
 ``sequence`` / ``ingest_seq`` when tracked, otherwise to the loader's stable
@@ -141,6 +141,20 @@ from ob_analytics.exceptions import ConfigError
 
 if TYPE_CHECKING:
     from pandas.api.typing import DataFrameGroupBy
+
+__all__ = [
+    "EVENT_DTYPES",
+    "HIDDEN_ORDER_ID",
+    "MAYBE_BAD_BOOK_ATTR",
+    "SYMBOL_COLUMN",
+    "TRADE_DTYPES",
+    "VENUE_COLUMN",
+    "cast_events",
+    "group_by_instrument",
+    "validate_depth_df",
+    "validate_events_df",
+    "validate_trades_df",
+]
 
 # ── Schema version ────────────────────────────────────────────────────
 #
@@ -679,7 +693,7 @@ def empty_frame(dtypes: dict[str, str | pd.CategoricalDtype]) -> pd.DataFrame:
     )
 
 
-# Depth uses 'direction' (bid/ask) to match DepthMetricsEngine.compute.
+# Depth uses 'direction' (bid/ask) to match DepthSummaryEngine.compute.
 DEPTH_COLUMNS: tuple[str, ...] = (
     "timestamp",
     "price",

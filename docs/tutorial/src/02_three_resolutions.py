@@ -33,7 +33,7 @@ from ob_analytics.visualization import plot, prepare
 
 events = set_order_types(toy_events(), toy_trades())
 t30 = events["timestamp"].iloc[0] + pd.Timedelta(seconds=30)
-snap = order_book(events, tp=t30)
+snap = order_book(events, at=t30)
 
 fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 4.4))
 plot("l1_ticker", ax=ax1, bid=99, ask=101, last=101, symbol="TOY")
@@ -312,7 +312,7 @@ assert list(sweep["maker_actor"]) == ["Jo", "Alice"]
 # %% tags=["solution"]
 from ob_analytics.quality import detect_stale_orders
 
-worst = detect_stale_orders(result.events, result.trades)[0]
+worst = detect_stale_orders(result.events, result.trades).iloc[0]
 print(f"side:            {worst.direction}")
 print(f"price:           {worst.price:,.2f}")
 print(f"disproved at:    {worst.disproved_at:%H:%M:%S}")

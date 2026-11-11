@@ -1196,7 +1196,7 @@ class TestLobsterWriterWritesTheRunsDepth:
         from ob_analytics.analytics import set_order_types
         from ob_analytics.config import PipelineConfig
         from ob_analytics.datasets import LOT_SIZE, TICK_SIZE, toy_events, toy_trades
-        from ob_analytics.depth import depth_metrics, price_level_volume
+        from ob_analytics.depth import price_level_volume, summarize_depth
         from ob_analytics.pipeline import PipelineResult
 
         config = PipelineConfig(
@@ -1213,7 +1213,7 @@ class TestLobsterWriterWritesTheRunsDepth:
             events=events,
             trades=toy_trades(),
             depth=depth,
-            depth_summary=depth_metrics(depth),
+            depth_summary=summarize_depth(depth),
             config=config,
         )
 
@@ -1234,7 +1234,7 @@ class TestLobsterWriterWritesTheRunsDepth:
         from ob_analytics.analytics import set_order_types
         from ob_analytics.config import PipelineConfig
         from ob_analytics.datasets import LOT_SIZE, TICK_SIZE, toy_events, toy_trades
-        from ob_analytics.depth import depth_metrics, price_level_volume
+        from ob_analytics.depth import price_level_volume, summarize_depth
         from ob_analytics.pipeline import PipelineResult
 
         config = PipelineConfig(
@@ -1249,7 +1249,7 @@ class TestLobsterWriterWritesTheRunsDepth:
             events=events.iloc[::-1].reset_index(drop=True),
             trades=toy_trades(),
             depth=depth,
-            depth_summary=depth_metrics(depth),
+            depth_summary=summarize_depth(depth),
             config=config,
         )
 
@@ -1260,7 +1260,7 @@ class TestLobsterWriterWritesTheRunsDepth:
 
     def test_synthetic_run(self, tmp_path):
         from ob_analytics.config import PipelineConfig
-        from ob_analytics.depth import depth_metrics, price_level_volume
+        from ob_analytics.depth import price_level_volume, summarize_depth
         from ob_analytics.pipeline import PipelineResult
         from ob_analytics.synth import generate_session
 
@@ -1276,7 +1276,7 @@ class TestLobsterWriterWritesTheRunsDepth:
             events=session.events,
             trades=session.trades,
             depth=depth,
-            depth_summary=depth_metrics(depth),
+            depth_summary=summarize_depth(depth),
             config=config,
         )
 

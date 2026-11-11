@@ -82,9 +82,11 @@ from ob_analytics.cost import (
 from ob_analytics.data import (
     OutputTables,
     ParquetWriter,
+    list_writers,
     load_data,
     load_result,
     load_writer_plugins,
+    register_writer,
     save_data,
 )
 from ob_analytics.databento import DatabentoSettings, DatabentoSource
@@ -108,16 +110,16 @@ from ob_analytics.features import (
 )
 from ob_analytics.flow_toxicity import (
     KyleLambdaResult,
-    compute_kyle_lambda,
-    compute_vpin,
-    ofi_by_horizon,
+    kyle_lambda,
+    ofi_by_window,
     order_flow_imbalance,
+    vpin,
     vpin_bucket_volume,
 )
 from ob_analytics.hidden_liquidity import (
-    IcebergDetection,
     detect_icebergs,
     hidden_trades,
+    iceberg_slices,
 )
 from ob_analytics.interop import (
     HftbacktestWriter,
@@ -164,9 +166,7 @@ from ob_analytics.quality import (
     BookDifference,
     DataQualitySummary,
     QualityCheck,
-    SequenceGapReport,
     Severity,
-    StaleOrder,
     data_quality_summary,
     detect_sequence_gaps,
     detect_stale_orders,
@@ -229,10 +229,8 @@ def sample_csv_path() -> Path:
 
 
 __all__ = [
-    # ── Instrument identity (issue #147) ─────────────────────────────
     "SYMBOL_COLUMN",
     "VENUE_COLUMN",
-    # ── Sources (per-venue entry points) ─────────────────────────────
     "BarRule",
     "BitstampSource",
     "BookDifference",
@@ -252,8 +250,6 @@ __all__ = [
     "FeedDeclarations",
     "FeedType",
     "HftbacktestWriter",
-    # ── Hidden liquidity ─────────────────────────────────────────────
-    "IcebergDetection",
     "InstrumentGrid",
     "KyleLambdaResult",
     "Level",
@@ -261,24 +257,19 @@ __all__ = [
     "LobsterSource",
     "Metric",
     "NautilusWriter",
-    # ── Exceptions ───────────────────────────────────────────────────
     "ObAnalyticsError",
-    # ── Protocols / extension points ─────────────────────────────────
     "OfflineSource",
     "OutputTables",
     "ParquetWriter",
-    # ── Pipeline orchestration ───────────────────────────────────────
     "Pipeline",
     "PipelineConfig",
     "PipelineResult",
     "QualityCheck",
     "RunContext",
-    "SequenceGapReport",
     "SequenceKind",
     "Severity",
     "Source",
     "SourceSettings",
-    "StaleOrder",
     "SupportsComputeDepth",
     "SupportsRequiredContext",
     "SupportsWriter",
@@ -288,23 +279,15 @@ __all__ = [
     "UnknownNameError",
     "WriteTarget",
     "__version__",
-    # ── Transaction cost and liquidity ───────────────────────────────
     "amihud",
-    # ── Bars ─────────────────────────────────────────────────────────
     "bars",
-    # ── Trade-sign classification ────────────────────────────────────
     "bulk_volume_classification",
     "classify_trade_sign",
-    "compute_kyle_lambda",
-    # ── Flow toxicity ────────────────────────────────────────────────
-    "compute_vpin",
     "cost_summary",
-    # ── Data quality ─────────────────────────────────────────────────
     "data_quality_summary",
     "detect_icebergs",
     "detect_sequence_gaps",
     "detect_stale_orders",
-    # ── Feature table ────────────────────────────────────────────────
     "features",
     "get_bar_rule",
     "get_feature",
@@ -312,29 +295,32 @@ __all__ = [
     "get_source",
     "group_by_instrument",
     "hidden_trades",
+    "iceberg_slices",
+    "kyle_lambda",
     "lee_ready",
     "list_bar_rules",
     "list_features",
     "list_metrics",
     "list_sources",
+    "list_writers",
     "load_bar_rule_plugins",
     "load_data",
     "load_feature_plugins",
     "load_metric_plugins",
     "load_result",
     "load_source_plugins",
+    "load_writer_plugins",
     "match_toy_orders",
-    "ofi_by_horizon",
+    "ofi_by_window",
     "order_flow_imbalance",
     "register_bar_rule",
     "register_feature",
     "register_metric",
     "register_source",
+    "register_writer",
     "roll_spread",
-    # ── Sample data ──────────────────────────────────────────────────
     "sample_csv_path",
     "sample_data_dir",
-    # ── Data I/O ─────────────────────────────────────────────────────
     "save_data",
     "tick_rule",
     "to_hftbacktest_array",
@@ -345,5 +331,6 @@ __all__ = [
     "toy_orders",
     "toy_trades",
     "transaction_costs",
+    "vpin",
     "vpin_bucket_volume",
 ]

@@ -31,7 +31,6 @@ from ob_analytics import (
     FeedType,
     LobsterSource,
     Severity,
-    StaleOrder,
     TradeAttribution,
     data_quality_summary,
     detect_stale_orders,
@@ -237,7 +236,7 @@ class TestFaithfulBestSeries:
         depth = price_level_volume(events)
         series = _faithful_best_series(depth).sort_values("timestamp")
         for tp in sorted(events["timestamp"].unique()):
-            book = order_book(events, tp=pd.Timestamp(tp), uncross=False)
+            book = order_book(events, at=pd.Timestamp(tp), uncross=False)
             exp_bid = book["bids"]["price"].max() if not book["bids"].empty else np.nan
             exp_ask = book["asks"]["price"].min() if not book["asks"].empty else np.nan
             at_tp = series[series["timestamp"] <= tp]
@@ -949,8 +948,9 @@ _FLOAT_SIZE_ROWS = [
 
 class TestStaleOrders:
     def test_finds_an_ask_a_trade_printed_through(self):
-        (stale,) = detect_stale_orders(_book_with_stale_ask(), _through_trade())
-        assert isinstance(stale, StaleOrder)
+        (stale,) = detect_stale_orders(
+            _book_with_stale_ask(), _through_trade()
+        ).itertuples(index=False)
         assert stale.id == 2
         assert stale.direction == "ask"
         assert stale.price == 101.0
@@ -970,7 +970,9 @@ class TestStaleOrders:
                 (3, 3, 60.0, 97.0, 1.0, "bid", "created", 0.0),
             ]
         )
-        (stale,) = detect_stale_orders(events, _trades([(5.0, 98.0)]))
+        (stale,) = detect_stale_orders(events, _trades([(5.0, 98.0)])).itertuples(
+            index=False
+        )
         assert (stale.id, stale.direction) == (1, "bid")
         assert stale.stale_seconds == pytest.approx(55.0)
         assert stale.touch_seconds == pytest.approx(55.0)
@@ -979,45 +981,45 @@ class TestStaleOrders:
         # The venue reports the ask 200 ms after the trade: the normal lag of
         # a diff feed, well inside the one-second grace.
         events = _book_with_stale_ask(delete_ask_at=10.2)
-        assert detect_stale_orders(events, _through_trade()) == ()
+        assert detect_stale_orders(events, _through_trade()).empty
 
     def test_grace_sets_how_late_is_stale(self):
         events = _book_with_stale_ask(delete_ask_at=10.2)
         (stale,) = detect_stale_orders(
             events, _through_trade(), grace=pd.Timedelta(milliseconds=100)
-        )
+        ).itertuples(index=False)
         assert stale.id == 2
         assert stale.stale_seconds == pytest.approx(0.2)
 
     def test_a_trade_at_the_same_instant_does_not_count(self):
         # A trade stamped in the same instant as the order's row cannot be
         # put before or after it, so it proves nothing.
-        assert (
-            detect_stale_orders(_book_with_stale_ask(), _trades([(0.0, 102.0)])) == ()
-        )
+        assert detect_stale_orders(
+            _book_with_stale_ask(), _trades([(0.0, 102.0)])
+        ).empty
 
     def test_a_trade_at_the_resting_price_does_not_count(self):
         # A print at the ask's own price is the ask trading, not a trade
         # through it.
-        assert (
-            detect_stale_orders(_book_with_stale_ask(), _trades([(10.0, 101.0)])) == ()
-        )
+        assert detect_stale_orders(
+            _book_with_stale_ask(), _trades([(10.0, 101.0)])
+        ).empty
 
     def test_the_worst_is_the_longest_at_the_touch(self):
         # Both asks sit below the trade at 104; only the one at 101 is the
         # best ask, so it comes first.
         stale = detect_stale_orders(_book_with_stale_ask(), _trades([(10.0, 104.0)]))
-        assert [o.id for o in stale] == [2, 3]
-        assert stale[1].touch_seconds == 0.0
+        assert stale["id"].tolist() == [2, 3]
+        assert stale.iloc[1].touch_seconds == 0.0
 
     def test_tick_size_reports_quote_prices(self):
         (stale,) = detect_stale_orders(
             _book_with_stale_ask(), _through_trade(), tick_size=0.01
-        )
+        ).itertuples(index=False)
         assert stale.price == pytest.approx(1.01)
 
     def test_toy_feed_has_none(self):
-        assert detect_stale_orders(_classified_toy(), toy_trades()) == ()
+        assert detect_stale_orders(_classified_toy(), toy_trades()).empty
 
     def test_float_sizes_empty_a_level_exactly(self):
         depth = price_level_volume(_classified(_FLOAT_SIZE_ROWS))
@@ -1031,7 +1033,9 @@ class TestStaleOrders:
             price_level_volume(_classified([tuple(r) for r in rows]))
 
     def test_an_emptied_float_level_does_not_hold_the_touch(self):
-        (stale,) = detect_stale_orders(_classified(_FLOAT_SIZE_ROWS), _through_trade())
+        (stale,) = detect_stale_orders(
+            _classified(_FLOAT_SIZE_ROWS), _through_trade()
+        ).itertuples(index=False)
         assert stale.id == 2
         assert stale.touch_seconds == pytest.approx(90.0)
 
@@ -1055,7 +1059,7 @@ class TestStaleOrdersInSummary:
         s = data_quality_summary(
             _book_with_stale_ask(), _through_trade(), feed_type=FeedType.DIFF_FEED
         )
-        assert [o.id for o in s.stale_orders] == [2]
+        assert s.stale_orders["id"].tolist() == [2]
         check = next(c for c in s.checks if c.name == "stale_orders")
         assert not check.passed
         assert check.severity is Severity.WARNING
@@ -1076,7 +1080,7 @@ class TestStaleOrdersInSummary:
         s = data_quality_summary(
             crossed_events(), _empty_trades(), feed_type=FeedType.DIFF_FEED
         )
-        assert s.stale_orders == ()
+        assert s.stale_orders.empty
         assert "not a bug" in s.render()
         assert "stale resting orders  : 0" in s.render()
         assert next(c for c in s.checks if c.name == "stale_orders").passed
@@ -1103,13 +1107,15 @@ class TestStaleOrdersInSummary:
         s = data_quality_summary(
             events, _through_trade(), feed_type=FeedType.MATCHED_BOOK
         )
-        assert [o.id for o in s.stale_orders] == [uuids[2]]
+        assert s.stale_orders["id"].tolist() == [uuids[2]]
         assert f"worst: ask {uuids[2]} at 101" in s.render()
         (payload,) = json.loads(json.dumps(s.to_dict()))["stale_orders"]
         assert payload["id"] == uuids[2]
 
     def test_an_integer_id_stays_a_plain_int(self):
-        (stale,) = detect_stale_orders(_book_with_stale_ask(), _through_trade())
+        (stale,) = detect_stale_orders(
+            _book_with_stale_ask(), _through_trade()
+        ).itertuples(index=False)
         assert type(stale.id) is int
 
     def test_names_the_opening_snapshot_ask_on_the_bitstamp_sample(
@@ -1125,11 +1131,11 @@ class TestStaleOrdersInSummary:
             depth=result.depth,
             tick_size=result.config.tick_size,
         )
-        assert [o.id for o in s.stale_orders] == [
+        assert s.stale_orders["id"].tolist() == [
             2002347646152704,
             2002347642003458,
         ]
-        worst = s.stale_orders[0]
+        worst = s.stale_orders.iloc[0]
         assert (worst.direction, worst.price) == ("ask", pytest.approx(78333.0))
         # It holds the ask touch for about 27 minutes after the first trade
         # that printed above it.
@@ -1191,8 +1197,11 @@ class TestStaleOrdersInSummary:
         )
         assert got.crossed_pct == expected.crossed_pct
         assert got.crossed_episodes == expected.crossed_episodes
-        assert got.stale_orders == expected.stale_orders
-        assert detect_stale_orders(shown.events, shown.trades) == got.stale_orders
+        pd.testing.assert_frame_equal(got.stale_orders, expected.stale_orders)
+        pd.testing.assert_frame_equal(
+            detect_stale_orders(shown.events, shown.trades),
+            got.stale_orders,
+        )
 
 
 # ---------------------------------------------------------------------------

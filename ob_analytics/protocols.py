@@ -31,6 +31,35 @@ import pandas as pd
 
 from ob_analytics.config import InstrumentGrid, SourceSettings
 
+__all__ = [
+    "BarRule",
+    "Clocks",
+    "DataWriter",
+    "DepthLoader",
+    "EventLoader",
+    "Feature",
+    "FeedDeclarations",
+    "FeedType",
+    "Level",
+    "Metric",
+    "OfflineSource",
+    "RunContext",
+    "SequenceKind",
+    "Source",
+    "SupportsComputeDepth",
+    "SupportsRequiredContext",
+    "SupportsWriter",
+    "TradeAttribution",
+    "TradeReader",
+    "WriteTarget",
+    "clocks_of",
+    "declarations_of",
+    "grid_of",
+    "required_context_of",
+    "sequence_kind_of",
+    "trade_attribution_of",
+]
+
 
 class Level(str, Enum):
     """Order-book resolution a feed (or a plot) works at — MBP vs MBO.
@@ -469,7 +498,7 @@ class DepthLoader(Protocol):
     An :attr:`Level.L2` source's :meth:`OfflineSource.create_loader` returns a
     ``DepthLoader``; the pipeline validates its output with
     :func:`~ob_analytics.schemas.validate_depth_df` and feeds it straight to
-    :class:`~ob_analytics.depth.DepthMetricsEngine`.
+    :class:`~ob_analytics.depth.DepthSummaryEngine`.
 
     Returned DataFrame columns (see
     :data:`~ob_analytics.schemas.DEPTH_COLUMNS`):
@@ -567,7 +596,7 @@ class Metric(Protocol):
     stored, its tables holding integer lots and ticks, by
     ``result.metric(...)``, ``result.plot(...)`` and the gallery alike.  Pass
     the tables to functions that read the units off them (such as
-    :func:`~ob_analytics.flow_toxicity.compute_vpin`), or convert with the
+    :func:`~ob_analytics.flow_toxicity.vpin`), or convert with the
     scale that ``frame.attrs["lot_size"]`` and ``frame.attrs["tick_size"]``
     give.
 

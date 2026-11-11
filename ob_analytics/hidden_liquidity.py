@@ -9,6 +9,7 @@ leave a footprint in an L3 stream, and each has a function here:
   side, a moment later.  The detector looks for that refill: a resting order
   filled to zero, followed within ``max_delay`` by a new order at its price
   level.  Slices linked this way are chained into one suspected iceberg.
+  :func:`iceberg_slices` lists the visible orders in each one.
 * :func:`hidden_trades` finds **trades against hidden orders**: a trade that
   printed strictly inside the visible spread standing before its maker's fill.
   No visible order rested at that price, so the maker was an order the book
@@ -29,7 +30,6 @@ precision.
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -42,9 +42,9 @@ from ob_analytics.trade_sign import quote_before
 
 __all__ = [
     "ICEBERG_MAX_DELAY",
-    "IcebergDetection",
     "detect_icebergs",
     "hidden_trades",
+    "iceberg_slices",
 ]
 
 #: Default longest wait between a peak being filled and the next slice
@@ -59,8 +59,8 @@ _ICEBERG_COLUMNS = [
     "iceberg",
     "direction",
     "price",
-    "start",
-    "end",
+    "timestamp_start",
+    "timestamp_end",
     "slices",
     "refills",
     "same_size_refills",
@@ -79,58 +79,22 @@ _SLICE_COLUMNS = ["iceberg", "slice", "id", "timestamp", "volume", "fill", "dela
 _CONFIDENCE = pd.CategoricalDtype(["low", "medium", "high"], ordered=True)
 
 
-@dataclass(frozen=True)
-class IcebergDetection:
-    """Result of :func:`detect_icebergs`.
-
-    Attributes
-    ----------
-    icebergs : pandas.DataFrame
-        One row per suspected iceberg, in order of ``start``:
-
-        - ``iceberg`` — number of the iceberg, from 1.
-        - ``direction``, ``price`` — the side and price level it rested at.
-        - ``start`` — when the first slice was placed (or first seen).
-        - ``end`` — the last event of the last slice.
-        - ``slices`` — visible orders in the chain, the first one included.
-        - ``refills`` — ``slices - 1``.
-        - ``same_size_refills`` — refills whose displayed size equals the
-          displayed size of the slice they replaced.
-        - ``peak`` — displayed size of the first slice, in lots; ``<NA>`` when
-          the first slice was already resting when the stream began.
-        - ``executed`` — size filled across all slices, in lots.
-        - ``median_delay_s`` — median wait from a peak filled to its refill.
-        - ``confidence`` — ``high`` when there are at least two refills and
-          every one matches the displayed size, ``medium`` when at least one
-          does, ``low`` otherwise.  An ordered categorical.
-
-    slices : pandas.DataFrame
-        One row per visible order in a chain: ``iceberg``, ``slice`` (from 1),
-        order ``id`` as the feed writes it (an integer, or a UUID string on
-        Independent Reserve), ``timestamp`` placed (or first seen), displayed
-        ``volume``, total ``fill``, and ``delay_s`` from the previous slice
-        being filled to this one appearing (``NaN`` for the first slice).
-    """
-
-    icebergs: pd.DataFrame
-    slices: pd.DataFrame
-
-
 def detect_icebergs(
     events: pd.DataFrame,
     trades: pd.DataFrame,
     *,
     max_delay: str | pd.Timedelta = ICEBERG_MAX_DELAY,
-) -> IcebergDetection:
+) -> pd.DataFrame:
     """Find suspected iceberg orders from the refills they leave behind.
 
     A slice is *filled out* when its last fill as a maker leaves it with
     nothing outstanding.  A refill is the first new order placed at the same
     side and price at or after that fill, within *max_delay*, and, at the
-    same instant, after it in event order.  When several slices at one price level are filled out
-    together, a new order is matched to the one whose displayed size it
-    equals, and otherwise to the one filled out first.  Each order joins at
-    most one refill as the new slice and at most one as the old.
+    same instant, after it in event order.  When several slices at one price
+    level are filled out together, a new order is matched to the one whose
+    displayed size it equals, and otherwise to the one filled out first.  Each
+    order joins at most one refill as the new slice and at most one as the old.
+    :func:`iceberg_slices` lists the visible orders each iceberg is made of.
 
     Parameters
     ----------
@@ -146,15 +110,99 @@ def detect_icebergs(
 
     Returns
     -------
-    IcebergDetection
-        The suspected icebergs and the slices each one is made of.  Both
-        frames are empty, with their columns, when none is found.
+    pandas.DataFrame
+        One row per suspected iceberg, in order of ``timestamp_start``, empty
+        with its columns when none is found:
+
+        - ``iceberg`` — number of the iceberg, from 1.
+        - ``direction``, ``price`` — the side and price level it rested at.
+        - ``timestamp_start`` — when the first slice was placed (or first
+          seen).
+        - ``timestamp_end`` — the last event of the last slice.
+        - ``slices`` — visible orders in the chain, the first one included.
+        - ``refills`` — ``slices - 1``.
+        - ``same_size_refills`` — refills whose displayed size equals the
+          displayed size of the slice they replaced.
+        - ``peak`` — displayed size of the first slice, in lots; ``<NA>`` when
+          the first slice was already resting when the stream began.
+        - ``executed`` — size filled across all slices, in lots.
+        - ``median_delay_s`` — median wait from a peak filled to its refill.
+        - ``confidence`` — ``high`` when there are at least two refills and
+          every one matches the displayed size, ``medium`` when at least one
+          does, ``low`` otherwise.  An ordered categorical.
+
+        ``attrs`` holds the summary: ``max_delay`` (the wait used) and
+        ``n_filled_out`` (how many visible orders were filled out, so how many
+        could have been refilled).
 
     Raises
     ------
     ConfigError
         If a required column is missing, or *max_delay* is negative.
     """
+    icebergs, _, delay, filled_out = _find_icebergs(
+        events, trades, max_delay, "detect_icebergs"
+    )
+    icebergs.attrs["max_delay"] = delay
+    icebergs.attrs["n_filled_out"] = filled_out
+    return icebergs
+
+
+def iceberg_slices(
+    events: pd.DataFrame,
+    trades: pd.DataFrame,
+    *,
+    max_delay: str | pd.Timedelta = ICEBERG_MAX_DELAY,
+) -> pd.DataFrame:
+    """List the visible orders each suspected iceberg is made of.
+
+    The icebergs are the ones :func:`detect_icebergs` finds with the same
+    arguments; this gives one row per slice instead of one per iceberg.
+
+    Parameters
+    ----------
+    events, trades, max_delay
+        As for :func:`detect_icebergs`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per visible order in a chain, empty with its columns when no
+        iceberg is found: ``iceberg``, ``slice`` (from 1), order ``id`` as the
+        feed writes it (an integer, or a UUID string on Independent Reserve),
+        ``timestamp`` placed (or first seen), displayed ``volume``, total
+        ``fill``, ``delay_s`` from the previous slice being filled to this one
+        appearing (``NaN`` for the first slice), and the iceberg's
+        ``direction``, ``price`` and ``confidence``.  ``attrs`` holds
+        ``max_delay``, the wait used.
+
+    Raises
+    ------
+    ConfigError
+        If a required column is missing, or *max_delay* is negative.
+    """
+    icebergs, slices, delay, _ = _find_icebergs(
+        events, trades, max_delay, "iceberg_slices"
+    )
+    out = slices.merge(
+        icebergs[["iceberg", "direction", "price", "confidence"]],
+        on="iceberg",
+        how="left",
+        # One row per iceberg by construction; a regression that broke that
+        # would otherwise fan rows out silently instead of raising.
+        validate="many_to_one",
+    )
+    out.attrs["max_delay"] = delay
+    return out
+
+
+def _find_icebergs(
+    events: pd.DataFrame,
+    trades: pd.DataFrame,
+    max_delay: str | pd.Timedelta,
+    context: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.Timedelta, int]:
+    """Return the icebergs, their slices, the wait used and the filled-out count."""
     validate_columns(
         events,
         {
@@ -167,12 +215,12 @@ def detect_icebergs(
             "direction",
             "fill",
         },
-        "detect_icebergs",
+        context,
     )
-    validate_columns(trades, {"maker_event_id"}, "detect_icebergs")
+    validate_columns(trades, {"maker_event_id"}, context)
     delay = pd.Timedelta(max_delay)
     if delay < pd.Timedelta(0):
-        raise ConfigError("detect_icebergs: max_delay must not be negative.")
+        raise ConfigError(f"{context}: max_delay must not be negative.")
 
     visible = events[events["id"] != HIDDEN_ORDER_ID]
     # Time order first: event_id only breaks ties, so a loader whose
@@ -184,9 +232,8 @@ def detect_icebergs(
         ["event_id", "id", "timestamp", "price", "volume", "direction"],
     ]
     links = _refill_links(filled_out, created, delay)
-    if not links:
-        return _empty_detection()
-    return _build_detection(visible, links)
+    icebergs, slices = _build_detection(visible, links) if links else _empty_detection()
+    return icebergs, slices, delay, len(filled_out)
 
 
 def _filled_out(visible: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
@@ -262,7 +309,7 @@ def _refill_links(
 
 def _build_detection(
     visible: pd.DataFrame, links: list[tuple[_OrderId, _OrderId, pd.Timedelta]]
-) -> IcebergDetection:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Chain refill links into icebergs and summarise each one."""
     successor = {old: (new, wait) for old, new, wait in links}
     has_parent = {new for _, new, _ in links}
@@ -318,8 +365,8 @@ def _build_detection(
             "iceberg": np.arange(1, len(rows) + 1),
             "direction": per_order.loc[heads_ordered, "direction"].to_numpy(),
             "price": per_order.loc[heads_ordered, "price"].to_numpy(),
-            "start": by_iceberg["timestamp"].first().to_numpy(),
-            "end": per_order.loc[tails, "last_ts"].to_numpy(),
+            "timestamp_start": by_iceberg["timestamp"].first().to_numpy(),
+            "timestamp_end": per_order.loc[tails, "last_ts"].to_numpy(),
             "slices": by_iceberg.size().to_numpy(),
             "refills": by_iceberg.size().to_numpy() - 1,
             "same_size_refills": same_size.to_numpy(),
@@ -331,8 +378,8 @@ def _build_detection(
         }
     )
     icebergs["direction"] = icebergs["direction"].astype(visible["direction"].dtype)
-    icebergs["start"] = icebergs["start"].astype(visible["timestamp"].dtype)
-    icebergs["end"] = icebergs["end"].astype(visible["timestamp"].dtype)
+    for column in ("timestamp_start", "timestamp_end"):
+        icebergs[column] = icebergs[column].astype(visible["timestamp"].dtype)
     icebergs["peak"] = icebergs["peak"].astype("Int64")
     icebergs["confidence"] = pd.Categorical(
         np.select(
@@ -346,15 +393,13 @@ def _build_detection(
         ),
         dtype=_CONFIDENCE,
     )
-    return IcebergDetection(icebergs=icebergs[_ICEBERG_COLUMNS], slices=slices)
+    return icebergs[_ICEBERG_COLUMNS], slices
 
 
-def _empty_detection() -> IcebergDetection:
+def _empty_detection() -> tuple[pd.DataFrame, pd.DataFrame]:
     icebergs = pd.DataFrame(columns=_ICEBERG_COLUMNS)
     icebergs["confidence"] = icebergs["confidence"].astype(_CONFIDENCE)
-    return IcebergDetection(
-        icebergs=icebergs, slices=pd.DataFrame(columns=_SLICE_COLUMNS)
-    )
+    return icebergs, pd.DataFrame(columns=_SLICE_COLUMNS)
 
 
 def hidden_trades(
@@ -397,7 +442,11 @@ def hidden_trades(
     pandas.DataFrame
         The matching rows of *trades*, index kept, with the standing
         ``best_bid_price`` and ``best_ask_price`` added, in *depth_summary*'s
-        own dtype (integer ticks on the canonical schema).
+        own dtype (integer ticks on the canonical schema).  ``attrs`` holds
+        the summary: ``n_trades`` (how many trades were read) and ``n_readable``
+        (how many of them had a readable spread to compare with), so
+        ``len(out) / out.attrs["n_readable"]`` is the share that printed inside
+        the spread.
 
     Raises
     ------
@@ -452,6 +501,9 @@ def hidden_trades(
     # own dtype back, not a silently truncated one.
     out["best_bid_price"] = bid[inside]
     out["best_ask_price"] = ask[inside]
-    return out.astype(
+    out = out.astype(
         depth_summary[["best_bid_price", "best_ask_price"]].dtypes.to_dict()
     )
+    out.attrs["n_trades"] = len(trades)
+    out.attrs["n_readable"] = int(found.sum())
+    return out

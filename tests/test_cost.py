@@ -184,7 +184,7 @@ class TestTransactionCosts:
     def test_crossed_guard_survives_a_mid_column(self):
         """A mid column must not quietly switch the crossed-book guard off.
 
-        ``depth_signals`` adds ``mid_price`` beside the touch, so the natural
+        ``book_signals`` adds ``mid_price`` beside the touch, so the natural
         way to reach the micro-price also puts a mid column on the frame.  The
         crossing is tested on the bid/ask pair whenever the frame has one, so
         the same quotes give the same answer either way.

@@ -29,7 +29,7 @@ from ob_analytics.datasets import (
     toy_orders,
     toy_trades,
 )
-from ob_analytics.depth import depth_metrics, price_level_volume
+from ob_analytics.depth import price_level_volume, summarize_depth
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import Level
 from ob_analytics.schemas import (
@@ -204,7 +204,7 @@ class TestTradeEventConsistency:
 class TestBookAndDepth:
     def test_scripted_book_at_t30(self, classified: pd.DataFrame) -> None:
         tp = classified["timestamp"].iloc[0] + pd.Timedelta(seconds=30)
-        snap = order_book(classified, tp=tp)
+        snap = order_book(classified, at=tp)
         bids, asks = snap["bids"], snap["asks"]
         assert bids["price"].max() == 99.0  # best bid
         assert asks["price"].min() == 101.0  # best ask — spread 2, mid 100
@@ -222,14 +222,14 @@ class TestBookAndDepth:
     ) -> None:
         t0 = classified["timestamp"].iloc[0]
         for s in range(1, 61, 7):
-            snap = order_book(classified, tp=t0 + pd.Timedelta(seconds=s))
+            snap = order_book(classified, at=t0 + pd.Timedelta(seconds=s))
             if len(snap["bids"]) and len(snap["asks"]):
                 assert snap["bids"]["price"].max() < snap["asks"]["price"].min()
 
     def test_depth_pipeline_runs(self, classified: pd.DataFrame) -> None:
         depth = price_level_volume(classified)
         validate_depth_df(depth)
-        summary = depth_metrics(depth)
+        summary = summarize_depth(depth)
         assert len(depth) > 0
         assert len(summary) > 0
 
@@ -246,7 +246,7 @@ class TestFacesRenderAtToyScale:
 
     def test_book_snapshot_l2_and_l3(self, classified: pd.DataFrame) -> None:
         tp = classified["timestamp"].iloc[0] + pd.Timedelta(seconds=30)
-        snap = order_book(classified, tp=tp)
+        snap = order_book(classified, at=tp)
         for level in (Level.L2, Level.L3):
             payload = prepare.book_snapshot(snap, level=level)
             fig = plot("book_snapshot", level=level, **payload)
@@ -256,7 +256,7 @@ class TestFacesRenderAtToyScale:
     def test_l3_payload_segments_the_99_queue(self, classified: pd.DataFrame) -> None:
         """Alice's and Ivy's orders at 99 stack as separate segments (0-2, 2-4)."""
         tp = classified["timestamp"].iloc[0] + pd.Timedelta(seconds=30)
-        payload = prepare.book_snapshot(order_book(classified, tp=tp), level="L3")
+        payload = prepare.book_snapshot(order_book(classified, at=tp), level="L3")
         at_99 = payload["bids"][payload["bids"]["price"] == 99.0]
         assert len(at_99) == 2
         segs = sorted(zip(at_99["seg_lo"], at_99["seg_hi"]))

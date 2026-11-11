@@ -2052,12 +2052,12 @@ def mpl_order_flow_imbalance(
 
 
 @_themed
-def mpl_ofi_horizon(
+def mpl_ofi_by_window(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
-    """Order-flow-imbalance horizon graph: OFI at several lookbacks, stacked.
+    """Order-flow-imbalance horizon graph: OFI over several trailing windows, stacked.
 
-    A *horizon graph* -- each lookback is a row that fills from its own
+    A *horizon graph* -- each window is a row that fills from its own
     baseline in the theme's buy / sell colours (net buy / net sell), with both
     fill height and colour saturation (three overlaid bands) growing with the
     size of the imbalance.  OFI is already bounded to ``[-1, +1]``, so every
@@ -2068,14 +2068,14 @@ def mpl_ofi_horizon(
     own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(11, 4.2))
     ofi = data["ofi"]
-    horizons = data["horizons"]
+    windows = data["windows"]
     if np.isnan(ofi).all():
         ax.set_title("Order flow imbalance — horizon graph (no data)")
         return fig
 
     x = mdates.date2num(pd.to_datetime(data["times"]))
     band_h, gap = 1.0, 0.15
-    for i, horizon in enumerate(horizons):
+    for i, window in enumerate(windows):
         y0 = i * (band_h + gap)
         for b, alpha in enumerate(data["band_alphas"]):
             for bands, color in (
@@ -2096,14 +2096,14 @@ def mpl_ofi_horizon(
         ax.text(
             x[0],
             y0 + band_h / 2,
-            f"{horizon} ",
+            f"{window} ",
             va="center",
             ha="right",
             fontsize=9,
             color=pal.label,
         )
 
-    ax.set_ylim(-0.2, len(horizons) * (band_h + gap))
+    ax.set_ylim(-0.2, len(windows) * (band_h + gap))
     ax.set_yticks([])
     # The bands alone cannot set the time range: a row of zeros draws none.
     # One grid step has no range of its own, so it gets a second each side.

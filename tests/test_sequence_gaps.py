@@ -16,7 +16,6 @@ import pandas as pd
 
 from ob_analytics import (
     FeedType,
-    SequenceGapReport,
     SequenceKind,
     data_quality_summary,
     detect_sequence_gaps,
@@ -145,62 +144,62 @@ _BITSTAMP_ROWS = [
 class TestDetectSequenceGaps:
     def test_clean_stream_is_not_flagged(self):
         report = detect_sequence_gaps(_framed([1, 2, 3, 4, 5]))
-        assert isinstance(report, SequenceGapReport)
-        assert report.clean
-        assert report.has_sequence
-        assert report.n_sequenced == 5
-        assert report.n_missing == 0
-        assert report.n_out_of_order == 0
-        assert report.first_break_seq is None
+        assert isinstance(report, pd.DataFrame)
+        assert report.empty
+        assert report.attrs["n_sequenced"] > 0
+        assert report.attrs["n_sequenced"] == 5
+        assert report.attrs["n_missing"] == 0
+        assert report.attrs["n_out_of_order"] == 0
+        assert report.attrs["first_break_sequence"] is None
 
     def test_dropped_message_is_flagged(self):
         # 3 -> 5 skips exactly one number.
         report = detect_sequence_gaps(_framed([1, 2, 3, 5, 6]))
-        assert not report.clean
-        assert report.n_missing == 1
-        assert report.n_out_of_order == 0
-        assert report.max_gap == 1
-        assert report.first_break_seq == 3
+        assert not report.empty
+        assert report.attrs["n_missing"] == 1
+        assert report.attrs["n_out_of_order"] == 0
+        assert report.attrs["max_gap"] == 1
+        assert report.attrs["first_break_sequence"] == 3
 
     def test_multi_message_gap_counts_each_missing(self):
         # 2 -> 6 skips 3, 4, 5.
         report = detect_sequence_gaps(_framed([1, 2, 6, 7]))
-        assert report.n_missing == 3
-        assert report.max_gap == 3
+        assert report.attrs["n_missing"] == 3
+        assert report.attrs["max_gap"] == 3
 
     def test_reordered_message_is_flagged(self):
         # 5 arrives before 4 (a reorder in arrival order).
         report = detect_sequence_gaps(_framed([1, 2, 3, 5, 4, 6]))
-        assert not report.clean
-        assert report.n_out_of_order >= 1
+        assert not report.empty
+        assert report.attrs["n_out_of_order"] >= 1
 
     def test_consecutive_duplicates_collapse_to_one_update(self):
         # One book update emits several rows that share its sequence.
         report = detect_sequence_gaps(_framed([1, 1, 1, 2, 2, 3]))
-        assert report.clean
-        assert report.n_sequenced == 6
-        assert report.n_updates == 3
+        assert report.empty
+        assert report.attrs["n_sequenced"] == 6
+        assert report.attrs["n_updates"] == 3
 
     def test_non_consecutive_repeat_is_out_of_order(self):
         report = detect_sequence_gaps(_framed([1, 2, 1, 3]))
-        assert not report.clean
-        assert report.n_out_of_order >= 1
+        assert not report.empty
+        assert report.attrs["n_out_of_order"] >= 1
 
     def test_missing_column_is_trivially_clean(self):
         report = detect_sequence_gaps(pd.DataFrame({"price": [1.0, 2.0]}))
-        assert report.clean
-        assert not report.has_sequence
-        assert report.n_sequenced == 0
+        assert report.empty
+        assert report.attrs["n_sequenced"] == 0
+        assert report.attrs["n_sequenced"] == 0
 
     def test_empty_frame_is_clean(self):
         report = detect_sequence_gaps(_framed([]))
-        assert report.clean
-        assert not report.has_sequence
+        assert report.empty
+        assert report.attrs["n_sequenced"] == 0
 
     def test_all_na_sequence_is_clean(self):
         report = detect_sequence_gaps(_framed([pd.NA, pd.NA, pd.NA]))
-        assert report.clean
-        assert not report.has_sequence
+        assert report.empty
+        assert report.attrs["n_sequenced"] == 0
 
     def test_grouping_isolates_channels(self):
         # Two channels, each clean on its own, interleaved in arrival order.
@@ -209,20 +208,20 @@ class TestDetectSequenceGaps:
             venues=["A", "B", "A", "B", "A", "B"],
         )
         # Per-venue: A=[1,2,3], B=[10,11,12] — both clean.
-        assert detect_sequence_gaps(frame).clean
+        assert detect_sequence_gaps(frame).empty
         # Ignoring the channel, the merged stream looks badly broken.
-        assert not detect_sequence_gaps(frame, group_cols=()).clean
+        assert not detect_sequence_gaps(frame, group_columns=()).empty
 
     def test_unordered_frame_is_sorted_by_ingest_seq(self):
         # A physically shuffled frame is still read in ingest order.
         frame = _framed([1, 2, 3, 4]).sample(frac=1.0, random_state=0)
-        assert detect_sequence_gaps(frame).clean
+        assert detect_sequence_gaps(frame).empty
 
-    def test_to_dict_is_json_serialisable(self):
+    def test_summary_is_json_serialisable(self):
         import json
 
         report = detect_sequence_gaps(_framed([1, 2, 4]))
-        payload = json.loads(json.dumps(report.to_dict()))
+        payload = json.loads(json.dumps(report.attrs))
         assert payload["n_missing"] == 1
 
 
@@ -232,23 +231,23 @@ class TestMonotonicSequence:
     def test_skips_are_not_dropped_messages(self):
         # Binance diffs span a range of update IDs, so the nonce jumps.
         report = detect_sequence_gaps(
-            _framed([100, 117, 117, 250]), kind=SequenceKind.MONOTONIC
+            _framed([100, 117, 117, 250]), sequence_kind=SequenceKind.MONOTONIC
         )
-        assert report.n_missing == 0
-        assert report.max_gap == 0
-        assert report.clean
-        assert report.first_break_seq is None
+        assert report.attrs["n_missing"] == 0
+        assert report.attrs["max_gap"] == 0
+        assert report.empty
+        assert report.attrs["first_break_sequence"] is None
 
     def test_a_step_back_is_still_out_of_order(self):
         report = detect_sequence_gaps(
-            _framed([100, 250, 117]), kind=SequenceKind.MONOTONIC
+            _framed([100, 250, 117]), sequence_kind=SequenceKind.MONOTONIC
         )
-        assert report.n_missing == 0
-        assert report.n_out_of_order == 1
-        assert report.first_break_seq == 250
+        assert report.attrs["n_missing"] == 0
+        assert report.attrs["n_out_of_order"] == 1
+        assert report.attrs["first_break_sequence"] == 250
 
     def test_contiguous_is_the_default(self):
-        assert detect_sequence_gaps(_framed([100, 117])).n_missing == 16
+        assert detect_sequence_gaps(_framed([100, 117])).attrs["n_missing"] == 16
 
 
 class TestDeclaredSequenceKind:
@@ -301,8 +300,8 @@ class TestBitstampSequenceColumns:
         # The venue gap (skipped 103) is detected in arrival order despite the
         # loader sorting rows by id.
         report = detect_sequence_gaps(events)
-        assert report.n_missing == 1
-        assert not report.clean
+        assert report.attrs["n_missing"] == 1
+        assert not report.empty
 
     def test_without_sequence_column_still_loads(self, tmp_path):
         csv = _write_bitstamp_csv(
@@ -313,7 +312,7 @@ class TestBitstampSequenceColumns:
         # No venue sequence in the file: the local counter is still attached.
         assert INGEST_SEQ_COLUMN in events.columns
         assert SEQUENCE_COLUMN not in events.columns
-        assert detect_sequence_gaps(events).clean
+        assert detect_sequence_gaps(events).empty
 
     def test_default_config_adds_no_columns(self, tmp_path):
         # Off by default: on a source with no venue sequence (like the bundled
@@ -358,7 +357,7 @@ class TestLobsterSequenceColumns:
         assert INGEST_SEQ_COLUMN in events.columns
         assert events[INGEST_SEQ_COLUMN].dtype == np.dtype("int64")
         assert SEQUENCE_COLUMN not in events.columns
-        assert detect_sequence_gaps(events).clean
+        assert detect_sequence_gaps(events).empty
 
     def test_default_config_adds_no_columns(self, tmp_path):
         msg = self._write_messages(tmp_path / "AAPL_message.csv")

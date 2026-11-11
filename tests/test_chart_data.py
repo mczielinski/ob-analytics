@@ -732,7 +732,7 @@ class TestPrepareOfi:
         assert data["ofi_df"] is ofi_df
 
 
-class TestPrepareOfiHorizon:
+class TestPrepareOfiByWindow:
     @staticmethod
     def _trades() -> pd.DataFrame:
         ts = pd.Timestamp("2015-05-01 01:00:00")
@@ -750,23 +750,23 @@ class TestPrepareOfiHorizon:
         )
 
     def test_grid_shape(self) -> None:
-        horizons = ("5s", "15s", "60s", "300s")
-        data = prepare.ofi_horizon(self._trades(), horizons=horizons, grid="5s")
+        windows = ("5s", "15s", "60s", "300s")
+        data = prepare.ofi_by_window(self._trades(), windows=windows, grid="5s")
         assert set(data) == {
             "ofi",
             "times",
-            "horizons",
+            "windows",
             "band_alphas",
             "buy_bands",
             "sell_bands",
         }
-        assert list(data["horizons"]) == list(horizons)
-        # One row per horizon; one column per grid step.
-        assert data["ofi"].shape[0] == len(horizons)
+        assert list(data["windows"]) == list(windows)
+        # One row per window; one column per grid step.
+        assert data["ofi"].shape[0] == len(windows)
         assert data["ofi"].shape[1] == len(data["times"])
 
     def test_values_bounded(self) -> None:
-        data = prepare.ofi_horizon(self._trades())
+        data = prepare.ofi_by_window(self._trades())
         finite = data["ofi"][np.isfinite(data["ofi"])]
         assert finite.size > 0
         assert finite.min() >= -1.0 - 1e-9
@@ -775,10 +775,10 @@ class TestPrepareOfiHorizon:
     def test_empty_window_returns_empty(self) -> None:
         trades = self._trades()
         after = trades["timestamp"].max() + pd.Timedelta(hours=1)
-        data = prepare.ofi_horizon(trades, start_time=after)
+        data = prepare.ofi_by_window(trades, start_time=after)
         assert data["ofi"].size == 0
         assert len(data["times"]) == 0
-        assert data["horizons"]  # horizons still reported
+        assert data["windows"]  # windows still reported
 
 
 class TestPrepareKyleLambda:

@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ob_analytics.flow_toxicity import compute_kyle_lambda
+from ob_analytics.flow_toxicity import kyle_lambda
 from ob_analytics.pipeline import PipelineResult
 from tests._golden import df_fingerprint
 
@@ -219,7 +219,7 @@ def test_demo_fingerprints(demo_result):
 
 
 def test_kyle_lambda_baseline(demo_result):
-    res = compute_kyle_lambda(demo_result.trades)
+    res = kyle_lambda(demo_result.trades)
     # Record the baseline scalar; C4 (lstsq rewrite) must stay within rtol.
     print(f"KYLE_LAMBDA_BASELINE = {res.lambda_!r}")
     print(f"KYLE_RSQ_BASELINE = {res.r_squared!r}")
@@ -236,7 +236,7 @@ def test_kyle_lambda_baseline(demo_result):
     # the regression itself did not move — only its units. Multiply by
     # tick_size and divide by lot_size for the quote-currency-per-base-asset
     # value.
-    # 2026-11-07 (#400, measures in instrument units): compute_kyle_lambda reads
+    # 2026-11-07 (#400, measures in instrument units): kyle_lambda reads
     # tick_size and lot_size off the trades and reports dollars per BTC, so
     # lambda is back at the original 8.651849748125398 (the 1e-6 above times
     # tick_size / lot_size = 1e6), with r_squared unchanged once more.

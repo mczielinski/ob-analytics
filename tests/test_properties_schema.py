@@ -9,7 +9,7 @@ fixtures:
 2. **The book does not cross after an uncross** — every uncrossing path leaves
    ``best_bid < best_ask`` (strict), and the depth engine never leaves a
    strictly crossed touch (``best_bid <= best_ask``; equal-price locks are
-   tolerated by design — see :class:`~ob_analytics.depth.DepthMetricsEngine`).
+   tolerated by design — see :class:`~ob_analytics.depth.DepthSummaryEngine`).
 3. **Volume adds up** — outstanding size, executed size, and traded size
    reconcile, and price-level depth is never negative.
 
@@ -28,7 +28,7 @@ import pytest
 from hypothesis import given, settings, strategies as st
 
 from ob_analytics.book import order_book
-from ob_analytics.depth import DepthMetricsEngine, depth_metrics, price_level_volume
+from ob_analytics.depth import DepthSummaryEngine, price_level_volume, summarize_depth
 from ob_analytics.synth import SynthConfig, generate_session
 
 _T0 = pd.Timestamp("2020-01-01 00:00:00")
@@ -157,7 +157,7 @@ def test_events_and_trades_move_forward_in_time(cfg: SynthConfig) -> None:
 @given(cfg=synth_configs())
 def test_depth_engine_emits_in_time_order(cfg: SynthConfig) -> None:
     events = generate_session(cfg).events
-    summary = depth_metrics(price_level_volume(events))
+    summary = summarize_depth(price_level_volume(events))
     # The engine sorts by time, so consumers reading its output see a forward
     # clock regardless of the input row order.
     assert summary["timestamp"].is_monotonic_increasing
@@ -178,7 +178,7 @@ def test_order_book_uncross_leaves_no_cross(events: pd.DataFrame) -> None:
 @settings(max_examples=50, deadline=None)
 @given(depth=crossable_depth())
 def test_depth_engine_never_strictly_crosses(depth: pd.DataFrame) -> None:
-    summary = DepthMetricsEngine().compute(depth)
+    summary = DepthSummaryEngine().compute(depth)
     both = (summary["best_bid_price"] > 0) & (summary["best_ask_price"] > 0)
     # Locks (equal best prices) are tolerated; a strict cross is not.
     assert (
@@ -218,7 +218,7 @@ def test_uncross_resolves_a_known_crossed_book() -> None:
         }
     ).sort_values("timestamp", kind="stable")
     events["exchange_timestamp"] = events["timestamp"]
-    book = order_book(events, tp=_T0 + pd.Timedelta(seconds=10), uncross=True)
+    book = order_book(events, at=_T0 + pd.Timedelta(seconds=10), uncross=True)
     assert book["bids"]["price"].max() < book["asks"]["price"].min()
 
 

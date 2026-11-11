@@ -16,6 +16,7 @@ from ob_analytics.hidden_liquidity import (
     ICEBERG_MAX_DELAY,
     detect_icebergs,
     hidden_trades,
+    iceberg_slices,
 )
 from ob_analytics.synth import generate_session
 from ob_analytics.visualization import prepare
@@ -82,9 +83,10 @@ class TestDetectIcebergs:
         events, trades = s.frames()
 
         det = detect_icebergs(events, trades)
+        det_slices = iceberg_slices(events, trades)
 
-        assert len(det.icebergs) == 1
-        row = det.icebergs.iloc[0]
+        assert len(det) == 1
+        row = det.iloc[0]
         assert row["slices"] == 3
         assert row["refills"] == 2
         assert row["same_size_refills"] == 2
@@ -93,12 +95,12 @@ class TestDetectIcebergs:
         assert row["confidence"] == "high"
         assert row["direction"] == "ask"
         assert row["price"] == 100
-        assert row["start"] == _us(0)
-        assert row["end"] == _us(9_000)
+        assert row["timestamp_start"] == _us(0)
+        assert row["timestamp_end"] == _us(9_000)
         assert row["median_delay_s"] == pytest.approx(225e-6)
-        assert det.slices["id"].tolist() == [1, 2, 3]
-        assert det.slices["slice"].tolist() == [1, 2, 3]
-        assert det.slices["delay_s"].iloc[1:].tolist() == pytest.approx(
+        assert det_slices["id"].tolist() == [1, 2, 3]
+        assert det_slices["slice"].tolist() == [1, 2, 3]
+        assert det_slices["delay_s"].iloc[1:].tolist() == pytest.approx(
             [250e-6, 200e-6]
         )
 
@@ -119,15 +121,16 @@ class TestDetectIcebergs:
         events, trades = s.frames()
 
         det = detect_icebergs(events, trades)
+        det_slices = iceberg_slices(events, trades)
 
-        assert len(det.icebergs) == 1
-        assert det.icebergs.iloc[0]["slices"] == 3
-        assert det.icebergs.iloc[0]["confidence"] == "high"
-        assert det.slices["id"].tolist() == [a, b, c]
+        assert len(det) == 1
+        assert det.iloc[0]["slices"] == 3
+        assert det.iloc[0]["confidence"] == "high"
+        assert det_slices["id"].tolist() == [a, b, c]
 
-        # The gallery's overlay joins the two frames; string ids pass through.
+        # String ids pass through the gallery's overlay.
         overlay = prepare.hidden_liquidity_overlay(
-            det.icebergs, det.slices, pd.DataFrame(columns=["timestamp", "price"])
+            det_slices, pd.DataFrame(columns=["timestamp", "price"])
         )
         assert overlay["iceberg_lines"]["id"].tolist() == [a, b, c]
         assert overlay["iceberg_refills"]["id"].tolist() == [b, c]
@@ -139,7 +142,7 @@ class TestDetectIcebergs:
         s.add(2, 1_100, "created", 100)
         events, trades = s.frames()
 
-        assert detect_icebergs(events, trades).icebergs.empty
+        assert detect_icebergs(events, trades).empty
 
     def test_filled_aggressor_is_not_a_slice(self):
         # Order 1 crossed and was filled to zero as the taker, not the maker.
@@ -149,7 +152,7 @@ class TestDetectIcebergs:
         s.add(2, 100, "created", 50, side="bid")
         events, trades = s.frames()
 
-        assert detect_icebergs(events, trades).icebergs.empty
+        assert detect_icebergs(events, trades).empty
 
     def test_refill_later_than_max_delay_is_ignored(self):
         s = _Stream()
@@ -158,9 +161,9 @@ class TestDetectIcebergs:
         s.add(2, 3_000, "created", 100)  # 2 ms later
         events, trades = s.frames()
 
-        assert detect_icebergs(events, trades).icebergs.empty
-        found = detect_icebergs(events, trades, max_delay="5ms")
-        assert found.slices["id"].tolist() == [1, 2]
+        assert detect_icebergs(events, trades).empty
+        found_slices = iceberg_slices(events, trades, max_delay="5ms")
+        assert found_slices["id"].tolist() == [1, 2]
 
     def test_refill_must_match_price_and_side(self):
         s = _Stream()
@@ -170,7 +173,7 @@ class TestDetectIcebergs:
         s.add(3, 1_100, "created", 100, side="bid")
         events, trades = s.frames()
 
-        assert detect_icebergs(events, trades).icebergs.empty
+        assert detect_icebergs(events, trades).empty
 
     def test_new_order_is_matched_to_the_peak_it_equals(self):
         # Two peaks filled by one sweep; only the 30-lot one refills.
@@ -183,8 +186,9 @@ class TestDetectIcebergs:
         events, trades = s.frames()
 
         det = detect_icebergs(events, trades)
-        assert det.slices["id"].tolist() == [2, 3]
-        assert det.icebergs["confidence"].tolist() == ["medium"]
+        det_slices = iceberg_slices(events, trades)
+        assert det_slices["id"].tolist() == [2, 3]
+        assert det["confidence"].tolist() == ["medium"]
 
     def test_different_size_refill_is_low_confidence(self):
         s = _Stream()
@@ -194,8 +198,8 @@ class TestDetectIcebergs:
         events, trades = s.frames()
 
         det = detect_icebergs(events, trades)
-        assert det.icebergs["confidence"].tolist() == ["low"]
-        assert det.icebergs["same_size_refills"].tolist() == [0]
+        assert det["confidence"].tolist() == ["low"]
+        assert det["same_size_refills"].tolist() == [0]
 
     def test_order_follows_time_not_event_id(self):
         # Bitstamp numbers events by order id, not by time.  Order 2 was placed
@@ -209,7 +213,7 @@ class TestDetectIcebergs:
 
         found = detect_icebergs(events, trades, max_delay="1s")
 
-        assert found.icebergs.empty
+        assert found.empty
 
     def test_refill_found_when_event_ids_are_out_of_time_order(self):
         s = _Stream()
@@ -219,10 +223,11 @@ class TestDetectIcebergs:
         events, trades = s.frames()
 
         found = detect_icebergs(events, trades)
+        found_slices = iceberg_slices(events, trades)
 
-        assert found.slices["id"].tolist() == [1, 2]
-        assert found.slices["delay_s"].iloc[1] == pytest.approx(200e-6)
-        assert found.icebergs["start"].tolist() == [_us(0)]
+        assert found_slices["id"].tolist() == [1, 2]
+        assert found_slices["delay_s"].iloc[1] == pytest.approx(200e-6)
+        assert found["timestamp_start"].tolist() == [_us(0)]
 
     def test_peak_is_na_when_first_slice_was_already_resting(self):
         s = _Stream()
@@ -231,9 +236,10 @@ class TestDetectIcebergs:
         events, trades = s.frames()
 
         found = detect_icebergs(events, trades)
+        found_slices = iceberg_slices(events, trades)
 
-        assert found.icebergs["peak"].isna().tolist() == [True]
-        assert found.slices["volume"].isna().tolist() == [True, False]
+        assert found["peak"].isna().tolist() == [True]
+        assert found_slices["volume"].isna().tolist() == [True, False]
 
     def test_hidden_order_id_never_forms_a_slice(self):
         s = _Stream()
@@ -241,7 +247,7 @@ class TestDetectIcebergs:
         s.add(2, 1_200, "created", 100)
         events, trades = s.frames()
 
-        assert detect_icebergs(events, trades).icebergs.empty
+        assert detect_icebergs(events, trades).empty
 
     def test_empty_result_keeps_its_columns(self):
         s = _Stream()
@@ -249,8 +255,9 @@ class TestDetectIcebergs:
         events, trades = s.frames()
 
         det = detect_icebergs(events, trades)
-        assert "confidence" in det.icebergs.columns
-        assert "delay_s" in det.slices.columns
+        det_slices = iceberg_slices(events, trades)
+        assert "confidence" in det.columns
+        assert "delay_s" in det_slices.columns
 
     def test_negative_max_delay_raises(self):
         events, trades = _Stream().add(1, 0, "created", 1).frames()
@@ -282,10 +289,10 @@ class TestSyntheticGroundTruth:
         session = generate_session(
             seed=3, duration=300, iceberg_fraction=0.1, arrival_process=process
         )
-        det = detect_icebergs(session.events, session.trades)
+        det_slices = iceberg_slices(session.events, session.trades)
 
         true_links = self._links(session.icebergs, "iceberg")
-        found = self._links(det.slices, "iceberg")
+        found = self._links(det_slices, "iceberg")
         hits = len(true_links & found)
         assert true_links, "the session should hold refilled icebergs"
         assert hits == len(true_links)  # recall 1.0
@@ -330,15 +337,15 @@ class TestOrderIdsDoNotMatter:
         def detect(orders_csv):
             events = BitstampLoader().load(orders_csv)
             linked = BitstampTradeReader().load(events, orders_csv)
-            return detect_icebergs(events, linked)
+            return detect_icebergs(events, linked), iceberg_slices(events, linked)
 
-        expected = detect(bitstamp_sample_dir / "orders.csv.gz")
-        got = detect(tmp_path / "orders.csv")
+        expected, expected_slices = detect(bitstamp_sample_dir / "orders.csv.gz")
+        got, got_slices = detect(tmp_path / "orders.csv")
 
         old_id = {v: k for k, v in new_id.items()}
-        assert len(expected.icebergs) == 2
-        assert got.slices["id"].map(old_id).tolist() == expected.slices["id"].tolist()
-        pd.testing.assert_frame_equal(got.icebergs, expected.icebergs)
+        assert len(expected) == 2
+        assert got_slices["id"].map(old_id).tolist() == expected_slices["id"].tolist()
+        pd.testing.assert_frame_equal(got, expected)
 
 
 # ── hidden_trades ────────────────────────────────────────────────────

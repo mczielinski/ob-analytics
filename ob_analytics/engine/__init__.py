@@ -1,4 +1,4 @@
-"""The order-book engine: order events in, book states and lifecycles out.
+"""The order-book engine: order events in, book snapshots and lifecycles out.
 
 This is the stateful core of ob-analytics — the part that replays a stream of
 order events and works out what the book looked like, who was queued behind
@@ -26,7 +26,7 @@ learn a vocabulary — order types, venue names — that belongs to the layer ab
 
 The interface
 -------------
-* :func:`book_state` — the book at one instant, both sides.
+* :func:`order_book` — the book at one instant, both sides.
 * :func:`order_lifecycles` — one row per order: placement to outcome.
 * :func:`queue_positions` — each order's FIFO place, event by event.
 * :func:`queue_age_grid` — the touch queue's composition over time.
@@ -62,9 +62,9 @@ from __future__ import annotations
 
 from ob_analytics.engine._book import (
     BookSide,
-    BookState,
-    book_state,
+    BookSnapshot,
     crossed_prefix_counts,
+    order_book,
 )
 from ob_analytics.engine._events import (
     ACTIONS,
@@ -97,7 +97,7 @@ __all__ = [
     "OUTCOMES",
     "Action",
     "BookSide",
-    "BookState",
+    "BookSnapshot",
     "Code",
     "Direction",
     "OrderEvents",
@@ -105,8 +105,8 @@ __all__ = [
     "Outcome",
     "QueueAgeGrid",
     "QueuePositions",
-    "book_state",
     "crossed_prefix_counts",
+    "order_book",
     "order_lifecycles",
     "queue_age_grid",
     "queue_positions",

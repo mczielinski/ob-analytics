@@ -113,7 +113,7 @@ _GOLDEN_CONFIG = SynthConfig(seed=143, duration=60.0)
 # here changes twice in one instant. The same 21 ``depth_summary`` rows change,
 # and the book at the end of every instant is unchanged. Each depth_summary row
 # is now the book after the event it names: the last row of every event
-# matches the per-order rebuild (``engine.book_state``) on the best bid and ask,
+# matches the per-order rebuild (``engine.order_book``) on the best bid and ask,
 # where before 16 rows did not. ``events`` follows through
 # ``aggressiveness_bps`` on 4 of 970 rows. ``trades``, ``order_book``,
 # ``order_lifecycles`` and ``queue_positions`` are unchanged.

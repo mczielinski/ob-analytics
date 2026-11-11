@@ -22,10 +22,10 @@ from matplotlib.figure import Figure
 from ob_analytics import metrics
 from ob_analytics.bitstamp import BitstampSource
 from ob_analytics.flow_toxicity import (
-    compute_kyle_lambda,
-    compute_vpin,
-    ofi_by_horizon,
+    kyle_lambda,
+    ofi_by_window,
     order_flow_imbalance,
+    vpin,
 )
 from ob_analytics.pipeline import Pipeline, PipelineResult
 from ob_analytics.protocols import Level
@@ -37,7 +37,7 @@ from ob_analytics.visualization.gallery import (
     display_result,
 )
 
-BUILT_IN = ("kyle_lambda", "l1_ticker", "ofi_horizon", "order_flow_imbalance", "vpin")
+BUILT_IN = ("kyle_lambda", "l1_ticker", "ofi_by_window", "order_flow_imbalance", "vpin")
 
 
 @pytest.fixture(scope="module")
@@ -119,7 +119,7 @@ def test_result_metric_passes_settings_to_compute(result) -> None:
     bucket = float(result.trades["volume"].sum()) * result.config.lot_size / 4
     frame = result.metric("vpin", bucket_volume=bucket, n_buckets=3)
 
-    expected = compute_vpin(result.trades, bucket_volume=bucket, n_buckets=3)
+    expected = vpin(result.trades, bucket_volume=bucket, n_buckets=3)
     pd.testing.assert_frame_equal(frame, expected)
 
 
@@ -135,7 +135,7 @@ def test_an_unknown_keyword_is_an_error(result) -> None:
 
 def test_kyle_metric_keeps_the_fit_in_attrs(result) -> None:
     frame = result.metric("kyle_lambda", window="5s")
-    kyle = compute_kyle_lambda(result.trades, "5s")
+    kyle = kyle_lambda(result.trades, "5s")
 
     pd.testing.assert_frame_equal(frame, kyle.regression_df, check_like=True)
     assert frame.attrs["lambda_"] == pytest.approx(kyle.lambda_, nan_ok=True)
@@ -164,7 +164,7 @@ def test_ofi_metric_draws_the_close_as_its_price_line(result) -> None:
 
 
 # ---------------------------------------------------------------------------
-# ofi_by_horizon
+# ofi_by_window
 # ---------------------------------------------------------------------------
 
 
@@ -180,10 +180,10 @@ def _trades(rows) -> pd.DataFrame:
     )
 
 
-def test_ofi_by_horizon_sums_a_trailing_window_per_horizon() -> None:
+def test_ofi_by_window_sums_a_trailing_window_per_horizon() -> None:
     trades = _trades([(0, 3.0, "buy"), (5, 1.0, "sell"), (10, 1.0, "sell")])
 
-    grid = ofi_by_horizon(trades, horizons=("5s", "15s"), grid="5s")
+    grid = ofi_by_window(trades, windows=("5s", "15s"), grid="5s")
 
     assert list(grid.columns) == ["timestamp", "5s", "15s"]
     assert grid["timestamp"].dt.tz is not None
@@ -192,11 +192,11 @@ def test_ofi_by_horizon_sums_a_trailing_window_per_horizon() -> None:
     assert grid["15s"].tolist() == pytest.approx([1.0, 2 / 4, 1 / 5])
 
 
-def test_ofi_horizon_face_draws_the_metric_grid(result) -> None:
-    grid = result.metric("ofi_horizon")
-    payload = prepare.ofi_horizon(result.trades)
+def test_ofi_by_window_face_draws_the_metric_grid(result) -> None:
+    grid = result.metric("ofi_by_window")
+    payload = prepare.ofi_by_window(result.trades)
 
-    assert payload["horizons"] == list(grid.columns[1:])
+    assert payload["windows"] == list(grid.columns[1:])
     np.testing.assert_allclose(payload["ofi"], grid.iloc[:, 1:].to_numpy().T)
 
 
@@ -343,8 +343,8 @@ def test_result_plots_the_l1_card_at_an_instant(result) -> None:
     assert "BTC/USD" in {t.get_text() for t in fig.axes[0].texts}
 
 
-def test_ofi_by_horizon_infers_a_missing_side() -> None:
+def test_ofi_by_window_infers_a_missing_side() -> None:
     trades = _trades([(0, 1.0, "buy"), (5, 1.0, "sell")]).drop(columns="direction")
     trades["price"] = [100, 101]
     # The tick rule reads the uptick as a buy.
-    assert ofi_by_horizon(trades, horizons=("5s",))["5s"].iloc[1] == 1.0
+    assert ofi_by_window(trades, windows=("5s",))["5s"].iloc[1] == 1.0

@@ -1,9 +1,9 @@
-"""Order book depth computation and metrics.
+"""Order book depth and the depth summary.
 
 Contains :class:`PriceLevelBook`, the book at L2 kept one depth row at a
-time; :class:`DepthMetricsEngine` for computing limit order book depth
-metrics on it, along with :func:`price_level_volume`, :func:`filter_depth`,
-:func:`depth_metrics` (backward-compatible wrapper), :func:`get_spread`,
+time; :class:`DepthSummaryEngine`, which builds the depth summary on it, along
+with :func:`price_level_volume`, :func:`filter_depth`,
+:func:`summarize_depth` (a wrapper around the engine), :func:`get_spread`,
 :func:`readable_quotes`, and :func:`price_level_snapshots`.
 """
 
@@ -34,7 +34,22 @@ from ob_analytics.exceptions import ConfigError
 from ob_analytics.schemas import time_order_keys, validate_columns
 
 if TYPE_CHECKING:
-    from ob_analytics.book import OrderBookSnapshot
+    from ob_analytics.book import BookSnapshot
+
+__all__ = [
+    "BookLevels",
+    "DepthSummaryEngine",
+    "PriceLevelBook",
+    "book_imbalance",
+    "book_signals",
+    "filter_depth",
+    "get_spread",
+    "micro_price",
+    "price_level_snapshots",
+    "price_level_volume",
+    "readable_quotes",
+    "summarize_depth",
+]
 
 
 @lru_cache(maxsize=256)
@@ -151,7 +166,7 @@ class PriceLevelBook:
     price makes the whole level recent here, while ``order_book`` still sees
     the stale order as old.
 
-    :class:`DepthMetricsEngine` builds the depth summary on this class, so the
+    :class:`DepthSummaryEngine` builds the depth summary on this class, so the
     quoted levels here are the depth summary's book after every row.
 
     Parameters
@@ -350,13 +365,12 @@ def _book_levels(
     return levels
 
 
-class DepthMetricsEngine:
-    """Incrementally compute order book depth metrics.
+class DepthSummaryEngine:
+    """Build the depth summary one depth row at a time.
 
-    Replaces the monolithic :func:`depth_metrics` function with a
-    stateful, testable class.  :meth:`compute` processes a whole depth
-    frame; internally each event is applied via :meth:`update_side`,
-    which writes one metrics row into a pre-allocated numpy buffer.
+    :meth:`compute` processes a whole depth frame; internally each event is
+    applied via :meth:`update_side`, which writes one summary row into a
+    pre-allocated numpy buffer.
 
     The book itself is a :class:`PriceLevelBook`, which holds each side as
     parallel numpy arrays sorted ascending by integer price.  BPS-bin sums
@@ -420,10 +434,9 @@ class DepthMetricsEngine:
         return float(vols[-1]) if vols.size else 0.0
 
     def compute(self, depth: pd.DataFrame) -> pd.DataFrame:
-        """Process an entire depth DataFrame and return metrics.
+        """Process an entire depth DataFrame and return the depth summary.
 
-        This is the main entry point, equivalent to the legacy
-        :func:`depth_metrics` function.
+        This is the main entry point; :func:`summarize_depth` calls it.
 
         Parameters
         ----------
@@ -441,9 +454,9 @@ class DepthMetricsEngine:
         validate_columns(
             depth,
             {"timestamp", "price", "volume", "direction"},
-            "DepthMetricsEngine.compute",
+            "DepthSummaryEngine.compute",
         )
-        validate_non_empty(depth, "DepthMetricsEngine.compute")
+        validate_non_empty(depth, "DepthSummaryEngine.compute")
 
         # Replay in the canonical event order (``schemas.time_order_keys``:
         # timestamp, then sequence / event_id / ingest_seq where present), the
@@ -736,7 +749,7 @@ def _price_level_volume(events: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFram
         # resting level that no order is on.  A `changed` row with no execution
         # and a new price is different: the order really has moved (Databento's
         # modify), so its volume leaves the old level and joins the new one.
-        # The per-order rebuild (`engine.book_state`) and the queue rebuilds
+        # The per-order rebuild (`engine.order_book`) and the queue rebuilds
         # read the same resting price, so all of them put an order on the same
         # level.
         order_key = dir_events["id"]
@@ -926,17 +939,17 @@ def _warn_on_overdrawn_levels(overdrawn: pd.DataFrame) -> None:
 
 
 def filter_depth(
-    d: pd.DataFrame, from_timestamp: pd.Timestamp, to_timestamp: pd.Timestamp
+    depth: pd.DataFrame, start_time: pd.Timestamp, end_time: pd.Timestamp
 ) -> pd.DataFrame:
     """Filter depth data within a specified time range.
 
     Parameters
     ----------
-    d : pandas.DataFrame
+    depth : pandas.DataFrame
         DataFrame containing depth data.
-    from_timestamp : pandas.Timestamp
+    start_time : pandas.Timestamp
         Start of the time range.
-    to_timestamp : pandas.Timestamp
+    end_time : pandas.Timestamp
         End of the time range.
 
     Returns
@@ -944,9 +957,9 @@ def filter_depth(
     pandas.DataFrame
         Filtered depth data within the specified time range.
     """
-    validate_columns(d, {"timestamp", "price", "volume"}, "filter_depth")
+    validate_columns(depth, {"timestamp", "price", "volume"}, "filter_depth")
 
-    pre = d[d["timestamp"] <= from_timestamp]
+    pre = depth[depth["timestamp"] <= start_time]
     pre = pre.sort_values(by=["price", "timestamp"], kind="stable")
 
     pre = pre.drop_duplicates(subset="price", keep="last")
@@ -954,15 +967,15 @@ def filter_depth(
 
     if not pre.empty:
         pre.loc[:, "timestamp"] = pre["timestamp"].where(
-            pre["timestamp"] >= from_timestamp, from_timestamp
+            pre["timestamp"] >= start_time, start_time
         )
 
-    mid = d[(d["timestamp"] > from_timestamp) & (d["timestamp"] < to_timestamp)]
+    mid = depth[(depth["timestamp"] > start_time) & (depth["timestamp"] < end_time)]
     range_combined = pd.concat([pre, mid])
 
     open_ends = range_combined.drop_duplicates(subset="price", keep="last")
     open_ends = open_ends[open_ends["volume"] > 0].copy()
-    open_ends["timestamp"] = to_timestamp
+    open_ends["timestamp"] = end_time
     open_ends["volume"] = 0
 
     range_combined = pd.concat([range_combined, open_ends])
@@ -973,38 +986,40 @@ def filter_depth(
     return range_combined
 
 
-def depth_metrics(depth: pd.DataFrame, bps: int = 25, bins: int = 20) -> pd.DataFrame:
-    """Compute limit order book depth metrics.
+def summarize_depth(
+    depth: pd.DataFrame, depth_bps: int = 25, depth_bins: int = 20
+) -> pd.DataFrame:
+    """Build the depth summary from a depth table.
 
-    This is a convenience wrapper around :class:`DepthMetricsEngine`.
+    This is a convenience wrapper around :class:`DepthSummaryEngine`.
 
     Parameters
     ----------
     depth : pandas.DataFrame
         DataFrame containing depth data.
-    bps : int, optional
-        Basis points increment for volume bins. Default is 25.
-    bins : int, optional
-        Number of bins to use for volume aggregation. Default is 20.
+    depth_bps : int, optional
+        Width of each depth bin, in basis points. Default is 25.
+    depth_bins : int, optional
+        Number of depth bins. Default is 20.
 
     Returns
     -------
     pandas.DataFrame
-        DataFrame containing depth metrics over time.
+        The depth summary: one row per depth event.
     """
-    config = PipelineConfig(depth_bps=bps, depth_bins=bins)
-    return DepthMetricsEngine(config).compute(depth)
+    config = PipelineConfig(depth_bps=depth_bps, depth_bins=depth_bins)
+    return DepthSummaryEngine(config).compute(depth)
 
 
 def price_level_snapshots(
     depth: pd.DataFrame,
     times: Iterable[datetime | pd.Timestamp],
     max_levels: int | None = None,
-) -> list[OrderBookSnapshot]:
+) -> list[BookSnapshot]:
     """Return the book at L2 at each of *times*, replayed from the depth table.
 
     One pass over *depth* drives a :class:`PriceLevelBook`, the book
-    :class:`DepthMetricsEngine` builds the depth summary on, and copies it out
+    :class:`DepthSummaryEngine` builds the depth summary on, and copies it out
     at each instant.  So the touch of each snapshot equals the depth summary's
     last row at or before that instant: each snapshot holds the quoted
     levels, which leave out a level crossed by a more recently updated quote
@@ -1028,7 +1043,7 @@ def price_level_snapshots(
 
     Returns
     -------
-    list of OrderBookSnapshot
+    list of BookSnapshot
         One per entry of *times*, in the same order.  Each has the shape
         :func:`~ob_analytics.book.order_book` returns, with one row per
         price level: ``bids`` best first and ``asks`` best last, each with
@@ -1046,7 +1061,7 @@ def price_level_snapshots(
     )
     instants = [_engine_frames.instant_ns(t, like=depth["timestamp"]) for t in times]
 
-    # The same playback order as DepthMetricsEngine.compute: the canonical
+    # The same playback order as DepthSummaryEngine.compute: the canonical
     # event order, so the book at the end of an instant is the one the depth
     # summary ends that instant on.
     ordered = depth.sort_values(by=time_order_keys(depth), kind="stable")
@@ -1069,7 +1084,7 @@ def price_level_snapshots(
             }
         )
 
-    snapshots: list[OrderBookSnapshot | None] = [None] * len(instants)
+    snapshots: list[BookSnapshot | None] = [None] * len(instants)
     row = 0
     for k in np.argsort(instants, kind="stable"):
         stop = int(np.searchsorted(stamps, instants[k], side="right"))
@@ -1167,7 +1182,7 @@ def readable_quotes(quotes: pd.DataFrame) -> pd.DataFrame:
     trade printed inside (:func:`~ob_analytics.hidden_liquidity.hidden_trades`),
     the book columns of the feature table
     (:func:`~ob_analytics.features.features`), the micro-price
-    (:func:`micro_price`) and the mids of :func:`depth_signals`, the mids the
+    (:func:`micro_price`) and the mids of :func:`book_signals`, the mids the
     trade tape, the price view, the book signals and the depth heatmap draw,
     the mid line of the book ladder and the price range of the book replay,
     and the empty sides of the Level 1 quote table
@@ -1252,7 +1267,7 @@ def bin_volume_columns(depth_summary: pd.DataFrame, side: str) -> list[str]:
     """Return the per-bps depth-bin volume columns for *side*, touch outward.
 
     These are the ``{side}_vol{N}bps`` aggregates written by
-    :class:`DepthMetricsEngine` -- each the resting volume in one bps ring out
+    :class:`DepthSummaryEngine` -- each the resting volume in one bps ring out
     from the touch.  They are discovered from the frame and ordered by their
     bps distance rather than assumed, so a summary built with a non-default
     ``bps``/``bins`` configuration is handled correctly.
@@ -1260,7 +1275,7 @@ def bin_volume_columns(depth_summary: pd.DataFrame, side: str) -> list[str]:
     Parameters
     ----------
     depth_summary : pandas.DataFrame
-        Depth summary produced by :func:`depth_metrics`.
+        Depth summary produced by :func:`summarize_depth`.
     side : str
         ``"bid"`` or ``"ask"``.
 
@@ -1371,7 +1386,7 @@ def book_imbalance(depth_summary: pd.DataFrame, levels: int = 1) -> pd.Series:
     Parameters
     ----------
     depth_summary : pandas.DataFrame
-        Depth summary produced by :func:`depth_metrics`.
+        Depth summary produced by :func:`summarize_depth`.
     levels : int, optional
         Depth over which to measure the imbalance.  ``1`` (default) uses the
         touch only -- ``best_bid_vol`` and ``best_ask_vol``.  ``levels > 1``
@@ -1434,10 +1449,10 @@ def imbalance_levels(depth_summary: pd.DataFrame, levels: int) -> int:
     return max(1, min(levels, available + 1))
 
 
-def depth_signals(
+def book_signals(
     depth_summary: pd.DataFrame,
     *,
-    depth_levels: int = 5,
+    levels: int = 5,
     stoikov_adjustment: pd.Series | np.ndarray | float | None = None,
 ) -> pd.DataFrame:
     """Append fair-value and pressure signal columns to a depth summary.
@@ -1452,8 +1467,8 @@ def depth_signals(
     ``obi``
         Touch order-book imbalance -- :func:`book_imbalance` with ``levels=1``.
     ``obi_depth``
-        Cumulative-depth order-book imbalance over *depth_levels* --
-        :func:`book_imbalance` with ``levels=depth_levels``.
+        Cumulative-depth order-book imbalance over *levels* --
+        :func:`book_imbalance` with ``levels=levels``.
 
     A row whose quote cannot be read as a price (:func:`readable_quotes`: an
     empty side or a crossed book) has no mid of either kind: both are
@@ -1463,8 +1478,8 @@ def depth_signals(
     Parameters
     ----------
     depth_summary : pandas.DataFrame
-        Depth summary produced by :func:`depth_metrics`.
-    depth_levels : int, optional
+        Depth summary produced by :func:`summarize_depth`.
+    levels : int, optional
         Depth for the cumulative ``obi_depth`` column.  Default ``5`` (the
         touch plus the first four bps depth bins).  Clamped to the number of
         depth bins actually present, so a summary with fewer bins does not
@@ -1480,10 +1495,10 @@ def depth_signals(
     validate_columns(
         depth_summary,
         {"best_bid_price", "best_bid_vol", "best_ask_price", "best_ask_vol"},
-        "depth_signals",
+        "book_signals",
     )
 
-    effective_levels = imbalance_levels(depth_summary, depth_levels)
+    effective_levels = imbalance_levels(depth_summary, levels)
 
     result = depth_summary.copy()
     result["mid_price"] = _readable_mid(depth_summary)

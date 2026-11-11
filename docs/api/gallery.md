@@ -47,14 +47,14 @@ common ones. For any other level-less plot, build a `PlotSpec` with the
 plot's `prepare` function:
 
 ```python
-from ob_analytics import Pipeline, compute_vpin, sample_csv_path
+from ob_analytics import Pipeline, vpin, sample_csv_path
 from ob_analytics.visualization import prepare
 from ob_analytics.visualization.gallery import (
     PlotSpec, build_gallery_model, generate_gallery,
 )
 
 result = Pipeline().run(sample_csv_path())
-vpin_df = compute_vpin(result.trades)
+vpin_df = vpin(result.trades)
 
 model = build_gallery_model(result)
 model.analytics.append(
@@ -71,7 +71,7 @@ generate_gallery(result, "out/gallery", model=model)
 
 ::: ob_analytics.visualization.gallery.bars_card
 
-::: ob_analytics.visualization.gallery.ofi_horizon_card
+::: ob_analytics.visualization.gallery.ofi_by_window_card
 
 ::: ob_analytics.visualization.gallery.kyle_lambda_card
 

@@ -16,7 +16,7 @@ class TestFilterDepth:
     """Unit tests for filter_depth boundary conditions."""
 
     def test_pre_range_timestamps_clipped(self):
-        """Timestamps before from_timestamp are clipped upward to from_timestamp."""
+        """Timestamps before start_time are clipped upward to start_time."""
         d = _depth(
             ("2015-01-01 00:00:00", 100, 5.0),  # before range
             ("2015-01-01 00:00:30", 100, 3.0),  # in range
@@ -47,7 +47,7 @@ class TestFilterDepth:
         assert len(pre_rows) == 0
 
     def test_open_end_rows_added(self):
-        """Surviving levels get a volume=0 closing row at to_timestamp."""
+        """Surviving levels get a volume=0 closing row at end_time."""
         d = _depth(
             ("2015-01-01 00:00:30", 100, 5.0),  # in range, still alive
         )

@@ -29,6 +29,12 @@ from ob_analytics.schemas import (
 )
 from ob_analytics.trade_sign import quote_before
 
+__all__ = [
+    "order_aggressiveness",
+    "set_order_types",
+    "trade_impacts",
+]
+
 
 def _event_diff_bps(
     orders: pd.DataFrame,
@@ -156,14 +162,15 @@ def trade_impacts(trades: pd.DataFrame) -> pd.DataFrame:
     Returns
     -------
     pandas.DataFrame
-        A DataFrame summarising market order impacts with columns:
-        ``id``, ``min_price``, ``max_price``, ``vwap``, ``hits``, ``vol``,
-        ``start_time``, ``end_time``, ``dir``.  The price-valued columns
-        (``min_price``, ``max_price``, ``vwap``) are in the quote currency
-        and ``vol`` in the instrument's own units, whether the trades hold
-        integer ticks and lots (with ``tick_size`` and ``lot_size`` on the
-        frame's ``attrs``, as on a pipeline result) or display prices and
-        sizes.
+        One row per taker order, with columns ``id`` (the taker's order id),
+        ``low`` and ``high`` (its lowest and highest fill price), ``vwap``,
+        ``n_trades`` (how many fills), ``volume``, ``timestamp_start`` and
+        ``timestamp_end`` (its first and last fill), and ``direction``.  The
+        price-valued columns (``low``, ``high``, ``vwap``) are in the quote
+        currency and ``volume`` in the instrument's own units, whether the
+        trades hold integer ticks and lots (with ``tick_size`` and
+        ``lot_size`` on the frame's ``attrs``, as on a pipeline result) or
+        display prices and sizes.
 
     Raises
     ------
@@ -190,28 +197,28 @@ def trade_impacts(trades: pd.DataFrame) -> pd.DataFrame:
         trades_pv.groupby("taker")
         .agg(
             id=("taker", "last"),
-            min_price=("_price", "min"),
-            max_price=("_price", "max"),
-            hits=("taker", "size"),
-            vol=("_volume", "sum"),
-            start_time=("timestamp", "min"),
-            end_time=("timestamp", "max"),
-            dir=("direction", "last"),
+            low=("_price", "min"),
+            high=("_price", "max"),
+            n_trades=("taker", "size"),
+            volume=("_volume", "sum"),
+            timestamp_start=("timestamp", "min"),
+            timestamp_end=("timestamp", "max"),
+            direction=("direction", "last"),
             pv_sum=("_pv", "sum"),
         )
         .reset_index(drop=True)
     )
-    impacts["vwap"] = impacts["pv_sum"] / impacts["vol"]
+    impacts["vwap"] = impacts["pv_sum"] / impacts["volume"]
     cols = [
         "id",
-        "min_price",
-        "max_price",
+        "low",
+        "high",
         "vwap",
-        "hits",
-        "vol",
-        "start_time",
-        "end_time",
-        "dir",
+        "n_trades",
+        "volume",
+        "timestamp_start",
+        "timestamp_end",
+        "direction",
     ]
     return impacts[cols]
 

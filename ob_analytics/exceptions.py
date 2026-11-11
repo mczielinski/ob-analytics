@@ -22,6 +22,12 @@ from __future__ import annotations
 import difflib
 from collections.abc import Iterable
 
+__all__ = [
+    "ConfigError",
+    "ObAnalyticsError",
+    "UnknownNameError",
+]
+
 #: Show every known name when there are at most this many and none is close.
 _SHORT_LIST = 12
 

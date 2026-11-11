@@ -52,7 +52,7 @@ Concepts with both L2 and L3 faces: `trade_tape`, `order_activity`,
 `time_series`, `depth_heatmap`, `volume_percentiles`, `events_histogram`,
 `hidden_executions`, `price_view`, `trade_size`. L3-only: `order_outcome`,
 `queue_position`. Level-less analytics: `vpin`, `order_flow_imbalance`,
-`kyle_lambda`, `ofi_horizon`, `l1_ticker`, `book_signals`,
+`kyle_lambda`, `ofi_by_window`, `l1_ticker`, `book_signals`,
 `transaction_costs`, `amihud`, `roll_spread`, `bars`, `trading_halts`. All
 but the last two are also registered [metrics](metrics.md), so
 `result.plot("vpin")` computes and draws them.

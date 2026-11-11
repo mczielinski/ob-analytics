@@ -51,6 +51,10 @@ from ob_analytics.live._base import (
     UnmappedMessageError,
 )
 
+__all__ = [
+    "BitstampCapturer",
+]
+
 WS_URL = "wss://ws.bitstamp.net"
 REST_BOOK_URL = "https://www.bitstamp.net/api/v2/order_book/{pair}/?group=2"
 
