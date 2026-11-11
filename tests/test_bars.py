@@ -445,28 +445,28 @@ class TestFace:
 
         assert fig is not None
 
-    def test_panel_labels_itself_from_the_frame(self, toy: pd.DataFrame) -> None:
-        from ob_analytics.visualization.gallery import bars_panel
+    def test_card_labels_itself_from_the_frame(self, toy: pd.DataFrame) -> None:
+        from ob_analytics.visualization.gallery import bars_card
 
-        spec = bars_panel(bars(toy, "tick", 4))
+        spec = bars_card(bars(toy, "tick", 4))
 
         assert spec.plot_name == "bars"
         assert spec.title == "Bars (tick, 4)"
 
     def test_two_cuts_get_separate_file_stems(self, toy: pd.DataFrame) -> None:
         # Both draw the "bars" concept, but each needs its own image file.
-        from ob_analytics.visualization.gallery import bars_panel
+        from ob_analytics.visualization.gallery import bars_card
 
-        clock = bars_panel(bars(toy, "time", "30s"))
-        volume = bars_panel(bars(toy, "volume", 5))
+        clock = bars_card(bars(toy, "time", "30s"))
+        volume = bars_card(bars(toy, "volume", 5))
 
         assert clock.plot_name == volume.plot_name == "bars"
         assert clock.name != volume.name
 
-    def test_panel_takes_an_explicit_label(self, toy: pd.DataFrame) -> None:
-        from ob_analytics.visualization.gallery import bars_panel
+    def test_card_takes_an_explicit_label(self, toy: pd.DataFrame) -> None:
+        from ob_analytics.visualization.gallery import bars_card
 
-        assert bars_panel(bars(toy, "tick", 4), label="every 4th").title == (
+        assert bars_card(bars(toy, "tick", 4), label="every 4th").title == (
             "Bars (every 4th)"
         )
 

@@ -40,12 +40,12 @@ def sample_result(bundled_sample_result):
     return bundled_sample_result
 
 
-def _replay(result, per_order=False, **kwargs):
+def _replay(result, level="L2", **kwargs):
     return prepare.book_replay(
         depth=result.depth,
         events=result.events,
         trades=result.trades,
-        per_order=per_order,
+        level=level,
         **kwargs,
     )
 
@@ -87,10 +87,10 @@ class TestAcceptance:
             "end_time": start + pd.Timedelta("1min"),
             "interval": "10s",
         }
-        shown = _replay(sample_result, per_order=True, **window)
+        shown = _replay(sample_result, "L3", **window)
         assert all(bid < ask for bid, ask in map(_touch, shown["snapshots"]))
         # The faithful book of this diff feed holds stale crossed orders.
-        faithful = _replay(sample_result, per_order=True, uncross=False, **window)
+        faithful = _replay(sample_result, "L3", uncross=False, **window)
         assert any(bid >= ask for bid, ask in map(_touch, faithful["snapshots"]))
 
 
@@ -110,8 +110,8 @@ class TestPrepare:
         assert any("max_frames=4" in m for m in messages)
 
     def test_every_bar_sits_in_the_shared_price_range(self, tiny_result):
-        for per_order in (False, True):
-            data = _replay(tiny_result, per_order=per_order, interval="2s")
+        for level in ("L2", "L3"):
+            data = _replay(tiny_result, level, interval="2s")
             low, high = data["price_range"]
             for snapshot in data["snapshots"]:
                 for side in (snapshot["bids"], snapshot["asks"]):
@@ -144,12 +144,10 @@ class TestPrepare:
         with pytest.raises(ConfigError, match="before it starts"):
             _replay(tiny_result, start_time=t.max(), end_time=t.min())
 
-    @pytest.mark.parametrize(
-        ("per_order", "missing"), [(False, "depth"), (True, "events")]
-    )
-    def test_missing_table_is_refused(self, per_order, missing):
+    @pytest.mark.parametrize(("level", "missing"), [("L2", "depth"), ("L3", "events")])
+    def test_missing_table_is_refused(self, level, missing):
         with pytest.raises(ConfigError, match=f"needs the {missing} table"):
-            prepare.book_replay(per_order=per_order)
+            prepare.book_replay(level=level)
 
 
 @pytest.fixture(scope="module")
@@ -157,8 +155,8 @@ def faces(tiny_result):
     """The L2 and L3 replay figures, in display units, with their payloads."""
     shown = display_result(tiny_result)
     out = {}
-    for level, per_order in ((Level.L2, False), (Level.L3, True)):
-        data = _replay(shown, per_order=per_order, interval="2s")
+    for level in (Level.L2, Level.L3):
+        data = _replay(shown, level, interval="2s")
         out[level] = (data, plot("book_replay", level, backend="plotly", **data))
     return out
 

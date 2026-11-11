@@ -16,9 +16,8 @@ import pandas as pd
 import pytest
 
 from ob_analytics.exceptions import UnknownNameError
-from ob_analytics.live._base import CaptureConfig
+from ob_analytics.live import CaptureConfig, CcxtSettings, CcxtSource
 from ob_analytics.live._runner import run_capturer
-from ob_analytics.live.ccxt_source import CcxtSettings, CcxtSource
 from ob_analytics.protocols import FeedType, Level
 
 _CCXT_INSTALLED = importlib.util.find_spec("ccxt") is not None

@@ -452,7 +452,7 @@ class TestTradeAttributionDeclarations:
 
     def test_price_level_sources_name_neither(self):
         from ob_analytics.depth_csv import DepthCsvSource
-        from ob_analytics.live.ccxt_source import CcxtSource
+        from ob_analytics.live import CcxtSource
 
         assert DepthCsvSource().trade_attribution is TradeAttribution.NONE
         assert CcxtSource().trade_attribution is TradeAttribution.NONE
@@ -1196,18 +1196,20 @@ class TestStaleOrdersInSummary:
 
 
 # ---------------------------------------------------------------------------
-# prepare_book_snapshot_data draws the book it is given
+# prepare.book_snapshot draws the book it is given
 # ---------------------------------------------------------------------------
 
 
 class TestPrepareDrawsTheGivenBook:
     def test_prepare_keeps_an_uncrossed_book_uncrossed(self):
-        from ob_analytics.visualization._data import prepare_book_snapshot_data
+        from ob_analytics.visualization import prepare
 
-        faithful = prepare_book_snapshot_data(
-            order_book(crossed_events(), uncross=False)
+        faithful = prepare.book_snapshot(
+            order_book(crossed_events(), uncross=False), level="L2"
         )
-        display = prepare_book_snapshot_data(order_book(crossed_events(), uncross=True))
+        display = prepare.book_snapshot(
+            order_book(crossed_events(), uncross=True), level="L2"
+        )
         # Faithful stays crossed; the uncrossed view does not.
         assert faithful["bids"]["price"].max() > faithful["asks"]["price"].min()
         if not display["bids"].empty and not display["asks"].empty:
@@ -1238,11 +1240,11 @@ def _crossing_later_events() -> pd.DataFrame:
 
 def _crossing_later_replay() -> dict:
     """A faithful replay of :func:`_crossing_later_events`, one frame per 5s."""
-    from ob_analytics.visualization._data import prepare_book_replay_data
+    from ob_analytics.visualization import prepare
 
-    return prepare_book_replay_data(
+    return prepare.book_replay(
         events=_crossing_later_events(),
-        per_order=True,
+        level="L3",
         uncross=False,
         start_time=_BASE,
         end_time=_BASE + pd.Timedelta(seconds=20),
@@ -1293,16 +1295,14 @@ class TestCrossedBookHasNoMid:
         assert data["price_range"] == (99.0, 103.0)
 
     def test_faithful_replay_of_an_always_crossed_book_keeps_a_range(self):
-        from ob_analytics.visualization._data import (
-            book_mid,
-            prepare_book_replay_data,
-        )
+        from ob_analytics.visualization import prepare
+        from ob_analytics.visualization._data import book_mid
 
         # From t=10 the bid at 100 rests above the ask at 99, and a bid at 97
         # joins at t=60.  No frame has a mid.
-        data = prepare_book_replay_data(
+        data = prepare.book_replay(
             events=crossed_events(),
-            per_order=True,
+            level="L3",
             uncross=False,
             start_time=_BASE + pd.Timedelta(seconds=10),
             end_time=_BASE + pd.Timedelta(seconds=70),

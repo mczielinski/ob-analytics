@@ -33,7 +33,7 @@ from ob_analytics.capture_files import (
 )
 from ob_analytics.config import PipelineConfig
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.live._base import CaptureResult
+from ob_analytics.live import CaptureResult
 from ob_analytics.pipeline import Pipeline
 from ob_analytics.protocols import RunContext, grid_of
 

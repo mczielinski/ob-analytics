@@ -3,9 +3,9 @@
 The unified :func:`plot` dispatcher renders a plot *concept* at a resolution
 *level* on a chosen backend, from already-prepared data::
 
-    from ob_analytics.visualization import plot, _data
-    fig = plot("trade_tape", backend="matplotlib",
-               **_data.prepare_trades_data(trades))
+    from ob_analytics.visualization import plot, prepare
+    fig = plot("trade_tape", "L2", backend="matplotlib",
+               **prepare.trade_tape(trades, level="L2"))
 
 Every plot is a coordinate ``(concept, level, backend)``, where *level* is a
 :class:`Level` (``L2``/``L3``) or ``None`` for level-less analytics.  One
@@ -56,8 +56,8 @@ from ob_analytics.visualization._theme import DEFAULT_THEME, PlotTheme
 
 # `infer_volume_scale` is a stable, user-facing helper that gallery callers
 # import from this namespace; keep it as a public re-export. The `prepare_*`
-# implementations live in `_data`; their public, friendly-named re-exports are
-# the `prepare` namespace (lazily exposed via __getattr__ below).
+# implementations live in `_data`; the `prepare` namespace (lazily exposed via
+# __getattr__ below) names them after their concepts.
 infer_volume_scale = _viz_data.infer_volume_scale
 
 
@@ -144,14 +144,13 @@ def plot(
 ) -> Any:
     """Render *concept* at *level* on *backend* from already-prepared *data*.
 
-    Prepare data with the matching ``prepare_<concept>_data`` in
-    :mod:`ob_analytics.visualization._data` (or a gallery helper) and spread
-    it as keyword arguments::
+    Prepare data with the function of the same name in
+    :mod:`ob_analytics.visualization.prepare` and spread it as keyword
+    arguments::
 
-        from ob_analytics.visualization import plot
-        from ob_analytics.visualization import _data
-        fig = plot("trade_tape", backend="matplotlib",
-                   **_data.prepare_trades_data(trades))
+        from ob_analytics.visualization import plot, prepare
+        fig = plot("trade_tape", "L2", backend="matplotlib",
+                   **prepare.trade_tape(trades, level="L2"))
 
     Parameters
     ----------
@@ -170,7 +169,7 @@ def plot(
         layout engine) once all the panels are drawn.  Without *ax*, the face
         creates its own figure and lays it out.
     **data
-        Prepared plot data, as returned by the matching ``prepare_*`` helper.
+        Prepared plot data, as returned by the matching ``prepare`` function.
         May include ``theme=PlotTheme(...)`` to override :data:`DEFAULT_THEME`
         for this call, on any backend.
 

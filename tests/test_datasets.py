@@ -238,15 +238,17 @@ class TestFacesRenderAtToyScale:
     """The tutorial renders these faces on the toy stream — they must accept N≈24."""
 
     def test_trade_tape_l2(self, trades: pd.DataFrame) -> None:
-        fig = plot("trade_tape", level=Level.L2, **prepare.trades(trades))
+        fig = plot(
+            "trade_tape", level=Level.L2, **prepare.trade_tape(trades, level="L2")
+        )
         assert fig.axes
         plt.close(fig)
 
     def test_book_snapshot_l2_and_l3(self, classified: pd.DataFrame) -> None:
         tp = classified["timestamp"].iloc[0] + pd.Timedelta(seconds=30)
         snap = order_book(classified, tp=tp)
-        for level, per_order in ((Level.L2, False), (Level.L3, True)):
-            payload = prepare.book_snapshot(snap, per_order=per_order)
+        for level in (Level.L2, Level.L3):
+            payload = prepare.book_snapshot(snap, level=level)
             fig = plot("book_snapshot", level=level, **payload)
             assert fig.axes
             plt.close(fig)
@@ -254,7 +256,7 @@ class TestFacesRenderAtToyScale:
     def test_l3_payload_segments_the_99_queue(self, classified: pd.DataFrame) -> None:
         """Alice's and Ivy's orders at 99 stack as separate segments (0-2, 2-4)."""
         tp = classified["timestamp"].iloc[0] + pd.Timedelta(seconds=30)
-        payload = prepare.book_snapshot(order_book(classified, tp=tp), per_order=True)
+        payload = prepare.book_snapshot(order_book(classified, tp=tp), level="L3")
         at_99 = payload["bids"][payload["bids"]["price"] == 99.0]
         assert len(at_99) == 2
         segs = sorted(zip(at_99["seg_lo"], at_99["seg_hi"]))

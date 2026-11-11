@@ -207,7 +207,7 @@ def _draw_lollipops(
 
 
 @_themed
-def mpl_trades(
+def mpl_trade_tape_aggregate(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """Render the L2 signed-lollipop trade tape.
@@ -488,7 +488,7 @@ def _draw_depth_lines(ax: Axes, depth: pd.DataFrame, col_bias: float) -> None:
 
 
 @_themed
-def mpl_price_levels(
+def mpl_depth_heatmap(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """Render the price-level depth heatmap."""
@@ -621,7 +621,7 @@ def mpl_price_levels(
 
 
 @_themed
-def mpl_event_map(
+def mpl_order_activity_aggregate(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """Render a limit-order event map."""
@@ -735,7 +735,7 @@ def mpl_event_map(
 
 
 @_themed
-def mpl_volume_map(
+def mpl_cancellations_aggregate(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """Render a volume map of flashed limit orders."""
@@ -1171,7 +1171,7 @@ def mpl_queue_position_per_order(
 
 
 @_themed
-def mpl_liquidity_at_touch(
+def mpl_liquidity_at_touch_aggregate(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
     """L2 (MBP) liquidity at the touch: best bid/ask resting size over time."""
@@ -1658,7 +1658,7 @@ def mpl_trade_tape_per_order(
 
     mid_line = data.get("mid_line")
     if mid_line is not None and not mid_line.empty:
-        # steps-post: the mid holds between samples (see mpl_trades).
+        # steps-post: the mid holds between samples (see mpl_trade_tape_aggregate).
         ax.plot(
             mdates.date2num(mid_line["timestamp"]),
             mid_line["mid"].to_numpy(),

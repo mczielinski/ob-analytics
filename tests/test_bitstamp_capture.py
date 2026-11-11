@@ -16,8 +16,7 @@ import pytest
 
 pytest.importorskip("websockets")
 
-from ob_analytics.live import bitstamp as live_bitstamp
-from ob_analytics.live._base import CaptureConfig
+from ob_analytics.live import CaptureConfig, bitstamp as live_bitstamp
 from ob_analytics.live.bitstamp import BitstampCapturer
 
 _ORDERS = "live_orders_btcusd"

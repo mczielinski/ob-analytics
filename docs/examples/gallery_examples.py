@@ -45,7 +45,7 @@ def depth_heatmap(result):
     return plot(
         "depth_heatmap",
         level="L2",
-        **prepare.price_levels(
+        **prepare.depth_heatmap(
             result.depth,
             spread=get_spread(result.depth_summary),
             trades=result.trades,
@@ -60,16 +60,14 @@ def book_snapshot(result):
     """The bid/ask book at a single timestamp, one bar per resting order (L3)."""
     tp = result.events["timestamp"].iloc[0] + pd.Timedelta(minutes=10)
     snap = order_book(result.events, tp=tp)
-    return plot(
-        "book_snapshot", level="L3", **prepare.book_snapshot(snap, per_order=True)
-    )
+    return plot("book_snapshot", level="L3", **prepare.book_snapshot(snap, level="L3"))
 
 
 def depth_chart(result):
     """Cumulative resting volume by price, bids left, asks right."""
     tp = result.events["timestamp"].iloc[0] + pd.Timedelta(minutes=10)
     snap = order_book(result.events, tp=tp)
-    return plot("depth_chart", level="L2", **prepare.book_snapshot(snap))
+    return plot("depth_chart", level="L2", **prepare.book_snapshot(snap, level="L2"))
 
 
 # ── Trades ───────────────────────────────────────────────────────────
@@ -81,11 +79,12 @@ def trade_tape(result):
     return plot(
         "trade_tape",
         level="L2",
-        **prepare.trades(
+        **prepare.trade_tape(
             result.trades,
             spread=get_spread(result.depth_summary),
             start_time=start,
             end_time=end,
+            level="L2",
         ),
     )
 
@@ -112,7 +111,7 @@ def liquidity_at_touch(result):
         "liquidity_at_touch",
         level="L2",
         **prepare.liquidity_at_touch(
-            result.depth_summary, start_time=start, end_time=end
+            result.depth_summary, start_time=start, end_time=end, level="L2"
         ),
     )
 
@@ -122,7 +121,7 @@ def liquidity_at_touch(result):
 
 def order_outcome(result):
     """Orders by placement distance and size, coloured by outcome."""
-    return plot("order_outcome", level="L3", **prepare.order_outcome_l3(result.events))
+    return plot("order_outcome", level="L3", **prepare.order_outcome(result.events))
 
 
 def queue_position(result):
@@ -131,13 +130,15 @@ def queue_position(result):
     return plot(
         "queue_position",
         level="L3",
-        **prepare.queue_position_l3(result.events, start_time=start, end_time=end),
+        **prepare.queue_position(result.events, start_time=start, end_time=end),
     )
 
 
 def cancellations(result):
     """Cancellations by age and distance from the touch."""
-    return plot("cancellations", level="L3", **prepare.cancellations_l3(result.events))
+    return plot(
+        "cancellations", level="L3", **prepare.cancellations(result.events, level="L3")
+    )
 
 
 # ── Flow toxicity ────────────────────────────────────────────────────

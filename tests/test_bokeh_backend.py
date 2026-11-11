@@ -15,21 +15,16 @@ import pytest
 bpl = pytest.importorskip("bokeh.plotting", reason="bokeh not installed")
 
 from ob_analytics.exceptions import ConfigError
+from ob_analytics.visualization import prepare
 from ob_analytics.visualization._bokeh import (
     _bokeh_color_field,
     bokeh_book_snapshot_aggregate,
     bokeh_book_snapshot_per_order,
     bokeh_depth_chart_aggregate,
     bokeh_depth_chart_per_order,
-    bokeh_price_levels,
+    bokeh_depth_heatmap,
+    bokeh_trade_tape_aggregate,
     bokeh_trade_tape_per_order,
-    bokeh_trades,
-)
-from ob_analytics.visualization._data import (
-    prepare_book_snapshot_data,
-    prepare_price_levels_data,
-    prepare_trade_tape_l3_data,
-    prepare_trades_data,
 )
 
 # ---------------------------------------------------------------------------
@@ -83,19 +78,19 @@ def sample_order_book() -> dict:
 
 class TestBokehTrades:
     def test_returns_bokeh_figure(self, sample_trades: pd.DataFrame) -> None:
-        data = prepare_trades_data(sample_trades)
-        fig = bokeh_trades(data)
+        data = prepare.trade_tape(sample_trades, level="L2")
+        fig = bokeh_trade_tape_aggregate(data)
         assert isinstance(fig, bpl.figure)
         assert len(fig.renderers) >= 1
 
     def test_l2_ylabel_is_price(self, sample_trades: pd.DataFrame) -> None:
-        data = prepare_trades_data(sample_trades)
-        fig = bokeh_trades(data)
+        data = prepare.trade_tape(sample_trades, level="L2")
+        fig = bokeh_trade_tape_aggregate(data)
         assert fig.yaxis[0].axis_label == "Price"
 
     def test_has_lollipop_legend_entries(self, sample_trades: pd.DataFrame) -> None:
-        data = prepare_trades_data(sample_trades)
-        fig = bokeh_trades(data)
+        data = prepare.trade_tape(sample_trades, level="L2")
+        fig = bokeh_trade_tape_aggregate(data)
         labels = {item.label["value"] for item in fig.legend[0].items}
         assert "buy (lifts ask)" in labels
         assert "sell (hits bid)" in labels
@@ -140,8 +135,8 @@ class TestBiasedColorField:
 
 class TestBokehPriceLevels:
     def test_returns_bokeh_figure(self, sample_depth: pd.DataFrame) -> None:
-        data = prepare_price_levels_data(sample_depth)
-        fig = bokeh_price_levels(data)
+        data = prepare.depth_heatmap(sample_depth)
+        fig = bokeh_depth_heatmap(data)
         assert isinstance(fig, bpl.figure)
 
     def test_spread_overlays_present(self, sample_depth: pd.DataFrame) -> None:
@@ -152,8 +147,8 @@ class TestBokehPriceLevels:
                 "best_ask_price": sample_depth["price"] + 0.05,
             }
         )
-        fig = bokeh_price_levels(
-            prepare_price_levels_data(sample_depth, spread=spread, show_mp=True)
+        fig = bokeh_depth_heatmap(
+            prepare.depth_heatmap(sample_depth, spread=spread, show_mp=True)
         )
         assert isinstance(fig, bpl.figure)
 
@@ -163,7 +158,7 @@ class TestBokehPriceLevels:
         depth = sample_events[["timestamp", "price", "volume"]].copy()
         depth["direction"] = "bid"
         overlay = hidden_liquidity_overlay
-        fig = bokeh_price_levels(prepare_price_levels_data(depth, **overlay))
+        fig = bokeh_depth_heatmap(prepare.depth_heatmap(depth, **overlay))
         labels = {item.label["value"] for item in fig.legend[0].items}
         assert {"Iceberg chain", "Iceberg refill", "Hidden-order trade"} <= labels
         chains = next(r for r in fig.renderers if type(r.glyph).__name__ == "MultiLine")
@@ -179,7 +174,7 @@ class TestBokehPriceLevels:
     ) -> None:
         depth = sample_events[["timestamp", "price", "volume"]].copy()
         depth["direction"] = "bid"
-        fig = bokeh_price_levels(prepare_price_levels_data(depth))
+        fig = bokeh_depth_heatmap(prepare.depth_heatmap(depth))
         glyphs = {type(r.glyph).__name__ for r in fig.renderers}
         assert not glyphs & {"MultiLine", "Segment"}
 
@@ -187,7 +182,9 @@ class TestBokehPriceLevels:
 class TestBokehTradeTapeL3:
     def test_returns_bokeh_figure(self, sample_executed_orders) -> None:
         events, trades = sample_executed_orders
-        data = prepare_trade_tape_l3_data(events, trades, price_from=0.0, price_to=1e9)
+        data = prepare.trade_tape(
+            events, trades, price_from=0.0, price_to=1e9, level="L3"
+        )
         fig = bokeh_trade_tape_per_order(data)
         assert isinstance(fig, bpl.figure)
         assert len(fig.renderers) >= 1
@@ -195,13 +192,13 @@ class TestBokehTradeTapeL3:
 
 class TestBokehBookSnapshot:
     def test_aggregate_returns_figure(self, sample_order_book: dict) -> None:
-        data = prepare_book_snapshot_data(sample_order_book, per_order=False)
+        data = prepare.book_snapshot(sample_order_book, level="L2")
         fig = bokeh_book_snapshot_aggregate(data)
         assert isinstance(fig, bpl.figure)
         assert len(fig.renderers) >= 2  # bid + ask bars
 
     def test_per_order_returns_figure(self, sample_order_book: dict) -> None:
-        data = prepare_book_snapshot_data(sample_order_book, per_order=True)
+        data = prepare.book_snapshot(sample_order_book, level="L3")
         fig = bokeh_book_snapshot_per_order(data)
         assert isinstance(fig, bpl.figure)
         assert len(fig.renderers) >= 2
@@ -216,20 +213,22 @@ class TestBokehBookSnapshot:
     def test_payload_level_mismatch_raises(
         self, sample_order_book: dict, renderer, wrong_per_order: bool
     ) -> None:
-        data = prepare_book_snapshot_data(sample_order_book, per_order=wrong_per_order)
+        data = prepare.book_snapshot(
+            sample_order_book, level="L3" if wrong_per_order else "L2"
+        )
         with pytest.raises(ConfigError, match="prepare.book_snapshot"):
             renderer(data)
 
 
 class TestBokehDepthChart:
     def test_aggregate_returns_figure(self, sample_order_book: dict) -> None:
-        data = prepare_book_snapshot_data(sample_order_book, per_order=False)
+        data = prepare.book_snapshot(sample_order_book, level="L2")
         fig = bokeh_depth_chart_aggregate(data)
         assert isinstance(fig, bpl.figure)
         assert len(fig.renderers) >= 2  # bid + ask curves (step + varea each)
 
     def test_per_order_returns_figure(self, sample_order_book: dict) -> None:
-        data = prepare_book_snapshot_data(sample_order_book, per_order=True)
+        data = prepare.book_snapshot(sample_order_book, level="L3")
         fig = bokeh_depth_chart_per_order(data)
         assert isinstance(fig, bpl.figure)
 
@@ -243,7 +242,9 @@ class TestBokehDepthChart:
     def test_payload_level_mismatch_raises(
         self, sample_order_book: dict, renderer, wrong_per_order: bool
     ) -> None:
-        data = prepare_book_snapshot_data(sample_order_book, per_order=wrong_per_order)
+        data = prepare.book_snapshot(
+            sample_order_book, level="L3" if wrong_per_order else "L2"
+        )
         with pytest.raises(ConfigError, match="prepare.book_snapshot"):
             renderer(data)
 
@@ -257,31 +258,31 @@ class TestBackendDispatch:
     def test_bokeh_backend_returns_bokeh_figure(
         self, sample_trades: pd.DataFrame
     ) -> None:
-        from ob_analytics.visualization import Level, _data, plot
+        from ob_analytics.visualization import Level, plot, prepare
 
         fig = plot(
             "trade_tape",
             Level.L2,
             backend="bokeh",
-            **_data.prepare_trades_data(sample_trades),
+            **prepare.trade_tape(sample_trades, level="L2"),
         )
         assert isinstance(fig, bpl.figure)
 
     def test_missing_level_for_comparable_concept_raises(
         self, sample_order_book: dict
     ) -> None:
-        from ob_analytics.visualization import _data, plot
+        from ob_analytics.visualization import plot, prepare
 
-        data = _data.prepare_book_snapshot_data(sample_order_book, per_order=False)
+        data = prepare.book_snapshot(sample_order_book, level="L2")
         with pytest.raises(ConfigError, match='pass level="L2" or level="L3"'):
             plot("book_snapshot", backend="bokeh", **data)
 
     def test_ax_is_refused(self, sample_order_book: dict) -> None:
         import matplotlib.pyplot as plt
 
-        from ob_analytics.visualization import _data, plot
+        from ob_analytics.visualization import plot, prepare
 
-        data = _data.prepare_book_snapshot_data(sample_order_book, per_order=False)
+        data = prepare.book_snapshot(sample_order_book, level="L2")
         _, ax = plt.subplots()
         with pytest.raises(ConfigError, match="ax= is a Matplotlib axes"):
             plot("book_snapshot", "L2", backend="bokeh", ax=ax, **data)

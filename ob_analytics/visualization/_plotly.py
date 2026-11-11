@@ -145,7 +145,7 @@ def plotly_time_series(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     return fig
 
 
-def plotly_trades(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
+def plotly_trade_tape_aggregate(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render the L2 signed-lollipop trade tape.
 
     Each trade is a stem from the mid line to its execution price, tipped by a
@@ -216,7 +216,7 @@ def _add_notice(fig: Any, text: str, pal: Palette) -> None:
     )
 
 
-def plotly_price_levels(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
+def plotly_depth_heatmap(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render the price-level depth heatmap using Scattergl."""
     pal = theme.palette
     go = _import_plotly()
@@ -348,7 +348,9 @@ def plotly_price_levels(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     return fig
 
 
-def plotly_event_map(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
+def plotly_order_activity_aggregate(
+    data: dict, *, theme: PlotTheme = DEFAULT_THEME
+) -> Any:
     """Render a limit-order event map."""
     pal = theme.palette
     go = _import_plotly()
@@ -415,7 +417,9 @@ def plotly_event_map(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     return fig
 
 
-def plotly_volume_map(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
+def plotly_cancellations_aggregate(
+    data: dict, *, theme: PlotTheme = DEFAULT_THEME
+) -> Any:
     """Render a volume map of flashed limit orders."""
     pal = theme.palette
     go = _import_plotly()
@@ -1402,7 +1406,7 @@ def plotly_order_activity_per_order(
 ) -> Any:
     """L3 (MBO) order activity: each order one lifecycle bar, coloured by fate.
 
-    Uses ``Scattergl`` (WebGL) like the L2 ``plotly_event_map`` it pairs with: a
+    Uses ``Scattergl`` (WebGL) like the L2 ``plotly_order_activity_aggregate`` it pairs with: a
     per-order face draws one segment per limit order, so the line cloud is large
     and the SVG ``Scatter`` path does not scale.
     """
@@ -1499,7 +1503,9 @@ def plotly_queue_position_per_order(
     return fig
 
 
-def plotly_liquidity_at_touch(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
+def plotly_liquidity_at_touch_aggregate(
+    data: dict, *, theme: PlotTheme = DEFAULT_THEME
+) -> Any:
     """L2 (MBP) liquidity at the touch: best bid/ask resting size over time."""
     pal = theme.palette
     go = _import_plotly()
@@ -1962,7 +1968,7 @@ def plotly_trade_tape_per_order(data: dict, *, theme: PlotTheme = DEFAULT_THEME)
 
     mid_line = data.get("mid_line")
     if mid_line is not None and not mid_line.empty:
-        # "hv" steps: the mid holds between samples (see plotly_trades).
+        # "hv" steps: the mid holds between samples (see plotly_trade_tape_aggregate).
         fig.add_trace(
             go.Scattergl(
                 x=mid_line["timestamp"],

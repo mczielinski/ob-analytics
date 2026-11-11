@@ -15,9 +15,12 @@ replay is Plotly only) rather than a missing registration.  The backend
 modules only draw: each calls :func:`register_backend` once, which registers
 the backend's function for every coordinate the table gives it.
 
-A renderer is named after its backend and its face: the ``"trades"`` face
-is ``mpl_trades`` in the matplotlib module, ``plotly_trades`` in the plotly
-module and ``bokeh_trades`` in the bokeh module.
+A renderer is named after its backend and its face: the L2 trade tape face,
+``"trade_tape_aggregate"``, is ``mpl_trade_tape_aggregate`` in the matplotlib
+module, ``plotly_trade_tape_aggregate`` in the plotly module and
+``bokeh_trade_tape_aggregate`` in the bokeh module.  A concept drawn at both
+levels names its faces ``<concept>_aggregate`` (L2) and ``<concept>_per_order``
+(L3); a concept drawn at one level names its face after the concept.
 
 A plot registered straight into :data:`~ob_analytics.visualization.RENDERERS`
 by another package (a plug-in plot or backend) is not in this table.
@@ -167,7 +170,7 @@ class Face:
     ----------
     renderer : str
         The renderer's name without its backend prefix (see
-        :data:`BACKEND_PREFIXES`), e.g. ``"trades"`` for ``mpl_trades``.
+        :data:`BACKEND_PREFIXES`), e.g. ``"trade_tape_aggregate"`` for ``mpl_trade_tape_aggregate``.
     backends : tuple of str
         The backends that draw this face.
     bind : callable or None
@@ -202,7 +205,7 @@ def _bound(prepare: Callable[..., dict], **kwargs: Any) -> Binding:
 def _trade_tape_l2(s: Scene) -> Binding | None:
     if s.trades.empty:
         return None
-    return _bound(_data.prepare_trades_data, trades=s.trades)
+    return _bound(_data.prepare_trade_tape_l2_data, trades=s.trades)
 
 
 def _trade_tape_l3(s: Scene) -> Binding | None:
@@ -218,7 +221,7 @@ def _trade_tape_l3(s: Scene) -> Binding | None:
 
 def _depth_heatmap(s: Scene) -> Binding:
     return _bound(
-        _data.prepare_price_levels_data,
+        _data.prepare_depth_heatmap_data,
         depth=s.depth,
         spread=s.spread,
         trades=s.trades,
@@ -228,20 +231,20 @@ def _depth_heatmap(s: Scene) -> Binding:
     )
 
 
-def _event_map(s: Scene) -> Binding | None:
+def _order_activity_l2(s: Scene) -> Binding | None:
     if not s.per_order:
         return None
     # The depth heatmap's price band, so the event map clips around the
     # touch: far flashed orders would otherwise squash the activity.
     return _bound(
-        _data.prepare_event_map_data,
+        _data.prepare_order_activity_l2_data,
         events=s.events,
         volume_scale=s.volume_scale,
         **s.price_band,
     )
 
 
-def _order_lifecycles(s: Scene) -> Binding | None:
+def _order_activity_l3(s: Scene) -> Binding | None:
     if not s.per_order:
         return None
     return _bound(
@@ -253,11 +256,11 @@ def _order_lifecycles(s: Scene) -> Binding | None:
     )
 
 
-def _cancelled_volume(s: Scene) -> Binding | None:
+def _cancellations_l2(s: Scene) -> Binding | None:
     if not s.per_order:
         return None
     return _bound(
-        _data.prepare_volume_map_data,
+        _data.prepare_cancellations_l2_data,
         events=s.events,
         volume_scale=s.volume_scale,
         log_scale=True,
@@ -284,7 +287,7 @@ def _book(level: Level) -> Binder:
         return _bound(
             _data.prepare_book_snapshot_data,
             order_book=book,
-            per_order=level is L3,
+            level=level,
             volume_scale=s.volume_scale,
         )
 
@@ -306,7 +309,7 @@ def _book_replay(level: Level) -> Binder:
             _data.prepare_book_replay_data,
             depth=s.depth,
             trades=s.trades,
-            per_order=level is L3,
+            level=level,
             start_time=s.zoom_start,
             end_time=s.zoom_end,
             interval=interval,
@@ -322,7 +325,7 @@ def _order_outcome(s: Scene) -> Binding | None:
     if not s.per_order or "aggressiveness_bps" not in s.events.columns:
         return None
     return _bound(
-        _data.prepare_order_outcome_l3_data,
+        _data.prepare_order_outcome_data,
         events=s.events,
         volume_scale=s.volume_scale,
     )
@@ -334,18 +337,18 @@ def _queue_position(s: Scene) -> Binding | None:
     # The zoom window: a whole session of touch orders smears into a band at
     # the front, while a few minutes show single orders climbing the queue.
     return _bound(
-        _data.prepare_queue_position_l3_data,
+        _data.prepare_queue_position_data,
         events=s.events,
         start_time=s.zoom_start,
         end_time=s.zoom_end,
     )
 
 
-def _best_size(s: Scene) -> Binding | None:
+def _liquidity_at_touch_l2(s: Scene) -> Binding | None:
     if s.depth_summary.empty or not s.per_order:
         return None
     return _bound(
-        _data.prepare_liquidity_at_touch_data,
+        _data.prepare_liquidity_at_touch_l2_data,
         depth_summary=s.depth_summary,
         events=s.events,
         start_time=s.summary_start,
@@ -354,7 +357,7 @@ def _best_size(s: Scene) -> Binding | None:
     )
 
 
-def _queue_composition(s: Scene) -> Binding | None:
+def _liquidity_at_touch_l3(s: Scene) -> Binding | None:
     if s.depth_summary.empty or not s.per_order:
         return None
     return _bound(
@@ -440,7 +443,7 @@ CONCEPTS: tuple[Concept, ...] = (
     Concept(
         "trade_tape",
         {
-            L2: Face("trades", _ALL, _trade_tape_l2),
+            L2: Face("trade_tape_aggregate", _ALL, _trade_tape_l2),
             L3: Face("trade_tape_per_order", _ALL, _trade_tape_l3),
         },
         "Trade Tape",
@@ -450,7 +453,7 @@ CONCEPTS: tuple[Concept, ...] = (
     ),
     Concept(
         "depth_heatmap",
-        {L2: Face("price_levels", _ALL, _depth_heatmap)},
+        {L2: Face("depth_heatmap", _ALL, _depth_heatmap)},
         "Depth Heatmap",
         "Resting liquidity through time: one horizontal line per price level, "
         "colored by available volume; the pale line is the midprice. "
@@ -463,8 +466,8 @@ CONCEPTS: tuple[Concept, ...] = (
     Concept(
         "order_activity",
         {
-            L2: Face("event_map", _MPL_PLOTLY, _event_map),
-            L3: Face("order_activity_per_order", _MPL_PLOTLY, _order_lifecycles),
+            L2: Face("order_activity_aggregate", _MPL_PLOTLY, _order_activity_l2),
+            L3: Face("order_activity_per_order", _MPL_PLOTLY, _order_activity_l3),
         },
         "Order Activity",
         "Order placement and removal. L2: created/deleted events scattered at "
@@ -475,7 +478,7 @@ CONCEPTS: tuple[Concept, ...] = (
     Concept(
         "cancellations",
         {
-            L2: Face("volume_map", _MPL_PLOTLY, _cancelled_volume),
+            L2: Face("cancellations_aggregate", _MPL_PLOTLY, _cancellations_l2),
             L3: Face("cancellations_per_order", _MPL_PLOTLY, _cancellations_l3),
         },
         "Cancellations",
@@ -540,8 +543,12 @@ CONCEPTS: tuple[Concept, ...] = (
     Concept(
         "liquidity_at_touch",
         {
-            L2: Face("liquidity_at_touch", _MPL_PLOTLY, _best_size),
-            L3: Face("liquidity_at_touch_per_order", _MPL_PLOTLY, _queue_composition),
+            L2: Face(
+                "liquidity_at_touch_aggregate", _MPL_PLOTLY, _liquidity_at_touch_l2
+            ),
+            L3: Face(
+                "liquidity_at_touch_per_order", _MPL_PLOTLY, _liquidity_at_touch_l3
+            ),
         },
         "Liquidity at the Touch",
         "Liquidity a marketable order meets first. L2: resting size at the "

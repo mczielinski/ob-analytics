@@ -30,6 +30,8 @@ from ob_analytics.depth import (
 )
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.flow_toxicity import OFI_HORIZONS, ofi_by_horizon
+from ob_analytics.pipeline import _UNSET
+from ob_analytics.protocols import Level
 from ob_analytics.schemas import validate_columns
 
 
@@ -366,8 +368,39 @@ def _price_axis_breaks(
     return price_by, y_breaks
 
 
+def resolve_level(concept: str, level: Level | str | None) -> Level | None:
+    """Return the level a prepare function builds *concept*'s payload for.
+
+    The rule of :func:`~ob_analytics.visualization.plot`: a *level* left out
+    resolves to the only level *concept* is drawn at (``None`` for a
+    level-less plot), and a *level* given must be one it is drawn at.
+
+    Raises
+    ------
+    ConfigError
+        If *level* was left out and *concept* is drawn at both L2 and L3, or
+        *concept* is not drawn at *level*.
+    """
+    # Imported here: the concept table imports this module.
+    from ob_analytics.visualization import _concepts, _resolve_level
+
+    levels = tuple(dict.fromkeys(lvl for lvl, _ in _concepts.placements(concept)))
+    if not levels:
+        raise ConfigError(f"No backend draws plot concept {concept!r}.")
+    resolved = _resolve_level(concept, level, "", levels)
+    if resolved not in levels:
+        if levels == (None,):
+            hint = "it is level-less, so leave level out"
+        else:
+            hint = "it is drawn at " + " and ".join(str(lvl) for lvl in levels)
+        raise ConfigError(
+            f"Plot concept {concept!r} has no plot at level={level!r}; {hint}."
+        )
+    return resolved
+
+
 # ---------------------------------------------------------------------------
-# Prepare functions — one per plot type
+# Prepare functions — one per plot face
 # ---------------------------------------------------------------------------
 
 
@@ -378,8 +411,11 @@ def prepare_time_series_data(
     end_time: pd.Timestamp | None = None,
     title: str = "time series",
     y_label: str = "series",
+    *,
+    level: Level | str | None = _UNSET,
 ) -> dict[str, Any]:
     """Prepare data for a generic time-series step plot."""
+    resolve_level("time_series", level)
     if len(timestamp) != len(series):
         raise ConfigError("Length of timestamp and series must be the same.")
 
@@ -430,7 +466,7 @@ def _trade_tape_mid(
     return out
 
 
-def prepare_trades_data(
+def prepare_trade_tape_l2_data(
     trades: pd.DataFrame,
     spread: pd.DataFrame | None = None,
     start_time: pd.Timestamp | None = None,
@@ -505,7 +541,7 @@ def _price_range_notice(price_from: float | None, price_to: float | None) -> str
     return f"No price level at or below {price_to:.6g}."
 
 
-def prepare_price_levels_data(
+def prepare_depth_heatmap_data(
     depth: pd.DataFrame,
     spread: pd.DataFrame | None = None,
     trades: pd.DataFrame | None = None,
@@ -523,6 +559,8 @@ def prepare_price_levels_data(
     iceberg_lines: pd.DataFrame | None = None,
     iceberg_refills: pd.DataFrame | None = None,
     hidden_trades: pd.DataFrame | None = None,
+    *,
+    level: Level | str | None = _UNSET,
 ) -> dict[str, Any]:
     """Prepare data for the price-level depth heatmap.
 
@@ -552,6 +590,7 @@ def prepare_price_levels_data(
     issue #272), already clipped to the caller's display window. ``None``
     (the default) draws the heatmap with no overlay.
     """
+    resolve_level("depth_heatmap", level)
     depth_local = depth.copy()
     if volume_scale is None:
         volume_scale = infer_volume_scale(depth_local["volume"])
@@ -741,7 +780,7 @@ def prepare_hidden_liquidity_overlay(
     }
 
 
-def prepare_event_map_data(
+def prepare_order_activity_l2_data(
     events: pd.DataFrame,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
@@ -923,12 +962,13 @@ def prepare_order_activity_l3_data(
     }
 
 
-def prepare_queue_position_l3_data(
+def prepare_queue_position_data(
     events: pd.DataFrame,
     *,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
     marker_threshold: int = 400,
+    level: Level | str | None = _UNSET,
 ) -> dict[str, Any]:
     """L3 (MBO) queue position: each touch order's FIFO rank over time, by fate.
 
@@ -944,6 +984,7 @@ def prepare_queue_position_l3_data(
     ``timestamp``, ``id``, ``rank``, ``age_s``, in time order; ``max_rank`` for the (inverted)
     y-axis; and ``show_markers`` (terminal × / ○ only when few enough orders).
     """
+    resolve_level("queue_position", level)
     from ob_analytics.book import order_lifecycles
     from ob_analytics.queue import queue_positions
 
@@ -996,7 +1037,7 @@ def _event_rug(
     }
 
 
-def prepare_liquidity_at_touch_data(
+def prepare_liquidity_at_touch_l2_data(
     depth_summary: pd.DataFrame,
     volume_scale: float | None = None,
     start_time: pd.Timestamp | None = None,
@@ -1078,6 +1119,7 @@ def prepare_price_view_data(
     *,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
+    level: Level | str | None = _UNSET,
 ) -> dict[str, Any]:
     """L2 price view: the spread ribbon plus the volume-weighted microprice.
 
@@ -1092,6 +1134,7 @@ def prepare_price_view_data(
     Optionally overlays executions (buy/sell dots at trade price) when
     *trades* is given.
     """
+    resolve_level("price_view", level)
     start_time, end_time = _default_start_end(depth_summary, start_time, end_time)
     win = depth_summary[
         (depth_summary["timestamp"] >= start_time)
@@ -1128,6 +1171,7 @@ def prepare_l1_ticker_data(
     symbol: str = "",
     start_time: pd.Timestamp | str | None = None,
     end_time: pd.Timestamp | str | None = None,
+    level: Level | str | None = _UNSET,
 ) -> dict[str, Any]:
     """The Level 1 quote: best bid, best ask and last trade.
 
@@ -1155,6 +1199,7 @@ def prepare_l1_ticker_data(
         ``last_price`` and ``y_range``, with only the rows where a price
         changes.
     """
+    resolve_level("l1_ticker", level)
     tz = getattr(l1["timestamp"].dtype, "tz", None)
 
     def in_data_tz(t: pd.Timestamp | str | None) -> pd.Timestamp | None:
@@ -1284,6 +1329,7 @@ def prepare_book_signals_data(
     levels: int = 5,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
+    level: Level | str | None = _UNSET,
 ) -> dict[str, Any]:
     """Predictive touch signals: micro-price vs mid, plus order-book imbalance.
 
@@ -1296,6 +1342,7 @@ def prepare_book_signals_data(
     A quote that cannot be read as a price
     (:func:`~ob_analytics.depth.readable_quotes`) has no mid of either kind.
     """
+    resolve_level("book_signals", level)
     start_time, end_time = _default_start_end(depth_summary, start_time, end_time)
     win = depth_summary[
         (depth_summary["timestamp"] >= start_time)
@@ -1331,6 +1378,7 @@ def prepare_trade_size_data(
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
     volume_scale: float | None = None,
+    level: Level | str | None = _UNSET,
 ) -> dict[str, Any]:
     """Trade-size strip: each execution as a jittered dot on a log size axis.
 
@@ -1338,6 +1386,7 @@ def prepare_trade_size_data(
     is logarithmic; buys and sells sit in two jittered bands so their size
     profiles are directly comparable.
     """
+    resolve_level("trade_size", level)
     start_time, end_time = _default_start_end(trades, start_time, end_time)
     win = trades[
         (trades["timestamp"] >= start_time) & (trades["timestamp"] <= end_time)
@@ -1355,13 +1404,15 @@ def prepare_trade_size_data(
     }
 
 
-def prepare_order_outcome_l3_data(
+def prepare_order_outcome_data(
     events: pd.DataFrame,
     volume_scale: float | None = None,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
     bps_quantiles: tuple[float, float] = (0.05, 0.99),
     min_positive_bps: float = 5.0,
+    *,
+    level: Level | str | None = _UNSET,
 ) -> dict[str, Any]:
     """L3 (MBO) order outcome: each limit order as outcome vs placement.
 
@@ -1391,6 +1442,7 @@ def prepare_order_outcome_l3_data(
     are dropped before clipping so they neither distort the quantiles nor the
     axis.
     """
+    resolve_level("order_outcome", level)
     from ob_analytics.book import order_lifecycles
 
     start_time, end_time = _default_start_end(events, start_time, end_time)
@@ -1546,7 +1598,7 @@ def prepare_trade_tape_l3_data(
     }
 
 
-def prepare_volume_map_data(
+def prepare_cancellations_l2_data(
     events: pd.DataFrame,
     action: str = "deleted",
     event_type: list[str] | None = None,
@@ -1812,18 +1864,20 @@ def check_book_payload_level(data: dict[str, Any], *, per_order: bool) -> None:
 
 def prepare_book_snapshot_data(
     order_book: Mapping[str, Any],
-    per_order: bool = False,
     volume_scale: float | None = None,
     show_quantiles: bool = False,
     top_n: int | None = 40,
+    *,
+    level: Level | str | None = _UNSET,
 ) -> dict[str, Any]:
     """Prepare an order-book snapshot at one resolution.
 
-    Feeds both the ``book_snapshot`` ladder and the ``depth_chart`` curve.
-    ``per_order=False`` collapses each price level to one row (L2 /
-    Market-By-Price); ``per_order=True`` keeps every order as its own row with
-    within-level stacking bounds (L3 / Market-By-Order).  ``volume_scale=None``
-    auto-infers a power-of-10 scale from the combined bid/ask volumes.
+    Feeds both the ``book_snapshot`` ladder and the ``depth_chart`` curve
+    (see :func:`prepare_depth_chart_data`).  ``level`` is required:
+    ``level="L2"`` collapses each price level to one row (Market-By-Price);
+    ``level="L3"`` keeps every order as its own row with within-level stacking
+    bounds (Market-By-Order).  ``volume_scale=None`` auto-infers a power-of-10
+    scale from the combined bid/ask volumes.
 
     ``top_n`` windows each side to its *N* nearest price levels (``None`` =
     whole book); the default keeps the touch region where bars stay tall enough
@@ -1841,8 +1895,21 @@ def prepare_book_snapshot_data(
     volume, liquidity, seg_lo, seg_hi`` (volumes already scaled), the same
     rows in rising price order as ``bid_curve``/``ask_curve`` for the depth
     curve, the ``mid`` (see :func:`book_mid`), high-volume ``*_quantiles``
-    price marks, ``timestamp``, ``volume_scale``, and the ``per_order`` flag.
+    price marks, ``timestamp``, ``volume_scale``, and the ``per_order`` flag
+    (``True`` at L3).
     """
+    per_order = resolve_level("book_snapshot", level) is Level.L3
+    return _book_snapshot(order_book, per_order, volume_scale, show_quantiles, top_n)
+
+
+def _book_snapshot(
+    order_book: Mapping[str, Any],
+    per_order: bool,
+    volume_scale: float | None,
+    show_quantiles: bool,
+    top_n: int | None,
+) -> dict[str, Any]:
+    """The book snapshot payload, at a level already checked."""
     bids = _as_book_side_frame(order_book["bids"])
     asks = _as_book_side_frame(order_book["asks"])
 
@@ -1881,6 +1948,21 @@ def prepare_book_snapshot_data(
         "timestamp": timestamp,
         "volume_scale": volume_scale,
     }
+
+
+def prepare_depth_chart_data(
+    order_book: Mapping[str, Any],
+    *,
+    level: Level | str | None = _UNSET,
+    **options: Any,
+) -> dict[str, Any]:
+    """Prepare a depth chart: the payload of :func:`prepare_book_snapshot_data`.
+
+    The depth chart draws the same book as the book snapshot, as a cumulative
+    curve, so it takes the same arguments.
+    """
+    resolve_level("depth_chart", level)
+    return prepare_book_snapshot_data(order_book, level=level, **options)
 
 
 def _replay_price_range(
@@ -1927,7 +2009,6 @@ def prepare_book_replay_data(
     depth: pd.DataFrame | None = None,
     trades: pd.DataFrame | None = None,
     events: pd.DataFrame | None = None,
-    per_order: bool = False,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
     interval: str | timedelta = "1s",
@@ -1936,16 +2017,18 @@ def prepare_book_replay_data(
     speeds: tuple[float, ...] = (1, 5, 20),
     volume_scale: float | None = None,
     uncross: bool = True,
+    *,
+    level: Level | str | None = _UNSET,
 ) -> dict[str, Any]:
     """Prepare the book at one instant per *interval*, for a replay.
 
     Each frame is a :func:`prepare_book_snapshot_data` payload, so a replay
     frame draws exactly as a ``book_snapshot`` does at that instant.
 
-    ``per_order=False`` (L2) replays *depth* with
+    ``level="L2"`` replays *depth* with
     :func:`~ob_analytics.depth.price_level_snapshots`: one bar per price level,
-    and a touch equal to the depth summary's at every frame.  ``per_order=True``
-    (L3) rebuilds the book from *events* at each frame with
+    and a touch equal to the depth summary's at every frame.  ``level="L3"``
+    rebuilds the book from *events* at each frame with
     :func:`~ob_analytics.book.order_book`: one segment per order.  The
     L3 rebuild reads the whole event table once per frame, so it is the slower
     of the two.
@@ -1969,15 +2052,13 @@ def prepare_book_replay_data(
     Parameters
     ----------
     depth : pandas.DataFrame, optional
-        The depth table.  Required when ``per_order=False``.
+        The depth table.  Required at L2.
     trades : pandas.DataFrame, optional
         The trades table; the replay shows every trade between the first and
         last frame.  ``None`` shows none.
     events : pandas.DataFrame, optional
         The events table, classified (it needs the ``type`` column).  Required
-        when ``per_order=True``.
-    per_order : bool
-        ``False`` for the L2 face, ``True`` for the L3 face.
+        at L3.
     start_time, end_time : pandas.Timestamp, optional
         The first and last frame.  Default to the first and last timestamp of
         the table the face replays.
@@ -2005,6 +2086,8 @@ def prepare_book_replay_data(
         chosen, as ``order_book(uncross=True)`` does.  ``True`` by default, to
         match the L2 face; the L2 face is uncrossed by the depth table and
         ignores it.
+    level : Level or str
+        ``"L2"`` for the L2 face, ``"L3"`` for the L3 face.  Required.
 
     Returns
     -------
@@ -2014,7 +2097,8 @@ def prepare_book_replay_data(
         or ``None`` when no frame has both sides), ``interval`` (the time
         between frames, as a :class:`pandas.Timedelta`), ``speeds``,
         ``trades`` (``timestamp``, ``price``, ``volume`` and ``direction``,
-        sizes scaled, from the first frame to the last), ``per_order``,
+        sizes scaled, from the first frame to the last), ``per_order``
+        (``True`` at L3),
         ``volume_scale``, ``bar_thickness`` (one bar thickness for every
         frame, the smallest of the frames' :func:`book_bar_thickness`) and
         ``view_range`` (``price_range`` widened by a bar thickness each side,
@@ -2023,11 +2107,14 @@ def prepare_book_replay_data(
     Raises
     ------
     ConfigError
-        If the table the face replays is missing or empty, *interval* is not
+        If *level* is left out or is not L2 or L3, the table the face replays
+        is missing or empty, *interval* is not
         positive, *max_frames* or *price_levels* is less than 1, *speeds* is
         empty or holds a speed that is not positive, or *end_time* is before
         *start_time*.
     """
+    face = resolve_level("book_replay", level)
+    per_order = face is Level.L3
     step = pd.Timedelta(interval)
     if step <= pd.Timedelta(0):
         raise ConfigError(f"The replay interval must be positive, got {interval!r}.")
@@ -2042,9 +2129,8 @@ def prepare_book_replay_data(
         )
     table, name = (events, "events") if per_order else (depth, "depth")
     if table is None or table.empty:
-        level = "L3" if per_order else "L2"
         raise ConfigError(
-            f"The {level} book replay needs the {name} table, and it is "
+            f"The {face} book replay needs the {name} table, and it is "
             f"{'missing' if table is None else 'empty'}."
         )
     start_time, end_time = _default_start_end(table, start_time, end_time)
@@ -2119,9 +2205,7 @@ def prepare_book_replay_data(
         shown = shown.assign(volume=shown["volume"] * volume_scale)
 
     snapshots = [
-        prepare_book_snapshot_data(
-            book, per_order=per_order, volume_scale=volume_scale, top_n=None
-        )
+        _book_snapshot(book, per_order, volume_scale, show_quantiles=False, top_n=None)
         for book in books
     ]
     # One thickness for every frame, so the bars keep one height as it plays.
@@ -2150,6 +2234,8 @@ def prepare_volume_percentiles_data(
     volume_scale: float | None = None,
     perc_line: bool = True,
     side_line: bool = True,
+    *,
+    level: Level | str | None = _UNSET,
 ) -> dict[str, Any]:
     """Prepare data for volume-percentile stacked area chart.
 
@@ -2161,6 +2247,7 @@ def prepare_volume_percentiles_data(
     window with no rows gives empty ``asks_cumsum`` / ``bids_cumsum_neg``
     frames that keep the bin columns; the renderers draw a "no data" figure.
     """
+    resolve_level("volume_percentiles", level)
     if start_time is None:
         start_time = depth_summary["timestamp"].iloc[0]
     if end_time is None:
@@ -2308,6 +2395,8 @@ def prepare_events_histogram_data(
     bw: float | None = None,
     price_from: float | None = None,
     price_to: float | None = None,
+    *,
+    level: Level | str | None = _UNSET,
 ) -> dict[str, Any]:
     """Prepare data for an events price/volume histogram.
 
@@ -2317,6 +2406,7 @@ def prepare_events_histogram_data(
     touch flashed orders, so the caller passes a mid-anchored focus window (the
     same one the depth heatmap uses) to keep the near-touch distribution legible.
     """
+    resolve_level("events_histogram", level)
     if val not in ("volume", "price"):
         raise ConfigError(f"val must be 'volume' or 'price', got {val!r}")
     start_time, end_time = _default_start_end(events, start_time, end_time)
@@ -2333,6 +2423,8 @@ def prepare_events_histogram_data(
 def prepare_vpin_data(
     vpin_df: pd.DataFrame,
     threshold: float = 0.7,
+    *,
+    level: Level | str | None = _UNSET,
 ) -> dict[str, Any]:
     """Prepare data for a VPIN time-series chart.
 
@@ -2340,6 +2432,7 @@ def prepare_vpin_data(
     ``bucket_volume="fit"`` sized them from the total volume, and is empty
     otherwise.  The gallery shows it under the card.
     """
+    resolve_level("vpin", level)
     if len(vpin_df) > 1:
         bar_width = 0.6 * (
             (vpin_df["timestamp_end"].iloc[-1] - vpin_df["timestamp_end"].iloc[0])
@@ -2374,6 +2467,7 @@ def prepare_transaction_costs_data(
     costs: pd.DataFrame,
     *,
     window: str = "1min",
+    level: Level | str | None = _UNSET,
 ) -> dict[str, Any]:
     """Prepare the transaction-cost decomposition for plotting.
 
@@ -2407,6 +2501,7 @@ def prepare_transaction_costs_data(
         a backend that wants to draw it outright; the two shipped faces read
         it off the chart as the band between the other two lines.
     """
+    resolve_level("transaction_costs", level)
     validate_columns(
         costs,
         {
@@ -2461,7 +2556,9 @@ def prepare_transaction_costs_data(
     }
 
 
-def prepare_amihud_data(amihud_df: pd.DataFrame) -> dict[str, Any]:
+def prepare_amihud_data(
+    amihud_df: pd.DataFrame, *, level: Level | str | None = _UNSET
+) -> dict[str, Any]:
     """Prepare an :func:`~ob_analytics.cost.amihud` table for its face.
 
     The face draws one point per window, joined by a line.  The payload is
@@ -2469,6 +2566,7 @@ def prepare_amihud_data(amihud_df: pd.DataFrame) -> dict[str, Any]:
     ``ylabel`` and ``notice``, a note for the title (the number of windows,
     and how many have no value).
     """
+    resolve_level("amihud", level)
     validate_columns(amihud_df, {"timestamp", "amihud"}, "prepare_amihud_data")
     return _window_measure(
         amihud_df,
@@ -2478,7 +2576,9 @@ def prepare_amihud_data(amihud_df: pd.DataFrame) -> dict[str, Any]:
     )
 
 
-def prepare_roll_spread_data(roll_df: pd.DataFrame) -> dict[str, Any]:
+def prepare_roll_spread_data(
+    roll_df: pd.DataFrame, *, level: Level | str | None = _UNSET
+) -> dict[str, Any]:
     """Prepare a :func:`~ob_analytics.cost.roll_spread` table for its face.
 
     The face draws the implied spread, in the quote currency, one point per
@@ -2486,6 +2586,7 @@ def prepare_roll_spread_data(roll_df: pd.DataFrame) -> dict[str, Any]:
     the median lag-1 autocorrelation of the price changes, which Roll's
     model puts at ``-0.5``.
     """
+    resolve_level("roll_spread", level)
     validate_columns(
         roll_df,
         {"timestamp", "roll_spread", "autocorrelation"},
@@ -2541,9 +2642,11 @@ def _band_range(*series: np.ndarray, floor: float = 3.0) -> tuple[float, float] 
     return low - margin, high + margin
 
 
-def prepare_ofi_data(
+def prepare_order_flow_imbalance_data(
     ofi_df: pd.DataFrame,
     trades: pd.DataFrame | None = None,
+    *,
+    level: Level | str | None = _UNSET,
 ) -> dict[str, Any]:
     """Prepare data for an order-flow-imbalance bar chart.
 
@@ -2551,6 +2654,7 @@ def prepare_ofi_data(
     *width* (which depends on the renderer's x-axis units; matplotlib uses
     date numbers) are chosen by each backend rather than here.
     """
+    resolve_level("order_flow_imbalance", level)
     return {
         "ofi_df": ofi_df,
         "trades": trades,
@@ -2564,6 +2668,7 @@ def prepare_ofi_horizon_data(
     grid: str = "5s",
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
+    level: Level | str | None = _UNSET,
 ) -> dict[str, Any]:
     """Multi-horizon order-flow-imbalance grid for the OFI horizon graph.
 
@@ -2579,6 +2684,7 @@ def prepare_ofi_horizon_data(
     and the fill of each colour band: ``band_alphas``, ``buy_bands`` and
     ``sell_bands``, the height of each band as a fraction of its row.
     """
+    resolve_level("ofi_horizon", level)
     start_time, end_time = _default_start_end(trades, start_time, end_time)
     tr = trades[(trades["timestamp"] >= start_time) & (trades["timestamp"] <= end_time)]
     if tr.empty:
@@ -2651,8 +2757,11 @@ def _horizon_bands(ofi: np.ndarray) -> dict[str, Any]:
     }
 
 
-def prepare_kyle_lambda_data(kyle_result: Any) -> dict[str, Any]:
+def prepare_kyle_lambda_data(
+    kyle_result: Any, *, level: Level | str | None = _UNSET
+) -> dict[str, Any]:
     """Prepare data for Kyle's Lambda regression scatter."""
+    resolve_level("kyle_lambda", level)
     reg_df = kyle_result.regression_df
     lambda_ = kyle_result.lambda_
     r_squared = kyle_result.r_squared
@@ -2675,6 +2784,8 @@ def prepare_hidden_executions_data(
     trades: pd.DataFrame,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
+    *,
+    level: Level | str | None = _UNSET,
 ) -> dict[str, Any]:
     """Prepare data for a hidden-executions overlay chart.
 
@@ -2682,6 +2793,7 @@ def prepare_hidden_executions_data(
     over the trade price time series.  Degrades to an empty plot with a
     message when no hidden execution data is present.
     """
+    resolve_level("hidden_executions", level)
     has_hidden = (
         "raw_event_type" in events.columns
         and events["raw_event_type"].notna().any()
@@ -2734,6 +2846,8 @@ def prepare_trading_halts_data(
     events: pd.DataFrame | None = None,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
+    *,
+    level: Level | str | None = _UNSET,
 ) -> dict[str, Any]:
     """Prepare data for a trading-halts overlay chart.
 
@@ -2741,6 +2855,7 @@ def prepare_trading_halts_data(
     periods.  Accepts either a halts DataFrame directly or extracts
     halt events (``raw_event_type == 7``) from the events DataFrame.
     """
+    resolve_level("trading_halts", level)
     if (
         halts is None
         and events is not None
@@ -2821,6 +2936,8 @@ def _bar_tick_labels(closes: pd.Series, count: int = 8) -> tuple[list[int], list
 def prepare_bars_data(
     bars: pd.DataFrame,
     label: str = "",
+    *,
+    level: Level | str | None = _UNSET,
 ) -> dict[str, Any]:
     """Prepare data for a candlestick chart with a signed-volume strip.
 
@@ -2840,6 +2957,7 @@ def prepare_bars_data(
     ``"ordinal"``); ``x`` and ``bar_width`` are in that axis's own units, and
     ``ticks`` carries the ``(positions, labels)`` an ordinal axis needs.
     """
+    resolve_level("bars", level)
     label = label or bars_label(bars)
     closes = bars["timestamp_end"]
     payload: dict[str, Any] = {

@@ -37,8 +37,7 @@ from ob_analytics import (
 )
 from ob_analytics.bitstamp import BitstampLoader
 from ob_analytics.depth_csv import DepthCsvLoader
-from ob_analytics.live._base import CaptureConfig
-from ob_analytics.live.ccxt_source import CcxtSettings, CcxtSource
+from ob_analytics.live import CaptureConfig, CcxtSettings, CcxtSource
 from ob_analytics.lobster import LobsterLoader, LobsterSource
 
 _BASE_MS = 1_700_000_000_000  # arbitrary epoch-ms anchor

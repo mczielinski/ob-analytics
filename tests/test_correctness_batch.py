@@ -143,7 +143,7 @@ class TestStreamCountsSurviveCancellation:
 
     def test_cancelled_stream_keeps_counts(self, tmp_path):
         from ob_analytics.config import SourceSettings
-        from ob_analytics.live._base import CaptureConfig
+        from ob_analytics.live import CaptureConfig
         from ob_analytics.live._runner import _stream, _StreamState
         from ob_analytics.protocols import FeedType, Level
 

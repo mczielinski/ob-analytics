@@ -133,7 +133,7 @@ class TestQueuePositionFace:
         assert "rank" in ax.get_ylabel().lower()
 
     def test_prepare_schema(self, result: PipelineResult) -> None:
-        data = prepare.queue_position_l3(result.events)
+        data = prepare.queue_position(result.events)
         assert set(data) >= {
             "filled",
             "cancelled",
@@ -157,17 +157,26 @@ class TestAvailableConcepts:
 
 
 class TestPrepareNamespace:
-    def test_short_names_are_callable(self) -> None:
-        # The public namespace drops the prepare_/_data ceremony.
-        for name in ("trades", "price_levels", "trade_tape_l3", "order_outcome_l3"):
-            assert callable(getattr(prepare, name))
+    def test_a_concept_at_both_levels_needs_level(self, result: PipelineResult) -> None:
+        with pytest.raises(ConfigError, match='level="L2" or level="L3"'):
+            prepare.trade_tape(result.trades)
+
+    def test_a_concept_at_one_level_resolves_it(self, result: PipelineResult) -> None:
+        data = prepare.trade_size(result.trades)
+        assert set(data) == set(prepare.trade_size(result.trades, level="L2"))
+
+    def test_a_level_the_concept_lacks_is_refused(self, result: PipelineResult) -> None:
+        with pytest.raises(ConfigError, match="drawn at L2"):
+            prepare.trade_size(result.trades, level="L3")
+        with pytest.raises(ConfigError, match="level-less"):
+            prepare.amihud(result.trades, level="L2")
 
     def test_trades_returns_payload(self, result: PipelineResult) -> None:
-        data = prepare.trades(result.trades)
+        data = prepare.trade_tape(result.trades, level="L2")
         assert {"buys", "sells", "mid_line"} <= set(data)
 
-    def test_is_thin_reexport_of_impl(self) -> None:
-        # Same function object as the private impl, just a friendlier name.
-        from ob_analytics.visualization import _data
+    def test_every_concept_has_a_prepare_function_of_its_name(self) -> None:
+        from ob_analytics.visualization import _concepts
 
-        assert prepare.trades is _data.prepare_trades_data
+        missing = [c.key for c in _concepts.CONCEPTS if not hasattr(prepare, c.key)]
+        assert missing == []

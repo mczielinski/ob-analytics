@@ -465,6 +465,12 @@ _Avoid_: chart type, plot kind, view
 **Face**:
 One rendered plot: a concept at one resolution on one backend.
 
+**Card**:
+One entry in a gallery: a title, a note on how to read it, and one panel per
+column. A concept gets one card; so does each level-less plot, such as a
+metric or the cards built with the gallery's `*_card` helpers.
+_Avoid_: panel for a whole card
+
 **Panel**:
 One column within a gallery card, holding a face and how to display it.
 _Avoid_: panel for a face, or for a level-less analytic plot

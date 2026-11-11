@@ -148,7 +148,7 @@ ofi[["timestamp", "buy_volume", "sell_volume", "ofi"]]
 # %%
 from ob_analytics.visualization import plot, prepare
 
-fig = plot("order_flow_imbalance", **prepare.ofi(ofi, trades=tape))
+fig = plot("order_flow_imbalance", **prepare.order_flow_imbalance(ofi, trades=tape))
 
 # %% [markdown]
 # ## VPIN: imbalance on a volume clock

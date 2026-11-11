@@ -153,9 +153,9 @@ class TestBookSignalsFace:
     """The gallery face: prepare payload, matplotlib/plotly renderers, panel."""
 
     def test_prepare_payload_shape_and_clamp(self) -> None:
-        from ob_analytics.visualization import _data
+        from ob_analytics.visualization import prepare
 
-        payload = _data.prepare_book_signals_data(_summary(), levels=99)
+        payload = prepare.book_signals(_summary(), levels=99)
         for key in ("timestamp", "mid", "microprice", "obi", "obi_depth", "levels"):
             assert key in payload
         # Only two bins, so levels clamps to 3.
@@ -167,28 +167,21 @@ class TestBookSignalsFace:
         import matplotlib.pyplot as plt
         from matplotlib.figure import Figure
 
-        from ob_analytics.visualization import _data, plot
+        from ob_analytics.visualization import plot, prepare
 
-        payload = _data.prepare_book_signals_data(_summary())
+        payload = prepare.book_signals(_summary())
         fig = plot("book_signals", backend="matplotlib", **payload)
         assert isinstance(fig, Figure)
         plt.close(fig)
 
     def test_plotly_renderer_returns_figure(self) -> None:
         pytest.importorskip("plotly")
-        from ob_analytics.visualization import _data, plot
+        from ob_analytics.visualization import plot, prepare
 
-        payload = _data.prepare_book_signals_data(_summary())
+        payload = prepare.book_signals(_summary())
         fig = plot("book_signals", backend="plotly", **payload)
         # A plotly figure exposes a data tuple of traces.
         assert len(fig.data) > 0
-
-    def test_panel_helper_builds_spec(self) -> None:
-        from ob_analytics.visualization.gallery import book_signals_panel
-
-        spec = book_signals_panel(_summary(), levels=4)
-        assert spec.plot_name == "book_signals"
-        assert spec.prep_kwargs["levels"] == 4
 
 
 def _unreadable_summary() -> pd.DataFrame:
@@ -244,9 +237,9 @@ class TestUnreadableQuotesGiveNoMid:
         assert depth_signals(_unreadable_summary())["obi"].iloc[0] == pytest.approx(-1)
 
     def test_signals_face_draws_no_mid_for_unreadable_rows(self) -> None:
-        from ob_analytics.visualization import _data
+        from ob_analytics.visualization import prepare
 
-        payload = _data.prepare_book_signals_data(_unreadable_summary())
+        payload = prepare.book_signals(_unreadable_summary())
         np.testing.assert_allclose(
             payload["mid"], [np.nan, np.nan, 101.0, 100.5], equal_nan=True
         )
@@ -255,9 +248,9 @@ class TestUnreadableQuotesGiveNoMid:
         )
 
     def test_price_view_draws_no_mid_for_unreadable_rows(self) -> None:
-        from ob_analytics.visualization import _data
+        from ob_analytics.visualization import prepare
 
-        payload = _data.prepare_price_view_data(_unreadable_summary())
+        payload = prepare.price_view(_unreadable_summary())
         np.testing.assert_allclose(
             payload["mid"], [np.nan, np.nan, 101.0, 100.5], equal_nan=True
         )
@@ -266,7 +259,7 @@ class TestUnreadableQuotesGiveNoMid:
         )
 
     def test_trade_tape_mid_skips_unreadable_quotes(self) -> None:
-        from ob_analytics.visualization import _data
+        from ob_analytics.visualization import prepare
 
         # The trade's nearest quote has an empty bid side; its stem hangs off
         # the last quote that can be read, not off a mid halfway to zero.
@@ -282,5 +275,5 @@ class TestUnreadableQuotesGiveNoMid:
                 "direction": ["buy"],
             }
         )
-        payload = _data.prepare_trades_data(trades, spread)
+        payload = prepare.trade_tape(trades, spread, level="L2")
         assert payload["mid_line"]["mid"].tolist() == [100.5]

@@ -220,7 +220,7 @@ given, so pass them the uncrossed book:
 from ob_analytics.visualization import prepare, plot
 
 fig = plot("book_snapshot", level="L3",
-           **prepare.book_snapshot(order_book=display, per_order=True))
+           **prepare.book_snapshot(order_book=display, level="L3"))
 ```
 
 Uncrossing applies to orders the rule the depth summary applies to price

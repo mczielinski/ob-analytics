@@ -185,7 +185,7 @@ thousands of hidden trades.
 To draw the same overlay elsewhere, build it with
 `prepare.hidden_liquidity_overlay` and pass the three frames it returns
 (`iceberg_lines`, `iceberg_refills`, `hidden_trades`) into
-`prepare.price_levels` or `prepare.order_activity_l3`:
+`prepare.depth_heatmap`, or `prepare.order_activity` at L3:
 
 ```python
 from ob_analytics.visualization import prepare

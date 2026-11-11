@@ -237,13 +237,11 @@ class TestQueueAgeGrid:
     def test_the_composition_of_a_window_with_no_events_is_empty(self) -> None:
         # A zoom window can hold no events on an L3 run; that is an empty
         # grid, not the L2 refusal.
-        from ob_analytics.visualization._data import (
-            prepare_liquidity_at_touch_l3_data,
-        )
+        from ob_analytics.visualization import prepare
 
         ev = _events(self.GRID_EVENTS)
         later = ev["timestamp"].max() + pd.Timedelta("1h")
-        data = prepare_liquidity_at_touch_l3_data(
-            ev, start_time=later, end_time=later + pd.Timedelta("1s")
+        data = prepare.liquidity_at_touch(
+            ev, start_time=later, end_time=later + pd.Timedelta("1s"), level="L3"
         )
         assert data["max_rank"] == 0 and data["ages"].size == 0

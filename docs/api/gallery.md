@@ -35,38 +35,44 @@ it to a self-contained HTML page.
 
 ::: ob_analytics.visualization.gallery.generate_gallery
 
-## Extra panels
+## Extra cards
 
-The built-in [metrics](metrics.md) (VPIN, Kyle's λ, order flow imbalance, the
-OFI horizon graph and the L1 quote) already have cards, with their default
-settings. Build a panel yourself to add bars, transaction costs, LOBSTER
-trading halts, or a flow-toxicity face from a frame you computed with other
-settings, and append it to `model.analytics` before rendering:
+The built-in [metrics](metrics.md) (the L1 quote, book signals, VPIN, Kyle's
+λ, order flow imbalance, the OFI horizon graph, transaction costs, Amihud
+illiquidity and the Roll spread) already have cards, with their default
+settings. To add bars, LOBSTER trading halts, or a metric's plot from a frame
+you computed with other settings, build a card and append it to
+`model.analytics` before rendering. The `*_card` helpers below build the
+common ones. For any other level-less plot, build a `PlotSpec` with the
+plot's `prepare` function:
 
 ```python
 from ob_analytics import Pipeline, compute_vpin, sample_csv_path
+from ob_analytics.visualization import prepare
 from ob_analytics.visualization.gallery import (
-    build_gallery_model, generate_gallery, vpin_panel,
+    PlotSpec, build_gallery_model, generate_gallery,
 )
 
 result = Pipeline().run(sample_csv_path())
 vpin_df = compute_vpin(result.trades)
 
 model = build_gallery_model(result)
-model.analytics.append(vpin_panel(vpin_df))
+model.analytics.append(
+    PlotSpec(
+        name="vpin_alert_08",
+        title="VPIN (alert at 0.8)",
+        plot_name="vpin",
+        prepare=prepare.vpin,
+        prep_kwargs={"vpin_df": vpin_df, "threshold": 0.8},
+    )
+)
 generate_gallery(result, "out/gallery", model=model)
 ```
 
-::: ob_analytics.visualization.gallery.bars_panel
+::: ob_analytics.visualization.gallery.bars_card
 
-::: ob_analytics.visualization.gallery.vpin_panel
+::: ob_analytics.visualization.gallery.ofi_horizon_card
 
-::: ob_analytics.visualization.gallery.ofi_panel
+::: ob_analytics.visualization.gallery.kyle_lambda_card
 
-::: ob_analytics.visualization.gallery.ofi_horizon_panel
-
-::: ob_analytics.visualization.gallery.kyle_panel
-
-::: ob_analytics.visualization.gallery.transaction_costs_panel
-
-::: ob_analytics.visualization.gallery.trading_halts_panel
+::: ob_analytics.visualization.gallery.trading_halts_card

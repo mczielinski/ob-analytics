@@ -38,9 +38,9 @@ snap = order_book(events, tp=t30)
 fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 4.4))
 plot("l1_ticker", ax=ax1, bid=99, ask=101, last=101, symbol="TOY")
 ax1.set_title("L1 — the quote", fontsize=10)
-plot("book_snapshot", level="L2", ax=ax2, **prepare.book_snapshot(snap))
+plot("book_snapshot", level="L2", ax=ax2, **prepare.book_snapshot(snap, level="L2"))
 ax2.set_title("L2 — market by price", fontsize=10)
-plot("book_snapshot", level="L3", ax=ax3, **prepare.book_snapshot(snap, per_order=True))
+plot("book_snapshot", level="L3", ax=ax3, **prepare.book_snapshot(snap, level="L3"))
 ax3.set_title("L3 — market by order", fontsize=10)
 fig.tight_layout()
 
@@ -84,13 +84,18 @@ crowd = {
 
 fig, axes = plt.subplots(2, 2, figsize=(10, 6), sharex=True, sharey=True)
 for col, (name, book) in enumerate([("one whale", whale), ("a crowd", crowd)]):
-    plot("book_snapshot", level="L2", ax=axes[0][col], **prepare.book_snapshot(book))
+    plot(
+        "book_snapshot",
+        level="L2",
+        ax=axes[0][col],
+        **prepare.book_snapshot(book, level="L2"),
+    )
     axes[0][col].set_title(f"L2 — {name}", fontsize=10)
     plot(
         "book_snapshot",
         level="L3",
         ax=axes[1][col],
-        **prepare.book_snapshot(book, per_order=True),
+        **prepare.book_snapshot(book, level="L3"),
     )
     axes[1][col].set_title(f"L3 — {name}", fontsize=10)
 for ax in axes.ravel():
@@ -196,7 +201,7 @@ available_concepts(result)
 
 # %%
 t_start = result.events["timestamp"].min()
-payload = prepare.queue_position_l3(
+payload = prepare.queue_position(
     result.events,
     start_time=t_start,
     end_time=t_start + pd.Timedelta(minutes=10),

@@ -918,7 +918,7 @@ def _fake_capture(monkeypatch, *, error=None):
     """Replace the capture loop; return the dict it fills with what it was given."""
     import pandas as pd
 
-    from ob_analytics.live._base import CaptureResult
+    from ob_analytics.live import CaptureResult
 
     captured: dict = {}
 
@@ -987,8 +987,7 @@ class TestCaptureSubcommand:
     def test_venue_flag_flows_into_typed_settings(self, monkeypatch, tmp_path):
         """--venue / --depth-limit flow into typed CcxtSettings (no network)."""
         from ob_analytics import cli
-        from ob_analytics.live._base import CaptureConfig
-        from ob_analytics.live.ccxt_source import CcxtSettings, CcxtSource
+        from ob_analytics.live import CaptureConfig, CcxtSettings, CcxtSource
 
         captured = _fake_capture(monkeypatch)
         # This test checks the flag wiring, not the extra: skip the check for it.
