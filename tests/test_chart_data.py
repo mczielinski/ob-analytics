@@ -13,88 +13,20 @@ from ob_analytics.visualization._data import (
 )
 
 # ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def sample_trades() -> pd.DataFrame:
-    ts = pd.Timestamp("2015-05-01 01:00:00")
-    return pd.DataFrame(
-        {
-            "timestamp": [ts + pd.Timedelta(seconds=i) for i in range(5)],
-            "price": [236.50, 236.55, 236.45, 236.60, 236.50],
-            "volume": [100, 200, 150, 300, 250],
-            "direction": pd.Categorical(
-                ["buy", "sell", "buy", "sell", "buy"],
-                categories=["buy", "sell"],
-            ),
-        }
-    )
-
-
-@pytest.fixture
-def sample_events() -> pd.DataFrame:
-    ts = pd.Timestamp("2015-05-01 01:00:00")
-    n = 20
-    return pd.DataFrame(
-        {
-            "timestamp": [ts + pd.Timedelta(seconds=i) for i in range(n)],
-            "price": np.linspace(236.0, 237.0, n),
-            "volume": np.random.default_rng(42).uniform(100, 1000, n),
-            "direction": pd.Categorical(
-                ["bid", "ask"] * (n // 2), categories=["bid", "ask"]
-            ),
-            "action": pd.Categorical(
-                ["created", "deleted"] * (n // 2),
-                categories=["created", "changed", "deleted"],
-                ordered=True,
-            ),
-            "type": ["flashed-limit"] * 10 + ["resting-limit"] * 10,
-        }
-    )
-
-
-@pytest.fixture
-def sample_depth_summary() -> pd.DataFrame:
-    ts = pd.Timestamp("2015-05-01 01:00:00")
-    n = 30
-    rng = np.random.default_rng(42)
-    data: dict = {"timestamp": [ts + pd.Timedelta(seconds=i) for i in range(n)]}
-    for side in ("bid", "ask"):
-        for bps in range(25, 501, 25):
-            data[f"{side}_vol{bps}bps"] = rng.uniform(10, 500, n)
-    data["best_bid_price"] = np.full(n, 236.50)
-    data["best_ask_price"] = np.full(n, 237.00)
-    data["best_bid_vol"] = rng.uniform(100, 1000, n)
-    data["best_ask_vol"] = rng.uniform(100, 1000, n)
-    return pd.DataFrame(data)
-
-
-@pytest.fixture
-def sample_order_book() -> dict:
-    return {
-        "timestamp": 1430445600,
-        "bids": np.array([[236.50, 100, 100], [236.00, 200, 300]]),
-        "asks": np.array([[237.00, 150, 150], [237.50, 250, 400]]),
-    }
-
-
-# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
 class TestDefaultStartEnd:
-    def test_fills_none_from_df(self, sample_trades: pd.DataFrame) -> None:
-        start, end = _default_start_end(sample_trades, None, None)
-        assert start == sample_trades["timestamp"].min()
-        assert end == sample_trades["timestamp"].max()
+    def test_fills_none_from_df(self, plot_trades: pd.DataFrame) -> None:
+        start, end = _default_start_end(plot_trades, None, None)
+        assert start == plot_trades["timestamp"].min()
+        assert end == plot_trades["timestamp"].max()
 
-    def test_preserves_explicit_values(self, sample_trades: pd.DataFrame) -> None:
+    def test_preserves_explicit_values(self, plot_trades: pd.DataFrame) -> None:
         explicit_start = pd.Timestamp("2015-05-01 00:00:00")
         explicit_end = pd.Timestamp("2015-05-01 02:00:00")
-        start, end = _default_start_end(sample_trades, explicit_start, explicit_end)
+        start, end = _default_start_end(plot_trades, explicit_start, explicit_end)
         assert start == explicit_start
         assert end == explicit_end
 
@@ -207,24 +139,24 @@ class TestPrepareTimeSeries:
 
 
 class TestPrepareTrades:
-    def test_returns_dict_with_required_keys(self, sample_trades: pd.DataFrame) -> None:
-        data = prepare.trade_tape(sample_trades, level="L2")
+    def test_returns_dict_with_required_keys(self, plot_trades: pd.DataFrame) -> None:
+        data = prepare.trade_tape(plot_trades, level="L2")
         assert "filtered_trades" in data
         assert "y_breaks" in data
         assert len(data["filtered_trades"]) == 5
 
-    def test_filters_by_time(self, sample_trades: pd.DataFrame) -> None:
-        start = sample_trades["timestamp"].iloc[1]
-        end = sample_trades["timestamp"].iloc[3]
+    def test_filters_by_time(self, plot_trades: pd.DataFrame) -> None:
+        start = plot_trades["timestamp"].iloc[1]
+        end = plot_trades["timestamp"].iloc[3]
         data = prepare.trade_tape(
-            sample_trades, start_time=start, end_time=end, level="L2"
+            plot_trades, start_time=start, end_time=end, level="L2"
         )
         assert len(data["filtered_trades"]) == 3
 
 
 class TestPrepareEventMap:
-    def test_returns_created_and_deleted(self, sample_events: pd.DataFrame) -> None:
-        data = prepare.order_activity(sample_events, level="L2")
+    def test_returns_created_and_deleted(self, plot_events: pd.DataFrame) -> None:
+        data = prepare.order_activity(plot_events, level="L2")
         assert "created" in data
         assert "deleted" in data
         assert "events" in data
@@ -233,18 +165,18 @@ class TestPrepareEventMap:
 
 
 class TestPrepareVolumeMap:
-    def test_default_action_deleted(self, sample_events: pd.DataFrame) -> None:
-        data = prepare.cancellations(sample_events, level="L2")
+    def test_default_action_deleted(self, plot_events: pd.DataFrame) -> None:
+        data = prepare.cancellations(plot_events, level="L2")
         assert "events" in data
         assert "log_scale" in data
         assert data["log_scale"] is False
 
-    def test_invalid_action_raises(self, sample_events: pd.DataFrame) -> None:
+    def test_invalid_action_raises(self, plot_events: pd.DataFrame) -> None:
         with pytest.raises(ValueError, match="action must be"):
-            prepare.cancellations(sample_events, action="invalid", level="L2")
+            prepare.cancellations(plot_events, action="invalid", level="L2")
 
-    def test_log_scale_passed_through(self, sample_events: pd.DataFrame) -> None:
-        data = prepare.cancellations(sample_events, log_scale=True, level="L2")
+    def test_log_scale_passed_through(self, plot_events: pd.DataFrame) -> None:
+        data = prepare.cancellations(plot_events, log_scale=True, level="L2")
         assert data["log_scale"] is True
 
 
@@ -379,21 +311,21 @@ class TestPrepareOrderActivityL3:
 
 
 class TestPrepareLiquidityAtTouch:
-    def test_returns_paired_series(self, sample_depth_summary: pd.DataFrame) -> None:
-        data = prepare.liquidity_at_touch(sample_depth_summary, level="L2")
+    def test_returns_paired_series(self, plot_depth_summary: pd.DataFrame) -> None:
+        data = prepare.liquidity_at_touch(plot_depth_summary, level="L2")
         assert set(data) == {"rug", "timestamp", "bid_vol", "ask_vol", "volume_scale"}
-        assert len(data["timestamp"]) == len(sample_depth_summary)
+        assert len(data["timestamp"]) == len(plot_depth_summary)
         assert len(data["bid_vol"]) == len(data["ask_vol"]) == len(data["timestamp"])
 
-    def test_rug_none_without_events(self, sample_depth_summary: pd.DataFrame) -> None:
-        data = prepare.liquidity_at_touch(sample_depth_summary, level="L2")
+    def test_rug_none_without_events(self, plot_depth_summary: pd.DataFrame) -> None:
+        data = prepare.liquidity_at_touch(plot_depth_summary, level="L2")
         assert data["rug"] is None
 
     def test_rug_classes_from_events(
-        self, sample_depth_summary: pd.DataFrame, sample_events: pd.DataFrame
+        self, plot_depth_summary: pd.DataFrame, plot_events: pd.DataFrame
     ) -> None:
         data = prepare.liquidity_at_touch(
-            sample_depth_summary, events=sample_events, level="L2"
+            plot_depth_summary, events=plot_events, level="L2"
         )
         rug = data["rug"]
         assert set(rug) == {"created", "cancelled", "filled"}
@@ -403,21 +335,21 @@ class TestPrepareLiquidityAtTouch:
         # No fill column in the fixture -> nothing in the filled row.
         assert len(rug["filled"]) == 0
 
-    def test_scales_volume(self, sample_depth_summary: pd.DataFrame) -> None:
+    def test_scales_volume(self, plot_depth_summary: pd.DataFrame) -> None:
         raw = prepare.liquidity_at_touch(
-            sample_depth_summary, volume_scale=1.0, level="L2"
+            plot_depth_summary, volume_scale=1.0, level="L2"
         )
         scaled = prepare.liquidity_at_touch(
-            sample_depth_summary, volume_scale=2.0, level="L2"
+            plot_depth_summary, volume_scale=2.0, level="L2"
         )
         assert np.allclose(
             scaled["bid_vol"].to_numpy(), raw["bid_vol"].to_numpy() * 2.0
         )
 
-    def test_window_filters_by_time(self, sample_depth_summary: pd.DataFrame) -> None:
-        mid = sample_depth_summary["timestamp"].iloc[15]
+    def test_window_filters_by_time(self, plot_depth_summary: pd.DataFrame) -> None:
+        mid = plot_depth_summary["timestamp"].iloc[15]
         data = prepare.liquidity_at_touch(
-            sample_depth_summary, start_time=mid, level="L2"
+            plot_depth_summary, start_time=mid, level="L2"
         )
         assert (data["timestamp"] >= mid).all()
 
@@ -562,8 +494,8 @@ class TestPrepareTradeTapeL3:
 
 
 class TestPrepareBookSnapshot:
-    def test_returns_book_sides(self, sample_order_book: dict) -> None:
-        data = prepare.book_snapshot(sample_order_book, level="L2")
+    def test_returns_book_sides(self, plot_order_book: dict) -> None:
+        data = prepare.book_snapshot(plot_order_book, level="L2")
         assert "bids" in data
         assert "asks" in data
         assert "timestamp" in data
@@ -574,14 +506,14 @@ class TestPrepareBookSnapshot:
                 side.columns
             )
 
-    def test_volume_scale_applied(self, sample_order_book: dict) -> None:
-        data = prepare.book_snapshot(sample_order_book, volume_scale=0.5, level="L2")
+    def test_volume_scale_applied(self, plot_order_book: dict) -> None:
+        data = prepare.book_snapshot(plot_order_book, volume_scale=0.5, level="L2")
         # Cumulative liquidity is scaled: ask cumsum 400 * 0.5 == 200.
         assert data["asks"]["liquidity"].max() <= 200
 
-    def test_aggregate_zeroes_segment_floor(self, sample_order_book: dict) -> None:
+    def test_aggregate_zeroes_segment_floor(self, plot_order_book: dict) -> None:
         # L2 bars sit on the axis: each level is one segment from 0.
-        data = prepare.book_snapshot(sample_order_book, level="L2")
+        data = prepare.book_snapshot(plot_order_book, level="L2")
         assert (data["bids"]["seg_lo"] == 0).all()
         assert (data["asks"]["seg_lo"] == 0).all()
 
@@ -601,8 +533,8 @@ class TestPrepareBookSnapshot:
 
 
 class TestPrepareVolumePercentiles:
-    def test_returns_cumsum_data(self, sample_depth_summary: pd.DataFrame) -> None:
-        data = prepare.volume_percentiles(sample_depth_summary)
+    def test_returns_cumsum_data(self, plot_depth_summary: pd.DataFrame) -> None:
+        data = prepare.volume_percentiles(plot_depth_summary)
         assert "asks_cumsum" in data
         assert "bids_cumsum_neg" in data
         assert "colors_dict" in data
@@ -611,13 +543,13 @@ class TestPrepareVolumePercentiles:
         assert len(data["bids_cols"]) == 20
 
     def test_empty_window_keeps_the_bin_columns(
-        self, sample_depth_summary: pd.DataFrame
+        self, plot_depth_summary: pd.DataFrame
     ) -> None:
         # A window before the data: pivoting the empty frame used to drop the
         # bin columns, so selecting them raised KeyError.
-        t0 = sample_depth_summary["timestamp"].min()
+        t0 = plot_depth_summary["timestamp"].min()
         data = prepare.volume_percentiles(
-            sample_depth_summary,
+            plot_depth_summary,
             start_time=t0 - pd.Timedelta(hours=2),
             end_time=t0 - pd.Timedelta(hours=1),
         )
@@ -679,26 +611,26 @@ class TestPrepareVolumePercentiles:
 
 
 class TestPrepareEventsHistogram:
-    def test_returns_filtered_events(self, sample_events: pd.DataFrame) -> None:
-        data = prepare.events_histogram(sample_events, val="price")
+    def test_returns_filtered_events(self, plot_events: pd.DataFrame) -> None:
+        data = prepare.events_histogram(plot_events, val="price")
         assert "events" in data
         assert data["val"] == "price"
 
-    def test_invalid_val_raises(self, sample_events: pd.DataFrame) -> None:
+    def test_invalid_val_raises(self, plot_events: pd.DataFrame) -> None:
         with pytest.raises(ValueError, match="val must be"):
-            prepare.events_histogram(sample_events, val="invalid")
+            prepare.events_histogram(plot_events, val="invalid")
 
-    def test_clips_price_to_focus_window(self, sample_events: pd.DataFrame) -> None:
+    def test_clips_price_to_focus_window(self, plot_events: pd.DataFrame) -> None:
         # The price face was a single 1px spike because q01-q99 of a heavy-tailed
         # book still spans far-from-touch flashed orders.  A caller-supplied
         # focus window must clip the events to the near-touch band.
         data = prepare.events_histogram(
-            sample_events, val="price", price_from=236.4, price_to=236.7
+            plot_events, val="price", price_from=236.4, price_to=236.7
         )
         prices = data["events"]["price"]
         assert prices.min() >= 236.4
         assert prices.max() <= 236.7
-        assert len(prices) < len(sample_events)  # outliers were clipped
+        assert len(prices) < len(plot_events)  # outliers were clipped
 
 
 class TestPrepareVpin:

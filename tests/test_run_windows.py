@@ -84,11 +84,16 @@ def test_windowed_run_matches_a_single_run(synth_session, tmp_path):
     _assert_tables_equal(single, load_data(out))
 
 
-def test_bitstamp_windowed_run_matches_except_aggressiveness(tmp_path):
+def test_bitstamp_windowed_run_matches_except_aggressiveness(
+    tmp_path, bundled_sample_result
+):
     # Bitstamp numbers its events by order, not by time, and aggressiveness
     # looks up the standing quote by event_id, so that one column can read a
-    # quote from another window.  Everything else must match.
-    single = _saved_single_run(Pipeline(), sample_csv_path(), tmp_path / "single")
+    # quote from another window.  Everything else must match.  The single run
+    # is the session's run of the sample, so the sample runs once here.
+    run = bundled_sample_result
+    save_data(run.tables(), tmp_path / "single", config=run.config)
+    single = load_data(tmp_path / "single")
     cuts = _cuts(single["events"]["timestamp"], 0.5)
 
     out = Pipeline().run_windows(sample_csv_path(), cuts, tmp_path / "w")

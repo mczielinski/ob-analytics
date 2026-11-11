@@ -16,7 +16,6 @@ from ob_analytics.depth import readable_quotes
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
 from ob_analytics.features import (
     DEFAULT_FEATURES,
-    FEATURES,
     INDEX_COLUMNS,
     KyleLambdaFeature,
     ReturnsFeature,
@@ -92,15 +91,6 @@ def toy_quotes(toy_trades: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-@pytest.fixture
-def _restore_registry():
-    """Snapshot / restore the global feature registry around the test."""
-    before = dict(FEATURES._items)
-    yield
-    FEATURES._items.clear()
-    FEATURES._items.update(before)
-
-
 class ConstantFeature:
     """A feature of one's own, writing one column of a known value."""
 
@@ -171,7 +161,7 @@ class TestNoLookAhead:
         assert not table.iloc[6:]["spread"].equals(after.iloc[6:]["spread"])
 
     def test_a_feature_that_looks_forward_is_caught(
-        self, toy_trades, _restore_registry
+        self, toy_trades, restore_registries
     ):
         """The truncation test has teeth: a peeking feature fails it."""
 
@@ -330,7 +320,7 @@ class TestRegistry:
     def test_shipped_features_are_registered(self):
         assert set(DEFAULT_FEATURES) <= set(list_features())
 
-    def test_a_feature_of_your_own(self, toy_trades, toy_quotes, _restore_registry):
+    def test_a_feature_of_your_own(self, toy_trades, toy_quotes, restore_registries):
         register_feature(ConstantFeature())
         table = features(toy_trades, toy_quotes)
 
@@ -343,7 +333,7 @@ class TestRegistry:
         assert get_feature("MICRO_PRICE").name == "micro_price"
 
     def test_a_feature_may_shadow_a_built_in(
-        self, toy_trades, toy_quotes, _restore_registry
+        self, toy_trades, toy_quotes, restore_registries
     ):
         class FlatSpread:
             name = "spread"
@@ -362,7 +352,7 @@ class TestRegistry:
         assert (table["spread"] == 0.0).all()
 
     def test_a_one_column_feature_names_its_column_after_itself(
-        self, toy_trades, _restore_registry
+        self, toy_trades, restore_registries
     ):
         """So a second window registered beside the built-in has its own column."""
         register_feature(VpinFeature(name="vpin_5", window=5))
@@ -371,7 +361,7 @@ class TestRegistry:
         assert list(table.columns[3:]) == ["vpin", "vpin_5"]
         assert not table["vpin"].equals(table["vpin_5"])
 
-    def test_two_features_cannot_share_a_column(self, toy_trades, _restore_registry):
+    def test_two_features_cannot_share_a_column(self, toy_trades, restore_registries):
         """A renamed multi-column feature is refused, not silently merged."""
         register_feature(ReturnsFeature(name="returns_60", window=60))
 
@@ -379,7 +369,7 @@ class TestRegistry:
             features(toy_trades, None, "tick", 2, include=["returns", "returns_60"])
 
     def test_undeclared_column_is_reported(
-        self, toy_trades, toy_quotes, _restore_registry
+        self, toy_trades, toy_quotes, restore_registries
     ):
         class Mismatched:
             name = "mismatched"
@@ -393,7 +383,7 @@ class TestRegistry:
         with pytest.raises(ConfigError, match="declares columns"):
             features(toy_trades, toy_quotes, include=["mismatched"])
 
-    def test_wrong_length_is_reported(self, toy_trades, toy_quotes, _restore_registry):
+    def test_wrong_length_is_reported(self, toy_trades, toy_quotes, restore_registries):
         class TooShort:
             name = "too_short"
             columns = ("too_short",)
@@ -515,7 +505,7 @@ class TestTradeFeatures:
             np.asarray(python_window.compute(frame)["vpin_py"], dtype=float),
         )
 
-    def test_a_reconfigured_window_is_honoured(self, toy_trades, _restore_registry):
+    def test_a_reconfigured_window_is_honoured(self, toy_trades, restore_registries):
         register_feature(ReturnsFeature(window=3))
         table = features(toy_trades, None, "tick", 2, include=["returns"])
 

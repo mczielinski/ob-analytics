@@ -27,12 +27,6 @@ from ob_analytics.schemas import (
 TABLE_NAMES = {"events", "trades", "depth", "depth_summary"}
 
 
-@pytest.fixture(scope="module")
-def result(tiny_bitstamp_orders_csv):
-    """A small L3 ``PipelineResult`` shared by the tests in this module."""
-    return Pipeline().run(tiny_bitstamp_orders_csv)
-
-
 @pytest.fixture
 def l2_result(tmp_path):
     """A price-level ``PipelineResult``, whose ``events`` frame is empty."""

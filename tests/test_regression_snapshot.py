@@ -214,8 +214,7 @@ def test_demo_fingerprints(demo_result):
         "depth": "2deeef0fe9c009ef0d1dea7bbb1297c4c0523500703e7972040be449b2b8149d",
         "depth_summary": "2ec4be96458bcc6029e00204f3ff72ac6efa0c9a76175493eaba0aec595da781",
     }
-    if EXPECTED:
-        assert fps == EXPECTED
+    assert fps == EXPECTED
 
 
 def test_kyle_lambda_baseline(demo_result):
@@ -240,9 +239,8 @@ def test_kyle_lambda_baseline(demo_result):
     # tick_size and lot_size off the trades and reports dollars per BTC, so
     # lambda is back at the original 8.651849748125398 (the 1e-6 above times
     # tick_size / lot_size = 1e6), with r_squared unchanged once more.
-    BASELINE_LAMBDA: float | None = 8.651849748125398
-    if BASELINE_LAMBDA is not None and not np.isnan(BASELINE_LAMBDA):
-        assert np.isclose(res.lambda_, BASELINE_LAMBDA, rtol=1e-10, equal_nan=True)
+    BASELINE_LAMBDA = 8.651849748125398
+    assert np.isclose(res.lambda_, BASELINE_LAMBDA, rtol=1e-10)
 
 
 # ── Totals counted from the raw files ─────────────────────────────────

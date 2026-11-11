@@ -41,6 +41,7 @@ from ob_analytics.schemas import (
     validate_events_df,
     validate_trades_df,
 )
+from tests._drawn import drawn
 
 _BASE_MS = 1_700_000_000_000  # arbitrary epoch-ms anchor
 
@@ -639,12 +640,10 @@ class TestL2Gallery:
         assert data["bids"]["price"].max() < data["asks"]["price"].min()
 
     def test_depth_heatmap_renders(self, toy_l2_result):
-        import matplotlib.pyplot as plt
-
         from ob_analytics.visualization import plot_result
 
         fig = plot_result(toy_l2_result, "depth_heatmap", backend="matplotlib")
-        plt.close(fig)
+        assert drawn(fig)
 
     def test_generate_gallery_builds(self, toy_l2_result, tmp_path):
         from ob_analytics.visualization.gallery import generate_gallery
@@ -661,12 +660,10 @@ class TestL2Gallery:
         Before the fix both faces got zero rows (the zoom window ended before
         their data started) and raised, and the gallery dropped them.
         """
-        import matplotlib.pyplot as plt
-
         from ob_analytics.visualization import plot_result
 
         fig = plot_result(sparse_l2_result, concept, backend="matplotlib")
-        plt.close(fig)
+        assert drawn(fig)
 
     @pytest.mark.parametrize("backend", ["matplotlib", "plotly"])
     @pytest.mark.parametrize("concept", ["price_view", "volume_percentiles"])

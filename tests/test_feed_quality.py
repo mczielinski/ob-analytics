@@ -160,8 +160,9 @@ class TestUncrossOrderBook:
     def test_uncross_yields_uncrossed(self):
         book = order_book(crossed_events(), uncross=True)
         bids, asks = book["bids"], book["asks"]
-        if not bids.empty and not asks.empty:
-            assert bids["price"].max() < asks["price"].min()
+        # The non-crossing bid and the fresh ask survive the uncross.
+        assert not bids.empty and not asks.empty
+        assert bids["price"].max() < asks["price"].min()
 
     def test_uncross_evicts_the_stale_side(self):
         # The bid@100 (t=0) is older than the ask@99 (t=10); the fresher ask

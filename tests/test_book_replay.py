@@ -26,20 +26,6 @@ from ob_analytics.visualization._plotly import BOOK_REPLAY_SCRIPT
 from tests._logging import warnings_logged
 
 
-@pytest.fixture(scope="module")
-def tiny_result(tiny_bitstamp_orders_csv):
-    from ob_analytics.bitstamp import BitstampSource
-    from ob_analytics.pipeline import Pipeline
-
-    return Pipeline(source=BitstampSource()).run(str(tiny_bitstamp_orders_csv))
-
-
-@pytest.fixture(scope="module")
-def sample_result(bundled_sample_result):
-    """Full pipeline run on the bundled Bitstamp sample (loaded once)."""
-    return bundled_sample_result
-
-
 def _replay(result, level="L2", **kwargs):
     return prepare.book_replay(
         depth=result.depth,
@@ -61,11 +47,13 @@ def _touch(snapshot) -> tuple[float, float]:
 class TestAcceptance:
     """The issue's acceptance check, on the bundled Bitstamp sample."""
 
-    def test_l2_touch_matches_depth_summary_at_every_frame(self, sample_result):
-        summary = sample_result.depth_summary
+    def test_l2_touch_matches_depth_summary_at_every_frame(self, bundled_sample_result):
+        summary = bundled_sample_result.depth_summary
         start = summary["timestamp"].min() + pd.Timedelta("10min")
         data = _replay(
-            sample_result, start_time=start, end_time=start + pd.Timedelta("2min")
+            bundled_sample_result,
+            start_time=start,
+            end_time=start + pd.Timedelta("2min"),
         )
         assert len(data["snapshots"]) == 121
         for snapshot in data["snapshots"]:
@@ -80,45 +68,45 @@ class TestAcceptance:
             assert touch_bid == pytest.approx(row["best_bid_vol"])
             assert touch_ask == pytest.approx(row["best_ask_vol"])
 
-    def test_l3_face_is_uncrossed_by_default(self, sample_result):
-        start = sample_result.events["timestamp"].min() + pd.Timedelta("10min")
+    def test_l3_face_is_uncrossed_by_default(self, bundled_sample_result):
+        start = bundled_sample_result.events["timestamp"].min() + pd.Timedelta("10min")
         window = {
             "start_time": start,
             "end_time": start + pd.Timedelta("1min"),
             "interval": "10s",
         }
-        shown = _replay(sample_result, "L3", **window)
+        shown = _replay(bundled_sample_result, "L3", **window)
         assert all(bid < ask for bid, ask in map(_touch, shown["snapshots"]))
         # The faithful book of this diff feed holds stale crossed orders.
-        faithful = _replay(sample_result, "L3", uncross=False, **window)
+        faithful = _replay(bundled_sample_result, "L3", uncross=False, **window)
         assert any(bid >= ask for bid, ask in map(_touch, faithful["snapshots"]))
 
 
 class TestPrepare:
-    def test_frames_are_one_interval_apart(self, tiny_result):
-        data = _replay(tiny_result, interval="5s")
+    def test_frames_are_one_interval_apart(self, result):
+        data = _replay(result, interval="5s")
         times = pd.DatetimeIndex([f["timestamp"] for f in data["snapshots"]])
         assert (times[1:] - times[:-1] == pd.Timedelta("5s")).all()
         assert data["interval"] == pd.Timedelta("5s")
         assert data["speeds"] == (1, 5, 20)
 
-    def test_interval_widens_to_fit_max_frames(self, tiny_result):
+    def test_interval_widens_to_fit_max_frames(self, result):
         with warnings_logged() as messages:
-            data = _replay(tiny_result, interval="1s", max_frames=4)
+            data = _replay(result, interval="1s", max_frames=4)
         assert len(data["snapshots"]) <= 4
         assert data["interval"] > pd.Timedelta("1s")
         assert any("max_frames=4" in m for m in messages)
 
-    def test_every_bar_sits_in_the_shared_price_range(self, tiny_result):
+    def test_every_bar_sits_in_the_shared_price_range(self, result):
         for level in ("L2", "L3"):
-            data = _replay(tiny_result, level, interval="2s")
+            data = _replay(result, level, interval="2s")
             low, high = data["price_range"]
             for snapshot in data["snapshots"]:
                 for side in (snapshot["bids"], snapshot["asks"]):
                     assert side["price"].between(low, high).all()
 
-    def test_trades_cover_the_replay(self, tiny_result):
-        data = _replay(tiny_result, interval="2s")
+    def test_trades_cover_the_replay(self, result):
+        data = _replay(result, interval="2s")
         first, last = (
             data["snapshots"][0]["timestamp"],
             data["snapshots"][-1]["timestamp"],
@@ -135,14 +123,14 @@ class TestPrepare:
             ({"speeds": (1, 0)}, "positive speeds"),
         ],
     )
-    def test_bad_settings_are_refused(self, tiny_result, kwargs, match):
+    def test_bad_settings_are_refused(self, result, kwargs, match):
         with pytest.raises(ConfigError, match=match):
-            _replay(tiny_result, **kwargs)
+            _replay(result, **kwargs)
 
-    def test_end_before_start_is_refused(self, tiny_result):
-        t = tiny_result.depth["timestamp"]
+    def test_end_before_start_is_refused(self, result):
+        t = result.depth["timestamp"]
         with pytest.raises(ConfigError, match="before it starts"):
-            _replay(tiny_result, start_time=t.max(), end_time=t.min())
+            _replay(result, start_time=t.max(), end_time=t.min())
 
     @pytest.mark.parametrize(("level", "missing"), [("L2", "depth"), ("L3", "events")])
     def test_missing_table_is_refused(self, level, missing):
@@ -151,9 +139,9 @@ class TestPrepare:
 
 
 @pytest.fixture(scope="module")
-def faces(tiny_result):
+def faces(result):
     """The L2 and L3 replay figures, in display units, with their payloads."""
-    shown = display_result(tiny_result)
+    shown = display_result(result)
     out = {}
     for level in (Level.L2, Level.L3):
         data = _replay(shown, level, interval="2s")
@@ -251,27 +239,25 @@ class TestFigure:
         assert BOOK_REPLAY_SCRIPT in kwargs["post_script"]
 
 
-def test_frame_names_are_unique_below_a_second(tiny_result):
-    data = _replay(tiny_result, interval="250ms")
+def test_frame_names_are_unique_below_a_second(result):
+    data = _replay(result, interval="250ms")
     fig = plot("book_replay", Level.L2, backend="plotly", **data)
     names = [f.name for f in fig.frames]
     assert len(set(names)) == len(names)
 
 
-def test_plot_result_draws_the_replay_on_plotly_only(tiny_result):
-    fig = plot_result(tiny_result, "book_replay", level="L3", backend="plotly")
+def test_plot_result_draws_the_replay_on_plotly_only(result):
+    fig = plot_result(result, "book_replay", level="L3", backend="plotly")
     assert "replay-trades:" in fig.to_html()
     # The message names the backend that does draw it, not every renderer.
     with pytest.raises(UnknownNameError, match="Backends that draw it: 'plotly'.$"):
-        plot_result(tiny_result, "book_replay", level="L2", backend="matplotlib")
+        plot_result(result, "book_replay", level="L2", backend="matplotlib")
 
 
-def test_gallery_shows_the_replay_without_warnings(tiny_result, tmp_path):
+def test_gallery_shows_the_replay_without_warnings(result, tmp_path):
     from ob_analytics.visualization.gallery import generate_gallery
 
     with warnings_logged() as messages:
-        generate_gallery(
-            tiny_result, tmp_path, view="l2", backends=["plotly", "matplotlib"]
-        )
+        generate_gallery(result, tmp_path, view="l2", backends=["plotly", "matplotlib"])
     assert not [m for m in messages if "book_replay" in m]
     assert "replay-trades:" in (tmp_path / "plotly" / "book_replay.L2.html").read_text()

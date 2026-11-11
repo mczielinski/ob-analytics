@@ -106,7 +106,7 @@ class TestPipelineWithMocks:
 
     def test_default_config_created(self):
         pipeline = Pipeline()
-        assert pipeline.config is not None
+        assert pipeline.config == PipelineConfig()
 
     def test_custom_config_propagated(self):
         config = PipelineConfig(depth_bps=50)

@@ -42,16 +42,6 @@ from ob_analytics.protocols import RunContext, grid_of
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="module")
-def tiny_pipeline_result(tiny_bitstamp_orders_csv: Path):
-    """Single Pipeline.run() shared across the writer-test module.
-
-    Uses the tiny programmatic fixture (not the bundled sample data) so
-    the run finishes in well under a second.
-    """
-    return Pipeline(source=BitstampSource()).run(tiny_bitstamp_orders_csv)
-
-
 # ---------------------------------------------------------------------------
 # BitstampLoader
 # ---------------------------------------------------------------------------
@@ -59,8 +49,7 @@ def tiny_pipeline_result(tiny_bitstamp_orders_csv: Path):
 
 class TestBitstampLoader:
     # These six tests share one session-scoped load of the bundled sample
-    # (the `sample_events` fixture in conftest.py) instead of paying the
-    # ~15s load each.
+    # (the `sample_events` fixture in conftest.py).
 
     def test_loads_sample_data(self, sample_events: pd.DataFrame):
         events = sample_events
@@ -136,10 +125,9 @@ class TestBitstampLoader:
 
 
 class TestBitstampTradeReader:
-    def test_loads_companion_trades(self, bitstamp_sample_dir):
-        events = BitstampLoader().load(bitstamp_sample_dir / "orders.csv.gz")
+    def test_loads_companion_trades(self, sample_events, bitstamp_sample_dir):
         trades = BitstampTradeReader().load(
-            events, bitstamp_sample_dir / "orders.csv.gz"
+            sample_events, bitstamp_sample_dir / "orders.csv.gz"
         )
         assert len(trades) > 0
         for col in (
@@ -154,17 +142,12 @@ class TestBitstampTradeReader:
         ):
             assert col in trades.columns
 
-    def test_missing_companion_returns_empty_or_raises(
-        self, bitstamp_sample_orders_only
-    ):
-        """No companion trades.csv -> either empty DataFrame or clean error."""
-        events = BitstampLoader().load(bitstamp_sample_orders_only)
-        reader = BitstampTradeReader()
-        try:
-            trades = reader.load(events, bitstamp_sample_orders_only)
-            assert isinstance(trades, pd.DataFrame)
-        except (FileNotFoundError, ConfigError):
-            pass
+    def test_a_missing_companion_is_refused(self, tmp_path, tiny_bitstamp_orders_csv):
+        orders = tmp_path / "orders.csv"
+        orders.write_bytes(tiny_bitstamp_orders_csv.read_bytes())
+        events = BitstampLoader().load(orders)
+        with pytest.raises(FileNotFoundError, match="no trades.csv next to"):
+            BitstampTradeReader().load(events, orders)
 
 
 class TestNotANumber:
@@ -738,10 +721,11 @@ class TestQuoteAmountTaker:
 
         assert pd.isna(trades["taker_event_id"].iloc[0])
 
-    def test_the_bundled_sample_resolves_every_taker(self, bitstamp_sample_dir):
-        events = BitstampLoader().load(bitstamp_sample_dir / "orders.csv.gz")
+    def test_the_bundled_sample_resolves_every_taker(
+        self, sample_events, bitstamp_sample_dir
+    ):
         trades = BitstampTradeReader().load(
-            events, bitstamp_sample_dir / "orders.csv.gz"
+            sample_events, bitstamp_sample_dir / "orders.csv.gz"
         )
 
         assert len(trades) == 284
@@ -755,8 +739,7 @@ class TestQuoteAmountTaker:
 
 
 class TestBitstampWriter:
-    def test_round_trip_event_count(self, tmp_path, tiny_pipeline_result):
-        result = tiny_pipeline_result
+    def test_round_trip_event_count(self, tmp_path, result):
         rt_csv = BitstampWriter().write(result.tables(), tmp_path / "roundtrip")
         assert rt_csv == tmp_path / "roundtrip" / "orders.csv"
         # The writer emits a companion trades.csv automatically whenever the
@@ -837,10 +820,8 @@ class TestBitstampWriter:
         assert by_row(again) == by_row(first)
         assert pd.read_csv(written).columns.tolist() == list(ORDER_COLUMNS)
 
-    def test_writer_creates_file(self, tmp_path, tiny_pipeline_result):
-        target = BitstampWriter().write(
-            {"events": tiny_pipeline_result.events}, tmp_path
-        )
+    def test_writer_creates_file(self, tmp_path, result):
+        target = BitstampWriter().write({"events": result.events}, tmp_path)
         assert target == tmp_path / "orders.csv"
         assert target.exists()
         assert target.stat().st_size > 0

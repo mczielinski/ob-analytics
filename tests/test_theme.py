@@ -6,7 +6,6 @@ and scales its text by ``context`` x ``font_scale``.
 """
 
 import json
-from contextlib import contextmanager
 
 import matplotlib
 
@@ -216,22 +215,17 @@ def test_ofi_horizon_uses_buy_and_sell(backend: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-@contextmanager
-def _backend(renderer):
-    """Register *renderer* for ``("probe", None, "probe")`` for the block."""
+def _register_probe(renderer):
+    """Register *renderer* for ``("probe", None, "probe")``."""
     from ob_analytics.visualization import RENDERERS
     from ob_analytics.visualization._renderers import _BACKEND_MODULES
 
     # Any importable module will do: the renderer is registered by hand.
     _BACKEND_MODULES["probe"] = "ob_analytics.visualization._palette"
     RENDERERS.register(("probe", None, "probe"), renderer)
-    try:
-        yield
-    finally:
-        _BACKEND_MODULES.pop("probe", None)
-        RENDERERS._items.pop(("probe", None, "probe"), None)
 
 
+@pytest.mark.usefixtures("restore_registries")
 class TestThemeDispatch:
     def test_renderer_without_theme_still_draws(self) -> None:
         # A renderer written before themes reached every backend takes only
@@ -239,7 +233,8 @@ class TestThemeDispatch:
         def legacy(data):
             return ("drawn", data)
 
-        with _backend(legacy), warnings_logged() as messages:
+        _register_probe(legacy)
+        with warnings_logged() as messages:
             out = plot("probe", backend="probe", theme=PlotTheme(), x=1)
         assert out == ("drawn", {"x": 1})
         assert any("takes no theme=" in m for m in messages)
@@ -250,8 +245,8 @@ class TestThemeDispatch:
         def aware(data, *, theme=DEFAULT_THEME):
             return theme
 
-        with _backend(aware):
-            assert plot("probe", backend="probe", theme=theme) is theme
+        _register_probe(aware)
+        assert plot("probe", backend="probe", theme=theme) is theme
 
     def test_theme_reaches_kwargs(self) -> None:
         theme = PlotTheme(context="paper")
@@ -259,14 +254,15 @@ class TestThemeDispatch:
         def open_ended(data, **kwargs):
             return kwargs.get("theme")
 
-        with _backend(open_ended):
-            assert plot("probe", backend="probe", theme=theme) is theme
+        _register_probe(open_ended)
+        assert plot("probe", backend="probe", theme=theme) is theme
 
     def test_no_warning_without_a_theme(self) -> None:
         def legacy(data):
             return "drawn"
 
-        with _backend(legacy), warnings_logged() as messages:
+        _register_probe(legacy)
+        with warnings_logged() as messages:
             assert plot("probe", backend="probe") == "drawn"
         assert messages == []
 
@@ -374,15 +370,14 @@ class TestBokehTheme:
 # ---------------------------------------------------------------------------
 
 
-def test_plot_result_accepts_theme(tiny_bitstamp_orders_csv) -> None:
+def test_plot_result_accepts_theme(result) -> None:
     pytest.importorskip("plotly")
-    from ob_analytics.bitstamp import BitstampSource
-    from ob_analytics.pipeline import Pipeline
     from ob_analytics.visualization import plot_result
 
-    result = Pipeline(source=BitstampSource()).run(str(tiny_bitstamp_orders_csv))
     fig = plot_result(
         result, "trade_tape", "L2", backend="plotly", theme=PlotTheme(palette=CUSTOM)
     )
     found = fig.to_json().lower()
-    assert CUSTOM.buy in found or CUSTOM.sell in found
+    # The tiny run has buys and sells.
+    assert CUSTOM.buy in found
+    assert CUSTOM.sell in found

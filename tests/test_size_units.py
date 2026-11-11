@@ -24,13 +24,13 @@ from ob_analytics import (
     register_bar_rule,
     vpin_bucket_volume,
 )
-from ob_analytics.bars import BAR_RULES
 from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
 from ob_analytics.depth import micro_price
 from ob_analytics.depth_csv import DepthCsvWriter
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.metrics import get_metric
 from ob_analytics.visualization.gallery import _metric_payload, display_result
+from tests._drawn import drawn
 
 FRAMES = ("events", "trades", "depth", "depth_summary")
 
@@ -117,11 +117,9 @@ def test_result_plot_vpin_draws_with_a_size_in_btc(sample) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
 
     figure = sample.plot("vpin", bucket_volume=0.5)
-    plt.close("all")
-    assert figure is not None
+    assert drawn(figure)["rectangle"] > 0  # the buckets
 
 
 def test_the_readme_vpin_example_runs(sample) -> None:
@@ -286,22 +284,13 @@ class _RecordingRule:
         return np.zeros(len(frame), dtype=np.int64)
 
 
-@pytest.fixture
-def _restore_registry():
-    """Snapshot and restore the global bar-rule registry around the test."""
-    before = dict(BAR_RULES._items)
-    yield
-    BAR_RULES._items.clear()
-    BAR_RULES._items.update(before)
-
-
 def _raw_trades() -> pd.DataFrame:
     trades = _lots_without_units()
     trades.attrs.update(tick_size=0.25, lot_size=1e-8)
     return trades
 
 
-@pytest.mark.usefixtures("_restore_registry")
+@pytest.mark.usefixtures("restore_registries")
 def test_a_rule_with_no_units_gets_its_threshold_as_given() -> None:
     rule = _RecordingRule("every_n", units=None)
     register_bar_rule(rule)
@@ -312,7 +301,7 @@ def test_a_rule_with_no_units_gets_its_threshold_as_given() -> None:
     assert out.attrs["bar_threshold"] == 7.0
 
 
-@pytest.mark.usefixtures("_restore_registry")
+@pytest.mark.usefixtures("restore_registries")
 def test_units_of_none_mean_no_units() -> None:
     rule = _RecordingRule("every_n", units=None)
     rule.units = None
@@ -323,7 +312,7 @@ def test_units_of_none_mean_no_units() -> None:
     assert rule.seen == 7.0
 
 
-@pytest.mark.usefixtures("_restore_registry")
+@pytest.mark.usefixtures("restore_registries")
 def test_a_price_rule_gets_its_threshold_in_ticks() -> None:
     # A tick of 0.25 has the integer inverse 4: $1.50 is 6 ticks.
     rule = _RecordingRule("price_move", units=("price",))
@@ -335,7 +324,7 @@ def test_a_price_rule_gets_its_threshold_in_ticks() -> None:
     assert out.attrs["bar_threshold"] == 1.5
 
 
-@pytest.mark.usefixtures("_restore_registry")
+@pytest.mark.usefixtures("restore_registries")
 def test_a_step_with_no_integer_inverse_divides() -> None:
     # 0.3 has no integer inverse, so a setting is divided by it: $0.9 is 3
     # ticks, up to float rounding.
@@ -349,7 +338,7 @@ def test_a_step_with_no_integer_inverse_divides() -> None:
     assert rule.seen == pytest.approx(3.0)
 
 
-@pytest.mark.usefixtures("_restore_registry")
+@pytest.mark.usefixtures("restore_registries")
 def test_units_that_are_not_a_tuple_of_columns_are_named_in_the_error() -> None:
     register_bar_rule(_RecordingRule("price_move", units="price"))
 

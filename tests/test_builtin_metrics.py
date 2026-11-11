@@ -17,17 +17,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
-from matplotlib.figure import Figure
 
 from ob_analytics import metrics
-from ob_analytics.bitstamp import BitstampSource
 from ob_analytics.flow_toxicity import (
     compute_kyle_lambda,
     compute_vpin,
     ofi_by_horizon,
     order_flow_imbalance,
 )
-from ob_analytics.pipeline import Pipeline, PipelineResult
 from ob_analytics.protocols import Level
 from ob_analytics.visualization import available_concepts, plot, prepare
 from ob_analytics.visualization._data import l1_card_texts
@@ -36,13 +33,9 @@ from ob_analytics.visualization.gallery import (
     build_gallery_model,
     display_result,
 )
+from tests._drawn import drawn
 
 BUILT_IN = ("kyle_lambda", "l1_ticker", "ofi_horizon", "order_flow_imbalance", "vpin")
-
-
-@pytest.fixture(scope="module")
-def result(tiny_bitstamp_orders_csv) -> PipelineResult:
-    return Pipeline(source=BitstampSource()).run(str(tiny_bitstamp_orders_csv))
 
 
 @pytest.fixture(autouse=True)
@@ -76,15 +69,20 @@ def test_built_in_metrics_apply_to_an_l2_run(result) -> None:
     assert set(BUILT_IN) <= set(l2.metrics())
 
 
+# The tiny run trades five BTC: VPIN needs smaller buckets, and fewer of them,
+# than the defaults to draw anything.
+PLOT_SETTINGS = {"vpin": {"bucket_volume": 0.5, "n_buckets": 2}}
+
+
 @pytest.mark.parametrize("name", BUILT_IN)
 def test_result_plots_each_built_in_metric(result, name) -> None:
-    assert isinstance(result.plot(name), Figure)
+    assert drawn(result.plot(name, **PLOT_SETTINGS.get(name, {})))
 
 
 @pytest.mark.parametrize("name", BUILT_IN)
 def test_result_plots_each_built_in_metric_on_plotly(result, name) -> None:
-    go = pytest.importorskip("plotly.graph_objects")
-    assert isinstance(result.plot(name, backend="plotly"), go.Figure)
+    pytest.importorskip("plotly.graph_objects")
+    assert drawn(result.plot(name, backend="plotly", **PLOT_SETTINGS.get(name, {})))
 
 
 def test_building_the_model_computes_no_metric(result, monkeypatch) -> None:

@@ -14,14 +14,8 @@ from ob_analytics._demos import (
     _lobster_analytics_cards,
     run_bitstamp_demo,
 )
-from ob_analytics.bitstamp import BitstampSource
-from ob_analytics.pipeline import Pipeline, PipelineResult
+from ob_analytics.pipeline import PipelineResult
 from ob_analytics.visualization.gallery import display_result
-
-
-@pytest.fixture(scope="module")
-def result(tiny_bitstamp_orders_csv) -> PipelineResult:
-    return Pipeline(source=BitstampSource()).run(str(tiny_bitstamp_orders_csv))
 
 
 @pytest.fixture

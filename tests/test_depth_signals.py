@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 from ob_analytics.depth import book_imbalance, depth_signals, micro_price
+from tests._drawn import drawn
 
 
 def _summary() -> pd.DataFrame:
@@ -163,25 +164,24 @@ class TestBookSignalsFace:
         assert payload["microprice"][0] == pytest.approx(100.8)
         assert payload["obi"][0] == pytest.approx(0.6)
 
-    def test_matplotlib_renderer_returns_figure(self) -> None:
-        import matplotlib.pyplot as plt
-        from matplotlib.figure import Figure
-
+    def test_matplotlib_renderer_draws(self) -> None:
         from ob_analytics.visualization import plot, prepare
 
         payload = prepare.book_signals(_summary())
         fig = plot("book_signals", backend="matplotlib", **payload)
-        assert isinstance(fig, Figure)
-        plt.close(fig)
+        marks = drawn(fig)
+        assert marks["line"] > 0  # micro-price and mid
+        assert marks["fillbetweenpolycollection"] > 0
 
-    def test_plotly_renderer_returns_figure(self) -> None:
+    def test_plotly_renderer_draws(self) -> None:
         pytest.importorskip("plotly")
         from ob_analytics.visualization import plot, prepare
 
         payload = prepare.book_signals(_summary())
         fig = plot("book_signals", backend="plotly", **payload)
-        # A plotly figure exposes a data tuple of traces.
-        assert len(fig.data) > 0
+        marks = drawn(fig)
+        assert marks["scatter lines"] > 0  # micro-price and mid
+        assert marks["bar"] == len(_summary())  # the OBI strip, a bar for each row
 
 
 def _unreadable_summary() -> pd.DataFrame:

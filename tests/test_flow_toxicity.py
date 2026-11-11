@@ -763,9 +763,9 @@ class TestOneWindowAnchor:
 import matplotlib
 
 matplotlib.use("Agg")
-from matplotlib.figure import Figure
 
 from ob_analytics.visualization import plot
+from tests._drawn import drawn
 
 # Built at import time (parametrize arguments are evaluated on collection,
 # where a pytest mark does not apply), so the warning is silenced inline.
@@ -781,7 +781,7 @@ class TestFlowToxicityPlots:
         trades = _trades(["buy"] * 10, volumes=[1.0] * 10)
         vpin_df = compute_vpin(trades, bucket_volume=2.0)
         fig = plot("vpin", **prepare.vpin(vpin_df))
-        assert isinstance(fig, Figure)
+        assert drawn(fig)["rectangle"] == len(vpin_df)  # a bar for each bucket
 
     @pytest.mark.parametrize(
         "vpin_df",
@@ -809,7 +809,7 @@ class TestFlowToxicityPlots:
         )
         ofi_df = order_flow_imbalance(trades, window="1min")
         fig = plot("order_flow_imbalance", **prepare.order_flow_imbalance(ofi_df))
-        assert isinstance(fig, Figure)
+        assert drawn(fig)["rectangle"] == len(ofi_df)  # a bar for each window
 
     def test_plot_ofi_with_price_overlay(self):
         """plot_order_flow_imbalance with trades overlay returns a Figure."""
@@ -822,7 +822,11 @@ class TestFlowToxicityPlots:
         fig = plot(
             "order_flow_imbalance", **prepare.order_flow_imbalance(ofi_df, trades)
         )
-        assert isinstance(fig, Figure)
+        marks = drawn(fig)
+        assert marks["rectangle"] == len(ofi_df)
+        # The overlay adds the trade price, one point for each trade, to the
+        # zero line the plot without it draws.
+        assert marks["line"] == 2 + len(trades)
 
     def test_plot_kyle_lambda_returns_figure(self):
         """plot_kyle_lambda returns a Figure."""
@@ -834,4 +838,5 @@ class TestFlowToxicityPlots:
         )
         result = compute_kyle_lambda(trades, window="5min")
         fig = plot("kyle_lambda", **prepare.kyle_lambda(result))
-        assert isinstance(fig, Figure)
+        # A point for each window in the regression.
+        assert drawn(fig)["pathcollection"] == len(result.regression_df)

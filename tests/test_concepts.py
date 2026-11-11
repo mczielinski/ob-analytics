@@ -62,16 +62,13 @@ class TestTable:
             if any(face.bind for face in concept.faces.values()):
                 assert concept.title and concept.note, concept.key
 
-    def test_a_plugin_renderer_is_placed_with_the_table(self):
+    def test_a_plugin_renderer_is_placed_with_the_table(self, restore_registries):
         def fn(data, ax=None):
             return None
 
         RENDERERS.register(("trade_tape", Level.L2, "probe"), fn)
-        try:
-            assert "probe" in _concepts.backends("trade_tape", Level.L2)
-            assert "matplotlib" in _concepts.backends("trade_tape", Level.L2)
-        finally:
-            RENDERERS._items.pop(("trade_tape", Level.L2, "probe"), None)
+        assert "probe" in _concepts.backends("trade_tape", Level.L2)
+        assert "matplotlib" in _concepts.backends("trade_tape", Level.L2)
 
 
 class TestMissingBackend:

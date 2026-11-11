@@ -27,7 +27,7 @@ from ob_analytics.visualization import (
     Level,
     register_plot_backend,
 )
-from ob_analytics.visualization._renderers import _BACKEND_MODULES, _load_backend
+from ob_analytics.visualization._renderers import _load_backend
 from ob_analytics.visualization.gallery import (
     VIEWS,
     GalleryModel,
@@ -41,9 +41,14 @@ from ob_analytics.visualization.gallery import (
     _write_gallery_html,
     _zoom_window,
     build_gallery_model,
+    display_result,
     generate_gallery,
+    kyle_lambda_card,
+    ofi_horizon_card,
+    trading_halts_card,
 )
 from tests import _lobster_few_levels as few
+from tests._drawn import drawn
 from tests._logging import warnings_logged
 
 # ---------------------------------------------------------------------------
@@ -107,19 +112,10 @@ _STUB_RENDERERS = {
 
 
 @pytest.fixture(autouse=True)
-def _register_stub_renderers():
-    """Register stub renderers for gallery dispatch; clean up after."""
+def _register_stub_renderers(restore_registries):
+    """Register stub renderers for gallery dispatch; put the registry back after."""
     for key, fn in _STUB_RENDERERS.items():
         RENDERERS.register(key, fn)
-    yield
-    for key in _STUB_RENDERERS:
-        RENDERERS._items.pop(key, None)
-
-
-@pytest.fixture(autouse=True)
-def _close_figures():
-    yield
-    plt.close("all")
 
 
 # ---------------------------------------------------------------------------
@@ -555,18 +551,15 @@ class TestMisplacedCard:
 
     def test_unloadable_backend_says_so_once(self, tmp_path: Path) -> None:
         register_plot_backend("nosuch", "ob_analytics_no_such_backend_module")
-        try:
-            model = GalleryModel(concepts=[_comparable_concept()])
-            with warnings_logged() as messages:
-                path = generate_gallery(
-                    result=None,
-                    output_dir=tmp_path,
-                    model=model,
-                    view="both",
-                    backends=["matplotlib", "nosuch"],
-                )
-        finally:
-            _BACKEND_MODULES.pop("nosuch", None)
+        model = GalleryModel(concepts=[_comparable_concept()])
+        with warnings_logged() as messages:
+            path = generate_gallery(
+                result=None,
+                output_dir=tmp_path,
+                model=model,
+                view="both",
+                backends=["matplotlib", "nosuch"],
+            )
         html = path.read_text(encoding="utf-8")
         assert html.count("The &#x27;nosuch&#x27; backend could not be loaded") == 2
         assert (tmp_path / "matplotlib" / "stub.L2.png").exists()
@@ -596,15 +589,12 @@ class TestMisplacedCard:
         (tmp_path / "ob_bad_backend.py").write_text("raise ValueError('bad build')\n")
         monkeypatch.syspath_prepend(str(tmp_path))
         register_plot_backend("badbuild", "ob_bad_backend")
-        try:
-            path = generate_gallery(
-                result=None,
-                output_dir=tmp_path / "out",
-                model=GalleryModel(concepts=[_l2_concept()]),
-                backends=["badbuild"],
-            )
-        finally:
-            _BACKEND_MODULES.pop("badbuild", None)
+        path = generate_gallery(
+            result=None,
+            output_dir=tmp_path / "out",
+            model=GalleryModel(concepts=[_l2_concept()]),
+            backends=["badbuild"],
+        )
         assert (
             "The &#x27;badbuild&#x27; backend could not be loaded: bad build"
         ) in path.read_text(encoding="utf-8")
@@ -613,49 +603,40 @@ class TestMisplacedCard:
         # The comparison view draws plotly alone, so a broken second backend
         # is never loaded and never reported.
         register_plot_backend("nosuch", "ob_analytics_no_such_backend_module")
-        try:
-            with warnings_logged() as messages:
-                generate_gallery(
-                    result=None,
-                    output_dir=tmp_path,
-                    model=GalleryModel(concepts=[_comparable_concept()]),
-                    view="comparison",
-                    backends=["plotly", "nosuch"],
-                )
-        finally:
-            _BACKEND_MODULES.pop("nosuch", None)
+        with warnings_logged() as messages:
+            generate_gallery(
+                result=None,
+                output_dir=tmp_path,
+                model=GalleryModel(concepts=[_comparable_concept()]),
+                view="comparison",
+                backends=["plotly", "nosuch"],
+            )
         assert messages == []
 
     def test_other_backends_do_not_change_the_answer(self, tmp_path: Path) -> None:
         # bokeh draws the plot at L3, but the gallery draws matplotlib only,
         # which has no L3 renderer: the L3 variant is reported either way.
         RENDERERS.register(("stubfail", Level.L3, "bokeh"), _stub_bokeh)
-        try:
-            concept = PlotConcept("stubfail", "Wrong Level", {Level.L3: _spec()})
-            path = generate_gallery(
-                result=None,
-                output_dir=tmp_path,
-                model=GalleryModel(concepts=[concept]),
-                backends=["matplotlib"],
-            )
-        finally:
-            RENDERERS._items.pop(("stubfail", Level.L3, "bokeh"), None)
+        concept = PlotConcept("stubfail", "Wrong Level", {Level.L3: _spec()})
+        path = generate_gallery(
+            result=None,
+            output_dir=tmp_path,
+            model=GalleryModel(concepts=[concept]),
+            backends=["matplotlib"],
+        )
         assert "its PlotConcept has a variant at L3" in path.read_text(encoding="utf-8")
 
     def test_missing_backend_shows_bare_na(self, tmp_path: Path) -> None:
         # A plot with no renderer on one backend is not a mismatch: that
         # backend shows a bare "Not available", the other draws.
         RENDERERS.register(("stubmplonly", Level.L2, "matplotlib"), _stub_mpl)
-        try:
-            model = GalleryModel(concepts=[_l2_concept("stubmplonly", "Mpl Only")])
-            path = generate_gallery(
-                result=None,
-                output_dir=tmp_path,
-                model=model,
-                backends=["plotly", "matplotlib"],
-            )
-        finally:
-            RENDERERS._items.pop(("stubmplonly", Level.L2, "matplotlib"), None)
+        model = GalleryModel(concepts=[_l2_concept("stubmplonly", "Mpl Only")])
+        path = generate_gallery(
+            result=None,
+            output_dir=tmp_path,
+            model=model,
+            backends=["plotly", "matplotlib"],
+        )
         html = path.read_text(encoding="utf-8")
         assert html.count("Not available") == 1
         assert "na-reason" not in html.split("<body>", 1)[1]
@@ -696,16 +677,12 @@ class TestMisplacedCard:
         monkeypatch.syspath_prepend(str(tmp_path))
         register_plot_backend("badbuild", "ob_bad_backend")
         RENDERERS.register(("stubbadonly", Level.L2, "badbuild"), _stub_mpl)
-        try:
-            path = generate_gallery(
-                result=None,
-                output_dir=tmp_path / "out",
-                model=GalleryModel(concepts=[_l2_concept("stubbadonly", "Bad")]),
-                backends=["badbuild", "matplotlib"],
-            )
-        finally:
-            _BACKEND_MODULES.pop("badbuild", None)
-            RENDERERS._items.pop(("stubbadonly", Level.L2, "badbuild"), None)
+        path = generate_gallery(
+            result=None,
+            output_dir=tmp_path / "out",
+            model=GalleryModel(concepts=[_l2_concept("stubbadonly", "Bad")]),
+            backends=["badbuild", "matplotlib"],
+        )
         html = path.read_text(encoding="utf-8")
         assert "backend could not be loaded: bad build" in html
         assert "does not use" not in html
@@ -1134,6 +1111,45 @@ class TestBuildGalleryModel:
         assert len(hidden) == 1
         assert hidden["price"].iloc[0] == pytest.approx(236.60)
         assert hidden["best_bid_price"].iloc[0] == pytest.approx(236.50)
+
+
+# ---------------------------------------------------------------------------
+# Card builders: the cards a caller adds to GalleryModel.analytics by hand
+# ---------------------------------------------------------------------------
+
+
+def _draw(card: PlotSpec):
+    from ob_analytics.visualization import plot
+
+    return plot(card.plot_name, **card.prepare(**card.prep_kwargs))
+
+
+class TestCardBuilders:
+    def test_ofi_horizon_card_draws_a_band_for_each_horizon(self, result) -> None:
+        card = ofi_horizon_card(display_result(result).trades, horizons=("5s", "15s"))
+        assert card.title == "Order Flow Imbalance vs Horizon"
+        fig = _draw(card)
+        assert {t.get_text().strip() for t in fig.axes[0].texts} >= {"5s", "15s"}
+        assert drawn(fig)["fillbetweenpolycollection"] > 0
+
+    def test_kyle_lambda_card_names_lambda_in_its_title(
+        self, bundled_sample_result
+    ) -> None:
+        from ob_analytics.flow_toxicity import compute_kyle_lambda
+
+        shown = display_result(bundled_sample_result)
+        fit = compute_kyle_lambda(shown.trades, quotes=shown.depth_summary)
+        card = kyle_lambda_card(fit)
+        assert card.title == f"Kyle's Lambda (lambda={fit.lambda_:.4f})"
+        # A point for each window in the regression.
+        assert drawn(_draw(card))["pathcollection"] == len(fit.regression_df)
+
+    def test_trading_halts_card_shades_each_halt(self, result) -> None:
+        trades = display_result(result).trades
+        halts = pd.DataFrame({"timestamp": trades["timestamp"].iloc[[2]]})
+        card = trading_halts_card(trades, halts)
+        assert card.title == "Trading Halts"
+        assert drawn(_draw(card)) == {"line": len(trades), "rectangle": 1}
 
 
 class TestBookFacesReadTheirOwnLevel:

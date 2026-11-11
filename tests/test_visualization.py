@@ -29,73 +29,7 @@ from ob_analytics.visualization import (
     save_figure,
 )
 from ob_analytics.visualization._matplotlib import _create_axes, _step_envelope
-
-
-@pytest.fixture(autouse=True)
-def _close_figures():
-    """Close all matplotlib figures after each test."""
-    yield
-    plt.close("all")
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def sample_trades() -> pd.DataFrame:
-    ts = pd.Timestamp("2015-05-01 01:00:00")
-    return pd.DataFrame(
-        {
-            "timestamp": [ts + pd.Timedelta(seconds=i) for i in range(5)],
-            "price": [236.50, 236.55, 236.45, 236.60, 236.50],
-            "volume": [100, 200, 150, 300, 250],
-            "direction": pd.Categorical(
-                ["buy", "sell", "buy", "sell", "buy"],
-                categories=["buy", "sell"],
-            ),
-        }
-    )
-
-
-@pytest.fixture
-def sample_events() -> pd.DataFrame:
-    ts = pd.Timestamp("2015-05-01 01:00:00")
-    n = 20
-    return pd.DataFrame(
-        {
-            "timestamp": [ts + pd.Timedelta(seconds=i) for i in range(n)],
-            "price": np.linspace(236.0, 237.0, n),
-            "volume": np.random.default_rng(42).uniform(100, 1000, n),
-            "direction": pd.Categorical(
-                ["bid", "ask"] * (n // 2), categories=["bid", "ask"]
-            ),
-            "action": pd.Categorical(
-                ["created", "deleted"] * (n // 2),
-                categories=["created", "changed", "deleted"],
-                ordered=True,
-            ),
-            "type": ["flashed-limit"] * 10 + ["resting-limit"] * 10,
-        }
-    )
-
-
-@pytest.fixture
-def sample_depth_summary() -> pd.DataFrame:
-    ts = pd.Timestamp("2015-05-01 01:00:00")
-    n = 30
-    rng = np.random.default_rng(42)
-    data: dict = {"timestamp": [ts + pd.Timedelta(seconds=i) for i in range(n)]}
-    for side in ("bid", "ask"):
-        for bps in range(25, 501, 25):
-            data[f"{side}_vol{bps}bps"] = rng.uniform(10, 500, n)
-    data["best_bid_price"] = np.full(n, 236.50)
-    data["best_ask_price"] = np.full(n, 237.00)
-    data["best_bid_vol"] = rng.uniform(100, 1000, n)
-    data["best_ask_vol"] = rng.uniform(100, 1000, n)
-    return pd.DataFrame(data)
-
+from tests._drawn import drawn
 
 # ---------------------------------------------------------------------------
 # Theme tests
@@ -121,7 +55,7 @@ class TestPlotTheme:
         with pytest.raises(AttributeError):
             theme.style = "whitegrid"  # ty: ignore[invalid-assignment]
 
-    def test_theme_does_not_leak_into_rcparams(self, sample_trades):
+    def test_theme_does_not_leak_into_rcparams(self, plot_trades):
         # The theme is scoped to the figure plot() creates: matplotlib's
         # global rcParams are the same before and after the call.
         before = dict(matplotlib.rcParams)
@@ -129,18 +63,18 @@ class TestPlotTheme:
             "trade_tape",
             Level.L2,
             theme=PlotTheme(style="darkgrid", context="talk"),
-            **prepare.trade_tape(sample_trades, level="L2"),
+            **prepare.trade_tape(plot_trades, level="L2"),
         )
         assert dict(matplotlib.rcParams) == before
 
-    def test_themed_figure_keeps_theme_after_call(self, sample_trades):
+    def test_themed_figure_keeps_theme_after_call(self, plot_trades):
         # The returned figure still shows the theme when drawn after the
         # call, when tick artists are built outside the theme's rc_context.
         fig = plot(
             "trade_tape",
             Level.L2,
             theme=PlotTheme(style="darkgrid", context="talk", font_scale=1.0),
-            **prepare.trade_tape(sample_trades, level="L2"),
+            **prepare.trade_tape(plot_trades, level="L2"),
         )
         fig.canvas.draw()
         ax = fig.axes[0]
@@ -155,16 +89,16 @@ class TestPlotTheme:
         plain_tick = plain_ax.xaxis.get_major_ticks()[0]
         assert plain_tick.label1.get_fontsize() != pytest.approx(16.5)
 
-    def test_plot_accepts_theme_kwarg(self, sample_trades):
+    def test_plot_accepts_theme_kwarg(self, plot_trades):
         # plot() pops theme= from kwargs and forwards it to the renderer.
         custom = PlotTheme(style="whitegrid", font_scale=1.0)
         fig = plot(
             "trade_tape",
             Level.L2,
             theme=custom,
-            **prepare.trade_tape(sample_trades, level="L2"),
+            **prepare.trade_tape(plot_trades, level="L2"),
         )
-        assert isinstance(fig, Figure)
+        assert drawn(fig)["pathcollection"] == len(plot_trades)
 
 
 # ---------------------------------------------------------------------------
@@ -302,7 +236,7 @@ class TestPlotTimeSeries:
         ts = pd.Series(pd.date_range("2020-01-01", periods=5, freq="s"))
         vals = pd.Series([1, 2, 3, 2, 1])
         fig = plot("time_series", **prepare.time_series(ts, vals))
-        assert isinstance(fig, Figure)
+        assert drawn(fig) == {"line": len(vals)}
 
     def test_accepts_ax(self):
         fig_orig, ax_orig = plt.subplots()
@@ -313,80 +247,82 @@ class TestPlotTimeSeries:
 
 
 class TestPlotTrades:
-    def test_returns_figure(self, sample_trades):
+    def test_returns_figure(self, plot_trades):
         fig = plot(
-            "trade_tape", Level.L2, **prepare.trade_tape(sample_trades, level="L2")
+            "trade_tape", Level.L2, **prepare.trade_tape(plot_trades, level="L2")
         )
-        assert isinstance(fig, Figure)
+        # The price step, and a volume stem and a marker for each trade.
+        n = len(plot_trades)
+        assert drawn(fig) == {"line": n, "linecollection": n, "pathcollection": n}
 
-    def test_accepts_ax(self, sample_trades):
+    def test_accepts_ax(self, plot_trades):
         fig_orig, ax_orig = plt.subplots()
         fig = plot(
             "trade_tape",
             Level.L2,
             ax=ax_orig,
-            **prepare.trade_tape(sample_trades, level="L2"),
+            **prepare.trade_tape(plot_trades, level="L2"),
         )
         assert fig is fig_orig
 
-    def test_comparable_requires_level(self, sample_trades):
+    def test_comparable_requires_level(self, plot_trades):
         with pytest.raises(ConfigError, match='pass level="L2" or level="L3"'):
-            plot("trade_tape", **prepare.trade_tape(sample_trades, level="L2"))
+            plot("trade_tape", **prepare.trade_tape(plot_trades, level="L2"))
 
-    def test_l2_ylabel_is_price(self, sample_trades):
+    def test_l2_ylabel_is_price(self, plot_trades):
         # The L2 tape plots execution prices, not limit prices.
         fig = plot(
-            "trade_tape", Level.L2, **prepare.trade_tape(sample_trades, level="L2")
+            "trade_tape", Level.L2, **prepare.trade_tape(plot_trades, level="L2")
         )
         assert fig.axes[0].get_ylabel() == "Price"
 
-    def test_mid_line_is_step(self, sample_trades):
+    def test_mid_line_is_step(self, plot_trades):
         # The mid holds until the book changes; linear interpolation would
         # paint a diagonal ramp between sparse samples that never existed.
         fig = plot(
-            "trade_tape", Level.L2, **prepare.trade_tape(sample_trades, level="L2")
+            "trade_tape", Level.L2, **prepare.trade_tape(plot_trades, level="L2")
         )
         (mid,) = fig.axes[0].get_lines()
         assert mid.get_drawstyle() == "steps-post"
 
 
 class TestPlotEventMap:
-    def test_returns_figure(self, sample_events):
+    def test_returns_figure(self, plot_events):
         fig = plot(
             "order_activity",
             Level.L2,
-            **prepare.order_activity(sample_events, level="L2"),
+            **prepare.order_activity(plot_events, level="L2"),
         )
-        assert isinstance(fig, Figure)
+        assert drawn(fig)["pathcollection"] > 0
 
-    def test_has_legend_disambiguating_marks(self, sample_events):
+    def test_has_legend_disambiguating_marks(self, plot_events):
         # §3.9: the gray create/delete circles and the bid/ask direction dots
         # were unexplained; a legend must label all four.
         fig = plot(
             "order_activity",
             Level.L2,
-            **prepare.order_activity(sample_events, level="L2"),
+            **prepare.order_activity(plot_events, level="L2"),
         )
         legend = fig.axes[0].get_legend()
         assert legend is not None
         labels = {t.get_text() for t in legend.get_texts()}
         assert {"bid", "ask", "created", "deleted"} <= labels
 
-    def test_accepts_ax(self, sample_events):
+    def test_accepts_ax(self, plot_events):
         fig_orig, ax_orig = plt.subplots()
         fig = plot(
             "order_activity",
             Level.L2,
             ax=ax_orig,
-            **prepare.order_activity(sample_events, level="L2"),
+            **prepare.order_activity(plot_events, level="L2"),
         )
         assert fig is fig_orig
 
-    def test_empty_window_draws_no_data(self, sample_events):
+    def test_empty_window_draws_no_data(self, plot_events):
         # A window before the data: the price-axis step used to raise
         # ValueError on the NaN price range of zero rows.
         data = prepare.order_activity(
-            sample_events,
+            plot_events,
             start_time=pd.Timestamp("2015-05-01 00:00:00"),
             end_time=pd.Timestamp("2015-05-01 00:30:00"),
             level="L2",
@@ -401,7 +337,9 @@ class TestPlotOrderActivityL3:
     def test_returns_figure(self, sample_order_lifecycle_events):
         data = prepare.order_activity(sample_order_lifecycle_events, level="L3")
         fig = plot("order_activity", Level.L3, **data)
-        assert isinstance(fig, Figure)
+        marks = drawn(fig)
+        assert marks["linecollection"] > 0  # the order spans
+        assert marks["pathcollection"] > 0
 
     def test_accepts_ax(self, sample_order_lifecycle_events):
         fig_orig, ax_orig = plt.subplots()
@@ -483,21 +421,21 @@ class TestPlotOrderActivityL3:
 
 
 class TestPlotVolumeMap:
-    def test_returns_figure(self, sample_events):
+    def test_returns_figure(self, plot_events):
         fig = plot(
             "cancellations",
             Level.L2,
-            **prepare.cancellations(sample_events, level="L2"),
+            **prepare.cancellations(plot_events, level="L2"),
         )
-        assert isinstance(fig, Figure)
+        assert drawn(fig)["pathcollection"] > 0
 
-    def test_accepts_ax(self, sample_events):
+    def test_accepts_ax(self, plot_events):
         fig_orig, ax_orig = plt.subplots()
         fig = plot(
             "cancellations",
             Level.L2,
             ax=ax_orig,
-            **prepare.cancellations(sample_events, level="L2"),
+            **prepare.cancellations(plot_events, level="L2"),
         )
         assert fig is fig_orig
 
@@ -506,7 +444,7 @@ class TestPlotCancellationsL3:
     def test_returns_figure(self, sample_cancellation_events):
         data = prepare.cancellations(sample_cancellation_events, level="L3")
         fig = plot("cancellations", Level.L3, **data)
-        assert isinstance(fig, Figure)
+        assert drawn(fig)["polycollection"] > 0
 
     def test_accepts_ax(self, sample_cancellation_events):
         fig_orig, ax_orig = plt.subplots()
@@ -551,7 +489,9 @@ class TestPlotTradeTapeL3:
             events, trades, price_from=0.0, price_to=1e9, level="L3"
         )
         fig = plot("trade_tape", Level.L3, **data)
-        assert isinstance(fig, Figure)
+        # A marker for each trade whose maker is a measured order: three of
+        # the four (the third trade's maker is not one).
+        assert drawn(fig)["pathcollection"] == 3
 
     def test_accepts_ax(self, sample_executed_orders):
         events, trades = sample_executed_orders
@@ -575,21 +515,22 @@ class TestPlotTradeTapeL3:
 
 class TestPlotLiquidityAtTouch:
     # Now a comparable concept (L2 step + L3 composition), so level is explicit.
-    def test_returns_figure(self, sample_depth_summary):
-        data = prepare.liquidity_at_touch(sample_depth_summary, level="L2")
+    def test_returns_figure(self, plot_depth_summary):
+        data = prepare.liquidity_at_touch(plot_depth_summary, level="L2")
         fig = plot("liquidity_at_touch", Level.L2, **data)
-        assert isinstance(fig, Figure)
+        # A step through every row, for the bid and for the ask.
+        assert drawn(fig) == {"line": 2 * len(plot_depth_summary)}
 
-    def test_accepts_ax(self, sample_depth_summary):
+    def test_accepts_ax(self, plot_depth_summary):
         fig_orig, ax_orig = plt.subplots()
-        data = prepare.liquidity_at_touch(sample_depth_summary, level="L2")
+        data = prepare.liquidity_at_touch(plot_depth_summary, level="L2")
         fig = plot("liquidity_at_touch", Level.L2, ax=ax_orig, **data)
         assert fig is fig_orig
 
-    def test_lines_drawn_with_transparency(self, sample_depth_summary):
+    def test_lines_drawn_with_transparency(self, plot_depth_summary):
         # The bid/ask step series overplot heavily in the dense band; drawing
         # them with alpha < 1 keeps both legible where they overlap.
-        data = prepare.liquidity_at_touch(sample_depth_summary, level="L2")
+        data = prepare.liquidity_at_touch(plot_depth_summary, level="L2")
         fig = plot("liquidity_at_touch", Level.L2, **data)
         ax = fig.axes[0]
         lines = ax.get_lines()
@@ -598,12 +539,12 @@ class TestPlotLiquidityAtTouch:
             alpha = ln.get_alpha()
             assert alpha is not None and alpha < 1.0
 
-    def test_event_rug_drawn_from_events(self, sample_depth_summary, sample_events):
+    def test_event_rug_drawn_from_events(self, plot_depth_summary, plot_events):
         # Passing events adds a rug (created/cancelled vlines) below the series;
         # without events there is no rug.
-        bare = prepare.liquidity_at_touch(sample_depth_summary, level="L2")
+        bare = prepare.liquidity_at_touch(plot_depth_summary, level="L2")
         with_rug = prepare.liquidity_at_touch(
-            sample_depth_summary, events=sample_events, level="L2"
+            plot_depth_summary, events=plot_events, level="L2"
         )
         assert bare["rug"] is None
         n_bare = len(plot("liquidity_at_touch", Level.L2, **bare).axes[0].collections)
@@ -634,7 +575,7 @@ class TestPlotLiquidityAtTouchL3:
             "max_rank": 0,
             "side": "bid",
         }
-        assert isinstance(plot("liquidity_at_touch", Level.L3, **data), Figure)
+        assert not drawn(plot("liquidity_at_touch", Level.L3, **data))
 
 
 class TestPlotOfiHorizon:
@@ -672,7 +613,7 @@ class TestPlotOfiHorizon:
             "times": np.array([], dtype="datetime64[ns]"),
             "horizons": ["5s", "60s"],
         }
-        assert isinstance(plot("ofi_horizon", **data), Figure)
+        assert not drawn(plot("ofi_horizon", **data))
 
     @staticmethod
     def _grid(ofi: np.ndarray) -> dict[str, Any]:
@@ -727,7 +668,8 @@ class TestPlotOrderOutcomeL3:
         events, _trades = sample_executed_orders
         data = prepare.order_outcome(events, bps_quantiles=(0.0, 1.0))
         fig = plot("order_outcome", Level.L3, **data)
-        assert isinstance(fig, Figure)
+        # Every order but the one still resting has an outcome.
+        assert drawn(fig)["pathcollection"] == 5
 
     def test_accepts_ax(self, sample_executed_orders):
         events, _trades = sample_executed_orders
@@ -741,7 +683,7 @@ class TestPlotOrderOutcomeL3:
         events, _trades = sample_executed_orders
         data = prepare.order_outcome(events, bps_quantiles=(0.0, 1.0))
         fig = plot("order_outcome", **data)
-        assert isinstance(fig, Figure)
+        assert drawn(fig)["pathcollection"] == 5
 
     def test_draws_cancelled_underneath(self, sample_executed_orders):
         import matplotlib.colors as mcolors
@@ -776,7 +718,9 @@ class TestPlotBookSnapshot:
     def test_returns_figure(self, concept: str, level: Level) -> None:
         data = prepare.book_snapshot(self._order_book(), level=level)
         fig = plot(concept, level, **data)
-        assert isinstance(fig, Figure)
+        # Two levels a side: a bar for each level, or a step through both.
+        marks = drawn(fig)
+        assert marks["rectangle" if concept == "book_snapshot" else "line"] == 4
 
     def test_comparable_requires_level(self) -> None:
         data = prepare.book_snapshot(self._order_book(), level="L2")
@@ -822,9 +766,10 @@ class TestPlotBookSnapshot:
         data = prepare.book_snapshot(self._order_book(), level="L2")
         fig = plot("book_snapshot", Level.L2, **data)
         ax = fig.axes[0]
-        for container in ax.containers:
-            if len(container.patches):
-                assert container.patches[0].get_edgecolor()[3] == 0.0
+        drawn_sides = [c for c in ax.containers if len(c.patches)]
+        assert drawn_sides  # at least one side drawn
+        for container in drawn_sides:
+            assert container.patches[0].get_edgecolor()[3] == 0.0
 
     def test_l2_and_l3_render_differently(self) -> None:
         # The flagship acceptance: equal-total levels with different
@@ -918,36 +863,87 @@ class TestPlotBookSnapshot:
 
 
 class TestPlotVolumePercentiles:
-    def test_returns_figure(self, sample_depth_summary):
+    def test_returns_figure(self, plot_depth_summary):
         fig = plot(
             "volume_percentiles",
-            **prepare.volume_percentiles(sample_depth_summary),
+            **prepare.volume_percentiles(plot_depth_summary),
         )
-        assert isinstance(fig, Figure)
+        # Twenty depth bands a side.
+        assert drawn(fig)["fillbetweenpolycollection"] == 40
+
+
+# The kinds of mark each backend draws a line and markers with.
+_LINE = {"matplotlib": "line", "plotly": "scatter lines"}
+_MARKERS = {"matplotlib": "pathcollection", "plotly": "scatter markers"}
+
+
+@pytest.mark.parametrize("backend", ["matplotlib", "plotly"])
+class TestPlotHiddenExecutions:
+    def test_draws_each_hidden_execution_over_the_trade_price(
+        self, backend, plot_trades, plot_hidden_executions
+    ):
+        pytest.importorskip(backend)
+        data = prepare.hidden_executions(plot_hidden_executions, plot_trades)
+        fig = plot("hidden_executions", backend=backend, **data)
+        assert drawn(fig) == {
+            _LINE[backend]: len(plot_trades),
+            _MARKERS[backend]: len(plot_hidden_executions),
+        }
+
+    def test_without_hidden_executions_draws_the_trade_price_only(
+        self, backend, plot_trades, plot_hidden_executions
+    ):
+        pytest.importorskip(backend)
+        events = plot_hidden_executions.assign(raw_event_type=1)
+        data = prepare.hidden_executions(events, plot_trades)
+        fig = plot("hidden_executions", backend=backend, **data)
+        assert drawn(fig) == {_LINE[backend]: len(plot_trades)}
+
+
+@pytest.mark.parametrize("backend", ["matplotlib", "plotly"])
+class TestPlotTradingHalts:
+    def test_shades_each_halt_over_the_trade_price(self, backend, plot_trades):
+        pytest.importorskip(backend)
+        halts = pd.DataFrame({"timestamp": plot_trades["timestamp"].iloc[[2]]})
+        fig = plot(
+            "trading_halts",
+            backend=backend,
+            **prepare.trading_halts(plot_trades, halts),
+        )
+        shade = "rectangle" if backend == "matplotlib" else "shape"
+        assert drawn(fig) == {_LINE[backend]: len(plot_trades), shade: 1}
+
+    def test_without_halts_draws_the_trade_price_only(self, backend, plot_trades):
+        pytest.importorskip(backend)
+        fig = plot(
+            "trading_halts", backend=backend, **prepare.trading_halts(plot_trades)
+        )
+        assert drawn(fig) == {_LINE[backend]: len(plot_trades)}
 
 
 class TestPlotEventsHistogram:
-    def test_returns_figure(self, sample_events):
+    def test_returns_figure(self, plot_events):
         fig = plot(
             "events_histogram",
-            **prepare.events_histogram(sample_events, val="price", bw=0.25),
+            **prepare.events_histogram(plot_events, val="price", bw=0.25),
         )
-        assert isinstance(fig, Figure)
+        # One histogram for the bids and one for the asks.
+        assert drawn(fig) == {"fillbetweenpolycollection": 2}
 
-    def test_accepts_ax(self, sample_events):
+    def test_accepts_ax(self, plot_events):
         fig_orig, ax_orig = plt.subplots()
         fig = plot(
             "events_histogram",
             ax=ax_orig,
-            **prepare.events_histogram(sample_events, val="price", bw=0.25),
+            **prepare.events_histogram(plot_events, val="price", bw=0.25),
         )
         assert fig is fig_orig
 
-    def test_empty_window_draws_no_data(self, sample_events):
+    def test_empty_window_draws_no_data(self, plot_events):
         # A window before the data: seaborn's histplot used to raise
         # ValueError while working out bin edges for zero rows.
         data = prepare.events_histogram(
-            sample_events,
+            plot_events,
             start_time=pd.Timestamp("2015-05-01 00:00:00"),
             end_time=pd.Timestamp("2015-05-01 00:30:00"),
             val="price",
@@ -1003,19 +999,19 @@ class TestVolumeNorm:
 class TestPriceLevelsColBias:
     """The depth heatmap renders under every col_bias regime."""
 
-    def _depth(self, sample_events):
-        depth = sample_events[["timestamp", "price", "volume"]].copy()
+    def _depth(self, plot_events):
+        depth = plot_events[["timestamp", "price", "volume"]].copy()
         depth["direction"] = "bid"
         return depth
 
     @pytest.mark.parametrize("col_bias", [1.0, 0.5, 0.1, 0.0, -1.0])
-    def test_renders_for_each_bias(self, sample_events, col_bias):
-        depth = self._depth(sample_events)
+    def test_renders_for_each_bias(self, plot_events, col_bias):
+        depth = self._depth(plot_events)
         fig = plot(
             "depth_heatmap",
             **prepare.depth_heatmap(depth, col_bias=col_bias),
         )
-        assert isinstance(fig, Figure)
+        assert drawn(fig)["linecollection"] > 0
 
     def test_default_bias_is_linear(self):
         # The library default is the hero linear look (col_bias=1.0).
@@ -1024,10 +1020,10 @@ class TestPriceLevelsColBias:
         sig = inspect.signature(prepare.depth_heatmap)
         assert sig.parameters["col_bias"].default == 1.0
 
-    def test_midprice_overlay_is_step(self, sample_events):
+    def test_midprice_overlay_is_step(self, plot_events):
         # The midprice holds until the book changes, like the best bid/ask
         # step lines it replaces under show_mp; no ramps between samples.
-        depth = self._depth(sample_events)
+        depth = self._depth(plot_events)
         spread = pd.DataFrame(
             {
                 "timestamp": depth["timestamp"],
@@ -1125,24 +1121,24 @@ class TestPrepareHiddenLiquidityOverlay:
 class TestPriceLevelsHiddenLiquidityOverlay:
     """Depth heatmap draws the #272 overlay when given, and skips it when not."""
 
-    def _depth(self, sample_events):
-        depth = sample_events[["timestamp", "price", "volume"]].copy()
+    def _depth(self, plot_events):
+        depth = plot_events[["timestamp", "price", "volume"]].copy()
         depth["direction"] = "bid"
         return depth
 
-    def test_no_overlay_draws_no_extra_legend_entries(self, sample_events):
-        depth = self._depth(sample_events)
+    def test_no_overlay_draws_no_extra_legend_entries(self, plot_events):
+        depth = self._depth(plot_events)
         fig = plot("depth_heatmap", **prepare.depth_heatmap(depth))
         labels = {t.get_text() for t in fig.axes[0].get_legend().get_texts()}
         assert "Iceberg refill" not in labels
         assert "Hidden-order trade" not in labels
 
     def test_iceberg_and_hidden_trade_overlay_draws_and_legends(
-        self, sample_events, hidden_liquidity_overlay
+        self, plot_events, hidden_liquidity_overlay
     ):
         overlay = hidden_liquidity_overlay
 
-        depth = self._depth(sample_events)
+        depth = self._depth(plot_events)
         fig = plot(
             "depth_heatmap",
             **prepare.depth_heatmap(
@@ -1373,19 +1369,19 @@ class TestPriceLevelsNotice:
 
 
 class TestSubplotComposition:
-    def test_two_plots_on_shared_figure(self, sample_trades):
+    def test_two_plots_on_shared_figure(self, plot_trades):
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
         fig1 = plot(
             "trade_tape",
             Level.L2,
             ax=ax1,
-            **prepare.trade_tape(sample_trades, level="L2"),
+            **prepare.trade_tape(plot_trades, level="L2"),
         )
         fig2 = plot(
             "trade_tape",
             Level.L2,
             ax=ax2,
-            **prepare.trade_tape(sample_trades, level="L2"),
+            **prepare.trade_tape(plot_trades, level="L2"),
         )
         assert fig1 is fig
         assert fig2 is fig
@@ -1398,30 +1394,30 @@ class TestSubplotComposition:
 
 
 class TestBackendDispatch:
-    def test_default_backend_returns_matplotlib_figure(self, sample_trades):
+    def test_default_backend_returns_matplotlib_figure(self, plot_trades):
         fig = plot(
-            "trade_tape", Level.L2, **prepare.trade_tape(sample_trades, level="L2")
+            "trade_tape", Level.L2, **prepare.trade_tape(plot_trades, level="L2")
         )
-        assert isinstance(fig, Figure)
+        assert drawn(fig)["pathcollection"] == len(plot_trades)
 
-    def test_explicit_matplotlib_returns_figure(self, sample_trades):
+    def test_explicit_matplotlib_returns_figure(self, plot_trades):
         fig = plot(
             "trade_tape",
             Level.L2,
             backend="matplotlib",
-            **prepare.trade_tape(sample_trades, level="L2"),
+            **prepare.trade_tape(plot_trades, level="L2"),
         )
-        assert isinstance(fig, Figure)
+        assert drawn(fig)["pathcollection"] == len(plot_trades)
 
-    def test_invalid_backend_raises_value_error(self, sample_trades):
+    def test_invalid_backend_raises_value_error(self, plot_trades):
         with pytest.raises(UnknownNameError, match="Unknown plot backend"):
             plot(
                 "trade_tape",
                 backend="nonexistent",
-                **prepare.trade_tape(sample_trades, level="L2"),
+                **prepare.trade_tape(plot_trades, level="L2"),
             )
 
-    def test_plot_dispatch_matplotlib(self, sample_trades):
+    def test_plot_dispatch_matplotlib(self, plot_trades):
         """The unified plot() dispatcher renders from already-prepared data."""
         from ob_analytics.visualization import plot, prepare
 
@@ -1429,9 +1425,9 @@ class TestBackendDispatch:
             "trade_tape",
             Level.L2,
             backend="matplotlib",
-            **prepare.trade_tape(sample_trades, level="L2"),
+            **prepare.trade_tape(plot_trades, level="L2"),
         )
-        assert isinstance(fig, Figure)
+        assert drawn(fig)["pathcollection"] == len(plot_trades)
 
     def test_plot_unknown_backend_raises(self):
         from ob_analytics.visualization import plot
@@ -1441,11 +1437,9 @@ class TestBackendDispatch:
 
 
 class TestRegisterBackend:
-    def test_register_and_dispatch(self, sample_trades, tmp_path):
+    def test_register_and_dispatch(self, plot_trades, tmp_path, restore_registries):
         """A backend module self-registers its renderers; plot() dispatches."""
         from ob_analytics.visualization import (
-            RENDERERS,
-            Level,
             plot,
             register_plot_backend,
         )
@@ -1475,13 +1469,10 @@ class TestRegisterBackend:
             assert type(fig).__name__ == "_Sentinel"
         finally:
             sys.path.pop(0)
-            _BACKEND_MODULES.pop("dummy", None)
             sys.modules.pop("dummy_backend", None)
-            # Registry has no public removal; the inert (trade_tape, L2, dummy)
-            # entry is dropped here so the dummy module's renderer doesn't linger.
-            RENDERERS._items.pop(("trade_tape", Level.L2, "dummy"), None)
 
 
+@pytest.mark.usefixtures("restore_registries")
 class TestRendererKinds:
     """A concept is level-less or leveled on every backend, never both (#302)."""
 
@@ -1492,15 +1483,6 @@ class TestRendererKinds:
         assert _kind_text([Level.L3, Level.L2, Level.L3]) == "at L2 and L3"
         with pytest.raises(ValueError, match="No levels"):
             _kind_text([])
-
-    @pytest.fixture(autouse=True)
-    def _drop_probe_renderers(self):
-        from ob_analytics.visualization import RENDERERS
-
-        yield
-        probes = ("kind_probe", "cumvol")
-        for key in [k for k in RENDERERS._items if k[0] in probes]:
-            RENDERERS._items.pop(key)
 
     @staticmethod
     def _renderer(data, ax=None):
@@ -1612,8 +1594,8 @@ class TestRendererKinds:
 class TestPlotPriceView:
     """§4.2 spread ribbon + microprice (L2)."""
 
-    def test_returns_figure_with_ribbon(self, sample_depth_summary):
-        data = prepare.price_view(sample_depth_summary)
+    def test_returns_figure_with_ribbon(self, plot_depth_summary):
+        data = prepare.price_view(plot_depth_summary)
         fig = plot("price_view", Level.L2, **data)
         ax = fig.axes[0]
         assert isinstance(fig, Figure)
@@ -1626,8 +1608,8 @@ class TestPlotPriceView:
 class TestPlotTradeSize:
     """§4.3 trade-size strip (log-x jittered dots by side)."""
 
-    def test_returns_figure_log_x(self, sample_trades):
-        data = prepare.trade_size(sample_trades)
+    def test_returns_figure_log_x(self, plot_trades):
+        data = prepare.trade_size(plot_trades)
         fig = plot("trade_size", Level.L2, **data)
         ax = fig.axes[0]
         assert isinstance(fig, Figure)
