@@ -29,12 +29,12 @@ from ob_analytics.config import PipelineConfig
 from ob_analytics.databento import DatabentoWriter
 from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
 from ob_analytics.depth import depth_metrics, get_spread, price_level_volume
-from ob_analytics.depth_l2 import DepthCsvWriter, L2DepthLoader, L2TradeReader
+from ob_analytics.depth_csv import DepthCsvLoader, DepthCsvTradeReader, DepthCsvWriter
 from ob_analytics.exceptions import ConfigError, UnknownNameError
 from ob_analytics.hidden_liquidity import hidden_trades
 from ob_analytics.interop import HftbacktestWriter, NautilusWriter
 from ob_analytics.lobster import LobsterWriter
-from ob_analytics.protocols import Clocks, DepthSource, FeedType
+from ob_analytics.protocols import Clocks, DepthLoader, FeedType
 from ob_analytics.queue import queue_age_grid, queue_positions
 from ob_analytics.schemas import (
     validate_depth_df,
@@ -129,7 +129,7 @@ class TestDepthCsvSource:
         from ob_analytics.protocols import RunContext
 
         loader = DepthCsvSource().create_loader(PipelineConfig(), RunContext())
-        assert isinstance(loader, DepthSource)
+        assert isinstance(loader, DepthLoader)
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +137,7 @@ class TestDepthCsvSource:
 # ---------------------------------------------------------------------------
 
 
-class TestL2DepthLoader:
+class TestDepthCsvLoader:
     def test_reads_canonical_depth_frame(self, tmp_path):
         _write_l2_dir(
             tmp_path,
@@ -147,7 +147,7 @@ class TestL2DepthLoader:
                 (_BASE_MS + 1000, "bid", 100.0, 1.0),
             ],
         )
-        depth = L2DepthLoader().load(tmp_path)
+        depth = DepthCsvLoader().load(tmp_path)
         validate_depth_df(depth)
         assert list(depth["direction"].cat.categories) == ["bid", "ask"]
         assert len(depth) == 3
@@ -165,7 +165,7 @@ class TestL2DepthLoader:
                 "size": [2.0, 3.0],
             }
         ).to_csv(tmp_path / "depth.csv", index=False)
-        depth = L2DepthLoader().load(tmp_path)
+        depth = DepthCsvLoader().load(tmp_path)
         assert depth["direction"].tolist() == ["bid", "ask"]
 
     def test_zero_volume_is_kept_as_removal(self, tmp_path):
@@ -173,7 +173,7 @@ class TestL2DepthLoader:
             tmp_path,
             [(_BASE_MS, "bid", 99.0, 2.0), (_BASE_MS + 1, "bid", 99.0, 0.0)],
         )
-        depth = L2DepthLoader().load(tmp_path)
+        depth = DepthCsvLoader().load(tmp_path)
         assert depth["volume"].tolist() == [200_000_000, 0]
 
     def test_negative_volume_dropped(self, tmp_path):
@@ -181,33 +181,33 @@ class TestL2DepthLoader:
             tmp_path,
             [(_BASE_MS, "bid", 99.0, 2.0), (_BASE_MS + 1, "bid", 98.0, -1.0)],
         )
-        depth = L2DepthLoader().load(tmp_path)
+        depth = DepthCsvLoader().load(tmp_path)
         assert len(depth) == 1
 
     def test_unknown_side_raises(self, tmp_path):
         _write_l2_dir(tmp_path, [(_BASE_MS, "sideways", 99.0, 2.0)])
         with pytest.raises(ConfigError, match="unrecognised side"):
-            L2DepthLoader().load(tmp_path)
+            DepthCsvLoader().load(tmp_path)
 
     def test_missing_columns_raises(self, tmp_path):
         pd.DataFrame({"timestamp": [_BASE_MS], "price": [99.0]}).to_csv(
             tmp_path / "depth.csv", index=False
         )
         with pytest.raises(ConfigError, match="missing required columns"):
-            L2DepthLoader().load(tmp_path)
+            DepthCsvLoader().load(tmp_path)
 
     def test_off_grid_price_raises(self, tmp_path):
         # 0.036 is not a whole number of the default 0.01 ticks; rounding it
         # to 0.04 would move the level without a word.
         _write_l2_dir(tmp_path, [(_BASE_MS, "bid", 0.036, 1.0)])
         with pytest.raises(ConfigError, match="not whole multiples of tick_size"):
-            L2DepthLoader().load(tmp_path)
+            DepthCsvLoader().load(tmp_path)
 
     def test_finer_tick_keeps_the_price(self, tmp_path):
         from ob_analytics.config import PipelineConfig
 
         _write_l2_dir(tmp_path, [(_BASE_MS, "bid", 0.036, 1.0)])
-        depth = L2DepthLoader(PipelineConfig(tick_size=0.001)).load(tmp_path)
+        depth = DepthCsvLoader(PipelineConfig(tick_size=0.001)).load(tmp_path)
         assert depth["price"].tolist() == [36]
 
     def test_off_grid_trade_price_raises(self, tmp_path):
@@ -216,8 +216,8 @@ class TestL2DepthLoader:
             [(_BASE_MS, "bid", 0.03, 1.0)],
             [{"timestamp": _BASE_MS, "price": 0.037, "volume": 1.0}],
         )
-        with pytest.raises(ConfigError, match="L2TradeReader"):
-            L2TradeReader().load(pd.DataFrame(), tmp_path)
+        with pytest.raises(ConfigError, match="DepthCsvTradeReader"):
+            DepthCsvTradeReader().load(pd.DataFrame(), tmp_path)
 
     @pytest.mark.parametrize("column", ["price", "volume"])
     @pytest.mark.parametrize("bad", [None, "abc"])
@@ -229,22 +229,23 @@ class TestL2DepthLoader:
         frame.loc[1, column] = bad
         frame.to_csv(tmp_path / "depth.csv", index=False)
         with pytest.raises(
-            ConfigError, match=r"L2DepthLoader\.load\(.*depth\.csv\): 1 of 2 row.*row 2"
+            ConfigError,
+            match=r"DepthCsvLoader\.load\(.*depth\.csv\): 1 of 2 row.*row 2",
         ):
-            L2DepthLoader().load(tmp_path)
+            DepthCsvLoader().load(tmp_path)
 
     @pytest.mark.parametrize("column", ["price", "volume"])
     def test_a_trade_value_that_is_not_a_number_raises(self, tmp_path, column):
         trade = {"timestamp": _BASE_MS, "price": 0.03, "volume": 1.0, column: ""}
         _write_l2_dir(tmp_path, [(_BASE_MS, "bid", 0.03, 1.0)], [trade])
         with pytest.raises(
-            ConfigError, match=r"L2TradeReader\.load\(.*trades\.csv\): 1 of 1 row"
+            ConfigError, match=r"DepthCsvTradeReader\.load\(.*trades\.csv\): 1 of 1 row"
         ):
-            L2TradeReader().load(pd.DataFrame(), tmp_path)
+            DepthCsvTradeReader().load(pd.DataFrame(), tmp_path)
 
     def test_missing_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
-            L2DepthLoader().load(tmp_path)
+            DepthCsvLoader().load(tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -379,7 +380,7 @@ class TestDepthCsvWriter:
         depth_in = toy_l2_depth()
         DepthCsvWriter().write({"depth": depth_in}, tmp_path)
         assert (tmp_path / "depth.csv").exists()
-        depth_out = L2DepthLoader().load(tmp_path)
+        depth_out = DepthCsvLoader().load(tmp_path)
         # Both the toy fixture and the loader output carry the canonical
         # tz-aware UTC nanosecond clock (issue #154), so the instants compare
         # directly.
@@ -405,7 +406,7 @@ class TestDepthCsvWriter:
                 "origin": ["snapshot", "stream"],
             }
         ).to_csv(tmp_path / "depth.csv", index=False)
-        loader = L2DepthLoader(PipelineConfig(track_sequence=True))
+        loader = DepthCsvLoader(PipelineConfig(track_sequence=True))
         depth_in = loader.load(tmp_path)
         out = tmp_path / "out"
         DepthCsvWriter().write({"depth": depth_in}, out)
@@ -420,7 +421,7 @@ class TestDepthCsvWriter:
             {"depth": toy_l2_depth(), "trades": toy_l2_trades()}, tmp_path
         )
         assert (tmp_path / "trades.csv").exists()
-        trades = L2TradeReader().load(pd.DataFrame(), tmp_path)
+        trades = DepthCsvTradeReader().load(pd.DataFrame(), tmp_path)
         assert len(trades) == len(toy_l2_trades())
 
 
@@ -442,7 +443,7 @@ class TestVenueClock:
 
     def test_the_loader_keeps_exchange_timestamp(self, tmp_path):
         self._write(tmp_path, [_BASE_MS - 5, _BASE_MS + 990])
-        depth = L2DepthLoader().load(tmp_path)
+        depth = DepthCsvLoader().load(tmp_path)
         validate_depth_df(depth)
         assert list(depth.columns[:2]) == ["timestamp", "exchange_timestamp"]
         assert str(depth["exchange_timestamp"].dtype) == "datetime64[ns, UTC]"
@@ -452,14 +453,14 @@ class TestVenueClock:
 
     def test_a_file_with_one_clock_has_no_exchange_timestamp(self, tmp_path):
         _write_l2_dir(tmp_path, [(_BASE_MS, "bid", 100.0, 1.0)])
-        assert "exchange_timestamp" not in L2DepthLoader().load(tmp_path).columns
+        assert "exchange_timestamp" not in DepthCsvLoader().load(tmp_path).columns
 
     def test_the_writer_round_trips_it(self, tmp_path):
         self._write(tmp_path, [_BASE_MS - 5, _BASE_MS + 990])
-        depth_in = L2DepthLoader().load(tmp_path)
+        depth_in = DepthCsvLoader().load(tmp_path)
         out = tmp_path / "out"
         DepthCsvWriter().write({"depth": depth_in}, out)
-        depth_out = L2DepthLoader().load(out)
+        depth_out = DepthCsvLoader().load(out)
         pd.testing.assert_series_equal(
             depth_in["exchange_timestamp"], depth_out["exchange_timestamp"]
         )

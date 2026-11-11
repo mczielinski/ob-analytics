@@ -354,9 +354,9 @@ class RunContext:
     """Per-run parameters that don't belong on the Source constructor.
 
     Give one to ``Pipeline(ctx=...)`` as the default for every run, or to
-    ``Pipeline.run(source, ctx=...)`` for that run alone.  The pipeline builds
-    each run's loader and trade source from that run's context
-    (``OfflineSource.create_loader`` / ``create_trade_source``), so one source
+    ``Pipeline.run(path, ctx=...)`` for that run alone.  The pipeline builds
+    each run's loader and trade reader from that run's context
+    (``OfflineSource.create_loader`` / ``create_trade_reader``), so one source
     serves many runs, each with its own date, symbol and venue.
 
     Attributes
@@ -395,13 +395,13 @@ class EventLoader(Protocol):
     ``ob_analytics.schemas.validate_events_df``.
     """
 
-    def load(self, source: Any) -> pd.DataFrame:
-        """Load events from *source* and return a DataFrame.
+    def load(self, path: Any) -> pd.DataFrame:
+        """Load events from *path* and return a DataFrame.
 
         Parameters
         ----------
-        source
-            Data source identifier.  The canonical type is ``str | Path``
+        path
+            What the loader reads.  The canonical type is ``str | Path``
             (a file path), but loaders may accept richer descriptors
             such as dicts, dataclasses, or connection strings.
 
@@ -415,7 +415,7 @@ class EventLoader(Protocol):
 
 
 @runtime_checkable
-class TradeSource(Protocol):
+class TradeReader(Protocol):
     """Builds the trades DataFrame for a given run.
 
     Implementations read explicit trade records (a separate
@@ -438,15 +438,15 @@ class TradeSource(Protocol):
     * ``taker_og``         — original_number of the taker event
     """
 
-    def load(self, events: pd.DataFrame, source: Any) -> pd.DataFrame:
+    def load(self, events: pd.DataFrame, path: Any) -> pd.DataFrame:
         """Build the trades DataFrame.
 
         Parameters
         ----------
         events : pandas.DataFrame
             The processed events frame (post-loader).
-        source
-            The same ``source`` value passed to :meth:`EventLoader.load`.
+        path
+            The same ``path`` value passed to :meth:`EventLoader.load`.
             Used by file-based readers to locate companion files.
 
         Returns
@@ -457,17 +457,17 @@ class TradeSource(Protocol):
 
 
 @runtime_checkable
-class DepthSource(Protocol):
+class DepthLoader(Protocol):
     """Loads a **price-level (L2) depth stream** into the canonical depth frame.
 
     The L2 counterpart to :class:`EventLoader`.  Where an ``EventLoader``
     returns per-order events that the pipeline later folds into depth via
-    :func:`~ob_analytics.depth.price_level_volume`, a ``DepthSource`` returns
+    :func:`~ob_analytics.depth.price_level_volume`, a ``DepthLoader`` returns
     the depth frame **directly** — a price-level feed *is* a depth stream, so
     there is nothing to reconstruct.
 
     An :attr:`Level.L2` source's :meth:`OfflineSource.create_loader` returns a
-    ``DepthSource``; the pipeline validates its output with
+    ``DepthLoader``; the pipeline validates its output with
     :func:`~ob_analytics.schemas.validate_depth_df` and feeds it straight to
     :class:`~ob_analytics.depth.DepthMetricsEngine`.
 
@@ -483,13 +483,13 @@ class DepthSource(Protocol):
     * ``direction``  — categorical ``bid``/``ask``
     """
 
-    def load(self, source: Any) -> pd.DataFrame:
-        """Load a price-level depth stream from *source* and return the frame.
+    def load(self, path: Any) -> pd.DataFrame:
+        """Load a price-level depth stream from *path* and return the frame.
 
         Parameters
         ----------
-        source
-            Data source identifier — canonically a ``str | Path`` (a snapshot
+        path
+            What the loader reads — canonically a ``str | Path`` (a snapshot
             + price-level-delta file), but implementations may accept richer
             descriptors.
 
@@ -642,7 +642,7 @@ class BarRule(Protocol):
         """Return the threshold that cuts *frame* into about *target_bars* bars.
 
         Used when the caller passes no threshold of its own.  The unit is the
-        rule's own: a :class:`pandas.Timedelta` for a clock rule, a count of
+        rule's own: a :class:`pandas.Timedelta` for a time rule, a count of
         trades for a tick rule, an amount for a volume rule.
         """
         ...
@@ -787,7 +787,7 @@ class Source(Protocol):
         treats a missing one as the default grid.
 
     A source holds no state from one run: the pipeline builds each run's
-    loader and trade source from that run's config and context, so one source
+    loader and trade reader from that run's config and context, so one source
     can serve many runs.
     """
 
@@ -825,19 +825,19 @@ class OfflineSource(Source, Protocol):
     ``isinstance``, as the live runner detects ``SupportsDiagnostics``.
     """
 
-    def create_loader(self, config: Any, ctx: RunContext) -> EventLoader | DepthSource:
+    def create_loader(self, config: Any, ctx: RunContext) -> EventLoader | DepthLoader:
         """Return the loader for this source.
 
         An :attr:`Level.L3` source returns an :class:`EventLoader` (per-order
-        events); an :attr:`Level.L2` source returns a :class:`DepthSource`
+        events); an :attr:`Level.L2` source returns a :class:`DepthLoader`
         (the price-level depth frame directly).
         """
         ...
 
-    def create_trade_source(
+    def create_trade_reader(
         self, config: Any, ctx: RunContext, loader: Any
-    ) -> TradeSource:
-        """Return a trade source for this source.
+    ) -> TradeReader:
+        """Return a trade reader for this source.
 
         *loader* is the run's loader, the one that reads the events.  A source
         whose trades come off the same read (Databento) takes them from it;
@@ -872,7 +872,7 @@ class SupportsComputeDepth(Protocol):
         self,
         events: pd.DataFrame,
         config: Any,
-        source: Any,
+        path: Any,
         ctx: RunContext,
         loader: Any,
     ) -> tuple[pd.DataFrame, pd.DataFrame] | None:

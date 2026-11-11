@@ -396,7 +396,7 @@ def bitstamp_sample_dir() -> Path:
     """Path to the bundled Bitstamp sample directory (orders.csv.gz + trades.csv).
 
     Use when a test needs the directory itself (e.g. to feed
-    ``BitstampTradeReader.load(events, source=...)``) rather than just
+    ``BitstampTradeReader.load(events, path=...)``) rather than just
     the orders.csv.gz path.
     """
     from ob_analytics import sample_data_dir

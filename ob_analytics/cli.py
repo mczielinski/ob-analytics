@@ -896,7 +896,7 @@ def _generate_gallery_from_result(
     result: Any,
     gallery_dir: Path,
     fmt_name: str,
-    source: str,
+    path: str,
     *,
     view: str = "both",
     backends: list[str] | None = None,
@@ -916,7 +916,7 @@ def _generate_gallery_from_result(
         gallery_dir,
         view=view,
         backends=backends,
-        title=f"{fmt_name} ({Path(source).name}) -- ob-analytics",
+        title=f"{fmt_name} ({Path(path).name}) -- ob-analytics",
     )
     logger.info("Gallery: {}", gallery_path.resolve())
     logger.info("Open in browser: file://{}", gallery_path.resolve())

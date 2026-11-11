@@ -233,7 +233,7 @@ and lots, and must scale them itself."""
 
 
 def check_schema_version(
-    version: str | None, *, source: str = "<parquet>", stacklevel: int = 2
+    version: str | None, *, path: str = "<parquet>", stacklevel: int = 2
 ) -> None:
     """Validate an on-disk schema *version* against what this build reads.
 
@@ -242,8 +242,8 @@ def check_schema_version(
     version : str or None
         The value stored under :data:`SCHEMA_VERSION_KEY` in a Parquet file's
         metadata, or ``None`` when the file carries no such key.
-    source : str
-        Short identifier for the file, used only in messages.
+    path : str
+        The file's path or name, used only in messages.
     stacklevel : int
         Passed to :func:`warnings.warn`, so a caller several frames down can
         point the warning at the user's own call.
@@ -267,7 +267,7 @@ def check_schema_version(
     """
     if version is None:
         warnings.warn(
-            f"{source}: no schema version in Parquet metadata; treating as "
+            f"{path}: no schema version in Parquet metadata; treating as "
             f"legacy (pre-{SCHEMA_VERSION}) data. Re-save with save_data() to "
             "tag it.",
             stacklevel=stacklevel,
@@ -275,7 +275,7 @@ def check_schema_version(
         return
     if version not in _SUPPORTED_SCHEMA_VERSIONS:
         raise ConfigError(
-            f"{source}: unsupported schema version {version!r}. This build "
+            f"{path}: unsupported schema version {version!r}. This build "
             f"reads {sorted(_SUPPORTED_SCHEMA_VERSIONS)} (current "
             f"{SCHEMA_VERSION!r}). Upgrade ob-analytics or re-export the data."
         )

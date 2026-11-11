@@ -20,9 +20,9 @@ from ob_analytics._windows import window_bounds
 from ob_analytics.data import load_data, save_data
 from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
 from ob_analytics.depth import DepthMetricsEngine, depth_metrics
-from ob_analytics.depth_l2 import DepthCsvWriter
+from ob_analytics.depth_csv import DepthCsvWriter
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.synth import SyntheticLoader, SyntheticTradeSource, generate_session
+from ob_analytics.synth import SynthLoader, SynthTradeReader, generate_session
 
 
 def _cuts(timestamps: pd.Series, *quantiles: float) -> list[pd.Timestamp]:
@@ -31,8 +31,8 @@ def _cuts(timestamps: pd.Series, *quantiles: float) -> list[pd.Timestamp]:
     return [ordered.iloc[int(q * (len(ordered) - 1))].floor("s") for q in quantiles]
 
 
-def _saved_single_run(pipeline: Pipeline, source, dest) -> dict[str, pd.DataFrame]:
-    result = pipeline.run(source)
+def _saved_single_run(pipeline: Pipeline, path, dest) -> dict[str, pd.DataFrame]:
+    result = pipeline.run(path)
     save_data(result.tables(), dest, config=result.config)
     return load_data(dest)
 
@@ -67,8 +67,8 @@ def synth_session():
 
 def _synth_pipeline(session) -> Pipeline:
     return Pipeline(
-        loader=SyntheticLoader(session),
-        trade_source=SyntheticTradeSource(session),
+        loader=SynthLoader(session),
+        trade_reader=SynthTradeReader(session),
     )
 
 
@@ -314,12 +314,12 @@ def test_databento_windowed_run_matches_a_single_run(tmp_path):
 
 
 def test_a_loader_the_caller_passes_reads_the_whole_input(tmp_path, monkeypatch):
-    # The source's trade source may not read what such a loader keeps, so the
+    # The source's trade reader may not read what such a loader keeps, so the
     # run cannot rely on it to build the trades of a windowed read.
     from ob_analytics.databento import DatabentoLoader, DatabentoSource
     from tests.test_databento import LIFECYCLE, T0, mbo_frame
 
-    def refuse(self, source, windows):
+    def refuse(self, path, windows):
         raise AssertionError("read one window at a time")
 
     monkeypatch.setattr(DatabentoLoader, "load_windows", refuse)
@@ -360,8 +360,8 @@ def _dbn_file(duration: float, path):
     )
     result = Pipeline(
         config,
-        loader=SyntheticLoader(session),
-        trade_source=SyntheticTradeSource(session),
+        loader=SynthLoader(session),
+        trade_reader=SynthTradeReader(session),
     ).run(None)
     tables = {"events": result.events, "trades": result.trades}
     return DatabentoWriter(config).write(tables, path), result.events
@@ -419,8 +419,8 @@ def test_a_databento_run_holds_one_window_of_events(tmp_path, monkeypatch):
     def whole(path, cuts):
         # A loader the caller passes reads the whole file.
         loader = DatabentoLoader(config)
-        trade_source = DatabentoTradeReader(config, loader=loader)
-        Pipeline(config, loader=loader, trade_source=trade_source).run_windows(
+        trade_reader = DatabentoTradeReader(config, loader=loader)
+        Pipeline(config, loader=loader, trade_reader=trade_reader).run_windows(
             path, cuts, tmp_path / "w"
         )
 

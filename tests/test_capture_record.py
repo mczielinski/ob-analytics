@@ -188,7 +188,7 @@ class TestPipelineAppliesTheRecord:
         assert result.depth["volume"].tolist() == [10, 12, 5, 0]
 
     def test_a_tick_the_caller_set_is_kept(self, tmp_path):
-        from ob_analytics.depth_l2 import DepthCsvSource
+        from ob_analytics.depth_csv import DepthCsvSource
 
         cap = _l2_capture(tmp_path / "cap", _FINE_ROWS, {"tick_size": 0.001})
         pipeline = Pipeline(
@@ -201,7 +201,7 @@ class TestPipelineAppliesTheRecord:
         assert sorted(result.depth["price"].unique().tolist()) == [246, 248, 250]
 
     def test_other_settings_the_caller_made_are_kept(self, tmp_path):
-        from ob_analytics.depth_l2 import DepthCsvSource
+        from ob_analytics.depth_csv import DepthCsvSource
 
         cap = _l2_capture(tmp_path / "cap", _FINE_ROWS, {"tick_size": 0.001})
         result = Pipeline(PipelineConfig(depth_bps=50), source=DepthCsvSource()).run(

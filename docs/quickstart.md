@@ -137,7 +137,7 @@ See [Run from the command line](howto/cli.md) for all subcommands.
 | Step through pipeline stages, snapshot the book, compose figures | [Step-by-step control](howto/full-control.md) |
 | Use your own Bitstamp CSV or another instrument | [Use your own data](howto/your-own-data.md) |
 | Process LOBSTER message + orderbook files | [Process LOBSTER files](howto/lobster.md) |
-| Plug in your own loader, trade source, or format | [Plug in custom components](howto/custom-components.md) |
+| Plug in your own loader, trade reader, or format | [Plug in custom components](howto/custom-components.md) |
 | Theme plots, save artefacts, or use Plotly | [Save, load, and export](howto/output.md) |
 | Compute VPIN / Kyle's λ / OFI | [Compute flow toxicity](howto/flow-toxicity.md) |
 | Process Databento market-by-order files | [Process Databento files](howto/databento.md) |

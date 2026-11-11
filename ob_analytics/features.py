@@ -203,7 +203,7 @@ class ReturnsFeature:
     ``realized_vol``
         Standard deviation of ``log_return`` over the last :attr:`window`
         bars, the row's own included.  It is per bar and not annualized: only
-        clock bars span equal amounts of time, so there is no one factor that
+        time bars span equal amounts of time, so there is no one factor that
         would scale it to a year.
 
     Attributes

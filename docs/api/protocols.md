@@ -10,12 +10,12 @@ inheritance required.
 
 | Protocol | Method | Purpose |
 |----------|--------|---------|
-| `EventLoader` | `load(source) → DataFrame` | Parse raw L3 data into events |
-| `DepthSource` | `load(source) → DataFrame` | Load an L2 price-level feed into the depth frame |
-| `TradeSource` | `load(events, source) → DataFrame` | Build the canonical trades DataFrame |
+| `EventLoader` | `load(path) → DataFrame` | Parse raw L3 data into events |
+| `DepthLoader` | `load(path) → DataFrame` | Load an L2 price-level feed into the depth frame |
+| `TradeReader` | `load(events, path) → DataFrame` | Build the canonical trades DataFrame |
 | `DataWriter` | `write(data, dest)` | Serialize pipeline outputs |
 | `Source` | `level` · `feed_type` · `trade_attribution` · `settings` | The shape shared by every data source, file or live |
-| `OfflineSource` | `create_loader` · `create_trade_source` | A `Source` that replays stored files |
+| `OfflineSource` | `create_loader` · `create_trade_reader` | A `Source` that replays stored files |
 | `SupportsWriter` | `create_writer` | Optional: write a run in the source's own format |
 | `SupportsComputeDepth` | `compute_depth` | Optional: supply the depth the venue ships |
 | `SupportsRequiredContext` | `required_context` | Optional: name the `RunContext` fields a run needs |
@@ -37,7 +37,7 @@ A run carries these declarations on its result as `FeedDeclarations`, and
 `result.audit()` holds the run to them.
 
 A source keeps nothing from a run. The pipeline builds each run's loader and
-trade source from that run's config and `RunContext`, so one source can serve
+trade reader from that run's config and `RunContext`, so one source can serve
 many runs and many pipelines.
 
 ::: ob_analytics.protocols.Level
@@ -64,9 +64,9 @@ many runs and many pipelines.
 
 ::: ob_analytics.protocols.EventLoader
 
-::: ob_analytics.protocols.DepthSource
+::: ob_analytics.protocols.DepthLoader
 
-::: ob_analytics.protocols.TradeSource
+::: ob_analytics.protocols.TradeReader
 
 ::: ob_analytics.protocols.DataWriter
 

@@ -27,9 +27,9 @@ from ob_analytics.schemas import (
 )
 from ob_analytics.synth import (
     SynthConfig,
-    SyntheticLoader,
-    SyntheticTradeSource,
+    SynthLoader,
     SynthSession,
+    SynthTradeReader,
     generate_session,
 )
 
@@ -45,9 +45,9 @@ def _session(**overrides) -> SynthSession:
 
 def _run_pipeline(session: SynthSession):
     return Pipeline(
-        loader=SyntheticLoader(session),
-        trade_source=SyntheticTradeSource(session),
-    ).run(source=None)
+        loader=SynthLoader(session),
+        trade_reader=SynthTradeReader(session),
+    ).run(path=None)
 
 
 # ── (a) Determinism ───────────────────────────────────────────────────
@@ -357,11 +357,11 @@ def test_empty_session_raises():
 
 def test_loader_returns_independent_copy():
     session = _session(seed=2)
-    loader = SyntheticLoader(session)
-    frame = loader.load(source=None)
+    loader = SynthLoader(session)
+    frame = loader.load(path=None)
     frame.loc[frame.index[0], "price"] = -123.0
     # Mutating the loaded frame must not corrupt the stored session.
     assert session.events["price"].iloc[0] != -123.0
-    trade_source = SyntheticTradeSource(session)
-    tframe = trade_source.load(session.events, source=None)
+    trade_reader = SynthTradeReader(session)
+    tframe = trade_reader.load(session.events, path=None)
     assert list(tframe.columns) == list(session.trades.columns)

@@ -356,16 +356,16 @@ class TestSameInstantOrder:
         from ob_analytics.schemas import time_order_keys
         from ob_analytics.synth import (
             SynthConfig,
-            SyntheticLoader,
-            SyntheticTradeSource,
+            SynthLoader,
+            SynthTradeReader,
             generate_session,
         )
 
         session = generate_session(SynthConfig(seed=3, duration=60.0))
         result = Pipeline(
-            loader=SyntheticLoader(session),
-            trade_source=SyntheticTradeSource(session),
-        ).run(source=None)
+            loader=SynthLoader(session),
+            trade_reader=SynthTradeReader(session),
+        ).run(path=None)
         events = result.events.sort_values(
             time_order_keys(result.events), kind="stable"
         ).reset_index(drop=True)

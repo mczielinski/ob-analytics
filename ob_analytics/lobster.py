@@ -62,7 +62,7 @@ from ob_analytics.protocols import (
     Level,
     RunContext,
     TradeAttribution,
-    TradeSource,
+    TradeReader,
     WriteTarget,
 )
 from ob_analytics.quality import CROSSED_TOLERANCE_PCT, _book_crossing
@@ -183,12 +183,12 @@ class LobsterLoader:
         #: have.
         self.message_rows: int | None = None
 
-    def load(self, source: Any) -> pd.DataFrame:
+    def load(self, path: Any) -> pd.DataFrame:
         """Load LOBSTER message data and return a cleaned events DataFrame.
 
         Parameters
         ----------
-        source : str, Path, or directory
+        path : str, Path, or directory
             Path to a LOBSTER message CSV, or a directory containing
             message/orderbook file pairs.  When a directory is given the
             loader auto-discovers files by the LOBSTER naming convention.
@@ -197,8 +197,8 @@ class LobsterLoader:
         -------
         pandas.DataFrame
         """
-        source = Path(source)
-        msg_path = self._resolve_message_file(source)
+        path = Path(path)
+        msg_path = self._resolve_message_file(path)
 
         logger.info("LobsterLoader: reading {}", msg_path)
         where = f"LobsterLoader.load({msg_path})"
@@ -298,7 +298,7 @@ class LobsterLoader:
             0,
         )
 
-        # ``original_number`` captures the 1-based row in the source message
+        # ``original_number`` captures the 1-based row in the message
         # file (gaps appear where halt/cross/other event types were filtered
         # out above). ``event_id`` is a contiguous 1..N surrogate. These match
         # the Bitstamp loader's convention so trade provenance (maker_og /
@@ -339,7 +339,7 @@ class LobsterLoader:
             events = attach_ingest_seq(events)
 
         # Discover and store the orderbook file path for depth computation
-        self.orderbook_path = self._resolve_orderbook_file(source)
+        self.orderbook_path = self._resolve_orderbook_file(path)
 
         # Optional per-row instrument identity (issue #147); a no-op unless a
         # venue/symbol was supplied for the run.
@@ -365,23 +365,23 @@ class LobsterLoader:
         return candidates[0] if candidates else None
 
     @staticmethod
-    def _resolve_message_file(source: Path) -> Path:
-        """Find the message CSV from *source* (file or directory)."""
-        if source.is_file():
-            return source
-        if source.is_dir():
-            found = LobsterLoader._glob_lobster_file(source, "message")
+    def _resolve_message_file(path: Path) -> Path:
+        """Find the message CSV from *path* (file or directory)."""
+        if path.is_file():
+            return path
+        if path.is_dir():
+            found = LobsterLoader._glob_lobster_file(path, "message")
             if found is not None:
                 return found
-            raise FileNotFoundError(f"No LOBSTER message file found in {source}")
-        raise FileNotFoundError(f"Path does not exist: {source}")
+            raise FileNotFoundError(f"No LOBSTER message file found in {path}")
+        raise FileNotFoundError(f"Path does not exist: {path}")
 
     @staticmethod
-    def _resolve_orderbook_file(source: Path) -> Path | None:
-        """Find the orderbook CSV from *source* (file or directory)."""
-        source = Path(source)
-        if source.is_dir():
-            return LobsterLoader._glob_lobster_file(source, "orderbook")
+    def _resolve_orderbook_file(path: Path) -> Path | None:
+        """Find the orderbook CSV from *path* (file or directory)."""
+        path = Path(path)
+        if path.is_dir():
+            return LobsterLoader._glob_lobster_file(path, "orderbook")
         return None
 
 
@@ -396,7 +396,7 @@ class LobsterTradeReader:
     directly from those rows in the events frame; no matching is needed
     because the data already pairs maker rows with executions.
 
-    Satisfies the :class:`~ob_analytics.protocols.TradeSource` protocol.
+    Satisfies the :class:`~ob_analytics.protocols.TradeReader` protocol.
 
     Parameters
     ----------
@@ -409,14 +409,14 @@ class LobsterTradeReader:
     def __init__(self, config: PipelineConfig | None = None) -> None:
         self._config = LOBSTER_GRID.config(config)
 
-    def load(self, events: pd.DataFrame, source: Any) -> pd.DataFrame:
+    def load(self, events: pd.DataFrame, path: Any) -> pd.DataFrame:
         """Build a trades DataFrame from LOBSTER execution events.
 
         Parameters
         ----------
         events : pandas.DataFrame
             Events with ``raw_event_type`` column populated.
-        source
+        path
             Unused; trade information is embedded in *events*.
 
         Returns
@@ -1276,9 +1276,9 @@ class LobsterSource:
             symbol=ctx.symbol,
         )
 
-    def create_trade_source(
+    def create_trade_reader(
         self, config: PipelineConfig, ctx: RunContext, loader: Any
-    ) -> TradeSource:
+    ) -> TradeReader:
         return LobsterTradeReader(config)
 
     def create_writer(
@@ -1290,7 +1290,7 @@ class LobsterSource:
         self,
         events: pd.DataFrame,
         config: Any,
-        source: Any,
+        path: Any,
         ctx: RunContext,
         loader: Any,
     ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
@@ -1299,7 +1299,7 @@ class LobsterSource:
         read = loader if isinstance(loader, LobsterLoader) else None
         ob_path = read.orderbook_path if read is not None else None
         if ob_path is None:
-            ob_path = LobsterLoader._resolve_orderbook_file(Path(source))
+            ob_path = LobsterLoader._resolve_orderbook_file(Path(path))
         _warn_if_book_crosses(events, from_orderbook=ob_path is not None)
         if ob_path is None:
             warnings.warn(
@@ -1317,13 +1317,13 @@ class LobsterSource:
             events, ob_path, config, message_rows=message_rows
         )
 
-    def venue_book(self, source: Any, config: PipelineConfig) -> BookLevels | None:
+    def venue_book(self, path: Any, config: PipelineConfig) -> BookLevels | None:
         """The venue's own book: the orderbook file next to the messages.
 
         ``ob-analytics audit`` compares the book rebuilt from the messages
-        with it.  ``None`` when *source* has no orderbook file.
+        with it.  ``None`` when *path* has no orderbook file.
         """
-        ob_path = LobsterLoader._resolve_orderbook_file(Path(source))
+        ob_path = LobsterLoader._resolve_orderbook_file(Path(path))
         if ob_path is None:
             return None
         return lobster_venue_book(ob_path, config)

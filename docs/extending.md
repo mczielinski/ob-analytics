@@ -45,8 +45,8 @@ two coordinates, `level` (`Level.L2` / `Level.L3`) and `feed_type`
 implements one or both **capabilities**:
 
 - **`OfflineSource`** — replay stored files. Two factories are required: a
-  loader (`EventLoader` for L3, `DepthSource` for L2) and a trade source
-  (`TradeSource`). The pipeline calls them once for each run, with that run's
+  loader (`EventLoader` for L3, `DepthLoader` for L2) and a trade reader
+  (`TradeReader`). The pipeline calls them once for each run, with that run's
   config and `RunContext`, so a source keeps nothing from one run to the next.
   Three more capabilities are optional, each its own small protocol:
   `SupportsWriter` (`create_writer`, a writer in the venue's own format),
@@ -87,22 +87,22 @@ class CoinbaseLoader:
     def __init__(self, config: PipelineConfig) -> None:
         self.config = config
 
-    def load(self, source: Any) -> pd.DataFrame:
+    def load(self, path: Any) -> pd.DataFrame:
         # Parse the venue feed into the canonical event columns (listed
         # below this example). See ob_analytics.bitstamp.BitstampLoader for
         # a full implementation.
-        raw = pd.read_json(source)
+        raw = pd.read_json(path)
         ...
         return cast_events(events)
 
 
 class CoinbaseTradeReader:
-    """Satisfies the TradeSource Protocol."""
+    """Satisfies the TradeReader Protocol."""
 
     def __init__(self, config: PipelineConfig) -> None:
         self.config = config
 
-    def load(self, events: pd.DataFrame, source: Any) -> pd.DataFrame:
+    def load(self, events: pd.DataFrame, path: Any) -> pd.DataFrame:
         # Project explicit trade records into the canonical trades schema
         # (listed below this example). Return a frame, never None: a run
         # with no trades returns an empty frame with those columns.
@@ -126,7 +126,7 @@ class CoinbaseSource:
     def create_loader(self, config: PipelineConfig, ctx: RunContext) -> CoinbaseLoader:
         return CoinbaseLoader(config)
 
-    def create_trade_source(
+    def create_trade_reader(
         self, config: PipelineConfig, ctx: RunContext, loader: Any
     ) -> CoinbaseTradeReader:
         # loader is this run's loader, for trades that come off the same read.
@@ -169,7 +169,7 @@ come out right. The loader's events need these columns:
 | `direction` | categorical | `bid` or `ask` |
 | `fill` | `int64` | The size executed at this event, in lots; `0` when nothing traded |
 
-The pipeline adds `type` itself. The trade source's frame needs `timestamp`,
+The pipeline adds `type` itself. The trade reader's frame needs `timestamp`,
 `price`, `volume`, `direction` (`buy` or `sell`, the taker's side),
 `maker_event_id` and `taker_event_id`. [The schema](schema.md) says what each
 column means, including how `volume` and `fill` change over an order's life.

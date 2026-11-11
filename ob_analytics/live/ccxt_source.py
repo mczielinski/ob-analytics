@@ -380,7 +380,7 @@ class CcxtSource:
 
     Satisfies :class:`~ob_analytics.live._base.LiveSource` (live only — a CCXT
     capture's ``depth.csv`` replays offline through the generic
-    :class:`~ob_analytics.depth_l2.DepthCsvSource`).  Instances are not
+    :class:`~ob_analytics.depth_csv.DepthCsvSource`).  Instances are not
     reusable across runs -- construct a fresh one per capture.
     """
 

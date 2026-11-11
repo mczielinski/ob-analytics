@@ -356,7 +356,7 @@ class TestThePipelineFillsDirectionsLikeResolveDirection:
     @pytest.fixture
     def blanked(self, tmp_path):
         from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
-        from ob_analytics.depth_l2 import DepthCsvWriter
+        from ob_analytics.depth_csv import DepthCsvWriter
 
         trades = toy_l2_trades()
         trades["direction"] = pd.Categorical(

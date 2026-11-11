@@ -85,9 +85,9 @@ from ob_analytics.schemas import (
 
 __all__ = [
     "SynthConfig",
+    "SynthLoader",
     "SynthSession",
-    "SyntheticLoader",
-    "SyntheticTradeSource",
+    "SynthTradeReader",
     "generate_session",
 ]
 
@@ -766,7 +766,7 @@ class _Simulator:
         return cast_columns(trades, TRADE_DTYPES)
 
 
-class SyntheticLoader:
+class SynthLoader:
     """Serve a pre-generated session's events to :class:`~ob_analytics.pipeline.Pipeline`.
 
     Satisfies the :class:`~ob_analytics.protocols.EventLoader` protocol, so a
@@ -774,32 +774,32 @@ class SyntheticLoader:
 
         from ob_analytics import Pipeline
         from ob_analytics.synth import (
-            generate_session, SyntheticLoader, SyntheticTradeSource,
+            generate_session, SynthLoader, SynthTradeReader,
         )
 
         session = generate_session(seed=1)
         result = Pipeline(
-            loader=SyntheticLoader(session),
-            trade_source=SyntheticTradeSource(session),
-        ).run(source=None)
+            loader=SynthLoader(session),
+            trade_reader=SynthTradeReader(session),
+        ).run(path=None)
     """
 
     def __init__(self, session: SynthSession) -> None:
         self._session = session
 
-    def load(self, source: Any = None) -> pd.DataFrame:
+    def load(self, path: Any = None) -> pd.DataFrame:
         return self._session.events.copy()
 
 
-class SyntheticTradeSource:
+class SynthTradeReader:
     """Serve a pre-generated session's trades to :class:`~ob_analytics.pipeline.Pipeline`.
 
-    Satisfies the :class:`~ob_analytics.protocols.TradeSource` protocol. See
-    :class:`SyntheticLoader` for the paired usage.
+    Satisfies the :class:`~ob_analytics.protocols.TradeReader` protocol. See
+    :class:`SynthLoader` for the paired usage.
     """
 
     def __init__(self, session: SynthSession) -> None:
         self._session = session
 
-    def load(self, events: pd.DataFrame, source: Any = None) -> pd.DataFrame:
+    def load(self, events: pd.DataFrame, path: Any = None) -> pd.DataFrame:
         return self._session.trades.copy()

@@ -33,14 +33,14 @@ from ob_analytics.book import order_book
 from ob_analytics.data import load_result, save_data
 from ob_analytics.databento import DatabentoSource
 from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
-from ob_analytics.depth_l2 import DepthCsvSettings, DepthCsvSource
+from ob_analytics.depth_csv import DepthCsvSettings, DepthCsvSource
 from ob_analytics.lobster import LobsterSource
 from ob_analytics.pipeline import Pipeline, PipelineResult
 from ob_analytics.protocols import Level, RunContext
 from ob_analytics.synth import (
     SynthConfig,
-    SyntheticLoader,
-    SyntheticTradeSource,
+    SynthLoader,
+    SynthTradeReader,
     generate_session,
 )
 from tests._golden import assert_same_result
@@ -74,8 +74,8 @@ _SESSION = SynthConfig(seed=418, duration=30.0)
 def _synth_pipeline(ctx: RunContext) -> Pipeline:
     session = generate_session(_SESSION)
     return Pipeline(
-        loader=SyntheticLoader(session),
-        trade_source=SyntheticTradeSource(session),
+        loader=SynthLoader(session),
+        trade_reader=SynthTradeReader(session),
         ctx=ctx,
     )
 

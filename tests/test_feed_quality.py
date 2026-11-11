@@ -451,7 +451,7 @@ class TestTradeAttributionDeclarations:
         assert DatabentoSource().trade_attribution is TradeAttribution.MAKER_ONLY
 
     def test_price_level_sources_name_neither(self):
-        from ob_analytics.depth_l2 import DepthCsvSource
+        from ob_analytics.depth_csv import DepthCsvSource
         from ob_analytics.live.ccxt_source import CcxtSource
 
         assert DepthCsvSource().trade_attribution is TradeAttribution.NONE
@@ -875,7 +875,7 @@ class TestClocksDeclarations:
 
     def test_sources_with_two_clocks(self):
         from ob_analytics.databento import DatabentoSource
-        from ob_analytics.depth_l2 import DepthCsvSource
+        from ob_analytics.depth_csv import DepthCsvSource
 
         for source in (BitstampSource(), DatabentoSource(), DepthCsvSource()):
             assert clocks_of(source) is Clocks.BOTH

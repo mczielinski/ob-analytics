@@ -36,7 +36,7 @@ from ob_analytics import (
     group_by_instrument,
 )
 from ob_analytics.bitstamp import BitstampLoader
-from ob_analytics.depth_l2 import L2DepthLoader
+from ob_analytics.depth_csv import DepthCsvLoader
 from ob_analytics.live._base import CaptureConfig
 from ob_analytics.live.ccxt_source import CcxtSettings, CcxtSource
 from ob_analytics.lobster import LobsterLoader, LobsterSource
@@ -205,16 +205,16 @@ class TestLobsterIdentity:
 
 class TestL2DepthIdentity:
     def test_loader_tags_venue_and_symbol(self, l2_depth_dir: Path):
-        depth = L2DepthLoader(venue="binance", symbol="BTC/USDT").load(l2_depth_dir)
+        depth = DepthCsvLoader(venue="binance", symbol="BTC/USDT").load(l2_depth_dir)
         _assert_identity(depth, venue="binance", symbol="BTC/USDT")
 
     def test_generic_venue_is_na_when_only_symbol_given(self, l2_depth_dir: Path):
         # A generic price-level CSV has no venue of its own: venue stays NA.
-        depth = L2DepthLoader(symbol="BTC/USDT").load(l2_depth_dir)
+        depth = DepthCsvLoader(symbol="BTC/USDT").load(l2_depth_dir)
         _assert_identity(depth, venue=None, symbol="BTC/USDT")
 
     def test_default_load_is_untagged(self, l2_depth_dir: Path):
-        depth = L2DepthLoader().load(l2_depth_dir)
+        depth = DepthCsvLoader().load(l2_depth_dir)
         assert VENUE_COLUMN not in depth.columns
         assert SYMBOL_COLUMN not in depth.columns
 
@@ -289,8 +289,8 @@ class TestCcxtIdentity:
 
 class TestGroupByInstrument:
     def test_two_venue_frame_splits_by_venue(self, l2_depth_dir: Path):
-        binance = L2DepthLoader(venue="binance", symbol="BTC/USDT").load(l2_depth_dir)
-        kraken = L2DepthLoader(venue="kraken", symbol="BTC/USD").load(l2_depth_dir)
+        binance = DepthCsvLoader(venue="binance", symbol="BTC/USDT").load(l2_depth_dir)
+        kraken = DepthCsvLoader(venue="kraken", symbol="BTC/USD").load(l2_depth_dir)
         combined = pd.concat([binance, kraken], ignore_index=True)
 
         # The identity columns concatenate cleanly (stay string dtype).
@@ -309,6 +309,6 @@ class TestGroupByInstrument:
             assert (part[SYMBOL_COLUMN] == key[1]).all()
 
     def test_group_by_instrument_raises_on_untagged_frame(self, l2_depth_dir: Path):
-        depth = L2DepthLoader().load(l2_depth_dir)  # no identity columns
+        depth = DepthCsvLoader().load(l2_depth_dir)  # no identity columns
         with pytest.raises(ConfigError, match="no instrument-identity columns"):
             group_by_instrument(depth)

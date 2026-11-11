@@ -14,7 +14,7 @@ import pytest
 
 from ob_analytics.data import save_data
 from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
-from ob_analytics.depth_l2 import DepthCsvWriter
+from ob_analytics.depth_csv import DepthCsvWriter
 from ob_analytics.pipeline import Pipeline
 from ob_analytics.schemas import (
     SCHEMA_VERSION,

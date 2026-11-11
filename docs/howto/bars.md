@@ -11,7 +11,7 @@ VWAP, and the buy/sell split of that volume.
 What differs between bar types is only where the boundaries fall, so that
 decision is a **rule** you name.
 
-## Clock bars (OHLCV)
+## Time bars (OHLCV)
 
 The classic: a new bar every fixed span of the clock.
 
@@ -130,7 +130,7 @@ save_figure(fig, "volume_bars.png")
 Candles are coloured by whether the bar closed up or down, over a volume strip
 coloured by which side was the net aggressor.
 
-The x axis follows the rule. Clock bars occupy equal spans of time, so they are
+The x axis follows the rule. Time bars occupy equal spans of time, so they are
 drawn on a real time axis and a stretch with no trading shows as the gap it
 was. Activity bars occupy wildly unequal spans — a burst can close several
 inside a second — so they get one equal slot each, labelled with their closing

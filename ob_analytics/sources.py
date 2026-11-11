@@ -7,7 +7,7 @@ One registry keyed by name replaces the previous split between the offline
 
 Built-in sources self-register at import time (see the bottom of
 :mod:`ob_analytics.bitstamp`, :mod:`ob_analytics.lobster`,
-:mod:`ob_analytics.depth_l2`, and :mod:`ob_analytics.live.ccxt_source`).
+:mod:`ob_analytics.depth_csv`, and :mod:`ob_analytics.live.ccxt_source`).
 Third-party sources ship in their own package and are found through the
 ``ob_analytics.sources`` entry-point group — :func:`load_source_plugins`
 discovers and registers them with no edit to this core.

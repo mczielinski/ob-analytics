@@ -46,7 +46,7 @@ into structured analytics:
   another venue can ship as its own package and register through that group,
   with no change here.
 - **Optional methods are separate protocols.** An offline source must have
-  only `create_loader` and `create_trade_source`. Writing its own format
+  only `create_loader` and `create_trade_reader`. Writing its own format
   (`SupportsWriter`), supplying its own depth (`SupportsComputeDepth`) and
   naming the `RunContext` fields it needs (`SupportsRequiredContext`) are each
   a protocol of their own, found with `isinstance`. A live source works the
@@ -56,7 +56,7 @@ into structured analytics:
   per-session parameters (trading date, time zone, symbol, venue) live on
   `RunContext`. Give one to `Pipeline(source=..., ctx=...)` as the default for
   every run, or to `Pipeline.run(path, ctx=...)` for that run alone. The
-  pipeline builds each run's loader and trade source from that run's config
+  pipeline builds each run's loader and trade reader from that run's config
   and context, and a source keeps nothing from a run, so one source serves
   many runs, and many pipelines, at once.
 - **A loader knows its own feed format.** How a file encodes prices and
@@ -168,8 +168,8 @@ venue-specific defaults and capabilities.
 classDiagram
     class Pipeline {
         +config: PipelineConfig
-        +run(source, ctx) PipelineResult
-        +run_windows(source, boundaries, output, carry, ctx) Path
+        +run(path, ctx) PipelineResult
+        +run_windows(path, boundaries, output, carry, ctx) Path
         +from_source(name, **kwargs)$ Pipeline
     }
 
@@ -193,8 +193,8 @@ classDiagram
     }
     class OfflineSource {
         <<Protocol>>
-        +create_loader(config, ctx) EventLoader | DepthSource
-        +create_trade_source(config, ctx, loader) TradeSource
+        +create_loader(config, ctx) EventLoader | DepthLoader
+        +create_trade_reader(config, ctx, loader) TradeReader
     }
     class SupportsWriter {
         <<Protocol>>
@@ -202,7 +202,7 @@ classDiagram
     }
     class SupportsComputeDepth {
         <<Protocol>>
-        +compute_depth(events, config, source, ctx, loader) tuple | None
+        +compute_depth(events, config, path, ctx, loader) tuple | None
     }
     class SupportsRequiredContext {
         <<Protocol>>
@@ -231,15 +231,15 @@ classDiagram
 
     class EventLoader {
         <<Protocol>>
-        +load(source) DataFrame
+        +load(path) DataFrame
     }
-    class DepthSource {
+    class DepthLoader {
         <<Protocol>>
-        +load(source) DataFrame
+        +load(path) DataFrame
     }
-    class TradeSource {
+    class TradeReader {
         <<Protocol>>
-        +load(events, source) DataFrame
+        +load(events, path) DataFrame
     }
     class DataWriter {
         <<Protocol>>
@@ -262,8 +262,8 @@ classDiagram
 
     Pipeline --> PipelineConfig
     Pipeline ..> EventLoader : one per run (L3)
-    Pipeline ..> DepthSource : one per run (L2)
-    Pipeline ..> TradeSource : one per run
+    Pipeline ..> DepthLoader : one per run (L2)
+    Pipeline ..> TradeReader : one per run
     Pipeline --> PipelineResult
     Pipeline ..> OfflineSource : source=
     Pipeline ..> RunContext : per-run params
@@ -308,7 +308,7 @@ its `FeedType` crossing invariant:
   so `set_order_types`, `order_aggressiveness`, and queue reconstruction run.
 - **L2 (market-by-price)** — price-level feeds (Binance, Kalshi, Polymarket,
   most CCXT sources) publish `[price, quantity]` levels and diffs with **no
-  order IDs**. The loader (a `DepthSource`) yields the depth frame directly and
+  order IDs**. The loader (a `DepthLoader`) yields the depth frame directly and
   the pipeline **skips the per-order stages**: `PipelineResult.events` comes
   back empty (schema-valid) and `PipelineResult.level is Level.L2`.
   `DepthMetricsEngine` already consumes an absolute price-level book, so depth /
@@ -338,7 +338,7 @@ ob_analytics/
 ├── sources.py            # SOURCES registry: register_source, list_sources, get_source, entry-point discovery
 ├── _registry.py          # Registry and load_plugins: the one lookup and plug-in loader every registry uses
 ├── config.py             # PipelineConfig, InstrumentGrid, SourceSettings, Credential (frozen Pydantic models)
-├── protocols.py          # EventLoader, DepthSource, TradeSource, DataWriter, Source, OfflineSource, RunContext
+├── protocols.py          # EventLoader, DepthLoader, TradeReader, DataWriter, Source, OfflineSource, RunContext
 ├── schemas.py            # column constants, dtypes, unit metadata + validators (validate_events_df, …)
 ├── exceptions.py         # ObAnalyticsError hierarchy
 ├── _secrets.py           # removes loaded credentials from files and logs
@@ -348,10 +348,10 @@ ob_analytics/
 ├── bitstamp.py           # BitstampLoader, BitstampTradeReader, BitstampWriter, BitstampSource (offline + live)
 ├── lobster.py            # LobsterLoader, LobsterTradeReader, LobsterWriter, LobsterSource
 ├── databento.py          # DatabentoLoader, DatabentoTradeReader, DatabentoWriter, DatabentoSource (DBN MBO)
-├── depth_l2.py           # L2DepthLoader, L2TradeReader, DepthCsvWriter, DepthCsvSource (price-level)
+├── depth_csv.py           # DepthCsvLoader, DepthCsvTradeReader, DepthCsvWriter, DepthCsvSource (price-level)
 ├── capture_files.py      # a capture folder's file names and columns, FileCaptureSink, repair_files
 ├── capture_record.py     # a capture's meta.json: read_record, write_record, CaptureRecord
-├── synth.py              # synthetic L3 sessions: generate_session, SyntheticLoader, SyntheticTradeSource
+├── synth.py              # synthetic L3 sessions: generate_session, SynthLoader, SynthTradeReader
 ├── datasets.py           # tiny hand-checkable toy datasets for teaching and tests
 ├── engine/               # Order-book engine: events in, book states + lifecycles out
 │   ├── __init__.py       # the interface: book_state, order_lifecycles, queue_positions, queue_age_grid, crossed_prefix_counts

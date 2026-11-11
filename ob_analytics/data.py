@@ -352,7 +352,7 @@ def _read_versioned_parquet(path: Path) -> pd.DataFrame:
     raw = metadata.get(SCHEMA_VERSION_KEY)
     version = raw.decode() if raw is not None else None
     # The caller of load_data, through _read_versioned_parquet.
-    check_schema_version(version, source=path.name, stacklevel=4)
+    check_schema_version(version, path=path.name, stacklevel=4)
     df = table.to_pandas()
     # An older version stored float prices and sizes; casting them to integer
     # ticks and lots would change the numbers, so only a current file is cast.

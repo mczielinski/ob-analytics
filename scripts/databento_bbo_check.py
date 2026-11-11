@@ -159,16 +159,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def read_bbo_frame(
-    source: Any,
+    data: Any,
     *,
     instrument_id: int | None = None,
     publisher_id: int | None = None,
 ) -> pd.DataFrame:
-    """Return the top-of-book records of *source*, one instrument's only.
+    """Return the top-of-book records of *data*, one instrument's only.
 
     Parameters
     ----------
-    source : str, Path or pandas.DataFrame
+    data : str, Path or pandas.DataFrame
         A ``.dbn`` / ``.dbn.zst`` file holding one of :data:`BBO_SCHEMAS`, or
         a frame of its records as ``DBNStore.to_df(price_type="fixed")`` gives
         them.
@@ -194,19 +194,19 @@ def read_bbo_frame(
             part = part[part["publisher_id"] == publisher_id]
         return part[[*BBO_COLUMNS, "instrument_id", "publisher_id"]]
 
-    if isinstance(source, pd.DataFrame):
-        kept = [narrow(source.reset_index() if source.index.name else source)]
+    if isinstance(data, pd.DataFrame):
+        kept = [narrow(data.reset_index() if data.index.name else data)]
     else:
         import databento as db
 
         from ob_analytics.databento import _close_dbn
 
-        store = db.DBNStore.from_file(Path(source))
+        store = db.DBNStore.from_file(Path(data))
         try:
             schema = str(store.metadata.schema or "")
             if schema not in BBO_SCHEMAS:
                 raise ValueError(
-                    f"{source} holds the {schema!r} schema; this check reads "
+                    f"{data} holds the {schema!r} schema; this check reads "
                     f"{', '.join(BBO_SCHEMAS)}"
                 )
             kept = [
@@ -217,7 +217,7 @@ def read_bbo_frame(
             _close_dbn(store)
 
     if not kept or not sum(map(len, kept)):
-        raise ValueError(f"{source} holds no top-of-book records to compare")
+        raise ValueError(f"{data} holds no top-of-book records to compare")
     frame = pd.concat(kept, ignore_index=True)
 
     for column in ("instrument_id", "publisher_id"):

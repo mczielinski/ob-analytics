@@ -9,11 +9,11 @@ instead of faking per-order state (see :class:`~ob_analytics.protocols.Level`).
 
 The symmetric set, mirroring the other formats:
 
-* :class:`L2DepthLoader` — reads the canonical L2 CSV schema (a snapshot
+* :class:`DepthCsvLoader` — reads the canonical L2 CSV schema (a snapshot
   followed by price-level updates) straight into the depth frame.  Satisfies
-  :class:`~ob_analytics.protocols.DepthSource`.
-* :class:`L2TradeReader` — reads a companion ``trades.csv`` of raw prints.
-  Satisfies :class:`~ob_analytics.protocols.TradeSource`.
+  :class:`~ob_analytics.protocols.DepthLoader`.
+* :class:`DepthCsvTradeReader` — reads a companion ``trades.csv`` of raw prints.
+  Satisfies :class:`~ob_analytics.protocols.TradeReader`.
 * :class:`DepthCsvWriter` — round-trips the depth frame (and trades) back to
   the L2 CSV schema.  Satisfies :class:`~ob_analytics.protocols.DataWriter`.
 * :class:`DepthCsvSource` — the ``depth_csv`` source descriptor, declaring
@@ -79,12 +79,12 @@ from ob_analytics.config import InstrumentGrid, PipelineConfig, SourceSettings
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import (
     DataWriter,
-    DepthSource,
+    DepthLoader,
     FeedType,
     Level,
     RunContext,
     TradeAttribution,
-    TradeSource,
+    TradeReader,
     WriteTarget,
 )
 from ob_analytics.schemas import (
@@ -131,8 +131,8 @@ _TRADE_SIDE_MAP: dict[str, str] = {
 class DepthCsvSettings(SourceSettings):
     """How a price-level CSV encodes its timestamps and prices.
 
-    The settings of :class:`DepthCsvSource`, read by :class:`L2DepthLoader`,
-    :class:`L2TradeReader` and :class:`DepthCsvWriter`.  The defaults are what
+    The settings of :class:`DepthCsvSource`, read by :class:`DepthCsvLoader`,
+    :class:`DepthCsvTradeReader` and :class:`DepthCsvWriter`.  The defaults are what
     a capture writes: millisecond epochs and prices in the quote currency.
 
     Attributes
@@ -221,13 +221,13 @@ def _to_lots(raw_size: pd.Series, cfg: PipelineConfig, where: str) -> np.ndarray
     return size_to_lots(size, cfg.lot_size)
 
 
-# ── L2DepthLoader ─────────────────────────────────────────────────────
+# ── DepthCsvLoader ─────────────────────────────────────────────────────
 
 
-class L2DepthLoader:
+class DepthCsvLoader:
     """Load a price-level depth stream into the canonical depth frame.
 
-    Satisfies the :class:`~ob_analytics.protocols.DepthSource` protocol.
+    Satisfies the :class:`~ob_analytics.protocols.DepthLoader` protocol.
 
     Parameters
     ----------
@@ -244,7 +244,7 @@ class L2DepthLoader:
         untagged.
     """
 
-    #: Depth-file basenames tried when *source* is a directory (in order).
+    #: Depth-file basenames tried when *path* is a directory (in order).
     _DEPTH_NAMES: tuple[str, ...] = (DEPTH_NAME, "depth_updates.csv", "l2.csv")
 
     def __init__(
@@ -256,16 +256,16 @@ class L2DepthLoader:
         symbol: str | None = None,
     ) -> None:
         self._config = config or PipelineConfig()
-        self._settings = _csv_settings(settings, "L2DepthLoader")
+        self._settings = _csv_settings(settings, "DepthCsvLoader")
         self._venue = venue
         self._symbol = symbol
 
-    def load(self, source: str | Path) -> pd.DataFrame:
-        """Read *source* and return a canonical depth DataFrame.
+    def load(self, path: str | Path) -> pd.DataFrame:
+        """Read *path* and return a canonical depth DataFrame.
 
         Parameters
         ----------
-        source : str or Path
+        path : str or Path
             The L2 CSV file, or a directory containing ``depth.csv``.
 
         Returns
@@ -278,11 +278,11 @@ class L2DepthLoader:
             has it, and ``origin`` (which part of a capture wrote the row) is
             kept when the file has it.
         """
-        path = self._resolve_depth_file(source)
-        where = f"L2DepthLoader.load({path})"
-        logger.info("L2DepthLoader: reading {}", path)
-        raw = read_csv_file(path, where)
-        validate_non_empty(raw, "L2DepthLoader.load")
+        file = self._resolve_depth_file(path)
+        where = f"DepthCsvLoader.load({file})"
+        logger.info("DepthCsvLoader: reading {}", file)
+        raw = read_csv_file(file, where)
+        validate_non_empty(raw, "DepthCsvLoader.load")
 
         ts_col = _first_present(raw.columns, _TIMESTAMP_COLUMNS)
         price_col = _first_present(raw.columns, ("price",))
@@ -297,7 +297,7 @@ class L2DepthLoader:
         missing = [name for name, col in required.items() if col is None]
         if missing:
             raise ConfigError(
-                f"L2DepthLoader.load: missing required columns {missing}. "
+                f"DepthCsvLoader.load: missing required columns {missing}. "
                 f"Need a timestamp, price, side ({'/'.join(_SIDE_COLUMNS)}), and "
                 f"volume ({'/'.join(_VOLUME_COLUMNS)}). "
                 f"Present: {list(raw.columns)}"
@@ -346,7 +346,7 @@ class L2DepthLoader:
         if unknown.any():
             bad = sorted(raw.loc[unknown.to_numpy(), side_col].astype(str).unique())
             raise ConfigError(
-                f"L2DepthLoader.load: unrecognised side value(s) {bad}; "
+                f"DepthCsvLoader.load: unrecognised side value(s) {bad}; "
                 f"expected one of {sorted(_SIDE_TO_DIRECTION)}."
             )
 
@@ -362,7 +362,7 @@ class L2DepthLoader:
             depth = attach_ingest_seq(depth)
 
         logger.info(
-            "L2DepthLoader: {} price-level updates ({} bid, {} ask)",
+            "DepthCsvLoader: {} price-level updates ({} bid, {} ask)",
             len(depth),
             int((depth["direction"] == "bid").sum()),
             int((depth["direction"] == "ask").sum()),
@@ -376,8 +376,8 @@ class L2DepthLoader:
         )
         return depth
 
-    def _resolve_depth_file(self, source: str | Path) -> Path:
-        p = Path(source)
+    def _resolve_depth_file(self, path: str | Path) -> Path:
+        p = Path(path)
         if p.is_file():
             return p
         if p.is_dir():
@@ -386,16 +386,16 @@ class L2DepthLoader:
                 if candidate.exists():
                     return candidate
             raise FileNotFoundError(
-                f"L2DepthLoader: no depth file ({' / '.join(self._DEPTH_NAMES)}) "
+                f"DepthCsvLoader: no depth file ({' / '.join(self._DEPTH_NAMES)}) "
                 f"found in {p}."
             )
-        raise FileNotFoundError(f"L2DepthLoader: path does not exist: {source}")
+        raise FileNotFoundError(f"DepthCsvLoader: path does not exist: {path}")
 
 
-# ── L2TradeReader ─────────────────────────────────────────────────────
+# ── DepthCsvTradeReader ─────────────────────────────────────────────────────
 
 
-class L2TradeReader:
+class DepthCsvTradeReader:
     """Read raw trade prints from a companion ``trades.csv``.
 
     Projects each print into the canonical trades schema.  Price-level feeds
@@ -409,7 +409,7 @@ class L2TradeReader:
     Trades are optional for an L2 run: a missing / empty ``trades.csv`` yields
     an empty trades frame (depth analytics still run).
 
-    Satisfies the :class:`~ob_analytics.protocols.TradeSource` protocol.
+    Satisfies the :class:`~ob_analytics.protocols.TradeReader` protocol.
 
     Parameters
     ----------
@@ -418,7 +418,7 @@ class L2TradeReader:
         ``lot_size``.
     settings : DepthCsvSettings, optional
         How the file encodes its timestamps and prices, as for
-        :class:`L2DepthLoader`.
+        :class:`DepthCsvLoader`.
     """
 
     def __init__(
@@ -428,16 +428,18 @@ class L2TradeReader:
         settings: DepthCsvSettings | None = None,
     ) -> None:
         self._config = config or PipelineConfig()
-        self._settings = _csv_settings(settings, "L2TradeReader")
+        self._settings = _csv_settings(settings, "DepthCsvTradeReader")
 
-    def load(self, events: pd.DataFrame, source: Any) -> pd.DataFrame:
-        path = self._resolve_trades_file(source)
-        if path is None:
-            logger.info("L2TradeReader: no trades.csv next to {}; no trades", source)
+    def load(self, events: pd.DataFrame, path: Any) -> pd.DataFrame:
+        file = self._resolve_trades_file(path)
+        if file is None:
+            logger.info(
+                "DepthCsvTradeReader: no trades.csv next to {}; no trades", path
+            )
             return empty_trades()
 
-        where = f"L2TradeReader.load({path})"
-        raw = read_csv_file(path, where)
+        where = f"DepthCsvTradeReader.load({file})"
+        raw = read_csv_file(file, where)
         if raw.empty:
             return empty_trades()
 
@@ -446,7 +448,7 @@ class L2TradeReader:
         vol_col = _first_present(raw.columns, _VOLUME_COLUMNS)
         if ts_col is None or price_col is None or vol_col is None:
             raise ConfigError(
-                "L2TradeReader.load: trades.csv needs timestamp, price, and a "
+                "DepthCsvTradeReader.load: trades.csv needs timestamp, price, and a "
                 f"volume ({'/'.join(_VOLUME_COLUMNS)}) column. "
                 f"Present: {list(raw.columns)}"
             )
@@ -483,7 +485,7 @@ class L2TradeReader:
         )
         labelled = int(trades["direction"].notna().sum())
         logger.info(
-            "L2TradeReader: {} trades ({})",
+            "DepthCsvTradeReader: {} trades ({})",
             len(trades),
             f"{labelled} natively signed"
             if labelled
@@ -509,8 +511,8 @@ class L2TradeReader:
         return pd.Categorical(values, dtype=TRADE_SIDE_DTYPE)
 
     @staticmethod
-    def _resolve_trades_file(source: Any) -> Path | None:
-        p = Path(source)
+    def _resolve_trades_file(path: Any) -> Path | None:
+        p = Path(path)
         base = p.parent if p.is_file() else p
         candidate = base / TRADES_NAME
         return candidate if candidate.exists() else None
@@ -522,7 +524,7 @@ class L2TradeReader:
 class DepthCsvWriter:
     """Write a depth frame (and trades) back to the L2 CSV schema.
 
-    Round-trips :class:`L2DepthLoader` / :class:`L2TradeReader`: writes
+    Round-trips :class:`DepthCsvLoader` / :class:`DepthCsvTradeReader`: writes
     ``depth.csv`` (and a companion ``trades.csv`` when trades are supplied)
     into the *dest* directory.
 
@@ -673,18 +675,18 @@ class DepthCsvSource:
     # A cent tick and satoshi lots; a capture's record gives its own.
     grid: InstrumentGrid = field(default_factory=InstrumentGrid)
 
-    def create_loader(self, config: PipelineConfig, ctx: RunContext) -> DepthSource:
-        return L2DepthLoader(
+    def create_loader(self, config: PipelineConfig, ctx: RunContext) -> DepthLoader:
+        return DepthCsvLoader(
             config,
             settings=_csv_settings(self.settings, "DepthCsvSource"),
             venue=ctx.venue,
             symbol=ctx.symbol,
         )
 
-    def create_trade_source(
+    def create_trade_reader(
         self, config: PipelineConfig, ctx: RunContext, loader: Any
-    ) -> TradeSource:
-        return L2TradeReader(
+    ) -> TradeReader:
+        return DepthCsvTradeReader(
             config, settings=_csv_settings(self.settings, "DepthCsvSource")
         )
 

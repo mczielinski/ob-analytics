@@ -172,8 +172,8 @@ class TestNotANumber:
     the number of rows and the first one (#397)."""
 
     @staticmethod
-    def _spoil(source: Path, target: Path, column: str, bad: str | None) -> Path:
-        frame = pd.read_csv(source)
+    def _spoil(path: Path, target: Path, column: str, bad: str | None) -> Path:
+        frame = pd.read_csv(path)
         frame[column] = frame[column].astype(object)
         frame.loc[2, column] = bad
         frame.to_csv(target, index=False)
@@ -861,12 +861,12 @@ class TestBitstampSource:
         grid = grid_of(BitstampSource())
         assert (grid.tick_size, grid.lot_size) == (0.01, 1e-8)
 
-    def test_constructs_loader_and_trade_source(self):
+    def test_constructs_loader_and_trade_reader(self):
         source = BitstampSource()
         cfg = PipelineConfig(**grid_of(source).fields())
         ctx = RunContext()
         loader = source.create_loader(cfg, ctx)
-        ts = source.create_trade_source(cfg, ctx, loader)
+        ts = source.create_trade_reader(cfg, ctx, loader)
         writer = source.create_writer(cfg, ctx)
         assert isinstance(loader, BitstampLoader)
         assert isinstance(ts, BitstampTradeReader)

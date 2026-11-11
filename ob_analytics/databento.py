@@ -124,7 +124,7 @@ from ob_analytics.protocols import (
     RunContext,
     SequenceKind,
     TradeAttribution,
-    TradeSource,
+    TradeReader,
     WriteTarget,
 )
 from ob_analytics.schemas import (
@@ -269,12 +269,12 @@ class DatabentoSettings(SourceSettings):
 # ── Reading a DBN file into its raw record frame ──────────────────────
 
 
-def read_mbo_frame(source: Any) -> pd.DataFrame:
-    """Return the raw MBO records of *source* as a DataFrame, in file order.
+def read_mbo_frame(data: Any) -> pd.DataFrame:
+    """Return the raw MBO records of *data* as a DataFrame, in file order.
 
     Parameters
     ----------
-    source : str, Path, DBNStore, or pandas.DataFrame
+    data : str, Path, DBNStore, or pandas.DataFrame
         A ``.dbn`` / ``.dbn.zst`` path, an already-open
         ``databento.DBNStore``, or a frame of MBO records the caller read
         itself (``store.to_df(price_type="fixed")``).  A frame is taken as is,
@@ -295,10 +295,10 @@ def read_mbo_frame(source: Any) -> pd.DataFrame:
     ImportError
         If a path or store was given and ``databento`` is not installed.
     """
-    if isinstance(source, pd.DataFrame):
-        frame = source.reset_index() if source.index.name else source.copy()
+    if isinstance(data, pd.DataFrame):
+        frame = data.reset_index() if data.index.name else data.copy()
     else:
-        with _mbo_store(source) as store:
+        with _mbo_store(data) as store:
             # ``price_type="fixed"`` keeps Databento's raw integer prices,
             # which convert to ticks exactly; the decimal default would
             # round-trip them through a float first.
@@ -308,19 +308,19 @@ def read_mbo_frame(source: Any) -> pd.DataFrame:
     return frame
 
 
-def _mbo_parts(source: Any, rows: int) -> Iterator[pd.DataFrame]:
-    """Yield the raw MBO records of *source* in file order, *rows* at a time.
+def _mbo_parts(data: Any, rows: int) -> Iterator[pd.DataFrame]:
+    """Yield the raw MBO records of *data* in file order, *rows* at a time.
 
     Takes what :func:`read_mbo_frame` takes, and reads a file or store a part
     at a time, so the whole file is never in memory.
     """
-    if isinstance(source, pd.DataFrame):
-        frame = source.reset_index() if source.index.name else source
+    if isinstance(data, pd.DataFrame):
+        frame = data.reset_index() if data.index.name else data
         validate_columns(frame, _REQUIRED_MBO_COLUMNS, "DatabentoLoader: MBO frame")
         for start in range(0, len(frame), rows):
             yield frame.iloc[start : start + rows]
         return
-    with _mbo_store(source) as store:
+    with _mbo_store(data) as store:
         for part in store.to_df(price_type="fixed", count=rows):
             part = part.reset_index()
             validate_columns(part, _REQUIRED_MBO_COLUMNS, "DatabentoLoader: MBO frame")
@@ -328,7 +328,7 @@ def _mbo_parts(source: Any, rows: int) -> Iterator[pd.DataFrame]:
 
 
 @contextmanager
-def _mbo_store(source: Any) -> Generator[Any]:
+def _mbo_store(data: Any) -> Generator[Any]:
     """Give the open ``DBNStore`` of a path or store, refusing a bad file.
 
     A store opened here from a path is closed on the way out; a store the
@@ -343,21 +343,21 @@ def _mbo_store(source: Any) -> Generator[Any]:
     from databento_dbn import DBNError
 
     bad_file = (db.BentoError, db.common.error.BentoWarning, DBNError, ValueError)
-    opened = not hasattr(source, "to_df")
+    opened = not hasattr(data, "to_df")
     store = None
     try:
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "error", message=".*truncated", category=db.common.error.BentoWarning
             )
-            store = db.DBNStore.from_file(Path(source)) if opened else source
+            store = db.DBNStore.from_file(Path(data)) if opened else data
             _check_mbo_schema(store)
             yield store
     except bad_file as exc:
         if isinstance(exc, ConfigError):
             raise
         raise ConfigError(
-            f"DatabentoLoader: {source} is not a DBN file this reader can read: {exc}"
+            f"DatabentoLoader: {data} is not a DBN file this reader can read: {exc}"
         ) from exc
     finally:
         if opened and store is not None:
@@ -468,12 +468,12 @@ class DatabentoLoader:
     #: How many records :meth:`load_windows` reads from the file at a time.
     read_size: int = 250_000
 
-    def load(self, source: Any) -> pd.DataFrame:
-        """Load MBO records from *source* and return the events frame.
+    def load(self, path: Any) -> pd.DataFrame:
+        """Load MBO records from *path* and return the events frame.
 
         Parameters
         ----------
-        source : str, Path, DBNStore, or pandas.DataFrame
+        path : str, Path, DBNStore, or pandas.DataFrame
             Anything :func:`read_mbo_frame` accepts.
 
         Returns
@@ -486,9 +486,9 @@ class DatabentoLoader:
             record's own ``size`` field).  ``attrs[MAYBE_BAD_BOOK_ATTR]``
             holds :attr:`maybe_bad_book_records`.
         """
-        logger.info("DatabentoLoader: reading {}", source)
+        logger.info("DatabentoLoader: reading {}", path)
         book = _BookFilter(self._settings)
-        raw = book.narrow(read_mbo_frame(source))
+        raw = book.narrow(read_mbo_frame(path))
         book.finish()
         reading = _Reading()
         events, records = self._read_part(raw, reading, last=True)
@@ -498,10 +498,10 @@ class DatabentoLoader:
 
     def load_windows(
         self,
-        source: Any,
+        path: Any,
         windows: list[tuple[pd.Timestamp | None, pd.Timestamp | None]],
     ) -> Iterator[LoadedWindow]:
-        """Yield the events of each time window of *source* in turn.
+        """Yield the events of each time window of *path* in turn.
 
         The file is read :attr:`read_size` records at a time, and only one
         window's records and events are in memory at once.  The state an order
@@ -517,7 +517,7 @@ class DatabentoLoader:
 
         Parameters
         ----------
-        source : str, Path, DBNStore, or pandas.DataFrame
+        path : str, Path, DBNStore, or pandas.DataFrame
             Anything :func:`read_mbo_frame` accepts.
         windows : list of tuple
             ``(start, end)`` per window, tz-aware UTC, ``None`` for an open
@@ -537,10 +537,10 @@ class DatabentoLoader:
             in: the records are not in receive-time order, which Databento
             guarantees for one instrument.
         """
-        logger.info("DatabentoLoader: reading {} one window at a time", source)
+        logger.info("DatabentoLoader: reading {} one window at a time", path)
         self.trade_records = None
         book = _BookFilter(self._settings)
-        parts = (book.narrow(raw) for raw in _mbo_parts(source, self.read_size))
+        parts = (book.narrow(raw) for raw in _mbo_parts(path, self.read_size))
         reading = _Reading()
         records = []
         cut = _window_records(parts, windows)
@@ -918,7 +918,7 @@ def _reject_aggregated_records(raw: pd.DataFrame) -> None:
             f"({n_tob} top-of-book, {n_mbp} price-level). This publisher does "
             "not send order-level data, so its order ids mean nothing. Read "
             "its price-level schema through the L2 path instead (see "
-            "ob_analytics.depth_l2)."
+            "ob_analytics.depth_csv)."
         )
 
 
@@ -1518,7 +1518,7 @@ def _in_record_order(parts: list[pd.DataFrame]) -> pd.DataFrame:
 class DatabentoTradeReader:
     """Build trades from the fill and trade records of a Databento MBO file.
 
-    Satisfies the :class:`~ob_analytics.protocols.TradeSource` protocol.
+    Satisfies the :class:`~ob_analytics.protocols.TradeReader` protocol.
 
     Which record makes a trade is :attr:`DatabentoSettings.trades_from`:
 
@@ -1572,14 +1572,14 @@ class DatabentoTradeReader:
         self._loader = loader
         self._settings = settings or DatabentoSettings()
 
-    def load(self, events: pd.DataFrame, source: Any) -> pd.DataFrame:
+    def load(self, events: pd.DataFrame, path: Any) -> pd.DataFrame:
         """Build the trades DataFrame for the run.
 
         Parameters
         ----------
         events : pandas.DataFrame
             Unused; each trade record already names its maker event.
-        source
+        path
             Unused; the trade records came off the file with the events.
 
         Returns
@@ -2075,9 +2075,9 @@ class DatabentoSource:
             symbol=ctx.symbol or settings.raw_symbol,
         )
 
-    def create_trade_source(
+    def create_trade_reader(
         self, config: PipelineConfig, ctx: RunContext, loader: Any
-    ) -> TradeSource:
+    ) -> TradeReader:
         # The trades come off the same read as the events, so the reader takes
         # the run's loader rather than re-reading the file.
         if not isinstance(loader, DatabentoLoader):

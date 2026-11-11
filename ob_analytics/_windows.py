@@ -320,20 +320,20 @@ class WindowedLoader(Protocol):
     """A loader that can read its input one time window at a time.
 
     :meth:`~ob_analytics.pipeline.Pipeline.run_windows` uses it when the
-    run's source built the loader and the trade source, so no more than one
+    run's source built the loader and the trade reader, so no more than one
     window's events is in memory.
     """
 
     def load_windows(
         self,
-        source: Any,
+        path: Any,
         windows: list[tuple[pd.Timestamp | None, pd.Timestamp | None]],
     ) -> Iterator[LoadedWindow]:
         """Yield each of *windows*' events in turn.
 
         The events are the rows the loader's ``load`` gives, cut at the
         windows: a window holds the rows at or after its start and before its
-        end.  Once the last window is yielded, the run's trade source, given
+        end.  Once the last window is yielded, the run's trade reader, given
         an empty events frame, builds the whole run's trades from what the
         loader kept.
         """

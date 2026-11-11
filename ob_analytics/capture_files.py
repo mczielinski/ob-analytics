@@ -5,7 +5,7 @@ A live capture writes one folder (one per segment of a long capture):
 * ``orders.csv`` -- L3 only: one row per order event, read by
   :class:`~ob_analytics.bitstamp.BitstampLoader`;
 * ``depth.csv`` -- L2 only: one row per price-level change, read by
-  :class:`~ob_analytics.depth_l2.L2DepthLoader`;
+  :class:`~ob_analytics.depth_csv.DepthCsvLoader`;
 * ``trades.csv`` -- one row per trade, for both levels;
 * ``raw.jsonl`` -- every frame the venue sent, one JSON object per line,
   when the capture keeps them;
@@ -15,7 +15,7 @@ This module owns the file names and columns, the sink that writes them
 (:class:`FileCaptureSink`), and the repair of a folder a capture never closed
 (:func:`repair_files`).  The writers that save a run in the same format
 (:class:`~ob_analytics.bitstamp.BitstampWriter`,
-:class:`~ob_analytics.depth_l2.DepthCsvWriter`) take their names and columns
+:class:`~ob_analytics.depth_csv.DepthCsvWriter`) take their names and columns
 from here too.
 
 Like :mod:`ob_analytics.capture_record`, it is outside

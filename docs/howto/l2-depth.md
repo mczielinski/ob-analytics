@@ -85,7 +85,7 @@ currency, says so in the source's settings:
 <!-- docs-test
 from ob_analytics import DepthCsvSettings
 from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
-from ob_analytics.depth_l2 import DepthCsvWriter
+from ob_analytics.depth_csv import DepthCsvWriter
 
 toy = {"depth": toy_l2_depth(), "trades": toy_l2_trades()}
 encoding = DepthCsvSettings(timestamp_unit="us", price_divisor=10_000)
@@ -192,7 +192,7 @@ get_spread(summary)
 - [Custom components](custom-components.md) — write a loader for any other format
 - [What each feed shows](../feeds.md) — depth, gaps, clocks and trade sides, source by source
 - [Data quality](../data-quality.md) — matched book, diff feed and price levels
-- [L2 API reference](../api/depth_l2.md) — `L2DepthLoader`, `DepthCsvSource`, …
+- [L2 API reference](../api/depth_csv.md) — `DepthCsvLoader`, `DepthCsvSource`, …
 
 !!! note "Live L2 capture"
     A live L2 capture writes this schema directly: the [ccxt source](ccxt.md)

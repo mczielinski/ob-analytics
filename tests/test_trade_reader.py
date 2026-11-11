@@ -1,26 +1,26 @@
-"""Tests for the TradeSource protocol and built-in implementations."""
+"""Tests for the TradeReader protocol and built-in implementations."""
 
 from __future__ import annotations
 
 import pandas as pd
 import pytest
 
-from ob_analytics.protocols import TradeSource
+from ob_analytics.protocols import TradeReader
 
 
-class TestTradeSourceProtocol:
+class TestTradeReaderProtocol:
     def test_protocol_is_runtime_checkable(self):
         class Stub:
-            def load(self, events, source):
+            def load(self, events, path):
                 return pd.DataFrame()
 
-        assert isinstance(Stub(), TradeSource)
+        assert isinstance(Stub(), TradeReader)
 
     def test_protocol_rejects_missing_load(self):
         class NoLoad:
             pass
 
-        assert not isinstance(NoLoad(), TradeSource)
+        assert not isinstance(NoLoad(), TradeReader)
 
 
 class TestBitstampTradeReader:
@@ -173,20 +173,20 @@ class TestBitstampTradeReader:
         assert "ob-analytics capture bitstamp" in str(exc.value)
 
 
-class TestSourceCreateTradeSource:
+class TestSourceCreateTradeReader:
     def test_bitstamp_source_creates_trade_reader(self):
         from ob_analytics import BitstampSource, PipelineConfig
         from ob_analytics.bitstamp import BitstampTradeReader
         from ob_analytics.protocols import RunContext
 
-        ts = BitstampSource().create_trade_source(PipelineConfig(), RunContext(), None)
+        ts = BitstampSource().create_trade_reader(PipelineConfig(), RunContext(), None)
         assert isinstance(ts, BitstampTradeReader)
 
-    def test_lobster_source_creates_trade_source(self):
+    def test_lobster_source_creates_trade_reader(self):
         from ob_analytics import LobsterSource, PipelineConfig
         from ob_analytics.protocols import RunContext
 
-        ts = LobsterSource().create_trade_source(
+        ts = LobsterSource().create_trade_reader(
             PipelineConfig(), RunContext(trading_date="2025-01-01"), None
         )
-        assert isinstance(ts, TradeSource)
+        assert isinstance(ts, TradeReader)
