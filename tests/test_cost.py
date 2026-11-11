@@ -649,14 +649,12 @@ class TestRollSpread:
 class TestBundledSample:
     """Every measure runs on the bundled Bitstamp capture (issue #110)."""
 
-    @pytest.fixture
-    def result(self, bundled_sample_result):
-        return bundled_sample_result
+    def test_costs_decompose(self, bundled_sample_result):
+        costs = transaction_costs(
+            bundled_sample_result.trades, bundled_sample_result.depth_summary
+        )
 
-    def test_costs_decompose(self, result):
-        costs = transaction_costs(result.trades, result.depth_summary)
-
-        assert len(costs) == len(result.trades)
+        assert len(costs) == len(bundled_sample_result.trades)
         measured = costs.dropna(subset=["realized_spread"])
         assert not measured.empty
         np.testing.assert_allclose(
@@ -664,20 +662,24 @@ class TestBundledSample:
             measured["effective_spread"],
         )
 
-    def test_summary_reports_what_it_could_measure(self, result):
+    def test_summary_reports_what_it_could_measure(self, bundled_sample_result):
         summary = cost_summary(
-            transaction_costs(result.trades, result.depth_summary, horizon="5s")
+            transaction_costs(
+                bundled_sample_result.trades,
+                bundled_sample_result.depth_summary,
+                horizon="5s",
+            )
         )
 
-        assert summary.n_trades == len(result.trades)
+        assert summary.n_trades == len(bundled_sample_result.trades)
         assert summary.n_realized <= summary.n_trades
         assert summary.horizon == "5s"
         # The median trade pays about the quoted spread; the mean is dragged
         # up by a tail, so only the sign and the order of magnitude are held.
         assert 0 < summary.effective_spread_bps < 100
 
-    def test_amihud_and_roll_run(self, result):
-        illiq = amihud(result.trades, window="5min")
+    def test_amihud_and_roll_run(self, bundled_sample_result):
+        illiq = amihud(bundled_sample_result.trades, window="5min")
         assert len(illiq) > 1
         assert (illiq["amihud"].dropna() >= 0).all()
 
@@ -686,7 +688,7 @@ class TestBundledSample:
         # variance.  The autocovariance comes out positive, the estimate has
         # no real root, and the autocorrelation is nowhere near the -0.5 the
         # model requires -- which is what the diagnostic columns are for.
-        roll = roll_spread(result.trades)
+        roll = roll_spread(bundled_sample_result.trades)
         assert roll.iloc[0]["autocovariance"] > 0
         assert roll.iloc[0]["autocorrelation"] > 0
         assert np.isnan(roll.iloc[0]["roll_spread"])

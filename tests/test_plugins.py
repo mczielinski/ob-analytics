@@ -18,24 +18,24 @@ from typing import Any
 import pytest
 
 from ob_analytics import _registry, data, metrics, sources
-from ob_analytics._registry import Registry
 
 # ``ob_analytics.bars`` and ``ob_analytics.features`` are also the names of
 # functions on the package, so these two modules are imported by their names.
 from ob_analytics.bars import (
-    BAR_RULES,
     ENTRY_POINT_GROUP as BAR_RULES_GROUP,
     get_bar_rule,
     load_bar_rule_plugins,
 )
 from ob_analytics.features import (
     ENTRY_POINT_GROUP as FEATURES_GROUP,
-    FEATURES,
     get_feature,
     load_feature_plugins,
 )
 from ob_analytics.protocols import Level
 from ob_analytics.visualization import _renderers
+
+# Every test here registers a plug-in; put each registry back afterwards.
+pytestmark = pytest.mark.usefixtures("restore_registries")
 
 
 class FakePlugin:
@@ -118,26 +118,6 @@ _GROUPS = [
         lambda found: found == __name__,
     ),
 ]
-
-
-@pytest.fixture(autouse=True)
-def _restore_registries():
-    """Snapshot / restore every registry the tests below write to."""
-    registries: list[Registry[str, Any]] = [
-        sources.SOURCES,
-        metrics.METRICS,
-        BAR_RULES,
-        FEATURES,
-        data.WRITERS,
-    ]
-    before = [dict(r._items) for r in registries]
-    backends = dict(_renderers._BACKEND_MODULES)
-    yield
-    for registry, items in zip(registries, before, strict=True):
-        registry._items.clear()
-        registry._items.update(items)
-    _renderers._BACKEND_MODULES.clear()
-    _renderers._BACKEND_MODULES.update(backends)
 
 
 def _advertise(monkeypatch, group: str, *eps: EntryPoint) -> None:

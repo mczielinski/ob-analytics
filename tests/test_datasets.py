@@ -221,10 +221,13 @@ class TestBookAndDepth:
         self, classified: pd.DataFrame
     ) -> None:
         t0 = classified["timestamp"].iloc[0]
+        two_sided = 0
         for s in range(1, 61, 7):
             snap = order_book(classified, at=t0 + pd.Timedelta(seconds=s))
             if len(snap["bids"]) and len(snap["asks"]):
+                two_sided += 1
                 assert snap["bids"]["price"].max() < snap["asks"]["price"].min()
+        assert two_sided  # the check means nothing on one-sided books
 
     def test_depth_pipeline_runs(self, classified: pd.DataFrame) -> None:
         depth = price_level_volume(classified)

@@ -3,6 +3,7 @@
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -49,7 +50,7 @@ def sample_csv_path() -> Path:
 def _bundled_sample_run():
     """The bundled sample through the default pipeline, once per session.
 
-    The run takes ~15s, and a dozen modules need it. Do not use this one in a
+    The run takes about 10 s, and a dozen modules need it. Do not use this one in a
     test: use ``bundled_sample_result``, which hands each module its own copy.
     """
     if not SAMPLE_CSV.exists():
@@ -75,9 +76,74 @@ def bundled_sample_result(_bundled_sample_run):
     )
 
 
+@pytest.fixture(scope="module")
+def result(tiny_bitstamp_orders_csv: Path):
+    """The tiny Bitstamp fixture through the default pipeline, one per module.
+
+    The run takes well under a second. Use it when a test needs any small,
+    valid L3 run; use ``bundled_sample_result`` when it needs real data.
+    """
+    from ob_analytics.pipeline import Pipeline
+
+    return Pipeline().run(tiny_bitstamp_orders_csv)
+
+
+@pytest.fixture(autouse=True)
+def _close_figures():
+    """Close every matplotlib figure a test left open.
+
+    Only when the test imported pyplot, so a test with no plots pays nothing.
+    """
+    yield
+    pyplot = sys.modules.get("matplotlib.pyplot")
+    if pyplot is not None:
+        pyplot.close("all")
+
+
+@pytest.fixture
+def restore_registries():
+    """Put back every plug-in registry as it was before the test.
+
+    Use it in a test that registers a source, metric, bar rule, feature,
+    writer, renderer or plot backend of its own.
+    """
+    from ob_analytics import data, sources
+    from ob_analytics._registry import Registry
+    from ob_analytics.bars import BAR_RULES
+    from ob_analytics.features import FEATURES
+    from ob_analytics.metrics import METRICS
+    from ob_analytics.visualization import _renderers
+
+    # A backend registers its renderers when it is first imported.  Import the
+    # built-in ones now, or a test that loads one would lose its renderers at
+    # the restore while the module stays imported.
+    for backend in ("plotly", "bokeh"):
+        try:
+            _renderers._load_backend(backend)
+        except ImportError:
+            pass
+
+    registries: list[Registry[Any, Any]] = [
+        sources.SOURCES,
+        METRICS,
+        BAR_RULES,
+        FEATURES,
+        data.WRITERS,
+        _renderers.RENDERERS,
+    ]
+    before = [dict(registry._items) for registry in registries]
+    backends = dict(_renderers._BACKEND_MODULES)
+    yield
+    for registry, items in zip(registries, before, strict=True):
+        registry._items.clear()
+        registry._items.update(items)
+    _renderers._BACKEND_MODULES.clear()
+    _renderers._BACKEND_MODULES.update(backends)
+
+
 @pytest.fixture(scope="session")
 def _sample_events_cache() -> pd.DataFrame:
-    """Bundled sample loaded once per session (the load costs ~15s)."""
+    """Bundled sample loaded once per session."""
     if not SAMPLE_CSV.exists():
         pytest.skip(f"Sample data not found: {SAMPLE_CSV}")
     from ob_analytics.bitstamp import BitstampLoader
@@ -791,20 +857,6 @@ def cli_runner():
     return _run
 
 
-@pytest.fixture
-def bitstamp_sample_orders_only(tmp_path, sample_csv_path) -> Path:
-    """Copy just the bundled orders.csv.gz into a temp dir (no trades.csv).
-
-    Use to test the error path when BitstampTradeReader can't find its
-    companion file.
-    """
-    import shutil
-
-    dest = tmp_path / "orders.csv.gz"
-    shutil.copy(sample_csv_path, dest)
-    return dest
-
-
 #: A LOBSTER day in brief: a bid of 100 and an ask of 200 shares, two trades
 #: of 40 and 25 shares, then the bid is cancelled.  Prices are in ten-
 #: thousandths of a dollar, sizes in whole shares.
@@ -878,6 +930,102 @@ def tiny_depth() -> pd.DataFrame:
             ),
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# Small hand-built frames for the plot tests: five trades, twenty events,
+# thirty depth-summary rows and a two-level book, in display units.
+# ---------------------------------------------------------------------------
+
+_PLOT_START = pd.Timestamp("2015-05-01 01:00:00")
+
+
+@pytest.fixture
+def plot_trades() -> pd.DataFrame:
+    """Five trades, buys and sells alternating, one a second."""
+    return pd.DataFrame(
+        {
+            "timestamp": [_PLOT_START + pd.Timedelta(seconds=i) for i in range(5)],
+            "price": [236.50, 236.55, 236.45, 236.60, 236.50],
+            "volume": [100, 200, 150, 300, 250],
+            "direction": pd.Categorical(
+                ["buy", "sell", "buy", "sell", "buy"],
+                categories=["buy", "sell"],
+            ),
+        }
+    )
+
+
+@pytest.fixture
+def plot_events() -> pd.DataFrame:
+    """Twenty events, bids and asks alternating, created and deleted."""
+    n = 20
+    return pd.DataFrame(
+        {
+            "timestamp": [_PLOT_START + pd.Timedelta(seconds=i) for i in range(n)],
+            "price": np.linspace(236.0, 237.0, n),
+            "volume": np.random.default_rng(42).uniform(100, 1000, n),
+            "direction": pd.Categorical(
+                ["bid", "ask"] * (n // 2), categories=["bid", "ask"]
+            ),
+            "action": pd.Categorical(
+                ["created", "deleted"] * (n // 2),
+                categories=["created", "changed", "deleted"],
+                ordered=True,
+            ),
+            "type": ["flashed-limit"] * 10 + ["resting-limit"] * 10,
+        }
+    )
+
+
+@pytest.fixture
+def plot_depth(plot_events: pd.DataFrame) -> pd.DataFrame:
+    """The twenty events as bid depth rows: one price level each."""
+    depth = plot_events[["timestamp", "price", "volume"]].copy()
+    depth["direction"] = "bid"
+    return depth
+
+
+@pytest.fixture
+def plot_depth_summary() -> pd.DataFrame:
+    """Thirty depth-summary rows: the touch and every 25 bps band to 500."""
+    n = 30
+    rng = np.random.default_rng(42)
+    data: dict = {
+        "timestamp": [_PLOT_START + pd.Timedelta(seconds=i) for i in range(n)]
+    }
+    for side in ("bid", "ask"):
+        for bps in range(25, 501, 25):
+            data[f"{side}_vol{bps}bps"] = rng.uniform(10, 500, n)
+    data["best_bid_price"] = np.full(n, 236.50)
+    data["best_ask_price"] = np.full(n, 237.00)
+    data["best_bid_vol"] = rng.uniform(100, 1000, n)
+    data["best_ask_vol"] = rng.uniform(100, 1000, n)
+    return pd.DataFrame(data)
+
+
+@pytest.fixture
+def plot_hidden_executions() -> pd.DataFrame:
+    """Three hidden executions (LOBSTER event type 5) among the five trades."""
+    return pd.DataFrame(
+        {
+            "timestamp": [_PLOT_START + pd.Timedelta(seconds=i) for i in (1, 2, 3)],
+            "price": [236.52, 236.48, 236.55],
+            "volume": [50.0, 80.0, 500.0],
+            "direction": ["bid", "ask", "bid"],
+            "raw_event_type": [5, 5, 5],
+        }
+    )
+
+
+@pytest.fixture
+def plot_order_book() -> dict:
+    """A book of two bid and two ask levels: price, size, cumulative size."""
+    return {
+        "timestamp": 1430445600,
+        "bids": np.array([[236.50, 100, 100], [236.00, 200, 300]]),
+        "asks": np.array([[237.00, 150, 150], [237.50, 250, 400]]),
+    }
 
 
 # ---------------------------------------------------------------------------

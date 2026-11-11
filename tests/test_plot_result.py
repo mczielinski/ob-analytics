@@ -6,39 +6,28 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import pytest
-from matplotlib.figure import Figure
 
-from ob_analytics.bitstamp import BitstampSource
 from ob_analytics.exceptions import ConfigError, UnknownNameError
-from ob_analytics.pipeline import Pipeline, PipelineResult
+from ob_analytics.pipeline import PipelineResult
 from ob_analytics.visualization import available_concepts, plot_result, prepare
-
-
-@pytest.fixture(scope="module")
-def result(tiny_bitstamp_orders_csv) -> PipelineResult:
-    """One tiny pipeline run shared across the module."""
-    return Pipeline(source=BitstampSource()).run(str(tiny_bitstamp_orders_csv))
-
-
-@pytest.fixture(autouse=True)
-def _close_figures():
-    yield
-    plt.close("all")
+from tests._drawn import drawn
 
 
 class TestPlotResult:
     def test_returns_matplotlib_figure(self, result: PipelineResult) -> None:
-        assert isinstance(plot_result(result, "depth_heatmap"), Figure)
+        assert drawn(plot_result(result, "depth_heatmap"))
 
     def test_explicit_level(self, result: PipelineResult) -> None:
         # A comparable concept renders at either resolution.
-        assert isinstance(plot_result(result, "trade_tape", "L2"), Figure)
-        assert isinstance(plot_result(result, "trade_tape", "L3"), Figure)
+        # A marker for each trade at L2.
+        l2 = drawn(plot_result(result, "trade_tape", "L2"))
+        assert l2["pathcollection"] == len(result.trades)
+        assert drawn(plot_result(result, "trade_tape", "L3"))
 
     def test_one_level_resolves(self, result: PipelineResult) -> None:
         # An L2-only and an L3-only concept need no level.
-        assert isinstance(plot_result(result, "depth_heatmap"), Figure)
-        assert isinstance(plot_result(result, "order_outcome"), Figure)
+        assert drawn(plot_result(result, "depth_heatmap"))
+        assert drawn(plot_result(result, "order_outcome"))
 
     def test_two_levels_require_level(self, result: PipelineResult) -> None:
         # This L3 run has the trade tape at L2 and at L3: no default.
@@ -60,14 +49,13 @@ class TestPlotResult:
 
     def test_override_flows_to_prepare(self, result: PipelineResult) -> None:
         # A prepare kwarg passes through (col_bias is real since §3.5).
-        assert isinstance(plot_result(result, "depth_heatmap", col_bias=0.1), Figure)
+        assert drawn(plot_result(result, "depth_heatmap", col_bias=0.1))
 
     def test_plotly_backend(self, result: PipelineResult) -> None:
         pytest.importorskip("plotly.graph_objects")
-        import plotly.graph_objects as go
 
-        fig = plot_result(result, "cancellations", "L3", backend="plotly")
-        assert isinstance(fig, go.Figure)
+        fig = plot_result(result, "trade_tape", "L3", backend="plotly")
+        assert drawn(fig)
 
     def test_unknown_concept_raises(self, result: PipelineResult) -> None:
         with pytest.raises(UnknownNameError, match="Unknown concept") as info:
@@ -94,10 +82,10 @@ class TestPlotResult:
 
 class TestPipelineResultPlot:
     def test_method_delegates(self, result: PipelineResult) -> None:
-        assert isinstance(result.plot("depth_heatmap"), Figure)
+        assert drawn(result.plot("depth_heatmap"))
 
     def test_method_passes_overrides(self, result: PipelineResult) -> None:
-        assert isinstance(result.plot("trade_tape", "L3", volume_scale=1.0), Figure)
+        assert drawn(result.plot("trade_tape", "L3", volume_scale=1.0))
 
     def test_method_requires_level_like_plot_result(
         self, result: PipelineResult
@@ -115,12 +103,9 @@ class TestQueuePositionFace:
 
     def test_renders_both_backends(self, result: PipelineResult) -> None:
         pytest.importorskip("plotly.graph_objects")
-        import plotly.graph_objects as go
 
-        assert isinstance(plot_result(result, "queue_position"), Figure)
-        assert isinstance(
-            plot_result(result, "queue_position", "L3", backend="plotly"), go.Figure
-        )
+        assert drawn(plot_result(result, "queue_position"))
+        assert drawn(plot_result(result, "queue_position", "L3", backend="plotly"))
 
     def test_l3_only(self, result: PipelineResult) -> None:
         assert available_concepts(result)["queue_position"] == ["L3"]

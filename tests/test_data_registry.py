@@ -43,16 +43,9 @@ class _StubWriter:
 
 
 @pytest.fixture(autouse=True)
-def _cleanup_registry():
-    """Snapshot and restore the global writer registry around each test.
-
-    ``Registry`` exposes no public clear/restore (by design — it is a
-    write-once-at-import surface), so we snapshot its backing map.
-    """
-    before = dict(WRITERS._items)
+def _cleanup_registry(restore_registries):
+    """Put the writer registry back, and forget the stub's writes, after each test."""
     yield
-    WRITERS._items.clear()
-    WRITERS._items.update(before)
     _StubWriter.written.clear()
 
 

@@ -37,13 +37,8 @@ from ob_analytics.visualization.gallery import display_result
 
 
 @pytest.fixture(scope="module")
-def result(bundled_sample_result) -> PipelineResult:
-    return bundled_sample_result
-
-
-@pytest.fixture(scope="module")
-def shown(result) -> PipelineResult:
-    return display_result(result)
+def shown(bundled_sample_result) -> PipelineResult:
+    return display_result(bundled_sample_result)
 
 
 @pytest.fixture(autouse=True)
@@ -84,8 +79,8 @@ BARE: dict[str, Callable[[PipelineResult], pd.DataFrame]] = {
 }
 
 
-def _metric_table(result: PipelineResult, name: str) -> pd.DataFrame:
-    frame = result.metric(name)
+def _metric_table(bundled_sample_result: PipelineResult, name: str) -> pd.DataFrame:
+    frame = bundled_sample_result.metric(name)
     if name == "kyle_lambda":
         frame = frame.assign(lambda_=frame.attrs["lambda_"])
     return frame
@@ -136,58 +131,66 @@ FRAME_UNITS = frozenset({"book_signals"})
 
 
 @pytest.mark.parametrize("name", sorted(BARE))
-def test_metric_is_the_bare_function(result, shown, name) -> None:
-    run = shown if name in FRAME_UNITS else result
-    _assert_same_table(_metric_table(result, name), BARE[name](run))
+def test_metric_is_the_bare_function(bundled_sample_result, shown, name) -> None:
+    run = shown if name in FRAME_UNITS else bundled_sample_result
+    _assert_same_table(_metric_table(bundled_sample_result, name), BARE[name](run))
 
 
 @pytest.mark.parametrize("name", sorted(BARE.keys() - FRAME_UNITS))
-def test_bare_function_reads_a_display_frame_the_same(result, shown, name) -> None:
-    _assert_same_table(BARE[name](result), BARE[name](shown))
+def test_bare_function_reads_a_display_frame_the_same(
+    bundled_sample_result, shown, name
+) -> None:
+    _assert_same_table(BARE[name](bundled_sample_result), BARE[name](shown))
 
 
 @pytest.mark.parametrize("name", sorted(BARE))
-def test_plot_draws_the_metric_table(result, name, monkeypatch) -> None:
+def test_plot_draws_the_metric_table(bundled_sample_result, name, monkeypatch) -> None:
     drawn: dict[str, Any] = {}
 
     def capture(concept, level, *, backend, ax=None, **data):
         drawn.update(data)
 
     def no_display(_result):
-        raise AssertionError("result.plot converted the result before a measure")
+        raise AssertionError(
+            "bundled_sample_result.plot converted the bundled_sample_result before a measure"
+        )
 
     monkeypatch.setattr(gallery, "plot", capture)
     monkeypatch.setattr(gallery, "display_result", no_display)
-    result.plot(name)
+    bundled_sample_result.plot(name)
 
     metric = metrics.get_metric(name)
-    _assert_same_payload(drawn, metric.prepare(result.metric(name)))
+    _assert_same_payload(drawn, metric.prepare(bundled_sample_result.metric(name)))
 
 
-def test_gallery_card_draws_the_metric_table(result) -> None:
+def test_gallery_card_draws_the_metric_table(bundled_sample_result) -> None:
     # The gallery's own cards measure the run's frames too.
-    model = gallery.build_gallery_model(result)
+    model = gallery.build_gallery_model(bundled_sample_result)
     names = [spec.name for spec in model.analytics]
     assert len(names) == len(set(names))
     card = next(spec for spec in model.analytics if spec.name == "amihud")
-    expected = metrics.get_metric("amihud").prepare(result.metric("amihud"))
+    expected = metrics.get_metric("amihud").prepare(
+        bundled_sample_result.metric("amihud")
+    )
     _assert_same_payload(card.prepare(**card.prep_kwargs), expected)
 
 
-def test_measures_are_in_the_quote_currency_and_btc(result, shown) -> None:
+def test_measures_are_in_the_quote_currency_and_btc(
+    bundled_sample_result, shown
+) -> None:
     # A spot check of the units themselves, not only that the paths agree.
     trade_price = shown.trades["price"]
     assert trade_price.between(100, 1_000_000).all()  # dollars, not ticks
 
-    costs = result.metric("transaction_costs")
+    costs = bundled_sample_result.metric("transaction_costs")
     assert costs["price"].to_numpy() == pytest.approx(trade_price.to_numpy())
     assert costs["volume"].sum() == pytest.approx(shown.trades["volume"].sum())
 
-    illiq = result.metric("amihud")
+    illiq = bundled_sample_result.metric("amihud")
     turnover = (shown.trades["price"] * shown.trades["volume"]).sum()
     assert illiq["turnover"].iloc[0] == pytest.approx(turnover)
 
-    ofi = result.metric("order_flow_imbalance")
+    ofi = bundled_sample_result.metric("order_flow_imbalance")
     assert ofi["buy_volume"].sum() == pytest.approx(
         shown.trades.loc[shown.trades["direction"] == "buy", "volume"].sum()
     )

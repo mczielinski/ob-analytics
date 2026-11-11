@@ -15,6 +15,7 @@ import pytest
 
 from ob_analytics import _registry, metrics
 from ob_analytics.protocols import Level
+from tests._drawn import drawn
 
 
 class SpreadWidthMetric:
@@ -38,16 +39,7 @@ class SpreadWidthMetric:
         return {"series": frame}
 
 
-@pytest.fixture
-def _restore_registry():
-    """Snapshot / restore the global metric registry around the test."""
-    before = dict(metrics.METRICS._items)
-    yield
-    metrics.METRICS._items.clear()
-    metrics.METRICS._items.update(before)
-
-
-def test_registered_metric_is_listed_and_retrievable(_restore_registry):
+def test_registered_metric_is_listed_and_retrievable(restore_registries):
     metric = SpreadWidthMetric()
     metrics.register_metric(metric)
 
@@ -72,7 +64,7 @@ def _fake_entry_points(*, group: str | None = None):
 
 
 def test_plugin_metric_is_discovered_through_entry_points(
-    monkeypatch, _restore_registry
+    monkeypatch, restore_registries
 ):
     monkeypatch.setattr(_registry, "entry_points", _fake_entry_points)
 
@@ -87,23 +79,13 @@ def test_plugin_metric_is_discovered_through_entry_points(
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="module")
-def tiny_result(tiny_bitstamp_orders_csv):
-    """One tiny L3 run, shared across the run-level tests."""
-    from ob_analytics.bitstamp import BitstampSource
-    from ob_analytics.pipeline import Pipeline
-
-    return Pipeline(source=BitstampSource()).run(str(tiny_bitstamp_orders_csv))
-
-
-def test_result_computes_one_registered_metric(tiny_result, _restore_registry):
+def test_result_computes_one_registered_metric(result, restore_registries):
     metrics.register_metric(SpreadWidthMetric())
 
-    frame = tiny_result.metric("spread_width")
+    frame = result.metric("spread_width")
 
     expected = (
-        tiny_result.depth_summary["best_ask_price"]
-        - tiny_result.depth_summary["best_bid_price"]
+        result.depth_summary["best_ask_price"] - result.depth_summary["best_bid_price"]
     )
     assert list(frame.columns) == ["timestamp", "spread_width"]
     pd.testing.assert_series_equal(frame["spread_width"], expected, check_names=False)
@@ -125,24 +107,24 @@ class HiddenRefillMetric:
 
 
 def test_result_metrics_runs_every_metric_registered_for_the_run_level(
-    tiny_result, _restore_registry
+    result, restore_registries
 ):
     metrics.METRICS._items.clear()
     metrics.register_metric(SpreadWidthMetric())
     metrics.register_metric(HiddenRefillMetric())
 
-    computed = tiny_result.metrics()
+    computed = result.metrics()
 
     assert sorted(computed) == ["hidden_refill", "spread_width"]
 
 
 def test_result_metrics_skips_a_metric_that_does_not_apply_to_the_level(
-    tiny_result, _restore_registry
+    result, restore_registries
 ):
     metrics.METRICS._items.clear()
     metrics.register_metric(SpreadWidthMetric())
     metrics.register_metric(HiddenRefillMetric())
-    l2_result = dataclasses.replace(tiny_result, level=Level.L2)
+    l2_result = dataclasses.replace(result, level=Level.L2)
 
     computed = l2_result.metrics()
 
@@ -170,14 +152,14 @@ class BrokenMetric:
 
 
 def test_gallery_model_carries_a_panel_per_registered_metric(
-    tiny_result, _restore_registry
+    result, restore_registries
 ):
     from ob_analytics.visualization.gallery import build_gallery_model
 
     metrics.METRICS._items.clear()
     metrics.register_metric(SpreadWidthMetric())
 
-    model = build_gallery_model(tiny_result)
+    model = build_gallery_model(result)
 
     (panel,) = model.analytics
     assert panel.name == "spread_width"
@@ -187,7 +169,7 @@ def test_gallery_model_carries_a_panel_per_registered_metric(
     assert list(payload["series"].columns) == ["timestamp", "spread_width"]
 
 
-def test_a_metric_that_fails_fails_only_its_own_panel(tiny_result, _restore_registry):
+def test_a_metric_that_fails_fails_only_its_own_panel(result, restore_registries):
     from ob_analytics.visualization.gallery import build_gallery_model
 
     metrics.METRICS._items.clear()
@@ -196,7 +178,7 @@ def test_a_metric_that_fails_fails_only_its_own_panel(tiny_result, _restore_regi
 
     # Metrics are computed when a panel is prepared, not when the model is
     # built, so the broken one is listed and raises only when drawn.
-    model = build_gallery_model(tiny_result)
+    model = build_gallery_model(result)
     panels = {panel.name: panel for panel in model.analytics}
 
     assert sorted(panels) == ["broken", "spread_width"]
@@ -206,7 +188,7 @@ def test_a_metric_that_fails_fails_only_its_own_panel(tiny_result, _restore_regi
 
 
 def test_a_failing_metric_card_says_why(
-    tiny_result, _restore_registry, tmp_path, monkeypatch
+    result, restore_registries, tmp_path, monkeypatch
 ):
     import matplotlib
 
@@ -225,22 +207,11 @@ def test_a_failing_metric_card_says_why(
 
     monkeypatch.setattr(BrokenMetric, "compute", counted)
     html = generate_gallery(
-        tiny_result, tmp_path, view="l2", backends=["matplotlib", "plotly"]
+        result, tmp_path, view="l2", backends=["matplotlib", "plotly"]
     ).read_text()
 
     assert html.count("Preparing the data failed: no data for this run") == 2
     assert calls == [1]  # one card, two backends, one attempt
-
-
-@pytest.fixture
-def _restore_renderers():
-    """Snapshot / restore the renderer registry around the test."""
-    from ob_analytics.visualization import RENDERERS
-
-    before = dict(RENDERERS._items)
-    yield
-    RENDERERS._items.clear()
-    RENDERERS._items.update(before)
 
 
 def _mpl_spread_width(data, ax=None):
@@ -252,27 +223,22 @@ def _mpl_spread_width(data, ax=None):
     return fig
 
 
-def test_registered_metric_is_listed_by_available_concepts(
-    tiny_result, _restore_registry
-):
+def test_registered_metric_is_listed_by_available_concepts(result, restore_registries):
     from ob_analytics.visualization import available_concepts
 
     metrics.METRICS._items.clear()
     metrics.register_metric(SpreadWidthMetric())
 
-    concepts = available_concepts(tiny_result)
+    concepts = available_concepts(result)
 
     # A metric is level-less: it has no L2/L3 variants to choose between.
     assert concepts["spread_width"] == []
 
 
-def test_result_plots_a_registered_metric(
-    tiny_result, _restore_registry, _restore_renderers
-):
+def test_result_plots_a_registered_metric(result, restore_registries):
     import matplotlib
 
     matplotlib.use("Agg")
-    from matplotlib.figure import Figure
 
     from ob_analytics.visualization import RENDERERS
 
@@ -280,9 +246,9 @@ def test_result_plots_a_registered_metric(
     metrics.register_metric(SpreadWidthMetric())
     RENDERERS.register(("spread_width", None, "matplotlib"), _mpl_spread_width)
 
-    fig = tiny_result.plot("spread_width")
+    fig = result.plot("spread_width")
 
-    assert isinstance(fig, Figure)
+    assert drawn(fig) == {"line": len(result.depth_summary)}
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +257,7 @@ def test_result_plots_a_registered_metric(
 
 
 def test_plugin_metric_runs_and_plots_from_the_public_api(
-    monkeypatch, tiny_result, _restore_registry, _restore_renderers
+    monkeypatch, result, restore_registries
 ):
     import matplotlib
 
@@ -308,12 +274,12 @@ def test_plugin_metric_runs_and_plots_from_the_public_api(
     RENDERERS.register(("spread_width", None, "matplotlib"), _mpl_spread_width)
 
     assert "spread_width" in ob.list_metrics()
-    assert "spread_width" in ob.visualization.available_concepts(tiny_result)
-    assert not tiny_result.metric("spread_width").empty
-    assert isinstance(tiny_result.plot("spread_width"), Figure)
+    assert "spread_width" in ob.visualization.available_concepts(result)
+    assert not result.metric("spread_width").empty
+    assert isinstance(result.plot("spread_width"), Figure)
 
 
-def test_a_metric_without_needs_is_refused_when_registered(_restore_registry):
+def test_a_metric_without_needs_is_refused_when_registered(restore_registries):
     # Refused here, so it cannot break every metric a run computes later.
     class OldMetric:
         name = "old"

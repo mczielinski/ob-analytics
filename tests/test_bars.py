@@ -12,13 +12,13 @@ import pytest
 
 from ob_analytics.bars import (
     BAR_COLUMNS,
-    BAR_RULES,
     bars,
     get_bar_rule,
     list_bar_rules,
     register_bar_rule,
 )
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
+from tests._drawn import drawn
 
 RULES = ("time", "tick", "volume", "dollar", "imbalance")
 
@@ -55,15 +55,6 @@ def toy() -> pd.DataFrame:
     # keep the thresholds below in the numbers they were written in.
     trades.attrs.update(tick_size=1.0, lot_size=1.0)
     return trades
-
-
-@pytest.fixture
-def _restore_registry():
-    """Snapshot / restore the global bar-rule registry around the test."""
-    before = dict(BAR_RULES._items)
-    yield
-    BAR_RULES._items.clear()
-    BAR_RULES._items.update(before)
 
 
 # ---------------------------------------------------------------------------
@@ -383,7 +374,7 @@ class TestRegistry:
         assert get_bar_rule("VOLUME") is get_bar_rule("volume")
 
     def test_a_rule_of_your_own_is_usable_by_name(
-        self, toy: pd.DataFrame, _restore_registry
+        self, toy: pd.DataFrame, restore_registries
     ) -> None:
         class EveryOtherTrade:
             """A stand-in third-party rule, defined outside the core."""
@@ -407,7 +398,7 @@ class TestRegistry:
         assert out["n_trades"].tolist() == [2] * 6
 
     def test_a_rule_returning_the_wrong_length_is_rejected(
-        self, toy: pd.DataFrame, _restore_registry
+        self, toy: pd.DataFrame, restore_registries
     ) -> None:
         class Truncating:
             name = "truncating"
@@ -441,9 +432,14 @@ class TestFace:
         pytest.importorskip(backend)
         from ob_analytics.visualization import plot, prepare
 
-        fig = plot("bars", backend=backend, **prepare.bars(bars(toy, rule)))
+        cut = bars(toy, rule)
+        fig = plot("bars", backend=backend, **prepare.bars(cut))
 
-        assert fig is not None
+        # A candle and a volume bar for each bar.
+        if backend == "plotly":
+            assert drawn(fig) == {"candlestick": len(cut), "bar": len(cut)}
+        else:
+            assert drawn(fig) == {"linecollection": len(cut), "rectangle": 2 * len(cut)}
 
     def test_card_labels_itself_from_the_frame(self, toy: pd.DataFrame) -> None:
         from ob_analytics.visualization.gallery import bars_card

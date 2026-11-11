@@ -60,16 +60,7 @@ def _fake_entry_points(*, group: str | None = None):
 
 
 @pytest.fixture
-def _restore_registry():
-    """Snapshot / restore the global source registry around the test."""
-    before = dict(sources.SOURCES._items)
-    yield
-    sources.SOURCES._items.clear()
-    sources.SOURCES._items.update(before)
-
-
-@pytest.fixture
-def discovered_plugin(monkeypatch, _restore_registry):
+def discovered_plugin(monkeypatch, restore_registries):
     """Discover the fake plug-in through the (monkeypatched) entry points."""
     monkeypatch.setattr(_registry, "entry_points", _fake_entry_points)
     registered = sources.load_source_plugins(force=True)
