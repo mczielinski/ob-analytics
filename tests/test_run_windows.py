@@ -424,7 +424,7 @@ def test_a_databento_run_holds_one_window_of_events(tmp_path, monkeypatch):
         DatabentoTradeReader,
     )
 
-    monkeypatch.setattr(DatabentoLoader, "read_size", 5000)
+    monkeypatch.setattr(DatabentoLoader, "read_size", 2500)
     config = PipelineConfig(tick_size=0.01, lot_size=1.0)
 
     def windowed(path, cuts):
@@ -438,18 +438,28 @@ def test_a_databento_run_holds_one_window_of_events(tmp_path, monkeypatch):
             path, cuts, tmp_path / "w"
         )
 
-    peaks: dict[tuple[str, float], float] = {}
-    for duration in (300.0, 1200.0):
+    # Memory tracing slows each run several times over, and the long file
+    # costs the most.  Shorter files than these leave too little between the
+    # windowed and the whole peak.
+    short, long = 150.0, 600.0
+    inputs = {}
+    for duration in (short, long):
         path, events = _dbn_file(duration, tmp_path / f"{duration:.0f}.dbn")
         start = events["timestamp"].min()
-        cuts = [start + pd.Timedelta(seconds=s) for s in range(150, int(duration), 150)]
-        for name, run in (("windowed", windowed), ("whole", whole)):
-            run(path, cuts)  # once first, so imports and caches are not counted
-            peaks[name, duration] = _peak_mib(lambda: run(path, cuts))  # noqa: B023
+        cuts = [start + pd.Timedelta(seconds=s) for s in range(75, int(duration), 75)]
+        inputs[duration] = path, cuts
+    # Once each first, so imports and caches are not counted.
+    windowed(*inputs[short])
+    whole(*inputs[short])
+    peaks = {
+        (name, duration): _peak_mib(lambda: run(*inputs[duration]))  # noqa: B023
+        for duration in (short, long)
+        for name, run in (("windowed", windowed), ("whole", whole))
+    }
 
-    assert peaks["whole", 1200.0] > 3 * peaks["whole", 300.0], peaks
-    assert peaks["windowed", 1200.0] < 2 * peaks["windowed", 300.0], peaks
-    assert peaks["windowed", 1200.0] < peaks["whole", 1200.0] / 2, peaks
+    assert peaks["whole", long] > 3 * peaks["whole", short], peaks
+    assert peaks["windowed", long] < 2 * peaks["windowed", short], peaks
+    assert peaks["windowed", long] < peaks["whole", long] / 2, peaks
 
 
 @requires_databento
