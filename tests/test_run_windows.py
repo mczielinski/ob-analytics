@@ -15,7 +15,7 @@ import tracemalloc
 import pandas as pd
 import pytest
 
-from ob_analytics import Pipeline, sample_csv_path
+from ob_analytics import Pipeline
 from ob_analytics._windows import window_bounds
 from ob_analytics.data import load_data, save_data
 from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
@@ -84,19 +84,28 @@ def test_windowed_run_matches_a_single_run(synth_session, tmp_path):
     _assert_tables_equal(single, load_data(out))
 
 
-def test_bitstamp_windowed_run_matches_except_aggressiveness(
-    tmp_path, bundled_sample_result
-):
+@pytest.fixture
+def bitstamp_head(tmp_path, bitstamp_sample_dir):
+    """The first minute of the bundled Bitstamp sample, as a capture."""
+    orders = pd.read_csv(bitstamp_sample_dir / "orders.csv.gz")
+    trades = pd.read_csv(bitstamp_sample_dir / "trades.csv")
+    end = orders["timestamp"].min() + 60_000  # ms
+    folder = tmp_path / "head"
+    folder.mkdir()
+    orders[orders["timestamp"] < end].to_csv(folder / "orders.csv", index=False)
+    trades[trades["timestamp"] < end].to_csv(folder / "trades.csv", index=False)
+    return folder / "orders.csv"
+
+
+def test_bitstamp_windowed_run_matches_except_aggressiveness(tmp_path, bitstamp_head):
     # Bitstamp numbers its events by order, not by time, and aggressiveness
     # looks up the standing quote by event_id, so that one column can read a
-    # quote from another window.  Everything else must match.  The single run
-    # is the session's run of the sample, so the sample runs once here.
-    run = bundled_sample_result
-    save_data(run.tables(), tmp_path / "single", config=run.config)
-    single = load_data(tmp_path / "single")
+    # quote from another window.  Everything else must match.
+    single = _saved_single_run(Pipeline(), bitstamp_head, tmp_path / "single")
+    assert len(single["trades"]) > 0
     cuts = _cuts(single["events"]["timestamp"], 0.5)
 
-    out = Pipeline().run_windows(sample_csv_path(), cuts, tmp_path / "w")
+    out = Pipeline().run_windows(bitstamp_head, cuts, tmp_path / "w")
 
     _assert_tables_equal(
         single, load_data(out), skip_event_columns=("aggressiveness_bps",)
@@ -415,7 +424,7 @@ def test_a_databento_run_holds_one_window_of_events(tmp_path, monkeypatch):
         DatabentoTradeReader,
     )
 
-    monkeypatch.setattr(DatabentoLoader, "read_size", 5000)
+    monkeypatch.setattr(DatabentoLoader, "read_size", 2500)
     config = PipelineConfig(tick_size=0.01, lot_size=1.0)
 
     def windowed(path, cuts):
@@ -429,18 +438,28 @@ def test_a_databento_run_holds_one_window_of_events(tmp_path, monkeypatch):
             path, cuts, tmp_path / "w"
         )
 
-    peaks: dict[tuple[str, float], float] = {}
-    for duration in (300.0, 1200.0):
+    # Memory tracing slows each run several times over, and the long file
+    # costs the most.  Shorter files than these leave too little between the
+    # windowed and the whole peak.
+    short, long = 150.0, 600.0
+    inputs = {}
+    for duration in (short, long):
         path, events = _dbn_file(duration, tmp_path / f"{duration:.0f}.dbn")
         start = events["timestamp"].min()
-        cuts = [start + pd.Timedelta(seconds=s) for s in range(150, int(duration), 150)]
-        for name, run in (("windowed", windowed), ("whole", whole)):
-            run(path, cuts)  # once first, so imports and caches are not counted
-            peaks[name, duration] = _peak_mib(lambda: run(path, cuts))  # noqa: B023
+        cuts = [start + pd.Timedelta(seconds=s) for s in range(75, int(duration), 75)]
+        inputs[duration] = path, cuts
+    # Once each first, so imports and caches are not counted.
+    windowed(*inputs[short])
+    whole(*inputs[short])
+    peaks = {
+        (name, duration): _peak_mib(lambda: run(*inputs[duration]))  # noqa: B023
+        for duration in (short, long)
+        for name, run in (("windowed", windowed), ("whole", whole))
+    }
 
-    assert peaks["whole", 1200.0] > 3 * peaks["whole", 300.0], peaks
-    assert peaks["windowed", 1200.0] < 2 * peaks["windowed", 300.0], peaks
-    assert peaks["windowed", 1200.0] < peaks["whole", 1200.0] / 2, peaks
+    assert peaks["whole", long] > 3 * peaks["whole", short], peaks
+    assert peaks["windowed", long] < 2 * peaks["windowed", short], peaks
+    assert peaks["windowed", long] < peaks["whole", long] / 2, peaks
 
 
 @requires_databento

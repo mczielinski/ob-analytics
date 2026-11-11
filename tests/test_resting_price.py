@@ -230,7 +230,14 @@ class TestMarketOrdersInTheQueue:
 
 @pytest.fixture(scope="module")
 def sample_run_events(bundled_sample_result):
-    return bundled_sample_result.events
+    """The first three minutes of the bundled sample's events.
+
+    Each of the grid's samples rebuilds the book from every event, so the
+    whole sample makes the check slow.
+    """
+    events = bundled_sample_result.events
+    end = events["timestamp"].min() + pd.Timedelta(minutes=3)
+    return events[events["timestamp"] < end].reset_index(drop=True)
 
 
 @pytest.mark.parametrize("side", ["bid", "ask"])

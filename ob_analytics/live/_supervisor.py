@@ -94,6 +94,28 @@ STOP_GRACE_SECONDS = 5.0
 
 SourceFactory = Callable[[], LiveSource]
 
+
+class _Clock:
+    """The time the supervisor reads, and waits by.
+
+    Every ``*_SECONDS`` limit is counted on it.  This one is the system's
+    monotonic clock.  A test passes one it can move forward, so a limit of many seconds
+    runs out at once.
+    """
+
+    def monotonic(self) -> float:
+        """Seconds from an arbitrary start; never goes back."""
+        return time.monotonic()
+
+    async def wait(self, tasks: set[asyncio.Future[Any]], timeout: float) -> None:
+        """Wait until one of *tasks* is done, or *timeout* seconds have passed."""
+        await asyncio.wait(tasks, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+
+    async def sleep(self, seconds: float) -> None:
+        """Wait *seconds*."""
+        await asyncio.sleep(seconds)
+
+
 #: The lock file a running capture holds in its directory.
 LOCK_NAME = ".capture.lock"
 
@@ -133,8 +155,8 @@ class _Running:
     stop: asyncio.Event
     streaming: _FirstEvent
     task: asyncio.Task[CaptureResult]
-    opened: float  # monotonic time the segment started
-    # Monotonic time it became the current segment, and the bytes it had
+    opened: float  # clock time the segment started
+    # Clock time it became the current segment, and the bytes it had
     # written by its first live event.  A roll counts from these, so the time
     # and the snapshot a segment spends taking over never count toward its
     # limit, and a new segment is never due to roll the moment it takes over.
@@ -182,6 +204,13 @@ async def run_capture(make_source: SourceFactory, config: CaptureConfig) -> Capt
     settings reads the key again for every segment, and fails at the next one
     if the key file has gone.
     """
+    return await _run_capture(make_source, config, _Clock())
+
+
+async def _run_capture(
+    make_source: SourceFactory, config: CaptureConfig, clock: _Clock
+) -> CaptureRun:
+    """Do what :func:`run_capture` says, with every wait counted on *clock*."""
     for name in ("roll_minutes", "roll_mb"):
         value = getattr(config, name)
         if value is not None and not value > 0:
@@ -200,7 +229,9 @@ async def run_capture(make_source: SourceFactory, config: CaptureConfig) -> Capt
         at_once = asyncio.Event()
         loop = asyncio.get_running_loop()
         installed = install_stop_signals(loop, stop, at_once.set)
-        supervisor = _Supervisor(make_source, config, root, manifest, stop, at_once)
+        supervisor = _Supervisor(
+            make_source, config, root, manifest, stop, at_once, clock=clock
+        )
         try:
             await supervisor.run(source)
         finally:
@@ -247,6 +278,8 @@ class _Supervisor:
         manifest: CaptureManifest,
         stop: asyncio.Event,
         at_once: asyncio.Event | None = None,
+        *,
+        clock: _Clock,
     ) -> None:
         self._make_source = make_source
         self._config = config
@@ -255,9 +288,10 @@ class _Supervisor:
         self._stop = stop
         # Set by a second signal: a segment still closing is cancelled now.
         self._at_once = asyncio.Event() if at_once is None else at_once
-        self._deadline = time.monotonic() + config.minutes * 60.0
+        self._clock = clock
+        self._deadline = self._clock.monotonic() + config.minutes * 60.0
         self._backoff = BACKOFF_START_SECONDS
-        # A failing handover is retried no sooner than this (monotonic).
+        # A failing handover is retried no sooner than this (clock time).
         self._retry_at = 0.0
         self._running: list[_Running] = []
         # raw.jsonl warnings already logged, shared by every segment's sink so
@@ -281,7 +315,7 @@ class _Supervisor:
                     source = None
                     if current is None:
                         current = new
-                        current.current_since = time.monotonic()
+                        current.current_since = self._clock.monotonic()
                         continue
                     current, adopted = await self._handover(
                         new, current, pending_roll, stop_task
@@ -294,7 +328,7 @@ class _Supervisor:
                         # current one carries on and the roll is tried again
                         # after a wait.
                         await self._finish(new)
-                        self._retry_at = time.monotonic() + self._next_backoff()
+                        self._retry_at = self._clock.monotonic() + self._next_backoff()
                     continue
 
                 if current is None:
@@ -312,8 +346,9 @@ class _Supervisor:
                 current = None
                 if self._fatal(segment):
                     break
-                if time.monotonic() - ended_run.opened >= BACKOFF_RESET_SECONDS and (
-                    segment.stream_started is not None
+                if (
+                    self._clock.monotonic() - ended_run.opened >= BACKOFF_RESET_SECONDS
+                    and segment.stream_started is not None
                 ):
                     self._backoff = BACKOFF_START_SECONDS
                 if not await self._backoff_sleep(stop_task):
@@ -368,7 +403,7 @@ class _Supervisor:
         return self._stop.is_set() or self._remaining() <= 0
 
     def _remaining(self) -> float:
-        return self._deadline - time.monotonic()
+        return self._deadline - self._clock.monotonic()
 
     def _next_backoff(self) -> float:
         wait = self._backoff
@@ -443,7 +478,7 @@ class _Supervisor:
             stop=stop,
             streaming=streaming,
             task=task,
-            opened=time.monotonic(),
+            opened=self._clock.monotonic(),
         )
         running.watchers.append(asyncio.create_task(self._on_streaming(running)))
         self._running.append(running)
@@ -475,7 +510,7 @@ class _Supervisor:
         running.stop_requested = pd.Timestamp.now(tz="UTC")
         running.stop.set()
         if not await _ends_within(
-            running.task, STOP_TIMEOUT_SECONDS, unless=self._at_once
+            self._clock, running.task, STOP_TIMEOUT_SECONDS, unless=self._at_once
         ):
             if self._at_once.is_set():
                 running.why_cancelled = (
@@ -498,7 +533,7 @@ class _Supervisor:
             )
             running.stuck = True
             running.task.cancel()
-            await _ends_within(running.task, STOP_GRACE_SECONDS)
+            await _ends_within(self._clock, running.task, STOP_GRACE_SECONDS)
         return await self._finish(running)
 
     async def _finish(self, running: _Running) -> Segment:
@@ -658,7 +693,7 @@ class _Supervisor:
                 return "ended"
             if self._should_end():
                 return None
-            now = time.monotonic()
+            now = self._clock.monotonic()
             if now >= self._retry_at:
                 since = current.current_since or current.opened
                 if roll_seconds is not None and now - since >= roll_seconds:
@@ -671,11 +706,7 @@ class _Supervisor:
                 ):
                     return EndReason.ROLLED_SIZE
             timeout = max(0.0, min(POLL_SECONDS, self._remaining()))
-            await asyncio.wait(
-                {current.task, stop_task},
-                timeout=timeout,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
+            await self._clock.wait({current.task, stop_task}, timeout)
 
     async def _handover(
         self,
@@ -691,17 +722,18 @@ class _Supervisor:
         failed before it streamed (or the capture is ending) and the old one,
         if it is still running, stays current.
         """
-        waited_from = time.monotonic()
+        waited_from = self._clock.monotonic()
         streaming = asyncio.create_task(new.streaming.wait())
         try:
             while True:
                 if new.streaming.is_set() or (
                     not new.task.done()
-                    and time.monotonic() - waited_from >= HANDOVER_TIMEOUT_SECONDS
+                    and self._clock.monotonic() - waited_from
+                    >= HANDOVER_TIMEOUT_SECONDS
                 ):
                     await self._stop_segment(current, reason or EndReason.ROLLED_TIME)
                     self._retry_at = 0.0
-                    new.current_since = time.monotonic()
+                    new.current_since = self._clock.monotonic()
                     return new, True
                 if new.task.done() or self._should_end():
                     return current, False
@@ -710,12 +742,11 @@ class _Supervisor:
                     # new one simply takes over, and any gap between them is
                     # recorded when it streams.
                     await self._finish(current)
-                    new.current_since = time.monotonic()
+                    new.current_since = self._clock.monotonic()
                     return new, True
-                await asyncio.wait(
+                await self._clock.wait(
                     {new.task, current.task, stop_task, streaming},
-                    timeout=max(0.0, min(POLL_SECONDS, self._remaining())),
-                    return_when=asyncio.FIRST_COMPLETED,
+                    max(0.0, min(POLL_SECONDS, self._remaining())),
                 )
         finally:
             streaming.cancel()
@@ -728,13 +759,13 @@ class _Supervisor:
             self._manifest.source,
             wait,
         )
-        await asyncio.wait({stop_task}, timeout=wait)
+        await self._clock.wait({stop_task}, wait)
         return not self._should_end()
 
     async def _heartbeat(self) -> None:
         """Keep the manifest and running segments' ``meta.json`` current."""
         while True:
-            await asyncio.sleep(HEARTBEAT_SECONDS)
+            await self._clock.sleep(HEARTBEAT_SECONDS)
             now = pd.Timestamp.now(tz="UTC")
             for running in self._running:
                 if running.task.done():
@@ -809,22 +840,24 @@ def _finished_normally(task: asyncio.Task[Any]) -> bool:
 
 
 async def _ends_within(
-    task: asyncio.Task[Any], seconds: float, *, unless: asyncio.Event | None = None
+    clock: _Clock,
+    task: asyncio.Task[Any],
+    seconds: float,
+    *,
+    unless: asyncio.Event | None = None,
 ) -> bool:
-    """Wait up to *seconds* for *task* to end; whether it did.
+    """Wait up to *seconds* on *clock* for *task* to end; whether it did.
 
     The wait ends early when *unless* is set.
     """
     if unless is None:
-        await asyncio.wait({task}, timeout=seconds)
+        await clock.wait({task}, seconds)
         return task.done()
     if unless.is_set():
         return task.done()
     waiter = asyncio.create_task(unless.wait())
     try:
-        await asyncio.wait(
-            {task, waiter}, timeout=seconds, return_when=asyncio.FIRST_COMPLETED
-        )
+        await clock.wait({task, waiter}, seconds)
     finally:
         waiter.cancel()
     return task.done()

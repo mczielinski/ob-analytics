@@ -248,14 +248,68 @@ def _fast_clock(monkeypatch):
     monkeypatch.setattr(_runner, "CANCEL_RETRY_SECONDS", 0.02)
 
 
-def _capture(tmp_path: Path, plan: list[str], seconds: float, **config: Any):
-    cfg = CaptureConfig(
+class _SteppedClock(_supervisor._Clock):
+    """Real time, plus however far the test has moved it forward.
+
+    A wait the supervisor makes on it ends once the clock passes its end,
+    whether real time took it there or :meth:`advance` did.  :attr:`waits`
+    holds the length of each wait in flight, so a test can tell when the
+    supervisor is waiting on a limit.
+
+    The ``_fast_clock`` fixture shrinks every limit, so most tests wait them
+    out in real time.  A test that needs a limit to run out without waiting
+    for it moves this clock past the limit instead.
+    """
+
+    def __init__(self) -> None:
+        self._ahead = 0.0
+        self._moved = asyncio.Event()
+        self.waits: list[float] = []
+
+    def monotonic(self) -> float:
+        return time.monotonic() + self._ahead
+
+    def advance(self, seconds: float) -> None:
+        self._ahead += seconds
+        self._moved.set()
+        self._moved = asyncio.Event()
+
+    async def wait(self, tasks: set[asyncio.Future[Any]], timeout: float) -> None:
+        end = self.monotonic() + timeout
+        self.waits.append(timeout)
+        try:
+            while (left := end - self.monotonic()) > 0:
+                moved = asyncio.ensure_future(self._moved.wait())
+                try:
+                    done, _ = await asyncio.wait(
+                        {*tasks, moved},
+                        timeout=left,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                finally:
+                    moved.cancel()
+                if done - {moved}:
+                    return
+        finally:
+            self.waits.remove(timeout)
+
+    async def sleep(self, seconds: float) -> None:
+        await self.wait(set(), seconds)
+
+
+def _config(tmp_path: Path, seconds: float, **config: Any) -> CaptureConfig:
+    return CaptureConfig(
         pair="btcusd",
         out_dir=tmp_path / "cap",
         minutes=seconds / 60,
         **{"keep_raw": False, **config},
     )
-    return asyncio.run(run_capture(_factory(plan), cfg))
+
+
+def _capture(tmp_path: Path, plan: list[str], seconds: float, **config: Any):
+    return asyncio.run(
+        run_capture(_factory(plan), _config(tmp_path, seconds, **config))
+    )
 
 
 def _rows(path: Path) -> list[dict[str, str]]:
@@ -599,19 +653,39 @@ class TestRoll:
         self, tmp_path, monkeypatch
     ):
         # The capture ends while the next segment is still taking its snapshot,
-        # so both are running, and neither stops by itself.
-        monkeypatch.setattr(_supervisor, "STOP_TIMEOUT_SECONDS", 2.0)
+        # so both are running, and neither stops by itself.  Both stop limits
+        # must run at the same time: once both are waiting, moving the clock
+        # past one limit ends the capture.  Stopped one after the other, the
+        # second limit would only start then, and take its whole length.
+        limit = 30.0
+        monkeypatch.setattr(_supervisor, "STOP_TIMEOUT_SECONDS", limit)
         monkeypatch.setattr(_supervisor, "STOP_GRACE_SECONDS", 0.1)
-        started = time.monotonic()
-        run = _capture(
-            tmp_path,
-            [HANG_ON_STOP, STUCK_SNAPSHOT],
-            seconds=0.6,
-            roll_minutes=0.3 / 60,
-        )
+        cfg = _config(tmp_path, seconds=0.6, roll_minutes=0.3 / 60)
 
-        # One limit (2 s) after the end, not one per segment (4 s).
-        assert time.monotonic() - started < 3.7
+        async def capture() -> tuple[Any, float]:
+            clock = _SteppedClock()
+            run = asyncio.create_task(
+                _supervisor._run_capture(
+                    _factory([HANG_ON_STOP, STUCK_SNAPSHOT]), cfg, clock
+                )
+            )
+            try:
+                async with asyncio.timeout(10):
+                    while clock.waits.count(limit) < 2 and not run.done():
+                        await asyncio.sleep(0.01)
+            except TimeoutError:
+                run.cancel()
+                pytest.fail("the two stop limits never ran at the same time")
+            if run.done():
+                await run  # raises what ended it
+                pytest.fail("the capture ended before both stopped")
+            clock.advance(limit)
+            started = time.monotonic()
+            return await run, time.monotonic() - started
+
+        run, after_the_limit = asyncio.run(capture())
+
+        assert after_the_limit < 5
         first, second = run.manifest.segments
         assert first.end_reason is second.end_reason is EndReason.FINISHED
         assert "did not stop within" in (first.error or "")
@@ -883,7 +957,12 @@ def _first_event_recorded(
         )
         config = CaptureConfig(pair="btcusd", out_dir=tmp_path, minutes=1.0)
         supervisor = _supervisor._Supervisor(
-            _factory([OK]), config, tmp_path, manifest, asyncio.Event()
+            _factory([OK]),
+            config,
+            tmp_path,
+            manifest,
+            asyncio.Event(),
+            clock=_supervisor._Clock(),
         )
         segment = Segment(name="seg-0001", started=t0)
         manifest.segments.append(segment)

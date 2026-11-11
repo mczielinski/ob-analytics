@@ -1240,7 +1240,12 @@ class TestReadingOneWindowAtATime:
         save_data(single.tables(), tmp_path / "single", config=single.config)
         expected = load_data(tmp_path / "single")
 
-        for number, cuts in enumerate(cut_sets(frame)):
+        # A run per cut is slow.  One cut in the middle, with records on each
+        # side, then two runs that each cut at every other boundary, so that
+        # every boundary is cut once and the book is carried across it.
+        received = list(frame["ts_recv"])[1:]
+        middle = [received[len(received) // 2]]
+        for number, cuts in enumerate((middle, received[::2], received[1::2])):
             out = pipeline().run_windows(frame, cuts, tmp_path / f"w{number}")
             windowed = load_data(out)
             for name in ("trades", "depth", "depth_summary"):
