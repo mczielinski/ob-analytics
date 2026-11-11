@@ -2,9 +2,13 @@
 
 ob-analytics rebuilds a limit order book from a venue's raw event stream and
 measures it. This file is the glossary of the words the code already uses, so
-that new code, tests, issues and documents name things the same way. Where it
-disagrees with the published glossary at `docs/glossary.md`, that file wins and
-this one is corrected.
+that new code, tests, issues and documents name things the same way.
+
+This file decides identifiers: the name of each concept, and the name the code
+gives it. The published glossary at `docs/glossary.md` explains the same terms
+for users, and may name a synonym once. The two files hold the same terms.
+Where they disagree, this file wins: correct the glossary, or the code, to
+match it.
 
 ## Venue and instrument
 
@@ -75,6 +79,18 @@ Binance, Kalshi and Polymarket are L2.
 The matching rule that gives the queue its order: better prices execute first,
 and at one price, earlier arrivals execute first.
 
+**Matching engine**:
+The venue's component that pairs compatible buy and sell orders under fixed,
+published rules and reports the trades.
+
+**Continuous double auction**:
+The market design most venues run: both sides post orders, and the matching
+engine matches them the moment they become compatible, all session long.
+
+**Last trade**:
+The price of the most recent trade. Part of L1; it can stay the same while
+the book changes.
+
 **Feed type**:
 Whether a feed's resting book can be crossed. Named `feed_type` and typed
 `FeedType`, with the values below; it is a property of the source, not of the
@@ -95,6 +111,15 @@ the capture kept a level the venue removed. `FeedType.PRICE_LEVELS`.
 
 **Unknown feed type**:
 A source that does not declare a feed type. `FeedType.UNKNOWN`, the default.
+
+**Bitstamp CSV**:
+Bitstamp's stored format: one row per order event, with a sibling
+`trades.csv` of live trades, as `ob-analytics capture bitstamp` writes it.
+
+**LOBSTER**:
+An academic equity data set of paired message and orderbook files, with
+integer prices and timestamps in seconds after midnight. The orderbook file is
+its venue book.
 
 **Trade attribution**:
 Which orders of a trade a feed's order events can name: the maker, the order
@@ -124,8 +149,16 @@ All orders resting at a venue for one instrument at one instant.
 Bid or ask. Named `direction` on the events, depth and book snapshot tables.
 _Avoid_: `side` as a column name
 
+**Limit order**:
+An instruction to buy or sell at a given price or better. It rests in the book
+until it is matched, changed or cancelled.
+
+**Market order**:
+An instruction to trade at once against the best price on the other side.
+Modeled as a limit order whose price crosses the spread on arrival.
+
 **Price level**:
-One price rung on one side of the book, and the size resting there. Always
+One price on one side of the book, and the size resting there. Always
 written in full, because a bare "level" means resolution.
 _Avoid_: rung, bucket, tier, bare "level"
 
@@ -210,9 +243,9 @@ What an event did to the order: `created`, `changed` or `deleted`. Named
 _Avoid_: kind, op, message type
 
 **Volume**:
-Size, in the base asset or in shares. Its meaning is per table: outstanding
-size after the event, the size removed without trading on a delete, the
-level's new resting size on the depth table, and the executed size on trades.
+Size, stored as a whole number of lots (see lot size). Its meaning is per
+table: outstanding size after the event, the size removed without trading on a
+delete, the price level's new resting size on the depth table, and the executed size on trades.
 _Avoid_: size, quantity, amount
 
 **Fill**:
@@ -285,6 +318,22 @@ a bare "direction" would be read as the book side; the identifier stays
 `direction`.
 _Avoid_: `aggressor` as an identifier, sign, initiator
 
+**Order flow imbalance (OFI)**:
+Signed volume divided by total traded volume, per time window, from `-1` to
+`+1`. Computed by `order_flow_imbalance`, or by `ofi_by_window` for several
+trailing windows at once. `order_flow_imbalance` names its column `ofi`;
+`ofi_by_window` writes one column per window.
+
+**VPIN**:
+Volume-synchronized probability of informed trading: trades put in buckets of
+equal volume, and the rolling absolute buy-sell imbalance across them.
+Computed by `vpin`, with `vpin_bucket_volume` for the usual bucket size.
+
+**Kyle's lambda**:
+The slope of price change against signed volume over a rolling window: the
+price move a unit of signed volume buys. Computed by `kyle_lambda`, which
+returns a `KyleLambdaResult`.
+
 **Trade sign**:
 A direction worked out after the fact for a feed that does not label the taker
 side, by the tick rule, Lee-Ready or bulk volume classification.
@@ -298,12 +347,13 @@ row per change to one price level.
 _Avoid_: liquidity, book state, ladder
 
 **Depth summary**:
-One row per event holding the touch and the size resting in each basis-point
-ring out from the mid-price. Named `depth_summary`.
+One row per event holding the touch and the size resting in each depth bin
+out from the mid-price. Named `depth_summary`, and made by `summarize_depth`.
 _Avoid_: metrics, stats, aggregates
 
 **Depth bin**:
-One basis-point ring of the depth summary. Its width is `depth_bps` and their
+One range of distances from the mid-price in the depth summary, on each side
+of the book. Its width in basis points is `depth_bps` and their
 count is `depth_bins`.
 _Avoid_: bucket, band, ring
 
@@ -501,6 +551,10 @@ What decides where the bar boundaries fall — `time`, `tick`, `volume`,
 the `BAR_RULES` registry, never a name suffix.
 _Avoid_: bar type, sampling scheme
 
+**Time bar** / **tick bar** / **volume bar** / **dollar bar** / **imbalance bar**:
+A bar made by the `time`, `tick`, `volume`, `dollar` or `imbalance` bar rule.
+"Tick" here means one printed trade, not the price increment.
+
 **Threshold**:
 How much of the rule's own quantity closes a bar. Named `threshold`; the unit
 is the rule's (a duration, a trade count, or an amount in instrument units).
@@ -585,6 +639,10 @@ size.
 **Realized volatility**:
 The standard deviation of returns over a trailing window, per bar rather than
 annualized. Named `realized_vol`.
+
+**Close location**:
+Where a bar's close fell within its own high-low range. Not a built-in
+feature; the worked example of writing one.
 
 **Trailing window**:
 The stretch a value looks back over, ending at its own row. A feature counts
