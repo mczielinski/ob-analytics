@@ -110,8 +110,8 @@ def format_time_axis(ax: Axes) -> None:
     Sets an explicit ``AutoDateLocator`` + ``ConciseDateFormatter`` pair.
     Renderers that plot ``date2num`` floats stay off matplotlib's date
     *units converter*, whose registration forces the slow collection-draw
-    path (one ``Path`` rebuilt per segment on every draw — the WS-2.4
-    profile); for unit-converted axes only the tick style changes (the
+    path (one ``Path`` rebuilt per segment on every draw, as profiling
+    showed); for unit-converted axes only the tick style changes (the
     default formatter rendered "02 02:45"-style day prefixes).
     """
     locator = mdates.AutoDateLocator()

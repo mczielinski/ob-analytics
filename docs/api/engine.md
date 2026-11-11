@@ -47,11 +47,23 @@ engine compares and the label a frame carries cannot fall out of step.
 
 ::: ob_analytics.engine.Outcome
 
+::: ob_analytics.engine.Code
+
+::: ob_analytics.engine.DIRECTIONS
+
+::: ob_analytics.engine.ACTIONS
+
+::: ob_analytics.engine.OUTCOMES
+
+::: ob_analytics.engine.NAT_NS
+
 ## Reconstructions
 
 ::: ob_analytics.engine.order_book
 
 ::: ob_analytics.engine.order_lifecycles
+
+::: ob_analytics.engine.DEFAULT_FILL_TOLERANCE
 
 ::: ob_analytics.engine.queue_positions
 

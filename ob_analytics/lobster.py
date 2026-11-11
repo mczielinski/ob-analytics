@@ -93,7 +93,7 @@ _LOBSTER_COLS = ["time", "event_type", "id", "volume", "price", "direction"]
 #: Default venue time zone for a LOBSTER session.  LOBSTER distributes US
 #: equity data (NASDAQ), whose trading day is US/Eastern; its timestamps are
 #: seconds after *local* midnight with no zone, so converting them to the
-#: shared UTC clock (issue #154) needs this.  Override per run via
+#: shared UTC clock needs this.  Override per run via
 #: ``RunContext(session_tz=...)`` for a non-US-Eastern capture.
 LOBSTER_DEFAULT_TZ = "America/New_York"
 

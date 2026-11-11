@@ -256,8 +256,8 @@ class PipelineConfig(_Settings):
         default=0.01,
         gt=0,
         description=(
-            "The instrument's minimum price increment, in the quote currency "
-            "(issue #155).  Prices are stored as a whole number of ticks "
+            "The instrument's minimum price increment, in the quote currency.  "
+            "Prices are stored as a whole number of ticks "
             "(``int64``); the quote-currency price is ``ticks * tick_size``.  "
             "0.01 (default) is a cent grid (USD equities, BTC-USD); use the "
             "venue's real tick for small-tick crypto or 0-1 prediction markets. "
@@ -272,7 +272,7 @@ class PipelineConfig(_Settings):
             "Display precision: decimal places to show when a tick price is "
             "rendered back to the quote currency for a plot or CSV.  2 for USD "
             "equities / BTC-USD; 8 for satoshi-denominated pairs; 4-5 for FX.  "
-            "The stored price grid is ``tick_size``, not this — see issue #155."
+            "The stored price grid is ``tick_size``, not this."
         ),
     )
     lot_size: float = Field(

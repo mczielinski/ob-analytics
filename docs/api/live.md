@@ -24,3 +24,35 @@ segments, rolls, reconnects and restarts work.
 ::: ob_analytics.live.Gap
 
 ::: ob_analytics.live.EndReason
+
+## Built-in live sources
+
+The `bitstamp` source captures Bitstamp itself. The `ccxt` and `cryptofeed`
+sources reach many venues through those libraries, and need the `ccxt` and
+`cryptofeed` extras. See [Capture CCXT venues](../howto/ccxt.md) and
+[Capture cryptofeed venues](../howto/cryptofeed.md).
+
+::: ob_analytics.live.bitstamp.BitstampCapturer
+
+::: ob_analytics.live.CcxtSource
+
+::: ob_analytics.live.CcxtSettings
+
+::: ob_analytics.live.CryptofeedSource
+
+::: ob_analytics.live.CryptofeedSettings
+
+## Writing a live source
+
+What a live source yields and what the capture runner reads from it. See
+[The live capability](../extending.md#the-live-capability).
+
+::: ob_analytics.live.EventDict
+
+::: ob_analytics.live.CaptureSink
+
+::: ob_analytics.live.CaptureResult
+
+::: ob_analytics.live.SupportsDiagnostics
+
+::: ob_analytics.live.SupportsPreflight

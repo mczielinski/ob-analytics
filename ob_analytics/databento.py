@@ -4,7 +4,7 @@ Databento publishes normalized market data for many venues in its own binary
 encoding, DBN.  Its **MBO** schema is a per-order feed — every record carries
 an ``order_id``, a ``price``, a ``size`` and a ``side`` — which is the shape
 ob-analytics reconstructs from, so a DBN MBO file replays through the standard
-:class:`~ob_analytics.pipeline.Pipeline` (issue #100).
+:class:`~ob_analytics.pipeline.Pipeline`.
 
 The ``action`` field says what a record does.  Databento documents the seven
 values as follows, and only the first four change the book:
@@ -50,12 +50,12 @@ A DBN record carries two clocks.  ``ts_recv`` is Databento's own receive time,
 which they guarantee to be monotonic per instrument, so it becomes the
 canonical ``timestamp`` the pipeline orders events by.  ``ts_event`` is the
 venue matching engine's own time, which can go backwards across gateways, so it
-becomes ``exchange_timestamp``.  Both are UTC nanoseconds already (issue #154).
+becomes ``exchange_timestamp``.  Both are UTC nanoseconds already.
 
 Scope
 -----
 This module reads stored DBN files.  Databento's Live client is not wired up
-here; see issue #100 for that half.
+here.
 
 A modify has no canonical event of its own.  Databento's ``M`` can move an
 order to another price or make it bigger, and both lose queue priority, so both
@@ -445,7 +445,7 @@ class DatabentoLoader:
     settings : DatabentoSettings, optional
         Which instrument and publisher of a multi-instrument file to read.
     venue, symbol : str, optional
-        Optional instrument identity (issue #147).  When either is supplied the
+        Optional instrument identity.  When either is supplied the
         loaded frame gains per-row ``venue`` / ``symbol`` columns; ``venue``
         falls back to ``"databento"``.
     """

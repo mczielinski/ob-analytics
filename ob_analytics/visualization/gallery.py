@@ -277,7 +277,7 @@ def _gallery_settings(metric: Any) -> dict[str, Any]:
 
 
 #: Price-valued columns per frame, converted from integer ticks to a
-#: quote-currency float for display (issue #155).  Bps columns are scale-free
+#: quote-currency float for display.  Bps columns are scale-free
 #: and are left alone; size-valued columns are handled by
 #: :data:`_DISPLAY_SIZE_COLUMNS`.
 _DISPLAY_PRICE_COLUMNS: dict[str, tuple[str, ...]] = {
@@ -288,7 +288,7 @@ _DISPLAY_PRICE_COLUMNS: dict[str, tuple[str, ...]] = {
 }
 
 #: Size-valued columns per frame, converted from integer lots to a base-asset
-#: float for display (issue #226).  ``depth_summary`` carries one volume column
+#: float for display.  ``depth_summary`` carries one volume column
 #: per bps bin and the bin count is configurable, so that frame is matched by
 #: name rather than listed.
 _DISPLAY_SIZE_COLUMNS: dict[str, tuple[str, ...]] = {

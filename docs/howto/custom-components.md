@@ -78,15 +78,21 @@ result = Pipeline(
 ).run("my_exchange_data/orders.csv")  # requires sibling trades.csv
 ```
 
-### Cryptofeed L3 adapter (conceptual)
+### A feed that sends only each order's new size
+
+Some per-order logs carry no action column: each row gives an order's new
+size, and a size of 0 deletes it. A loader can infer the action and the fill by
+tracking each order's last size. (For cryptofeed itself you need no loader of
+your own: the built-in `cryptofeed` source captures its L3 venues. See
+[Capture cryptofeed venues](cryptofeed.md).)
 
 ```python
 from pathlib import Path
 import pandas as pd
 from ob_analytics import PipelineConfig
 
-class CryptofeedLoader:
-    """Load events from a cryptofeed L3 order book log.
+class SizeUpdateLoader:
+    """Load events from a per-order log of new sizes.
 
     Size of 0 means deletion. This adapter tracks state to infer
     actions and compute fills.

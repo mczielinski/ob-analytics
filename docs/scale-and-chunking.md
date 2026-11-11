@@ -233,15 +233,9 @@ window ended with:
 - Order types and trade signs are decided once, over the whole input, as in a
   single run.
 
-The result matches a single run row for row in every table. There are two
-differences:
-
-- `events` is written in window order, not in the loader's order.
-- `aggressiveness_bps` looks up the quote standing before each order by
-  `event_id`. Bitstamp numbers its events by order, not by time, so on a
-  Bitstamp input the lookup can find a quote from another window. Sources that
-  number events in time order (Databento, the synthetic generator) match
-  exactly.
+The result matches a single run row for row in every table. The one
+difference is that `events` is written in window order, not in the loader's
+order.
 
 A run that fails part-way leaves the output folder as it was: the files are
 moved into place only once every window is done.

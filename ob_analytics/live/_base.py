@@ -97,17 +97,20 @@ class CaptureResult:
     stream_ended: pd.Timestamp | None = None
 
 
-# Single canonical event dict shape, mirroring BitstampLoader's CSV columns.
-# Capturers yield these one at a time; the runner buffers/writes.
+# Capturers yield these one at a time; the runner buffers and writes them.
 EventDict = dict[str, Any]
-# Required keys for an order event (L3):  id, timestamp, exchange_timestamp,
-#                                    price, volume, action, direction
-# Required keys for a depth event (L2):   timestamp, exchange_timestamp,
-#                                    side, price, volume  (volume = the new
-#                                    absolute size at that price; 0 removes it)
-# Required keys for a trade event:   trade_id, timestamp, exchange_timestamp,
-#                                    price, amount, buy_order_id,
-#                                    sell_order_id, side
+"""One event a live source yields: a dict of column name to value.
+
+The required keys are:
+
+* an order event (L3): ``id``, ``timestamp``, ``exchange_timestamp``,
+  ``price``, ``volume``, ``action``, ``direction``.
+* a depth event (L2): ``timestamp``, ``exchange_timestamp``, ``side``,
+  ``price``, ``volume``.  ``volume`` is the new size at that price; ``0``
+  removes the level.
+* a trade event: ``trade_id``, ``timestamp``, ``exchange_timestamp``,
+  ``price``, ``amount``, ``buy_order_id``, ``sell_order_id``, ``side``.
+"""
 
 
 @dataclass

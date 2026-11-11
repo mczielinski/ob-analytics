@@ -1,4 +1,4 @@
-"""Frame adapters for the engine's FIFO queue reconstruction (WS-4.1).
+"""Frame adapters for the engine's FIFO queue reconstruction.
 
 The reconstruction itself is :mod:`ob_analytics.engine`: a single time-ordered
 pass over the event stream rebuilds, per ``(direction, price)`` level, the

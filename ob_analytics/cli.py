@@ -1066,6 +1066,16 @@ def main(argv: list[str] | None = None) -> None:
     *argv* is the arguments after the command name; ``None`` reads
     ``sys.argv``.
     """
+    args = _build_parser().parse_args(argv)
+    args.func(args)
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """The parser for ``ob-analytics`` and its subcommands.
+
+    ``capture`` reads the flags after the source's name later, with
+    :func:`_capture_parser`, once the source is known.
+    """
     from ob_analytics.data import list_writers
     from ob_analytics.sources import list_sources
 
@@ -1287,8 +1297,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     p_src.set_defaults(func=_cmd_sources)
 
-    args = parser.parse_args(argv)
-    args.func(args)
+    return parser
 
 
 if __name__ == "__main__":

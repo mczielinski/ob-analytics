@@ -177,8 +177,8 @@ MARKET_DATA_MIRRORS: dict[str, dict[str, str]] = {
 #: changes, so after the price moves away and back the book has holes near
 #: the top.  These venues are asked for the whole book, which the capture
 #: records in full -- cropping it to ``depth_limit`` would turn a level that
-#: is still resting, just outside that crop, into what looks like a cancel
-#: (issue #275).  (Other venues differ: Kraken subscribes at ``limit`` levels
+#: is still resting, just outside that crop, into what looks like a cancel.
+#: (Other venues differ: Kraken subscribes at ``limit`` levels
 #: and keeps the window filled, so a level leaving it really is gone from
 #: Kraken's own view; Coinbase, Bitstamp and OKX ignore the limit and hand
 #: ccxt the whole book too, so nothing needs to crop those either.)
@@ -192,7 +192,7 @@ _WHOLE_BOOK_VENUES: dict[str, int] = {
 #: Venues whose trades name the side of the maker, the resting order, and
 #: which ccxt passes on unchanged as the trade's side. The capture reverses
 #: that side so ``trades.csv`` names the taker's side, as every other venue's
-#: does (issue #308). Coinbase Advanced Trade (``coinbase``) does this on both
+#: does. Coinbase Advanced Trade (``coinbase``) does this on both
 #: its websocket and its REST trades. Coinbase Exchange (``coinbaseexchange``)
 #: names the maker's side too, but ccxt already reverses it there.
 _MAKER_SIDE_VENUES = frozenset({"coinbase"})
@@ -785,8 +785,8 @@ class CcxtSource:
         per-side book.  Every level CCXT's book reports is compared, with no
         crop of its own: for most venues that book already is (or the venue
         makes it) everything CCXT knows about, so ``0`` means the level is
-        genuinely gone, not merely outside some smaller recorded window
-        (issue #275).  The one exception is Kraken, which keeps CCXT's book
+        genuinely gone, not merely outside some smaller recorded window.
+        The one exception is Kraken, which keeps CCXT's book
         at exactly its subscribed window; a level leaving that window reads
         as ``0`` too, because it is gone from Kraken's own view as well.
 
@@ -871,7 +871,7 @@ class CcxtSource:
 
         CCXT sorts each side best first (bids high to low, asks low to high).
         A shallower depth than CCXT tracks is not cropped back down here: see
-        :meth:`_diff_book` for why (issue #275).
+        :meth:`_diff_book` for why.
         """
         return list(book.get(key) or ())
 

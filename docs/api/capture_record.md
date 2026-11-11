@@ -32,3 +32,17 @@ recorded tick size and lot size when your config does not set them. So
 ::: ob_analytics.capture_record.read_fields
 
 ::: ob_analytics.capture_record.record_path
+
+## Capture files
+
+A capture segment's `orders.csv` or `depth.csv`, `trades.csv` and `raw.jsonl`.
+These functions find a segment's book file, and complete the files of a capture
+that stopped without closing them.
+
+::: ob_analytics.capture_files.book_file
+
+::: ob_analytics.capture_files.repair_files
+
+::: ob_analytics.capture_files.RepairedFiles
+
+::: ob_analytics.capture_files.FileCaptureSink

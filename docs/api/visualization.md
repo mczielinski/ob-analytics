@@ -120,6 +120,66 @@ clicking to work.
 
 ::: ob_analytics.visualization.plot
 
+## Prepare functions
+
+One function per concept, in the `prepare` namespace. Each turns a result's
+tables into the keyword arguments `plot()` takes for that concept.
+`prepare.book_replay` is under [Book replay](#book-replay).
+
+::: ob_analytics.visualization.prepare.amihud
+
+::: ob_analytics.visualization.prepare.bars
+
+::: ob_analytics.visualization.prepare.book_signals
+
+::: ob_analytics.visualization.prepare.book_snapshot
+
+::: ob_analytics.visualization.prepare.cancellations
+
+::: ob_analytics.visualization.prepare.depth_chart
+
+::: ob_analytics.visualization.prepare.depth_heatmap
+
+::: ob_analytics.visualization.prepare.events_histogram
+
+::: ob_analytics.visualization.prepare.hidden_executions
+
+::: ob_analytics.visualization.prepare.hidden_liquidity_overlay
+
+::: ob_analytics.visualization.prepare.kyle_lambda
+
+::: ob_analytics.visualization.prepare.l1_ticker
+
+::: ob_analytics.visualization.prepare.liquidity_at_touch
+
+::: ob_analytics.visualization.prepare.ofi_by_window
+
+::: ob_analytics.visualization.prepare.order_activity
+
+::: ob_analytics.visualization.prepare.order_flow_imbalance
+
+::: ob_analytics.visualization.prepare.order_outcome
+
+::: ob_analytics.visualization.prepare.price_view
+
+::: ob_analytics.visualization.prepare.queue_position
+
+::: ob_analytics.visualization.prepare.roll_spread
+
+::: ob_analytics.visualization.prepare.time_series
+
+::: ob_analytics.visualization.prepare.trade_size
+
+::: ob_analytics.visualization.prepare.trade_tape
+
+::: ob_analytics.visualization.prepare.trading_halts
+
+::: ob_analytics.visualization.prepare.transaction_costs
+
+::: ob_analytics.visualization.prepare.volume_percentiles
+
+::: ob_analytics.visualization.prepare.vpin
+
 ## Theme and Saving
 
 Pass `theme=PlotTheme(...)` to `plot()` to override `DEFAULT_THEME` for a
@@ -147,6 +207,8 @@ it clips gets the same bounds. Pass them to your own faces to match it.
 ::: ob_analytics.visualization.focus_window
 
 ::: ob_analytics.visualization.FocusWindow
+
+::: ob_analytics.visualization.format_time_axis
 
 ## Renderer registry
 
