@@ -178,7 +178,7 @@ def test_ofi_bars_use_buy_and_sell(backend: str) -> None:
 
 
 @pytest.mark.parametrize("backend", ["matplotlib", "plotly"])
-def test_ofi_horizon_uses_buy_and_sell(backend: str) -> None:
+def test_ofi_by_window_uses_buy_and_sell(backend: str) -> None:
     # Net buy / net sell bands share the OFI bar chart's aggressor colours.
     _skip_missing(backend)
     ts = pd.Timestamp("2015-05-01 01:00:00")
@@ -196,7 +196,7 @@ def test_ofi_horizon_uses_buy_and_sell(backend: str) -> None:
     )
     theme = PlotTheme(palette=CUSTOM)
     fig = plot(
-        "ofi_horizon", backend=backend, theme=theme, **prepare.ofi_horizon(trades)
+        "ofi_by_window", backend=backend, theme=theme, **prepare.ofi_by_window(trades)
     )
     if backend == "plotly":
         # Plotly fills are rgba() strings built from the palette's hex.

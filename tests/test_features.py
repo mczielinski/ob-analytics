@@ -365,7 +365,7 @@ class TestRegistry:
         self, toy_trades, _restore_registry
     ):
         """So a second window registered beside the built-in has its own column."""
-        register_feature(VpinFeature(name="vpin_5", window=5))
+        register_feature(VpinFeature(name="vpin_5", n_bars=5))
         table = features(toy_trades, None, "tick", 2, include=["vpin", "vpin_5"])
 
         assert list(table.columns[3:]) == ["vpin", "vpin_5"]
@@ -373,7 +373,7 @@ class TestRegistry:
 
     def test_two_features_cannot_share_a_column(self, toy_trades, _restore_registry):
         """A renamed multi-column feature is refused, not silently merged."""
-        register_feature(ReturnsFeature(name="returns_60", window=60))
+        register_feature(ReturnsFeature(name="returns_60", n_bars=60))
 
         with pytest.raises(ConfigError, match="log_return"):
             features(toy_trades, None, "tick", 2, include=["returns", "returns_60"])
@@ -435,7 +435,7 @@ class TestTradeFeatures:
         table = features(toy_trades, None, "tick", 2, include=["returns"])
         returns = table["log_return"]
 
-        expected = returns.rolling(ReturnsFeature().window, min_periods=2).std(ddof=1)
+        expected = returns.rolling(ReturnsFeature().n_bars, min_periods=2).std(ddof=1)
         pd.testing.assert_series_equal(
             table["realized_vol"], expected, check_names=False
         )
@@ -453,7 +453,7 @@ class TestTradeFeatures:
         table = features(toy_trades, None, "volume", 12.0, include=["flow", "vpin"])
 
         imbalance = (table["signed_volume"] / table["volume"]).abs()
-        expected = imbalance.rolling(VpinFeature().window, min_periods=1).mean()
+        expected = imbalance.rolling(VpinFeature().n_bars, min_periods=1).mean()
         np.testing.assert_allclose(table["vpin"], expected)
         assert table["vpin"].between(0.0, 1.0).all()
 
@@ -463,7 +463,7 @@ class TestTradeFeatures:
         )
         flow = table["signed_volume"].to_numpy(dtype=float)
         move = (table["close"] - table["open"]).to_numpy(dtype=float)
-        window = KyleLambdaFeature().window
+        window = KyleLambdaFeature().n_bars
 
         row = len(table) - 1
         start = max(0, row - window + 1)
@@ -494,19 +494,19 @@ class TestTradeFeatures:
     )
     def test_an_unusable_window_is_refused_when_built(self, make, bad):
         """Reported against the feature, not later from inside pandas."""
-        with pytest.raises(ConfigError, match="window"):
-            make(window=bad)
+        with pytest.raises(ConfigError, match="n_bars"):
+            make(n_bars=bad)
 
     def test_the_smallest_usable_windows_are_accepted(self):
-        ReturnsFeature(window=2)
-        VpinFeature(window=1)
-        KyleLambdaFeature(window=2)
+        ReturnsFeature(n_bars=2)
+        VpinFeature(n_bars=1)
+        KyleLambdaFeature(n_bars=2)
 
     @pytest.mark.parametrize("window", [np.int64(5), np.int32(5), np.uint8(5)])
     def test_a_numpy_integer_window_is_accepted(self, toy_trades, window):
         """A window worked out from data is often a numpy integer."""
-        numpy_window = VpinFeature(name="vpin_np", window=window)
-        python_window = VpinFeature(name="vpin_py", window=5)
+        numpy_window = VpinFeature(name="vpin_np", n_bars=window)
+        python_window = VpinFeature(name="vpin_py", n_bars=5)
         # The flow columns are what VPIN reads, so the table serves as its input.
         frame = features(toy_trades, None, "tick", 2, include=["flow"])
 
@@ -516,7 +516,7 @@ class TestTradeFeatures:
         )
 
     def test_a_reconfigured_window_is_honoured(self, toy_trades, _restore_registry):
-        register_feature(ReturnsFeature(window=3))
+        register_feature(ReturnsFeature(n_bars=3))
         table = features(toy_trades, None, "tick", 2, include=["returns"])
 
         expected = table["log_return"].rolling(3, min_periods=2).std(ddof=1)

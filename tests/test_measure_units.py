@@ -24,12 +24,12 @@ import pytest
 
 from ob_analytics import metrics
 from ob_analytics.cost import amihud, roll_spread, transaction_costs
-from ob_analytics.depth import depth_signals
+from ob_analytics.depth import book_signals
 from ob_analytics.flow_toxicity import (
-    compute_kyle_lambda,
-    compute_vpin,
-    ofi_by_horizon,
+    kyle_lambda,
+    ofi_by_window,
     order_flow_imbalance,
+    vpin,
 )
 from ob_analytics.pipeline import PipelineResult
 from ob_analytics.visualization import gallery
@@ -56,7 +56,7 @@ def _quiet():
 
 
 def _kyle(run: PipelineResult) -> pd.DataFrame:
-    fit = compute_kyle_lambda(run.trades, quotes=run.depth_summary)
+    fit = kyle_lambda(run.trades, quotes=run.depth_summary)
     return fit.regression_df.assign(lambda_=fit.lambda_)
 
 
@@ -73,11 +73,11 @@ def _l1(run: PipelineResult) -> pd.DataFrame:
 #: The run's own depth_summary is the quotes, as the metrics pass it.
 BARE: dict[str, Callable[[PipelineResult], pd.DataFrame]] = {
     "l1_ticker": _l1,
-    "book_signals": lambda run: depth_signals(run.depth_summary),
-    "vpin": lambda run: compute_vpin(run.trades, quotes=run.depth_summary),
+    "book_signals": lambda run: book_signals(run.depth_summary),
+    "vpin": lambda run: vpin(run.trades, quotes=run.depth_summary),
     "kyle_lambda": _kyle,
     "order_flow_imbalance": _ofi,
-    "ofi_horizon": lambda run: ofi_by_horizon(run.trades, quotes=run.depth_summary),
+    "ofi_by_window": lambda run: ofi_by_window(run.trades, quotes=run.depth_summary),
     "transaction_costs": lambda run: transaction_costs(run.trades, run.depth_summary),
     "amihud": lambda run: amihud(run.trades),
     "roll_spread": lambda run: roll_spread(run.trades),
@@ -130,7 +130,7 @@ def test_every_built_in_metric_has_a_case() -> None:
     assert shipped == set(BARE)
 
 
-#: depth_signals still reports in the units of the frame it is handed, so its
+#: book_signals still reports in the units of the frame it is handed, so its
 #: table in the instrument's units is the one it gives on a display frame.
 FRAME_UNITS = frozenset({"book_signals"})
 

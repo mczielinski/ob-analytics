@@ -191,7 +191,7 @@ source, export format, plot, flow-toxicity metric, or live capturer — see
      file)
    - `compute_depth(events, config, path, ctx, loader) -> tuple[depth, depth_summary] | None`
      (override only if your venue computes depth differently; return `None`
-     to fall back to the standard `price_level_volume` → `depth_metrics` path)
+     to fall back to the standard `price_level_volume` → `summarize_depth` path)
 
    Auxiliary per-format tables (e.g. LOBSTER trading halts / cross trades /
    hidden executions) ride on the loader itself — expose them as an attribute
@@ -214,7 +214,7 @@ Follow the existing log style — short imperative subject, optional scope:
 
 ```
 feat(visualization): auto-infer volume_scale across plots and gallery
-perf(depth): iterate active levels in DepthMetricsEngine bin writers
+perf(depth): iterate active levels in DepthSummaryEngine bin writers
 fix(lobster): handle cross trades / halts when reconciling orderbook
 docs(quickstart): promote LOBSTER to its own section
 ```

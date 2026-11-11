@@ -123,11 +123,11 @@ the run. A size you pass is in the instrument's own units (here BTC), even
 though the run stores sizes as whole lots:
 
 ```python
-from ob_analytics import Pipeline, compute_vpin, compute_kyle_lambda, sample_csv_path
+from ob_analytics import Pipeline, vpin, kyle_lambda, sample_csv_path
 
 result = Pipeline().run(sample_csv_path())
-vpin = compute_vpin(result.trades, bucket_volume=0.25)  # 0.25 BTC buckets
-kyle = compute_kyle_lambda(result.trades)
+vpin_df = vpin(result.trades, bucket_volume=0.25)  # 0.25 BTC buckets
+kyle = kyle_lambda(result.trades)
 ```
 
 The same metrics are registered by name, so `result.metric("vpin",

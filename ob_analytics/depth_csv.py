@@ -25,7 +25,7 @@ The L2 CSV schema
 One row per price-level update, each carrying the level's **new absolute**
 resting size (``0`` removes the level) — *not* a signed delta.  A book
 snapshot is simply the opening block of rows.  This is exactly what
-:class:`~ob_analytics.depth.DepthMetricsEngine` consumes, so there is nothing
+:class:`~ob_analytics.depth.DepthSummaryEngine` consumes, so there is nothing
 to reconstruct.
 
 ======  ==================================================================
@@ -97,6 +97,14 @@ from ob_analytics.schemas import (
     cast_columns,
     validate_columns,
 )
+
+__all__ = [
+    "DepthCsvLoader",
+    "DepthCsvSettings",
+    "DepthCsvSource",
+    "DepthCsvTradeReader",
+    "DepthCsvWriter",
+]
 
 # ── Column-spelling tolerance ─────────────────────────────────────────
 

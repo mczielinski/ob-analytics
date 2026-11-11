@@ -16,14 +16,14 @@ Nine metrics ship with the package and are registered on import:
 
 * ``"l1_ticker"`` — the Level 1 quote: best bid, best ask and last trade.
 * ``"book_signals"`` — mid, micro-price and order-book imbalance
-  (:func:`~ob_analytics.depth.depth_signals`).
-* ``"vpin"`` — VPIN (:func:`~ob_analytics.flow_toxicity.compute_vpin`).
+  (:func:`~ob_analytics.depth.book_signals`).
+* ``"vpin"`` — VPIN (:func:`~ob_analytics.flow_toxicity.vpin`).
 * ``"kyle_lambda"`` — Kyle's λ
-  (:func:`~ob_analytics.flow_toxicity.compute_kyle_lambda`).
+  (:func:`~ob_analytics.flow_toxicity.kyle_lambda`).
 * ``"order_flow_imbalance"`` — order flow imbalance per window
   (:func:`~ob_analytics.flow_toxicity.order_flow_imbalance`).
-* ``"ofi_horizon"`` — order flow imbalance over several horizons
-  (:func:`~ob_analytics.flow_toxicity.ofi_by_horizon`).
+* ``"ofi_by_window"`` — order flow imbalance over several windows
+  (:func:`~ob_analytics.flow_toxicity.ofi_by_window`).
 * ``"transaction_costs"`` — effective and realized spread and price impact
   per trade (:func:`~ob_analytics.cost.transaction_costs`).
 * ``"amihud"`` — Amihud illiquidity (:func:`~ob_analytics.cost.amihud`).
@@ -55,16 +55,34 @@ import pandas as pd
 from ob_analytics._registry import Registry, load_plugins
 from ob_analytics._utils import price_scale, size_scale
 from ob_analytics.cost import amihud, roll_spread, transaction_costs
-from ob_analytics.depth import _quoted, depth_signals, get_spread, imbalance_levels
+from ob_analytics.depth import _quoted, book_signals, get_spread, imbalance_levels
 from ob_analytics.flow_toxicity import (
-    OFI_HORIZONS,
+    OFI_WINDOWS,
     KyleLambdaResult,
     _ofi_windows,
-    compute_kyle_lambda,
-    compute_vpin,
-    ofi_by_horizon,
+    kyle_lambda,
+    ofi_by_window,
+    vpin,
 )
 from ob_analytics.protocols import Level, Metric
+
+__all__ = [
+    "AmihudMetric",
+    "BookSignalsMetric",
+    "KyleLambdaMetric",
+    "L1TickerMetric",
+    "OfiByWindowMetric",
+    "OrderFlowImbalanceMetric",
+    "RollSpreadMetric",
+    "TransactionCostsMetric",
+    "VpinMetric",
+    "applicable_metrics",
+    "get_metric",
+    "list_metrics",
+    "load_metric_plugins",
+    "register_metric",
+    "skip_reason",
+]
 
 #: The entry-point group a third-party package advertises a metric under, e.g.
 #: ``[project.entry-points."ob_analytics.metrics"]`` with ``amihud =
@@ -273,7 +291,7 @@ class L1TickerMetric:
 
 
 class VpinMetric:
-    """VPIN, from :func:`~ob_analytics.flow_toxicity.compute_vpin`."""
+    """VPIN, from :func:`~ob_analytics.flow_toxicity.vpin`."""
 
     name = "vpin"
     title = "VPIN"
@@ -288,12 +306,12 @@ class VpinMetric:
         n_buckets: int = 50,
         sign_method: str | None = None,
     ) -> pd.DataFrame:
-        """Return the per-bucket VPIN table; the settings are ``compute_vpin``'s.
+        """Return the per-bucket VPIN table; the settings are ``vpin``'s.
 
         *bucket_volume* is in the instrument's own units, as
-        ``compute_vpin`` takes it, or ``"fit"`` to size it to the capture.
+        ``vpin`` takes it, or ``"fit"`` to size it to the capture.
         """
-        return compute_vpin(
+        return vpin(
             result.trades,
             bucket_volume=bucket_volume,
             n_buckets=n_buckets,
@@ -309,7 +327,7 @@ class VpinMetric:
 
 
 class KyleLambdaMetric:
-    """Kyle's λ, from :func:`~ob_analytics.flow_toxicity.compute_kyle_lambda`.
+    """Kyle's λ, from :func:`~ob_analytics.flow_toxicity.kyle_lambda`.
 
     The table is the per-window regression data.  The fit itself is in the
     table's ``attrs``: ``lambda_``, ``t_stat``, ``r_squared``, ``n_windows``,
@@ -332,8 +350,8 @@ class KyleLambdaMetric:
         ci_level: float = 0.95,
         seed: int | None = 0,
     ) -> pd.DataFrame:
-        """Return the regression table; the settings are ``compute_kyle_lambda``'s."""
-        kyle = compute_kyle_lambda(
+        """Return the regression table; the settings are ``kyle_lambda``'s."""
+        kyle = kyle_lambda(
             result.trades,
             window,
             sign_method=sign_method,
@@ -411,11 +429,11 @@ class OrderFlowImbalanceMetric:
         return prepare_order_flow_imbalance_data(frame, trades=prices)
 
 
-class OfiHorizonMetric:
-    """Order flow imbalance over several horizons, from :func:`~ob_analytics.flow_toxicity.ofi_by_horizon`."""
+class OfiByWindowMetric:
+    """Order flow imbalance over several windows, from :func:`~ob_analytics.flow_toxicity.ofi_by_window`."""
 
-    name = "ofi_horizon"
-    title = "Order Flow Imbalance vs Horizon"
+    name = "ofi_by_window"
+    title = "Order Flow Imbalance by Window"
     levels: tuple[Level, ...] = _EVERY_LEVEL
     needs: tuple[str, ...] = ("trades",)
 
@@ -423,14 +441,14 @@ class OfiHorizonMetric:
         self,
         result: Any,
         *,
-        horizons: tuple[str, ...] = OFI_HORIZONS,
+        windows: tuple[str, ...] = OFI_WINDOWS,
         grid: str = "5s",
         sign_method: str | None = None,
     ) -> pd.DataFrame:
-        """Return the grid table; the settings are ``ofi_by_horizon``'s."""
-        return ofi_by_horizon(
+        """Return the grid table; the settings are ``ofi_by_window``'s."""
+        return ofi_by_window(
             result.trades,
-            horizons=horizons,
+            windows=windows,
             grid=grid,
             sign_method=sign_method,
             quotes=result.depth_summary,
@@ -444,15 +462,15 @@ class OfiHorizonMetric:
         end_time: pd.Timestamp | None = None,
     ) -> dict[str, Any]:
         """Payload for the horizon graph, for the steps from *start_time* to *end_time*."""
-        from ob_analytics.visualization._data import prepare_ofi_horizon_grid_data
+        from ob_analytics.visualization._data import prepare_ofi_by_window_grid_data
 
-        return prepare_ofi_horizon_grid_data(
+        return prepare_ofi_by_window_grid_data(
             frame, start_time=start_time, end_time=end_time
         )
 
 
 class BookSignalsMetric:
-    """Mid, micro-price and order-book imbalance, from :func:`~ob_analytics.depth.depth_signals`.
+    """Mid, micro-price and order-book imbalance, from :func:`~ob_analytics.depth.book_signals`.
 
     The table is the run's ``depth_summary`` with the signal columns added,
     prices in the quote currency and sizes in the instrument's units.  Its
@@ -464,15 +482,15 @@ class BookSignalsMetric:
     levels: tuple[Level, ...] = _EVERY_LEVEL
     needs: tuple[str, ...] = ("depth_summary",)
 
-    def compute(self, result: Any, *, depth_levels: int = 5) -> pd.DataFrame:
+    def compute(self, result: Any, *, levels: int = 5) -> pd.DataFrame:
         """Return the summary with ``mid_price``, ``micro_price``, ``obi`` and ``obi_depth``.
 
-        *depth_levels* is ``depth_signals``'s: the depth of ``obi_depth``.  The
+        *levels* is ``book_signals``'s: the depth of ``obi_depth``.  The
         level count used, after clamping to the bins present, is in
-        ``attrs["depth_levels"]``.
+        ``attrs["levels"]``.
         """
         summary = result.depth_summary
-        signals = depth_signals(summary, depth_levels=depth_levels)
+        signals = book_signals(summary, levels=levels)
         frame = _in_units(
             signals,
             summary,
@@ -480,7 +498,7 @@ class BookSignalsMetric:
             tuple(c for c in signals.columns if "vol" in c),
             "book_signals",
         )
-        frame.attrs["depth_levels"] = imbalance_levels(summary, depth_levels)
+        frame.attrs["levels"] = imbalance_levels(summary, levels)
         return frame
 
     def prepare(
@@ -495,7 +513,7 @@ class BookSignalsMetric:
 
         return prepare_book_signals_data(
             frame,
-            levels=frame.attrs.get("depth_levels", 5),
+            levels=frame.attrs.get("levels", 5),
             start_time=start_time,
             end_time=end_time,
         )
@@ -579,7 +597,7 @@ for _metric in (
     VpinMetric(),
     KyleLambdaMetric(),
     OrderFlowImbalanceMetric(),
-    OfiHorizonMetric(),
+    OfiByWindowMetric(),
     TransactionCostsMetric(),
     AmihudMetric(),
     RollSpreadMetric(),

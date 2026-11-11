@@ -28,6 +28,14 @@ from typing import Any
 from ob_analytics._registry import Registry, load_plugins
 from ob_analytics.protocols import Source
 
+__all__ = [
+    "CliOption",
+    "get_source",
+    "list_sources",
+    "load_source_plugins",
+    "register_source",
+]
+
 
 @dataclass(frozen=True)
 class CliOption:

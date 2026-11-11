@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import heapq
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
@@ -37,69 +37,20 @@ from ob_analytics.schemas import (
     validate_columns,
 )
 
+__all__ = [
+    "STALE_GRACE",
+    "BookDifference",
+    "DataQualitySummary",
+    "QualityCheck",
+    "Severity",
+    "data_quality_summary",
+    "detect_sequence_gaps",
+    "detect_stale_orders",
+]
+
 # ---------------------------------------------------------------------------
 # Venue sequence gap detection
 # ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class SequenceGapReport:
-    """Result of scanning a frame's venue ``sequence`` column for breaks.
-
-    Built by :func:`detect_sequence_gaps`.  A feed numbers each message on a
-    channel with a sequence that should rise by exactly one; a skip is a
-    dropped message and a step that does not rise is a reordered (or repeated)
-    one.  Rows are read in ingest order (``ingest_seq`` when present, else the
-    frame's row order) and grouped per instrument / venue when those columns
-    exist, so interleaved channels are scored independently.
-
-    Attributes
-    ----------
-    n_sequenced : int
-        Rows carrying a non-null venue ``sequence``.  ``0`` means the frame has
-        nothing to check (the report is then trivially clean).
-    n_updates : int
-        Distinct consecutive sequence values seen — one per venue message (a
-        book update that emits several rows shares one sequence, counted once).
-    n_missing : int
-        Total count of skipped sequence numbers: the dropped-message count.
-    n_out_of_order : int
-        Steps where the sequence did not advance (a repeat or a decrease) — a
-        reordered or duplicated message.
-    max_gap : int
-        Largest single run of consecutive missing numbers (``0`` when none).
-    first_break_seq : int or None
-        The last in-order sequence value before the first break, a hint for
-        where to resync; ``None`` when the frame is clean.
-    """
-
-    n_sequenced: int
-    n_updates: int
-    n_missing: int
-    n_out_of_order: int
-    max_gap: int
-    first_break_seq: int | None
-
-    @property
-    def has_sequence(self) -> bool:
-        """Whether any row carried a venue sequence to check."""
-        return self.n_sequenced > 0
-
-    @property
-    def clean(self) -> bool:
-        """True when no missing and no out-of-order sequence values were found."""
-        return self.n_missing == 0 and self.n_out_of_order == 0
-
-    def to_dict(self) -> dict[str, Any]:
-        """Return the report as a plain, JSON-serialisable dict."""
-        return {
-            "n_sequenced": self.n_sequenced,
-            "n_updates": self.n_updates,
-            "n_missing": self.n_missing,
-            "n_out_of_order": self.n_out_of_order,
-            "max_gap": self.max_gap,
-            "first_break_seq": self.first_break_seq,
-        }
 
 
 _SEQUENCE_GROUP_COLUMNS: tuple[str, ...] = ("venue", "symbol")
@@ -108,29 +59,34 @@ _SEQUENCE_GROUP_COLUMNS: tuple[str, ...] = ("venue", "symbol")
 def detect_sequence_gaps(
     frame: pd.DataFrame,
     *,
-    sequence_col: str = SEQUENCE_COLUMN,
-    order_col: str = INGEST_SEQ_COLUMN,
-    group_cols: Sequence[str] = _SEQUENCE_GROUP_COLUMNS,
-    kind: SequenceKind = SequenceKind.CONTIGUOUS,
-) -> SequenceGapReport:
-    """Report missing or out-of-order venue sequence numbers in *frame*.
+    sequence_column: str = SEQUENCE_COLUMN,
+    order_column: str = INGEST_SEQ_COLUMN,
+    group_columns: Sequence[str] = _SEQUENCE_GROUP_COLUMNS,
+    sequence_kind: SequenceKind = SequenceKind.CONTIGUOUS,
+) -> pd.DataFrame:
+    """Find missing or out-of-order venue sequence numbers in *frame*.
+
+    A feed numbers each message on a channel with a sequence that should rise
+    by exactly one; a skip is a dropped message and a step that does not rise
+    is a reordered (or repeated) one.  Rows are read in ingest order and
+    grouped per channel, so interleaved channels are scored independently.
 
     Parameters
     ----------
     frame : pandas.DataFrame
-        Events or depth rows.  A missing *sequence_col* (a source with no venue
-        sequence) yields an empty, clean report — the column is optional.
-    sequence_col : str
+        Events or depth rows.  A missing *sequence_column* (a source with no
+        venue sequence) gives an empty result: the column is optional.
+    sequence_column : str
         Column holding the venue's per-event sequence (nullable integer).
-    order_col : str
+    order_column : str
         Column defining ingest order; when absent, the frame's current row
         order is used instead.
-    group_cols : sequence of str
+    group_columns : sequence of str
         Columns that identify one channel (instrument / venue).  Only those
         present in *frame* are used; with none present the whole frame is one
         channel.  Sequences from different channels are not comparable, so each
         group is scored on its own.
-    kind : SequenceKind
+    sequence_kind : SequenceKind
         What the sequence promises.  With
         :attr:`~ob_analytics.protocols.SequenceKind.MONOTONIC` a skipped number
         is normal, so nothing is counted as missing and only steps that do not
@@ -138,7 +94,30 @@ def detect_sequence_gaps(
 
     Returns
     -------
-    SequenceGapReport
+    pandas.DataFrame
+        One row per break, in ingest order within each channel, so an empty
+        frame means a clean sequence.  The columns are the *group_columns*
+        present in *frame*, then:
+
+        - ``previous_sequence`` — the last sequence value before the break.
+        - ``sequence`` — the value that broke it.
+        - ``missing`` — how many numbers were skipped (``0`` for a step that
+          did not rise).
+        - ``out_of_order`` — whether the step did not rise.
+
+        ``attrs`` holds the summary:
+
+        - ``n_sequenced`` — rows carrying a non-null venue sequence.  ``0``
+          means the frame has nothing to check.
+        - ``n_updates`` — distinct consecutive sequence values seen, one per
+          venue message (a book update that emits several rows shares one
+          sequence, counted once).
+        - ``n_missing`` — total count of skipped sequence numbers: the
+          dropped-message count.
+        - ``n_out_of_order`` — steps where the sequence did not rise.
+        - ``max_gap`` — the largest single run of missing numbers.
+        - ``first_break_sequence`` — the last in-order value before the first
+          break, a hint for where to resync; ``None`` when there is no break.
 
     Notes
     -----
@@ -147,60 +126,88 @@ def detect_sequence_gaps(
     book diff) counts once.  A non-consecutive repeat still shows as
     out-of-order.
     """
-    if sequence_col not in frame.columns or frame.empty:
-        return SequenceGapReport(0, 0, 0, 0, 0, None)
-
-    groups = [c for c in group_cols if c in frame.columns]
-    work = frame
-    if order_col in frame.columns:
-        work = frame.sort_values(order_col, kind="stable")
-
-    if groups:
-        parts: Iterable[pd.DataFrame] = (
-            part for _, part in work.groupby(groups, sort=False, dropna=False)
-        )
-    else:
-        parts = (work,)
-
+    groups = [c for c in group_columns if c in frame.columns]
+    breaks: list[pd.DataFrame] = []
     n_sequenced = n_updates = n_missing = n_out_of_order = max_gap = 0
     first_break: int | None = None
 
-    for part in parts:
-        seq = part[sequence_col]
-        seq = seq[seq.notna()]
-        if seq.empty:
-            continue
-        vals = seq.to_numpy(dtype="int64")
-        n_sequenced += int(vals.size)
+    if sequence_column in frame.columns and not frame.empty:
+        work = frame
+        if order_column in frame.columns:
+            work = frame.sort_values(order_column, kind="stable")
+        parts: Iterable[tuple[Any, pd.DataFrame]] = (
+            work.groupby(groups, sort=False, dropna=False) if groups else [((), work)]
+        )
+        for key, part in parts:
+            seq = part[sequence_column]
+            seq = seq[seq.notna()]
+            if seq.empty:
+                continue
+            vals = seq.to_numpy(dtype="int64")
+            n_sequenced += int(vals.size)
 
-        # Collapse consecutive repeats: one venue message can emit several rows
-        # (every changed level of a book diff shares that update's sequence).
-        keep = np.ones(vals.size, dtype=bool)
-        keep[1:] = vals[1:] != vals[:-1]
-        uniq = vals[keep]
-        n_updates += int(uniq.size)
-        if uniq.size < 2:
-            continue
+            # Collapse consecutive repeats: one venue message can emit several
+            # rows (every changed level of a book diff shares that update's
+            # sequence).
+            keep = np.ones(vals.size, dtype=bool)
+            keep[1:] = vals[1:] != vals[:-1]
+            uniq = vals[keep]
+            n_updates += int(uniq.size)
+            if uniq.size < 2:
+                continue
 
-        diffs = np.diff(uniq)
-        broken = diffs <= 0
-        n_out_of_order += int(np.count_nonzero(broken))
-        # A skip is a dropped message only when every message adds one.
-        if kind is SequenceKind.CONTIGUOUS:
-            gap_steps = diffs[diffs > 1] - 1
-            if gap_steps.size:
-                n_missing += int(gap_steps.sum())
-                max_gap = max(max_gap, int(gap_steps.max()))
-            broken |= diffs > 1
-
-        if first_break is None:
-            where = np.nonzero(broken)[0]
-            if where.size:
+            diffs = np.diff(uniq)
+            backward = diffs <= 0
+            n_out_of_order += int(np.count_nonzero(backward))
+            # A skip is a dropped message only when every message adds one.
+            skipped = np.zeros(diffs.size, dtype=np.int64)
+            if sequence_kind is SequenceKind.CONTIGUOUS:
+                skipped = np.where(diffs > 1, diffs - 1, 0)
+            n_missing += int(skipped.sum())
+            max_gap = max(max_gap, int(skipped.max()))
+            broken = backward | (skipped > 0)
+            where = np.flatnonzero(broken)
+            if where.size == 0:
+                continue
+            if first_break is None:
                 first_break = int(uniq[where[0]])
+            channel = dict(zip(groups, key if isinstance(key, tuple) else (key,)))
+            breaks.append(
+                pd.DataFrame(
+                    {
+                        **{c: [v] * where.size for c, v in channel.items()},
+                        "previous_sequence": uniq[where],
+                        "sequence": uniq[where + 1],
+                        "missing": skipped[where],
+                        "out_of_order": backward[where],
+                    }
+                )
+            )
 
-    return SequenceGapReport(
-        n_sequenced, n_updates, n_missing, n_out_of_order, max_gap, first_break
+    if breaks:
+        out = pd.concat(breaks, ignore_index=True)
+        # Each channel's key was written as plain values; give the columns
+        # back the frame's own dtypes, as the empty result has.
+        out = out.astype({c: frame[c].dtype for c in groups})
+    else:
+        out = pd.DataFrame(
+            {
+                **{c: frame[c].iloc[:0] for c in groups},
+                "previous_sequence": pd.Series(dtype="int64"),
+                "sequence": pd.Series(dtype="int64"),
+                "missing": pd.Series(dtype="int64"),
+                "out_of_order": pd.Series(dtype=bool),
+            }
+        ).reset_index(drop=True)
+    out.attrs.update(
+        n_sequenced=n_sequenced,
+        n_updates=n_updates,
+        n_missing=n_missing,
+        n_out_of_order=n_out_of_order,
+        max_gap=max_gap,
+        first_break_sequence=first_break,
     )
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -331,54 +338,35 @@ def _book_crossing(
 STALE_GRACE: pd.Timedelta = pd.Timedelta(seconds=1)
 
 
-@dataclass(frozen=True)
-class StaleOrder:
-    """A resting order a trade printed through, which the venue did not report.
-
-    A matching engine cannot print a trade at a price worse than a resting order
-    on the other side of it.  So a trade above a resting ask, or below a resting
-    bid, shows that the order had already left the book.  When the venue then
-    does not report the order again within a grace period, the rebuilt book goes
-    on holding an order that is not there.
-
-    Attributes
-    ----------
-    id : int or str
-        The order id, as the feed writes it: an integer on most venues, a UUID
-        string on Independent Reserve.
-    direction : str
-        ``"bid"`` or ``"ask"``.
-    price : float
-        The price the order rests at, in the quote currency
-        (``ticks * tick_size``).
-    disproved_at : pandas.Timestamp
-        The time of the first trade that printed through it.
-    stale_seconds : float
-        Seconds from that trade to the order's next event row, or to the end of
-        the capture when it has none.
-    touch_seconds : float
-        Seconds of that span in which the order's price was the best price on
-        its side of the faithful book: how long it held the touch after the
-        trade showed it was gone.
-    """
-
-    id: int | str
-    direction: str
-    price: float
-    disproved_at: pd.Timestamp
-    stale_seconds: float
-    touch_seconds: float
-
-    def to_dict(self) -> dict[str, Any]:
-        """Return the order as a plain, JSON-serialisable dict."""
-        return {
-            "id": self.id,
-            "direction": self.direction,
-            "price": self.price,
-            "disproved_at": self.disproved_at.isoformat(),
-            "stale_seconds": self.stale_seconds,
-            "touch_seconds": self.touch_seconds,
+def _empty_stale_orders() -> pd.DataFrame:
+    """The :func:`detect_stale_orders` result when no order is stale."""
+    return pd.DataFrame(
+        {
+            "id": pd.Series(dtype=object),
+            "direction": pd.Series(dtype=object),
+            "price": pd.Series(dtype=np.float64),
+            "disproved_at": pd.Series(dtype="datetime64[ns, UTC]"),
+            "stale_seconds": pd.Series(dtype=np.float64),
+            "touch_seconds": pd.Series(dtype=np.float64),
         }
+    )
+
+
+def _stale_records(stale: pd.DataFrame) -> list[dict[str, Any]]:
+    """The stale orders as plain, JSON-serialisable dicts, worst first."""
+    records = stale.to_dict("records")
+    return [
+        {
+            # A NumPy scalar becomes the plain Python value.
+            "id": rec["id"].item() if isinstance(rec["id"], np.generic) else rec["id"],
+            "direction": rec["direction"],
+            "price": float(rec["price"]),
+            "disproved_at": pd.Timestamp(rec["disproved_at"]).isoformat(),
+            "stale_seconds": float(rec["stale_seconds"]),
+            "touch_seconds": float(rec["touch_seconds"]),
+        }
+        for rec in records
+    ]
 
 
 def _capture_end_ns(events: pd.DataFrame, trades: pd.DataFrame) -> int:
@@ -509,14 +497,13 @@ def _stale_spans(
 
 def _stale_orders(
     spans: pd.DataFrame, best: pd.DataFrame, end_ns: int, tick_size: float
-) -> tuple[StaleOrder, ...]:
+) -> pd.DataFrame:
     """Measure how long each stale span held the touch, worst first."""
     bt = epoch_ns(best["timestamp"])
     held_until = np.append(bt[1:], end_ns)
     touch = {True: best["best_ask"].to_numpy(), False: best["best_bid"].to_numpy()}
-    found = []
-    for oid, is_ask, price, disproved, end in zip(
-        spans["id"].to_numpy(),
+    held = []
+    for is_ask, price, disproved, end in zip(
         spans["is_ask"].to_numpy(),
         spans["price"].to_numpy(),
         spans["disproved_ns"].to_numpy(),
@@ -525,20 +512,23 @@ def _stale_orders(
     ):
         overlap = np.minimum(held_until, end) - np.maximum(bt, disproved)
         at_touch = (touch[bool(is_ask)] == price) & (overlap > 0)
-        found.append(
-            StaleOrder(
-                # A NumPy scalar becomes the plain Python value, so the
-                # report serialises to JSON.
-                id=oid.item() if isinstance(oid, np.generic) else oid,
-                direction="ask" if is_ask else "bid",
-                price=float(ticks_to_price(price, tick_size)),
-                disproved_at=pd.Timestamp(int(disproved), tz="UTC"),
-                stale_seconds=int(end - disproved) / 1e9,
-                touch_seconds=float(overlap[at_touch].sum()) / 1e9,
-            )
-        )
-    found.sort(key=lambda o: (o.touch_seconds, o.stale_seconds), reverse=True)
-    return tuple(found)
+        held.append(float(overlap[at_touch].sum()) / 1e9)
+    out = pd.DataFrame(
+        {
+            "id": spans["id"].astype(object),
+            "direction": np.where(spans["is_ask"], "ask", "bid").astype(object),
+            "price": ticks_to_price(spans["price"].to_numpy(), tick_size).astype(
+                np.float64
+            ),
+            "disproved_at": pd.to_datetime(spans["disproved_ns"], unit="ns", utc=True),
+            "stale_seconds": (spans["end_ns"] - spans["disproved_ns"]) / 1e9,
+            "touch_seconds": held,
+        }
+    )
+    out = out.sort_values(
+        ["touch_seconds", "stale_seconds"], ascending=False, kind="stable"
+    )
+    return out.reset_index(drop=True)
 
 
 def detect_stale_orders(
@@ -548,7 +538,7 @@ def detect_stale_orders(
     grace: pd.Timedelta = STALE_GRACE,
     depth: pd.DataFrame | None = None,
     tick_size: float = 1.0,
-) -> tuple[StaleOrder, ...]:
+) -> pd.DataFrame:
     """Find resting orders a trade printed through that the venue left in place.
 
     A trade above a resting ask, or below a resting bid, shows that the order
@@ -594,9 +584,24 @@ def detect_stale_orders(
 
     Returns
     -------
-    tuple of StaleOrder
-        Worst first: the longest time at the touch, then the longest time
-        stale.  Empty when the venue reported every order in time.
+    pandas.DataFrame
+        One row per stale order, worst first: the longest time at the touch,
+        then the longest time stale.  Empty, with its columns, when the venue
+        reported every order in time.  The columns are:
+
+        - ``id`` — the order id as the feed writes it: an integer on most
+          venues, a UUID string on Independent Reserve.
+        - ``direction`` — ``"bid"`` or ``"ask"``.
+        - ``price`` — the price the order rests at, ``ticks * tick_size``.
+        - ``disproved_at`` — the time of the first trade that printed through
+          it.
+        - ``stale_seconds`` — seconds from that trade to the order's next event
+          row, or to the end of the capture when it has none.
+        - ``touch_seconds`` — seconds of that span in which the order's price
+          was the best price on its side of the faithful book: how long it held
+          the touch after the trade showed it was gone.
+
+        ``attrs`` holds ``grace``, the wait used.
     """
     validate_columns(
         events,
@@ -604,15 +609,17 @@ def detect_stale_orders(
         "detect_stale_orders(events)",
     )
     validate_columns(trades, {"timestamp", "price"}, "detect_stale_orders(trades)")
-    if events.empty or trades.empty:
-        return ()
-    end_ns = _capture_end_ns(events, trades)
-    spans = _stale_spans(events, trades, grace, end_ns)
-    if spans.empty:
-        return ()
-    if depth is None:
-        depth = price_level_volume(events)
-    return _stale_orders(spans, _faithful_best_series(depth), end_ns, tick_size)
+    stale = _empty_stale_orders()
+    if not events.empty and not trades.empty:
+        end_ns = _capture_end_ns(events, trades)
+        spans = _stale_spans(events, trades, grace, end_ns)
+        if not spans.empty:
+            if depth is None:
+                depth = price_level_volume(events)
+            best = _faithful_best_series(depth)
+            stale = _stale_orders(spans, best, end_ns, tick_size)
+    stale.attrs["grace"] = grace
+    return stale
 
 
 class Severity(str, Enum):
@@ -897,10 +904,10 @@ class DataQualitySummary:
         :class:`~ob_analytics.protocols.Clocks`).  The two clock checks run
         only when it is ``BOTH``; with one clock there is nothing to compare,
         and the report says so.
-    stale_orders : tuple of StaleOrder
+    stale_orders : pandas.DataFrame
         Resting orders a trade printed through that the venue did not report
-        again within :data:`STALE_GRACE`, worst first (see
-        :func:`detect_stale_orders`).  Each one stays in the rebuilt book after
+        again within :data:`STALE_GRACE`, worst first, as
+        :func:`detect_stale_orders` returns them.  Each one stays in the rebuilt book after
         it has gone, so a diff feed's crossing is then partly this defect
         rather than the feed's normal lag.
     trade_attribution : TradeAttribution
@@ -947,7 +954,10 @@ class DataQualitySummary:
     exchange_time_after_receive: int = 0
     exchange_time_reordered: int = 0
     clocks: Clocks = Clocks.BOTH
-    stale_orders: tuple[StaleOrder, ...] = ()
+    # A frame does not compare or hash, so the dataclass leaves it out of both.
+    stale_orders: pd.DataFrame = field(
+        default_factory=_empty_stale_orders, compare=False
+    )
     trade_attribution: TradeAttribution = TradeAttribution.BOTH
     trades_matched_by_order: int = 0
     per_order_crossed_pct: float = 0.0
@@ -995,7 +1005,7 @@ class DataQualitySummary:
             "exchange_time_after_receive": self.exchange_time_after_receive,
             "exchange_time_reordered": self.exchange_time_reordered,
             "clocks": str(self.clocks.value),
-            "stale_orders": [o.to_dict() for o in self.stale_orders],
+            "stale_orders": _stale_records(self.stale_orders),
             "trade_attribution": str(self.trade_attribution.value),
             "trades_matched_by_order": self.trades_matched_by_order,
             "maybe_bad_book_records": self.maybe_bad_book_records,
@@ -1011,7 +1021,7 @@ class DataQualitySummary:
                 return f"as expected for {name}"
             return f"UNEXPECTED for {name} — {cause}"
         if self.feed_type == FeedType.DIFF_FEED:
-            if self.stale_orders:
+            if not self.stale_orders.empty:
                 return (
                     f"diff feed, but {len(self.stale_orders)} stale resting "
                     "order(s) stay in the book — see stale resting orders"
@@ -1156,7 +1166,7 @@ class DataQualitySummary:
 
     def _worst_stale(self) -> str:
         """The worst stale order: its id, side, price and time at the touch."""
-        worst = self.stale_orders[0]
+        worst = self.stale_orders.iloc[0]
         return (
             f"{worst.direction} {worst.id} at {_format_price(worst.price)} held "
             f"the {worst.direction} touch for "
@@ -1251,13 +1261,17 @@ class DataQualitySummary:
             ),
             QualityCheck(
                 "stale_orders",
-                not self.stale_orders,
+                self.stale_orders.empty,
                 Severity.WARNING,
                 f"{len(self.stale_orders)} resting order(s) a trade printed "
                 "through and the venue did not report again within "
                 f"{STALE_GRACE.total_seconds():g} s; each stays in the rebuilt "
                 "book after it has gone"
-                + (f". Worst: {self._worst_stale()}" if self.stale_orders else ""),
+                + (
+                    f". Worst: {self._worst_stale()}"
+                    if not self.stale_orders.empty
+                    else ""
+                ),
             ),
             QualityCheck(
                 "negative_level",
@@ -1372,7 +1386,11 @@ class DataQualitySummary:
             f"  venue book            : {self._venue_book()}",
             (
                 f"  stale resting orders  : {len(self.stale_orders)}"
-                + (f" (worst: {self._worst_stale()})" if self.stale_orders else "")
+                + (
+                    f" (worst: {self._worst_stale()})"
+                    if not self.stale_orders.empty
+                    else ""
+                )
             ),
             (
                 f"  unmatched trades      : {self.unmatched_trades_pct:.2f}% "
@@ -1754,7 +1772,7 @@ def data_quality_summary(
     # Stale resting orders need per-order events and priced, timed trades.  An
     # L2 run has neither, and a trades frame without prices has nothing to
     # print through a resting order.
-    stale_orders: tuple[StaleOrder, ...] = ()
+    stale_orders = _empty_stale_orders()
     if (
         best is not None
         and not l2
@@ -1794,9 +1812,9 @@ def data_quality_summary(
     # Venue sequence gaps: read from events on the L3 path, or from the
     # price-level depth on the L2 path (where sequence, when present, rides on
     # depth rather than the empty events frame).  Absent columns score zero.
-    gaps = detect_sequence_gaps(depth if l2 else events, kind=sequence_kind)
+    gaps = detect_sequence_gaps(depth if l2 else events, sequence_kind=sequence_kind)
     # Steps back the source accounts for: never more than the data shows.
-    restarts = min(max(sequence_restarts, 0), gaps.n_out_of_order)
+    restarts = min(max(sequence_restarts, 0), gaps.attrs["n_out_of_order"])
 
     # Orders changed or deleted with no created row.  On the L2 path there are
     # no per-order events, so there is nothing to orphan.
@@ -1844,9 +1862,9 @@ def data_quality_summary(
         duplicate_event_ids=duplicate_event_ids,
         duplicate_created_ids=duplicate_created_ids,
         pre_existing_orders=pre_existing_orders,
-        events_with_sequence=gaps.n_sequenced,
-        sequence_gaps=gaps.n_missing,
-        sequence_out_of_order=gaps.n_out_of_order - restarts,
+        events_with_sequence=gaps.attrs["n_sequenced"],
+        sequence_gaps=gaps.attrs["n_missing"],
+        sequence_out_of_order=gaps.attrs["n_out_of_order"] - restarts,
         sequence_restarts=restarts,
         sequence_kind=sequence_kind,
         orphan_orders=orphan_orders,

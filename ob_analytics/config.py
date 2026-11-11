@@ -15,6 +15,13 @@ from pydantic import BaseModel, Field, SecretStr, ValidationError, model_validat
 from ob_analytics._secrets import MIN_SECRET_LENGTH, remember
 from ob_analytics.exceptions import ConfigError
 
+__all__ = [
+    "Credential",
+    "InstrumentGrid",
+    "PipelineConfig",
+    "SourceSettings",
+]
+
 
 @dataclass(frozen=True)
 class Credential:
@@ -335,37 +342,6 @@ class PipelineConfig(_Settings):
                 "more."
             )
         return self
-
-    # ── Derived helpers ───────────────────────────────────────────────────
-    @property
-    def price_multiplier(self) -> int:
-        """Integer inverse of :attr:`tick_size` (``round(1 / tick_size)``).
-
-        The multiplier that turns a quote-currency price into an integer tick
-        count, defined only when the tick is a reciprocal integer (the usual
-        case: a cent, nickel, or quarter grid).  With the default ``tick_size``
-        of ``0.01`` this is ``100``, matching the former ``10 ** price_decimals``.
-
-        Raises
-        ------
-        ConfigError
-            If :attr:`tick_size` has no integer inverse; convert prices with
-            ``ob_analytics._utils.price_to_ticks`` (which divides) instead.
-        """
-        from ob_analytics._utils import tick_multiplier
-
-        multiplier = tick_multiplier(self.tick_size)
-        if multiplier is None:
-            raise ConfigError(
-                f"tick_size={self.tick_size!r} has no integer inverse; use "
-                "ob_analytics._utils.price_to_ticks to convert prices to ticks."
-            )
-        return multiplier
-
-    @property
-    def bps_labels(self) -> list[str]:
-        """Column suffixes for depth-metric BPS bins (e.g. '25bps', '50bps' …)."""
-        return [f"{i * self.depth_bps}bps" for i in range(1, self.depth_bins + 1)]
 
 
 def instrument_fields(

@@ -51,7 +51,7 @@ from ob_analytics._engine_frames import to_order_events
 from ob_analytics.analytics import set_order_types
 from ob_analytics.bitstamp import BitstampLoader, BitstampTradeReader
 from ob_analytics.config import PipelineConfig
-from ob_analytics.depth import depth_metrics, price_level_volume
+from ob_analytics.depth import price_level_volume, summarize_depth
 from ob_analytics.engine import queue_positions
 from ob_analytics.synth import generate_session
 
@@ -401,7 +401,7 @@ DEFAULT_MARGINS = Margins(seconds=1.0, peak_rss_mib=0.15)
 
 Wall-clock time belongs to the runner that measured it, and two runners differ
 by more than the first version of this number allowed. One commit measured
-``depth_metrics`` at 14.66s and then at 10.17s against a 9.36s baseline, with no
+``summarize_depth`` at 14.66s and then at 10.17s against a 9.36s baseline, with no
 timed code changed between them (issue #220), so the earlier margin of half
 again reported a slow-down that was not there. Twice the baseline sits outside
 that spread.
@@ -484,7 +484,7 @@ def _measure(mult: int) -> None:
     events = _tile(set_order_types(events, trades), mult)
     n = len(events)
     t0 = time.perf_counter()
-    summary = depth_metrics(price_level_volume(events))
+    summary = summarize_depth(price_level_volume(events))
     wall = time.perf_counter() - t0
     rss_mib = _peak_rss_mib()
     assert len(summary) > 0

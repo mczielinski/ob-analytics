@@ -38,6 +38,13 @@ from ob_analytics.data import register_writer
 from ob_analytics.protocols import WriteTarget
 from ob_analytics.schemas import time_order_keys
 
+__all__ = [
+    "HftbacktestWriter",
+    "NautilusWriter",
+    "to_hftbacktest_array",
+    "to_nautilus_deltas",
+]
+
 # ── hftbacktest ───────────────────────────────────────────────────────
 
 #: hftbacktest's feed-event record (``hftbacktest.types.event_dtype``).  Written

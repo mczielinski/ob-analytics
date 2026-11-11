@@ -61,6 +61,24 @@ from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import Feature
 from ob_analytics.schemas import validate_columns
 
+__all__ = [
+    "DepthFeature",
+    "FlowFeature",
+    "ImbalanceFeature",
+    "KyleLambdaFeature",
+    "MicroPriceFeature",
+    "MidPriceFeature",
+    "PriceFeature",
+    "ReturnsFeature",
+    "SpreadFeature",
+    "VpinFeature",
+    "features",
+    "get_feature",
+    "list_features",
+    "load_feature_plugins",
+    "register_feature",
+]
+
 #: The entry-point group a third-party package advertises a feature under,
 #: e.g. ``[project.entry-points."ob_analytics.features"]`` with ``amihud =
 #: my_pkg.amihud:AmihudFeature``.
@@ -94,7 +112,7 @@ DEFAULT_FEATURES: tuple[str, ...] = (
 )
 
 #: How many bars back a trailing-window feature looks by default.
-DEFAULT_WINDOW: int = 20
+DEFAULT_N_BARS: int = 20
 
 #: Basis points in one, the scale ``spread_bps`` is written on.
 _BPS = 10_000.0
@@ -153,19 +171,18 @@ def load_feature_plugins(*, force: bool = False) -> list[str]:
     return load_plugins(ENTRY_POINT_GROUP, _register_entry_point, force=force)
 
 
-def _check_window(feature: str, window: object, least: int) -> None:
-    """Raise :class:`ConfigError` unless *window* is a whole number of bars >= *least*.
+def _check_n_bars(feature: str, n_bars: object, least: int) -> None:
+    """Raise :class:`ConfigError` unless *n_bars* is a whole number >= *least*.
 
-    Checked when the feature is built, so a window the feature cannot use is
+    Checked when the feature is built, so a bar count the feature cannot use is
     reported against the feature that was given it, not later from inside
     pandas when a table is being built.
     """
-    # Integral rather than int: a window worked out from data is often a numpy
+    # Integral rather than int: a count worked out from data is often a numpy
     # integer, which pandas takes as readily as a Python one.
-    if isinstance(window, bool) or not isinstance(window, Integral) or window < least:
+    if isinstance(n_bars, bool) or not isinstance(n_bars, Integral) or n_bars < least:
         raise ConfigError(
-            f"features: {feature!r} needs a window of {least} or more bars, "
-            f"got {window!r}."
+            f"features: {feature!r} needs n_bars of {least} or more, got {n_bars!r}."
         )
 
 
@@ -201,7 +218,7 @@ class ReturnsFeature:
         ``log(close / previous close)``.  The first bar has no previous close,
         so it is ``NaN``; so is a bar whose close is not a positive price.
     ``realized_vol``
-        Standard deviation of ``log_return`` over the last :attr:`window`
+        Standard deviation of ``log_return`` over the last :attr:`n_bars`
         bars, the row's own included.  It is per bar and not annualized: only
         time bars span equal amounts of time, so there is no one factor that
         would scale it to a year.
@@ -210,18 +227,18 @@ class ReturnsFeature:
     ----------
     name : str
         Registered feature name.
-    window : int
+    n_bars : int
         How many bars ``realized_vol`` looks back over.
     """
 
     name: str = "returns"
-    window: int = DEFAULT_WINDOW
+    n_bars: int = DEFAULT_N_BARS
     columns = ("log_return", "realized_vol")
     requires = frozenset({"close"})
 
     def __post_init__(self) -> None:
         # A standard deviation needs two returns to spread.
-        _check_window(self.name, self.window, 2)
+        _check_n_bars(self.name, self.n_bars, 2)
 
     def compute(self, frame: pd.DataFrame) -> dict[str, npt.ArrayLike]:
         """Return the log return per bar and its trailing standard deviation."""
@@ -234,7 +251,7 @@ class ReturnsFeature:
         # The roll wrapped the last close onto row 0, which has no previous
         # bar at all.
         log_return[0] = np.nan
-        realized = pd.Series(log_return).rolling(self.window, min_periods=2).std(ddof=1)
+        realized = pd.Series(log_return).rolling(self.n_bars, min_periods=2).std(ddof=1)
         return {"log_return": log_return, "realized_vol": realized}
 
 
@@ -354,7 +371,7 @@ class ImbalanceFeature:
         Book imbalance at the touch — :func:`~ob_analytics.depth.book_imbalance`
         with ``levels=1``.
     ``obi_depth``
-        The same measured over :attr:`depth_levels`, so it reads the pressure
+        The same measured over :attr:`levels`, so it reads the pressure
         behind the touch as well as on it.  The level count is clamped to the
         depth bins the quotes frame actually carries, so a summary with fewer
         bins gives a shallower reading rather than an error.
@@ -363,20 +380,20 @@ class ImbalanceFeature:
     ----------
     name : str
         Registered feature name.
-    depth_levels : int
+    levels : int
         Depth for ``obi_depth``, counted the way
         :func:`~ob_analytics.depth.book_imbalance` counts it: ``1`` is the
         touch alone and each further level adds one depth bin.
     """
 
     name: str = "imbalance"
-    depth_levels: int = 5
+    levels: int = 5
     columns = ("obi", "obi_depth")
     requires = frozenset({"best_bid_vol", "best_ask_vol"})
 
     def compute(self, frame: pd.DataFrame) -> dict[str, npt.ArrayLike]:
         """Return the touch imbalance and the deeper one."""
-        levels = imbalance_levels(frame, self.depth_levels)
+        levels = imbalance_levels(frame, self.levels)
         return {
             "obi": book_imbalance(frame, levels=1),
             "obi_depth": book_imbalance(frame, levels=levels),
@@ -429,7 +446,7 @@ def _side_depth(frame: pd.DataFrame, side: str) -> np.ndarray:
 
 @dataclass
 class VpinFeature:
-    """How one-sided the flow has been over the last :attr:`window` bars.
+    """How one-sided the flow has been over the last :attr:`n_bars` bars.
 
     ``vpin``
         The mean of the absolute trade imbalance over the window.  It runs
@@ -452,7 +469,7 @@ class VpinFeature:
     many trades before reading this column as toxicity; ``n_trades`` in the
     same table shows how many each bar holds.
 
-    :func:`~ob_analytics.flow_toxicity.compute_vpin` computes VPIN without a
+    :func:`~ob_analytics.flow_toxicity.vpin` computes VPIN without a
     bar table, and cuts its buckets slightly differently: a trade that
     straddles a bucket boundary is split between the two, where a volume bar
     keeps the trade whole and closes a little past its threshold.  The two
@@ -462,7 +479,7 @@ class VpinFeature:
     ----------
     name : str
         Registered feature name.
-    window : int
+    n_bars : int
         How many bars the mean covers — the bucket count of the original
         measure, which the paper puts at 50.
     columns : tuple of str
@@ -472,12 +489,12 @@ class VpinFeature:
     """
 
     name: str = "vpin"
-    window: int = DEFAULT_WINDOW
+    n_bars: int = DEFAULT_N_BARS
     columns = ("vpin",)
     requires = frozenset({"volume", "signed_volume"})
 
     def __post_init__(self) -> None:
-        _check_window(self.name, self.window, 1)
+        _check_n_bars(self.name, self.n_bars, 1)
         self.columns = (self.name,)
 
     def compute(self, frame: pd.DataFrame) -> dict[str, npt.ArrayLike]:
@@ -486,7 +503,7 @@ class VpinFeature:
         signed = frame["signed_volume"].to_numpy(dtype=float)
         with np.errstate(invalid="ignore", divide="ignore"):
             imbalance = np.where(volume > 0, np.abs(signed) / volume, np.nan)
-        rolling = pd.Series(imbalance).rolling(self.window, min_periods=1).mean()
+        rolling = pd.Series(imbalance).rolling(self.n_bars, min_periods=1).mean()
         return {self.name: rolling}
 
 
@@ -496,14 +513,14 @@ class KyleLambdaFeature:
 
     ``kyle_lambda``
         The slope of ``close - open`` on ``signed_volume``, fitted over the
-        last :attr:`window` bars.  A high value says a given imbalance pushed
+        last :attr:`n_bars` bars.  A high value says a given imbalance pushed
         the price a long way, which is a book that was expensive to trade
         against.  It is in the price units of the trades frame per unit of
         volume: on a pipeline result that is ticks per lot, so multiply by
         ``config.tick_size`` to read it in the quote currency.
 
     This is Kyle's λ, estimated on a trailing window rather than over a whole
-    run.  :func:`~ob_analytics.flow_toxicity.compute_kyle_lambda` fits the
+    run.  :func:`~ob_analytics.flow_toxicity.kyle_lambda` fits the
     same regression once across every window of a run, and reports the
     t-statistic and R² that say whether the fit means anything; a rolling
     slope reports neither, so read it as a level that moves, not as a test.
@@ -512,7 +529,7 @@ class KyleLambdaFeature:
     ----------
     name : str
         Registered feature name.
-    window : int
+    n_bars : int
         How many bars each fit covers.
     min_bars : int
         The fewest bars that produce a slope.  Earlier rows are ``NaN``.
@@ -523,14 +540,14 @@ class KyleLambdaFeature:
     """
 
     name: str = "kyle_lambda"
-    window: int = DEFAULT_WINDOW
+    n_bars: int = DEFAULT_N_BARS
     min_bars: int = 3
     columns = ("kyle_lambda",)
     requires = frozenset({"open", "close", "signed_volume"})
 
     def __post_init__(self) -> None:
         # A slope needs two bars to run through.
-        _check_window(self.name, self.window, 2)
+        _check_n_bars(self.name, self.n_bars, 2)
         self.columns = (self.name,)
 
     def compute(self, frame: pd.DataFrame) -> dict[str, npt.ArrayLike]:
@@ -539,8 +556,8 @@ class KyleLambdaFeature:
         move = pd.Series(
             frame["close"].to_numpy(dtype=float) - frame["open"].to_numpy(dtype=float)
         )
-        periods = min(self.min_bars, self.window)
-        window = flow.rolling(self.window, min_periods=periods)
+        periods = min(self.min_bars, self.n_bars)
+        window = flow.rolling(self.n_bars, min_periods=periods)
         covariance = window.cov(move)
         variance = window.var(ddof=1)
         # A window in which every bar carried the same net flow has no slope

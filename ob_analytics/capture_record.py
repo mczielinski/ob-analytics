@@ -49,6 +49,17 @@ from ob_analytics.protocols import (
     trade_attribution_of,
 )
 
+__all__ = [
+    "CaptureRecord",
+    "read_fields",
+    "read_instrument",
+    "read_record",
+    "record_path",
+    "run_declarations",
+    "source_declarations",
+    "write_record",
+]
+
 #: The record's file name, in the capture folder or a segment's folder.
 RECORD_NAME = "meta.json"
 

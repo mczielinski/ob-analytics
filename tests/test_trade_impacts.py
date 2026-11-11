@@ -39,15 +39,15 @@ class TestTradeImpacts:
         )
         assert len(out) == 2
         one = out[out["id"] == 1].iloc[0]
-        assert one["min_price"] == 100.0
-        assert one["max_price"] == 101.0
-        assert one["hits"] == 2
-        assert one["vol"] == 15.0
+        assert one["low"] == 100.0
+        assert one["high"] == 101.0
+        assert one["n_trades"] == 2
+        assert one["volume"] == 15.0
         # VWAP = (100*10 + 101*5) / 15
         assert one["vwap"] == pytest.approx(1505.0 / 15.0)
-        assert one["dir"] == "buy"
-        assert one["start_time"] == TS
-        assert one["end_time"] == TS + pd.Timedelta(seconds=1)
+        assert one["direction"] == "buy"
+        assert one["timestamp_start"] == TS
+        assert one["timestamp_end"] == TS + pd.Timedelta(seconds=1)
 
     def test_missing_columns_raises(self) -> None:
         bad = pd.DataFrame({"price": [1.0], "volume": [1.0]})
@@ -84,4 +84,4 @@ class TestTradeImpacts:
 
         pd.testing.assert_frame_equal(trade_impacts(raw), trade_impacts(display))
         one = trade_impacts(raw).iloc[0]
-        assert (one["min_price"], one["max_price"], one["vol"]) == (100.0, 101.0, 4.0)
+        assert (one["low"], one["high"], one["volume"]) == (100.0, 101.0, 4.0)

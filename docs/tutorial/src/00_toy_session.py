@@ -57,11 +57,11 @@ import pandas as pd
 from _docs_theme import DOCS_THEME, plot_book_keyframes
 
 from ob_analytics.analytics import set_order_types
-from ob_analytics.depth import depth_metrics, get_spread, price_level_volume
+from ob_analytics.depth import get_spread, price_level_volume, summarize_depth
 from ob_analytics.visualization import plot, prepare
 
 classified = set_order_types(events, trades)
-spread = get_spread(depth_metrics(price_level_volume(classified)))
+spread = get_spread(summarize_depth(price_level_volume(classified)))
 
 fig = plt.figure(figsize=(17, 8))
 gs = fig.add_gridspec(2, 13, height_ratios=[1.5, 1.0], hspace=0.3, wspace=0.15)

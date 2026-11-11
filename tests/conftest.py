@@ -972,10 +972,8 @@ def hidden_liquidity_overlay(
     iceberg_events_and_trades, hidden_trade_rows
 ) -> dict[str, pd.DataFrame]:
     """The overlay frames for the two fixtures above, unclipped."""
-    from ob_analytics.hidden_liquidity import detect_icebergs
+    from ob_analytics.hidden_liquidity import iceberg_slices
     from ob_analytics.visualization import prepare
 
-    detection = detect_icebergs(*iceberg_events_and_trades)
-    return prepare.hidden_liquidity_overlay(
-        detection.icebergs, detection.slices, hidden_trade_rows
-    )
+    slices = iceberg_slices(*iceberg_events_and_trades)
+    return prepare.hidden_liquidity_overlay(slices, hidden_trade_rows)

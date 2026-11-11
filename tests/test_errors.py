@@ -61,13 +61,13 @@ _CASES: list[tuple[str, Callable[[], Any], type[ObAnalyticsError]]] = [
         UnknownNameError,
     ),
     (
-        "compute_kyle_lambda, empty trades",
-        lambda: oa.compute_kyle_lambda(_empty_trades()),
+        "kyle_lambda, empty trades",
+        lambda: oa.kyle_lambda(_empty_trades()),
         ConfigError,
     ),
     (
-        "compute_kyle_lambda, bad ci_level",
-        lambda: oa.compute_kyle_lambda(oa.toy_trades(), ci_level=2.0),
+        "kyle_lambda, bad ci_level",
+        lambda: oa.kyle_lambda(oa.toy_trades(), ci_level=2.0),
         ConfigError,
     ),
     (
@@ -78,11 +78,6 @@ _CASES: list[tuple[str, Callable[[], Any], type[ObAnalyticsError]]] = [
     (
         "queue_positions",
         lambda: queue_positions(oa.toy_events(), levels="some"),
-        ConfigError,
-    ),
-    (
-        "PipelineConfig.price_multiplier",
-        lambda: oa.PipelineConfig(tick_size=0.3).price_multiplier,
         ConfigError,
     ),
 ]

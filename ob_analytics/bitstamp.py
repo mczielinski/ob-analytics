@@ -75,6 +75,13 @@ if TYPE_CHECKING:
 
     from ob_analytics.live._base import CaptureConfig, EventDict
 
+__all__ = [
+    "BitstampLoader",
+    "BitstampSource",
+    "BitstampTradeReader",
+    "BitstampWriter",
+]
+
 # ── BitstampLoader ────────────────────────────────────────────────────
 
 #: How many order ids the duplicate-cancellation warning names.

@@ -45,6 +45,13 @@ from ob_analytics.schemas import ORIGIN_COLUMN, SEQUENCE_COLUMN, SNAPSHOT_ORIGIN
 if TYPE_CHECKING:
     from ob_analytics.live._base import CaptureResult, EventDict
 
+__all__ = [
+    "FileCaptureSink",
+    "RepairedFiles",
+    "book_file",
+    "repair_files",
+]
+
 #: The L3 book file: one row per order event.
 ORDERS_NAME = "orders.csv"
 #: The L2 book file: one row per price-level change.

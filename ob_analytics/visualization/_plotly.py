@@ -2309,10 +2309,10 @@ def plotly_transaction_costs(data: dict, *, theme: PlotTheme = DEFAULT_THEME) ->
     return fig
 
 
-def plotly_ofi_horizon(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
-    """Order-flow-imbalance horizon graph across multiple look-back horizons.
+def plotly_ofi_by_window(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
+    """Order-flow-imbalance horizon graph across several trailing windows.
 
-    One stacked subplot per horizon (sharing the time axis); each fills from
+    One stacked subplot per window (sharing the time axis); each fills from
     its baseline in the theme's buy (net buy) / sell (net sell) colours,
     height and colour saturation (three overlaid bands) both growing with the
     imbalance.  Short rows are jumpy, long rows smooth -- fleeting vs
@@ -2321,19 +2321,19 @@ def plotly_ofi_horizon(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     pal = theme.palette
     go = _import_plotly()
     ofi = data["ofi"]
-    horizons = data["horizons"]
+    windows = data["windows"]
     if getattr(ofi, "size", 0) == 0:
         return _base_figure(go, theme, title="Order flow imbalance — horizon graph")
 
     from plotly.subplots import make_subplots
 
-    n = len(horizons)
+    n = len(windows)
     fig = make_subplots(
         rows=n,
         cols=1,
         shared_xaxes=True,
         vertical_spacing=0.03,
-        row_titles=[str(h) for h in horizons],
+        row_titles=[str(h) for h in windows],
     )
     x = data["times"]
     for i in range(n):

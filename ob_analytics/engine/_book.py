@@ -122,11 +122,11 @@ class BookSide:
 
 
 @dataclass(frozen=True)
-class BookState:
+class BookSnapshot:
     """The book at one instant: both sides, best price first.
 
     The instant itself is not repeated here — the caller supplied it as
-    :func:`book_state`'s ``at`` and still holds it.
+    :func:`order_book`'s ``at`` and still holds it.
 
     Attributes
     ----------
@@ -246,7 +246,7 @@ def _side(events: OrderEvents, resting: np.ndarray, direction: Direction) -> Boo
     )
 
 
-def book_state(events: OrderEvents, *, at: int, uncross: bool = False) -> BookState:
+def order_book(events: OrderEvents, *, at: int, uncross: bool = False) -> BookSnapshot:
     """Reconstruct the order book at one instant.
 
     Parameters
@@ -267,14 +267,14 @@ def book_state(events: OrderEvents, *, at: int, uncross: bool = False) -> BookSt
 
     Returns
     -------
-    BookState
+    BookSnapshot
         Both sides, best price first, each carrying the row that put every
         resting order in its current state.
     """
     resting = _resting_rows(events, at)
     if uncross:
         resting = _uncross_rows(events, resting)
-    return BookState(
+    return BookSnapshot(
         bids=_side(events, resting, Direction.BID),
         asks=_side(events, resting, Direction.ASK),
     )

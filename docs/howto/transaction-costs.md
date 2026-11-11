@@ -78,9 +78,9 @@ else — most usefully the micro-price, the size-weighted mid that leans toward
 the side carrying the heavier opposite book:
 
 ```python
-from ob_analytics.depth import depth_signals
+from ob_analytics.depth import book_signals
 
-quotes = depth_signals(result.depth_summary)   # adds mid_price and micro_price
+quotes = book_signals(result.depth_summary)   # adds mid_price and micro_price
 costs = transaction_costs(
     result.trades, quotes, horizon="5s", mid_column="micro_price"
 )

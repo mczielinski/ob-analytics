@@ -58,6 +58,17 @@ from ob_analytics.protocols import BarRule
 from ob_analytics.schemas import validate_columns
 from ob_analytics.trade_sign import resolve_direction
 
+__all__ = [
+    "AccumulationRule",
+    "TickRule",
+    "TimeRule",
+    "bars",
+    "get_bar_rule",
+    "list_bar_rules",
+    "load_bar_rule_plugins",
+    "register_bar_rule",
+]
+
 #: The entry-point group a third-party package advertises a bar rule under,
 #: e.g. ``[project.entry-points."ob_analytics.bar_rules"]`` with ``range =
 #: my_pkg.range:RangeRule``.

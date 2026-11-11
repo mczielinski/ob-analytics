@@ -729,10 +729,10 @@ on `prepare`. `result.plot(name, **kwargs)` sends each keyword to the method
 that names it, so the two must not share a name.
 
 Nine metrics ship registered: `l1_ticker`, `book_signals`, `vpin`,
-`kyle_lambda`, `order_flow_imbalance`, `ofi_horizon`, `transaction_costs`,
+`kyle_lambda`, `order_flow_imbalance`, `ofi_by_window`, `transaction_costs`,
 `amihud` and `roll_spread` (see [the metric list](api/metrics.md)). Each wraps
 a plain function you can still call directly, such as
-[`compute_vpin`](api/flow_toxicity.md) or [`amihud`](api/cost.md).
+[`vpin`](api/flow_toxicity.md) or [`amihud`](api/cost.md).
 Registering is what makes a function run and plot from a result.
 
 ```python
@@ -828,7 +828,7 @@ run's tables carry `attrs["tick_size"]` and `attrs["lot_size"]` for this, as
 `price_range` reads above. A setting is in the instrument's own units too: a
 size such as VPIN's `bucket_volume` in BTC, shares or contracts, and a price
 in the quote currency. Hand a size setting to a function that converts it,
-such as `compute_vpin` or `bars`, or divide it by `lot_size` yourself when
+such as `vpin` or `bars`, or divide it by `lot_size` yourself when
 the frame's sizes are integers.
 
 **Shipping a metric as its own package.** Advertise it under the
@@ -999,16 +999,16 @@ it in `include` to get it on its own, or to put its column somewhere else.
 
 ### Changing a built-in
 
-The features that look back over a window carry that window on the instance,
-so a different one is a second registration, not an argument to thread through
+The features that look back over a trailing window carry its length in bars,
+`n_bars`, on the instance, so a different one is a second registration, not an argument to thread through
 `features()`. Registering under the same name replaces the built-in; under a
 new name, both run:
 
 ```python
 from ob_analytics.features import VpinFeature
 
-register_feature(VpinFeature(window=50))                # the paper's 50 buckets
-register_feature(VpinFeature(name="vpin_5", window=5))  # and a fast one beside it
+register_feature(VpinFeature(n_bars=50))                # the paper's 50 buckets
+register_feature(VpinFeature(name="vpin_5", n_bars=5))  # and a fast one beside it
 ```
 
 The two one-column features name their column after themselves, so the second

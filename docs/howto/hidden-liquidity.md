@@ -32,16 +32,21 @@ save_data(
 -->
 
 ```python
-from ob_analytics import LobsterSource, Pipeline, RunContext, detect_icebergs
+from ob_analytics import (
+    LobsterSource,
+    Pipeline,
+    RunContext,
+    detect_icebergs,
+    iceberg_slices,
+)
 
 result = Pipeline(
     source=LobsterSource(),
     ctx=RunContext(trading_date="2012-06-21"),
 ).run("AAPL_2012-06-21_10")
 
-found = detect_icebergs(result.events, result.trades)
-found.icebergs      # one row per suspected iceberg
-found.slices        # one row per visible order in each iceberg
+found = detect_icebergs(result.events, result.trades)  # one row per iceberg
+slices = iceberg_slices(result.events, result.trades)  # one row per slice
 ```
 
 A slice is *filled out* when a trade fills it as the maker and leaves nothing
@@ -49,15 +54,16 @@ outstanding. A *refill* is the first new order at the same side and price, at
 most `max_delay` later. Refills chain: a refilled slice that is filled out and
 refilled again stays in the same iceberg.
 
-Each row of `found.icebergs` gives the side and price, the start and end, the
+Each row of `found` gives the side and price, the start and end, the
 number of `slices` and `refills`, the displayed `peak`, the size `executed`
 across all slices, and the median delay from a filled-out slice to its refill.
 The `confidence` column is `high` when there are at least two refills and every
 one has the same displayed size as the slice it replaced, `medium` when at least
-one does, and `low` otherwise.
+one does, and `low` otherwise. `found.attrs` holds the delay used and how
+many visible orders were filled out, so how many could have been refilled.
 
 ```python
-found.icebergs[found.icebergs["confidence"] == "high"]
+found[found["confidence"] == "high"]
 ```
 
 ### Choose `max_delay`
@@ -96,7 +102,9 @@ inside = hidden_trades(result.events, result.trades, result.depth_summary)
 ```
 
 This returns the trades that printed strictly inside the visible spread, with
-that spread's `best_bid_price` and `best_ask_price` added.
+that spread's `best_bid_price` and `best_ask_price` added. `inside.attrs` holds
+how many trades were read (`n_trades`) and how many had a readable spread
+(`n_readable`).
 
 The spread is the one standing just before the maker's fill, not the one at
 the trade's own timestamp. Some feeds report the fill on the order stream before
@@ -190,7 +198,7 @@ To draw the same overlay elsewhere, build it with
 ```python
 from ob_analytics.visualization import prepare
 
-overlay = prepare.hidden_liquidity_overlay(found.icebergs, found.slices, inside)
+overlay = prepare.hidden_liquidity_overlay(slices, inside)
 ```
 
 ## Related

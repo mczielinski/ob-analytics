@@ -58,6 +58,11 @@ from ob_analytics.protocols import (
 from ob_analytics.schemas import ORIGIN_COLUMN
 from ob_analytics.sources import CliOption
 
+__all__ = [
+    "CryptofeedSettings",
+    "CryptofeedSource",
+]
+
 #: cryptofeed's channel names (``cryptofeed.defines``), spelled out so this
 #: module imports without cryptofeed installed.
 _L3_CHANNEL = "l3_book"

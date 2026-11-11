@@ -14,9 +14,9 @@ import pytest
 
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
 from ob_analytics.flow_toxicity import (
-    compute_kyle_lambda,
-    compute_vpin,
+    kyle_lambda,
     order_flow_imbalance,
+    vpin,
 )
 from ob_analytics.trade_sign import (
     bulk_volume_classification,
@@ -118,7 +118,7 @@ class TestClassifyTradeSign:
             sec_offsets=[2, 0, 1],
             index=[7, 3, 5],
         )
-        out = classify_trade_sign(trades, method="tick")
+        out = classify_trade_sign(trades, sign_method="tick")
         assert out.name == "direction"
         assert list(out.index) == [7, 3, 5]
         assert list(out.cat.categories) == ["buy", "sell"]
@@ -134,7 +134,7 @@ class TestClassifyTradeSign:
                 "best_ask_price": [10.4],  # mid 10.3
             }
         )
-        out = classify_trade_sign(trades, method="lee_ready", quotes=quotes)
+        out = classify_trade_sign(trades, sign_method="lee_ready", quotes=quotes)
         # 10.0 < 10.3 → sell; 10.6 > 10.3 → buy
         assert out.astype(str).tolist() == ["sell", "buy"]
 
@@ -143,7 +143,7 @@ class TestClassifyTradeSign:
         quotes = pd.DataFrame(
             {"timestamp": [pd.Timestamp("2015-05-01 00:00:00")], "mid": [10.3]}
         )
-        out = classify_trade_sign(trades, method="lee_ready", quotes=quotes)
+        out = classify_trade_sign(trades, sign_method="lee_ready", quotes=quotes)
         assert out.astype(str).tolist() == ["sell", "buy"]
 
     def test_lee_ready_trade_before_first_quote_uses_tick(self):
@@ -155,38 +155,38 @@ class TestClassifyTradeSign:
                 "mid": [10.5],
             }
         )
-        out = classify_trade_sign(trades, method="lee_ready", quotes=quotes)
+        out = classify_trade_sign(trades, sign_method="lee_ready", quotes=quotes)
         # Both fall back to tick: 10→11 uptick, backfilled first → buy, buy.
         assert out.astype(str).tolist() == ["buy", "buy"]
 
     def test_lee_ready_requires_quotes(self):
         with pytest.raises(ConfigError, match="requires quotes"):
-            classify_trade_sign(_trades([1.0, 2.0]), method="lee_ready")
+            classify_trade_sign(_trades([1.0, 2.0]), sign_method="lee_ready")
 
     def test_lee_ready_bad_quote_columns(self):
         trades = _trades([10.0])
         quotes = pd.DataFrame({"timestamp": [pd.Timestamp("2015-05-01")], "foo": [1]})
         with pytest.raises(ConfigError, match="mid column"):
-            classify_trade_sign(trades, method="lee_ready", quotes=quotes)
+            classify_trade_sign(trades, sign_method="lee_ready", quotes=quotes)
 
     def test_bvc_method_is_rejected_with_guidance(self):
         with pytest.raises(ConfigError, match="bulk_volume_classification"):
-            classify_trade_sign(_trades([1.0, 2.0]), method="bvc")
+            classify_trade_sign(_trades([1.0, 2.0]), sign_method="bvc")
 
     def test_unknown_method(self):
-        with pytest.raises(ConfigError, match="unknown method"):
-            classify_trade_sign(_trades([1.0]), method="nope")
+        with pytest.raises(ConfigError, match="unknown sign_method"):
+            classify_trade_sign(_trades([1.0]), sign_method="nope")
 
     def test_missing_columns(self):
         with pytest.raises(ConfigError, match="missing required columns"):
-            classify_trade_sign(pd.DataFrame({"timestamp": [1]}), method="tick")
+            classify_trade_sign(pd.DataFrame({"timestamp": [1]}), sign_method="tick")
 
     def test_empty(self):
         with pytest.raises(ObAnalyticsError):
-            classify_trade_sign(_trades([]).iloc[0:0], method="tick")
+            classify_trade_sign(_trades([]).iloc[0:0], sign_method="tick")
 
     def test_method_case_insensitive(self):
-        out = classify_trade_sign(_trades([1.0, 2.0]), method="TICK")
+        out = classify_trade_sign(_trades([1.0, 2.0]), sign_method="TICK")
         assert out.astype(str).tolist() == ["buy", "buy"]
 
 
@@ -216,7 +216,7 @@ class TestTheQuoteATradeArrivedInto:
     def test_lee_ready_labels_the_buy_that_took_the_ask_a_buy(self):
         trades, quotes = self._after_a_buy_took_the_ask()
 
-        side = classify_trade_sign(trades, method="lee_ready", quotes=quotes)
+        side = classify_trade_sign(trades, sign_method="lee_ready", quotes=quotes)
 
         assert list(side) == ["buy"]
 
@@ -225,7 +225,7 @@ class TestTheQuoteATradeArrivedInto:
         naive = quotes.assign(timestamp=quotes["timestamp"].dt.tz_localize(None))
 
         with pytest.raises(ConfigError, match="time-zone"):
-            classify_trade_sign(trades, method="lee_ready", quotes=naive)
+            classify_trade_sign(trades, sign_method="lee_ready", quotes=naive)
 
     def test_its_effective_spread_is_positive(self):
         from ob_analytics.cost import transaction_costs
@@ -248,7 +248,7 @@ class TestTheQuoteATradeArrivedInto:
 class TestResolveDirection:
     """The column it returns holds only buy and sell -- see the docstring.
 
-    Every consumer (`compute_vpin`, `order_flow_imbalance`, `bars`, the cost
+    Every consumer (`vpin`, `order_flow_imbalance`, `bars`, the cost
     metrics) reads the column as ``== "buy"`` and takes everything else as a
     sell, so a value that is neither is not a gap to them: it is the wrong
     side.  These tests hold the guarantee that makes that idiom safe.
@@ -396,10 +396,10 @@ class TestPartlyLabelledFeedReachesTheMetrics:
 
     @pytest.mark.filterwarnings("ignore::UserWarning")
     def test_vpin_does_not_count_the_blanks_as_sells(self):
-        vpin = compute_vpin(self._half_labelled(), bucket_volume=2.0)
+        vpin_df = vpin(self._half_labelled(), bucket_volume=2.0)
 
-        assert vpin["sell_volume"].sum() == 0.0
-        assert vpin["vpin"].eq(1.0).all()
+        assert vpin_df["sell_volume"].sum() == 0.0
+        assert vpin_df["vpin"].eq(1.0).all()
 
     def test_bars_do_not_count_the_blanks_as_sells(self):
         from ob_analytics.bars import bars
@@ -416,7 +416,7 @@ class TestPartlyLabelledFeedReachesTheMetrics:
         each window is its whole volume.  Counting the five blanks as sells
         would cancel most of it out and flip the regression's slope.
         """
-        result = compute_kyle_lambda(self._half_labelled(), window="1min")
+        result = kyle_lambda(self._half_labelled(), window="1min")
 
         signed = result.regression_df["signed_volume"]
         assert (signed > 0).all()
@@ -490,11 +490,11 @@ class TestFlowToxicityFallback:
     @pytest.mark.filterwarnings("ignore::UserWarning")
     def test_vpin_without_direction_uses_tick(self):
         trades = _trades(self._prices())
-        got = compute_vpin(trades, bucket_volume=2.0)
+        got = vpin(trades, bucket_volume=2.0)
         # Equivalent to classifying first, then running the native path.
         seeded = trades.copy()
-        seeded["direction"] = classify_trade_sign(trades, method="tick")
-        expected = compute_vpin(seeded, bucket_volume=2.0)
+        seeded["direction"] = classify_trade_sign(trades, sign_method="tick")
+        expected = vpin(seeded, bucket_volume=2.0)
         pd.testing.assert_frame_equal(got, expected)
 
     @pytest.mark.filterwarnings("ignore::UserWarning")
@@ -502,9 +502,9 @@ class TestFlowToxicityFallback:
         trades = _trades(self._prices())
         trades["direction"] = ["buy", "sell"] * 6
         # sign_method=None must honor the native direction (not reclassify).
-        got = compute_vpin(trades, bucket_volume=2.0)
+        got = vpin(trades, bucket_volume=2.0)
         # Reclassifying would change the split; assert it did NOT.
-        reclassified = compute_vpin(trades, bucket_volume=2.0, sign_method="tick")
+        reclassified = vpin(trades, bucket_volume=2.0, sign_method="tick")
         assert not np.allclose(got["vpin"].to_numpy(), reclassified["vpin"].to_numpy())
 
     @pytest.mark.filterwarnings("ignore::UserWarning")
@@ -517,16 +517,14 @@ class TestFlowToxicityFallback:
                 "best_ask_price": trades["price"] + 0.5,
             }
         )
-        got = compute_vpin(
-            trades, bucket_volume=2.0, sign_method="lee_ready", quotes=quotes
-        )
+        got = vpin(trades, bucket_volume=2.0, sign_method="lee_ready", quotes=quotes)
         assert not got.empty
         assert {"vpin", "vpin_avg"}.issubset(got.columns)
 
     @pytest.mark.filterwarnings("ignore::UserWarning")
     def test_vpin_bvc_path(self):
         trades = _trades(self._prices())
-        got = compute_vpin(trades, bucket_volume=2.0, sign_method="bvc")
+        got = vpin(trades, bucket_volume=2.0, sign_method="bvc")
         assert list(got.columns) == [
             "bucket",
             "timestamp_start",
@@ -542,13 +540,13 @@ class TestFlowToxicityFallback:
         trades = _trades(self._prices())
         got = order_flow_imbalance(trades, window="5s")
         seeded = trades.copy()
-        seeded["direction"] = classify_trade_sign(trades, method="tick")
+        seeded["direction"] = classify_trade_sign(trades, sign_method="tick")
         expected = order_flow_imbalance(seeded, window="5s")
         pd.testing.assert_frame_equal(got, expected)
 
     def test_ofi_bvc_rejected(self):
         trades = _trades(self._prices())
-        with pytest.raises(ConfigError, match="only supported by compute_vpin"):
+        with pytest.raises(ConfigError, match="only supported by vpin"):
             order_flow_imbalance(trades, sign_method="bvc")
 
     def test_vpin_missing_price_for_classification(self):
@@ -592,9 +590,9 @@ class TestBitstampValidationHarness:
         assert classifiable.sum() > 0
         true = true[classifiable]
 
-        tick = classify_trade_sign(trades, method="tick")[classifiable]
+        tick = classify_trade_sign(trades, sign_method="tick")[classifiable]
         quotes = res.depth_summary[["timestamp", "best_bid_price", "best_ask_price"]]
-        lee = classify_trade_sign(trades, method="lee_ready", quotes=quotes)[
+        lee = classify_trade_sign(trades, sign_method="lee_ready", quotes=quotes)[
             classifiable
         ]
 
@@ -617,11 +615,11 @@ class TestBitstampValidationHarness:
         total_volume = float(res.trades["volume"].sum()) * res.config.lot_size
         bucket = total_volume / 10.0
 
-        vpin_tick = compute_vpin(l2_trades, bucket_volume=bucket, n_buckets=5)
+        vpin_tick = vpin(l2_trades, bucket_volume=bucket, n_buckets=5)
         assert not vpin_tick.empty
         assert vpin_tick["vpin"].between(0, 1).all()
 
-        vpin_lee = compute_vpin(
+        vpin_lee = vpin(
             l2_trades,
             bucket_volume=bucket,
             n_buckets=5,
@@ -630,9 +628,7 @@ class TestBitstampValidationHarness:
         )
         assert not vpin_lee.empty
 
-        vpin_bvc = compute_vpin(
-            l2_trades, bucket_volume=bucket, n_buckets=5, sign_method="bvc"
-        )
+        vpin_bvc = vpin(l2_trades, bucket_volume=bucket, n_buckets=5, sign_method="bvc")
         assert not vpin_bvc.empty
 
         ofi = order_flow_imbalance(l2_trades, window="1min")

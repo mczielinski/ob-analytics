@@ -22,7 +22,7 @@ into structured analytics:
 - **DataFrames end to end.** Pandas for speed; the column-list constants and
   `validate_*` functions in `schemas.py` document the column contracts.
 - **The rebuild engine is separate, and holds no pandas.** `engine/` takes order
-  events as numpy columns and returns book states, order lifecycles, and queue
+  events as numpy columns and returns book snapshots, order lifecycles, and queue
   positions -- nothing else. It knows nothing about analytics, plots, sources,
   or files, and its results carry a *row index* back into the caller's event
   table instead of copying columns out, so adding a column to the schema never
@@ -78,7 +78,7 @@ into structured analytics:
 ob-analytics keeps the full event, depth, and trade tables in memory (pandas), so
 the working set scales with the event count. Peak RSS grows roughly **linearly,
 by a little under 1 GiB per 1M events**, with the depth stages
-(`price_level_volume` → `depth_metrics`) dominating both memory and time:
+(`price_level_volume` → `summarize_depth`) dominating both memory and time:
 
 | events  | peak RSS  | depth stages |
 |---------|----------:|-------------:|
@@ -106,7 +106,7 @@ holds on other machines; the seconds do not:
 | `load` | 0.82 | 6% |
 | `set_order_types` | 0.31 | 2% |
 | `price_level_volume` | 0.27 | 2% |
-| `depth_metrics` | 11.44 | 83% |
+| `summarize_depth` | 11.44 | 83% |
 | `order_aggressiveness` | 0.15 | 1% |
 | `queue_positions` | 0.82 | 6% |
 
@@ -141,8 +141,8 @@ wrong number.
   (`price_from`, `price_to`) and set `col_bias` to a value in `(0, 1)`, or to
   `0` or less for a log scale, to see them.
 - **The feature table does not carry the metric diagnostics.**
-  `compute_vpin` records its bucket settings and diagnostics in the result's
-  `attrs`, and `compute_kyle_lambda` returns `significant` and `diagnostics`.
+  `vpin` records its bucket settings and diagnostics in the result's
+  `attrs`, and `kyle_lambda` returns `significant` and `diagnostics`.
   The `vpin` and `kyle_lambda` columns of `features()` do not carry these
   checks. To check a thin tape, call the two functions directly.
 - **Colour scales do not follow the theme.** `PlotTheme` and its `Palette`
@@ -311,7 +311,7 @@ its `FeedType` crossing invariant:
   order IDs**. The loader (a `DepthLoader`) yields the depth frame directly and
   the pipeline **skips the per-order stages**: `PipelineResult.events` comes
   back empty (schema-valid) and `PipelineResult.level is Level.L2`.
-  `DepthMetricsEngine` already consumes an absolute price-level book, so depth /
+  `DepthSummaryEngine` already consumes an absolute price-level book, so depth /
   spread / trade analytics run unchanged. See the
   [Process L2 feeds](https://github.com/mczielinski/ob-analytics/blob/main/docs/howto/l2-depth.md)
   how-to.
@@ -353,8 +353,8 @@ ob_analytics/
 ├── capture_record.py     # a capture's meta.json: read_record, write_record, CaptureRecord
 ├── synth.py              # synthetic L3 sessions: generate_session, SynthLoader, SynthTradeReader
 ├── datasets.py           # tiny hand-checkable toy datasets for teaching and tests
-├── engine/               # Order-book engine: events in, book states + lifecycles out
-│   ├── __init__.py       # the interface: book_state, order_lifecycles, queue_positions, queue_age_grid, crossed_prefix_counts
+├── engine/               # Order-book engine: events in, book snapshots + lifecycles out
+│   ├── __init__.py       # the interface: order_book, order_lifecycles, queue_positions, queue_age_grid, crossed_prefix_counts
 │   ├── _events.py        # OrderEvents -- the shared schema as numpy columns
 │   ├── _book.py          # point-in-time rebuild + crossed-book eviction
 │   ├── _lifecycles.py    # placement -> outcome, one row per order
@@ -364,12 +364,12 @@ ob_analytics/
 ├── analytics.py          # order_aggressiveness, trade_impacts, set_order_types
 ├── quality.py            # data_quality_summary, detect_sequence_gaps, detect_stale_orders
 ├── queue.py              # frame faces for the engine's queue reconstruction
-├── depth.py              # DepthMetricsEngine, price_level_volume, depth_metrics, get_spread, micro_price
+├── depth.py              # DepthSummaryEngine, price_level_volume, summarize_depth, get_spread, micro_price
 ├── trade_sign.py         # trade-sign classification: tick rule, Lee-Ready, bulk volume classification
 ├── hidden_liquidity.py   # detect_icebergs, hidden_trades
 ├── data.py               # save_data, load_data, load_result, writer registry
 ├── interop.py            # export to hftbacktest and Nautilus Trader
-├── flow_toxicity.py      # compute_vpin, compute_kyle_lambda, order_flow_imbalance, KyleLambdaResult
+├── flow_toxicity.py      # vpin, kyle_lambda, order_flow_imbalance, KyleLambdaResult
 ├── metrics.py            # METRICS registry: register_metric and the built-in metrics
 ├── bars.py               # bars, BAR_RULES registry, register_bar_rule
 ├── cost.py               # transaction_costs, cost_summary, amihud, roll_spread, CostSummary

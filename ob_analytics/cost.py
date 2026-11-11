@@ -71,6 +71,14 @@ from ob_analytics.trade_sign import (
     resolve_direction,
 )
 
+__all__ = [
+    "CostSummary",
+    "amihud",
+    "cost_summary",
+    "roll_spread",
+    "transaction_costs",
+]
+
 #: Basis points in one, the scale every ``_bps`` column is written on.
 _BPS = 10_000.0
 
@@ -229,7 +237,7 @@ def transaction_costs(
         (default) uses the plain mid.  Pass ``"micro_price"`` to measure
         against the size-weighted mid instead
         (:func:`~ob_analytics.depth.micro_price`, present on a frame from
-        :func:`~ob_analytics.depth.depth_signals`): the micro-price is the
+        :func:`~ob_analytics.depth.book_signals`): the micro-price is the
         better forecast of where the price is going, so an effective spread
         measured against it charges the taker for crossing but not for the
         move the book was already leaning toward.  The two answer different
@@ -333,7 +341,7 @@ def _quote_price_scale(
     The prices are read in the units of the frame's bid/ask pair when it has
     one, and otherwise in those of the mid column the mids are read from.  A
     mid derived from integer ticks, such as the ``micro_price`` that
-    :func:`~ob_analytics.depth.depth_signals` adds to a pipeline summary, is a
+    :func:`~ob_analytics.depth.book_signals` adds to a pipeline summary, is a
     float in ticks, so its own dtype cannot say which units it is in; the
     touch beside it can.
     """

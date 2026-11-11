@@ -574,7 +574,7 @@ def match_toy_orders(
 # A tiny price-level (L2 / market-by-price) session — the aggregate counterpart
 # to the per-order stream above.  No order identity: each row is one price
 # level's **new absolute** resting size (0 removes the level), the shape
-# :class:`~ob_analytics.depth.DepthMetricsEngine` consumes directly.  The first
+# :class:`~ob_analytics.depth.DepthSummaryEngine` consumes directly.  The first
 # four rows (t=0) are the opening *snapshot*; the rest are price-level deltas.
 #
 #   time  side  price  volume   best bid / best ask / mid   note
@@ -630,8 +630,8 @@ def toy_l2_depth() -> pd.DataFrame:
 
     Ten price-level updates over 30 synthetic seconds (a four-level opening
     snapshot at ``t=0`` followed by six deltas), in the exact column layout
-    :class:`~ob_analytics.depth.DepthMetricsEngine` /
-    :func:`~ob_analytics.depth.depth_metrics` consume — the L2 counterpart to
+    :class:`~ob_analytics.depth.DepthSummaryEngine` /
+    :func:`~ob_analytics.depth.summarize_depth` consume — the L2 counterpart to
     :func:`toy_events`.  ``volume`` is each level's **new absolute** resting
     size (``0`` removes it), *not* a signed delta.
 
@@ -645,8 +645,8 @@ def toy_l2_depth() -> pd.DataFrame:
     Examples
     --------
     >>> from ob_analytics.datasets import toy_l2_depth
-    >>> from ob_analytics.depth import depth_metrics, get_spread
-    >>> summary = depth_metrics(toy_l2_depth())
+    >>> from ob_analytics.depth import summarize_depth, get_spread
+    >>> summary = summarize_depth(toy_l2_depth())
     >>> summary[["best_bid_price", "best_ask_price"]].iloc[-1].tolist()
     [99, 100]
     """

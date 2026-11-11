@@ -587,6 +587,8 @@ The standard deviation of returns over a trailing window, per bar rather than
 annualized. Named `realized_vol`.
 
 **Trailing window**:
-How many bars back a feature looks, the row's own included. Named `window`,
-and its unit is bars.
-_Avoid_: lookback, span, period
+The stretch a value looks back over, ending at its own row. A feature counts
+it in bars, named `n_bars`, the row's own included; `ofi_by_window` measures it
+as a span of time, one per entry of `windows`. A `window` argument is always a
+span of time, given as a pandas offset string.
+_Avoid_: lookback, span, period, horizon (a horizon looks forward)

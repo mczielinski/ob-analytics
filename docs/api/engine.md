@@ -4,7 +4,7 @@ title: Order-book engine
 
 # Order-book engine
 
-The stateful core: **order events in, book states and order lifecycles out**.
+The stateful core: **order events in, book snapshots and order lifecycles out**.
 This is the only part of the library that knows how a book is rebuilt, and the
 only part that holds no pandas — everything crosses its interface as NumPy
 arrays, so the inside can be made faster later (numba, then possibly Rust)
@@ -49,7 +49,7 @@ engine compares and the label a frame carries cannot fall out of step.
 
 ## Reconstructions
 
-::: ob_analytics.engine.book_state
+::: ob_analytics.engine.order_book
 
 ::: ob_analytics.engine.order_lifecycles
 
@@ -61,7 +61,7 @@ engine compares and the label a frame carries cannot fall out of step.
 
 ## Results
 
-::: ob_analytics.engine.BookState
+::: ob_analytics.engine.BookSnapshot
 
 ::: ob_analytics.engine.BookSide
 

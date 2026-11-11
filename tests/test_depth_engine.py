@@ -1,4 +1,4 @@
-"""Tests for DepthMetricsEngine — crossed-book guards, deletions, event_id passthrough.
+"""Tests for DepthSummaryEngine — crossed-book guards, deletions, event_id passthrough.
 
 Also the price-level book it is built on (:class:`PriceLevelBook`) and the
 replay of that book at many instants (:func:`price_level_snapshots`).
@@ -9,10 +9,10 @@ import pandas as pd
 import pytest
 
 from ob_analytics.depth import (
-    DepthMetricsEngine,
+    DepthSummaryEngine,
     PriceLevelBook,
-    depth_metrics,
     price_level_snapshots,
+    summarize_depth,
 )
 
 
@@ -37,7 +37,7 @@ class TestCrossedBookGuards:
 
     def test_ask_at_best_bid_is_kept_and_quoted(self):
         """An ask at exactly the best bid is kept, and the older bid is not quoted."""
-        engine = DepthMetricsEngine()
+        engine = DepthSummaryEngine()
         out = np.zeros(engine._row_len)
 
         engine.update_side(100, 5.0, 0, out)
@@ -50,7 +50,7 @@ class TestCrossedBookGuards:
 
     def test_bid_at_best_ask_is_kept_and_quoted(self):
         """A bid at exactly the best ask is kept, and the older ask is not quoted."""
-        engine = DepthMetricsEngine()
+        engine = DepthSummaryEngine()
         out = np.zeros(engine._row_len)
 
         engine.update_side(110, 5.0, 1, out)
@@ -63,7 +63,7 @@ class TestCrossedBookGuards:
 
     def test_ask_below_best_bid_hides_crossed_bid(self):
         """An ask strictly below the best bid is fresher: the bid is not quoted."""
-        engine = DepthMetricsEngine()
+        engine = DepthSummaryEngine()
         out = np.zeros(engine._row_len)
 
         engine.update_side(100, 5.0, 0, out)  # bid at 100
@@ -76,7 +76,7 @@ class TestCrossedBookGuards:
 
     def test_bid_above_best_ask_hides_crossed_ask(self):
         """A bid strictly above the best ask is fresher: the ask is not quoted."""
-        engine = DepthMetricsEngine()
+        engine = DepthSummaryEngine()
         out = np.zeros(engine._row_len)
 
         engine.update_side(110, 5.0, 1, out)  # ask at 110
@@ -95,7 +95,7 @@ class TestCrossedBookGuards:
         strictly above that stale level, the touch moves past it to the
         genuine liquidity above.
         """
-        engine = DepthMetricsEngine()
+        engine = DepthSummaryEngine()
         out = np.zeros(engine._row_len)
 
         engine.update_side(100, 0.17, 1, out)  # orphaned ask at 100 (never deleted)
@@ -114,7 +114,7 @@ class TestCrossedBookGuards:
         refresh and write the opposing metrics columns rather than carry the
         stale prior row.
         """
-        engine = DepthMetricsEngine()
+        engine = DepthSummaryEngine()
         depth = _depth(
             ("2026-01-01T00:00:00", 100.0, 0.17, "ask"),  # orphan ask, never deleted
             ("2026-01-01T00:00:01", 105.0, 1.0, "ask"),  # genuine ask above
@@ -140,7 +140,7 @@ class TestCrossedBookGuards:
             ("2026-01-01T00:00:02", 99, 3, "ask"),  # crosses the bid
             ("2026-01-01T00:00:03", 99, 0, "ask"),  # and leaves
         )
-        summary = DepthMetricsEngine().compute(depth)
+        summary = DepthSummaryEngine().compute(depth)
         quotes = list(
             zip(summary["best_bid_price"], summary["best_ask_price"], strict=True)
         )
@@ -152,7 +152,7 @@ class TestBestPriceRecalculation:
     """When the best level is deleted, the next-best must promote."""
 
     def test_ask_deletion_promotes_next_best(self):
-        engine = DepthMetricsEngine()
+        engine = DepthSummaryEngine()
         out = np.zeros(engine._row_len)
 
         engine.update_side(100, 5.0, 1, out)  # ask at 100
@@ -164,7 +164,7 @@ class TestBestPriceRecalculation:
         assert engine._best_ask_vol == 3.0
 
     def test_bid_deletion_promotes_next_best(self):
-        engine = DepthMetricsEngine()
+        engine = DepthSummaryEngine()
         out = np.zeros(engine._row_len)
 
         engine.update_side(100, 5.0, 0, out)  # bid at 100
@@ -177,7 +177,7 @@ class TestBestPriceRecalculation:
 
     def test_delete_only_ask_clears_best(self):
         """Deleting the sole ask level sets best_ask to None."""
-        engine = DepthMetricsEngine()
+        engine = DepthSummaryEngine()
         out = np.zeros(engine._row_len)
 
         engine.update_side(100, 5.0, 1, out)
@@ -206,7 +206,7 @@ class TestEventIdPassthrough:
                 "direction": ["bid", "ask", "bid"],
             }
         )
-        engine = DepthMetricsEngine()
+        engine = DepthSummaryEngine()
         result = engine.compute(depth)
         assert "event_id" in result.columns
         assert list(result["event_id"]) == [1, 2, 3]
@@ -223,7 +223,7 @@ class TestEventIdPassthrough:
                 "direction": ["bid", "ask"],
             }
         )
-        engine = DepthMetricsEngine()
+        engine = DepthSummaryEngine()
         result = engine.compute(depth)
         assert "event_id" not in result.columns
         assert "timestamp" in result.columns
@@ -238,7 +238,7 @@ class TestBpsBinVolumes:
         from ob_analytics.config import PipelineConfig
 
         cfg = PipelineConfig(depth_bps=100, depth_bins=5, price_decimals=2)
-        engine = DepthMetricsEngine(cfg)
+        engine = DepthSummaryEngine(cfg)
         out = np.zeros(engine._row_len)
 
         # best ask at 10000 (=$100.00 in cents)
@@ -264,7 +264,7 @@ class TestBpsBinVolumes:
         from ob_analytics.config import PipelineConfig
 
         cfg = PipelineConfig(depth_bps=100, depth_bins=5, price_decimals=2)
-        engine = DepthMetricsEngine(cfg)
+        engine = DepthSummaryEngine(cfg)
         out = np.zeros(engine._row_len)
 
         engine.update_side(10000, 4.0, 0, out)  # best bid
@@ -341,7 +341,7 @@ class TestSameInstantOrder:
                 "direction": ["bid", "ask"],
             }
         )
-        result = DepthMetricsEngine().compute(depth)
+        result = DepthSummaryEngine().compute(depth)
         assert list(result["event_id"]) == [1, 2]
         last = result.iloc[-1]
         assert (last["best_bid_price"], last["best_ask_price"]) == (100, 0)
@@ -383,7 +383,7 @@ class TestSameInstantOrder:
                     if getattr(stream, f.name) is not None
                 },
             )
-            book = engine.book_state(upto, at=int(stream.timestamp[end - 1]))
+            book = engine.order_book(upto, at=int(stream.timestamp[end - 1]))
             bid = stream.price[book.bids.row[0]] if book.bids.row.size else 0
             ask = stream.price[book.asks.row[0]] if book.asks.row.size else 0
             return int(bid), int(ask)
@@ -405,7 +405,7 @@ class TestSameInstantOrder:
 
 
 class TestPriceLevelBook:
-    """The book at L2 that DepthMetricsEngine and the book replay share (#117)."""
+    """The book at L2 that DepthSummaryEngine and the book replay share (#117)."""
 
     def test_sets_replaces_and_removes_levels(self):
         book = PriceLevelBook()
@@ -527,7 +527,7 @@ class TestPriceLevelSnapshots:
 
     def test_touch_matches_depth_summary_at_every_row(self):
         depth = _replay_depth()
-        summary = depth_metrics(depth)
+        summary = summarize_depth(depth)
         times = depth["timestamp"].drop_duplicates()
         for t, snap in zip(times, price_level_snapshots(depth, times), strict=True):
             row = summary[summary["timestamp"] <= t].iloc[-1]
@@ -551,7 +551,7 @@ class TestPriceLevelSnapshots:
             }
         )
         (snap,) = price_level_snapshots(depth, [t])
-        last = depth_metrics(depth).iloc[-1]
+        last = summarize_depth(depth).iloc[-1]
         assert snap["bids"]["price"].tolist() == [last["best_bid_price"]] == [100]
         assert snap["asks"].empty and last["best_ask_price"] == 0
 

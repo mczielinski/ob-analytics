@@ -48,7 +48,7 @@ from ob_analytics._utils import (
 from ob_analytics.config import InstrumentGrid, PipelineConfig, SourceSettings
 from ob_analytics.depth import (
     BookLevels,
-    DepthMetricsEngine,
+    DepthSummaryEngine,
     _book_levels,
     _price_level_volume,
     price_level_volume,
@@ -76,6 +76,15 @@ from ob_analytics.schemas import (
     time_order_keys,
     validate_columns,
 )
+
+__all__ = [
+    "LobsterLoader",
+    "LobsterSource",
+    "LobsterTradeReader",
+    "LobsterWriter",
+    "lobster_depth_from_orderbook",
+    "lobster_venue_book",
+]
 
 # ── Constants ─────────────────────────────────────────────────────────
 
@@ -1123,7 +1132,7 @@ def lobster_depth_from_orderbook(
 
     logger.info("lobster_depth: {} depth rows from orderbook", len(depth))
 
-    engine = DepthMetricsEngine(config)
+    engine = DepthSummaryEngine(config)
     depth_summary = engine.compute(depth)
 
     return depth, depth_summary
