@@ -586,8 +586,8 @@ def prepare_depth_heatmap_data(
     level changed.
 
     ``iceberg_lines``, ``iceberg_refills`` and ``hidden_trades`` are the
-    optional hidden-liquidity overlay (see :func:`prepare_hidden_liquidity_overlay`,
-    issue #272), already clipped to the caller's display window. ``None``
+    optional hidden-liquidity overlay (see :func:`prepare_hidden_liquidity_overlay`),
+    already clipped to the caller's display window. ``None``
     (the default) draws the heatmap with no overlay.
     """
     resolve_level("depth_heatmap", level)
@@ -731,6 +731,15 @@ def prepare_hidden_liquidity_overlay(
         Output of :func:`~ob_analytics.hidden_liquidity.iceberg_slices`.
     hidden : pandas.DataFrame
         Output of :func:`~ob_analytics.hidden_liquidity.hidden_trades`.
+    start_time, end_time : pandas.Timestamp, optional
+        Keep only rows with a ``timestamp`` in ``[start_time, end_time]``.
+        Both ends are inclusive.  ``None`` (the default) leaves that end open.
+    price_from, price_to : float, optional
+        Keep only rows with a ``price`` in ``[price_from, price_to]``.  Both
+        ends are inclusive.  Give them in the unit of the ``price`` column of
+        *slices* and *hidden*: integer ticks for a raw result, the quote
+        currency for a display result.  ``None`` (the default) leaves that end
+        open.
 
     Returns
     -------
@@ -859,8 +868,8 @@ def prepare_order_activity_l3_data(
     end.  Lifecycles overlapping the window are clipped to it.
 
     ``iceberg_lines``, ``iceberg_refills`` and ``hidden_trades`` are the
-    optional hidden-liquidity overlay (see :func:`prepare_hidden_liquidity_overlay`,
-    issue #272), already clipped to the caller's display window. ``None``
+    optional hidden-liquidity overlay (see :func:`prepare_hidden_liquidity_overlay`),
+    already clipped to the caller's display window. ``None``
     (the default) draws the Gantt with no overlay.
     """
     from ob_analytics.book import order_lifecycles

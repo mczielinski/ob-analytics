@@ -131,15 +131,19 @@ __all__ = [
     "toy_trades",
 ]
 
-#: Tick size of the toy book (issue #155).  ``1.0`` so the integer-tick prices
-#: equal the whole-number prices in the script; the display price is
-#: ``ticks * TICK_SIZE``.
 TICK_SIZE = 1.0
+"""Tick size of the toy book.
 
-#: Lot size of the toy book (issue #226).  ``1.0`` so the integer-lot sizes
-#: equal the whole-number sizes in the script; the base-asset size is
-#: ``lots * LOT_SIZE``.
+``1.0``, so the integer-tick prices equal the whole-number prices in the
+script.  The display price is ``ticks * TICK_SIZE``.
+"""
+
 LOT_SIZE = 1.0
+"""Lot size of the toy book.
+
+``1.0``, so the integer-lot sizes equal the whole-number sizes in the script.
+The base-asset size is ``lots * LOT_SIZE``.
+"""
 
 _BASE = pd.Timestamp("2026-01-05 10:00:00")
 

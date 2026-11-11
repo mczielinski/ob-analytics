@@ -15,6 +15,8 @@ ob-analytics bitstamp-demo orders.csv
 ob-analytics lobster-demo /path/to/lobster_data --trading-date 2012-06-21
 ```
 
-Pass `-v` / `--verbose` for debug-level logging.
+Pass `-v` / `--verbose` before the subcommand for debug-level logging. The
+[CLI flag reference](cli-flags.md) lists every flag of every subcommand, and
+[Run from the command line](../howto/cli.md) shows them in use.
 
 ::: ob_analytics.cli

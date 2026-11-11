@@ -260,55 +260,15 @@ reports the dropped messages and the error as the `dropped_messages` and
 
 ## Adding a new venue
 
-Give your source the live capability -- the three async-iterator methods of a
-`LiveSource` -- alongside its `level` / `feed_type` / `settings`, and register
-it:
-
-```python
-from ob_analytics import FeedType, Level, SourceSettings, register_source
-
-
-class CoinbaseSource:
-    name = "coinbase"
-    level = Level.L3
-    feed_type = FeedType.MATCHED_BOOK
-    settings = SourceSettings()
-
-    async def snapshot(self, config):
-        # yield synthetic "created" events from a REST snapshot
-        ...
-
-    async def stream(self, config):
-        # yield (kind, event, raw_frame) tuples for each live message
-        ...
-
-    async def shutdown_synthetic_events(self):
-        # yield "deleted" events for everything still resting
-        ...
-
-
-register_source("coinbase", CoinbaseSource)
-```
-
-That's enough to make `ob-analytics capture coinbase` work. Persistence,
-raw-frame archival, signal handling, segments, and `meta.json` all live in the
-generic runner -- you only write the per-venue parser. A source can also add
-the offline-replay factories and be both.
-
-To wait for the next message with a time limit, use
-`async with asyncio.timeout(...)`, not `asyncio.wait_for`. On Python 3.11,
-`wait_for` can drop the cancel that stops a segment when a message arrives at
-the same moment, and the stream then carries on. Keep the cleanup in `stream`'s
-`finally` short: a segment that takes more than 20 seconds to stop is
-cancelled.
-
-Do not reconnect inside `stream`. When the connection drops, let `stream`
-raise: the capture then starts a new segment from a fresh snapshot and records
-the gap. A source that reconnects by itself carries its book across the gap,
-and every order changed while it was disconnected stays wrong.
+A venue the built-in sources do not reach needs a source of its own with the
+live capability: three async methods that parse the venue's feed into event
+rows. `run_capture` does the rest: it writes the files and `meta.json`, rolls
+segments, and starts a new segment when the connection drops. See
+[The live capability](../extending.md#the-live-capability) in "Extending
+ob-analytics" for the methods, an example, and the rules a `stream` must keep.
 
 ## Related
 
-- [Command-line interface](cli.md) — all `capture` flags
+- [CLI flag reference](../api/cli-flags.md#ob-analytics-capture) — all `capture` flags
 - [Use an API key](api-keys.md) — for a source that needs one
 - [Extending ob-analytics](../extending.md) — the `Source` / `LiveSource` protocols in depth

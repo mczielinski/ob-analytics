@@ -17,3 +17,9 @@ Parquet serialization and writer registry.
 ::: ob_analytics.data.list_writers
 
 ::: ob_analytics.data.load_writer_plugins
+
+## Writing
+
+::: ob_analytics.data.OutputTables
+
+::: ob_analytics.data.ParquetWriter

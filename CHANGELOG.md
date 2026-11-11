@@ -323,6 +323,21 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Added
 
+- **Every exported name has an API page entry** (#421). New Reference pages
+  cover synthetic data (`ob_analytics.synth`), the sample and toy data
+  (`ob_analytics.datasets`, `sample_csv_path`), queue positions
+  (`ob_analytics.queue`) and the backtester writers (`ob_analytics.interop`).
+  The existing pages gained the `prepare` functions, the ccxt and cryptofeed
+  sources and their settings, the capture-file helpers, the engine's code
+  constants, `BarRule`, `Feature`, `OutputTables`, `ParquetWriter` and the
+  instrument columns. A new test, `tests/test_api_pages.py`, fails when a name
+  in a public module's `__all__` has no `:::` entry on a docs page.
+- **A CLI flag reference** (#421). The "CLI flag reference" page lists every
+  flag of every subcommand, and of `capture` for each built-in live source.
+  `scripts/cli_reference.py` makes it from the command's own parser, and
+  `tests/test_cli_reference.py` fails when the page is out of date.
+- **An "Export to a backtester" how-to** (#421). The hftbacktest and Nautilus
+  Trader exports moved there from "Extending ob-analytics".
 - **A security policy, issue forms and a list of known limitations** (#422).
   `SECURITY.md` says how to report a security problem privately. New bug and
   feature forms under `.github/ISSUE_TEMPLATE/` ask for what a report needs.
@@ -505,10 +520,10 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   finishes, as one Parquet file per table, the same folder `save_data` writes;
   `load_data` reads it back. With `carry=True`, the default, each window starts
   from the book the previous one ended with, and the output matches a single
-  run row for row. The exceptions are `aggressiveness_bps` on a Bitstamp
-  input, and depth where the Databento loader already warns that it is off. A
-  run that fails part-way leaves the output folder as it was. On 1.26M events, eight windows peak at 771 MiB against 1,507 MiB for
-  a single run. The loader still reads the whole input. See "Scale and
+  run row for row. The one exception is depth where the Databento loader
+  already warns that it is off. A run that fails part-way leaves the output
+  folder as it was. On 1.26M events, eight windows peak at 771 MiB against
+  1,507 MiB for a single run. The loader still reads the whole input. See "Scale and
   chunking".
 - **The flow-toxicity faces and the L1 quote are built-in metrics** (#118).
   `vpin`, `kyle_lambda`, `order_flow_imbalance` and `ofi_horizon` are now
@@ -1423,6 +1438,21 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
+- **Docstrings carry no issue numbers** (#421). Published docstrings, `#:`
+  attribute comments and the `tick_size` / `price_decimals` field descriptions
+  named GitHub issues or plan labels, which mean nothing to a reader. A new
+  test, `tests/test_docstrings_no_issue_refs.py`, fails on an issue number
+  (`#NNN`) or a plan label (`WS-n`, `Phase n`, an audit label such as `A7-1`)
+  in any string or `#:` comment under `ob_analytics/`. The package docstring now
+  lists every built-in source, and `prepare.hidden_liquidity_overlay`
+  documents its four window parameters.
+- **The `run_windows` caveat about `aggressiveness_bps` is gone** (#421). A
+  windowed Bitstamp run gives the same `aggressiveness_bps` as a single run,
+  and `tests/test_run_windows_aggressiveness.py` checks it. The `run_windows`
+  docstring and the "Scale and chunking" page no longer say it can differ.
+- **One text on adding a live venue** (#421). "Capture live data" now links to
+  "The live capability" in "Extending ob-analytics", which holds the rules
+  for a `stream` that were only on the capture page.
 - **The gallery asks a backend only for the plots it draws** (#463). Without
   Plotly installed, `ob-analytics process ... --gallery` logged a failure for
   the book replay, which only Plotly draws. Now that card says which backend

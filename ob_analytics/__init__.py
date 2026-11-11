@@ -17,15 +17,24 @@ The package exposes two layers:
   with sensible defaults.  When called without arguments it defaults
   to the Bitstamp format (orders + companion ``trades.csv``).
 * **Low-level**: Individual classes and functions for step-by-step control.
-  Two symmetric source implementations are provided:
 
-  - Bitstamp: :class:`BitstampLoader`, :class:`BitstampTradeReader`,
-    :class:`BitstampWriter`, :class:`BitstampSource`
-  - LOBSTER: :class:`LobsterLoader`, :class:`LobsterTradeReader`,
-    :class:`LobsterWriter`, :class:`LobsterSource`
-  - Databento: :class:`~ob_analytics.databento.DatabentoLoader`,
-    :class:`~ob_analytics.databento.DatabentoTradeReader`,
-    :class:`~ob_analytics.databento.DatabentoWriter`, :class:`DatabentoSource`
+Each data source is one :class:`Source` in the source registry
+(:func:`list_sources`, :func:`get_source`).  These ship with the package:
+
+- ``bitstamp``: Bitstamp order and trade CSVs, and live capture from
+  Bitstamp (:class:`BitstampSource`).
+- ``lobster``: LOBSTER message and order-book files
+  (:class:`LobsterSource`).
+- ``databento``: Databento DBN market-by-order files
+  (:class:`DatabentoSource`).  It needs the ``databento`` extra.
+- ``depth_csv``: price-level (L2) depth CSVs, as a live capture writes them
+  (:class:`DepthCsvSource`).
+- ``ccxt`` and ``cryptofeed``: live capture through the ccxt and cryptofeed
+  libraries (:mod:`ob_analytics.live`).  They need the ``ccxt`` and
+  ``cryptofeed`` extras.
+
+:mod:`~ob_analytics.synth` generates a synthetic session with no input file,
+and :mod:`~ob_analytics.datasets` holds small toy books for examples.
 
 All processing stages are pluggable via :mod:`~ob_analytics.protocols`; a whole
 new data source registers via :func:`~ob_analytics.sources.register_source`, and

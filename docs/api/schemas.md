@@ -25,3 +25,14 @@ allowed.
 ::: ob_analytics.schemas.MAYBE_BAD_BOOK_ATTR
 
 ::: ob_analytics.schemas.HIDDEN_ORDER_ID
+
+## Instrument columns
+
+A frame that holds more than one instrument names each row's venue and symbol
+in two optional columns.
+
+::: ob_analytics.schemas.VENUE_COLUMN
+
+::: ob_analytics.schemas.SYMBOL_COLUMN
+
+::: ob_analytics.schemas.group_by_instrument

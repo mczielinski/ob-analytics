@@ -91,3 +91,7 @@ many runs and many pipelines.
 ::: ob_analytics.live.UnmappedMessageError
 
 ::: ob_analytics.protocols.Metric
+
+::: ob_analytics.protocols.BarRule
+
+::: ob_analytics.protocols.Feature

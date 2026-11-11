@@ -638,10 +638,6 @@ class Pipeline:
         With *carry* on, each window starts from the book the previous window
         ended with, so the cuts do not show in the output: every table matches
         a single run row for row, though ``events`` comes out in window order.
-        One column can differ.  ``aggressiveness_bps`` reads the quote standing
-        before each order by ``event_id``, so on a source whose ``event_id`` is
-        not in time order (Bitstamp numbers its events by order) it can read a
-        quote from another window, and the value differs from a single run's.
         With *carry* off, each window starts from an empty book, as if it were
         a separate input: the orders resting at a cut are missing from the next
         window's depth.

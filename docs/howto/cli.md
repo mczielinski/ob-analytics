@@ -4,9 +4,11 @@ title: Run from the command line
 
 # Run from the command line
 
-Installing the package registers the `ob-analytics` command. All
-subcommands accept `-v` / `--verbose` for debug-level logging. Every
-subcommand calls its input `path` and its output `-o` / `--output`.
+Installing the package registers the `ob-analytics` command. Put
+`-v` / `--verbose` before the subcommand for debug-level logging. Every
+subcommand calls its input `path` and its output `-o` / `--output`. The
+[CLI flag reference](../api/cli-flags.md) lists every flag of every
+subcommand.
 
 | Subcommand | Description |
 |------------|-------------|
@@ -114,7 +116,9 @@ instead. A windowed run writes Parquet, and builds no gallery: run
 
 The flags after `capture <source>` are the capture's own (`--pair`,
 `--minutes`, `-o` / `--output`, `--roll-minutes`, `--roll-mb`, `--no-raw`)
-and one for each field of the source's settings class. List them with:
+and one for each field of the source's settings class. The
+[CLI flag reference](../api/cli-flags.md#ob-analytics-capture-bitstamp) lists
+them for each built-in source, and `--help` lists them for any source:
 
 ```bash
 ob-analytics capture ccxt --help
@@ -131,6 +135,6 @@ flag: it is read from its environment variable (see
 
 ## Related
 
-- [CLI Reference](../api/cli.md) — argparse-level docs for every flag
+- [CLI flag reference](../api/cli-flags.md) — every flag of every subcommand
 - [Check data quality with `audit`](audit.md) — the `audit` verb in depth
 - [Capture live data](live-capture.md) — the `capture` verb in depth

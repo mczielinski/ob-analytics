@@ -115,6 +115,9 @@ file.
 | `"nautilus"` | a file | a Parquet file of Nautilus order-book deltas |
 | `"databento"` | a file | a DBN file of MBO records |
 
+[Export to a backtester](backtester.md) shows the `"hftbacktest"` and
+`"nautilus"` exports in use.
+
 `save_data` checks `path` before it writes. A folder format refuses an
 existing file, and a name that ends in a file extension such as `.parquet`,
 `.csv` or `.npz`. A file format refuses an existing folder, and a name with no
@@ -196,3 +199,4 @@ register_plot_backend("altair", "my_package._altair_backend")
 
 - [Visualization API](../api/visualization.md) — `plot`, `prepare`, concepts and levels
 - [Data I/O API](../api/data.md) — `save_data` / `load_data`
+- [Export to a backtester](backtester.md) — hftbacktest and Nautilus Trader
