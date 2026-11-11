@@ -974,6 +974,11 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   every source, the plot backends and all six extras. Both say that live
   capture is supported on Linux and macOS only, and that the docs follow `main`, not
   the newest release.
+- **The glossary uses the code's names** (#423). It now defines the
+  package's terms by the same names the code uses: the venue, resolution and
+  L1/L2/L3, order type, depth bin, rank, and the order events, queue, capture,
+  data quality and plot terms, with the column or function name where there
+  is one.
 - **Every measure reports in the instrument's own units** (#400). VPIN,
   Kyle's λ, order flow imbalance, `transaction_costs`, `cost_summary`,
   `amihud`, `roll_spread`, `trade_impacts` and the `l1_ticker` and

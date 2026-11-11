@@ -52,11 +52,13 @@ ever split into several packages. It has not, so don't build it.
 When your output names a domain concept (in an issue title, a refactor proposal,
 a hypothesis, a test name), use the term as defined in `CONTEXT.md`.
 
-This repo also has a published, human-facing glossary at `docs/glossary.md`,
-covering order book terminology (level, resolution, event, lifecycle, and so on).
-Read it as well, and don't drift to synonyms either glossary avoids. Where the
-two disagree, `docs/glossary.md` is the one users read: fix `CONTEXT.md` to match
-rather than inventing a third term.
+This repo also has a published glossary at `docs/glossary.md`. It explains the
+same terms for users. `CONTEXT.md` decides identifiers: the name of each
+concept, and the name the code gives it. Where the two disagree, fix
+`docs/glossary.md` (or the code) to match `CONTEXT.md`. Do not invent a third
+term. When you add a term to one file, add it to the other as well. The
+glossary may name a synonym once; don't use a synonym that `CONTEXT.md` lists
+under _Avoid_ anywhere else.
 
 If the concept you need isn't in either glossary yet, that's a signal: either
 you're inventing language the project doesn't use (reconsider) or there's a real
