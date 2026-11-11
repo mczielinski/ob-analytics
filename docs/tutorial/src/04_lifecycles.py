@@ -299,9 +299,9 @@ fig = plot("order_outcome", level="L3", **prepare.order_outcome(result.events))
 
 # %%
 from ob_analytics.analytics import order_aggressiveness
-from ob_analytics.depth import depth_metrics, price_level_volume
+from ob_analytics.depth import price_level_volume, summarize_depth
 
-agg = order_aggressiveness(events, depth_metrics(price_level_volume(events)))
+agg = order_aggressiveness(events, summarize_depth(price_level_volume(events)))
 placed = agg[agg["action"] == "created"].set_index("actor")
 placed[["price", "type", "aggressiveness_bps"]].round(1)
 

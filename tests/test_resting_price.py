@@ -246,7 +246,7 @@ def test_grid_touch_queue_matches_the_book_on_the_bundled_sample(
         samples = samples.tz_localize("UTC")
     differ = 0
     for column, t in enumerate(samples):
-        book = order_book(events, tp=t)
+        book = order_book(events, at=t)
         frame = book["bids"] if side == "bid" else book["asks"]
         in_book: list[float] = []
         if not frame.empty:

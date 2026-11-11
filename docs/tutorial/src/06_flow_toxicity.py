@@ -174,10 +174,10 @@ fig = plot("order_flow_imbalance", **prepare.order_flow_imbalance(ofi, trades=ta
 # 8-unit buckets:
 
 # %%
-from ob_analytics.flow_toxicity import compute_vpin
+from ob_analytics.flow_toxicity import vpin
 
-vpin = compute_vpin(tape, bucket_volume=8.0, n_buckets=3)
-vpin[["bucket", "buy_volume", "sell_volume", "vpin", "vpin_avg"]].round(3)
+vpin_df = vpin(tape, bucket_volume=8.0, n_buckets=3)
+vpin_df[["bucket", "buy_volume", "sell_volume", "vpin", "vpin_avg"]].round(3)
 
 # %% [markdown]
 # Bucket 0 gathers the calm open — 4 buys, 4 sells, imbalance
@@ -188,7 +188,7 @@ vpin[["bucket", "buy_volume", "sell_volume", "vpin", "vpin_avg"]].round(3)
 # line above which flow is "toxic":
 
 # %%
-fig = plot("vpin", **prepare.vpin(vpin, threshold=0.7))
+fig = plot("vpin", **prepare.vpin(vpin_df, threshold=0.7))
 
 # %% [markdown]
 # ## Kyle's λ: the price of a unit of flow
@@ -209,9 +209,9 @@ fig = plot("vpin", **prepare.vpin(vpin, threshold=0.7))
 # lot. Fitting on the tape:
 
 # %%
-from ob_analytics.flow_toxicity import compute_kyle_lambda
+from ob_analytics.flow_toxicity import kyle_lambda
 
-kyle = compute_kyle_lambda(tape, window="30s")
+kyle = kyle_lambda(tape, window="30s")
 print(f"λ = {kyle.lambda_:.4f}   t = {kyle.t_stat:.2f}   R² = {kyle.r_squared:.3f}")
 kyle.regression_df.round({"delta_price": 2, "signed_volume": 2})
 
@@ -255,7 +255,7 @@ from ob_analytics.visualization import display_result
 result = Pipeline().run(sample_csv_path())
 # Canonical prices are integer ticks (issue #155); show quote currency.
 result = display_result(result)
-kyle_real = compute_kyle_lambda(result.trades, window="5min")
+kyle_real = kyle_lambda(result.trades, window="5min")
 print(
     f"trades: {len(result.trades)}   total volume: {result.trades['volume'].sum():.1f}"
 )
@@ -290,11 +290,11 @@ for reason in kyle_real.diagnostics:
 # %%
 import warnings
 
-# compute_vpin also raises a UserWarning here; suppressed since the
+# vpin also raises a UserWarning here; suppressed since the
 # diagnostics it points at are printed explicitly below.
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", UserWarning)
-    vpin_real = compute_vpin(result.trades)
+    vpin_real = vpin(result.trades)
 print(
     f"bucket_volume = {vpin_real.attrs['bucket_volume']:.2f} "
     f"({vpin_real.attrs['bucket_volume_rule']})   buckets = {len(vpin_real)}"
@@ -342,7 +342,7 @@ fig = result.plot("kyle_lambda")  # the same fit as kyle_real above
 
 # %% [markdown]
 # The flow names are `vpin`, `kyle_lambda`, `order_flow_imbalance` and
-# `ofi_horizon`; `transaction_costs`, `amihud` and `roll_spread` measure
+# `ofi_by_window`; `transaction_costs`, `amihud` and `roll_spread` measure
 # cost, and `l1_ticker` and `book_signals` read the quote. Each reports in
 # the instrument's own units, so `result.metric(name)`, `result.plot(name)`
 # and the bare function give the same numbers.
@@ -386,10 +386,10 @@ amihud(tape).dropna().round({"amihud": 5})
 # %% tags=["solution"]
 rows = {}
 for size in (4.0, 8.0, 16.0):
-    # 16-unit buckets fill fewer than n_buckets, and compute_vpin warns.
+    # 16-unit buckets fill fewer than n_buckets, and vpin warns.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
-        v = compute_vpin(tape, bucket_volume=size, n_buckets=3)
+        v = vpin(tape, bucket_volume=size, n_buckets=3)
     rows[f"bucket_volume={size:g}"] = {
         "buckets": len(v),
         "one-sided buckets": int((v["vpin"] == 1).sum()),

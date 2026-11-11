@@ -17,7 +17,7 @@ from pathlib import Path
 from ob_analytics import sample_csv_path
 from ob_analytics.analytics import order_aggressiveness, set_order_types
 from ob_analytics.bitstamp import BitstampLoader, BitstampTradeReader
-from ob_analytics.depth import depth_metrics, price_level_volume
+from ob_analytics.depth import summarize_depth, price_level_volume
 
 orders_path = sample_csv_path()
 run_dir = Path(orders_path).parent
@@ -30,7 +30,7 @@ trades = reader.load(events, run_dir)
 
 events = set_order_types(events, trades)             # market, flashed-limit, market-limit, …
 depth = price_level_volume(events)
-depth_summary = depth_metrics(depth)                 # best bid/ask, BPS bins
+depth_summary = summarize_depth(depth)               # best bid/ask, BPS bins
 events = order_aggressiveness(events, depth_summary)
 ```
 
@@ -45,7 +45,7 @@ from ob_analytics.book import order_book
 
 # Snapshot ten minutes into the run (events.timestamp is tz-aware UTC).
 tp = events["timestamp"].iloc[0] + pd.Timedelta(minutes=10)
-snapshot = order_book(events, tp=tp, max_levels=5)
+snapshot = order_book(events, at=tp, max_levels=5)
 print(snapshot["timestamp"])
 print(snapshot["bids"].head())
 print(snapshot["asks"].head())

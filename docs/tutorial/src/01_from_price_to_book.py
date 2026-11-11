@@ -220,10 +220,10 @@ events.groupby("actor", observed=True)["type"].first().sort_values()
 import matplotlib.pyplot as plt
 from _docs_theme import DOCS_THEME
 
-from ob_analytics.depth import depth_metrics, get_spread, price_level_volume
+from ob_analytics.depth import get_spread, price_level_volume, summarize_depth
 from ob_analytics.visualization import plot, prepare
 
-spread = get_spread(depth_metrics(price_level_volume(events)))
+spread = get_spread(summarize_depth(price_level_volume(events)))
 
 fig = plt.figure(figsize=(17, 8))
 gs = fig.add_gridspec(2, 13, height_ratios=[1.5, 1.0], hspace=0.3, wspace=0.15)

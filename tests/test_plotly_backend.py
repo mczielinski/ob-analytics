@@ -28,7 +28,7 @@ from ob_analytics.visualization._plotly import (
     plotly_kyle_lambda,
     plotly_liquidity_at_touch_aggregate,
     plotly_liquidity_at_touch_per_order,
-    plotly_ofi_horizon,
+    plotly_ofi_by_window,
     plotly_order_activity_aggregate,
     plotly_order_activity_per_order,
     plotly_order_flow_imbalance,
@@ -331,7 +331,7 @@ class TestPlotlyLiquidityAtTouchL3:
         assert [tr.type for tr in fig.data] == ["heatmap"]
 
 
-class TestPlotlyOfiHorizon:
+class TestPlotlyOfiByWindow:
     @staticmethod
     def _trades() -> pd.DataFrame:
         ts = pd.Timestamp("2015-05-01 01:00:00")
@@ -349,8 +349,8 @@ class TestPlotlyOfiHorizon:
         )
 
     def test_returns_banded_subplots(self) -> None:
-        data = prepare.ofi_horizon(self._trades())
-        fig = plotly_ofi_horizon(data)
+        data = prepare.ofi_by_window(self._trades())
+        fig = plotly_ofi_by_window(data)
         assert isinstance(fig, go.Figure)
         # Horizon graph = stacked filled scatter bands (one subplot per row),
         # not a single heatmap.
@@ -362,9 +362,9 @@ class TestPlotlyOfiHorizon:
         data = {
             "ofi": np.empty((0, 0)),
             "times": np.array([], dtype="datetime64[ns]"),
-            "horizons": ["5s", "60s"],
+            "windows": ["5s", "60s"],
         }
-        assert not drawn(plotly_ofi_horizon(data))
+        assert not drawn(plotly_ofi_by_window(data))
 
 
 class TestPlotlyOrderOutcomeL3:
@@ -552,7 +552,7 @@ class TestPlotlyVpin:
         assert bar.width == pytest.approx(36_000.0)
 
     def test_empty_draws_no_buckets(self) -> None:
-        # A capture shorter than one bucket gives compute_vpin zero rows.
+        # A capture shorter than one bucket gives vpin zero rows.
         vpin_df = pd.DataFrame(
             {
                 "timestamp_end": pd.Series(dtype="datetime64[ns, UTC]"),

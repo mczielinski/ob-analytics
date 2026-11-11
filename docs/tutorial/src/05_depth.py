@@ -59,9 +59,9 @@ depth
 import matplotlib.pyplot as plt
 from _docs_theme import plot_book_keyframes, plot_toy_depth_heatmap
 
-from ob_analytics.depth import depth_metrics, get_spread
+from ob_analytics.depth import get_spread, summarize_depth
 
-summary = depth_metrics(depth)
+summary = summarize_depth(depth)
 spread = get_spread(summary)
 
 fig = plt.figure(figsize=(15, 7))
@@ -100,7 +100,7 @@ for axk in key_axes[1:]:
 #
 # ## The summary: best quotes and binned liquidity
 #
-# `depth_metrics` reduces the same information the other way — one row
+# `summarize_depth` reduces the same information the other way — one row
 # per moment, answering "what are the best quotes, and how much stands
 # *near* them?" Watch it react to Eve. Here are the rows bracketing her
 # flash:

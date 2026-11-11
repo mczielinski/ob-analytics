@@ -19,7 +19,7 @@ from ob_analytics import Pipeline, sample_csv_path
 from ob_analytics._windows import window_bounds
 from ob_analytics.data import load_data, save_data
 from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
-from ob_analytics.depth import DepthMetricsEngine, depth_metrics
+from ob_analytics.depth import DepthSummaryEngine, summarize_depth
 from ob_analytics.depth_csv import DepthCsvWriter
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.synth import SynthLoader, SynthTradeReader, generate_session
@@ -236,9 +236,9 @@ def test_summary_engine_carries_on_from_its_own_book():
             "direction": ["bid", "ask", "bid", "ask", "bid", "ask"],
         }
     )
-    whole = depth_metrics(depth)
+    whole = summarize_depth(depth)
 
-    engine = DepthMetricsEngine()
+    engine = DepthSummaryEngine()
     parts = pd.concat(
         [engine.compute(depth.iloc[:3]), engine.compute(depth.iloc[3:])],
         ignore_index=True,

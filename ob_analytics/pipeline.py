@@ -63,10 +63,10 @@ from ob_analytics.capture_record import read_instrument, run_declarations
 from ob_analytics.config import PipelineConfig, instrument_fields
 from ob_analytics.depth import (
     BookLevels,
-    DepthMetricsEngine,
-    depth_metrics,
+    DepthSummaryEngine,
     price_level_volume,
     readable_quotes,
+    summarize_depth,
 )
 from ob_analytics.protocols import (
     EventLoader,
@@ -98,6 +98,11 @@ from ob_analytics.trade_sign import (
 
 if TYPE_CHECKING:
     from matplotlib.axes import Axes
+
+__all__ = [
+    "Pipeline",
+    "PipelineResult",
+]
 
 #: The quote columns a windowed run keeps for labelling trades after the
 #: last window: what Lee-Ready reads, and nothing else.
@@ -782,7 +787,7 @@ class Pipeline:
         # The quotes are kept only for trades the venue left unlabelled.
         unlabelled = _unlabelled_trades(trades)
         resting: pd.DataFrame | None = None
-        engine = DepthMetricsEngine(config)
+        engine = DepthSummaryEngine(config)
         last_quote = last_readable = pd.DataFrame()
         had_quotes = False
         with ParquetAppender(output, config, declarations) as out:
@@ -800,7 +805,7 @@ class Pipeline:
                     len(resting),
                 )
                 if not carry:
-                    engine = DepthMetricsEngine(config)
+                    engine = DepthSummaryEngine(config)
                     last_quote, last_readable = last_quote[:0], last_readable[:0]
 
                 if level is Level.L2:
@@ -919,10 +924,10 @@ def _depth_metrics(tables: dict[str, pd.DataFrame], config: PipelineConfig) -> N
     """
     if "depth_summary" not in tables:
         logger.info(
-            "Pipeline: computing depth metrics ({} depth rows)", len(tables["depth"])
+            "Pipeline: building the depth summary ({} depth rows)", len(tables["depth"])
         )
-        tables["depth_summary"] = depth_metrics(
-            tables["depth"], bps=config.depth_bps, bins=config.depth_bins
+        tables["depth_summary"] = summarize_depth(
+            tables["depth"], depth_bps=config.depth_bps, depth_bins=config.depth_bins
         )
     tables["trades"] = _sign_unlabelled(tables["trades"], tables["depth_summary"])
     validate_trades_df(tables["trades"])  # data contract (schemas.py)
@@ -1009,7 +1014,7 @@ def _tick_signs(trades: pd.DataFrame, rows: np.ndarray) -> pd.DataFrame:
     if not rows.any():
         return trades
     direction = trades["direction"].copy()
-    direction[rows] = classify_trade_sign(trades, method="tick")[rows]
+    direction[rows] = classify_trade_sign(trades, sign_method="tick")[rows]
     return trades.assign(direction=direction)
 
 

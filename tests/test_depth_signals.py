@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ob_analytics.depth import book_imbalance, depth_signals, micro_price
+from ob_analytics.depth import book_imbalance, book_signals, micro_price
 from tests._drawn import drawn
 
 
@@ -115,13 +115,13 @@ class TestBookImbalance:
 
 class TestDepthSignals:
     def test_appends_expected_columns(self) -> None:
-        out = depth_signals(_summary())
+        out = book_signals(_summary())
         for col in ("mid_price", "micro_price", "obi", "obi_depth"):
             assert col in out.columns
 
     def test_preserves_existing_columns(self) -> None:
         df = _summary()
-        out = depth_signals(df)
+        out = book_signals(df)
         assert set(df.columns) <= set(out.columns)
         for col in df.columns:
             pd.testing.assert_series_equal(out[col], df[col])
@@ -129,22 +129,22 @@ class TestDepthSignals:
     def test_does_not_mutate_input(self) -> None:
         df = _summary()
         before = list(df.columns)
-        depth_signals(df)
+        book_signals(df)
         assert list(df.columns) == before
 
     def test_column_values_match_the_signal_functions(self) -> None:
-        out = depth_signals(_summary())
+        out = book_signals(_summary())
         assert out["mid_price"].iloc[0] == pytest.approx(100.5)
         assert out["micro_price"].iloc[0] == pytest.approx(100.8)
         assert out["obi"].iloc[0] == pytest.approx(0.6)
 
-    def test_depth_levels_clamped_to_available_bins(self) -> None:
+    def test_levels_clamped_to_available_bins(self) -> None:
         # Request more depth than exists (2 bins) -> clamp to levels=3, no error.
-        out = depth_signals(_summary(), depth_levels=99)
+        out = book_signals(_summary(), levels=99)
         assert out["obi_depth"].iloc[0] == pytest.approx(6.0 / 26.0)
 
     def test_edge_row_is_nan(self) -> None:
-        out = depth_signals(_summary())
+        out = book_signals(_summary())
         assert np.isnan(out["micro_price"].iloc[1])
         assert np.isnan(out["obi"].iloc[1])
         assert np.isnan(out["obi_depth"].iloc[1])
@@ -222,8 +222,8 @@ class TestUnreadableQuotesGiveNoMid:
     def test_micro_price_of_a_locked_book_is_its_price(self) -> None:
         assert micro_price(_unreadable_summary()).iloc[2] == pytest.approx(101.0)
 
-    def test_depth_signals_mids_skip_unreadable_rows(self) -> None:
-        out = depth_signals(_unreadable_summary())
+    def test_book_signals_mids_skip_unreadable_rows(self) -> None:
+        out = book_signals(_unreadable_summary())
         # Empty bid side and crossed book: no mid.  Locked and good: a mid.
         np.testing.assert_allclose(
             out["mid_price"], [np.nan, np.nan, 101.0, 100.5], equal_nan=True
@@ -232,9 +232,9 @@ class TestUnreadableQuotesGiveNoMid:
             out["micro_price"], [np.nan, np.nan, 101.0, 100.8], equal_nan=True
         )
 
-    def test_depth_signals_keeps_the_imbalance_of_an_empty_side(self) -> None:
+    def test_book_signals_keeps_the_imbalance_of_an_empty_side(self) -> None:
         # All the touch volume is on the ask: that is a true imbalance of -1.
-        assert depth_signals(_unreadable_summary())["obi"].iloc[0] == pytest.approx(-1)
+        assert book_signals(_unreadable_summary())["obi"].iloc[0] == pytest.approx(-1)
 
     def test_signals_face_draws_no_mid_for_unreadable_rows(self) -> None:
         from ob_analytics.visualization import prepare

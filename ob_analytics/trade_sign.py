@@ -5,7 +5,7 @@ ob-analytics gets true trade signs for free on L3 crypto: Bitstamp ships
 resolves maker vs taker and the trades frame carries a real ``direction``
 (the taker's aggressor side).  **L2 / aggregated feeds don't label the
 aggressor side** — and many CCXT sources don't either — so signed-flow
-analytics (:func:`~ob_analytics.flow_toxicity.compute_vpin`,
+analytics (:func:`~ob_analytics.flow_toxicity.vpin`,
 :func:`~ob_analytics.flow_toxicity.order_flow_imbalance`) have nothing to
 work with.
 
@@ -24,7 +24,7 @@ analytics work on every feed:
   VPIN-native method — it labels volume, not individual trades.
 
 :func:`classify_trade_sign` is the per-trade entry point (tick / Lee–Ready);
-:func:`~ob_analytics.flow_toxicity.compute_vpin` and
+:func:`~ob_analytics.flow_toxicity.vpin` and
 :func:`~ob_analytics.flow_toxicity.order_flow_imbalance` call it as a
 fallback when the trades frame has no native ``direction``.
 
@@ -48,6 +48,20 @@ from ob_analytics.depth import _BID_ASK_COLUMNS, _bid_ask_pair, readable_quotes
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.schemas import TRADE_SIDE_DTYPE, time_order_keys, validate_columns
 
+__all__ = [
+    "MAX_VOLUME_BUCKETS",
+    "bulk_volume_classification",
+    "check_bucket_count",
+    "classify_trade_sign",
+    "lee_ready",
+    "mid_before",
+    "prevailing_mid",
+    "quote_before",
+    "resolve_direction",
+    "tick_rule",
+    "volume_buckets",
+]
+
 _SQRT2 = sqrt(2.0)
 
 
@@ -62,7 +76,7 @@ def _unlabelled_trades(trades: pd.DataFrame) -> np.ndarray:
 
 
 #: Most volume buckets :func:`bulk_volume_classification` and
-#: :func:`~ob_analytics.flow_toxicity.compute_vpin` build.  Both hold every
+#: :func:`~ob_analytics.flow_toxicity.vpin` build.  Both hold every
 #: bucket in memory, so a ``bucket_volume`` far too small for the instrument
 #: would otherwise ask for hundreds of millions of buckets and run out of
 #: memory.  Fifty buckets a day for fifty years is under a million.
@@ -194,7 +208,7 @@ def lee_ready(
 
 def classify_trade_sign(
     trades: pd.DataFrame,
-    method: str = "lee_ready",
+    sign_method: str = "lee_ready",
     quotes: pd.DataFrame | None = None,
 ) -> pd.Series:
     """Classify the aggressor side of each trade.
@@ -208,15 +222,15 @@ def classify_trade_sign(
     ----------
     trades : pandas.DataFrame
         Trades with at least ``timestamp`` and ``price``.
-    method : str, optional
+    sign_method : str, optional
         ``"tick"`` (:func:`tick_rule`) or ``"lee_ready"``
         (:func:`lee_ready`, the default).  ``"bvc"`` is **not** a per-trade
         classifier — it labels volume bars; use
         :func:`bulk_volume_classification` or
-        :func:`~ob_analytics.flow_toxicity.compute_vpin` with
+        :func:`~ob_analytics.flow_toxicity.vpin` with
         ``sign_method="bvc"`` instead.
     quotes : pandas.DataFrame, optional
-        Required for ``method="lee_ready"``.  A quote frame with
+        Required for ``sign_method="lee_ready"``.  A quote frame with
         ``timestamp`` plus either a mid column (``mid`` / ``midprice`` /
         ``mid_price``) or a bid/ask pair (``best_bid_price`` /
         ``best_ask_price``, ``best_bid`` / ``best_ask``, or ``bid`` /
@@ -235,22 +249,27 @@ def classify_trade_sign(
     Raises
     ------
     ConfigError
-        If *method* is unknown, if ``"bvc"`` is requested here, if required
+        If *sign_method* is unknown, if ``"bvc"`` is requested here, if required
         columns are missing, or if ``lee_ready`` is requested without usable
         *quotes*.
         Also if *trades* is empty.
     """
     validate_non_empty(trades, "classify_trade_sign")
-    method = method.lower()
-    if method == "bvc":
+    if not isinstance(sign_method, str):
+        raise ConfigError(
+            f"classify_trade_sign: sign_method must be 'tick' or 'lee_ready', "
+            f"got {sign_method!r}."
+        )
+    sign_method = sign_method.lower()
+    if sign_method == "bvc":
         raise ConfigError(
             "classify_trade_sign: BVC labels volume bars, not individual "
             "trades. Use bulk_volume_classification() or "
-            "compute_vpin(..., sign_method='bvc')."
+            "vpin(..., sign_method='bvc')."
         )
-    if method not in {"tick", "lee_ready"}:
+    if sign_method not in {"tick", "lee_ready"}:
         raise ConfigError(
-            f"classify_trade_sign: unknown method {method!r}; "
+            f"classify_trade_sign: unknown sign_method {sign_method!r}; "
             "expected 'tick', 'lee_ready', or 'bvc'."
         )
     validate_columns(trades, {"timestamp", "price"}, "classify_trade_sign")
@@ -259,12 +278,12 @@ def classify_trade_sign(
     order = np.argsort(trades["timestamp"].to_numpy(), kind="stable")
     prices = trades["price"].to_numpy(dtype=np.float64)[order]
 
-    if method == "tick":
+    if sign_method == "tick":
         signs_sorted = tick_rule(prices)
     else:  # lee_ready
         if quotes is None:
             raise ConfigError(
-                "classify_trade_sign: method='lee_ready' requires quotes "
+                "classify_trade_sign: sign_method='lee_ready' requires quotes "
                 "(a frame with timestamp + mid or bid/ask columns)."
             )
         mid = mid_before(trades, quotes, "classify_trade_sign")
@@ -541,7 +560,7 @@ def _readable_mids(
     mid spellings, then to the average of a bid/ask pair.  Readability is
     tested on the bid/ask pair whenever the frame carries one, even when the
     value itself comes from a mid column: a frame can hold both
-    (:func:`~ob_analytics.depth.depth_signals` adds ``mid_price`` beside the
+    (:func:`~ob_analytics.depth.book_signals` adds ``mid_price`` beside the
     touch), and reading the mid from one column must not skip a test the
     other columns can answer.
     """
@@ -654,12 +673,12 @@ def resolve_direction(
     if sign_method == "bvc":
         raise ConfigError(
             f"{context}: sign_method='bvc' labels volume bars, not individual "
-            "trades, and is only supported by compute_vpin."
+            "trades, and is only supported by vpin."
         )
     if sign_method is not None:
         out = trades.copy()
         out["direction"] = classify_trade_sign(
-            trades, method=sign_method, quotes=quotes
+            trades, sign_method=sign_method, quotes=quotes
         )
         return out
 
@@ -685,7 +704,7 @@ def resolve_direction(
         out["direction"] = pd.Categorical(known, dtype=TRADE_SIDE_DTYPE)
         return out
 
-    inferred = classify_trade_sign(trades, method=method, quotes=quotes)
+    inferred = classify_trade_sign(trades, sign_method=method, quotes=quotes)
     out["direction"] = pd.Categorical(
         known.where(~unlabelled, inferred.astype(object)), dtype=TRADE_SIDE_DTYPE
     )
@@ -763,7 +782,7 @@ def volume_buckets(
     rest goes into the next one.  Only full buckets are returned, so the volume
     after the last full bucket is left out.  These are the volume bars of
     :func:`bulk_volume_classification` and
-    :func:`~ob_analytics.flow_toxicity.compute_vpin`.
+    :func:`~ob_analytics.flow_toxicity.vpin`.
 
     Parameters
     ----------
@@ -859,7 +878,7 @@ def bulk_volume_classification(
     """Split volume bars into buy / sell fractions (Easley–LdP–O'Hara BVC).
 
     Partitions cumulative trade volume into equal-sized *buckets* (the same
-    volume bars :func:`~ob_analytics.flow_toxicity.compute_vpin` uses; a
+    volume bars :func:`~ob_analytics.flow_toxicity.vpin` uses; a
     trade straddling a boundary is split proportionally) and estimates each
     bucket's buy fraction as
 
@@ -928,7 +947,7 @@ def _bulk_volume_classification(
 
     *sigma* is in the frame's price units.  *context* and *advice* go to
     :func:`volume_buckets`, so a caller such as
-    :func:`~ob_analytics.flow_toxicity.compute_vpin` reports a bad
+    :func:`~ob_analytics.flow_toxicity.vpin` reports a bad
     *bucket_volume* under its own name.
     """
     df = trades.sort_values("timestamp").reset_index(drop=True)

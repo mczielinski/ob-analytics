@@ -18,6 +18,12 @@ from ob_analytics import _engine_frames, engine
 from ob_analytics._utils import require_per_order_events
 from ob_analytics.schemas import validate_columns
 
+__all__ = [
+    "BookSnapshot",
+    "order_book",
+    "order_lifecycles",
+]
+
 # ---------------------------------------------------------------------------
 # Order lifecycles
 # ---------------------------------------------------------------------------
@@ -76,7 +82,7 @@ def order_lifecycles(events: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
-class OrderBookSnapshot(TypedDict):
+class BookSnapshot(TypedDict):
     """The order book at one instant, as :func:`order_book` returns it.
 
     A plain dictionary at run time; the type names its three fixed keys so
@@ -99,14 +105,14 @@ class OrderBookSnapshot(TypedDict):
 
 def order_book(
     events: pd.DataFrame,
-    tp: datetime | None = None,
+    at: datetime | None = None,
     max_levels: int | None = None,
     bps_range: int = 0,
     uncross: bool = False,
-) -> OrderBookSnapshot:
+) -> BookSnapshot:
     """Reconstruct the order book at a specific point in time.
 
-    The reconstruction itself is :func:`ob_analytics.engine.book_state`; this
+    The reconstruction itself is :func:`ob_analytics.engine.order_book`; this
     function is its frame adapter, and owns the display window (*max_levels*,
     *bps_range*) the engine has no opinion about.
 
@@ -114,7 +120,7 @@ def order_book(
     ----------
     events : pandas.DataFrame
         DataFrame containing order events.
-    tp : datetime.datetime or pandas.Timestamp, optional
+    at : datetime.datetime or pandas.Timestamp, optional
         The point in time at which to evaluate the order book.
         If None, uses the latest event timestamp in the data.
     max_levels : int, optional
@@ -137,7 +143,7 @@ def order_book(
 
     Returns
     -------
-    OrderBookSnapshot
+    BookSnapshot
         A dictionary containing:
         - 'timestamp': The evaluation timestamp.
         - 'asks': DataFrame of active ask orders.
@@ -166,14 +172,14 @@ def order_book(
     )
     require_per_order_events(events, "order_book")
 
-    if tp is None:
-        tp = events["timestamp"].max()
+    if at is None:
+        at = events["timestamp"].max()
 
     pct_range = bps_range * 0.0001
 
-    book = engine.book_state(
+    book = engine.order_book(
         _engine_frames.to_order_events(events, market=True),
-        at=_engine_frames.instant_ns(tp, like=events["timestamp"]),
+        at=_engine_frames.instant_ns(at, like=events["timestamp"]),
         uncross=uncross,
     )
 
@@ -195,4 +201,4 @@ def order_book(
         asks = asks.tail(max_levels).reset_index(drop=True)
         bids = bids.head(max_levels).reset_index(drop=True)
 
-    return {"timestamp": tp, "asks": asks, "bids": bids}
+    return {"timestamp": at, "asks": asks, "bids": bids}

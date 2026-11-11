@@ -42,6 +42,17 @@ if TYPE_CHECKING:
     from ob_analytics.pipeline import PipelineResult
     from ob_analytics.protocols import RunContext
 
+__all__ = [
+    "OutputTables",
+    "ParquetWriter",
+    "list_writers",
+    "load_data",
+    "load_result",
+    "load_writer_plugins",
+    "register_writer",
+    "save_data",
+]
+
 
 # ── Writer registry ───────────────────────────────────────────────────
 
@@ -407,7 +418,7 @@ def load_data(path: str | Path) -> dict[str, pd.DataFrame]:
 
 
 def save_data(
-    lob_data: PipelineResult | dict[str, pd.DataFrame],
+    data: PipelineResult | dict[str, pd.DataFrame],
     path: str | Path,
     *,
     fmt: str = "parquet",
@@ -420,7 +431,7 @@ def save_data(
 
     Parameters
     ----------
-    lob_data : PipelineResult or dict of str to pandas.DataFrame
+    data : PipelineResult or dict of str to pandas.DataFrame
         A pipeline result, or the DataFrames to save (keys become file
         stems).  A result is saved as its four tables, with its own config
         unless *config* is given, and with its declarations.
@@ -467,16 +478,16 @@ def save_data(
 
     p = Path(path)
     declarations = None
-    if isinstance(lob_data, PipelineResult):
+    if isinstance(data, PipelineResult):
         if config is None:
-            config = lob_data.config
-        declarations = lob_data.declarations
-        lob_data = lob_data.tables()
+            config = data.config
+        declarations = data.declarations
+        data = data.tables()
     # Every writer is handed the same payload: a mapping of pandas frames that
     # can also produce canonical Arrow (#216).  It is a dict, so a writer that
     # ignores the extra sees exactly what it saw before.
     tables = OutputTables(
-        lob_data,
+        data,
         tick_sizes=tick_sizes_from_config(config),
         lot_sizes=lot_sizes_from_config(config),
         config=config if isinstance(config, PipelineConfig) else None,

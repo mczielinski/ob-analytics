@@ -105,7 +105,7 @@ def tick_multiplier(tick_size: float) -> int | None:
     A tick such as ``0.01`` (``1/100``), ``0.05`` (``1/20``) or ``0.25``
     (``1/4``) has an exact integer inverse, so a price is converted to ticks by
     an integer multiply-and-round — the same operation
-    :class:`~ob_analytics.depth.DepthMetricsEngine` used internally before this
+    :class:`~ob_analytics.depth.DepthSummaryEngine` used internally before this
     change, so the tick integers reproduce it bit-for-bit.  A tick with no
     integer inverse returns ``None``; :func:`price_to_ticks` then divides.
     """

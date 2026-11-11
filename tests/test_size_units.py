@@ -19,9 +19,9 @@ from ob_analytics import (
     Pipeline,
     bars,
     bulk_volume_classification,
-    compute_vpin,
     features,
     register_bar_rule,
+    vpin,
     vpin_bucket_volume,
 )
 from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
@@ -98,7 +98,7 @@ def test_a_price_level_run_puts_them_on_every_frame_too(tmp_path) -> None:
 
 def test_the_three_vpin_calls_use_the_same_half_btc_buckets(sample, shown) -> None:
     from_metric = sample.metric("vpin", bucket_volume=0.5)
-    from_function = compute_vpin(sample.trades, bucket_volume=0.5)
+    from_function = vpin(sample.trades, bucket_volume=0.5)
     # What result.plot("vpin", bucket_volume=0.5) draws.
     from_plot = _metric_payload(get_metric("vpin"), sample, bucket_volume=0.5)[
         "vpin_df"
@@ -124,21 +124,21 @@ def test_result_plot_vpin_draws_with_a_size_in_btc(sample) -> None:
 
 def test_the_readme_vpin_example_runs(sample) -> None:
     # As the README shows it: 0.25 BTC buckets, about sixty on the sample.
-    vpin = compute_vpin(sample.trades, bucket_volume=0.25)
+    vpin_df = vpin(sample.trades, bucket_volume=0.25)
 
-    assert vpin.attrs["bucket_volume"] == 0.25
-    assert len(vpin) >= 50
+    assert vpin_df.attrs["bucket_volume"] == 0.25
+    assert len(vpin_df) >= 50
 
 
 def test_the_default_bucket_is_reported_in_btc(sample, shown) -> None:
     picked = vpin_bucket_volume(sample.trades)
 
     assert picked == pytest.approx(vpin_bucket_volume(shown.trades))
-    vpin = compute_vpin(sample.trades)
-    assert vpin.attrs["bucket_volume"] == pytest.approx(picked)
+    vpin_df = vpin(sample.trades)
+    assert vpin_df.attrs["bucket_volume"] == pytest.approx(picked)
     # The default round-trips: passing it back cuts the same buckets.
-    again = compute_vpin(sample.trades, bucket_volume=vpin.attrs["bucket_volume"])
-    assert len(again) == len(vpin)
+    again = vpin(sample.trades, bucket_volume=vpin_df.attrs["bucket_volume"])
+    assert len(again) == len(vpin_df)
 
 
 def test_bulk_volume_classification_buckets_are_in_btc(sample, shown) -> None:
@@ -212,8 +212,8 @@ def test_a_stoikov_correction_is_in_the_quote_currency(sample) -> None:
 @pytest.mark.parametrize(
     "call",
     [
-        lambda t: compute_vpin(t, bucket_volume=0.5),
-        lambda t: compute_vpin(t),
+        lambda t: vpin(t, bucket_volume=0.5),
+        lambda t: vpin(t),
         lambda t: vpin_bucket_volume(t),
         lambda t: bulk_volume_classification(t, 0.5),
         lambda t: bars(t, "volume", 0.5),

@@ -29,7 +29,7 @@ from ob_analytics.depth import (
     readable_quotes,
 )
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.flow_toxicity import OFI_HORIZONS, ofi_by_horizon
+from ob_analytics.flow_toxicity import OFI_WINDOWS, ofi_by_window
 from ob_analytics.pipeline import _UNSET
 from ob_analytics.protocols import Level
 from ob_analytics.schemas import validate_columns
@@ -708,7 +708,6 @@ def prepare_depth_heatmap_data(
 
 
 def prepare_hidden_liquidity_overlay(
-    icebergs: pd.DataFrame,
     slices: pd.DataFrame,
     hidden: pd.DataFrame,
     *,
@@ -717,11 +716,9 @@ def prepare_hidden_liquidity_overlay(
     price_from: float | None = None,
     price_to: float | None = None,
 ) -> dict[str, pd.DataFrame]:
-    """Clip iceberg refills and hidden trades to a face's display window (#272).
+    """Clip iceberg refills and hidden trades to a face's display window.
 
-    Joins :func:`~ob_analytics.hidden_liquidity.detect_icebergs`'s two frames
-    into one row per slice (``iceberg``, ``timestamp``, ``price``,
-    ``direction``, ``confidence``), then clips it and
+    Clips :func:`~ob_analytics.hidden_liquidity.iceberg_slices`'s rows and
     :func:`~ob_analytics.hidden_liquidity.hidden_trades`'s output to
     *start_time*/*end_time*/*price_from*/*price_to* -- the same window the
     depth heatmap and order-activity map already clip to, so a full day's
@@ -730,9 +727,8 @@ def prepare_hidden_liquidity_overlay(
 
     Parameters
     ----------
-    icebergs, slices : pandas.DataFrame
-        :attr:`~ob_analytics.hidden_liquidity.IcebergDetection.icebergs` and
-        ``.slices``.
+    slices : pandas.DataFrame
+        Output of :func:`~ob_analytics.hidden_liquidity.iceberg_slices`.
     hidden : pandas.DataFrame
         Output of :func:`~ob_analytics.hidden_liquidity.hidden_trades`.
 
@@ -757,18 +753,7 @@ def prepare_hidden_liquidity_overlay(
             df = df[df[price_col] <= price_to]
         return df
 
-    chain = _clip(
-        slices.merge(
-            icebergs[["iceberg", "direction", "price", "confidence"]],
-            on="iceberg",
-            how="left",
-            # icebergs has exactly one row per iceberg id by construction; a
-            # detect_icebergs regression that broke that would otherwise fan
-            # out rows silently instead of raising.
-            validate="many_to_one",
-        ),
-        "price",
-    )
+    chain = _clip(slices, "price")
     counts = chain.groupby("iceberg")["slice"].transform("size")
     iceberg_lines = chain[counts >= 2].sort_values(["iceberg", "timestamp"])
     iceberg_refills = chain[chain["slice"] > 1]
@@ -2163,7 +2148,7 @@ def prepare_book_replay_data(
 
         # Uncross before the price range is chosen, so the range follows the
         # mid of the book the frames show.
-        books = [order_book(table, tp=t, uncross=uncross) for t in instants]
+        books = [order_book(table, at=t, uncross=uncross) for t in instants]
     else:
         books = price_level_snapshots(table, instants)
 
@@ -2661,45 +2646,45 @@ def prepare_order_flow_imbalance_data(
     }
 
 
-def prepare_ofi_horizon_data(
+def prepare_ofi_by_window_data(
     trades: pd.DataFrame,
     *,
-    horizons: tuple[str, ...] = OFI_HORIZONS,
+    windows: tuple[str, ...] = OFI_WINDOWS,
     grid: str = "5s",
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
     level: Level | str | None = _UNSET,
 ) -> dict[str, Any]:
-    """Multi-horizon order-flow-imbalance grid for the OFI horizon graph.
+    """Order flow imbalance over several trailing windows, for the horizon graph.
 
-    A single OFI line shows one lookback; this computes OFI at several
-    *horizons* on one *grid* (:func:`~ob_analytics.flow_toxicity.ofi_by_horizon`)
-    from the trades between *start_time* and *end_time*, so short- vs
-    long-horizon pressure can be compared at a glance.  Each row is a horizon;
+    A single OFI line shows one window; this computes OFI over several trailing
+    *windows* on one *grid* (:func:`~ob_analytics.flow_toxicity.ofi_by_window`)
+    from the trades between *start_time* and *end_time*, so pressure over short
+    and long windows can be compared at a glance.  Each row is a window;
     the value is OFI in ``[-1, +1]`` (buy pressure positive), rendered as a
     stacked horizon-graph band per row.
 
-    Returns ``ofi`` (a ``len(horizons)`` x ``n_grid`` array, longest horizon
-    last so it plots at the top), ``times`` (grid timestamps), ``horizons``,
+    Returns ``ofi`` (a ``len(windows)`` x ``n_grid`` array, longest window
+    last so it plots at the top), ``times`` (grid timestamps), ``windows``,
     and the fill of each colour band: ``band_alphas``, ``buy_bands`` and
     ``sell_bands``, the height of each band as a fraction of its row.
     """
-    resolve_level("ofi_horizon", level)
+    resolve_level("ofi_by_window", level)
     start_time, end_time = _default_start_end(trades, start_time, end_time)
     tr = trades[(trades["timestamp"] >= start_time) & (trades["timestamp"] <= end_time)]
     if tr.empty:
         return {
             "ofi": np.empty((0, 0)),
             "times": np.array([], dtype="datetime64[ns]"),
-            "horizons": list(horizons),
+            "windows": list(windows),
             **_horizon_bands(np.empty((0, 0))),
         }
-    return prepare_ofi_horizon_grid_data(
-        ofi_by_horizon(tr, horizons=horizons, grid=grid)
+    return prepare_ofi_by_window_grid_data(
+        ofi_by_window(tr, windows=windows, grid=grid)
     )
 
 
-def prepare_ofi_horizon_grid_data(
+def prepare_ofi_by_window_grid_data(
     grid: pd.DataFrame,
     *,
     start_time: pd.Timestamp | None = None,
@@ -2707,19 +2692,19 @@ def prepare_ofi_horizon_grid_data(
 ) -> dict[str, Any]:
     """The OFI horizon graph payload from an already computed grid.
 
-    *grid* is a :func:`~ob_analytics.flow_toxicity.ofi_by_horizon` table:
-    ``timestamp`` and one column per horizon.  Returns the same payload as
-    :func:`prepare_ofi_horizon_data`, for the grid steps between *start_time*
+    *grid* is a :func:`~ob_analytics.flow_toxicity.ofi_by_window` table:
+    ``timestamp`` and one column per window.  Returns the same payload as
+    :func:`prepare_ofi_by_window_data`, for the grid steps between *start_time*
     and *end_time*.
     """
     start_time, end_time = _default_start_end(grid, start_time, end_time)
     rows = grid[(grid["timestamp"] >= start_time) & (grid["timestamp"] <= end_time)]
-    horizons = [c for c in grid.columns if c != "timestamp"]
-    ofi = rows[horizons].to_numpy(dtype=float).T.reshape(len(horizons), -1)
+    windows = [c for c in grid.columns if c != "timestamp"]
+    ofi = rows[windows].to_numpy(dtype=float).T.reshape(len(windows), -1)
     return {
         "ofi": ofi,
         "times": pd.DatetimeIndex(rows["timestamp"]).to_numpy(),
-        "horizons": horizons,
+        "windows": windows,
         **_horizon_bands(ofi),
     }
 

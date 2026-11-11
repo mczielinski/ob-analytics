@@ -975,7 +975,7 @@ class TestSequenceReachesTheOutput:
             out / "orders.csv"
         )
         report = detect_sequence_gaps(events)
-        assert report.n_missing == 1  # sequence 42 never arrived
+        assert report.attrs["n_missing"] == 1  # sequence 42 never arrived
 
 
 class TestSequenceDiagnostics:

@@ -72,7 +72,7 @@ Two groups of tables exist.
 | `events.parquet` | the loader + `set_order_types` | one order event (add / change / delete) |
 | `trades.parquet` | the trade reader | one execution (a trade print) |
 | `depth.parquet` | `price_level_volume` | one price level's size after a change |
-| `depth_summary.parquet` | `depth_metrics` | the reconstructed book state at one event |
+| `depth_summary.parquet` | `summarize_depth` | the reconstructed book state at one event |
 
 **Derived records** — engine output computed on demand from `events`. They are
 not written by default, but they follow a fixed shape and you can save them with
@@ -110,7 +110,7 @@ carries them — the venue `sequence`, then `event_id` (the dense per-order key 
 the L3 path), then the local `ingest_seq`.
 [`ob_analytics.schemas.time_order_keys`](api/schemas.md) returns this key list
 for a frame. The per-order reconstructions (`queue_positions`, `order_book`)
-and the price-level depth engine (`price_level_volume`, `depth_metrics`) all
+and the price-level depth engine (`price_level_volume`, `summarize_depth`) all
 replay events in this order, and every loader builds its frame with fixed,
 stable sorts, so a rebuild is deterministic run-to-run. On a price-level (L2)
 feed there is no `event_id`; ties there fall to `sequence` / `ingest_seq` when
@@ -352,7 +352,7 @@ loader yields this frame directly with the same four required columns.
 
 ## depth_summary (book states)
 
-Output of `depth_metrics`. One row per depth event, holding the reconstructed
+Output of `summarize_depth`. One row per depth event, holding the reconstructed
 best bid and offer plus cumulative resting volume in basis-point bins on each
 side. This is the reconstructed book state over time. Rows are in the
 [same-instant order](#same-instant-order), and each row is the book after the
@@ -375,7 +375,7 @@ The bin columns depend on configuration. With the defaults (`depth_bps = 25`,
 holds the volume in that bps slice of the book.
 
 \* `event_id` is always present on a standard pipeline run, which feeds L3 depth
-carrying it. It is omitted only if you call `depth_metrics` on a depth frame
+carrying it. It is omitted only if you call `summarize_depth` on a depth frame
 without an `event_id` column.
 
 ## Order lifecycles

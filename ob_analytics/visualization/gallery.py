@@ -36,6 +36,7 @@ from ob_analytics._utils import (
 )
 from ob_analytics.depth import get_spread
 from ob_analytics.exceptions import ConfigError, UnknownNameError
+from ob_analytics.flow_toxicity import OFI_WINDOWS
 from ob_analytics.pipeline import _UNSET, PipelineResult
 from ob_analytics.protocols import Level
 from ob_analytics.visualization import (
@@ -54,6 +55,21 @@ from ob_analytics.visualization._renderers import (
     _load_backend,
     _same_kind,
 )
+
+__all__ = [
+    "GalleryModel",
+    "PlotConcept",
+    "PlotSpec",
+    "available_concepts",
+    "bars_card",
+    "build_gallery_model",
+    "display_result",
+    "generate_gallery",
+    "kyle_lambda_card",
+    "ofi_by_window_card",
+    "plot_result",
+    "trading_halts_card",
+]
 
 #: Views recognised by :func:`generate_gallery` / :func:`_project`.
 VIEWS = ("l2", "l3", "both", "comparison")
@@ -212,7 +228,7 @@ def _metric_payload(metric: Any, result: PipelineResult, **settings: Any) -> dic
 
 #: Settings the gallery picks for a metric in place of the metric's defaults.
 #: VPIN's default bucket (a day's volume ÷ 50) fills one bucket on a capture
-#: of half an hour, so the gallery has ``compute_vpin`` fit it to the capture.
+#: of half an hour, so the gallery has ``vpin`` fit it to the capture.
 _GALLERY_SETTINGS: dict[str, dict[str, Any]] = {"vpin": {"bucket_volume": "fit"}}
 
 
@@ -387,8 +403,8 @@ def _hidden_liquidity_overlay(
         return {}
     try:
         from ob_analytics.hidden_liquidity import (
-            detect_icebergs,
             hidden_trades as find_hidden_trades,
+            iceberg_slices,
         )
 
         # Detected on raw ticks (exact price equality), then its own price
@@ -397,16 +413,16 @@ def _hidden_liquidity_overlay(
         # draws over. Legacy-safe like display_result()'s own _scale: only an
         # integer (tick) column is converted, so a pre-tick result whose
         # events/trades already carry display-unit floats is not scaled twice.
-        detection = detect_icebergs(raw_result.events, raw_result.trades)
+        slices = iceberg_slices(raw_result.events, raw_result.trades)
         hidden = find_hidden_trades(
             raw_result.events, raw_result.trades, raw_result.depth_summary
         )
         tick_size = getattr(raw_result.config, "tick_size", 1.0)
         decimals = getattr(raw_result.config, "price_decimals", None)
 
-        icebergs_display = detection.icebergs.assign(
+        slices_display = slices.assign(
             price=ticks_to_price_if_integer(
-                detection.icebergs["price"], tick_size, decimals=decimals
+                slices["price"], tick_size, decimals=decimals
             )
         )
         hidden_display = hidden.assign(
@@ -421,8 +437,7 @@ def _hidden_liquidity_overlay(
             ),
         )
         return _viz_data.prepare_hidden_liquidity_overlay(
-            icebergs_display,
-            detection.slices,
+            slices_display,
             hidden_display,
             start_time=zoom_start,
             end_time=zoom_end,
@@ -650,17 +665,17 @@ def available_concepts(result: PipelineResult) -> dict[str, list[str]]:
     return {**concepts, **{spec.name: [] for spec in model.analytics}}
 
 
-def bars_card(bars_df: pd.DataFrame, *, label: str = "") -> PlotSpec:
+def bars_card(bars: pd.DataFrame, *, label: str = "") -> PlotSpec:
     """Build a bars card for :attr:`GalleryModel.analytics`.
 
-    *bars_df* is a table from :func:`ob_analytics.bars.bars`.  *label* names
+    *bars* is a table from :func:`ob_analytics.bars.bars`.  *label* names
     the rule and threshold it was cut with and is shown in the chart title;
     the default reads them off the frame.  Prices are drawn as they arrive, so
     cut the bars from a display-unit trades frame (see :func:`display_result`)
     when the rest of the gallery is in the quote currency.
     """
-    label = label or _viz_data.bars_label(bars_df)
-    rule = bars_df.attrs.get("bar_rule")
+    label = label or _viz_data.bars_label(bars)
+    rule = bars.attrs.get("bar_rule")
     return PlotSpec(
         # The file stem, so two cuts of the same trades do not overwrite each
         # other's image; the concept both of them draw under is "bars".
@@ -668,27 +683,27 @@ def bars_card(bars_df: pd.DataFrame, *, label: str = "") -> PlotSpec:
         f"Bars ({label})" if label else "Bars",
         "bars",
         _viz_data.prepare_bars_data,
-        {"bars": bars_df, "label": label},
+        {"bars": bars, "label": label},
     )
 
 
-def ofi_horizon_card(
+def ofi_by_window_card(
     trades: pd.DataFrame,
     *,
-    horizons: tuple[str, ...] = ("5s", "15s", "60s", "300s"),
+    windows: tuple[str, ...] = OFI_WINDOWS,
     grid: str = "5s",
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
 ) -> PlotSpec:
-    """Build an OFI-vs-horizon card for :attr:`GalleryModel.analytics` (one band per horizon)."""
+    """Build an OFI-by-window card for :attr:`GalleryModel.analytics` (one band per window)."""
     return PlotSpec(
-        "ofi_horizon",
-        "Order Flow Imbalance vs Horizon",
-        "ofi_horizon",
-        _viz_data.prepare_ofi_horizon_data,
+        "ofi_by_window",
+        "Order Flow Imbalance by Window",
+        "ofi_by_window",
+        _viz_data.prepare_ofi_by_window_data,
         {
             "trades": trades,
-            "horizons": horizons,
+            "windows": windows,
             "grid": grid,
             "start_time": start_time,
             "end_time": end_time,

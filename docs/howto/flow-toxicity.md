@@ -14,7 +14,7 @@ display-unit frame give the same numbers.
 ## VPIN
 
 ```python
-from ob_analytics import Pipeline, compute_vpin, sample_csv_path
+from ob_analytics import Pipeline, vpin, sample_csv_path
 from ob_analytics.visualization import plot, save_figure, prepare
 
 result = Pipeline().run(sample_csv_path())
@@ -22,19 +22,19 @@ result = Pipeline().run(sample_csv_path())
 # About 60 buckets: enough to fill the 50-bucket trailing window.
 # The trades store whole lots; lot_size turns their total into BTC.
 total = result.trades["volume"].sum() * result.config.lot_size
-vpin = compute_vpin(result.trades, bucket_volume=total / 60)
-fig = plot("vpin", **prepare.vpin(vpin, threshold=0.7))
+vpin_df = vpin(result.trades, bucket_volume=total / 60)
+fig = plot("vpin", **prepare.vpin(vpin_df, threshold=0.7))
 save_figure(fig, "vpin.png")
 ```
 
 `bucket_volume` is in the instrument's own units: BTC on the Bitstamp sample,
 shares or contracts elsewhere. A pipeline result stores sizes as whole lots
-(the size is `lots × lot_size`), and `compute_vpin` reads the lot size from
+(the size is `lots × lot_size`), and `vpin` reads the lot size from
 the trades' `attrs`, so `bucket_volume=0.5` means 0.5 BTC on `result.trades`
 and on [`display_result(result).trades`](../api/gallery.md#ob_analytics.visualization.gallery.display_result) alike.
 Trades with integer sizes and no `attrs["lot_size"]` (a frame you built
 yourself) raise `ConfigError`: set the lot size on the frame, or pass float
-sizes. [Short captures](#short-captures) explains the 60. `compute_vpin`
+sizes. [Short captures](#short-captures) explains the 60. `vpin`
 raises `ConfigError` when the bucket would cut the trades into more than
 [`MAX_VOLUME_BUCKETS`](../api/trade_sign.md#ob_analytics.trade_sign.MAX_VOLUME_BUCKETS)
 (one million) buckets.
@@ -48,18 +48,18 @@ the 24-hour default for a capture that runs over several days, since the span
 it divides by then includes the closed hours:
 
 ```python
-from ob_analytics import compute_vpin, vpin_bucket_volume
+from ob_analytics import vpin, vpin_bucket_volume
 
-vpin = compute_vpin(result.trades)
-print(vpin.attrs["bucket_volume"], vpin.attrs["bucket_volume_rule"])
+vpin_df = vpin(result.trades)
+print(vpin_df.attrs["bucket_volume"], vpin_df.attrs["bucket_volume_rule"])
 
 bucket = vpin_bucket_volume(result.trades, trading_day="6.5h")
-vpin = compute_vpin(result.trades, bucket_volume=bucket)
+vpin_df = vpin(result.trades, bucket_volume=bucket)
 ```
 
 The frame's `attrs` also hold `n_buckets` and `diagnostics`. When there are
 fewer complete buckets than `n_buckets`, `vpin_avg` is never a full trailing
-average, `diagnostics` says so, and `compute_vpin` raises a `UserWarning`. An
+average, `diagnostics` says so, and `vpin` raises a `UserWarning`. An
 empty `diagnostics` tuple means no problem was found.
 
 ### Short captures
@@ -67,15 +67,15 @@ empty `diagnostics` tuple means no problem was found.
 The default `bucket_volume` (average daily volume ÷ 50) assumes a capture
 that runs close to a full day. The bundled sample covers about 30 minutes, so
 the default rule scales that up to a day and picks a bucket almost as large
-as the whole capture (96% of its volume) — `compute_vpin` fills one bucket and
+as the whole capture (96% of its volume) — `vpin` fills one bucket and
 stops:
 
 ```python
-from ob_analytics import Pipeline, compute_vpin, sample_csv_path
+from ob_analytics import Pipeline, vpin, sample_csv_path
 
 result = Pipeline().run(sample_csv_path())
-vpin = compute_vpin(result.trades)
-len(vpin)                      # 1, with a UserWarning explaining why
+vpin_df = vpin(result.trades)
+len(vpin_df)                      # 1, with a UserWarning explaining why
 ```
 
 Pass a `bucket_volume` sized to the capture instead of the default. Dividing
@@ -85,8 +85,8 @@ fills a whole trailing window:
 
 ```python
 total = result.trades["volume"].sum() * result.config.lot_size
-vpin = compute_vpin(result.trades, bucket_volume=total / 60)
-len(vpin)                      # a full series, no warning
+vpin_df = vpin(result.trades, bucket_volume=total / 60)
+len(vpin_df)                      # a full series, no warning
 ```
 
 Or pass `bucket_volume="fit"`, as the gallery does. It keeps the default when
@@ -94,17 +94,17 @@ that fills `n_buckets` buckets. Otherwise each bucket is the total volume ÷
 (2 × `n_buckets`), and `attrs["bucket_volume_rule"]` says `"total/100"`:
 
 ```python
-vpin = compute_vpin(result.trades, bucket_volume="fit")
-len(vpin)                      # about 100 buckets on the sample, no warning
+vpin_df = vpin(result.trades, bucket_volume="fit")
+len(vpin_df)                      # about 100 buckets on the sample, no warning
 ```
 
 ## Kyle's lambda
 
 ```python
-from ob_analytics import compute_kyle_lambda
+from ob_analytics import kyle_lambda
 from ob_analytics.visualization import plot, save_figure, prepare
 
-kyle = compute_kyle_lambda(result.trades, window="5min")
+kyle = kyle_lambda(result.trades, window="5min")
 print(f"λ={kyle.lambda_:.6f}, t={kyle.t_stat:.2f}, R²={kyle.r_squared:.3f}")
 print(f"95% interval: [{kyle.ci_low:.6f}, {kyle.ci_high:.6f}]")
 if not kyle.significant:
@@ -143,7 +143,7 @@ split with a [trade-sign classifier](../api/trade_sign.md) when `direction`
 is absent, and all three take the same `sign_method` and `quotes`:
 
 ```python
-from ob_analytics import compute_kyle_lambda, compute_vpin, order_flow_imbalance
+from ob_analytics import kyle_lambda, vpin, order_flow_imbalance
 
 # A trades frame with no aggressor side, such as an L2 capture's.
 l2_trades = result.trades.drop(columns=["direction"])
@@ -152,21 +152,21 @@ l2_trades = result.trades.drop(columns=["direction"])
 bucket = l2_trades["volume"].sum() * result.config.lot_size / 60
 
 # No `direction` column → tick rule by default.
-vpin = compute_vpin(l2_trades, bucket_volume=bucket)
+vpin_df = vpin(l2_trades, bucket_volume=bucket)
 
 # Lee–Ready: pass quotes (e.g. the pipeline's depth_summary — it carries
 # best_bid_price / best_ask_price).
-vpin = compute_vpin(
+vpin_df = vpin(
     l2_trades, bucket_volume=bucket,
     sign_method="lee_ready", quotes=result.depth_summary,
 )
 
 # BVC (bulk volume classification) — the VPIN-native estimator; needs no
 # per-trade sign at all.
-vpin = compute_vpin(l2_trades, bucket_volume=bucket, sign_method="bvc")
+vpin_df = vpin(l2_trades, bucket_volume=bucket, sign_method="bvc")
 
 ofi = order_flow_imbalance(l2_trades, window="1min", sign_method="tick")
-kyle = compute_kyle_lambda(
+kyle = kyle_lambda(
     l2_trades, window="5min", sign_method="lee_ready", quotes=result.depth_summary
 )
 ```

@@ -191,7 +191,7 @@ def _book_levels_at(
     events: pd.DataFrame, at: pd.Timestamp
 ) -> dict[tuple[str, int], int]:
     """The per-order book at *at*, summed by price level."""
-    book = order_book(events, tp=at)
+    book = order_book(events, at=at)
     levels: dict[tuple[str, int], int] = {}
     for side, direction in (("bids", "bid"), ("asks", "ask")):
         for price, volume in zip(book[side]["price"], book[side]["volume"]):

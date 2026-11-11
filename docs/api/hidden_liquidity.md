@@ -16,12 +16,10 @@ and the measured recall and precision, and
 
 ::: ob_analytics.hidden_liquidity.detect_icebergs
 
+::: ob_analytics.hidden_liquidity.iceberg_slices
+
 ::: ob_analytics.hidden_liquidity.ICEBERG_MAX_DELAY
 
 ## Trades against hidden orders
 
 ::: ob_analytics.hidden_liquidity.hidden_trades
-
-## Models
-
-::: ob_analytics.hidden_liquidity.IcebergDetection

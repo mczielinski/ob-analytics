@@ -137,7 +137,7 @@ class Scene:
         """The book at ``zoom_end`` rebuilt from the events, or ``None``."""
         if not self.classified:
             return None
-        return order_book(self.events, tp=self.zoom_end)
+        return order_book(self.events, at=self.zoom_end)
 
     @property
     def snapshot_label(self) -> str:
@@ -611,7 +611,7 @@ CONCEPTS: tuple[Concept, ...] = (
             "vpin",
             "order_flow_imbalance",
             "transaction_costs",
-            "ofi_horizon",
+            "ofi_by_window",
             "kyle_lambda",
             "trading_halts",
         )

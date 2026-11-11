@@ -44,7 +44,7 @@ from ob_analytics.visualization.gallery import (
     display_result,
     generate_gallery,
     kyle_lambda_card,
-    ofi_horizon_card,
+    ofi_by_window_card,
     trading_halts_card,
 )
 from tests import _lobster_few_levels as few
@@ -1125,9 +1125,9 @@ def _draw(card: PlotSpec):
 
 
 class TestCardBuilders:
-    def test_ofi_horizon_card_draws_a_band_for_each_horizon(self, result) -> None:
-        card = ofi_horizon_card(display_result(result).trades, horizons=("5s", "15s"))
-        assert card.title == "Order Flow Imbalance vs Horizon"
+    def test_ofi_by_window_card_draws_a_band_for_each_window(self, result) -> None:
+        card = ofi_by_window_card(display_result(result).trades, windows=("5s", "15s"))
+        assert card.title == "Order Flow Imbalance by Window"
         fig = _draw(card)
         assert {t.get_text().strip() for t in fig.axes[0].texts} >= {"5s", "15s"}
         assert drawn(fig)["fillbetweenpolycollection"] > 0
@@ -1135,10 +1135,10 @@ class TestCardBuilders:
     def test_kyle_lambda_card_names_lambda_in_its_title(
         self, bundled_sample_result
     ) -> None:
-        from ob_analytics.flow_toxicity import compute_kyle_lambda
+        from ob_analytics.flow_toxicity import kyle_lambda
 
         shown = display_result(bundled_sample_result)
-        fit = compute_kyle_lambda(shown.trades, quotes=shown.depth_summary)
+        fit = kyle_lambda(shown.trades, quotes=shown.depth_summary)
         card = kyle_lambda_card(fit)
         assert card.title == f"Kyle's Lambda (lambda={fit.lambda_:.4f})"
         # A point for each window in the regression.

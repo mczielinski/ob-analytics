@@ -136,7 +136,7 @@ fig.tight_layout()
 # | What traded? | `trade_tape`, `trade_size`, `events_histogram` | [1](01_from_price_to_book.md) |
 # | How much liquidity, and where? | `volume_percentiles`, `liquidity_at_touch`, `price_view` | [5](05_depth.md) |
 # | Who placed, waited, cancelled, filled? | `order_activity`, `order_outcome`, `queue_position`, `cancellations` | [2](02_three_resolutions.md), [4](04_lifecycles.md) |
-# | What do measurements of the run show? | `l1_ticker`, `vpin`, `kyle_lambda`, `order_flow_imbalance`, `ofi_horizon` | [1](01_from_price_to_book.md), [6](06_flow_toxicity.md) |
+# | What do measurements of the run show? | `l1_ticker`, `vpin`, `kyle_lambda`, `order_flow_imbalance`, `ofi_by_window` | [1](01_from_price_to_book.md), [6](06_flow_toxicity.md) |
 #
 # The last row is the **metrics**. A metric is computed from the
 # finished run, not read straight off it, and it has no resolution:

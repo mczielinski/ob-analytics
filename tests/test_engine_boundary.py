@@ -181,9 +181,9 @@ def _stream() -> OrderEvents:
 class TestEngineInterface:
     """Arrays in, arrays out — no pandas object crosses the boundary."""
 
-    def test_book_state_reports_rows_and_derived_columns(self) -> None:
+    def test_order_book_reports_rows_and_derived_columns(self) -> None:
         events = _stream()
-        book = engine.book_state(events, at=events.timestamp[-1])
+        book = engine.order_book(events, at=events.timestamp[-1])
 
         # A filled and a cancelled order have left; only C is still resting.
         assert len(book.bids) == 0
@@ -194,9 +194,9 @@ class TestEngineInterface:
         assert book.asks.liquidity.tolist() == [7.0]
         assert book.asks.bps.tolist() == [0.0]  # the touch is its own reference
 
-    def test_book_state_is_a_point_in_time(self) -> None:
+    def test_order_book_is_a_point_in_time(self) -> None:
         events = _stream()
-        early = engine.book_state(events, at=events.timestamp[1])
+        early = engine.order_book(events, at=events.timestamp[1])
         assert events.order_id[early.bids.row].tolist() == [1, 2]
         assert early.bids.liquidity.tolist() == [5.0, 8.0]
 

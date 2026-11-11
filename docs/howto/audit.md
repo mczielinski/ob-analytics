@@ -276,7 +276,7 @@ print(summary.render())
 summary.ok            # False when an error-severity check failed
 summary.errors        # the failed error checks, each with a one-line detail
 summary.warnings      # the failed warning checks
-summary.stale_orders  # StaleOrder records, worst first
+summary.stale_orders  # one row per stale order, worst first
 summary.to_dict()     # JSON-serialisable, including every check
 ```
 

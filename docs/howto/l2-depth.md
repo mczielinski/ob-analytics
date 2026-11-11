@@ -121,7 +121,7 @@ result.events            # empty — the per-order stages did not run
 ## What you get — and what's skipped
 
 The depth analytics run exactly as they do for L3, because
-`DepthMetricsEngine` already consumes an absolute price-level book:
+`DepthSummaryEngine` already consumes an absolute price-level book:
 
 ```python
 from ob_analytics.depth import get_spread
@@ -180,9 +180,9 @@ snapshot + delta stream — the L2 counterpart to `toy_events` / `toy_trades`:
 
 ```python
 from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
-from ob_analytics.depth import depth_metrics, get_spread
+from ob_analytics.depth import summarize_depth, get_spread
 
-summary = depth_metrics(toy_l2_depth())
+summary = summarize_depth(toy_l2_depth())
 get_spread(summary)
 ```
 

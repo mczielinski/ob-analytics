@@ -17,13 +17,10 @@ from typing import Any
 
 import pandas as pd
 
+from ob_analytics import flow_toxicity
 from ob_analytics.book import order_book
 from ob_analytics.cost import transaction_costs
 from ob_analytics.depth import get_spread
-from ob_analytics.flow_toxicity import (
-    compute_kyle_lambda,
-    compute_vpin,
-)
 from ob_analytics.visualization import busiest_window, plot, prepare
 
 
@@ -59,14 +56,14 @@ def depth_heatmap(result):
 def book_snapshot(result):
     """The bid/ask book at a single timestamp, one bar per resting order (L3)."""
     tp = result.events["timestamp"].iloc[0] + pd.Timedelta(minutes=10)
-    snap = order_book(result.events, tp=tp)
+    snap = order_book(result.events, at=tp)
     return plot("book_snapshot", level="L3", **prepare.book_snapshot(snap, level="L3"))
 
 
 def depth_chart(result):
     """Cumulative resting volume by price, bids left, asks right."""
     tp = result.events["timestamp"].iloc[0] + pd.Timedelta(minutes=10)
-    snap = order_book(result.events, tp=tp)
+    snap = order_book(result.events, at=tp)
     return plot("depth_chart", level="L2", **prepare.book_snapshot(snap, level="L2"))
 
 
@@ -150,7 +147,7 @@ def vpin(result):
     # 50-bucket window would never fill on a 30-minute sample.
     # The trades store whole lots; lot_size turns their total into BTC.
     total = result.trades["volume"].sum() * result.config.lot_size
-    v = compute_vpin(result.trades, bucket_volume=total / 20, n_buckets=10)
+    v = flow_toxicity.vpin(result.trades, bucket_volume=total / 20, n_buckets=10)
     return plot("vpin", **prepare.vpin(v, threshold=0.7))
 
 
@@ -160,7 +157,7 @@ def kyle_lambda(result):
     # cloud around the fit rather than a bare line.
     return plot(
         "kyle_lambda",
-        **prepare.kyle_lambda(compute_kyle_lambda(result.trades, window="1min")),
+        **prepare.kyle_lambda(flow_toxicity.kyle_lambda(result.trades, window="1min")),
     )
 
 

@@ -1,6 +1,6 @@
 """Tests for the protocol-satisfying classes.
 
-Covers BitstampLoader and DepthMetricsEngine with synthetic data.
+Covers BitstampLoader and DepthSummaryEngine with synthetic data.
 """
 
 from pathlib import Path
@@ -10,7 +10,7 @@ import pytest
 
 from ob_analytics.bitstamp import BitstampLoader
 from ob_analytics.config import PipelineConfig
-from ob_analytics.depth import DepthMetricsEngine
+from ob_analytics.depth import DepthSummaryEngine
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
 from ob_analytics.protocols import EventLoader
 
@@ -75,9 +75,9 @@ class TestBitstampLoader:
         assert fine["price"].iloc[0] == 2_365_000
 
 
-class TestDepthMetricsEngine:
+class TestDepthSummaryEngine:
     def test_compute_returns_correct_shape(self, tiny_depth):
-        engine = DepthMetricsEngine()
+        engine = DepthSummaryEngine()
         result = engine.compute(tiny_depth)
         assert len(result) == len(tiny_depth)
         assert "timestamp" in result.columns
@@ -86,7 +86,7 @@ class TestDepthMetricsEngine:
 
     def test_compute_column_count(self, tiny_depth):
         config = PipelineConfig(depth_bins=5)
-        engine = DepthMetricsEngine(config)
+        engine = DepthSummaryEngine(config)
         result = engine.compute(tiny_depth)
         expected_cols = 1 + 2 * (
             2 + 5
@@ -94,7 +94,7 @@ class TestDepthMetricsEngine:
         assert len(result.columns) == expected_cols
 
     def test_best_prices_populated(self, tiny_depth):
-        engine = DepthMetricsEngine()
+        engine = DepthSummaryEngine()
         result = engine.compute(tiny_depth)
         assert result["best_bid_price"].iloc[-1] > 0
         assert result["best_ask_price"].iloc[-1] > 0
@@ -118,7 +118,7 @@ class TestDepthMetricsEngine:
                 ),
             }
         )
-        result = DepthMetricsEngine().compute(depth)
+        result = DepthSummaryEngine().compute(depth)
         # After the second bid (101 > 100), best_bid_vol must be 7, not stale 5
         assert result["best_bid_vol"].iloc[-1] == 7
 
@@ -137,7 +137,7 @@ class TestDepthMetricsEngine:
                 ),
             }
         )
-        result = DepthMetricsEngine().compute(depth)
+        result = DepthSummaryEngine().compute(depth)
         # best bid should be max(100, 102) = 102
         assert result["best_bid_price"].iloc[-1] == 102.00
         # best ask should be min(200, 198) = 198
@@ -146,7 +146,7 @@ class TestDepthMetricsEngine:
     def test_rejects_empty_dataframe(self):
         df = pd.DataFrame(columns=["timestamp", "price", "volume", "direction"])
         with pytest.raises(ObAnalyticsError):
-            DepthMetricsEngine().compute(df)
+            DepthSummaryEngine().compute(df)
 
     def test_fractional_volume_preserved(self):
         """Sub-integer volumes (e.g. 0.5 BTC) must not be truncated to 0."""
@@ -161,7 +161,7 @@ class TestDepthMetricsEngine:
                 ),
             }
         )
-        result = DepthMetricsEngine().compute(depth)
+        result = DepthSummaryEngine().compute(depth)
         assert result["best_bid_vol"].iloc[-1] == 0.5
         assert result["best_ask_vol"].iloc[-1] == 0.75
 
@@ -178,7 +178,7 @@ class TestDepthMetricsEngine:
                 ),
             }
         )
-        engine = DepthMetricsEngine()
+        engine = DepthSummaryEngine()
         result = engine.compute(depth)
         assert result["best_bid_price"].iloc[-1] == 50000.00
         assert result["best_ask_price"].iloc[-1] == 50100.00

@@ -28,7 +28,7 @@ from ob_analytics.capture_files import DEPTH_COLUMNS
 from ob_analytics.config import PipelineConfig
 from ob_analytics.databento import DatabentoWriter
 from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
-from ob_analytics.depth import depth_metrics, get_spread, price_level_volume
+from ob_analytics.depth import get_spread, price_level_volume, summarize_depth
 from ob_analytics.depth_csv import DepthCsvLoader, DepthCsvTradeReader, DepthCsvWriter
 from ob_analytics.exceptions import ConfigError, UnknownNameError
 from ob_analytics.hidden_liquidity import hidden_trades
@@ -262,7 +262,7 @@ class TestToyL2Fixture:
         validate_trades_df(toy_l2_trades())
 
     def test_documented_final_book(self):
-        summary = depth_metrics(toy_l2_depth())
+        summary = summarize_depth(toy_l2_depth())
         last = summary.iloc[-1]
         assert last["best_bid_price"] == 99.0
         assert last["best_ask_price"] == 100.0
@@ -277,7 +277,7 @@ class TestToyL2Fixture:
         from ob_analytics.trade_sign import classify_trade_sign
 
         trades = toy_l2_trades()
-        summary = depth_metrics(toy_l2_depth())
+        summary = summarize_depth(toy_l2_depth())
         unlabelled = trades.assign(
             direction=pd.Categorical([None] * len(trades), categories=["buy", "sell"])
         )
@@ -299,7 +299,7 @@ class TestL2Pipeline:
         r = toy_l2_result
         validate_depth_df(r.depth)
         assert not r.depth.empty
-        # depth_metrics ran → best bid/ask columns exist; get_spread works
+        # summarize_depth ran → best bid/ask columns exist; get_spread works
         assert "best_bid_price" in r.depth_summary.columns
         spread = get_spread(r.depth_summary)
         assert not spread.empty
@@ -567,7 +567,7 @@ _TRADE_METRICS = (
     "vpin",
     "kyle_lambda",
     "order_flow_imbalance",
-    "ofi_horizon",
+    "ofi_by_window",
     "transaction_costs",
     "amihud",
     "roll_spread",

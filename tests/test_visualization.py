@@ -578,7 +578,7 @@ class TestPlotLiquidityAtTouchL3:
         assert not drawn(plot("liquidity_at_touch", Level.L3, **data))
 
 
-class TestPlotOfiHorizon:
+class TestPlotOfiByWindow:
     """OFI horizon graph (level-less analytic): stacked banded rows."""
 
     @staticmethod
@@ -598,22 +598,22 @@ class TestPlotOfiHorizon:
         )
 
     def test_returns_banded_figure(self) -> None:
-        data = prepare.ofi_horizon(self._trades())
-        fig = plot("ofi_horizon", **data)
+        data = prepare.ofi_by_window(self._trades())
+        fig = plot("ofi_by_window", **data)
         ax = fig.axes[0]
         assert isinstance(fig, Figure)
         assert ax.collections  # fill_between PolyCollections (the bands)
-        # Each lookback is labelled as a text artist beside its row.
+        # Each window is labelled as a text artist beside its row.
         labels = {t.get_text().strip() for t in ax.texts}
-        assert set(data["horizons"]) <= labels
+        assert set(data["windows"]) <= labels
 
     def test_empty_is_safe(self) -> None:
         data: dict[str, Any] = {
             "ofi": np.empty((0, 0)),
             "times": np.array([], dtype="datetime64[ns]"),
-            "horizons": ["5s", "60s"],
+            "windows": ["5s", "60s"],
         }
-        assert not drawn(plot("ofi_horizon", **data))
+        assert not drawn(plot("ofi_by_window", **data))
 
     @staticmethod
     def _grid(ofi: np.ndarray) -> dict[str, Any]:
@@ -622,7 +622,7 @@ class TestPlotOfiHorizon:
         return {
             "ofi": ofi,
             "times": times.to_numpy(),
-            "horizons": ["5s", "60s"],
+            "windows": ["5s", "60s"],
             **_data._horizon_bands(ofi),
         }
 
@@ -634,7 +634,7 @@ class TestPlotOfiHorizon:
     def test_time_axis_spans_the_data(self, row: np.ndarray, tmp_path) -> None:
         """Rows with few or no bands still save, on the data's own time range."""
         data = self._grid(np.vstack([row, row]))
-        fig = plot("ofi_horizon", **data)
+        fig = plot("ofi_by_window", **data)
         save_figure(fig, tmp_path / "ofi.png")
 
         x = mdates.date2num(pd.to_datetime(data["times"]))
@@ -646,10 +646,10 @@ class TestPlotOfiHorizon:
         data: dict[str, Any] = {
             "ofi": ofi,
             "times": times,
-            "horizons": ["5s", "60s"],
+            "windows": ["5s", "60s"],
             **_data._horizon_bands(ofi),
         }
-        fig = plot("ofi_horizon", **data)
+        fig = plot("ofi_by_window", **data)
         save_figure(fig, tmp_path / "ofi.png")
 
         lo, hi = fig.axes[0].get_xlim()
@@ -657,7 +657,7 @@ class TestPlotOfiHorizon:
 
     def test_all_missing_says_no_data(self, tmp_path) -> None:
         data = self._grid(np.full((2, 10), np.nan))
-        fig = plot("ofi_horizon", **data)
+        fig = plot("ofi_by_window", **data)
         save_figure(fig, tmp_path / "ofi.png")
 
         assert "no data" in fig.axes[0].get_title("left")
@@ -1048,12 +1048,10 @@ class TestPriceLevelsColBias:
 class TestPrepareHiddenLiquidityOverlay:
     @staticmethod
     def _overlay(iceberg_events_and_trades, hidden_trade_rows, **window):
-        from ob_analytics.hidden_liquidity import detect_icebergs
+        from ob_analytics.hidden_liquidity import iceberg_slices
 
-        detection = detect_icebergs(*iceberg_events_and_trades)
-        return prepare.hidden_liquidity_overlay(
-            detection.icebergs, detection.slices, hidden_trade_rows, **window
-        )
+        slices = iceberg_slices(*iceberg_events_and_trades)
+        return prepare.hidden_liquidity_overlay(slices, hidden_trade_rows, **window)
 
     def test_lines_need_two_surviving_slices(
         self, iceberg_events_and_trades, hidden_trade_rows
@@ -1091,27 +1089,22 @@ class TestPrepareHiddenLiquidityOverlay:
         assert out["iceberg_refills"].empty
 
     def test_no_icebergs_or_hidden_trades_is_safe(self, hidden_trade_rows):
-        empty_icebergs = pd.DataFrame(
+        empty_slices = pd.DataFrame(
             columns=[
                 "iceberg",
+                "slice",
+                "id",
+                "timestamp",
+                "volume",
+                "fill",
+                "delay_s",
                 "direction",
                 "price",
-                "start",
-                "end",
-                "slices",
-                "refills",
-                "same_size_refills",
-                "peak",
-                "executed",
-                "median_delay_s",
                 "confidence",
             ]
         )
-        empty_slices = pd.DataFrame(
-            columns=["iceberg", "slice", "id", "timestamp", "volume", "fill", "delay_s"]
-        )
         out = prepare.hidden_liquidity_overlay(
-            empty_icebergs, empty_slices, hidden_trade_rows.iloc[0:0]
+            empty_slices, hidden_trade_rows.iloc[0:0]
         )
         assert out["iceberg_lines"].empty
         assert out["iceberg_refills"].empty

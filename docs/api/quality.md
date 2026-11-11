@@ -25,10 +25,8 @@ for the concepts and the [`audit` how-to](../howto/audit.md) for the CLI.
 
 ::: ob_analytics.quality.detect_sequence_gaps
 
-::: ob_analytics.quality.SequenceGapReport
-
 ## Stale orders
 
 ::: ob_analytics.quality.detect_stale_orders
 
-::: ob_analytics.quality.StaleOrder
+::: ob_analytics.quality.STALE_GRACE

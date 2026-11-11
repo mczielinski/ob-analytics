@@ -36,7 +36,7 @@ def _events(*rows):
 
 class TestOrderBook:
     def test_default_tp_uses_latest_timestamp(self):
-        """When tp=None, order_book uses events['timestamp'].max()."""
+        """When at=None, order_book uses events['timestamp'].max()."""
         events = _events(
             (
                 1,
@@ -59,7 +59,7 @@ class TestOrderBook:
                 3.0,
             ),
         )
-        result = order_book(events, tp=None)
+        result = order_book(events, at=None)
         assert result["timestamp"] == pd.Timestamp("2015-01-01 00:00:02")
 
     def test_max_levels_limits_output(self):
@@ -143,7 +143,7 @@ class TestOrderBook:
                 3.0,
             ),
         )
-        result = order_book(events, tp=pd.Timestamp("2015-01-01 00:00:03"))
+        result = order_book(events, at=pd.Timestamp("2015-01-01 00:00:03"))
         assert 10 not in result["bids"]["id"].values
 
     def test_changed_order_uses_latest_state(self):
@@ -180,7 +180,7 @@ class TestOrderBook:
                 1.0,
             ),
         )
-        result = order_book(events, tp=pd.Timestamp("2015-01-01 00:00:03"))
+        result = order_book(events, at=pd.Timestamp("2015-01-01 00:00:03"))
         bid_row = result["bids"][result["bids"]["id"] == 10]
         assert len(bid_row) == 1
         assert bid_row.iloc[0]["volume"] == 3.0  # changed volume, not original

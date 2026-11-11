@@ -13,7 +13,7 @@ the price the later row happens to carry leaves the volume on the created
 level for the rest of the session, where every consumer reads it back as a
 resting level that no order is on.
 
-The per-order rebuild (``engine.book_state``) tracks orders by id and has
+The per-order rebuild (``engine.order_book``) tracks orders by id and has
 never had this problem, so these tests also pin the two rebuilds together.
 """
 
@@ -93,7 +93,7 @@ def _level_at(depth: pd.DataFrame, price: int, direction: str, t: float) -> floa
 def _book_levels(events: pd.DataFrame, t: float) -> dict[tuple[str, int], float]:
     """Volume per ``(direction, price)`` in the per-order rebuild at *t*."""
     at = int((_BASE + pd.Timedelta(seconds=t)).value)
-    book = engine.book_state(to_order_events(events, market=True), at=at)
+    book = engine.order_book(to_order_events(events, market=True), at=at)
     levels: dict[tuple[str, int], float] = {}
     for side in (book.bids, book.asks):
         for row in side.row:

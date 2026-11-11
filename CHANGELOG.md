@@ -142,12 +142,11 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 - **`ob_analytics.analytics` is split in three** (#404). The names at the
   top level (`from ob_analytics import data_quality_summary` and the rest)
   are unchanged.
-  - `order_book`, `OrderBookSnapshot` and `order_lifecycles` ->
+  - `order_book`, `BookSnapshot` and `order_lifecycles` ->
     `ob_analytics.book`.
   - `data_quality_summary`, `DataQualitySummary`, `QualityCheck`,
     `Severity`, `BookDifference`, `detect_sequence_gaps`,
-    `SequenceGapReport`, `detect_stale_orders`, `StaleOrder`,
-    `CROSSED_TOLERANCE_PCT`, `STALE_GRACE` and `UNMATCHED_TRADES_WARN_PCT`
+    `detect_stale_orders`, `CROSSED_TOLERANCE_PCT`, `STALE_GRACE` and `UNMATCHED_TRADES_WARN_PCT`
     -> `ob_analytics.quality`.
   - `order_aggressiveness`, `trade_impacts` and `set_order_types` stay in
     `ob_analytics.analytics`.
@@ -222,7 +221,7 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
     `prepare.book_snapshot`) and `prepare.l1_ticker` (the L1 quote card).
   - The other `prepare` functions keep their names and take `level=` too:
     `amihud`, `bars`, `book_signals`, `events_histogram`,
-    `hidden_executions`, `kyle_lambda`, `ofi_horizon`, `price_view`,
+    `hidden_executions`, `kyle_lambda`, `price_view`,
     `roll_spread`, `time_series`, `trade_size`, `trading_halts`,
     `transaction_costs`, `volume_percentiles` and `vpin`.
     `hidden_liquidity_overlay` prepares no plot of its own and takes no
@@ -236,9 +235,91 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
     `PlotSpec` with `prepare.vpin`, `prepare.book_signals`,
     `prepare.order_flow_imbalance` or `prepare.transaction_costs`.
   - `bars_panel` -> `bars_card`.
-  - `ofi_horizon_panel` -> `ofi_horizon_card`.
+  - `ofi_horizon_panel` -> `ofi_by_window_card`.
   - `kyle_panel` -> `kyle_lambda_card`.
   - `trading_halts_panel` -> `trading_halts_card`.
+- **One name per quantity, per input and per measure** (#414). The package
+  keeps no aliases for the old names.
+  - The measures lose `compute_`, as the other six never had it:
+    `compute_vpin` -> `vpin`, `compute_kyle_lambda` -> `kyle_lambda`. Each
+    measure now has the name of its metric.
+  - `ofi_by_horizon(trades, horizons=...)` ->
+    `ofi_by_window(trades, windows=...)`, and `OFI_HORIZONS` ->
+    `OFI_WINDOWS`: each column is a trailing window. The metric and plot
+    concept `ofi_horizon` -> `ofi_by_window`, `prepare.ofi_horizon` ->
+    `prepare.ofi_by_window`, `OfiHorizonMetric` -> `OfiByWindowMetric`, and
+    the card's `horizons=` -> `windows=`. A *horizon* is now only the wait in
+    `transaction_costs(horizon=...)`.
+  - `window` is always a span of time, given as a pandas offset string. The
+    features that count bars back take `n_bars`:
+    `ReturnsFeature(window=20)` -> `ReturnsFeature(n_bars=20)`, and the same
+    for `VpinFeature` and `KyleLambdaFeature`. `DEFAULT_WINDOW` ->
+    `DEFAULT_N_BARS`.
+  - `depth_metrics(depth, bps=25, bins=20)` ->
+    `summarize_depth(depth, depth_bps=25, depth_bins=20)`, the names
+    `PipelineConfig` uses. `DepthMetricsEngine` -> `DepthSummaryEngine`.
+    Both build the depth summary. The API page "Depth Metrics" is now
+    "Depth".
+  - `depth_signals(summary, depth_levels=5)` ->
+    `book_signals(summary, levels=5)`, the name of its metric and the
+    argument name of `book_imbalance`. `ImbalanceFeature(depth_levels=...)`
+    -> `ImbalanceFeature(levels=...)`, and the `book_signals` metric's
+    `depth_levels=` and `attrs["depth_levels"]` -> `levels=` and
+    `attrs["levels"]`.
+  - `order_flow_imbalance` column `net_volume` -> `signed_volume`, the name
+    `bars` gives the same quantity.
+  - `trade_impacts` columns, to the names `bars` uses: `min_price` -> `low`,
+    `max_price` -> `high`, `hits` -> `n_trades`, `vol` -> `volume`,
+    `start_time` -> `timestamp_start`, `end_time` -> `timestamp_end`, `dir`
+    -> `direction`.
+  - `order_book(events, tp=...)` -> `order_book(events, at=...)`, the name
+    the engine uses for the same instant.
+  - `filter_depth(d, from_timestamp, to_timestamp)` ->
+    `filter_depth(depth, start_time, end_time)`, the names the plots use.
+  - `save_data(lob_data, path)` -> `save_data(data, path)`, the name of what
+    `load_data` returns.
+  - `classify_trade_sign(trades, method=...)` ->
+    `classify_trade_sign(trades, sign_method=...)`, the name every other
+    function uses.
+  - `bars_card(bars_df)` -> `bars_card(bars)`.
+  - `PipelineConfig.price_multiplier` and `PipelineConfig.bps_labels` ->
+    removed. Nothing in the package read them.
+  - The finders return a DataFrame of findings, as the measures do, with
+    the summary in `attrs`:
+    - `detect_icebergs` returns the icebergs frame (was
+      `IcebergDetection.icebergs`); `attrs` holds `max_delay` and
+      `n_filled_out`. Its `start` and `end` columns -> `timestamp_start` and
+      `timestamp_end`. The slices (was `IcebergDetection.slices`) come from
+      the new `iceberg_slices`, which takes the same arguments and adds each
+      iceberg's `direction`, `price` and `confidence`.
+      `IcebergDetection` -> removed.
+    - `prepare.hidden_liquidity_overlay(icebergs, slices, hidden)` ->
+      `prepare.hidden_liquidity_overlay(slices, hidden)`, with `slices` from
+      `iceberg_slices`.
+    - `hidden_trades` adds `attrs["n_trades"]` and `attrs["n_readable"]`.
+    - `detect_sequence_gaps` returns one row per break (`previous_sequence`,
+      `sequence`, `missing`, `out_of_order`, after the channel columns), so
+      `report.clean` -> `gaps.empty`. The counts move to `attrs`:
+      `report.n_missing` -> `gaps.attrs["n_missing"]`, and the same for
+      `n_sequenced`, `n_updates`, `n_out_of_order` and `max_gap`;
+      `report.first_break_seq` -> `gaps.attrs["first_break_sequence"]`;
+      `report.has_sequence` -> `gaps.attrs["n_sequenced"] > 0`;
+      `report.to_dict()` -> `gaps.attrs`. Its arguments
+      `sequence_col`, `order_col`, `group_cols` and `kind` ->
+      `sequence_column`, `order_column`, `group_columns` and
+      `sequence_kind`. `SequenceGapReport` -> removed.
+    - `detect_stale_orders` returns one row per stale order (`id`,
+      `direction`, `price`, `disproved_at`, `stale_seconds`,
+      `touch_seconds`), worst first, with `attrs["grace"]`. So does
+      `DataQualitySummary.stale_orders`. `StaleOrder` -> removed.
+  - In `ob_analytics.engine`: `book_state` -> `order_book` and `BookState`
+    -> `BookSnapshot`, the names of their frame faces in
+    `ob_analytics.book`. `ob_analytics.book.OrderBookSnapshot` ->
+    `BookSnapshot`.
+  - Every public module lists its exports in `__all__`, and holds no
+    private name there. The top level now also exports `iceberg_slices`, `list_writers`,
+    `register_writer` and `load_writer_plugins`, beside the other
+    registries.
 
 ### Added
 
