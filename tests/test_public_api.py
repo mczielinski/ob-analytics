@@ -9,31 +9,26 @@ that every name the API pages document is exported.
 from __future__ import annotations
 
 import importlib
-import pkgutil
 import re
 from pathlib import Path
-from types import ModuleType
 
 import pytest
 
 import ob_analytics
+from tests._public_modules import (
+    importable_public_modules,
+    needs_missing_extra,
+    public_module_params,
+)
 
 _DOCS = Path(__file__).resolve().parent.parent / "docs"
 
-
-def _public_modules() -> list[ModuleType]:
-    names = [ob_analytics.__name__]
-    for info in pkgutil.walk_packages(ob_analytics.__path__, "ob_analytics."):
-        if not any(part.startswith("_") for part in info.name.split(".")[1:]):
-            names.append(info.name)
-    return [importlib.import_module(name) for name in sorted(names)]
+_MODULES = importable_public_modules()
 
 
-_MODULES = _public_modules()
-
-
-@pytest.mark.parametrize("module", _MODULES, ids=lambda m: m.__name__)
-def test_every_public_module_lists_its_exports(module: ModuleType) -> None:
+@pytest.mark.parametrize("module_name", public_module_params())
+def test_every_public_module_lists_its_exports(module_name: str) -> None:
+    module = importlib.import_module(module_name)
     assert hasattr(module, "__all__"), f"{module.__name__} has no __all__"
     exported = list(module.__all__)
     assert len(exported) == len(set(exported)), "a name is listed twice"
@@ -41,8 +36,9 @@ def test_every_public_module_lists_its_exports(module: ModuleType) -> None:
         assert hasattr(module, name), f"{module.__name__}.{name} does not exist"
 
 
-@pytest.mark.parametrize("module", _MODULES, ids=lambda m: m.__name__)
-def test_no_private_name_is_exported(module: ModuleType) -> None:
+@pytest.mark.parametrize("module_name", public_module_params())
+def test_no_private_name_is_exported(module_name: str) -> None:
+    module = importlib.import_module(module_name)
     private = [
         name
         for name in module.__all__
@@ -88,7 +84,11 @@ def test_every_documented_name_is_exported() -> None:
                 # ``::: ob_analytics.cli`` documents a whole module.
                 importlib.import_module(f"{module_name}.{name}")
                 continue
-            except ModuleNotFoundError:
+            except ModuleNotFoundError as error:
+                if needs_missing_extra(error):
+                    continue
+                if error.name != f"{module_name}.{name}":
+                    raise
                 module = importlib.import_module(module_name)
             if name not in getattr(module, "__all__", ()):
                 missing.append(f"{page.relative_to(_DOCS)}: {module_name}.{name}")

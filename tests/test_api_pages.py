@@ -10,7 +10,6 @@ home module counts), or when the entry renders its whole module.  A module in
 from __future__ import annotations
 
 import importlib
-import pkgutil
 import re
 from pathlib import Path
 from types import ModuleType
@@ -18,31 +17,37 @@ from typing import Any
 
 import pytest
 
-import ob_analytics
+from tests._public_modules import needs_missing_extra, public_module_params
 
 _DOCS = Path(__file__).resolve().parent.parent / "docs"
 _ENTRY = re.compile(r"^::: ([\w.]+)", re.MULTILINE)
 
 
-def _public_module_names() -> list[str]:
-    names = [ob_analytics.__name__]
-    for info in pkgutil.walk_packages(ob_analytics.__path__, "ob_analytics."):
-        if not any(part.startswith("_") for part in info.name.split(".")[1:]):
-            names.append(info.name)
-    return sorted(names)
-
-
 def _resolve(path: str) -> Any:
     parts = path.split(".")
     for cut in range(len(parts), 0, -1):
+        candidate = ".".join(parts[:cut])
         try:
-            obj: Any = importlib.import_module(".".join(parts[:cut]))
-        except ImportError:
+            obj: Any = importlib.import_module(candidate)
+        except ModuleNotFoundError as error:
+            if error.name != candidate:
+                raise
             continue
         for part in parts[cut:]:
             obj = getattr(obj, part)
         return obj
     raise ImportError(path)
+
+
+def _can_resolve(path: str) -> bool:
+    """False when the entry's module needs an optional extra that is missing."""
+    try:
+        _resolve(path)
+    except ModuleNotFoundError as error:
+        if not needs_missing_extra(error):
+            raise
+        return False
+    return True
 
 
 def _entries() -> list[str]:
@@ -51,6 +56,7 @@ def _entries() -> list[str]:
             match.group(1)
             for page in _DOCS.rglob("*.md")
             for match in _ENTRY.finditer(page.read_text(encoding="utf-8"))
+            if _can_resolve(match.group(1))
         }
     )
 
@@ -67,7 +73,7 @@ def _is_documented(module: ModuleType, name: str) -> bool:
     return (id(obj), name) in _DOCUMENTED
 
 
-@pytest.mark.parametrize("module_name", _public_module_names())
+@pytest.mark.parametrize("module_name", public_module_params())
 def test_every_export_has_an_api_page_entry(module_name: str) -> None:
     if module_name in _WHOLE_MODULES:
         return
