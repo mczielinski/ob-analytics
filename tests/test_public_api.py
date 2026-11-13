@@ -77,7 +77,9 @@ def test_every_documented_name_is_exported() -> None:
     missing = []
     for page in sorted(_DOCS.rglob("*.md")):
         for match in re.finditer(
-            r"^::: (ob_analytics[\w.]*)\.(\w+)\s*$", page.read_text(), re.MULTILINE
+            r"^::: (ob_analytics[\w.]*)\.(\w+)\s*$",
+            page.read_text(encoding="utf-8"),
+            re.MULTILINE,
         ):
             module_name, name = match.groups()
             try:

@@ -995,6 +995,8 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Changed
 
+- **seaborn 0.13.2 or later** is required. seaborn 0.13.0 and 0.13.1 draw an
+  empty events histogram when the direction column has pandas 3's string type.
 - **The README and Getting started describe the current package** (#422):
   every source, the plot backends and all six extras. Both say that live
   capture is supported on Linux and macOS only, and that the docs follow `main`, not

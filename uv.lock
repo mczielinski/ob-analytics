@@ -2511,7 +2511,7 @@ requires-dist = [
     { name = "plotly", marker = "extra == 'interactive'", specifier = ">=6.8.0" },
     { name = "pyarrow", specifier = ">=24.0.0" },
     { name = "pydantic", specifier = ">=2.13.4,<3" },
-    { name = "seaborn", specifier = ">=0.13,<1" },
+    { name = "seaborn", specifier = ">=0.13.2,<1" },
     { name = "websockets", marker = "extra == 'kalshi'", specifier = ">=14" },
     { name = "websockets", marker = "extra == 'live'", specifier = ">=12" },
 ]
