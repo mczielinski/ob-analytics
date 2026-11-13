@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
 import pytest
 
 from ob_analytics.data import load_data, save_data
@@ -21,6 +22,35 @@ class TestSaveLoadParquet:
         assert set(loaded.keys()) == {"events", "trades"}
         pd.testing.assert_frame_equal(loaded["events"], data["events"])
         pd.testing.assert_frame_equal(loaded["trades"], data["trades"])
+
+    def test_failed_overwrite_preserves_saved_run(
+        self, tmp_path: Path, lobster_day_dir, lobster_day_pipeline
+    ):
+        from ob_analytics.data import load_result
+
+        result = lobster_day_pipeline.run(lobster_day_dir)
+        save_data(result, tmp_path)
+        with pytest.raises(pa.ArrowInvalid):
+            save_data(
+                {
+                    "events": pd.DataFrame({"x": [2]}),
+                    "trades": pd.DataFrame({"x": [object()]}),
+                },
+                tmp_path,
+            )
+        assert_same_result(load_result(tmp_path), result)
+
+    def test_publish_failure_restores_replaced_files(self, tmp_path: Path):
+        original = pd.DataFrame({"x": [1]})
+        changed = pd.DataFrame({"x": [2]})
+        save_data({"first": original}, tmp_path)
+        (tmp_path / "blocked.parquet").mkdir()
+        with pytest.raises(OSError):
+            save_data({"first": changed, "new": changed, "blocked": changed}, tmp_path)
+        pd.testing.assert_frame_equal(
+            pd.read_parquet(tmp_path / "first.parquet"), original
+        )
+        assert not (tmp_path / "new.parquet").exists()
 
     def test_load_from_empty_dir_raises(self, tmp_path: Path):
         empty = tmp_path / "empty"

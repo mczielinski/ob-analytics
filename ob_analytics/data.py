@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import shutil
 import warnings
 from collections.abc import Callable
 from importlib.metadata import EntryPoint
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
@@ -259,15 +261,38 @@ class ParquetWriter:
         p = Path(dest)
         p.mkdir(parents=True, exist_ok=True)
         declarations = data.declarations if isinstance(data, OutputTables) else None
-        for name, df in data.items():
-            _write_versioned_parquet(
-                df,
-                p / f"{name}.parquet",
-                tick_sizes=self._tick_sizes,
-                lot_sizes=self._lot_sizes,
-                config=self._config,
-                declarations=declarations,
-            )
+        with TemporaryDirectory(dir=p, prefix=".parquet-") as temporary:
+            staging = Path(temporary)
+            files = []
+            for index, (name, df) in enumerate(data.items()):
+                staged = staging / str(index)
+                _write_versioned_parquet(
+                    df,
+                    staged,
+                    tick_sizes=self._tick_sizes,
+                    lot_sizes=self._lot_sizes,
+                    config=self._config,
+                    declarations=declarations,
+                )
+                files.append((staged, p / f"{name}.parquet"))
+
+            # Keep old files available for rollback if a later replace fails.
+            installed: list[tuple[Path, Path | None]] = []
+            try:
+                for staged, target in files:
+                    backup = None
+                    if target.exists():
+                        backup = staged.with_suffix(".bak")
+                        shutil.copy2(target, backup)
+                    staged.replace(target)
+                    installed.append((target, backup))
+            except OSError:
+                for target, backup in reversed(installed):
+                    if backup is None:
+                        target.unlink()
+                    else:
+                        backup.replace(target)
+                raise
         return p
 
 
