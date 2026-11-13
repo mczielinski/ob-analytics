@@ -832,17 +832,22 @@ def ofi_by_window(
     timestamps = trades["timestamp"]
     # Signed volume binned onto the fine grid, then trailing-summed per window.
     floored = window_start(timestamps, step)
-    # The grid runs to the step at or after the last trade.
-    last = floored.max()
-    end = last if timestamps.max() == last else last + step
-    index = pd.date_range(floored.min(), end, freq=step)
+    # A trailing window at t includes trades in (t - step, t].
+    bucket_end = floored.where(timestamps == floored, floored + step)
+    index = pd.date_range(floored.min(), bucket_end.max(), freq=step)
     is_buy = trades["direction"] == "buy"
     volume = trades["volume"]
     buy = (
-        volume.where(is_buy, 0.0).groupby(floored).sum().reindex(index, fill_value=0.0)
+        volume.where(is_buy, 0.0)
+        .groupby(bucket_end)
+        .sum()
+        .reindex(index, fill_value=0.0)
     )
     sell = (
-        volume.where(~is_buy, 0.0).groupby(floored).sum().reindex(index, fill_value=0.0)
+        volume.where(~is_buy, 0.0)
+        .groupby(bucket_end)
+        .sum()
+        .reindex(index, fill_value=0.0)
     )
 
     out = pd.DataFrame({"timestamp": index})
