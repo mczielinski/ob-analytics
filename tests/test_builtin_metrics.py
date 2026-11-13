@@ -190,6 +190,16 @@ def test_ofi_by_window_sums_a_trailing_window_per_horizon() -> None:
     assert grid["15s"].tolist() == pytest.approx([1.0, 2 / 4, 1 / 5])
 
 
+def test_ofi_by_window_only_includes_trades_up_to_the_grid_time() -> None:
+    trades = _trades([(4, 3.0, "buy"), (5, 1.0, "sell"), (6, 2.0, "sell")])
+    grid = ofi_by_window(trades, windows=("5s", "10s"), grid="5s")
+
+    assert grid["timestamp"].dt.second.tolist() == [0, 5, 10]
+    assert grid.loc[0, ["5s", "10s"]].isna().all()
+    assert grid["5s"].iloc[1:].tolist() == [0.5, -1.0]
+    assert grid["10s"].iloc[1:].tolist() == [0.5, 0.0]
+
+
 def test_ofi_by_window_face_draws_the_metric_grid(result) -> None:
     grid = result.metric("ofi_by_window")
     payload = prepare.ofi_by_window(result.trades)
