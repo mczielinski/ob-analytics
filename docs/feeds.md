@@ -97,10 +97,11 @@ How the feed reports the book changing.
 
 - **Values:** every change, one message each; changes merged, where one update
   can hold several; repeated snapshots of the book; polls.
-- **Sources:** native Bitstamp, LOBSTER, Databento and cryptofeed's Bitfinex,
-  Blockchain.com and Independent Reserve books report every change. ccxt's
-  websocket venues merge changes. cryptofeed's Bitstamp L3 book is a snapshot
-  about 10 times a second. Kalshi is polled once a second.
+- **Sources:** native Bitstamp, LOBSTER, Databento, Kalshi's WebSocket and
+  cryptofeed's Bitfinex, Blockchain.com and Independent Reserve books report
+  every change. ccxt's websocket venues merge changes. cryptofeed's Bitstamp
+  L3 book is a snapshot about 10 times a second. Kalshi through ccxt is polled
+  once a second.
 - **Lets you conclude:** with every change, short-lived orders, cancel rates and
   every flicker of the spread.
 - **Stops you concluding:** with merged changes, snapshots or polls, anything
@@ -193,8 +194,9 @@ and `audit` does not count it as out of order.
 Which times each row carries.
 
 - **Values:** `both`, venue and receive; `receive_only`; `venue_only`.
-- **Sources:** most live feeds carry both. Kalshi books and cryptofeed's
-  Bitfinex, Blockchain.com and Kraken books carry receive time only. LOBSTER
+- **Sources:** most live feeds carry both. Kalshi books polled through ccxt
+  and cryptofeed's Bitfinex, Blockchain.com and Kraken books carry receive
+  time only. LOBSTER
   carries venue time only.
 - **Lets you conclude:** with both clocks, latency, and whether messages
   arrived out of order.
@@ -359,8 +361,8 @@ Whether the trade tape can miss or repeat trades.
 
 - **Values:** none; polled; repeated trades removed; trades from before the
   capture.
-- **Sources:** Kalshi is polled, and trades from before the opening book are
-  dropped. Polymarket can send a trade twice, and the capture drops the repeat.
+- **Sources:** Kalshi through ccxt is polled. Both Kalshi captures drop trades
+  from before the opening book. Polymarket can send a trade twice, and the capture drops the repeat.
   ccxt's Coinbase tape and cryptofeed's Bitfinex tape start with trades from
   before the capture.
 - **Lets you conclude:** where there are no gaps, trade counts and volumes.
@@ -442,6 +444,7 @@ What you need to capture the feed.
 | ccxt, Coinbase | L2 | whole book | — |
 | ccxt, Kraken | L2 | top `--depth-limit` levels (100 by default), kept filled by Kraken | — |
 | ccxt, Kalshi | L2 | whole book, each poll | — |
+| `kalshi` (WebSocket) | L2 | whole book | — |
 | ccxt, Polymarket | L2 | whole book | — |
 | `depth_csv` | L2 | what the file holds | — |
 
@@ -464,6 +467,7 @@ What you need to capture the feed.
 | ccxt, Coinbase | changes, merged | merged changes; a lost message | drifts until the level changes again | none | venue + receive | price levels |
 | ccxt, Kraken | changes, merged | merged changes; a lost message | drifts until the level changes again | none | venue + receive | price levels |
 | ccxt, Kalshi | polls, 1 a second | anything shorter than a poll | the next poll corrects it | none | receive only | price levels |
+| `kalshi` (WebSocket) | opening book, then every change | nothing; a lost change is found by its number | a new segment from a new opening book | Kalshi's `seq`; every book message adds one | venue + receive; the opening book has the time Kalshi sent it | price levels |
 | ccxt, Polymarket | changes, merged, and a whole-book snapshot every second or two while the market trades | merged changes | the next snapshot corrects it | none | venue + receive | price levels |
 | `depth_csv` | as recorded | as recorded | — | if present | as recorded | price levels |
 
@@ -505,6 +509,9 @@ Notes on this table:
   and applies those from the same second, even ones older than the book.
 - **Kalshi:** a poll that times out ends the capture segment, and the capture
   starts a new one from a new opening book.
+- **`kalshi` (WebSocket):** the opening book and every change come on one
+  subscription, numbered in order, so there is nothing to line up. A missing
+  number ends the segment, and the next starts from a new opening book.
 
 ## Trades
 
@@ -525,6 +532,7 @@ Notes on this table:
 | ccxt, Coinbase | — | — | venue; Coinbase names the maker's side, so the capture reverses it | — | starts with trades from before the capture |
 | ccxt, Kraken | — | — | venue | — | none |
 | ccxt, Kalshi | — | — | venue (buy = the taker bought Yes) | — | polled; trades from before the opening book dropped |
+| `kalshi` (WebSocket) | — | — | venue (buy = the taker bought Yes) | — | trades from before the opening book dropped; a lost trade is counted in `meta.json` |
 | ccxt, Polymarket | — | — | venue | — | repeated trades removed |
 | `depth_csv` | — | — | the `side` column, or Lee–Ready | — | as recorded |
 
@@ -560,6 +568,7 @@ Note on this table:
 | ccxt, Coinbase | fixed (0.01 on BTC/USD) | normal | `coinbase` is public; `coinbaseexchange` and the per-order feed need a key |
 | ccxt, Kraken | fixed (0.1 on BTC/USD) | normal | public |
 | ccxt, Kalshi | by market: cents; tenths of a cent near 0 and 1; tenths or hundredths of a cent throughout | Yes book, from Yes and No bids; price = probability of Yes | REST public; websocket needs a key |
+| `kalshi` (WebSocket) | by market, from Kalshi's market data | Yes book, from Yes and No bids; price = probability of Yes | API key |
 | ccxt, Polymarket | 0.01 or 0.001, finer near 0 and 1; can change during the capture, and the capture finds the finer step from the prices | one book per outcome | public |
 | `depth_csv` | you supply it | as recorded | — |
 
@@ -601,6 +610,7 @@ the code.
 | ccxt, Coinbase | depth, taker side, tape gaps, sequence, crossing | — |
 | ccxt, Kraken | depth, taker side, tape gaps, price grid, crossing | — |
 | ccxt, Kalshi | depth, compared with Kalshi's REST book; clocks, taker side, timeouts, crossing | price grids: Kalshi's market list |
+| `kalshi` (WebSocket) | sequence (no gaps in 1,686 rows), crossing, clocks; the book matched Kalshi's REST book within a second at each of five fetches | Kalshi's WebSocket documentation |
 | ccxt, Polymarket | depth, compared with Polymarket's REST book; taker side, repeated trades, crossing | snapshot frequency and hash: a direct listen to Polymarket's websocket |
 
 The measurements:

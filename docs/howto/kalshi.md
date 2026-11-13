@@ -6,9 +6,13 @@ title: Capture Kalshi markets
 
 Kalshi lists event contracts. Each market asks a yes-or-no question, and a Yes
 contract pays $1 if the answer is Yes. ob-analytics captures a Kalshi market
-through the [ccxt source](ccxt.md) and replays it through the
-[L2 path](l2-depth.md). You do not need a Kalshi account or an API key: the
-order book and the trades are public.
+in one of two ways, and replays either through the [L2 path](l2-depth.md):
+
+- The [ccxt source](ccxt.md) polls Kalshi's public REST API. You do not need a
+  Kalshi account or an API key. The rest of this section is about it.
+- The `kalshi` source reads Kalshi's WebSocket feed and records every change.
+  It needs an API key: see
+  [Capture every change, with an API key](#capture-every-change-with-an-api-key).
 
 !!! info "What this feed shows"
 
@@ -47,12 +51,15 @@ market's page on kalshi.com shows its ticker, and Kalshi's public API lists
 the open markets:
 
 ```bash
-curl -s "https://api.elections.kalshi.com/trade-api/v2/markets?status=open&limit=100"
+curl -s "https://api.elections.kalshi.com/trade-api/v2/markets?status=open&mve_filter=exclude&limit=100"
 ```
 
+`mve_filter=exclude` leaves out Kalshi's combined markets, which are many and
+seldom trade.
+
 Pick a market that trades. A quiet market gives a book that seldom changes and
-few trades. Even busy Kalshi books change only a few times a minute, so
-capture for 10 minutes or more.
+few trades. Many Kalshi books change only a few times a minute, so capture for
+10 minutes or more.
 
 ## The book is the Yes book
 
@@ -149,10 +156,99 @@ the rate with `--poll-interval`. Because it polls:
 - Trades from before the opening book are left out. Kalshi's first answer is
   its recent history, which can reach back hours.
 
-Kalshi's WebSocket feed sends every change with a sequence number, but it needs
-an API key. Capturing from it is
-[#240](https://github.com/mczielinski/ob-analytics/issues/240). [Use an API
-key](api-keys.md) explains how a source takes a key.
+Kalshi's WebSocket feed sends every change with a sequence number. It needs an
+API key: see the next section.
+
+## Capture every change, with an API key
+
+The `kalshi` source reads Kalshi's WebSocket feed instead of polling. It
+records every change to the book, with Kalshi's time and a sequence number, and
+every trade as Kalshi sends it. It needs a Kalshi account and an API key.
+
+!!! info "What this feed shows"
+
+    | Property | Value |
+    |---|---|
+    | Level | L2 |
+    | Depth shown | whole book |
+    | Update form | opening book, then every change |
+    | What can be missed | nothing; a lost change is found by its number |
+    | After a lost message | a new segment from a new opening book |
+    | Sequence | Kalshi's `seq`; every book message adds one |
+    | Clocks | venue + receive |
+    | Crossing | price levels |
+    | Taker side | venue (buy = the taker bought Yes) |
+    | Trade tape gaps | trades from before the opening book dropped; a lost trade is counted |
+    | Price grid | by market, from Kalshi's market data |
+    | What the book means | Yes book, from Yes and No bids |
+    | Access | API key |
+
+    Use it for how a book changes from second to second, and for book latency.
+    [What each feed shows](../feeds.md) explains each property and compares
+    every source.
+
+### Get a key
+
+1. Log in to kalshi.com and open your profile page,
+   <https://kalshi.com/account/profile>.
+2. Under **API Keys**, choose **Create New API Key**. For the access, choose
+   **Read all data** only: the capture never trades or moves money. An Ed25519
+   key (Kalshi's default) and an RSA key both work.
+3. Kalshi shows the private key once. Save it in a file that only you can
+   read, such as `~/.config/kalshi/private-key.pem` (`chmod 600`).
+4. Note the **Key ID** that Kalshi shows with the key.
+
+### Capture
+
+Set the Key ID and the path of the key file, then capture. [Use an API
+key](api-keys.md) explains how keys are kept out of the shell history and out
+of the capture's files.
+
+```bash
+pip install "ob-analytics[kalshi]"
+
+export KALSHI_API_KEY_ID=<your key id>
+export KALSHI_PRIVATE_KEY_PATH=~/.config/kalshi/private-key.pem
+
+ob-analytics capture kalshi --pair KXPRESNOMD-28-MK --minutes 10 -o /tmp/kalshi_ws
+ob-analytics audit /tmp/kalshi_ws --source depth_csv
+ob-analytics process /tmp/kalshi_ws --source depth_csv --gallery --output /tmp/kalshi_ws_out
+```
+
+The capture writes the same files as the polled capture, and the book is the
+same Yes book. What is different:
+
+- Every book row carries Kalshi's `seq` in the `sequence` column. `audit`
+  checks that no number is missing.
+- If a number is missing, the capture cannot know what changed, so it ends the
+  segment and starts a new one from a new opening book. `manifest.json`
+  records the gap. A change that would leave a size below zero does the same.
+- Book rows carry Kalshi's time in `exchange_timestamp`, and the time the
+  capture received them in `timestamp`. The opening book carries the time
+  Kalshi sent it.
+- Trades carry their own numbers. `meta.json` counts any that never arrived as
+  `trades_missed`.
+
+From Python, build the settings once and give them to each segment:
+
+<!-- docs-test: skip needs a Kalshi API key -->
+
+```python
+import asyncio
+from pathlib import Path
+
+from ob_analytics.live import CaptureConfig, KalshiSettings, KalshiSource, run_capture
+
+settings = KalshiSettings()  # reads KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY_PATH
+config = CaptureConfig(pair="KXPRESNOMD-28-MK", out_dir=Path("/tmp/kalshi_ws"), minutes=10)
+asyncio.run(run_capture(lambda: KalshiSource(settings=settings), config))
+```
+
+If a variable is not set, the capture stops before it creates the output
+directory. If Kalshi refuses the key, or has no market with the ticker given,
+the capture stops at once with a message that says which: for a refused key,
+it names the two variables to check. `manifest.json` records the failed
+segment.
 
 ## See also
 

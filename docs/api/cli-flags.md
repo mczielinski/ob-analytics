@@ -19,7 +19,7 @@ For examples, see [Run from the command line](../howto/cli.md).
 | Flag | Description |
 |------|-------------|
 | `path` | Path to data file or directory |
-| `-s SOURCE`, `--source SOURCE` | Data source (default: bitstamp; registered: bitstamp, ccxt, cryptofeed, databento, depth_csv, lobster) |
+| `-s SOURCE`, `--source SOURCE` | Data source (default: bitstamp; registered: bitstamp, ccxt, cryptofeed, databento, depth_csv, kalshi, lobster) |
 | `--trading-date TRADING_DATE` | Trading date, for a source that needs one (LOBSTER), as YYYY-MM-DD |
 | `--session-tz SESSION_TZ` | The venue's time zone, for a feed whose times count from the session's midnight (LOBSTER; default: America/New_York) |
 | `--tick-size TICK_SIZE` | The instrument's price step, in the quote currency (e.g. 0.001). Default: the source's, or a capture's own from its meta.json |
@@ -39,7 +39,7 @@ For examples, see [Run from the command line](../howto/cli.md).
 | Flag | Description |
 |------|-------------|
 | `path` | Path to data file or directory |
-| `-s SOURCE`, `--source SOURCE` | Data source (default: bitstamp when running the pipeline; registered: bitstamp, ccxt, cryptofeed, databento, depth_csv, lobster) |
+| `-s SOURCE`, `--source SOURCE` | Data source (default: bitstamp when running the pipeline; registered: bitstamp, ccxt, cryptofeed, databento, depth_csv, kalshi, lobster) |
 | `--trading-date TRADING_DATE` | Trading date, for a source that needs one (LOBSTER), as YYYY-MM-DD |
 | `--session-tz SESSION_TZ` | The venue's time zone, for a feed whose times count from the session's midnight (LOBSTER; default: America/New_York) |
 | `--tick-size TICK_SIZE` | The instrument's price step, in the quote currency (e.g. 0.001). Default: the source's, or a capture's own from its meta.json |
@@ -133,6 +133,19 @@ Live-capture market data from the 'cryptofeed' source.
 | `--venue VENUE` | The cryptofeed venue id (e.g. 'bitstamp', 'binance'); give --pair in cryptofeed notation, e.g. 'BTC-USD' |
 | `--level {L2,L3}` | Force the capture resolution. Leave it out to read it from the venue: L3 where the venue publishes a per-order book, L2 otherwise |
 | `--queue-size QUEUE_SIZE` | Messages the buffer between cryptofeed and the capture holds (default: 10000) |
+
+## `ob-analytics capture kalshi`
+
+Live-capture market data from the 'kalshi' source.
+
+| Flag | Description |
+|------|-------------|
+| `--pair PAIR` | Venue-specific pair symbol (default: btcusd) |
+| `--minutes MINUTES` | Capture duration in minutes (default: 10.0) |
+| `-o OUTPUT`, `--output OUTPUT` | Required. Capture directory: manifest.json plus one folder per segment (orders.csv for L3 or depth.csv for L2, plus trades.csv, raw.jsonl, meta.json). A directory that already holds a capture of the same source and pair is continued. |
+| `--roll-minutes ROLL_MINUTES` | Start a new segment every this many minutes (default: never) |
+| `--roll-mb ROLL_MB` | Start a new segment once one has written this many MB since its first live event (default: never) |
+| `--no-raw` | Don't write raw.jsonl (saves disk for long runs) |
 
 ## `ob-analytics sources`
 

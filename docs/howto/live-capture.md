@@ -250,7 +250,9 @@ written out). After a failed snapshot the stream does not run. Messages a
 source received but could not use are counted in `dropped`. At L3, an order
 message a source cannot use (Bitstamp's, or cryptofeed's) ends the segment
 instead, with `UnmappedMessageError` as its error: the book would be wrong
-from then on, and the next segment starts from a fresh snapshot. A trade
+from then on, and the next segment starts from a fresh snapshot. The `kalshi`
+source does the same at L2, for a book change it cannot apply or a missing
+sequence number. A trade
 Bitstamp cannot parse is still left out and counted, since its order events
 carry the fills. If the source
 cannot report its counters, the capture logs a warning and `meta.json`

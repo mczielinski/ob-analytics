@@ -124,7 +124,8 @@ them for each built-in source, and `--help` lists them for any source:
 ob-analytics capture ccxt --help
 ```
 
-For `ccxt` and `cryptofeed`, `--venue` names the venue. A source from a
+For `ccxt` and `cryptofeed`, `--venue` names the venue; for `kalshi`,
+`--pair` takes the market ticker. A source from a
 plug-in package gets its flags the same way, so it is set up from the command
 line as from Python. A field gets a flag named after it when its type is one
 the command line reads (`str`, `int`, `float`, `bool`, a `Literal`, an `Enum`

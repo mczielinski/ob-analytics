@@ -131,7 +131,7 @@ jobs:
         with:
           enable-cache: true
       # Every extra a page imports from. `uv run --no-sync` below keeps them.
-      - run: uv sync --group dev --extra interactive --extra bokeh --extra live --extra ccxt --extra cryptofeed --extra databento
+      - run: uv sync --group dev --extra interactive --extra bokeh --extra live --extra kalshi --extra ccxt --extra cryptofeed --extra databento
       # Two pages at a time: a page that builds a full gallery needs about
       # 4.5 GB, and the runner has 16 GB.
       - run: uv run --no-sync python scripts/check_doc_examples.py --jobs 2

@@ -29,12 +29,13 @@ pip install "ob-analytics[interactive]"   # Plotly figures
 pip install "ob-analytics[bokeh]"         # Bokeh figures (four of the plots)
 pip install "ob-analytics[databento]"     # read Databento DBN files
 pip install "ob-analytics[live]"          # live Bitstamp capture (websockets)
+pip install "ob-analytics[kalshi]"        # live Kalshi capture from its WebSocket (needs a key)
 pip install "ob-analytics[ccxt]"          # live L2 capture from CCXT venues
 pip install "ob-analytics[cryptofeed]"    # live L2 or L3 capture through cryptofeed
 ```
 
-Requires Python 3.11+. Live capture (the `live`, `ccxt` and `cryptofeed`
-extras) is supported on Linux and macOS only. CI does not test it on
+Requires Python 3.11+. Live capture (the `live`, `kalshi`, `ccxt` and
+`cryptofeed` extras) is supported on Linux and macOS only. CI does not test it on
 Windows, where it takes no lock on the capture folder and Ctrl-C does not
 close the files cleanly. On Windows, CI tests reading files, the analytics
 and the plots.

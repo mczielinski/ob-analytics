@@ -2460,6 +2460,10 @@ databento = [
 interactive = [
     { name = "plotly" },
 ]
+kalshi = [
+    { name = "cryptography" },
+    { name = "websockets" },
+]
 live = [
     { name = "websockets" },
 ]
@@ -2498,6 +2502,7 @@ requires-dist = [
     { name = "bokeh", marker = "extra == 'bokeh'", specifier = ">=3.1" },
     { name = "ccxt", marker = "extra == 'ccxt'", specifier = ">=4.5.90" },
     { name = "cryptofeed", marker = "extra == 'cryptofeed'", specifier = ">=2.4.1" },
+    { name = "cryptography", marker = "extra == 'kalshi'", specifier = ">=50.0.0" },
     { name = "databento", marker = "extra == 'databento'", specifier = ">=0.86" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "matplotlib", specifier = ">=3.11.0,<4" },
@@ -2507,9 +2512,10 @@ requires-dist = [
     { name = "pyarrow", specifier = ">=24.0.0" },
     { name = "pydantic", specifier = ">=2.13.4,<3" },
     { name = "seaborn", specifier = ">=0.13,<1" },
+    { name = "websockets", marker = "extra == 'kalshi'", specifier = ">=14" },
     { name = "websockets", marker = "extra == 'live'", specifier = ">=12" },
 ]
-provides-extras = ["interactive", "bokeh", "live", "ccxt", "cryptofeed", "databento"]
+provides-extras = ["interactive", "bokeh", "live", "kalshi", "ccxt", "cryptofeed", "databento"]
 
 [package.metadata.requires-dev]
 backtest-engines = [
