@@ -39,7 +39,6 @@ from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack
 from typing import Any
 
-import pandas as pd
 import websockets
 from loguru import logger
 from websockets.exceptions import ConnectionClosed
@@ -49,6 +48,7 @@ from ob_analytics.live._base import (
     EventDict,
     OpenOrders,
     UnmappedMessageError,
+    epoch_ms_to_ts,
 )
 
 __all__ = [
@@ -210,7 +210,7 @@ class BitstampCapturer:
             self._snapshot_us // 1000 if self._snapshot_us else int(time.time() * 1000)
         )
 
-        ts = _epoch_ms_to_ts(snap_ms)
+        ts = epoch_ms_to_ts(snap_ms)
         for direction, side_key in (("bid", "bids"), ("ask", "asks")):
             for row in snap.get(side_key, ()):
                 try:
@@ -331,7 +331,7 @@ class BitstampCapturer:
 
     async def shutdown_synthetic_events(self) -> AsyncIterator[EventDict]:
         """Yield synthetic ``deleted`` events for every still-resting order."""
-        at = _epoch_ms_to_ts(int(time.time() * 1000))
+        at = epoch_ms_to_ts(int(time.time() * 1000))
         for event in self._open_orders.close(at):
             self.synthetic_deleted += 1
             yield event
@@ -478,8 +478,8 @@ class BitstampCapturer:
         ex_ms = ex_us // 1000
         ev: EventDict = {
             "id": order_id,
-            "timestamp": _epoch_ms_to_ts(recv_ms),
-            "exchange_timestamp": _epoch_ms_to_ts(ex_ms),
+            "timestamp": epoch_ms_to_ts(recv_ms),
+            "exchange_timestamp": epoch_ms_to_ts(ex_ms),
             "price": price,
             "volume": volume,
             "action": action,
@@ -521,8 +521,8 @@ class BitstampCapturer:
         ex_ms = ex_us // 1000
         return {
             "trade_id": trade_id,
-            "timestamp": _epoch_ms_to_ts(recv_ms),
-            "exchange_timestamp": _epoch_ms_to_ts(ex_ms),
+            "timestamp": epoch_ms_to_ts(recv_ms),
+            "exchange_timestamp": epoch_ms_to_ts(ex_ms),
             "price": price,
             "amount": amount,
             "buy_order_id": buy_id,
@@ -546,8 +546,3 @@ class BitstampCapturer:
             "pre_snapshot_trades_skipped": self.pre_snapshot_trades_skipped,
             "dropped": self.dropped,
         }
-
-
-def _epoch_ms_to_ts(ms: int) -> pd.Timestamp:
-    # Canonical clock: tz-aware UTC nanoseconds (issue #154).
-    return pd.Timestamp(ms, unit="ms", tz="UTC").as_unit("ns")

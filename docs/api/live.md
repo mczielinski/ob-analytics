@@ -27,9 +27,12 @@ segments, rolls, reconnects and restarts work.
 
 ## Built-in live sources
 
-The `bitstamp` source captures Bitstamp itself. The `ccxt` and `cryptofeed`
-sources reach many venues through those libraries, and need the `ccxt` and
-`cryptofeed` extras. See [Capture CCXT venues](../howto/ccxt.md) and
+The `bitstamp` source captures Bitstamp itself, and the `kalshi` source
+captures Kalshi from its WebSocket feed (it needs the `kalshi` extra and an API
+key). The `ccxt` and `cryptofeed` sources reach many venues through those
+libraries, and need the `ccxt` and `cryptofeed` extras. See
+[Capture Kalshi](../howto/kalshi.md#capture-every-change-with-an-api-key),
+[Capture CCXT venues](../howto/ccxt.md) and
 [Capture cryptofeed venues](../howto/cryptofeed.md).
 
 ::: ob_analytics.live.bitstamp.BitstampCapturer
@@ -41,6 +44,10 @@ sources reach many venues through those libraries, and need the `ccxt` and
 ::: ob_analytics.live.CryptofeedSource
 
 ::: ob_analytics.live.CryptofeedSettings
+
+::: ob_analytics.live.KalshiSource
+
+::: ob_analytics.live.KalshiSettings
 
 ## Writing a live source
 

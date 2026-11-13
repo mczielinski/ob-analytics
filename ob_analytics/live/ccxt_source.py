@@ -44,15 +44,17 @@ from typing import Annotated, Any
 import pandas as pd
 from loguru import logger
 
-from ob_analytics._utils import off_tick_grid
 from ob_analytics.capture_record import LOT_SIZE, TICK_SIZE
 from ob_analytics.config import SourceSettings
 from ob_analytics.exceptions import ConfigError, UnknownNameError
 from ob_analytics.live._base import (
+    FINEST_STEP,
     CaptureConfig,
     EventDict,
     VenueClockCount,
     diff_levels,
+    epoch_ms_to_ts,
+    step_for,
 )
 from ob_analytics.protocols import (
     Clocks,
@@ -77,10 +79,6 @@ _DEFAULT_POLL_INTERVAL = 1.0  # seconds; REST-poll venues only
 # is the tick itself; in DECIMAL_PLACES mode it is a count of decimals.
 _CCXT_DECIMAL_PLACES = 2
 _CCXT_TICK_SIZE = 4
-
-# The finest step a capture will shrink its recorded tick or lot size to: the
-# default lot grid, finer than any venue quotes a price or a size.
-_FINEST_STEP = 1e-8
 
 # How many recent trades a capture remembers to recognise one delivered twice.
 _SEEN_TRADES_LIMIT = 10_000
@@ -377,7 +375,7 @@ def _epoch_ms_to_ts(ms: Any, received: pd.Timestamp) -> pd.Timestamp:
     """
     if ms is None:
         return received
-    return pd.Timestamp(int(ms), unit="ms", tz="UTC").as_unit("ns")
+    return epoch_ms_to_ts(ms)
 
 
 class CcxtSource:
@@ -558,7 +556,7 @@ class CcxtSource:
         # A finer lot than the default grid counts few units before int64
         # ends (18 decimals hold only 9.2 units), so it stops there, as
         # _fit_lot does.
-        self.lot_size = None if lot is None else max(lot, _FINEST_STEP)
+        self.lot_size = None if lot is None else max(lot, FINEST_STEP)
         self._opened_ms = book.get("timestamp")
         received = pd.Timestamp.now(tz="UTC").as_unit("ns")
         self.venue_clock.note(book.get("timestamp"))
@@ -936,7 +934,7 @@ class CcxtSource:
         price sits on, so the tick is divided by ten until *price* does.  A
         venue with no tick size in its metadata records none, and is left so.
         """
-        tick = _step_for(price, self.tick_size)
+        tick = step_for(price, self.tick_size)
         if tick == self.tick_size:
             return
         logger.info(
@@ -957,7 +955,7 @@ class CcxtSource:
         every size in whole lots, so the step is divided by ten until *size*
         sits on it.  A venue with no size step records none, and is left so.
         """
-        lot = _step_for(size, self.lot_size)
+        lot = step_for(size, self.lot_size)
         if lot == self.lot_size:
             return
         logger.info(
@@ -1004,19 +1002,6 @@ class CcxtSource:
             "trade_events": self.trade_events,
             "duplicate_trades": self.duplicate_trades,
         }
-
-
-def _step_for(value: float, step: float | None) -> float | None:
-    """Return *step*, divided by ten until *value* is a whole number of steps.
-
-    ``None`` stays ``None``, and the step stops shrinking at
-    :data:`_FINEST_STEP`.
-    """
-    if step is None:
-        return None
-    while step > _FINEST_STEP and off_tick_grid(value, step):
-        step = round(step / 10, 12)
-    return step
 
 
 # ── Register this source ──────────────────────────────────────────────

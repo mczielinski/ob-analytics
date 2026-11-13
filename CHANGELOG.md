@@ -323,6 +323,16 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Added
 
+- **Kalshi capture from its WebSocket feed** (#240). `ob-analytics capture
+  kalshi --pair <ticker>` records every change to a Kalshi market's book, not
+  one poll a second. It needs a Kalshi API key, read from `KALSHI_API_KEY_ID`
+  and the private key file `KALSHI_PRIVATE_KEY_PATH` names; an Ed25519 or RSA
+  key works. Each book row carries Kalshi's `seq`, so `audit` finds a lost
+  change, and a lost change starts a new segment from a new opening book.
+  Book rows carry Kalshi's time. The book is the Yes book, as in the ccxt
+  capture. The source needs the new `kalshi` extra
+  (`pip install "ob-analytics[kalshi]"`). `KalshiSource` and `KalshiSettings`
+  are in `ob_analytics.live`.
 - **Every exported name has an API page entry** (#421). New Reference pages
   cover synthetic data (`ob_analytics.synth`), the sample and toy data
   (`ob_analytics.datasets`, `sample_csv_path`), queue positions
@@ -985,6 +995,8 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Changed
 
+- **seaborn 0.13.2 or later** is required. seaborn 0.13.0 and 0.13.1 draw an
+  empty events histogram when the direction column has pandas 3's string type.
 - **The README and Getting started describe the current package** (#422):
   every source, the plot backends and all six extras. Both say that live
   capture is supported on Linux and macOS only, and that the docs follow `main`, not

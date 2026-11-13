@@ -86,13 +86,13 @@ jobs:
       - uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: true
-      - run: uv sync --group dev --extra interactive --extra live --extra ccxt --extra databento
+      - run: uv sync --group dev --extra interactive --extra live --extra kalshi --extra ccxt --extra databento
       # Pass --extra to `uv run` too: its implicit sync would otherwise
       # re-resolve to the project default (no extras) and uninstall plotly /
       # websockets / ccxt, leaving imports in visualization/ and live/
       # (incl. live/ccxt_source.py's `import ccxt.pro` and
       # live/cryptofeed_source.py's `import cryptofeed`) unresolvable.
-      - run: uv run --group dev --extra interactive --extra live --extra ccxt --extra cryptofeed --extra databento ty check ob_analytics/ tests/ scripts/
+      - run: uv run --group dev --extra interactive --extra live --extra kalshi --extra ccxt --extra cryptofeed --extra databento ty check ob_analytics/ tests/ scripts/
 
   test:
     needs: scope
@@ -107,7 +107,7 @@ jobs:
         with:
           enable-cache: true
       - run: uv python install ${{ matrix.python-version }}
-      - run: uv sync --group dev --extra interactive --extra live --extra ccxt --extra cryptofeed --extra databento --python ${{ matrix.python-version }}
+      - run: uv sync --group dev --extra interactive --extra live --extra kalshi --extra ccxt --extra cryptofeed --extra databento --python ${{ matrix.python-version }}
       # Pass --extra to `uv run` too: its implicit sync would otherwise
       # re-resolve to the project default (no extras) and uninstall plotly /
       # websockets / ccxt / cryptofeed, which causes test_plotly_backend.py to
@@ -119,7 +119,7 @@ jobs:
       # runner's cores; --dist loadfile keeps each module on one worker, so a
       # module-scoped fixture is built once.
       - run: >-
-          uv run --group dev --extra interactive --extra live --extra ccxt --extra cryptofeed --extra databento --python ${{ matrix.python-version }}
+          uv run --group dev --extra interactive --extra live --extra kalshi --extra ccxt --extra cryptofeed --extra databento --python ${{ matrix.python-version }}
           pytest tests/ -q --durations=15 -n auto --dist loadfile
           ${{ matrix.python-version == '3.11' && '--cov=ob_analytics --cov-report=xml' || '' }}
       - name: Upload coverage
@@ -188,7 +188,7 @@ jobs:
       - run: uv python install 3.11
       # This re-resolves and rewrites uv.lock on the runner. --no-sync on the
       # run keeps `uv run` from resolving it back to the newest versions.
-      - run: uv sync --group dev --extra interactive --extra bokeh --extra live --extra ccxt --extra cryptofeed --extra databento --resolution lowest-direct --python 3.11
+      - run: uv sync --group dev --extra interactive --extra bokeh --extra live --extra kalshi --extra ccxt --extra cryptofeed --extra databento --resolution lowest-direct --python 3.11
       - run: uv run --no-sync pytest tests/ -q -n auto --dist loadfile
 
   # Windows: the core and offline parts only. Live capture is documented as

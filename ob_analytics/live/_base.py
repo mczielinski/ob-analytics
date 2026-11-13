@@ -16,6 +16,7 @@ from typing import Any, Protocol, runtime_checkable
 
 import pandas as pd
 
+from ob_analytics._utils import off_tick_grid
 from ob_analytics.exceptions import ObAnalyticsError
 from ob_analytics.protocols import Clocks, Source
 
@@ -25,9 +26,12 @@ from ob_analytics.protocols import Clocks, Source
 
 
 class UnmappedMessageError(ObAnalyticsError, ValueError):
-    """An L3 message a live source could not turn into order events.
+    """A book message a live source could not apply to its book.
 
-    An L3 source raises it from :meth:`LiveSource.snapshot` or
+    An L3 source raises it for a message it cannot turn into order events.
+    An L2 source that keeps its book from the venue's changes raises it for
+    a change it cannot apply, or when the venue's sequence shows it missed
+    one.  The source raises it from :meth:`LiveSource.snapshot` or
     :meth:`LiveSource.stream` instead of leaving the message out: without
     it the capture's book would no longer match the venue's.  The runner
     records it as :attr:`CaptureResult.capture_error`, and
@@ -210,6 +214,32 @@ def diff_levels(
         changes.append((price, 0.0))
         del previous[price]
     return changes
+
+
+def epoch_ms_to_ts(ms: int) -> pd.Timestamp:
+    """Epoch milliseconds on the canonical clock: tz-aware UTC nanoseconds."""
+    return pd.Timestamp(int(ms), unit="ms", tz="UTC").as_unit("ns")
+
+
+#: The finest step a capture will shrink its recorded tick or lot size to: the
+#: default lot grid, finer than any venue quotes a price or a size.
+FINEST_STEP = 1e-8
+
+
+def step_for(value: float, step: float | None) -> float | None:
+    """Return *step*, divided by ten until *value* is a whole number of steps.
+
+    A live source records its instrument's tick and lot size in ``meta.json``
+    so the replay uses the same grid.  A venue can quote a price or size
+    between the steps its metadata gave, so a source makes the recorded step
+    finer to fit each value it writes.  ``None`` stays ``None``, and the step
+    stops shrinking at :data:`FINEST_STEP`.
+    """
+    if step is None:
+        return None
+    while step > FINEST_STEP and off_tick_grid(value, step):
+        step = round(step / 10, 12)
+    return step
 
 
 # ---------------------------------------------------------------------------

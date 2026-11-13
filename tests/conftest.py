@@ -27,6 +27,7 @@ LIVE_CAPTURE_TESTS = [
     "test_cryptofeed_source.py",
     "test_cryptofeed_venues.py",
     "test_kalshi.py",
+    "test_kalshi_ws.py",
     "test_live_protocol.py",
     "test_polymarket.py",
 ]

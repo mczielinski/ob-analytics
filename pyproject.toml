@@ -24,7 +24,7 @@ dependencies = [
     "numpy>=2.4.6",
     "pandas>=3.0.3,<4",
     "matplotlib>=3.11.0,<4",
-    "seaborn>=0.13,<1",
+    "seaborn>=0.13.2,<1",
     "pydantic>=2.13.4,<3",
     "pyarrow>=24.0.0",
     "loguru>=0.7.3",
@@ -34,6 +34,14 @@ dependencies = [
 interactive = ["plotly>=6.8.0"]
 bokeh = ["bokeh>=3.1"]
 live = ["websockets>=12"]
+# The Kalshi WebSocket source signs its connection (cryptography) and sends the
+# signature as headers through websockets' asyncio client, which raises
+# InvalidStatus for a refused key from websockets 14 on. The cryptography floor
+# is the version in uv.lock.
+kalshi = [
+    "websockets>=14",
+    "cryptography>=50.0.0",
+]
 # The ccxt and cryptofeed floors are the oldest versions CI tests (the ones in
 # uv.lock). Older releases lack venues the sources use: ccxt 4.0 has no
 # Coinbase in ccxt.pro, and cryptofeed 2.0 has no Independent Reserve.

@@ -18,8 +18,13 @@ line with the environment variables to set:
 <source>  [live, key: <VENUE>_API_KEY, <VENUE>_PRIVATE_KEY_PATH]
 ```
 
-No built-in source needs a key yet. The [venues](#venues) section lists those
-planned.
+For example, the `kalshi` source:
+
+```text
+kalshi  [live, key: KALSHI_API_KEY_ID, KALSHI_PRIVATE_KEY_PATH]
+```
+
+The [venues](#venues) section lists each source that needs a key.
 
 ## Set the key
 
@@ -38,6 +43,14 @@ those, the variable holds the path of the file, not the key:
 ```bash
 chmod 600 ~/.config/venue/private-key.pem
 export VENUE_PRIVATE_KEY_PATH=~/.config/venue/private-key.pem
+```
+
+To keep the variables in one place, put them in a file named `.env` that git
+ignores and only you can read (`chmod 600 .env`), and load it before a
+capture:
+
+```bash
+set -a; source .env; set +a
 ```
 
 A key file of one line is read without the spaces and newline around the key.
@@ -100,12 +113,28 @@ run as your user can read it.
 
 ## Venues
 
-No built-in venue needs a key yet. These are planned, and each will add a
-section here:
+### Kalshi
 
-- Kalshi's WebSocket feed
-  ([#240](https://github.com/mczielinski/ob-analytics/issues/240)). Kalshi's
-  REST capture needs no key: see [Capture Kalshi](kalshi.md).
+The `kalshi` source reads Kalshi's WebSocket feed, and signs each connection
+with your key. Set two variables:
+
+| Variable | Holds |
+|---|---|
+| `KALSHI_API_KEY_ID` | the Key ID Kalshi shows with the key |
+| `KALSHI_PRIVATE_KEY_PATH` | the path of the file that holds the private key |
+
+Kalshi issues keys on the profile page of a Kalshi account,
+<https://kalshi.com/account/profile>. Give the key **Read all data** access
+only: the capture never trades or moves money. Kalshi shows the private key
+once, as text; paste it into a file that only you can read. An Ed25519 key
+(Kalshi's default) and an RSA key both work. [Capture
+Kalshi](kalshi.md#capture-every-change-with-an-api-key) shows a capture.
+
+Kalshi's REST capture through the `ccxt` source needs no key: see [Capture
+Kalshi](kalshi.md).
+
+### Planned
+
 - Coinbase's per-order (L3) feed
   ([#99](https://github.com/mczielinski/ob-analytics/issues/99)). Coinbase's
   price-level (L2) book needs no key: see [Capture Coinbase](coinbase.md).
