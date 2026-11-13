@@ -690,12 +690,16 @@ class TestOneWindowAnchor:
             ofi["signed_volume"], time_bars["signed_volume"] * lot
         )
 
-    def test_ofi_matches_one_step_horizon(self, sample_trades):
-        ofi = order_flow_imbalance(sample_trades, "7s")
+    def test_one_step_horizon_matches_trades_through_each_grid_end(self, sample_trades):
         by_horizon = ofi_by_window(sample_trades, windows=("7s",), grid="7s")
-        traded = by_horizon.dropna(subset=["7s"]).reset_index(drop=True)
-        assert (traded["timestamp"].to_numpy() == ofi["timestamp"].to_numpy()).all()
-        np.testing.assert_allclose(traded["7s"], ofi["ofi"])
+        ends = sample_trades["timestamp"].dt.ceil("7s")
+        volume = sample_trades["volume"]
+        signed = volume.where(sample_trades["direction"] == "buy", -volume)
+        expected = signed.groupby(ends).sum() / volume.groupby(ends).sum()
+
+        traded = by_horizon.set_index("timestamp")["7s"].dropna()
+        pd.testing.assert_index_equal(traded.index, expected.index, check_names=False)
+        np.testing.assert_allclose(traded, expected)
 
     def test_kyle_windows_match_time_bars(self, sample_trades):
         reg = kyle_lambda(sample_trades, "7s", n_boot=0).regression_df
