@@ -283,8 +283,12 @@ The check needs two files for the same instrument and time range:
   compared. `bbo-1s` is smaller, but it does not see a wrong state that lasts
   less than a second.
 
-The MBO file must start at the start of the venue's day. The rebuilt book
-starts empty, so an order resting before the file starts is missing from it.
+The MBO file must start at the start of the venue's day. Databento opens each
+day of MBO data with a clear record and then one record for each order still
+resting from the day before (seen on `XNAS.ITCH`), so the rebuilt book is
+complete from the first record. A file that starts later in the day has no
+such records, and the orders resting before it starts are missing from the
+rebuilt book.
 
 How the two are lined up:
 
@@ -312,8 +316,41 @@ across each cut. `--csv PATH` writes every mismatched record to a file.
 `tests/test_databento_bbo_check.py` runs the check on a short hand-built MBO
 stream and its known top of book. It needs no key.
 
-**Result:** not run on a real file yet. The result, with the dataset, symbol
-and date range, will be recorded here after the first run.
+The same test file also runs the check on a real file pair, but only when you
+point it at one. Set `OB_DATABENTO_MBO` and `OB_DATABENTO_BBO` to the two
+files, and, for a large file, `OB_DATABENTO_CUTS` to comma-separated UTC cut
+times. Without them the test is skipped. The test passes only if every
+instant matches.
+
+### Result
+
+| | |
+|---|---|
+| Dataset | `XNAS.ITCH` (Nasdaq TotalView-ITCH) |
+| Symbol | AAPL |
+| Time range | 2026-11-10 00:00 to 2026-11-11 00:00 UTC (one full day) |
+| Files | `mbo`: 3,870,832 records; `mbp-1`: 577,990 records |
+| Compared | 486,850 instants (several `mbp-1` records can share one instant) |
+| Best bid and ask price match | 486,850 of 486,850 (100%) |
+| Price and size match | 486,850 of 486,850 (100%) |
+| Prices off the 0.01 tick | 0 |
+
+Every compared instant matched, on both prices and both sizes, across the
+whole UTC day: the end of the previous day's after-hours session, the
+pre-market, the regular session and the after-hours session.
+There was no mismatch to explain. In 486,844 instants both sides of the book
+held orders. In the other six, one side or both sides were empty, and the
+rebuilt book was empty on the same side.
+
+The check covers the resting book, which is what the top of book shows. It
+does not cover trades: on the same day, fills explain 3,058,846 of the
+10,639,554 shares printed in the MBO file's trade records. The rest are trades
+with no displayed order behind them, such as auctions and non-displayed
+orders, and the loader warns about them. See
+[Process Databento MBO files](howto/databento.md).
+
+The two files cost USD 0.29 from Databento's historical API, so they are not
+bundled with the package.
 
 ## See also
 

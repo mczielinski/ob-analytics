@@ -5,11 +5,18 @@ own top of book. Here the MBO side is the short stream in :mod:`tests._mbo`,
 and the top of book is built by hand from what that stream's book must be, so
 a correct rebuild matches it on every instant. The tests that read or write a
 ``.dbn`` file skip without the ``databento`` extra.
+
+One opt-in test runs the check on a real Databento file pair. It runs only
+when ``OB_DATABENTO_MBO`` and ``OB_DATABENTO_BBO`` name the two files, and
+fails unless every instant matches.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import os
+from pathlib import Path
+from typing import cast
 
 import pandas as pd
 import pytest
@@ -290,3 +297,46 @@ def test_help_runs_through_argparse(capsys):
         check.parse_args(["--help"])
     assert exit_.value.code == 0
     assert "Databento's own BBO" in capsys.readouterr().out
+
+
+# ── Opt-in: a real Databento file pair ────────────────────────────────
+
+#: Paths to a real MBO file and its matching top-of-book file. The test below
+#: runs only when both are set; the files need a Databento account.
+REAL_MBO_ENV, REAL_BBO_ENV = "OB_DATABENTO_MBO", "OB_DATABENTO_BBO"
+#: Optional comma-separated UTC cut times, for a file of several million records.
+REAL_CUTS_ENV = "OB_DATABENTO_CUTS"
+
+
+def _real_files() -> tuple[Path, Path] | None:
+    paths = [os.environ.get(name, "") for name in (REAL_MBO_ENV, REAL_BBO_ENV)]
+    if not all(paths) or not all(Path(p).is_file() for p in paths):
+        return None
+    return Path(paths[0]), Path(paths[1])
+
+
+@requires_databento
+@pytest.mark.skipif(
+    _real_files() is None,
+    reason=f"set {REAL_MBO_ENV} and {REAL_BBO_ENV} to a real Databento file pair",
+)
+def test_a_real_file_matches_databento_top_of_book():
+    from ob_analytics.databento import DATABENTO_GRID
+
+    mbo, bbo = cast("tuple[Path, Path]", _real_files())
+    cuts = [c.strip() for c in os.environ.get(REAL_CUTS_ENV, "").split(",")]
+    cuts = [c for c in cuts if c]
+    config = DATABENTO_GRID.config()
+    touch, events = check.rebuild_touch(mbo, config=config, cuts=cuts)
+    result = check.compare(
+        touch,
+        check.read_bbo_frame(bbo),
+        tick_size=config.tick_size,
+        lot_size=config.lot_size,
+    )
+
+    assert len(result.rows)
+    assert result.off_grid == 0
+    assert result.full_match_rate == 1.0, check.report(
+        result, events, tick_size=config.tick_size, lot_size=config.lot_size
+    )
