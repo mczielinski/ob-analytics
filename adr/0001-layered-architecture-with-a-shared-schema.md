@@ -89,6 +89,61 @@ zensical stack: Narwhals, Polars, DuckDB, numba, typed configuration (pydantic
 or dataclasses), entry-point plug-ins, a benchmark test in CI, and conda-forge
 (#115). Rust tools (maturin, cibuildwheel) only if #138 needs them.
 
+## Allowed upward imports
+
+*Added 2026-11-17 (#495).* A layer imports only from the layers below it.
+`tests/test_layer_imports.py` checks every module against this. It puts each
+module in a layer (`LAYER_OF`), says which layers each layer may use
+(`MAY_IMPORT`), and lists the few imports that go upward on purpose
+(`ALLOWED_EXCEPTIONS`). That list and this one must match. To add an upward
+import, add it to both, with the reason here.
+
+The schema and the small helpers every layer uses (`schemas`, `config`,
+`protocols`, `exceptions`, `_utils` and a few others) form a shared layer
+under all five. The diagram puts `plot_result` and `prepare` in the public
+API, so the test does too, and puts the gallery beside them. The rest of
+`ob_analytics.visualization`, Parquet I/O (`data`) and the backtest writers
+(`interop`) form the plots and export layer. Export may use sources, because
+a source can supply the writer for its own format.
+
+The one upward import by design:
+
+- **`metrics` → `visualization._data`.** `Metric.prepare` returns the data a
+  renderer draws. One object then holds a metric and its plot, which is the
+  short way for a plug-in author to add both (goal #174). The import is inside
+  each `prepare` method, so loading `metrics` does not load the plot code.
+
+Upward imports allowed for now. Each uses a function or type that sits one
+layer too high for it. Moving them down would touch modules that other work is
+changing, so each is left as a later move:
+
+- **`lobster` → `depth` and `quality`.** The LOBSTER loader rebuilds the price
+  levels from the messages and warns when that book is crossed for too long. It
+  uses `quality.book_crossing` and `CROSSED_TOLERANCE_PCT`, so the loader and
+  the audit measure a crossed book the same way. It still imports the private
+  `depth._price_level_volume`.
+- **`live._manifest` → `quality`.** A capture manifest reports its problems as
+  `QualityCheck` rows with a `Severity`, so `audit` shows them beside the other
+  checks. The two types could move into the shared layer.
+- **`synth` → `analytics`.** A generated session comes back with
+  `set_order_types` already applied, so it looks like real input after the
+  pipeline's classification step.
+- **`databento` → `_engine_frames`.** The loader uses `resting_price`, the
+  library's one rule for the price an order rests at, so it does not keep a
+  second copy of that rule.
+- **`databento` → `_windows`.** The loader reads one window at a time for
+  `Pipeline.run_windows`, and yields the `LoadedWindow` that module defines.
+  `LoadedWindow` could move down to the sources or shared layer.
+- **`data` → `pipeline`.** Loading a saved run builds a `PipelineResult`, the
+  type the pipeline returns. The imports are inside functions or under
+  `TYPE_CHECKING`, which breaks the import cycle with `pipeline`.
+- **`visualization._data` → `pipeline`.** Plot data uses the pipeline's marker
+  for an argument that was not given, `_UNSET`, so a plot can tell "no level
+  given" from `level=None`. The marker could move into the shared layer.
+- **`visualization._data` → `visualization`.** Plot data resolves the level
+  of a run with the same function `plot_result` uses, so the two cannot
+  disagree.
+
 ## Related
 
 - Roadmap and current status: epic #124. That issue tracks *what is done*; this

@@ -995,6 +995,13 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Changed
 
+- **A test checks every layer's imports** (#495). Before, only the engine's
+  imports were checked against ADR 0001. `tests/test_layer_imports.py` now
+  puts every module in a layer and fails when a module imports from a layer
+  above it. ADR 0001 lists the upward imports that stay, and why:
+  `Metric.prepare` by design, and a few small helpers for now. The LOBSTER
+  loader no longer imports a private name from `quality`. The function it uses
+  is now `quality.book_crossing`.
 - **seaborn 0.13.2 or later** is required. seaborn 0.13.0 and 0.13.1 draw an
   empty events histogram when the direction column has pandas 3's string type.
 - **The README and Getting started describe the current package** (#422):
