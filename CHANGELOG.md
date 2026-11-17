@@ -1455,6 +1455,19 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
+- **`queue_positions` no longer scans every live level per event** (#489).
+  To find the touch, the engine took `max` or `min` over all non-empty price
+  levels of a side for every event. On a real capture in time order thousands
+  of levels are live, so `queue_positions(result.events)` took about 9 s on the
+  bundled sample. The live levels now sit in a heap, and the same call takes
+  about 0.65 s on the same desktop. The output is unchanged, byte for byte.
+  `queue_age_grid` uses the same heap.
+- **The speed test times `queue_positions` as a user calls it** (#489).
+  `scripts/bench_scale.py` passed the events to the engine in the order the
+  Bitstamp loader leaves them, by order id, where few levels are live at once.
+  It understated the stage about ten times. It now calls the public
+  `ob_analytics.queue.queue_positions`, which sorts the events into time order
+  first.
 - **Docstrings carry no issue numbers** (#421). Published docstrings, `#:`
   attribute comments and the `tick_size` / `price_decimals` field descriptions
   named GitHub issues or plan labels, which mean nothing to a reader. A new

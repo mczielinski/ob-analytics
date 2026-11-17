@@ -34,7 +34,16 @@ _PACKAGE_DIR = _ENGINE_DIR.parent
 # Everything the engine is allowed to import.  numpy is the one third-party
 # dependency; the rest is the standard library plus the engine's own modules.
 _ALLOWED_ROOTS = frozenset(
-    {"__future__", "collections", "dataclasses", "enum", "math", "numpy", "typing"}
+    {
+        "__future__",
+        "collections",
+        "dataclasses",
+        "enum",
+        "heapq",
+        "math",
+        "numpy",
+        "typing",
+    }
 )
 
 
