@@ -44,6 +44,7 @@ from ob_analytics.live._base import (
     CaptureConfig,
     EventDict,
     OpenOrders,
+    RecordedGrid,
     UnmappedMessageError,
     VenueClockCount,
     diff_levels,
@@ -482,6 +483,9 @@ class CryptofeedSource:
         )
         # Books with and without the venue's own time (see ``clocks``).
         self.venue_clock = VenueClockCount()
+        # The tick and lot size every written price and size sits on, for
+        # meta.json: cryptofeed gives neither (see ``_fitted``).
+        self.grid = RecordedGrid()
 
         # Diagnostics (surfaced in meta.json via SupportsDiagnostics).
         self.sequence_out_of_order = 0
@@ -1234,6 +1238,7 @@ class CryptofeedSource:
             # It came from the stream; only the close-outs below are the
             # shutdown's own rows.
             event.setdefault(ORIGIN_COLUMN, ORIGIN_STREAM)
+            self.grid.fit(event)
             yield event
         if self.level is not Level.L2:
             for held in self._release_held_deletes():
@@ -1263,6 +1268,7 @@ class CryptofeedSource:
             "books_without_venue_time": self.venue_clock.without_venue_time,
             "synthetic_deleted": self.synthetic_deleted,
             "dropped": self.dropped,
+            **self.grid.fields(),
         }
 
     # -- the cryptofeed bridge ----------------------------------------------
@@ -1483,21 +1489,32 @@ class CryptofeedSource:
                     # place a held book: write it now rather than leave it
                     # off disk until the next message (see ``_hold_book``).
                     for held in self._release_held_book():
-                        yield held
+                        yield self._fitted(held)
                     continue
-                yield _checked(item)
+                yield self._fitted(_checked(item))
             # Stop the feed first, so nothing is added while the queue drains,
             # then write what it delivered, and the held book last: it came
             # after everything in the queue.
             stopped = True
             await self._stop_handler(handler)
             while not queue.empty():
-                yield _checked(queue.get_nowait())
+                yield self._fitted(_checked(queue.get_nowait()))
             for held in self._release_held_book():
-                yield held
+                yield self._fitted(held)
         finally:
             if not stopped:
                 await self._stop_handler(handler)
+
+    def _fitted(self, item: tuple[str, EventDict, Any]) -> tuple[str, EventDict, Any]:
+        """Return *item*, after fitting the recorded grid to its row.
+
+        Every row the stream writes passes through here, so the ``tick_size``
+        and ``lot_size`` in ``meta.json`` hold every price and size in the
+        capture.  A raw frame's row is empty and changes nothing, and so is
+        a trade from another market, whose price is in another currency.
+        """
+        self.grid.fit(item[1])
+        return item
 
     async def _stop_handler(self, handler: Any) -> None:
         """Shut the feed handler down without touching the running loop."""

@@ -17,6 +17,8 @@ What the capturer does:
   the snapshot (already reflected in the synthetic ``created`` rows).
 * Emits a synthetic ``deleted`` event at shutdown for every order still
   resting (full ``created -> ... -> deleted`` lifecycle).
+* Records in ``meta.json`` the ``tick_size`` and ``lot_size`` every price
+  and size it wrote sits on, since the feed gives neither.
 * Raises :class:`~ob_analytics.live.UnmappedMessageError` on an order
   message (a snapshot row or a live event) it cannot parse, since the book
   would be wrong from then on.  A trade it cannot parse is left out and
@@ -47,6 +49,7 @@ from ob_analytics.live._base import (
     CaptureConfig,
     EventDict,
     OpenOrders,
+    RecordedGrid,
     UnmappedMessageError,
     epoch_ms_to_ts,
 )
@@ -134,6 +137,9 @@ class BitstampCapturer:
         # used overlapped the stream (see SNAPSHOT_MAX_FETCHES).
         self.snapshot_fetches = 0
         self.snapshot_overlap = False
+        # The tick and lot size every written price and size sits on, for
+        # meta.json: the feed gives neither.
+        self.grid = RecordedGrid()
 
     # ---------------------------------------------------------------
     # snapshot
@@ -227,7 +233,7 @@ class BitstampCapturer:
                     continue
                 self._open_orders[order_id] = (price, direction, volume)
                 self.synthetic_created += 1
-                yield {
+                created: EventDict = {
                     "id": order_id,
                     "timestamp": ts,
                     "exchange_timestamp": ts,
@@ -236,6 +242,8 @@ class BitstampCapturer:
                     "action": "created",
                     "direction": direction,
                 }
+                self.grid.fit(created)
+                yield created
 
         logger.info(
             "[bitstamp] snapshot: {} resting orders (microtimestamp={})",
@@ -485,6 +493,7 @@ class BitstampCapturer:
             "action": action,
             "direction": direction,
         }
+        self.grid.fit(ev)
 
         if action == "deleted":
             self._open_orders.pop(order_id, None)
@@ -519,7 +528,7 @@ class BitstampCapturer:
             return None
 
         ex_ms = ex_us // 1000
-        return {
+        trade: EventDict = {
             "trade_id": trade_id,
             "timestamp": epoch_ms_to_ts(recv_ms),
             "exchange_timestamp": epoch_ms_to_ts(ex_ms),
@@ -529,13 +538,19 @@ class BitstampCapturer:
             "sell_order_id": sell_id,
             "side": side,
         }
+        self.grid.fit(trade)
+        return trade
 
     # ---------------------------------------------------------------
     # diagnostics
     # ---------------------------------------------------------------
 
     def diagnostics(self) -> dict[str, Any]:
-        """Return per-capturer counters for inclusion in meta.json."""
+        """Return per-capturer counters for inclusion in meta.json.
+
+        With the ``tick_size`` and ``lot_size`` every written price and size
+        sits on, so the replay reads them on that grid.
+        """
         return {
             "snapshot_microtimestamp": self._snapshot_us,
             "snapshot_fetches": self.snapshot_fetches,
@@ -545,4 +560,5 @@ class BitstampCapturer:
             "pre_snapshot_skipped": self.pre_snapshot_skipped,
             "pre_snapshot_trades_skipped": self.pre_snapshot_trades_skipped,
             "dropped": self.dropped,
+            **self.grid.fields(),
         }

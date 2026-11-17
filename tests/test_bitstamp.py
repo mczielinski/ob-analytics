@@ -852,3 +852,80 @@ class TestBitstampSource:
         assert isinstance(loader, BitstampLoader)
         assert isinstance(ts, BitstampTradeReader)
         assert isinstance(writer, BitstampWriter)
+
+
+class TestOffGrid:
+    """A price between two ticks is refused, a size between two lots is
+    rounded with a warning, and a capture is read on the grid it recorded
+    (#500)."""
+
+    @staticmethod
+    def _copy(fixture: Path, target: Path, file: str = "", **cells) -> Path:
+        """Copy the fixture's two files to *target*, setting *cells* in *file*.
+
+        A cell is ``column=(row, value)``.  Returns the copied orders.csv.
+        """
+        target.mkdir(parents=True, exist_ok=True)
+        for name in ("orders.csv", "trades.csv"):
+            frame = pd.read_csv(fixture.parent / name)
+            if name == file:
+                for column, (row, value) in cells.items():
+                    frame.loc[row, column] = value
+            frame.to_csv(target / name, index=False)
+        return target / "orders.csv"
+
+    def test_an_off_grid_order_price_is_refused(
+        self, tiny_bitstamp_orders_csv, tmp_path
+    ):
+        orders = self._copy(
+            tiny_bitstamp_orders_csv, tmp_path, "orders.csv", price=(2, 99.905)
+        )
+        with pytest.raises(
+            ConfigError, match=r"'price' column.*tick_size=0\.01.*99\.905"
+        ):
+            BitstampLoader().load(orders)
+
+    def test_an_off_grid_trade_price_is_rounded(
+        self, tiny_bitstamp_orders_csv, tmp_path
+    ):
+        # An execution can print between two ticks; only order prices are
+        # held to the grid.
+        orders = self._copy(
+            tiny_bitstamp_orders_csv, tmp_path, "trades.csv", price=(0, 100.105)
+        )
+        events = BitstampLoader().load(orders)
+        trades = BitstampTradeReader().load(events, orders)
+        assert trades["price"].iloc[0] in (10010, 10011)
+
+    def test_an_off_lot_size_is_rounded_with_a_warning(
+        self, tiny_bitstamp_orders_csv, tmp_path
+    ):
+        orders = self._copy(
+            tiny_bitstamp_orders_csv, tmp_path, "orders.csv", volume=(0, 2.000000001)
+        )
+        with pytest.warns(UserWarning, match=r"'volume' column.*lot_size=1e-08"):
+            events = BitstampLoader().load(orders)
+        assert events.loc[events["id"] == 1, "volume"].iloc[0] == 200_000_000
+
+    def test_a_capture_that_recorded_no_steps_loads_on_the_default_grid(
+        self, tiny_bitstamp_orders_csv, tmp_path
+    ):
+        # A capture made before captures recorded tick_size and lot_size.
+        orders = self._copy(tiny_bitstamp_orders_csv, tmp_path)
+        (tmp_path / "meta.json").write_text('{"source": "bitstamp"}')
+        result = Pipeline().run(orders)
+        assert result.config.tick_size == 0.01
+        assert result.config.lot_size == 1e-8
+
+    def test_a_capture_is_read_on_the_tick_it_recorded(
+        self, tiny_bitstamp_orders_csv, tmp_path
+    ):
+        orders = self._copy(
+            tiny_bitstamp_orders_csv, tmp_path, "orders.csv", price=(0, 99.005)
+        )
+        (tmp_path / "meta.json").write_text(
+            '{"source": "bitstamp", "tick_size": 0.001, "lot_size": 1e-08}'
+        )
+        result = Pipeline().run(orders)
+        assert result.config.tick_size == 0.001
+        assert 99_005 in result.events["price"].tolist()

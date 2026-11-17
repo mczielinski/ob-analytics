@@ -9,6 +9,7 @@ or a socket.
 from __future__ import annotations
 
 import importlib.util
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -2653,3 +2654,66 @@ class TestUnmappableMessages:
         assert result.capture_error is None
         assert result.n_depth_events == 2
         assert json.loads((out / "meta.json").read_text())["dropped"] == 1
+
+
+class TestRecordedGrid:
+    """cryptofeed gives no tick or lot size, so a capture records the grid
+    every written price and size sits on, and the replay reads it (#500)."""
+
+    @staticmethod
+    def _capture(tmp_path, venue, script) -> tuple[dict, Path]:
+        import asyncio
+        import json
+
+        from ob_analytics.live._runner import run_capturer
+
+        asyncio.run(run_capturer(_source_with(venue, script), _capture_cfg(tmp_path)))
+        out = tmp_path / "cap"
+        return json.loads((out / "meta.json").read_text()), out
+
+    def test_prices_on_the_default_grid_record_it(self, tmp_path):
+        script = [
+            ("l3_book", _l3_book({"bid": {100.0: {11: 2.0}}, "ask": {}}, delta=None)),
+        ]
+        meta, _ = self._capture(tmp_path, _l3_venue(), script)
+        assert meta["tick_size"] == 0.01
+        assert meta["lot_size"] == 1e-8
+        assert meta["tick_size_changes"] == 0
+        assert meta["lot_size_changes"] == 0
+
+    def test_a_finer_trade_price_makes_the_l3_tick_finer(self, tmp_path):
+        from ob_analytics.pipeline import Pipeline
+
+        script = [
+            (
+                "l3_book",
+                _l3_book(
+                    {"bid": {100.0: {11: 2.0}}, "ask": {101.0: {21: 3.0}}}, delta=None
+                ),
+            ),
+            ("trades", _FakeTrade(price="100.005")),
+        ]
+        meta, out = self._capture(tmp_path, _l3_venue(), script)
+        assert meta["tick_size"] == 0.001
+        assert meta["tick_size_changes"] == 1
+
+        # On the default cent grid the trade would be refused.
+        result = Pipeline().run(out / "orders.csv")
+        assert result.config.tick_size == 0.001
+        assert result.trades["price"].tolist() == [100_005]
+
+    def test_a_finer_l2_price_makes_the_tick_finer(self, tmp_path):
+        from ob_analytics.pipeline import Pipeline
+
+        script = [
+            (
+                "l2_book",
+                _FakeBook({"bid": {0.1234: 5.0}, "ask": {0.1236: 4.0}}, delta=None),
+            ),
+        ]
+        meta, out = self._capture(tmp_path, _l2_venue(), script)
+        assert meta["tick_size"] == 0.0001
+
+        result = Pipeline.from_source("depth_csv").run(out)
+        assert result.config.tick_size == 0.0001
+        assert sorted(result.depth["price"].unique().tolist()) == [1234, 1236]

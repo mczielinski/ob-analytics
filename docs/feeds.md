@@ -385,11 +385,13 @@ The smallest step between two prices.
 - **Stops you concluding:** that a depth ring in basis points holds the same
   number of ticks on every market. On a coarse grid, a narrow ring can hold no
   tick at all.
-- **In the package:** `PipelineConfig.tick_size`. A ccxt capture records it in
-  `meta.json`, and the loaders refuse prices off the grid. ccxt ignores
-  Polymarket's messages that change the step. The capture finds the finer
-  step from the prices instead, records the final one, and counts the changes
-  in `tick_size_changes`.
+- **In the package:** `PipelineConfig.tick_size`. Every live capture records
+  it in `meta.json`, and the loaders refuse prices off the grid. A capture
+  that does not know the step starts at 0.01 and makes it ten times finer
+  until every price fits. It records the final step and counts the changes in
+  `tick_size_changes`. ccxt ignores Polymarket's messages that change the
+  step, so a Polymarket capture finds the finer step from the prices the same
+  way.
 
 ### What the book means
 

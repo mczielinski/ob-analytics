@@ -1645,3 +1645,34 @@ class TestDbnFiles:
     def test_the_source_supplies_a_writer(self):
         writer = DatabentoSource().create_writer(_config(), RunContext())
         assert isinstance(writer, DatabentoWriter)
+
+
+class TestOffGridPrices:
+    """A price between two ticks is refused; a clear's price is never read,
+    so it is not checked (#500)."""
+
+    def test_an_off_grid_price_is_refused(self):
+        records = [*LIFECYCLE]
+        records[0] = (1, "A", "B", px(100.255), 100)
+        with pytest.raises(
+            ConfigError, match=r"'price' column.*tick_size=0\.01.*100\.255"
+        ):
+            load(records)
+
+    def test_a_finer_tick_keeps_the_price(self):
+        records = [*LIFECYCLE]
+        records[0] = (1, "A", "B", px(100.255), 100)
+        _, events = load(records, _config(tick_size=0.001, price_decimals=3))
+        assert events["price"].iloc[0] == 100_255
+
+    def test_a_midpoint_trade_price_is_not_checked(self):
+        # A trade can print between two ticks (a midpoint execution); only a
+        # book record's price is held to the grid.
+        records = [*LIFECYCLE]
+        records[3] = (0, "T", "B", px(100.355), 20)
+        _, events = load(records)
+        assert len(events) > 0
+
+    def test_a_clear_with_no_price_is_not_checked(self):
+        _, events = load([(0, "R", "N", UNDEF_PRICE, 0), *LIFECYCLE])
+        assert len(events) > 0

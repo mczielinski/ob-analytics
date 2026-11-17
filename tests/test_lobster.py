@@ -1408,3 +1408,55 @@ class TestFewLevelsWarning:
         warning = next(w for w in caught if "no orderbook file found" in str(w.message))
         # Reported at the caller of Pipeline.run, not inside the package.
         assert warning.filename.endswith("_lobster_few_levels.py")
+
+
+class TestOffGridPrices:
+    """A price between two ticks is refused in either file, and a halt's
+    price, which is a code, is not checked (#500)."""
+
+    def test_an_off_grid_message_price_is_refused(self, tmp_path):
+        from ob_analytics.exceptions import ConfigError
+
+        # 100.005 is between two cent ticks.
+        messages = TestOrderbookRowsFollowMessageRows.MESSAGES.replace(
+            "34202.0,1,2,200,1010000,-1", "34202.0,1,2,200,1000050,-1"
+        )
+        _write_pair(tmp_path, messages, TestOrderbookRowsFollowMessageRows.ORDERBOOK)
+        with pytest.raises(
+            ConfigError, match=r"'price' column.*tick_size=0\.01.*100\.005"
+        ):
+            _run_lobster(tmp_path)
+
+    def test_an_off_grid_orderbook_price_is_refused(self, tmp_path):
+        from ob_analytics.exceptions import ConfigError
+
+        orderbook = TestOrderbookRowsFollowMessageRows.ORDERBOOK.replace(
+            "1010000,200,-9999999999,0", "1010050,200,-9999999999,0"
+        )
+        _write_pair(tmp_path, TestOrderbookRowsFollowMessageRows.MESSAGES, orderbook)
+        with pytest.raises(ConfigError, match=r"orderbook.*101\.005"):
+            _run_lobster(tmp_path)
+
+    def test_a_midpoint_execution_price_is_not_checked(self, tmp_path):
+        # A hidden order filled at the midpoint (type 5) prints at 100.505,
+        # between two cent ticks; that is a real execution, not a bad grid.
+        messages = TestOrderbookRowsFollowMessageRows.MESSAGES.replace(
+            "34201.0,6,0,50,1005000,-1", "34201.0,5,0,50,1005050,-1"
+        )
+        result = _run_lobster(
+            _write_pair(
+                tmp_path, messages, TestOrderbookRowsFollowMessageRows.ORDERBOOK
+            )
+        )
+        assert len(result.events) > 0
+
+    def test_a_halt_price_is_not_checked(self, tmp_path):
+        # The halt row's price is -1: -0.0001 dollars, off the cent grid.
+        result = _run_lobster(
+            _write_pair(
+                tmp_path,
+                TestOrderbookRowsFollowMessageRows.MESSAGES,
+                TestOrderbookRowsFollowMessageRows.ORDERBOOK,
+            )
+        )
+        assert len(result.events) > 0

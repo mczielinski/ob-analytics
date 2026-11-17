@@ -17,6 +17,8 @@ from typing import Any, Protocol, runtime_checkable
 import pandas as pd
 
 from ob_analytics._utils import off_tick_grid
+from ob_analytics.capture_record import LOT_SIZE, TICK_SIZE
+from ob_analytics.config import InstrumentGrid
 from ob_analytics.exceptions import ObAnalyticsError
 from ob_analytics.protocols import Clocks, Source
 
@@ -240,6 +242,59 @@ def step_for(value: float, step: float | None) -> float | None:
     while step > FINEST_STEP and off_tick_grid(value, step):
         step = round(step / 10, 12)
     return step
+
+
+@dataclass
+class RecordedGrid:
+    """The tick and lot size a live source records in ``meta.json``.
+
+    For a source whose venue gives no tick or lot size.  The steps start at
+    the grid the replay would use without them (:class:`InstrumentGrid`), and
+    :meth:`fit` makes them finer, as :func:`step_for` does, until every price
+    and size the capture writes sits on them.  :meth:`fields` gives the
+    ``meta.json`` fields, so the replay reads every value on the right grid.
+
+    Attributes
+    ----------
+    tick_size, lot_size : float
+        The steps fitted so far.
+    tick_size_changes, lot_size_changes : int
+        How many times each step was made finer.
+    """
+
+    tick_size: float = InstrumentGrid.tick_size
+    lot_size: float = InstrumentGrid.lot_size
+    tick_size_changes: int = 0
+    lot_size_changes: int = 0
+
+    def fit(self, event: EventDict) -> None:
+        """Make the steps fine enough for *event*'s price and size.
+
+        The size is ``volume`` on an order or depth row and ``amount`` on a
+        trade.  A row with neither price nor size (a raw frame) changes
+        nothing.
+        """
+        price = event.get("price")
+        if price is not None:
+            tick = step_for(price, self.tick_size)
+            if tick is not None and tick != self.tick_size:
+                self.tick_size = tick
+                self.tick_size_changes += 1
+        size = event.get("volume", event.get("amount"))
+        if size is not None:
+            lot = step_for(size, self.lot_size)
+            if lot is not None and lot != self.lot_size:
+                self.lot_size = lot
+                self.lot_size_changes += 1
+
+    def fields(self) -> dict[str, Any]:
+        """Return the ``meta.json`` fields: both steps and their change counts."""
+        return {
+            TICK_SIZE: self.tick_size,
+            "tick_size_changes": self.tick_size_changes,
+            LOT_SIZE: self.lot_size,
+            "lot_size_changes": self.lot_size_changes,
+        }
 
 
 # ---------------------------------------------------------------------------
