@@ -130,6 +130,13 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   as "nothing there". The Bitstamp, Databento, hftbacktest and Nautilus
   writers raise it too instead of writing an empty file. The LOBSTER writer
   already refused; its message is now the same as the others'.
+- **The iceberg and stale-order finders refuse an L2 run too** (#505).
+  `detect_icebergs`, `iceberg_slices` and `detect_stale_orders` returned an
+  empty table on a run with no events, which read as "no icebergs" or "no
+  stale orders". They now raise `ConfigError` naming L3, as `hidden_trades`
+  does. Code that called them on an L2 run -> check `result.level` (or
+  `result.events.empty`) first. The gallery and `audit` already skip these
+  checks on an L2 run.
 - **A metric declares `needs`** (#399). A `Metric` without it -> add
   `needs: tuple[str, ...]`, the run's tables it cannot be computed without,
   e.g. `("trades",)`. A metric is skipped on a run where one of them has no
