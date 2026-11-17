@@ -286,6 +286,14 @@ class LiveSource(Source, Protocol):
     to ``orders.csv``; :attr:`~ob_analytics.protocols.Level.L2` → price-level
     depth updates to ``depth.csv``.
 
+    A live source MAY declare ``replay_source``: the name of the offline
+    source that reads its capture back.  The capture writes it to
+    ``meta.json``, and ``ob-analytics process`` and ``audit`` read with that
+    source when ``--source`` is not given.  Without it, the reader is the
+    source itself when it also replays files, and otherwise the source that
+    reads the capture's files at its level (see
+    :func:`~ob_analytics.capture_record.replay_source_of`).
+
     Implementors only worry about parsing. Persistence, raw-frame archival,
     and signal handling live in ``ob_analytics.live._runner``.
 

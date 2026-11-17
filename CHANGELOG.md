@@ -323,6 +323,22 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Added
 
+- **`process` and `audit` read a capture without `--source`** (#502). A live
+  capture writes `level` and `replay_source`, the offline source that reads
+  it back, to `meta.json` and `manifest.json`, so
+  `ob-analytics process <ccxt capture> -o out` works. A live source can set
+  `replay_source`; one that does not is read by itself when it also replays
+  files, and otherwise by `bitstamp` (L3) or `depth_csv` (L2). A capture made
+  before this is read by the source for its level, or by `bitstamp` when it
+  records no level. `--source` that reads another level than the capture
+  records stops the command with both named.
+- **`process` and `audit` take the settings of the source that reads the
+  data** (#502), one flag per field, as `capture` does: for example
+  `--instrument-id`, `--publisher-id`, `--raw-symbol` and `--trades-from` for
+  `databento`, and `--price-divisor` and `--timestamp-unit` for `depth_csv`.
+  `ob-analytics process <path> --source <name> --help` lists them. New
+  `--symbol` and `--venue` set the `RunContext` fields of the same name.
+
 - **Kalshi capture from its WebSocket feed** (#240). `ob-analytics capture
   kalshi --pair <ticker>` records every change to a Kalshi market's book, not
   one poll a second. It needs a Kalshi API key, read from `KALSHI_API_KEY_ID`

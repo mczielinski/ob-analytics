@@ -5,6 +5,8 @@ Entry point registered as ``ob-analytics`` in pyproject.toml.
 Usage::
 
     ob-analytics process orders.csv --output results/
+    ob-analytics process /tmp/kraken --output results/   # a capture: no --source
+    ob-analytics process file.dbn.zst --source databento --instrument-id 42
     ob-analytics process data/ --source lobster --trading-date 2012-06-21
     ob-analytics process orders.csv --tick-size 0.001 --lot-size 0.0001
     ob-analytics process orders.csv --cut 2015-05-01T02:00 --output windows/
@@ -17,7 +19,9 @@ Usage::
     ob-analytics capture ccxt --venue kraken --pair BTC/USD --output /tmp/kraken
 
 ``ob-analytics capture <source> --help`` lists the flags of that source's
-settings.
+settings.  ``process`` and ``audit`` take the settings flags of the source
+that reads the data: ``ob-analytics process <path> --source <source> --help``
+lists them.
 """
 
 from __future__ import annotations
@@ -78,8 +82,12 @@ def _cmd_process(args: argparse.Namespace) -> None:
         sys.exit(2)
     root = Path(args.path)
     manifest = _read_capture_manifest(root)
+    record = _capture_record(root, manifest)
+    source_name = _reading_source(args, record)
+    source = _build_source(args, source_name)
+    _check_level(args, source, record, root)
     if manifest is None:
-        _process_one(args, args.path, Path(args.output))
+        _process_one(args, source, source_name, args.path, Path(args.output))
         return
     if _writes_a_file(args.format, _run_context(args)):
         logger.error(
@@ -95,7 +103,13 @@ def _cmd_process(args: argparse.Namespace) -> None:
     if not seg_dirs:
         _no_segment_data(root, manifest)
     for seg_dir in seg_dirs:
-        _process_one(args, str(_segment_input(seg_dir)), output / seg_dir.name)
+        _process_one(
+            args,
+            source,
+            source_name,
+            str(_segment_input(seg_dir)),
+            output / seg_dir.name,
+        )
     output.mkdir(parents=True, exist_ok=True)
     (output / "manifest.json").write_bytes((root / "manifest.json").read_bytes())
 
@@ -170,15 +184,20 @@ def _read_capture_manifest(path: Path) -> Any:
         sys.exit(1)
 
 
-def _process_one(args: argparse.Namespace, data_path: str, output: Path) -> None:
-    """Run the pipeline on one capture (or file) and save the results."""
+def _process_one(
+    args: argparse.Namespace,
+    source: Any,
+    source_name: str,
+    data_path: str,
+    output: Path,
+) -> None:
+    """Run the pipeline of *source* on one capture (or file) and save the results."""
     from loguru import logger
 
     from ob_analytics.data import save_data
     from ob_analytics.exceptions import ConfigError
 
-    source_name = args.source
-    pipeline = _build_pipeline(args, _build_source(source_name), source_name)
+    pipeline = _build_pipeline(args, source, source_name)
 
     result = None
     try:
@@ -239,6 +258,9 @@ def _cmd_audit(args: argparse.Namespace) -> None:
 
     if args.from_parquet:
         given = [flag for dest, flag in _RUN_FLAGS.items() if getattr(args, dest)]
+        given += [
+            flag for dest, flag in _settings_flags_given(args, args.source).items()
+        ]
         if given:
             logger.error(
                 "{} set how the pipeline runs; a saved result keeps the "
@@ -248,9 +270,18 @@ def _cmd_audit(args: argparse.Namespace) -> None:
             sys.exit(2)
     root = Path(args.path)
     manifest = _read_capture_manifest(root)
+    record = _capture_record(root, manifest)
+    # A saved result read with no --source records its own declarations, and
+    # one that records none (an older output) stays undeclared rather than
+    # guessed, which keeps the crossing check honest (see FeedType).
+    source_name = _saved_or_reading_source(args, record)
+    source = None
+    if source_name is not None:
+        source = _build_source(args, source_name)
+        _check_level(args, source, record, root)
     capture_checks: tuple[Any, ...]
     if manifest is None:
-        summary = _audit_one(args, root)
+        summary = _audit_one(args, source, source_name, root)
         capture_checks = record_checks(root)
         if args.json:
             report = summary.to_dict()
@@ -268,7 +299,10 @@ def _cmd_audit(args: argparse.Namespace) -> None:
     else:
         seg_dirs = manifest.segment_dirs(root)
         _note_open_segments(manifest, "checked")
-        named = [(d.name, _audit_one(args, _segment_input(d))) for d in seg_dirs]
+        named = [
+            (d.name, _audit_one(args, source, source_name, _segment_input(d)))
+            for d in seg_dirs
+        ]
         capture_checks = manifest.checks()
         if args.json:
             report = {
@@ -299,27 +333,20 @@ def _cmd_audit(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
-def _audit_one(args: argparse.Namespace, path: Path) -> Any:
+def _audit_one(
+    args: argparse.Namespace, source: Any, source_name: str | None, path: Path
+) -> Any:
     """Audit one capture, file or saved result; return its quality summary.
 
     The result carries the declarations it is checked against: its source's,
-    with what a live capture recorded in their place.
+    with what a live capture recorded in their place.  *source* is ``None``
+    only for a saved result read with no ``--source``.
     """
     from loguru import logger
 
     from ob_analytics.exceptions import ConfigError
 
-    # Running the pipeline needs a source, so it falls back to the default one.
-    # Reading a saved result does not: it records its own declarations, and
-    # one that records none (an older output) stays undeclared without
-    # --source rather than guessed, which keeps the crossing check honest
-    # (see FeedType).
-    source_name = args.source
-    if source_name is None and not args.from_parquet:
-        source_name = "bitstamp"
-    source = _build_source(source_name) if source_name is not None else None
-
-    if args.from_parquet:
+    if args.from_parquet or source_name is None:
         return _load_saved_result(path, source=source).audit()
 
     # Dropped-message detection reads the venue sequence, which is off by
@@ -341,17 +368,150 @@ def _audit_one(args: argparse.Namespace, path: Path) -> Any:
     return result.audit(venue_book=venue_book)
 
 
-def _build_source(source_name: str) -> Any:
-    """The registered source called *source_name*; exit when there is none."""
+#: The source ``process`` and ``audit`` read with when neither ``--source``
+#: nor a capture record names one.
+_DEFAULT_SOURCE = "bitstamp"
+
+
+def _capture_record(path: Path, manifest: Any = None) -> Any:
+    """What the capture at *path* records about how to read it back.
+
+    A segmented capture's *manifest* records it for every segment; a single
+    capture, or one segment, has it in its ``meta.json``.  Empty for input
+    that is not a capture.
+    """
+    from ob_analytics.capture_record import CaptureRecord, read_record
+    from ob_analytics.protocols import Level
+
+    if manifest is None:
+        return read_record(path)
+    replay_source = manifest.declarations.get("replay_source")
+    try:
+        level = Level(manifest.level)
+    except ValueError:
+        level = None
+    return CaptureRecord(
+        level=level,
+        replay_source=replay_source
+        if isinstance(replay_source, str) and replay_source
+        else None,
+    )
+
+
+def _reading_source(args: argparse.Namespace, record: Any) -> str:
+    """The name of the source that reads the data: ``--source``, or the record's.
+
+    A capture names the source that reads it back; input that names none is
+    read by the default source.
+    """
+    return args.source or record.reading_source() or _DEFAULT_SOURCE
+
+
+def _saved_or_reading_source(args: argparse.Namespace, record: Any) -> str | None:
+    """The reading source, or ``None`` for a saved result read with no ``--source``."""
+    if getattr(args, "from_parquet", False) and args.source is None:
+        return None
+    return _reading_source(args, record)
+
+
+def _check_level(
+    args: argparse.Namespace, source: Any, record: Any, path: Path
+) -> None:
+    """Stop when ``--source`` reads another level than the capture records."""
     from loguru import logger
 
-    from ob_analytics.exceptions import UnknownNameError
+    if args.source is None or record.level is None:
+        return
+    level = getattr(source, "level", None)
+    if level is None or str(level) == str(record.level):
+        return
+    logger.error(
+        "--source {} reads {} data, but the capture in {} is {} (see its "
+        "meta.json); leave out --source to read it with {}",
+        args.source,
+        level,
+        path,
+        record.level,
+        record.reading_source(),
+    )
+    sys.exit(2)
+
+
+def _settings_flags_given(
+    args: argparse.Namespace, source_name: str | None
+) -> dict[str, str]:
+    """The settings flags given on the command line: field name to flag.
+
+    Only the flags of *source_name*'s settings can be on the command line,
+    since those are the ones the parser was built with.
+    """
+    settings_cls = _offline_settings_class(source_name)
+    if settings_cls is None:
+        return {}
+    flags = _settings_flag_names(settings_cls)
+    return {
+        name: flags[name]
+        for dest, name in _settings_dests(settings_cls).items()
+        if hasattr(args, dest)
+    }
+
+
+def _offline_settings_class(source_name: str | None) -> Any:
+    """The settings class of the offline source *source_name*, or ``None``.
+
+    ``None`` too when there is no such source, it cannot replay files, or its
+    settings class cannot be read: the command then reports the problem when
+    it builds the source.
+    """
+    from ob_analytics.sources import SOURCES
+
+    if source_name is None or source_name not in SOURCES:
+        return None
+    source_cls = SOURCES.get(source_name)
+    # A live-only source has no settings to read files with; the command
+    # stops on it with its own message.
+    if not callable(getattr(source_cls, "create_loader", None)):
+        return None
+    try:
+        return _settings_class(source_cls)
+    except Exception:  # noqa: BLE001 -- reported when the source is built
+        return None
+
+
+def _build_source(args: argparse.Namespace, source_name: str) -> Any:
+    """The registered source called *source_name*, with the settings flags given.
+
+    Exit when there is no such source, or the settings are not valid for it.
+    """
+    from loguru import logger
+
+    from ob_analytics.exceptions import ConfigError, UnknownNameError
     from ob_analytics.sources import get_source
 
     try:
-        return get_source(source_name)()
+        source_cls = get_source(source_name)
     except UnknownNameError as exc:
         logger.error(str(exc))
+        sys.exit(1)
+    settings_cls = _offline_settings_class(source_name)
+    given = {
+        name: getattr(args, _SETTING_DEST + name)
+        for name in _settings_flags_given(args, source_name)
+    }
+    try:
+        if settings_cls is None or not given:
+            return source_cls()
+        settings = settings_cls(**given)
+    except (ConfigError, ValueError) as exc:
+        # A pydantic ValidationError is a ValueError.
+        logger.error("Bad settings for source {!r}: {}", source_name, exc)
+        sys.exit(2)
+    # The registry is typed as `type[Source]`, whose protocol declares no
+    # constructor; every built-in source takes an optional `settings`.
+    try:
+        return source_cls(settings=settings)  # ty: ignore[unknown-argument]
+    except (ConfigError, ValueError) as exc:
+        logger.error("Source {!r} cannot be built: {}", source_name, exc)
         sys.exit(1)
 
 
@@ -365,14 +525,21 @@ _RUN_FLAGS = {
     "lot_size": "--lot-size",
     "depth_bins": "--depth-bins",
     "depth_bps": "--depth-bps",
+    "symbol": "--symbol",
+    "venue": "--venue",
 }
 
 
 def _run_context(args: argparse.Namespace) -> Any:
-    """The run context the ``--trading-date`` and ``--session-tz`` flags give."""
+    """The run context the date, time zone, symbol and venue flags give."""
     from ob_analytics.protocols import RunContext
 
-    return RunContext(trading_date=args.trading_date, session_tz=args.session_tz)
+    return RunContext(
+        trading_date=args.trading_date,
+        session_tz=args.session_tz,
+        symbol=args.symbol,
+        venue=args.venue,
+    )
 
 
 def _run_config(args: argparse.Namespace, **fields: Any) -> PipelineConfig | None:
@@ -793,12 +960,35 @@ def _capture_parser(source_name: str, settings_cls: Any) -> argparse.ArgumentPar
     return parser
 
 
-def _add_settings_flags(parser: argparse.ArgumentParser, settings_cls: Any) -> None:
+def _settings_flag_names(settings_cls: Any) -> dict[str, str]:
+    """The flag of each field of *settings_cls* the command line can set.
+
+    A :class:`~ob_analytics.config.Credential` field gets no flag: a key on a
+    command line stays in the shell history.  Neither does a field of a type
+    the command line cannot read.
+    """
+    from ob_analytics.sources import CliOption
+
+    credentials = settings_cls.credentials()
+    flags = {}
+    for name, field in settings_cls.model_fields.items():
+        option = next((m for m in field.metadata if isinstance(m, CliOption)), None)
+        if name in credentials or _flag_kind(field.annotation, option) is None:
+            continue
+        flags[name] = "--" + ((option.flag if option else None) or name).replace(
+            "_", "-"
+        )
+    return flags
+
+
+def _add_settings_flags(
+    parser: argparse.ArgumentParser, settings_cls: Any, command: str = "capture"
+) -> None:
     """Add one flag to *parser* for each field of *settings_cls* it can read.
 
     A flag given sets its field; a flag left out leaves the field at the
-    class's default.  A :class:`~ob_analytics.config.Credential` field gets
-    no flag: a key on a command line stays in the shell history.
+    class's default.  *command* names the command in the error raised when a
+    flag clashes with one of its own.
     """
     from pydantic_core import PydanticUndefined
 
@@ -806,15 +996,10 @@ def _add_settings_flags(parser: argparse.ArgumentParser, settings_cls: Any) -> N
     from ob_analytics.sources import CliOption
 
     group = parser.add_argument_group(f"source settings ({settings_cls.__name__})")
-    credentials = settings_cls.credentials()
-    for name, field in settings_cls.model_fields.items():
-        if name in credentials:
-            continue
+    for name, flag in _settings_flag_names(settings_cls).items():
+        field = settings_cls.model_fields[name]
         option = next((m for m in field.metadata if isinstance(m, CliOption)), None)
         kind = _flag_kind(field.annotation, option)
-        if kind is None:  # a type the command line cannot read
-            continue
-        flag = "--" + ((option.flag if option else None) or name).replace("_", "-")
         help_text = (option.help if option else None) or field.description or name
         required = field.default is PydanticUndefined and field.default_factory is None
         if kind == "bool" and not required:
@@ -843,7 +1028,7 @@ def _add_settings_flags(parser: argparse.ArgumentParser, settings_cls: Any) -> N
         except argparse.ArgumentError:
             raise ConfigError(
                 f"{settings_cls.__name__}.{name} would be the flag {flag}, which "
-                "the capture command has already; give the field "
+                f"the {command} command has already; give the field "
                 "CliOption(flag=...) with another name"
             ) from None
 
@@ -998,21 +1183,32 @@ def _cut_time(text: str) -> Any:
 
 
 def _add_run_args(
-    parser: argparse.ArgumentParser, sources: list[str], *, source_default: str | None
+    parser: argparse.ArgumentParser,
+    sources: list[str],
+    *,
+    command: str,
+    settings_cls: Any = None,
+    quiet: bool = False,
 ) -> None:
-    """Add the flags ``process`` and ``audit`` share: the source and the run's settings."""
-    parser.add_argument("path", help="Path to data file or directory")
-    default_text = (
-        f"default: {source_default}"
-        if source_default
-        else "default: bitstamp when running the pipeline"
+    """Add the flags ``process`` and ``audit`` share: the source and the run's settings.
+
+    *settings_cls* is the settings class of the source that reads the data;
+    each of its fields gets a flag.  A *quiet* parser lets ``path`` be missing.
+    """
+    parser.add_argument(
+        "path", nargs="?" if quiet else None, help="Path to data file or directory"
     )
     parser.add_argument(
         "-s",
         "--source",
-        default=source_default,
+        default=None,
         choices=sources,
-        help=f"Data source ({default_text}; registered: {', '.join(sources)})",
+        help=(
+            "Data source (default: for a capture, the source its meta.json "
+            f"names; otherwise {_DEFAULT_SOURCE}. Registered: "
+            f"{', '.join(sources)}). Run '{command} PATH --source NAME --help' "
+            "to see the flags of that source's settings"
+        ),
     )
     parser.add_argument(
         "--trading-date",
@@ -1058,6 +1254,24 @@ def _add_run_args(
         default=None,
         help="Width of each depth bin, in basis points (default: 25)",
     )
+    parser.add_argument(
+        "--symbol",
+        default=None,
+        help=(
+            "The instrument the data covers (e.g. BTC/USD): tags each row with "
+            "a symbol column"
+        ),
+    )
+    parser.add_argument(
+        "--venue",
+        default=None,
+        help=(
+            "The venue the data comes from (e.g. kraken): tags each row with a "
+            "venue column (default: the source's name, when --symbol is given)"
+        ),
+    )
+    if settings_cls is not None:
+        _add_settings_flags(parser, settings_cls, command)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -1066,15 +1280,78 @@ def main(argv: list[str] | None = None) -> None:
     *argv* is the arguments after the command name; ``None`` reads
     ``sys.argv``.
     """
-    args = _build_parser().parse_args(argv)
+    from ob_analytics.exceptions import ConfigError
+
+    argv = sys.argv[1:] if argv is None else list(argv)
+    try:
+        parser = _build_parser(_reading_settings_class(argv))
+    except ConfigError as exc:  # a plug-in's settings field clashes with a flag
+        print(f"ob-analytics: error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    args = parser.parse_args(argv)
     args.func(args)
 
 
-def _build_parser() -> argparse.ArgumentParser:
+def _reading_settings_class(argv: list[str]) -> Any:
+    """The settings class of the source a ``process`` or ``audit`` run reads with.
+
+    The flags of ``process`` and ``audit`` include one for each field of the
+    reading source's settings, and which source that is depends on the
+    arguments: ``--source``, or the capture record of the path.  So the
+    arguments are read once without those flags, quietly and ignoring what
+    is not known yet, to find the source.  ``None`` for another command, or
+    when the source cannot be found; the command then reports the problem.
+    """
+    import contextlib
+    import io
+    import warnings
+
+    from ob_analytics.capture_record import CaptureRecord
+
+    pre = _build_parser(quiet=True)
+    try:
+        with (
+            contextlib.redirect_stderr(io.StringIO()),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            args, _ = pre.parse_known_args(argv)
+    except SystemExit:
+        return None
+    if args.command not in ("process", "audit", "validate"):
+        return None
+    record = CaptureRecord()
+    if args.path is not None:
+        path = Path(args.path)
+        # The command reads the record again, and warns about it then.
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                record = _capture_record(path, _quiet_manifest(path))
+        except Exception:  # noqa: BLE001 -- the command reports it
+            return None
+    return _offline_settings_class(_saved_or_reading_source(args, record))
+
+
+def _quiet_manifest(path: Path) -> Any:
+    """The manifest of a segmented capture at *path*, or ``None`` if none is read."""
+    from ob_analytics.live import read_manifest
+
+    try:
+        return read_manifest(path) if path.is_dir() else None
+    except Exception:  # noqa: BLE001 -- the command reports it
+        return None
+
+
+def _build_parser(
+    settings_cls: Any = None, *, quiet: bool = False
+) -> argparse.ArgumentParser:
     """The parser for ``ob-analytics`` and its subcommands.
 
     ``capture`` reads the flags after the source's name later, with
-    :func:`_capture_parser`, once the source is known.
+    :func:`_capture_parser`, once the source is known.  ``process`` and
+    ``audit`` get a flag for each field of *settings_cls*, the settings class
+    of the source that reads the data.  A *quiet* parser is the one that
+    finds that source: it prints no help, and its ``path`` may be missing.
     """
     from ob_analytics.data import list_writers
     from ob_analytics.sources import list_sources
@@ -1098,8 +1375,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p_process = subparsers.add_parser(
         "process",
         help="Run the pipeline on a data source and save results",
+        add_help=not quiet,
     )
-    _add_run_args(p_process, sources, source_default="bitstamp")
+    _add_run_args(
+        p_process,
+        sources,
+        command="ob-analytics process",
+        settings_cls=settings_cls,
+        quiet=quiet,
+    )
     p_process.add_argument(
         "-o",
         "--output",
@@ -1151,8 +1435,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "audit",
         aliases=["validate"],
         help="Check a run's data quality; exit non-zero when a check fails",
+        add_help=not quiet,
     )
-    _add_run_args(p_audit, sources, source_default=None)
+    _add_run_args(
+        p_audit,
+        sources,
+        command="ob-analytics audit",
+        settings_cls=settings_cls,
+        quiet=quiet,
+    )
     p_audit.add_argument(
         "--from-parquet",
         action="store_true",

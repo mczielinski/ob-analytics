@@ -463,10 +463,17 @@ segment.
 **Capture record**:
 The `meta.json` a capture writes beside each segment's files. Most of it is
 counters; the part that says how to read the data back is the source that made
-the capture, what that source declares, and the instrument's tick and lot size.
-Typed `CaptureRecord`, read with `read_record`. The pipeline uses its tick and
-lot size when the caller sets none, and its declarations in place of the
-reading source's.
+the capture, what that source declares, the capture's level, the reading
+source, and the instrument's tick and lot size. Typed `CaptureRecord`, read
+with `read_record`. The pipeline uses its tick and lot size when the caller
+sets none, and its declarations in place of the reading source's.
+
+**Reading source**:
+The offline source that reads a capture's files back: `depth_csv` for a ccxt
+capture, `bitstamp` for a cryptofeed L3 one. A live source declares it as
+`replay_source`, and the capture record keeps it, so `process` and `audit`
+need no `--source` for a capture.
+_Avoid_: replay format, reader (that is a loader or trade reader)
 _Avoid_: meta, metadata (that is the Parquet key-value metadata)
 
 **Origin**:

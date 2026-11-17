@@ -866,6 +866,8 @@ async def _ends_within(
 def _declarations(source: LiveSource) -> dict[str, Any]:
     declared = source_declarations(source)
     declared.pop("source", None)
+    # The manifest records the level in its own field.
+    declared.pop("level", None)
     # A live source learns its clocks from the venue's books, so the value is
     # not known when the manifest is opened.  Each segment's meta.json has it.
     declared.pop("clocks", None)

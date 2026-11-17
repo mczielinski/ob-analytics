@@ -14,7 +14,9 @@ does not need the live-capture extras.
 `Pipeline.run` reads the record of the capture it is given, and uses the
 recorded tick size and lot size when your config does not set them. So
 `Pipeline.from_source("depth_csv").run(capture)` and
-`ob-analytics process capture --source depth_csv` give the same result. See
+`ob-analytics process capture` give the same result: the record names the
+source that reads the capture back (`replay_source`), so the command needs no
+`--source`. See
 [Capture live data](../howto/live-capture.md).
 
 ::: ob_analytics.capture_record.read_record
@@ -28,6 +30,8 @@ recorded tick size and lot size when your config does not set them. So
 ::: ob_analytics.capture_record.write_record
 
 ::: ob_analytics.capture_record.source_declarations
+
+::: ob_analytics.capture_record.replay_source_of
 
 ::: ob_analytics.capture_record.read_fields
 
