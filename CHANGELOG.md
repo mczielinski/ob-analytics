@@ -1455,6 +1455,15 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
+- **No negative depth bins at low prices** (#488). With the default
+  `depth_bps=25` and `depth_bins=20`, a best price under about 100 ticks, as on
+  every cent-priced prediction market, could give a negative size in the last
+  depth bin. The bin boundaries went backwards when the window held fewer
+  ticks than bins. Now they never go backwards: a bin left with no tick stays
+  at zero, and a side's bins add up to its size in the window. The
+  columns and their names do not change, and neither do the values when the
+  window holds at least as many ticks as bins. A property test in
+  `tests/test_depth_engine.py` checks best prices from 1 tick up.
 - **Docstrings carry no issue numbers** (#421). Published docstrings, `#:`
   attribute comments and the `tick_size` / `price_decimals` field descriptions
   named GitHub issues or plan labels, which mean nothing to a reader. A new
