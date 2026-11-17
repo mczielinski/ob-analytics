@@ -59,6 +59,70 @@ class TestSaveLoadParquet:
             load_data(empty)
 
 
+class TestLoaderCounts:
+    """The loader's counts survive a saved run (issue #503)."""
+
+    def _flagged_run(self):
+        from ob_analytics import Pipeline
+        from ob_analytics.databento import DatabentoSource
+        from tests.test_databento import LIFECYCLE, flag_one_record, mbo_frame
+
+        frame = flag_one_record(mbo_frame(LIFECYCLE), 5)
+        with pytest.warns(UserWarning, match="F_MAYBE_BAD_BOOK"):
+            return Pipeline(source=DatabentoSource()).run(frame)
+
+    def test_a_saved_run_records_them_in_its_own_metadata(self, tmp_path: Path):
+        import json
+
+        import pyarrow.parquet as pq
+
+        from ob_analytics.schemas import LOADER_COUNTS_KEY
+
+        save_data(self._flagged_run(), tmp_path)
+
+        metadata = pq.read_schema(tmp_path / "events.parquet").metadata
+        assert json.loads(metadata[LOADER_COUNTS_KEY]) == {"maybe_bad_book_records": 1}
+        # Stored once: not again in pandas' own metadata.
+        assert b"maybe_bad_book_records" not in metadata[b"pandas"]
+
+    def test_the_audit_of_a_saved_run_makes_the_check(self, tmp_path: Path):
+        from ob_analytics.data import load_result
+
+        save_data(self._flagged_run(), tmp_path)
+        summary = load_result(tmp_path).audit()
+
+        assert summary.maybe_bad_book_records == 1
+        assert [check.name for check in summary.warnings] == ["maybe_bad_book"]
+
+    def test_the_arrow_tables_record_them_too(self):
+        import json
+
+        from ob_analytics.schemas import LOADER_COUNTS_KEY
+
+        tables = self._flagged_run().to_arrow()
+
+        counts = json.loads(tables["events"].schema.metadata[LOADER_COUNTS_KEY])
+        assert counts == {"maybe_bad_book_records": 1}
+
+    def test_a_file_from_an_older_version_still_loads(self, tmp_path: Path):
+        # Older files kept the count only in pandas' own metadata, and most
+        # files have no count at all.
+        import pyarrow.parquet as pq
+
+        counted = pd.DataFrame({"x": [1]})
+        counted.attrs["maybe_bad_book_records"] = 2
+        pq.write_table(pa.Table.from_pandas(counted), tmp_path / "counted.parquet")
+        pq.write_table(
+            pa.Table.from_pandas(pd.DataFrame({"x": [1]})), tmp_path / "plain.parquet"
+        )
+
+        with pytest.warns(UserWarning, match="schema version"):
+            loaded = load_data(tmp_path)
+
+        assert loaded["counted"].attrs["maybe_bad_book_records"] == 2
+        assert "maybe_bad_book_records" not in loaded["plain"].attrs
+
+
 class TestLoadResult:
     """``load_result`` gives back the result ``save_data`` was given."""
 
