@@ -349,7 +349,6 @@ class PipelineResult:
         *,
         backend: str = "matplotlib",
         ax: Axes | None = None,
-        volume_scale: float | None = None,
         **overrides: Any,
     ) -> Any:
         """Render one plot *concept* from this result in a single call.
@@ -369,7 +368,6 @@ class PipelineResult:
             level,
             backend=backend,
             ax=ax,
-            volume_scale=volume_scale,
             **overrides,
         )
 
