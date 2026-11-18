@@ -1515,6 +1515,15 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   error. The backup of a replaced file is now a hidden `.<name>.bak` file
   beside it, or `.<name>.<n>.bak` when that name is taken. Before,
   `save_data` kept it in a temporary folder that it deleted on exit.
+- **A settings flag works before the path** (#523). `process` and `audit`
+  read the arguments twice. The first read finds the source that reads the
+  data, and it did not know the settings flags. So when a settings flag came
+  before the path and `--source` was not given, its value was read as the
+  path: `ob-analytics process --instrument-id 42 capture/` looked for a
+  capture named `42`. The first read now knows the settings flags of every
+  registered offline source and skips each flag with its value. An on/off
+  flag takes no value. The second read still refuses a flag that the reading
+  source does not have.
 - **Every loader refuses an order price between two ticks** (#500). Only the
   price-level CSV loader checked prices. The Bitstamp, LOBSTER and Databento
   loaders rounded a price to the nearest tick and gave no warning, so on the
@@ -1553,6 +1562,19 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   bundled sample. The live levels now sit in a heap, and the same call takes
   about 0.65 s on the same desktop. The output is unchanged, byte for byte.
   `queue_age_grid` uses the same heap.
+- **`queue_positions` no longer walks a long queue to find an order's rank**
+  (#520). For each event, the engine counted the orders ahead of the order and
+  added up their sizes, one by one. On the synthetic session a queue holds
+  about 620 orders on average, so this was most of the stage's time. A level
+  with 32 or more orders now keeps two Fenwick trees (binary indexed trees)
+  over its orders in arrival order: one counts the orders, one sums their
+  sizes. The rank and the volume ahead are then a short sum, not a walk. The
+  synthetic queue stage in `scripts/bench_scale.py` went from about 2.7 s to
+  0.9 s on one desktop. The bundled sample's queues are short, so the trees
+  rarely help there, and the extra upkeep makes it up to a tenth slower. The
+  output is unchanged, byte for byte. The trees need exact sums, so they are
+  used only for integer sizes, as a canonical stream has. Float sizes are
+  still added one by one.
 - **The speed test times `queue_positions` as a user calls it** (#489).
   `scripts/bench_scale.py` passed the events to the engine in the order the
   Bitstamp loader leaves them, by order id, where few levels are live at once.
