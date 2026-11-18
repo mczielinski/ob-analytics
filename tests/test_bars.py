@@ -441,6 +441,82 @@ class TestFace:
         else:
             assert drawn(fig) == {"linecollection": len(cut), "rectangle": 2 * len(cut)}
 
+    @pytest.mark.parametrize("backend", ("matplotlib", "plotly"))
+    @pytest.mark.parametrize(
+        ("rule", "x_title"),
+        (("time", "Time"), ("tick", "Bar (labelled by close time)")),
+    )
+    def test_both_backends_title_the_axes_alike(
+        self, toy: pd.DataFrame, backend: str, rule: str, x_title: str
+    ) -> None:
+        pytest.importorskip(backend)
+        from ob_analytics.visualization import plot, prepare
+
+        fig = plot("bars", backend=backend, **prepare.bars(bars(toy, rule)))
+
+        if backend == "plotly":
+            layout = fig.layout
+            titles = (
+                layout.xaxis.title.text,
+                layout.yaxis.title.text,
+                layout.yaxis2.title.text,
+            )
+        else:
+            price, volume = sorted(fig.axes, key=lambda ax: ax.get_ylabel() != "Price")
+            titles = (price.get_xlabel(), price.get_ylabel(), volume.get_ylabel())
+        assert titles == (x_title, "Price", "Volume")
+
+    @pytest.mark.parametrize("backend", ("matplotlib", "plotly"))
+    def test_a_flat_bar_is_coloured_as_rising(
+        self, toy: pd.DataFrame, backend: str
+    ) -> None:
+        # Bar 1 closes down; bar 2 closes where it opened.  Plotly's own rule
+        # would colour bar 2 by the close before it, so down.
+        pytest.importorskip(backend)
+        from ob_analytics.visualization import plot, prepare
+        from ob_analytics.visualization._theme import DEFAULT_THEME
+
+        toy.loc[11, "price"] = 100
+        cut = bars(toy, "tick", 4)
+        assert cut["close"].iloc[2] == cut["open"].iloc[2]
+        assert cut["close"].iloc[1] < cut["open"].iloc[1]
+        fig = plot("bars", backend=backend, **prepare.bars(cut))
+
+        pal = DEFAULT_THEME.palette
+        expected = [pal.buy if up else pal.sell for up in cut["close"] >= cut["open"]]
+        if backend == "plotly":
+            # Each candle trace draws in one colour, whichever way Plotly
+            # reads a candle's direction.
+            colours: dict[float, str] = {}
+            for trace in fig.data:
+                if trace.type == "candlestick":
+                    assert trace.decreasing.line.color == trace.increasing.line.color
+                    colours.update(dict.fromkeys(trace.x, trace.increasing.line.color))
+            assert [colours[x] for x in range(len(cut))] == expected
+        else:
+            from matplotlib.colors import to_hex
+
+            price = next(ax for ax in fig.axes if ax.get_ylabel() == "Price")
+            wicks = price.collections[0].get_colors()
+            assert [to_hex(c) for c in wicks] == [to_hex(c) for c in expected]
+
+    def test_plotly_legend_names_both_colours_when_every_bar_rises(
+        self, toy: pd.DataFrame
+    ) -> None:
+        pytest.importorskip("plotly")
+        from ob_analytics.visualization import plot, prepare
+
+        toy["price"] = range(100, 112)
+        cut = bars(toy, "tick", 4)
+        assert (cut["close"] >= cut["open"]).all()
+        fig = plot("bars", backend="plotly", **prepare.bars(cut))
+
+        assert fig.layout.showlegend
+        assert [t.name for t in fig.data if t.showlegend is not False] == [
+            "close up / net buying",
+            "close down / net selling",
+        ]
+
     def test_card_labels_itself_from_the_frame(self, toy: pd.DataFrame) -> None:
         from ob_analytics.visualization.gallery import bars_card
 

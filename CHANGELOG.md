@@ -1531,6 +1531,12 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   each fate, with one path for each order, so the picture is the same.
 - **The Plotly bars card titles its volume axis "Volume"** (#504). It was
   titled "Price", like the price axis.
+- **The Plotly bars card colours a flat bar as rising** (#543). Plotly
+  coloured a bar that closes where it opened by the close before it, so it
+  could be drawn in the sell colour. Each candle now takes its colour from
+  `close >= open`, as on the matplotlib card. The legend names the colours
+  as the matplotlib legend does: "close up / net buying" and "close down /
+  net selling".
 - **The order flow imbalance and VPIN cards count taker orders** (#532).
   On an L3 feed, one taker order that fills many resting orders makes many
   trades, so a window could pass the 10-trade floor with one order in it.

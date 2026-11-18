@@ -2716,32 +2716,49 @@ def plotly_bars(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
             marker_color=[pal.buy if s >= 0 else pal.sell for s in signed],
             opacity=0.3,
             name="Volume",
+            showlegend=False,
             yaxis="y2",
             hovertemplate="Volume: %{y}<extra></extra>",
         )
     )
-    fig.add_trace(
-        go.Candlestick(
-            x=x,
-            open=bars["open"],
-            high=bars["high"],
-            low=bars["low"],
-            close=bars["close"],
-            increasing_line_color=pal.buy,
-            increasing_fillcolor=pal.buy,
-            decreasing_line_color=pal.sell,
-            decreasing_fillcolor=pal.sell,
-            name="Price",
-            # The bar's own close time, so an ordinal axis still hovers a time.
-            text=bars["timestamp_end"].astype(str),
+    # One trace per direction, each in a single colour.  Plotly colours a
+    # candle that closes where it opened by the close before it; the
+    # matplotlib face, and the payload's "rising", count it as up.
+    rising = np.asarray(data["rising"], dtype=bool)
+    # Both traces are always added, so the legend names both colours even
+    # when every bar moves the same way.  A Series keeps the time axis's time
+    # zone through the mask.
+    x_values = pd.Series(x).reset_index(drop=True)
+    for up, color, name in (
+        (True, pal.buy, "close up / net buying"),
+        (False, pal.sell, "close down / net selling"),
+    ):
+        keep = rising == up
+        rows = bars[keep]
+        fig.add_trace(
+            go.Candlestick(
+                x=x_values[keep],
+                open=rows["open"],
+                high=rows["high"],
+                low=rows["low"],
+                close=rows["close"],
+                increasing_line_color=color,
+                increasing_fillcolor=color,
+                decreasing_line_color=color,
+                decreasing_fillcolor=color,
+                name=name,
+                # The bar's own close time, so an ordinal axis still hovers
+                # a time.
+                text=rows["timestamp_end"].astype(str),
+            )
         )
-    )
 
     # Four times the tallest bar: the volume strip reads as a footer under the
     # candles rather than competing with them.
     top = float(volume.max()) * 4 if volume.size and volume.max() > 0 else 1.0
     fig.update_layout(
         xaxis_rangeslider_visible=False,
+        showlegend=True,
         yaxis2={
             "overlaying": "y",
             "side": "right",
