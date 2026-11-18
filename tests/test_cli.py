@@ -48,6 +48,119 @@ class TestCLIBasics:
         r = cli_runner("nonsense-cmd")
         assert r.returncode != 0
 
+    def test_a_missing_input_file_is_one_line(self, cli_runner, tmp_path):
+        """A missing file is the user's to fix: one line on stderr, exit 1."""
+        missing = tmp_path / "nowhere" / "orders.csv"
+        r = cli_runner("process", str(missing), "-o", str(tmp_path / "out"))
+        assert r.returncode == 1
+        assert "Traceback" not in r.stderr
+        assert "| ERROR" not in r.stderr  # no log line besides the message
+        errors = [
+            line for line in r.stderr.splitlines() if line.startswith("ob-analytics:")
+        ]
+        assert errors == [f"ob-analytics: error: No such file: {missing}"]
+
+    def test_a_package_error_is_one_line(self, monkeypatch, capsys):
+        """An ObAnalyticsError from any command is reported, not raised."""
+        from ob_analytics import cli
+        from ob_analytics.exceptions import ConfigError
+
+        def fail(args):
+            raise ConfigError("the run cannot start")
+
+        monkeypatch.setattr(cli, "_cmd_sources", fail)
+        with pytest.raises(SystemExit) as exc:
+            cli.main(["sources"])
+        assert exc.value.code == 1
+        assert capsys.readouterr().err == "ob-analytics: error: the run cannot start\n"
+
+    def test_the_error_line_hides_a_known_key(self, monkeypatch, capsys):
+        """The message passes through the same redaction as the log."""
+        from ob_analytics import _secrets, cli
+        from ob_analytics.exceptions import ConfigError
+
+        # Restore the remembered secrets afterwards.
+        monkeypatch.setattr(_secrets, "_known", set(_secrets._known))
+        monkeypatch.setattr(_secrets, "_ordered", _secrets._ordered)
+        _secrets.remember("sk-test-0123456789abcdef")
+
+        def fail(args):
+            raise ConfigError("venue said: bad key sk-test-0123456789abcdef")
+
+        monkeypatch.setattr(cli, "_cmd_sources", fail)
+        with pytest.raises(SystemExit):
+            cli.main(["sources"])
+        err = capsys.readouterr().err
+        assert "sk-test-0123456789abcdef" not in err
+        assert err.startswith("ob-analytics: error: venue said: bad key ")
+
+
+class TestGalleryOptions:
+    """Every command that draws a gallery takes the same gallery options."""
+
+    @staticmethod
+    def _options(command):
+        import argparse
+
+        from ob_analytics import cli
+
+        parser = cli._build_parser()
+        sub = next(
+            a for a in parser._actions if isinstance(a, argparse._SubParsersAction)
+        )
+        return {
+            flag
+            for action in sub.choices[command]._actions
+            for flag in action.option_strings
+        }
+
+    def test_the_four_commands_share_one_set(self):
+        import argparse
+
+        from ob_analytics import cli
+
+        alone = argparse.ArgumentParser(add_help=False)
+        cli._add_gallery_args(alone)
+        shared = {flag for a in alone._actions for flag in a.option_strings}
+        assert shared == {"--view", "--backend", "--title"}
+        for command in ("process", "gallery", "bitstamp-demo", "lobster-demo"):
+            assert shared <= self._options(command), command
+
+    @pytest.mark.parametrize(
+        ("command", "demo", "extra"),
+        [
+            ("bitstamp-demo", "run_bitstamp_demo", []),
+            ("lobster-demo", "run_lobster_demo", ["--trading-date", "2012-06-21"]),
+        ],
+    )
+    def test_a_demo_passes_them_on(self, monkeypatch, tmp_path, command, demo, extra):
+        from ob_analytics import _demos, cli
+
+        seen = {}
+
+        def fake_demo(*args, **kwargs):
+            seen.update(kwargs)
+
+        monkeypatch.setattr(_demos, demo, fake_demo)
+        cli.main(
+            [command, str(tmp_path), *extra, "-o", str(tmp_path), "--view", "l3",
+             "--backend", "matplotlib", "--title", "Mine"]
+        )  # fmt: skip
+        assert seen["view"] == "l3"
+        assert seen["backends"] == ["matplotlib"]
+        assert seen["title"] == "Mine"
+
+    def test_the_view_defaults_to_both(self, monkeypatch, tmp_path):
+        from ob_analytics import _demos, cli
+
+        seen = {}
+        monkeypatch.setattr(
+            _demos, "run_bitstamp_demo", lambda *a, **kw: seen.update(kw)
+        )
+        cli.main(["bitstamp-demo", "-o", str(tmp_path)])
+        assert seen["view"] == "both"
+        assert seen["title"] is None
+
 
 # ---------------------------------------------------------------------------
 # process
@@ -227,7 +340,9 @@ class TestProcessSubcommand:
             (("--cut", "1970-01-01T00:00:10", "--format", "bitstamp"), "--cut writes Parquet"),
             (("--cut", "1970-01-01T00:00:10", "--gallery"), "--cut does not build a gallery"),
             (("--no-carry",), "--no-carry applies only with --cut"),
+            (("--view", "l3"), "--view applies only with --gallery"),
             (("--backend", "plotly"), "--backend applies only with --gallery"),
+            (("--title", "Mine"), "--title applies only with --gallery"),
             (("--cut", "soon"), "is not a time"),
         ],
     )  # fmt: skip
@@ -957,8 +1072,9 @@ class TestCaptureSubcommand:
 
     def test_old_flag_names_are_refused(self, cli_runner, tmp_path):
         r = cli_runner(
-            "capture", "ccxt", "--exchange", "kraken", "--out", str(tmp_path / "c")
-        )
+            "capture", "ccxt", "--pair", "BTC/USD", "--exchange", "kraken",
+            "--out", str(tmp_path / "c"),
+        )  # fmt: skip
         assert r.returncode == 2
         assert "unrecognized arguments" in r.stderr
 
@@ -967,13 +1083,22 @@ class TestCaptureSubcommand:
         assert r.returncode == 2
         assert "-o/--output" in r.stderr
 
+    def test_pair_is_required(self, cli_runner, tmp_path):
+        """No source shares a pair symbol, so --pair has no default."""
+        r = cli_runner("capture", "bitstamp", "-o", str(tmp_path / "cap"))
+        assert r.returncode == 2
+        assert "--pair" in r.stderr
+        assert not (tmp_path / "cap").exists()
+
     def test_a_source_is_required(self, cli_runner):
         r = cli_runner("capture")
         assert r.returncode == 2
         assert "source is required" in r.stderr
 
     def test_offline_only_source_is_named(self, cli_runner, tmp_path):
-        r = cli_runner("capture", "lobster", "--output", str(tmp_path / "cap"))
+        r = cli_runner(
+            "capture", "lobster", "--pair", "x", "--output", str(tmp_path / "cap")
+        )  # fmt: skip
         assert r.returncode == 1
         assert "Source 'lobster' has no live capture" in r.stderr
 
@@ -1029,7 +1154,7 @@ class TestCaptureSubcommand:
 
         with pytest.raises(SystemExit) as exc:
             cli.main(
-                ["capture", "cryptofeed", "--venue", "bitstamp",
+                ["capture", "cryptofeed", "--venue", "bitstamp", "--pair", "BTC-USD",
                  "-o", str(tmp_path / "o")]
             )  # fmt: skip
         assert exc.value.code == 1
@@ -1042,8 +1167,9 @@ class TestCaptureSubcommand:
 
         with pytest.raises(SystemExit) as exc:
             cli.main(
-                ["capture", "ccxt", "--venue", "binanse", "-o", str(tmp_path / "o")]
-            )
+                ["capture", "ccxt", "--venue", "binanse", "--pair", "BTC/USDT",
+                 "-o", str(tmp_path / "o")]
+            )  # fmt: skip
         assert exc.value.code == 1
         assert not (tmp_path / "o").exists()
 
@@ -1057,7 +1183,7 @@ class TestCaptureSubcommand:
         )
         with pytest.raises(SystemExit) as exc:
             cli.main(
-                ["capture", "bitstamp", "--minutes", "0.001",
+                ["capture", "bitstamp", "--pair", "btcusd", "--minutes", "0.001",
                  "-o", str(tmp_path / "o")]
             )  # fmt: skip
         assert exc.value.code == 1
@@ -1134,8 +1260,8 @@ class TestCaptureFlagsFromSettings:
         monkeypatch.setenv(TOKEN_ENV, "fake-plugin-token")
         captured = _fake_capture(monkeypatch)
         cli.main(
-            ["capture", "fakeplugin", "--market", "M-1", "--minutes", "0.001",
-             "-o", str(tmp_path / "o")]
+            ["capture", "fakeplugin", "--market", "M-1", "--pair", "x",
+             "--minutes", "0.001", "-o", str(tmp_path / "o")]
         )  # fmt: skip
         settings = captured["source"].settings
         assert settings.depth == 10
@@ -1151,7 +1277,7 @@ class TestCaptureFlagsFromSettings:
         self._register(monkeypatch, "settingsrequired", SettingsRequiredSource)
         captured = _fake_capture(monkeypatch)
         cli.main(
-            ["capture", "settingsrequired", "--minutes", "0.001",
+            ["capture", "settingsrequired", "--pair", "x", "--minutes", "0.001",
              "-o", str(tmp_path / "o")]
         )  # fmt: skip
         assert captured["source"].settings == OptionalSettings()
@@ -1176,7 +1302,7 @@ class TestCaptureFlagsFromSettings:
         with pytest.raises(SystemExit) as exc:
             cli.main(
                 ["capture", "fakeplugin", "--market", "M-1", "--levels", "0",
-                 "-o", str(tmp_path / "o")]
+                 "--pair", "x", "-o", str(tmp_path / "o")]
             )  # fmt: skip
         assert exc.value.code == 2
         assert "Bad settings for source 'fakeplugin'" in capfd.readouterr().err
@@ -1190,7 +1316,7 @@ class TestCaptureFlagsFromSettings:
         with pytest.raises(SystemExit) as exc:
             cli.main(
                 ["capture", "fakeplugin", "--market", "M-1", "--book-side", "mid",
-                 "-o", str(tmp_path / "o")]
+                 "--pair", "x", "-o", str(tmp_path / "o")]
             )  # fmt: skip
         assert exc.value.code == 2
         assert "'mid' is not one of bid, ask" in capsys.readouterr().err

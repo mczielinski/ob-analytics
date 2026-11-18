@@ -35,6 +35,7 @@ For examples, see [Run from the command line](../howto/cli.md).
 | `--gallery` | Also generate an HTML plot gallery |
 | `--view VIEW` | Gallery view: resolution level(s) to render (l2\|l3\|both\|comparison; default: both) |
 | `--backend BACKEND` | Plot backend to draw the gallery with (matplotlib, plotly, bokeh, or a registered plug-in); give it more than once for more columns. Default: plotly and matplotlib when plotly is installed, else matplotlib. |
+| `--title TITLE` | Gallery page title (default: names the input) |
 
 ## `ob-analytics audit`
 
@@ -81,9 +82,9 @@ The flags 'process' and 'audit' add when the 'depth_csv' source reads the data: 
 |------|-------------|
 | `path` | Path to Parquet directory (output of 'process') |
 | `-o OUTPUT`, `--output OUTPUT` | Output directory for the gallery (default: ./gallery_output) |
-| `--title TITLE` | Gallery page title |
 | `--view VIEW` | Gallery view: resolution level(s) to render (l2\|l3\|both\|comparison; default: both) |
 | `--backend BACKEND` | Plot backend to draw the gallery with (matplotlib, plotly, bokeh, or a registered plug-in); give it more than once for more columns. Default: plotly and matplotlib when plotly is installed, else matplotlib. |
+| `--title TITLE` | Gallery page title (default: names the input) |
 
 ## `ob-analytics bitstamp-demo`
 
@@ -93,6 +94,8 @@ The flags 'process' and 'audit' add when the 'depth_csv' source reads the data: 
 | `-o OUTPUT`, `--output OUTPUT` | Output directory (default: ./bitstamp_output) |
 | `--roundtrip` | Write then re-read the result to verify the round-trip (slower) |
 | `--view VIEW` | Gallery view: resolution level(s) to render (l2\|l3\|both\|comparison; default: both) |
+| `--backend BACKEND` | Plot backend to draw the gallery with (matplotlib, plotly, bokeh, or a registered plug-in); give it more than once for more columns. Default: plotly and matplotlib when plotly is installed, else matplotlib. |
+| `--title TITLE` | Gallery page title (default: names the input) |
 
 ## `ob-analytics lobster-demo`
 
@@ -102,6 +105,8 @@ The flags 'process' and 'audit' add when the 'depth_csv' source reads the data: 
 | `--trading-date TRADING_DATE` | Required. Trading date for LOBSTER format (YYYY-MM-DD) |
 | `-o OUTPUT`, `--output OUTPUT` | Output directory (default: ./lobster_output) |
 | `--view VIEW` | Gallery view: resolution level(s) to render (l2\|l3\|both\|comparison; default: both) |
+| `--backend BACKEND` | Plot backend to draw the gallery with (matplotlib, plotly, bokeh, or a registered plug-in); give it more than once for more columns. Default: plotly and matplotlib when plotly is installed, else matplotlib. |
+| `--title TITLE` | Gallery page title (default: names the input) |
 
 ## `ob-analytics capture`
 
@@ -118,7 +123,7 @@ Live-capture market data from the 'bitstamp' source.
 
 | Flag | Description |
 |------|-------------|
-| `--pair PAIR` | Venue-specific pair symbol (default: btcusd) |
+| `--pair PAIR` | Required. The venue's pair symbol (e.g. btcusd for bitstamp, BTC/USDT for ccxt) |
 | `--minutes MINUTES` | Capture duration in minutes (default: 10.0) |
 | `-o OUTPUT`, `--output OUTPUT` | Required. Capture directory: manifest.json plus one folder per segment (orders.csv for L3 or depth.csv for L2, plus trades.csv, raw.jsonl, meta.json). A directory that already holds a capture of the same source and pair is continued. |
 | `--roll-minutes ROLL_MINUTES` | Start a new segment every this many minutes (default: never) |
@@ -131,7 +136,7 @@ Live-capture market data from the 'ccxt' source.
 
 | Flag | Description |
 |------|-------------|
-| `--pair PAIR` | Venue-specific pair symbol (default: btcusd) |
+| `--pair PAIR` | Required. The venue's pair symbol (e.g. btcusd for bitstamp, BTC/USDT for ccxt) |
 | `--minutes MINUTES` | Capture duration in minutes (default: 10.0) |
 | `-o OUTPUT`, `--output OUTPUT` | Required. Capture directory: manifest.json plus one folder per segment (orders.csv for L3 or depth.csv for L2, plus trades.csv, raw.jsonl, meta.json). A directory that already holds a capture of the same source and pair is continued. |
 | `--roll-minutes ROLL_MINUTES` | Start a new segment every this many minutes (default: never) |
@@ -148,7 +153,7 @@ Live-capture market data from the 'cryptofeed' source.
 
 | Flag | Description |
 |------|-------------|
-| `--pair PAIR` | Venue-specific pair symbol (default: btcusd) |
+| `--pair PAIR` | Required. The venue's pair symbol (e.g. btcusd for bitstamp, BTC/USDT for ccxt) |
 | `--minutes MINUTES` | Capture duration in minutes (default: 10.0) |
 | `-o OUTPUT`, `--output OUTPUT` | Required. Capture directory: manifest.json plus one folder per segment (orders.csv for L3 or depth.csv for L2, plus trades.csv, raw.jsonl, meta.json). A directory that already holds a capture of the same source and pair is continued. |
 | `--roll-minutes ROLL_MINUTES` | Start a new segment every this many minutes (default: never) |
@@ -164,7 +169,7 @@ Live-capture market data from the 'kalshi' source.
 
 | Flag | Description |
 |------|-------------|
-| `--pair PAIR` | Venue-specific pair symbol (default: btcusd) |
+| `--pair PAIR` | Required. The venue's pair symbol (e.g. btcusd for bitstamp, BTC/USDT for ccxt) |
 | `--minutes MINUTES` | Capture duration in minutes (default: 10.0) |
 | `-o OUTPUT`, `--output OUTPUT` | Required. Capture directory: manifest.json plus one folder per segment (orders.csv for L3 or depth.csv for L2, plus trades.csv, raw.jsonl, meta.json). A directory that already holds a capture of the same source and pair is continued. |
 | `--roll-minutes ROLL_MINUTES` | Start a new segment every this many minutes (default: never) |

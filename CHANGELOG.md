@@ -133,6 +133,10 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   `capture` flag (`pair`, `minutes`, `output`, `roll_minutes`, `roll_mb`,
   `no_raw`) -> give the field `CliOption(flag=...)` with another name, or
   `capture` stops with a message naming the field.
+- **`capture --pair` has no default** (#510). It was `btcusd`, a Bitstamp
+  symbol that no other source takes. `ob-analytics capture bitstamp -o DIR`
+  -> `ob-analytics capture bitstamp --pair btcusd -o DIR`. Without `--pair`,
+  `capture` stops with a message naming the flag.
 - **A function that needs per-order events refuses an L2 run** (#399). On a
   run with no events (what an L2 run has), `set_order_types`,
   `order_lifecycles`, `order_book`, `order_aggressiveness`,
@@ -467,6 +471,14 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   flag of every subcommand, and of `capture` for each built-in live source.
   `scripts/cli_reference.py` makes it from the command's own parser, and
   `tests/test_cli_reference.py` fails when the page is out of date.
+- **The gallery commands take the same options, and CLI errors are one
+  line** (#510). `process --gallery`, `gallery`, `bitstamp-demo` and
+  `lobster-demo` all take `--view`, `--backend` and `--title`; the demos had
+  only `--view`, and only `gallery` had `--title`. `process` refuses each of
+  them without `--gallery`, as it did `--backend`. An `ObAnalyticsError` or a
+  missing input file from any subcommand prints one line on stderr and exits
+  1. `ob-analytics process /nonexistent/orders.csv -o out` ended in a pandas
+  traceback.
 - **An "Export to a backtester" how-to** (#421). The hftbacktest and Nautilus
   Trader exports moved there from "Extending ob-analytics".
 - **A security policy, issue forms and a list of known limitations** (#422).
