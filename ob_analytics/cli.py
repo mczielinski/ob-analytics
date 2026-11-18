@@ -74,9 +74,15 @@ def _cmd_process(args: argparse.Namespace) -> None:
             "output instead"
         )
         sys.exit(2)
-    if args.backend and not args.gallery:
-        logger.error("--backend applies only with --gallery")
-        sys.exit(2)
+    gallery_flags = (
+        ("--view", args.view),
+        ("--backend", args.backend),
+        ("--title", args.title),
+    )
+    for flag, value in gallery_flags:
+        if value and not args.gallery:
+            logger.error("{} applies only with --gallery", flag)
+            sys.exit(2)
     if args.no_carry and not args.cut:
         logger.error("--no-carry applies only with --cut")
         sys.exit(2)
@@ -233,8 +239,9 @@ def _process_one(
             gallery_dir,
             source_name,
             data_path,
-            view=args.view,
+            view=args.view or "both",
             backends=args.backend,
+            title=args.title,
         )
 
 
@@ -647,7 +654,7 @@ def _cmd_gallery(args: argparse.Namespace) -> None:
     gallery_path = generate_gallery(
         result,
         output,
-        view=args.view,
+        view=args.view or "both",
         backends=args.backend,
         title=args.title or f"ob-analytics gallery -- {data_path.name}",
     )
@@ -661,7 +668,14 @@ def _cmd_bitstamp_demo(args: argparse.Namespace) -> None:
     _setup_logging(args.verbose)
     from ob_analytics._demos import run_bitstamp_demo
 
-    run_bitstamp_demo(args.path, args.output, view=args.view, roundtrip=args.roundtrip)
+    run_bitstamp_demo(
+        args.path,
+        args.output,
+        roundtrip=args.roundtrip,
+        view=args.view or "both",
+        backends=args.backend,
+        title=args.title,
+    )
 
 
 def _cmd_sources(args: argparse.Namespace) -> None:
@@ -701,7 +715,14 @@ def _cmd_lobster_demo(args: argparse.Namespace) -> None:
     _setup_logging(args.verbose)
     from ob_analytics._demos import run_lobster_demo
 
-    run_lobster_demo(args.path, args.trading_date, args.output, view=args.view)
+    run_lobster_demo(
+        args.path,
+        args.trading_date,
+        args.output,
+        view=args.view or "both",
+        backends=args.backend,
+        title=args.title,
+    )
 
 
 def _cmd_capture(args: argparse.Namespace) -> None:
@@ -913,8 +934,8 @@ def _capture_parser(source_name: str, settings_cls: Any) -> argparse.ArgumentPar
     )
     parser.add_argument(
         "--pair",
-        default="btcusd",
-        help="Venue-specific pair symbol (default: btcusd)",
+        required=True,
+        help="The venue's pair symbol (e.g. btcusd for bitstamp, BTC/USDT for ccxt)",
     )
     parser.add_argument(
         "--minutes",
@@ -1088,6 +1109,7 @@ def _generate_gallery_from_result(
     *,
     view: str = "both",
     backends: list[str] | None = None,
+    title: str | None = None,
 ) -> None:
     """Helper to generate a gallery alongside process output."""
     from loguru import logger
@@ -1099,27 +1121,23 @@ def _generate_gallery_from_result(
         gallery_dir,
         view=view,
         backends=backends,
-        title=f"{fmt_name} ({Path(path).name}) -- ob-analytics",
+        title=title or f"{fmt_name} ({Path(path).name}) -- ob-analytics",
     )
     logger.info("Gallery: {}", gallery_path.resolve())
     logger.info("Open in browser: file://{}", gallery_path.resolve())
 
 
-def _add_view_arg(parser: argparse.ArgumentParser) -> None:
-    """Add the shared ``--view`` gallery-resolution argument."""
+def _add_gallery_args(parser: argparse.ArgumentParser) -> None:
+    """Add the gallery options every command that draws a gallery takes."""
     parser.add_argument(
         "--view",
-        default="both",
+        default=None,
         choices=["l2", "l3", "both", "comparison"],
         help=(
             "Gallery view: resolution level(s) to render "
             "(l2|l3|both|comparison; default: both)"
         ),
     )
-
-
-def _add_backend_arg(parser: argparse.ArgumentParser) -> None:
-    """Add the shared ``--backend`` gallery argument."""
     parser.add_argument(
         "--backend",
         action="append",
@@ -1130,6 +1148,11 @@ def _add_backend_arg(parser: argparse.ArgumentParser) -> None:
             "Default: plotly and matplotlib when plotly is installed, else "
             "matplotlib."
         ),
+    )
+    parser.add_argument(
+        "--title",
+        default=None,
+        help="Gallery page title (default: names the input)",
     )
 
 
@@ -1315,16 +1338,27 @@ def main(argv: list[str] | None = None) -> None:
     *argv* is the arguments after the command name; ``None`` reads
     ``sys.argv``.
     """
-    from ob_analytics.exceptions import ConfigError
+    from ob_analytics._secrets import redact
+    from ob_analytics.exceptions import ObAnalyticsError
 
     argv = sys.argv[1:] if argv is None else list(argv)
+    # A package error or a missing file is the user's to fix: one line on
+    # stderr, not a traceback.  Anything else is a bug and keeps its traceback.
     try:
+        # The parser itself fails when a plug-in's settings field clashes
+        # with a flag.
         parser = _build_parser(_reading_settings_class(argv))
-    except ConfigError as exc:  # a plug-in's settings field clashes with a flag
-        print(f"ob-analytics: error: {exc}", file=sys.stderr)
+        args = parser.parse_args(argv)
+        args.func(args)
+    except (ObAnalyticsError, FileNotFoundError) as exc:
+        # An OSError from open() reads "[Errno 2] No such file or
+        # directory: '...'"; name the file plainly instead.
+        is_os_error = isinstance(exc, FileNotFoundError) and exc.filename
+        message = f"No such file: {exc.filename}" if is_os_error else str(exc)
+        # A venue's message may quote a key; the logger redacts it, and so
+        # must this line.
+        print(f"ob-analytics: error: {redact(message)}", file=sys.stderr)
         sys.exit(1)
-    args = parser.parse_args(argv)
-    args.func(args)
 
 
 def _reading_settings_class(argv: list[str]) -> Any:
@@ -1480,8 +1514,7 @@ def _build_parser(
         default=False,
         help="Also generate an HTML plot gallery",
     )
-    _add_view_arg(p_process)
-    _add_backend_arg(p_process)
+    _add_gallery_args(p_process)
     p_process.set_defaults(func=_cmd_process)
 
     # -- audit --
@@ -1539,13 +1572,7 @@ def _build_parser(
         default="gallery_output",
         help="Output directory for the gallery (default: ./gallery_output)",
     )
-    p_gallery.add_argument(
-        "--title",
-        default=None,
-        help="Gallery page title",
-    )
-    _add_view_arg(p_gallery)
-    _add_backend_arg(p_gallery)
+    _add_gallery_args(p_gallery)
     p_gallery.set_defaults(func=_cmd_gallery)
 
     # -- bitstamp-demo --
@@ -1574,7 +1601,7 @@ def _build_parser(
         default=False,
         help="Write then re-read the result to verify the round-trip (slower)",
     )
-    _add_view_arg(p_bs)
+    _add_gallery_args(p_bs)
     p_bs.set_defaults(func=_cmd_bitstamp_demo)
 
     # -- lobster-demo --
@@ -1597,7 +1624,7 @@ def _build_parser(
         default=None,
         help="Output directory (default: ./lobster_output)",
     )
-    _add_view_arg(p_lob)
+    _add_gallery_args(p_lob)
     p_lob.set_defaults(func=_cmd_lobster_demo)
 
     # -- capture --

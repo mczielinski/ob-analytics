@@ -39,6 +39,7 @@ def _save_and_gallery(
     *,
     analytics: list[PlotSpec] | None = None,
     view: str = "both",
+    backends: list[str] | None = None,
 ) -> Path:
     """Save Parquet + generate gallery; return the gallery HTML path.
 
@@ -61,7 +62,7 @@ def _save_and_gallery(
 
     gallery_dir = output_dir / "gallery"
     gallery_path = generate_gallery(
-        result, gallery_dir, model=model, view=view, title=title
+        result, gallery_dir, model=model, view=view, backends=backends, title=title
     )
     logger.info("Gallery: {}", gallery_path.resolve())
     logger.info("Open in browser: file://{}", gallery_path.resolve())
@@ -118,6 +119,8 @@ def run_bitstamp_demo(
     *,
     roundtrip: bool = False,
     view: str = "both",
+    backends: list[str] | None = None,
+    title: str | None = None,
 ) -> Path:
     """Run the Bitstamp demo pipeline.
 
@@ -134,6 +137,11 @@ def run_bitstamp_demo(
     view
         Gallery view: ``l2``, ``l3``, ``both``, or ``comparison``. The
         ``comparison`` view renders L2-vs-L3 counterpart plots side by side.
+    backends
+        Plot backends to draw the gallery with, one column each. ``None``
+        uses the gallery's default.
+    title
+        Gallery page title. ``None`` names the input file.
 
     Returns
     -------
@@ -185,8 +193,9 @@ def run_bitstamp_demo(
     return _save_and_gallery(
         result,
         out,
-        title=f"Bitstamp ({orders_path.name}) -- ob-analytics",
+        title=title or f"Bitstamp ({orders_path.name}) -- ob-analytics",
         view=view,
+        backends=backends,
     )
 
 
@@ -201,11 +210,15 @@ def run_lobster_demo(
     output_dir: Path | str | None,
     *,
     view: str = "both",
+    backends: list[str] | None = None,
+    title: str | None = None,
 ) -> Path:
     """Run the LOBSTER demo pipeline.
 
     *view* is the gallery view (``l2``, ``l3``, ``both``, or ``comparison``);
     ``comparison`` renders L2-vs-L3 counterpart plots side by side.
+    *backends* are the plot backends to draw the gallery with (``None``: the
+    gallery's default). *title* is the page title (``None``: names the data).
 
     Returns the path to the generated gallery HTML.
     """
@@ -229,7 +242,8 @@ def run_lobster_demo(
     return _save_and_gallery(
         result,
         out,
-        title=f"LOBSTER {src.name} ({trading_date}) -- ob-analytics",
+        title=title or f"LOBSTER {src.name} ({trading_date}) -- ob-analytics",
         analytics=analytics,
         view=view,
+        backends=backends,
     )
