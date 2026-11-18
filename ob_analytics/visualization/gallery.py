@@ -30,6 +30,7 @@ from loguru import logger
 from matplotlib.axes import Axes
 
 from ob_analytics._utils import (
+    _UNSET,
     lots_to_size,
     ticks_to_price,
     ticks_to_price_if_integer,
@@ -37,7 +38,7 @@ from ob_analytics._utils import (
 from ob_analytics.depth import get_spread
 from ob_analytics.exceptions import ConfigError, UnknownNameError
 from ob_analytics.flow_toxicity import OFI_WINDOWS
-from ob_analytics.pipeline import _UNSET, PipelineResult
+from ob_analytics.pipeline import PipelineResult
 from ob_analytics.protocols import Level
 from ob_analytics.visualization import (
     PlotTheme,

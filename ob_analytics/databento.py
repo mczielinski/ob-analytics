@@ -113,7 +113,6 @@ from ob_analytics._utils import (
     to_grid,
     to_utc_ns,
 )
-from ob_analytics._windows import LoadedWindow
 from ob_analytics.config import InstrumentGrid, PipelineConfig, SourceSettings
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import (
@@ -121,6 +120,7 @@ from ob_analytics.protocols import (
     EventLoader,
     FeedType,
     Level,
+    LoadedWindow,
     RunContext,
     SequenceKind,
     TradeAttribution,

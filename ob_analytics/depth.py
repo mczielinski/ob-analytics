@@ -629,7 +629,9 @@ class DepthSummaryEngine:
 # ── Standalone functions ──────────────────────────────────────────────
 
 
-def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
+def price_level_volume(
+    events: pd.DataFrame, *, warn_overdrawn: bool = True
+) -> pd.DataFrame:
     """Calculate the cumulative volume for each price level over time.
 
     Parameters
@@ -641,6 +643,11 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
         exactly on that grid, so a level that empties reads exactly ``0`` in
         either case.  Float sizes on no such grid are summed as floats, with
         a warning.
+    warn_overdrawn : bool, default True
+        Whether to warn when the events take a level's size below zero (see
+        *Warns*).  A caller that reports overdrawn levels in its own way, or
+        that expects them, passes ``False``.  The level is held at zero either
+        way.
 
     Returns
     -------
@@ -662,10 +669,12 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
         The warning names the level and the first event that overdrew it.
         The level's running total is held at zero, so it never reads a
         negative size, and the next order on it starts from zero.  ``audit``
-        counts these rows as ``negative_level``.
+        counts these rows as ``negative_level``.  Pass
+        ``warn_overdrawn=False`` to leave this warning out.
     """
     depth, overdrawn = _price_level_volume(events)
-    _warn_on_overdrawn_levels(overdrawn)
+    if warn_overdrawn:
+        _warn_on_overdrawn_levels(overdrawn)
     return depth
 
 

@@ -1036,6 +1036,18 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Changed
 
+- **Four helpers moved down a layer** (#522). Each was the only reason for an
+  upward import, so ADR 0001 and the layer test no longer allow those imports.
+  `QualityCheck` and `Severity` now live in the shared layer, and
+  `ob_analytics.quality` still exports them, so a capture manifest no longer
+  imports `quality`. The windowed-loader types moved to `protocols`, so the
+  Databento loader no longer imports `_windows`. The "no level given" marker
+  of the plot functions moved to `_utils`, so plot data no longer imports
+  `pipeline`. `price_level_volume` has a new `warn_overdrawn` option. The
+  LOBSTER loader passes `warn_overdrawn=False`, so it no longer calls a
+  private `depth` function.
+  `quality.book_crossing` is now in `quality.__all__` and on the Data quality
+  API page.
 - **A test checks every layer's imports** (#495). Before, only the engine's
   imports were checked against ADR 0001. `tests/test_layer_imports.py` now
   puts every module in a layer and fails when a module imports from a layer

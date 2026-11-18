@@ -28,7 +28,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from ob_analytics.pipeline import _UNSET
+from ob_analytics._utils import _UNSET
 from ob_analytics.protocols import Level
 from ob_analytics.visualization import _data
 from ob_analytics.visualization._data import (

@@ -49,7 +49,6 @@ from ob_analytics.depth import (
     BookLevels,
     DepthSummaryEngine,
     _book_levels,
-    _price_level_volume,
     price_level_volume,
 )
 from ob_analytics.exceptions import ConfigError
@@ -1221,7 +1220,7 @@ def _warn_if_book_crosses(events: pd.DataFrame, *, from_orderbook: bool) -> None
     """
     if events.empty:
         return
-    _, crossed_pct, _ = book_crossing(_price_level_volume(events)[0])
+    _, crossed_pct, _ = book_crossing(price_level_volume(events, warn_overdrawn=False))
     if crossed_pct <= CROSSED_TOLERANCE_PCT:
         return
     depth_note = (

@@ -11,12 +11,12 @@ from __future__ import annotations
 import heapq
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
+from ob_analytics._quality_checks import QualityCheck, Severity
 from ob_analytics._utils import epoch_ns, require_per_order_events, ticks_to_price
 from ob_analytics.depth import (
     BookLevels,
@@ -43,6 +43,7 @@ __all__ = [
     "DataQualitySummary",
     "QualityCheck",
     "Severity",
+    "book_crossing",
     "data_quality_summary",
     "detect_sequence_gaps",
     "detect_stale_orders",
@@ -644,77 +645,6 @@ def detect_stale_orders(
             stale = _stale_orders(spans, best, end_ns, tick_size)
     stale.attrs["grace"] = grace
     return stale
-
-
-class Severity(str, Enum):
-    """How much a failed data-quality check matters.
-
-    A check carries its severity so the policy — what fails a run — lives with
-    the measurement rather than in each caller.  The enum mixes in ``str``
-    (``Severity.ERROR == "error"``), which keeps CLI and JSON output plain.
-
-    Attributes
-    ----------
-    ERROR
-        The data contradicts something that must hold (a duplicate
-        ``event_id``, a dropped venue message, a negative volume).  Any failing
-        error check fails the run.
-    WARNING
-        A signal worth reading before trusting the feed, but one a sound
-        capture can legitimately show (orders resting before the capture
-        began, zero-priced levels, messages reordered in transit).  Fails the
-        run only under ``ob-analytics audit --strict``.
-    INFO
-        Reported for context; never fails a run.
-    """
-
-    ERROR = "error"
-    WARNING = "warning"
-    INFO = "info"
-
-
-@dataclass(frozen=True)
-class QualityCheck:
-    """One named data-quality check and how it read on this run.
-
-    Attributes
-    ----------
-    name : str
-        Stable identifier, matching the summary field it reads
-        (e.g. ``"duplicate_event_ids"``).
-    passed : bool
-        Whether the data satisfied the check.  ``False`` for a skipped check,
-        which did not pass.
-    severity : Severity
-        What a failure means (see :class:`Severity`).
-    detail : str
-        One line saying what was found and how to read it.
-    skipped : bool
-        Whether the check did not run, because the data cannot answer it.
-        A skipped check is :attr:`Severity.INFO` and never fails a run;
-        *detail* says why it did not run.
-    """
-
-    name: str
-    passed: bool
-    severity: Severity
-    detail: str
-    skipped: bool = False
-
-    @classmethod
-    def skip(cls, name: str, why: str) -> QualityCheck:
-        """A check that did not run, and *why*."""
-        return cls(name, False, Severity.INFO, why, skipped=True)
-
-    def to_dict(self) -> dict[str, Any]:
-        """Return the check as a plain, JSON-serialisable dict."""
-        return {
-            "name": self.name,
-            "passed": self.passed,
-            "skipped": self.skipped,
-            "severity": str(self.severity.value),
-            "detail": self.detail,
-        }
 
 
 # A matched book that is crossed for less than this share of session time is

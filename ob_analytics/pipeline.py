@@ -43,10 +43,9 @@ import pandas as pd
 import pyarrow as pa
 from loguru import logger
 
-from ob_analytics._utils import empty_events, require_per_order_events
+from ob_analytics._utils import _UNSET, empty_events, require_per_order_events
 from ob_analytics._windows import (
     ParquetAppender,
-    WindowedLoader,
     resting_orders,
     seed_rows,
     window_bounds,
@@ -77,6 +76,7 @@ from ob_analytics.protocols import (
     Source,
     SupportsComputeDepth,
     TradeReader,
+    WindowedLoader,
     grid_of,
 )
 from ob_analytics.quality import DataQualitySummary, data_quality_summary
@@ -116,12 +116,6 @@ _GRID_FIELDS = (
     frozenset(instrument_fields(tick_size=1.0)),
     frozenset(instrument_fields(lot_size=1.0)),
 )
-
-#: The default of a plot's ``level=`` argument: the caller left it out.  It
-#: differs from ``None``, the level of a level-less plot.  It lives here, not in
-#: the visualization package, so that importing this module does not import
-#: Matplotlib; :func:`ob_analytics.visualization.plot` uses the same object.
-_UNSET: Any = object()
 
 
 @dataclass(frozen=True)

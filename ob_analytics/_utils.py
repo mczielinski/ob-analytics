@@ -22,6 +22,14 @@ from ob_analytics.schemas import (
     empty_frame,
 )
 
+#: The default of an argument the caller may leave out when ``None`` is also a
+#: meaningful value, such as a plot's ``level=``: ``None`` is the level of a
+#: level-less plot, and this marker says no level was given.  It lives in this
+#: shared module so that the pipeline and the plot code use the same object,
+#: and so that importing the pipeline does not import Matplotlib.
+_UNSET: Any = object()
+
+
 # ---------------------------------------------------------------------------
 # DataFrame validation
 # ---------------------------------------------------------------------------
