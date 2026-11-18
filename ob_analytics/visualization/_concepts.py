@@ -44,6 +44,7 @@ import pandas as pd
 
 from ob_analytics.book import order_book
 from ob_analytics.depth import price_level_snapshots
+from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import Level
 from ob_analytics.visualization import _data
 from ob_analytics.visualization._renderers import (
@@ -204,11 +205,11 @@ class Needs:
     def __post_init__(self) -> None:
         unknown = (set(self.tables) | set(self.uses)) - _TABLE_TEXT.keys()
         if unknown:
-            raise ValueError(
+            raise ConfigError(
                 f"Unknown tables {sorted(unknown)}; use {list(_TABLE_TEXT)}"
             )
         if (self.classified or self.columns) and "events" not in self.tables:
-            raise ValueError("A face that reads event columns needs the events table.")
+            raise ConfigError("A face that reads event columns needs the events table.")
 
     @property
     def per_order(self) -> bool:
@@ -276,7 +277,7 @@ class Face:
 
     def __post_init__(self) -> None:
         if (self.needs is None) != (self.bind is None):
-            raise ValueError(
+            raise ConfigError(
                 f"Face {self.renderer!r} declares needs without a binder, or a "
                 "binder without needs."
             )

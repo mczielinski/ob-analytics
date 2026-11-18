@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ob_analytics.exceptions import UnknownNameError
+from ob_analytics.exceptions import ConfigError, UnknownNameError
 from ob_analytics.protocols import Level
 from ob_analytics.visualization import (
     RENDERERS,
@@ -236,17 +236,17 @@ class TestNeeds:
                 assert (face.needs is None) == (face.bind is None), face.renderer
 
     def test_a_face_with_a_binder_and_no_needs_is_refused(self):
-        with pytest.raises(ValueError, match="needs"):
+        with pytest.raises(ConfigError, match="needs"):
             _concepts.Face(
                 "x", ("matplotlib",), bind=lambda s: _concepts.Binding(dict, {})
             )
 
     def test_an_unknown_table_is_refused(self):
-        with pytest.raises(ValueError, match="Unknown tables"):
+        with pytest.raises(ConfigError, match="Unknown tables"):
             _concepts.Needs(("orders",))
 
     def test_event_columns_need_the_events(self):
-        with pytest.raises(ValueError, match="events table"):
+        with pytest.raises(ConfigError, match="events table"):
             _concepts.Needs(("depth",), classified=True)
 
     def test_an_l2_face_needs_only_aggregated_data(self):
