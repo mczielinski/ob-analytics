@@ -132,7 +132,7 @@ from __future__ import annotations
 
 import json
 import warnings
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
@@ -237,6 +237,16 @@ precision included.  A file without it (written by an older version, or by a
 windowed run) still records the tick and lot size, and the display precision
 is then taken from them.  Bytes, because Arrow file-metadata keys and values
 are raw bytes."""
+
+LOADER_COUNTS_KEY: bytes = b"ob_analytics_loader_counts"
+"""Parquet metadata key under which the loader's counts are stored.
+
+The value is a JSON object of the counts a loader put on the frame's
+``attrs`` (the keys in :data:`LOADER_COUNT_ATTRS`), such as
+:data:`MAYBE_BAD_BOOK_ATTR`.  :func:`ob_analytics.data.load_data` puts them
+back on the frame's ``attrs``, so an audit of a saved run makes the same
+checks as an audit of the run itself.  A file without the key records no
+counts.  Bytes, as for :data:`CONFIG_KEY`."""
 
 _SUPPORTED_SCHEMA_VERSIONS: frozenset[str] = frozenset({"1.0", "2.0", "3.0", "4.0"})
 """Schema versions this build can read.  A file tagged with anything else
@@ -439,6 +449,35 @@ Databento sets the flag ``F_MAYBE_BAD_BOOK`` on such records;
 :func:`~ob_analytics.quality.data_quality_summary` reads it.  A frame
 without the key comes from a source that does not flag such records, so the
 count was not checked."""
+
+
+LOADER_COUNT_ATTRS: tuple[str, ...] = (MAYBE_BAD_BOOK_ATTR,)
+"""The ``attrs`` keys that hold a count a loader made while it read the input.
+
+Each one is saved under :data:`LOADER_COUNTS_KEY`.  A count covers the rows
+it was made over, so the counts of the parts of one input add up to the
+count of the whole input."""
+
+
+def loader_counts(attrs: Mapping[Any, Any]) -> dict[str, int]:
+    """Return the loader's counts held in *attrs* (see :data:`LOADER_COUNT_ATTRS`)."""
+    return {key: int(attrs[key]) for key in LOADER_COUNT_ATTRS if key in attrs}
+
+
+def encode_loader_counts(counts: dict[str, int]) -> bytes:
+    """Serialise the loader's counts for Parquet metadata."""
+    return json.dumps(counts).encode()
+
+
+def decode_loader_counts(raw: bytes | None) -> dict[str, int]:
+    """Parse the :data:`LOADER_COUNTS_KEY` metadata value.
+
+    An absent value gives no counts.  A count this version does not know is
+    left out, so a file from a later version still loads.
+    """
+    if raw is None:
+        return {}
+    return loader_counts(json.loads(raw.decode()))
 
 
 def put_units(

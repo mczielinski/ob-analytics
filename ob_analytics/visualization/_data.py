@@ -306,36 +306,6 @@ def _volume_percentile_palette(
 # ---------------------------------------------------------------------------
 
 
-def infer_volume_scale(volumes: pd.Series | np.ndarray) -> float:
-    """Pick a power-of-10 scale so the median volume lands in [0.1, 100].
-
-    Useful for plot axes: integer-satoshi or share volumes (median ~1e8)
-    benefit from being scaled down to single-digit numbers, while
-    fractional FX volumes (median ~1e-4) benefit from being scaled up.
-
-    Parameters
-    ----------
-    volumes : pandas.Series or numpy.ndarray
-        Vector of positive volume samples.  Empty / non-positive medians
-        fall back to a scale of ``1.0``.
-
-    Returns
-    -------
-    float
-        Multiplicative scale factor.  Multiplying *volumes* by the
-        returned value yields a series whose median is in the
-        ``[0.1, 100)`` range.
-    """
-    arr = np.asarray(volumes, dtype=float)
-    if arr.size == 0:
-        return 1.0
-    median = float(np.nanmedian(arr))
-    if not np.isfinite(median) or median <= 0:
-        return 1.0
-    exp = math.floor(math.log10(median))
-    return 10.0 ** (-exp)
-
-
 def _default_start_end(
     df: pd.DataFrame,
     start_time: pd.Timestamp | None,
@@ -554,7 +524,6 @@ def prepare_depth_heatmap_data(
     price_to: float | None = None,
     volume_from: float | None = None,
     volume_to: float | None = None,
-    volume_scale: float | None = None,
     price_by: float | None = None,
     iceberg_lines: pd.DataFrame | None = None,
     iceberg_refills: pd.DataFrame | None = None,
@@ -572,10 +541,6 @@ def prepare_depth_heatmap_data(
     (``0.1`` matches the R package's palette bias). Values ``<= 0``
     select a log10 scale.
 
-    When ``volume_scale`` is ``None`` (the default), an order-of-magnitude
-    scale is auto-inferred from the input depth via
-    :func:`infer_volume_scale`.
-
     By default a price level that does not change in the window is left
     out: it would be one flat line from start to end. When no level changes
     at all, every level is kept instead, so a quiet book still draws.
@@ -592,9 +557,6 @@ def prepare_depth_heatmap_data(
     """
     resolve_level("depth_heatmap", level)
     depth_local = depth.copy()
-    if volume_scale is None:
-        volume_scale = infer_volume_scale(depth_local["volume"])
-    depth_local["volume"] = depth_local["volume"] * volume_scale
 
     # The first step that leaves no rows names the reason the heatmap is empty.
     notice: str | None = NO_DEPTH_NOTICE if depth_local.empty else None
@@ -782,13 +744,8 @@ def prepare_order_activity_l2_data(
     price_to: float | None = None,
     volume_from: float | None = None,
     volume_to: float | None = None,
-    volume_scale: float | None = None,
 ) -> dict[str, Any]:
-    """Prepare data for a limit-order event map.
-
-    ``volume_scale=None`` auto-infers a power-of-10 scale from the
-    filtered events.
-    """
+    """Prepare data for a limit-order event map."""
     start_time, end_time = _default_start_end(events, start_time, end_time)
 
     events = events[
@@ -796,10 +753,6 @@ def prepare_order_activity_l2_data(
         & (events["timestamp"] <= end_time)
         & ((events["type"] == "flashed-limit") | (events["type"] == "resting-limit"))
     ].copy()
-
-    if volume_scale is None:
-        volume_scale = infer_volume_scale(events["volume"])
-    events["volume"] *= volume_scale
 
     if volume_from is not None:
         events = events[events["volume"] >= volume_from]
@@ -828,7 +781,6 @@ def prepare_order_activity_l2_data(
 
 def prepare_order_activity_l3_data(
     events: pd.DataFrame,
-    volume_scale: float | None = None,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
     price_from: float | None = None,
@@ -890,10 +842,6 @@ def prepare_order_activity_l3_data(
     spans["end_ts"] = ended.where(ended <= end_time, end_time)
     spans = spans.rename(columns={"placed_vol": "volume"})
 
-    if volume_scale is None:
-        volume_scale = infer_volume_scale(spans["volume"]) if not spans.empty else 1.0
-    spans["volume"] = spans["volume"] * volume_scale
-
     if not spans.empty:
         if price_from is None:
             price_from = float(spans["price"].quantile(0.01))
@@ -945,7 +893,6 @@ def prepare_order_activity_l3_data(
         "filled": spans[spans["fate"] == "filled"],
         "cancelled": spans[spans["fate"] == "cancelled"],
         "resting": spans[spans["fate"] == "resting"],
-        "volume_scale": volume_scale,
         "price_by": price_by,
         "y_range": y_range,
         "shown_of": shown_of,
@@ -1033,7 +980,6 @@ def _event_rug(
 
 def prepare_liquidity_at_touch_l2_data(
     depth_summary: pd.DataFrame,
-    volume_scale: float | None = None,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
     events: pd.DataFrame | None = None,
@@ -1054,18 +1000,12 @@ def prepare_liquidity_at_touch_l2_data(
         (depth_summary["timestamp"] >= start_time)
         & (depth_summary["timestamp"] <= end_time)
     ]
-    bid_vol = win["best_bid_vol"]
-    ask_vol = win["best_ask_vol"]
-    if volume_scale is None:
-        combined = pd.concat([bid_vol, ask_vol])
-        volume_scale = infer_volume_scale(combined) if not combined.empty else 1.0
     rug = _event_rug(events, start_time, end_time)
     return {
         "rug": rug,
         "timestamp": win["timestamp"].reset_index(drop=True),
-        "bid_vol": (bid_vol * volume_scale).reset_index(drop=True),
-        "ask_vol": (ask_vol * volume_scale).reset_index(drop=True),
-        "volume_scale": volume_scale,
+        "bid_vol": win["best_bid_vol"].reset_index(drop=True),
+        "ask_vol": win["best_ask_vol"].reset_index(drop=True),
     }
 
 
@@ -1371,7 +1311,6 @@ def prepare_trade_size_data(
     *,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
-    volume_scale: float | None = None,
     level: Level | str | None = _UNSET,
 ) -> dict[str, Any]:
     """Trade-size strip: each execution as a jittered dot on a log size axis.
@@ -1385,22 +1324,18 @@ def prepare_trade_size_data(
     win = trades[
         (trades["timestamp"] >= start_time) & (trades["timestamp"] <= end_time)
     ].copy()
-    if volume_scale is None:
-        volume_scale = infer_volume_scale(win["volume"]) if not win.empty else 1.0
-    win["size"] = win["volume"] * volume_scale
+    win["size"] = win["volume"]
     win = win[win["size"] > 0]  # log axis can't show zero/negative sizes
     rng = np.random.default_rng(0)
     win["jitter"] = rng.uniform(-0.4, 0.4, len(win))
     return {
         "buys": win[win["direction"] == "buy"],
         "sells": win[win["direction"] == "sell"],
-        "volume_scale": volume_scale,
     }
 
 
 def prepare_order_outcome_data(
     events: pd.DataFrame,
-    volume_scale: float | None = None,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
     bps_quantiles: tuple[float, float] = (0.05, 0.99),
@@ -1454,12 +1389,7 @@ def prepare_order_outcome_data(
     created = created[created["outcome"] != "resting"].dropna(subset=["distance_bps"])
     created = created[np.isfinite(created["distance_bps"])]
 
-    if volume_scale is None:
-        volume_scale = (
-            infer_volume_scale(created["placed"]) if not created.empty else 1.0
-        )
     created = created.copy()
-    created["placed"] = created["placed"] * volume_scale
 
     if not created.empty:
         lo_q, hi_q = bps_quantiles
@@ -1474,7 +1404,6 @@ def prepare_order_outcome_data(
         "filled": created[created["outcome"] == "filled"],
         "partial": created[created["outcome"] == "partial"],
         "cancelled": created[created["outcome"] == "cancelled"],
-        "volume_scale": volume_scale,
     }
 
 
@@ -1506,7 +1435,6 @@ def prepare_trade_tape_l3_data(
     events: pd.DataFrame,
     trades: pd.DataFrame,
     spread: pd.DataFrame | None = None,
-    volume_scale: float | None = None,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
     price_from: float | None = None,
@@ -1554,10 +1482,7 @@ def prepare_trade_tape_l3_data(
         if price_to is not None:
             tr = tr[tr["price"] <= price_to]
 
-    if volume_scale is None:
-        volume_scale = infer_volume_scale(tr["volume"]) if not tr.empty else 1.0
     tr = tr.copy()
-    tr["volume"] = tr["volume"] * volume_scale
 
     mid_line = _trade_tape_mid(tr, spread)
     tr["mid"] = mid_line["mid"].to_numpy()
@@ -1587,7 +1512,6 @@ def prepare_trade_tape_l3_data(
         "lolli_sells": lolli_sells,
         "mid_line": mid_line.sort_values("timestamp", kind="stable"),
         "dense": dense,
-        "volume_scale": volume_scale,
         "y_range": y_range,
     }
 
@@ -1602,25 +1526,15 @@ def prepare_cancellations_l2_data(
     price_to: float | None = None,
     volume_from: float | None = None,
     volume_to: float | None = None,
-    volume_scale: float | None = None,
     log_scale: bool = False,
 ) -> dict[str, Any]:
-    """Prepare data for a volume map of flashed limit orders.
-
-    ``volume_scale=None`` auto-infers a power-of-10 scale from the
-    incoming events.
-    """
+    """Prepare data for a volume map of flashed limit orders."""
     if event_type is None:
         event_type = ["flashed-limit"]
     if action not in ("deleted", "created"):
         raise ConfigError(f"action must be 'deleted' or 'created', got {action!r}")
 
     start_time, end_time = _default_start_end(events, start_time, end_time)
-
-    events = events.copy()
-    if volume_scale is None:
-        volume_scale = infer_volume_scale(events["volume"])
-    events["volume"] *= volume_scale
 
     mask = (
         (events["action"] == action)
@@ -1646,7 +1560,6 @@ def prepare_cancellations_l2_data(
 
 def prepare_cancellations_l3_data(
     events: pd.DataFrame,
-    volume_scale: float | None = None,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
     age_floor_s: float = 1e-3,
@@ -1689,12 +1602,6 @@ def prepare_cancellations_l3_data(
     cancels["age_s"] = (cancels["timestamp"] - cancels["created_ts"]).dt.total_seconds()
     cancels = cancels[cancels["age_s"] >= 0].copy()
 
-    if volume_scale is None:
-        volume_scale = (
-            infer_volume_scale(cancels["volume"]) if not cancels.empty else 1.0
-        )
-    cancels["volume"] = cancels["volume"] * volume_scale
-
     # Floor onto the log scale instead of quantile-clipping the tails: instant
     # cancels land in a thin "age floor" band, at-touch placements in a
     # "distance floor" band, and the deep/patient structure is preserved.
@@ -1706,7 +1613,7 @@ def prepare_cancellations_l3_data(
 
     bids = cancels[cancels["direction"] == "bid"]
     asks = cancels[cancels["direction"] == "ask"]
-    return {"bids": bids, "asks": asks, "volume_scale": volume_scale}
+    return {"bids": bids, "asks": asks}
 
 
 def _as_book_side_frame(side: pd.DataFrame | np.ndarray) -> pd.DataFrame:
@@ -1723,16 +1630,13 @@ def _as_book_side_frame(side: pd.DataFrame | np.ndarray) -> pd.DataFrame:
     return side.copy()
 
 
-def _book_side(
-    side: pd.DataFrame, *, ascending: bool, per_order: bool, scale: float
-) -> pd.DataFrame:
+def _book_side(side: pd.DataFrame, *, ascending: bool, per_order: bool) -> pd.DataFrame:
     """Best-first side frame with stacking bounds + cumulative liquidity.
 
     *ascending* is the price sort that places the touch first (asks ascending,
     bids descending).  ``per_order=False`` sums every order at a price into one
     row (L2 / MBP); ``per_order=True`` keeps each order with within-level
-    ``seg_lo``/``seg_hi`` stacking bounds (L3 / MBO).  Volume-like columns are
-    multiplied by *scale*.
+    ``seg_lo``/``seg_hi`` stacking bounds (L3 / MBO).
     """
     cols = ["price", "volume", "liquidity", "seg_lo", "seg_hi"]
     if side.empty:
@@ -1767,7 +1671,6 @@ def _book_side(
             }
         )
     out["liquidity"] = out["volume"].cumsum()
-    out[["volume", "liquidity", "seg_lo", "seg_hi"]] *= scale
     return out
 
 
@@ -1858,7 +1761,6 @@ def check_book_payload_level(data: dict[str, Any], *, per_order: bool) -> None:
 
 def prepare_book_snapshot_data(
     order_book: Mapping[str, Any],
-    volume_scale: float | None = None,
     show_quantiles: bool = False,
     top_n: int | None = 40,
     *,
@@ -1870,8 +1772,7 @@ def prepare_book_snapshot_data(
     (see :func:`prepare_depth_chart_data`).  ``level`` is required:
     ``level="L2"`` collapses each price level to one row (Market-By-Price);
     ``level="L3"`` keeps every order as its own row with within-level stacking
-    bounds (Market-By-Order).  ``volume_scale=None`` auto-infers a power-of-10
-    scale from the combined bid/ask volumes.
+    bounds (Market-By-Order).
 
     ``top_n`` windows each side to its *N* nearest price levels (``None`` =
     whole book); the default keeps the touch region where bars stay tall enough
@@ -1886,20 +1787,19 @@ def prepare_book_snapshot_data(
     ``order_book(..., uncross=True)`` returns.
 
     Returns ``bids``/``asks`` frames ordered best-first with columns ``price,
-    volume, liquidity, seg_lo, seg_hi`` (volumes already scaled), the same
-    rows in rising price order as ``bid_curve``/``ask_curve`` for the depth
-    curve, the ``mid`` (see :func:`book_mid`), high-volume ``*_quantiles``
-    price marks, ``timestamp``, ``volume_scale``, and the ``per_order`` flag
+    volume, liquidity, seg_lo, seg_hi`` (sizes in the instrument's units),
+    the same rows in rising price order as ``bid_curve``/``ask_curve`` for the
+    depth curve, the ``mid`` (see :func:`book_mid`), high-volume
+    ``*_quantiles`` price marks, ``timestamp``, and the ``per_order`` flag
     (``True`` at L3).
     """
     per_order = resolve_level("book_snapshot", level) is Level.L3
-    return _book_snapshot(order_book, per_order, volume_scale, show_quantiles, top_n)
+    return _book_snapshot(order_book, per_order, show_quantiles, top_n)
 
 
 def _book_snapshot(
     order_book: Mapping[str, Any],
     per_order: bool,
-    volume_scale: float | None,
     show_quantiles: bool,
     top_n: int | None,
 ) -> dict[str, Any]:
@@ -1907,18 +1807,11 @@ def _book_snapshot(
     bids = _as_book_side_frame(order_book["bids"])
     asks = _as_book_side_frame(order_book["asks"])
 
-    if volume_scale is None:
-        volume_scale = infer_volume_scale(
-            np.concatenate([bids["volume"].to_numpy(), asks["volume"].to_numpy()])
-        )
-
     bid_side = _window_levels(
-        _book_side(bids, ascending=False, per_order=per_order, scale=volume_scale),
-        top_n,
+        _book_side(bids, ascending=False, per_order=per_order), top_n
     )
     ask_side = _window_levels(
-        _book_side(asks, ascending=True, per_order=per_order, scale=volume_scale),
-        top_n,
+        _book_side(asks, ascending=True, per_order=per_order), top_n
     )
 
     bid_quantiles = pd.Series(dtype=float)
@@ -1940,7 +1833,6 @@ def _book_snapshot(
         "show_quantiles": show_quantiles,
         "per_order": per_order,
         "timestamp": timestamp,
-        "volume_scale": volume_scale,
     }
 
 
@@ -2009,7 +1901,6 @@ def prepare_book_replay_data(
     max_frames: int = 600,
     price_levels: int = 20,
     speeds: tuple[float, ...] = (1, 5, 20),
-    volume_scale: float | None = None,
     uncross: bool = True,
     *,
     level: Level | str | None = _UNSET,
@@ -2072,9 +1963,6 @@ def prepare_book_replay_data(
         a speed is smooth only when that is short (about 50 ms or less) and
         steps visibly otherwise.  The fastest speeds run a little slower than
         stated, by the time the browser takes to draw each frame.
-    volume_scale : float or None
-        Size display scale.  ``None`` infers one scale from every frame, so
-        bar lengths compare across frames.
     uncross : bool
         L3 only: evict crossed resting orders before the price range is
         chosen, as ``order_book(uncross=True)`` does.  ``True`` by default, to
@@ -2091,10 +1979,9 @@ def prepare_book_replay_data(
         or ``None`` when no frame has both sides), ``interval`` (the time
         between frames, as a :class:`pandas.Timedelta`), ``speeds``,
         ``trades`` (``timestamp``, ``price``, ``volume`` and ``direction``,
-        sizes scaled, from the first frame to the last), ``per_order``
-        (``True`` at L3),
-        ``volume_scale``, ``bar_thickness`` (one bar thickness for every
-        frame, the smallest of the frames' :func:`book_bar_thickness`) and
+        from the first frame to the last), ``per_order`` (``True`` at L3),
+        ``bar_thickness`` (one bar thickness for every frame, the smallest of
+        the frames' :func:`book_bar_thickness`) and
         ``view_range`` (``price_range`` widened by a bar thickness each side,
         so the bars at its edges are drawn whole; ``None`` with it).
 
@@ -2173,17 +2060,6 @@ def prepare_book_replay_data(
             for book in books
         ]
 
-    if volume_scale is None:
-        volume_scale = infer_volume_scale(
-            np.concatenate(
-                [
-                    np.asarray(book[side]["volume"], dtype=float)
-                    for book in books
-                    for side in ("bids", "asks")
-                ]
-            )
-        )
-
     if trades is None:
         shown = pd.DataFrame(columns=["timestamp", "price", "volume", "direction"])
     else:
@@ -2196,10 +2072,9 @@ def prepare_book_replay_data(
         shown = trades.loc[
             in_range, ["timestamp", "price", "volume", "direction"]
         ].sort_values("timestamp", kind="stable")
-        shown = shown.assign(volume=shown["volume"] * volume_scale)
 
     snapshots = [
-        _book_snapshot(book, per_order, volume_scale, show_quantiles=False, top_n=None)
+        _book_snapshot(book, per_order, show_quantiles=False, top_n=None)
         for book in books
     ]
     # One thickness for every frame, so the bars keep one height as it plays.
@@ -2217,7 +2092,6 @@ def prepare_book_replay_data(
         "speeds": tuple(speeds),
         "trades": shown.reset_index(drop=True),
         "per_order": per_order,
-        "volume_scale": volume_scale,
     }
 
 
@@ -2225,7 +2099,6 @@ def prepare_volume_percentiles_data(
     depth_summary: pd.DataFrame,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
-    volume_scale: float | None = None,
     perc_line: bool = True,
     side_line: bool = True,
     *,
@@ -2236,10 +2109,9 @@ def prepare_volume_percentiles_data(
     The BPS bins are discovered from the ``(bid|ask)_vol<N>bps`` columns of
     *depth_summary*, so any ``depth_bps`` / ``depth_bins`` configuration works
     (the previous hardcoded 25–500 bps range raised ``KeyError`` for anything
-    else).  ``volume_scale=None`` auto-infers a power-of-10 scale from the
-    aggregated bin volumes (after the time-window filter is applied).  A
-    window with no rows gives empty ``asks_cumsum`` / ``bids_cumsum_neg``
-    frames that keep the bin columns; the renderers draw a "no data" figure.
+    else).  A window with no rows gives empty ``asks_cumsum`` /
+    ``bids_cumsum_neg`` frames that keep the bin columns; the renderers draw a
+    "no data" figure.
     """
     resolve_level("volume_percentiles", level)
     if start_time is None:
@@ -2288,11 +2160,6 @@ def prepare_volume_percentiles_data(
     max_ask = ob[ask_names_fmt].sum(axis=1).max()
     max_bid = ob[bid_names_fmt].sum(axis=1).max()
 
-    if volume_scale is None:
-        volume_scale = infer_volume_scale(
-            ob[bid_names_fmt + ask_names_fmt].to_numpy().ravel()
-        )
-
     melted_asks = ob.melt(
         id_vars="timestamp",
         value_vars=ask_names_fmt,
@@ -2304,7 +2171,6 @@ def prepare_volume_percentiles_data(
         categories=ask_names_fmt,
         ordered=True,
     )
-    melted_asks["liquidity"] *= volume_scale
 
     melted_bids = ob.melt(
         id_vars="timestamp",
@@ -2317,7 +2183,6 @@ def prepare_volume_percentiles_data(
         categories=bid_names_fmt,
         ordered=True,
     )
-    melted_bids["liquidity"] *= volume_scale
 
     # One ramp per side, both indexed touch (0, darkest) -> far (light).  The
     # ask/bid columns below are ordered touch-first to match, so the near-touch
@@ -2375,7 +2240,6 @@ def prepare_volume_percentiles_data(
         "legend_names": legend_names,
         "max_ask": max_ask,
         "max_bid": max_bid,
-        "volume_scale": volume_scale,
         "perc_line": perc_line,
         "side_line": side_line,
     }

@@ -82,8 +82,6 @@ class Scene:
         The depth summary without its first minute, while the book fills.
     spread : pandas.DataFrame
         The best bid and ask through time.
-    volume_scale : float
-        The volume display scale.
     zoom_start, zoom_end : pandas.Timestamp
         The busiest stretch of the run (:func:`~ob_analytics.visualization.busiest_window`).
         The book faces show the book at ``zoom_end``.
@@ -102,7 +100,6 @@ class Scene:
     depth: pd.DataFrame
     depth_summary: pd.DataFrame
     spread: pd.DataFrame
-    volume_scale: float
     zoom_start: pd.Timestamp
     zoom_end: pd.Timestamp
     summary_start: pd.Timestamp
@@ -215,7 +212,6 @@ def _trade_tape_l3(s: Scene) -> Binding | None:
         _data.prepare_trade_tape_l3_data,
         events=s.events,
         trades=s.trades,
-        volume_scale=s.volume_scale,
     )
 
 
@@ -225,7 +221,6 @@ def _depth_heatmap(s: Scene) -> Binding:
         depth=s.depth,
         spread=s.spread,
         trades=s.trades,
-        volume_scale=s.volume_scale,
         **s.price_band,
         **s.overlay,
     )
@@ -239,7 +234,6 @@ def _order_activity_l2(s: Scene) -> Binding | None:
     return _bound(
         _data.prepare_order_activity_l2_data,
         events=s.events,
-        volume_scale=s.volume_scale,
         **s.price_band,
     )
 
@@ -250,7 +244,6 @@ def _order_activity_l3(s: Scene) -> Binding | None:
     return _bound(
         _data.prepare_order_activity_l3_data,
         events=s.events,
-        volume_scale=s.volume_scale,
         **s.price_band,
         **s.overlay,
     )
@@ -262,7 +255,6 @@ def _cancellations_l2(s: Scene) -> Binding | None:
     return _bound(
         _data.prepare_cancellations_l2_data,
         events=s.events,
-        volume_scale=s.volume_scale,
         log_scale=True,
     )
 
@@ -273,7 +265,6 @@ def _cancellations_l3(s: Scene) -> Binding | None:
     return _bound(
         _data.prepare_cancellations_l3_data,
         events=s.events,
-        volume_scale=s.volume_scale,
     )
 
 
@@ -288,7 +279,6 @@ def _book(level: Level) -> Binder:
             _data.prepare_book_snapshot_data,
             order_book=book,
             level=level,
-            volume_scale=s.volume_scale,
         )
 
     return bind
@@ -313,7 +303,6 @@ def _book_replay(level: Level) -> Binder:
             start_time=s.zoom_start,
             end_time=s.zoom_end,
             interval=interval,
-            volume_scale=s.volume_scale,
             **events,
         )
 
@@ -327,7 +316,6 @@ def _order_outcome(s: Scene) -> Binding | None:
     return _bound(
         _data.prepare_order_outcome_data,
         events=s.events,
-        volume_scale=s.volume_scale,
     )
 
 
@@ -353,7 +341,6 @@ def _liquidity_at_touch_l2(s: Scene) -> Binding | None:
         events=s.events,
         start_time=s.summary_start,
         end_time=s.summary_end,
-        volume_scale=s.volume_scale,
     )
 
 
@@ -376,7 +363,6 @@ def _volume_percentiles(s: Scene) -> Binding | None:
         depth_summary=s.depth_summary,
         start_time=s.summary_start,
         end_time=s.summary_end,
-        volume_scale=s.volume_scale,
     )
 
 
@@ -395,8 +381,7 @@ def _price_view(s: Scene) -> Binding | None:
 def _events_histogram(s: Scene) -> Binding | None:
     if not s.per_order:
         return None
-    events = s.events[["timestamp", "direction", "price", "volume"]].copy()
-    events["volume"] = events["volume"] * s.volume_scale
+    events = s.events[["timestamp", "direction", "price", "volume"]]
     # The bin width is a hundredth of the focus band, so the near-touch
     # distribution stays readable; the prepare step clips to the band.
     if s.focus.price_from is not None and s.focus.price_to is not None:
@@ -415,9 +400,7 @@ def _events_histogram(s: Scene) -> Binding | None:
 def _trade_size(s: Scene) -> Binding | None:
     if s.trades.empty:
         return None
-    return _bound(
-        _data.prepare_trade_size_data, trades=s.trades, volume_scale=s.volume_scale
-    )
+    return _bound(_data.prepare_trade_size_data, trades=s.trades)
 
 
 def _hidden_executions(s: Scene) -> Binding | None:

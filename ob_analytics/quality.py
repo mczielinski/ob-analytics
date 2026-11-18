@@ -17,7 +17,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from ob_analytics._utils import epoch_ns, ticks_to_price
+from ob_analytics._utils import epoch_ns, require_per_order_events, ticks_to_price
 from ob_analytics.depth import (
     BookLevels,
     _book_levels,
@@ -618,15 +618,23 @@ def detect_stale_orders(
           the touch after the trade showed it was gone.
 
         ``attrs`` holds ``grace``, the wait used.
+
+    Raises
+    ------
+    ConfigError
+        If a required column is missing, or *events* has no rows: an L2 run
+        has no per-order events, and an empty answer would read as "no stale
+        orders".
     """
     validate_columns(
         events,
         {"id", "timestamp", "price", "volume", "direction", "action"},
         "detect_stale_orders(events)",
     )
+    require_per_order_events(events, "detect_stale_orders")
     validate_columns(trades, {"timestamp", "price"}, "detect_stale_orders(trades)")
     stale = _empty_stale_orders()
-    if not events.empty and not trades.empty:
+    if not trades.empty:
         end_ns = _capture_end_ns(events, trades)
         spans = _stale_spans(events, trades, grace, end_ns)
         if not spans.empty:

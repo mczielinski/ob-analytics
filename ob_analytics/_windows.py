@@ -176,10 +176,12 @@ class ParquetAppender:
 
     Each call to :meth:`write` adds a row group to a working file next to
     ``<dest>/<name>.parquet``.  :meth:`finish` checks that every table the run
-    owes was written and only then moves the working files into place, so a
-    run that fails part-way leaves the folder as it was rather than a file that
-    reads as complete but holds only the first windows.  The files carry the
-    same schema version, tick size and lot size metadata as one
+    owes was written and only then moves the working files into place, all of
+    them or none, the way :class:`~ob_analytics.data.ParquetWriter` does.  So
+    a run that fails part-way, or a move that fails, leaves the folder as it
+    was rather than a file that reads as complete but holds only the first
+    windows.  The files carry the same schema version, tick size, lot size,
+    declarations and loader's counts metadata as one
     :class:`~ob_analytics.data.ParquetWriter` writes, so
     :func:`~ob_analytics.data.load_data` reads the folder as it would a single
     run's.
@@ -193,6 +195,9 @@ class ParquetAppender:
     declarations : FeedDeclarations, optional
         The run's declarations, recorded so
         :func:`~ob_analytics.data.load_result` gives them back.
+    loader_counts : dict of str to int, optional
+        The loader's counts over the whole run, recorded in the ``events``
+        file as a single run records them.
     """
 
     def __init__(
@@ -200,12 +205,14 @@ class ParquetAppender:
         dest: str | Path,
         config: Any,
         declarations: FeedDeclarations | None = None,
+        loader_counts: dict[str, int] | None = None,
     ) -> None:
         self.dest = Path(dest)
         self.dest.mkdir(parents=True, exist_ok=True)
         self._tick_sizes = tick_sizes_from_config(config)
         self._lot_sizes = lot_sizes_from_config(config)
         self._declarations = declarations
+        self._loader_counts = loader_counts
         self._writers: dict[str, pq.ParquetWriter] = {}
 
     def _working(self, name: str) -> Path:
@@ -220,6 +227,10 @@ class ParquetAppender:
         in that first frame has no type of its own (Arrow's ``null``), so pass
         *like*, a frame holding the column's values for the whole run, and the
         type is read from its first value instead.
+
+        The loader's counts on *frame*'s ``attrs`` cover that window only, so
+        they are not recorded; the ``events`` file records the whole run's,
+        as given to the constructor.
         """
         from ob_analytics.data import _to_arrow_table
 
@@ -228,6 +239,7 @@ class ParquetAppender:
             tick_sizes=self._tick_sizes,
             lot_sizes=self._lot_sizes,
             declarations=self._declarations,
+            loader_counts=self._loader_counts if name == "events" else None,
         )
         writer = self._writers.get(name)
         if writer is None:
@@ -239,20 +251,28 @@ class ParquetAppender:
     def finish(self, names: Iterable[str]) -> None:
         """Close every file and move it into place, once all *names* are written.
 
+        The files are moved all or none: when one move fails, the files
+        already moved are put back as they were.
+
         Raises
         ------
         ConfigError
             If one of *names* was never written; nothing is moved.
         """
+        from ob_analytics.data import _install_files
+
         missing = [name for name in names if name not in self._writers]
         if missing:
             raise ConfigError(
                 f"run_windows: no window produced rows for {missing}, so the "
                 "output would be incomplete"
             )
-        for name, writer in self._writers.items():
+        for writer in self._writers.values():
             writer.close()
-            self._working(name).replace(self.dest / f"{name}.parquet")
+        _install_files(
+            (self._working(name), self.dest / f"{name}.parquet")
+            for name in self._writers
+        )
         self._writers.clear()
 
     def abort(self) -> None:

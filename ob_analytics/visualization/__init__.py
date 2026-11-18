@@ -54,11 +54,8 @@ from ob_analytics.visualization._renderers import (
 )
 from ob_analytics.visualization._theme import DEFAULT_THEME, PlotTheme
 
-# `infer_volume_scale` is a stable, user-facing helper that gallery callers
-# import from this namespace; keep it as a public re-export. The `prepare_*`
-# implementations live in `_data`; the `prepare` namespace (lazily exposed via
-# __getattr__ below) names them after their concepts.
-infer_volume_scale = _viz_data.infer_volume_scale
+# The `prepare_*` implementations live in `_data`; the `prepare` namespace
+# (lazily exposed via __getattr__ below) names them after their concepts.
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +232,6 @@ __all__ = [
     "focus_window",
     "format_time_axis",
     # Helpers users actually call
-    "infer_volume_scale",
     "load_plot_backend_plugins",
     # Dispatcher + registry
     "plot",
