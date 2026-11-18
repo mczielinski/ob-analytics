@@ -1666,6 +1666,17 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   old table gave. Runner speed varies from run to run, so the baseline comes
   from a run of typical speed: the check fails a stage at twice its baseline,
   and a baseline from a fast runner would fail on a slow one.
+- **The speed check allows for the runner's speed** (#536).
+  `scripts/bench_scale.py` timed each stage once and failed it at twice its
+  baseline. GitHub runners differ in speed by up to about three times, so a
+  slow-down of up to twice passed, and a baseline from a fast runner failed
+  on a slow one. Now each stage is timed three times and keeps its fastest
+  time. Each run also times a small fixed numpy and pandas workload, and a
+  stage's seconds are scaled by it before they are compared. The margin is
+  now one and a half times the baseline. `bench-baseline.json` gains a
+  `reference_seconds` field. A baseline without it still works, at the old
+  margin of twice the baseline, until a new one is recorded on the runner.
+  The `bench` job takes about a minute longer.
 - **No negative depth bins at low prices** (#488). With the default
   `depth_bps=25` and `depth_bins=20`, a best price under about 100 ticks, as on
   every cent-priced prediction market, could give a negative size in the last
