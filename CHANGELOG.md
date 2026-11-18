@@ -1541,6 +1541,19 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   bundled sample. The live levels now sit in a heap, and the same call takes
   about 0.65 s on the same desktop. The output is unchanged, byte for byte.
   `queue_age_grid` uses the same heap.
+- **`queue_positions` no longer walks a long queue to find an order's rank**
+  (#520). For each event, the engine counted the orders ahead of the order and
+  added up their sizes, one by one. On the synthetic session a queue holds
+  about 620 orders on average, so this was most of the stage's time. A level
+  with 32 or more orders now keeps two Fenwick trees (binary indexed trees)
+  over its orders in arrival order: one counts the orders, one sums their
+  sizes. The rank and the volume ahead are then a short sum, not a walk. The
+  synthetic queue stage in `scripts/bench_scale.py` went from about 2.7 s to
+  0.9 s on one desktop. The bundled sample's queues are short, so the trees
+  rarely help there, and the extra upkeep makes it up to a tenth slower. The
+  output is unchanged, byte for byte. The trees need exact sums, so they are
+  used only for integer sizes, as a canonical stream has. Float sizes are
+  still added one by one.
 - **The speed test times `queue_positions` as a user calls it** (#489).
   `scripts/bench_scale.py` passed the events to the engine in the order the
   Bitstamp loader leaves them, by order id, where few levels are live at once.
