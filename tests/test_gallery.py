@@ -956,6 +956,29 @@ class TestBuildGalleryModel:
         ):
             assert frame["timestamp"].between(zoom_start, zoom_end).all()
 
+    def test_a_failed_hidden_liquidity_overlay_warns_and_is_left_out(
+        self, tiny_bitstamp_orders_csv, monkeypatch
+    ) -> None:
+        # #510: a UserWarning, since the package's logger is off by default.
+        from ob_analytics import hidden_liquidity
+        from ob_analytics.bitstamp import BitstampSource
+        from ob_analytics.pipeline import Pipeline
+
+        result = Pipeline(source=BitstampSource()).run(str(tiny_bitstamp_orders_csv))
+
+        def broken(*args, **kwargs):
+            raise RuntimeError("detector broke")
+
+        monkeypatch.setattr(hidden_liquidity, "iceberg_slices", broken)
+        with pytest.warns(UserWarning, match="hidden-liquidity overlay.*detector"):
+            model = build_gallery_model(result)
+
+        heatmap = next(c for c in model.concepts if c.key == "depth_heatmap").at(
+            Level.L2
+        )
+        assert heatmap is not None
+        assert "iceberg_lines" not in heatmap.prep_kwargs
+
     def test_hidden_liquidity_overlay_is_not_rescaled_on_a_legacy_float_result(
         self,
     ) -> None:

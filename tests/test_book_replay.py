@@ -5,6 +5,8 @@ from the depth table and an L3 face rebuilt from the events, beside a still
 trades panel.  Skipped entirely if plotly is not installed.
 """
 
+import warnings
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -90,11 +92,11 @@ class TestPrepare:
         assert data["speeds"] == (1, 5, 20)
 
     def test_interval_widens_to_fit_max_frames(self, result):
-        with warnings_logged() as messages:
+        # A UserWarning, since the package's logger is off by default (#510).
+        with pytest.warns(UserWarning, match="max_frames=4"):
             data = _replay(result, interval="1s", max_frames=4)
         assert len(data["snapshots"]) <= 4
         assert data["interval"] > pd.Timedelta("1s")
-        assert any("max_frames=4" in m for m in messages)
 
     def test_every_bar_sits_in_the_shared_price_range(self, result):
         for level in ("L2", "L3"):
@@ -256,7 +258,9 @@ def test_plot_result_draws_the_replay_on_plotly_only(result):
 def test_gallery_shows_the_replay_without_warnings(result, tmp_path):
     from ob_analytics.visualization.gallery import generate_gallery
 
-    with warnings_logged() as messages:
+    with warnings_logged() as messages, warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
         generate_gallery(result, tmp_path, view="l2", backends=["plotly", "matplotlib"])
     assert not [m for m in messages if "book_replay" in m]
+    assert not [w for w in caught if "max_frames" in str(w.message)]
     assert "replay-trades:" in (tmp_path / "plotly" / "book_replay.L2.html").read_text()

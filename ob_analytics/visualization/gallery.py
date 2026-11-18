@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import html as html_mod
 import inspect
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from functools import partial
@@ -396,7 +397,7 @@ def _hidden_liquidity_overlay(
     9,600 hidden trades, which would flood a face meant to show a few
     minutes.  A failed detector run, unit conversion or clip must not stop
     the gallery (as a failed metric fails only its own card), so any failure
-    drops the overlay and logs a warning.  A run with no per-order events has
+    drops the overlay and gives a warning.  A run with no per-order events has
     no overlay.
     """
     if raw_result.events.empty:
@@ -445,7 +446,11 @@ def _hidden_liquidity_overlay(
             price_to=focus.price_to,
         )
     except Exception as e:  # noqa: BLE001 -- one bad overlay must not sink the gallery
-        logger.warning("Gallery: hidden-liquidity overlay failed: {}", e)
+        warnings.warn(
+            f"Gallery: the hidden-liquidity overlay failed and is left out: {e!r}",
+            UserWarning,
+            stacklevel=2,
+        )
         return {}
 
 

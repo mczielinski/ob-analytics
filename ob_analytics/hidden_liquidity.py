@@ -123,9 +123,11 @@ def detect_icebergs(
         - ``refills`` — ``slices - 1``.
         - ``same_size_refills`` — refills whose displayed size equals the
           displayed size of the slice they replaced.
-        - ``peak`` — displayed size of the first slice, in lots; ``<NA>`` when
+        - ``peak`` — displayed size of the first slice, in lots (or in the
+          events' own units when their sizes are floats, as after
+          :func:`~ob_analytics.visualization.display_result`); ``<NA>`` when
           the first slice was already resting when the stream began.
-        - ``executed`` — size filled across all slices, in lots.
+        - ``executed`` — size filled across all slices, in the same units.
         - ``median_delay_s`` — median wait from a peak filled to its refill.
         - ``confidence`` — ``high`` when there are at least two refills and
           every one matches the displayed size, ``medium`` when at least one
@@ -356,7 +358,12 @@ def _build_detection(
                 }
             )
     slices = pd.DataFrame(slice_rows, columns=_SLICE_COLUMNS)
-    slices["volume"] = slices["volume"].astype("Int64")
+    # Nullable, for a first slice with no known size.  Integer lots stay
+    # integers; float sizes (a result already in display units) stay floats.
+    size_dtype = (
+        "Int64" if pd.api.types.is_integer_dtype(visible["volume"]) else "Float64"
+    )
+    slices["volume"] = slices["volume"].astype(size_dtype)
     slices["timestamp"] = slices["timestamp"].astype(visible["timestamp"].dtype)
 
     by_iceberg = slices.groupby("iceberg", sort=True)
@@ -385,7 +392,7 @@ def _build_detection(
     icebergs["direction"] = icebergs["direction"].astype(visible["direction"].dtype)
     for column in ("timestamp_start", "timestamp_end"):
         icebergs[column] = icebergs[column].astype(visible["timestamp"].dtype)
-    icebergs["peak"] = icebergs["peak"].astype("Int64")
+    icebergs["peak"] = icebergs["peak"].astype(size_dtype)
     icebergs["confidence"] = pd.Categorical(
         np.select(
             [

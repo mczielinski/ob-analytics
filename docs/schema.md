@@ -255,6 +255,15 @@ was declared to show. A folder without the key gets the declarations of the
 capture record beside it, then those of the source passed to `load_result`.
 Like the config key, it is optional and does not change the schema version.
 
+### The run's level
+
+When `save_data` is given a result, each file also records the run's level,
+`"L2"` or `"L3"`, under `ob_analytics_level`. `load_result` reads it, so a
+per-order (L3) run that loaded no events still comes back as L3. A folder
+without the key (written by an older version) gets L2 when its `events` table
+is empty and L3 otherwise. The key is optional and does not change the schema
+version.
+
 ### The loader's counts
 
 Some loaders count things while they read the input, and put the counts on the
