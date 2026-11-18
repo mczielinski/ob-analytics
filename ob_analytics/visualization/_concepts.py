@@ -4,9 +4,14 @@ A plot is a coordinate ``(concept, level, backend)``: what it shows, at which
 resolution (``Level.L2``, ``Level.L3``, or ``None`` for a level-less
 analytic), and which library draws it.  :data:`CONCEPTS` declares each
 concept once: its gallery title and note, and at each level the renderer
-that draws it, the backends that have that renderer, and how the gallery
-binds its data from a run.  :data:`PLOTS` is the same table keyed by the
-coordinate.
+that draws it, the backends that have that renderer, the data it needs, and
+how the gallery binds that data from a run.  :data:`PLOTS` is the same
+table keyed by the coordinate.
+
+An L2 face needs only aggregated data: the depth table, the depth summary
+and the trades.  So every L2 face draws on a price-level run, and on a
+per-order run it shows the aggregated view of the same book.  A face that
+needs per-order events is an L3 face.
 
 The gallery, :func:`~ob_analytics.visualization.plot_result` and
 :func:`~ob_analytics.visualization.plot` read this table to know where a plot
@@ -39,6 +44,7 @@ import pandas as pd
 
 from ob_analytics.book import order_book
 from ob_analytics.depth import price_level_snapshots
+from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import Level
 from ob_analytics.visualization import _data
 from ob_analytics.visualization._renderers import (
@@ -150,8 +156,93 @@ class Binding:
     kwargs: dict[str, Any]
 
 
-#: Binds a face's data from a scene, or returns ``None`` when the run lacks it.
-Binder = Callable[[Scene], Binding | None]
+#: Binds a face's data from a scene that has what the face needs.
+Binder = Callable[[Scene], Binding]
+
+
+#: What a table is called in a sentence that says a run lacks it.
+_TABLE_TEXT: dict[str, str] = {
+    "events": "per-order events",
+    "trades": "trades",
+    "depth": "a depth table",
+    "depth_summary": "a depth summary",
+}
+
+
+@dataclass(frozen=True)
+class Needs:
+    """The data a face reads from a run.
+
+    The counterpart of a metric's ``levels`` and ``needs`` and a feature's
+    ``requires``: what the face needs is declared here, not found in its
+    binder's code.  The gallery, :func:`~ob_analytics.visualization.available_concepts`
+    and :func:`~ob_analytics.visualization.plot_result` read it to know
+    whether a run can draw the face, and the gallery card says what is
+    missing when it cannot.
+
+    Attributes
+    ----------
+    tables : tuple of str
+        The tables that must have rows: ``"events"``, ``"trades"``,
+        ``"depth"`` or ``"depth_summary"``.  ``"events"`` means per-order
+        events, which only an L3 run has.
+    uses : tuple of str
+        Tables the face also reads when they have rows, and draws without
+        when they do not (an event strip, a trade overlay).
+    classified : bool
+        Whether the events must carry the order ``type`` that
+        :func:`~ob_analytics.analytics.set_order_types` adds.
+    columns : tuple of str
+        Event columns the face reads, e.g. ``"raw_event_type"``, which only
+        LOBSTER data fills.  A column that holds no value counts as missing.
+    """
+
+    tables: tuple[str, ...]
+    uses: tuple[str, ...] = ()
+    classified: bool = False
+    columns: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        unknown = (set(self.tables) | set(self.uses)) - _TABLE_TEXT.keys()
+        if unknown:
+            raise ConfigError(
+                f"Unknown tables {sorted(unknown)}; use {list(_TABLE_TEXT)}"
+            )
+        if (self.classified or self.columns) and "events" not in self.tables:
+            raise ConfigError("A face that reads event columns needs the events table.")
+
+    @property
+    def per_order(self) -> bool:
+        """Whether the face needs per-order events (an L3 run)."""
+        return "events" in self.tables
+
+    def unmet(self, run: Any) -> str | None:
+        """Say what *run* lacks for this face, or return ``None`` when it has it all.
+
+        The text is a clause, e.g. ``"it needs per-order events, and this
+        run has none"``, like :func:`~ob_analytics.metrics.skip_reason`.
+
+        *run* is anything with the four tables as attributes: a
+        :class:`~ob_analytics.pipeline.PipelineResult` or a :class:`Scene`.
+        """
+        empty = [_TABLE_TEXT[t] for t in self.tables if getattr(run, t).empty]
+        if empty:
+            return f"it needs {' and '.join(empty)}, and this run has none"
+        events = run.events
+        if self.classified and "type" not in events.columns:
+            return (
+                "it needs events with order types (set_order_types adds them), "
+                "and this run's events have none"
+            )
+        missing = [
+            c
+            for c in self.columns
+            if c not in events.columns or not events[c].notna().any()
+        ]
+        if missing:
+            names = " and ".join(missing)
+            return f"it needs the events' {names}, and this run's events lack it"
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -170,16 +261,26 @@ class Face:
         :data:`BACKEND_PREFIXES`), e.g. ``"trade_tape_aggregate"`` for ``mpl_trade_tape_aggregate``.
     backends : tuple of str
         The backends that draw this face.
+    needs : Needs or None
+        The data the face reads from a run.  ``None`` exactly when *bind* is.
     bind : callable or None
-        How the gallery binds the face's data from a :class:`Scene`.
-        ``None`` for a face the gallery does not build itself: a metric
-        (it has its own panel) or a plot drawn only by
+        How the gallery binds the face's data from a :class:`Scene` that has
+        what *needs* says.  ``None`` for a face the gallery does not build
+        itself: a metric (it has its own card) or a plot drawn only by
         :func:`~ob_analytics.visualization.plot`.
     """
 
     renderer: str
     backends: tuple[str, ...]
+    needs: Needs | None = None
     bind: Binder | None = None
+
+    def __post_init__(self) -> None:
+        if (self.needs is None) != (self.bind is None):
+            raise ConfigError(
+                f"Face {self.renderer!r} declares needs without a binder, or a "
+                "binder without needs."
+            )
 
 
 @dataclass(frozen=True)
@@ -199,15 +300,15 @@ def _bound(prepare: Callable[..., dict], **kwargs: Any) -> Binding:
     return Binding(prepare, kwargs)
 
 
-def _trade_tape_l2(s: Scene) -> Binding | None:
-    if s.trades.empty:
-        return None
+# Each binder is called only for a scene that has what its face needs (see
+# Needs.unmet), so none checks the run itself.
+
+
+def _trade_tape_l2(s: Scene) -> Binding:
     return _bound(_data.prepare_trade_tape_l2_data, trades=s.trades)
 
 
-def _trade_tape_l3(s: Scene) -> Binding | None:
-    if not s.per_order:
-        return None
+def _trade_tape_l3(s: Scene) -> Binding:
     return _bound(
         _data.prepare_trade_tape_l3_data,
         events=s.events,
@@ -226,21 +327,17 @@ def _depth_heatmap(s: Scene) -> Binding:
     )
 
 
-def _order_activity_l2(s: Scene) -> Binding | None:
-    if not s.per_order:
-        return None
-    # The depth heatmap's price band, so the event map clips around the
-    # touch: far flashed orders would otherwise squash the activity.
+def _order_activity_l2(s: Scene) -> Binding:
+    # The depth heatmap's price band, so the map clips around the touch:
+    # changes at far levels would otherwise squash the activity.
     return _bound(
         _data.prepare_order_activity_l2_data,
-        events=s.events,
+        depth=s.depth,
         **s.price_band,
     )
 
 
-def _order_activity_l3(s: Scene) -> Binding | None:
-    if not s.per_order:
-        return None
+def _order_activity_l3(s: Scene) -> Binding:
     return _bound(
         _data.prepare_order_activity_l3_data,
         events=s.events,
@@ -249,19 +346,7 @@ def _order_activity_l3(s: Scene) -> Binding | None:
     )
 
 
-def _cancellations_l2(s: Scene) -> Binding | None:
-    if not s.per_order:
-        return None
-    return _bound(
-        _data.prepare_cancellations_l2_data,
-        events=s.events,
-        log_scale=True,
-    )
-
-
-def _cancellations_l3(s: Scene) -> Binding | None:
-    if not s.per_order:
-        return None
+def _cancellations_l3(s: Scene) -> Binding:
     return _bound(
         _data.prepare_cancellations_l3_data,
         events=s.events,
@@ -271,10 +356,8 @@ def _cancellations_l3(s: Scene) -> Binding | None:
 def _book(level: Level) -> Binder:
     """The book faces read the book of their own level (see ``book_snapshot``)."""
 
-    def bind(s: Scene) -> Binding | None:
+    def bind(s: Scene) -> Binding:
         book = s.price_level_book if level is L2 else s.per_order_book
-        if book is None:
-            return None
         return _bound(
             _data.prepare_book_snapshot_data,
             order_book=book,
@@ -290,9 +373,7 @@ REPLAY_FRAMES = 300
 
 
 def _book_replay(level: Level) -> Binder:
-    def bind(s: Scene) -> Binding | None:
-        if s.depth.empty or (level is L3 and not s.classified):
-            return None
+    def bind(s: Scene) -> Binding:
         interval = max(pd.Timedelta("1s"), (s.zoom_end - s.zoom_start) / REPLAY_FRAMES)
         events = {"events": s.events} if s.classified else {}
         return _bound(
@@ -309,19 +390,14 @@ def _book_replay(level: Level) -> Binder:
     return bind
 
 
-def _order_outcome(s: Scene) -> Binding | None:
-    # It needs the distance from the touch at placement, the per-event bps.
-    if not s.per_order or "aggressiveness_bps" not in s.events.columns:
-        return None
+def _order_outcome(s: Scene) -> Binding:
     return _bound(
         _data.prepare_order_outcome_data,
         events=s.events,
     )
 
 
-def _queue_position(s: Scene) -> Binding | None:
-    if not s.per_order:
-        return None
+def _queue_position(s: Scene) -> Binding:
     # The zoom window: a whole session of touch orders smears into a band at
     # the front, while a few minutes show single orders climbing the queue.
     return _bound(
@@ -332,21 +408,19 @@ def _queue_position(s: Scene) -> Binding | None:
     )
 
 
-def _liquidity_at_touch_l2(s: Scene) -> Binding | None:
-    if s.depth_summary.empty or not s.per_order:
-        return None
+def _liquidity_at_touch_l2(s: Scene) -> Binding:
+    # The event strip beneath the series is drawn on a per-order run only.
+    events = {"events": s.events} if s.per_order else {}
     return _bound(
         _data.prepare_liquidity_at_touch_l2_data,
         depth_summary=s.depth_summary,
-        events=s.events,
         start_time=s.summary_start,
         end_time=s.summary_end,
+        **events,
     )
 
 
-def _liquidity_at_touch_l3(s: Scene) -> Binding | None:
-    if s.depth_summary.empty or not s.per_order:
-        return None
+def _liquidity_at_touch_l3(s: Scene) -> Binding:
     return _bound(
         _data.prepare_liquidity_at_touch_l3_data,
         events=s.events,
@@ -355,9 +429,7 @@ def _liquidity_at_touch_l3(s: Scene) -> Binding | None:
     )
 
 
-def _volume_percentiles(s: Scene) -> Binding | None:
-    if s.depth_summary.empty:
-        return None
+def _volume_percentiles(s: Scene) -> Binding:
     return _bound(
         _data.prepare_volume_percentiles_data,
         depth_summary=s.depth_summary,
@@ -366,9 +438,7 @@ def _volume_percentiles(s: Scene) -> Binding | None:
     )
 
 
-def _price_view(s: Scene) -> Binding | None:
-    if s.depth_summary.empty:
-        return None
+def _price_view(s: Scene) -> Binding:
     return _bound(
         _data.prepare_price_view_data,
         depth_summary=s.depth_summary,
@@ -378,37 +448,52 @@ def _price_view(s: Scene) -> Binding | None:
     )
 
 
-def _events_histogram(s: Scene) -> Binding | None:
-    if not s.per_order:
-        return None
-    events = s.events[["timestamp", "direction", "price", "volume"]]
-    # The bin width is a hundredth of the focus band, so the near-touch
-    # distribution stays readable; the prepare step clips to the band.
-    if s.focus.price_from is not None and s.focus.price_to is not None:
-        price_window = s.focus.price_to - s.focus.price_from
-    else:  # no focus band (a degenerate tape): use the tail span
-        price_window = events["price"].quantile(0.99) - events["price"].quantile(0.01)
-    return _bound(
-        _data.prepare_events_histogram_data,
-        events=events,
-        val="price",
-        bw=max(0.01, round(price_window / 100, 2)),
-        **s.price_band,
+def _prepare_level_change_histogram(
+    depth: pd.DataFrame,
+    *,
+    val: str = "price",
+    bw: float | None = None,
+    price_from: float | None = None,
+    price_to: float | None = None,
+    **kwargs: Any,
+) -> dict:
+    """The events histogram of the price-level changes: where the book changed.
+
+    The changes are found here, when the card is drawn, not when the gallery
+    model is built, so a model that never draws this card costs nothing.
+    """
+    changes = _data.price_level_changes(depth)
+    changes = changes[["timestamp", "direction", "price", "volume"]]
+    if bw is None:
+        # The bin width is a hundredth of the focus band, so the near-touch
+        # distribution stays readable; the prepare step clips to the band.
+        if price_from is not None and price_to is not None:
+            price_window = price_to - price_from
+        else:  # no focus band (a degenerate tape): use the tail span
+            prices = changes["price"]
+            price_window = prices.quantile(0.99) - prices.quantile(0.01)
+        bw = max(0.01, round(float(price_window) / 100, 2))
+    return _data.prepare_events_histogram_data(
+        changes,
+        val=val,
+        bw=bw,
+        price_from=price_from,
+        price_to=price_to,
+        **kwargs,
     )
 
 
-def _trade_size(s: Scene) -> Binding | None:
-    if s.trades.empty:
-        return None
+def _events_histogram(s: Scene) -> Binding:
+    return _bound(_prepare_level_change_histogram, depth=s.depth, **s.price_band)
+
+
+def _trade_size(s: Scene) -> Binding:
     return _bound(_data.prepare_trade_size_data, trades=s.trades)
 
 
-def _hidden_executions(s: Scene) -> Binding | None:
-    # LOBSTER marks executions against hidden orders as event type 5.
-    if "raw_event_type" not in s.events.columns:
-        return None
-    if not (s.events["raw_event_type"] == 5).any():
-        return None
+def _hidden_executions(s: Scene) -> Binding:
+    # LOBSTER marks executions against hidden orders as event type 5; a run
+    # with none draws the trade price only.
     return _bound(
         _data.prepare_hidden_executions_data, events=s.events, trades=s.trades
     )
@@ -421,13 +506,23 @@ _HIDDEN_LEVELS_NOTE = (
     "keeps them all."
 )
 
+# What the book faces read: the depth table at L2, the book rebuilt from the
+# classified events at L3.
+_BOOK_L2 = Needs(("depth",))
+_BOOK_L3 = Needs(("events",), classified=True)
+
 #: Every plot concept, in gallery order.
 CONCEPTS: tuple[Concept, ...] = (
     Concept(
         "trade_tape",
         {
-            L2: Face("trade_tape_aggregate", _ALL, _trade_tape_l2),
-            L3: Face("trade_tape_per_order", _ALL, _trade_tape_l3),
+            L2: Face("trade_tape_aggregate", _ALL, Needs(("trades",)), _trade_tape_l2),
+            L3: Face(
+                "trade_tape_per_order",
+                _ALL,
+                Needs(("events", "trades")),
+                _trade_tape_l3,
+            ),
         },
         "Trade Tape",
         "Executions over time. L2: price as a step line. L3: each execution "
@@ -436,7 +531,14 @@ CONCEPTS: tuple[Concept, ...] = (
     ),
     Concept(
         "depth_heatmap",
-        {L2: Face("depth_heatmap", _ALL, _depth_heatmap)},
+        {
+            L2: Face(
+                "depth_heatmap",
+                _ALL,
+                Needs(("depth",), uses=("trades",)),
+                _depth_heatmap,
+            )
+        },
         "Depth Heatmap",
         "Resting liquidity through time: one horizontal line per price level, "
         "colored by available volume; the pale line is the midprice. "
@@ -449,31 +551,47 @@ CONCEPTS: tuple[Concept, ...] = (
     Concept(
         "order_activity",
         {
-            L2: Face("order_activity_aggregate", _MPL_PLOTLY, _order_activity_l2),
-            L3: Face("order_activity_per_order", _MPL_PLOTLY, _order_activity_l3),
+            L2: Face(
+                "order_activity_aggregate",
+                _MPL_PLOTLY,
+                Needs(("depth",)),
+                _order_activity_l2,
+            ),
+            L3: Face(
+                "order_activity_per_order",
+                _MPL_PLOTLY,
+                Needs(("events",), classified=True),
+                _order_activity_l3,
+            ),
         },
         "Order Activity",
-        "Order placement and removal. L2: created/deleted events scattered at "
-        "their price. L3: each order is one lifespan from placement to "
+        "Order placement and removal. L2: size added to (filled dot) and "
+        "removed from (outlined dot) each price level, at its price, from the "
+        "depth table; a removal can be a cancel or a fill. L3: each order is "
+        "one lifespan from placement to "
         "outcome - orange = pulled (flashed), green = rested/filled. L3 also "
         "overlays iceberg refills and trades against hidden orders.",
     ),
     Concept(
         "cancellations",
         {
-            L2: Face("cancellations_aggregate", _MPL_PLOTLY, _cancellations_l2),
-            L3: Face("cancellations_per_order", _MPL_PLOTLY, _cancellations_l3),
+            L3: Face(
+                "cancellations_per_order",
+                _MPL_PLOTLY,
+                Needs(("events",), classified=True, columns=("aggressiveness_bps",)),
+                _cancellations_l3,
+            )
         },
         "Cancellations",
-        "Pulled orders. L2: cancelled volume over time (log scale). L3: every "
-        "cancellation as how-long-it-rested vs how-far-from-the-touch-it-sat, "
-        "sized by volume.",
+        "Pulled orders: every cancellation as how-long-it-rested vs "
+        "how-far-from-the-touch-it-sat, sized by volume. A price level has no "
+        "order identity, so this needs per-order events.",
     ),
     Concept(
         "book_snapshot",
         {
-            L2: Face("book_snapshot_aggregate", _ALL, _book(L2)),
-            L3: Face("book_snapshot_per_order", _ALL, _book(L3)),
+            L2: Face("book_snapshot_aggregate", _ALL, _BOOK_L2, _book(L2)),
+            L3: Face("book_snapshot_per_order", _ALL, _BOOK_L3, _book(L3)),
         },
         "Book Snapshot ({snapshot})",
         "The resting book at one instant. L2: total size per price level, "
@@ -484,8 +602,8 @@ CONCEPTS: tuple[Concept, ...] = (
     Concept(
         "depth_chart",
         {
-            L2: Face("depth_chart_aggregate", _ALL, _book(L2)),
-            L3: Face("depth_chart_per_order", _ALL, _book(L3)),
+            L2: Face("depth_chart_aggregate", _ALL, _BOOK_L2, _book(L2)),
+            L3: Face("depth_chart_per_order", _ALL, _BOOK_L3, _book(L3)),
         },
         "Depth Chart ({snapshot})",
         "Cumulative size from the touch outwards: how far the price moves to "
@@ -495,8 +613,18 @@ CONCEPTS: tuple[Concept, ...] = (
     Concept(
         "book_replay",
         {
-            L2: Face("book_replay_aggregate", _PLOTLY, _book_replay(L2)),
-            L3: Face("book_replay_per_order", _PLOTLY, _book_replay(L3)),
+            L2: Face(
+                "book_replay_aggregate",
+                _PLOTLY,
+                Needs(("depth",), uses=("trades", "events")),
+                _book_replay(L2),
+            ),
+            L3: Face(
+                "book_replay_per_order",
+                _PLOTLY,
+                Needs(("depth", "events"), uses=("trades",), classified=True),
+                _book_replay(L3),
+            ),
         },
         "Book Replay",
         "The book through the zoom window. Drag the slider or press a play "
@@ -508,7 +636,14 @@ CONCEPTS: tuple[Concept, ...] = (
     ),
     Concept(
         "order_outcome",
-        {L3: Face("order_outcome_per_order", _MPL_PLOTLY, _order_outcome)},
+        {
+            L3: Face(
+                "order_outcome_per_order",
+                _MPL_PLOTLY,
+                Needs(("events",), columns=("aggressiveness_bps",)),
+                _order_outcome,
+            )
+        },
         "Order Outcome",
         "Where orders were placed vs how they ended. x = signed distance from "
         "the best price at placement (right of 0 improved the touch), y = "
@@ -517,7 +652,14 @@ CONCEPTS: tuple[Concept, ...] = (
     ),
     Concept(
         "queue_position",
-        {L3: Face("queue_position_per_order", _MPL_PLOTLY, _queue_position)},
+        {
+            L3: Face(
+                "queue_position_per_order",
+                _MPL_PLOTLY,
+                Needs(("events",), classified=True),
+                _queue_position,
+            )
+        },
         "Queue Position",
         "Each line is a resting order's FIFO rank at the touch over time, "
         "marching toward the front (rank 1, at the top) as the orders ahead "
@@ -527,22 +669,36 @@ CONCEPTS: tuple[Concept, ...] = (
         "liquidity_at_touch",
         {
             L2: Face(
-                "liquidity_at_touch_aggregate", _MPL_PLOTLY, _liquidity_at_touch_l2
+                "liquidity_at_touch_aggregate",
+                _MPL_PLOTLY,
+                Needs(("depth_summary",), uses=("events",)),
+                _liquidity_at_touch_l2,
             ),
             L3: Face(
-                "liquidity_at_touch_per_order", _MPL_PLOTLY, _liquidity_at_touch_l3
+                "liquidity_at_touch_per_order",
+                _MPL_PLOTLY,
+                Needs(("events",), classified=True),
+                _liquidity_at_touch_l3,
             ),
         },
         "Liquidity at the Touch",
         "Liquidity a marketable order meets first. L2: resting size at the "
-        "best bid/ask, with an event rug beneath (gray = created, amber = "
-        "cancelled, green = filled) marking when the book churned. L3: the "
+        "best bid/ask. On a per-order run, an event rug beneath (gray = "
+        "created, amber = cancelled, green = filled) marks when the book "
+        "churned. L3: the "
         "touch queue's composition - each cell is the age of the order at "
         "that rank; pale = recent churn, dark = sticky liquidity.",
     ),
     Concept(
         "volume_percentiles",
-        {L2: Face("volume_percentiles", _MPL_PLOTLY, _volume_percentiles)},
+        {
+            L2: Face(
+                "volume_percentiles",
+                _MPL_PLOTLY,
+                Needs(("depth_summary",)),
+                _volume_percentiles,
+            )
+        },
         "Volume Percentiles",
         "Book depth through time, stacked by distance from the touch in bps "
         "bands: asks above zero, bids below; band thickness = resting volume "
@@ -550,7 +706,14 @@ CONCEPTS: tuple[Concept, ...] = (
     ),
     Concept(
         "price_view",
-        {L2: Face("price_view", _MPL_PLOTLY, _price_view)},
+        {
+            L2: Face(
+                "price_view",
+                _MPL_PLOTLY,
+                Needs(("depth_summary",), uses=("trades",)),
+                _price_view,
+            )
+        },
         "Price View",
         "The spread as a ribbon (best bid to best ask) with the "
         "volume-weighted microprice through it - it leans toward the side "
@@ -559,14 +722,18 @@ CONCEPTS: tuple[Concept, ...] = (
     ),
     Concept(
         "events_histogram",
-        {L2: Face("events_histogram", _MPL_PLOTLY, _events_histogram)},
+        {
+            L2: Face(
+                "events_histogram", _MPL_PLOTLY, Needs(("depth",)), _events_histogram
+            )
+        },
         "Events Histogram (price)",
-        "Where order activity concentrated: event counts binned by price "
-        "within the focus window, split by side.",
+        "Where the book changed: the number of price-level changes in the "
+        "depth table, binned by price within the focus window, split by side.",
     ),
     Concept(
         "trade_size",
-        {L2: Face("trade_size", _MPL_PLOTLY, _trade_size)},
+        {L2: Face("trade_size", _MPL_PLOTLY, Needs(("trades",)), _trade_size)},
         "Trade Size",
         "How big trades are: each execution a jittered dot on a log size "
         "axis, buys and sells in separate bands. Trade size is heavy-tailed, "
@@ -575,19 +742,26 @@ CONCEPTS: tuple[Concept, ...] = (
     ),
     Concept(
         "hidden_executions",
-        {L2: Face("hidden_executions", _MPL_PLOTLY, _hidden_executions)},
+        {
+            L3: Face(
+                "hidden_executions",
+                _MPL_PLOTLY,
+                Needs(("events",), uses=("trades",), columns=("raw_event_type",)),
+                _hidden_executions,
+            )
+        },
         "Hidden Executions",
         "LOBSTER-only: executions against hidden orders (type 5) scattered "
         "over the trade price line - liquidity that never showed in the "
         "visible book.",
     ),
-    # Drawn by plot() only: no gallery card.
-    Concept("time_series", {L2: Face("time_series", _MPL_PLOTLY)}),
-    # Level-less analytics.  The gallery draws a metric from its own panel
-    # and the others from the *_panel helpers, so none binds from a scene.
+    # Level-less analytics, and time_series, which plot() alone draws.  The
+    # gallery draws a metric from its own card and the others from the
+    # *_card helpers, so none binds from a scene.
     *(
         Concept(key, {None: Face(key, _MPL_PLOTLY)})
         for key in (
+            "time_series",
             "l1_ticker",
             "book_signals",
             "bars",

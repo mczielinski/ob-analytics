@@ -624,7 +624,7 @@ def mpl_depth_heatmap(
 def mpl_order_activity_aggregate(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
-    """Render a limit-order event map."""
+    """Render the size added to and removed from each price level."""
     pal = theme.palette
     events = data["events"]
     created = data["created"]
@@ -636,7 +636,7 @@ def mpl_order_activity_aggregate(
     own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(10, 6))
     if events.empty:
-        ax.set_title("Limit Order Event Map (no data)")
+        ax.set_title("Price Level Changes (no data)")
         return fig
 
     sns.scatterplot(
@@ -678,12 +678,12 @@ def mpl_order_activity_aggregate(
     )
 
     ax.set_xlabel("Time")
-    ax.set_ylabel("Limit Price")
+    ax.set_ylabel("Price")
     ax.set_yticks(
         _rounded_price_ticks(events["price"].min(), events["price"].max(), price_by)
     )
     # The map overlays two unlabelled mark families; a legend disambiguates the
-    # gray volume-sized create/delete circles from the bid/ask direction dots.
+    # gray volume-sized added/removed circles from the bid/ask direction dots.
     legend_handles = [
         Line2D(
             [0],
@@ -713,7 +713,7 @@ def mpl_order_activity_aggregate(
             markerfacecolor=pal.price_line,
             markeredgecolor="none",
             markersize=8,
-            label="created",
+            label="added",
         ),
         Line2D(
             [0],
@@ -724,43 +724,10 @@ def mpl_order_activity_aggregate(
             markeredgecolor="black",
             alpha=0.5,
             markersize=8,
-            label="deleted",
+            label="removed",
         ),
     ]
     ax.legend(handles=legend_handles, loc="upper right", framealpha=0.9)
-    format_time_axis(ax)
-    if own_figure:
-        fig.tight_layout()
-    return fig
-
-
-@_themed
-def mpl_cancellations_aggregate(
-    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
-) -> Figure:
-    """Render a volume map of flashed limit orders."""
-    pal = theme.palette
-    events = data["events"]
-    log_scale = data["log_scale"]
-    col_pal = {"bid": pal.bid, "ask": pal.ask}
-
-    own_figure = ax is None
-    fig, ax = _create_axes(ax, figsize=(10, 6))
-    if log_scale:
-        ax.set_yscale("log")
-    sns.scatterplot(
-        data=events,
-        x="timestamp",
-        y="volume",
-        hue="direction",
-        palette=col_pal,
-        s=14,  # fixed marker size (was size=0.5, a misuse of the size semantic)
-        marker="o",
-        ax=ax,
-    )
-    ax.set_xlabel("Time")
-    ax.set_ylabel("Volume")
-    ax.set_title("Volume Map of Flashed Limit Orders")
     format_time_axis(ax)
     if own_figure:
         fig.tight_layout()

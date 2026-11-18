@@ -15,7 +15,7 @@ import pytest
 from ob_analytics.visualization._data import (
     Thinned,
     depth_raster,
-    prepare_cancellations_l2_data,
+    prepare_order_activity_l2_data,
     prepare_order_outcome_data,
     prepare_queue_position_data,
     thin_order_lines,
@@ -224,17 +224,17 @@ def _assert_same_extremes(full: pd.DataFrame, thin: pd.DataFrame, cols) -> None:
 class TestFacesKeepTheLargestPoints:
     """Each face keeps the largest point, or each order's extremes, in every cell."""
 
-    def test_cancellations(self, bundled_sample_result) -> None:
-        events = bundled_sample_result.events
-        full = prepare_cancellations_l2_data(events, log_scale=True, time_bins=None)
-        thin = prepare_cancellations_l2_data(events, log_scale=True)
+    def test_order_activity_l2(self, bundled_sample_result) -> None:
+        depth = bundled_sample_result.depth
+        full = prepare_order_activity_l2_data(depth, time_bins=None)
+        thin = prepare_order_activity_l2_data(depth)
         assert full["thinned"] is None
         assert isinstance(thin["thinned"], Thinned) and thin["thinned"].points
         e = full["events"]
         assert thin["thinned"].total == len(e) > len(thin["events"])
         cols = _cells(pd.DatetimeIndex(e["timestamp"]).asi8.astype(float), 1000)
-        rows = _cells(np.log10(e["volume"].to_numpy(dtype=float)), 300)
-        expected = e.groupby(["direction", cols, rows])["volume"].max()
+        rows = _cells(e["price"].to_numpy(dtype=float), 300)
+        expected = e.groupby(["action", "direction", cols, rows])["volume"].max()
         np.testing.assert_array_equal(
             np.sort(thin["events"]["volume"].to_numpy(dtype=float)),
             np.sort(expected.to_numpy(dtype=float)),
@@ -324,7 +324,7 @@ class TestDepthRaster:
 
 # The largest page each face may write for the bundled 30-minute sample.  The
 # faces with thinned lines stay well under the default.  The L2 event map
-# keeps one event per spot of the screen and has its own, larger budget
+# keeps one change per spot of the screen and has its own, larger budget
 # (19 MiB before).  The cancellations map (6.7 MiB before), the order outcome
 # cloud (5.3 MiB) and the queue lines (3.4 MiB) were thinned in #533.
 _DEFAULT_BUDGET_MIB = 2.5
