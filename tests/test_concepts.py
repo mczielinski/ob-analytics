@@ -1,8 +1,9 @@
 """Tests for the plot concept table, ``visualization/_concepts.py``.
 
 The table declares every plot of the package at ``(concept, level, backend)``;
-the backends register their renderers from it, and ``plot``, ``plot_result``
-and the gallery read it to know where a plot is drawn (audit #405).
+each backend registers its renderers at the coordinates the table gives it
+(a test below checks the two match), and ``plot``, ``plot_result`` and the
+gallery read it to know where a plot is drawn (audit #405).
 """
 
 from __future__ import annotations
@@ -25,24 +26,35 @@ from ob_analytics.visualization import (
     prepare,
 )
 from ob_analytics.visualization._data import _horizon_bands, padded_range
-from ob_analytics.visualization._renderers import _BACKEND_MODULES, _load_backend
+from ob_analytics.visualization._renderers import (
+    _BACKEND_MODULES,
+    _load_backend,
+    renders,
+)
 
 
 @pytest.fixture(scope="module", autouse=True)
 def _load_builtin_backends():
-    for backend in _concepts.BACKEND_PREFIXES:
+    for backend in _concepts.BUILTIN_BACKENDS:
         _load_backend(backend)
 
 
 class TestTable:
-    def test_the_builtin_backends_register_exactly_the_table(self):
-        builtin = {
-            key for key in RENDERERS.list() if key[2] in _concepts.BACKEND_PREFIXES
-        }
-        assert builtin == set(_concepts.PLOTS)
+    def _builtin_registrations(self) -> set:
+        return {key for key in RENDERERS.list() if key[2] in _concepts.BUILTIN_BACKENDS}
+
+    def test_every_plot_in_the_table_has_a_renderer(self):
+        # A renderer the table names and no backend registers fails here,
+        # not when its backend is imported.
+        missing = set(_concepts.PLOTS) - self._builtin_registrations()
+        assert not missing, f"no renderer is registered at {sorted(missing, key=str)}"
+
+    def test_no_builtin_backend_registers_a_plot_the_table_lacks(self):
+        extra = self._builtin_registrations() - set(_concepts.PLOTS)
+        assert not extra, f"the table does not declare {sorted(extra, key=str)}"
 
     def test_each_builtin_backend_is_a_known_module(self):
-        assert set(_concepts.BACKEND_PREFIXES) <= set(_BACKEND_MODULES)
+        assert set(_concepts.BUILTIN_BACKENDS) <= set(_BACKEND_MODULES)
 
     def test_a_concept_is_declared_once(self):
         keys = [c.key for c in _concepts.CONCEPTS]
@@ -69,6 +81,25 @@ class TestTable:
         RENDERERS.register(("trade_tape", Level.L2, "probe"), fn)
         assert "probe" in _concepts.backends("trade_tape", Level.L2)
         assert "matplotlib" in _concepts.backends("trade_tape", Level.L2)
+
+    def test_renders_registers_the_function_at_each_coordinate(
+        self, restore_registries
+    ):
+        def fn(data, ax=None):
+            return None
+
+        decorated = renders("probe_a", None, "probe")(
+            renders("probe_b", None, "probe")(fn)
+        )
+        assert decorated is fn
+        assert RENDERERS.get(("probe_a", None, "probe")) is fn
+        assert RENDERERS.get(("probe_b", None, "probe")) is fn
+
+    def test_the_shared_window_renderer_draws_both_measures(self):
+        for backend in ("matplotlib", "plotly"):
+            assert RENDERERS.get(("amihud", None, backend)) is RENDERERS.get(
+                ("roll_spread", None, backend)
+            )
 
 
 class TestMissingBackend:
@@ -233,13 +264,11 @@ class TestNeeds:
     def test_every_gallery_face_declares_needs(self):
         for concept in _concepts.CONCEPTS:
             for face in concept.faces.values():
-                assert (face.needs is None) == (face.bind is None), face.renderer
+                assert (face.needs is None) == (face.bind is None), concept.key
 
     def test_a_face_with_a_binder_and_no_needs_is_refused(self):
         with pytest.raises(ConfigError, match="needs"):
-            _concepts.Face(
-                "x", ("matplotlib",), bind=lambda s: _concepts.Binding(dict, {})
-            )
+            _concepts.Face(("matplotlib",), bind=lambda s: _concepts.Binding(dict, {}))
 
     def test_an_unknown_table_is_refused(self):
         with pytest.raises(ConfigError, match="Unknown tables"):

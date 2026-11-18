@@ -15,7 +15,7 @@ from __future__ import annotations
 import importlib
 from collections.abc import Callable, Iterable, Iterator
 from importlib.metadata import EntryPoint
-from typing import Any
+from typing import Any, TypeVar
 
 from ob_analytics._registry import Registry, load_plugins
 from ob_analytics.exceptions import ConfigError, UnknownNameError
@@ -145,8 +145,42 @@ class RendererRegistry(Registry[RendererKey, RendererFn]):
 #: analytics.  A concept is one kind or the other on every backend.
 #: The built-in backend modules (``_matplotlib``, ``_plotly``, ``_bokeh``)
 #: register, when imported, every plot the concept table
-#: (``visualization/_concepts.py``) gives them.
+#: (``visualization/_concepts.py``) gives them, each with ``renders``.
 RENDERERS: RendererRegistry = RendererRegistry("renderer")
+
+_Fn = TypeVar("_Fn", bound=RendererFn)
+
+
+def renders(concept: str, level: Level | None, backend: str) -> Callable[[_Fn], _Fn]:
+    """Register the decorated function in :data:`RENDERERS` at a coordinate.
+
+    The decorator returns the function unchanged, so one function can be
+    registered at more than one coordinate by stacking the decorator.  A
+    built-in backend module binds *backend* once with
+    :func:`functools.partial` and writes ``@renders("trade_tape", L2)``
+    above each renderer.
+
+    Parameters
+    ----------
+    concept : str
+        The plot concept the function draws.
+    level : Level or None
+        The level it draws *concept* at, or ``None`` for a level-less plot.
+    backend : str
+        The backend the function belongs to.
+
+    Raises
+    ------
+    ConfigError
+        As :meth:`RendererRegistry.register` does.
+    """
+
+    def register(fn: _Fn) -> _Fn:
+        RENDERERS.register((concept, level, backend), fn)
+        return fn
+
+    return register
+
 
 # Lazy-import bootstrap: backend name → module that registers its renderers
 # on import.  matplotlib is a hard dep, imported with the

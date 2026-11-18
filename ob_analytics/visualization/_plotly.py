@@ -11,14 +11,15 @@ from __future__ import annotations
 
 import html
 import math
-from functools import lru_cache
+from functools import lru_cache, partial
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.visualization._concepts import register_backend
+from ob_analytics.protocols import Level
+from ob_analytics.visualization import _renderers
 from ob_analytics.visualization._data import (
     NO_DEPTH_NOTICE,
     biased_color_norm,
@@ -29,6 +30,12 @@ from ob_analytics.visualization._data import (
 )
 from ob_analytics.visualization._palette import Palette, iceberg_opacity
 from ob_analytics.visualization._theme import DEFAULT_THEME, PlotTheme
+
+L2, L3 = Level.L2, Level.L3
+
+#: Registers the decorated function as this backend's renderer of a
+#: ``(concept, level)``.
+renders = partial(_renderers.renders, backend="plotly")
 
 
 @lru_cache(maxsize=1)
@@ -127,6 +134,7 @@ def _base_figure(
 # ---------------------------------------------------------------------------
 
 
+@renders("time_series", None)
 def plotly_time_series(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render a time-series step plot."""
     pal = theme.palette
@@ -147,6 +155,7 @@ def plotly_time_series(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     return fig
 
 
+@renders("trade_tape", L2)
 def plotly_trade_tape_aggregate(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render the L2 signed-lollipop trade tape.
 
@@ -288,6 +297,7 @@ def _add_depth_image(fig: Any, go: Any, depth: pd.DataFrame, col_bias: float) ->
     )
 
 
+@renders("depth_heatmap", L2)
 def plotly_depth_heatmap(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render the price-level depth heatmap: the levels as one image."""
     pal = theme.palette
@@ -393,6 +403,7 @@ def plotly_depth_heatmap(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any
     return fig
 
 
+@renders("order_activity", L2)
 def plotly_order_activity_aggregate(
     data: dict, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Any:
@@ -1091,6 +1102,7 @@ def _plotly_book_replay(
     return fig
 
 
+@renders("book_replay", L2)
 def plotly_book_replay_aggregate(
     data: dict, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Any:
@@ -1098,6 +1110,7 @@ def plotly_book_replay_aggregate(
     return _plotly_book_replay(data, per_order=False, theme=theme)
 
 
+@renders("book_replay", L3)
 def plotly_book_replay_per_order(
     data: dict, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Any:
@@ -1105,6 +1118,7 @@ def plotly_book_replay_per_order(
     return _plotly_book_replay(data, per_order=True, theme=theme)
 
 
+@renders("book_snapshot", L2)
 def plotly_book_snapshot_aggregate(
     data: dict, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Any:
@@ -1112,6 +1126,7 @@ def plotly_book_snapshot_aggregate(
     return _plotly_book_bars(data, per_order=False, theme=theme)
 
 
+@renders("book_snapshot", L3)
 def plotly_book_snapshot_per_order(
     data: dict, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Any:
@@ -1119,6 +1134,7 @@ def plotly_book_snapshot_per_order(
     return _plotly_book_bars(data, per_order=True, theme=theme)
 
 
+@renders("depth_chart", L2)
 def plotly_depth_chart_aggregate(
     data: dict, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Any:
@@ -1126,6 +1142,7 @@ def plotly_depth_chart_aggregate(
     return _plotly_depth_curve(data, per_order=False, theme=theme)
 
 
+@renders("depth_chart", L3)
 def plotly_depth_chart_per_order(
     data: dict, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Any:
@@ -1156,6 +1173,7 @@ def _log_density_grid(side: Any, xedges: np.ndarray, yedges: np.ndarray) -> np.n
     return np.where(counts == 0, np.nan, counts).T  # (y, x) for Heatmap z
 
 
+@renders("cancellations", L3)
 def plotly_cancellations_per_order(
     data: dict, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Any:
@@ -1414,6 +1432,7 @@ def _apply_y_range(fig: Any, y_range: tuple[float, float] | None) -> None:
         fig.update_yaxes(range=list(y_range))
 
 
+@renders("order_activity", L3)
 def plotly_order_activity_per_order(
     data: dict, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Any:
@@ -1480,6 +1499,7 @@ def _queue_traj_xy(side: Any) -> tuple[list, list]:
     return xs, ys
 
 
+@renders("queue_position", L3)
 def plotly_queue_position_per_order(
     data: dict, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Any:
@@ -1516,6 +1536,7 @@ def plotly_queue_position_per_order(
     return fig
 
 
+@renders("liquidity_at_touch", L2)
 def plotly_liquidity_at_touch_aggregate(
     data: dict, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Any:
@@ -1576,6 +1597,7 @@ def plotly_liquidity_at_touch_aggregate(
     return fig
 
 
+@renders("liquidity_at_touch", L3)
 def plotly_liquidity_at_touch_per_order(
     data: dict, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Any:
@@ -1609,6 +1631,7 @@ def plotly_liquidity_at_touch_per_order(
     return fig
 
 
+@renders("price_view", L2)
 def plotly_price_view(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """L2 price view: spread ribbon + volume-weighted microprice over time."""
     pal = theme.palette
@@ -1687,6 +1710,7 @@ def plotly_price_view(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     return fig
 
 
+@renders("l1_ticker", None)
 def plotly_l1_ticker(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Level 1 quote: a quote card for one instant, or the prices over time.
 
@@ -1766,6 +1790,7 @@ def _plotly_l1_card(data: dict, theme: PlotTheme) -> Any:
     return fig
 
 
+@renders("book_signals", None)
 def plotly_book_signals(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Predictive touch signals: micro-price vs mid, with an OBI strip.
 
@@ -1864,6 +1889,7 @@ def plotly_book_signals(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     return fig
 
 
+@renders("trade_size", L2)
 def plotly_trade_size(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Trade-size strip: jittered execution dots on a log size axis, by side."""
     pal = theme.palette
@@ -1891,6 +1917,7 @@ def plotly_trade_size(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     return fig
 
 
+@renders("order_outcome", L3)
 def plotly_order_outcome_per_order(
     data: dict, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Any:
@@ -1944,6 +1971,7 @@ def plotly_order_outcome_per_order(
     return fig
 
 
+@renders("trade_tape", L3)
 def plotly_trade_tape_per_order(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """L3 (MBO) signed-lollipop trade tape with maker resting spans.
 
@@ -2010,6 +2038,7 @@ def plotly_trade_tape_per_order(data: dict, *, theme: PlotTheme = DEFAULT_THEME)
     return fig
 
 
+@renders("volume_percentiles", L2)
 def plotly_volume_percentiles(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render volume-percentile stacked area chart."""
     pal = theme.palette
@@ -2118,6 +2147,7 @@ def _histogram_edges(
     return start + bw * np.arange(math.floor((hi - start) / bw) + 2)
 
 
+@renders("events_histogram", L2)
 def plotly_events_histogram(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render an events price/volume histogram."""
     pal = theme.palette
@@ -2157,6 +2187,7 @@ def plotly_events_histogram(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> 
     return fig
 
 
+@renders("vpin", None)
 def plotly_vpin(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render VPIN time series."""
     pal = theme.palette
@@ -2228,6 +2259,7 @@ def plotly_vpin(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     return fig
 
 
+@renders("order_flow_imbalance", None)
 def plotly_order_flow_imbalance(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render order flow imbalance bar chart."""
     pal = theme.palette
@@ -2290,6 +2322,8 @@ def plotly_order_flow_imbalance(data: dict, *, theme: PlotTheme = DEFAULT_THEME)
     return fig
 
 
+@renders("amihud", None)
+@renders("roll_spread", None)
 def plotly_window_measure(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render one value per window: the Amihud and Roll faces.
 
@@ -2335,6 +2369,7 @@ def plotly_window_measure(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> An
     return fig
 
 
+@renders("transaction_costs", None)
 def plotly_transaction_costs(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render the transaction-cost decomposition: effective, realized, impact.
 
@@ -2391,6 +2426,7 @@ def plotly_transaction_costs(data: dict, *, theme: PlotTheme = DEFAULT_THEME) ->
     return fig
 
 
+@renders("ofi_by_window", None)
 def plotly_ofi_by_window(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Order-flow-imbalance horizon graph across several trailing windows.
 
@@ -2447,6 +2483,7 @@ def plotly_ofi_by_window(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any
     return fig
 
 
+@renders("kyle_lambda", None)
 def plotly_kyle_lambda(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render Kyle's Lambda regression scatter."""
     pal = theme.palette
@@ -2511,6 +2548,7 @@ def plotly_kyle_lambda(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
 # ---------------------------------------------------------------------------
 
 
+@renders("hidden_executions", L3)
 def plotly_hidden_executions(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render hidden execution volume overlaid on the trade price."""
     pal = theme.palette
@@ -2601,6 +2639,7 @@ def plotly_hidden_executions(data: dict, *, theme: PlotTheme = DEFAULT_THEME) ->
     return fig
 
 
+@renders("trading_halts", None)
 def plotly_trading_halts(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render trade price with shaded halt periods."""
     pal = theme.palette
@@ -2643,6 +2682,7 @@ def plotly_trading_halts(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any
     return fig
 
 
+@renders("bars", None)
 def plotly_bars(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render bars as candlesticks over a signed-volume strip.
 
@@ -2742,7 +2782,3 @@ def plotly_bars(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     # The price axis only: update_yaxes would retitle the volume axis too.
     fig.update_layout(yaxis_title_text="Price")
     return fig
-
-
-# The concept table names the plots this backend draws; register them.
-register_backend("plotly", globals())

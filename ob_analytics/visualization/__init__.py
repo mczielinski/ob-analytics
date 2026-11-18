@@ -10,7 +10,8 @@ The unified :func:`plot` dispatcher renders a plot *concept* at a resolution
 Every plot is a coordinate ``(concept, level, backend)``, where *level* is a
 :class:`Level` (``L2``/``L3``) or ``None`` for level-less analytics.  One
 concept table declares each plot of the package and the backends that draw
-it; the backends register their renderers from it into :data:`RENDERERS`.
+it; each backend registers its renderers into :data:`RENDERERS` at the
+coordinates the table gives it.
 Other packages add plots and backends through :data:`RENDERERS` and
 :func:`register_plot_backend`.  ``backend="matplotlib"`` (default) returns a
 Matplotlib figure; ``backend="plotly"`` returns an interactive Plotly
