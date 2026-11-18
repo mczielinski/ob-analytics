@@ -1473,6 +1473,23 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
+- **A saved run keeps the loader's counts** (#503). The Databento loader
+  counts the records the venue flagged after a gap (`F_MAYBE_BAD_BOOK`), and
+  `audit` warns when there are any. A `run_windows` output lost the count, so
+  `ob-analytics audit --from-parquet` skipped the check. A normal saved run
+  kept it only through pandas' own metadata. Now every Parquet file records
+  its loader's counts as a JSON object under the new metadata key
+  `ob_analytics_loader_counts` (`schemas.LOADER_COUNTS_KEY`), and `load_data`
+  and `load_result` put them back on the frame's `attrs`. A windowed run
+  records the sum over its windows. `to_arrow()` records them too. The key is
+  optional, so the schema version does not change, and older files still
+  load.
+- **`run_windows` moves its files into place all or none** (#503). It
+  replaced the four output files one at a time, so a failed move left a
+  folder with some new files and some old ones. It now uses the same step as
+  `save_data`: each old file is kept until every new one is in place, and a
+  failed move puts the folder back as it was. The old file is kept as a hard
+  link where the file system allows, so a large output is not copied.
 - **Docstrings carry no issue numbers** (#421). Published docstrings, `#:`
   attribute comments and the `tick_size` / `price_decimals` field descriptions
   named GitHub issues or plan labels, which mean nothing to a reader. A new
