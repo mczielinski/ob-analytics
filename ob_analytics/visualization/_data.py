@@ -1274,7 +1274,8 @@ def prepare_book_signals_data(
     (:func:`~ob_analytics.depth.book_imbalance`).  *levels* is clamped to the
     depth bins actually present so a summary with fewer bins does not raise.
     A quote that cannot be read as a price
-    (:func:`~ob_analytics.depth.readable_quotes`) has no mid of either kind.
+    (:func:`~ob_analytics.depth.readable_quotes`) has no mid of either kind,
+    no spread, and no part in the price range.
     """
     resolve_level("book_signals", level)
     start_time, end_time = _default_start_end(depth_summary, start_time, end_time)
@@ -1283,9 +1284,13 @@ def prepare_book_signals_data(
         & (depth_summary["timestamp"] <= end_time)
     ]
 
-    bid = win["best_bid_price"].to_numpy(dtype=float)
-    ask = win["best_ask_price"].to_numpy(dtype=float)
     mid = _readable_mid(win)
+    # An empty side is a price of 0: in the spread or the range it would
+    # stretch the axis down to zero and flatten the lines at the top.
+    readable = ~np.isnan(mid)
+    bid = np.where(readable, win["best_bid_price"].to_numpy(dtype=float), np.nan)
+    ask = np.where(readable, win["best_ask_price"].to_numpy(dtype=float), np.nan)
+    quotes = win[readable]
 
     levels = imbalance_levels(win, levels)
 
@@ -1302,7 +1307,7 @@ def prepare_book_signals_data(
         "obi": obi,
         "obi_depth": obi_depth,
         "levels": levels,
-        "y_range": price_y_range(win["best_bid_price"], win["best_ask_price"]),
+        "y_range": price_y_range(quotes["best_bid_price"], quotes["best_ask_price"]),
     }
 
 
@@ -2278,10 +2283,17 @@ def prepare_events_histogram_data(
     return {"events": filtered, "val": val, "bw": bw}
 
 
+#: The fewest trades a VPIN bucket or an order-flow-imbalance window needs
+#: before its card draws it.  With only a few trades, one side often takes
+#: all of them, so the value sits at its limit and says little.
+MIN_TRADES = 10
+
+
 def prepare_vpin_data(
     vpin_df: pd.DataFrame,
     threshold: float = 0.7,
     *,
+    min_trades: int = MIN_TRADES,
     level: Level | str | None = _UNSET,
 ) -> dict[str, Any]:
     """Prepare data for a VPIN time-series chart.
@@ -2289,8 +2301,21 @@ def prepare_vpin_data(
     The payload's ``note`` says how the buckets were sized when
     ``bucket_volume="fit"`` sized them from the total volume, and is empty
     otherwise.  The gallery shows it under the card.
+
+    When the median bucket holds fewer than *min_trades* trades (the
+    ``n_trades`` column of :func:`~ob_analytics.flow_toxicity.vpin`), the
+    payload's ``too_few`` says so and the face draws that message in place
+    of the chart.  Otherwise ``too_few`` is empty.
     """
     resolve_level("vpin", level)
+    too_few = ""
+    if not vpin_df.empty and "n_trades" in vpin_df.columns:
+        per_bucket = float(vpin_df["n_trades"].median())
+        if per_bucket < min_trades:
+            too_few = (
+                f"Too few trades to draw.\nA bucket holds about {per_bucket:g} "
+                f"trades; the chart needs at least {min_trades}."
+            )
     if len(vpin_df) > 1:
         bar_width = 0.6 * (
             (vpin_df["timestamp_end"].iloc[-1] - vpin_df["timestamp_end"].iloc[0])
@@ -2303,6 +2328,7 @@ def prepare_vpin_data(
         "threshold": threshold,
         "bar_width": bar_width,
         "note": _vpin_note(vpin_df),
+        "too_few": too_few,
     }
 
 
@@ -2419,10 +2445,12 @@ def prepare_amihud_data(
 ) -> dict[str, Any]:
     """Prepare an :func:`~ob_analytics.cost.amihud` table for its face.
 
-    The face draws one point per window, joined by a line.  The payload is
-    the shared window-measure shape: ``times``, ``values``, ``title``,
-    ``ylabel`` and ``notice``, a note for the title (the number of windows,
-    and how many have no value).
+    The face draws one point per window, joined by a line, or the one value
+    as a number when there is a single window.  The payload is the shared
+    window-measure shape: ``times``, ``values``, ``title``, ``ylabel``,
+    ``notice``, a note for the title (the number of windows, and how many
+    have no value), and ``headline``, the single value as text (empty when
+    there are several windows).
     """
     resolve_level("amihud", level)
     validate_columns(amihud_df, {"timestamp", "amihud"}, "prepare_amihud_data")
@@ -2440,7 +2468,8 @@ def prepare_roll_spread_data(
     """Prepare a :func:`~ob_analytics.cost.roll_spread` table for its face.
 
     The face draws the implied spread, in the quote currency, one point per
-    window.  The note says how many windows the model could not measure, and
+    window, or the one value as a number when there is a single window.  The
+    note says how many windows the model could not measure, and
     the median lag-1 autocorrelation of the price changes, which Roll's
     model puts at ``-0.5``.
     """
@@ -2468,19 +2497,29 @@ def prepare_roll_spread_data(
 def _window_measure(
     frame: pd.DataFrame, column: str, *, title: str, ylabel: str
 ) -> dict[str, Any]:
-    """The payload of a face that draws one value per window of *frame*."""
+    """The payload of a face that draws one value per window of *frame*.
+
+    A single window has no line to draw, so ``headline`` holds its value as
+    text, and the face shows that number in place of a time axis.
+    """
     values = frame[column].to_numpy(dtype=np.float64)
     missing = int(np.isnan(values).sum())
-    plural = "" if len(frame) == 1 else "s"
-    notice = f"{len(frame)} window{plural}"
-    if missing:
-        notice += f", {missing} with no value"
+    headline = ""
+    if len(frame) == 1:
+        value = values[0]
+        headline = f"{value:.4g}" if np.isfinite(value) else "No value"
+        notice = "One window holds every trade"
+    else:
+        notice = f"{len(frame)} windows"
+        if missing:
+            notice += f", {missing} with no value"
     return {
         "times": frame["timestamp"].to_numpy(),
         "values": values,
         "title": title,
         "ylabel": ylabel,
         "notice": notice,
+        "headline": headline,
     }
 
 
@@ -2504,6 +2543,7 @@ def prepare_order_flow_imbalance_data(
     ofi_df: pd.DataFrame,
     trades: pd.DataFrame | None = None,
     *,
+    min_trades: int = MIN_TRADES,
     level: Level | str | None = _UNSET,
 ) -> dict[str, Any]:
     """Prepare data for an order-flow-imbalance bar chart.
@@ -2511,11 +2551,40 @@ def prepare_order_flow_imbalance_data(
     Bar colours (the theme's buy / sell split on the sign of the OFI) and bar
     *width* (which depends on the renderer's x-axis units; matplotlib uses
     date numbers) are chosen by each backend rather than here.
+
+    A window with fewer than *min_trades* trades (the ``n_trades`` column of
+    :func:`~ob_analytics.flow_toxicity.order_flow_imbalance`) is left out of
+    ``ofi_df``, and ``notice`` says how many were.  When no window is left,
+    ``too_few`` says so and the face draws that message in place of the
+    bars.  A table with no ``n_trades`` column is drawn whole.  ``bar_gap``
+    is the median time between windows before any are left out, so a bar
+    stays as wide as its window; it is ``None`` for fewer than two windows.
     """
     resolve_level("order_flow_imbalance", level)
+    # Taken before thin windows go: the gaps they leave would widen the bars.
+    bar_gap = ofi_df["timestamp"].diff().median() if len(ofi_df) > 1 else None
+    notice = ""
+    too_few = ""
+    if "n_trades" in ofi_df.columns and not ofi_df.empty:
+        enough = ofi_df["n_trades"] >= min_trades
+        left_out = int((~enough).sum())
+        if not enough.any():
+            too_few = (
+                f"Too few trades to draw.\nNo window holds {min_trades} trades; "
+                "a longer window holds more."
+            )
+        elif left_out:
+            notice = (
+                f"{left_out} of {len(ofi_df)} windows left out: "
+                f"fewer than {min_trades} trades each"
+            )
+        ofi_df = ofi_df[enough]
     return {
         "ofi_df": ofi_df,
         "trades": trades,
+        "notice": notice,
+        "too_few": too_few,
+        "bar_gap": bar_gap,
     }
 
 

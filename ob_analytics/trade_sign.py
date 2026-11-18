@@ -909,8 +909,10 @@ def bulk_volume_classification(
     pandas.DataFrame
         One row per completed bucket with columns ``bucket``,
         ``timestamp_start``, ``timestamp_end``, ``close``, ``delta_price``,
-        ``buy_fraction``, ``buy_volume``, ``sell_volume``.  The two volumes
-        are in the instrument's own units, like *bucket_volume*.  Empty (no
+        ``buy_fraction``, ``buy_volume``, ``sell_volume``, ``n_trades``.  The
+        two volumes are in the instrument's own units, like *bucket_volume*.
+        ``n_trades`` is the number of trades with volume in the bucket; a
+        trade split across two buckets counts in both.  Empty (no
         rows) if the trades don't fill a single bucket.
 
     Raises
@@ -963,6 +965,7 @@ def _bulk_volume_classification(
                 "buy_fraction",
                 "buy_volume",
                 "sell_volume",
+                "n_trades",
             ]
         )
 
@@ -991,5 +994,6 @@ def _bulk_volume_classification(
             "buy_fraction": buy_fraction,
             "buy_volume": buy_fraction * bucket_volume,
             "sell_volume": (1.0 - buy_fraction) * bucket_volume,
+            "n_trades": buckets.groupby("bucket")["row"].nunique().to_numpy(),
         }
     )

@@ -239,6 +239,7 @@ def _empty_vpin_frame(
             "timestamp_end": pd.Series(dtype=timestamp_dtype),
             "buy_volume": pd.Series(dtype="float64"),
             "sell_volume": pd.Series(dtype="float64"),
+            "n_trades": pd.Series(dtype="int64"),
             "vpin": pd.Series(dtype="float64"),
             "vpin_avg": pd.Series(dtype="float64"),
         }
@@ -315,6 +316,8 @@ def vpin(
         * ``buy_volume`` — total buy volume in the bucket, in the
           instrument's own units
         * ``sell_volume`` — total sell volume in the bucket, likewise
+        * ``n_trades`` — the number of trades with volume in the bucket; a
+          trade split across two buckets counts in both
         * ``vpin`` — ``|buy_volume - sell_volume| / bucket_volume``
         * ``vpin_avg`` — trailing mean of ``vpin`` over *n_buckets*
 
@@ -438,6 +441,7 @@ def _vpin_from_signs(
             "timestamp_end": _rows_at(df["timestamp"], ends),
             "buy_volume": buy.to_numpy() / scale,
             "sell_volume": sell.to_numpy() / scale,
+            "n_trades": buckets.groupby("bucket")["row"].nunique().to_numpy(),
             "vpin": (buy - sell).abs().to_numpy() / (bucket_volume * scale),
         }
     )
@@ -462,7 +466,14 @@ def _vpin_from_bvc(
     if bvc.empty:
         return _empty_vpin_frame(trades["timestamp"].dtype)
     result = bvc[
-        ["bucket", "timestamp_start", "timestamp_end", "buy_volume", "sell_volume"]
+        [
+            "bucket",
+            "timestamp_start",
+            "timestamp_end",
+            "buy_volume",
+            "sell_volume",
+            "n_trades",
+        ]
     ].copy()
     result["vpin"] = (
         result["buy_volume"] - result["sell_volume"]
@@ -731,7 +742,7 @@ def order_flow_imbalance(
         Columns: ``timestamp`` (the start of the window), ``buy_volume``,
         ``sell_volume``, ``signed_volume`` (in the instrument's own units, BTC,
         shares or contracts, whether the trades hold integer lots or display
-        sizes), ``ofi``.
+        sizes), ``n_trades`` (the number of trades in the window), ``ofi``.
 
     Raises
     ------
@@ -768,6 +779,7 @@ def _ofi_windows(
             "buy_volume": windows["buy_volume"] / sizes,
             "sell_volume": windows["sell_volume"] / sizes,
             "signed_volume": windows["signed_volume"] / sizes,
+            "n_trades": windows["n_trades"],
         }
     )
     # A ratio of two sizes in the bars' own units, so it needs no conversion.
