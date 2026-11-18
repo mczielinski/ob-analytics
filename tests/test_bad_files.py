@@ -165,15 +165,15 @@ CSV_READERS = [
         _toy_l2,
         "depth.csv",
         lambda folder: DepthCsvLoader().load(folder),
-        required=("timestamp", "side", "price", "volume"),
+        required=("timestamp", "direction", "price", "volume"),
     ),
     CsvReader(
         "depth_csv trades",
         _toy_l2,
         "trades.csv",
         lambda folder: DepthCsvTradeReader().load(pd.DataFrame(), folder),
-        required=("timestamp", "price", "amount"),
-        optional=("side",),
+        required=("timestamp", "price", "volume"),
+        optional=("direction",),
     ),
 ]
 

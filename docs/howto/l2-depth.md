@@ -23,7 +23,7 @@ most CCXT sources — publish only **L2 aggregated** data: price-level
     | Sequence | if present |
     | Clocks | as recorded |
     | Crossing | price levels |
-    | Taker side | the `side` column, or Lee–Ready |
+    | Taker side | the `direction` column, or Lee–Ready |
     | Trade tape gaps | as recorded |
     | Price grid | you supply it |
     | What the book means | as recorded |
@@ -60,7 +60,7 @@ resting size (`0` removes the level) — *not* a signed delta. A book snapshot i
 simply the opening block of rows.
 
 ```text
-timestamp,side,price,volume
+timestamp,direction,price,volume
 1700000000000,bid,99.0,5.0     # ─┐ opening snapshot
 1700000000000,bid,98.0,8.0     #  │
 1700000000000,ask,101.0,4.0    #  │
@@ -72,12 +72,19 @@ timestamp,side,price,volume
 | column | meaning |
 |--------|---------|
 | `timestamp` | receive time — integer epoch (milliseconds by default) or any string pandas can parse |
-| `side` | `bid` / `ask` (`buy` / `sell` and `b` / `a` are also accepted) |
+| `direction` | `bid` / `ask` (`buy` / `sell` and `b` / `a` are also accepted) |
 | `price` | the price level, in the quote currency by default (stored as a whole number of `tick_size` ticks; a price between two ticks raises `ConfigError` instead of being rounded) |
 | `volume` | the level's **new absolute** resting size (`0` = removed) |
 
-Column names are flexible: `side` / `direction` and `volume` / `size` /
+Column names are flexible: `direction` / `side` and `volume` / `size` /
 `amount` / `quantity` are all accepted.
+
+A live capture's folder says how its times are written: its `meta.json`
+records the format version (`capture_format`). Version 2 writes nanoseconds,
+and the reader uses them when the settings do not name a unit. A folder with no
+version (an older capture, or a file you wrote) is read in milliseconds.
+`DepthCsvWriter` writes nanoseconds and records the version, unless the
+settings name a unit.
 
 A file with another timestamp unit, or prices in a smaller unit than the quote
 currency, says so in the source's settings:
@@ -138,10 +145,11 @@ an aggregated feed and is not attempted.
 ## Trade signs
 
 L3 crypto ships the taker side for free; price-level feeds usually don't. When
-`trades.csv` has no `side` column, the pipeline classifies the aggressor with
+`trades.csv` has no `direction` column, the pipeline classifies the aggressor with
 **Lee–Ready** against the reconstructed touch: the last quote strictly before
 each trade, falling back to the tick rule at the mid — see
-[trade signs](../api/trade_sign.md). A native `side` column is honored as-is.
+[trade signs](../api/trade_sign.md). A native `direction` column (`side` in
+older files) is honored as-is.
 
 ```python
 result.trades["direction"]    # buy / sell taker side, native or classified

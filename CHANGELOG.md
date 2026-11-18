@@ -101,6 +101,18 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   a capture moved out of the private runner module:
   `ob_analytics.live._runner.FileCaptureSink` ->
   `ob_analytics.capture_files.FileCaptureSink`.
+- **A capture writes its files in format version 2** (#494). Times are
+  nanoseconds, not milliseconds, and `trades.csv` and `depth.csv` name the side
+  and size `direction` and `volume`, not `side` and `amount`. A script that
+  reads a capture's CSV files itself -> read `timestamp` with `unit="ns"` and
+  use the new names, or check `capture_format` in `meta.json`. The package's
+  readers read both versions. A plug-in live source -> yield `direction` and
+  `volume` in its depth and trade events; the sink refuses an event that uses
+  `side` or `amount`, and the capture ends with that error.
+  `RepairedFiles.last_ms` -> `RepairedFiles.last_timestamp`, a tz-aware
+  `Timestamp`. `BitstampWriter` writes nanoseconds and records
+  `capture_format` in the folder's `meta.json`; so does `DepthCsvWriter` unless
+  its settings set `timestamp_unit`.
 - **`Palette.flashed` and `Palette.resting` are gone** (#415). No plot read
   them. `Palette(flashed=..., resting=...)` -> leave both out.
 - **The command line has one name per thing** (#411). The input is `path`
@@ -557,6 +569,14 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   `write_record` and `source_declarations` are what the capture runner and the
   segment supervisor write it with. The module is outside `ob_analytics.live`,
   so code that only replays files does not import the live package.
+- **A replayed capture keeps the venue's time and names its instrument**
+  (#494). A capture writes times in nanoseconds, so Bitstamp's microseconds
+  are kept, and cryptofeed's times are kept to the microsecond. `meta.json`
+  records the format version (`capture_format`) and the instrument (`venue`,
+  `symbol`), and the loaders put the venue and symbol on every row, so a
+  replay needs no `RunContext`. `read_format(path)` returns them. A capture
+  made earlier records no version and still loads, in milliseconds; one made
+  by a later version is refused with a message to upgrade.
 - **A ccxt capture records the venue's size step as `lot_size`** (#346), from
   ccxt's market data, beside the tick size. If a size arrives between two
   steps, the capture makes the step finer until the size fits, as it does for

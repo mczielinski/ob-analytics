@@ -159,7 +159,7 @@ class TestL2Translation:
             delta={"bid": [(100.0, 7.0), (99.0, 0.0)], "ask": [(101.0, 4.0)]},
         )
         rows = src._l2_rows(book)
-        assert {(r["side"], r["price"], r["volume"]) for r in rows} == {
+        assert {(r["direction"], r["price"], r["volume"]) for r in rows} == {
             ("bid", 100.0, 7.0),
             ("bid", 99.0, 0.0),
             ("ask", 101.0, 4.0),
@@ -181,7 +181,7 @@ class TestL2Translation:
         src = self._source()
         book = _FakeBook({"bid": {100.0: 5.0}, "ask": {101.0: 4.0}}, delta=None)
         rows = src._l2_rows(book)
-        assert {(r["side"], r["price"], r["volume"]) for r in rows} == {
+        assert {(r["direction"], r["price"], r["volume"]) for r in rows} == {
             ("bid", 100.0, 5.0),
             ("ask", 101.0, 4.0),
         }
@@ -196,7 +196,7 @@ class TestL2Translation:
                 {"bid": {100.0: 6.0}, "ask": {101.0: 4.0, 102.0: 1.0}}, delta=None
             )
         )
-        assert {(r["side"], r["price"], r["volume"]) for r in rows} == {
+        assert {(r["direction"], r["price"], r["volume"]) for r in rows} == {
             ("bid", 100.0, 6.0),
             ("ask", 102.0, 1.0),
         }
@@ -205,7 +205,7 @@ class TestL2Translation:
         src = self._source()
         src._l2_rows(_FakeBook({"bid": {100.0: 5.0, 99.0: 2.0}, "ask": {}}, delta=None))
         rows = src._l2_rows(_FakeBook({"bid": {100.0: 5.0}, "ask": {}}, delta=None))
-        assert [(r["side"], r["price"], r["volume"]) for r in rows] == [
+        assert [(r["direction"], r["price"], r["volume"]) for r in rows] == [
             ("bid", 99.0, 0.0)
         ]
 
@@ -412,8 +412,8 @@ class TestTradeTranslation:
         ev = self._source()._map_trade(_FakeTrade())
         assert ev["trade_id"] == "t1"
         assert ev["price"] == 100.5
-        assert ev["amount"] == 0.25
-        assert ev["side"] == "buy"
+        assert ev["volume"] == 0.25
+        assert ev["direction"] == "buy"
         assert ev["venue"] == "fakel3"
         assert ev["symbol"] == "BTC-USD"
 
@@ -421,7 +421,7 @@ class TestTradeTranslation:
         """cryptofeed hands out Decimals; the schema wants plain floats."""
         ev = self._source()._map_trade(_FakeTrade(price="0.1", amount="0.2"))
         assert isinstance(ev["price"], float)
-        assert isinstance(ev["amount"], float)
+        assert isinstance(ev["volume"], float)
 
     def test_public_tape_carries_no_order_ids(self):
         """Public trades have no maker/taker IDs -- they must not be invented."""

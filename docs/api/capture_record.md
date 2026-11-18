@@ -7,7 +7,8 @@ title: Capture record
 Every live capture, and every segment of a long one, writes a `meta.json`
 beside its files. Most of its fields are counters. A few say how to read the
 data back: the source that made the capture and what it declares about its
-feed, and the instrument's tick size and lot size. This module writes and reads
+feed, the instrument's tick size and lot size, the version of the file format,
+and the instrument's venue and symbol. This module writes and reads
 those fields. It is outside `ob_analytics.live`, so code that only replays files
 does not need the live-capture extras.
 
@@ -25,6 +26,10 @@ source that reads the capture back (`replay_source`), so the command needs no
 
 ::: ob_analytics.capture_record.read_instrument
 
+::: ob_analytics.capture_record.read_format
+
+::: ob_analytics.capture_record.CaptureFormat
+
 ::: ob_analytics.capture_record.run_declarations
 
 ::: ob_analytics.capture_record.write_record
@@ -40,10 +45,14 @@ source that reads the capture back (`replay_source`), so the command needs no
 ## Capture files
 
 A capture segment's `orders.csv` or `depth.csv`, `trades.csv` and `raw.jsonl`.
-These functions find a segment's book file, and complete the files of a capture
-that stopped without closing them.
+These functions find a segment's book file, record the format version of
+files a writer saved, and complete the files of a capture that stopped without
+closing them. The files are in format version 2: see
+[the file format](../howto/live-capture.md#the-file-format).
 
 ::: ob_analytics.capture_files.book_file
+
+::: ob_analytics.capture_files.record_format
 
 ::: ob_analytics.capture_files.repair_files
 

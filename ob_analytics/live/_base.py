@@ -111,11 +111,17 @@ The required keys are:
 
 * an order event (L3): ``id``, ``timestamp``, ``exchange_timestamp``,
   ``price``, ``volume``, ``action``, ``direction``.
-* a depth event (L2): ``timestamp``, ``exchange_timestamp``, ``side``,
-  ``price``, ``volume``.  ``volume`` is the new size at that price; ``0``
-  removes the level.
+* a depth event (L2): ``timestamp``, ``exchange_timestamp``, ``direction``
+  (``bid`` or ``ask``), ``price``, ``volume``.  ``volume`` is the new size at
+  that price; ``0`` removes the level.
 * a trade event: ``trade_id``, ``timestamp``, ``exchange_timestamp``,
-  ``price``, ``amount``, ``buy_order_id``, ``sell_order_id``, ``side``.
+  ``price``, ``volume``, ``buy_order_id``, ``sell_order_id``, ``direction``
+  (the taker's side, ``buy`` or ``sell``).
+
+The times are tz-aware UTC :class:`pandas.Timestamp` values, kept to the
+precision the venue sent.  An event may also carry ``venue`` and ``symbol``:
+the capture records the first ones it sees in ``meta.json``, and a replay puts
+them on every row.
 """
 
 
@@ -223,6 +229,11 @@ def epoch_ms_to_ts(ms: int) -> pd.Timestamp:
     return pd.Timestamp(int(ms), unit="ms", tz="UTC").as_unit("ns")
 
 
+def epoch_us_to_ts(us: int) -> pd.Timestamp:
+    """Epoch microseconds on the canonical clock: tz-aware UTC nanoseconds."""
+    return pd.Timestamp(int(us), unit="us", tz="UTC").as_unit("ns")
+
+
 #: The finest step a capture will shrink its recorded tick or lot size to: the
 #: default lot grid, finer than any venue quotes a price or a size.
 FINEST_STEP = 1e-8
@@ -271,9 +282,8 @@ class RecordedGrid:
     def fit(self, event: EventDict) -> None:
         """Make the steps fine enough for *event*'s price and size.
 
-        The size is ``volume`` on an order or depth row and ``amount`` on a
-        trade.  A row with neither price nor size (a raw frame) changes
-        nothing.
+        The size is ``volume`` on every row.  A row with neither price nor
+        size (a raw frame) changes nothing.
         """
         price = event.get("price")
         if price is not None:
@@ -281,7 +291,7 @@ class RecordedGrid:
             if tick is not None and tick != self.tick_size:
                 self.tick_size = tick
                 self.tick_size_changes += 1
-        size = event.get("volume", event.get("amount"))
+        size = event.get("volume")
         if size is not None:
             lot = step_for(size, self.lot_size)
             if lot is not None and lot != self.lot_size:
@@ -370,7 +380,7 @@ class LiveSource(Source, Protocol):
         Called once at startup before :meth:`stream`. **L3:** each event MUST
         have ``action="created"``; the runner writes them to ``orders.csv`` so
         later ``changed`` / ``deleted`` events have matching creates. **L2:**
-        each event is an absolute-size depth row (``side`` / ``price`` /
+        each event is an absolute-size depth row (``direction`` / ``price`` /
         ``volume``) written to ``depth.csv``.
         """
         ...

@@ -19,7 +19,7 @@ What the capture does:
   :class:`~ob_analytics.live.UnmappedMessageError`, and
   :func:`~ob_analytics.live.run_capture` starts a new segment from a new
   opening book.  So does a change that would leave a negative size.
-* Writes each trade at its Yes price.  ``side`` is ``buy`` when the taker
+* Writes each trade at its Yes price.  ``direction`` is ``buy`` when the taker
   bought Yes and ``sell`` when the taker bought No.  Trades that arrive
   before the opening book are left out.
 * Records the market's tick size (from Kalshi's market data) and lot size in
@@ -516,10 +516,10 @@ class KalshiSource:
             "timestamp": received,
             "exchange_timestamp": venue_ts,
             "price": price,
-            "amount": amount,
+            "volume": amount,
             "buy_order_id": "",
             "sell_order_id": "",
-            "side": side,
+            "direction": side,
             "venue": self.name,
             "symbol": self._ticker,
         }
@@ -556,7 +556,7 @@ class KalshiSource:
         return {
             "timestamp": received,
             "exchange_timestamp": venue_ts,
-            "side": side,
+            "direction": side,
             "price": price_f,
             "volume": size_f,
             "sequence": self._book_seq,

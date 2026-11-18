@@ -60,9 +60,38 @@ complete capture on its own, so it replays alone:
 |------|----------|
 | `manifest.json` | The whole capture: its segments, why each one ended, and the gaps between them |
 | `seg-NNNN/orders.csv` | BitstampLoader-compatible event log (`created` / `changed` / `deleted`) |
+| `seg-NNNN/depth.csv` | L2 captures only, in place of `orders.csv`: one row per price-level change |
 | `seg-NNNN/trades.csv` | Venue-reported trades (informational; pipeline infers fills itself) |
 | `seg-NNNN/raw.jsonl` | The raw WebSocket frames, one per line (omit with `--no-raw`). A value or dict key that JSON cannot hold is written as text (`str(value)`). A frame that JSON cannot hold at all, such as one that refers to itself, is skipped. Neither stops the capture |
-| `seg-NNNN/meta.json` | Segment metadata, the capture record: start/end, counts, per-capturer diagnostics, the source and what it declares about its feed, and the instrument's `tick_size` and `lot_size`. When the venue does not give a step, the capture starts from 0.01 and `1e-8` and makes each step finer until every price and size written fits. With `raw.jsonl` on, `raw_text_types` names the types written as text and `n_raw_frames_skipped` counts the skipped frames. `n_raw_frames` counts every frame, skipped ones included, so `raw.jsonl` has `n_raw_frames - n_raw_frames_skipped` lines. The capture logs a warning the first time each happens |
+| `seg-NNNN/meta.json` | Segment metadata, the capture record: start/end, counts, per-capturer diagnostics, the source and what it declares about its feed, and the instrument's `tick_size` and `lot_size`, the file format version (`capture_format`), and the instrument's `venue` and `symbol`. When the venue does not give a step, the capture starts from 0.01 and `1e-8` and makes each step finer until every price and size written fits. With `raw.jsonl` on, `raw_text_types` names the types written as text and `n_raw_frames_skipped` counts the skipped frames. `n_raw_frames` counts every frame, skipped ones included, so `raw.jsonl` has `n_raw_frames - n_raw_frames_skipped` lines. The capture logs a warning the first time each happens |
+
+## The file format
+
+The CSV files are in format version 2, which `meta.json` records as
+`"capture_format": 2`:
+
+- Times are whole nanoseconds since the epoch (UTC), so each time keeps the
+  precision the venue sent. Bitstamp sends microseconds.
+- Every file names the book side or the taker's side `direction`, and the size
+  `volume`.
+- `meta.json` records the `venue` and `symbol`. A replay puts them on every row
+  of the events (L3) or the depth (L2), so you do not need a
+  [`RunContext`](../api/protocols.md). A `RunContext` or `--venue` /
+  `--symbol` replaces them.
+
+| File | Columns |
+|------|---------|
+| `orders.csv` | `id`, `timestamp`, `exchange_timestamp`, `price`, `volume`, `action`, `direction`, `sequence`, `origin` |
+| `depth.csv` | `timestamp`, `exchange_timestamp`, `direction`, `price`, `volume`, `sequence`, `origin` |
+| `trades.csv` | `trade_id`, `timestamp`, `exchange_timestamp`, `price`, `volume`, `buy_order_id`, `sell_order_id`, `direction` |
+
+A capture made before captures recorded a format version has no
+`capture_format`, and is read as version 1: times in milliseconds, and `side` and `amount` in place of
+`direction` and `volume` in `trades.csv` and `depth.csv`. It has no venue or
+symbol on its rows unless you give them. A capture made by a later version of
+ob-analytics than yours is refused with a message to upgrade.
+
+## Reading a capture
 
 `process` and `audit` given the capture directory work through each segment.
 They need no `--source`: the capture records the source that reads it back

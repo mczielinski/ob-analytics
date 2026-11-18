@@ -11,6 +11,14 @@ A live capture writes one folder (one per segment of a long capture):
   when the capture keeps them;
 * ``meta.json`` -- the capture record (see :mod:`ob_analytics.capture_record`).
 
+The files are in format version 2 (``capture_format`` in ``meta.json``): times
+are whole nanoseconds since the epoch, so they keep the precision the venue
+sent, and every file names the side ``direction`` and the size ``volume``.
+``meta.json`` records the ``venue`` and ``symbol``, and a replay puts them on
+every row.  A capture made in version 1 has no ``capture_format``: its times
+are milliseconds, and ``trades.csv`` and ``depth.csv`` name the side ``side``
+and the size ``amount``.  The readers read both versions.
+
 This module owns the file names and columns, the sink that writes them
 (:class:`FileCaptureSink`), and the repair of a folder a capture never closed
 (:func:`repair_files`).  The writers that save a run in the same format
@@ -38,7 +46,16 @@ import pandas as pd
 from loguru import logger
 
 from ob_analytics._secrets import RedactingFile, any_known, redact
-from ob_analytics.capture_record import write_record
+from ob_analytics.capture_record import (
+    CURRENT_FORMAT,
+    FORMAT,
+    SYMBOL,
+    VENUE,
+    read_fields,
+    read_format,
+    write_record,
+)
+from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import Level
 from ob_analytics.schemas import ORIGIN_COLUMN, SEQUENCE_COLUMN, SNAPSHOT_ORIGIN
 
@@ -49,6 +66,7 @@ __all__ = [
     "FileCaptureSink",
     "RepairedFiles",
     "book_file",
+    "record_format",
     "repair_files",
 ]
 
@@ -88,25 +106,27 @@ ORDER_COLUMNS: tuple[str, ...] = (
     SEQUENCE_COLUMN,
     ORIGIN_COLUMN,
 )
-#: The columns of ``trades.csv``.
+#: The columns of ``trades.csv``.  ``direction`` is the taker's side (``buy``
+#: or ``sell``) and ``volume`` the size traded.
 TRADE_COLUMNS: tuple[str, ...] = (
     "trade_id",
     "timestamp",
     "exchange_timestamp",
     "price",
-    "amount",
+    "volume",
     "buy_order_id",
     "sell_order_id",
-    "side",
+    "direction",
 )
-#: The columns of ``depth.csv``.  ``volume`` is the new size at ``price`` (0
-#: removes the level).  ``sequence`` is the venue's number for the book when
-#: the source gives one (blank otherwise).  ``timestamp`` is the receive time
-#: a replay sorts on; ``exchange_timestamp`` keeps the venue's time.
+#: The columns of ``depth.csv``.  ``direction`` is the book side (``bid`` or
+#: ``ask``), and ``volume`` the new size at ``price`` (0 removes the level).
+#: ``sequence`` is the venue's number for the book when the source gives one
+#: (blank otherwise).  ``timestamp`` is the receive time a replay sorts on;
+#: ``exchange_timestamp`` keeps the venue's time.
 DEPTH_COLUMNS: tuple[str, ...] = (
     "timestamp",
     "exchange_timestamp",
-    "side",
+    "direction",
     "price",
     "volume",
     SEQUENCE_COLUMN,
@@ -119,6 +139,20 @@ CSV_FILES: dict[str, tuple[str, ...]] = {
     DEPTH_NAME: DEPTH_COLUMNS,
     TRADES_NAME: TRADE_COLUMNS,
 }
+
+#: The format version 1 names of the columns version 2 renamed, per file, by
+#: the new name.  ``orders.csv`` already used ``direction`` and ``volume``, and
+#: ``depth.csv`` already used ``volume``.
+V1_NAMES: dict[str, dict[str, str]] = {
+    TRADES_NAME: {"direction": "side", "volume": "amount"},
+    DEPTH_NAME: {"direction": "side"},
+}
+
+
+def csv_columns(name: str, version: int) -> tuple[str, ...]:
+    """The columns of the capture CSV file *name* in format *version*."""
+    renamed = V1_NAMES.get(name, {}) if version == 1 else {}
+    return tuple(renamed.get(column, column) for column in CSV_FILES[name])
 
 
 def book_file(folder: Path) -> Path | None:
@@ -137,10 +171,25 @@ def book_file(folder: Path) -> Path | None:
 # ---------------------------------------------------------------------------
 
 
-def _ts_ms(ts: pd.Timestamp | float) -> int:
+def record_format(folder: Path) -> None:
+    """Record in *folder*'s ``meta.json`` that its files are in the current format.
+
+    For a writer that saves a run in the capture format: the other fields of
+    a ``meta.json`` already there are kept.  One is written when there is none.
+    """
+    fields = read_fields(folder) or {}
+    if fields.get(FORMAT) != CURRENT_FORMAT:
+        write_record(folder, {**fields, FORMAT: CURRENT_FORMAT})
+
+
+def _ts_ns(ts: pd.Timestamp | float) -> int:
+    """A row's time as whole nanoseconds since the epoch.
+
+    A number is read as epoch milliseconds, as format version 1 wrote it.
+    """
     if isinstance(ts, pd.Timestamp):
-        return int(ts.value // 1_000_000)
-    return int(ts)
+        return int(ts.value)
+    return int(ts) * 1_000_000
 
 
 class FileCaptureSink:
@@ -170,6 +219,14 @@ class FileCaptureSink:
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self._keep_raw = keep_raw
         self._level = level
+        # The instrument, from the first row that names it (see format_fields).
+        self._venue: str | None = None
+        self._symbol: str | None = None
+        # The kinds of row whose keys have been checked (see _check_keys).
+        self._checked: set[str] = set()
+        # A meta.json from the start, so a folder a crash leaves open is still
+        # read in the right format. finalize replaces it.
+        write_record(self.out_dir, {**self.format_fields(), "provisional": True})
 
         # Exactly one book writer is opened, per resolution. The other stays
         # None so write_order / write_depth are safe no-ops on the wrong side.
@@ -220,31 +277,66 @@ class FileCaptureSink:
     def write_order(self, event: EventDict) -> None:
         if self._orders is None:
             return
-        row = {
-            **event,
-            "timestamp": _ts_ms(event["timestamp"]),
-            "exchange_timestamp": _ts_ms(event["exchange_timestamp"]),
-        }
-        self._orders.writerow(row)
+        self._orders.writerow(self._row(event))
 
     def write_depth(self, event: EventDict) -> None:
         if self._depth is None:
             return
         # Only the DEPTH_COLUMNS are persisted (extras ignored).
-        row = {
-            **event,
-            "timestamp": _ts_ms(event["timestamp"]),
-            "exchange_timestamp": _ts_ms(event["exchange_timestamp"]),
-        }
-        self._depth.writerow(row)
+        if "depth" not in self._checked:
+            self._check_keys("depth", event)
+        self._depth.writerow(self._row(event))
 
     def write_trade(self, event: EventDict) -> None:
-        row = {
+        if "trade" not in self._checked:
+            self._check_keys("trade", event)
+        self._trades.writerow(self._row(event))
+
+    def _check_keys(self, kind: str, event: EventDict) -> None:
+        """Refuse the first *kind* row when it uses the version 1 key names.
+
+        The writer drops keys it does not know, so a source that still yields
+        ``side`` or ``amount`` would otherwise write empty cells for the whole
+        capture.
+        """
+        name = TRADES_NAME if kind == "trade" else DEPTH_NAME
+        old = [
+            f"{v1!r} (now {new!r})"
+            for new, v1 in V1_NAMES[name].items()
+            if v1 in event and new not in event
+        ]
+        if old:
+            raise ConfigError(
+                f"A {kind} event names {', '.join(old)}: {name} names the "
+                "side 'direction' and the size 'volume'."
+            )
+        self._checked.add(kind)
+
+    def _row(self, event: EventDict) -> EventDict:
+        """*event* with its times in nanoseconds, noting the instrument it names."""
+        if self._venue is None and event.get(VENUE):
+            self._venue = str(event[VENUE])
+        if self._symbol is None and event.get(SYMBOL):
+            self._symbol = str(event[SYMBOL])
+        return {
             **event,
-            "timestamp": _ts_ms(event["timestamp"]),
-            "exchange_timestamp": _ts_ms(event["exchange_timestamp"]),
+            "timestamp": _ts_ns(event["timestamp"]),
+            "exchange_timestamp": _ts_ns(event["exchange_timestamp"]),
         }
-        self._trades.writerow(row)
+
+    def format_fields(self) -> dict[str, Any]:
+        """The ``meta.json`` fields that say how to read the files.
+
+        The format version, and the ``venue`` and ``symbol`` of the first row
+        that named them (a source puts them on its events).  Each is left out
+        until a row names it.
+        """
+        fields: dict[str, Any] = {FORMAT: CURRENT_FORMAT}
+        if self._venue is not None:
+            fields[VENUE] = self._venue
+        if self._symbol is not None:
+            fields[SYMBOL] = self._symbol
+        return fields
 
     def write_raw(self, frame: Any) -> None:
         if self._raw_fp is None or frame is None:
@@ -417,6 +509,7 @@ class FileCaptureSink:
             "stream_ended": _iso_or_none(result.stream_ended),
             **result.extras,
             **self.raw_diagnostics(),
+            **self.format_fields(),
         }
         if result.capture_error is not None:
             meta["capture_error"] = result.capture_error
@@ -448,16 +541,16 @@ class RepairedFiles:
 
     Attributes
     ----------
-    last_ms : int or None
-        The latest receive ``timestamp`` in any CSV file, in epoch
-        milliseconds; ``None`` when they hold no rows.
+    last_timestamp : pandas.Timestamp or None
+        The latest receive ``timestamp`` in any CSV file, as tz-aware UTC;
+        ``None`` when they hold no rows.
     orders_closed : int
         The ``deleted`` rows written for orders still open.
     n_order_events, n_depth_events, n_trade_events : int
         The rows each file holds after the repair.
     """
 
-    last_ms: int | None
+    last_timestamp: pd.Timestamp | None
     orders_closed: int
     n_order_events: int
     n_depth_events: int
@@ -471,25 +564,30 @@ def repair_files(folder: Path) -> RepairedFiles:
     before its first flush, a file may be empty.  This cuts each file back to
     its last whole line, puts back a missing header, and closes every L3 order
     still open at the last recorded time, with the same ``deleted`` rows a
-    normal shutdown writes.  It does not touch ``meta.json``.
+    normal shutdown writes.  It reads the format version from ``meta.json``,
+    and does not change it.
     """
+    capture_format = read_format(folder)
     for name in (*CSV_FILES, RAW_NAME):
         _trim_to_last_line(folder / name)
-    for name, columns in CSV_FILES.items():
-        _restore_header(folder / name, columns)
+    for name in CSV_FILES:
+        _restore_header(folder / name, csv_columns(name, capture_format.version))
 
+    # The times as written, in the folder's unit.
     stamps = [
-        ms
+        last
         for name in CSV_FILES
-        if (ms := _last_timestamp_ms(folder / name)) is not None
+        if (last := _last_timestamp(folder / name)) is not None
     ]
-    last_ms = max(stamps, default=None)
+    last = max(stamps, default=None)
     orders = folder / ORDERS_NAME
     closed = 0
-    if orders.is_file() and last_ms is not None:
-        closed = _close_open_orders(orders, last_ms)
+    if orders.is_file() and last is not None:
+        closed = _close_open_orders(orders, last)
     return RepairedFiles(
-        last_ms=last_ms,
+        last_timestamp=None
+        if last is None
+        else pd.Timestamp(last, unit=capture_format.time_unit, tz="UTC").as_unit("ns"),
         orders_closed=closed,
         n_order_events=_count_rows(orders),
         n_depth_events=_count_rows(folder / DEPTH_NAME),
@@ -537,8 +635,8 @@ def _count_rows(path: Path) -> int:
         return max(sum(1 for _ in fp) - 1, 0)  # minus the header
 
 
-def _last_timestamp_ms(path: Path) -> int | None:
-    """The latest receive ``timestamp`` in a capture CSV, in epoch ms."""
+def _last_timestamp(path: Path) -> int | None:
+    """The latest receive ``timestamp`` in a capture CSV, as written."""
     if not path.is_file():
         return None
     latest: int | None = None
@@ -553,8 +651,8 @@ def _last_timestamp_ms(path: Path) -> int | None:
     return latest
 
 
-def _close_open_orders(orders: Path, at_ms: int) -> int:
-    """Append a ``deleted`` row at *at_ms* for every order still open."""
+def _close_open_orders(orders: Path, at: int) -> int:
+    """Append a ``deleted`` row at *at* (in the file's unit) for every order still open."""
     open_orders: dict[str, dict[str, str]] = {}
     with orders.open(newline="") as fp:
         reader = csv.DictReader(fp)
@@ -572,8 +670,8 @@ def _close_open_orders(orders: Path, at_ms: int) -> int:
             writer.writerow(
                 {
                     **row,
-                    "timestamp": at_ms,
-                    "exchange_timestamp": at_ms,
+                    "timestamp": at,
+                    "exchange_timestamp": at,
                     "action": "deleted",
                     SEQUENCE_COLUMN: "",
                     ORIGIN_COLUMN: ORIGIN_SHUTDOWN,
