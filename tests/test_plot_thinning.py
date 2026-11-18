@@ -15,6 +15,10 @@ import pytest
 from ob_analytics.visualization._data import (
     Thinned,
     depth_raster,
+    prepare_cancellations_l2_data,
+    prepare_order_outcome_data,
+    prepare_queue_position_data,
+    thin_order_lines,
     thin_payload,
     thin_points,
     thin_positions,
@@ -135,6 +139,149 @@ class TestThinPoints:
         assert thinned is not None
         assert len(out) == thinned.shown == 10
 
+    def test_any_x_column_and_a_log_y_axis(self) -> None:
+        # Volumes 1, 2, ..., 9 and 10, 20, ..., 90 on two log rows: a linear
+        # cut would put all of 1..9 into the first of two rows with 10..40.
+        size = np.r_[np.arange(1.0, 10.0), np.arange(10.0, 100.0, 10.0)]
+        n = 40 * len(size)
+        df = pd.DataFrame(
+            {
+                "distance": np.repeat(np.linspace(-1.0, 1.0, 40), len(size)),
+                "size": np.tile(size, 40),
+            }
+        )
+        out, thinned = thin_points(
+            df, x="distance", y="size", by=[], size="size", bins=4, rows=2, log_y=True
+        )
+        assert thinned is not None and thinned.total == n
+        cols = _cells(df["distance"].to_numpy(), 4)
+        rows = _cells(np.log10(df["size"].to_numpy()), 2)
+        expected = df.groupby([cols, rows])["size"].max().sort_values()
+        np.testing.assert_array_equal(out["size"].sort_values(), expected)
+        assert sorted(out["size"].unique()) == [9.0, 90.0]
+
+
+class TestThinOrderLines:
+    def test_each_order_keeps_its_extremes_in_every_bin(self) -> None:
+        n, bins = 20_000, 50
+        rng = np.random.default_rng(2)
+        df = pd.DataFrame(
+            {
+                "timestamp": _times(n),
+                "id": rng.integers(0, 40, n),
+                "rank": rng.integers(1, 30, n),
+            }
+        )
+        out, thinned = thin_order_lines(df, y="rank", bins=bins)
+        assert thinned is not None and thinned.orders
+        assert len(out) == thinned.shown < n
+        assert out.index.is_monotonic_increasing  # still in time order
+        cols = pd.Series(_bins(df["timestamp"], bins), index=df.index)
+        _assert_same_extremes(df, out, cols)
+
+    def test_a_point_drawn_twice_keeps_one_row(self) -> None:
+        # Each order has two rows on the same spot of the screen, as most
+        # short-lived orders at the touch do.
+        n = 4_000
+        df = pd.DataFrame(
+            {
+                "timestamp": np.repeat(_times(n // 2).to_numpy(), 2),
+                "id": np.arange(n) // 2,
+                "rank": 3,
+            }
+        )
+        out, thinned = thin_order_lines(df, y="rank", bins=10)
+        assert thinned is not None
+        assert len(out) == n // 2
+        np.testing.assert_array_equal(out.index, np.arange(1, n, 2))  # the later
+
+    def test_a_short_frame_is_not_thinned(self) -> None:
+        df = pd.DataFrame({"timestamp": _times(50), "id": 1, "rank": 1})
+        assert thin_order_lines(df, y="rank", bins=100) == (df, None)
+        assert thin_order_lines(df, y="rank", bins=None) == (df, None)
+
+
+def _cells(values: np.ndarray, count: int) -> np.ndarray:
+    lo, hi = values.min(), values.max()
+    return np.minimum(((values - lo) / (hi - lo) * count).astype(int), count - 1)
+
+
+def _assert_same_extremes(full: pd.DataFrame, thin: pd.DataFrame, cols) -> None:
+    """*thin* has each order's lowest, highest and last rank in every bin."""
+    for frame in (full, thin):
+        assert frame.index.is_unique
+    pd.testing.assert_frame_equal(
+        thin.groupby(["id", cols.loc[thin.index]])["rank"].agg(["min", "max"]),
+        full.groupby(["id", cols])["rank"].agg(["min", "max"]),
+    )
+    # The last row of each bin, where the line leaves it: the row itself.
+    pd.testing.assert_frame_equal(
+        thin.groupby(["id", cols.loc[thin.index]]).tail(1).sort_index(),
+        full.groupby(["id", cols]).tail(1).sort_index(),
+    )
+
+
+class TestFacesKeepTheLargestPoints:
+    """Each face keeps the largest point, or each order's extremes, in every cell."""
+
+    def test_cancellations(self, bundled_sample_result) -> None:
+        events = bundled_sample_result.events
+        full = prepare_cancellations_l2_data(events, log_scale=True, time_bins=None)
+        thin = prepare_cancellations_l2_data(events, log_scale=True)
+        assert full["thinned"] is None
+        assert isinstance(thin["thinned"], Thinned) and thin["thinned"].points
+        e = full["events"]
+        assert thin["thinned"].total == len(e) > len(thin["events"])
+        cols = _cells(pd.DatetimeIndex(e["timestamp"]).asi8.astype(float), 1000)
+        rows = _cells(np.log10(e["volume"].to_numpy(dtype=float)), 300)
+        expected = e.groupby(["direction", cols, rows])["volume"].max()
+        np.testing.assert_array_equal(
+            np.sort(thin["events"]["volume"].to_numpy(dtype=float)),
+            np.sort(expected.to_numpy(dtype=float)),
+        )
+
+    def test_order_outcome(self, bundled_sample_result) -> None:
+        events = bundled_sample_result.events
+        full = prepare_order_outcome_data(events, bins=None)
+        thin = prepare_order_outcome_data(events)
+        assert full["thinned"] is None
+        assert isinstance(thin["thinned"], Thinned) and thin["thinned"].points
+        outcomes = ("filled", "partial", "cancelled")
+        f = pd.concat([full[k] for k in outcomes])
+        t = pd.concat([thin[k] for k in outcomes])
+        assert thin["thinned"].total == len(f) > len(t)
+        cols = _cells(f["distance_bps"].to_numpy(dtype=float), 1000)
+        rows = _cells(f["placed"].to_numpy(dtype=float), 300)
+        expected = f.groupby(["outcome", cols, rows])["placed"].max()
+        np.testing.assert_array_equal(
+            np.sort(t["placed"].to_numpy(dtype=float)),
+            np.sort(expected.to_numpy(dtype=float)),
+        )
+        # The marker sizes still scale against every order, not the kept ones.
+        pd.testing.assert_series_equal(t["marker_area"], f.loc[t.index, "marker_area"])
+
+    def test_queue_position(self, bundled_sample_result) -> None:
+        events = bundled_sample_result.events
+        full = prepare_queue_position_data(events, time_bins=None)
+        thin = prepare_queue_position_data(events)
+        assert full["thinned"] is None
+        assert isinstance(thin["thinned"], Thinned) and thin["thinned"].orders
+        assert (thin["max_rank"], thin["show_markers"]) == (
+            full["max_rank"],
+            full["show_markers"],
+        )
+        # The kept rows keep their index labels, so they line up with the full
+        # rows.  One order has one fate, so its rows stay in time order.
+        fates = ("filled", "cancelled", "resting")
+        f = pd.concat([full[k] for k in fates])
+        t = pd.concat([thin[k] for k in fates])
+        assert thin["thinned"].total == len(f) > len(t)
+        cols = pd.Series(
+            _cells(pd.DatetimeIndex(f["timestamp"]).asi8.astype(float), 1000),
+            index=f.index,
+        )
+        _assert_same_extremes(f, t, cols)
+
 
 class TestDepthRaster:
     def test_a_cell_holds_the_largest_volume_in_it(self) -> None:
@@ -176,15 +323,13 @@ class TestDepthRaster:
 
 
 # The largest page each face may write for the bundled 30-minute sample.  The
-# faces with thinned lines stay well under the default.  The point clouds
-# have their own, larger budgets: the L2 event map keeps one event per spot of
-# the screen (19 MiB before), and the others are not thinned yet.
+# faces with thinned lines stay well under the default.  The L2 event map
+# keeps one event per spot of the screen and has its own, larger budget
+# (19 MiB before).  The cancellations map (6.7 MiB before), the order outcome
+# cloud (5.3 MiB) and the queue lines (3.4 MiB) were thinned in #533.
 _DEFAULT_BUDGET_MIB = 2.5
 _PAGE_BUDGET_MIB = {
     "order_activity.L2": 4.0,
-    "cancellations.L2": 8.0,
-    "order_outcome.L3": 6.0,
-    "queue_position.L3": 4.0,
 }
 
 
@@ -216,3 +361,4 @@ class TestGalleryPageSizes:
         # and the event map
         assert html.count("time steps keeps its first, last, lowest") >= 5
         assert "it shows the largest one." in html
+        assert "each order keeps its lowest, highest and last rank." in html
