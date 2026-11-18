@@ -25,6 +25,8 @@ for the concepts and the [`audit` how-to](../howto/audit.md) for the CLI.
 
 ::: ob_analytics.quality.book_crossing
 
+::: ob_analytics.quality.CROSSED_TOLERANCE_PCT
+
 ## Sequence gaps
 
 ::: ob_analytics.quality.detect_sequence_gaps

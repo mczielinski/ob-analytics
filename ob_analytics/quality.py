@@ -38,6 +38,7 @@ from ob_analytics.schemas import (
 )
 
 __all__ = [
+    "CROSSED_TOLERANCE_PCT",
     "STALE_GRACE",
     "BookDifference",
     "DataQualitySummary",
@@ -647,9 +648,15 @@ def detect_stale_orders(
     return stale
 
 
-# A matched book that is crossed for less than this share of session time is
-# treated as uncrossed: floating-point ties at the touch, not a defect.
 CROSSED_TOLERANCE_PCT: float = 0.05
+"""The share of session time, in percent, that a book may be crossed and still pass.
+
+A matched book or a price-level book that is crossed for this share of the
+time or less is treated as uncrossed: the crossings are ties at the touch, not
+a defect.  The crossed-book checks of :func:`data_quality_summary` and the
+LOBSTER loader's warning compare the ``crossed_pct`` of
+:func:`book_crossing` with it.
+"""
 
 # How much a crossed book matters, by feed type.  A matched book and a
 # price-level book must not cross; a diff feed can, faithfully.  An undeclared

@@ -1046,8 +1046,8 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   `pipeline`. `price_level_volume` has a new `warn_overdrawn` option. The
   LOBSTER loader passes `warn_overdrawn=False`, so it no longer calls a
   private `depth` function.
-  `quality.book_crossing` is now in `quality.__all__` and on the Data quality
-  API page.
+  `quality.book_crossing` and `quality.CROSSED_TOLERANCE_PCT` are now in
+  `quality.__all__` and on the Data quality API page.
 - **A test checks every layer's imports** (#495). Before, only the engine's
   imports were checked against ADR 0001. `tests/test_layer_imports.py` now
   puts every module in a layer and fails when a module imports from a layer
