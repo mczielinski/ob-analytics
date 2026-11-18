@@ -1545,6 +1545,7 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
     it shows.
   - A test builds the Plotly gallery of the sample and fails when a page is
     larger than its size budget.
+
 - **A failed rollback no longer hides the first error** (#524). `save_data`
   and `run_windows` move their files into place all or none. When a move
   fails, they put back the files already moved. Before, if putting back one
@@ -1557,6 +1558,22 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   error. The backup of a replaced file is now a hidden `.<name>.bak` file
   beside it, or `.<name>.<n>.bak` when that name is taken. Before,
   `save_data` kept it in a temporary folder that it deleted on exit.
+- **Three more Plotly pages of the sample are under 2.5 MiB** (#533). They
+  sent every point to the page.
+  - The L2 cancellations map keeps the largest order of each side on each
+    spot of the screen (6.7 MiB to 0.9 MiB). On a log volume axis, the spots
+    are cut on the log of the volume.
+  - The order outcome plot keeps the largest order of each outcome on each
+    spot of the screen (5.3 MiB to 0.1 MiB). Many orders had the same
+    distance and size. Where they were stacked, the faded points looked
+    darker. The plot no longer shows how many orders are stacked on a spot.
+  - The queue position plot keeps each order's lowest, highest and last rank
+    in each of 1,000 time steps (3.4 MiB to 1.9 MiB).
+    Most orders at the touch had two rows on the same spot, so the plot
+    looks the same.
+  - Pass `time_bins=None` to `prepare.cancellations` or
+    `prepare.queue_position`, or `bins=None` to `prepare.order_outcome`, to
+    keep every row.
 - **A settings flag works before the path** (#523). `process` and `audit`
   read the arguments twice. The first read finds the source that reads the
   data, and it did not know the settings flags. So when a settings flag came

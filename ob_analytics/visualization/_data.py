@@ -381,13 +381,16 @@ SERIES_BINS = 1000
 class Thinned:
     """A payload whose series were thinned: *shown* of *total* rows kept.
 
-    The rows were kept by :func:`thin_positions` over *bins* time bins.
+    The rows were kept by :func:`thin_positions` over *bins* time bins, by
+    :func:`thin_points` when *points* is true, or by :func:`thin_order_lines`
+    when *orders* is true.
     """
 
     shown: int
     total: int
     bins: int
     points: bool = False
+    orders: bool = False
 
     @property
     def note(self) -> str:
@@ -397,6 +400,12 @@ class Thinned:
                 f"The plot shows {self.shown:,} of {self.total:,} events. "
                 "Where several events fall on the same spot of the screen, "
                 "it shows the largest one."
+            )
+        if self.orders:
+            return (
+                f"The lines show {self.shown:,} of {self.total:,} rows. "
+                f"In each of {self.bins:,} time steps, each order keeps its "
+                "lowest, highest and last rank."
             )
         return (
             f"The lines show {self.shown:,} of {self.total:,} rows. "
@@ -514,31 +523,33 @@ def thin_points(
     size: str,
     bins: int | None = SERIES_BINS,
     rows: int = 300,
+    x: str = "timestamp",
+    log_y: bool = False,
 ) -> tuple[pd.DataFrame, Thinned | None]:
     """Keep one point of *df* per spot of the screen: the one with the largest *size*.
 
-    The plot's time axis (``timestamp``) is split into *bins* columns and
-    the *y* axis into *rows* rows.  In each cell, for each group of *by*,
-    only the row with the largest *size* is kept, so the largest marker
-    still shows.  Returns *df* unchanged and ``None`` when there are no more
-    rows than *bins*, or *bins* is ``None``.
+    The plot's *x* axis (by default ``timestamp``) is split into *bins*
+    columns and the *y* axis into *rows* rows.  With *log_y*, the rows are
+    cut on the log of *y*, as a log axis draws them.  In each cell, for each
+    group of *by*, only the row with the largest *size* is kept, so the
+    largest marker still shows.  Returns *df* unchanged and ``None`` when
+    there are no more rows than *bins*, or *bins* is ``None``.
     """
     if bins is None or len(df) <= bins:
         return df, None
-    t = pd.DatetimeIndex(df["timestamp"]).asi8
+    if pd.api.types.is_datetime64_any_dtype(df[x]):
+        u = pd.DatetimeIndex(df[x]).asi8.astype(float)
+    else:
+        u = df[x].to_numpy(dtype=float)
     v = df[y].to_numpy(dtype=float)
-
-    def cell(values: np.ndarray, count: int) -> np.ndarray:
-        lo, hi = np.nanmin(values), np.nanmax(values)
-        if not hi > lo:
-            return np.zeros(len(values), dtype=np.int64)
-        return np.minimum(
-            ((values - lo) / (hi - lo) * count).astype(np.int64), count - 1
-        )
+    if log_y:
+        # A log axis does not draw values at or below zero.
+        with np.errstate(divide="ignore", invalid="ignore"):
+            v = np.where(v > 0, np.log10(v), np.nan)
 
     # Positions, not index labels: an index may repeat a label.
     cells = df.reset_index(drop=True).assign(
-        _col=cell(t.astype(float), bins), _row=cell(v, rows)
+        _col=_screen_cells(u, bins), _row=_screen_cells(v, rows)
     )
     keep = np.sort(
         cells.sort_values(size, ascending=False, kind="stable")
@@ -548,6 +559,66 @@ def thin_points(
     if len(keep) == len(df):
         return df, None
     return df.iloc[keep], Thinned(len(keep), len(df), bins, points=True)
+
+
+def _screen_cells(values: np.ndarray, count: int) -> np.ndarray:
+    """The cell, from 0 to *count* - 1, of each of *values* on an axis that spans them.
+
+    A missing value gets cell -1.
+    """
+    cells = np.full(len(values), -1, dtype=np.int64)
+    present = ~np.isnan(values)
+    if not present.any():
+        return cells
+    lo, hi = values[present].min(), values[present].max()
+    if hi > lo:
+        cells[present] = np.minimum(
+            ((values[present] - lo) / (hi - lo) * count).astype(np.int64), count - 1
+        )
+    else:
+        cells[present] = 0
+    return cells
+
+
+def thin_order_lines(
+    df: pd.DataFrame,
+    *,
+    y: str,
+    order: str = "id",
+    bins: int | None = SERIES_BINS,
+) -> tuple[pd.DataFrame, Thinned | None]:
+    """Thin the rows of *df* that draw one line per *order* along ``timestamp``.
+
+    The time span of *df* is split into *bins* columns.  In each column,
+    each order keeps the row with its lowest and the row with its highest
+    *y*: a line through the kept rows covers the same span of *y* in every
+    column as a line through all the rows.  Of rows with the same *y*, the
+    latest is kept.  Each order also keeps its last row in each column, so
+    its line leaves the column at the right *y* and ends where it ends.
+    The rows stay in their order.
+
+    Returns *df* unchanged and ``None`` when there are no more rows than
+    *bins*, *bins* is ``None``, or no row can be dropped.
+    """
+    n = len(df)
+    if bins is None or n <= bins:
+        return df, None
+    col = _screen_cells(pd.DatetimeIndex(df["timestamp"]).asi8.astype(float), bins)
+    code = pd.factorize(df[order])[0]
+    v = df[y].to_numpy(dtype=float)
+    pos = np.arange(n)
+    keep = np.zeros(n, dtype=bool)
+    # After a sort by (order, column, value, latest first), the first row of
+    # each (order, column) is the latest row with its extreme value.  With
+    # no value, it is the latest row.
+    for key in (v, -v, np.zeros(n)):
+        o = np.lexsort((-pos, key, col, code))
+        c, k = code[o], col[o]
+        keep[o[np.r_[True, (c[1:] != c[:-1]) | (k[1:] != k[:-1])]]] = True
+    if keep.all():
+        return df, None
+    kept = np.flatnonzero(keep)
+    return df.iloc[kept], Thinned(len(kept), n, bins, orders=True)
 
 
 def depth_raster(
@@ -1207,6 +1278,7 @@ def prepare_queue_position_data(
     end_time: pd.Timestamp | None = None,
     marker_threshold: int = 400,
     level: Level | str | None = _UNSET,
+    time_bins: int | None = SERIES_BINS,
 ) -> dict[str, Any]:
     """L3 (MBO) queue position: each touch order's FIFO rank over time, by fate.
 
@@ -1221,6 +1293,10 @@ def prepare_queue_position_data(
     Returns one frame per fate (``filled`` / ``cancelled`` / ``resting``) with
     ``timestamp``, ``id``, ``rank``, ``age_s``, in time order; ``max_rank`` for the (inverted)
     y-axis; and ``show_markers`` (terminal × / ○ only when few enough orders).
+
+    With *time_bins*, each order's line is thinned to its lowest, highest
+    and last rank in each of that many time steps (:func:`thin_order_lines`); ``None``
+    keeps every row.  The payload's ``thinned`` says how many rows were kept.
     """
     resolve_level("queue_position", level)
     from ob_analytics.book import order_lifecycles
@@ -1243,12 +1319,15 @@ def prepare_queue_position_data(
     q = q.sort_values("timestamp", kind="stable")
 
     max_rank = int(q["rank"].max()) if not q.empty else 1
+    show_markers = q["id"].nunique() <= marker_threshold
+    q, thinned = thin_order_lines(q, y="rank", bins=time_bins)
     return {
         "filled": q[q["fate"] == "filled"],
         "cancelled": q[q["fate"] == "cancelled"],
         "resting": q[q["fate"] == "resting"],
         "max_rank": max_rank,
-        "show_markers": q["id"].nunique() <= marker_threshold,
+        "show_markers": show_markers,
+        "thinned": thinned,
     }
 
 
@@ -1672,6 +1751,7 @@ def prepare_order_outcome_data(
     min_positive_bps: float = 5.0,
     *,
     level: Level | str | None = _UNSET,
+    bins: int | None = SERIES_BINS,
 ) -> dict[str, Any]:
     """L3 (MBO) order outcome: each limit order as outcome vs placement.
 
@@ -1700,6 +1780,12 @@ def prepare_order_outcome_data(
     Non-finite distances (an occasional ``inf`` from a near-zero touch reference)
     are dropped before clipping so they neither distort the quantiles nor the
     axis.
+
+    Many orders can fall on one spot of the screen.  With *bins*, the
+    distance axis is split into that many columns and the size axis into
+    rows, and each spot keeps only its largest order of each outcome
+    (:func:`thin_points`); ``None`` keeps every order.  The payload's
+    ``thinned`` says how many orders were kept.
     """
     resolve_level("order_outcome", level)
     from ob_analytics.book import order_lifecycles
@@ -1730,10 +1816,19 @@ def prepare_order_outcome_data(
         ]
 
     created["marker_area"] = normalized_marker_areas(created["placed"])
+    created, thinned = thin_points(
+        created,
+        x="distance_bps",
+        y="placed",
+        by=["outcome"],
+        size="placed",
+        bins=bins,
+    )
     return {
         "filled": created[created["outcome"] == "filled"],
         "partial": created[created["outcome"] == "partial"],
         "cancelled": created[created["outcome"] == "cancelled"],
+        "thinned": thinned,
     }
 
 
@@ -1857,8 +1952,17 @@ def prepare_cancellations_l2_data(
     volume_from: float | None = None,
     volume_to: float | None = None,
     log_scale: bool = False,
+    *,
+    time_bins: int | None = SERIES_BINS,
 ) -> dict[str, Any]:
-    """Prepare data for a volume map of flashed limit orders."""
+    """Prepare data for a volume map of flashed limit orders.
+
+    Many orders can fall on one spot of the screen.  With *time_bins*, the
+    time axis is split into that many columns and the volume axis into rows
+    (on the log of the volume when *log_scale* is true), and each spot keeps
+    only its largest order of each side (:func:`thin_points`); ``None`` keeps
+    every order.  The payload's ``thinned`` says how many orders were kept.
+    """
     if event_type is None:
         event_type = ["flashed-limit"]
     if action not in ("deleted", "created"):
@@ -1884,8 +1988,16 @@ def prepare_cancellations_l2_data(
     if volume_to is None:
         volume_to = float(events["volume"].quantile(0.9999))
     events = events[events["volume"] <= volume_to]
+    events, thinned = thin_points(
+        events,
+        y="volume",
+        by=["direction"],
+        size="volume",
+        bins=time_bins,
+        log_y=log_scale,
+    )
 
-    return {"events": events, "log_scale": log_scale}
+    return {"events": events, "log_scale": log_scale, "thinned": thinned}
 
 
 def prepare_cancellations_l3_data(

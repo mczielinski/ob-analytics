@@ -325,7 +325,7 @@ class TestPrepareOrderOutcomeL3:
     ) -> None:
         events, _trades = sample_executed_orders
         data = prepare.order_outcome(events, bps_quantiles=(0.0, 1.0))
-        assert set(data) == {"filled", "partial", "cancelled"}
+        assert set(data) == {"filled", "partial", "cancelled", "thinned"}
         for frame in (data["filled"], data["partial"], data["cancelled"]):
             assert {"distance_bps", "placed", "marker_area"} <= set(frame.columns)
 
