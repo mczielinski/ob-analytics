@@ -26,6 +26,7 @@ from ob_analytics._utils import (
     lots_to_size,
     price_scale,
     require_per_order_events,
+    size_scale,
     size_to_lots,
     validate_non_empty,
 )
@@ -43,6 +44,7 @@ __all__ = [
     "book_imbalance",
     "book_levels",
     "book_signals",
+    "depth_bands",
     "filter_depth",
     "get_spread",
     "micro_price",
@@ -1334,6 +1336,72 @@ def bin_volume_columns(depth_summary: pd.DataFrame, side: str) -> list[str]:
         if found is not None:
             matched.append((int(found.group(1)), column))
     return [column for _, column in sorted(matched)]
+
+
+def depth_bands(
+    depth_summary: pd.DataFrame, *, interval: str | None = None
+) -> pd.DataFrame:
+    """Return the resting volume in each distance band over time.
+
+    The bands are the depth summary's basis-point bins: ``bid_vol<N>bps`` is
+    the bid volume in one ring of prices, out to *N* bps from the best bid,
+    and ``ask_vol<N>bps`` the same for the asks.  Each ring holds only its own
+    volume, so add the bands of a side to get its depth out to the farthest
+    one.
+
+    Parameters
+    ----------
+    depth_summary : pandas.DataFrame
+        Depth summary produced by :func:`summarize_depth`, with ``timestamp``
+        and the ``bid_vol<N>bps`` / ``ask_vol<N>bps`` columns.
+    interval : str, optional
+        A length of time such as ``"1s"`` or ``"1min"``.  When given, each
+        band is averaged over each interval, and the row is stamped at the end
+        of its interval.  When ``None`` (the default), there is one row per
+        timestamp of the summary: the last one when several rows share a
+        timestamp, which is the book after all of them.
+
+    Returns
+    -------
+    pandas.DataFrame
+        ``timestamp``, then the bid bands and the ask bands, each from the
+        touch outward.  The volumes are in the instrument's units, whether
+        the summary holds integer lots (with ``lot_size`` on the frame's
+        ``attrs``, as on a pipeline result) or display sizes.
+
+    Raises
+    ------
+    ConfigError
+        If *depth_summary* has no ``bid_vol<N>bps`` column, the bid and ask
+        bands differ, or the volumes are integers and the frame carries no
+        ``lot_size``.
+    """
+    bids = bin_volume_columns(depth_summary, "bid")
+    asks = bin_volume_columns(depth_summary, "ask")
+    if not bids:
+        raise ConfigError(
+            "depth_bands: no 'bid_vol<N>bps' columns in depth_summary. "
+            f"Columns: {list(depth_summary.columns)}"
+        )
+    if [c.removeprefix("bid") for c in bids] != [c.removeprefix("ask") for c in asks]:
+        raise ConfigError(
+            f"depth_bands: the bid bands {bids} and the ask bands {asks} differ."
+        )
+    bands = bids + asks
+    scale = size_scale(depth_summary, "depth_bands", bids[0])
+    frame = depth_summary[["timestamp", *bands]].drop_duplicates(
+        subset="timestamp", keep="last"
+    )
+    frame = frame.assign(
+        **{c: frame[c].to_numpy(dtype=np.float64) / scale for c in bands}
+    )
+    if interval is None:
+        return frame.reset_index(drop=True)
+    step = pd.Timedelta(interval)
+    frame = frame.set_index("timestamp")
+    averaged = frame.groupby(pd.DatetimeIndex(frame.index).floor(step)).mean()
+    averaged.index = pd.DatetimeIndex(averaged.index) + step
+    return averaged.rename_axis("timestamp").reset_index()
 
 
 def micro_price(

@@ -15,6 +15,12 @@ data-quality checks are on the [Data quality](quality.md) page.
 
 ::: ob_analytics.analytics.trade_impacts
 
+::: ob_analytics.analytics.maker_resting_times
+
+## Cancelled Orders
+
+::: ob_analytics.analytics.cancelled_orders
+
 ## Order Type Classification
 
 ::: ob_analytics.analytics.set_order_types

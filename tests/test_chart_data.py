@@ -223,6 +223,36 @@ class TestPrepareCancellationsL3:
         assert (both["age_s"].notna()).all()
         assert 999 not in both["id"].to_numpy()
 
+    def test_window_keeps_orders_cancelled_inside_it(
+        self, sample_cancellation_events: pd.DataFrame
+    ) -> None:
+        events = sample_cancellation_events
+        deleted = events[events["action"] == "deleted"]
+        start = events["timestamp"].min() + pd.Timedelta(seconds=5)
+        end = deleted["timestamp"].max()
+        data = prepare.cancellations(events, level="L3", start_time=start, end_time=end)
+        both = pd.concat([data["bids"], data["asks"]])
+        expected = deleted.loc[deleted["timestamp"] >= start, "id"]
+        # Orders placed before the window but cancelled in it are kept.
+        assert sorted(both["id"]) == sorted(expected)
+
+    def test_drops_an_order_cancelled_before_it_was_placed(
+        self, sample_cancellation_events: pd.DataFrame
+    ) -> None:
+        events = sample_cancellation_events.copy()
+        # A clock error puts order 1's delete a minute before its creation.
+        late = (events["id"] == 1) & (events["action"] == "deleted")
+        events.loc[late, "timestamp"] -= pd.Timedelta(minutes=1)
+        data = prepare.cancellations(
+            events,
+            level="L3",
+            start_time=events["timestamp"].min(),
+            end_time=events["timestamp"].max(),
+        )
+        both = pd.concat([data["bids"], data["asks"]])
+        assert 1 not in both["id"].to_numpy()
+        assert len(both) == 7
+
 
 class TestPrepareOrderActivityL3:
     def test_returns_fate_frames(

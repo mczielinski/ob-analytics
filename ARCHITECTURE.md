@@ -367,7 +367,7 @@ ob_analytics/
 │   └── _queue.py         # FIFO queue position and touch composition
 ├── _engine_frames.py     # pandas <-> engine arrays (the only place the two are converted)
 ├── book.py               # frame faces of the engine: order_book, order_lifecycles
-├── analytics.py          # order_aggressiveness, trade_impacts, set_order_types
+├── analytics.py          # order_aggressiveness, trade_impacts, maker_resting_times, cancelled_orders, set_order_types
 ├── quality.py            # data_quality_summary, detect_sequence_gaps, detect_stale_orders
 ├── queue.py              # frame faces for the engine's queue reconstruction
 ├── depth.py              # DepthSummaryEngine, price_level_volume, summarize_depth, get_spread, micro_price
