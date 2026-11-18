@@ -2761,7 +2761,8 @@ def plotly_bars(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
             ticktext=labels,
             range=[-1, len(bars)],
         )
-    fig.update_yaxes(title_text="Price")
+    # The price axis only: update_yaxes would retitle the volume axis too.
+    fig.update_layout(yaxis_title_text="Price")
     return fig
 
 

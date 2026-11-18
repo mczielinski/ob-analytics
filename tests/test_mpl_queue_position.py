@@ -1,26 +1,29 @@
-"""The matplotlib queue-position face draws one line collection per fate.
+"""The matplotlib queue-position face draws like one line per order.
 
-The face used to call ``ax.plot`` once per order, which took about 25 s on the
-bundled sample (#539).  These tests pin that the batched drawing keeps every
-order's steps-post line, its colour and its end marker.
+The face draws one line collection per fate instead of one line per order
+(#539).  ``tests/test_plot_result.py`` checks the step paths.  These tests
+check what a collection does differently from a line by default: caps and
+joins, end markers, and the axes' data limits.
 """
 
 from __future__ import annotations
+
+from typing import Any, cast
 
 import matplotlib
 
 matplotlib.use("Agg")
 
-import matplotlib.colors as mcolors
+import matplotlib as mpl
 import matplotlib.dates as mdates
 import numpy as np
 import pandas as pd
 import pytest
 from matplotlib import collections
-from matplotlib.cbook import pts_to_poststep
+from matplotlib.lines import Line2D
 
 from ob_analytics.visualization._matplotlib import (
-    _steps_post_paths,
+    _theme_rc,
     mpl_queue_position_per_order,
 )
 from ob_analytics.visualization._theme import DEFAULT_THEME
@@ -51,38 +54,21 @@ def data() -> dict:
     }
 
 
-def _expected_paths(side: pd.DataFrame) -> list[np.ndarray]:
-    """What one ``ax.plot(..., drawstyle="steps-post")`` per order draws."""
-    paths = []
-    for _, g in side.groupby("id", sort=False):
-        x, y = pts_to_poststep(
-            mdates.date2num(g["timestamp"]), g["rank"].to_numpy(dtype=float)
-        )
-        paths.append(np.column_stack((x, y)))
-    return paths
+def _line_collections(ax) -> list[collections.LineCollection]:
+    return [c for c in ax.collections if isinstance(c, collections.LineCollection)]
 
 
-def test_one_collection_per_fate_with_per_order_steps(data: dict) -> None:
+def test_lines_use_line_caps_and_joins(data: dict) -> None:
+    # A collection defaults to butt caps; ax.plot drew the theme's line caps.
+    with mpl.rc_context(cast(Any, _theme_rc(DEFAULT_THEME))):
+        line = Line2D([0, 1], [0, 1])
+    cap, join = line.get_solid_capstyle(), line.get_solid_joinstyle()
     ax = mpl_queue_position_per_order(data).axes[0]
-    lcs = [c for c in ax.collections if isinstance(c, collections.LineCollection)]
-    assert ax.get_lines() == []  # no per-order Line2D any more
-
-    pal = DEFAULT_THEME.palette
-    fates = [
-        (data["filled"], pal.filled),
-        (data["cancelled"], pal.cancelled),
-        (data["resting"], pal.partial),
-    ]
-    assert len(lcs) == len(fates)
-    for lc, (side, color) in zip(lcs, fates):
-        got = [np.asarray(p.vertices) for p in lc.get_paths()]
-        want = _expected_paths(side)
-        assert len(got) == len(want)
-        for g, w in zip(got, want):
-            np.testing.assert_allclose(g, w)
-        np.testing.assert_allclose(
-            np.asarray(lc.get_edgecolor()), [mcolors.to_rgba(color, alpha=0.5)]
-        )
+    lcs = _line_collections(ax)
+    assert len(lcs) == 3
+    for lc in lcs:
+        assert lc.get_capstyle() == cap
+        assert lc.get_joinstyle() == join
 
 
 def test_end_markers_sit_on_each_order_last_rank(data: dict) -> None:
@@ -110,8 +96,3 @@ def test_data_limits_match_per_order_plot(data: dict) -> None:
         pd.concat([data["filled"], data["cancelled"], data["resting"]])["timestamp"]
     )
     np.testing.assert_allclose(ax.dataLim.intervalx, [x.min(), x.max()])
-
-
-def test_steps_post_paths_empty() -> None:
-    empty = np.array([])
-    assert _steps_post_paths(empty, empty, empty) == []

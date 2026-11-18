@@ -1103,30 +1103,28 @@ def mpl_order_activity_per_order(
     return fig
 
 
-def _steps_post_paths(
-    ids: np.ndarray, x: np.ndarray, y: np.ndarray
-) -> list[np.ndarray]:
-    """Split points into one steps-post path per id.
+def _step_paths(x: np.ndarray, y: np.ndarray, groups: np.ndarray) -> list[np.ndarray]:
+    """Each group's points as a steps-post path, one ``(m, 2)`` array per group.
 
-    Matches ``ax.plot(..., drawstyle="steps-post")`` called once per id:
-    ids come in order of first appearance, rows keep their order within an
-    id, and each path holds ``2n - 1`` vertices for an id with ``n`` rows.
-    An id with one row gets a one-vertex path: it draws nothing, as a
-    one-point line does, but still counts towards the axes' data limits.
+    A group of *k* points becomes ``2k - 1`` vertices: before each point after
+    the first comes the corner at the point's *x* and the previous point's
+    *y*, as ``drawstyle="steps-post"`` draws it.  Points keep their order
+    within a group, and groups come in the order they first appear.
     """
-    codes, _ = pd.factorize(ids)
-    order = np.argsort(codes, kind="stable")
-    x, y = np.asarray(x, float)[order], np.asarray(y, float)[order]
-    if len(x) == 0:
+    order = np.argsort(groups, kind="stable")
+    x, y, groups = x[order], y[order], groups[order]
+    if not len(x):
         return []
-    # Repeat each point, then shift x by one: the vertices run
-    # (x0, y0), (x1, y0), (x1, y1), (x2, y1), ...  Rows [s, e) of one id map
-    # to vertices [2s, 2e - 1), so no path reaches into the next id's points.
-    verts = np.column_stack((np.repeat(x, 2)[1:], np.repeat(y, 2)[:-1]))
-    counts = np.bincount(codes)
-    ends = np.cumsum(counts)
-    starts = ends - counts
-    return [verts[2 * s : 2 * e - 1] for s, e in zip(starts, ends)]
+    starts = np.flatnonzero(np.r_[True, groups[1:] != groups[:-1]])
+    vertices = np.empty((2 * len(x), 2))
+    vertices[0::2, 0] = x  # the corner before each point
+    vertices[0::2, 1] = np.r_[np.nan, y[:-1]]
+    vertices[1::2, 0] = x
+    vertices[1::2, 1] = y
+    keep = np.ones(len(vertices), dtype=bool)
+    keep[2 * starts] = False  # a group's first point has no corner
+    # Dropping one corner per group start moves group g to 2 * start - g.
+    return np.split(vertices[keep], (2 * starts - np.arange(len(starts)))[1:])
 
 
 @_themed
@@ -1152,24 +1150,27 @@ def mpl_queue_position_per_order(
         if side.empty:
             continue
         drew_any = True
-        # One collection per fate, one path per order.  A path per order
-        # keeps the look of one line per order: overlapping orders darken,
-        # but an order's own corners do not (#539).
+        # One collection per fate, one path per order: a line per order took
+        # about 25 s on the bundled sample.  Separate paths keep the overlap
+        # of two orders darker, as separate lines drew it.
         ax.add_collection(
             collections.LineCollection(
-                _steps_post_paths(
-                    side["id"].to_numpy(),
+                _step_paths(
                     mdates.date2num(side["timestamp"]),
                     side["rank"].to_numpy(dtype=float),
+                    pd.factorize(side["id"])[0],
                 ),
                 colors=color,
                 alpha=0.5,
                 linewidths=1.0,
+                # A collection draws butt caps by default, but a line takes its
+                # caps and joins from rcParams.  Take them from there too, so
+                # line ends and corners draw as one line per order drew them.
                 capstyle=mpl.rcParams["lines.solid_capstyle"],
                 joinstyle=mpl.rcParams["lines.solid_joinstyle"],
-                zorder=Line2D.zorder,
             )
         )
+        ax.autoscale_view()
         if show_markers and marker is not None:
             ends = side.groupby("id", sort=False).tail(1)
             x = mdates.date2num(ends["timestamp"])

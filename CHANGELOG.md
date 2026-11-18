@@ -348,6 +348,15 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Added
 
+- **A test draws every face in the concept table** (#504).
+  `tests/test_every_face.py` draws each face on the bundled sample, with
+  each backend that has it. A face must draw marks, or show the reason its
+  data gives for drawing none, such as "Too few trades". Its time and price
+  axes must stay near the run's times and traded prices. Its size axes must
+  not draw sizes larger than the sizes the plot was given. A new face in the
+  table is tested without a new test.
+  `tests/test_golden_sources.py` pins the output of a small LOBSTER day and
+  the toy price-level session, beside the synthetic and Bitstamp baselines.
 - **`process` and `audit` read a capture without `--source`** (#502). A live
   capture writes `level` and `replay_source`, the offline source that reads
   it back, to `meta.json` and `manifest.json`, so
@@ -1517,6 +1526,12 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
+- **The matplotlib queue-position face draws in about 1 s, not 25 s** (#539).
+  It drew one line for each order. It now draws one line collection for
+  each fate, with one path for each order. The paths keep the line caps and
+  joins of the old lines, so the picture is the same, pixel for pixel.
+- **The Plotly bars card titles its volume axis "Volume"** (#504). It was
+  titled "Price", like the price axis.
 - **The order flow imbalance and VPIN cards count taker orders** (#532).
   On an L3 feed, one taker order that fills many resting orders makes many
   trades, so a window could pass the 10-trade floor with one order in it.
@@ -1639,12 +1654,6 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   bundled sample. The live levels now sit in a heap, and the same call takes
   about 0.65 s on the same desktop. The output is unchanged, byte for byte.
   `queue_age_grid` uses the same heap.
-- **The matplotlib queue position plot draws in under a second** (#539). It
-  called `ax.plot` once for each order, and the gallery's zoom window on the
-  bundled sample holds thousands of orders, so the plot took about 22 s. It
-  now draws one line collection for each fate, with one path for each order,
-  and builds all the step points at once. The plot now takes under a second
-  on the same desktop, and its picture is unchanged, pixel for pixel.
 - **`queue_positions` no longer walks a long queue to find an order's rank**
   (#520). For each event, the engine counted the orders ahead of the order and
   added up their sizes, one by one. On the synthetic session a queue holds
