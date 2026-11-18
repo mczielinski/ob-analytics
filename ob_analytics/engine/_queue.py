@@ -87,6 +87,149 @@ class _LiveLevels:
         return None
 
 
+_TREE_FROM = 32
+"""Queue length at which a level starts keeping its Fenwick trees.
+
+Below it, walking the queue from the front is cheaper than keeping the trees up
+to date: most levels hold only a few orders at a time.
+"""
+
+
+class _ArrivalQueue:
+    """The orders resting at one price level, in arrival order.
+
+    Reports each order's rank and the size queued ahead of it.  A short queue
+    is walked from the front.  A long one keeps two Fenwick trees (binary
+    indexed trees) instead, so these come from prefix sums in time logarithmic
+    in the queue length.  The trees are built when the queue reaches
+    :data:`_TREE_FROM` orders and dropped when it falls below half that.
+
+    In the trees, each order holds a slot, numbered in the order the orders
+    joined.  One tree counts the orders still resting in each run of slots, the
+    other sums their remaining size.  A slot is not reused when its order
+    leaves.  When the slots run out, the resting orders are numbered again from
+    1 in arrival order and the trees are rebuilt with room for as many again,
+    so each join costs constant time on average.
+
+    The trees need exact sums: with float sizes, taking an order out would
+    leave rounding error behind in the totals.  So they are kept only for
+    integer sizes (``exact=True``).  A queue of float sizes is always walked,
+    adding the sizes in queue order, so no error builds up as orders come and
+    go.
+    """
+
+    __slots__ = (
+        "_cap",
+        "_count",
+        "_exact",
+        "_remaining",
+        "_slot",
+        "_used",
+        "_volume",
+    )
+
+    def __init__(self, *, exact: bool) -> None:
+        self._exact = exact
+        self._remaining: dict = {}  # order id -> remaining size, arrival order
+        # The trees, present only while the queue is long; see _build_trees.
+        self._slot: dict | None = None  # order id -> its 1-based slot
+        self._count: list = []  # Fenwick tree of resting orders, 1-based
+        self._volume: list = []  # Fenwick tree of remaining size, 1-based
+        self._used = 0  # slots handed out since the trees were built
+        self._cap = 0  # slots the trees have room for
+
+    def __len__(self) -> int:
+        return len(self._remaining)
+
+    def append(self, oid, size) -> None:
+        """Put order *oid*, not already resting here, at the back."""
+        self._remaining[oid] = size
+        slots = self._slot
+        if slots is None:
+            if self._exact and len(self._remaining) >= _TREE_FROM:
+                self._build_trees()
+        elif self._used == self._cap:
+            self._build_trees()
+        else:
+            self._used += 1
+            slots[oid] = self._used
+            self._add(self._used, 1, size)
+
+    def resize(self, oid, size) -> None:
+        """Give resting order *oid* a new remaining size; its place is kept."""
+        if self._slot is not None:
+            self._add(self._slot[oid], 0, size - self._remaining[oid])
+        self._remaining[oid] = size
+
+    def remove(self, oid) -> None:
+        """Take resting order *oid* out of the queue."""
+        size = self._remaining.pop(oid)
+        slots = self._slot
+        if slots is None:
+            return
+        if len(self._remaining) < _TREE_FROM // 2:
+            self._drop_trees()
+        else:
+            self._add(slots.pop(oid), -1, -size)
+
+    def position(self, oid) -> tuple[int, object, object]:
+        """Resting order *oid*'s place in the queue.
+
+        Returns its 1-based rank, the size queued ahead of it, and its own
+        remaining size.
+        """
+        rank = 1
+        ahead = 0
+        if self._slot is None:
+            for other_id, size in self._remaining.items():
+                if other_id == oid:
+                    return rank, ahead, size
+                rank += 1
+                ahead += size
+            raise KeyError(oid)
+        count, volume = self._count, self._volume
+        i = self._slot[oid] - 1
+        while i:
+            rank += count[i]
+            ahead += volume[i]
+            i &= i - 1
+        return rank, ahead, self._remaining[oid]
+
+    def _add(self, i: int, count_delta: int, size_delta) -> None:
+        count, volume, cap = self._count, self._volume, self._cap
+        while i <= cap:
+            count[i] += count_delta
+            volume[i] += size_delta
+            i += i & -i
+
+    def _build_trees(self) -> None:
+        """Number the resting orders 1, 2, ... and make room for as many again."""
+        cap = 2 * len(self._remaining)
+        count = [0] * (cap + 1)
+        volume = [0] * (cap + 1)
+        slots = {}
+        for slot, (oid, size) in enumerate(self._remaining.items(), start=1):
+            slots[oid] = slot
+            count[slot] = 1
+            volume[slot] = size
+        # Build both trees in one linear pass: each node passes its total on to
+        # the next node that covers it.
+        for i in range(1, cap + 1):
+            parent = i + (i & -i)
+            if parent <= cap:
+                count[parent] += count[i]
+                volume[parent] += volume[i]
+        self._slot = slots
+        self._count, self._volume = count, volume
+        self._cap = cap
+        self._used = len(self._remaining)
+
+    def _drop_trees(self) -> None:
+        self._slot = None
+        self._count, self._volume = [], []
+        self._used = self._cap = 0
+
+
 @dataclass(frozen=True)
 class QueuePositions:
     """One row per order event, reporting that order's place in its level.
@@ -192,9 +335,10 @@ def queue_positions(events: OrderEvents, *, touch_only: bool = True) -> QueuePos
     directions = events.direction[visible].tolist()
     actions = events.action[visible].tolist()
 
-    # Per level: insertion-ordered {order id: remaining}.  Dicts preserve
-    # insertion order, which *is* price-time priority here.
-    queues: dict[tuple[int, object], dict[int, float]] = {}
+    # Per level: the resting orders in arrival order, which *is* price-time
+    # priority here.
+    queues: dict[tuple[int, object], _ArrivalQueue] = {}
+    exact = np.issubdtype(events.volume.dtype, np.integer)
     order_level: dict[int, tuple[int, object]] = {}
     placed_at: dict[int, int] = {}
     # Live (non-empty) price levels per side, for the running touch.
@@ -205,28 +349,22 @@ def queue_positions(events: OrderEvents, *, touch_only: bool = True) -> QueuePos
     out_action: list[int] = []
     out_rank: list[int] = []
     out_len: list[int] = []
-    out_ahead: list[float] = []
-    out_remaining: list[float] = []
+    out_ahead: list[object] = []
+    out_remaining: list[object] = []
     out_age: list[float] = []
 
     def emit(row, when, oid, level, queue, action) -> None:
         direction, price = level
         if touch_only and price != live[direction].best():
             return
-        ahead = 0.0
-        rank = 0
-        for other_id, remaining in queue.items():
-            rank += 1
-            if other_id == oid:
-                break
-            ahead += remaining
+        rank, ahead, remaining = queue.position(oid)
         rows.append(row)
         out_price.append(price)
         out_action.append(action)
         out_rank.append(rank)
         out_len.append(len(queue))
         out_ahead.append(ahead)
-        out_remaining.append(queue[oid])
+        out_remaining.append(remaining)
         out_age.append(
             _elapsed_seconds(when - placed_at[oid]) if oid in placed_at else 0.0
         )
@@ -234,14 +372,16 @@ def queue_positions(events: OrderEvents, *, touch_only: bool = True) -> QueuePos
     def leave(oid: int, level: tuple[int, object]) -> None:
         del order_level[oid]
         queue = queues[level]
-        del queue[oid]
+        queue.remove(oid)
         if not queue:
             live[level[0]].discard(level[1])
 
-    def join(oid: int, level: tuple[int, object], volume: float) -> dict:
+    def join(oid: int, level: tuple[int, object], volume) -> _ArrivalQueue:
         order_level[oid] = level
-        queue = queues.setdefault(level, {})
-        queue[oid] = float(volume)
+        queue = queues.get(level)
+        if queue is None:
+            queue = queues[level] = _ArrivalQueue(exact=exact)
+        queue.append(oid, volume)
         live[level[0]].add(level[1])
         return queue
 
@@ -284,7 +424,7 @@ def queue_positions(events: OrderEvents, *, touch_only: bool = True) -> QueuePos
             emit(row, when, oid, new_level, queue, Action.CREATED)
             continue
 
-        queue[oid] = float(volume)  # a size change keeps the queue place
+        queue.resize(oid, volume)  # a size change keeps the queue place
         emit(row, when, oid, level, queue, Action.CHANGED)
 
     return QueuePositions(

@@ -1183,11 +1183,14 @@ def _add_run_args(
     command: str,
     settings_cls: Any = None,
     quiet: bool = False,
+    ignored: dict[str, bool] | None = None,
 ) -> None:
     """Add the flags ``process`` and ``audit`` share: the source and the run's settings.
 
     *settings_cls* is the settings class of the source that reads the data;
     each of its fields gets a flag.  A *quiet* parser lets ``path`` be missing.
+    *ignored* are flags the parser reads and skips, from
+    :func:`_every_settings_flag`.
     """
     parser.add_argument(
         "path", nargs="?" if quiet else None, help="Path to data file or directory"
@@ -1266,6 +1269,44 @@ def _add_run_args(
     )
     if settings_cls is not None:
         _add_settings_flags(parser, settings_cls, command)
+    for flag, on_off in (ignored or {}).items():
+        kwargs: dict[str, Any] = {
+            "dest": "ignored__" + flag.removeprefix("--"),
+            "default": argparse.SUPPRESS,
+        }
+        if on_off:
+            kwargs["action"] = argparse.BooleanOptionalAction
+        try:
+            parser.add_argument(flag, **kwargs)
+        except argparse.ArgumentError:
+            # It clashes with one of the command's own flags; the command
+            # reports that when this source reads the data.
+            continue
+
+
+def _every_settings_flag() -> dict[str, bool]:
+    """The settings flags of every registered offline source: ``True`` for an on/off flag.
+
+    The quiet parser that finds the reading source does not know yet which
+    source that is, so it knows none of the settings flags.  Without them,
+    the value of a flag given before the path would be read as the path.
+    With them, it skips each flag together with its value, wherever it is.
+    The parser that runs the command still refuses a flag the reading source
+    does not have.  A flag that two sources read in different ways (one with
+    a value, one on/off) is read as the first source reads it.
+    """
+    from ob_analytics.sources import CliOption, list_sources
+
+    kinds: dict[str, bool] = {}
+    for name in list_sources():
+        settings_cls = _offline_settings_class(name)
+        if settings_cls is None:
+            continue
+        for field_name, flag in _settings_flag_names(settings_cls).items():
+            field = settings_cls.model_fields[field_name]
+            option = next((m for m in field.metadata if isinstance(m, CliOption)), None)
+            kinds.setdefault(flag, _flag_kind(field.annotation, option) == "bool")
+    return kinds
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -1292,9 +1333,13 @@ def _reading_settings_class(argv: list[str]) -> Any:
     The flags of ``process`` and ``audit`` include one for each field of the
     reading source's settings, and which source that is depends on the
     arguments: ``--source``, or the capture record of the path.  So the
-    arguments are read once without those flags, quietly and ignoring what
-    is not known yet, to find the source.  ``None`` for another command, or
-    when the source cannot be found; the command then reports the problem.
+    arguments are read once without those flags, quietly, to find the
+    source.  That read skips the settings flags of every offline source, so
+    a flag may come before the path.  If the arguments cannot be read that
+    way (a flag with no value, or a shortened flag that is no longer
+    unique), they are read again ignoring what is not known.  ``None`` for
+    another command, or when the source cannot be found; the command then
+    reports the problem.
     """
     import contextlib
     import io
@@ -1302,14 +1347,24 @@ def _reading_settings_class(argv: list[str]) -> Any:
 
     from ob_analytics.capture_record import CaptureRecord
 
-    pre = _build_parser(quiet=True)
-    try:
-        with (
-            contextlib.redirect_stderr(io.StringIO()),
-            contextlib.redirect_stdout(io.StringIO()),
-        ):
-            args, _ = pre.parse_known_args(argv)
-    except SystemExit:
+    # Only these commands take settings flags; skip reading every source's
+    # settings class for the others.
+    if not {"process", "audit", "validate"} & set(argv):
+        return None
+    args = None
+    for ignored in (_every_settings_flag(), None):
+        try:
+            with (
+                contextlib.redirect_stderr(io.StringIO()),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                args, _ = _build_parser(quiet=True, ignored=ignored).parse_known_args(
+                    argv
+                )
+            break
+        except SystemExit:
+            continue
+    if args is None:
         return None
     if args.command not in ("process", "audit", "validate"):
         return None
@@ -1337,7 +1392,10 @@ def _quiet_manifest(path: Path) -> Any:
 
 
 def _build_parser(
-    settings_cls: Any = None, *, quiet: bool = False
+    settings_cls: Any = None,
+    *,
+    quiet: bool = False,
+    ignored: dict[str, bool] | None = None,
 ) -> argparse.ArgumentParser:
     """The parser for ``ob-analytics`` and its subcommands.
 
@@ -1346,6 +1404,7 @@ def _build_parser(
     ``audit`` get a flag for each field of *settings_cls*, the settings class
     of the source that reads the data.  A *quiet* parser is the one that
     finds that source: it prints no help, and its ``path`` may be missing.
+    *ignored* are flags ``process`` and ``audit`` read and skip.
     """
     from ob_analytics.data import list_writers
     from ob_analytics.sources import list_sources
@@ -1377,6 +1436,7 @@ def _build_parser(
         command="ob-analytics process",
         settings_cls=settings_cls,
         quiet=quiet,
+        ignored=ignored,
     )
     p_process.add_argument(
         "-o",
@@ -1437,6 +1497,7 @@ def _build_parser(
         command="ob-analytics audit",
         settings_cls=settings_cls,
         quiet=quiet,
+        ignored=ignored,
     )
     p_audit.add_argument(
         "--from-parquet",
