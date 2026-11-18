@@ -20,7 +20,7 @@ def drawn(fig: Any) -> Counter[str]:
     for its marks, in lower case: ``line``, ``pathcollection``, ``quadmesh``,
     ``rectangle`` and ``image`` for matplotlib; the trace type (``heatmap``,
     ``bar``), with its mode when it has one (``scatter markers``, ``scattergl
-    lines``), and ``shape`` for plotly; the glyph class
+    lines``), ``shape`` and ``image`` (one per layout image) for plotly; the glyph class
     (``scatter``, ``quad``, ``image``, ``segment``) for bokeh. A figure that
     shows only text, such as a "no data" figure, draws nothing: the counter is
     empty.
@@ -86,6 +86,7 @@ def _plotly(fig: Any) -> Counter[str]:
         mode = getattr(trace, "mode", None)
         _add(counts, f"{trace.type} {mode}" if mode else trace.type, points)
     _add(counts, "shape", len(fig.layout.shapes))
+    _add(counts, "image", len(fig.layout.images))
     return counts
 
 
