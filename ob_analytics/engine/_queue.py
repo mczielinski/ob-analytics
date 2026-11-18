@@ -18,6 +18,7 @@ of its old level and puts it at the back of the new one.
 
 from __future__ import annotations
 
+import heapq
 from dataclasses import dataclass
 
 import numpy as np
@@ -39,6 +40,51 @@ def _elapsed_seconds(delta_ns: int) -> float:
     """
     seconds, remainder = divmod(delta_ns, 1_000_000_000)
     return seconds + (remainder // 1000) / 1e6
+
+
+class _LiveLevels:
+    """The non-empty price levels of one side, with the best one at hand.
+
+    The prices sit in a heap, so finding the best level does not look at every
+    live level.  A level that empties leaves its heap entry behind; the entry is
+    dropped when it reaches the top, and the heap is rebuilt from the live
+    levels when such stale entries outnumber them.
+    """
+
+    __slots__ = ("_heap", "_live", "_sign")
+
+    def __init__(self, direction: int) -> None:
+        # ``heapq`` keeps the smallest entry on top, so bid prices are stored
+        # negated to put the highest bid there.
+        self._sign = -1 if direction == Direction.BID else 1
+        self._live: set = set()
+        self._heap: list = []
+
+    def add(self, price) -> None:
+        """Mark *price* as holding at least one order."""
+        if price in self._live:
+            return
+        self._live.add(price)
+        heap = self._heap
+        if len(heap) > 2 * len(self._live) + 64:
+            heap[:] = [self._sign * live for live in self._live]
+            heapq.heapify(heap)
+        else:
+            heapq.heappush(heap, self._sign * price)
+
+    def discard(self, price) -> None:
+        """Mark *price* as empty."""
+        self._live.discard(price)
+
+    def best(self):
+        """The best live price — highest bid or lowest ask — or ``None``."""
+        heap = self._heap
+        while heap:
+            price = self._sign * heap[0]
+            if price in self._live:
+                return price
+            heapq.heappop(heap)
+        return None
 
 
 @dataclass(frozen=True)
@@ -152,13 +198,7 @@ def queue_positions(events: OrderEvents, *, touch_only: bool = True) -> QueuePos
     order_level: dict[int, tuple[int, object]] = {}
     placed_at: dict[int, int] = {}
     # Live (non-empty) price levels per side, for the running touch.
-    live: tuple[set, set] = (set(), set())
-
-    def touch(direction: int):
-        levels = live[direction]
-        if not levels:
-            return None
-        return max(levels) if direction == Direction.BID else min(levels)
+    live = (_LiveLevels(Direction.BID), _LiveLevels(Direction.ASK))
 
     rows: list[int] = []
     out_price: list[object] = []
@@ -171,7 +211,7 @@ def queue_positions(events: OrderEvents, *, touch_only: bool = True) -> QueuePos
 
     def emit(row, when, oid, level, queue, action) -> None:
         direction, price = level
-        if touch_only and price != touch(direction):
+        if touch_only and price != live[direction].best():
             return
         ahead = 0.0
         rank = 0
@@ -304,7 +344,7 @@ def queue_age_grid(
     # Order id -> the price it is queued at, for the orders in a queue now.
     order_level: dict[int, object] = {}
     placed_at: dict[int, int] = {}
-    live: set = set()
+    live = _LiveLevels(side)
 
     def leave(oid: int, level: object) -> None:
         del order_level[oid]
@@ -316,11 +356,6 @@ def queue_age_grid(
         order_level[oid] = level
         queues.setdefault(level, {})[oid] = float(volume)
         live.add(level)
-
-    def best():
-        if not live:
-            return None
-        return max(live) if side == Direction.BID else min(live)
 
     snapshots: list[list[float]] = []
     pending = 0
@@ -349,7 +384,7 @@ def queue_age_grid(
                     queues[level][oid] = float(volumes[pending])
             pending += 1
 
-        touch = best()
+        touch = live.best()
         if touch is None:
             snapshots.append([])
             continue
