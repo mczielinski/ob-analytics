@@ -56,7 +56,6 @@ For examples, see [Run from the command line](../howto/cli.md).
 |------|-------------|
 | `path` | Path to Parquet directory (output of 'process') |
 | `-o OUTPUT`, `--output OUTPUT` | Output directory for the gallery (default: ./gallery_output) |
-| `--volume-scale VOLUME_SCALE` | Volume display scale factor. Omit to auto-infer a power-of-10 scale from the data. |
 | `--title TITLE` | Gallery page title |
 | `--view VIEW` | Gallery view: resolution level(s) to render (l2\|l3\|both\|comparison; default: both) |
 | `--backend BACKEND` | Plot backend to draw the gallery with (matplotlib, plotly, bokeh, or a registered plug-in); give it more than once for more columns. Default: plotly and matplotlib when plotly is installed, else matplotlib. |

@@ -211,8 +211,8 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   - `prepare.book_snapshot(book)` -> `prepare.book_snapshot(book,
     level="L2")`, and `prepare.book_snapshot(book, per_order=True)` ->
     `prepare.book_snapshot(book, level="L3")`. `per_order` was the second
-    positional argument; `volume_scale`, `show_quantiles` and `top_n` each
-    move up one place.
+    positional argument, and `volume_scale` is gone (see below), so
+    `show_quantiles` and `top_n` each move up two places.
   - `prepare.book_replay(..., per_order=False)` (the default) ->
     `prepare.book_replay(..., level="L2")`, and `per_order=True` ->
     `level="L3"`. `start_time` and the arguments after it each move up one
@@ -320,6 +320,24 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
     private name there. The top level now also exports `iceberg_slices`, `list_writers`,
     `register_writer` and `load_writer_plugins`, beside the other
     registries.
+- **Plots draw sizes in the instrument's units** (#487). Every plot
+  multiplied sizes by a power of ten that no axis or colour bar showed, so a
+  2 BTC level was drawn at 200. Sizes now read off an axis as they are in
+  `display_result(result)`.
+  - `volume_scale=` -> removed from every `prepare` function, `plot_result`,
+    `PipelineResult.plot`, `build_gallery_model` and `generate_gallery`. Leave
+    it out. Where it was a positional argument (`prepare.book_snapshot`,
+    `prepare.order_activity` and `prepare.cancellations` at L3,
+    `prepare.liquidity_at_touch` at L2, `prepare.order_outcome`,
+    `prepare.trade_tape` at L3), the arguments after it each move up one
+    place.
+  - `ob-analytics gallery --volume-scale` -> removed.
+  - `infer_volume_scale` -> removed.
+  - The prepared payloads no longer hold a `volume_scale` key.
+  - `volume_from` and `volume_to` of `prepare.depth_heatmap`,
+    `prepare.order_activity` (L2) and `prepare.cancellations` (L2) are now
+    in the instrument's units. They compared against the multiplied sizes
+    before.
 
 ### Added
 

@@ -188,7 +188,7 @@ for ax, bias, title in (
     (ax1, 1.0, "col_bias=1.0 (default, linear)"),
     (ax2, 0.1, "col_bias=0.1 (thin levels brightened)"),
 ):
-    plot_toy_depth_heatmap(wall, col_bias=bias, ax=ax, band_pt=14, volume_scale=1)
+    plot_toy_depth_heatmap(wall, col_bias=bias, ax=ax, band_pt=14)
     if (legend := ax.get_legend()) is not None:
         legend.remove()  # no mid/trades in the constructed book
     # regular ticks across the whole range: gray rows are real prices
