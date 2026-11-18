@@ -291,11 +291,14 @@ class ParquetWriter:
 def _install_files(files: Iterable[tuple[Path, Path]]) -> None:
     """Move each ``(staged, target)`` file into place, all of them or none.
 
-    Each target that exists is kept as a backup beside its staged file until
-    every file is in place.  When one move fails, the files already moved are
-    put back as they were (a target that did not exist is removed again) and
-    the error is raised.  Each staged file must be on the same file system as
-    its target.
+    Each target that exists is kept as a hidden backup beside it until every
+    file is in place.  When one move fails or is interrupted, the files
+    already moved are put back as they were (a target that did not exist is
+    removed again) and the error is raised.  Every step of putting them back
+    runs even when one fails; the error then carries a note for each file that
+    could not be put back, naming the file and its backup.  A backup that
+    cannot be removed once every file is in place gives a warning.  Each staged
+    file must be on the same file system as its target.
     """
     installed: list[tuple[Path, Path | None]] = []
     backup = None
@@ -303,36 +306,74 @@ def _install_files(files: Iterable[tuple[Path, Path]]) -> None:
         for staged, target in files:
             backup = None
             if target.exists():
-                backup = staged.with_name(f"{staged.name}.bak")
-                _keep_backup(target, backup)
+                backup = _keep_backup(target)
             staged.replace(target)
             installed.append((target, backup))
-    except OSError:
+    except BaseException as error:
         if backup is not None:
             # The backup of the file whose move failed: its target is intact.
-            backup.unlink(missing_ok=True)
+            try:
+                backup.unlink(missing_ok=True)
+            except OSError as failure:
+                error.add_note(
+                    f"Could not remove the backup {backup}; {target} is "
+                    f"intact ({failure})."
+                )
         for target, kept in reversed(installed):
-            if kept is None:
-                target.unlink()
-            else:
-                kept.replace(target)
+            try:
+                if kept is None:
+                    target.unlink()
+                else:
+                    kept.replace(target)
+            except OSError as failure:
+                error.add_note(
+                    (
+                        f"Could not remove {target}, which did not exist "
+                        f"before ({failure})."
+                    )
+                    if kept is None
+                    else (
+                        f"Could not put back {target}; its earlier content "
+                        f"is in {kept} ({failure})."
+                    )
+                )
         raise
-    for _, kept in installed:
-        if kept is not None:
+    for target, kept in installed:
+        if kept is None:
+            continue
+        try:
             kept.unlink(missing_ok=True)
+        except OSError as failure:
+            warnings.warn(
+                f"{target} is in place, but its old content could not be "
+                f"removed from {kept} ({failure})",
+                stacklevel=2,
+            )
 
 
-def _keep_backup(target: Path, backup: Path) -> None:
-    """Keep *target*'s content at *backup*, leaving *target* in place.
+def _keep_backup(target: Path) -> Path:
+    """Keep *target*'s content in a hidden backup beside it, and return its path.
 
-    A hard link costs no copy, which matters for the large files of a windowed
-    run; a file system without hard links gets a copy.
+    The backup is ``.<name>.bak``, or ``.<name>.<n>.bak`` when that name is
+    taken, so a backup left by an earlier failed install is never overwritten.
+    *target* stays in place.  A hard link costs no copy, which matters for the
+    large files of a windowed run; a file system without hard links gets a
+    copy.
     """
-    backup.unlink(missing_ok=True)
+    backup = target.with_name(f".{target.name}.bak")
+    n = 0
+    while backup.exists():
+        n += 1
+        backup = target.with_name(f".{target.name}.{n}.bak")
     try:
         os.link(target, backup)
     except OSError:
-        shutil.copy2(target, backup)
+        try:
+            shutil.copy2(target, backup)
+        except OSError:
+            backup.unlink(missing_ok=True)
+            raise
+    return backup
 
 
 def _to_arrow_table(
