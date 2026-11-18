@@ -1517,6 +1517,36 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
+- **The order flow imbalance and VPIN cards count taker orders** (#532).
+  On an L3 feed, one taker order that fills many resting orders makes many
+  trades, so a window could pass the 10-trade floor with one order in it.
+  `order_flow_imbalance`, `vpin` and `bulk_volume_classification` now add an
+  `n_takers` column next to `n_trades` when the trades have taker ids. It
+  counts the distinct taker orders; a trade with no taker id counts as one.
+  The cards apply `MIN_TRADES` to `n_takers` when it is there and to
+  `n_trades` when it is not, and say which they counted. L2 tables are
+  unchanged. On the bundled sample, the imbalance card now keeps 4 of 30
+  one-minute windows, down from 10.
+- **Five gallery cards are readable on a short capture** (#497). On the
+  bundled sample, these cards showed little or nothing true.
+  - Book signals: an empty side of the book has a price of 0, and the price
+    axis started there. The axis and the spread now use only quotes that can
+    be read as a price, so the mid and the micro-price sit inside the axis.
+  - Roll spread and Amihud: each measures the whole session by default, so
+    each has one value. The card now shows that value as a number, not as a
+    point on a time axis. With no value, the card says "No value".
+  - VPIN: the gallery fits about 100 buckets to the capture. On the sample a
+    bucket holds about three trades, nearly always on one side, so VPIN sat
+    near 1. When the median bucket holds fewer than 10 trades, the card now
+    says "Too few trades to draw" in place of the chart.
+  - Order flow imbalance: a window with fewer than 10 trades is left out, and
+    the card says how many were. When no window holds 10 trades, the card
+    says "Too few trades to draw".
+  - `vpin`, `order_flow_imbalance` and `bulk_volume_classification` return a
+    new column, `n_trades`: the number of trades in each bucket or window.
+    `prepare.vpin` and `prepare.order_flow_imbalance` take `min_trades`
+    (default 10), and so do `result.plot("vpin")` and
+    `result.plot("order_flow_imbalance")`.
 - **The Plotly gallery of the bundled sample is 28 MiB, not 231 MiB** (#491).
   Each line carried every row of `depth_summary`, so `book_signals.html`
   alone was 82 MiB. The data functions now thin a long series to 1,000 time

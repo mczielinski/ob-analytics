@@ -118,7 +118,8 @@ def test_result_plot_vpin_draws_with_a_size_in_btc(sample) -> None:
 
     matplotlib.use("Agg")
 
-    figure = sample.plot("vpin", bucket_volume=0.5)
+    # A half-BTC bucket holds fewer trades than the card needs to draw.
+    figure = sample.plot("vpin", bucket_volume=0.5, min_trades=1)
     assert drawn(figure)["rectangle"] > 0  # the buckets
 
 

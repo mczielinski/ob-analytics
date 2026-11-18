@@ -218,6 +218,12 @@ def _add_notice(fig: Any, text: str, pal: Palette) -> None:
     )
 
 
+def _hide_axes(fig: Any) -> None:
+    """Hide both axes of *fig*, for a chart that shows only text."""
+    fig.update_xaxes(visible=False)
+    fig.update_yaxes(visible=False)
+
+
 def _add_depth_image(fig: Any, go: Any, depth: pd.DataFrame, col_bias: float) -> None:
     """Draw the depth levels as one image behind the other traces.
 
@@ -2190,6 +2196,14 @@ def plotly_vpin(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     vpin_df = data["vpin_df"]
     threshold = data["threshold"]
 
+    too_few = data.get("too_few")
+    if too_few:
+        # Buckets of a few trades sit near 1 whatever the flow: say so, not draw.
+        fig = _base_figure(go, theme, title="VPIN — Probability of Informed Trading")
+        _hide_axes(fig)
+        _add_notice(fig, too_few, pal)
+        return fig
+
     if vpin_df.empty:
         # A capture shorter than one bucket fills none: draw the bare panel.
         fig = _base_figure(
@@ -2252,15 +2266,28 @@ def plotly_order_flow_imbalance(data: dict, *, theme: PlotTheme = DEFAULT_THEME)
     go = _import_plotly()
     ofi_df = data["ofi_df"]
     trades = data["trades"]
+    too_few = data.get("too_few")
+    if too_few or ofi_df.empty:
+        fig = _base_figure(go, theme, title="Order Flow Imbalance")
+        _hide_axes(fig)
+        _add_notice(fig, too_few or "No windows to draw.", pal)
+        return fig
     # Buy pressure (OFI >= 0) in the buy colour, sell pressure in the sell colour.
     colors = np.where(ofi_df["ofi"].to_numpy() >= 0, pal.buy, pal.sell)
 
-    fig = _base_figure(go, theme, title="Order Flow Imbalance")
+    fig = _base_figure(
+        go, theme, title="Order Flow Imbalance", notice=data.get("notice")
+    )
 
+    # Plotly sizes bars from the closest pair; with thin windows left out
+    # that pair can be far apart, so use 80% of the gap between all windows.
+    gap = data.get("bar_gap")
+    width_ms = gap.total_seconds() * 800.0 if gap is not None else None
     fig.add_trace(
         go.Bar(
             x=ofi_df["timestamp"],
             y=ofi_df["ofi"],
+            width=width_ms,
             marker_color=colors,
             opacity=0.7,
             name="OFI",
@@ -2303,10 +2330,35 @@ def _hex_to_rgba(hexc: str, alpha: float) -> str:
 
 
 def plotly_window_measure(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
-    """Render one value per window: the Amihud and Roll faces."""
+    """Render one value per window: the Amihud and Roll faces.
+
+    A single window is drawn as its value, in large type, with no time axis.
+    """
     pal = theme.palette
     go = _import_plotly()
     fig = _base_figure(go, theme, title=data["title"], notice=data["notice"])
+    headline = data.get("headline")
+    if headline:
+        _hide_axes(fig)
+        fig.add_annotation(
+            text=html.escape(headline),
+            xref="paper",
+            yref="paper",
+            x=0.5,
+            y=0.55,
+            showarrow=False,
+            font={"size": 48, "color": pal.series},
+        )
+        fig.add_annotation(
+            text=html.escape(data["ylabel"]),
+            xref="paper",
+            yref="paper",
+            x=0.5,
+            y=0.3,
+            showarrow=False,
+            font={"size": 14, "color": pal.reference_line},
+        )
+        return fig
     fig.add_trace(
         go.Scatter(
             x=data["times"],

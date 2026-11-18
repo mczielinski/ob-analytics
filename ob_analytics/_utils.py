@@ -911,3 +911,38 @@ def datetime_to_seconds_after_midnight(
     """
     local = to_utc_ns(series).dt.tz_convert(tz).dt.tz_localize(None)
     return (local - date).dt.total_seconds()
+
+
+def has_takers(trades: pd.DataFrame) -> bool:
+    """Whether *trades* name the taker order of at least one trade.
+
+    An L3 feed fills the ``taker`` column.  An L2 feed names no orders, so
+    the column is missing or all NA, as it is on a feed that cannot attribute
+    takers (Databento).
+    """
+    return "taker" in trades.columns and bool(trades["taker"].notna().any())
+
+
+def taker_codes(takers: pd.Series) -> np.ndarray:
+    """Number each trade's taker order, so trades of one order share a number.
+
+    One taker order that fills several resting orders makes several trades;
+    counting the distinct numbers in a group of trades counts the orders
+    behind them.  A trade whose taker is not known gets a number of its own,
+    so it counts as one order.
+
+    Parameters
+    ----------
+    takers : pandas.Series
+        The ``taker`` id of each trade, NA where it is not known.
+
+    Returns
+    -------
+    numpy.ndarray
+        One ``int64`` number per trade, in the order of *takers*.
+    """
+    codes, _ = pd.factorize(takers, use_na_sentinel=True)
+    codes = codes.astype(np.int64)
+    unknown = codes < 0
+    codes[unknown] = -1 - np.flatnonzero(unknown)
+    return codes

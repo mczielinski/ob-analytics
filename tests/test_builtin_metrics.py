@@ -70,8 +70,12 @@ def test_built_in_metrics_apply_to_an_l2_run(result) -> None:
 
 
 # The tiny run trades five BTC: VPIN needs smaller buckets, and fewer of them,
-# than the defaults to draw anything.
-PLOT_SETTINGS = {"vpin": {"bucket_volume": 0.5, "n_buckets": 2}}
+# than the defaults to draw anything.  It also has only a few trades a bucket
+# or a window, below the cards' floor, so the floor is lowered to draw.
+PLOT_SETTINGS = {
+    "vpin": {"bucket_volume": 0.5, "n_buckets": 2, "min_trades": 1},
+    "order_flow_imbalance": {"min_trades": 1},
+}
 
 
 @pytest.mark.parametrize("name", BUILT_IN)

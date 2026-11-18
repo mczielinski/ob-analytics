@@ -319,11 +319,24 @@ class VpinMetric:
             quotes=result.depth_summary,
         )
 
-    def prepare(self, frame: pd.DataFrame, *, threshold: float = 0.7) -> dict[str, Any]:
-        """Payload for the face; *threshold* is the alert line."""
+    def prepare(
+        self,
+        frame: pd.DataFrame,
+        *,
+        threshold: float = 0.7,
+        min_trades: int | None = None,
+    ) -> dict[str, Any]:
+        """Payload for the face; *threshold* is the alert line.
+
+        *min_trades* is the fewest trades the median bucket must hold for
+        the face to draw, counted as taker orders when the table has
+        ``n_takers``; ``None`` uses ``prepare_vpin_data``'s default.
+        """
         from ob_analytics.visualization._data import prepare_vpin_data
 
-        return prepare_vpin_data(frame, threshold=threshold)
+        if min_trades is None:
+            return prepare_vpin_data(frame, threshold=threshold)
+        return prepare_vpin_data(frame, threshold=threshold, min_trades=min_trades)
 
 
 class KyleLambdaMetric:
@@ -419,14 +432,25 @@ class OrderFlowImbalanceMetric:
         close = windows["close"].to_numpy(dtype=float)
         return frame.assign(last_price=close / price_scale(trades, "ofi"))
 
-    def prepare(self, frame: pd.DataFrame) -> dict[str, Any]:
-        """Payload for the bars, with the window prices as the price line."""
+    def prepare(
+        self, frame: pd.DataFrame, *, min_trades: int | None = None
+    ) -> dict[str, Any]:
+        """Payload for the bars, with the window prices as the price line.
+
+        *min_trades* is the fewest trades a window must hold to be drawn,
+        counted as taker orders when the table has ``n_takers``; ``None``
+        uses ``prepare_order_flow_imbalance_data``'s default.
+        """
         from ob_analytics.visualization._data import prepare_order_flow_imbalance_data
 
         prices = frame[["timestamp", "last_price"]].rename(
             columns={"last_price": "price"}
         )
-        return prepare_order_flow_imbalance_data(frame, trades=prices)
+        if min_trades is None:
+            return prepare_order_flow_imbalance_data(frame, trades=prices)
+        return prepare_order_flow_imbalance_data(
+            frame, trades=prices, min_trades=min_trades
+        )
 
 
 class OfiByWindowMetric:
