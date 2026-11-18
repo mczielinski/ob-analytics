@@ -348,6 +348,16 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Added
 
+- **A test draws every face in the concept table** (#504).
+  `tests/test_every_face.py` draws each face on the bundled sample, with
+  each backend that has it. A face must draw marks, and its time and price
+  axes must stay near the run's times and traded prices. Its size axes must
+  not draw sizes larger than the sizes the plot was given. A new face in the
+  table is tested without a new test. Faces that fail today are marked as
+  expected failures: book signals, the matplotlib Amihud and Roll cards
+  (#497), and the plotly bars card, whose volume axis is titled "Price".
+  `tests/test_golden_sources.py` pins the output of a small LOBSTER day and
+  the toy price-level session, beside the synthetic and Bitstamp baselines.
 - **`process` and `audit` read a capture without `--source`** (#502). A live
   capture writes `level` and `replay_source`, the offline source that reads
   it back, to `meta.json` and `manifest.json`, so
