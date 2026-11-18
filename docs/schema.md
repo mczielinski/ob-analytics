@@ -255,6 +255,22 @@ was declared to show. A folder without the key gets the declarations of the
 capture record beside it, then those of the source passed to `load_result`.
 Like the config key, it is optional and does not change the schema version.
 
+### The loader's counts
+
+Some loaders count things while they read the input, and put the counts on the
+frame's `attrs`. The Databento loader counts the records the venue flagged as
+coming after a gap it could not repair (`F_MAYBE_BAD_BOOK`), under
+`attrs["maybe_bad_book_records"]`. Each file records the counts on its frame
+as a JSON object under `ob_analytics_loader_counts`, for example
+`{"maybe_bad_book_records": 2}`. `load_data` and `load_result` put them back
+on the frame's `attrs`, so `result.audit()` and
+`ob-analytics audit --from-parquet` make the same check on a saved run as on
+the run itself. A windowed run records the sum over its windows in its
+`events` file. A file without the key has no counts, so the audit reports the
+check as skipped. The exception is a file written by an older version, which
+kept the counts in pandas' own metadata; they still load from there. Like the config key, it is optional and does
+not change the schema version.
+
 A size too large to count in `int64` lots of the run's `lot_size` (about
 9.2e10 units at the default `1e-8`) is refused with `ConfigError` when a
 loader reads it, rather than wrapped to a negative number. Set the instrument's

@@ -195,8 +195,6 @@ single call, on any backend; there is no global theme to set.
 
 ::: ob_analytics.visualization.save_figure
 
-::: ob_analytics.visualization.infer_volume_scale
-
 ## Display windows
 
 The gallery picks one time window and one price band per run, and every face

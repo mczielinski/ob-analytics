@@ -81,6 +81,7 @@ from ob_analytics.protocols import (
 )
 from ob_analytics.quality import DataQualitySummary, data_quality_summary
 from ob_analytics.schemas import (
+    loader_counts,
     lot_sizes_from_config,
     put_config_units,
     tick_sizes_from_config,
@@ -186,8 +187,9 @@ class PipelineResult:
         """Return the run's four core tables as Arrow tables.
 
         Each table carries the same key-value metadata a canonical Parquet file
-        carries — the schema version, the run's tick and lot size, its config
-        and its declarations (see :mod:`ob_analytics.schemas`) — so a reader
+        carries — the schema version, the run's tick and lot size, its config,
+        its declarations and the loader's counts (see
+        :mod:`ob_analytics.schemas`) — so a reader
         handed these tables in memory is no worse off than one reading the
         files.
 
@@ -214,6 +216,7 @@ class PipelineResult:
                 lot_sizes=lot_sizes,
                 config=self.config,
                 declarations=self.declarations,
+                loader_counts=loader_counts(df.attrs),
             )
             for name, df in self.tables().items()
         }
@@ -349,7 +352,6 @@ class PipelineResult:
         *,
         backend: str = "matplotlib",
         ax: Axes | None = None,
-        volume_scale: float | None = None,
         **overrides: Any,
     ) -> Any:
         """Render one plot *concept* from this result in a single call.
@@ -369,7 +371,6 @@ class PipelineResult:
             level,
             backend=backend,
             ax=ax,
-            volume_scale=volume_scale,
             **overrides,
         )
 
@@ -718,11 +719,11 @@ class Pipeline:
                 working = stack.enter_context(
                     tempfile.TemporaryDirectory(prefix=".run_windows-", dir=output)
                 )
-                trades, typed_windows, like = _read_windows(
+                trades, typed_windows, like, counts = _read_windows(
                     path, loader, trade_reader, windows, Path(working)
                 )
             else:
-                trades, typed_windows, like = self._cut_inputs(
+                trades, typed_windows, like, counts = self._cut_inputs(
                     path, loader, trade_reader, windows, config
                 )
             self._write_windows(
@@ -731,8 +732,7 @@ class Pipeline:
                 like,
                 trades,
                 config,
-                declarations,
-                output,
+                ParquetAppender(output, config, declarations, counts),
                 carry=carry,
             )
 
@@ -746,21 +746,24 @@ class Pipeline:
         trade_reader: Any,
         windows: list[tuple[pd.Timestamp | None, pd.Timestamp | None]],
         config: PipelineConfig,
-    ) -> tuple[pd.DataFrame, Iterator[pd.DataFrame], pd.DataFrame]:
+    ) -> tuple[pd.DataFrame, Iterator[pd.DataFrame], pd.DataFrame, dict[str, int]]:
         """Load the whole input and cut its rows into *windows*.
 
         Returns the trades, each window's rows (order types set, for a
-        per-order source), and a frame holding a value of each column.
+        per-order source), a frame holding a value of each column, and the
+        loader's counts (none for a price-level source, as in :meth:`run`).
         """
-        rows, trades, _ = self._load_inputs(path, loader, trade_reader)
+        rows, trades, loaded_attrs = self._load_inputs(path, loader, trade_reader)
+        counts: dict[str, int] = {}
         if self._source.level is Level.L3:
+            counts = loader_counts(loaded_attrs)
             tables = {"events": rows, "trades": trades}
             # The stage builds a new events frame; let the loaded one go.
             del rows
             _set_order_types(tables, config)
             rows = tables.pop("events")
         positions = window_positions(rows["timestamp"], windows)
-        return trades, (rows.iloc[p] for p in positions), rows
+        return trades, (rows.iloc[p] for p in positions), rows, counts
 
     def _write_windows(
         self,
@@ -769,8 +772,7 @@ class Pipeline:
         like: pd.DataFrame,
         trades: pd.DataFrame,
         config: PipelineConfig,
-        declarations: FeedDeclarations,
-        output: str | Path,
+        appender: ParquetAppender,
         *,
         carry: bool,
     ) -> None:
@@ -786,7 +788,7 @@ class Pipeline:
         engine = DepthSummaryEngine(config)
         last_quote = last_readable = pd.DataFrame()
         had_quotes = False
-        with ParquetAppender(output, config, declarations) as out:
+        with appender as out:
             for number, ((start, _), window, at_trades) in enumerate(
                 zip(windows, typed_windows, trade_windows, strict=True), 1
             ):
@@ -1051,7 +1053,7 @@ def _read_windows(
     trade_reader: Any,
     windows: list[tuple[pd.Timestamp | None, pd.Timestamp | None]],
     working: Path,
-) -> tuple[pd.DataFrame, Iterator[pd.DataFrame], pd.DataFrame]:
+) -> tuple[pd.DataFrame, Iterator[pd.DataFrame], pd.DataFrame, dict[str, int]]:
     """Read *path* one window at a time, saving each window's events.
 
     An order's type is decided over the whole run, so the first pass keeps
@@ -1063,16 +1065,20 @@ def _read_windows(
     -------
     tuple
         The trades; each window's events with their order types, read back
-        from *working* one at a time; and a frame holding a value of each
-        text column, for the output's column types.
+        from *working* one at a time; a frame holding a value of each text
+        column, for the output's column types; and the loader's counts over
+        the whole input, the sum of each window's.
     """
     logger.info("Pipeline: reading {} one window at a time", path)
     paths: list[Path] = []
     facts: list[_OrderFacts] = []
     texts: dict[str, Any] = {}
+    counts: dict[str, int] = {}
     events = empty_events()
     for number, (events, named) in enumerate(loader.load_windows(path, windows)):
         facts.append(_OrderFacts.of(events, named))
+        for key, count in loader_counts(events.attrs).items():
+            counts[key] = counts.get(key, 0) + count
         for column in events.columns:
             if column in texts or events[column].dtype != object:
                 continue
@@ -1106,7 +1112,7 @@ def _read_windows(
             yield window
 
     like = pd.DataFrame({c: pd.Series([v], dtype=object) for c, v in texts.items()})
-    return trades, typed(), like
+    return trades, typed(), like, counts
 
 
 def _led_by(

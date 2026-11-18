@@ -164,7 +164,7 @@ class TestSharedDrawingData:
                 {"id": [3, 4], "price": [102.0, 101.0], "volume": [1.0, 1.0]}
             ),
         }
-        data = prepare.book_snapshot(book, volume_scale=1.0, level="L2")
+        data = prepare.book_snapshot(book, level="L2")
         assert data["mid"] == pytest.approx(100.0)
         assert list(data["bid_curve"]["price"]) == [98.0, 99.0]
         assert list(data["ask_curve"]["price"]) == [101.0, 102.0]

@@ -62,9 +62,8 @@ class TestAcceptance:
             assert best_bid == row["best_bid_price"]
             assert best_ask == row["best_ask_price"]
             bids, asks = snapshot["bids"], snapshot["asks"]
-            scale = data["volume_scale"]
-            touch_bid = bids.loc[bids["price"] == best_bid, "volume"].sum() / scale
-            touch_ask = asks.loc[asks["price"] == best_ask, "volume"].sum() / scale
+            touch_bid = bids.loc[bids["price"] == best_bid, "volume"].sum()
+            touch_ask = asks.loc[asks["price"] == best_ask, "volume"].sum()
             assert touch_bid == pytest.approx(row["best_bid_vol"])
             assert touch_ask == pytest.approx(row["best_ask_vol"])
 
