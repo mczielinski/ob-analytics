@@ -481,7 +481,6 @@ def _cmd_gallery(args: argparse.Namespace) -> None:
         result,
         output,
         view=args.view,
-        volume_scale=args.volume_scale,
         backends=args.backend,
         title=args.title or f"ob-analytics gallery -- {data_path.name}",
     )
@@ -905,12 +904,7 @@ def _generate_gallery_from_result(
     view: str = "both",
     backends: list[str] | None = None,
 ) -> None:
-    """Helper to generate a gallery alongside process output.
-
-    ``volume_scale`` is intentionally left to the gallery's auto-inference;
-    the previous ``1e-8`` / ``1.0`` hard-codes leaked Bitstamp/LOBSTER
-    conventions into the CLI.
-    """
+    """Helper to generate a gallery alongside process output."""
     from loguru import logger
 
     from ob_analytics.visualization.gallery import generate_gallery
@@ -1192,15 +1186,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "--output",
         default="gallery_output",
         help="Output directory for the gallery (default: ./gallery_output)",
-    )
-    p_gallery.add_argument(
-        "--volume-scale",
-        type=float,
-        default=None,
-        help=(
-            "Volume display scale factor. Omit to auto-infer a "
-            "power-of-10 scale from the data."
-        ),
     )
     p_gallery.add_argument(
         "--title",

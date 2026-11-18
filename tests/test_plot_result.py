@@ -5,11 +5,14 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pytest
 
+from ob_analytics.depth import price_level_snapshots
 from ob_analytics.exceptions import ConfigError, UnknownNameError
 from ob_analytics.pipeline import PipelineResult
 from ob_analytics.visualization import available_concepts, plot_result, prepare
+from ob_analytics.visualization.gallery import display_result
 from tests._drawn import drawn
 
 
@@ -85,7 +88,7 @@ class TestPipelineResultPlot:
         assert drawn(result.plot("depth_heatmap"))
 
     def test_method_passes_overrides(self, result: PipelineResult) -> None:
-        assert drawn(result.plot("trade_tape", "L3", volume_scale=1.0))
+        assert drawn(result.plot("trade_tape", "L3", density_threshold=10))
 
     def test_method_requires_level_like_plot_result(
         self, result: PipelineResult
@@ -165,3 +168,45 @@ class TestPrepareNamespace:
 
         missing = [c.key for c in _concepts.CONCEPTS if not hasattr(prepare, c.key)]
         assert missing == []
+
+
+def _bar_ends(fig, backend: str) -> np.ndarray:
+    """Where each drawn bar of a book ladder ends on the size axis."""
+    if backend == "matplotlib":
+        return np.array([bar.get_x() + bar.get_width() for bar in fig.axes[0].patches])
+    return np.concatenate(
+        [np.asarray(t.base) + np.asarray(t.x) for t in fig.data if t.type == "bar"]
+    )
+
+
+class TestSizesInInstrumentUnits:
+    """Issue #487: a size read off an axis is the size in the instrument's units.
+
+    The plots used to multiply sizes by a power of ten that no axis showed: on
+    the bundled sample a 2 BTC level was drawn at 200.
+    """
+
+    @pytest.mark.parametrize("backend", ["matplotlib", "plotly"])
+    def test_largest_bar_is_the_largest_level(
+        self, bundled_sample_result: PipelineResult, backend: str
+    ) -> None:
+        depth = display_result(bundled_sample_result).depth
+        # Mid-run: the sample's book is empty at its last row.
+        at = depth["timestamp"].sort_values().iloc[len(depth) // 2]
+        # Each price level's size at that instant: its last depth row.
+        levels = (
+            depth[depth["timestamp"] <= at]
+            .sort_values("timestamp", kind="stable")
+            .groupby(["price", "direction"], observed=True)
+            .tail(1)
+        )
+        book = price_level_snapshots(depth, [at])[0]
+        fig = plot_result(
+            bundled_sample_result,
+            "book_snapshot",
+            "L2",
+            backend=backend,
+            order_book=book,
+            top_n=None,
+        )
+        assert _bar_ends(fig, backend).max() == pytest.approx(levels["volume"].max())

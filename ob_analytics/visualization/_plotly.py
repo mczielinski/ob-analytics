@@ -2009,7 +2009,6 @@ def plotly_volume_percentiles(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -
     legend_entries = data["legend_entries"]
     max_ask = data["max_ask"]
     max_bid = data["max_bid"]
-    volume_scale = data["volume_scale"]
     side_line = data["side_line"]
 
     if asks_cumsum.empty:
@@ -2059,7 +2058,7 @@ def plotly_volume_percentiles(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -
     if side_line:
         fig.add_hline(y=0, line_color=pal.rule, line_width=0.5)
 
-    y_range = volume_scale * max(max_ask, max_bid)
+    y_range = max(max_ask, max_bid)
     fig.update_yaxes(
         range=[-y_range, y_range],
         title_text="Cumulative volume (bid -/ ask +)",

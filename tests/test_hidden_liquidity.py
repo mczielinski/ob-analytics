@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 from ob_analytics import LobsterSource, Pipeline, RunContext
+from ob_analytics._utils import empty_events
 from ob_analytics.bitstamp import BitstampLoader, BitstampTradeReader
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.hidden_liquidity import (
@@ -18,6 +19,7 @@ from ob_analytics.hidden_liquidity import (
     hidden_trades,
     iceberg_slices,
 )
+from ob_analytics.quality import detect_stale_orders
 from ob_analytics.synth import generate_session
 from ob_analytics.visualization import prepare
 
@@ -485,6 +487,28 @@ class TestHiddenTrades:
                 _trade_frame([]),
                 _summary([]).drop(columns="best_ask_price"),
             )
+
+
+# ── L2 runs ───────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(lambda e, t, s: detect_icebergs(e, t), id="detect_icebergs"),
+        pytest.param(lambda e, t, s: iceberg_slices(e, t), id="iceberg_slices"),
+        pytest.param(lambda e, t, s: hidden_trades(e, t, s), id="hidden_trades"),
+        pytest.param(
+            lambda e, t, s: detect_stale_orders(e, t), id="detect_stale_orders"
+        ),
+    ],
+)
+def test_an_l2_run_is_refused_naming_l3(call):
+    """#505: an L2 run has no per-order events.  An empty table would read as
+    "nothing found", so each finder raises instead, naming L3."""
+    trades = _trade_frame([(0, 100)])
+    with pytest.raises(ConfigError, match=r"needs per-order \(L3\) events"):
+        call(empty_events(), trades, _summary([]))
 
 
 def _write_lobster(directory: Path) -> Path:

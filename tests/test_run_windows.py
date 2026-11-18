@@ -347,6 +347,34 @@ def test_a_loader_the_caller_passes_reads_the_whole_input(tmp_path, monkeypatch)
     _assert_tables_equal(single, load_data(out))
 
 
+def _flagged_windows():
+    """A Databento frame with one flagged record in each of its two windows."""
+    from tests.test_databento import LIFECYCLE, T0, flag_one_record, mbo_frame
+
+    frame = flag_one_record(flag_one_record(mbo_frame(LIFECYCLE), 1), 7)
+    return frame, [pd.Timestamp(T0 + 3 * 1_000_000, tz="UTC")]
+
+
+@pytest.mark.parametrize("caller_loader", [False, True], ids=["windowed", "whole"])
+def test_the_audit_of_a_windowed_run_counts_flagged_records(tmp_path, caller_loader):
+    # Issue #503: the count of records Databento flagged after a gap must
+    # cover the whole run, whether the loader reads one window at a time or
+    # the whole input.
+    from ob_analytics.data import load_result
+    from ob_analytics.databento import DatabentoLoader, DatabentoSource
+
+    frame, cuts = _flagged_windows()
+    loader = DatabentoLoader() if caller_loader else None
+    pipeline = Pipeline(source=DatabentoSource(), loader=loader)
+    with pytest.warns(UserWarning, match="F_MAYBE_BAD_BOOK"):
+        out = pipeline.run_windows(frame, cuts, tmp_path / "w")
+
+    summary = load_result(out).audit()
+
+    assert summary.maybe_bad_book_records == 2
+    assert [check.name for check in summary.warnings] == ["maybe_bad_book"]
+
+
 requires_databento = pytest.mark.skipif(
     importlib.util.find_spec("databento") is None,
     reason="databento is an optional extra",
@@ -516,6 +544,41 @@ def test_a_failed_run_leaves_the_folder_as_it_was(synth_session, tmp_path, monke
 
     assert sorted(p.name for p in out.iterdir()) == ["events.parquet"]
     assert (out / "events.parquet").read_bytes() == b"earlier run"
+
+
+def test_a_failed_replace_leaves_the_folder_as_it_was(
+    synth_session, tmp_path, monkeypatch
+):
+    # Issue #503: the windowed files are moved into place all or none.
+    from pathlib import Path
+
+    out = tmp_path / "w"
+    out.mkdir()
+    earlier = {
+        name: f"earlier {name}".encode() for name in ("events", "depth", "trades")
+    }
+    for name, content in earlier.items():
+        (out / f"{name}.parquet").write_bytes(content)
+    replace = Path.replace
+
+    def fail_on_trades(self, target):
+        # ``trades`` is the last table the run writes, so the other three are
+        # in place, one of them new, when its move fails.
+        if Path(target).name == "trades.parquet":
+            raise OSError("disk full")
+        return replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", fail_on_trades)
+    cut = synth_session.events["timestamp"].median()
+
+    with pytest.raises(OSError, match="disk full"):
+        _synth_pipeline(synth_session).run_windows(None, [cut], out)
+
+    assert sorted(p.name for p in out.iterdir()) == sorted(
+        f"{name}.parquet" for name in earlier
+    )
+    for name, content in earlier.items():
+        assert (out / f"{name}.parquet").read_bytes() == content
 
 
 def test_every_table_must_be_written(tmp_path):

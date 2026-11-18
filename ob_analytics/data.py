@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from importlib.metadata import EntryPoint
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -23,6 +24,8 @@ from ob_analytics.schemas import (
     CONFIG_KEY,
     DECLARATIONS_KEY,
     EVENT_DTYPES,
+    LOADER_COUNT_ATTRS,
+    LOADER_COUNTS_KEY,
     LOT_SIZE_KEY,
     SCHEMA_VERSION,
     SCHEMA_VERSION_KEY,
@@ -31,10 +34,13 @@ from ob_analytics.schemas import (
     UNIT_ATTRS,
     cast_columns,
     check_schema_version,
+    decode_loader_counts,
     decode_lot_sizes,
     decode_tick_sizes,
+    encode_loader_counts,
     encode_lot_sizes,
     encode_tick_sizes,
+    loader_counts,
     lot_sizes_from_config,
     put_units,
     tick_sizes_from_config,
@@ -143,7 +149,8 @@ def _write_versioned_parquet(
     integer ticks.  *lot_sizes* does the same for the integer sizes under
     :data:`LOT_SIZE_KEY`, *config* records the whole run configuration
     under :data:`CONFIG_KEY`, and *declarations* the run's declarations under
-    :data:`DECLARATIONS_KEY`.  The index is dropped,
+    :data:`DECLARATIONS_KEY`.  The loader's counts on *df*'s ``attrs`` go
+    under :data:`LOADER_COUNTS_KEY`.  The index is dropped,
     matching the previous ``df.to_parquet(..., index=False)`` behaviour.
     """
     pq.write_table(
@@ -153,6 +160,7 @@ def _write_versioned_parquet(
             lot_sizes=lot_sizes,
             config=config,
             declarations=declarations,
+            loader_counts=loader_counts(df.attrs),
         ),
         path,
     )
@@ -209,8 +217,8 @@ class OutputTables(dict[str, pd.DataFrame]):
         """Return the same tables as canonical Arrow, keyed the same way.
 
         Each table carries the schema version and, when the run declared one,
-        the tick size, the lot size, the configuration and the
-        :attr:`declarations` — the same key-value
+        the tick size, the lot size, the configuration, the
+        :attr:`declarations` and the loader's counts — the same key-value
         metadata a canonical Parquet file carries, so a writer building one is
         no worse off than :class:`ParquetWriter`.
         """
@@ -221,6 +229,7 @@ class OutputTables(dict[str, pd.DataFrame]):
                 lot_sizes=self._lot_sizes,
                 config=self._config,
                 declarations=self.declarations,
+                loader_counts=loader_counts(df.attrs),
             )
             for name, df in self.items()
         }
@@ -275,25 +284,55 @@ class ParquetWriter:
                     declarations=declarations,
                 )
                 files.append((staged, p / f"{name}.parquet"))
-
-            # Keep old files available for rollback if a later replace fails.
-            installed: list[tuple[Path, Path | None]] = []
-            try:
-                for staged, target in files:
-                    backup = None
-                    if target.exists():
-                        backup = staged.with_suffix(".bak")
-                        shutil.copy2(target, backup)
-                    staged.replace(target)
-                    installed.append((target, backup))
-            except OSError:
-                for target, backup in reversed(installed):
-                    if backup is None:
-                        target.unlink()
-                    else:
-                        backup.replace(target)
-                raise
+            _install_files(files)
         return p
+
+
+def _install_files(files: Iterable[tuple[Path, Path]]) -> None:
+    """Move each ``(staged, target)`` file into place, all of them or none.
+
+    Each target that exists is kept as a backup beside its staged file until
+    every file is in place.  When one move fails, the files already moved are
+    put back as they were (a target that did not exist is removed again) and
+    the error is raised.  Each staged file must be on the same file system as
+    its target.
+    """
+    installed: list[tuple[Path, Path | None]] = []
+    backup = None
+    try:
+        for staged, target in files:
+            backup = None
+            if target.exists():
+                backup = staged.with_name(f"{staged.name}.bak")
+                _keep_backup(target, backup)
+            staged.replace(target)
+            installed.append((target, backup))
+    except OSError:
+        if backup is not None:
+            # The backup of the file whose move failed: its target is intact.
+            backup.unlink(missing_ok=True)
+        for target, kept in reversed(installed):
+            if kept is None:
+                target.unlink()
+            else:
+                kept.replace(target)
+        raise
+    for _, kept in installed:
+        if kept is not None:
+            kept.unlink(missing_ok=True)
+
+
+def _keep_backup(target: Path, backup: Path) -> None:
+    """Keep *target*'s content at *backup*, leaving *target* in place.
+
+    A hard link costs no copy, which matters for the large files of a windowed
+    run; a file system without hard links gets a copy.
+    """
+    backup.unlink(missing_ok=True)
+    try:
+        os.link(target, backup)
+    except OSError:
+        shutil.copy2(target, backup)
 
 
 def _to_arrow_table(
@@ -303,6 +342,7 @@ def _to_arrow_table(
     lot_sizes: dict[str, float] | None = None,
     config: Any = None,
     declarations: FeedDeclarations | None = None,
+    loader_counts: dict[str, int] | None = None,
 ) -> pa.Table:
     """Convert *df* to an Arrow table tagged with the canonical metadata.
 
@@ -327,17 +367,23 @@ def _to_arrow_table(
         Anything else is not recorded.
     declarations : FeedDeclarations, optional
         The run's declarations, recorded under :data:`DECLARATIONS_KEY`.
+    loader_counts : dict of str to int, optional
+        The loader's counts, recorded under :data:`LOADER_COUNTS_KEY`.  The
+        caller passes them, rather than this function reading them from
+        *df*'s ``attrs``, because a part of a run carries the counts of that
+        part only.
 
     Returns
     -------
     pyarrow.Table
-        *df* as Arrow, with the metadata attached.  The tick and lot size on
-        *df*'s ``attrs`` are not written a second time with pandas' own
-        metadata: the key-value metadata above is where they are stored.
+        *df* as Arrow, with the metadata attached.  The tick and lot size and
+        the loader's counts on *df*'s ``attrs`` are not written a second time
+        with pandas' own metadata: the key-value metadata above is where they
+        are stored.
     """
-    if any(key in df.attrs for key in UNIT_ATTRS):
+    if any(key in df.attrs for key in _KEY_VALUE_ATTRS):
         df = df.copy(deep=False)
-        df.attrs = {k: v for k, v in df.attrs.items() if k not in UNIT_ATTRS}
+        df.attrs = {k: v for k, v in df.attrs.items() if k not in _KEY_VALUE_ATTRS}
     table = pa.Table.from_pandas(df, preserve_index=False)
     metadata = dict(table.schema.metadata or {})
     metadata[SCHEMA_VERSION_KEY] = SCHEMA_VERSION.encode()
@@ -349,7 +395,14 @@ def _to_arrow_table(
         metadata[CONFIG_KEY] = config.model_dump_json().encode()
     if declarations is not None:
         metadata[DECLARATIONS_KEY] = json.dumps(declarations.to_dict()).encode()
+    if loader_counts:
+        metadata[LOADER_COUNTS_KEY] = encode_loader_counts(loader_counts)
     return table.replace_schema_metadata(metadata)
+
+
+#: The ``attrs`` keys stored in a file's own key-value metadata, and so kept
+#: out of pandas' metadata.
+_KEY_VALUE_ATTRS: frozenset[str] = frozenset((*UNIT_ATTRS, *LOADER_COUNT_ATTRS))
 
 
 #: Tables whose dtypes ``load_data`` restores when the file is in the current
@@ -376,7 +429,8 @@ def _read_versioned_parquet(path: Path) -> pd.DataFrame:
     ``attrs``: ``df.attrs["tick_sizes"]`` holds the full instrument map and
     ``df.attrs["tick_size"]`` the resolved default, so ``price * tick_size``
     recovers the quote currency.  An older file that stored float
-    quote-currency prices has neither.
+    quote-currency prices has neither.  The loader's counts stored under
+    :data:`LOADER_COUNTS_KEY` go back on ``attrs`` under their own keys.
     """
     try:
         table = pq.read_table(path)
@@ -399,6 +453,7 @@ def _read_versioned_parquet(path: Path) -> pd.DataFrame:
         tick_sizes=decode_tick_sizes(metadata.get(TICK_SIZE_KEY)),
         lot_sizes=decode_lot_sizes(metadata.get(LOT_SIZE_KEY)),
     )
+    df.attrs.update(decode_loader_counts(metadata.get(LOADER_COUNTS_KEY)))
     return df
 
 
@@ -598,6 +653,11 @@ def load_result(path: str | Path, *, source: Any = None) -> PipelineResult:
     The resolution comes from the tables: an
     :attr:`~ob_analytics.protocols.Level.L2` run has an empty ``events``
     table, and an L3 run never does.
+
+    The loader's counts (such as
+    :data:`~ob_analytics.schemas.MAYBE_BAD_BOOK_ATTR`) come back on the
+    tables' ``attrs``, so :meth:`~ob_analytics.pipeline.PipelineResult.audit`
+    makes the same checks as on the run itself.
 
     The run's declarations (:attr:`PipelineResult.declarations`) come back
     too.  A folder written by an older version does not record them; it gets
