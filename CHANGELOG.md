@@ -1503,6 +1503,16 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
+- **The order flow imbalance and VPIN cards count taker orders** (#532).
+  On an L3 feed, one taker order that fills many resting orders makes many
+  trades, so a window could pass the 10-trade floor with one order in it.
+  `order_flow_imbalance`, `vpin` and `bulk_volume_classification` now add an
+  `n_takers` column next to `n_trades` when the trades have taker ids. It
+  counts the distinct taker orders; a trade with no taker id counts as one.
+  The cards apply `MIN_TRADES` to `n_takers` when it is there and to
+  `n_trades` when it is not, and say which they counted. L2 tables are
+  unchanged. On the bundled sample, the imbalance card now keeps 4 of 30
+  one-minute windows, down from 10.
 - **Five gallery cards are readable on a short capture** (#497). On the
   bundled sample, these cards showed little or nothing true.
   - Book signals: an empty side of the book has a price of 0, and the price

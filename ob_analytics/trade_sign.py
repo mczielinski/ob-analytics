@@ -43,7 +43,14 @@ import numpy.typing as npt
 import pandas as pd
 from loguru import logger
 
-from ob_analytics._utils import epoch_ns, price_scale, size_scale, validate_non_empty
+from ob_analytics._utils import (
+    epoch_ns,
+    has_takers,
+    price_scale,
+    size_scale,
+    taker_codes,
+    validate_non_empty,
+)
 from ob_analytics.depth import _BID_ASK_COLUMNS, _bid_ask_pair, readable_quotes
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.schemas import TRADE_SIDE_DTYPE, time_order_keys, validate_columns
@@ -912,8 +919,12 @@ def bulk_volume_classification(
         ``buy_fraction``, ``buy_volume``, ``sell_volume``, ``n_trades``.  The
         two volumes are in the instrument's own units, like *bucket_volume*.
         ``n_trades`` is the number of trades with volume in the bucket; a
-        trade split across two buckets counts in both.  Empty (no
-        rows) if the trades don't fill a single bucket.
+        trade split across two buckets counts in both.  When the trades name
+        their taker orders (the ``taker`` column of an L3 feed), an
+        ``n_takers`` column follows: the number of distinct taker orders with
+        volume in the bucket, where a trade with no taker id counts as one
+        taker of its own.  Empty (no rows) if the trades don't fill a single
+        bucket.
 
     Raises
     ------
@@ -954,20 +965,22 @@ def _bulk_volume_classification(
     """
     df = trades.sort_values("timestamp").reset_index(drop=True)
     buckets = volume_buckets(df, bucket_volume, context, advice=advice)
+    takers = has_takers(df)
     if buckets.empty:
-        return pd.DataFrame(
-            columns=[
-                "bucket",
-                "timestamp_start",
-                "timestamp_end",
-                "close",
-                "delta_price",
-                "buy_fraction",
-                "buy_volume",
-                "sell_volume",
-                "n_trades",
-            ]
-        )
+        columns = [
+            "bucket",
+            "timestamp_start",
+            "timestamp_end",
+            "close",
+            "delta_price",
+            "buy_fraction",
+            "buy_volume",
+            "sell_volume",
+            "n_trades",
+        ]
+        if takers:
+            columns.append("n_takers")
+        return pd.DataFrame(columns=columns)
 
     prices = df["price"].to_numpy(dtype=np.float64)
     starts, ends = _bucket_bounds(buckets)
@@ -984,7 +997,7 @@ def _bulk_volume_classification(
     else:
         buy_fraction = _norm_cdf(delta_price / sigma)
 
-    return pd.DataFrame(
+    out = pd.DataFrame(
         {
             "bucket": np.arange(close.size),
             "timestamp_start": _rows_at(df["timestamp"], starts),
@@ -997,3 +1010,17 @@ def _bulk_volume_classification(
             "n_trades": buckets.groupby("bucket")["row"].nunique().to_numpy(),
         }
     )
+    if takers:
+        out["n_takers"] = _bucket_takers(df, buckets)
+    return out
+
+
+def _bucket_takers(df: pd.DataFrame, buckets: pd.DataFrame) -> np.ndarray:
+    """The distinct taker orders in each volume bucket, in bucket order.
+
+    *buckets* is :func:`volume_buckets` of *df*; its ``row`` column indexes
+    *df*.  A trade split across two buckets counts in both.
+    """
+    codes = taker_codes(df["taker"])[buckets["row"].to_numpy()]
+    per_bucket = pd.Series(codes).groupby(buckets["bucket"].to_numpy()).nunique()
+    return per_bucket.to_numpy()
