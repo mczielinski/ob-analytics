@@ -2285,8 +2285,24 @@ def prepare_events_histogram_data(
 
 #: The fewest trades a VPIN bucket or an order-flow-imbalance window needs
 #: before its card draws it.  With only a few trades, one side often takes
-#: all of them, so the value sits at its limit and says little.
+#: all of them, so the value sits at its limit and says little.  When the
+#: table has an ``n_takers`` column, the floor applies to taker orders, since
+#: one taker order that fills many resting orders is many trades but one
+#: decision.
 MIN_TRADES = 10
+
+
+def _trade_count(table: pd.DataFrame) -> tuple[str, str, str] | None:
+    """The column that counts a table's trades, and what a card calls one and many.
+
+    ``n_takers`` (taker orders) when the table has it, else ``n_trades``
+    (trades), else ``None``.
+    """
+    if "n_takers" in table.columns:
+        return "n_takers", "taker order", "taker orders"
+    if "n_trades" in table.columns:
+        return "n_trades", "trade", "trades"
+    return None
 
 
 def prepare_vpin_data(
@@ -2305,16 +2321,21 @@ def prepare_vpin_data(
     When the median bucket holds fewer than *min_trades* trades (the
     ``n_trades`` column of :func:`~ob_analytics.flow_toxicity.vpin`), the
     payload's ``too_few`` says so and the face draws that message in place
-    of the chart.  Otherwise ``too_few`` is empty.
+    of the chart.  Otherwise ``too_few`` is empty.  When the table has an
+    ``n_takers`` column, the floor counts taker orders instead of trades,
+    and the message says so.
     """
     resolve_level("vpin", level)
     too_few = ""
-    if not vpin_df.empty and "n_trades" in vpin_df.columns:
-        per_bucket = float(vpin_df["n_trades"].median())
+    count = _trade_count(vpin_df)
+    if not vpin_df.empty and count is not None:
+        column, one, what = count
+        per_bucket = float(vpin_df[column].median())
         if per_bucket < min_trades:
+            held = one if per_bucket == 1 else what
             too_few = (
-                f"Too few trades to draw.\nA bucket holds about {per_bucket:g} "
-                f"trades; the chart needs at least {min_trades}."
+                f"Too few {what} to draw.\nA bucket holds about {per_bucket:g} "
+                f"{held}; the chart needs at least {min_trades}."
             )
     if len(vpin_df) > 1:
         bar_width = 0.6 * (
@@ -2554,9 +2575,11 @@ def prepare_order_flow_imbalance_data(
 
     A window with fewer than *min_trades* trades (the ``n_trades`` column of
     :func:`~ob_analytics.flow_toxicity.order_flow_imbalance`) is left out of
-    ``ofi_df``, and ``notice`` says how many were.  When no window is left,
-    ``too_few`` says so and the face draws that message in place of the
-    bars.  A table with no ``n_trades`` column is drawn whole.  ``bar_gap``
+    ``ofi_df``, and ``notice`` says how many were.  When the table has an
+    ``n_takers`` column, the floor counts taker orders instead of trades,
+    and the messages say so.  When no window is left, ``too_few`` says so
+    and the face draws that message in place of the bars.  A table with
+    neither column is drawn whole.  ``bar_gap``
     is the median time between windows before any are left out, so a bar
     stays as wide as its window; it is ``None`` for fewer than two windows.
     """
@@ -2565,18 +2588,20 @@ def prepare_order_flow_imbalance_data(
     bar_gap = ofi_df["timestamp"].diff().median() if len(ofi_df) > 1 else None
     notice = ""
     too_few = ""
-    if "n_trades" in ofi_df.columns and not ofi_df.empty:
-        enough = ofi_df["n_trades"] >= min_trades
+    count = _trade_count(ofi_df)
+    if count is not None and not ofi_df.empty:
+        column, _, what = count
+        enough = ofi_df[column] >= min_trades
         left_out = int((~enough).sum())
         if not enough.any():
             too_few = (
-                f"Too few trades to draw.\nNo window holds {min_trades} trades; "
+                f"Too few {what} to draw.\nNo window holds {min_trades} {what}; "
                 "a longer window holds more."
             )
         elif left_out:
             notice = (
                 f"{left_out} of {len(ofi_df)} windows left out: "
-                f"fewer than {min_trades} trades each"
+                f"fewer than {min_trades} {what} each"
             )
         ofi_df = ofi_df[enough]
     return {

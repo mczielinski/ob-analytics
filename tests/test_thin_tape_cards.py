@@ -186,13 +186,14 @@ class TestVpinNeedsEnoughTrades:
         text = _mpl_text(fig) if backend == "matplotlib" else _plotly_text(fig)
         assert "Too few trades" in text
 
-    def test_the_sample_vpin_card_says_too_few_trades(
+    def test_the_sample_vpin_card_says_too_few_taker_orders(
         self, bundled_sample_result
     ) -> None:
-        # The gallery fits ~100 buckets to the sample's 284 trades.
+        # The gallery fits ~100 buckets to the sample's 284 trades.  The
+        # sample is L3, so the floor counts taker orders (#532).
         payload = _card(bundled_sample_result, "vpin", bucket_volume="fit")
-        assert payload["vpin_df"]["n_trades"].median() < MIN_TRADES
-        assert payload["too_few"].startswith("Too few trades")
+        assert payload["vpin_df"]["n_takers"].median() < MIN_TRADES
+        assert payload["too_few"].startswith("Too few taker orders")
 
 
 # ── Order flow imbalance: enough trades per window ───────────────────
@@ -257,5 +258,5 @@ class TestImbalanceNeedsEnoughTrades:
         payload = _card(bundled_sample_result, "order_flow_imbalance")
         kept = payload["ofi_df"]
         assert not kept.empty
-        assert (kept["n_trades"] >= MIN_TRADES).all()
+        assert (kept["n_takers"] >= MIN_TRADES).all()
         assert "windows left out" in payload["notice"]

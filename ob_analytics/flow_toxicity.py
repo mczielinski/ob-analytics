@@ -39,8 +39,10 @@ import pandas as pd
 
 from ob_analytics._utils import (
     fixed_window,
+    has_takers,
     price_scale,
     size_scale,
+    taker_codes,
     validate_non_empty,
     window_start,
 )
@@ -49,6 +51,7 @@ from ob_analytics.exceptions import ConfigError
 from ob_analytics.schemas import validate_columns
 from ob_analytics.trade_sign import (
     _bucket_bounds,
+    _bucket_takers,
     _bulk_volume_classification,
     _rows_at,
     resolve_direction,
@@ -226,24 +229,27 @@ def vpin_bucket_volume(
 
 def _empty_vpin_frame(
     timestamp_dtype: np.dtype | pd.api.extensions.ExtensionDtype,
+    takers: bool,
 ) -> pd.DataFrame:
     """Zero-row :func:`vpin` result with the standard columns and dtypes.
 
     *timestamp_dtype* is the trades' ``timestamp`` dtype, so the bucket
-    bounds keep the same time zone as a non-empty result.
+    bounds keep the same time zone as a non-empty result.  *takers* adds the
+    ``n_takers`` column, as a non-empty result from the same trades has.
     """
-    return pd.DataFrame(
-        {
-            "bucket": pd.Series(dtype="int64"),
-            "timestamp_start": pd.Series(dtype=timestamp_dtype),
-            "timestamp_end": pd.Series(dtype=timestamp_dtype),
-            "buy_volume": pd.Series(dtype="float64"),
-            "sell_volume": pd.Series(dtype="float64"),
-            "n_trades": pd.Series(dtype="int64"),
-            "vpin": pd.Series(dtype="float64"),
-            "vpin_avg": pd.Series(dtype="float64"),
-        }
-    )
+    columns = {
+        "bucket": pd.Series(dtype="int64"),
+        "timestamp_start": pd.Series(dtype=timestamp_dtype),
+        "timestamp_end": pd.Series(dtype=timestamp_dtype),
+        "buy_volume": pd.Series(dtype="float64"),
+        "sell_volume": pd.Series(dtype="float64"),
+        "n_trades": pd.Series(dtype="int64"),
+    }
+    if takers:
+        columns["n_takers"] = pd.Series(dtype="int64")
+    columns["vpin"] = pd.Series(dtype="float64")
+    columns["vpin_avg"] = pd.Series(dtype="float64")
+    return pd.DataFrame(columns)
 
 
 def vpin(
@@ -318,6 +324,11 @@ def vpin(
         * ``sell_volume`` — total sell volume in the bucket, likewise
         * ``n_trades`` — the number of trades with volume in the bucket; a
           trade split across two buckets counts in both
+        * ``n_takers`` — only when the trades name their taker orders (the
+          ``taker`` column of an L3 feed): the number of distinct taker
+          orders with volume in the bucket.  One taker order that fills
+          several resting orders makes several trades but counts as one
+          taker; a trade with no taker id counts as one taker of its own
         * ``vpin`` — ``|buy_volume - sell_volume| / bucket_volume``
         * ``vpin_avg`` — trailing mean of ``vpin`` over *n_buckets*
 
@@ -426,7 +437,7 @@ def _vpin_from_signs(
     df = trades.sort_values("timestamp").reset_index(drop=True)
     buckets = volume_buckets(df, bucket_volume, "vpin", advice=advice)
     if buckets.empty:
-        return _empty_vpin_frame(df["timestamp"].dtype)
+        return _empty_vpin_frame(df["timestamp"].dtype, has_takers(df))
 
     # A trade is all buy or all sell, so each part of it in a bucket is too.
     is_buy = (df["direction"] == "buy").to_numpy()[buckets["row"].to_numpy()]
@@ -442,9 +453,11 @@ def _vpin_from_signs(
             "buy_volume": buy.to_numpy() / scale,
             "sell_volume": sell.to_numpy() / scale,
             "n_trades": buckets.groupby("bucket")["row"].nunique().to_numpy(),
-            "vpin": (buy - sell).abs().to_numpy() / (bucket_volume * scale),
         }
     )
+    if has_takers(df):
+        result["n_takers"] = _bucket_takers(df, buckets)
+    result["vpin"] = (buy - sell).abs().to_numpy() / (bucket_volume * scale)
     result["vpin_avg"] = result["vpin"].rolling(n_buckets, min_periods=1).mean()
     return result
 
@@ -464,17 +477,18 @@ def _vpin_from_bvc(
     """
     bvc = _bulk_volume_classification(trades, bucket_volume, None, "vpin", advice)
     if bvc.empty:
-        return _empty_vpin_frame(trades["timestamp"].dtype)
-    result = bvc[
-        [
-            "bucket",
-            "timestamp_start",
-            "timestamp_end",
-            "buy_volume",
-            "sell_volume",
-            "n_trades",
-        ]
-    ].copy()
+        return _empty_vpin_frame(trades["timestamp"].dtype, has_takers(trades))
+    keep = [
+        "bucket",
+        "timestamp_start",
+        "timestamp_end",
+        "buy_volume",
+        "sell_volume",
+        "n_trades",
+    ]
+    if "n_takers" in bvc.columns:
+        keep.append("n_takers")
+    result = bvc[keep].copy()
     result["vpin"] = (
         result["buy_volume"] - result["sell_volume"]
     ).abs() / bucket_volume
@@ -743,6 +757,11 @@ def order_flow_imbalance(
         ``sell_volume``, ``signed_volume`` (in the instrument's own units, BTC,
         shares or contracts, whether the trades hold integer lots or display
         sizes), ``n_trades`` (the number of trades in the window), ``ofi``.
+        When the trades name their taker orders (the ``taker`` column of an
+        L3 feed), an ``n_takers`` column follows ``n_trades``: the number of
+        distinct taker orders in the window.  One taker order that fills
+        several resting orders makes several trades but counts as one taker;
+        a trade with no taker id counts as one taker of its own.
 
     Raises
     ------
@@ -782,6 +801,12 @@ def _ofi_windows(
             "n_trades": windows["n_trades"],
         }
     )
+    if has_takers(trades):
+        # Each window holds at least one trade, so every window has a count.
+        # By value, not by index: a trades frame may repeat index labels.
+        starts = pd.Index(window_start(trades["timestamp"], step))
+        per_window = pd.Series(taker_codes(trades["taker"])).groupby(starts).nunique()
+        out["n_takers"] = per_window.reindex(out["timestamp"]).to_numpy()
     # A ratio of two sizes in the bars' own units, so it needs no conversion.
     out["ofi"] = windows["signed_volume"] / windows["volume"].replace(0, np.nan)
     return out, windows

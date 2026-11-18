@@ -134,6 +134,29 @@ fig = result.plot("order_flow_imbalance", window="1min")
 save_figure(fig, "ofi.png")
 ```
 
+### Trades and taker orders
+
+Each row of the `order_flow_imbalance` and `vpin` tables has `n_trades`, the
+number of trades in the window or bucket. When the trades name their taker
+orders (the `taker` column, which L3 feeds such as Bitstamp fill), the row
+also has `n_takers`, the number of distinct taker orders. One taker order
+that fills many resting orders makes many trades but counts as one taker. A
+trade with no taker id counts as one taker. L2 feeds name no orders, so
+their `taker` column is empty or missing, and their tables have no
+`n_takers`.
+
+The gallery cards leave out a window, or the whole VPIN chart, when it holds
+too few trades. The floor is 10 (`MIN_TRADES`). The cards count `n_takers`
+when the table has it and `n_trades` when it does not, and the card says
+which it counted. A
+window of 10 trades from one taker order has an imbalance of +1 or −1 just
+because of that order, so it is left out. Pass `min_trades` to the card to
+change the floor:
+
+```python
+fig = result.plot("order_flow_imbalance", window="1min", min_trades=5)
+```
+
 ## Feeds without a native aggressor side
 
 L3 crypto (Bitstamp) labels each trade's taker side, so `result.trades` has a
