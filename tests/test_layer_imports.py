@@ -50,6 +50,7 @@ LAYER_OF: dict[str, str] = {
     "ob_analytics.protocols": SHARED,
     "ob_analytics._registry": SHARED,
     "ob_analytics._secrets": SHARED,
+    "ob_analytics._quality_checks": SHARED,
     # Sources: files, live feeds, and generated sessions.
     "ob_analytics.sources": SOURCES,
     "ob_analytics.capture_record": SOURCES,
@@ -111,19 +112,13 @@ ALLOWED_EXCEPTIONS: frozenset[tuple[str, str]] = frozenset(
     {
         # Metric.prepare returns the payload a renderer draws.
         ("ob_analytics.metrics", "ob_analytics.visualization._data"),
-        # LOBSTER checks that the book it rebuilt does not cross.
+        # LOBSTER rebuilds the price levels and checks that the book does not cross.
         ("ob_analytics.lobster", "ob_analytics.depth"),
         ("ob_analytics.lobster", "ob_analytics.quality"),
-        # A capture manifest reports its problems as quality checks.
-        ("ob_analytics.live._manifest", "ob_analytics.quality"),
         # A synthetic session comes back with its order types set.
         ("ob_analytics.synth", "ob_analytics.analytics"),
         # Databento rebuilds resting prices with the engine adapter's rule.
         ("ob_analytics.databento", "ob_analytics._engine_frames"),
-        # Databento reads one window at a time for a windowed run.
-        ("ob_analytics.databento", "ob_analytics._windows"),
-        # Plot data uses the pipeline's "level not given" marker.
-        ("ob_analytics.visualization._data", "ob_analytics.pipeline"),
         # Loading a saved run builds the pipeline's result type.
         ("ob_analytics.data", "ob_analytics.pipeline"),
         # Plot data resolves a level the way plot_result does.

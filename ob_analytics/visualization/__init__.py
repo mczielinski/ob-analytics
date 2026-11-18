@@ -38,8 +38,8 @@ from typing import Any
 from loguru import logger
 from matplotlib.axes import Axes
 
+from ob_analytics._utils import _UNSET
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.pipeline import _UNSET
 from ob_analytics.protocols import Level
 from ob_analytics.visualization import _concepts, _data as _viz_data
 from ob_analytics.visualization._matplotlib import format_time_axis, save_figure

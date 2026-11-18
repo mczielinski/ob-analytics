@@ -64,6 +64,15 @@ class TestALevelBelowZero:
         assert list(depth["volume"]) == [5, 0, 0, 4]
         assert (depth["volume"] >= 0).all()
 
+    def test_warn_overdrawn_false_leaves_the_warning_out(self):
+        # The LOBSTER loader checks the book it rebuilt this way (#522).
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            depth = price_level_volume(self._overdrawn(), warn_overdrawn=False)
+
+        # The level is held at zero all the same.
+        assert list(depth["volume"]) == [5, 0, 0, 4]
+
     def test_a_level_that_empties_does_not_warn(self):
         events = _events(
             [

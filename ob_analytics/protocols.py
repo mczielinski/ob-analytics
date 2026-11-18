@@ -20,11 +20,11 @@ protocol to :class:`~ob_analytics.pipeline.Pipeline`, or register a whole new
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, NamedTuple, Protocol, runtime_checkable
 
 import numpy.typing as npt
 import pandas as pd
@@ -527,6 +527,46 @@ class DepthLoader(Protocol):
         pandas.DataFrame
             Depth with at least the columns required by
             :func:`~ob_analytics.schemas.validate_depth_df`.
+        """
+        ...
+
+
+# The two types a windowed run reads its input with.  They are kept out of
+# __all__ and the API docs: they are internal to Pipeline.run_windows and the
+# built-in loaders, and not yet a contract for plug-in sources.
+
+
+class LoadedWindow(NamedTuple):
+    """One window's events, as a :class:`WindowedLoader` yields them."""
+
+    #: The window's canonical events.
+    events: pd.DataFrame
+    #: The ``event_id`` of each of those events that a trade names, as maker
+    #: or taker.  The order types are read from them.
+    named_event_ids: Any
+
+
+@runtime_checkable
+class WindowedLoader(Protocol):
+    """A loader that can read its input one time window at a time.
+
+    :meth:`~ob_analytics.pipeline.Pipeline.run_windows` uses it when the
+    run's source built the loader and the trade reader, so no more than one
+    window's events is in memory.
+    """
+
+    def load_windows(
+        self,
+        path: Any,
+        windows: list[tuple[pd.Timestamp | None, pd.Timestamp | None]],
+    ) -> Iterator[LoadedWindow]:
+        """Yield each of *windows*' events in turn.
+
+        The events are the rows the loader's ``load`` gives, cut at the
+        windows: a window holds the rows at or after its start and before its
+        end.  Once the last window is yielded, the run's trade reader, given
+        an empty events frame, builds the whole run's trades from what the
+        loader kept.
         """
         ...
 

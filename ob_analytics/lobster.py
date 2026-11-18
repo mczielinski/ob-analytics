@@ -48,8 +48,7 @@ from ob_analytics.config import InstrumentGrid, PipelineConfig, SourceSettings
 from ob_analytics.depth import (
     BookLevels,
     DepthSummaryEngine,
-    _book_levels,
-    _price_level_volume,
+    book_levels,
     price_level_volume,
 )
 from ob_analytics.exceptions import ConfigError
@@ -824,7 +823,7 @@ class LobsterWriter:
         # order of the files, the depth table's own order kept within one
         # event: the order the depth summary replays.
         try:
-            levels = _book_levels(events, depth, num_levels)
+            levels = book_levels(events, depth, num_levels)
         except ConfigError as exc:
             raise ConfigError(f"LobsterWriter: {exc}") from None
 
@@ -1221,7 +1220,7 @@ def _warn_if_book_crosses(events: pd.DataFrame, *, from_orderbook: bool) -> None
     """
     if events.empty:
         return
-    _, crossed_pct, _ = book_crossing(_price_level_volume(events)[0])
+    _, crossed_pct, _ = book_crossing(price_level_volume(events, warn_overdrawn=False))
     if crossed_pct <= CROSSED_TOLERANCE_PCT:
         return
     depth_note = (

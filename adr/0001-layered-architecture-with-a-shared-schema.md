@@ -99,9 +99,10 @@ module in a layer (`LAYER_OF`), says which layers each layer may use
 import, add it to both, with the reason here.
 
 The schema and the small helpers every layer uses (`schemas`, `config`,
-`protocols`, `exceptions`, `_utils` and a few others) form a shared layer
-under all five. The diagram puts `plot_result` and `prepare` in the public
-API, so the test does too, and puts the gallery beside them. The rest of
+`protocols`, `exceptions`, `_utils`, the `QualityCheck` and `Severity` types,
+and a few others) form a shared layer under all five. The diagram puts
+`plot_result` and `prepare` in the public API, so the test does too, and puts
+the gallery beside them. The rest of
 `ob_analytics.visualization`, Parquet I/O (`data`) and the backtest writers
 (`interop`) form the plots and export layer. Export may use sources, because
 a source can supply the writer for its own format.
@@ -120,26 +121,19 @@ changing, so each is left as a later move:
 - **`lobster` → `depth` and `quality`.** The LOBSTER loader rebuilds the price
   levels from the messages and warns when that book is crossed for too long. It
   uses `quality.book_crossing` and `CROSSED_TOLERANCE_PCT`, so the loader and
-  the audit measure a crossed book the same way. It still imports the private
-  `depth._price_level_volume`.
-- **`live._manifest` → `quality`.** A capture manifest reports its problems as
-  `QualityCheck` rows with a `Severity`, so `audit` shows them beside the other
-  checks. The two types could move into the shared layer.
+  the audit measure a crossed book the same way. It builds the depth table and
+  its summary with `depth.price_level_volume` and `DepthSummaryEngine`, and
+  writes the orderbook file's levels with `depth.book_levels`. It uses only
+  public names from both modules.
 - **`synth` → `analytics`.** A generated session comes back with
   `set_order_types` already applied, so it looks like real input after the
   pipeline's classification step.
 - **`databento` → `_engine_frames`.** The loader uses `resting_price`, the
   library's one rule for the price an order rests at, so it does not keep a
   second copy of that rule.
-- **`databento` → `_windows`.** The loader reads one window at a time for
-  `Pipeline.run_windows`, and yields the `LoadedWindow` that module defines.
-  `LoadedWindow` could move down to the sources or shared layer.
 - **`data` → `pipeline`.** Loading a saved run builds a `PipelineResult`, the
   type the pipeline returns. The imports are inside functions or under
   `TYPE_CHECKING`, which breaks the import cycle with `pipeline`.
-- **`visualization._data` → `pipeline`.** Plot data uses the pipeline's marker
-  for an argument that was not given, `_UNSET`, so a plot can tell "no level
-  given" from `level=None`. The marker could move into the shared layer.
 - **`visualization._data` → `visualization`.** Plot data resolves the level
   of a run with the same function `plot_result` uses, so the two cannot
   disagree.

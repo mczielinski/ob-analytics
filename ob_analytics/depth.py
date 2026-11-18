@@ -41,6 +41,7 @@ __all__ = [
     "DepthSummaryEngine",
     "PriceLevelBook",
     "book_imbalance",
+    "book_levels",
     "book_signals",
     "filter_depth",
     "get_spread",
@@ -316,30 +317,68 @@ class BookLevels(NamedTuple):
     bid_volumes: np.ndarray
 
 
-def _book_levels(
+def book_levels(
     events: pd.DataFrame,
     depth: pd.DataFrame,
     num_levels: int,
     *,
     quoted: bool = True,
 ) -> BookLevels:
-    """The best *num_levels* levels of each side after each event.
+    """Return the best *num_levels* levels of each side after each event.
 
     The depth rows are replayed through a :class:`PriceLevelBook`, each with
-    the event it names, the events in the order of *events*; the depth
-    table's own order is kept within one event.  Row ``i`` of the result is
-    the book after ``events.iloc[i]``.
+    the event it names, the events in the order of *events*.  The depth
+    table's own order is kept within one event.
 
-    With *quoted* (the default) each side holds its quoted levels, which
-    leave out the crossed levels at the touch as the depth summary does.
-    Without it, each side holds every level the depth table leaves resting,
-    crossed or not.
+    Parameters
+    ----------
+    events : pandas.DataFrame
+        The run's events, with an ``event_id`` column.  Their order sets the
+        order of the result's rows.
+    depth : pandas.DataFrame
+        The depth table of the same run, as
+        :func:`price_level_volume` returns it.  Each row names its event in
+        ``event_id``.
+    num_levels : int
+        How many levels of each side to return.
+    quoted : bool, default True
+        With ``True``, each side holds its quoted levels, which leave out the
+        crossed levels at the touch, as the depth summary does.  With
+        ``False``, each side holds every level the depth table leaves
+        resting, crossed or not.
+
+    Returns
+    -------
+    BookLevels
+        One row per event: row ``i`` is the book after ``events.iloc[i]``.
+        A side with fewer than *num_levels* levels fills the rest with price
+        0 and volume 0.
 
     Raises
     ------
     ConfigError
-        If the depth table names an event that *events* does not have.
+        If a column is missing, if *num_levels* is below 1, if the depth
+        table is in display units (float prices, or sizes that are not whole
+        lots), or if it names an event that *events* does not have.
     """
+    validate_columns(events, {"event_id"}, "book_levels")
+    validate_columns(depth, {"event_id", "price", "volume", "direction"}, "book_levels")
+    if num_levels < 1:
+        raise ConfigError(
+            f"book_levels: num_levels must be 1 or more, not {num_levels}."
+        )
+    volume = depth["volume"].to_numpy()
+    # price_level_volume can return whole lots as floats, so a float size
+    # column of whole numbers is read as lots.
+    if not pd.api.types.is_integer_dtype(depth["price"]) or not (
+        pd.api.types.is_integer_dtype(volume)
+        or bool(np.all(volume == np.round(volume)))
+    ):
+        raise ConfigError(
+            "book_levels: the depth table's price must be integer ticks and its "
+            "volume whole lots, as the pipeline returns them, not the display "
+            "units display_result converts to."
+        )
     position = pd.Index(events["event_id"]).get_indexer(pd.Index(depth["event_id"]))
     if (position < 0).any():
         raise ConfigError(
@@ -629,7 +668,9 @@ class DepthSummaryEngine:
 # ── Standalone functions ──────────────────────────────────────────────
 
 
-def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
+def price_level_volume(
+    events: pd.DataFrame, *, warn_overdrawn: bool = True
+) -> pd.DataFrame:
     """Calculate the cumulative volume for each price level over time.
 
     Parameters
@@ -641,6 +682,11 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
         exactly on that grid, so a level that empties reads exactly ``0`` in
         either case.  Float sizes on no such grid are summed as floats, with
         a warning.
+    warn_overdrawn : bool, default True
+        Whether to warn when the events take a level's size below zero (see
+        *Warns*).  A caller that reports overdrawn levels in its own way, or
+        that expects them, passes ``False``.  The level is held at zero either
+        way.
 
     Returns
     -------
@@ -662,10 +708,12 @@ def price_level_volume(events: pd.DataFrame) -> pd.DataFrame:
         The warning names the level and the first event that overdrew it.
         The level's running total is held at zero, so it never reads a
         negative size, and the next order on it starts from zero.  ``audit``
-        counts these rows as ``negative_level``.
+        counts these rows as ``negative_level``.  Pass
+        ``warn_overdrawn=False`` to leave this warning out.
     """
     depth, overdrawn = _price_level_volume(events)
-    _warn_on_overdrawn_levels(overdrawn)
+    if warn_overdrawn:
+        _warn_on_overdrawn_levels(overdrawn)
     return depth
 
 

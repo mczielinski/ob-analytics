@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from ob_analytics._utils import require_per_order_events, window_start
+from ob_analytics._utils import _UNSET, require_per_order_events, window_start
 from ob_analytics.depth import (
     _readable_mid,
     book_imbalance,
@@ -30,7 +30,6 @@ from ob_analytics.depth import (
 )
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.flow_toxicity import OFI_WINDOWS, ofi_by_window
-from ob_analytics.pipeline import _UNSET
 from ob_analytics.protocols import Level
 from ob_analytics.schemas import validate_columns
 

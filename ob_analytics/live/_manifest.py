@@ -29,10 +29,10 @@ from typing import Any
 
 import pandas as pd
 
+from ob_analytics._quality_checks import QualityCheck, Severity
 from ob_analytics._secrets import redact
 from ob_analytics.capture_record import read_fields
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.quality import QualityCheck, Severity
 
 MANIFEST_NAME = "manifest.json"
 #: What the manifest's ``format`` field says, so a reader knows the file.
