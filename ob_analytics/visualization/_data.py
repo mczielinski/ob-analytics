@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from ob_analytics._utils import require_per_order_events, window_start
+from ob_analytics._utils import _UNSET, require_per_order_events, window_start
 from ob_analytics.depth import (
     _readable_mid,
     book_imbalance,
@@ -30,7 +30,6 @@ from ob_analytics.depth import (
 )
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.flow_toxicity import OFI_WINDOWS, ofi_by_window
-from ob_analytics.pipeline import _UNSET
 from ob_analytics.protocols import Level
 from ob_analytics.schemas import validate_columns
 
@@ -370,6 +369,267 @@ def resolve_level(concept: str, level: Level | str | None) -> Level | None:
 
 
 # ---------------------------------------------------------------------------
+# Thinning: long series cut down to what a screen can show
+# ---------------------------------------------------------------------------
+
+#: The number of time bins a long series is thinned to: about one bin per
+#: pixel column of a wide plot.
+SERIES_BINS = 1000
+
+
+@dataclass(frozen=True)
+class Thinned:
+    """A payload whose series were thinned: *shown* of *total* rows kept.
+
+    The rows were kept by :func:`thin_positions` over *bins* time bins.
+    """
+
+    shown: int
+    total: int
+    bins: int
+    points: bool = False
+
+    @property
+    def note(self) -> str:
+        """One sentence for the card under the plot."""
+        if self.points:
+            return (
+                f"The plot shows {self.shown:,} of {self.total:,} events. "
+                "Where several events fall on the same spot of the screen, "
+                "it shows the largest one."
+            )
+        return (
+            f"The lines show {self.shown:,} of {self.total:,} rows. "
+            f"Each of {self.bins:,} time steps keeps its first, last, lowest "
+            "and highest value, so every spike is still drawn."
+        )
+
+
+def thin_positions(
+    timestamp: pd.Series | pd.DatetimeIndex | np.ndarray,
+    *series: pd.Series | np.ndarray,
+    bins: int | None = SERIES_BINS,
+) -> np.ndarray | None:
+    """The row positions a plot *bins* columns wide needs to draw *series*.
+
+    Splits the time span of *timestamp* into *bins* equal bins.  In each bin
+    it keeps the first and the last row, and the rows that hold the lowest
+    and the highest value of each of *series*.  A line through the kept rows
+    has the same lowest and highest value in every bin as a line through all
+    the rows, so every spike is still drawn.  It also keeps the rows where a
+    series starts or stops having values, so the gaps in a line stay where
+    they are.
+
+    Returns the positions in increasing order, or ``None`` when there is
+    nothing to thin: *bins* is ``None``, there are no more than four rows
+    per bin, the times are not in order, or they span no time.
+    """
+    n = len(timestamp)
+    if bins is None or n <= 4 * bins:
+        return None
+    t = pd.DatetimeIndex(timestamp).asi8
+    span = t[-1] - t[0]
+    if span <= 0 or (np.diff(t) < 0).any():
+        return None
+    b = np.minimum(((t - t[0]) / span * bins).astype(np.int64), bins - 1)
+    starts = np.flatnonzero(np.r_[True, b[1:] != b[:-1]])
+    keep = np.zeros(n, dtype=bool)
+    keep[starts] = True
+    keep[np.r_[starts[1:] - 1, n - 1]] = True
+    for values in series:
+        v = np.asarray(values, dtype=float)
+        if len(v) != n:
+            raise ConfigError("Each series must have one value per timestamp.")
+        missing = np.isnan(v)
+        if missing.all():
+            continue
+        # The bins are in order, so after a sort by (bin, value) the first
+        # row of each bin is that bin's lowest value.
+        for key in (np.where(missing, np.inf, v), np.where(missing, np.inf, -v)):
+            keep[np.lexsort((key, b))[starts]] = True
+        edges = np.flatnonzero(missing[1:] != missing[:-1])
+        keep[edges] = True
+        keep[edges + 1] = True
+    return np.flatnonzero(keep)
+
+
+def thin_payload(payload: dict[str, Any], bins: int | None) -> dict[str, Any]:
+    """Thin every series of *payload* that runs along ``payload["timestamp"]``.
+
+    A series is a NumPy array or a pandas Series with one value per
+    timestamp.  The lowest and highest values are kept by
+    :func:`thin_positions` over all the numeric series at once, so the
+    series stay aligned.  The payload gains ``"thinned"``: a
+    :class:`Thinned`, or ``None`` when nothing was thinned.
+    """
+    timestamp = payload["timestamp"]
+    n = len(timestamp)
+    keys = [
+        key
+        for key, value in payload.items()
+        if key != "timestamp"
+        and isinstance(value, pd.Series | np.ndarray)
+        and value.ndim == 1
+        and len(value) == n
+    ]
+    numeric = [
+        pd.Series(payload[k]).to_numpy(dtype=float, na_value=np.nan)
+        for k in keys
+        if pd.api.types.is_numeric_dtype(payload[k])
+    ]
+    keep = thin_positions(timestamp, *numeric, bins=bins)
+    if keep is None or bins is None:
+        return {**payload, "thinned": None}
+    out = dict(payload)
+    for key in ("timestamp", *keys):
+        value = payload[key]
+        out[key] = (
+            value.iloc[keep].reset_index(drop=True)
+            if isinstance(value, pd.Series)
+            else value[keep]
+        )
+    out["thinned"] = Thinned(len(keep), n, bins)
+    return out
+
+
+def thin_frame(
+    df: pd.DataFrame, time_col: str, columns: list[str], bins: int | None
+) -> tuple[pd.DataFrame, Thinned | None]:
+    """Thin the rows of *df* by :func:`thin_positions` over *columns*.
+
+    Columns of *columns* that *df* does not have are skipped.
+    """
+    present = [c for c in columns if c in df.columns]
+    keep = thin_positions(df[time_col], *(df[c] for c in present), bins=bins)
+    if keep is None or bins is None:
+        return df, None
+    return df.iloc[keep], Thinned(len(keep), len(df), bins)
+
+
+def thin_points(
+    df: pd.DataFrame,
+    *,
+    y: str,
+    by: list[str],
+    size: str,
+    bins: int | None = SERIES_BINS,
+    rows: int = 300,
+) -> tuple[pd.DataFrame, Thinned | None]:
+    """Keep one point of *df* per spot of the screen: the one with the largest *size*.
+
+    The plot's time axis (``timestamp``) is split into *bins* columns and
+    the *y* axis into *rows* rows.  In each cell, for each group of *by*,
+    only the row with the largest *size* is kept, so the largest marker
+    still shows.  Returns *df* unchanged and ``None`` when there are no more
+    rows than *bins*, or *bins* is ``None``.
+    """
+    if bins is None or len(df) <= bins:
+        return df, None
+    t = pd.DatetimeIndex(df["timestamp"]).asi8
+    v = df[y].to_numpy(dtype=float)
+
+    def cell(values: np.ndarray, count: int) -> np.ndarray:
+        lo, hi = np.nanmin(values), np.nanmax(values)
+        if not hi > lo:
+            return np.zeros(len(values), dtype=np.int64)
+        return np.minimum(
+            ((values - lo) / (hi - lo) * count).astype(np.int64), count - 1
+        )
+
+    # Positions, not index labels: an index may repeat a label.
+    cells = df.reset_index(drop=True).assign(
+        _col=cell(t.astype(float), bins), _row=cell(v, rows)
+    )
+    keep = np.sort(
+        cells.sort_values(size, ascending=False, kind="stable")
+        .drop_duplicates([*by, "_col", "_row"])
+        .index.to_numpy()
+    )
+    if len(keep) == len(df):
+        return df, None
+    return df.iloc[keep], Thinned(len(keep), len(df), bins, points=True)
+
+
+def depth_raster(
+    depth: pd.DataFrame,
+    *,
+    width: int = SERIES_BINS,
+    max_rows: int = 600,
+) -> dict[str, Any] | None:
+    """The depth heatmap as a grid of cells: price rows by time columns.
+
+    *depth* is the ``depth`` frame of :func:`prepare_depth_heatmap_data`.
+    Each price level holds its volume from one of its rows until the next
+    one, as the heatmap's lines do.  A cell holds the largest volume of any
+    level in its price row while that level overlaps its time column, so
+    every spike is still drawn.  A cell no level covers, or covers with no
+    volume, is ``NaN``.
+
+    There is one price row per price step, or fewer when that would make
+    more than *max_rows* rows; then each row covers several steps.
+
+    Returns ``None`` when no level has two rows.  Otherwise a dict with
+    ``volume`` (the grid, ``rows`` x *width*, row 0 at the lowest price),
+    ``t0`` and ``t1`` (the time span of the columns), and ``price0`` and
+    ``price_step`` (the centre of row 0 and the height of a row).
+    """
+    if depth.empty:
+        return None
+    dd = depth.sort_values(["price", "timestamp"], kind="stable")
+    price = dd["price"].to_numpy(dtype=float)
+    t = pd.DatetimeIndex(dd["timestamp"]).asi8
+    volume = dd["volume"].to_numpy(dtype=float)
+    segment = price[:-1] == price[1:]
+    if not segment.any():
+        return None
+
+    levels = np.unique(price)
+    price0 = float(levels[0])
+    price_range = float(levels[-1]) - price0
+    gaps = np.diff(levels)
+    step = float(gaps.min()) if gaps.size else 1.0
+    step = max(step, price_range / (max_rows - 1)) if price_range > 0 else step
+    rows = round(price_range / step) + 1
+
+    t0, t1 = int(t.min()), int(t.max())
+    span = max(t1 - t0, 1)
+
+    def column(times: np.ndarray) -> np.ndarray:
+        cols = ((times - t0) / span * width).astype(np.int64)
+        return np.clip(cols, 0, width - 1)
+
+    # Segment i holds volume[i] from t[i] until t[i + 1] at price[i].
+    start = column(t[:-1][segment])
+    # A segment that ends on a column edge does not reach into that column.
+    end = np.maximum(column(t[1:][segment] - 1), start)
+    row = np.rint((price[:-1][segment] - price0) / step).astype(np.int64)
+    vol = volume[:-1][segment]
+    has_volume = ~np.isnan(vol)
+    start, end, row, vol = (a[has_volume] for a in (start, end, row, vol))
+
+    grid = np.full((rows, width), np.nan)
+    if vol.size:
+        lengths = end - start + 1
+        cells_row = np.repeat(row, lengths)
+        offsets = np.arange(lengths.sum()) - np.repeat(
+            np.cumsum(lengths) - lengths, lengths
+        )
+        cells_col = np.repeat(start, lengths) + offsets
+        flat = np.full(rows * width, -np.inf)
+        np.maximum.at(flat, cells_row * width + cells_col, np.repeat(vol, lengths))
+        flat[np.isneginf(flat)] = np.nan
+        grid = flat.reshape(rows, width)
+
+    return {
+        "volume": grid,
+        "t0": dd["timestamp"].min(),
+        "t1": dd["timestamp"].max(),
+        "price0": price0,
+        "price_step": step,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Prepare functions — one per plot face
 # ---------------------------------------------------------------------------
 
@@ -383,8 +643,14 @@ def prepare_time_series_data(
     y_label: str = "series",
     *,
     level: Level | str | None = _UNSET,
+    time_bins: int | None = SERIES_BINS,
 ) -> dict[str, Any]:
-    """Prepare data for a generic time-series step plot."""
+    """Prepare data for a generic time-series step plot.
+
+    A long series is thinned to *time_bins* time steps by
+    :func:`thin_positions`; ``None`` keeps every row.  The payload's
+    ``thinned`` says how many rows were kept.
+    """
     resolve_level("time_series", level)
     if len(timestamp) != len(series):
         raise ConfigError("Length of timestamp and series must be the same.")
@@ -392,7 +658,8 @@ def prepare_time_series_data(
     df = pd.DataFrame({"ts": timestamp, "val": series})
     start_time, end_time = _default_start_end(df, start_time, end_time, col="ts")
     df = df[(df["ts"] >= start_time) & (df["ts"] <= end_time)]
-    return {"df": df, "title": title, "y_label": y_label}
+    df, thinned = thin_frame(df, "ts", ["val"], time_bins)
+    return {"df": df, "title": title, "y_label": y_label, "thinned": thinned}
 
 
 def _trade_tape_mid(
@@ -530,6 +797,7 @@ def prepare_depth_heatmap_data(
     hidden_trades: pd.DataFrame | None = None,
     *,
     level: Level | str | None = _UNSET,
+    time_bins: int | None = SERIES_BINS,
 ) -> dict[str, Any]:
     """Prepare data for the price-level depth heatmap.
 
@@ -554,12 +822,17 @@ def prepare_depth_heatmap_data(
     optional hidden-liquidity overlay (see :func:`prepare_hidden_liquidity_overlay`),
     already clipped to the caller's display window. ``None``
     (the default) draws the heatmap with no overlay.
+
+    A long quote line is thinned to *time_bins* time steps by
+    :func:`thin_positions`; ``None`` keeps every row.  The payload's
+    ``thinned`` says how many rows were kept.
     """
     resolve_level("depth_heatmap", level)
     depth_local = depth.copy()
 
     # The first step that leaves no rows names the reason the heatmap is empty.
     notice: str | None = NO_DEPTH_NOTICE if depth_local.empty else None
+    thinned: Thinned | None = None
 
     if not depth_local.empty:
         if start_time is None:
@@ -581,6 +854,12 @@ def prepare_depth_heatmap_data(
             price_from = _price_bound(0.995 * spread["best_bid_price"].min())
         if price_to is None:
             price_to = _price_bound(1.005 * spread["best_ask_price"].max())
+        spread, thinned = thin_frame(
+            spread,
+            "timestamp",
+            ["midprice", "best_bid_price", "best_ask_price"],
+            time_bins,
+        )
 
     if trades is not None:
         if start_time is not None and end_time is not None:
@@ -666,6 +945,7 @@ def prepare_depth_heatmap_data(
         "iceberg_lines": iceberg_lines,
         "iceberg_refills": iceberg_refills,
         "hidden_trades": hidden_trades,
+        "thinned": thinned,
     }
 
 
@@ -744,8 +1024,17 @@ def prepare_order_activity_l2_data(
     price_to: float | None = None,
     volume_from: float | None = None,
     volume_to: float | None = None,
+    *,
+    time_bins: int | None = SERIES_BINS,
 ) -> dict[str, Any]:
-    """Prepare data for a limit-order event map."""
+    """Prepare data for a limit-order event map.
+
+    Many events can fall on one spot of the screen.  With *time_bins*, the
+    time axis is split into that many columns and the price axis into rows,
+    and each spot keeps only its largest event of each side and action
+    (:func:`thin_points`); ``None`` keeps every event.  The payload's
+    ``thinned`` says how many events were kept.
+    """
     start_time, end_time = _default_start_end(events, start_time, end_time)
 
     events = events[
@@ -765,6 +1054,13 @@ def prepare_order_activity_l2_data(
         price_to = float(events["price"].quantile(0.99))
 
     events = events[(events["price"] >= price_from) & (events["price"] <= price_to)]
+    events, thinned = thin_points(
+        events,
+        y="price",
+        by=["action", "direction"],
+        size="volume",
+        bins=time_bins,
+    )
 
     created = events[events["action"] == "created"]
     deleted = events[events["action"] == "deleted"]
@@ -776,6 +1072,7 @@ def prepare_order_activity_l2_data(
         "created": created,
         "deleted": deleted,
         "price_by": price_by,
+        "thinned": thinned,
     }
 
 
@@ -959,11 +1256,14 @@ def _event_rug(
     events: pd.DataFrame | None,
     start_time: pd.Timestamp,
     end_time: pd.Timestamp,
+    bins: int | None = None,
 ) -> dict[str, np.ndarray] | None:
     """Tick times per event class (created / cancelled / filled) in the window.
 
     The rug under the liquidity series shows *when* the book churned -- bursts
     of adds, cancels, and fills the aggregate best-size line alone hides.
+    With *bins*, each class keeps one tick per time bin: the ticks in one
+    bin would draw on top of each other.
     """
     if events is None or events.empty:
         return None
@@ -971,11 +1271,18 @@ def _event_rug(
         (events["timestamp"] >= start_time) & (events["timestamp"] <= end_time)
     ]
     fill = win["fill"] if "fill" in win.columns else pd.Series(0.0, index=win.index)
-    return {
-        "created": win.loc[win["action"] == "created", "timestamp"].to_numpy(),
-        "cancelled": win.loc[win["action"] == "deleted", "timestamp"].to_numpy(),
-        "filled": win.loc[fill > 0, "timestamp"].to_numpy(),
+    rug = {
+        "created": win.loc[win["action"] == "created", "timestamp"],
+        "cancelled": win.loc[win["action"] == "deleted", "timestamp"],
+        "filled": win.loc[fill > 0, "timestamp"],
     }
+    if bins is not None and end_time > start_time:
+        span = end_time - start_time
+        rug = {
+            k: t[~((t - start_time) / span * bins).astype(int).duplicated()]
+            for k, t in rug.items()
+        }
+    return {k: t.to_numpy() for k, t in rug.items()}
 
 
 def prepare_liquidity_at_touch_l2_data(
@@ -983,6 +1290,8 @@ def prepare_liquidity_at_touch_l2_data(
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
     events: pd.DataFrame | None = None,
+    *,
+    time_bins: int | None = SERIES_BINS,
 ) -> dict[str, Any]:
     """L2 (MBP) liquidity at the touch: best bid/ask resting size over time.
 
@@ -994,19 +1303,24 @@ def prepare_liquidity_at_touch_l2_data(
 
     Pass *events* to add an **event rug** beneath the series -- created /
     cancelled / filled tick marks showing when the book churned.
+
+    A long series is thinned to *time_bins* time steps by
+    :func:`thin_positions`; ``None`` keeps every row.  The payload's
+    ``thinned`` says how many rows were kept.
     """
     start_time, end_time = _default_start_end(depth_summary, start_time, end_time)
     win = depth_summary[
         (depth_summary["timestamp"] >= start_time)
         & (depth_summary["timestamp"] <= end_time)
     ]
-    rug = _event_rug(events, start_time, end_time)
-    return {
+    rug = _event_rug(events, start_time, end_time, time_bins)
+    payload = {
         "rug": rug,
         "timestamp": win["timestamp"].reset_index(drop=True),
         "bid_vol": win["best_bid_vol"].reset_index(drop=True),
         "ask_vol": win["best_ask_vol"].reset_index(drop=True),
     }
+    return thin_payload(payload, time_bins)
 
 
 def prepare_liquidity_at_touch_l3_data(
@@ -1054,6 +1368,7 @@ def prepare_price_view_data(
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
     level: Level | str | None = _UNSET,
+    time_bins: int | None = SERIES_BINS,
 ) -> dict[str, Any]:
     """L2 price view: the spread ribbon plus the volume-weighted microprice.
 
@@ -1067,6 +1382,10 @@ def prepare_price_view_data(
     book) has no mid of either kind, so neither line is drawn there.
     Optionally overlays executions (buy/sell dots at trade price) when
     *trades* is given.
+
+    A long series is thinned to *time_bins* time steps by
+    :func:`thin_positions`; ``None`` keeps every row.  The payload's
+    ``thinned`` says how many rows were kept.
     """
     resolve_level("price_view", level)
     start_time, end_time = _default_start_end(depth_summary, start_time, end_time)
@@ -1087,7 +1406,7 @@ def prepare_price_view_data(
             (trades["timestamp"] >= start_time) & (trades["timestamp"] <= end_time)
         ][["timestamp", "price", "direction"]]
 
-    return {
+    payload = {
         "timestamp": win["timestamp"].reset_index(drop=True),
         "best_bid_price": bid,
         "best_ask_price": ask,
@@ -1096,6 +1415,7 @@ def prepare_price_view_data(
         "trades": out_trades,
         "y_range": price_y_range(win["best_bid_price"], win["best_ask_price"]),
     }
+    return thin_payload(payload, time_bins)
 
 
 def prepare_l1_ticker_data(
@@ -1106,6 +1426,7 @@ def prepare_l1_ticker_data(
     start_time: pd.Timestamp | str | None = None,
     end_time: pd.Timestamp | str | None = None,
     level: Level | str | None = _UNSET,
+    time_bins: int | None = SERIES_BINS,
 ) -> dict[str, Any]:
     """The Level 1 quote: best bid, best ask and last trade.
 
@@ -1131,7 +1452,9 @@ def prepare_l1_ticker_data(
         a value the table does not have yet is ``None``.  For the prices over
         time: ``timestamp``, ``best_bid_price``, ``best_ask_price``,
         ``last_price`` and ``y_range``, with only the rows where a price
-        changes.
+        changes, and ``thinned``.  A long series is thinned to *time_bins*
+        time steps by :func:`thin_positions`; ``None`` keeps every row.
+        ``thinned`` says how many rows were kept.
     """
     resolve_level("l1_ticker", level)
     tz = getattr(l1["timestamp"].dtype, "tz", None)
@@ -1173,7 +1496,7 @@ def prepare_l1_ticker_data(
     previous = prices.shift()
     same = prices.eq(previous) | (prices.isna() & previous.isna())
     lines = win[~same.all(axis=1)]
-    return {
+    payload = {
         "timestamp": lines["timestamp"].reset_index(drop=True),
         "best_bid_price": lines["best_bid_price"].to_numpy(dtype=float),
         "best_ask_price": lines["best_ask_price"].to_numpy(dtype=float),
@@ -1181,6 +1504,7 @@ def prepare_l1_ticker_data(
         # From every row, not just the changes: one far quote is one change.
         "y_range": _l1_y_range(win),
     }
+    return thin_payload(payload, time_bins)
 
 
 @dataclass(frozen=True)
@@ -1264,6 +1588,7 @@ def prepare_book_signals_data(
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
     level: Level | str | None = _UNSET,
+    time_bins: int | None = SERIES_BINS,
 ) -> dict[str, Any]:
     """Predictive touch signals: micro-price vs mid, plus order-book imbalance.
 
@@ -1275,6 +1600,10 @@ def prepare_book_signals_data(
     depth bins actually present so a summary with fewer bins does not raise.
     A quote that cannot be read as a price
     (:func:`~ob_analytics.depth.readable_quotes`) has no mid of either kind.
+
+    A long series is thinned to *time_bins* time steps by
+    :func:`thin_positions`; ``None`` keeps every row.  The payload's
+    ``thinned`` says how many rows were kept.
     """
     resolve_level("book_signals", level)
     start_time, end_time = _default_start_end(depth_summary, start_time, end_time)
@@ -1293,7 +1622,7 @@ def prepare_book_signals_data(
     obi = book_imbalance(win, levels=1).to_numpy(dtype=float)
     obi_depth = book_imbalance(win, levels=levels).to_numpy(dtype=float)
 
-    return {
+    payload = {
         "timestamp": win["timestamp"].reset_index(drop=True),
         "best_bid_price": bid,
         "best_ask_price": ask,
@@ -1304,6 +1633,7 @@ def prepare_book_signals_data(
         "levels": levels,
         "y_range": price_y_range(win["best_bid_price"], win["best_ask_price"]),
     }
+    return thin_payload(payload, time_bins)
 
 
 def prepare_trade_size_data(

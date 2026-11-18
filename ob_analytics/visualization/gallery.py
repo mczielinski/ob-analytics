@@ -30,6 +30,7 @@ from loguru import logger
 from matplotlib.axes import Axes
 
 from ob_analytics._utils import (
+    _UNSET,
     lots_to_size,
     ticks_to_price,
     ticks_to_price_if_integer,
@@ -37,7 +38,7 @@ from ob_analytics._utils import (
 from ob_analytics.depth import get_spread
 from ob_analytics.exceptions import ConfigError, UnknownNameError
 from ob_analytics.flow_toxicity import OFI_WINDOWS
-from ob_analytics.pipeline import _UNSET, PipelineResult
+from ob_analytics.pipeline import PipelineResult
 from ob_analytics.protocols import Level
 from ob_analytics.visualization import (
     PlotTheme,
@@ -984,6 +985,9 @@ def generate_gallery(
             panel.rendered = _render_and_save(panel, out, plt, prepared)
         if not card.note:
             card.note = _payload_note(prepared)
+        thinned = _thinned_note(prepared)
+        if thinned:
+            card.note = f"{card.note} {thinned}" if card.note else thinned
 
     html_path = out / "gallery.html"
     _write_gallery_html(html_path, cards, title)
@@ -1051,6 +1055,21 @@ def _payload_note(prepared: dict[tuple[int, int], dict | Exception]) -> str:
     for payload in prepared.values():
         if isinstance(payload, dict) and payload.get("note"):
             return str(payload["note"])
+    return ""
+
+
+def _thinned_note(prepared: dict[tuple[int, int], dict | Exception]) -> str:
+    """Say that a card's lines show thinned data, or return ``""``.
+
+    A prepare step that thinned its series puts a
+    :class:`~ob_analytics.visualization._data.Thinned` in its payload's
+    ``thinned``; the card says how many rows the lines show.
+    """
+    for payload in prepared.values():
+        if isinstance(payload, dict) and isinstance(
+            payload.get("thinned"), _viz_data.Thinned
+        ):
+            return payload["thinned"].note
     return ""
 
 

@@ -1046,6 +1046,20 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Changed
 
+- **Four helpers moved down a layer** (#522). Each was the only reason for an
+  upward import, so ADR 0001 and the layer test no longer allow those imports.
+  `QualityCheck` and `Severity` now live in the shared layer, and
+  `ob_analytics.quality` still exports them, so a capture manifest no longer
+  imports `quality`. The windowed-loader types moved to `protocols`, so the
+  Databento loader no longer imports `_windows`. The "no level given" marker
+  of the plot functions moved to `_utils`, so plot data no longer imports
+  `pipeline`. `price_level_volume` has a new `warn_overdrawn` option, and
+  the private `depth._book_levels` is now the public `depth.book_levels`, so
+  the LOBSTER loader uses no private `depth` functions. `book_levels` checks
+  its columns and refuses a depth table in display units. It still imports
+  `depth` and `quality`, as ADR 0001 allows.
+  `quality.book_crossing` and `quality.CROSSED_TOLERANCE_PCT` are now in
+  `quality.__all__` and on the Data quality API page.
 - **A test checks every layer's imports** (#495). Before, only the engine's
   imports were checked against ADR 0001. `tests/test_layer_imports.py` now
   puts every module in a layer and fails when a module imports from a layer
@@ -1513,6 +1527,22 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
+- **The Plotly gallery of the bundled sample is 28 MiB, not 231 MiB** (#491).
+  Each line carried every row of `depth_summary`, so `book_signals.html`
+  alone was 82 MiB. The data functions now thin a long series to 1,000 time
+  steps. Each step keeps its first, last, lowest and highest value, so every
+  spike is still drawn. Matplotlib gets the same rows. Pass `time_bins=None`
+  to a `prepare` function to keep every row.
+  - The Plotly depth heatmap draws its levels as one image, not one marker
+    per row (32 MiB to 0.3 MiB). Its cells no longer show the volume on
+    hover.
+  - The L2 order event map keeps one event per spot of the screen, the
+    largest (19 MiB to 3 MiB). The liquidity rug keeps one tick per time
+    step. The Plotly events histogram sends counts, not every event.
+  - A gallery card says when its plot shows thinned data, and how many rows
+    it shows.
+  - A test builds the Plotly gallery of the sample and fails when a page is
+    larger than its size budget.
 - **A failed rollback no longer hides the first error** (#524). `save_data`
   and `run_windows` move their files into place all or none. When a move
   fails, they put back the files already moved. Before, if putting back one
@@ -1591,6 +1621,14 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   It understated the stage about ten times. It now calls the public
   `ob_analytics.queue.queue_positions`, which sorts the events into time order
   first.
+- **The speed baseline is recorded again after the queue fixes** (#521).
+  `bench-baseline.json` and the stage timings on the Architecture page come
+  from a new run on the CI runner, after #489 and #520. On the sample,
+  `queue_positions` takes 1.01 s, 7% of a run. Before the two fixes, the
+  same call took about 9 s on one desktop, about 40% of a run, not the 6% the
+  old table gave. Runner speed varies from run to run, so the baseline comes
+  from a run of typical speed: the check fails a stage at twice its baseline,
+  and a baseline from a fast runner would fail on a slow one.
 - **No negative depth bins at low prices** (#488). With the default
   `depth_bps=25` and `depth_bins=20`, a best price under about 100 ticks, as on
   every cent-priced prediction market, could give a negative size in the last
