@@ -64,7 +64,7 @@ from ob_analytics.protocols import (
     TradeReader,
     WriteTarget,
 )
-from ob_analytics.quality import CROSSED_TOLERANCE_PCT, _book_crossing
+from ob_analytics.quality import CROSSED_TOLERANCE_PCT, book_crossing
 from ob_analytics.schemas import (
     BOOK_SIDE_DTYPE,
     TRADE_DTYPES,
@@ -1221,7 +1221,7 @@ def _warn_if_book_crosses(events: pd.DataFrame, *, from_orderbook: bool) -> None
     """
     if events.empty:
         return
-    _, crossed_pct, _ = _book_crossing(_price_level_volume(events)[0])
+    _, crossed_pct, _ = book_crossing(_price_level_volume(events)[0])
     if crossed_pct <= CROSSED_TOLERANCE_PCT:
         return
     depth_note = (

@@ -47,12 +47,11 @@ from typing import Any
 import pandas as pd
 
 from ob_analytics import pipeline, sample_csv_path
-from ob_analytics._engine_frames import to_order_events
 from ob_analytics.analytics import set_order_types
 from ob_analytics.bitstamp import BitstampLoader, BitstampTradeReader
 from ob_analytics.config import PipelineConfig
 from ob_analytics.depth import price_level_volume, summarize_depth
-from ob_analytics.engine import queue_positions
+from ob_analytics.queue import queue_positions
 from ob_analytics.synth import generate_session
 
 BASELINE = Path(__file__).resolve().parent.parent / "bench-baseline.json"
@@ -122,9 +121,10 @@ STAGES: tuple[str, ...] = (
 
 The middle ones are the pipeline's own (``ob_analytics.pipeline.STAGES``), run
 as ``Pipeline.run`` runs them.  ``load`` covers reading events and trades off
-the source.  ``queue_positions`` is the engine's FIFO reconstruction: not part
-of ``Pipeline.run``, but the stateful loop that #138 would compile, so it needs
-a number of its own.
+the source.  ``queue_positions`` is the public ``ob_analytics.queue`` call: the
+sort into time order and the engine's FIFO reconstruction.  It is not part of
+``Pipeline.run``, but it holds the stateful loop that #138 would compile, so it
+needs a number of its own.
 """
 
 
@@ -146,7 +146,11 @@ def _stages(
         state["events"], state["trades"] = load()
 
     def _queue_positions() -> None:
-        queue_positions(to_order_events(state["events"], market=True))
+        # The public call, as a user makes it: it sorts the events into time
+        # order before the engine replays them.  Fed the frame as the loader
+        # left it (in order-id order for Bitstamp), the engine sees few live
+        # levels at once and the stage reads about ten times too fast (#489).
+        queue_positions(state["events"])
 
     def _stage(stage: Callable[[dict[str, Any], PipelineConfig], None]) -> Step:
         return lambda: stage(state, config)

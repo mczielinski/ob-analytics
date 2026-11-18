@@ -245,3 +245,37 @@ class TestQueueAgeGrid:
             ev, start_time=later, end_time=later + pd.Timedelta("1s"), level="L3"
         )
         assert data["max_rank"] == 0 and data["ages"].size == 0
+
+
+class TestLiveLevels:
+    """The heap of live levels finds the same touch a scan of every level does.
+
+    The touch used to be ``max``/``min`` over all live levels on every event,
+    which made the call slow on a real day (#489); the heap must not change
+    which level it reports.
+    """
+
+    @pytest.mark.parametrize("side", ["bid", "ask"])
+    @pytest.mark.parametrize("prices", [range(5), range(400)])
+    def test_best_matches_a_full_scan(self, side: str, prices: range) -> None:
+        from ob_analytics.engine import Direction
+        from ob_analytics.engine._queue import _LiveLevels
+
+        direction = Direction[side.upper()]
+        levels = _LiveLevels(direction)
+        live: set[int] = set()
+        rng = np.random.default_rng(7)
+        # Enough churn to leave stale heap entries behind and rebuild the heap
+        # several times, on a narrow and on a wide range of prices.
+        for _ in range(20_000):
+            price = int(rng.choice(prices))
+            if price in live and rng.random() < 0.6:
+                levels.discard(price)
+                live.discard(price)
+            else:
+                levels.add(price)
+                live.add(price)
+            expected = None
+            if live:
+                expected = max(live) if direction == Direction.BID else min(live)
+            assert levels.best() == expected

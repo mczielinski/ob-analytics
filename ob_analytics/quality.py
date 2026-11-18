@@ -309,14 +309,30 @@ def _crossed_time_fraction(best: pd.DataFrame) -> tuple[float, int]:
     return crossed_time / total, episodes
 
 
-def _book_crossing(
+def book_crossing(
     depth: pd.DataFrame,
 ) -> tuple[pd.DataFrame | None, float, int]:
     """How long the book in a price-level-volume frame is crossed.
 
-    Returns the faithful best bid / best ask series (``None`` for an empty
-    frame), the percentage (0–100) of the time the book is crossed, and the
-    number of crossed intervals.
+    The book is crossed when the best bid is above the best ask.  The data
+    quality summary uses this for its crossed-book checks, and a loader can
+    use it to check the book it rebuilt.
+
+    Parameters
+    ----------
+    depth : pandas.DataFrame
+        Resting volume per price level over time, as
+        :func:`~ob_analytics.depth.price_level_volume` returns it.
+
+    Returns
+    -------
+    best : pandas.DataFrame or None
+        Columns ``timestamp``, ``best_bid`` and ``best_ask``, not uncrossed,
+        with ``NaN`` where a side is empty.  ``None`` when *depth* is empty.
+    crossed_pct : float
+        The percentage of the time, from 0 to 100, that the book is crossed.
+    crossed_episodes : int
+        The number of separate intervals in which the book is crossed.
     """
     if depth.empty:
         return None, 0.0, 0
@@ -1764,7 +1780,7 @@ def data_quality_summary(
         venue_book_price_levels = int(venue_book.ask_prices.shape[1])
         venue_book_rows = len(events)
 
-    best, crossed_pct, crossed_episodes = _book_crossing(depth)
+    best, crossed_pct, crossed_episodes = book_crossing(depth)
     if l2:
         per_order_crossed_pct, per_order_crossed_episodes = 0.0, 0
     elif per_order_depth is None:
@@ -1773,7 +1789,7 @@ def data_quality_summary(
             crossed_episodes,
         )
     else:
-        _, per_order_crossed_pct, per_order_crossed_episodes = _book_crossing(
+        _, per_order_crossed_pct, per_order_crossed_episodes = book_crossing(
             per_order_depth
         )
 
