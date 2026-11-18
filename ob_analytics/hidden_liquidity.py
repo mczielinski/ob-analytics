@@ -138,7 +138,9 @@ def detect_icebergs(
     Raises
     ------
     ConfigError
-        If a required column is missing, or *max_delay* is negative.
+        If a required column is missing, *max_delay* is negative, or *events*
+        has no rows: an L2 run has no per-order events, and an empty answer
+        would read as "no icebergs".
     """
     icebergs, _, delay, filled_out = _find_icebergs(
         events, trades, max_delay, "detect_icebergs"
@@ -179,7 +181,9 @@ def iceberg_slices(
     Raises
     ------
     ConfigError
-        If a required column is missing, or *max_delay* is negative.
+        If a required column is missing, *max_delay* is negative, or *events*
+        has no rows: an L2 run has no per-order events, and an empty answer
+        would read as "no icebergs".
     """
     icebergs, slices, delay, _ = _find_icebergs(
         events, trades, max_delay, "iceberg_slices"
@@ -217,6 +221,7 @@ def _find_icebergs(
         },
         context,
     )
+    require_per_order_events(events, context)
     validate_columns(trades, {"maker_event_id"}, context)
     delay = pd.Timedelta(max_delay)
     if delay < pd.Timedelta(0):
