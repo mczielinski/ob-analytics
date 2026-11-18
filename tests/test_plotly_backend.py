@@ -125,19 +125,26 @@ class TestPlotlyPriceLevels:
         depth["direction"] = "bid"
         data = prepare.depth_heatmap(depth)
         fig = plotly_depth_heatmap(data)
-        assert drawn(fig)["scattergl markers"] > 0
+        assert drawn(fig)["image"] == 1
 
-    def test_real_volume_rides_along_as_customdata(
+    def test_levels_are_one_image_with_a_volume_colorbar(
         self, plot_events: pd.DataFrame
     ) -> None:
+        # #491: one marker per row made the sample's page 32 MiB.  The levels
+        # are one image; an invisible trace carries the colorbar and spans
+        # the image so the axes take it in.
         depth = plot_events[["timestamp", "price", "volume"]].copy()
         depth["direction"] = "bid"
         data = prepare.depth_heatmap(depth, col_bias=0.1)
         fig = plotly_depth_heatmap(data)
+        (image,) = fig.layout.images
+        assert (image.xref, image.yref, image.sizing) == ("x", "y", "stretch")
+        assert image.source.startswith("data:image/png;base64,")
         depth_trace = next(tr for tr in fig.data if tr.name == "Depth")
-        # Color is the normalized ramp (cmax == 1); hover reads true volume.
+        # Color is the normalized ramp (cmax == 1), ticks in real volume.
         assert depth_trace.marker.cmax == 1
-        assert depth_trace.customdata is not None
+        assert depth_trace.marker.colorbar.title.text == "Volume"
+        assert drawn(fig)["scattergl markers"] == 0
 
     def test_spread_overlays_are_step(self, plot_events: pd.DataFrame) -> None:
         # Midprice and best bid/ask hold until the book changes; no ramps
@@ -512,7 +519,15 @@ class TestPlotlyEventsHistogram:
     def test_returns_plotly_figure(self, plot_events: pd.DataFrame) -> None:
         data = prepare.events_histogram(plot_events, val="price")
         fig = plotly_events_histogram(data)
-        assert drawn(fig) == {"histogram": len(plot_events)}
+        # #491: binned before it is sent, so the page holds counts, not events.
+        assert set(drawn(fig)) == {"bar"}
+        assert sum(int(np.sum(tr.y)) for tr in fig.data) == len(plot_events)
+
+    def test_tiny_bin_width_is_capped(self, plot_events: pd.DataFrame) -> None:
+        data = prepare.events_histogram(plot_events, val="price", bw=1e-9)
+        fig = plotly_events_histogram(data)
+        assert all(len(tr.x) <= 1000 for tr in fig.data)
+        assert sum(int(np.sum(tr.y)) for tr in fig.data) == len(plot_events)
 
     def test_empty_window_draws_no_data(self, plot_events: pd.DataFrame) -> None:
         data = prepare.events_histogram(
