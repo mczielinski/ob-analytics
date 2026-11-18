@@ -12,6 +12,7 @@ from hypothesis import given, settings, strategies as st
 from ob_analytics.depth import (
     DepthSummaryEngine,
     PriceLevelBook,
+    _interval_sums_sorted,
     price_level_snapshots,
     summarize_depth,
 )
@@ -279,6 +280,33 @@ class TestBpsBinVolumes:
         assert bins.sum() == 11.0
 
 
+def _interval_sums_sparse(
+    levels: dict[int, float],
+    best: int,
+    side: int,
+    range_len: int,
+    breaks: np.ndarray,
+) -> np.ndarray:
+    """Sum active book volume into the bins delimited by *breaks*.
+
+    Dict adapter over ``_interval_sums_sorted`` for the dense cumsum oracle
+    test below; the engine holds price-sorted arrays and calls the core
+    directly.  Moved here from ``depth.py`` (#510): only this test uses it.
+    """
+    idx_list: list[int] = []
+    vol_list: list[float] = []
+    for p, v in levels.items():
+        idx = (p - best) if side == 1 else (best - p)
+        if 0 <= idx < range_len:
+            idx_list.append(idx)
+            vol_list.append(v)
+
+    order = np.argsort(idx_list, kind="stable")
+    idxs = np.asarray(idx_list)[order]
+    vols = np.asarray(vol_list, dtype=np.float64)[order]
+    return _interval_sums_sorted(idxs, vols, range_len, breaks)
+
+
 def test_interval_sums_sparse_matches_dense():
     """_interval_sums_sparse must byte-match the dense cumsum reference.
 
@@ -286,7 +314,7 @@ def test_interval_sums_sparse_matches_dense():
     only the active levels into the bins must reproduce, bit-for-bit, the legacy
     ``np.cumsum(dense)[breaks]`` differencing over the full zero-padded window.
     """
-    from ob_analytics.depth import _cached_breaks, _interval_sums_sparse
+    from ob_analytics.depth import _cached_breaks
 
     rng = np.random.default_rng(20260602)
     for _ in range(3000):

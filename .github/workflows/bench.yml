@@ -5,7 +5,9 @@
 # scripts/bench_scale.py measures the same stages again and compares.
 #
 # Wall-clock seconds belong to the machine that measured them, so the baseline
-# has to be recorded on this runner, not on a laptop. Run this workflow by hand
+# has to be recorded on this runner, not on a laptop. Runners of this image
+# still differ in speed, so the script also times a fixed reference workload
+# and scales each stage's seconds by it. Run this workflow by hand
 # with `record` set, download the bench-baseline artifact, and commit it. The
 # script prints which machine a baseline came from whenever it is not this one.
 #
@@ -17,7 +19,8 @@
 # record a new baseline in the same pull request.
 #
 # Its own job rather than a step in the test matrix: a timed run should not
-# share a runner with anything else, and it takes a couple of minutes.
+# share a runner with anything else, and it takes a few minutes, since each
+# stage is timed three times.
 #
 name: bench
 

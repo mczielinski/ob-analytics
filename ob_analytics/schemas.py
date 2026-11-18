@@ -227,6 +227,15 @@ attribution, sequence kind, clocks and the capture's sequence restarts), so
 :meth:`~ob_analytics.pipeline.PipelineResult.audit` holds to the same
 declarations as the run.  Bytes, as for :data:`CONFIG_KEY`."""
 
+LEVEL_KEY: bytes = b"ob_analytics_level"
+"""Parquet metadata key under which a run's level is stored.
+
+The value is the :class:`~ob_analytics.protocols.Level` value, ``"L2"`` or
+``"L3"``, so :func:`ob_analytics.data.load_result` gives back the level the
+run had, even for a per-order run with no events.  A file without the key
+(written by an older version) gets its level from its ``events`` table: L2
+when the table is empty, L3 otherwise.  Bytes, as for :data:`CONFIG_KEY`."""
+
 CONFIG_KEY: bytes = b"ob_analytics_config"
 """Parquet metadata key under which a run's whole configuration is stored.
 

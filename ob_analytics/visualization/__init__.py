@@ -32,10 +32,10 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import warnings
 from collections.abc import Iterable
 from typing import Any
 
-from loguru import logger
 from matplotlib.axes import Axes
 
 from ob_analytics._utils import _UNSET
@@ -195,11 +195,11 @@ def plot(
         if _accepts_theme(renderer):
             kwargs["theme"] = theme
         else:
-            logger.warning(
-                "The {!r} renderer for {!r} takes no theme= argument; "
-                "ignoring the theme.",
-                backend,
-                concept,
+            warnings.warn(
+                f"The {backend!r} renderer for {concept!r} takes no theme= "
+                "argument; ignoring the theme.",
+                UserWarning,
+                stacklevel=2,
             )
     if backend == "matplotlib":
         return renderer(data, ax, **kwargs)

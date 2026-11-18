@@ -3,16 +3,18 @@
 ## Pipeline stages
 
 ob-analytics turns **order event streams** and **authoritative trade records**
-into structured analytics:
+into structured analytics. The four middle rows are `pipeline.STAGES`, in
+order; an L2 run skips the two marked *(L3)*.
 
 | Stage | What happens |
 |-------|-------------|
 | **Load & normalize** | A source's loader reads its files into one event table (L3) or one depth table (L2). Built-in offline sources: Bitstamp CSV, LOBSTER message and orderbook files, Databento DBN market-by-order, and the L2 depth CSV. The ccxt, cryptofeed and kalshi captures write files that these sources read |
 | **Build trades** | Each source supplies its trades: Bitstamp and the captures read the companion `trades.csv`, LOBSTER takes the execution rows (types 4/5) from the message file, and Databento pairs each fill with the book event that took the size off |
-| **Classify orders** *(L3)* | Label each order as *market*, *resting-limit*, *flashed-limit*, *market-limit*, *pre-existing* (first seen mid-stream), or *unknown* |
-| **Depth & metrics** | Track price-level volume, best bid/ask, spread, and liquidity in configurable BPS bins. LOBSTER can use the official orderbook file for ground-truth depth |
-| **Queue positions** *(L3)* | Rebuild each visible order's FIFO place in the queue at its price |
-| **Analytics** *(after the run)* | Registered metrics (VPIN, Kyle's lambda, order-flow imbalance, transaction costs, …), bars, the feature table, hidden liquidity, and the data-quality audit, all computed from the run's tables |
+| **Classify orders** *(L3)* | `set_order_types`: label each order as *market*, *resting-limit*, *flashed-limit*, *market-limit*, *pre-existing* (first seen mid-stream), or *unknown* |
+| **Price-level depth** | `price_level_volume`: track the volume at each price level. At L2 the loader reads this table directly. LOBSTER can use the official orderbook file for ground-truth depth |
+| **Depth metrics** | `depth_metrics`: best bid/ask, spread, and liquidity in configurable BPS bins; trades the venue left unlabelled are signed here |
+| **Aggressiveness** *(L3)* | `order_aggressiveness`: how far each new limit order sits from the best price on its own side when it arrives, in BPS |
+| **Analytics** *(after the run)* | Registered metrics (VPIN, Kyle's lambda, order-flow imbalance, transaction costs, …), bars, the feature table, hidden liquidity, queue positions *(L3)*, and the data-quality audit, all computed from the run's tables |
 | **Visualize / export** | Depth heatmaps, event maps, trade charts, flow-toxicity plots, HTML galleries. Matplotlib (default) or Plotly backend; Bokeh draws four plots: trade_tape, depth_heatmap, book_snapshot and depth_chart. Parquet, the source formats, hftbacktest and Nautilus Trader output |
 
 ---

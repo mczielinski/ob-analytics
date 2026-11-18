@@ -290,42 +290,42 @@ class TestPlotTrades:
 
 
 class TestPlotEventMap:
-    def test_returns_figure(self, plot_events):
+    def test_returns_figure(self, plot_churn_depth):
         fig = plot(
             "order_activity",
             Level.L2,
-            **prepare.order_activity(plot_events, level="L2"),
+            **prepare.order_activity(plot_churn_depth, level="L2"),
         )
         assert drawn(fig)["pathcollection"] > 0
 
-    def test_has_legend_disambiguating_marks(self, plot_events):
-        # §3.9: the gray create/delete circles and the bid/ask direction dots
+    def test_has_legend_disambiguating_marks(self, plot_churn_depth):
+        # §3.9: the gray added/removed circles and the bid/ask direction dots
         # were unexplained; a legend must label all four.
         fig = plot(
             "order_activity",
             Level.L2,
-            **prepare.order_activity(plot_events, level="L2"),
+            **prepare.order_activity(plot_churn_depth, level="L2"),
         )
         legend = fig.axes[0].get_legend()
         assert legend is not None
         labels = {t.get_text() for t in legend.get_texts()}
-        assert {"bid", "ask", "created", "deleted"} <= labels
+        assert {"bid", "ask", "added", "removed"} <= labels
 
-    def test_accepts_ax(self, plot_events):
+    def test_accepts_ax(self, plot_churn_depth):
         fig_orig, ax_orig = plt.subplots()
         fig = plot(
             "order_activity",
             Level.L2,
             ax=ax_orig,
-            **prepare.order_activity(plot_events, level="L2"),
+            **prepare.order_activity(plot_churn_depth, level="L2"),
         )
         assert fig is fig_orig
 
-    def test_empty_window_draws_no_data(self, plot_events):
+    def test_empty_window_draws_no_data(self, plot_churn_depth):
         # A window before the data: the price-axis step used to raise
         # ValueError on the NaN price range of zero rows.
         data = prepare.order_activity(
-            plot_events,
+            plot_churn_depth,
             start_time=pd.Timestamp("2015-05-01 00:00:00"),
             end_time=pd.Timestamp("2015-05-01 00:30:00"),
             level="L2",
@@ -423,26 +423,6 @@ class TestPlotOrderActivityL3:
         assert "Hidden-order trade" not in labels
 
 
-class TestPlotVolumeMap:
-    def test_returns_figure(self, plot_events):
-        fig = plot(
-            "cancellations",
-            Level.L2,
-            **prepare.cancellations(plot_events, level="L2"),
-        )
-        assert drawn(fig)["pathcollection"] > 0
-
-    def test_accepts_ax(self, plot_events):
-        fig_orig, ax_orig = plt.subplots()
-        fig = plot(
-            "cancellations",
-            Level.L2,
-            ax=ax_orig,
-            **prepare.cancellations(plot_events, level="L2"),
-        )
-        assert fig is fig_orig
-
-
 class TestPlotCancellationsL3:
     def test_returns_figure(self, sample_cancellation_events):
         data = prepare.cancellations(sample_cancellation_events, level="L3")
@@ -455,10 +435,10 @@ class TestPlotCancellationsL3:
         fig = plot("cancellations", Level.L3, ax=ax_orig, **data)
         assert fig is fig_orig
 
-    def test_comparable_requires_level(self, sample_cancellation_events):
-        data = prepare.cancellations(sample_cancellation_events, level="L3")
-        with pytest.raises(ConfigError, match='pass level="L2" or level="L3"'):
-            plot("cancellations", **data)
+    def test_its_one_level_is_resolved(self, sample_cancellation_events):
+        # An L3-only plot since #492: the level may be left out.
+        data = prepare.cancellations(sample_cancellation_events)
+        assert drawn(plot("cancellations", **data))["polycollection"] > 0
 
     def test_hexbin_is_rasterized(self, sample_cancellation_events):
         # The density hexbin is a vector PolyCollection; rasterize it so a dense

@@ -122,29 +122,73 @@ class TestPrepareTrades:
 
 
 class TestPrepareEventMap:
-    def test_returns_created_and_deleted(self, plot_events: pd.DataFrame) -> None:
-        data = prepare.order_activity(plot_events, level="L2")
+    def test_returns_created_and_deleted(self, plot_churn_depth: pd.DataFrame) -> None:
+        data = prepare.order_activity(plot_churn_depth, level="L2")
         assert "created" in data
         assert "deleted" in data
         assert "events" in data
         assert "price_by" in data
         assert len(data["created"]) + len(data["deleted"]) <= len(data["events"])
+        assert not data["created"].empty and not data["deleted"].empty
 
 
-class TestPrepareVolumeMap:
-    def test_default_action_deleted(self, plot_events: pd.DataFrame) -> None:
-        data = prepare.cancellations(plot_events, level="L2")
-        assert "events" in data
-        assert "log_scale" in data
-        assert data["log_scale"] is False
+class TestPriceLevelChanges:
+    """The L2 order activity reads the depth table, not per-order events (#492)."""
 
-    def test_invalid_action_raises(self, plot_events: pd.DataFrame) -> None:
-        with pytest.raises(ValueError, match="action must be"):
-            prepare.cancellations(plot_events, action="invalid", level="L2")
+    @staticmethod
+    def _depth(rows):
+        t0 = pd.Timestamp("2026-01-01", tz="UTC")
+        return pd.DataFrame(
+            [(t0 + pd.Timedelta(seconds=s), p, v, d) for s, p, v, d in rows],
+            columns=["timestamp", "price", "volume", "direction"],
+        )
 
-    def test_log_scale_passed_through(self, plot_events: pd.DataFrame) -> None:
-        data = prepare.cancellations(plot_events, log_scale=True, level="L2")
-        assert data["log_scale"] is True
+    def test_each_change_is_the_size_added_or_removed(self) -> None:
+        from ob_analytics.visualization._data import price_level_changes
+
+        depth = self._depth(
+            [
+                (0, 10.0, 5.0, "bid"),  # the opening book: not a change
+                (0, 11.0, 4.0, "ask"),
+                (1, 10.0, 8.0, "bid"),  # +3
+                (2, 11.0, 1.0, "ask"),  # -3
+                (3, 10.0, 8.0, "bid"),  # no change: left out
+                (4, 12.0, 2.0, "ask"),  # a new level: +2
+                (5, 10.0, 0.0, "bid"),  # the level empties: -8
+            ]
+        )
+        changes = price_level_changes(depth)
+        assert changes[["price", "volume", "action"]].values.tolist() == [
+            [10.0, 3.0, "created"],
+            [11.0, 3.0, "deleted"],
+            [12.0, 2.0, "created"],
+            [10.0, 8.0, "deleted"],
+        ]
+
+    def test_the_same_price_on_both_sides_is_two_levels(self) -> None:
+        from ob_analytics.visualization._data import price_level_changes
+
+        depth = self._depth(
+            [(0, 10.0, 5.0, "bid"), (1, 10.0, 2.0, "ask"), (2, 10.0, 1.0, "bid")]
+        )
+        changes = price_level_changes(depth)
+        assert changes[["direction", "volume", "action"]].values.tolist() == [
+            ["ask", 2.0, "created"],
+            ["bid", 4.0, "deleted"],
+        ]
+
+    def test_an_empty_depth_table_has_no_changes(self) -> None:
+        from ob_analytics.visualization._data import price_level_changes
+
+        changes = price_level_changes(self._depth([]))
+        assert changes.empty
+        assert list(changes.columns) == [
+            "timestamp",
+            "price",
+            "volume",
+            "direction",
+            "action",
+        ]
 
 
 class TestPrepareCancellationsL3:

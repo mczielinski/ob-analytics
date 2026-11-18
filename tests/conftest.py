@@ -990,6 +990,31 @@ def plot_depth(plot_events: pd.DataFrame) -> pd.DataFrame:
 
 
 @pytest.fixture
+def plot_churn_depth() -> pd.DataFrame:
+    """Forty depth rows on four price levels whose size rises and falls.
+
+    The first four rows open the book at one time; each later row sets one
+    level's new size, so the levels gain and lose size on both sides.
+    """
+    n = 40
+    prices = [236.00, 236.25, 236.75, 237.00]
+    sides = ["bid", "bid", "ask", "ask"]
+    volume = np.random.default_rng(7).choice([0.0, 100.0, 250.0, 400.0], n)
+    volume[:4] = 300.0
+    return pd.DataFrame(
+        {
+            "timestamp": [_PLOT_START] * 4
+            + [_PLOT_START + pd.Timedelta(seconds=i) for i in range(1, n - 3)],
+            "price": [prices[i % 4] for i in range(n)],
+            "volume": volume,
+            "direction": pd.Categorical(
+                [sides[i % 4] for i in range(n)], categories=["bid", "ask"]
+            ),
+        }
+    )
+
+
+@pytest.fixture
 def plot_depth_summary() -> pd.DataFrame:
     """Thirty depth-summary rows: the touch and every 25 bps band to 500."""
     n = 30

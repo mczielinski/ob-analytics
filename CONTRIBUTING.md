@@ -77,8 +77,17 @@ library, and the schema change underneath them (issue #143). All run under
 level volume, depth metrics, aggressiveness, queue positions — over the bundled
 sample and a seeded synthetic session of about the same size, and compares the
 result with `bench-baseline.json` (issue #144). CI runs it on every pull
-request. It fails when a stage takes more than twice its baseline time, or
-more than 15% more peak memory than its baseline.
+request. It fails when a stage takes more than one and a half times its
+baseline time, or more than 15% more peak memory than its baseline.
+
+Each stage is timed three times, and the fastest time is kept, because other
+work on the machine only adds time. Runners also differ in speed, so each run
+also times a small fixed numpy and pandas workload, the reference. A stage's
+seconds are scaled by the baseline's reference time over this run's before
+they are compared. A runner that is twice as slow takes twice as long at the
+reference too, so it does not read as a slow-down. A baseline recorded before
+the reference existed has no reference time. Its seconds are compared as they
+are, at twice the baseline, and the script asks for a new baseline.
 
 A stage that runs for under a second is not judged on time: at that length the
 spread between two runs of identical code is wider than any slow-down worth
@@ -99,13 +108,11 @@ uv run python scripts/bench_scale.py --envelope         # the scale table
 Seconds belong to the machine that measured them, so the committed baseline is
 recorded on the CI runner, not on a laptop: run the `bench` workflow by hand
 with `record` set, download the `bench-baseline` artifact, and commit it in its
-own labelled commit. Runners differ in speed: on main, the depth stage has
-taken from 5 to 17 seconds on the sample. The check fails a stage at twice its
-baseline, so compare the recorded seconds with recent runs on main. If they
-are near the fastest, record again: a baseline from a fast runner makes the
-check fail on a slow one. Locally the script says which machine the baseline
-came from when it is not the one in front of you, so a failure there is a
-hint, not a verdict.
+own labelled commit. Any run will do: the reference time scales the seconds
+to the runner's speed, so a baseline from a fast runner no longer fails on a
+slow one. Locally the script says which machine the baseline came from when
+it is not the one in front of you, so a failure there is a hint, not a
+verdict.
 
 ### CI checks
 

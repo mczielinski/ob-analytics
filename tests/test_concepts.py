@@ -14,7 +14,7 @@ import pandas as pd
 import pytest
 
 from ob_analytics.book import BookSnapshot
-from ob_analytics.exceptions import UnknownNameError
+from ob_analytics.exceptions import ConfigError, UnknownNameError
 from ob_analytics.protocols import Level
 from ob_analytics.visualization import (
     RENDERERS,
@@ -179,3 +179,148 @@ class TestSharedDrawingData:
         assert bands["sell_bands"][0, :, 1] == pytest.approx([1.0, 1.0, 1.0])
         assert bands["buy_bands"][0, :, 2] == pytest.approx([0.0, 0.0, 0.0])
         assert bands["band_alphas"] == pytest.approx((0.25, 0.5, 0.75))
+
+
+# ---------------------------------------------------------------------------
+# What each face needs (#492)
+# ---------------------------------------------------------------------------
+
+_TABLES = ("events", "trades", "depth", "depth_summary")
+
+_GALLERY_FACES = [
+    pytest.param(concept.key, level, face, id=f"{concept.key}.{level}")
+    for concept in _concepts.CONCEPTS
+    for level, face in concept.faces.items()
+    if face.bind is not None
+]
+
+
+@pytest.fixture(scope="module")
+def l3_scene(result):
+    """The gallery's scene of an L3 run, with LOBSTER's raw event type added.
+
+    The tiny Bitstamp run has classified events and ``aggressiveness_bps``;
+    the ``raw_event_type`` column gives the hidden-execution face its data,
+    so the scene meets every face's needs.
+    """
+    from ob_analytics.visualization import gallery
+
+    scenes: list[_concepts.Scene] = []
+    original = gallery._concept_cards
+
+    def capture(scene: _concepts.Scene) -> list:
+        scenes.append(scene)
+        return original(scene)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(gallery, "_concept_cards", capture)
+        gallery.build_gallery_model(result)
+    (scene,) = scenes
+    events = scene.events.assign(raw_event_type=1)
+    events.loc[events.index[0], "raw_event_type"] = 5
+    return dataclasses.replace(scene, events=events)
+
+
+def _restricted(scene, needs):
+    """*scene* with every table *needs* does not name emptied."""
+    named = set(needs.tables) | set(needs.uses)
+    return dataclasses.replace(
+        scene,
+        **{t: getattr(scene, t).iloc[0:0] for t in _TABLES if t not in named},
+    )
+
+
+class TestNeeds:
+    def test_every_gallery_face_declares_needs(self):
+        for concept in _concepts.CONCEPTS:
+            for face in concept.faces.values():
+                assert (face.needs is None) == (face.bind is None), face.renderer
+
+    def test_a_face_with_a_binder_and_no_needs_is_refused(self):
+        with pytest.raises(ConfigError, match="needs"):
+            _concepts.Face(
+                "x", ("matplotlib",), bind=lambda s: _concepts.Binding(dict, {})
+            )
+
+    def test_an_unknown_table_is_refused(self):
+        with pytest.raises(ConfigError, match="Unknown tables"):
+            _concepts.Needs(("orders",))
+
+    def test_event_columns_need_the_events(self):
+        with pytest.raises(ConfigError, match="events table"):
+            _concepts.Needs(("depth",), classified=True)
+
+    def test_an_l2_face_needs_only_aggregated_data(self):
+        for concept in _concepts.CONCEPTS:
+            face = concept.faces.get(Level.L2)
+            if face is not None and face.needs is not None:
+                assert not face.needs.per_order, concept.key
+                assert not face.needs.classified and not face.needs.columns
+
+    def test_time_series_is_level_less(self):
+        assert _concepts.placements("time_series") == (
+            (None, "matplotlib"),
+            (None, "plotly"),
+        )
+
+    @pytest.mark.parametrize(("key", "level", "face"), _GALLERY_FACES)
+    def test_the_binder_reads_only_what_the_face_declares(
+        self, l3_scene, key, level, face
+    ):
+        scene = _restricted(l3_scene, face.needs)
+        assert face.needs.unmet(scene) is None
+        binding = face.bind(scene)
+        declared = set(face.needs.tables) | set(face.needs.uses)
+        for name, value in binding.kwargs.items():
+            for table in _TABLES:
+                if value is getattr(scene, table) and table not in declared:
+                    pytest.fail(f"{key}.{level} passes {table} as {name!r}")
+        # The face prepares from the tables it declares alone.
+        assert isinstance(binding.prepare(**binding.kwargs), dict)
+
+    @pytest.mark.parametrize(("key", "level", "face"), _GALLERY_FACES)
+    def test_each_declared_table_is_needed(self, l3_scene, key, level, face):
+        for table in face.needs.tables:
+            scene = dataclasses.replace(
+                l3_scene, **{table: getattr(l3_scene, table).iloc[0:0]}
+            )
+            assert face.needs.unmet(scene), (key, level, table)
+
+    def test_the_reasons_say_what_is_missing(self, l3_scene):
+        needs = _concepts.Needs(("events",), classified=True, columns=("foo",))
+        no_events = dataclasses.replace(l3_scene, events=l3_scene.events.iloc[0:0])
+        assert needs.unmet(no_events) == (
+            "it needs per-order events, and this run has none"
+        )
+        unclassified = dataclasses.replace(
+            l3_scene, events=l3_scene.events.drop(columns="type")
+        )
+        reason = needs.unmet(unclassified)
+        assert reason is not None and "order types" in reason
+        assert needs.unmet(l3_scene) == (
+            "it needs the events' foo, and this run's events lack it"
+        )
+
+
+class TestAvailableConcepts:
+    def test_it_does_not_build_the_gallery_model(self, result, monkeypatch):
+        from ob_analytics.visualization import available_concepts, gallery
+
+        def fail(*args, **kwargs):
+            raise AssertionError("available_concepts built the gallery model")
+
+        monkeypatch.setattr(gallery, "build_gallery_model", fail)
+        assert available_concepts(result)["queue_position"] == ["L3"]
+
+    def test_it_agrees_with_the_gallery_model(self, result):
+        from ob_analytics.visualization import available_concepts
+        from ob_analytics.visualization.gallery import build_gallery_model
+
+        listed = available_concepts(result)
+        model = build_gallery_model(result)
+        built = {
+            c.key: sorted(lvl.value for lvl in c.variants)
+            for c in model.concepts
+            if c.variants
+        }
+        assert {k: v for k, v in listed.items() if v} == built
