@@ -1527,6 +1527,9 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
+- **The matplotlib queue-position face draws in about 1 s, not 25 s** (#539).
+  It drew one line for each order. It now draws one line collection for
+  each fate, with one path for each order, so the picture is the same.
 - **The Plotly bars card titles its volume axis "Volume"** (#504). It was
   titled "Price", like the price axis.
 - **The Plotly gallery of the bundled sample is 28 MiB, not 231 MiB** (#491).
