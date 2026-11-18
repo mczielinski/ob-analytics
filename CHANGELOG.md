@@ -1523,6 +1523,18 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
     `prepare.vpin` and `prepare.order_flow_imbalance` take `min_trades`
     (default 10), and so do `result.plot("vpin")` and
     `result.plot("order_flow_imbalance")`.
+- **A failed rollback no longer hides the first error** (#524). `save_data`
+  and `run_windows` move their files into place all or none. When a move
+  fails, they put back the files already moved. Before, if putting back one
+  file also failed, that new error replaced the first one, and the files
+  after it were not put back. Now every file is put back that can be, and
+  the first error is raised. It carries a note for each file that could not
+  be put back, with the path of its backup. An interrupt such as Ctrl-C
+  during the moves now puts the files back too. A backup that cannot be
+  removed after every file is in place now gives a warning instead of an
+  error. The backup of a replaced file is now a hidden `.<name>.bak` file
+  beside it, or `.<name>.<n>.bak` when that name is taken. Before,
+  `save_data` kept it in a temporary folder that it deleted on exit.
 - **A settings flag works before the path** (#523). `process` and `audit`
   read the arguments twice. The first read finds the source that reads the
   data, and it did not know the settings flags. So when a settings flag came
