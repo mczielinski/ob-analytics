@@ -11,7 +11,7 @@ import pytest
 from ob_analytics.depth import price_level_snapshots
 from ob_analytics.exceptions import ConfigError, UnknownNameError
 from ob_analytics.pipeline import PipelineResult
-from ob_analytics.visualization import available_concepts, plot_result, prepare
+from ob_analytics.visualization import available_concepts, plot, plot_result, prepare
 from ob_analytics.visualization.gallery import display_result
 from tests._drawn import drawn
 
@@ -119,6 +119,49 @@ class TestQueuePositionFace:
         lo, hi = ax.get_ylim()
         assert lo > hi  # inverted
         assert "rank" in ax.get_ylabel().lower()
+
+    def test_matplotlib_draws_each_order_as_its_own_step_path(
+        self, result: PipelineResult
+    ) -> None:
+        # Issue #539: one collection per fate, one path per order, with the
+        # steps matplotlib's own steps-post rule draws.
+        import matplotlib.dates as mdates
+        from matplotlib import cbook
+        from matplotlib.collections import LineCollection
+
+        data = prepare.queue_position(result.events)
+        fig = plot("queue_position", "L3", **data)
+        lines = [c for c in fig.axes[0].collections if isinstance(c, LineCollection)]
+        fates = [data[f] for f in ("filled", "cancelled", "resting")]
+        fates = [f for f in fates if not f.empty]
+        assert len(lines) == len(fates)
+        for collection, fate in zip(lines, fates):
+            expected = [
+                np.asarray(
+                    cbook.pts_to_poststep(
+                        mdates.date2num(g["timestamp"]), g["rank"].to_numpy(float)
+                    )
+                ).T
+                for _, g in fate.groupby("id", sort=False)
+            ]
+            got = collection.get_segments()
+            assert len(got) == len(expected)
+            for path, want in zip(got, expected):
+                np.testing.assert_array_equal(path, want)
+
+    def test_step_paths_keep_groups_apart(self) -> None:
+        from ob_analytics.visualization._matplotlib import _step_paths
+
+        x = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        y = np.array([5.0, 6.0, 4.0, 3.0, 1.0])
+        # Two groups that interleave, and a group of one point.
+        paths = _step_paths(x, y, np.array([0, 1, 0, 2, 1]))
+        assert [p.tolist() for p in paths] == [
+            [[1, 5], [3, 5], [3, 4]],
+            [[2, 6], [5, 6], [5, 1]],
+            [[4, 3]],
+        ]
+        assert _step_paths(x[:0], y[:0], np.array([], dtype=int)) == []
 
     def test_prepare_schema(self, result: PipelineResult) -> None:
         data = prepare.queue_position(result.events)

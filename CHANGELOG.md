@@ -257,6 +257,23 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   - `ofi_horizon_panel` -> `ofi_by_window_card`.
   - `kyle_panel` -> `kyle_lambda_card`.
   - `trading_halts_panel` -> `trading_halts_card`.
+- **An L2 face needs only aggregated data** (#492). Five faces at L2 read
+  per-order events, so an L2 run could not draw them.
+  - `hidden_executions` -> moved to L3. It needs LOBSTER's `raw_event_type`.
+    A LOBSTER run with no hidden executions now gets the card too, and the
+    card draws the trade price only.
+  - The L2 `cancellations` face -> removed. A price level cannot tell a
+    cancel from a fill, so `cancellations` is an L3 plot only, and
+    `prepare.cancellations` takes no `level`.
+  - `prepare.order_activity(..., level="L2")` takes `depth`, not `events`.
+    It draws the size added to and removed from each price level.
+  - The L2 `events_histogram` card counts the price-level changes in the
+    depth table. `prepare.events_histogram` is unchanged.
+  - The L2 `liquidity_at_touch` face draws without events. It adds the
+    event strip on a per-order run only.
+  - `time_series` is level-less, as the metrics are. `plot("time_series", ...)`
+    is unchanged. A call that passes `level="L2"` to `plot` or
+    `prepare.time_series` -> leave `level` out.
 - **One name per quantity, per input and per measure** (#414). The package
   keeps no aliases for the old names.
   - The measures lose `compute_`, as the other six never had it:
@@ -360,6 +377,15 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Added
 
+- **A test draws every face in the concept table** (#504).
+  `tests/test_every_face.py` draws each face on the bundled sample, with
+  each backend that has it. A face must draw marks, or show the reason its
+  data gives for drawing none, such as "Too few trades". Its time and price
+  axes must stay near the run's times and traded prices. Its size axes must
+  not draw sizes larger than the sizes the plot was given. A new face in the
+  table is tested without a new test.
+  `tests/test_golden_sources.py` pins the output of a small LOBSTER day and
+  the toy price-level session, beside the synthetic and Bitstamp baselines.
 - **`process` and `audit` read a capture without `--source`** (#502). A live
   capture writes `level` and `replay_source`, the offline source that reads
   it back, to `meta.json` and `manifest.json`, so
@@ -529,6 +555,12 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   prices or sizes that records neither is warned about. `load_result` reads
   Parquet folders only, and refuses a pickle, which keeps no config. The key is
   optional, so the schema version stays `4.0` and older readers ignore it.
+- **A saved run records its level** (#510). `save_data(result, path)` writes
+  the run's level, `"L2"` or `"L3"`, under the new key `ob_analytics_level`,
+  and `load_result` reads it back. Before, `load_result` took L2 from an empty
+  events table, so a per-order run with no events came back as L2. A folder
+  without the key, written by an older version, still gets its level from the
+  events table. The key is optional, so the schema version stays `4.0`.
 - **`ob_analytics.capture_record` owns a capture's `meta.json`** (#346).
   `read_record(path)` returns a typed `CaptureRecord`: the source that made the
   capture, its feed type, trade attribution, sequence kind and clocks, the
@@ -1123,6 +1155,10 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   can differ in the last bit of a float, because a bucket's volume is now
   added up from its parts. A `compute_vpin(sign_method="bvc")` call with a bad
   `bucket_volume` now reports the error under `compute_vpin`.
+- **The mid-price formula is written once** (#510). The feature table, the
+  trade signs, the book signals and the depth heatmap's mid line use one
+  helper in `depth.py`. The Plotly backend has one colour converter, and a
+  helper that only a test used has moved into that test. No output changes.
 
 - **Every event loader casts through `EVENT_DTYPES`, and the validators check
   dtypes** (#379). The Bitstamp, LOBSTER and Databento loaders build their
@@ -1537,6 +1573,18 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
+- **The matplotlib queue-position face draws in about 1 s, not 25 s** (#539).
+  It drew one line for each order. It now draws one line collection for
+  each fate, with one path for each order. The paths keep the line caps and
+  joins of the old lines, so the picture is the same, pixel for pixel.
+- **The Plotly bars card titles its volume axis "Volume"** (#504). It was
+  titled "Price", like the price axis.
+- **The Plotly bars card colours a flat bar as rising** (#543). Plotly
+  coloured a bar that closes where it opened by the close before it, so it
+  could be drawn in the sell colour. Each candle now takes its colour from
+  `close >= open`, as on the matplotlib card. The legend names the colours
+  as the matplotlib legend does: "close up / net buying" and "close down /
+  net selling".
 - **The order flow imbalance and VPIN cards count taker orders** (#532).
   On an L3 feed, one taker order that fills many resting orders makes many
   trades, so a window could pass the 10-trade floor with one order in it.
@@ -1567,6 +1615,14 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
     `prepare.vpin` and `prepare.order_flow_imbalance` take `min_trades`
     (default 10), and so do `result.plot("vpin")` and
     `result.plot("order_flow_imbalance")`.
+- **Every L2 face draws on an L2 run** (#492). Each face declares the data it
+  needs in a new `Needs`: the tables that must have rows, the tables it reads
+  when they have rows, and whether the events must be classified or carry a
+  given column. `available_concepts` checks a result against these needs, so
+  it no longer builds the gallery model. A gallery card for a face the run
+  cannot draw now says what the face needs, where before the card was left
+  out with no reason. A run shorter than a minute keeps its whole depth
+  summary, so the depth-summary faces draw on it.
 - **The Plotly gallery of the bundled sample is 28 MiB, not 231 MiB** (#491).
   Each line carried every row of `depth_summary`, so `book_signals.html`
   alone was 82 MiB. The data functions now thin a long series to 1,000 time
@@ -1686,6 +1742,17 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   old table gave. Runner speed varies from run to run, so the baseline comes
   from a run of typical speed: the check fails a stage at twice its baseline,
   and a baseline from a fast runner would fail on a slow one.
+- **The speed check allows for the runner's speed** (#536).
+  `scripts/bench_scale.py` timed each stage once and failed it at twice its
+  baseline. GitHub runners differ in speed by up to about three times, so a
+  slow-down of up to twice passed, and a baseline from a fast runner failed
+  on a slow one. Now each stage is timed three times and keeps its fastest
+  time. Each run also times a small fixed numpy and pandas workload, and a
+  stage's seconds are scaled by it before they are compared. The margin is
+  now one and a half times the baseline. `bench-baseline.json` gains a
+  `reference_seconds` field. A baseline without it still works, at the old
+  margin of twice the baseline, until a new one is recorded on the runner.
+  The `bench` job takes about a minute longer.
 - **No negative depth bins at low prices** (#488). With the default
   `depth_bps=25` and `depth_bins=20`, a best price under about 100 ticks, as on
   every cent-priced prediction market, could give a negative size in the last
@@ -1752,6 +1819,11 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   account for all the printed trade volume, orders `set_order_types` cannot
   classify, Bitstamp duplicate cancellations, a LOBSTER run with no
   orderbook file, and a Parquet file with no schema version.
+- **Plot warnings reach a Python user** (#510). Three plot warnings still went
+  to the logger the package turns off. Each is now a `UserWarning`: a theme
+  that a renderer cannot take, a hidden-liquidity overlay that fails and is
+  left out of the gallery, and a book replay whose frame interval is widened
+  to fit `max_frames`.
 - **A run with no trades offers no trade metric** (#399).
   `available_concepts` listed VPIN, Kyle's λ, order flow imbalance and the
   cost metrics, which cannot be drawn, and `result.metrics()` raised.
@@ -1770,6 +1842,11 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   Independent Reserve capture, a refill made `detect_icebergs` raise
   `ValueError`, and the gallery left out its hidden-liquidity overlay. The
   slices now keep each order `id` as the feed writes it.
+- **`detect_icebergs` reads a result in display units** (#510). On a result
+  from `display_result`, whose sizes are floats, it raised `TypeError` when it
+  cast the slice sizes to integers. The gallery then left out its
+  hidden-liquidity overlay without a word; the new plot warning showed it.
+  Float sizes now stay floats.
 - **The Bokeh depth heatmap draws the hidden-liquidity overlay** (#410).
   With `backend="bokeh"`, the iceberg chains and refill markers and the
   trades against hidden orders were left out without a word. Bokeh now draws

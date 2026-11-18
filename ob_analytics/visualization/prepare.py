@@ -93,9 +93,10 @@ def order_activity(
 ) -> dict[str, Any]:
     """Prepare the order activity map.  ``level`` is required.
 
-    L2: ``events``, and optionally ``start_time``, ``end_time``,
+    L2: ``depth``, and optionally ``start_time``, ``end_time``,
     ``price_from``, ``price_to``, ``volume_from`` and ``volume_to``.
-    Draws created and deleted events at their price.
+    Draws the size added to and removed from each price level, at its
+    price.
 
     L3: ``events``, and optionally ``start_time``, ``end_time``,
     ``price_from``, ``price_to``, ``max_spans``,
@@ -113,22 +114,14 @@ def order_activity(
 def cancellations(
     *args: Any, level: Level | str | None = _UNSET, **kwargs: Any
 ) -> dict[str, Any]:
-    """Prepare the cancellations plot.  ``level`` is required.
+    """Prepare the cancellations plot, an L3 plot.
 
-    L2: ``events``, and optionally ``action``, ``event_type``,
-    ``start_time``, ``end_time``, ``price_from``, ``price_to``,
-    ``volume_from``, ``volume_to`` and ``log_scale``.
-    Draws the cancelled volume at each price through time.
-
-    L3: ``events``, and optionally ``start_time``, ``end_time``,
-    ``age_floor_s``, ``distance_floor_bps`` and
-    ``distance_cap_bps``.  Draws each cancellation by how long the order
-    rested and how far from the touch it sat.
+    ``events``, and optionally ``start_time``, ``end_time``,
+    ``age_floor_s``, ``distance_floor_bps`` and ``distance_cap_bps``.
+    Draws each cancellation by how long the order rested and how far from
+    the touch it sat.
     """
-    faces = {
-        Level.L2: _data.prepare_cancellations_l2_data,
-        Level.L3: _data.prepare_cancellations_l3_data,
-    }
+    faces = {Level.L3: _data.prepare_cancellations_l3_data}
     return _face("cancellations", level, faces)(*args, **kwargs)
 
 
@@ -139,7 +132,7 @@ def liquidity_at_touch(
 
     L2: ``depth_summary``, and optionally ``start_time``, ``end_time`` and
     ``events``.  Draws the resting size at the best bid and
-    ask, with a strip of the events beneath.
+    ask, with a strip of the events beneath when ``events`` is given.
 
     L3: ``events``, and optionally ``side``, ``n_time``, ``start_time`` and
     ``end_time``.  Draws the touch queue, each cell coloured by the age of

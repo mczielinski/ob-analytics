@@ -735,23 +735,33 @@ class TestBuildGalleryModel:
             "order_outcome",
             "queue_position",
         } <= keys
-        # The six concepts that ship both an aggregate (L2/MBP) and a per-order
+        # The concepts that ship both an aggregate (L2/MBP) and a per-order
         # (L3/MBO) face are the comparable ones: book_snapshot, depth_chart and
-        # book_replay (aggregate vs per-order), cancellations (volume map vs age x
-        # distance), order_activity (event map vs lifecycle Gantt) and trade_tape
-        # (price tape vs executions + maker lifecycles).
+        # book_replay (aggregate vs per-order), order_activity (level changes
+        # vs lifecycle Gantt), liquidity_at_touch (best size vs queue ages)
+        # and trade_tape (price tape vs executions + maker lifecycles).
+        # Cancellations is L3-only since #492: a price level cannot tell a
+        # cancel from a fill.
         comparable = {c.key for c in model.concepts if c.comparable}
         assert comparable == {
             "book_snapshot",
             "depth_chart",
             "book_replay",
-            "cancellations",
             "order_activity",
+            "liquidity_at_touch",
             "trade_tape",
         }
-        # Every concept exposes at least one face; comparable concepts expose
-        # both, single-level concepts exactly one.  order_outcome is L3-only.
+        # The hidden-execution face needs LOBSTER's raw event type, so a
+        # Bitstamp run keeps its card with that reason and no face.
+        hidden = next(c for c in model.concepts if c.key == "hidden_executions")
+        assert not hidden.variants
+        assert "raw_event_type" in hidden.unavailable[Level.L3]
+        # Every other concept exposes at least one face; comparable concepts
+        # expose both, single-level concepts exactly one.  order_outcome is
+        # L3-only.
         for c in model.concepts:
+            if c is hidden:
+                continue
             faces = {lvl for lvl in (Level.L2, Level.L3) if c.at(lvl) is not None}
             assert faces, f"{c.key} has no faces"
             if c.comparable:
@@ -846,8 +856,8 @@ class TestBuildGalleryModel:
             Level.L2
         )
         assert heatmap is not None and activity_l2 is not None
-        # The L2 event map clips to the same mid-anchored window as the depth
-        # heatmap so near-touch activity is not squished by far flashed orders.
+        # The L2 map clips to the same mid-anchored window as the depth
+        # heatmap so near-touch changes are not squished by far levels.
         assert (
             activity_l2.prep_kwargs["price_from"] == heatmap.prep_kwargs["price_from"]
         )
@@ -955,6 +965,29 @@ class TestBuildGalleryModel:
             heatmap.prep_kwargs["iceberg_refills"],
         ):
             assert frame["timestamp"].between(zoom_start, zoom_end).all()
+
+    def test_a_failed_hidden_liquidity_overlay_warns_and_is_left_out(
+        self, tiny_bitstamp_orders_csv, monkeypatch
+    ) -> None:
+        # #510: a UserWarning, since the package's logger is off by default.
+        from ob_analytics import hidden_liquidity
+        from ob_analytics.bitstamp import BitstampSource
+        from ob_analytics.pipeline import Pipeline
+
+        result = Pipeline(source=BitstampSource()).run(str(tiny_bitstamp_orders_csv))
+
+        def broken(*args, **kwargs):
+            raise RuntimeError("detector broke")
+
+        monkeypatch.setattr(hidden_liquidity, "iceberg_slices", broken)
+        with pytest.warns(UserWarning, match="hidden-liquidity overlay.*detector"):
+            model = build_gallery_model(result)
+
+        heatmap = next(c for c in model.concepts if c.key == "depth_heatmap").at(
+            Level.L2
+        )
+        assert heatmap is not None
+        assert "iceberg_lines" not in heatmap.prep_kwargs
 
     def test_hidden_liquidity_overlay_is_not_rescaled_on_a_legacy_float_result(
         self,
@@ -1086,7 +1119,15 @@ class TestBuildGalleryModel:
                 "best_ask_vol": [50.0],
             }
         )
-        depth = pd.DataFrame(columns=["timestamp", "price", "volume", "direction"])
+        # One depth row: the depth heatmap needs a depth table to draw.
+        depth = pd.DataFrame(
+            {
+                "timestamp": [ts],
+                "price": [236.50],
+                "volume": [100.0],
+                "direction": pd.Categorical(["bid"], categories=["bid", "ask"]),
+            }
+        )
 
         result = PipelineResult(
             events=events,

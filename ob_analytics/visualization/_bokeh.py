@@ -2,13 +2,15 @@
 
 Each ``bokeh_*()`` function takes a prepared data dict (from
 :mod:`~ob_analytics.visualization._data`) and returns a
-:class:`bokeh.plotting.figure` with interactive zoom, pan, and hover --
-suited to Bokeh / Panel server dashboards and streaming views, alongside the
-static Matplotlib default and the Plotly interactive backend.
+:class:`bokeh.plotting.figure` with interactive zoom, pan, and hover.  The
+figure is static once drawn: it does not update as new data arrives.  A
+gallery that asks for Bokeh saves each figure as its own HTML page and shows
+it in a frame on the gallery page.
 
-Covers the core concepts -- ``trade_tape``, ``depth_heatmap``,
+The backend draws four concepts -- ``trade_tape``, ``depth_heatmap``,
 ``book_snapshot``, ``depth_chart`` -- at both L2 (aggregate) and L3
-(per-order) resolution where the other backends do.
+(per-order) resolution where the other backends do.  Every other concept is
+drawn by the Matplotlib default or the Plotly backend.
 
 Install via ``pip install ob-analytics[bokeh]``.
 """

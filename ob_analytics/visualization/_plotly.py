@@ -396,15 +396,15 @@ def plotly_depth_heatmap(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any
 def plotly_order_activity_aggregate(
     data: dict, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Any:
-    """Render a limit-order event map."""
+    """Render the size added to and removed from each price level."""
     pal = theme.palette
     go = _import_plotly()
     created = data["created"]
     deleted = data["deleted"]
 
     if data["events"].empty:
-        return _base_figure(go, theme, title="Limit Order Event Map (no data)")
-    fig = _base_figure(go, theme, title="Limit Order Event Map")
+        return _base_figure(go, theme, title="Price Level Changes (no data)")
+    fig = _base_figure(go, theme, title="Price Level Changes")
 
     col_map = {"bid": pal.bid, "ask": pal.ask}
 
@@ -423,7 +423,7 @@ def plotly_order_activity_aggregate(
                         "color": col_map[direction],
                         "opacity": 0.6,
                     },
-                    name=f"Created ({direction})",
+                    name=f"Added ({direction})",
                     hovertemplate=(
                         "Time: %{x}<br>Price: %{y:.2f}<br>"
                         "Vol: %{customdata:.4f}<extra></extra>"
@@ -448,7 +448,7 @@ def plotly_order_activity_aggregate(
                         "opacity": 0.3,
                         "symbol": "x",
                     },
-                    name=f"Deleted ({direction})",
+                    name=f"Removed ({direction})",
                     hovertemplate=(
                         "Time: %{x}<br>Price: %{y:.2f}<br>"
                         "Vol: %{customdata:.4f}<extra></extra>"
@@ -458,39 +458,7 @@ def plotly_order_activity_aggregate(
             )
 
     fig.update_xaxes(title_text="Time")
-    fig.update_yaxes(title_text="Limit Price")
-    return fig
-
-
-def plotly_cancellations_aggregate(
-    data: dict, *, theme: PlotTheme = DEFAULT_THEME
-) -> Any:
-    """Render a volume map of flashed limit orders."""
-    pal = theme.palette
-    go = _import_plotly()
-    events = data["events"]
-    log_scale = data["log_scale"]
-    col_map = {"bid": pal.bid, "ask": pal.ask}
-
-    fig = _base_figure(go, theme, title="Volume Map of Flashed Limit Orders")
-
-    for direction in ["bid", "ask"]:
-        subset = events[events["direction"] == direction]
-        if subset.empty:
-            continue
-        fig.add_trace(
-            go.Scattergl(
-                x=subset["timestamp"],
-                y=subset["volume"],
-                mode="markers",
-                marker={"size": 4, "color": col_map[direction], "opacity": 0.6},
-                name=direction.capitalize(),
-                hovertemplate="Time: %{x}<br>Volume: %{y:.4f}<extra></extra>",
-            )
-        )
-
-    fig.update_xaxes(title_text="Time")
-    fig.update_yaxes(title_text="Volume", type="log" if log_scale else "linear")
+    fig.update_yaxes(title_text="Price")
     return fig
 
 
@@ -2322,13 +2290,6 @@ def plotly_order_flow_imbalance(data: dict, *, theme: PlotTheme = DEFAULT_THEME)
     return fig
 
 
-def _hex_to_rgba(hexc: str, alpha: float) -> str:
-    """``"#0072B2"`` + alpha -> ``"rgba(0,114,178,0.5)"`` for plotly fills."""
-    h = hexc.lstrip("#")
-    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    return f"rgba({r},{g},{b},{alpha})"
-
-
 def plotly_window_measure(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render one value per window: the Amihud and Roll faces.
 
@@ -2417,7 +2378,7 @@ def plotly_transaction_costs(data: dict, *, theme: PlotTheme = DEFAULT_THEME) ->
             mode="lines",
             line={"color": pal.effective_spread, "width": 2},
             fill="tonexty",
-            fillcolor=_hex_to_rgba(pal.buy, 0.25),
+            fillcolor=_rgba(pal.buy, 0.25),
             name="Effective spread",
             hovertemplate="Time: %{x}<br>Effective: %{y:.2f} bps<extra></extra>",
         )
@@ -2470,7 +2431,7 @@ def plotly_ofi_by_window(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any
                         y=height,
                         fill="tozeroy",
                         mode="none",
-                        fillcolor=_hex_to_rgba(color, alpha),
+                        fillcolor=_rgba(color, alpha),
                         hoverinfo="skip",
                         showlegend=False,
                     ),
@@ -2716,32 +2677,49 @@ def plotly_bars(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
             marker_color=[pal.buy if s >= 0 else pal.sell for s in signed],
             opacity=0.3,
             name="Volume",
+            showlegend=False,
             yaxis="y2",
             hovertemplate="Volume: %{y}<extra></extra>",
         )
     )
-    fig.add_trace(
-        go.Candlestick(
-            x=x,
-            open=bars["open"],
-            high=bars["high"],
-            low=bars["low"],
-            close=bars["close"],
-            increasing_line_color=pal.buy,
-            increasing_fillcolor=pal.buy,
-            decreasing_line_color=pal.sell,
-            decreasing_fillcolor=pal.sell,
-            name="Price",
-            # The bar's own close time, so an ordinal axis still hovers a time.
-            text=bars["timestamp_end"].astype(str),
+    # One trace per direction, each in a single colour.  Plotly colours a
+    # candle that closes where it opened by the close before it; the
+    # matplotlib face, and the payload's "rising", count it as up.
+    rising = np.asarray(data["rising"], dtype=bool)
+    # Both traces are always added, so the legend names both colours even
+    # when every bar moves the same way.  A Series keeps the time axis's time
+    # zone through the mask.
+    x_values = pd.Series(x).reset_index(drop=True)
+    for up, color, name in (
+        (True, pal.buy, "close up / net buying"),
+        (False, pal.sell, "close down / net selling"),
+    ):
+        keep = rising == up
+        rows = bars[keep]
+        fig.add_trace(
+            go.Candlestick(
+                x=x_values[keep],
+                open=rows["open"],
+                high=rows["high"],
+                low=rows["low"],
+                close=rows["close"],
+                increasing_line_color=color,
+                increasing_fillcolor=color,
+                decreasing_line_color=color,
+                decreasing_fillcolor=color,
+                name=name,
+                # The bar's own close time, so an ordinal axis still hovers
+                # a time.
+                text=rows["timestamp_end"].astype(str),
+            )
         )
-    )
 
     # Four times the tallest bar: the volume strip reads as a footer under the
     # candles rather than competing with them.
     top = float(volume.max()) * 4 if volume.size and volume.max() > 0 else 1.0
     fig.update_layout(
         xaxis_rangeslider_visible=False,
+        showlegend=True,
         yaxis2={
             "overlaying": "y",
             "side": "right",
@@ -2761,7 +2739,8 @@ def plotly_bars(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
             ticktext=labels,
             range=[-1, len(bars)],
         )
-    fig.update_yaxes(title_text="Price")
+    # The price axis only: update_yaxes would retitle the volume axis too.
+    fig.update_layout(yaxis_title_text="Price")
     return fig
 
 

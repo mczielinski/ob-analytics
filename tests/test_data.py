@@ -353,6 +353,74 @@ class TestLoadResult:
         assert back.level is Level.L2
         assert_same_result(back, result)
 
+    @staticmethod
+    def _without_level(folder: Path) -> None:
+        """Strip the recorded level, as a folder from an older version has."""
+        import pyarrow.parquet as pq
+
+        from ob_analytics.schemas import LEVEL_KEY
+
+        for file in folder.glob("*.parquet"):
+            table = pq.read_table(file)
+            metadata = dict(table.schema.metadata)
+            del metadata[LEVEL_KEY]
+            pq.write_table(table.replace_schema_metadata(metadata), file)
+
+    def test_a_per_order_run_with_no_events_comes_back_at_l3(
+        self, tmp_path: Path, lobster_day_dir, lobster_day_pipeline
+    ):
+        """The saved level wins over the empty events table (#510 item 2)."""
+        from dataclasses import replace
+
+        from ob_analytics.data import load_result
+        from ob_analytics.protocols import Level
+
+        result = lobster_day_pipeline.run(lobster_day_dir)
+        assert result.level is Level.L3
+        result = replace(result, events=result.events.iloc[0:0])
+        save_data(result, tmp_path / "saved")
+
+        assert load_result(tmp_path / "saved").level is Level.L3
+
+    def test_a_folder_without_a_level_takes_it_from_the_events(
+        self, tmp_path: Path, lobster_day_dir, lobster_day_pipeline
+    ):
+        """A folder from an older version still loads, by the old rule."""
+        from dataclasses import replace
+
+        from ob_analytics.data import load_result
+        from ob_analytics.protocols import Level
+
+        result = lobster_day_pipeline.run(lobster_day_dir)
+        save_data(result, tmp_path / "full")
+        self._without_level(tmp_path / "full")
+        back = load_result(tmp_path / "full")
+        assert back.level is Level.L3
+        assert_same_result(back, result)
+
+        save_data(replace(result, events=result.events.iloc[0:0]), tmp_path / "empty")
+        self._without_level(tmp_path / "empty")
+        assert load_result(tmp_path / "empty").level is Level.L2
+
+    def test_a_level_this_version_cannot_read_falls_back_to_the_events(
+        self, tmp_path: Path, lobster_day_dir, lobster_day_pipeline
+    ):
+        import pyarrow.parquet as pq
+
+        from ob_analytics.data import load_result
+        from ob_analytics.protocols import Level
+        from ob_analytics.schemas import LEVEL_KEY
+
+        save_data(lobster_day_pipeline.run(lobster_day_dir), tmp_path / "saved")
+        for file in (tmp_path / "saved").glob("*.parquet"):
+            table = pq.read_table(file)
+            metadata = {**table.schema.metadata, LEVEL_KEY: b"L9"}
+            pq.write_table(table.replace_schema_metadata(metadata), file)
+
+        with pytest.warns(UserWarning, match="level"):
+            back = load_result(tmp_path / "saved")
+        assert back.level is Level.L3
+
     def test_a_file_with_only_the_tick_and_lot_takes_decimals_from_them(
         self, tmp_path: Path, lobster_day_dir, lobster_day_pipeline
     ):
@@ -362,8 +430,11 @@ class TestLoadResult:
         lobster_day_pipeline.run_windows(
             lobster_day_dir, "2024-01-02 13:30:02", tmp_path / "saved"
         )
+        from ob_analytics.protocols import Level
+
         back = load_result(tmp_path / "saved")
 
+        assert back.level is Level.L3
         assert back.config.tick_size == 0.01
         assert back.config.price_decimals == 2
         assert back.config.lot_size == 1.0

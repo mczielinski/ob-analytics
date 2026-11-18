@@ -51,6 +51,7 @@ from loguru import logger
 from ob_analytics._registry import Registry, load_plugins
 from ob_analytics.bars import bars
 from ob_analytics.depth import (
+    _mid_price,
     bin_volume_columns,
     book_imbalance,
     imbalance_levels,
@@ -316,7 +317,7 @@ class SpreadFeature:
         bid = frame["best_bid_price"].to_numpy(dtype=float)
         ask = frame["best_ask_price"].to_numpy(dtype=float)
         spread = ask - bid
-        mid = (ask + bid) / 2.0
+        mid = _mid_price(bid, ask)
         with np.errstate(invalid="ignore", divide="ignore"):
             in_bps = np.where(mid > 0, spread / mid * _BPS, np.nan)
         return {"spread": spread, "spread_bps": in_bps}
@@ -331,9 +332,9 @@ class MidPriceFeature:
 
     def compute(self, frame: pd.DataFrame) -> dict[str, npt.ArrayLike]:
         """Return the plain mid-price per bar."""
-        bid = frame["best_bid_price"].to_numpy(dtype=float)
-        ask = frame["best_ask_price"].to_numpy(dtype=float)
-        return {"mid_price": (bid + ask) / 2.0}
+        return {
+            "mid_price": _mid_price(frame["best_bid_price"], frame["best_ask_price"])
+        }
 
 
 class MicroPriceFeature:
@@ -358,9 +359,8 @@ class MicroPriceFeature:
     def compute(self, frame: pd.DataFrame) -> dict[str, npt.ArrayLike]:
         """Return the micro-price and its distance from the mid."""
         micro = micro_price(frame).to_numpy(dtype=float)
-        bid = frame["best_bid_price"].to_numpy(dtype=float)
-        ask = frame["best_ask_price"].to_numpy(dtype=float)
-        return {"micro_price": micro, "micro_price_offset": micro - (bid + ask) / 2.0}
+        mid = _mid_price(frame["best_bid_price"], frame["best_ask_price"])
+        return {"micro_price": micro, "micro_price_offset": micro - mid}
 
 
 @dataclass

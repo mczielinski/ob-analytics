@@ -8,6 +8,13 @@ compares the result with the baseline committed next to it in
 ``bench-baseline.json``. A stage slower or larger than the baseline allows fails
 the job.
 
+Each stage is timed several times (:data:`REPEATS`) and the fastest time is
+kept: other work on the machine only ever adds time, so the fastest run is the
+closest to what the stage costs. Runners also differ in speed as a whole, which
+repeating cannot fix. So each run also times a small fixed workload of the same
+kind (:func:`reference_workload`), and a stage is judged on its seconds divided
+by the reference seconds, against the same ratio in the baseline.
+
     uv run python scripts/bench_scale.py                    # check the baseline
     uv run python scripts/bench_scale.py --update-baseline  # record a new one
     uv run python scripts/bench_scale.py --envelope         # the scale table
@@ -44,6 +51,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from ob_analytics import pipeline, sample_csv_path
@@ -68,6 +76,16 @@ second, which is where a timing is worth judging (see
 :attr:`Margins.floor_seconds`).  It matches the bundled sample's event count,
 so the two runs are readable side by side."""
 
+REPEATS = 3
+"""How many times each run's stages are timed; the fastest time is kept.
+
+Three passes cost about a minute of CI time over one, and catch a pass that
+another process slowed down.  Peak memory comes from the first pass only, since
+the high-water mark only ever rises."""
+
+REFERENCE_REPEATS = 5
+"""How many times the reference workload is timed after each pass."""
+
 
 # ──── what one stage measurement is ─────────────────────────────────────
 
@@ -81,6 +99,13 @@ class Measurement:
     events: int
     seconds: float
     peak_rss_mib: float
+    reference_seconds: float | None = None
+    """The fastest time of :func:`reference_workload` in the same process.
+
+    ``None`` in a baseline recorded before the reference existed. Such a
+    baseline is still read, and its seconds are compared as they are, with the
+    wider :attr:`Margins.unscaled_seconds`.
+    """
 
 
 @dataclass(frozen=True)
@@ -88,7 +113,15 @@ class Margins:
     """How much slower or larger than the baseline is still acceptable."""
 
     seconds: float
+    """The margin on a stage's seconds after scaling by the reference."""
     peak_rss_mib: float
+    unscaled_seconds: float = 1.0
+    """The margin on seconds when either side has no reference time.
+
+    Without the reference, the seconds of two runners are compared as they are,
+    and runners differ by up to about three times. This is the margin the check
+    used before the reference existed.
+    """
     floor_seconds: float = 1.0
     """Below this, a stage is too short to time and its seconds are not judged.
 
@@ -108,6 +141,12 @@ class Regression:
     metric: str
     baseline: float
     measured: float
+    scale: float = 1.0
+    """What *measured* was multiplied by to put it in the baseline machine's speed.
+
+    The baseline's reference seconds divided by this run's. ``1.0`` for memory,
+    and for seconds when there is no reference to scale by.
+    """
 
 
 # ──── measuring a run ───────────────────────────────────────────────────
@@ -209,6 +248,40 @@ def _return_freed_memory() -> None:
         _MALLOC_TRIM(0)
 
 
+def reference_workload() -> None:
+    """A small fixed piece of work, timed to tell how fast this machine is.
+
+    The stages are numpy and pandas code, so this is too: a seeded frame is
+    sorted, given a running total per group, summed per group, and searched
+    with ``searchsorted``. The input is the same on every call, so the time it takes
+    depends only on the machine. It runs in about a tenth of a second on a
+    desktop, and the fastest of several runs varies by about one percent.
+    """
+    rng = np.random.default_rng(0)
+    n = 400_000
+    frame = pd.DataFrame(
+        {
+            "level": rng.integers(0, 2_000, n),
+            "price": rng.integers(10_000, 20_000, n),
+            "volume": rng.random(n),
+        }
+    )
+    frame = frame.sort_values(["level", "price"], kind="stable")
+    frame["cumulative"] = frame.groupby("level")["volume"].cumsum()
+    edges = np.cumsum(frame.groupby("level")["volume"].sum().to_numpy())
+    np.searchsorted(edges, rng.random(n) * edges[-1])
+
+
+def time_reference(repeats: int = REFERENCE_REPEATS) -> float:
+    """The fastest of *repeats* runs of :func:`reference_workload`, in seconds."""
+    times = []
+    for _ in range(repeats):
+        start = time.perf_counter()
+        reference_workload()
+        times.append(time.perf_counter() - start)
+    return min(times)
+
+
 def _pass(
     load: Load, config: PipelineConfig
 ) -> tuple[list[tuple[str, float, float]], int]:
@@ -228,8 +301,29 @@ def _pass(
     return records, len(state["events"])
 
 
+def fastest(
+    passes: list[list[tuple[str, float, float]]],
+) -> list[tuple[str, float, float]]:
+    """Each stage's fastest seconds over *passes*, with the first pass's memory.
+
+    Noise only adds time, so the fastest pass is the closest to the stage's
+    cost. Peak memory is the process high-water mark, which only rises, so a
+    later pass's mark carries the earlier passes' peaks: only the first pass
+    reads a stage's own.
+    """
+    first = passes[0]
+    return [
+        (stage, min(p[i][1] for p in passes), peak)
+        for i, (stage, _, peak) in enumerate(first)
+    ]
+
+
 def measure_run(
-    name: str, load: Load, *, config: PipelineConfig | None = None
+    name: str,
+    load: Load,
+    *,
+    config: PipelineConfig | None = None,
+    repeats: int = REPEATS,
 ) -> list[Measurement]:
     """Measure every stage of one run named *name*.
 
@@ -242,9 +336,25 @@ def measure_run(
     config : PipelineConfig, optional
         The configuration the depth stages run under.  Defaults to
         :class:`PipelineConfig`.
+    repeats : int, optional
+        How many times to run every stage.  Each stage keeps its fastest
+        time.  Defaults to :data:`REPEATS`.
     """
+    if repeats < 1:
+        raise ValueError(f"repeats must be at least 1, got {repeats}")
     cfg = config if config is not None else PipelineConfig()
-    records, events = _pass(load, cfg)
+    passes = []
+    references = []
+    for _ in range(repeats):
+        records, events = _pass(load, cfg)
+        passes.append(records)
+        # Timed after every pass rather than once, so that one slow moment
+        # does not set it, and after the heap is trimmed, as every stage is.
+        # After the pass, not before: the first pass's memory marks are then
+        # the same as with no reference at all.
+        _return_freed_memory()
+        references.append(time_reference())
+    reference = min(references)
     return [
         Measurement(
             run=name,
@@ -252,12 +362,13 @@ def measure_run(
             events=events,
             seconds=seconds,
             peak_rss_mib=peak,
+            reference_seconds=reference,
         )
-        for stage, seconds, peak in records
+        for stage, seconds, peak in fastest(passes)
     ]
 
 
-def measure_runs(names: list[str]) -> list[Measurement]:
+def measure_runs(names: list[str], *, repeats: int = REPEATS) -> list[Measurement]:
     """Measure each named run, one child process per run.
 
     Peak RSS is a property of a process and only ever rises, so two runs
@@ -275,6 +386,8 @@ def measure_runs(names: list[str]) -> list[Measurement]:
                 name,
                 "--synth-duration",
                 str(SYNTH_DURATION),
+                "--repeats",
+                str(repeats),
             ],
             capture_output=True,
             text=True,
@@ -339,6 +452,15 @@ def baseline_machine(path: Path) -> str:
     return str(json.loads(path.read_text()).get("machine", "unrecorded"))
 
 
+def unscaled(baseline: list[Measurement]) -> bool:
+    """Whether *baseline* was recorded without reference seconds.
+
+    Such a baseline still works, but its seconds are compared as they are, so
+    a slow runner reads as a slow-down.  Record a new one to fix it.
+    """
+    return any(m.reference_seconds is None for m in baseline)
+
+
 def unmeasured(
     measured: list[Measurement], baseline: list[Measurement]
 ) -> list[tuple[str, str]]:
@@ -353,31 +475,49 @@ def compare(
     *,
     margins: Margins,
 ) -> list[Regression]:
-    """Every measurement in *measured* that its *baseline* says is a slow-down."""
+    """Every measurement in *measured* that its *baseline* says is a slow-down.
+
+    Seconds are compared at the baseline machine's speed: a stage's measured
+    seconds are multiplied by the baseline's reference seconds over this run's,
+    which is the same as comparing the two ratios of stage to reference.  When
+    either side has no reference time, the seconds are compared as they are,
+    under the wider :attr:`Margins.unscaled_seconds`.
+    """
     by_key = {(m.run, m.stage): m for m in baseline}
     regressions = []
     for m in measured:
         before = by_key.get((m.run, m.stage))
         if before is None:  # nothing to judge it against; see unmeasured()
             continue
-        for metric, allowed in (
-            ("seconds", margins.seconds),
-            ("peak_rss_mib", margins.peak_rss_mib),
-        ):
-            was = getattr(before, metric)
-            now = getattr(m, metric)
-            if metric == "seconds" and was < margins.floor_seconds:
-                continue  # too short to tell a slow-down from noise
-            if now > was * (1 + allowed):
+        if before.reference_seconds and m.reference_seconds:
+            scale = before.reference_seconds / m.reference_seconds
+            seconds_margin = margins.seconds
+        else:
+            scale = 1.0
+            seconds_margin = margins.unscaled_seconds
+        if before.seconds >= margins.floor_seconds:  # else too short to judge
+            now = m.seconds * scale
+            if now > before.seconds * (1 + seconds_margin):
                 regressions.append(
                     Regression(
                         run=m.run,
                         stage=m.stage,
-                        metric=metric,
-                        baseline=was,
+                        metric="seconds",
+                        baseline=before.seconds,
                         measured=now,
+                        scale=scale,
                     )
                 )
+        if m.peak_rss_mib > before.peak_rss_mib * (1 + margins.peak_rss_mib):
+            regressions.append(
+                Regression(
+                    run=m.run,
+                    stage=m.stage,
+                    metric="peak_rss_mib",
+                    baseline=before.peak_rss_mib,
+                    measured=m.peak_rss_mib,
+                )
+            )
     return regressions
 
 
@@ -400,22 +540,33 @@ def _synth() -> tuple[pd.DataFrame, pd.DataFrame]:
 RUNS: dict[str, Load] = {"sample": _sample, "synth": _synth}
 """The workloads measured, by name. A baseline record names one of these."""
 
-DEFAULT_MARGINS = Margins(seconds=1.0, peak_rss_mib=0.15)
+DEFAULT_MARGINS = Margins(seconds=0.5, peak_rss_mib=0.15, unscaled_seconds=1.0)
 """How much worse than the baseline still passes.
 
-Wall-clock time belongs to the runner that measured it, and two runners differ
-by more than the first version of this number allowed. One commit measured
-``summarize_depth`` at 14.66s and then at 10.17s against a 9.36s baseline, with no
-timed code changed between them (issue #220), so the earlier margin of half
-again reported a slow-down that was not there. Twice the baseline sits outside
-that spread.
+Seconds vary for two reasons. Other work on the machine adds time to one
+measurement, and GitHub runners differ in speed. On main, with one timing per
+stage and no reference, ``summarize_depth`` on the sample took from 5.3 s to
+17.3 s across about 28 runs of the same code, more than three times apart. Of
+five baseline recordings in a row, four took about 7 s and one took 11.87 s. A
+margin of twice the baseline was needed to keep that spread from failing, and
+it let a slow-down of up to twice pass.
 
-The cost is that a slow-down between 1.5x and 2x no longer fails. That is the
-price of judging one noisy sample; measuring each stage several times and
-keeping the fastest would allow a tighter number, since noise only adds time.
+Both causes are now handled. The fastest of :data:`REPEATS` passes removes
+most of the first, since noise only adds time. Dividing by the reference
+seconds removes most of the second, since a slower machine is slower at the
+reference too. What is left is the part of a runner's speed that the reference
+does not share, such as a different cache size. So seconds may be half again
+the baseline's, after scaling. That is the margin a single unscaled timing
+could not hold (one commit measured 14.66 s against a 9.36 s baseline, 1.57
+times), and it still fails any slow-down over 1.5 times. Check it against the
+spread of the scaled seconds over several runs on main, and tighten it if the
+spread allows.
+
+A baseline without reference seconds is compared unscaled, under the old
+margin of twice the baseline.
 
 Memory does not vary that way: the same input allocates the same arrays however
-fast the machine runs, so it is held to a tenth.
+fast the machine runs, so it is held to 15%.
 """
 
 
@@ -431,23 +582,42 @@ def report(
             f"{m.run:<8} {m.stage:<22} {m.events:>10,} "
             f"{m.seconds:>9.2f} {m.peak_rss_mib:>9.1f}"
         )
+    references = {m.run: m.reference_seconds for m in measured}
+    for run, seconds in references.items():
+        if seconds is not None:
+            print(f"{run:<8} {'(reference workload)':<22} {'':>10} {seconds:>9.3f}")
     for run, stage in missing:
         print(f"\nno baseline for {run}/{stage} - run --update-baseline to record it")
     for r in regressions:
+        scaled = (
+            f" ({r.measured / r.scale:.2f} measured, scaled by the reference)"
+            if r.scale != 1.0
+            else ""
+        )
         print(
-            f"\nSLOWER {r.run}/{r.stage}: {r.metric} {r.measured:.2f} "
+            f"\nSLOWER {r.run}/{r.stage}: {r.metric} {r.measured:.2f}{scaled} "
             f"vs {r.baseline:.2f} in the baseline"
         )
 
 
 def check(
-    runs: list[str], *, baseline_path: Path, margins: Margins
+    runs: list[str],
+    *,
+    baseline_path: Path,
+    margins: Margins,
+    repeats: int = REPEATS,
 ) -> tuple[list[Measurement], int]:
     """Measure *runs* and grade them against the saved baseline."""
-    measured = measure_runs(runs)
+    measured = measure_runs(runs, repeats=repeats)
     baseline = load_baseline(baseline_path)
     regressions = compare(measured, baseline, margins=margins)
     report(measured, regressions, unmeasured(measured, baseline))
+    if unscaled(baseline):
+        print(
+            "\nthe baseline has no reference seconds, so seconds are compared "
+            f"unscaled, at {1 + margins.unscaled_seconds:g} times the baseline - "
+            "run --update-baseline on the runner to record a new one"
+        )
     recorded = baseline_machine(baseline_path)
     if recorded != machine():
         print(
@@ -540,6 +710,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="measure and overwrite the baseline instead of checking it",
     )
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=REPEATS,
+        help=f"time each stage this many times and keep the fastest (default: {REPEATS})",
+    )
     parser.add_argument("--seconds-margin", type=float, default=DEFAULT_MARGINS.seconds)
     parser.add_argument(
         "--peak-margin", type=float, default=DEFAULT_MARGINS.peak_rss_mib
@@ -561,11 +737,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.synth_duration is not None:
         SYNTH_DURATION = args.synth_duration
 
+    if args.repeats < 1:
+        parser.error("--repeats must be at least 1")
+
     if args.mult is not None:  # one child process of an --envelope run
         _measure(args.mult)
         return 0
     if args.measure_run is not None:  # one child process of a measured run
-        measured = measure_run(args.measure_run, RUNS[args.measure_run])
+        measured = measure_run(
+            args.measure_run, RUNS[args.measure_run], repeats=args.repeats
+        )
         print(json.dumps({"measurements": [asdict(m) for m in measured]}))
         return 0
     if args.envelope:
@@ -578,7 +759,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"unknown run(s): {', '.join(unknown)}")
 
     if args.update_baseline:
-        measured = measure_runs(runs)
+        measured = measure_runs(runs, repeats=args.repeats)
         save_baseline(args.baseline, measured)
         report(measured, [], [])
         print(f"\nwrote {args.baseline}")
@@ -587,9 +768,12 @@ def main(argv: list[str] | None = None) -> int:
     margins = Margins(
         seconds=args.seconds_margin,
         peak_rss_mib=args.peak_margin,
+        unscaled_seconds=DEFAULT_MARGINS.unscaled_seconds,
         floor_seconds=args.floor_seconds,
     )
-    _, code = check(runs, baseline_path=args.baseline, margins=margins)
+    _, code = check(
+        runs, baseline_path=args.baseline, margins=margins, repeats=args.repeats
+    )
     return code
 
 

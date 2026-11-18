@@ -19,11 +19,12 @@ import pyarrow.parquet as pq
 from ob_analytics._registry import Registry, load_plugins
 from ob_analytics.config import PipelineConfig, instrument_fields
 from ob_analytics.exceptions import ConfigError, UnknownNameError
-from ob_analytics.protocols import DataWriter, FeedDeclarations, WriteTarget
+from ob_analytics.protocols import DataWriter, FeedDeclarations, Level, WriteTarget
 from ob_analytics.schemas import (
     CONFIG_KEY,
     DECLARATIONS_KEY,
     EVENT_DTYPES,
+    LEVEL_KEY,
     LOADER_COUNT_ATTRS,
     LOADER_COUNTS_KEY,
     LOT_SIZE_KEY,
@@ -138,6 +139,7 @@ def _write_versioned_parquet(
     lot_sizes: dict[str, float] | None = None,
     config: Any = None,
     declarations: FeedDeclarations | None = None,
+    level: Level | None = None,
 ) -> None:
     """Write *df* to *path* as Parquet, tagging the version, tick and lot size.
 
@@ -148,8 +150,9 @@ def _write_versioned_parquet(
     :data:`TICK_SIZE_KEY` so a reader can recover the float price from the
     integer ticks.  *lot_sizes* does the same for the integer sizes under
     :data:`LOT_SIZE_KEY`, *config* records the whole run configuration
-    under :data:`CONFIG_KEY`, and *declarations* the run's declarations under
-    :data:`DECLARATIONS_KEY`.  The loader's counts on *df*'s ``attrs`` go
+    under :data:`CONFIG_KEY`, *declarations* the run's declarations under
+    :data:`DECLARATIONS_KEY`, and *level* the run's level under
+    :data:`LEVEL_KEY`.  The loader's counts on *df*'s ``attrs`` go
     under :data:`LOADER_COUNTS_KEY`.  The index is dropped,
     matching the previous ``df.to_parquet(..., index=False)`` behaviour.
     """
@@ -160,6 +163,7 @@ def _write_versioned_parquet(
             lot_sizes=lot_sizes,
             config=config,
             declarations=declarations,
+            level=level,
             loader_counts=loader_counts(df.attrs),
         ),
         path,
@@ -196,6 +200,9 @@ class OutputTables(dict[str, pd.DataFrame]):
     declarations : FeedDeclarations, optional
         The run's declarations, recorded so the rebuilt run is audited
         against them.  ``None`` when the tables are not a run's.
+    level : Level, optional
+        The run's level, recorded so :func:`load_result` gives it back.
+        ``None`` when the tables are not a run's.
     """
 
     def __init__(
@@ -206,21 +213,23 @@ class OutputTables(dict[str, pd.DataFrame]):
         lot_sizes: dict[str, float] | None = None,
         config: PipelineConfig | None = None,
         declarations: FeedDeclarations | None = None,
+        level: Level | None = None,
     ) -> None:
         super().__init__(tables)
         self._tick_sizes = tick_sizes
         self._lot_sizes = lot_sizes
         self._config = config
         self.declarations = declarations
+        self.level = level
 
     def arrow(self) -> dict[str, pa.Table]:
         """Return the same tables as canonical Arrow, keyed the same way.
 
         Each table carries the schema version and, when the run declared one,
         the tick size, the lot size, the configuration, the
-        :attr:`declarations` and the loader's counts — the same key-value
-        metadata a canonical Parquet file carries, so a writer building one is
-        no worse off than :class:`ParquetWriter`.
+        :attr:`declarations`, the :attr:`level` and the loader's counts — the
+        same key-value metadata a canonical Parquet file carries, so a writer
+        building one is no worse off than :class:`ParquetWriter`.
         """
         return {
             name: _to_arrow_table(
@@ -229,6 +238,7 @@ class OutputTables(dict[str, pd.DataFrame]):
                 lot_sizes=self._lot_sizes,
                 config=self._config,
                 declarations=self.declarations,
+                level=self.level,
                 loader_counts=loader_counts(df.attrs),
             )
             for name, df in self.items()
@@ -265,11 +275,13 @@ class ParquetWriter:
         the tick size, the lot size and the config itself, so
         :func:`load_data` can check the first and restore prices and sizes,
         and :func:`load_result` can rebuild the run.  When *data* is a run's
-        :class:`OutputTables`, its declarations are recorded too.
+        :class:`OutputTables`, its declarations and level are recorded too.
         """
         p = Path(dest)
         p.mkdir(parents=True, exist_ok=True)
-        declarations = data.declarations if isinstance(data, OutputTables) else None
+        run = data if isinstance(data, OutputTables) else None
+        declarations = run.declarations if run is not None else None
+        level = run.level if run is not None else None
         with TemporaryDirectory(dir=p, prefix=".parquet-") as temporary:
             staging = Path(temporary)
             files = []
@@ -282,6 +294,7 @@ class ParquetWriter:
                     lot_sizes=self._lot_sizes,
                     config=self._config,
                     declarations=declarations,
+                    level=level,
                 )
                 files.append((staged, p / f"{name}.parquet"))
             _install_files(files)
@@ -383,6 +396,7 @@ def _to_arrow_table(
     lot_sizes: dict[str, float] | None = None,
     config: Any = None,
     declarations: FeedDeclarations | None = None,
+    level: Level | None = None,
     loader_counts: dict[str, int] | None = None,
 ) -> pa.Table:
     """Convert *df* to an Arrow table tagged with the canonical metadata.
@@ -408,6 +422,8 @@ def _to_arrow_table(
         Anything else is not recorded.
     declarations : FeedDeclarations, optional
         The run's declarations, recorded under :data:`DECLARATIONS_KEY`.
+    level : Level, optional
+        The run's level, recorded under :data:`LEVEL_KEY`.
     loader_counts : dict of str to int, optional
         The loader's counts, recorded under :data:`LOADER_COUNTS_KEY`.  The
         caller passes them, rather than this function reading them from
@@ -436,6 +452,8 @@ def _to_arrow_table(
         metadata[CONFIG_KEY] = config.model_dump_json().encode()
     if declarations is not None:
         metadata[DECLARATIONS_KEY] = json.dumps(declarations.to_dict()).encode()
+    if level is not None:
+        metadata[LEVEL_KEY] = Level(level).value.encode()
     if loader_counts:
         metadata[LOADER_COUNTS_KEY] = encode_loader_counts(loader_counts)
     return table.replace_schema_metadata(metadata)
@@ -555,7 +573,7 @@ def save_data(
     data : PipelineResult or dict of str to pandas.DataFrame
         A pipeline result, or the DataFrames to save (keys become file
         stems).  A result is saved as its four tables, with its own config
-        unless *config* is given, and with its declarations.
+        unless *config* is given, and with its declarations and level.
         :func:`load_result` reads a Parquet folder back as the same result.
     path : str or Path
         A folder for this package's own formats (``"parquet"``,
@@ -599,10 +617,12 @@ def save_data(
 
     p = Path(path)
     declarations = None
+    level = None
     if isinstance(data, PipelineResult):
         if config is None:
             config = data.config
         declarations = data.declarations
+        level = data.level
         data = data.tables()
     # Every writer is handed the same payload: a mapping of pandas frames that
     # can also produce canonical Arrow (#216).  It is a dict, so a writer that
@@ -613,6 +633,7 @@ def save_data(
         lot_sizes=lot_sizes_from_config(config),
         config=config if isinstance(config, PipelineConfig) else None,
         declarations=declarations,
+        level=level,
     )
 
     if writer is None:
@@ -691,9 +712,11 @@ def load_result(path: str | Path, *, source: Any = None) -> PipelineResult:
     of each.  A folder with neither (prices and sizes stored as floats) gets
     a tick size of 1, so its prices read as they are.
 
-    The resolution comes from the tables: an
-    :attr:`~ob_analytics.protocols.Level.L2` run has an empty ``events``
-    table, and an L3 run never does.
+    The run's :class:`~ob_analytics.protocols.Level` comes back as each
+    Parquet file records it.  A folder written by an older version does not
+    record it; its level comes from the tables instead:
+    :attr:`~ob_analytics.protocols.Level.L2` when the ``events`` table is
+    empty, :attr:`~ob_analytics.protocols.Level.L3` otherwise.
 
     The loader's counts (such as
     :data:`~ob_analytics.schemas.MAYBE_BAD_BOOK_ATTR`) come back on the
@@ -731,7 +754,6 @@ def load_result(path: str | Path, *, source: Any = None) -> PipelineResult:
         If the folder holds no Parquet file at all.
     """
     from ob_analytics.pipeline import PipelineResult
-    from ob_analytics.protocols import Level
 
     p = Path(path)
     data = load_data(p)
@@ -747,20 +769,48 @@ def load_result(path: str | Path, *, source: Any = None) -> PipelineResult:
         depth=data["depth"],
         depth_summary=data["depth_summary"],
         config=_saved_config(p, data),
-        level=Level.L2 if data["events"].empty else Level.L3,
+        level=_saved_level(p, data),
         declarations=_saved_declarations(p, source),
     )
+
+
+def _recorded(path: Path, key: bytes) -> tuple[Path, bytes] | None:
+    """The first table file of a saved run that records *key*, with its value."""
+    for name in _RESULT_TABLES:
+        file = path / f"{name}.parquet"
+        if not file.is_file():
+            continue
+        raw = (pq.read_schema(file).metadata or {}).get(key)
+        if raw is not None:
+            return file, raw
+    return None
+
+
+def _saved_level(path: Path, data: dict[str, pd.DataFrame]) -> Level:
+    """The level a saved run recorded, or the one its ``events`` table gives."""
+    found = _recorded(path, LEVEL_KEY)
+    if found is not None:
+        file, raw = found
+        try:
+            return Level(raw.decode())
+        except (ValueError, UnicodeDecodeError) as exc:
+            warnings.warn(
+                f"{file}: the saved level cannot be read by this version "
+                f"({exc}); taking it from the events table instead.",
+                UserWarning,
+                stacklevel=3,
+            )
+    # A folder written before the level was recorded.
+    return Level.L2 if data["events"].empty else Level.L3
 
 
 def _saved_declarations(path: Path, source: Any) -> FeedDeclarations:
     """The declarations a saved run recorded, or its capture's and *source*'s."""
     from ob_analytics.capture_record import run_declarations
 
-    for name in _RESULT_TABLES:
-        file = path / f"{name}.parquet"
-        raw = (pq.read_schema(file).metadata or {}).get(DECLARATIONS_KEY)
-        if raw is None:
-            continue
+    found = _recorded(path, DECLARATIONS_KEY)
+    if found is not None:
+        file, raw = found
         try:
             return FeedDeclarations.from_dict(json.loads(raw.decode()))
         except (ValueError, TypeError, AttributeError) as exc:
@@ -771,19 +821,14 @@ def _saved_declarations(path: Path, source: Any) -> FeedDeclarations:
                 UserWarning,
                 stacklevel=3,
             )
-            break
     return run_declarations(path, source)
 
 
 def _saved_config(path: Path, data: dict[str, pd.DataFrame]) -> PipelineConfig:
     """The config a saved run recorded, or the one its tick and lot size give."""
-    for name in _RESULT_TABLES:
-        file = path / f"{name}.parquet"
-        if not file.is_file():
-            continue
-        raw = (pq.read_schema(file).metadata or {}).get(CONFIG_KEY)
-        if raw is None:
-            continue
+    found = _recorded(path, CONFIG_KEY)
+    if found is not None:
+        file, raw = found
         try:
             recorded = json.loads(raw.decode())
             # Only the fields this version knows, so a file from a later
@@ -799,7 +844,6 @@ def _saved_config(path: Path, data: dict[str, pd.DataFrame]) -> PipelineConfig:
                 UserWarning,
                 stacklevel=3,
             )
-            break
     tick_size, lot_size = (
         next((df.attrs[key] for df in data.values() if key in df.attrs), None)
         for key in ("tick_size", "lot_size")

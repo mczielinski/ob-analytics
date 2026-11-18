@@ -624,7 +624,7 @@ def mpl_depth_heatmap(
 def mpl_order_activity_aggregate(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
-    """Render a limit-order event map."""
+    """Render the size added to and removed from each price level."""
     pal = theme.palette
     events = data["events"]
     created = data["created"]
@@ -636,7 +636,7 @@ def mpl_order_activity_aggregate(
     own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(10, 6))
     if events.empty:
-        ax.set_title("Limit Order Event Map (no data)")
+        ax.set_title("Price Level Changes (no data)")
         return fig
 
     sns.scatterplot(
@@ -678,12 +678,12 @@ def mpl_order_activity_aggregate(
     )
 
     ax.set_xlabel("Time")
-    ax.set_ylabel("Limit Price")
+    ax.set_ylabel("Price")
     ax.set_yticks(
         _rounded_price_ticks(events["price"].min(), events["price"].max(), price_by)
     )
     # The map overlays two unlabelled mark families; a legend disambiguates the
-    # gray volume-sized create/delete circles from the bid/ask direction dots.
+    # gray volume-sized added/removed circles from the bid/ask direction dots.
     legend_handles = [
         Line2D(
             [0],
@@ -713,7 +713,7 @@ def mpl_order_activity_aggregate(
             markerfacecolor=pal.price_line,
             markeredgecolor="none",
             markersize=8,
-            label="created",
+            label="added",
         ),
         Line2D(
             [0],
@@ -724,43 +724,10 @@ def mpl_order_activity_aggregate(
             markeredgecolor="black",
             alpha=0.5,
             markersize=8,
-            label="deleted",
+            label="removed",
         ),
     ]
     ax.legend(handles=legend_handles, loc="upper right", framealpha=0.9)
-    format_time_axis(ax)
-    if own_figure:
-        fig.tight_layout()
-    return fig
-
-
-@_themed
-def mpl_cancellations_aggregate(
-    data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
-) -> Figure:
-    """Render a volume map of flashed limit orders."""
-    pal = theme.palette
-    events = data["events"]
-    log_scale = data["log_scale"]
-    col_pal = {"bid": pal.bid, "ask": pal.ask}
-
-    own_figure = ax is None
-    fig, ax = _create_axes(ax, figsize=(10, 6))
-    if log_scale:
-        ax.set_yscale("log")
-    sns.scatterplot(
-        data=events,
-        x="timestamp",
-        y="volume",
-        hue="direction",
-        palette=col_pal,
-        s=14,  # fixed marker size (was size=0.5, a misuse of the size semantic)
-        marker="o",
-        ax=ax,
-    )
-    ax.set_xlabel("Time")
-    ax.set_ylabel("Volume")
-    ax.set_title("Volume Map of Flashed Limit Orders")
     format_time_axis(ax)
     if own_figure:
         fig.tight_layout()
@@ -1103,6 +1070,30 @@ def mpl_order_activity_per_order(
     return fig
 
 
+def _step_paths(x: np.ndarray, y: np.ndarray, groups: np.ndarray) -> list[np.ndarray]:
+    """Each group's points as a steps-post path, one ``(m, 2)`` array per group.
+
+    A group of *k* points becomes ``2k - 1`` vertices: before each point after
+    the first comes the corner at the point's *x* and the previous point's
+    *y*, as ``drawstyle="steps-post"`` draws it.  Points keep their order
+    within a group, and groups come in the order they first appear.
+    """
+    order = np.argsort(groups, kind="stable")
+    x, y, groups = x[order], y[order], groups[order]
+    if not len(x):
+        return []
+    starts = np.flatnonzero(np.r_[True, groups[1:] != groups[:-1]])
+    vertices = np.empty((2 * len(x), 2))
+    vertices[0::2, 0] = x  # the corner before each point
+    vertices[0::2, 1] = np.r_[np.nan, y[:-1]]
+    vertices[1::2, 0] = x
+    vertices[1::2, 1] = y
+    keep = np.ones(len(vertices), dtype=bool)
+    keep[2 * starts] = False  # a group's first point has no corner
+    # Dropping one corner per group start moves group g to 2 * start - g.
+    return np.split(vertices[keep], (2 * starts - np.arange(len(starts)))[1:])
+
+
 @_themed
 def mpl_queue_position_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -1126,15 +1117,27 @@ def mpl_queue_position_per_order(
         if side.empty:
             continue
         drew_any = True
-        for _, g in side.groupby("id", sort=False):
-            ax.plot(
-                mdates.date2num(g["timestamp"]),
-                g["rank"].to_numpy(),
-                color=color,
+        # One collection per fate, one path per order: a line per order took
+        # about 25 s on the bundled sample.  Separate paths keep the overlap
+        # of two orders darker, as separate lines drew it.
+        ax.add_collection(
+            collections.LineCollection(
+                _step_paths(
+                    mdates.date2num(side["timestamp"]),
+                    side["rank"].to_numpy(dtype=float),
+                    pd.factorize(side["id"])[0],
+                ),
+                colors=color,
                 alpha=0.5,
-                linewidth=1.0,
-                drawstyle="steps-post",
+                linewidths=1.0,
+                # A collection draws butt caps by default, but a line takes its
+                # caps and joins from rcParams.  Take them from there too, so
+                # line ends and corners draw as one line per order drew them.
+                capstyle=mpl.rcParams["lines.solid_capstyle"],
+                joinstyle=mpl.rcParams["lines.solid_joinstyle"],
             )
+        )
+        ax.autoscale_view()
         if show_markers and marker is not None:
             ends = side.groupby("id", sort=False).tail(1)
             x = mdates.date2num(ends["timestamp"])

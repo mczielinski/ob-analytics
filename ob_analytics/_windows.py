@@ -37,7 +37,7 @@ import pyarrow.parquet as pq
 from ob_analytics import _engine_frames
 from ob_analytics._utils import epoch_ns
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.protocols import FeedDeclarations
+from ob_analytics.protocols import FeedDeclarations, Level
 from ob_analytics.schemas import lot_sizes_from_config, tick_sizes_from_config
 
 #: How far before a window's start its seed rows are placed.  Strictly before
@@ -182,7 +182,7 @@ class ParquetAppender:
     a run that fails part-way, or a move that fails, leaves the folder as it
     was rather than a file that reads as complete but holds only the first
     windows.  The files carry the same schema version, tick size, lot size,
-    declarations and loader's counts metadata as one
+    declarations, level and loader's counts metadata as one
     :class:`~ob_analytics.data.ParquetWriter` writes, so
     :func:`~ob_analytics.data.load_data` reads the folder as it would a single
     run's.
@@ -196,6 +196,8 @@ class ParquetAppender:
     declarations : FeedDeclarations, optional
         The run's declarations, recorded so
         :func:`~ob_analytics.data.load_result` gives them back.
+    level : Level, optional
+        The run's level, recorded in the same way.
     loader_counts : dict of str to int, optional
         The loader's counts over the whole run, recorded in the ``events``
         file as a single run records them.
@@ -207,12 +209,14 @@ class ParquetAppender:
         config: Any,
         declarations: FeedDeclarations | None = None,
         loader_counts: dict[str, int] | None = None,
+        level: Level | None = None,
     ) -> None:
         self.dest = Path(dest)
         self.dest.mkdir(parents=True, exist_ok=True)
         self._tick_sizes = tick_sizes_from_config(config)
         self._lot_sizes = lot_sizes_from_config(config)
         self._declarations = declarations
+        self._level = level
         self._loader_counts = loader_counts
         self._writers: dict[str, pq.ParquetWriter] = {}
 
@@ -240,6 +244,7 @@ class ParquetAppender:
             tick_sizes=self._tick_sizes,
             lot_sizes=self._lot_sizes,
             declarations=self._declarations,
+            level=self._level,
             loader_counts=self._loader_counts if name == "events" else None,
         )
         writer = self._writers.get(name)
